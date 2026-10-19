@@ -1194,6 +1194,17 @@ test("envelope: an unknown field bounces BY NAME against the target's own schema
   assert.equal(r.code, 422);
   assert.match(r.defect, /does not take: nonsense/);
   assert.ok(r.allowed.includes("text"), "the bounce names the fields the act DOES take");
+  assert.equal(r.did_you_mean, undefined, "a field far from every name gets no guess");
+});
+
+test("envelope: a near-miss field is named with its likely meaning (POS-697 G1a)", async () => {
+  on();
+  // the rig affords say (walk's own row, `to`, is held bare in apex-near-miss.test.mjs)
+  const r = await worldApex({ do: "say", args: { message: "hello" } }, KEY_ALPHA);
+  assert.equal(r.code, 422);
+  assert.match(r.defect, /does not take: message/);
+  assert.deepEqual(r.did_you_mean, { message: ["text"] });
+  assert.match(r.hint, /^message: did you mean text\? the fields it takes: /);
 });
 
 // POS-70 §5 (ruled 2026-09-24): the send and the five paper acts take a retry

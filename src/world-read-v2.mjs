@@ -37,10 +37,11 @@
 //       saved by rows, never by bodies.
 //   G7  happening_here: the events on now here, the vessel's departures, the
 //       Mists where you stand in them; empty is omitted.
-//   G8  each act's line is the Darko-approved one-liner without its fields.
+//   G8  each act's line is the Darko-approved one-liner, WITH its fields
+//       (POS-697 G1a, Darko 2026-10-19 09:21, SUPERSEDES "without its fields").
 //   G10 the bands are the engine's own words.
 
-import { ONE_LINERS, paceKmH } from "./world-read-shape.mjs";
+import { ONE_LINERS, fieldsTail, paceKmH } from "./world-read-shape.mjs";
 
 /** G2: a lifted mark is a landmark only at this weight or more (Darko, 2026-10-14). */
 export const LANDMARK_WEIGHT_FLOOR = 10;
@@ -114,8 +115,17 @@ export const hourZ = (iso) => {
 /** A distance the way the sketch says it: metres under a kilometre, km to one place after. */
 export const distanceOf = (m) => (m >= 1000 ? { km: Math.round(m / 100) / 10 } : { m: Math.round(m) });
 
-/** One act's line: the Darko-approved sentence (10-09) without its "Fields:" tail; else the blurb's first sentence. */
+/**
+ * One act's line: the Darko-approved sentence (10-09), else the blurb's first
+ * sentence, then its fields in v1's approved "Fields:" wording (POS-697 G1a,
+ * Darko 2026-10-19 09:21; this reverses G8's "without its fields", because a
+ * first act guessed `to` for walk and bounced).
+ */
 export function actLine(entry, { pace = null } = {}) {
+  return `${actSentence(entry, { pace })} ${fieldsTail(entry)}`;
+}
+
+function actSentence(entry, { pace = null } = {}) {
   const fixed = ONE_LINERS[entry.action];
   if (entry.action === "walk") return pace ? `Walk to a mark or a point, at about ${Math.round(pace * 10) / 10} km an hour.` : "Walk to a mark or a point.";
   if (fixed) return fixed.says;

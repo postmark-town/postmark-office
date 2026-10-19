@@ -71,19 +71,24 @@ test("G5: the public acts are the ones the crossing log or the docket publishes,
   assert.deepEqual(Object.keys(PUBLIC_ACTS).sort(), ["drop", "enter", "exit", "give", "leave-mark", "say", "stake", "take", "walk", "withdraw"]);
 });
 
-test("G8: each act's line is the approved sentence without its fields, grouped by intent; an unknown act rides `more`", () => {
-  const entries = ["say", "walk", "enter", "take", "candy-trade", "stake"].map((action) => ({ action, blurb: "A candy trade swaps two candies. More words." }));
+test("G8 (POS-697 G1a): each act's line is the approved sentence WITH its fields, grouped by intent; an unknown act rides `more`", () => {
+  const entries = ["say", "walk", "enter", "take", "candy-trade", "stake"].map((action) => ({ action, blurb: "A candy trade swaps two candies. More words.",
+    ...(action === "candy-trade" ? { fields: { with: { type: "string", required: true }, kind: { type: "string" } } } : {}) }));
   const can = canBlock(entries, { pace: 5, handles: ["wright", "rei"], standing: "wright", notYours: [{ action: "build", because: "not your ground" }] });
   assert.deepEqual(Object.keys(can), ["speak", "move", "back", "carry", "more", "not_here", "as"]);
-  assert.equal(can.speak.say, ONE_LINERS.say.says);
-  assert.doesNotMatch(JSON.stringify(can), /Fields:/);
-  assert.equal(can.move.walk, "Walk to a mark or a point, at about 5 km an hour.");
-  assert.equal(can.more["candy-trade"], "A candy trade swaps two candies.");
+  assert.equal(can.speak.say, `${ONE_LINERS.say.says} Fields: text.`);
+  assert.equal(can.move.walk, "Walk to a mark or a point, at about 5 km an hour. Fields: mark_id or to_x + to_y, mode?, enter_on_arrival?.");
+  // an act with no approved line names its own schema's fields, the optional ones marked
+  assert.equal(can.more["candy-trade"], "A candy trade swaps two candies. Fields: with, kind?.");
+  // every grouped act's line names every field its approved line names: the first act needs no guess
+  for (const group of ["speak", "move", "back", "carry"])
+    for (const [act, line] of Object.entries(can[group])) assert.ok(line.endsWith(`Fields: ${ONE_LINERS[act].fields.join(", ")}.`), `${act}: ${line}`);
   assert.deepEqual(can.not_here, [{ act: "build", because: "not your ground" }]);
   const both = canBlock(entries, { notYours: [{ action: "say", because: "this door is for a human" }] });
   assert.equal(both.not_here, undefined, "G1: a refusal of an act your own grant opens is not said");
   assert.match(can.as, /^wright \(one of 2 residents on your key/);
-  assert.equal(actLine({ action: "walk" }), "Walk to a mark or a point.", "no dial, no speed");
+  assert.equal(actLine({ action: "walk" }), "Walk to a mark or a point. Fields: mark_id or to_x + to_y, mode?, enter_on_arrival?.", "no dial, no speed");
+  assert.equal(actLine({ action: "wave", blurb: "Wave." }), "Wave. No fields.");
 });
 
 test("G7: happening_here says the vessel's next departures and the Mists only where you stand in them; nothing is null", () => {

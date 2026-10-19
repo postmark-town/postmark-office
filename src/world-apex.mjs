@@ -110,7 +110,7 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // on the clause, then the grant on the resident class, then the office. Nothing
 // here was reachable: the resident class grants no `subscribe`, `gather` or
 // `hand-to-human`, so no resident could open these doors on any day they stood.
-import { callHoldTool, holdingsOf, liveHolder } from "./world-hold.mjs";
+import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.mjs";
 import { onlyUsable, canOn, viewMarkIds } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
@@ -923,6 +923,41 @@ const FIELD_ALIASES = Object.freeze({
   walk: Object.freeze({ to_x: "x", to_y: "y" }),
 });
 const aliasesFor = (action) => FIELD_ALIASES[action] ?? null;
+
+// ── the near misses a first act makes (POS-697 G1a, Darko 2026-10-19 09:21) ──
+//
+// Wright's first walk sent `to` and bounced. Plain edit distance would offer
+// `into` first (it, `to_x` and `to_y` are all two edits from `to`), so the
+// misses a newcomer makes are named here per act, and anything else falls back
+// to the edit distance the in-house refusal already uses (world-hold.mjs §
+// nearestIds). A row is only offered for fields the act really declares.
+export const FIELD_NEAR = Object.freeze({
+  walk: { to: { fields: ["mark_id", "to_x", "to_y"], says: "mark_id (a mark) or to_x + to_y (a point)" },
+    destination: ["mark_id"], target: ["mark_id"], mark: ["mark_id"], id: ["mark_id"] },
+  say: { message: ["text"], body: ["text"], words: ["text"], content: ["text"] },
+  enter: { mark_id: ["mark"], id: ["mark"], to: ["mark"] },
+  exit: { mark_id: ["mark"], id: ["mark"] },
+  withdraw: { mark_id: ["mark"], id: ["mark"] },
+  stake: { mark_id: ["mark"], amount: ["stamps"], n: ["stamps"] },
+  unstake: { mark_id: ["mark"], amount: ["stamps"], n: ["stamps"] },
+  give: { who: ["to"], recipient: ["to"] },
+  ride: { stop: ["to"], mark_id: ["to"] },
+  "note-to-self": { text: ["body"], note: ["body"] },
+});
+
+/** { <unknown field>: { fields, says } } for each unknown field with a likely meaning among `allowed`. Exported to be falsified bare. */
+export function didYouMean(action, unknown, allowed) {
+  const ok = new Set(allowed);
+  const out = {};
+  for (const k of unknown) {
+    const row = FIELD_NEAR[action]?.[k];
+    const curated = (Array.isArray(row) ? row : row?.fields ?? []).filter((f) => ok.has(f));
+    const fields = curated.length ? curated : nearestIds(k, [...ok]);
+    if (!fields.length) continue;
+    out[k] = { fields, says: curated.length && row?.says ? row.says : fields.join(" or ") };
+  }
+  return out;
+}
 /** The caller's names → the flat tool's names. Unaliased fields pass through. Exported so the rename can be falsified without standing anywhere. */
 export function toFlatFields(action, fields) {
   const map = aliasesFor(action);
@@ -3088,9 +3123,13 @@ async function apexDo(args, key, ctx = {}) {
       const doorOwn = new Set(DOOR_FIELDS[handler.tool] ?? []);
       const unknown = declared ? Object.keys(toFlatFields(action, envelope)).filter((k) => !(k in declared) && !doorOwn.has(k)) : [];
       if (unknown.length) {
+        const near = didYouMean(action, unknown, declaredNames);
+        const guessed = Object.keys(near).length
+          ? `${Object.entries(near).map(([k, g]) => `${k}: did you mean ${g.says}?`).join(" ")} ` : "";
         return bounce(422, `${handler.tool} does not take: ${unknown.join(", ")}`,
-          `the fields it takes: ${declaredNames.join(", ")} — the action's \`fields\` block spells out each one`,
-          { unknown_fields: unknown, allowed: declaredNames });
+          `${guessed}the fields it takes: ${declaredNames.join(", ")} — the action's \`fields\` block spells out each one`,
+          { unknown_fields: unknown, allowed: declaredNames,
+            ...(guessed ? { did_you_mean: Object.fromEntries(Object.entries(near).map(([k, g]) => [k, g.fields])) } : {}) });
       }
     }
 

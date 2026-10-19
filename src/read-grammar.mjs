@@ -80,7 +80,7 @@ export const EXPLAIN = Object.freeze({
     happening_here: row("events on now, departures from here, the Mists where you stand in them, what a creature within reach just did, and the nearest creature out at the edge", 'world { read: "happening" }', "live"),
 
     can: row("what you can do from here, grouped by intent; each act's full law is a read away", 'world { read: "<act>" }', "settled"),
-    "can.*": row("the acts for one intent, each with what it does in one line", 'world { read: "<act>" }', "settled"),
+    "can.*": row("the acts for one intent, each with what it does in one line and the fields it takes (a ? marks an optional one)", 'world { read: "<act>" }', "settled"),
     "can.not_here": row("acts a place here refused you, and why", 'world { read: "<act>" }', "settled"),
     "can.as": row("who is acting, and whether your human may act here too", 'household { }', "live"),
 
