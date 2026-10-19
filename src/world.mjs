@@ -2832,6 +2832,8 @@ export async function thingStandsBlock(id, w, r) {
     if (!p || p[HELD_BY] != null) return null; // never set down, printed where it stands, or in someone's hands
     const drop = view.drops.get(String(id)) ?? null;
     const setter = drop?.actor == null ? null : String(drop.actor);
+    // a thing back where canon has it (a printed drop's twin, or an opposed take's return): nothing new to say
+    if (!p.before_printout && canon?.at && Number(canon.at.x) === p.at.x && Number(canon.at.y) === p.at.y) return null;
     if (!p.before_printout)
       return { where: p.at, source: "set-down", set_down_by: setter, act_seq: drop?.seq ?? null,
         says: `${setter ?? "somebody"} set it down here, and it stands where they stood; the settlement prints it here` };
@@ -3558,7 +3560,8 @@ export async function witnessStampAt(handle, here, known = null) {
     // ground that is not a thing (the-town/the-not-ground: a thing is not ground).
     const [{ isThingMark }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
     const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
-    const at = anchorAt(here, { chain: chainAt(here).filter((m) => !isThingMark(m, thingOpts)), centreOf });
+    const groundAt = (p) => chainAt(p).filter((m) => !isThingMark(m, thingOpts));
+    const at = anchorAt(here, { chain: groundAt(here), centreOf });
 
     // `presentNear` is null when the presence layer is switched off at this
     // office, and `{unavailable}` when it tripped. Both are "could not see",
@@ -3566,7 +3569,7 @@ export async function witnessStampAt(handle, here, known = null) {
     const seen = await presentNear(here, { exclude: [handle], repo: WORLD_CLONE, ...(await keptPresence()) });
     const witnesses = seen == null ? pinWitnesses({ unread: "presence-off" })
       : seen.unavailable ? pinWitnesses({ unread: seen.unavailable })
-      : pinWitnesses({ residents: seen.residents ?? [], centreOf, chainAt });
+      : pinWitnesses({ residents: seen.residents ?? [], centreOf, chainAt: groundAt }); // a witness is pinned to ground too, never a thing (W4)
     return { at, witnesses };
   } catch (e) {
     return unread(`witness-read-threw: ${plainReason(e, "files", "a witness stamp")}`); // the row is published: never the raw error (POS-657)
