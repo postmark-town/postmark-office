@@ -29,15 +29,16 @@
 // Its table and its writer shipped in Stage 2 with a comment saying the verb
 // that calls them "lands with the vessel work." It did not. This is that verb.
 //
-// ── POSITION IS DERIVED, NEVER STORED ───────────────────────────────────────
+// ── A HELD THING HAS NO PLACE (POS-688, Darko 2026-10-18 20:58) ─────────────
 //
-// A held thing's world position is `holder's position + offset`, computed on
-// read — the same arithmetic world-frames.mjs already runs for passengers, and
-// the same discipline the-north-star.md states ("derived things are stored by
-// no one"). The alternative — rewriting the mark's `at:` on every hand-off —
-// would be a git commit per transfer AND would store a derived quantity. The
-// mark file of a thing is BYTE-IDENTICAL across any number of gives; a test
-// asserts exactly that, because it is the claim most worth being able to break.
+// SUPERSEDED: "A held thing's world position is `holder's position + offset`,
+// computed on read." A held thing is published but UNPLACED: it keeps its mark,
+// has no position while held, and shows as its holder's contents, exactly as a
+// thing in a chest does (held.mjs § placeOf, the one answer). The hand-off itself
+// still writes no file: the mark is BYTE-IDENTICAL across any number of gives at
+// the door, and a test asserts exactly that. The SETTLEMENT prints the held state
+// once per crossing (`held_by`, no `at`; a drop prints a fresh `at`:
+// world2/tools/hold-through.mjs).
 //
 // ── HELD vs SET DOWN, and the one judgement call in this file ────────────────
 //
@@ -67,6 +68,7 @@ import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read 
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { heldBy } from "./held.mjs"; // POS-688: a held thing is published but unplaced
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -99,17 +101,6 @@ export function holdingsOf(rows, handle) {
   const targets = [...new Set(rows.map((r) => r.target))];
   return targets.filter((t) => liveHolder(rows, t) === handle);
 }
-
-/**
- * A held thing's position: its holder's, plus the offset it was taken at.
- *
- * v0 offset is zero — a carried thing is AT its holder, which is what "in your
- * hands" means and what every inventory read needs. The parameter exists
- * because the frame arithmetic is `carrier.at + offset` and writing it without
- * the term would make the next person re-derive why it is absent.
- */
-export const heldPositionOf = (holderAt, offset = { x: 0, y: 0 }) =>
-  holderAt ? { x: holderAt.x + offset.x, y: holderAt.y + offset.y } : null;
 
 /**
  * WHICH OF THE THREE FACES THIS CALL IS — the ONE derivation.
@@ -626,12 +617,24 @@ export function refuseGiveOfUnheld({ thing, to, actor, holder }) {
       : `a give hands over what is in your hands, and ${holder} is holding this one. Nothing was recorded.`);
 }
 
+/**
+ * A TAKE OF A THING IN SOMEONE ELSE'S HANDS (POS-688, W6). The faces are read off
+ * the live holder, so `take` of a held thing derives the face "drop", and the
+ * adjudicator's refusal said "you can only give or set down what you are holding":
+ * a take answered as a give. The caller said take, so the answer says take. PURE.
+ */
+export function refuseTakeOfHeld({ thing, verb, actor, holder }) {
+  if (verb !== "take" || holder == null || holder === actor) return;
+  throw bounce(403, `${holder} is holding ${thing}, not ${actor}`,
+    `${holder} is holding it: a thing in someone's hands changes hands only when they give it. Ask them. Nothing was recorded.`);
+}
+
 // ── WHERE A THING STANDS — CLAUSE 2's READ HALF, AND THE-ANCHOR'S FIRST ──────
 //
 // `the-town/the-anchor`: "a held thing rides its holder as a rider rides the
 // deck". That sentence has been law since 2026-08-09 and had NO IMPLEMENTATION
-// on either side of the seam: `heldPositionOf` above is exported, asserted on
-// in one test, and called by nothing; the world fold's `attaches` is predicated
+// on either side of the seam: a `heldPositionOf` was exported, asserted on in
+// one test, and called by nothing (deleted with POS-688); the world fold's `attaches` is predicated
 // children by `parent` and has never read the holding edge; and every surface a
 // resident can read a thing's place from — `world_investigate` above all —
 // answers the folded canon mark's `at`, held or not.
@@ -700,13 +703,12 @@ export async function whereThingStands(thingId, {
   const id = String(thingId);
   if (attachments == null) return { where: null, source: "unreadable", says: "the office could not read the holding record — this is not an answer about where it stands" };
 
+  // A HELD THING HAS NO PLACE (POS-688, Darko 2026-10-18 20:58): published but
+  // unplaced, it shows as its holder's contents. The branch that derived a place
+  // from the holder's standpoint is gone: it was the second answer to "where is
+  // it" (held.mjs § placeOf is the one). `standpointOf` is no longer asked.
   const holder = liveHolder(attachments, id);
-  if (holder) {
-    const at = typeof standpointOf === "function" ? await standpointOf(holder) : null;
-    return at
-      ? { where: at, source: "holder", holder, says: `${holder} is holding it, and a held thing rides its holder (the-town/the-anchor)` }
-      : { where: null, source: "holder", holder, says: `${holder} is holding it, and the record does not place ${holder} anywhere — so where it stands cannot be derived` };
-  }
+  if (holder) return { where: null, source: "holder", holder, says: `${holder} is holding it: a held thing has no place of its own, and shows as ${holder}'s contents` };
 
   const drop = journal == null ? null : latestDrop(journal, id);
   if (drop) {
@@ -1171,7 +1173,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
 export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null, writtenAt = null, extra = {}, deps = {} }) {
   try {
     let mark = deps.mark !== undefined ? deps.mark
-      : await (async () => { const { worldMarkById } = await import("./world.mjs"); return (await worldMarkById(String(thing))).mark; })();
+      : await (async () => { const { canonMarkById } = await import("./world.mjs"); return (await canonMarkById(String(thing))).mark; })(); // the record as printed: the amend copies its own lines (POS-688)
     // ── THE AUTHOR'S OWN DRAFT (postmark#3663, kogane) ─────────────────────
     //
     // An unpublished thing may be taken and dropped inside its author's house
@@ -1190,6 +1192,10 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
         return { filed: false, put_forward_unpublished: true,
           why: `${thing} is put forward and not yet published, and re-siting a claim already on the docket waits on a ruling (postmark#3663)` };
     }
+    // PRINTED AS HELD (POS-688): canon has no place lines for it, and the settlement
+    // prints the set-down itself (world2/tools/hold-through.mjs), so no amend is owed.
+    if (heldBy(mark))
+      return { filed: false, printed_by_settlement: true, why: "the settlement prints where it was set down (a held thing's drop, POS-688): no amend is needed" };
     const built = setDownAmend({ thing, mark, stood, actor, actId, writtenAt });
     if (built.refused) return { filed: false, why: built.refused };
     const leave = deps.leave ?? (async (payload, k, opts) => {
@@ -1444,6 +1450,7 @@ async function holdAct(name, args = {}, key = null, verb = null) {
       return await callKinds("thing-from-holder", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
     }
     refuseGiveOfUnheld({ thing: args.thing, to: args.to ?? null, actor, holder: preHolder });
+    refuseTakeOfHeld({ thing: args.thing, verb, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
     const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder, key });
     // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.

@@ -1536,9 +1536,9 @@ export function standingHandle(args = {}, key = null) {
 // The last of those is the point. A read that listed things without saying
 // which of them the door would refuse would be a second opinion about the reach
 // — and the door's is the one that binds. So the row's verdict comes from
-// `standsWithin`, the same function the door calls, and a thing somebody else
-// is holding is listed with its holder rather than silently dropped: "she is
-// holding it" is an answer, an absence is not.
+// `standsWithin`, the same function the door calls. A thing somebody is holding
+// is not on the ground at all (POS-688: published but unplaced, it is its
+// holder's contents), so it is no row here; `investigate` on the holder lists it.
 const GROUND_THINGS = `SELECT id, by, tier,
          json_extract(props, '$.class') AS class,
          json_extract(props, '$.body')  AS body,
@@ -1578,7 +1578,13 @@ export async function groundWithinReach(oriented, key = null) {
     // throw out would turn the whole block into `{ unavailable }`, which is a
     // THIRD answer this function has never given. `test/hold-wirings.test.mjs`
     // WIRING 1 drives exactly this path.
-    const { attachments, journal } = await holdingRecord();
+    // ONE RECORD (POS-688): the kept hold record's rows and drops, the ones every
+    // hold read answers from, and its one answer to where each thing is (held.mjs §
+    // placeOf). An unreadable record is empty lists, as the comment above rules.
+    const [{ heldView }, { placeOf, HELD_BY }] = await Promise.all([import("./held-view.mjs"), import("./held.mjs")]);
+    const view = await heldView();
+    const attachments = view ? [...view.last.values()] : [];
+    const journal = view ? [...view.drops.values()] : [];
     // The author's house's answers to strangers' set-downs (POS-138), read
     // ONCE for the whole ground; an unreadable stance record is silence.
     const stances = await (async () => {
@@ -1587,7 +1593,9 @@ export async function groundWithinReach(oriented, key = null) {
     })();
     const rows = store.db.prepare(GROUND_THINGS).all();
     const marks = rows.map((r) => ({ id: r.id, at: { x: Number(r.at_x), y: Number(r.at_y) }, extent: { w: Number(r.extent_w) || 1, h: Number(r.extent_h) || 1 } }));
-    const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
+    // the one centre reader: canon's, or where a held anchor last stood (POS-688, W4)
+    const { markCentreOf } = await import("./world.mjs");
+    const centreOf = await markCentreOf().catch(() => (id) => marks.find((m) => m.id === id)?.at ?? null);
     // The world engine's own containment, through world.mjs's one loader — a
     // second `pointInRect` here would be the split-brain the reach module
     // exists to prevent, and this read must agree with the door exactly.
@@ -1599,10 +1607,14 @@ export async function groundWithinReach(oriented, key = null) {
     const out = [];
     for (const r of rows) {
       const mark = marks.find((m) => m.id === r.id);
-      const stands = await hold.whereThingStands(r.id, {
-        attachments, journal, fold: mark.at, centreOf, householdOf, stances,
-        standpointOf: async (h) => { const s = await residentStandpoint(h).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
-      });
+      // A HELD THING IS NOT ON THE GROUND (POS-688): published but unplaced, it is its holder's contents
+      const p = placeOf(r.id, view, mark);
+      if (p?.[HELD_BY] != null) continue;
+      // a drop since the last printout stands where it was set down, and prints there; one from before
+      // the first printout keeps the POS-138 words (whereThingStands); anything else stands where canon has it
+      const stands = p?.source === "set-down" && !p.before_printout
+        ? { where: p.at, source: "set-down", says: "set down here; the settlement prints it here" }
+        : await hold.whereThingStands(r.id, { attachments, journal, fold: mark.at, centreOf, householdOf, stances });
       if (!stands?.where) continue; // a thing whose place cannot be derived is not "underfoot"
       // The reach is asked of the thing WHERE IT ACTUALLY STANDS, not where the
       // fold last put it: a top set down at the track is at the track, and
@@ -1623,7 +1635,7 @@ export async function groundWithinReach(oriented, key = null) {
     return {
       at, reach_m: reach.EARSHOT_M ?? null, count: out.length,
       things: out,
-      reading_law: "Where a thing stands is derived, never stored: a held thing rides its holder, a thing set down stands where it was set down, and canon's fold is the answer only when neither speaks.",
+      reading_law: "Where a thing stands is read from the one record: a held thing is published but unplaced (its holder's contents, never on the ground), a thing set down stands where it was set down, and canon's fold answers otherwise.",
       ...(dis ? { disclosed: dis } : {}),
     };
   } catch (e) {
@@ -1631,25 +1643,6 @@ export async function groundWithinReach(oriented, key = null) {
   } finally {
     try { store?.db?.close(); } catch { /* a reader that cannot close still read */ }
   }
-}
-
-/**
- * The two holding shelves the ground read folds, from the record.
- *
- * ONE PLACE THE TWO READS FAIL TOGETHER. They are asked in parallel and a
- * failure of either lands on the same pair of empty lists, because the ground
- * read's contract is that an unreadable holding record is "nothing journalled"
- * rather than "I cannot see" — and a half-answered fold (an edge with no
- * set-downs) would be worse than both: it would move a thing to its holder and
- * then lose the drop that put it down.
- */
-async function holdingRecord() {
-  const guards = await import("./world2-guards.mjs");
-  const [attachments, journal] = await Promise.all([
-    guards.storeAttachmentRows().catch(() => null),
-    guards.storeHoldingRows().catch(() => null),
-  ]);
-  return (attachments && journal) ? { attachments, journal } : { attachments: [], journal: [] };
 }
 
 /**
