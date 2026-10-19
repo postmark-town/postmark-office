@@ -2,30 +2,6 @@
   "_doc": "The office suite's known reds on the train, as CI measures them (.github/workflows/suite.yml, POS-417). One row per test: file, name (the test's own name, exactly as node:test reports it), reason, owner (the Linear issue that owns the fix: a child of POS-419 per cause), date (listed on) and until (review by): a row past its until is printed as overdue, which does not fail the run. The CI summary fails on a red that is NOT here, and also on a row whose test passed (delete the row) or no longer exists. `flaky: true` is a flake: when it reds, its file runs once more, and green on that retry is allowed while red twice fails the run. Fixing the reds is POS-419.",
   "failures": [
     {
-      "file": "test/world2-fold-equality.test.mjs",
-      "name": "THE EQUALITY — fold(rows) deep-equals fold(files) at the newest settlement, in the published order",
-      "reason": "the store fold (src/world2-fold.mjs § marksFromRows) predates W2: rebuilt from rows at S118 it differs from the files' fold in 672 places (parent dropped on 374 predicate and 198 property marks, dials re-added to 83 classes, property_tier on 17). A dark path (W2_FOLD off in prod). Its fix and these rows' removal are POS-704 (POS-703, 2026-10-19)",
-      "owner": "POS-704",
-      "date": "2026-10-19",
-      "until": "2026-10-22"
-    },
-    {
-      "file": "test/world2-fold-equality.test.mjs",
-      "name": "ORDER is the one thing the rows do not carry — without the published order only the order differs",
-      "reason": "the store fold (src/world2-fold.mjs § marksFromRows) predates W2: rebuilt from rows at S118 it differs from the files' fold in 672 places (parent dropped on 374 predicate and 198 property marks, dials re-added to 83 classes, property_tier on 17). A dark path (W2_FOLD off in prod). Its fix and these rows' removal are POS-704 (POS-703, 2026-10-19)",
-      "owner": "POS-704",
-      "date": "2026-10-19",
-      "until": "2026-10-22"
-    },
-    {
-      "file": "test/world2-marks-ingest.test.mjs",
-      "name": "THE EQUALITY — after `marks-ingest --ref B`, fold(rows) deep-equals fold(files at B); a second run is a no-op",
-      "reason": "the store fold (src/world2-fold.mjs § marksFromRows) predates W2: rebuilt from rows at S118 it differs from the files' fold in 672 places (parent dropped on 374 predicate and 198 property marks, dials re-added to 83 classes, property_tier on 17). A dark path (W2_FOLD off in prod). Its fix and these rows' removal are POS-704 (POS-703, 2026-10-19)",
-      "owner": "POS-704",
-      "date": "2026-10-19",
-      "until": "2026-10-22"
-    },
-    {
       "file": "test/world-read-shape.test.mjs",
       "name": "v2: within the budget as the MCP door serves it, at the rig's standpoint (8k, pending Darko on POS-632)",
       "reason": "the world pin at main (POS-703) adds the `consume` act card to the v2 read's `can` (+58 characters): CI served 8,069 against the 8,000 cap. The cap is Darko's, pending on POS-632, with the consume card and POS-697's fields in view (2026-10-19)",
