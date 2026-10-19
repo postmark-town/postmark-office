@@ -153,7 +153,7 @@ test("7. a thing is a thing by its class chain", () => {
 
 test("8. W4: the witness stamp never anchors an act on a thing (source pin; the probe is the playground's)", () => {
   const src = readFileSync(join(ROOT, "src", "world.mjs"), "utf8");
-  assert.ok(src.includes("const at = anchorAt(here, { chain: chainAt(here).filter((m) => !isThingMark(m, thingOpts)), centreOf });"));
+  assert.ok(src.includes("const groundAt = (p) => chainAt(p).filter((m) => !isThingMark(m, thingOpts));") && src.includes("const at = anchorAt(here, { chain: groundAt(here), centreOf });") && src.includes("chainAt: groundAt }"), "the actor and every witness are pinned to ground");
 });
 
 test("9. W4: an act anchored on a thing now in someone's hands still composes, against where it last stood", () => {
