@@ -32,7 +32,10 @@ const SOURCE_WORLD = worldClone();
 const HAVE_SOURCE = !!SOURCE_WORLD && existsSync(join(SOURCE_WORLD, "WORLD", "world-state.json"));
 
 const repo = mkdtempSync(join(tmpdir(), "pm-receipt-fixture-"));
-const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+// maxBuffer: the RED CONTROL reads the fixture's whole world-state back through
+// `git show`, and the town's grew past execFileSync's 1 MiB default at world
+// 8c4ed291 (1,067,523 bytes minified; 1,020,949 at 8e159d75): ENOBUFS, not a red.
+const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 
 const HOUSEHOLD = "fixturehouse";
 const KEY = { household: HOUSEHOLD, handles: new Set(["fixture"]) };
