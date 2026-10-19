@@ -37,10 +37,11 @@
 //       saved by rows, never by bodies.
 //   G7  happening_here: the events on now here, the vessel's departures, the
 //       Mists where you stand in them; empty is omitted.
-//   G8  each act's line is the Darko-approved one-liner without its fields.
+//   G8  each act's line is the Darko-approved one-liner, WITH its fields
+//       (POS-697 G1a, Darko 2026-10-19 09:21, SUPERSEDES "without its fields").
 //   G10 the bands are the engine's own words.
 
-import { ONE_LINERS, paceKmH } from "./world-read-shape.mjs";
+import { ONE_LINERS, fieldsTail, paceKmH } from "./world-read-shape.mjs";
 
 /** G2: a lifted mark is a landmark only at this weight or more (Darko, 2026-10-14). */
 export const LANDMARK_WEIGHT_FLOOR = 10;
@@ -114,8 +115,17 @@ export const hourZ = (iso) => {
 /** A distance the way the sketch says it: metres under a kilometre, km to one place after. */
 export const distanceOf = (m) => (m >= 1000 ? { km: Math.round(m / 100) / 10 } : { m: Math.round(m) });
 
-/** One act's line: the Darko-approved sentence (10-09) without its "Fields:" tail; else the blurb's first sentence. */
+/**
+ * One act's line: the Darko-approved sentence (10-09), else the blurb's first
+ * sentence, then its fields in v1's approved "Fields:" wording (POS-697 G1a,
+ * Darko 2026-10-19 09:21; this reverses G8's "without its fields", because a
+ * first act guessed `to` for walk and bounced).
+ */
 export function actLine(entry, { pace = null } = {}) {
+  return `${actSentence(entry, { pace })} ${fieldsTail(entry)}`;
+}
+
+function actSentence(entry, { pace = null } = {}) {
   const fixed = ONE_LINERS[entry.action];
   if (entry.action === "walk") return pace ? `Walk to a mark or a point, at about ${Math.round(pace * 10) / 10} km an hour.` : "Walk to a mark or a point.";
   if (fixed) return fixed.says;
@@ -218,9 +228,16 @@ export function happenedGlance(h, { sinceCrossing } = {}) {
   if (!h) return { since: `crossing ${sinceCrossing}`, unavailable: "the delta is not read at this office" };
   if (h.unavailable) return { since: `crossing ${sinceCrossing}`, unavailable: h.unavailable };
   const around = h.around_you ?? {};
+  // POS-697 G3a (Darko 2026-10-19 09:21): each row says where, in the words
+  // `you.here` uses (the apex fills `where`), how far from you, and a
+  // departure's destination whole (BODIES, 10-14 22:33). A say stays the fact
+  // of it, never its words (G5 kept): those are earshot's, in `heard`.
   const events = (around.events ?? []).slice(0, AROUND_SHOWN).map((e) => ({
     who: e.actor, what: e.kind === "departure" ? "set out" : e.kind === "emission" ? "spoke" : e.kind === "attachment" ? "took or left something" : e.kind,
     when: hourZ(e.at),
+    ...(e.where ? { where: e.where } : {}),
+    ...(Number.isFinite(e.m) ? { m: e.m } : {}),
+    ...(e.toward && typeof e.toward === "object" ? { toward: e.toward } : {}),
   }));
   return {
     since: `crossing ${sinceCrossing}`,
@@ -228,23 +245,39 @@ export function happenedGlance(h, { sinceCrossing } = {}) {
     // a crossing absent from the log, a reach clamped to the last week)
     complete: h.complete !== false,
     ...(h.reach ? { reach: h.reach } : {}),
-    to_you: h.to_you ?? { complete: false, unavailable: "not read" },
+    // POS-697 G4a: the short form. The sentences (complete or INCOMPLETE) are
+    // explain: "now.happened.to_you"'s; a gap is still named, in a few words,
+    // so an absence is never read as nothing having happened.
+    to_you: h.to_you ? toYouShort(h.to_you) : { complete: false, unavailable: "not read" },
     around_you: { shown: events.length, count: around.count ?? events.length, events },
   };
 }
 
+/** to_you as the glance says it: complete, the gaps by name, the count and the events. */
+export function toYouShort(t) {
+  if (t.unavailable) return { complete: false, unavailable: t.unavailable };
+  return {
+    complete: t.complete !== false,
+    ...(t.complete === false ? { missing: t.missing?.length ? t.missing : ["a shelf could not be read"] } : {}),
+    count: t.count ?? (t.events ?? []).length,
+    events: t.events ?? [],
+  };
+}
+
 /** CAN: the afforded acts by intent, one line each; refusals said with their reason (G1). */
-export function canBlock(entries = [], { pace = null, handles = [], standing = null, humanHere = [], notYours = [] } = {}) {
+export function canBlock(entries = [], { pace = null, handles = [], standing = null, humanHere = [], notYours = [], names = false } = {}) {
   const out = {};
   const grouped = new Set();
+  // cards: "names" (POS-697 item 6): each group says its acts by name only
+  const say = (list) => (names ? list.map((e) => e.action) : Object.fromEntries(list.map((e) => [e.action, actLine(e, { pace })])));
   for (const [group, acts] of Object.entries(ACT_GROUPS)) {
     const here = acts.map((a) => entries.find((e) => e.action === a)).filter(Boolean);
     if (!here.length) continue;
-    out[group] = Object.fromEntries(here.map((e) => [e.action, actLine(e, { pace })]));
+    out[group] = say(here);
     for (const e of here) grouped.add(e.action);
   }
   const rest = entries.filter((e) => !grouped.has(e.action));
-  if (rest.length) out.more = Object.fromEntries(rest.map((e) => [e.action, actLine(e, { pace })]));
+  if (rest.length) out.more = say(rest);
   // G1: a refusal is said only for an act you cannot do here at all. A door that
   // refused you while your own grant opens the same act (a human-only door over
   // a resident's ambient walk) is not news, and `as` names the human's acts.
@@ -258,6 +291,11 @@ export function canBlock(entries = [], { pace = null, handles = [], standing = n
     if (humanHere.length) out.as += `; your human may act here too: as: "human" (${humanHere.join(", ")})`;
   }
   return out;
+}
+
+/** cards: "full" under v2: each afforded act's whole card, by name. */
+export function fullCards(entries = []) {
+  return Object.fromEntries(entries.map((e) => [e.action, e]));
 }
 
 /** How near an event's own point must be to be "here" when its place is not a mark on your spine or in view. */
@@ -426,7 +464,10 @@ export function shapeV2(p) {
     heard: p.heard == null ? { unavailable: "earshot is not read on this path; read: \"say\" hears the room" } : heardBlock(p.heard),
     ...(happening ? { happening_here: happening } : {}),
     // the class layer unreadable: say so, as v1's law does, never an empty can (review-555 § 1)
-    can: p.canUnavailable ? { unavailable: p.canUnavailable } : canBlock(p.entries, { pace: p.pace, handles: p.handles, standing: p.handle, humanHere: p.humanHere, notYours: p.notYours }),
+    can: p.canUnavailable ? { unavailable: p.canUnavailable } : canBlock(p.entries, { pace: p.pace, handles: p.handles, standing: p.handle, humanHere: p.humanHere, notYours: p.notYours, names: p.cards === "names" }),
+    // cards: "full" (POS-697 item 6, Darko 2026-10-19 09:21): every card whole beside can, as the dial
+    // promises (blurb, fields, dials, grant); the terms that would bind each stay a read: "<act>" away
+    ...(p.cards === "full" && !p.canUnavailable ? { cards: fullCards(p.entries) } : {}),
     law: { ...(p.canon ? { canon: p.canon } : {}), ...(p.nextSettlement ? { next_settlement: p.nextSettlement } : {}) },
     ...(p.focus ? { focus: p.focus } : {}),
     ...(p.found ? { found: p.found } : {}),
@@ -438,6 +479,37 @@ export function shapeV2(p) {
   };
   return out;
 }
+
+// ── a focus answers the focus (POS-697 G2a, Darko 2026-10-19 09:21) ────────
+//
+// Under v2, `find:` sent the whole glance back with `found` at the end: 8,668
+// characters on prod to learn one mark's place, 695 of them the find. A focus
+// is one question, so v2 answers it with where you are and the answer. The
+// glance is one call away (world { read_shape: "v2" }), which the more line
+// says. G2b (same ruling): mark: and investigate: are answered the same way.
+// No cursor rides here: this answer reads nothing of what happened, so a
+// cursor from it would skip what the caller has not yet been shown; the
+// caller keeps the cursor from their last glance. v1 and v0 are untouched.
+
+/** The v2 answer to a focus asked alone: where you are, and the focus. */
+export function shapeV2Focus({ handle = null, standpoint = {}, here = null, focus = null, found = null, investigated = null } = {}) {
+  return {
+    you: {
+      ...(handle ? { handle } : {}),
+      at: { x: Math.round(standpoint.x), y: Math.round(standpoint.y) },
+      ...(here ? { here } : {}),
+    },
+    ...(focus ? { focus } : {}),
+    ...(found ? { found } : {}),
+    ...(investigated ? { investigated } : {}),
+    more: FOCUS_MORE_V2,
+    reading_law: READING_LAW_V2,
+    read_shape: "v2",
+  };
+}
+
+/** The focus answer's more line: the glance is a call away, and the caller's own cursor still stands. */
+export const FOCUS_MORE_V2 = 'this answered your focus alone · world { read_shape: "v2" } is the whole glance · since: "<the cursor from your last glance>" still holds · explain: "<path>" what any part is for';
 
 // ── read: "<block>", the deeper read of a v2 block (G9, Wright 2026-10-14) ──
 

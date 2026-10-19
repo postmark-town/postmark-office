@@ -34,7 +34,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { WORLD_CLONE } from "../src/world-store.mjs";
-import { useGuardReader } from "../src/world2-guards.mjs";
+import { useGuardReader, DEPARTURE_HEAD_SQL, DEPARTURE_NEWEST_SQL } from "../src/world2-guards.mjs";
 import { normalizeRow } from "../src/world-journal.mjs";
 import { worldToolModule } from "../src/dynamic-entities.mjs";
 import { recordOfMovement } from "../src/position-projection.mjs";
@@ -45,7 +45,8 @@ const was = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 
 // ── the fixture store, as `pg` hands acts over ──────────────────────────────
 const STORE = [];
-let storeReads = 0;
+let storeReads = 0;   // reads of departure RECORDS
+let headReads = 0;    // reads of the departure head: ids only (POS-691)
 let restoreReader = null;
 
 before(() => {
@@ -56,9 +57,12 @@ before(() => {
   restoreReader = useGuardReader(async (fn) => fn({
     query: async (sql, params) => {
       if (!/FROM acts/i.test(String(sql))) return { rows: [] };
-      storeReads += 1;
       const actions = params?.[0] ?? [];
-      return { rows: STORE.filter((r) => actions.includes(r.action)) };
+      const deps = STORE.filter((r) => actions.includes(r.action));
+      if (sql === DEPARTURE_HEAD_SQL) { headReads += 1; return { rows: deps.filter((r) => r.id > Number(params[1])).map((r) => ({ id: r.id })) }; }
+      if (sql === DEPARTURE_NEWEST_SQL) { headReads += 1; return { rows: deps.slice(-1).map((r) => ({ id: r.id })) }; }
+      storeReads += 1;
+      return { rows: deps };
     },
   }));
 });
@@ -135,7 +139,7 @@ test("SAME: the standpoint over the kept positions equals the derivation, act by
     for (let i = 0; i < 24; i++) {
       const m = movementAt(i, walk);
       await fileWalk(m);
-      world.positionProjection.record(recordOfMovement(m));
+      world.positionProjection.record(recordOfMovement(m), { actId: STORE.at(-1).id });
       // Compared every sixth act: the derivation re-reads git and the store per
       // call, and every act is kept in step whether it is compared or not.
       if (i % 6 !== 5) continue;
@@ -175,9 +179,11 @@ test("COST: with the positions kept, a standpoint reads the store zero times; wi
     process.env.WORLD_POSITIONS = "1";
     world.positionProjection.invalidate();
     await world.positionProjection.departures();
-    storeReads = 0;
+    storeReads = 0; headReads = 0;
     for (const fold of [ASHORE, WITH_CARRIER]) for (const h of ASKED) await world.residentStandpoint(h, fold);
-    assert.equal(storeReads, 0, "a standpoint over the kept positions read the store");
+    assert.equal(storeReads, 0, "a standpoint over the kept positions read the store's records");
+    // POS-691: what it does read is the departure head, ids only, so a writer outside the office is heard
+    assert.ok(headReads >= 1 && headReads <= 2 * ASKED.length, `the head was read ${headReads} times for ${2 * ASKED.length} standpoints`);
 
     delete process.env.WORLD_POSITIONS;
     storeReads = 0;
@@ -188,4 +194,50 @@ test("COST: with the positions kept, a standpoint reads the store zero times; wi
     delete process.env.WORLD_POSITIONS;
     world.positionProjection.invalidate();
   }
+});
+
+// ── POS-691: A STANDPOINT MOVED OUTSIDE THE OFFICE READS CURRENT ─────────────
+// The playground's set-down (play.mjs § setDown) writes its walk from another
+// process, and the kept positions trusted themselves for 60 s against it: a take
+// was judged 448 m and 25 s behind its resident. Move, act within one second,
+// and the act is judged at the new place.
+test("FRESH: a walk written outside the walk door is the standpoint within one second", async (t) => {
+  if (needsClone(t)) return;
+  const world = await import("../src/world.mjs");
+  const walk = await worldToolModule("walk.mjs", { repo: WORLD_CLONE });
+  if (!STORE.length) for (let i = 0; i < 24; i++) await fileWalk(movementAt(i, walk));
+  const T = B + 60 * 60_000;
+  mock.timers.enable({ apis: ["Date"], now: T });
+  try {
+    process.env.WORLD_POSITIONS = "1";
+    world.positionProjection.invalidate();
+    const before = await world.residentStandpoint("new-a", ASHORE);
+    const there = { x: Math.round(before.x) + 448, y: Math.round(before.y) - 25 };
+    // the set-down, as another process writes it: into the record, never through recordMoved
+    await fileWalk({ actor: "new-a", from: there, toward: there, crossing: walk.fractionalCrossing(T), at: new Date(T).toISOString(),
+      within: null, toMark: null, pace: null });
+    mock.timers.setTime(T + 900); // the act, within one second
+    const after = await world.residentStandpoint("new-a", ASHORE);
+    assert.deepEqual({ x: after.x, y: after.y }, there, `the standpoint answered (${after.x}, ${after.y}), not the set-down's (${there.x}, ${there.y})`);
+    assert.notDeepEqual({ x: before.x, y: before.y }, there, "the fixture moved the resident");
+  } finally {
+    mock.timers.reset();
+    delete process.env.WORLD_POSITIONS;
+    world.positionProjection.invalidate();
+  }
+});
+
+// The two writers in this process record in the same step, each with its act id,
+// so the head read knows them heard (POS-691): the walk door, and the enter
+// door's set-down, the issue's prod writer. Read from the source, as WIRED
+// reads the walk door (walk-from-the-kept-positions.test.mjs).
+test("WIRED (POS-691): the walk door and the enter door's set-down record in-step with their act ids", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const src = (f) => readFileSync(fileURLToPath(new URL(`../src/${f}`, import.meta.url)), "utf8");
+  const bodyOf = (text, head) => { const i = text.indexOf(head); assert.ok(i > 0, `${head} is gone`); const j = text.indexOf("\n}\n", i); return text.slice(i, j); };
+  const land = bodyOf(src("world-apex.mjs"), "async function landOnEnter(");
+  assert.ok(land.indexOf("recordMoved(") > land.indexOf("appendJournal("), "landOnEnter writes its set-down and does not record it");
+  assert.match(land, /recordMoved\([\s\S]*?row\?\.actId/, "landOnEnter records without the act id");
+  assert.match(src("world.mjs"), /recordMoved\(movement, walkRow\?\.actId/, "the walk door records without the act id");
 });
