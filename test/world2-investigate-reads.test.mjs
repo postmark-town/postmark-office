@@ -251,7 +251,7 @@ test("the twin's answer is field-for-field 1.0's own, minus the named tree-only 
 // composition. A holding act is planted through `useGuardReader`
 // (stands-store-fixture.mjs), so the block is read off `acts` with no Postgres.
 
-test("A HELD THING: the twin carries `stands`, and it is 1.0's own block over the same world", async (t) => {
+test("A HELD THING (POS-688): the twin answers it unplaced, `held_by` and no `at`, with no second answer beside it", async (t) => {
   if (!ENGINE) return t.skip(`no world engine: ${ENGINE_WHY}`);
   const { holdingAct, withActs } = await import("./stands-store-fixture.mjs");
   const { thingStandsBlock } = await import("../src/world.mjs");
@@ -264,18 +264,20 @@ test("A HELD THING: the twin carries `stands`, and it is 1.0's own block over th
     const world = ENGINE.build.assembleWorld({ worldState: apex.worldStateFromMarkRows(ROWS), skeleton: apex.skeletonFromLawRows(SKELETON_ROWS ?? []) });
     expected = await thingStandsBlock(id, world, oracle(id));
   });
-  assert.ok(body.stands, "a holding edge stands in `acts` and the twin carried no block");
-  assert.equal(body.stands.source, "holder");
-  assert.equal(body.stands.holder, "wright");
-  assert.deepEqual(body.stands, expected);
-  assert.ok(reads >= 1, "the block was read off the guard reader, i.e. the store");
+  // SUPERSEDED (POS-688, Darko 2026-10-18 20:58): "the twin carries `stands` { source: holder }" beside canon's `at`.
+  // A held thing is published but unplaced: one answer, the record's, and no place to give.
+  assert.equal(body.held_by, "wright", "the twin's world is placed by the hold record, as the office door's is");
+  assert.equal(body.at, undefined, "no place while held");
+  assert.equal(body.stands, undefined, "and no second answer beside it");
+  assert.equal(expected, null, "1.0's own block agrees: nothing to add");
+  assert.ok(reads >= 1, "the hold record was read off the guard reader, i.e. the store");
 });
 
-// The world the twin hands over is load-bearing here and nowhere in the held
-// case: a set-down anchored on a mark stands at that mark's CENTRE plus the
-// offset, and the centre is read off the world the block is given. A twin that
-// handed it no world (or a different one) would answer a different `where`.
-test("A THING SET DOWN ON A MARK: `where` is the anchor's centre in the twin's own world, as on 1.0", async (t) => {
+// ONE RECORD (POS-688): where a set-down stands is the kept hold record's
+// answer (held.mjs § placeOf), composed by the office's one centre reader, so the
+// twin and 1.0 cannot differ on it whatever world each assembled. The drop is
+// anchored on the world here, so the answer is the fixture's own numbers.
+test("A THING SET DOWN: `where` is the one record's, on the twin as on 1.0", async (t) => {
   if (!ENGINE) return t.skip(`no world engine: ${ENGINE_WHY}`);
   const { holdingAct, withActs } = await import("./stands-store-fixture.mjs");
   const { thingStandsBlock } = await import("../src/world.mjs");
@@ -283,7 +285,7 @@ test("A THING SET DOWN ON A MARK: `where` is the anchor's centre in the twin's o
   const SET_DOWN = [
     holdingAct({ id: 201, at: "2026-09-07T21:53:00Z", actor: "wright", action: "take", thing: id, holder: "wright" }),
     holdingAct({ id: 202, at: "2026-09-07T22:10:00Z", actor: "wright", action: "drop", thing: id, holder: null,
-      anchor: HOUSE.slug, dx: 5, dy: 7 }),
+      anchor: null, dx: 105, dy: 107 }),
   ];
   let body, expected;
   await withActs(SET_DOWN, async () => {
@@ -293,7 +295,7 @@ test("A THING SET DOWN ON A MARK: `where` is the anchor's centre in the twin's o
   });
   assert.ok(body.stands, "a set-down stands in `acts` and the twin carried no block");
   assert.equal(body.stands.source, "set-down");
-  assert.deepEqual(body.stands.where, { x: 105, y: 107 }, "the anchor is the house, centred at (100, 100)");
+  assert.deepEqual(body.stands.where, { x: 105, y: 107 }, "where the dropper stood");
   assert.deepEqual(body.stands, expected);
 });
 
