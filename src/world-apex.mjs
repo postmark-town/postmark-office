@@ -112,8 +112,9 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // `hand-to-human`, so no resident could open these doors on any day they stood.
 import { callHoldTool, holdingsOf, liveHolder } from "./world-hold.mjs";
 import { onlyUsable, canOn, viewMarkIds } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
-// The stride a placement is stamped with — read off the record like every other
-// departure's, never a constant here (decision 008b).
+// The walk's pace, the resident class's own dial (WLD-29): read off the record
+// like every other departure's, never a constant here (decision 008b).
+import { departurePace } from "./world-classes.mjs";
 import { EARSHOT_M } from "./voices.mjs"; // postmark#3592: the description names both distances
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { AMBIENT_REACH_SQL, CLASS_MARK_GATE_SQL, WORKS_PATH_SQL } from "./world-store.mjs";
