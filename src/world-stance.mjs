@@ -1004,7 +1004,7 @@ const shadowLine = (c) => {
 export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
   const inbox = await stanceInbox(repo, key, { dbPath });
   if (inbox.unavailable) return { unavailable: inbox.unavailable, stances_awaiting_ground: stancesGround(key?.handles), awaiting: [],
-    ...(setDowns ? { set_downs_awaiting: [], set_downs_unavailable: "the world could not be read, so neither group of this read could be — this is not an answer that nothing waits" } : {}),
+    ...(setDowns ? { awaiting_your_word: [], set_downs_awaiting: [], set_downs_unavailable: "the world could not be read, so neither group of this read could be — this is not an answer that nothing waits" } : {}),
     standing: [] };
 
   const n = Math.max(1, Math.min(Number(limit) || PAGE_SIZE, 100));
@@ -1073,9 +1073,9 @@ export async function stancesForHandles(handles, { cursor = null, limit = PAGE_S
     // manners: "no entry landed inside the window" is a real state and not a
     // failure to read. A resident with nothing awaiting must be able to tell
     // that from a door that did not answer.
-    // A waiting set-down is a word awaited too, so the note that says nothing
-    // awaits is only true when BOTH groups are empty.
-    if (!answer.unavailable && (answer.stances_awaiting ?? 0) === 0 && !(answer.set_downs_awaiting?.length))
+    // A waiting take or set-down is a word awaited too, so the note that says
+    // nothing awaits is only true when BOTH groups are empty.
+    if (!answer.unavailable && (answer.stances_awaiting ?? 0) === 0 && !(answer.set_downs_awaiting?.length) && !(answer.awaiting_your_word?.length))
       return { ...answer, note: "nothing awaits your word — no mark has been laid over ground you hold since you last spoke. This is an ordinary state, not a quiet failure." };
     return answer;
   } catch (e) {

@@ -229,15 +229,16 @@ const assertForm = (got, want, what) => {
 for (const tree of ["pinned", "w2"]) {
   const want = THING_WRITTEN[tree];
   for (const [form, stool] of Object.entries(STOOLS)) {
-    test(`[${tree} tree · ${form}-form stool] the author's set-down (hold door drop) files the amend, in the ${tree} form`, async () => {
+    // POS-688 (E8): the settlement prints a set-down where it was made, so the door files no amend:
+    // the printout is the one writer of a held thing's place, whichever form the thing is written in
+    test(`[${tree} tree · ${form}-form stool] the author's set-down (hold door drop) files no amend: the settlement prints it`, async () => {
       await underTree(tree);
       const p = await fresh(); hand(stool.id, "keith");
       const r = await hold.callHoldTool("world_hold", { thing: stool.id, handle: "keith" }, KEITH);
       assert.equal(r.did, "drop", `the door answered ${JSON.stringify(r).slice(0, 400)}`);
-      assert.equal(r.set_down?.amend?.filed, true, `no amend filed: ${JSON.stringify(r.set_down?.amend)}`);
-      assert.ok(p.rows().some((a) => a.action === "amend"), "the amend act is on the record");
-      assertForm(written(p), want, "the set-down amend");
-      assert.deepEqual(p.claims().at(-1).geometry.at, YARD_AT, "re-sited to the standpoint");
+      assert.equal(p.rows().some((a) => a.action === "amend"), false, "no amend act on the record");
+      assert.equal(r.set_down?.amend, undefined);
+      assert.match(r.stands_note, /the settlement prints it here at the next crossing/);
     });
 
     test(`[${tree} tree · ${form}-form stool] fileSetDownAmend (the call the stance welcome makes too) files in the ${tree} form`, async () => {
@@ -341,39 +342,16 @@ for (const tree of ["pinned", "w2"]) {
   });
 }
 
-// A HOLDER IS SET DOWN LIKE ANY THING. The door re-declares holder and open
-// (kind-holding § holderWordOf), so the set-down carries them; before, the
-// amend was refused for "carrying `holder`, `open`" and canon kept the
-// crate where it was folded, POS-138's shape again.
-test("[w2 tree] a holder thing set down keeps its holder word, in the new form", async () => {
+// A HOLDER IS SET DOWN LIKE ANY THING, and since POS-688 (E8) no amend is filed at the door for either:
+// the printout copies the standing row's own data (hold-through.mjs), so holder, capacity and open ride it whole.
+test("[w2 tree] a holder thing set down by its author files no amend at the door, whichever words it carries", async () => {
   await underTree("w2");
-  const p = await fresh(); hand(CRATE.id, "keith");
-  const r = await hold.callHoldTool("world_hold", { thing: CRATE.id, handle: "keith" }, KEITH);
-  assert.equal(r.did, "drop", JSON.stringify(r).slice(0, 400));
-  assert.equal(r.set_down?.amend?.filed, true, `no amend filed: ${JSON.stringify(r.set_down?.amend)}`);
-  assertForm(written(p), { kind: "thing" }, "the holder's set-down");
-  const data = parse(p.claims().at(-1).data);
-  assert.equal(data.holder, true, "holder rides the amend");
-  assert.equal(data.open, true, "open rides the amend");
-});
-
-// SF3 (review-616): THE AMEND CARRIES A RESIDENT HOLDER'S WHOLE WORD. The pouch is published as the fold
-// publishes it (holder, capacity and open in the record's own spelling); its author sets it down, and the
-// amend must carry all three. A word AMEND_CARRIES does not name is refused at the amend ("carrying …"),
-// so canon would keep the pouch where it was folded: POS-138's shape. Each word is pinned by name.
-test("[w2 tree] SF3 · a fold-published resident holder set down by its author files an amend carrying holder, capacity and open", async () => {
-  await underTree("w2");
-  for (const word of ["holder", "capacity", "open"]) assert.ok(hold.AMEND_CARRIES.includes(word), `AMEND_CARRIES names ${word}`);
-  const p = await fresh(); hand(POUCH.id, "keith");
-  const r = await hold.callHoldTool("world_hold", { thing: POUCH.id, handle: "keith" }, KEITH);
-  assert.equal(r.did, "drop", JSON.stringify(r).slice(0, 400));
-  assert.equal(r.set_down?.amend?.filed, true, `no amend filed: ${JSON.stringify(r.set_down?.amend)}`);
-  assertForm(written(p), { kind: "thing" }, "the pouch's set-down");
-  const data = parse(p.claims().at(-1).data);
-  assert.equal(String(data.holder), "true", "holder rides the amend");
-  assert.equal(Number(data.capacity), 10, "capacity rides the amend");
-  assert.equal(String(data.open), "false", "open rides the amend");
-  assert.deepEqual(p.claims().at(-1).geometry.at, YARD_AT, "re-sited to the standpoint");
+  for (const thing of [CRATE, POUCH]) {
+    const p = await fresh(); hand(thing.id, "keith");
+    const r = await hold.callHoldTool("world_hold", { thing: thing.id, handle: "keith" }, KEITH);
+    assert.equal(r.did, "drop", JSON.stringify(r).slice(0, 400));
+    assert.equal(p.rows().some((a) => a.action === "amend"), false, `${thing.id}: no amend act`);
+  }
 });
 
 test("the hold door's guidance names the new spelling (amendCallFor)", () => {

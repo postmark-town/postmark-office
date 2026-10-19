@@ -98,7 +98,7 @@ const ALLOWED = {
   "world-pool.mjs": [2, `${OWN}: plumbing`],
   "world-refresher.mjs": [1, `${OWN}: plumbing`],
   "world-serve.mjs": [2, `${OPERATOR} (the serving flag's instrument panel)`],
-  "world-stance.mjs": [4, `${OWN}: PenUnreachableError's ruled sentence (x4: the take arm's stance write is the fourth, POS-688 D3)`],
+  "world-stance.mjs": [3, `${OWN}: PenUnreachableError's ruled sentence (x3: the ground's word, the town's, and the owner's word on a thing, POS-688)`],
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
   "world2-pen.mjs": [2, `${OWN}: status fields`],
