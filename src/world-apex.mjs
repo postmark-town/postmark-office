@@ -3358,19 +3358,28 @@ async function landOnEnter(args, key, who) {
     // writes its own zero-length walk past the walk door's road check, so it
     // asks the wall itself: a landing point behind it sets nobody down, and the
     // entrant stays where the entry left them, told why.
-    const { walkEntry, mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE } = await import("./world.mjs");
+    const { walkEntry, mistsGroundCheck, worldSkeletonRaw, MISTS_UNREADABLE, recordMoved } = await import("./world.mjs");
     const seen = await mistsGroundCheck(WORLD_CLONE, worldSkeletonRaw, [landing.at], currentCrossing());
     if (seen?.unreadable) return { ground: place.ground, refused: `${MISTS_UNREADABLE}: this ground sets no one down behind a wall it cannot see; you stay where you entered` };
     if (seen?.wall)
       return { ground: place.ground, refused: "this ground's landing point stands behind the wall of the Mists, so it sets no one down there; you stay where you entered" };
     const { appendJournal } = await import("./world-journal.mjs");
     const declaredAt = new Date().toISOString();
-    await appendJournal(null, walkEntry({
-      crossing: currentCrossing(), who, targetMarkId: place.ground,
+    const crossing = currentCrossing(), pace = departurePace();
+    const row = await appendJournal(null, walkEntry({
+      crossing, who, targetMarkId: place.ground,
       stampAt: null, witnesses: null,
-      from: landing.at, toward: landing.at, pace: departurePace(), targetExtent: null,
+      from: landing.at, toward: landing.at, pace, targetExtent: null,
       household: null, writtenAt: declaredAt, declaredBy: who,
     }));
+    // THE KEPT POSITIONS, IN THE SAME STEP (POS-691): the set-down moves its
+    // entrant as a walk does, so it records as the walk door records (the same
+    // record, announced to every worker), and the act's id tells each head read
+    // this writer was heard. A record that trips never unsays the set-down.
+    try {
+      recordMoved({ at: declaredAt, actor: who, from: landing.at, toward: landing.at, crossing,
+        within: null, toMark: place.ground, pace }, row?.actId ?? null);
+    } catch (e) { console.error(`[world] the set-down's kept position did not record (${String(e?.message ?? e).slice(0, 160)}); the head read will hear it`); }
     return {
       ground: place.ground, at: landing.at,
       ...(landing.jitter ? { jitter_m: landing.jitter, from_landing: landing.from } : {}),

@@ -555,19 +555,22 @@ export const departuresNow = async (worldClone = WORLD_CLONE, opts = {}) =>
 export const positionsProjected = () => process.env.WORLD_POSITIONS === "1";
 /** The projection's rebuild, exported so a test can stand the same projection on its own clock. */
 export const rebuildPositions = (atMs) => departuresAcrossEras(WORLD_CLONE, { atMs, fromSnapshot: true });
-export const positionProjection = createPositionProjection({ rebuild: rebuildPositions });
+/** The store's departure head (POS-691), only where the projection reads the store at all. */
+export const departureHead = async (after) => (movementV2Enabled() ? (await import("./world2-guards.mjs")).storeDepartureHead(after) : null);
+export const positionProjection = createPositionProjection({ rebuild: rebuildPositions, head: departureHead });
 
 // THE READ WORKERS' COPY (POS-266). Each worker keeps its own projection and
 // the walk door runs only on the main thread, so the door's record is announced
 // and every worker records the same movement. `recordMoved` is the one call the
 // door makes; the announcement rides the port ahead of any read handed over
-// after it (read-workers.mjs § THE SHAPE).
-export function recordMoved(movement) {
+// after it (read-workers.mjs § THE SHAPE). `actId` is the act just written, so
+// each projection's head read knows that writer was heard (POS-691).
+export function recordMoved(movement, actId = null) {
   const rec = recordOfMovement(movement);
-  positionProjection.record(rec);
-  announce("position", rec);
+  positionProjection.record(rec, { actId });
+  announce("position", { record: rec, actId });
 }
-onAnnounce("position", (rec) => positionProjection.record(rec));
+onAnnounce("position", ({ record, actId }) => positionProjection.record(record, { actId }));
 
 /** `departuresAcrossEras`' shape — from the projection when this office keeps one for this clone. */
 async function erasFor(worldClone) {
@@ -6022,7 +6025,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
       // (position-projection.mjs § recordOfMovement). Recorded whether or not
       // the flag is on — a projection nobody reads costs a Map.set, and one
       // switched on mid-life is then already current.
-      if (worldClone === WORLD_CLONE) recordMoved(movement);
+      if (worldClone === WORLD_CLONE) recordMoved(movement, walkRow?.actId ?? null);
     }
 
     result = {
