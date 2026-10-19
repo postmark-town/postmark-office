@@ -772,6 +772,11 @@ function settledStakes(state) {
 // this map dies with the process. It is a memo rather than a per-request
 // derivation because the real fold costs ~6s of judgment on the live world, and
 // the operator asking for a forecast accepts exactly this trade.
+//
+// The fold prints the whole folded world on stdout, so it needs the buffer the
+// git helper above has (POS-710): at Node's 1 MiB default every forecast failed
+// ENOBUFS once world-state.json passed it (1.46 MB at S119, 2026-10-19).
+const FOLD_MAX_BUFFER = 64 * 1024 * 1024;
 export function foldedStateAtRef(repo, ref, { stakes = null } = {}) {
   const sha = git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
   const key = `${repo}\0${ref}\0${sha}\0${stakes ? createHash("sha1").update(JSON.stringify(stakes)).digest("hex") : ""}`;
@@ -796,6 +801,7 @@ export function foldedStateAtRef(repo, ref, { stakes = null } = {}) {
     const state = JSON.parse(execFileSync(process.execPath, args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: FOLD_MAX_BUFFER,
     }));
     if (state.errors?.length)
       throw new Error(`fold at ${ref} has ${state.errors.length} error(s): ${JSON.stringify(state.errors[0])}`);
