@@ -16,13 +16,14 @@
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
+import { rowsEnv } from "./helpers/world-rows.mjs";
 import { NO_WORLD, OFFICE_ROOT, worldClone } from "./fixture-paths.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 
@@ -51,10 +52,23 @@ before(async () => {
     await c.query("INSERT INTO town_roll (town_sha, handle) VALUES ('porch-http-1', 'kogane') ON CONFLICT DO NOTHING");
     await c.query("INSERT INTO acts (at, actor, action, class) VALUES (now(), 'kogane-kin', 'say', 'voice')");
   } finally { await c.end(); }
+  // THE CLASS LAYER, AS PROD READS IT (POS-703). Since LOGOS v2 part 2 a class's
+  // dials are its `kind: property` nodes and the class mark's frontmatter
+  // `dials:` is empty, so the page's stride (the-town/resident's
+  // pace_km_per_crossing) is read only through the class layer. With
+  // WORLD_GRAPH_NONE this office had none, and the table found the stride in the
+  // old frontmatter alone. Now it stands on the clone's own graph, hydrated here.
+  const rowsOut = join(tmp, "rows.json");
+  const h = spawnSync(process.execPath, [join(OFFICE_ROOT, "src", "world-hydrate.mjs"), "--world", CLONE, "--no-db", "--rows-out", rowsOut, "--office", OFFICE_ROOT, "--no-lints", "--no-gexf"], { encoding: "utf8" });
+  if (h.status !== 0) throw new Error(`hydrating the clone exited ${h.status}
+${h.stdout}
+${h.stderr}`);
+  const rows = JSON.parse(readFileSync(rowsOut, "utf8"));
+  const graph = rowsEnv(rows.tables ?? rows, tmp);
   ({ child } = await bootOnFreePort((port) => {
     BASE = `http://127.0.0.1:${port}`;
     return spawn(process.execPath, [join(OFFICE_ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
-      env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", WORLD_APEX: "1", WORLD_CLONE: CLONE, TOWN_CLONE: join(tmp, "no-town-clone"), WORLD_READ_SHAPE: "" },
+      env: { ...process.env, ...IX.env, ...graph, WORLD_APEX: "1", WORLD_CLONE: CLONE, TOWN_CLONE: join(tmp, "no-town-clone"), WORLD_READ_SHAPE: "" },
       stdio: ["ignore", "pipe", "pipe"],
     });
   }));

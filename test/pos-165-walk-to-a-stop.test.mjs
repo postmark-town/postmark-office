@@ -307,8 +307,15 @@ test("the LIVE world's own timetable really does name a constitution-tiered mark
   assert.ok(refusedStops.length >= 1,
     "no stop on any live timetable carries the tier the walk verb refuses — POS-165's instance is gone from the world");
 
+  // SITED BY STANDING, NOT BY THE KIND WORD (POS-703): since LOGOS v2's W2 the
+  // Post Office is `kind: vehicle`, a class whose lineage runs vehicle →
+  // portal-ground → sited. The walk door asks `isSited` over the class tree
+  // before the tier check (src/world.mjs § the walk's mark target), so this asks
+  // the same predicate, with the class tree read off the same fold.
+  const { extendsFromMarks, isSited } = await import("../src/world-grants.mjs");
+  const extendsOf = extendsFromMarks(fold.marks);
   for (const m of refusedStops) {
-    assert.equal(m.kind, "sited", `${m.id} is a stop the walk verb refuses for its TIER, so it must be sited for the exemption to reach it`);
+    assert.ok(isSited(m, extendsOf), `${m.id} is a stop the walk verb refuses for its TIER, so it must stand sited for the exemption to reach it (kind ${m.kind})`);
     assert.ok(Number.isFinite(m.at?.x) && Number.isFinite(m.at?.y), `${m.id} has no place on the map`);
     assert.ok(isVehicleStop(m.id, services.find((s) => s.stops.some((st) => st.markId === m.id))),
       `${m.id} is on a timetable but the predicate the door uses does not see it`);
