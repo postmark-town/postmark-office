@@ -41,10 +41,12 @@
 export const GRID_CELL_M = 64;
 
 /**
- * How long a projection may be trusted without a rebuild. The office's own
- * walk door records in the same step (`record` below), so this bounds only the
- * writers that do not call in: the enter door's set-down (`world-apex.mjs §
- * landOnEnter`) and any pen outside this process.
+ * How long a projection may be trusted without a rebuild. Every writer in this
+ * process records in the same step (`record` below: the walk door and the
+ * enter door's set-down), and every other writer is heard through the store's
+ * departure head (`head`, POS-691), so this is only the backstop: a head that
+ * cannot be read, or a departure from outside that committed under an id the
+ * projection had already passed.
  */
 export const PROJECTION_MAX_AGE_MS = 60_000;
 
@@ -95,8 +97,19 @@ export function recordOfMovement(movement) {
 /**
  * One projection. `rebuild(atMs)` answers `{ departures, disclosed, eras,
  * ledgerUnreadable, store_records? }` — `departuresAcrossEras`' own shape.
+ *
+ * THE STORE'S DEPARTURE HEAD (POS-691). A standpoint moved by a writer that
+ * does not call in (the playground's set-down, a pen in another process) used
+ * to read stale for up to `maxAgeMs`: in the playground a take was judged 448 m
+ * and 25 s behind its resident. `head(after)` answers the ids of the departure
+ * acts past `after`, ascending, or, with `after` null, the newest one alone;
+ * null when the store holds no departure record (the flag-off world). Before
+ * the projection answers, it asks the head: an id it recorded in-step costs
+ * nothing, and any other id is a writer it did not hear, so it rebuilds, by
+ * the one derivation it is held equal to. Ids only: the head reads no record,
+ * and there is no second position record anywhere.
  */
-export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AGE_MS, now = () => Date.now() } = {}) {
+export function createPositionProjection({ rebuild, head = null, maxAgeMs = PROJECTION_MAX_AGE_MS, now = () => Date.now() } = {}) {
   let governing = null;      // Map handle -> governing record
   let meta = null;           // the rebuild's disclosure, carried whole
   let builtAt = null;
@@ -104,12 +117,47 @@ export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AG
   let building = null;       // one rebuild in flight, shared by every caller that arrives during it
   let pending = [];          // records written while a rebuild was reading — it may have read before them
   let epoch = 0;             // bumps on every change, so a grid knows when it is stale
+  let hw = null;             // POS-691: the newest departure id this projection has accounted for
+  let heard = new Set();     // departure ids recorded in-step that `hw` has not passed yet
+  let checking = null;       // one head read in flight, shared by every caller that arrives during it
+  let headWarned = false;
+
+  const headIds = async (after) => {
+    try {
+      const ids = await head(after);
+      return ids == null ? null : ids.map(Number);
+    } catch (e) {
+      // the projection answers as it did before the head existed; said once, never thrown at a reader
+      if (!headWarned) { headWarned = true; console.error(`[positions] the departure head could not be read (${String(e?.message ?? e).slice(0, 160)}): the projection trusts itself for ${maxAgeMs} ms, as before POS-691`); }
+      return null;
+    }
+  };
+
+  /** False when a departure the projection did not hear was written past `hw`. */
+  function heardAll() {
+    if (!head || hw == null) return true;
+    checking ??= (async () => {
+      const ids = await headIds(hw);
+      if (!ids?.length) return true;
+      if (ids.some((id) => !heard.has(id))) return false;
+      hw = Math.max(hw, ...ids);
+      for (const id of heard) if (id <= hw) heard.delete(id);
+      return true;
+    })().finally(() => { checking = null; });
+    return checking;
+  }
 
   async function ensure() {
-    if (governing && now() - builtAt <= maxAgeMs) return;
+    if (governing && now() - builtAt <= maxAgeMs) {
+      if (await heardAll()) return;
+      builtAt = -Infinity; // a writer it did not hear: rebuild, by the one derivation
+    }
     if (!building) {
       const startedAt = now();
       building = (async () => {
+        // The head BEFORE the rebuild reads: anything written after it is past
+        // `hw` and asked again next time; anything at or before it, the rebuild read.
+        const before = head ? await headIds(null) : null;
         const got = await rebuild(startedAt);
         governing = governingOf(got?.departures ?? []);
         // A walk recorded while the rebuild was reading may be missing from
@@ -128,6 +176,8 @@ export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AG
         builtAt = startedAt;
         recorded = 0;
         epoch += 1;
+        hw = before == null ? null : (before[0] ?? 0);
+        if (hw != null) for (const id of heard) if (id <= hw) heard.delete(id);
       })().finally(() => { building = null; });
     }
     await building;
@@ -166,10 +216,12 @@ export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AG
      * `storedDepartures` will hand it back once the act is read — the walk door
      * builds it from the values it just wrote. A projection that has not been
      * built, with no rebuild in flight, ignores it: the next rebuild reads the
-     * act itself.
+     * act itself. `actId` is the act's own id, so the head read knows this
+     * writer was heard (POS-691); without it, the head read rebuilds.
      */
-    record(rec) {
+    record(rec, { actId = null } = {}) {
       if (!rec?.handle) return false;
+      if (actId != null && Number.isFinite(Number(actId))) heard.add(Number(actId));
       if (building) pending.push(rec);
       if (!governing) return Boolean(building);
       governing.set(rec.handle, rec);
@@ -179,7 +231,7 @@ export function createPositionProjection({ rebuild, maxAgeMs = PROJECTION_MAX_AG
     },
 
     /** Forget everything; the next read rebuilds from the record. */
-    invalidate() { governing = null; meta = null; builtAt = null; recorded = 0; pending = []; epoch += 1; },
+    invalidate() { governing = null; meta = null; builtAt = null; recorded = 0; pending = []; hw = null; heard = new Set(); epoch += 1; },
 
     get epoch() { return epoch; },
   };

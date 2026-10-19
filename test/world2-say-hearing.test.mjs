@@ -101,5 +101,8 @@ test("a window the reader cannot give is said, and nothing before the instant is
   const r = await world2Serve("/world2/say", new URLSearchParams(`at=${iso(T + H)}`), { p: pool, hearingWindow: () => null });
   assert.equal(r.body.hearable_since, null);
   assert.match(r.body.hearing_window_disclosed, /could not be read/);
+  // POS-694: the read holds 13 h (SAY_READ_SQL), so a window it cannot give reaches the bound, and says so
+  assert.match(r.body.hearing_window_disclosed, /reaches back 13 h/);
+  assert.match(r.body.read_bound_disclosed, /13 h before the instant asked/);
   assert.deepEqual(r.body.emissions.map((e) => e.source), ["before-the-sweep", "little-bird", "far-off"]);
 });

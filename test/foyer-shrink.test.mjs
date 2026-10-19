@@ -1077,21 +1077,28 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //      The tenth note's rule stands: a PR that moves the pin re-captures here.
   // The golden's bytes are unchanged (full 24984, slim 22546).
   //
-  // ⚠ AND RE-CAPTURED AN EIGHTEENTH TIME, 2026-10-19 (lane plumb-exitlock, WLD-5 A,
-  // the exit lock), because the PR moved the world pin, daef8487 -> 2ca8291a (the
-  // head of postmark-world#249, on the doors stack #231/#233 over main bccecc66),
-  // as the tenth note says a pin move must. The code was cleared first: at this
-  // PR's head on CI-shaped clones at the OLD pin (suite-clones.sh's fetch, world
-  // daef8487, town 5efee017), F7c5 is green, byte-exact. Then the diff, leaf by
-  // leaf at the new pin BEFORE the capture: 1117 -> 1127 paths, 2 removed, 12
-  // added, 92 changed, and NOT ONE outside `stances`, the world's own data at the
-  // pin: `stances_awaiting` 61 -> 63, newer marks head the five rows
-  // (little-bird/a-page-torn-from-no-notes, seth/seths-folly) and their
-  // `on_your_ground` lists move with them. (This lane's office changes touch no
-  // doorstep segment: the exit act's lock fields, the enter door's lock read.)
+  // ⚠ AND RE-CAPTURED A SEVENTEENTH TIME, 2026-10-19 (lane plumb-flaky, POS-703),
+  // because the PR moved the world pin to world main: 38cfd41b (daef8487 plus
+  // POS-699's one commit) -> 8e159d75, 206 commits that include W2's kind rung
+  // and the settlements through 10-19. As the tenth note says a pin move must,
+  // the code was cleared first: this PR changes no doorstep segment (tests and
+  // the pin only), and at its base on CI-shaped clones at the OLD pin F7c5 is
+  // green (office#641's suite, run 39267673715, at 38cfd41b). Then the diff, leaf by leaf, on CI-shaped clones at the NEW pin
+  // (suite-clones.sh's fetch, world 8e159d75, town 5efee017) BEFORE the
+  // capture: 1117 -> 1129 paths, 2 removed, 14 added, 158 changed, every one of
+  // them the world's own data at the pin, in two segments and nowhere else:
+  //   1. `stances`: the count awaiting (61 -> 64), the five newest awaiting
+  //      rows and their `on_your_ground` lists, and `ground` (72 -> 73 marks,
+  //      wright/three-ships-on-one-water joining it). No key added or removed.
+  //   2. `stakes.rows.N`: 7 rows' `kind` in W2's form (`thing`,
+  //      `predicate`, `portal-ground`), and 4 rows' `class` null -> "home"
+  //      (exposed-timber, the-candle-vault, the-cellar-door,
+  //      the-lanternstep-parlor), which the 10-19 settlement wrote into the
+  //      sweep's registry (WORLD/settlement-publications.json).
+  // On the golden's world the compare is byte-exact again, so the form-aware
+  // remedies above are now the identity here.
   //
-  //   full  24984 -> 25000 (+16) = stances +16
-  //   slim  22546 -> 22562 (+16) = stances +16
+  //   full  24984 -> 25070 (+86) · slim  22546 -> 22632 (+86)
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

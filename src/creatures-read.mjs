@@ -207,7 +207,7 @@ export const TO_YOU_FOLD = Object.freeze({ value: "one event per creature, the n
  * one per creature: { kind: "creature", creature, at, line, reaction, roll,
  * judged_by, arrival?, and_more?, more? } (the newest; `and_more` counts the rest).
  *
- * From this process's fold, which keeps every reaction TO_YOU_REACH_MS (13 h)
+ * From this process's fold, which keeps every reaction TO_YOU_REACH_MS (25 h)
  * after it was written, however soon its creature ended or fled (review-574
  * C1), and boots that far back. A since older than that cannot be seen whole
  * here, so it answers `readable: false` and the shelf says it is incomplete.
@@ -225,7 +225,8 @@ export function creatureToYou({ living, law }, handle, { sinceMs, nowMs = Date.n
       ...(mine.length > 1 ? { and_more: mine.length - 1, more: `and ${mine.length - 1} more` } : {}) });
   }
   return sinceMs >= nowMs - TO_YOU_REACH_MS ? { events, readable: true }
-    : { events, readable: false, reason: "a creature's reactions older than the last 13 hours are not held here, and the crossing save does not carry them yet" };
+    : { events, readable: false, missing: `creatures' reactions older than ${TO_YOU_REACH_MS / 3600_000} h`,
+      reason: `a creature's reactions older than the last ${TO_YOU_REACH_MS / 3600_000} hours are not held here, and the crossing save does not carry them yet` };
 }
 
 // ── investigate ─────────────────────────────────────────────────────────────

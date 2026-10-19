@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { dropProvenanceCheck, dropRefId, isCandyClaim } from "../world2/tools/drop-provenance.mjs";
+import { dropProvenanceCheck, dropRefId, dropRefusalOf, isCandyClass, isCandyClaim } from "../world2/tools/drop-provenance.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const JOB = join(ROOT, "world2", "tools", "clearing-job.mjs");
@@ -145,4 +145,28 @@ test("the pure check: shape, act, action, actor, label, and the town's own candy
   assert.equal(dropProvenanceCheck({ ...claim, data: { ...claim.data, dropped: `act:${OVERSIZED}` } }, null), `dropped-unit-unproven: act ${OVERSIZED}`);
   assert.equal(isCandyClaim({ ...claim, claimant: "the-town" }), false);
   assert.equal(isCandyClaim({ ...claim, data: { class: "thing" } }), false);
+});
+
+// POS-692: THE ONE RULE, asked by the leave door (src/world.mjs § A CANDY ON THE GROUND) as by the clearing.
+test("the one proof, through a reader: no act named asks nothing; a named act is read and proved, or refused", async () => {
+  const asked = [];
+  const drop = { id: "7", action: "units:drop", class: "holding", actor: "sbx-cy", payload: { label: "l", moves: [{ from: "sbx-cy", to: null, label: "l", n: 1 }] } };
+  const q = async (sql, params) => { asked.push(params[0]); return { rows: params[0] === "7" ? [drop] : [] }; };
+  const placed = { claimant: "sbx-cy", class: "candy", data: { label: undefined, dropped: undefined } };
+  assert.equal(await dropRefusalOf(q, placed), "dropped-unit-unproven: no act", "amia-semper's shape: a placed candy names no act");
+  assert.deepEqual(asked, [], "and the store is not asked");
+  assert.equal(await dropRefusalOf(q, { claimant: "sbx-cy", class: "candy", data: { label: "l", dropped: "act:7" } }), null, "a real set-down proves");
+  assert.equal(await dropRefusalOf(q, { claimant: "sbx-bo", class: "candy", data: { label: "l", dropped: "act:7" } }), "dropped-unit-unproven: act 7", "another hand's set-down does not");
+  assert.equal(await dropRefusalOf(q, { claimant: "sbx-cy", class: "candy", data: { label: "l", dropped: "act:8" } }), "dropped-unit-unproven: act 8", "no such act");
+  assert.deepEqual(asked, ["7", "7", "8"]);
+});
+
+test("the class half, by lineage through the caller's reader", () => {
+  const chain = { lollipop: ["lollipop", "candy", "consumable", "thing"], mint: ["mint", "consumable", "thing"] };
+  const chainOf = (n) => chain[n] ?? [n];
+  assert.equal(isCandyClass("candy"), true, "candy itself, with no reader");
+  assert.equal(isCandyClass("lollipop"), false, "with no reader only candy itself is known");
+  assert.equal(isCandyClass("lollipop", chainOf), true, "a kind of candy is candy");
+  assert.equal(isCandyClass("mint", chainOf), false, "a consumable that is not candy is not");
+  assert.equal(isCandyClass(undefined, chainOf), false);
 });

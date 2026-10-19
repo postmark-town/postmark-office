@@ -42,8 +42,8 @@ const RE = /^- (\S+) · \S+ · (?:enters|exits) \S+ · ferry (\d+\.\d{4})/;
 
 /** An office whose every read takes ten seconds, on a clock it owns. The pen
  *  notes the clock at the moment it is handed the rows. */
-async function slowOffice({ standing = { x: -9, y: 35.5 }, start = Date.UTC(2026, 9, 1, 12), now = "the clock" } = {}) {
-  const worldState = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
+async function slowOffice({ standing = { x: -9, y: 35.5 }, start = Date.UTC(2026, 9, 1, 12), now = "the clock", world = null } = {}) {
+  const worldState = world ?? JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
   const law = await import(`file:///${join(CLONE, "tools", "enter-exit.mjs").replace(/\\/g, "/")}`);
   let t = start;
   const slow = (v) => { t += 10_000; return v; };
@@ -112,4 +112,26 @@ test("NO HALF-DAY CLOCK — a door with no `now` stamps the ferry's own clock", 
   const read = await occupancyViaOffice(CLONE, {}, { ledger: async () => "" });
   const wall = ferryOf(Date.now());
   assert.ok(Math.abs(read.at - wall) <= 0.001, `the occupancy read's clock is the ferry's (${read.at} vs ${wall})`);
+});
+
+// ONE FLOOR (POS-699, 2026-10-19). The test above went red about one run in ten,
+// and it was right: passageInstant floors the ferry with the world's stampAt, and
+// the world's formatEnterExit floored it a second time. In floats stampAt is not
+// idempotent ((k/1e4)·1e4 can land just under k), so about 9% of rows carried a
+// ferry 0.0001 crossing (4.32 s) early. Here the real door writes at 300 chosen
+// instants of a day, 4,321 ms apart, so the instants that the second floor broke
+// are always among them: every row's ferry is its own reading's floor. One world
+// object serves all 300: the door's world reads are keyed on it, and a fresh parse
+// per door costs ~0.7 s, which 300 times is past the file's cap.
+test("ONE FLOOR — at 300 instants of a day, every row's ferry is the floor of its own reading (POS-699)", SKIP, async () => {
+  const wrong = [];
+  const world = JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8"));
+  for (let i = 0; i < 300; i++) {
+    const o = await slowOffice({ start: Date.UTC(2026, 9, 19, 12) + i * 4321 + 7, now: null, world });
+    await enterViaOffice(CLONE, { mark: SHIP, handle: "postmaster", accept: true }, key("postmaster"), o.deps);
+    const { lines, t } = o.writes[0];
+    const got = stampsOf(lines[0]).ferry;
+    if (got !== ferryOf(t)) wrong.push(`${new Date(t).toISOString()}: ${got} written, ${ferryOf(t)} read`);
+  }
+  assert.deepEqual(wrong, [], `${wrong.length} of 300 rows carry a ferry other than their reading's floor`);
 });

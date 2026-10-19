@@ -29,7 +29,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -222,4 +222,36 @@ test("GET /world/store advertises W2_FOLD beside its siblings — and only adver
   } finally {
     if (before === undefined) delete process.env.W2_FOLD; else process.env.W2_FOLD = before;
   }
+});
+
+// POS-704: A CLASS FILE THAT KEEPS ITS OWN `dials:` LINE. On S118 no class does
+// (W2 moved every dial into property nodes), so the equality above cannot see
+// `_fileDials`. Here the resident class at the tag gets a `dials:` line whose
+// pace disagrees with its property node: the law row's `dials` is the merge
+// (the property first, 60) and stays what live readers ask for, and the record
+// the store fold rebuilds carries the file's own line, as the loader's does.
+test("POS-704 · a class file's own dials: line rides the law row beside the merge, and the store fold gives it back", { skip: WHY_SKIP }, async () => {
+  const work = mkdtempSync(join(tmpdir(), "pos704-dials-"));
+  try {
+    const repo = join(work, "w");
+    execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", WORLD_CLONE, repo], { stdio: "ignore" });
+    git(repo, ["-c", "advice.detachedHead=false", "checkout", "-q", TAG]);
+    const mf = await import(pathToFileURL(join(repo, "tools", "marks-fold.mjs")).href);
+    const resident = mf.loadMarks(join(repo, "WORLD", "marks")).find((m) => m.id === "the-town/resident");
+    assert.ok(resident && resident.dials === undefined, "the resident class at the tag carries no dials: line");
+    const file = join(resident._dir, "mark.md");
+    const text = readFileSync(file, "utf8");
+    writeFileSync(file, text.replace(/\r?\n---\r?\n/, '\ndials: {"pace_km_per_crossing": 99}\n---\n'));
+    const { deriveLaw } = await import("../world2/tools/law-ingest.mjs");
+    const law = await deriveLaw({ lawRepo: repo });
+    const row = (law.rows ?? law).find((r) => r.kind === "class" && r.key === "resident");
+    assert.deepEqual(row.data._fileDials, { pace_km_per_crossing: 99 }, "the file's own line, kept");
+    assert.equal(Number(row.data.dials.pace_km_per_crossing), 60, "the row's dials is still the merge, the property node first");
+    const rec = marksFromRows([], [JSON.parse(JSON.stringify(row))]).find((m) => m.id === "the-town/resident");
+    const loaded = mf.loadMarks(join(repo, "WORLD", "marks")).find((m) => m.id === "the-town/resident");
+    assert.deepEqual(rec.dials, loaded.dials, "the rebuilt record carries the file's dials, as the loader's does");
+    assert.equal("_fileDials" in rec, false, "and not the row's bookkeeping");
+    const other = marksFromRows([], [JSON.parse(JSON.stringify((law.rows ?? law).find((r) => r.kind === "class" && r.key === "sound")))])[0];
+    assert.equal(other.dials, undefined, "a class whose file has no dials: line rebuilds with none");
+  } finally { rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });

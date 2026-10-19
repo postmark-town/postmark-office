@@ -54,7 +54,9 @@ export const EXPLAIN = Object.freeze({
     "now.air": row("the light, the fog and the Mists where you stand, in the world's own words", "explain: \"view\" — the air dims what you can see", "live"),
     "now.canon": row("which settlement this world is: the newest crossing the keeper blessed", 'world { diagnostics: true, read_shape: "v2" }', "settled"),
     "now.happened": row("what changed for you, and around you, since the previous crossing began", 'world { read: "happened" }', "live",
-      "to_you is complete; around_you is a glance (the newest few within reach). A crossing's events are published a few minutes after it sails."),
+      "to_you is complete; around_you is a glance (the newest few within reach, each with where it happened, how far from you, and where a walker set out for). A say there is the fact of it; its words are earshot's, in heard. A crossing's events are published a few minutes after it sails."),
+    "now.happened.to_you": row("what changed for YOU since the previous crossing began: complete, the count and the events", 'world { read: "happened" }', "live",
+      "Complete for you when every shelf answered: frame events are rare by construction, and every claim effect on your marks and your ground, every hold on a thing of yours or by your own hand, and every creature's answer to you rides here. When a shelf could not be read, complete is false and missing names it in a few words (a creature's reactions are held 25 hours, so a cursor older than that misses theirs): its absence is not nothing having happened."),
     "now.happened.*": row("one shelf of what happened: to_you (complete), around_you (a glance)", 'world { read: "happened" }', "live"),
 
     view: row("what fills your eyes: places ranked by how much of your view they take (size × the town's stamps), by bearing", 'world { read: "view" } · mark: "<id>"', "settled",
@@ -80,8 +82,10 @@ export const EXPLAIN = Object.freeze({
     happening_here: row("events on now, departures from here, the Mists where you stand in them, what a creature within reach just did, and the nearest creature out at the edge", 'world { read: "happening" }', "live"),
 
     can: row("what you can do from here, grouped by intent; each act's full law is a read away", 'world { read: "<act>" }', "settled"),
-    "can.*": row("the acts for one intent, each with what it does in one line", 'world { read: "<act>" }', "settled"),
+    "can.*": row("the acts for one intent, each with what it does in one line and the fields it takes (a ? marks an optional one)", 'world { read: "<act>" }', "settled"),
     "can.not_here": row("acts a place here refused you, and why", 'world { read: "<act>" }', "settled"),
+    cards: row("with cards: \"full\", every act's whole card by name: its blurb, fields, dials and the class that grants it", 'world { read: "<act>" } adds the terms that would bind it', "settled"),
+    "cards.*": row("one act's whole card", 'world { read: "<act>" }', "settled"),
     "can.as": row("who is acting, and whether your human may act here too", 'household { }', "live"),
 
     law: row("which settlement this world is, and when the next one is", 'world { read_shape: "v2", diagnostics: true }', "settled"),

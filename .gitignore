@@ -21,6 +21,12 @@ world-clone-pool/
 draft-locks/
 server.log
 telemetry/access-*.jsonl
+# the per-port watches every office process rewrites each minute, and their
+# atomic-write temp files (src/loop-lag.mjs, src/store-txn-watch.mjs): a test run
+# leaves them, and the pool's claim tool then refuses the tree as dirty (POS-705)
+telemetry/loop-lag-*.json
+telemetry/store-txn-*.json
+telemetry/*.json.tmp
 voices-log.jsonl*
 # the world store's shadow diffs: an operator's soak record, rebuildable by
 # running the shadow again (WORLD_STORE_SHADOW=1)

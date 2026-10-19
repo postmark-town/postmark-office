@@ -201,13 +201,15 @@ test("v2: no url anywhere in a bare read, and a picture is a flag", { skip: !HAV
   for (const [b, rows] of Object.entries(v2.view)) if (b !== "how") for (const r of rows) if ("image" in r) assert.equal(r.image, true);
 });
 
-// THE SIZE BUDGET IS PENDING DARKO (POS-632). The ≤5K was the build's target;
-// Darko's 22:33 ruling put every mark's whole body back (bodies win; the lever is
-// rows, never bodies), and the budget went to his Call. 8K holds CI meaningful
-// meanwhile, on Wright's word.
-test("v2: within the budget as the MCP door serves it, at the rig's standpoint (8k, pending Darko on POS-632)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+// THE SIZE BUDGET IS 10,000 (Darko, 2026-10-19 13:58, on POS-632). The ≤5K was
+// the build's target; Darko's 22:33 ruling put every mark's whole body back
+// (bodies win; the lever is rows, never bodies), and 8K held CI meanwhile on
+// Wright's word, until the read outgrew it as law granted acts (the consume card,
+// +58; POS-697's field tails, ~+250): 8,069 on CI. The cap is a guard against
+// runaway growth, not a target.
+test("v2: within the budget as the MCP door serves it, at the rig's standpoint (10k, Darko on POS-632)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   const served = JSON.stringify(await v2At(), null, 1).length; // mcp.mjs § the answer's text block
-  assert.ok(served <= 8000, `v2 served is ${served} characters`);
+  assert.ok(served <= 10000, `v2 served is ${served} characters`);
 });
 
 test("v2: every mark the bare read shows carries its whole body (Darko 22:33)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
@@ -234,12 +236,24 @@ test("v2: with presence off, who says so rather than showing an empty room", { s
   assert.match(v2.who.unavailable ?? "", /presence is not switched on/);
 });
 
-test("v2: diagnostics rides v2 only, and cards: has nothing to size there", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+test("v2: diagnostics rides v2 only; cards: full adds every card whole beside can, and names says can by name (POS-697 item 6)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   const d = await v2At({ diagnostics: true });
   assert.ok(d.diagnostics?.law, "the full law block is behind the flag");
   assert.ok(!("diagnostics" in await v2At()));
   assert.equal((await worldApex({ handle: WHO, diagnostics: true }, KEY, {})).code, 422);
-  assert.equal((await v2At({ cards: "names" })).code, 422);
+  const glance = await v2At();
+  const full = await v2At({ cards: "full" });
+  assert.ok(!full.error, JSON.stringify(full).slice(0, 300));
+  const acts = Object.entries(glance.can).filter(([k]) => !["not_here", "as", "unavailable"].includes(k)).flatMap(([, g]) => Object.keys(g));
+  assert.ok(acts.length > 0);
+  assert.deepEqual(Object.keys(full.cards).sort(), [...acts].sort(), "a card for every act can lists");
+  for (const act of acts) assert.deepEqual(full.cards[act].fields, (await v2At({ read: act })).card?.fields ?? full.cards[act].fields, `${act}: the same fields its read card carries`);
+  assert.deepEqual(full.can, glance.can, "can is unchanged beside the cards");
+  assert.ok(!("cards" in glance), "omitted, no cards");
+  const names = await v2At({ cards: "names" });
+  for (const [group, list] of Object.entries(names.can)) if (!["not_here", "as", "unavailable"].includes(group)) assert.ok(Array.isArray(list) && list.every((a) => typeof a === "string"), group);
+  const { unexplained } = await import("../src/read-grammar.mjs");
+  assert.deepEqual(unexplained("world", full, 2), []);
   assert.equal((await v2At({ telling: true })).code, 422, "v2 tells no prose; v1 does (review-555 nit)");
 });
 
@@ -332,6 +346,9 @@ test("PR-4: investigate: on a resident rides the bare read, v1 and v2, with publ
     assert.ok(!JSON.stringify(r.investigated).includes("note-to-self"));
     const { unbodied } = await import("./helpers/mark-bodies.mjs");
     assert.deepEqual(unbodied(r.investigated), [], "every mark under investigated carries its body");
+    // POS-697 G2b: v2 answers the focus alone; v0 is the whole read plus investigated, as before
+    if (shape === "v2") assert.deepEqual(Object.keys(r), ["you", "investigated", "more", "reading_law", "read_shape"]);
+    else assert.ok(Array.isArray(r.within), "v0 keeps the whole read");
   }
   assert.ok(!("investigated" in await v2At()), "absent when not asked");
   assert.equal((await worldApex({ handle: WHO, investigate: KOGANE_PARCEL }, KEY, {})).code, 422, "a mark is mark:'s");

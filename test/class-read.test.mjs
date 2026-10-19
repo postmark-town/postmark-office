@@ -142,6 +142,16 @@ test("C1: the climb on a deep chain: each step up is the same move, and the poin
   assert.equal(cr.classPointer(db, "no-such-class"), null);
 });
 
+test("C1c: a class lists its kinds, the classes under it by name (POS-692: candy's kinds are found here)", () => {
+  for (const form of FORMS) {
+    const db = dbOf(form);
+    assert.deepEqual(cr.explainClass(db, "consumable").kinds, ["candy"], `${form}: candy is a kind of consumable`);
+    assert.deepEqual(cr.explainClass(db, "unit").kinds, ["widget"]);
+    assert.deepEqual(cr.explainClass(db, "candy").kinds, [], "a class with nothing under it lists none, and still answers the key");
+    assert.ok(cr.explainClass(db, "mark").kinds.includes("thing") && !cr.explainClass(db, "mark").kinds.includes("consumable"), "only the classes directly under it");
+  }
+});
+
 test("C1b: a chain that loops or names an unknown class stops there, and says no more than the record", () => {
   const t = layer("label");
   t.nodes.push(klass("loop-a", { extends: "loop-b" }), klass("loop-b", { extends: "loop-a" }), klass("orphan", { extends: "nothing-declares-me" }));
@@ -300,7 +310,7 @@ test("C7: every statement class-read registers is its SQL, row for row, over eac
       const names = ["candy", "thing", "parcel", "no-such-class"];
       for (const sql of mine) {
         const marks = (sql.match(/\?/g) ?? []).length;
-        const argSets = marks === 0 ? [[]] : /'\$\.class'\) = \?/.test(sql) ? names.map((n) => [n]) : ids.map((id) => [id]);
+        const argSets = marks === 0 ? [[]] : /'\$\.(class|extends)'\) = \?/.test(sql) ? names.map((n) => [n]) : ids.map((id) => [id]);
         for (const args of argSets)
           assert.equal(plain(store.prepare(sql).all(...args)), plain(sqlite.prepare(sql).all(...args)), `${form}: ${sql.slice(0, 70)} ${JSON.stringify(args)}`);
       }
