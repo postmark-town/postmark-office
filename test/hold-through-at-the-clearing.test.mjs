@@ -239,7 +239,7 @@ test("5b. PARCEL: berthillon's hands are full (capacity 1, a spoon in them): the
   const [back] = await townActs();
   assert.deepEqual([back.action, back.at_anchor, back.at_dx, back.at_dy], ["drop", PARCEL, 0, 0], "anchored at the parcel's centre");
   const row = await coneRow();
-  assert.deepEqual(row.geometry, { at: { x: 400, y: 400 }, extent: { w: 1, h: 1 } }, r.out.split(/\r?\n/).filter((l) => /hold/.test(l)).join(" | "));
+  assert.deepEqual(row.geometry, { at: { x: 400, y: 400 }, extent: { w: 1, h: 1 } }, "printed on the parcel");
   assert.equal(row.data.held_by, undefined);
 });
 

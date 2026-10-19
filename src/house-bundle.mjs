@@ -349,7 +349,11 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     act: `household { do: "declare-stance-on", args: { on: "${c.mark}", stance: "welcomed" | "opposed" } }`,
   }));
   const setDowns = (stances.set_downs_awaiting ?? []).map((r) => ({
-    ...r, cause: `${r.set_down_by} set down ${r.thing}, which ${r.made_by} made — it waits on your house's word`,
+    ...r, cause: `${r.set_down_by} set down ${r.thing}, which is ${r.owner ?? r.made_by}'s — it is lent until your house says otherwise, and it waits on your house's word`,
+  }));
+  // A TAKE of your house's thing by someone outside it (POS-688): lent until your house says otherwise
+  const takes = (stances.awaiting_your_word ?? []).filter((r) => r.act === "take").map((r) => ({
+    ...r, cause: `${r.by} took ${r.thing}, which is ${r.owner}'s — it is lent until your house says otherwise, and it waits on your house's word`,
   }));
 
   const bounces = [];
@@ -388,7 +392,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // the loose `left_the_world` rows the 7-day take note rode first.
   const alerts = alerted.alerts ?? [];
 
-  const count = stanceRows.length + setDowns.length + bounces.length + keyAsks.length + atRisk.length + alerts.length;
+  const count = stanceRows.length + setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length;
   return {
     read: "needs-you", household: house.slug, residents: mine, as_of: ctx.asOf ?? null,
     count,
@@ -399,6 +403,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       rows: stanceRows,
     },
     set_downs_awaiting: { rows: setDowns, ...(stances.set_downs_unavailable ? { unavailable: stances.set_downs_unavailable } : {}) },
+    takes_awaiting: { rows: takes, ...(stances.awaiting_your_word_unavailable ? { unavailable: stances.awaiting_your_word_unavailable } : {}) },
     unplaced_bounces: { rows: bounces },
     key_asks: { rows: keyAsks, ...(keyAsksUnavailable ? { unavailable: keyAsksUnavailable } : {}) },
     stakes_at_risk: { next_settlement: stakes.next_settlement ?? null, rows: atRisk,
