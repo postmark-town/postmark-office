@@ -371,7 +371,7 @@ test("PUT FORWARD: a claim already on the docket is not re-sited here, and the r
 
 // ── FALSIFIER 2 · a stranger's set-down files nothing, and says so ──────────
 
-test("ANA DROPS KEITH'S STOOL: no amend, no claim, canon unchanged — and the receipt says it is unaccepted", async () => {
+test("ANA DROPS KEITH'S STOOL: no amend, no claim — and the receipt says it stays keith's and the settlement prints it where she set it down (D2, POS-688)", async () => {
   const p = await fresh();
   hand("ana");
   const r = await hold.callHoldTool("world_hold", { thing: STOOL, handle: "ana" }, ANA);
@@ -381,7 +381,8 @@ test("ANA DROPS KEITH'S STOOL: no amend, no claim, canon unchanged — and the r
   assert.equal(p.claims().length, 0, "no claim on the docket: canon keeps the stool where Keith put it");
   assert.equal(r.set_down.whose, "another household's");
   assert.equal(r.set_down.amend.filed, false);
-  assert.match(r.stands_note, /keith made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where keith put it/);
+  assert.match(r.stands_note, /^it stands where you stood when you set it down, and the act carries that place\. keith made it and it stays keith's; the settlement prints it here at the next crossing\.$/);
+  assert.doesNotMatch(r.stands_note, /canon stays/, "the POS-138 promise is not made: the settlement prints a held thing's set-down (D2)");
   assert.doesNotMatch(r.stands_note, /re-sites/, "the old promise is not made to a stranger");
   console.log(`    RECEIPT · ${r.stands_note}`);
 });
