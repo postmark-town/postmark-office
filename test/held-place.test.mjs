@@ -175,6 +175,10 @@ test("10. W6: a take of a thing in someone else's hands answers as a take", () =
   assert.equal(refuseTakeOfHeld({ thing: CONE, verb: "drop", actor: "sb-cleo", holder: "sb-ash" }), undefined, "a drop's refusal is the adjudicator's own");
   assert.equal(refuseTakeOfHeld({ thing: CONE, verb: "take", actor: "sb-ash", holder: "sb-ash" }), undefined);
   assert.equal(refuseTakeOfHeld({ thing: CONE, verb: "take", actor: "sb-cleo", holder: null }), undefined);
+  // and the door asks it, before the faces are derived (the face of a take of a held thing is "drop")
+  const door = readFileSync(join(ROOT, "src", "world-hold.mjs"), "utf8");
+  const asks = door.indexOf("refuseTakeOfHeld({ thing: args.thing, verb, actor, holder: preHolder });");
+  assert.ok(asks > 0 && asks < door.indexOf("const face = faceOf(preHolder, args.to ?? null);"), "the door asks it before the face");
 });
 
 test("11. ONE OWNER: every reader of a thing's place reads the one answer, and the copies are deleted (source pins)", () => {
