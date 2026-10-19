@@ -1004,7 +1004,7 @@ const shadowLine = (c) => {
 export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
   const inbox = await stanceInbox(repo, key, { dbPath });
   if (inbox.unavailable) return { unavailable: inbox.unavailable, stances_awaiting_ground: stancesGround(key?.handles), awaiting: [],
-    ...(setDowns ? { awaiting_your_word: [], set_downs_awaiting: [], set_downs_unavailable: "the world could not be read, so neither group of this read could be — this is not an answer that nothing waits" } : {}),
+    ...(setDowns ? { set_downs_awaiting: [], set_downs_unavailable: "the world could not be read, so neither group of this read could be — this is not an answer that nothing waits" } : {}),
     standing: [] };
 
   const n = Math.max(1, Math.min(Number(limit) || PAGE_SIZE, 100));
@@ -1224,6 +1224,9 @@ async function answerWord({ on, stance, by, key, own, dbPath, witnessStamp, cros
 export async function wordsAwaiting(handles, { marks = null, deps = {} } = {}) {
   const mine = [...new Set([...(handles ?? [])].filter(Boolean).map(String))].sort();
   if (!mine.length) return { rows: [] };
+  // an office that keeps no hold record says so in the words it always has (POS-138's read, the same line)
+  if (!deps.record && !(await import("./world2-acts.mjs")).world2Enabled())
+    return { rows: [], unavailable: "this office cannot read the holding record — not an answer that nothing waits" };
   let rec;
   try { rec = deps.record ? await deps.record() : await (await import("./world-kinds.mjs")).holdRecordNow(); }
   catch (e) { return { rows: [], unavailable: `the holding record could not be read (${plainReason(e, "record", "your house's things")}) — this is not an answer that nothing waits` }; }
@@ -1252,11 +1255,13 @@ export async function wordsAwaiting(handles, { marks = null, deps = {} } = {}) {
 async function setDownsGroup(key, inbox, deps = {}) {
   const g = await wordsAwaiting(handlesOf(key), { marks: inbox.marks ?? null, deps });
   const setDowns = g.rows.filter((r) => r.act === "set-down")
-    .map((r) => ({ thing: r.thing, made_by: r.made_by, owner: r.owner, set_down_by: r.by, at: r.at ?? null, act_id: r.act_id, answer: r.answer }));
+    .map((r) => ({ thing: r.thing, made_by: r.made_by, ...(r.owner !== r.made_by ? { owner: r.owner } : {}), set_down_by: r.by, at: r.at ?? null, act_id: r.act_id, answer: r.answer }));
   return {
-    awaiting_your_word: g.rows,
+    // said only when something waits: the morning page does not grow a key for nothing (the doorstep's byte budget)
+    ...(g.rows.length ? { awaiting_your_word: g.rows } : {}),
     set_downs_awaiting: setDowns,
-    ...(g.unavailable ? { awaiting_your_word_unavailable: g.unavailable, set_downs_unavailable: g.unavailable } : {}),
+    // one line for both lists, under the name it has always had: they are read from one record
+    ...(g.unavailable ? { set_downs_unavailable: g.unavailable } : {}),
   };
 }
 

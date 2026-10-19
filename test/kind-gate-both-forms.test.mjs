@@ -57,7 +57,7 @@ const put = (root, path, text) => {
   writeFileSync(full, text);
 };
 
-// ── the world in a bottle (set-down-files-the-amend.test.mjs's, with two stools) ──
+// ── the world in a bottle (owners-word-at-the-door.test.mjs's, with two stools) ──
 //
 // Keith's house holds the garage and a yard parcel. Two of his stools stand in
 // the garage: one in the old form (as every store folded before W2 holds it),
