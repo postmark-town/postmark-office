@@ -76,7 +76,7 @@ import { emissionsEnabled } from "./dynamic-store.mjs"; // stage 2: the dynamic 
 import { world2Enabled } from "./world2-acts.mjs"; // the write-path closure: is the shadow mirror on at all
 import { VESSEL_HANDLE, ridesTheVessel } from "./dynamic-entities.mjs"; // the aboard test, one home for two readers
 import { carriersFrom, carriersWithDisclosure, heardFromV2, inRect, movementStandpoint, leavingWhileOccupying, walkFenceRefusal, movementV2Enabled, roadTerms, storedDepartures, storedGoverningDepartures, storedRecordsFor, vehicleStandpoint, vesselPositionAt as vesselFromTimetable, vesselServiceFrom, worldHasVehicle } from "./world-movement.mjs"; // stage D: carriers carry, frames compose; #2986: aboard is occupancy
-import { arrivedNotice, doorstepTransport, isVehicleStop, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable; POS-165: the walk verb asks the same predicate the ride verb does
+import { arrivedNotice, doorstepTransport, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable
 import { findMarks } from "./world-find.mjs"; // find a mark by name from anywhere (2026-09-26)
 import { byBand, presenceEnabled, presentNear, near as presenceNear, everyone as presenceEveryone, PRESENCE_DIALS } from "./dynamic-presence.mjs"; // stage 2: residents revealed to each other
 import { MEDIA_BASE, mediaUrlOk } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks
@@ -5310,7 +5310,7 @@ export async function worldNoteViaOffice(worldClone, payload = {}, key = null) {
 // Rulings this implements, named so a reviewer can check each:
 //   2 — destination order: no target → HOME; mark id → its footprint; raw coords
 //       kept for the general case, never the path we teach.
-//   3 — targets are SITED marks only, tier-excluded, extent-capped.
+//   3 — targets are SITED marks only (the tier exclusion was removed by POS-702, Darko 2026-10-19; the extent cap by C7, below).
 //   4 — water is an obstacle and there is NO pathfinding. A leg that crosses
 //       water is refused and the bounce names the nearest crossing; the resident
 //       declares their own waypoints. The resident is the pathfinder.
@@ -5326,7 +5326,6 @@ export async function worldNoteViaOffice(worldClone, payload = {}, key = null) {
 // ("too large to be a meaningful destination") no longer holds. A removed
 // check, not a lost record — CALLS.md C7 (archived in the world repo) keeps
 // the original reasoning.
-const WALK_EXCLUDED_TIERS = new Set(["constitution"]);
 
 // How many sited marks a parcel bounce names before it stops listing. A parcel
 // is 25 m square, so this is a cap that should almost never bite; it exists so a
@@ -5678,50 +5677,18 @@ async function walkAct(worldClone, payload = {}, key = null) {
       const refusal = unwalkableTarget(m, within);
       throw bounce(422, refusal.defect, refusal.hint);
     }
-    // ── A STOP A TIMETABLE NAMES IS A DESTINATION (POS-165, Keemin-ruled
-    //    2026-09-21 on Kogane's letter) ────────────────────────────────────
+    // ── ANYWHERE ON THE MAP IS A DESTINATION (POS-702; Darko, 2026-10-19 13:58) ──
     //
-    // "A mark that any vessel's timetable names as a stop is a destination,
-    // whatever its tier. The furniture refusal stays for furniture no timetable
-    // names."
-    //
-    // The instance: the Post Office's own notes say every stop on her timetable
-    // is a door into her and name `the-town/the-post-office` first — and that
-    // mark wears the constitution tier, so the boat's documented first step was
-    // the one move this verb refused. Kogane's workaround was a 71,340-character
-    // mark read to dig out two coordinates and then a coordinate walk to them,
-    // which this door would have accepted all along. The refusal was never
-    // protecting anything: the same journey, spelled the only way the door
-    // refused to hear.
-    //
-    // THE RIDE VERB SETTLED THIS THREE DAYS AGO, THE OTHER WAY. `world-ride.mjs
-    // § rideRefusal` carries Wright's 2026-09-19 ruling that her own id IS a
-    // valid destination — "on this ring she is both" — and the walk verb was the
-    // lone holdout. So this reads `isVehicleStop`, the predicate that ruling
-    // already runs on, rather than inventing a second spelling of "is a stop".
-    //
-    // ⚑ THE READ IS INSIDE THE REFUSAL BRANCH, AND THAT IS THE WHOLE COST
-    //   ARGUMENT. A walk to a market mark, a home mark, a parcel or a coordinate
-    //   never reaches this line. Only a walk that bounces today pays anything,
-    //   and what it pays is a `WeakMap` hit: `vesselServiceFrom` memoizes on the
-    //   marks array, `world()` hands back the same array until the sha moves,
-    //   and with WORLD_MOVEMENT_V2 on the service is ALREADY folded before this
-    //   block — `residentStandpoint` above → `movementStandpoint` →
-    //   `vesselServiceFrom`, same key, same repo.
-    //
-    // ⚑ ONE SERVICE, NOT EVERY VESSEL — said out loud because the ruling says
-    //   "any vessel". `vesselServiceFrom` collapses `servicesFromFold`'s LIST to
-    //   one (`services.find(…) ?? services[0] ?? null`). Measured on the fold at
-    //   world `caef5eb8`: 1,239 marks, exactly ONE `mechanic: timetable` mark, so
-    //   today the two sets are the same. If a second timetable is ever planted,
-    //   this exemption narrows to the first vessel — as do `world-crossings.mjs`'s
-    //   own two `isVehicleStop` call sites, which share the reader.
-    if (WALK_EXCLUDED_TIERS.has(m.tier)) {
-      const { service } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
-      if (!isVehicleStop(id, service))
-        throw bounce(422, `"${id}" is ${m.tier} — the town's own furniture, not a destination`,
-          "walk to a market or sovereign mark, or give coordinates");
-    }
+    // The tier refusal is gone: "the town's own furniture, not a destination"
+    // refused every constitution mark, and once every town mark stands at the
+    // constitution (POS-702) it would have refused the deck, the gangway and
+    // the quay that residents walk to. Darko ruled A: anything with a place on
+    // the map is walkable, and the Mist (seasonal) is the one exception, which
+    // `mistsRefusal` below still answers. POS-165's exemption for a stop on a
+    // vessel's timetable (Keemin, 2026-09-21) is subsumed: every stop is now a
+    // destination because every placed mark is. A mark with no place of its own
+    // (a law node, a class, a property) is still refused, as not sited (above)
+    // and as having no place on the map (below).
     if (!m.at) throw bounce(422, `"${id}" has no place on the map`, "an unplaced mark cannot be walked to");
     // The C7 size cap once bounced here ("too big to be a destination", ≥2000 m).
     // Removed 2026-08-19, founder-ruled: rim arrival makes any named mark a
