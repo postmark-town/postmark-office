@@ -228,6 +228,6 @@ export function cardsSchemaAt(schema, shape = "v0") {
   return {
     ...schema,
     enum: ["names", "full"],
-    description: 'the action cards\' size. Omitted, the lean read gives each act as one line (v1) or by name (v2). cards: "full" gives every card whole (its blurb, fields, dials and grant); cards: "names" gives each act\'s name, one line and how it reached you.',
+    description: 'the action cards\' size. Omitted, each act is one line with its fields (v1\'s actions, v2\'s can). cards: "full" gives every card whole (its blurb, fields, dials and grant; in v2, as cards beside can); cards: "names" gives each act\'s name, one line and how it reached you (in v2, can names its acts and nothing more).',
   };
 }

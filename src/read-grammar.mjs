@@ -84,6 +84,8 @@ export const EXPLAIN = Object.freeze({
     can: row("what you can do from here, grouped by intent; each act's full law is a read away", 'world { read: "<act>" }', "settled"),
     "can.*": row("the acts for one intent, each with what it does in one line and the fields it takes (a ? marks an optional one)", 'world { read: "<act>" }', "settled"),
     "can.not_here": row("acts a place here refused you, and why", 'world { read: "<act>" }', "settled"),
+    cards: row("with cards: \"full\", every act's whole card by name: its blurb, fields, dials and the class that grants it", 'world { read: "<act>" } adds the terms that would bind it', "settled"),
+    "cards.*": row("one act's whole card", 'world { read: "<act>" }', "settled"),
     "can.as": row("who is acting, and whether your human may act here too", 'household { }', "live"),
 
     law: row("which settlement this world is, and when the next one is", 'world { read_shape: "v2", diagnostics: true }', "settled"),

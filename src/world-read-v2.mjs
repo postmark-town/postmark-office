@@ -265,17 +265,19 @@ export function toYouShort(t) {
 }
 
 /** CAN: the afforded acts by intent, one line each; refusals said with their reason (G1). */
-export function canBlock(entries = [], { pace = null, handles = [], standing = null, humanHere = [], notYours = [] } = {}) {
+export function canBlock(entries = [], { pace = null, handles = [], standing = null, humanHere = [], notYours = [], names = false } = {}) {
   const out = {};
   const grouped = new Set();
+  // cards: "names" (POS-697 item 6): each group says its acts by name only
+  const say = (list) => (names ? list.map((e) => e.action) : Object.fromEntries(list.map((e) => [e.action, actLine(e, { pace })])));
   for (const [group, acts] of Object.entries(ACT_GROUPS)) {
     const here = acts.map((a) => entries.find((e) => e.action === a)).filter(Boolean);
     if (!here.length) continue;
-    out[group] = Object.fromEntries(here.map((e) => [e.action, actLine(e, { pace })]));
+    out[group] = say(here);
     for (const e of here) grouped.add(e.action);
   }
   const rest = entries.filter((e) => !grouped.has(e.action));
-  if (rest.length) out.more = Object.fromEntries(rest.map((e) => [e.action, actLine(e, { pace })]));
+  if (rest.length) out.more = say(rest);
   // G1: a refusal is said only for an act you cannot do here at all. A door that
   // refused you while your own grant opens the same act (a human-only door over
   // a resident's ambient walk) is not news, and `as` names the human's acts.
@@ -289,6 +291,11 @@ export function canBlock(entries = [], { pace = null, handles = [], standing = n
     if (humanHere.length) out.as += `; your human may act here too: as: "human" (${humanHere.join(", ")})`;
   }
   return out;
+}
+
+/** cards: "full" under v2: each afforded act's whole card, by name. */
+export function fullCards(entries = []) {
+  return Object.fromEntries(entries.map((e) => [e.action, e]));
 }
 
 /** How near an event's own point must be to be "here" when its place is not a mark on your spine or in view. */
@@ -457,7 +464,10 @@ export function shapeV2(p) {
     heard: p.heard == null ? { unavailable: "earshot is not read on this path; read: \"say\" hears the room" } : heardBlock(p.heard),
     ...(happening ? { happening_here: happening } : {}),
     // the class layer unreadable: say so, as v1's law does, never an empty can (review-555 § 1)
-    can: p.canUnavailable ? { unavailable: p.canUnavailable } : canBlock(p.entries, { pace: p.pace, handles: p.handles, standing: p.handle, humanHere: p.humanHere, notYours: p.notYours }),
+    can: p.canUnavailable ? { unavailable: p.canUnavailable } : canBlock(p.entries, { pace: p.pace, handles: p.handles, standing: p.handle, humanHere: p.humanHere, notYours: p.notYours, names: p.cards === "names" }),
+    // cards: "full" (POS-697 item 6, Darko 2026-10-19 09:21): every card whole beside can, as the dial
+    // promises (blurb, fields, dials, grant); the terms that would bind each stay a read: "<act>" away
+    ...(p.cards === "full" && !p.canUnavailable ? { cards: fullCards(p.entries) } : {}),
     law: { ...(p.canon ? { canon: p.canon } : {}), ...(p.nextSettlement ? { next_settlement: p.nextSettlement } : {}) },
     ...(p.focus ? { focus: p.focus } : {}),
     ...(p.found ? { found: p.found } : {}),

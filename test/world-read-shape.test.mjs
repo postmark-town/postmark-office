@@ -234,12 +234,24 @@ test("v2: with presence off, who says so rather than showing an empty room", { s
   assert.match(v2.who.unavailable ?? "", /presence is not switched on/);
 });
 
-test("v2: diagnostics rides v2 only, and cards: has nothing to size there", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+test("v2: diagnostics rides v2 only; cards: full adds every card whole beside can, and names says can by name (POS-697 item 6)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   const d = await v2At({ diagnostics: true });
   assert.ok(d.diagnostics?.law, "the full law block is behind the flag");
   assert.ok(!("diagnostics" in await v2At()));
   assert.equal((await worldApex({ handle: WHO, diagnostics: true }, KEY, {})).code, 422);
-  assert.equal((await v2At({ cards: "names" })).code, 422);
+  const glance = await v2At();
+  const full = await v2At({ cards: "full" });
+  assert.ok(!full.error, JSON.stringify(full).slice(0, 300));
+  const acts = Object.entries(glance.can).filter(([k]) => !["not_here", "as", "unavailable"].includes(k)).flatMap(([, g]) => Object.keys(g));
+  assert.ok(acts.length > 0);
+  assert.deepEqual(Object.keys(full.cards).sort(), [...acts].sort(), "a card for every act can lists");
+  for (const act of acts) assert.deepEqual(full.cards[act].fields, (await v2At({ read: act })).card?.fields ?? full.cards[act].fields, `${act}: the same fields its read card carries`);
+  assert.deepEqual(full.can, glance.can, "can is unchanged beside the cards");
+  assert.ok(!("cards" in glance), "omitted, no cards");
+  const names = await v2At({ cards: "names" });
+  for (const [group, list] of Object.entries(names.can)) if (!["not_here", "as", "unavailable"].includes(group)) assert.ok(Array.isArray(list) && list.every((a) => typeof a === "string"), group);
+  const { unexplained } = await import("../src/read-grammar.mjs");
+  assert.deepEqual(unexplained("world", full, 2), []);
   assert.equal((await v2At({ telling: true })).code, 422, "v2 tells no prose; v1 does (review-555 nit)");
 });
 

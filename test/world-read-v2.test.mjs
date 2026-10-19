@@ -273,3 +273,14 @@ test("POS-697 G4a: to_you in the glance is the short form; a gap is named in a f
   assert.deepEqual(g.to_you, { complete: false, missing: ["creatures' reactions older than 25 h"], count: 0, events: [] });
   assert.ok(JSON.stringify(g.to_you, null, 1).length < 140, JSON.stringify(g.to_you));
 });
+
+test("POS-697 item 6: under v2, cards: \"names\" says can by name and cards: \"full\" adds every card whole", async () => {
+  const { fullCards } = await import("../src/world-read-v2.mjs");
+  const entries = ["say", "walk", "candy-trade"].map((action) => ({ action, blurb: "B.", fields: { x: { type: "string" } }, from: "the-town/resident" }));
+  assert.deepEqual(canBlock(entries, { names: true }), { speak: ["say"], move: ["walk"], more: ["candy-trade"] });
+  assert.deepEqual(fullCards(entries).walk, entries[1]);
+  const p = { entries, standpoint: { x: 0, y: 0 }, crossing: 1, happened: null, sinceCrossing: 0 };
+  assert.deepEqual(Object.keys(shapeV2({ ...p, cards: "full" }).cards), ["say", "walk", "candy-trade"]);
+  assert.ok(!("cards" in shapeV2(p)), "omitted, no cards");
+  assert.deepEqual(shapeV2({ ...p, cards: "names" }).can.move, ["walk"]);
+});

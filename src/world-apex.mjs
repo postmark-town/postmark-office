@@ -2868,6 +2868,7 @@ async function apexRead(args, key, ctx = {}) {
       found,
       investigated,
       creatures,
+      cards: args.cards ?? null, // POS-697 item 6: "full" and "names" each do something under v2
       diagnostics: args.diagnostics === true
         ? { law: answer.law, ...(oriented.present?.disclosed ? { disclosed: oriented.present.disclosed } : {}), crowd: { radius_m: oriented.present?.radius_m, count: oriented.present?.count } }
         : null,
@@ -3905,15 +3906,14 @@ async function worldApexAnswer(args, key, ctx) {
     const who = standingHandle(args, key);
     return { ...done, terms: termsOnce(who ? `${args.as === "human" ? "human:" : ""}${who}` : null, done.terms, String(args.do)) };
   }
-  // POS-632: v2's own two words. `diagnostics` is v2's (v1 carries them always),
-  // and v2 says each act in one line, so a cards: dial has nothing to size.
+  // POS-632: v2's own words. `diagnostics` is v2's (v1 carries them always).
+  // cards: is no longer refused under v2 (POS-697 item 6): "full" adds every
+  // card whole beside can, and "names" says can by name (world-read-v2.mjs).
   const v2Asked = (args.read_shape ?? ctx.readShape) === "v2";
   if (args.diagnostics != null && !v2Asked)
     return bounce(422, "diagnostics: rides the v2 read", "world { read_shape: \"v2\", diagnostics: true } — the read you have today carries the engine's notes already");
   if (v2Asked && args.telling === true)
     return bounce(422, "v2 tells no prose — it is the compact glance", "the telling rides the v1 read: world { read_shape: \"v1\", telling: true }");
-  if (v2Asked && args.cards != null && args.cards !== "")
-    return bounce(422, "v2 has no cards: dial — each act is already one line", "world { read: \"<act>\" } is one act's full card; cards: sizes the v1 read (omit read_shape)");
   // ── THE TWO `since` CLOCKS, ONE WORD EACH (POS-70; office PR #48) ─────────
   //
   // Top-level `since:` here is a CROSSING NUMBER and buys `happened`; the say
