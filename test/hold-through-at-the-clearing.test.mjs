@@ -144,3 +144,19 @@ test("3. 078's arm: clearing_job may insert a hold printout of a standing mark b
     await assert.rejects(insert(unmarked), refused, "a claim naming no cutoff is no printout");
   } finally { await c.end(); }
 });
+
+test("4. a thing in the OLD form (kind: sited + class) prints held too: 078 lets a sited row be placeless only when it names its holder", { skip }, async () => {
+  await seed({ acts: [take(101, "2026-10-19T01:00:00Z")] });
+  const c = await store.connect("world2_owner");
+  try {
+    await c.query("UPDATE marks SET kind = 'sited', data = data || '{\"class\":\"thing\"}' WHERE slug = $1", [CONE]);
+    await assert.rejects(c.query("UPDATE marks SET geometry = NULL, bbox = NULL WHERE slug = $1", [ROOM]),
+      /sited_marks_have_a_where/, "a sited mark nobody holds still needs its where");
+  } finally { await c.end(); }
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /⚑ hold: berthillon\/a-cone — held by sb-ash/, r.out.slice(-800));
+  const row = await coneRow();
+  assert.equal(row.geometry, null);
+  assert.equal(row.data.held_by, "sb-ash");
+});

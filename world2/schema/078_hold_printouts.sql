@@ -39,6 +39,11 @@
 -- 'locked' already); 068's and 076's arms, verbatim. The function and trigger
 -- keep 068's names, so 068's and 076's landed-probes still read true.
 --
+-- AND ONE CHECK, WIDENED BY ONE CASE: 004's `sited_marks_have_a_where` lets a
+-- `sited` row be placeless only when it names its holder (a thing in the old
+-- form, held). Found on the playground's crossing of window 273: two old-form
+-- bags were refused by it. See the block below.
+--
 -- IDEMPOTENT. APPLY AS `world2_owner`, BEFORE THE OFFICE CODE THAT PRINTS
 -- (office #628). Without it the clearing's step 6.2 is refused by name, and
 -- the whole window with it (one transaction).
@@ -51,6 +56,7 @@
 --
 -- Ship check:
 --   SELECT prosrc LIKE '%_held_through%' FROM pg_proc WHERE proname = 'claims_insert_carry_only';  -- t
+--   SELECT pg_get_constraintdef(oid) LIKE '%held_by%' FROM pg_constraint WHERE conname = 'sited_marks_have_a_where';  -- t
 --
 -- CONSUMERS: world2/tools/hold-through.mjs § writeHoldThrough (the writer);
 -- world2/tools/clearing-job.mjs step 6.2.
@@ -97,7 +103,20 @@ BEGIN
   RAISE EXCEPTION 'claims: clearing_job may insert only a carried mark''s claim (status locked, superseding a standing mark, data._carried_by naming the move: POS-441), a taken mark''s return to its author''s drafts, once, in its own house and window (status draft, stake 0, data._returned naming the mark the sweep retired: WLD-51), or a hold printout (status locked, superseding its own standing mark, by its owner, with its kind, body and data but for where it is or whose hands it is in, data._held_through naming the cutoff: POS-688)';
 END $$;
 
-UPDATE registry SET ruling = ruling || ' + 078: clearing_job prints a hold record through (POS-688, data._held_through): a locked claim superseding its own standing mark, by its owner, changing only where it is or whose hands it is in'
+-- ── A HELD THING IN THE OLD FORM HAS NO WHERE EITHER ───────────────────────────
+--
+-- 004's CHECK holds every `sited` row to a geometry. A thing in the old form
+-- (`kind: sited` with `class: <a kind of thing>`, as the doors wrote it before
+-- LOGOS v2's W2) is `sited` in this column, so its printout as held (geometry
+-- null) was refused by name ("a sited mark with no place"). It is allowed exactly
+-- when the row names its holder; a parcel, and every sited mark nobody holds,
+-- still needs its where.
+ALTER TABLE marks DROP CONSTRAINT IF EXISTS sited_marks_have_a_where;
+ALTER TABLE marks ADD CONSTRAINT sited_marks_have_a_where
+  CHECK (kind NOT IN ('sited','parcel') OR (geometry IS NOT NULL AND bbox IS NOT NULL)
+         OR (kind = 'sited' AND data ? 'held_by'));
+
+UPDATE registry SET ruling = ruling || ' + 078: clearing_job prints a hold record through (POS-688, data._held_through): a locked claim superseding its own standing mark, by its owner, changing only where it is or whose hands it is in; a sited row may be placeless when it names its holder'
   WHERE object = 'claims' AND ruling NOT LIKE '%078:%';
 
 COMMIT;

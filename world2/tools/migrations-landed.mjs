@@ -124,8 +124,8 @@ export const LANDED = {
   "076_taken_to_drafts.sql":       { probe: `${col("marks", "retired_cause")} AND ${policy("claims_insert_clearing", " AND with_check LIKE '%draft%'")}` },
   // 077 (POS-579): arrival_heard_weekly searches the caller's pg_temp last.
   "077_definer_pg_temp_last.sql":  { probe: "EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_heard_weekly' AND prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'])" },
-  // 078 (POS-688): the clearing's insert trigger admits a hold printout (data._held_through).
-  "078_hold_printouts.sql":        { probe: "EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'claims_insert_carry_only' AND prosrc LIKE '%_held_through%')" },
+  // 078 (POS-688): the clearing's insert trigger admits a hold printout (data._held_through), and a held sited row may be placeless.
+  "078_hold_printouts.sql":        { probe: "EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'claims_insert_carry_only' AND prosrc LIKE '%_held_through%') AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sited_marks_have_a_where' AND pg_get_constraintdef(oid) LIKE '%held_by%')" },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
