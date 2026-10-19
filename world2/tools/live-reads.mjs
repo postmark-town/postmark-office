@@ -998,15 +998,23 @@ export function emissionOf(row) {
  */
 export function presentEmissionsAt(rows, atMs = Date.now(), { cls = SOUND } = {}) {
   const now = new Date(atMs).toISOString();
+  return emissionsOfClass(rows, { cls }).filter((e) => e.born_at <= now && e.ttl_expires_at > now);
+}
+
+/**
+ * Every emission of the class in the record, in `presentEmissionsAt`'s order,
+ * with no clock applied. The caller says what an instant keeps: 1.0's presence
+ * asks the stamped TTL (above); the store's say read asks the ear's window
+ * (POS-693, office `src/hearing-window.mjs § hearable`), because hearing
+ * reaches the settlement and the stamp's five minutes is not the ear's law.
+ */
+export function emissionsOfClass(rows, { cls = SOUND } = {}) {
   const out = [];
   for (const row of rows) {
     const r = emissionOf(row);
     if (r.refused) continue;
-    const e = r.emission;
-    if (e.class !== cls) continue;
-    if (!(e.born_at <= now)) continue;
-    if (!(e.ttl_expires_at > now)) continue;
-    out.push(e);
+    if (r.emission.class !== cls) continue;
+    out.push(r.emission);
   }
   return out.sort((a, b) => (a.born_at < b.born_at ? -1 : a.born_at > b.born_at ? 1 : (a.id < b.id ? -1 : 1)));
 }

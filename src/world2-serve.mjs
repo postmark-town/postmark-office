@@ -95,7 +95,9 @@ import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 // The CANDLE'S OWN escrow reader, not a second one — § THE DOCKET ROW says why.
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
-import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock } from "./world.mjs";
+import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt } from "./world.mjs";
+import { hearable } from "./hearing-window.mjs";
+import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
 // § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
 import { backedRow } from "./world-stake.mjs";
@@ -654,7 +656,7 @@ export function receiptTreeOnly(receipt) {
  * decides whether these doors exist at all, and every caller in `src/` passes
  * no pool and gets the real one.
  */
-export async function world2Serve(path, searchParams, { p: injected = null } = {}) {
+export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt } = {}) {
   if (!world2ServeEnabled()) return null;
   const p = injected ?? await pool();
 
@@ -1129,11 +1131,16 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
   }
 
   if (path === "/world2/say") {
-    // WHAT IS STILL IN THE AIR at a point. `presentEmissions` is a TTL QUERY,
-    // never a delete — "the row survives its own TTL because the occurrence has
-    // to reach a crossing log before it may be dropped; what expires is the
-    // ANSWER". Reading it out of an append-only acts table is that sentence's
-    // natural home.
+    // WHAT IS STILL HEARABLE at a point. A query, never a delete: "what expires
+    // is the ANSWER", and reading it out of an append-only acts table is that
+    // sentence's natural home.
+    //
+    // THE EAR'S WINDOW, NOT THE ROW'S TTL (POS-693). Every say within earshot
+    // stays hearable until the next settlement (POS-226), and this read asks the
+    // live ear's own reader where that window opened (world.mjs §
+    // hearingWindowAt, hearing-window.mjs § hearable). Each row's
+    // `ttl_expires_at` is the sound class's `hearing_ttl_min`, five minutes; a
+    // read that asked it would cut hearing back to five minutes at cutover.
     const at = clockOf(searchParams);
     if (at.error) return at.error;
     const near = pointOf(searchParams);
@@ -1146,10 +1153,16 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
     }
     const { rows } = await p.query(
       "SELECT id, at, actor, action, payload FROM acts WHERE action IN ('legacy:emission','emission') ORDER BY at, id");
-    const emissions = live.presentEmissionsAt(rows, at.ms);
+    let win = null;
+    try { win = hearingWindow(at.ms); } catch { win = null; }
+    const since = Number.isFinite(win?.since) ? win.since : null;
+    const emissions = live.emissionsOfClass(rows).filter((e) => hearable(Date.parse(e.born_at), at.ms, since));
     const body = {
-      what: "the emissions still hanging in the air at this instant — presence is a query over born_at/ttl, never a delete",
+      what: `the voices still hearable at this instant: everything said ${HEARING_WINDOW} (POS-226), the same window the live ear hears. A query, never a delete`,
       evaluated_at: new Date(at.ms).toISOString(),
+      hearable_since: since != null ? new Date(since).toISOString() : null,
+      ...(win?.disclosure || since == null
+        ? { hearing_window_disclosed: win?.disclosure ?? "the last settlement could not be read, so hearing reaches back through the whole record" } : {}),
       total_in_the_air: emissions.length,
       earshot_rule: mode === "current"
         ? `one radius for the whole answer (${radiusM} m), the way voices.mjs's live ear reads it`
