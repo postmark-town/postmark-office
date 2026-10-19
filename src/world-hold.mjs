@@ -621,7 +621,7 @@ export function refuseGiveOfUnheld({ thing, to, actor, holder }) {
 // ── A DROP ON THE COMMONS STAKES 1✦ (POS-688 D4 step 3, Darko 2026-10-19 09:27) ──
 //
 // A held thing set down stands where its dropper stood, and the settlement
-// judges that ground the way it judges any mark's: on its maker's ground it
+// judges that ground the way it judges any mark's: on its OWNER's ground it
 // stands free, and anywhere else it is a commons mark, which leaves the world
 // at the settlement with no stamp behind it. So a drop there stakes 1✦ from
 // the dropper onto the thing, unless stamps already stand behind it, through
@@ -646,14 +646,15 @@ async function dropExtentOf(thing) {
  * place to judge), `{ terms }` (an answer, nothing written), or `{ stake }`
  * (accepted: stake that many after the drop). Throws the empty-purse refusal.
  */
-export async function dropStakeTerms({ thing, actor, stood, accept = false }, deps = {}) {
+export async function dropStakeTerms({ thing, actor, stood, accept = false, owner = null }, deps = {}) {
   if (!stood) return null; // no standpoint: the drop's own path answers
   const verdictOf = deps.verdict ?? (async (a) => (await import("./world.mjs")).dropStakeVerdict(a));
   const purseOf = deps.held ?? (async (h) => (await import("./world-stake.mjs")).heldAtOffice(h));
   const blockOf = deps.block ?? (async (a) => (await import("./world-stake.mjs")).markStakeBlock(a));
-  const maker = String(thing).split("/")[0];
+  // the OWNER's ground (POS-688 D-O2, Darko 2026-10-19 17:14): whoever has the say over it; its maker until ownership moves
+  const maker = owner ?? String(thing).split("/")[0];
   const rule = await verdictOf({ thing: String(thing), by: maker, at: { x: stood.x, y: stood.y }, extent: await (deps.extentOf ?? dropExtentOf)(thing) });
-  if (!(Number(rule?.need) >= DROP_STAKE)) return null; // the maker's own ground, or stamps already behind it: free
+  if (!(Number(rule?.need) >= DROP_STAKE)) return null; // the owner's own ground, or stamps already behind it: free
   const purse = await purseOf(actor);
   if (!purse?.unread && !(Number(purse?.liquid) >= DROP_STAKE))
     throw bounce(422, `you hold 0 stamps, and setting ${thing} down here stakes ✦${DROP_STAKE}`,
@@ -663,7 +664,7 @@ export async function dropStakeTerms({ thing, actor, stood, accept = false }, de
   return { terms: {
     handle: actor, thing, recorded: false,
     stake: DROP_STAKE,
-    terms: `setting ${thing} down here stakes ✦${DROP_STAKE} from you onto it. This is not ${maker}'s ground, and a thing set down anywhere but its maker's ground stands on the commons, where a mark stands only with a stamp behind it. The stamp stays yours, in escrow behind the thing; if you take it back, the thing leaves the world at the next settlement.`,
+    terms: `setting ${thing} down here stakes ✦${DROP_STAKE} from you onto it. This is not ${maker}'s ground, and a thing set down anywhere but its owner's ground stands on the commons, where a mark stands only with a stamp behind it. The stamp stays yours, in escrow behind the thing; if you take it back, the thing leaves the world at the next settlement.`,
     stamps: await blockOf({ handle: actor, stamps: DROP_STAKE,
       to_confirm: `${confirm}: the same call with accept: true. Not calling is the no; nothing is written until you make it.` }),
     note: `nothing was recorded. Call again with accept: true to set it down and stake ✦${DROP_STAKE}, or set it down on ${maker}'s ground, where it is free.`,
@@ -1314,30 +1315,6 @@ export function draftRecordOf(live) {
 
 /** The stance payload's own word for which question it answers. */
 export const ANSWERS_SET_DOWN = "set-down";
-/** …and for a take (POS-688 D3, Darko 2026-10-19 09:21: opposition to a take, with the same stance machinery). */
-export const ANSWERS_TAKE = "take";
-
-/**
- * The maker's house's latest answer to one TAKE of its thing, or null (silence).
- * The set-down's answer, asked of a take: the same rows, the same latest-wins,
- * the same household test (only the maker's house answers). PURE.
- */
-export function takeAnswer({ stances = [], thing, takeSeq, madeBy, householdOf = null }) {
-  if (takeSeq == null) return null;
-  let latest = null;
-  for (const r of stances ?? []) {
-    if (r?.class !== "stance" || String(r.object) !== String(thing)) continue;
-    const p = r.payload ?? {};
-    if (p.answers !== ANSWERS_TAKE || String(p.take?.act_id) !== String(takeSeq)) continue;
-    if (p.stance !== "welcomed" && p.stance !== "opposed") continue;
-    if (!sameHousehold(madeBy, String(r.actor), householdOf).same) continue;
-    const later = !latest || String(r.written_at) > String(latest.written_at)
-      || (String(r.written_at) === String(latest.written_at) && Number(r.seq) > Number(latest.seq));
-    if (later) latest = r;
-  }
-  return latest ? { stance: latest.payload.stance, by: String(latest.actor), at: latest.written_at ?? null, seq: latest.seq ?? null } : null;
-}
-
 /**
  * The author's house's latest answer to one set-down, or null (silence). PURE.
  *
@@ -1361,32 +1338,28 @@ export function setDownAnswer({ stances = [], thing, dropSeq, madeBy, householdO
 }
 
 /**
- * THE RECEIPT'S SENTENCE, one per outcome — which of the two branches happened,
- * and whether canon will follow. The first clause is the one the receipt has
- * always carried; what follows it is now true of this drop.
+ * THE RECEIPT'S SENTENCE (POS-688). A set-down prints where it was set down at the
+ * next settlement (D2), whoever set it down, so the POS-138 amend and its
+ * outcomes (filed, draft, unaccepted) are gone from the receipt with the amend.
+ * What it says now is whose the thing is: set down by someone outside its
+ * owner's house, it is lent, and the owner's house may still ask for it back.
+ * `setDown` is `{ by, owner, whose }`; null says the first clause alone.
  */
-// D2 (POS-688): a held thing set down prints where it was set down, whoever set it
-// down, so a stranger's receipt no longer says canon stays put. Darko reads these
-// words (2026-10-19); false restores the POS-138 sentence.
-export const STRANGER_DROP_PRINTS = true;
-
 export function setDownNote(setDown) {
   const lead = "it stands where you stood when you set it down, and the act carries that place";
-  const a = setDown?.amend;
-  if (!a) return `${lead}.`;
-  if (a.filed && a.put_forward)
-    return `${lead}; the amend that re-sites the mark is filed${a.seq != null ? ` (act ${a.seq})` : ""}, and canon moves it here at the next crossing.`;
-  if (a.filed && a.draft)
-    return `${lead}; your private draft is re-sited here, and it publishes here when it is put forward.`;
-  if (a.filed)
-    return `${lead}; the amend that re-sites the mark is filed as ${setDown.made_by}'s private draft — no escrow behind it clears the ground it now stands on, so canon keeps it where it was folded until it is put forward.`;
-  if (a.put_forward_unpublished)
-    return `${lead}; it is put forward and not yet published, so it publishes where it was folded — re-siting a claim already on the docket waits on a ruling (postmark#3663).`;
+  if (!setDown) return `${lead}.`;
   if (setDown.whose === "another household's")
-    return STRANGER_DROP_PRINTS
-      ? `${lead}. ${setDown.made_by} made it and it stays ${setDown.made_by}'s; the settlement prints it here at the next crossing.`
-      : `${lead} — but ${setDown.made_by} made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where ${setDown.made_by} put it.`;
-  return `${lead}; no amend was filed (${a.why}), so canon keeps it where it was folded and the set-down is the read's answer until one is.`;
+    return `${lead}. It is ${setDown.owner}'s, lent to you: the settlement prints it here at the next crossing, and ${setDown.owner}'s house may still ask for it back.`;
+  return `${lead}; the settlement prints it here at the next crossing.`;
+}
+
+/** Who owns a thing now (POS-688): the kept record's fold, or its maker when the record cannot say. */
+async function ownerNow(thing) {
+  try {
+    const [{ holdRecordNow }, { ownershipOf }] = await Promise.all([import("./world-kinds.mjs"), import("./ownership.mjs")]);
+    const rec = await holdRecordNow();
+    return rec?.owners ? ownershipOf(rec.owners, thing).owner : String(thing).split("/")[0];
+  } catch { return String(thing).split("/")[0]; }
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
@@ -1562,18 +1535,21 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // dynamic.db, POS-269.)
     {
       const stood = await standpointOfActor(actor);
-      // a set-down off the maker's ground stakes 1✦: its terms, or its refusal, before anything is written (D4 step 3)
-      const dropStake = face === "drop" ? await dropStakeTerms({ thing: args.thing, actor, stood, accept: args.accept === true }) : null;
+      // a set-down off the OWNER's ground stakes 1✦: its terms, or its refusal, before anything is written (D4 step 3; D-O2)
+      const owner = face === "drop" ? await ownerNow(args.thing) : null;
+      const dropStake = face === "drop" ? await dropStakeTerms({ thing: args.thing, actor, stood, accept: args.accept === true, owner }) : null;
       if (dropStake?.terms) return dropStake.terms;
       const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings });
       if (out?.did !== "drop") return out;
       const staked = dropStake?.stake ? await stakeTheDrop({ thing: args.thing, actor, key, n: dropStake.stake }) : null;
-      // AFTER the drop's COMMIT, never inside its transaction: the amend is the
-      // mark lane's own act on the mark lane's own pen, and holding the hold
-      // lane's sqlite lock across a second pen's round trip would be a lock
-      // this door has no business taking. The drop stands whatever the amend
-      // does; the receipt says which happened.
-      const setDown = await fileSetDownAmend({ did: out, stood, key, actId: out.seq ?? null });
+      // NO AMEND (POS-688, E8): the settlement prints a set-down where it was made (D2),
+      // so the printout is the one writer of a held thing's place. The POS-138 amend
+      // at the door (`fileSetDownAmend`) was a second writer of the same place.
+      const house = sameHousehold(String(owner), String(actor), await (async () => {
+        try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; }
+      })());
+      const setDown = { by: String(actor), made_by: String(args.thing).split("/")[0], owner: String(owner),
+        at: stood ?? null, whose: house.same ? "your house's" : "another household's" };
       return { ...out, ...(staked ?? {}), stands_note: setDownNote(setDown), set_down: setDown };
     }
   } finally { /* no handle is opened: the record is read through the guards */ }
@@ -1601,6 +1577,8 @@ export function holdingEntry(did, { crossing, at, witnesses, cls, household }) {
       previous_holder: did.previous_holder ?? null,
       made_by: did.made_by,
       policy: did.policy,
+      // a take out of an open holder its owner put it in: the taker owns it (POS-688; ownership.mjs § takeOwns)
+      ...(did.owns === true ? { owns: true } : {}),
     },
     effect: did.did === "drop"
       ? "it stands on the ground where the holder set it down; the edge they authored is nullified"

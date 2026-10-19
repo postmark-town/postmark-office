@@ -1120,114 +1120,67 @@ export function readNeverPerforms(fields) {
  * consults a fold, blocks a mark, or changes what anybody's world looks like.
  * It writes the word down with its witnesses and gets out of the way.
  */
-// ── THE SET-DOWN ARM's two halves ────────────────────────────────────────────
-
-/**
- * Is there a set-down of `thing` by ANOTHER household standing unanswered-or-
- * answered on the record — and a test for who may answer it. Never throws.
- *
- * Returns `{ speakerHouse }` always (the author's-household test, for the
- * caller), plus `drop` / `stood` when the latest holding act on the thing is a
- * drop by a household the town's record says is not the author's. A household
- * record that cannot be read is NOT a stranger's set-down — the arm opens only
- * on what it can prove, like the hold door's own ladder.
- *
- * `deps` (`readRows`, `householdOf`) are injectable so a falsifier drives this
- * with the rows and the household map it supplies.
- */
-export async function setDownFor(thing, target, marks = [], deps = {}) {
-  const hold = await import("./world-hold.mjs");
-  let householdOf = deps.householdOf;
-  if (householdOf === undefined) {
-    // one read of the store's registry, a synchronous lookup over it (POS-342)
-    try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
-  }
-  const madeBy = String(target?.by ?? String(thing).split("/")[0]);
-  const speakerHouse = (h) => hold.sameHousehold(madeBy, String(h), householdOf).same;
-  let rows;
-  try {
-    rows = deps.readRows ? await deps.readRows(thing)
-      : await (await import("./world2-guards.mjs")).standsRowsFromStore(thing);
-  } catch (e) { return { speakerHouse, unreadable: plainReason(e, "record", "a thing's standing rows") }; }
-  if (!rows) return { speakerHouse };
-  if (hold.liveHolder(rows.attachments ?? [], String(thing))) return { speakerHouse }; // held, not set down
-  const drop = hold.latestDrop(rows.journal ?? [], String(thing));
-  if (!drop || drop.actor == null) return { speakerHouse };
-  const setter = hold.sameHousehold(madeBy, String(drop.actor), householdOf);
-  if (setter.same || setter.how !== "household") return { speakerHouse };
-  const { composeAnchor } = await import("./world-journal.mjs");
-  // the one centre reader, canon's or where a held anchor last stood (POS-688, W4); `marks` when it cannot say
-  const centreOf = await (await import("./world.mjs")).markCentreOf().catch(() => (id) => marks.find((m) => m.id === id)?.at ?? null);
-  return { speakerHouse, drop, stood: composeAnchor(drop.at ?? {}, centreOf), householdOf, madeBy };
-}
-
-// ── THE TAKE ARM (POS-688 D3, ruled by Darko 2026-10-19 09:21) ──────────────
+// ── THE OWNER'S WORD (POS-688; Darko 2026-10-19 16:39–16:45, D-O1..D-O6 at 17:14) ──
 //
-// "Consent is unchanged: the maker may oppose a take before the settlement, and
-// the thing returns." Built "with the SAME existing stance machinery": the
-// set-down arm's, asked of a take. The maker's house speaks on its own thing
-// with `declare-stance-on`; the stance names the ONE take it answers
-// (`take: { act_id, by }`), and the settlement reads it: an opposed take is never
-// printed in the taker's hands, and the clearing returns the thing to where it
-// was printed (world2/tools/hold-through.mjs § the return). Welcomed is the
-// maker's consent said out loud and changes nothing; silence settles neutral.
+// "The owner's word on their thing, while someone outside the house holds it or
+// has set it down, works like a mark stance: silence or neutral = borrowed;
+// welcomed = yours, and final; opposed = bring it back. Neutral and opposed are
+// revisable forever. A take or set-down shows in the owner's 'awaiting your
+// word' list." This replaces the POS-138 set-down arm (welcomed re-sited it in
+// the author's name, opposed kept canon: retired, POS-706 closes into this) and
+// the first D3 (a take opposable only until the settlement printed it).
+//
+// ONE ANSWER, FOLDED: who owns a thing, and whether it is out of the owner's
+// house, is the ownership fold's (ownership.mjs), read from the kept hold record.
+// The word names the act it answers (`act: { act_id, by }`, the latest take or
+// set-down of the thing's current outing), and the fold, the awaiting list and
+// the clearing all read it the same way.
 
 /**
- * Is `thing` in the hands of ANOTHER household by a take the settlement has not
- * printed yet? Returns `{ speakerHouse }` always, plus `take` / `taker` when so,
- * or `printed` when the take is already on the record (too late to oppose).
- * Never throws; an unread record opens no arm.
+ * A thing's owner and its current outing, from the one fold: `{ owner, outing }`,
+ * or `{ unreadable }`. Never throws. `deps.ownership(thing)` stands in for the
+ * kept record in a falsifier.
  */
-export async function takeFor(thing, target, deps = {}) {
-  const hold = await import("./world-hold.mjs");
-  let householdOf = deps.householdOf;
-  if (householdOf === undefined) {
-    try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
+export async function ownershipFor(thing, deps = {}) {
+  try {
+    if (deps.ownership) return await deps.ownership(String(thing));
+    const [{ holdRecordNow }, { ownershipOf }] = await Promise.all([import("./world-kinds.mjs"), import("./ownership.mjs")]);
+    const rec = await holdRecordNow();
+    if (!rec?.owners) return { unreadable: "the holding record is not kept by this office" };
+    return ownershipOf(rec.owners, thing);
+  } catch (e) {
+    return { unreadable: plainReason(e, "record", "a thing's owner") };
   }
-  const madeBy = String(target?.by ?? String(thing).split("/")[0]);
-  const speakerHouse = (h) => hold.sameHousehold(madeBy, String(h), householdOf).same;
-  let rows;
-  try {
-    rows = deps.readRows ? await deps.readRows(thing)
-      : await (await import("./world2-guards.mjs")).standsRowsFromStore(thing);
-  } catch (e) { return { speakerHouse, unreadable: plainReason(e, "record", "a thing's holding rows") }; }
-  if (!rows) return { speakerHouse };
-  const holder = hold.liveHolder(rows.attachments ?? [], String(thing));
-  if (!holder) return { speakerHouse }; // not held: nothing taken to answer
-  const takes = (rows.journal ?? []).filter((r) => r.action === "take" && String(r.object) === String(thing));
-  const take = takes[takes.length - 1] ?? null;
-  if (!take || take.actor == null) return { speakerHouse };
-  const taker = hold.sameHousehold(madeBy, String(take.actor), householdOf);
-  if (taker.same || taker.how !== "household") return { speakerHouse };
-  let through = null;
-  try {
-    through = deps.throughOf ? await deps.throughOf()
-      : (await (await import("./held-view.mjs")).heldView())?.through ?? null;
-  } catch { through = null; }
-  const printed = through != null && Number(take.seq) <= Number(through);
-  return { speakerHouse, take, taker: String(take.actor), holder: String(holder), madeBy, householdOf, ...(printed ? { printed: true } : {}) };
 }
 
-/** The maker's house answers a stranger's take: one stance row, and nothing else is written until the settlement. */
-async function answerTake({ repo, on, stance, by, key, tk, dbPath, witnessStamp, crossing }) {
-  const hold = await import("./world-hold.mjs");
-  const { take, taker, madeBy, householdOf } = tk;
-  if (tk.printed)
-    throw bounce(409, `the settlement has already printed ${on} in ${taker}'s hands`,
-      `a take is answered before the settlement that prints it, and this one is on the record now. Ask ${taker} to give it back — nothing was written`);
-  const prior = hold.takeAnswer({ stances: await stanceRows({ dbPath, worldClone: repo }), thing: on, takeSeq: take.seq, madeBy, householdOf });
+/** The household map the word is judged by: the store's registry (POS-342), or null when it cannot be read. */
+async function householdsForWords(deps = {}) {
+  if (deps.householdOf !== undefined) return deps.householdOf;
+  try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; }
+}
+
+/** The exact call that answers one waiting take or set-down. */
+export const wordCall = (thing, by) =>
+  `household { do: "${ACTION_STANCE}", args: { on: "${thing}", stance: "neutral" | "welcomed" | "opposed" } } — neutral lends it to ${by} (and clears this), welcomed gives it to ${by} to keep, opposed brings it back at the next settlement`;
+
+/** The owner's house answers the latest take or set-down of its thing's outing: one stance row, read at every settlement. */
+async function answerWord({ on, stance, by, key, own, dbPath, witnessStamp, crossing }) {
+  const { latestOutingAct } = await import("./ownership.mjs");
+  const act = latestOutingAct(own);
+  const answered = { act_id: act.act_id, by: act.by };
+  const what = act.kind === "take" ? `${act.by}'s take` : `${act.by}'s set-down`;
+  const prior = own.outing?.word ?? null;
   const stamp = witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } };
-  const answered = { act_id: take.seq == null ? null : String(take.seq), by: taker };
   let row;
   {
     const entry = {
       crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
       action: ACTION_STANCE, object: on, cls: CLASS_STANCE,
       at: stamp.at, witnesses: stamp.witnesses,
-      payload: { on, stance, by, answers: hold.ANSWERS_TAKE, take: answered },
-      effect: stance === "opposed"
-        ? `the maker's house opposes ${taker}'s take — at the settlement it goes back where ${madeBy}'s record has it`
-        : `the maker's house welcomes ${taker}'s take`,
+      payload: { on, stance, by, answers: act.kind, act: answered },
+      effect: stance === "opposed" ? `the owner's house asks for ${on} back from ${what}: it comes back at the next settlement`
+        : stance === "welcomed" ? `the owner's house gives ${on} to ${act.by} to keep`
+        : `the owner's house lends ${on} to ${act.by}`,
     };
     try {
       row = laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
@@ -1239,211 +1192,71 @@ async function answerTake({ repo, on, stance, by, key, tk, dbPath, witnessStamp,
     }
   }
   return {
-    on, stance, by, answers: hold.ANSWERS_TAKE, take: answered,
+    on, stance, by, answers: act.kind, act: answered,
     seq: row.actId, crossing: row.crossing, log: row.record ?? "acts",
     witnesses: row.witnesses ? JSON.parse(row.witnesses) : null,
-    ...(prior ? { superseded: { stance: prior.stance, at: prior.at, seq: prior.seq } } : {}),
+    ...(prior ? { superseded: { stance: prior.stance, seq: prior.stance_act } } : {}),
     effect: stance === "opposed"
-      ? `your house opposes ${taker}'s take of ${on}: at the next settlement it goes back where it was, out of ${taker}'s hands. Until then your word can still change.`
-      : `your house welcomes ${taker}'s take of ${on}: the settlement prints it in ${taker}'s hands.`,
-    note: "a take of your house's thing by another household is yours to answer before the settlement: opposed returns it there, welcomed says yes out loud, and silence lets it settle",
+      ? `you asked for ${on} back: at the next settlement it comes back to your hands, or onto your parcel if your hands are full. Until then your word can still change.`
+      : stance === "welcomed"
+        ? `${on} is ${act.by}'s now, to keep. That is final: it is theirs to lend or give from here.`
+        : `${on} is lent to ${act.by}. It stays yours, and you can still ask for it back with opposed.`,
+    note: "a thing of your house's that someone outside it has taken or set down is yours to answer: neutral lends it, welcomed gives it to keep (final), opposed brings it back at the next settlement; silence is lending too, and leaves it awaiting your word",
   };
 }
 
-// ── THE SET-DOWNS WAITING ON YOUR HOUSE'S WORD (POS-138, the read) ──────────
+// ── WHAT WAITS ON YOUR HOUSE'S WORD: TAKES AND SET-DOWNS (POS-688) ──────────
 //
-// Keemin, 2026-09-24: an author's house must be told when another household
-// has set down a thing it made, "in the same stances read". The answer exists
-// already (#184: `declare-stance-on` on the thing, bound to the drop's act id);
-// this is the read that tells the house there is something to answer.
-//
-// ONE READER. Whether a set-down is a stranger's is `setDownFor`'s question and
-// whether the house has answered it is `setDownAnswer`'s; this group asks both
-// and derives neither. The candidates are the things the scope's handles MADE
-// that have a drop on the holding record (`world2-guards.mjs §
-// setDownRowsForMakers`), so the read never asks about a thing the house did
-// not make — which is also the privacy line: a house sees set-downs of its own
-// residents' things and nobody else's.
-//
-// A SET-DOWN LEAVES THIS GROUP when the author's house has welcomed or opposed
-// that drop (its stance then reads in `standing`, the way every stance the
-// house has spoken does: `standingStances` keeps each speaker's latest word on
-// each object, and a set-down's answer is a stance on the thing), or when the
-// thing is picked up again (`setDownFor` reads a live holder as held, not set
-// down). A later drop by somebody else is a new question, because an answer
-// belongs to ONE drop.
-
-/** The exact call that answers one waiting set-down. */
-export const setDownAnswerCall = (thing) =>
-  `household { do: "${ACTION_STANCE}", args: { on: "${thing}", stance: "welcomed" | "opposed" } } — welcomed files ${String(thing).split("/")[0]}'s amend that re-sites it where it was set down; opposed keeps canon where it is`;
+// Every thing your house owns that someone outside it has taken or set down,
+// and your house has not answered: the latest take or set-down of its outing.
+// A declared neutral or opposed answers it (it leaves this list, and reads in
+// `standing` like every stance your house has spoken); welcomed gives it away.
+// Read from the kept hold record, so no store read beyond what the hold doors
+// already keep. `set_downs_awaiting`, the POS-138 spelling, stays: it is the
+// set-down rows of this list, in their old shape (an agent-facing name keeps
+// working, the ruling of 2026-10-18).
 
 /**
- * The waiting group for `handles`, newest first. Never throws: an unreadable
- * record is `unavailable`, said out loud, never an empty group.
- *
- * `deps.rowsForMakers(handles)` stands in for the store read and
- * `deps.householdOf` for the town's household map, so a falsifier drives this
- * over the rows the real doors wrote.
+ * The waiting rows for `handles`, newest first. Never throws: an unreadable
+ * record is `unavailable`, said out loud, never an empty list. `deps.record()`
+ * stands in for the kept record, `deps.householdOf` for the town's household map.
  */
-export async function setDownsAwaiting(handles, { marks = [], stances = [], deps = {} } = {}) {
-  const makers = [...new Set([...(handles ?? [])].filter(Boolean).map(String))].sort();
-  if (!makers.length) return { rows: [] };
-  let byThing;
-  try {
-    byThing = deps.rowsForMakers ? await deps.rowsForMakers(makers)
-      : await (await import("./world2-guards.mjs")).setDownRowsForMakers(makers);
-  } catch (e) {
-    return { rows: [], unavailable: `the holding record could not be read (${plainReason(e, "record", "the makers' set-downs")}) — this is not an answer that nothing waits` };
-  }
-  if (byThing == null)
-    return { rows: [], unavailable: "this office cannot read the holding record — not an answer that nothing waits" };
-
-  const hold = await import("./world-hold.mjs");
+export async function wordsAwaiting(handles, { marks = null, deps = {} } = {}) {
+  const mine = [...new Set([...(handles ?? [])].filter(Boolean).map(String))].sort();
+  if (!mine.length) return { rows: [] };
+  let rec;
+  try { rec = deps.record ? await deps.record() : await (await import("./world-kinds.mjs")).holdRecordNow(); }
+  catch (e) { return { rows: [], unavailable: `the holding record could not be read (${plainReason(e, "record", "your house's things")}) — this is not an answer that nothing waits` }; }
+  if (!rec?.owners) return { rows: [], unavailable: "this office cannot read the holding record — not an answer that nothing waits" };
+  const [hold, { awaitsWord, latestOutingAct, makerOf }] = await Promise.all([import("./world-hold.mjs"), import("./ownership.mjs")]);
+  const householdOf = await householdsForWords(deps);
+  const ours = (h) => mine.some((m) => hold.sameHousehold(m, String(h), householdOf).same);
+  const standing = Array.isArray(marks) ? new Set(marks.map((m) => m?.id)) : null;
   const rows = [];
-  for (const [thing, rec] of byThing) {
-    const mark = marks.find((m) => m?.id === thing) ?? null;
-    const sd = await setDownFor(thing, mark, marks, {
-      readRows: async () => rec,
-      ...(deps.householdOf !== undefined ? { householdOf: deps.householdOf } : {}),
-    });
-    if (!sd.drop || !makers.includes(String(sd.madeBy))) continue;
-    if (hold.setDownAnswer({ stances, thing, dropSeq: sd.drop.seq ?? null, madeBy: sd.madeBy, householdOf: sd.householdOf })) continue;
-    // A SET-DOWN OF A THING THAT IS NOT STANDING CANNOT BE ANSWERED. `marks` is
-    // the stances read's own `worldForStances` list, the one the answer door
-    // looks `on` up in, so a thing missing here bounces 404 there. little-bird's
-    // box of nine was swept at S86 (a commons mark at ✦0) after neth set it
-    // down, and this group kept offering a welcome the door could only refuse.
-    // The row comes back by itself if the thing stands again.
-    if (!mark) continue;
-    const canon = mark?.at && Number.isFinite(Number(mark.at.x)) && Number.isFinite(Number(mark.at.y))
-      ? { x: Number(mark.at.x), y: Number(mark.at.y) } : null;
+  for (const [thing, st] of rec.owners) {
+    if (!awaitsWord(st) || !ours(st.owner)) continue;
+    // a thing that no longer stands cannot be answered (the door looks `on` up in the same list)
+    if (standing && !standing.has(thing)) continue;
+    const act = latestOutingAct(st);
     rows.push({
-      thing, made_by: sd.madeBy, set_down_by: String(sd.drop.actor),
-      at: sd.stood ?? null, when: sd.drop.written_at ?? null,
-      act_id: sd.drop.seq == null ? null : String(sd.drop.seq),
-      canon_at: canon,
-      answer: setDownAnswerCall(thing),
+      thing, made_by: makerOf(thing), owner: st.owner, act: act.kind, by: act.by, act_id: act.act_id,
+      ...(act.kind === "set-down" ? { at: rec.places?.get(thing) ?? null } : {}),
+      answer: wordCall(thing, act.by),
     });
   }
-  rows.sort((a, b) => (String(a.when) === String(b.when) ? (a.thing < b.thing ? -1 : 1) : (String(a.when) < String(b.when) ? 1 : -1)));
+  rows.sort((a, b) => Number(b.act_id) - Number(a.act_id));
   return { rows };
 }
 
-/** The shadow's rendering of the group: the rows, and `unavailable` only when it could not be read. */
+/** The shadow's rendering: the new list, and the set-down rows under their old name. */
 async function setDownsGroup(key, inbox, deps = {}) {
-  const g = await setDownsAwaiting(handlesOf(key), { marks: inbox.marks ?? [], stances: inbox.stanceRows ?? [], deps });
-  return { set_downs_awaiting: g.rows, ...(g.unavailable ? { set_downs_unavailable: g.unavailable } : {}) };
-}
-
-/**
- * Was an amend filed that answers this drop? `true`, `false`, or `null` when
- * the record cannot say. An amend lands in `acts` only when the single log is on
- * and the mark lane writes there; anywhere else, finding none is not knowing none.
- */
-async function setDownAmendFiled(on, dropSeq) {
-  if (dropSeq == null || !singleLogEnabled() || !laneFlipped("mark")) return null;
-  try {
-    const [{ actsQuery }, { ACTION_AMEND, CLASS_MARK }] = await Promise.all([import("./world2-acts.mjs"), import("./world-journal.mjs")]);
-    const rows = await actsQuery("SELECT id, payload FROM acts WHERE class = $1 AND action = $2 AND object = ANY($3) ORDER BY id",
-      [CLASS_MARK, ACTION_AMEND, [String(on)]]);
-    if (!Array.isArray(rows)) return null;
-    const payloadOf = (p) => (typeof p === "string" ? JSON.parse(p) : p) ?? {};
-    return rows.some((r) => String(payloadOf(r.payload)._set_down?.act_id) === String(dropSeq));
-  } catch { return null; }
-}
-
-/**
- * The author's house answers a stranger's set-down: one stance row, and on
- * `welcomed` the author's amend. Everything that can refuse refuses BEFORE the
- * row is written, so a refusal leaves nothing behind.
- */
-async function answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, witnessStamp, crossing, deps = {} }) {
-  const hold = await import("./world-hold.mjs");
-  const { drop, stood, householdOf, madeBy } = sd;
-  const setter = String(drop.actor);
-  const place = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
-  if (!stood) throw bounce(409, `the record does not place ${setter}'s set-down of ${on}`,
-    "a set-down is answered at the place it was made, and the act's anchor could not be composed — nothing was written");
-
-  const prior = hold.setDownAnswer({
-    stances: await stanceRows({ dbPath, worldClone: repo }), thing: on, dropSeq: drop.seq, madeBy, householdOf });
-  // A welcome whose amend the door refused moved nothing, so it does not close
-  // the set-down (postmark#3549). Only an amend that answers THIS drop does, and
-  // the record is asked for one; a record that cannot say keeps the refusal.
-  if (prior?.stance === "welcomed" && stance === "opposed") {
-    const filed = await setDownAmendFiled(on, drop.seq);
-    if (filed !== false)
-      throw bounce(409, `your house has already accepted ${setter}'s set-down of ${on}`, filed
-        ? `accepting filed the amend that re-sites it in ${madeBy}'s name, so there is no set-down left to refuse — to move it back, amend the mark with world { do: "leave-mark", args: { slug, amend: true, at } }. Nothing was written.`
-        : `this door could not tell whether the amend that accepting files in ${madeBy}'s name was filed, so it will not record a refusal over one that may stand — try again, or to move it back, amend the mark with world { do: "leave-mark", args: { slug, amend: true, at } }. Nothing was written.`);
-  }
-
-  let amendDeps = deps;
-  if (stance === "welcomed") {
-    // The amend is filed in the AUTHOR's name through the leave-mark door, and
-    // that door refuses a key that does not act for them. Asked here, first,
-    // so the refusal comes before the stance row rather than after it.
-    if (!key?.handles?.has(madeBy))
-      throw bounce(403, `accepting moves ${madeBy}'s mark, and this key does not act for ${madeBy}`,
-        `the amend that re-sites it is filed in ${madeBy}'s name, so a key that holds ${madeBy} speaks the welcome — nothing was written`);
-    const mark = deps.mark !== undefined ? deps.mark
-      : (await (await import("./world.mjs")).canonMarkById(on)).mark; // the record as printed: the amend copies its own lines (POS-688)
-    const built = hold.setDownAmend({ thing: on, mark, stood, actor: setter });
-    if (built.refused) throw bounce(409, `${on} cannot be re-sited by an amend at this door`, `${built.refused} — nothing was written`);
-    // The same door refuses a point outside the parent the mark's filing
-    // declares (`world.mjs § declaredParentGuard`, postmark#3020), so that is
-    // asked here too, of the amend as the door will see it: its ring, if it
-    // has one, moved onto the standpoint first (postmark#3549).
-    const next = ringOf(built.payload.points)
-      ? { ...built.payload, points: ringMovedTo(built.payload.points, built.payload.at) } : built.payload;
-    const outside = await (await import("./world.mjs")).declaredParentGuard(on, next);
-    if (outside) throw bounce(outside.code, outside.defect, `${outside.hint} — nothing was written`);
-    amendDeps = { ...deps, mark };
-  }
-
-  const stamp = witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } };
-  const setDown = { act_id: drop.seq == null ? null : String(drop.seq), by: setter, at: stood };
-  let row;
-  {
-    const entry = {
-      crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
-      action: ACTION_STANCE, object: on, cls: CLASS_STANCE,
-      at: stamp.at, witnesses: stamp.witnesses,
-      payload: { on, stance, by, answers: hold.ANSWERS_SET_DOWN, set_down: setDown },
-      effect: stance === "welcomed"
-        ? `the author's house accepts ${setter}'s set-down — the amend that re-sites it is filed in ${madeBy}'s name`
-        : `the author's house refuses ${setter}'s set-down — canon keeps it where ${madeBy} put it`,
-    };
-    try {
-      row = laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
-    } catch (err) {
-      if (err?.name === "PenUnreachableError")
-        throw bounce(503, err.message,
-          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
-      throw err;
-    }
-  }
-
-  const amend = stance === "welcomed"
-    ? await hold.fileAuthorsAmend({ thing: on, stood, key, actor: setter, actId: drop.seq ?? null, writtenAt: drop.written_at ?? null,
-        extra: { stance_act_id: row.actId == null ? null : String(row.actId) }, deps: amendDeps })
-    : null;
-  const canonAt = target?.at ?? null;
-  const effect = stance === "opposed"
-    ? `your house refuses ${setter}'s set-down: canon keeps ${on} at ${canonAt ? place(canonAt) : "the place it was last folded"}, and the read answers canon from now on.`
-    : amend.filed && amend.put_forward
-      ? `your house accepts ${setter}'s set-down: the amend that re-sites ${on} at ${place(stood)} is filed in ${madeBy}'s name, and canon moves it at the next crossing.`
-      : amend.filed
-        ? `your house accepts ${setter}'s set-down: the amend that re-sites ${on} at ${place(stood)} is filed in ${madeBy}'s name as a private draft — no escrow behind it clears the ground it now stands on, so canon keeps it where it was folded until it is put forward.`
-        : `your house accepts ${setter}'s set-down, but the amend that re-sites ${on} was not filed (${amend.why}) — canon keeps it where it was folded; speak welcomed again to file it.`;
+  const g = await wordsAwaiting(handlesOf(key), { marks: inbox.marks ?? null, deps });
+  const setDowns = g.rows.filter((r) => r.act === "set-down")
+    .map((r) => ({ thing: r.thing, made_by: r.made_by, owner: r.owner, set_down_by: r.by, at: r.at ?? null, act_id: r.act_id, answer: r.answer }));
   return {
-    on, stance, by, answers: hold.ANSWERS_SET_DOWN, set_down: setDown,
-    seq: row.actId, crossing: row.crossing, log: row.record ?? "acts",
-    witnesses: row.witnesses ? JSON.parse(row.witnesses) : null,
-    ...(prior ? { superseded: { stance: prior.stance, at: prior.at, seq: prior.seq } } : {}),
-    ...(amend ? { amend } : {}),
-    effect,
-    note: "a set-down of your house's thing by another household is yours to answer: welcomed re-sites it in your name, opposed keeps canon where you put it, and silence leaves it unaccepted",
+    awaiting_your_word: g.rows,
+    set_downs_awaiting: setDowns,
+    ...(g.unavailable ? { awaiting_your_word_unavailable: g.unavailable, set_downs_unavailable: g.unavailable } : {}),
   };
 }
 
@@ -1604,38 +1417,23 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   // § STANDING_SCOPED_DOORS). The hint names the read that answers.
   if (!target) throw bounce(404, `no mark "${on}"`, "ids are <by>/<slug>: see the telling, or your own inbox, household { read: \"stances\" }");
 
-  // ── THE SET-DOWN ARM (POS-138; Keemin, 2026-09-24: "I agree with you here") ─
+  // ── THE OWNER'S WORD (POS-688): on a thing of your house's that someone outside it holds or set down ─
   //
-  // A set-down by ANOTHER household is a drafted amend of the author's thing,
-  // and the drafted amend IS the drop act. The author's house answers it here:
-  // welcomed files the author's amend (`world-hold.mjs § fileAuthorsAmend`,
-  // the same call the author's own drop makes), opposed files nothing and the
-  // read answers canon, and silence leaves it unaccepted. This arm is asked
-  // BEFORE the ground's-holder arm because it is the one case where the
-  // author speaks about their own mark — which the ground arm refuses by name,
-  // and still does for every other case.
-  const sd = await setDownFor(on, target, all, setDownDeps);
-  // An UNREADABLE holding record opens no arm and closes none: the door goes on
-  // to the answer it has always given, and says the set-down could not be
-  // checked. Turning every author's ordinary 422 into a 503 because a store
-  // blinked would make an outage look like a new law (the suite caught it).
-  if (sd?.drop && sd.speakerHouse(by)) {
-    if (stance === "neutral") throw bounce(422, "a set-down is answered welcomed or opposed",
-      `welcomed re-sites it where ${sd.drop.actor} left it, filed in your name; opposed keeps canon where you put it; silence leaves it unaccepted. A declared neutral is a word on ground you hold, and this is your house's own thing — nothing was written`);
-    return await answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, witnessStamp, crossing, deps: setDownDeps });
-  }
-
-  // ── THE TAKE ARM (POS-688 D3): the maker's house answers a stranger's take of its thing ─
-  const tk = await takeFor(on, target, setDownDeps);
-  if (tk?.take && tk.speakerHouse(by)) {
-    if (stance === "neutral") throw bounce(422, "a take is answered welcomed or opposed",
-      `opposed returns it at the settlement, out of ${tk.taker}'s hands; welcomed lets the take stand; silence lets it settle. A declared neutral is a word on ground you hold, and this is your house's own thing — nothing was written`);
-    return await answerTake({ repo, on, stance, by, key, tk, dbPath, witnessStamp, crossing });
+  // Asked BEFORE the ground's-holder arm, because it is the one case where a
+  // house speaks about its own thing, which the ground arm refuses by name. An
+  // unreadable holding record opens no arm and closes none: the door goes on to
+  // the answer it has always given, and says the owner could not be checked.
+  const own = await ownershipFor(on, setDownDeps);
+  if (own?.outing) {
+    const householdOf = await householdsForWords(setDownDeps);
+    const hold = await import("./world-hold.mjs");
+    if (hold.sameHousehold(own.owner, String(by), householdOf).same)
+      return await answerWord({ on, stance, by, key, own, dbPath, witnessStamp, crossing });
   }
 
   if (target.by === by) throw bounce(422, "a mark is never its own ground",
     "you do not consent to your own declaration — a stance is the word of the ground it landed on"
-    + (sd?.unreadable ? ` (whether another household has set it down, which is the one thing its author's house answers here, could not be checked: the holding record did not answer)` : ""));
+    + (own?.unreadable ? ` (whether someone outside your house holds it or set it down, which is the one thing its owner's house answers here, could not be checked: the holding record did not answer)` : ""));
 
   // THE HOUSE'S GROUND, READ BY THE ONE FUNCTION (POS-361, Q6): `awaitingOf`
   // with the house's own marks, grouped by household, with seniority. A
@@ -1652,7 +1450,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   if (!ground.length)
     throw bounce(403, `"${on}" does not stand on your ground`,
       "the ground's holder speaks: a mark with extent IS ground, so you may answer only what overlaps a mark of yours that stood there first — precedent weighs in on the newcomer, never the reverse"
-      + (sd?.drop ? ` — and ${sd.drop.actor}'s set-down of it is ${target.by}'s to answer: a set-down of ${target.by}'s thing is accepted or refused by ${target.by}'s house alone` : ""));
+      + (own?.outing ? ` — and while it is out of ${own.owner}'s house it is ${own.owner}'s to answer, by ${own.owner}'s house alone` : ""));
 
   // THE VERSION IT IS SPOKEN ON (POS-361, Q5), asked before anything is
   // written, so an unreadable version refuses with nothing behind it.

@@ -74,6 +74,8 @@ async function seed({ from = null, acts = [] } = {}) {
          OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [a.id, a.at, a.crossing ?? WIN + 0.1, a.actor, a.action, CONE, a.anchor ?? null, a.dx ?? null, a.dy ?? null, a.cls ?? "holding",
           JSON.stringify(a.payload ?? { thing: CONE, holder: a.holder ?? null, policy: a.action === "drop" ? "detach" : "cascade", made_by: "berthillon" })]);
+    // an act the clearing writes comes after every seeded one, as ids do on the record
+    await c.query("SELECT setval(pg_get_serial_sequence('acts', 'id'), 1000)");
   } finally { await c.end(); }
 }
 const take = (id, at) => ({ id, at, actor: "sb-ash", action: "take", holder: "sb-ash" });
@@ -133,6 +135,7 @@ test("3. 078's arm: clearing_job may insert a hold printout of a standing mark b
   try {
     await c.query("BEGIN");
     await insert(held);
+    await insert({ ...held, owned_by: "sb-ash" });
     await c.query("ROLLBACK");
     const refused = /or a hold printout/;
     await assert.rejects(insert(held, { body: "A cone, eaten." }), refused, "new words are not a printout");
@@ -161,56 +164,166 @@ test("4. a thing in the OLD form (kind: sited + class) prints held too: 078 lets
   assert.equal(row.data.held_by, "sb-ash");
 });
 
-// ── POS-688 D3 · AN OPPOSED TAKE RETURNS AT THE SETTLEMENT ──────────────────
-const opposeTake = (id, takeId, at, stance = "opposed") => ({ id, at, actor: "berthillon", action: "declare-stance-on", cls: "stance",
-  payload: { on: CONE, stance, by: "berthillon", answers: "take", take: { act_id: String(takeId), by: "sb-ash" } } });
+// ── POS-688 · THE OWNER'S WORD: OPPOSED BRINGS IT BACK (Darko 2026-10-19 16:39–16:45) ──
+//
+// The word is a stance answering the take or set-down (`answers`, `act: { act_id,
+// by }`), read at every clearing with no window. The return is to the owner's
+// hands when their carry has room (the store's law: the resident class's
+// capacity), otherwise onto their house's parcel, otherwise it waits.
+const word = (id, actId, at, stance = "opposed", { answers = "take", by = "berthillon", setter = "sb-ash" } = {}) => ({ id, at, actor: by, action: "declare-stance-on", cls: "stance",
+  payload: { on: CONE, stance, by, answers, act: { act_id: String(actId), by: setter } } });
+const give = (id, at, to, actor = "berthillon") => ({ id, at, actor, action: "give", holder: to, payload: { thing: CONE, holder: to, policy: "cascade", made_by: "berthillon" } });
+const PARCEL = "berthillon/home-ground";
+const PARCEL_ID = "b0000000-0000-4000-8000-000000000003";
+const BLESSED_SHA = "c".repeat(40);
+const OTHER = "berthillon/a-spoon";
+const OTHER_ID = "b0000000-0000-4000-8000-000000000004";
 
-test("5. the maker's house opposed sb-ash's take: nothing prints in sb-ash's hands, and the clearing returns the cone where it was, once", { skip }, async () => {
-  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z")] });
+/** The store's law (the resident's carry), a parcel for berthillon's house, and a second thing, as a test needs them. */
+async function withLaw({ capacity = 24, parcel = false, spoonHeld = false } = {}) {
+  const c = await store.connect("world2_owner");
+  try {
+    await c.query("TRUNCATE settlements, law_projection CASCADE");
+    await c.query("INSERT INTO law_projection (law_sha, kind, path, key, data) VALUES ($1, 'class', 'WORLD/resident/mark.md', 'resident', $2)",
+      [BLESSED_SHA, JSON.stringify({ class: "resident", dials: { capacity } })]);
+    await c.query("INSERT INTO settlements (number, tag_sha, published_at, window_id) VALUES (130, $1, now(), $2)", [BLESSED_SHA, WIN - 1]);
+    const put = async (id, slug, kind, at, ext) => {
+      const geometry = JSON.stringify({ at, extent: ext }), d = JSON.stringify({ tier: "home", date: "2026-08-26" });
+      await c.query(
+        `INSERT INTO claims (id, window_id, class, claimant, household, status, decided_at, body, geometry, bbox, stake, data, slug)
+         VALUES ($1, $2, $3, 'berthillon', 'hh:berthillon', 'locked', now(), $4, $5, $6::box, 0, $7, $8)`,
+        [id, WIN - 1, kind, `${slug}.`, geometry, box(at, ext), d, slug]);
+      await c.query(
+        `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+         VALUES ($1, $2, $3, 'berthillon', 'hh:berthillon', $4, $5, $6::box, 'standing', $7, $8)`,
+        [id, slug, kind, `${slug}.`, geometry, box(at, ext), WIN - 1, d]);
+    };
+    if (parcel) await put(PARCEL_ID, PARCEL, "parcel", { x: 400, y: 400 }, { w: 25, h: 25 });
+    if (spoonHeld) {
+      await put(OTHER_ID, OTHER, "thing", { x: 401, y: 401 }, { w: 1, h: 1 });
+      await c.query(`INSERT INTO acts (id, at, crossing, actor, action, object, class, payload) OVERRIDING SYSTEM VALUE
+                     VALUES (90, '2026-10-18T20:00:00Z', $1, 'berthillon', 'take', $2, 'holding', $3)`,
+        [WIN - 0.5, OTHER, JSON.stringify({ thing: OTHER, holder: "berthillon", policy: "cascade", made_by: "berthillon" })]);
+    }
+  } finally { await c.end(); }
+}
+const townActs = () => read("SELECT id::int, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE class = 'holding' AND actor = 'the-town' AND object = $1 ORDER BY id", [CONE]);
+
+test("5. HANDS: berthillon asks for the cone back from sb-ash: the settlement gives it into berthillon's hands, once, and prints it there", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z")] });
+  await withLaw();
   const r = clear();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /⚑ hold: berthillon\/a-cone — returned: its maker's house opposed sb-ash's take \(act 101\)/);
-  const row = await coneRow();
-  assert.deepEqual(row.geometry, { at: { x: 221, y: 95.5 }, extent: { w: 1, h: 1 } }, "canon is untouched: never printed held");
-  assert.equal(row.data.held_by, undefined);
-  const back = await read("SELECT actor, action, at_dx, at_dy, payload FROM acts WHERE class = 'holding' AND actor = 'the-town' AND object = $1", [CONE]);
+  assert.match(r.out, /⚑ hold: berthillon\/a-cone — returned to its owner berthillon \(into their hands\): they asked for it back \(act 101\)/);
+  const back = await townActs();
   assert.equal(back.length, 1, "one return act");
-  assert.equal(back[0].action, "drop");
-  assert.deepEqual([back[0].at_dx, back[0].at_dy], [221, 95.5], "set down where it was printed");
-  assert.deepEqual(back[0].payload.returned, { take_act: "101", stance_act: "102" });
+  assert.equal(back[0].action, "give");
+  assert.equal(back[0].payload.holder, "berthillon");
+  assert.deepEqual(back[0].payload.returned, { act: "101", stance_act: "102" });
+  const row = await coneRow();
+  assert.equal(row.data.held_by, "berthillon", "printed in its owner's hands, in the same clearing");
   const [win] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
   assert.equal(win.receipts.hold_returned[0].slug, CONE);
-  // the one return is the only one: 078 refuses a second for the same take (test 6)
-  assert.equal((await read("SELECT count(*)::int AS n FROM acts WHERE actor = 'the-town' AND object = $1", [CONE]))[0].n, 1);
+  assert.deepEqual(win.receipts.hold_returned[0].to, { held_by: "berthillon" });
+  // the outing is over: the next clearing returns nothing again
+  clear();
+  assert.equal((await townActs()).length, 1, "and a second clearing writes no second return");
 });
 
-test("5b. a welcomed take, or one already printed, is never returned", { skip }, async () => {
-  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z", "welcomed")] });
+test("5b. PARCEL: berthillon's hands are full (capacity 1, a spoon in them): the settlement sets the cone on berthillon's parcel, free, and prints it there", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z")] });
+  await withLaw({ capacity: 1, parcel: true, spoonHeld: true });
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /returned to its owner berthillon \(onto berthillon\/home-ground\)/, r.out.slice(-800));
+  const [back] = await townActs();
+  assert.deepEqual([back.action, back.at_anchor, back.at_dx, back.at_dy], ["drop", PARCEL, 0, 0], "anchored at the parcel's centre");
+  const row = await coneRow();
+  assert.deepEqual(row.geometry, { at: { x: 400, y: 400 }, extent: { w: 1, h: 1 } }, r.out.split(/\r?\n/).filter((l) => /hold/.test(l)).join(" | "));
+  assert.equal(row.data.held_by, undefined);
+});
+
+test("5c. WAITS: hands full and no parcel: nothing is written, the receipt says why, and the next clearing tries again", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z")] });
+  await withLaw({ capacity: 1, spoonHeld: true });
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /its owner berthillon asked for it back, and it waits — berthillon's hands are full and berthillon's house holds no parcel to set it on/);
+  assert.equal((await townActs()).length, 0);
+  assert.equal((await coneRow()).data.held_by, "sb-ash", "still lent, printed in sb-ash's hands");
+});
+
+test("5d. the latest word wins: opposed then neutral lends it, and nothing returns; welcomed gives it to keep, and the cone prints owned_by sb-ash", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z"), word(103, 101, "2026-10-19T01:40:00Z", "neutral")] });
+  await withLaw();
   let r = clear();
   assert.equal(r.code, 0, r.out);
-  assert.match(r.out, /⚑ hold: berthillon\/a-cone — held by sb-ash/, "welcomed: the take prints");
-  // printed at an earlier clearing (window 259's cutoff is past the take): too late, it stays in sb-ash's hands
-  await seed({ from: 101, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z")] });
+  assert.equal((await townActs()).length, 0, "neutral is the latest word: lent");
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z", "welcomed")] });
+  await withLaw();
   r = clear();
   assert.equal(r.code, 0, r.out);
-  assert.doesNotMatch(r.out, /returned/);
+  assert.equal((await townActs()).length, 0);
+  const row = await coneRow();
+  assert.equal(row.data.owned_by, "sb-ash", "welcomed: it is sb-ash's now, printed so (D-O1)");
+  assert.equal(row.data.held_by, "sb-ash");
 });
 
-test("6. 078's acts arm: clearing_job may insert only the return of an opposed take, once", { skip }, async () => {
-  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z"),
-    take(103, "2026-10-19T02:00:00Z"), opposeTake(104, 103, "2026-10-19T02:30:00Z", "welcomed")] });
+test("5e. NO WINDOW: a take printed at an earlier clearing is still the owner's to ask back; a word from outside the owner's house reaches nothing", { skip }, async () => {
+  await seed({ from: 101, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z", "opposed", { by: "sb-cleo" })] });
+  await withLaw();
+  let r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.equal((await townActs()).length, 0, "sb-cleo is not the owner's house");
+  await seed({ from: 101, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z")] });
+  await withLaw();
+  r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.equal((await townActs()).length, 1, "printed before, and it still comes back");
+});
+
+test("5f. a SET-DOWN by someone outside the house is answered the same way: opposed brings it back", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), drop(102, "2026-10-19T02:00:00Z", 196, -352), word(103, 102, "2026-10-19T02:30:00Z", "opposed", { answers: "set-down" })] });
+  await withLaw();
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  const [back] = await townActs();
+  assert.deepEqual(back.payload.returned, { act: "102", stance_act: "103" });
+  assert.equal((await coneRow()).data.held_by, "berthillon");
+});
+
+test("5g. THE OWNER'S GIVE passes ownership: berthillon gives the cone to sb-ash, and it prints owned_by sb-ash in sb-ash's hands", { skip }, async () => {
+  await seed({ from: 100, acts: [give(101, "2026-10-19T01:00:00Z", "sb-ash")] });
+  await withLaw();
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /⚑ hold: berthillon\/a-cone — held by sb-ash; owned by sb-ash/);
+  const row = await coneRow();
+  assert.equal(row.data.owned_by, "sb-ash");
+  const [claim] = await read("SELECT claimant FROM claims WHERE slug = $1 AND window_id = $2", [CONE, WIN]);
+  assert.equal(claim.claimant, "berthillon", "the maker is fixed: the printout is filed in the maker's name");
+});
+
+test("6. 078's acts arm: clearing_job may insert only the return of a thing its owner asked back (a take or a set-down), once per word", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z"),
+    take(103, "2026-10-19T02:00:00Z"), word(104, 103, "2026-10-19T02:30:00Z", "welcomed"),
+    drop(105, "2026-10-19T03:00:00Z", 196, -352), word(106, 105, "2026-10-19T03:30:00Z", "opposed", { answers: "set-down" })] });
   const c = await store.connect("clearing_job");
   const ret = (payload, { actor = "the-town", action = "drop", cls = "holding", object = CONE } = {}) => c.query(
     `INSERT INTO acts (at, crossing, actor, action, object, class, payload) VALUES (now(), $1, $2, $3, $4, $5, $6)`,
     [WIN, actor, action, object, cls, JSON.stringify(payload)]);
-  const good = { thing: CONE, holder: null, policy: "detach", returned: { take_act: "101", stance_act: "102" } };
+  const good = { thing: CONE, holder: null, policy: "detach", returned: { act: "101", stance_act: "102" } };
   const refused = /clearing_job may insert only the return of an opposed take/;
   try {
     await c.query("BEGIN");
     await ret(good);
-    await assert.rejects(ret(good), refused, "once per take");
+    await assert.rejects(ret(good), refused, "once per word");
     await c.query("ROLLBACK");
-    await assert.rejects(ret({ ...good, returned: { take_act: "103", stance_act: "104" } }), refused, "a welcomed take is not returned");
+    await c.query("BEGIN");
+    await ret({ ...good, returned: { act: "105", stance_act: "106" } });
+    await c.query("ROLLBACK");
+    await assert.rejects(ret({ ...good, returned: { act: "103", stance_act: "104" } }), refused, "a welcomed take is not returned");
+    await assert.rejects(ret({ ...good, returned: { act: "101", stance_act: "106" } }), refused, "the word must answer the act it names");
     await assert.rejects(ret(good, { actor: "sb-ash" }), refused, "only the town returns");
     await assert.rejects(ret({ thing: CONE, holder: null, policy: "detach" }), refused, "a drop naming no return is no return");
     await assert.rejects(ret(good, { cls: "voice", action: "say" }), refused, "nor any other act");
@@ -218,15 +331,15 @@ test("6. 078's acts arm: clearing_job may insert only the return of an opposed t
 });
 
 test("7. FALSIFIER (Wright's condition 1): clearing_job's INSERT on acts is the trigger's to refuse — every act that is not a return is refused, and with the trigger dropped the same inserts land", { skip }, async () => {
-  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z")] });
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), word(102, 101, "2026-10-19T01:30:00Z")] });
   // the shapes a clearing pen could be asked to write that are not the return of an opposed take
   const notReturns = [
     { actor: "the-town", action: "say", object: CONE, cls: "voice", payload: { text: "hello" } },
     { actor: "the-town", action: "leave-mark", object: CONE, cls: "mark", payload: { thing: CONE } },
-    { actor: "the-town", action: "take", object: CONE, cls: "holding", payload: { thing: CONE, holder: "the-town", policy: "cascade", returned: { take_act: "101", stance_act: "102" } } },
-    { actor: "the-town", action: "drop", object: ROOM, cls: "holding", payload: { thing: ROOM, holder: null, policy: "detach", returned: { take_act: "101", stance_act: "102" } } },
-    { actor: "the-town", action: "drop", object: CONE, cls: "holding", payload: { thing: CONE, holder: null, policy: "detach", returned: { take_act: "102", stance_act: "101" } } },
-    { actor: "berthillon", action: "drop", object: CONE, cls: "holding", payload: { thing: CONE, holder: null, policy: "detach", returned: { take_act: "101", stance_act: "102" } } },
+    { actor: "the-town", action: "take", object: CONE, cls: "holding", payload: { thing: CONE, holder: "the-town", policy: "cascade", returned: { act: "101", stance_act: "102" } } },
+    { actor: "the-town", action: "drop", object: ROOM, cls: "holding", payload: { thing: ROOM, holder: null, policy: "detach", returned: { act: "101", stance_act: "102" } } },
+    { actor: "the-town", action: "drop", object: CONE, cls: "holding", payload: { thing: CONE, holder: null, policy: "detach", returned: { act: "102", stance_act: "101" } } },
+    { actor: "berthillon", action: "drop", object: CONE, cls: "holding", payload: { thing: CONE, holder: null, policy: "detach", returned: { act: "101", stance_act: "102" } } },
   ];
   const insert = (c, a) => c.query(`INSERT INTO acts (at, crossing, actor, action, object, class, payload) VALUES (now(), $1, $2, $3, $4, $5, $6)`,
     [WIN, a.actor, a.action, a.object, a.cls, JSON.stringify(a.payload)]);
