@@ -166,6 +166,13 @@ const CAUSE_OF_CHECK = Object.freeze({
   // (`parcel-cap: …`, before the A build). RULED 2026-10-08 by Darko: `opposed`.
   "opposed": "opposed",
   "parcel-cap": "opposed",
+  // A candy mark whose record names no proved set-down (world2/tools/
+  // drop-provenance.mjs, WLD-27): candy is made by its kind into hands or a
+  // bowl, and a placed one is not a lawful candy record. `malformed`, PROPOSED
+  // for Darko (POS-692), with the way that works beside it (CAUSE_NEXT). Not
+  // `unbacked`, which a resident reads as "stake more". It had no word, so the
+  // receipt said "no word in the bulletin's five yet" over amia-semper's four.
+  "dropped-unit-unproven": "malformed",
   // ── the REVIEW lane's writer (world2/tools/review-rule.mjs) ───────────────
   //
   // ⚑ `contested`, NOT `held` (repaired 2026-09-07, reviewer-found — and it is
@@ -270,6 +277,15 @@ export function opposedLawOf(refusalCheck) {
   return m ? m[1] : null;
 }
 
+/**
+ * THE WAY THAT WORKS, beside the word (POS-692; drafted for Darko): for a check
+ * whose word alone leaves a resident with no next step. Keyed by check name,
+ * like CAUSE_OF_CHECK; a check with no entry answers no `next`.
+ */
+export const CAUSE_NEXT = Object.freeze({
+  "dropped-unit-unproven": 'a candy is made by its kind, not placed: explain: "candy" lists the kinds, and leave-mark { kind, count, to: <you or a bowl> } makes some',
+});
+
 export function causeOf(refusalCheck) {
   const raw = String(refusalCheck ?? "").trim();
   if (!raw) return { cause: null, cause_row: null };
@@ -277,7 +293,8 @@ export function causeOf(refusalCheck) {
   const word = CAUSE_OF_CHECK[key]
     ?? CAUSE_WORDS.find((w) => key === w)
     ?? null;
-  return { cause: word, cause_row: `${CAUSE_ROW_PREFIX}${JSON.stringify(raw)}` };
+  const next = CAUSE_NEXT[key] ?? null;
+  return { cause: word, cause_row: `${CAUSE_ROW_PREFIX}${JSON.stringify(raw)}`, ...(next ? { next } : {}) };
 }
 
 /**
@@ -432,14 +449,14 @@ export function receiptFrom(records = {}) {
   // 2 · THE DOCKET RULED, and canon does not hold it. This is the sentence the
   // bulletin promised and no door said.
   if (row?.status === "refused") {
-    const { cause, cause_row } = causeOf(row.refusal_check);
+    const { cause, cause_row, next } = causeOf(row.refusal_check);
     return {
-      ...base, status: "refused", cause, cause_row,
+      ...base, status: "refused", cause, cause_row, ...(next ? { next } : {}),
       crossing: settlement ?? null,
       settlement_sha: settlement?.sha ?? null,
       says: opposedLawOf(row.refusal_check)
         ? `opposed at candle ${row.window_id}, citing ${opposedLawOf(row.refusal_check)}: the parcel is over its limit and holds no ground${row.decided_at ? ` (${row.decided_at})` : ""}`
-        : `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}`
+        : `refused at candle ${row.window_id}${cause ? ` — ${cause}` : ""}${row.decided_at ? ` (${row.decided_at})` : ""}${next ? `: ${next}` : ""}`
         + (cause ? "" : " — the check that refused it has no word in the bulletin's five yet; the row is named beside this"),
     };
   }

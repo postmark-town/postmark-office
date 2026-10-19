@@ -60,6 +60,14 @@ const CLASS_NAMES_SQL = `SELECT DISTINCT json_extract(props, '$.class') AS class
 registerTwin(CLASS_NAMES_SQL, (g) => [...new Set(g.nodes.filter(classRosterGate).map((n) => jx(n.p, "class")))]
   .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((c) => ({ class: c })));
 
+// THE KINDS UNDER A CLASS (POS-692): the roster's classes whose `extends` names
+// this one, by name. "Each kind of candy is a subclass of candy … residents may
+// make candy of any kind" — and a kind no read lists is a kind nobody finds.
+const SUBCLASSES_SQL = `SELECT DISTINCT json_extract(props, '$.class') AS class FROM nodes
+      WHERE ${CLASS_ROSTER_GATE_SQL} AND json_extract(props, '$.extends') = ? ORDER BY class`;
+registerTwin(SUBCLASSES_SQL, (g, name) => [...new Set(g.nodes.filter((n) => classRosterGate(n) && jx(n.p, "extends") === name).map((n) => jx(n.p, "class")))]
+  .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((c) => ({ class: c })));
+
 // The class's structure: what it extends and the actions it declares. Same
 // authorship and tier gate as residueOf (only the town's constitutional record).
 const CLASS_SHAPE_SQL = `SELECT id,
@@ -287,6 +295,7 @@ export function explainClass(db, name) {
   const makers = makersOf(db, id, chain);
   const klass = own?.class ?? String(name);
   const up = chain[0]?.class ?? null;
+  const kinds = ask(db, SUBCLASSES_SQL, klass).map((r) => String(r.class));
   return {
     explains: klass,
     class: id,
@@ -300,6 +309,8 @@ export function explainClass(db, name) {
       ? { value: null, from: null, note: "not declared on this chain yet (WLD-73 part 2 writes it)" }
       : { value: makers.value, from: makers.from, ...(makers.from !== id ? { inherited: true } : {}) },
     deeper: up ? `explain: "${up}" — the class above, read the same way; each class answers only what it adds` : "this is the root: every class climbs to it",
+    // the classes under this one, by name (explain: "<kind>" reads one); every class answers the key, so the climb keeps one shape
+    kinds,
     changes: "at a settlement that changes the class layer",
   };
 }
@@ -349,4 +360,4 @@ export const withPointer = (answer, pointer) =>
   answer && !answer.error && pointer ? { ...answer, class_pointer: pointer } : answer;
 
 /** The statements this module asks, each with its twin, for the tests to hold to their SQL. */
-export const CLASS_READ_STATEMENTS = Object.freeze([CLASS_ID_SQL, CLASS_BY_ID_SQL, CLASS_NAMES_SQL, CLASS_SHAPE_SQL, CHILDREN_SQL, MARK_KIND_SQL]);
+export const CLASS_READ_STATEMENTS = Object.freeze([CLASS_ID_SQL, CLASS_BY_ID_SQL, CLASS_NAMES_SQL, CLASS_SHAPE_SQL, CHILDREN_SQL, MARK_KIND_SQL, SUBCLASSES_SQL]);

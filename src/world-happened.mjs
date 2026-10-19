@@ -85,9 +85,9 @@ export const LIVE_HW_SQL = "SELECT max(id)::text AS hw FROM acts";
 // NEWEST FIRST after the cursor (review-559 § 1): a long gap is a capped glance
 // of its NEWEST acts, and the cursor handed back is the top, so nothing between
 // is skipped silently; `complete` says when the gap was cut.
-export const LIVE_AFTER_SQL = `SELECT id::text AS id, actor, action, at, at_anchor, at_dx, at_dy FROM acts
+export const LIVE_AFTER_SQL = `SELECT id::text AS id, actor, action, object, at, at_anchor, at_dx, at_dy FROM acts
   WHERE id > $1::bigint AND action = ANY($2::text[]) ORDER BY id DESC LIMIT $3`;
-export const LIVE_NEWEST_SQL = `SELECT id::text AS id, actor, action, at, at_anchor, at_dx, at_dy FROM acts
+export const LIVE_NEWEST_SQL = `SELECT id::text AS id, actor, action, object, at, at_anchor, at_dx, at_dy FROM acts
   WHERE action = ANY($1::text[]) ORDER BY id DESC LIMIT $2`;
 
 /**
@@ -111,7 +111,10 @@ export async function liveLines({ afterId = null, sinceMs = null, query, centreO
     for (const r of rows ?? []) {
       const pos = compose({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf);
       if (!pos) continue;
-      lines.push({ at: r.at instanceof Date ? r.at.toISOString() : r.at, type: LIVE_KINDS[r.action], actor: r.actor, payload: { x: pos.x, y: pos.y }, live: true });
+      // a walk's act row names its destination mark as its object (world.mjs § walkEntry), as the
+      // log's departure line does in payload.to (POS-697 G3a: around_you says where they set out for)
+      const to = LIVE_KINDS[r.action] === "departure" && typeof r.object === "string" && r.object ? { to: r.object } : {};
+      lines.push({ at: r.at instanceof Date ? r.at.toISOString() : r.at, type: LIVE_KINDS[r.action], actor: r.actor, payload: { x: pos.x, y: pos.y, ...to }, live: true });
     }
     // the mark handed back is the highest of the store's top and the newest row
     // read: an act inserted between the two queries is shown now, never again
@@ -211,8 +214,15 @@ export function toYou({ transitions = [], carriedLegs = [], claimEffects = null,
     ...(holdsReadable ? [] : [holdEffects.reason ?? "the holding record could not be read"]),
     ...(creaturesReadable ? [] : [creatureEffects.reason ?? "the creatures could not be read"]),
   ];
+  // the same gaps in a few words each (POS-697 G4a): v2's glance says these, never the sentence
+  const missing = [
+    ...(docketReadable ? [] : [claimEffects.missing ?? "your marks' rulings"]),
+    ...(holdsReadable ? [] : [holdEffects.missing ?? "gives, takes and drops"]),
+    ...(creaturesReadable ? [] : [creatureEffects.missing ?? "creatures' reactions"]),
+  ];
   return {
     complete: docketReadable && holdsReadable && creaturesReadable,
+    ...(missing.length ? { missing } : {}),
     // ⚑ LANE A'S SENTENCE IS KEPT CONTIGUOUS, and that is not cosmetic: its own
     // test binds "every claim effect on your marks and on your ground rides
     // here too" as one string. My first draft spliced this lane's clause into
@@ -247,6 +257,8 @@ export function aroundYou({ lines = [], at, radiusM = HAPPENED_DIALS.around_radi
     if (exclude && l.actor === exclude) continue;
     near.push({
       kind: l.type, actor: l.actor, at: l.at, crossing: l.crossing,
+      // where it happened, and how far from you (POS-697 G3a): a row you can follow up
+      x: Math.round(x), y: Math.round(y), ...(at ? { m: Math.round(Math.hypot(x - at.x, y - at.y)) } : {}),
       ...(l.type === "emission" ? { place: p.place ?? null } : {}),
       ...(l.type === "departure" ? { toward: p.to ?? null } : {}),
     });

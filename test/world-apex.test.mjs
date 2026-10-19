@@ -1194,6 +1194,35 @@ test("envelope: an unknown field bounces BY NAME against the target's own schema
   assert.equal(r.code, 422);
   assert.match(r.defect, /does not take: nonsense/);
   assert.ok(r.allowed.includes("text"), "the bounce names the fields the act DOES take");
+  assert.equal(r.did_you_mean, undefined, "a field far from every name gets no guess");
+});
+
+test("envelope: a near-miss field is named with its likely meaning (POS-697 G1a)", async () => {
+  on();
+  // the rig affords say (walk's own row, `to`, is held bare in apex-near-miss.test.mjs)
+  const r = await worldApex({ do: "say", args: { message: "hello" } }, KEY_ALPHA);
+  assert.equal(r.code, 422);
+  assert.match(r.defect, /does not take: message/);
+  assert.deepEqual(r.did_you_mean, { message: ["text"] });
+  assert.match(r.hint, /^message: did you mean text\? the fields it takes: /);
+});
+
+test("terms (POS-697 G5a): a v2 caller is shown the law whole once, then by name; v1 always whole; a read card always whole", async () => {
+  on();
+  const { forgetShown } = await import("../src/terms-seen.mjs");
+  forgetShown();
+  // a bare say listens (free, never flooded), and its answer carries the law like any act
+  const first = await worldApex({ do: "say", read_shape: "v2" }, KEY_ALPHA);
+  assert.ok(first.terms?.binds?.text != null, JSON.stringify(first).slice(0, 300));
+  assert.match(first.terms.id, /^t1.[0-9a-f]{12}$/);
+  const second = await worldApex({ do: "say", read_shape: "v2" }, KEY_ALPHA);
+  assert.equal(second.terms.seen, true);
+  assert.equal(second.terms.id, first.terms.id);
+  assert.equal(second.terms.whole, 'world { read: "say" }');
+  const v1 = await worldApex({ do: "say" }, KEY_ALPHA);
+  assert.ok(v1.terms?.binds?.text != null, "a caller who did not ask for v2 sees the whole law, as before");
+  const card = await worldApex({ read: "say", read_shape: "v2" }, KEY_ALPHA);
+  assert.ok(card.card?.terms?.binds, "a read is where the whole law is: never named");
 });
 
 // POS-70 §5 (ruled 2026-09-24): the send and the five paper acts take a retry

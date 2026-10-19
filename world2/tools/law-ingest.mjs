@@ -255,6 +255,11 @@ export async function deriveLaw({ lawRepo }) {
   for (const m of marks) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
   for (const m of declarations) {
     const data = recordData(m);
+    // THE FILE'S OWN DIALS, KEPT BESIDE THE MERGE (POS-704). `dials` below is the
+    // merge every live reader asks for; a class node's own frontmatter `dials:`
+    // (absent on a W2 class) rides under its own key, written only when the file
+    // has the line, so the store fold rebuilds the record the loader built.
+    if (data.dials !== undefined) data._fileDials = data.dials;
     const dials = dialsOfClassNode(m, childrenOf.get(m.id));
     if (dials) data.dials = dials;
     push("class", relPath(repo, join(m._dir, "mark.md")), String(classNodeNameOf(m)), data);

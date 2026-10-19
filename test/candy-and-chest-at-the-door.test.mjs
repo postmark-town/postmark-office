@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 process.env.WORLD_CHESTS_CANDY = "1";
 
 process.env.WORLD_CLONE = join(tmpdir(), "postmark-no-world-clone-wld27");
-const { leaveMarkViaOffice } = await import("../src/world.mjs");
+const { leaveMarkViaOffice, CANDY_IS_MADE } = await import("../src/world.mjs");
 const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
 
 const CHEST_DIALS = { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" };
@@ -36,6 +36,7 @@ const CLASS_ROWS = [
   ["consumable", { extends: "thing", dials: {} }],
   ["candy", { extends: "consumable", dials: {}, labels: [{ label: "test-comets", name: "Test Comets", creator: "alpha" }] }],
   ["the-town-alone", { extends: "candy", dials: { makers: false } }],
+  ["lollipop", { extends: "candy", dials: {} }], // a kind of candy that inherits makers: true (POS-692)
   ["chest", { extends: "thing", dials: CHEST_DIALS }],
   ["lawless", {}],
 ].map(([key, data]) => ({ number: 250, tag_sha: "f".repeat(40), newest: 250, kind: "class", key, data: { class: key, ...data } }));
@@ -83,4 +84,62 @@ test("a chest's capacity is 1..120; portable is a boolean; welcome is open or cl
   assert.equal(await sentence({ ...chest, portable: "no" }), "portable is true or false");
   assert.equal(await sentence({ ...chest, welcome: "maybe" }), "welcome is open or closed");
   assert.equal(await sentence({ ...chest, kind: "parcel", extent: undefined }), "a chest is a sited mark");
+});
+
+// ── POS-692: A PLACED CANDY IS REFUSED AT THE DOOR, WITH THE WAY THAT WORKS ──
+// amia-semper's four named sweets (S118) were taken here as drafts and refused
+// at the crossing as `dropped-unit-unproven: no act`, with no word. The door now
+// asks the clearing's own rule (drop-provenance.mjs § isCandyClass, dropRefusalOf).
+const placed = { slug: "creek-honey-toffee", kind: "candy", at: { x: 3200, y: -2900 }, extent: { w: 1, h: 1 },
+  body: "Creek honey toffee: amber, chewy, warm." };
+
+test("A PLACED CANDY is refused at once, in both spellings and by lineage, with the way candy is made", async () => {
+  assert.equal(await sentence({ ...placed }), CANDY_IS_MADE.defect, "kind: candy (amia-semper's shape)");
+  assert.equal(await sentence({ ...placed, kind: "sited", class: "candy" }), CANDY_IS_MADE.defect, "the old spelling");
+  assert.equal(await sentence({ ...placed, kind: "lollipop" }), CANDY_IS_MADE.defect, "a kind of candy is candy");
+  let hint = null;
+  try { await leaveMarkViaOffice(process.env.WORLD_CLONE, { ...placed }, one); } catch (e) { hint = e.hint; assert.equal(e.code, 422); }
+  assert.ok(hint.includes(`leave-mark { kind: "<a kind>", count: 5, to: "alpha" }`), "the resident's own handle, in the call that works");
+  assert.ok(hint.includes(`explain: "candy" lists the kinds`), "where the kinds are found");
+  assert.ok(hint.includes("Write to wright"), "how a new kind is asked for (Darko 2026-10-19)");
+  assert.match(hint, /Nothing was written\.$/);
+  assert.doesNotMatch(hint, /set it down|drop/, "a set-down by kind is not built, so it is not offered");
+});
+
+test("a town-only class under candy still says town-only first; a thing is untouched", async () => {
+  assert.equal(await sentence({ ...placed, kind: "the-town-alone" }), 'class "the-town-alone" is town-only');
+  assert.notEqual(await sentence({ ...placed, kind: "thing" }), CANDY_IS_MADE.defect);
+});
+
+test("a candy naming a set-down is PROVED by the record, not waved through: no store here, so it cannot be checked", async () => {
+  assert.equal(await sentence({ ...unit }), "the set-down this candy names could not be checked",
+    "the door reads the act it names (dropRefusalOf), exactly as the clearing does");
+});
+
+test("the hold door's own set-down still files (proved by construction)", async () => {
+  const ok = await sentence({ ...unit }, { dropUnit: { actId: 77, label: "test-comets" } });
+  assert.notEqual(ok, CANDY_IS_MADE.defect);
+  assert.notEqual(ok, "the set-down this candy names could not be checked");
+});
+
+// ── POS-692 (kogane's bug post): A MAKE'S ACTOR IS THE TOP-LEVEL HANDLE ──────
+// On a two-resident key, world { handle: "kogane", do: "leave-mark", args: { to:
+// "kogane", kind: "candy", count: 1 } } bounced "which resident is making these?",
+// and handle kogane with by: keith ran as keith. The handle wins; a by naming
+// another resident is two actors, refused. (No hold store here: past the actor,
+// the make fails later, so the assertions are about which sentence comes back.)
+const two = { household: "house-a", handles: new Set(["alpha", "beta"]) };
+const makeSays = async (payload) => {
+  try { await leaveMarkViaOffice(process.env.WORLD_CLONE, payload, two); return "LANDED"; }
+  catch (e) { return String(e.defect ?? e.message); }
+};
+const make = { to: "alpha", kind: "candy", count: 1 };
+
+test("A MAKE'S ACTOR IS THE TOP-LEVEL HANDLE on a two-resident key; a by naming another is two actors", async () => {
+  assert.notEqual(await makeSays({ ...make, handle: "alpha" }), "which resident is making these?", "the handle names who makes");
+  assert.equal(await makeSays({ ...make, handle: "alpha", by: "beta" }), 'two residents named: handle "alpha" and by "beta"');
+  assert.doesNotMatch(await makeSays({ ...make, handle: "alpha", by: "alpha" }), /two residents named/, "the same resident twice is one");
+  assert.doesNotMatch(await makeSays({ ...make, by: "beta", to: "beta" }), /two residents named|which resident/, "by alone still names the maker");
+  assert.equal(await makeSays({ ...make }), "which resident is making these?", "neither, on a two-resident key: still asked");
+  assert.equal(await makeSays({ ...make, handle: "gamma" }), '"gamma" is not one of your residents');
 });

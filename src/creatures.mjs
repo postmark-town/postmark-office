@@ -284,8 +284,14 @@ export const PRUNE_AFTER_MS = 3600_000;
  * who answers every 12 hours still reads what the wolf did when they arrived,
  * even from a wolf that fled at once. A since older than this is answered as
  * incomplete (creatures-read.mjs § creatureToYou).
+ *
+ * 25 HOURS, NOT 13 (POS-697 G4a, Darko 2026-10-19 09:21). A bare read with no
+ * cursor reaches back to the PREVIOUS crossing's start (G4, 10-14), which is
+ * 12 to 24 hours ago, so a 13-hour reach made to_you say INCOMPLETE on nearly
+ * every bare read. Two crossings and an hour hold that whole window: the shelf
+ * is complete because it is, not because the note was quietened.
  */
-export const TO_YOU_REACH_MS = 13 * 3600_000;
+export const TO_YOU_REACH_MS = 25 * 3600_000;
 export const BOOT_SPAN_S = (TO_YOU_REACH_MS + 13 * 3600_000) / 1000;
 
 /**

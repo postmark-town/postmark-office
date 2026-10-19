@@ -72,19 +72,24 @@ test("G5: the public acts are the ones the crossing log or the docket publishes,
   assert.deepEqual(Object.keys(PUBLIC_ACTS).sort(), ["drop", "enter", "exit", "give", "land", "leave-mark", "say", "stake", "take", "walk", "withdraw"]);
 });
 
-test("G8: each act's line is the approved sentence without its fields, grouped by intent; an unknown act rides `more`", () => {
-  const entries = ["say", "walk", "enter", "take", "candy-trade", "stake"].map((action) => ({ action, blurb: "A candy trade swaps two candies. More words." }));
+test("G8 (POS-697 G1a): each act's line is the approved sentence WITH its fields, grouped by intent; an unknown act rides `more`", () => {
+  const entries = ["say", "walk", "enter", "take", "candy-trade", "stake"].map((action) => ({ action, blurb: "A candy trade swaps two candies. More words.",
+    ...(action === "candy-trade" ? { fields: { with: { type: "string", required: true }, kind: { type: "string" } } } : {}) }));
   const can = canBlock(entries, { pace: 5, handles: ["wright", "rei"], standing: "wright", notYours: [{ action: "build", because: "not your ground" }] });
   assert.deepEqual(Object.keys(can), ["speak", "move", "back", "carry", "more", "not_here", "as"]);
-  assert.equal(can.speak.say, ONE_LINERS.say.says);
-  assert.doesNotMatch(JSON.stringify(can), /Fields:/);
-  assert.equal(can.move.walk, "Walk to a mark or a point, at about 5 km an hour.");
-  assert.equal(can.more["candy-trade"], "A candy trade swaps two candies.");
+  assert.equal(can.speak.say, `${ONE_LINERS.say.says} Fields: text.`);
+  assert.equal(can.move.walk, "Walk to a mark or a point, at about 5 km an hour. Fields: mark_id or to_x + to_y, mode?, enter_on_arrival?.");
+  // an act with no approved line names its own schema's fields, the optional ones marked
+  assert.equal(can.more["candy-trade"], "A candy trade swaps two candies. Fields: with, kind?.");
+  // every grouped act's line names every field its approved line names: the first act needs no guess
+  for (const group of ["speak", "move", "back", "carry"])
+    for (const [act, line] of Object.entries(can[group])) assert.ok(line.endsWith(`Fields: ${ONE_LINERS[act].fields.join(", ")}.`), `${act}: ${line}`);
   assert.deepEqual(can.not_here, [{ act: "build", because: "not your ground" }]);
   const both = canBlock(entries, { notYours: [{ action: "say", because: "this door is for a human" }] });
   assert.equal(both.not_here, undefined, "G1: a refusal of an act your own grant opens is not said");
   assert.match(can.as, /^wright \(one of 2 residents on your key/);
-  assert.equal(actLine({ action: "walk" }), "Walk to a mark or a point.", "no dial, no speed");
+  assert.equal(actLine({ action: "walk" }), "Walk to a mark or a point. Fields: mark_id or to_x + to_y, mode?, enter_on_arrival?.", "no dial, no speed");
+  assert.equal(actLine({ action: "wave", blurb: "Wave." }), "Wave. No fields.");
 });
 
 test("G7: happening_here says the vessel's next departures and the Mists only where you stand in them; nothing is null", () => {
@@ -232,4 +237,51 @@ test("G6: heard is the newest three, each cut at 140 characters with an ellipsis
   assert.equal(h[2].said.length, SAID_MAX);
   assert.ok(h[2].said.endsWith("…"));
   assert.equal(h[0].said, "line 2");
+});
+
+test("POS-697 G2a: shapeV2Focus is where you are and the focus, with no cursor and the glance a call away", async () => {
+  const { shapeV2Focus, FOCUS_MORE_V2 } = await import("../src/world-read-v2.mjs");
+  const found = { q: "snug", hits: [{ id: "a/b" }] };
+  const r = shapeV2Focus({ handle: "wright", standpoint: { x: -1476.6, y: -2233 }, here: "the Marquee", found });
+  assert.deepEqual(r, { you: { handle: "wright", at: { x: -1477, y: -2233 }, here: "the Marquee" }, found, more: FOCUS_MORE_V2,
+    reading_law: r.reading_law, read_shape: "v2" });
+  assert.match(FOCUS_MORE_V2, /world \{ read_shape: "v2" \} is the whole glance/);
+  assert.deepEqual(Object.keys(shapeV2Focus({ standpoint: { x: 0, y: 0 } }).you), ["at"], "a spectator names no handle and no place it was not told");
+});
+
+test("POS-697 G3a: an around_you row says where, how far, and a departure's destination whole; a say stays the fact of it (G5)", () => {
+  const pier = { id: "a/the-pier", name: "the Pier", body: "Boards over the water." };
+  const g = happenedGlance({ around_you: { count: 2, events: [
+    { kind: "departure", actor: "elowen", at: "2026-10-15T00:01:00Z", x: 130, y: 240, m: 50, where: "the Quay", toward: pier },
+    { kind: "emission", actor: "mari", at: "2026-10-15T00:00:09Z", x: 100, y: 200, m: 0, where: "the Quay", place: "a/b", text: "hello" },
+  ] } }, { sinceCrossing: 249 });
+  assert.deepEqual(g.around_you.events[0], { who: "elowen", what: "set out", when: "00:01Z", where: "the Quay", m: 50, toward: pier });
+  assert.deepEqual(g.around_you.events[1], { who: "mari", what: "spoke", when: "00:00Z", where: "the Quay", m: 0 }, "no words, no raw place id");
+  // a destination the body read missed (a bare id) is not shown as a mark
+  const bare = happenedGlance({ around_you: { events: [{ kind: "departure", actor: "x", at: "2026-10-15T00:01:00Z", toward: "a/the-pier" }] } }, { sinceCrossing: 249 });
+  assert.equal(bare.around_you.events[0].toward, undefined);
+});
+
+test("POS-697 G4a: to_you in the glance is the short form; a gap is named in a few words, never a paragraph", async () => {
+  const { toYou } = await import("../src/world-happened.mjs");
+  const whole = toYou({ sinceCrossing: 258, nowCrossing: 259 });
+  const ok = happenedGlance({ to_you: whole, around_you: { events: [] } }, { sinceCrossing: 258 });
+  assert.deepEqual(ok.to_you, { complete: true, count: 0, events: [] });
+  const cut = toYou({ sinceCrossing: 258, nowCrossing: 259, creatureEffects: { events: [], readable: false, missing: "creatures' reactions older than 25 h", reason: "long" } });
+  assert.match(cut.note, /^INCOMPLETE/, "v1 keeps its sentence");
+  assert.deepEqual(cut.missing, ["creatures' reactions older than 25 h"]);
+  const g = happenedGlance({ to_you: cut, around_you: { events: [] } }, { sinceCrossing: 258 });
+  assert.deepEqual(g.to_you, { complete: false, missing: ["creatures' reactions older than 25 h"], count: 0, events: [] });
+  assert.ok(JSON.stringify(g.to_you, null, 1).length < 140, JSON.stringify(g.to_you));
+});
+
+test("POS-697 item 6: under v2, cards: \"names\" says can by name and cards: \"full\" adds every card whole", async () => {
+  const { fullCards } = await import("../src/world-read-v2.mjs");
+  const entries = ["say", "walk", "candy-trade"].map((action) => ({ action, blurb: "B.", fields: { x: { type: "string" } }, from: "the-town/resident" }));
+  assert.deepEqual(canBlock(entries, { names: true }), { speak: ["say"], move: ["walk"], more: ["candy-trade"] });
+  assert.deepEqual(fullCards(entries).walk, entries[1]);
+  const p = { entries, standpoint: { x: 0, y: 0 }, crossing: 1, happened: null, sinceCrossing: 0 };
+  assert.deepEqual(Object.keys(shapeV2({ ...p, cards: "full" }).cards), ["say", "walk", "candy-trade"]);
+  assert.ok(!("cards" in shapeV2(p)), "omitted, no cards");
+  assert.deepEqual(shapeV2({ ...p, cards: "names" }).can.move, ["walk"]);
 });

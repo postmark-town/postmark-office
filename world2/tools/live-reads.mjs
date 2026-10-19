@@ -1249,8 +1249,10 @@ export const DISCLOSURES = Object.freeze({
           "put them, not at the carrier's position. Stage D's frame fold has no 2.0 surface (it needs " +
           "world-frames.mjs, the vessel timetable and the movements table), so the overlay is absent " +
           "rather than wrong — and `aboard` is absent from these answers rather than always false.",
-  live_sound: "no live sound: the say path writes no journal row, so nothing said since the seed is " +
-              "mirrored into acts. Emission presence here is the crossing-save's crystallized record only.",
+  // POS-694: this said "no live sound" while the say path had written a live `say` act since 2026-08-28.
+  live_sound: "live sound: a live say is heard from its witnessed line (anchor + offset), beside the " +
+              "crossing-save's crystallized emissions. A live say stamps no radius or hearing time of its own, " +
+              "so it carries the say class's earshot_m and fade_min as read now (_live on the row).",
   no_staleness: "no staleness to disclose: 2.0 derives position at the instant asked, from the store's own " +
                 "records. There is no crystallized entities table to be behind the ledger, so 1.0's " +
                 "`ledger_moved` / `as_of` disclosures have nothing to describe.",

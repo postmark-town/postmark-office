@@ -555,19 +555,22 @@ export const departuresNow = async (worldClone = WORLD_CLONE, opts = {}) =>
 export const positionsProjected = () => process.env.WORLD_POSITIONS === "1";
 /** The projection's rebuild, exported so a test can stand the same projection on its own clock. */
 export const rebuildPositions = (atMs) => departuresAcrossEras(WORLD_CLONE, { atMs, fromSnapshot: true });
-export const positionProjection = createPositionProjection({ rebuild: rebuildPositions });
+/** The store's departure head (POS-691), only where the projection reads the store at all. */
+export const departureHead = async (after) => (movementV2Enabled() ? (await import("./world2-guards.mjs")).storeDepartureHead(after) : null);
+export const positionProjection = createPositionProjection({ rebuild: rebuildPositions, head: departureHead });
 
 // THE READ WORKERS' COPY (POS-266). Each worker keeps its own projection and
 // the walk door runs only on the main thread, so the door's record is announced
 // and every worker records the same movement. `recordMoved` is the one call the
 // door makes; the announcement rides the port ahead of any read handed over
-// after it (read-workers.mjs § THE SHAPE).
-export function recordMoved(movement) {
+// after it (read-workers.mjs § THE SHAPE). `actId` is the act just written, so
+// each projection's head read knows that writer was heard (POS-691).
+export function recordMoved(movement, actId = null) {
   const rec = recordOfMovement(movement);
-  positionProjection.record(rec);
-  announce("position", rec);
+  positionProjection.record(rec, { actId });
+  announce("position", { record: rec, actId });
 }
-onAnnounce("position", (rec) => positionProjection.record(rec));
+onAnnounce("position", ({ record, actId }) => positionProjection.record(record, { actId }));
 
 /** `departuresAcrossEras`' shape — from the projection when this office keeps one for this clone. */
 async function erasFor(worldClone) {
@@ -1429,8 +1432,11 @@ export async function landAt(worldClone, { who, at, via = null, why, key = null,
   const entry = landEntry({ crossing, who, at: point, via, why, household: household ?? (key ? resolvedWorldHousehold(key) : null), writtenAt: landedAt, declaredBy: who });
   entry.at = stampAt; entry.witnesses = witnesses;
   const row = laneFlipped("walk") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
-  // THE PROJECTION, IN THE SAME STEP (POS-264), in the shape storedDepartures hands it back
-  if (worldClone === WORLD_CLONE) recordMoved({ actor: who, from: point, toward: point, crossing, at: landedAt, within: null, toMark: null, declaredBy: who, pace: null, landed: { via, why: String(why) } });
+  // THE PROJECTION, IN THE SAME STEP (POS-264), in the shape storedDepartures hands it back,
+  // with the written act's id (POS-691): `land` is a departure action, and a departure
+  // recorded without its id is a writer the head read did not hear, so the next read
+  // would rebuild the projection after every landing (review-wld63, finding 4)
+  if (worldClone === WORLD_CLONE) recordMoved({ actor: who, from: point, toward: point, crossing, at: landedAt, within: null, toMark: null, declaredBy: who, pace: null, landed: { via, why: String(why) } }, row?.actId ?? null);
   return { at: point, via, why, recorded: true, ...(exited.length ? { exited } : {}), ...(row?.seq != null ? { seq: row.seq } : {}) };
 }
 
@@ -4437,6 +4443,19 @@ async function placementForecast({ worldClone, w, worldUnread, id, ring, mistsCr
   return { as_of: f.as_of, fringe: r.fringe, wall: r.wall, says: r.says };
 }
 
+/**
+ * THE WORDS FOR A PLACED CANDY (POS-692; re-drafted around kinds for Darko,
+ * 2026-10-19 09:21, who reads them before merge). Said only when the door's
+ * candy rule refuses (§ leaveMarkAct): candy is made by its KIND, each a town
+ * subclass of candy that residents asked for, with the resident's own handle
+ * in the call that works. A set-down by kind is not built (world-kinds.mjs §
+ * drop), so it is not offered. A new kind is asked for by letter to wright.
+ */
+export const CANDY_IS_MADE = Object.freeze({
+  defect: "candy is made by its kind, into hands or a bowl, not placed as a mark",
+  hint: (by) => `every kind of candy is the town's, and anyone may make it: explain: "candy" lists the kinds. leave-mark { kind: "<a kind>", count: 5, to: "${by}" } makes five into your hands, and to: a bowl's id (a thing made with holder: true) fills the bowl instead. give { kind: "<the kind>", count: 1, to: <a resident or a bowl> } hands one on, and consume { kind: "<the kind>" } eats one. Your own candy not a kind yet? Write to wright with its name and a line about it, and the town makes it a kind. Nothing was written.`,
+});
+
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
@@ -4449,7 +4468,14 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // its own, applies to a count.
   if (payload.to !== undefined) {
     const handles = [...(key?.handles ?? [])];
-    const actor = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
+    // WHO MAKES IT is the top-level handle, the standpoint the world card keeps
+    // top-level (kogane's bug post, POS-692 ruling 09:21): it wins over a key's
+    // count, and a `by` naming another resident is two actors, refused.
+    const named = payload.handle != null && String(payload.handle).trim() !== "" ? String(payload.handle).trim() : null;
+    if (named && payload.by != null && String(payload.by).trim() !== named)
+      throw bounce(422, `two residents named: handle "${named}" and by "${payload.by}"`,
+        `a make is one resident's act: the top-level handle is who makes it. Leave by: off, or name the same resident. Nothing was made.`);
+    const actor = named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
     if (!actor) throw bounce(422, "which resident is making these?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
     if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
     const own = ["slug", "body", "at", "extent", "points", "slot", "value", "parent_id", "class", "consent", "placed_by", "preview", "amend"].filter((k) => payload[k] !== undefined);
@@ -4633,6 +4659,33 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
         makers.read
           ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
           : `no class in "${klass}"'s lineage states makers, and an unread makers answers false, the root's own answer (postmark-node), so making one is the town's act, not a resident's — world { explain: "${klass}" } says who makes what`);
+    // ── A CANDY ON THE GROUND IS A SET-DOWN UNIT'S, PROVED (POS-692) ──────────
+    // makers lets a resident MAKE candy, and candy is made by the count into
+    // hands or a holder (`to:`, above). A candy mark of its own stands only
+    // where a unit was set down: the clearing refuses every candy claim whose
+    // record does not name its proved `units:drop` act (drop-provenance.mjs,
+    // WLD-27). Taken here, amia-semper's four named sweets stood as drafts and
+    // were refused at S118 with no word. So the door asks the clearing's own
+    // rule, both halves, and refuses at once. The hold door's own set-down is
+    // proved by construction (`droppedUnit`: it hands in the act it just wrote).
+    if (!droppedUnit) {
+      const { isCandyClass, dropRefId, dropProvenanceCheck, dropRefusalOf } = await import("../world2/tools/drop-provenance.mjs");
+      if (isCandyClass(klass, (name) => lineageOf(name, classExtendsOf()))) {
+        const claim = { claimant: by, class: String(klass), data: { label: payload.label, dropped: payload.dropped } };
+        let check;
+        if (dropRefId(payload.dropped) == null) check = dropProvenanceCheck(claim, null);
+        else {
+          try {
+            const { officeRead } = await import("./world2-pen.mjs");
+            check = await officeRead((c) => dropRefusalOf((sql, params) => c.query(sql, params), claim), { by: "candy-door" });
+          } catch (e) {
+            throw bounce(503, "the set-down this candy names could not be checked",
+              faultLogged("the candy door could not read the set-down it names", e));
+          }
+        }
+        if (check) throw bounce(422, CANDY_IS_MADE.defect, CANDY_IS_MADE.hint(by));
+      }
+    }
   }
 
   // ── the thing grammar (the object primitive) ────────────────────────────────
@@ -4750,7 +4803,9 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     : klass === "bounty"
       ? { class: klass, ask: String(ask).trim(), reward: Number(reward), status: status === undefined ? "open" : String(status).trim() }
       : klass === "chest" ? { class: klass, ...chestFields }
-        : klass === "candy" ? { class: klass, label: String(payload.label), dropped: String(payload.dropped) }
+        // only a proved candy reaches here (§ A CANDY ON THE GROUND), and each field is written only when
+        // sent: String(undefined) once wrote the text "undefined" into four claims and their acts (POS-692)
+        : klass === "candy" ? { class: klass, ...(payload.label != null ? { label: String(payload.label) } : {}), ...(payload.dropped != null ? { dropped: String(payload.dropped) } : {}) }
           : { class: klass, ...(holderFields ?? {}) };
   // ── THE FORM IT IS WRITTEN IN (LOGOS v2 part 2; O1's body, G3: "The office's
   // own writers stay on the old form here and flip in O2") ─────────────────────
@@ -6055,7 +6110,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
       // (position-projection.mjs § recordOfMovement). Recorded whether or not
       // the flag is on — a projection nobody reads costs a Map.set, and one
       // switched on mid-life is then already current.
-      if (worldClone === WORLD_CLONE) recordMoved(movement);
+      if (worldClone === WORLD_CLONE) recordMoved(movement, walkRow?.actId ?? null);
     }
 
     result = {

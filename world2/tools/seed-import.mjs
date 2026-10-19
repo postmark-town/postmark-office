@@ -392,6 +392,13 @@ export async function deriveSeed({ worldRepo, lawSha, townSha = null, window: gi
     // standing comes from the consent handshake, and the fold is what resolves
     // it — see `foldOracle` for why the fold and not `markStanding` alone.
     data.tier = derived.tier;
+    // THE AUTHORED TIER, KEPT BESIDE IT (POS-704). A property's own `tier:` line
+    // says who may set it (LOGOS v2: sovereign or constitution), and the world's
+    // fold prints it as `property_tier`, read from the loader's record. `tier`
+    // keeps its meaning (the derived standing every live reader asks), so the
+    // line rides under its own key, and the store fold (src/world2-fold.mjs §
+    // marksFromRows) gives the property's record back its own tier.
+    if (rec.kind === "property") data._authoredTier = rec.tier;
     // The one edge the schema cannot express, kept where it CAN be read. See
     // `resolveParent`: `parent` is a uuid into `marks`, and these parents are not
     // marks rows at all. The edge is preserved verbatim under its own key, counted
