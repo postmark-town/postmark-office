@@ -102,6 +102,11 @@ function livingFrom(living, at, nowMs) {
     .sort((a, b) => a.d - b.d);
 }
 
+/** A creature's awareness ring as a row carries it (WLD-82, part 1 of 2): its
+ *  kind's own ring_m, the number inRing judges by, so a page draws the ring the
+ *  office hears with. Nothing when the kind has none. */
+const ringOf = (kind) => (Number(kind?.ring_m) > 0 ? { ring_m: Number(kind.ring_m) } : {});
+
 // ── who (C6) ────────────────────────────────────────────────────────────────
 
 /**
@@ -118,7 +123,7 @@ export function creaturesInWho({ living, law }, at, { nowMs = Date.now(), engine
     const newest = c.reactions.at(-1) ?? null;
     const did = newest ? reactionOf(law, c, newest.reaction) : null;
     return {
-      kind: "creature", id: c.id, name: kind?.name ?? c.kind,
+      kind: "creature", id: c.id, name: kind?.name ?? c.kind, ...ringOf(kind),
       ...distanceOf(w.m), ...(w.bearing ? { bearing: w.bearing } : {}), ...(w.band ? { band: w.band } : {}),
       doing: did?.sentence ?? "out of the Mists",
       ...(newest ? { last: `answered ${newest.to}, ${ago(newest.at, nowMs)}` } : {}),
@@ -187,7 +192,7 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
       const w = here ? wayTo(here, c, engine) : null;
       return { id: c.id, kind: c.kind, name: law.kindOf(c.kind)?.name ?? c.kind, at: { x: Math.round(c.x), y: Math.round(c.y) },
         ...(d != null ? { distance_m: Math.round(d) } : {}), ...(w?.bearing ? { bearing: w.bearing } : {}),
-        fades_in: inWords(c.fades_at - nowMs) };
+        fades_in: inWords(c.fades_at - nowMs), ...ringOf(law.kindOf(c.kind)) };
     });
   return hits.length ? hits : null;
 }

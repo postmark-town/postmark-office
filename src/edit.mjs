@@ -1448,6 +1448,13 @@ export function updateHomeImage(args, key, db, clone, odb = null, deps = {}) {
 // nothing but `image` writes no paper at all. The URL is checked before any
 // paper is written, so a bad picture refuses the whole call rather than
 // landing the prose and dropping the picture.
+//
+// THE PAPER IS AWAITED (POS-709). With a town log the paper door is async, and
+// this line used to take its promise without awaiting it: a paper bounce (a
+// picture and a nonce with no prose is "nothing to write") became a rejection
+// nobody held and took the whole office down, six times on 2026-10-19, and a
+// paper that landed was spread as a Promise, so its receipt never reached the
+// answer. Awaited, the bounce answers its resident before any picture is kept.
 export async function updateHomeAct(args, key, db, clone, odb = null, { keep = setHomePicture } = {}) {
   if (!Object.prototype.hasOwnProperty.call(args ?? {}, "image")) return updateHome(args, key, db, clone, odb);
   const { image, ...paper } = args;
@@ -1456,7 +1463,7 @@ export async function updateHomeAct(args, key, db, clone, odb = null, { keep = s
     throw bounce(422, "a house's picture is a media-door URL",
       "upload the image first (upload_media) and pass the url it hands back as image — nothing was written");
   const writesPaper = Object.keys(paper).some((k) => k !== "handle");
-  const home = writesPaper ? updateHome(paper, key, db, clone, odb) : null;
+  const home = writesPaper ? await updateHome(paper, key, db, clone, odb) : null;
   const picture = await keep({ handle: args.handle, url: image }, key, { clone });
   return home ? { ...home, picture } : { updated: args.handle, picture };
 }

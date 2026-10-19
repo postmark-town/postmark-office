@@ -5,6 +5,12 @@
 // destination, whatever its tier. The furniture refusal stays for furniture no
 // timetable names."
 //
+// ⚑ WIDENED 2026-10-19 (POS-702; Darko, 13:58): anywhere on the map is walkable,
+// the Mist the one exception. The furniture refusal is gone, so legs 2 and 3
+// below now assert the ADMISSION of the furniture no timetable names (the town's
+// deck and quay among it), and the refusal that remains: a mark with no place of
+// its own (a law node) still bounces.
+//
 // ── WHY THIS SUITE EXISTS AT ALL ────────────────────────────────────────────
 //
 // `grep -l "furniture, not a destination\|WALK_EXCLUDED_TIERS" test/` at the
@@ -28,13 +34,13 @@
 //
 //   1. ADMITTED — the constitution mark the timetable names walks, and the
 //      answer is the same one a coordinate walk to its ground gives.
-//   2. STILL REFUSED — a constitution mark with the SAME geometry that the
-//      timetable does NOT name bounces with today's words, quoted verbatim.
-//      Leg 1 without leg 2 would pass just as well if the tier check had simply
-//      been deleted.
+//   2. ADMITTED TOO (POS-702) — a constitution mark with the SAME geometry that
+//      the timetable does NOT name walks, and so do the town's deck and quay;
+//      a law node, with no place of its own, is still refused. (Until
+//      2026-10-19 this leg asserted the furniture refusal, which POS-702 retired.)
 //   3. NO SERVICE — the world's timetable mark loses `mechanic: timetable`, and
-//      THE SAME ID that leg 1 admitted bounces with the same exact words. One
-//      id, two worlds, two answers: that is the rule stated as an experiment.
+//      the stop and the lamp post still walk: the tier is no longer part of
+//      the answer. (Until 2026-10-19: one id, two worlds, two answers.)
 //   4. THE PREMISE, ON THE REAL ENGINE — the live world clone's own
 //      `tools/vessel.mjs`, over the live fold, really does name a
 //      constitution-tiered mark as a stop. Legs 1-3 run against a stub
@@ -76,6 +82,10 @@ const POST_OFFICE = "the-town/the-post-office";
 const LAMP_POST = "the-town/the-lamp-post";
 const TWIN = "finn/the-twin-post";
 const WHEELHOUSE = "the-town/the-wheelhouse";
+// POS-702's own names: the town's furniture no timetable names, and a law node.
+const THE_DECK = "the-town/the-deck";
+const THE_QUAY = "the-town/the-quay";
+const A_LAW = "the-town/walk-verb";
 
 const sitedMark = (id, tier, at, extra = {}) => {
   const [by, slug] = id.split("/");
@@ -89,6 +99,10 @@ const marksFor = ({ timetable = true } = {}) => [
   sitedMark(POST_OFFICE, "constitution", { x: 100, y: 200 }),
   sitedMark(LAMP_POST, "constitution", { x: 140, y: 200 }),
   sitedMark(TWIN, "market", { x: 180, y: 200 }),
+  sitedMark(THE_DECK, "constitution", { x: 220, y: 200 }),
+  sitedMark(THE_QUAY, "constitution", { x: 260, y: 200 }),
+  // A law node: the town's, constitution, and no place of its own.
+  { id: A_LAW, by: "the-town", household: "the-town", kind: "predicate", tier: "constitution", body: "the walk verb's law" },
   // The timetable's own mark. Its `mechanic` is what leg 3 removes — the same
   // field the real `servicesFromFold` gates on (world-clone/tools/vessel.mjs
   // L102), not a flag invented for the test.
@@ -212,11 +226,6 @@ const { walkViaOffice } = await import("../src/world.mjs");
 
 const houseA = { household: "house-a", handles: new Set(["alpha"]) };
 
-/** Today's refusal, quoted rather than described — if the words move, these
- *  reds name the move. */
-const REFUSAL = (id) => `"${id}" is constitution — the town's own furniture, not a destination`;
-const REFUSAL_HINT = "walk to a market or sovereign mark, or give coordinates";
-
 // ── leg 1: the stop the timetable names is a destination ────────────────────
 
 test("a walk to the constitution mark the timetable names is ADMITTED, and lands on its ground", async () => {
@@ -243,23 +252,29 @@ test("a walk to the constitution mark the timetable names is ADMITTED, and lands
     "the admitted constitution walk and an ordinary market walk answered with different provenance");
 });
 
-// ── leg 2: furniture no timetable names still bounces, verbatim ─────────────
+// ── leg 2: furniture no timetable names is a destination too (POS-702) ──────
 
-test("a walk to a constitution mark NO timetable names still bounces with today's exact words", async () => {
+test("FALSIFIER, POS-702: the town's deck, its quay and a lamp post no timetable names are all walkable", async () => {
+  for (const id of [THE_DECK, THE_QUAY, LAMP_POST]) {
+    const walk = await walkViaOffice(repo, { handle: "alpha", mark_id: id }, houseA);
+    assert.equal(walk.mark_id, id, `${id} bounced: anywhere on the map is walkable (Darko, 2026-10-19 13:58)`);
+    assert.ok(walk.ledger?.commit, `the walk to ${id} was not recorded like any other`);
+  }
+});
+
+test("a law node, with no place of its own, is still refused, and never as furniture", async () => {
   await assert.rejects(
-    () => walkViaOffice(repo, { handle: "alpha", mark_id: LAMP_POST }, houseA),
+    () => walkViaOffice(repo, { handle: "alpha", mark_id: A_LAW }, houseA),
     (e) => {
       assert.equal(e.code, 422);
-      assert.equal(e.defect, REFUSAL(LAMP_POST),
-        "the refusal's words changed — this is the sentence residents have been reading");
-      assert.equal(e.hint, REFUSAL_HINT, "the refusal's hint changed");
+      assert.doesNotMatch(String(e.defect), /furniture, not a destination/, "the retired words came back");
       return true;
     });
 });
 
-// ── leg 3: one id, two worlds ───────────────────────────────────────────────
+// ── leg 3: one id, two worlds, one answer now ─────────────────────────────
 
-test("with no vessel service in the world, the SAME id bounces exactly as it did before the rule", async () => {
+test("with no vessel service in the world, the stop and the lamp post still walk: the tier is no longer part of the answer", async () => {
   // The world moves: the wheelhouse keeps its timetable and loses the mechanic
   // that runs it. `world()` is cached per ref and checks the SHA, so a commit is
   // what makes this a different world rather than a poked cache.
@@ -267,20 +282,10 @@ test("with no vessel service in the world, the SAME id bounces exactly as it did
   git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the schedule nothing runs");
 
-  await assert.rejects(
-    () => walkViaOffice(repo, { handle: "alpha", mark_id: POST_OFFICE }, houseA),
-    (e) => {
-      assert.equal(e.code, 422);
-      assert.equal(e.defect, REFUSAL(POST_OFFICE),
-        "a world with no vessel service admitted a constitution mark — the exemption is not reading the timetable");
-      assert.equal(e.hint, REFUSAL_HINT);
-      return true;
-    });
-
-  // The control the empty answer needs: the market mark still walks in this
-  // same world, so leg 3's red would be the exemption and not a broken bottle.
-  const twin = await walkViaOffice(repo, { handle: "alpha", mark_id: TWIN }, houseA);
-  assert.equal(twin.mark_id, TWIN, "the bottle stopped walking altogether — leg 3 proves nothing");
+  for (const id of [POST_OFFICE, LAMP_POST, TWIN]) {
+    const walk = await walkViaOffice(repo, { handle: "alpha", mark_id: id }, houseA);
+    assert.equal(walk.mark_id, id, `${id} bounced in a world with no vessel service`);
+  }
 });
 
 // ── leg 4: the premise, on the real engine and the real fold ────────────────
