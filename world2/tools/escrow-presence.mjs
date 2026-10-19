@@ -66,6 +66,22 @@
 /** The sweep's own mapping, at `settlement-sweep.mjs:1147`. One line, cited. */
 export const rowClassOf = (cls) => (cls === "market" ? "commons" : cls);
 
+// ── THE TOWN'S OWN MARKS NEED NO STAKE (POS-696) ────────────────────────────
+//
+// Darko, 2026-10-19 09:21: "constitutional marks need no stake." The town signs
+// its law (the LOGOS nodes, the harbor doors, the quay's furniture) and a few
+// things of its own, mostly with no `tier:` line, so the standing walk finds no
+// parcel ground under them and answers `market`: on prod, the-town/orient reads
+// owner the-town, tier market. The 1.0 sweep never asked them for escrow
+// because the town's record never travels the sketchbook path its rule lives
+// on (world `mark-standing.mjs § townOwned`, "deliberately broader than the
+// constitution shortcut"). Measured 2026-10-19: all 48 marks the notary listed
+// as `escrow_unbacked` are the town's. So the exemption is the town's own hand,
+// the store's `marks.owner`, and not a tier.
+export const TOWN = "the-town";
+/** Does this mark need somebody's stamps behind it at all? The town's own never does. */
+export const townsOwn = (row) => row?.owner === TOWN;
+
 /** The check name this writes into `claims.refusal_check` — the prefix `causeOf` splits on. */
 export const ESCROW_ABSENT_CHECK = "escrow-absent";
 
