@@ -1306,11 +1306,22 @@ export function shelterInPlay({ verbs, w, crossing }) {
   return typeof verbs?.shelterOf === "function" && !!w?.terrain?.mists && Number(crossing) >= MISTS_FIRST_CROSSING;
 }
 
+/** Whether a read needs the reader's enter stack at all: for the Mists' shelter
+ *  (above), or for the frame of sight, which is scoped to the interior of the
+ *  innermost mark you have entered, for ALL marks, Mists or not (WLD-5, Darko
+ *  2026-10-16 19:52). A clone that frames sight says so with `sightFrameOf`; one
+ *  older than the ruling, out of the Mists' season, reads no ledger, as before.
+ *  Found by the WLD-63 playground walk: with the Mists off the read went
+ *  unscoped, and a resident in a room saw twelve seats from outside it. */
+export function enterStackMatters(inPlay = {}) {
+  return shelterInPlay(inPlay) || typeof inPlay?.verbs?.sightFrameOf === "function";
+}
+
 /** What a resident is within now (DEC-5's read), for the eyes and the air; null
- *  when shelter is not in play, the clone carries no enter/exit law or the ledger
- *  will not read. */
+ *  when the stack matters to nothing (enterStackMatters), the clone carries no
+ *  enter/exit law or the ledger will not read. */
 async function enteredNow(handle, inPlay) {
-  if (!handle || !shelterInPlay(inPlay)) return null;
+  if (!handle || !enterStackMatters(inPlay)) return null;
   try {
     const { crossingLaw } = await import("./world-crossings.mjs");
     const { crossingDeps } = await import("./world-apex.mjs");
