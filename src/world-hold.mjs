@@ -1365,6 +1365,11 @@ export function setDownAnswer({ stances = [], thing, dropSeq, madeBy, householdO
  * and whether canon will follow. The first clause is the one the receipt has
  * always carried; what follows it is now true of this drop.
  */
+// D2 (POS-688): a held thing set down prints where it was set down, whoever set it
+// down, so a stranger's receipt no longer says canon stays put. Darko reads these
+// words (2026-10-19); false restores the POS-138 sentence.
+export const STRANGER_DROP_PRINTS = true;
+
 export function setDownNote(setDown) {
   const lead = "it stands where you stood when you set it down, and the act carries that place";
   const a = setDown?.amend;
@@ -1378,7 +1383,9 @@ export function setDownNote(setDown) {
   if (a.put_forward_unpublished)
     return `${lead}; it is put forward and not yet published, so it publishes where it was folded — re-siting a claim already on the docket waits on a ruling (postmark#3663).`;
   if (setDown.whose === "another household's")
-    return `${lead} — but ${setDown.made_by} made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where ${setDown.made_by} put it.`;
+    return STRANGER_DROP_PRINTS
+      ? `${lead}. ${setDown.made_by} made it and it stays ${setDown.made_by}'s; the settlement prints it here at the next crossing.`
+      : `${lead} — but ${setDown.made_by} made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where ${setDown.made_by} put it.`;
   return `${lead}; no amend was filed (${a.why}), so canon keeps it where it was folded and the set-down is the read's answer until one is.`;
 }
 
