@@ -512,9 +512,10 @@ async function keeper() {
     placesOf: async (drops) => {
       const places = new Map();
       if (!drops.size) return places;
-      const marks = await world.worldMarksAll().catch(() => []);
+      // the one centre reader: canon's, or where a held anchor last stood (POS-688, W4)
+      const centreOf = await world.markCentreOf().catch(() => () => null);
       for (const [id, r] of drops) {
-        const at = journal.composeAnchor(r.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+        const at = journal.composeAnchor(r.at ?? {}, centreOf);
         if (at) places.set(id, at);
       }
       return places;

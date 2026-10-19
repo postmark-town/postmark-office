@@ -55,7 +55,7 @@ import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
-import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
+import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
@@ -1558,7 +1558,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           fingerprint: async () => `${await storeFingerprint(await storePoolOrRefuse())}@${blessedSha(WORLD_CLONE)}`,
         });
         const asked = url.searchParams.get("settlement");
+        // THE NEWEST ONE IS PLACED BY THE HOLD RECORD (POS-688): a held thing is published but
+        // unplaced, so the World page draws it nowhere and reads its holder (`held_by`); a named
+        // settlement is that settlement, as it was sealed.
         return worldStateAnswer({ asked, fileAnswer })
+          .then(async (r) => (asked == null && Array.isArray(r?.marks) ? { ...r, marks: (await heldPlaced({ marks: r.marks })).marks } : r))
           .then((r) => (r?.error === "bounce" ? bounce(res, r.code, r.defect, r.hint) : j(res, 200, r)))
           .catch((e) => (e?.code ? bounce(res, e.code, e.defect, e.hint, undefined, e) : bounceFault(res, "the world door tripped", e)));
       }

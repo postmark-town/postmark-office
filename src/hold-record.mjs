@@ -73,7 +73,7 @@ export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHo
     const attachments = [...s.baseAtt.values(), ...s.window.attachments].sort(attachmentOrder);
     const drops = new Map(s.baseDrops);
     for (const r of s.window.holding) if (r.action === "drop" && r.object != null) drops.set(String(r.object), r);
-    return { top: s.top, epoch: s.epoch, cutoff: s.cutoff, fold, attachments, places: await placesOf(drops) };
+    return { top: s.top, epoch: s.epoch, cutoff: s.cutoff, fold, attachments, drops, places: await placesOf(drops) };
   };
   /** Fold rows into a base COPY: the kept base is never touched until the whole change has composed. */
   const intoBase = (s, holding, attachments) => {

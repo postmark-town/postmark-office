@@ -1156,7 +1156,8 @@ export async function setDownFor(thing, target, marks = [], deps = {}) {
   const setter = hold.sameHousehold(madeBy, String(drop.actor), householdOf);
   if (setter.same || setter.how !== "household") return { speakerHouse };
   const { composeAnchor } = await import("./world-journal.mjs");
-  const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
+  // the one centre reader, canon's or where a held anchor last stood (POS-688, W4); `marks` when it cannot say
+  const centreOf = await (await import("./world.mjs")).markCentreOf().catch(() => (id) => marks.find((m) => m.id === id)?.at ?? null);
   return { speakerHouse, drop, stood: composeAnchor(drop.at ?? {}, centreOf), householdOf, madeBy };
 }
 
@@ -1297,7 +1298,7 @@ async function answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, wi
       throw bounce(403, `accepting moves ${madeBy}'s mark, and this key does not act for ${madeBy}`,
         `the amend that re-sites it is filed in ${madeBy}'s name, so a key that holds ${madeBy} speaks the welcome — nothing was written`);
     const mark = deps.mark !== undefined ? deps.mark
-      : (await (await import("./world.mjs")).worldMarkById(on)).mark;
+      : (await (await import("./world.mjs")).canonMarkById(on)).mark; // the record as printed: the amend copies its own lines (POS-688)
     const built = hold.setDownAmend({ thing: on, mark, stood, actor: setter });
     if (built.refused) throw bounce(409, `${on} cannot be re-sited by an amend at this door`, `${built.refused} — nothing was written`);
     // The same door refuses a point outside the parent the mark's filing
