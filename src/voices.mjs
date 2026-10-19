@@ -52,6 +52,8 @@ import { dialNode, dialNumber } from "./world-classes.mjs";
 // One cap for every retry key, beside the rows (town-journal.mjs § NONCE_MAX) —
 // the say's nonce is bounded by the same number the send's is.
 import { NONCE_MAX } from "./town-journal.mjs";
+// The ear's rule, shared with the store's say read (`/world2/say`, POS-693).
+import { hearable } from "./hearing-window.mjs";
 
 // The class the dials hang on. Named once, beside the reader, for the same
 // reason STRIDE_CLASS_NAME is: the slow-walk bug was a lookup asking for a
@@ -539,7 +541,7 @@ export function createVoices({
     // endurance run's profile). This module never looks inside the room.
     const room = {};
     for (const v of hydrate()) {
-      if (v.at > t || (window.since != null && v.at < window.since)) continue;
+      if (!hearable(v.at, t, window.since)) continue;
       if (structural) {
         let from = null;
         stats.heardFrom += 1;

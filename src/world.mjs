@@ -1475,6 +1475,8 @@ export async function penVoiceAct(voice, spoken = null, deps = {}) {
 // Asked once at import so the first say after a boot already has it.
 const hearing = createHearingWindow({ repo: WORLD_CLONE });
 hearing.refresh().catch(() => {});
+/** The same reader, for the store's say read (`/world2/say`, POS-693): one window, every ear. */
+export const hearingWindowAt = (at) => hearing.read(at);
 
 const voices = createVoices({
   // the record sentence rides the conversation only while the office keeps
