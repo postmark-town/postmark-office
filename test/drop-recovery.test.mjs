@@ -29,7 +29,13 @@ process.env.WORLD_CHESTS_CANDY = "1";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const store = await startStore({ db: "drop_recovery_test" });
-after(() => store.stop());
+// The door's office_api pool (below) ends BEFORE the store goes. On a pool tree's
+// shared server, stop() drops this file's database, which terminates every
+// connection still open; an idle pooled one has no error listener, so it threw
+// after the last test had passed (the file red on 10-18, never on CI's
+// server-per-file path). One hook, in that order.
+let pool = null;
+after(async () => { if (pool) await pool.end(); await store.stop(); });
 const skip = store.skip ?? false;
 
 const LABEL = "test-comets";
@@ -260,8 +266,7 @@ const CLASSES = new Map(Object.entries({
   mark: { extends: null, dials: {} }, thing: { extends: "mark", dials: { carry_cap: 24 } }, consumable: { extends: "thing", dials: {} },
   candy: { extends: "consumable", dials: {}, labels: [{ label: LABEL, name: "Test Comets", creator: "sbx-ana" }] },
 }));
-let pool = null;
-after(async () => { __setPoolForTest(null); if (pool) await pool.end(); });
+after(() => { __setPoolForTest(null); });
 async function door({ leave }) {
   if (!pool && !skip) {
     const { default: pg } = await import("pg");
