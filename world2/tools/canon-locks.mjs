@@ -33,7 +33,7 @@
 // `locked`), and take the slug from `marks.slug`, which is the column that is
 // never null.
 
-import { rowClassOf } from "./escrow-presence.mjs";
+import { rowClassOf, townsOwn } from "./escrow-presence.mjs";
 
 /**
  * Every standing mark and the claim that locked it.
@@ -43,7 +43,7 @@ import { rowClassOf } from "./escrow-presence.mjs";
  * examined rather than dropped by the join that was supposed to describe it.
  */
 export const STANDING_SELECT = `
-  SELECT m.slug, m.locked_window, m.status AS mark_status, m.data->>'tier' AS tier,
+  SELECT m.slug, m.owner, m.locked_window, m.status AS mark_status, m.data->>'tier' AS tier,
          w.town_sha AS locking_town_sha,
          c.id::text AS claim_id, c.status AS claim_status, c.window_id, c.claimant, c.decided_at
     FROM marks m
@@ -196,6 +196,9 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
     // that rather than reporting zero findings, which would look identical to a
     // clean town.
     if (!escrowBySha) continue;
+    // The town's own marks need no stake (POS-696; escrow-presence.mjs § townsOwn):
+    // not judged, not counted unjudgeable, never listed.
+    if (townsOwn(r)) continue;
     if (rowClassOf(r.tier) !== "commons") continue;
     if (!r.locking_town_sha) continue;   // a mark whose window pinned no town read cannot be judged
 
