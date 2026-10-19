@@ -195,3 +195,14 @@ test("11. ONE OWNER: every reader of a thing's place reads the one answer, and t
   assert.doesNotMatch(apex, /async function holdingRecord\(/, "the ground read's own record read is gone");
   assert.ok(read("src/world2-serve.mjs").includes("await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows })"), "the store twin places its world too, by its own store's holds");
 });
+
+test("12. a drop the settlement could not print: canon still names a holder, so the record's place stands (found on the playground, window 274)", () => {
+  const places = new Map([[CONE, { x: 10, y: 20 }]]);
+  const printedHeld = { id: CONE, kind: "thing", [HELD_BY]: "sb-ash", body: "A paper cone." };
+  const v = view({ attachments: [take(CONE, "sb-ash", 660), drop(CONE, "sb-ash", 665)], places, from: 600, through: 665,
+    placed: new Map([[CONE, { at: { x: 221, y: 95.5 }, extent: { w: 1, h: 1 } }]]) });
+  assert.deepEqual(placeOf(CONE, v, printedHeld), { at: { x: 10, y: 20 }, extent: { w: 1, h: 1 }, source: "set-down" });
+  const m = placedMark(printedHeld, v);
+  assert.equal(m[HELD_BY], undefined); assert.deepEqual(m.at, { x: 10, y: 20 }); assert.deepEqual(m.extent, { w: 1, h: 1 });
+  assert.equal(placeOf(CONE, v, coneMark), null, "printed (canon has a place): canon's answer");
+});

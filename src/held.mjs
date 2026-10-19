@@ -85,7 +85,9 @@ export function placeOf(id, view, mark = null) {
   if (row?.policy !== "detach") return null;
   const act = actIdOf(row);
   const legacy = view.through == null || view.from == null || act <= view.from;
-  if (!legacy && act <= view.through) return null; // printed: canon has it where it was set down
+  // printed: canon has it where it was set down. Unless canon still names a holder: then the
+  // settlement could not print the drop (its notes say why), and the record's place stands
+  if (!legacy && act <= view.through && !heldBy(mark)) return null;
   const at = pointOf(view.places?.get?.(key));
   if (!at) return null;
   const extent = mark?.extent ?? view.placed?.get?.(key)?.extent ?? null;
