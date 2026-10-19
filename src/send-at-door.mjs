@@ -22,7 +22,6 @@ import { sendLetterAsRow, hotMailBlock } from "./town-mail.mjs";
 import { townLogEnabled } from "./town-journal.mjs";
 import { withThreadlessHint } from "./mail-thread.mjs";
 import { inferSender } from "./one-contract.mjs";
-import { indexSwitched } from "./index-probe.mjs";
 import { recipientsProbe } from "./ashore.mjs";
 
 // ── A RECIPIENT THE COPY HAS NOT CAUGHT UP TO (POS-332) ──────────────────────
@@ -69,8 +68,8 @@ export async function sendAtDoor(fields, key, { db, clone, odb }) {
     if (result && !result.error && String(f.nonce ?? "").trim())
       result = { ...result, nonce: String(f.nonce).trim(), nonce_honoured: false, nonce_note: NONCE_NOT_HONOURED };
   }
-  // THE HINT'S ROW (POS-268): with the switch on, the sender's mail_state is read
-  // from the store now, after the send. A store that cannot answer gives no hint,
+  // THE HINT'S ROW (POS-268): the sender's mail_state is read from the store
+  // now, after the send. A store that cannot answer gives no hint,
   // exactly as an index with no mail_state row does: the letter has gone, and a
   // refusal here would tell its sender otherwise.
   // The sender's own standing letters ride with it (POS-375): a reply they have
@@ -78,7 +77,7 @@ export async function sendAtDoor(fields, key, { db, clone, odb }) {
   // Read for a key that holds the sender only; a log that will not read leaves
   // the hint on the law alone.
   let hintIx = db;
-  if (indexSwitched() && !result?.error) {
+  if (!result?.error) {
     const { probeWithMailState } = await import("./town-index-store.mjs");
     let standing = null;
     if (odb && key?.handles?.has?.(f.from) === true) {

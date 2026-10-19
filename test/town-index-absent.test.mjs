@@ -1,33 +1,40 @@
-// town-index-absent.test.mjs — a switched office answers every door with office.db GONE (POS-268 part 5a).
+// town-index-absent.test.mjs — every door that reads the town index answers
+// from the store as it answered from office.db (POS-268 part 5a, POS-656).
 //
 //   node --test test/town-index-absent.test.mjs
 //
-// Two offices over one town and one record. "plain" has the switch off and reads the fixture's
-// office.db, as prod does today. "absent" has TOWN_INDEX_READS=store, a store
-// seeded from that same office.db, and a --db path where NO FILE EXISTS. Every
-// door that reads the town index (REST and MCP, keyed and keyless) must answer
-// the absent office exactly as it answers the plain one: the same status, the
-// same body, the same x-postmark-as-of. A reader still asking office.db meets
-// server.mjs § ABSENT_INDEX, which throws by name, so it cannot pass quietly.
+// One office over one town and one record: a store seeded from the fixture
+// town's rows. Every door that reads the town index (REST and MCP, keyed and
+// keyless) must answer exactly as the unswitched office answered from office.db
+// over the same rows, recorded in the last tree that had it (part 5a's sweep,
+// helpers/twin-golden.mjs): the same status, the same body, the same
+// x-postmark-as-of.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { copyIndexToStore } from "./helpers/index-to-store.mjs";
+import { seedTownIndex } from "./helpers/index-to-store.mjs";
+import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
+import { currentCrossing } from "../src/crossings.mjs"; // the town clock the manifest serves
+
+// WLD-27's chest and candy doors ship dark (chests-candy.mjs), so these offices run dark, and the doorstep
+// answers whose record is read with its `holds` stripped are named here (helpers/twin-golden.mjs § withoutHolds).
+delete process.env.WORLD_CHESTS_CANDY;
+const DARK = new Set(["REST /doorstep/wright", "REST /doorstep/wright (keyed)", "REST /doorstep/limen (keyed)",
+  'MCP read_doorstep {"handle":"wright"}', 'MCP household {"read":"doorstep","handle":"wright"}']);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const TWINS = twinGolden("town-index-absent");
 const tmp = mkdtempSync(join(tmpdir(), "town-index-absent-"));
-const dbPath = join(tmp, "office.db");
-const NO_DB = join(tmp, "there-is-no-office.db");
 const KEY = "absent-test-key";
 // The town clone, when the tree has one: the quest board and the doorstep's next
 // steps read the town's own quest tools from it, and without one they never
@@ -36,12 +43,12 @@ const TOWN = townClone();
 let store = null, skip = false;
 const offices = {};
 
-function office(name, db, env) {
-  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0", "--db", db,
+function office(name, env) {
+  const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(join(tmp, `${name}-oauth.db`), `${KEY}=keemin:wright`), "--roles-db", join(tmp, `${name}-roles.db`)], {
     env: { ...process.env, TOWN_CLONE: TOWN ?? join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, `${name}-voices.jsonl`), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
-      OFFICE_READ_WORKERS: "0", TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
+      OFFICE_READ_WORKERS: "0", WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let err = "";
@@ -59,23 +66,19 @@ function office(name, db, env) {
 before(async () => {
   store = await startStore({ db: "index_absent" });
   if (store.skip) { skip = store.skip; return; }
-  const db = fixtureDb(dbPath);
+  const db = fixtureTown();
   if (TOWN) {
     const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
-    const put = db.prepare("INSERT OR REPLACE INTO meta VALUES (?, ?)");
-    put.run("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-    put.run("quest_day", townDay());
-    db.prepare("INSERT INTO quest_progress (handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run("wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"]));
-    db.prepare("INSERT INTO quest_standing VALUES (?, ?)").run("wright", JSON.stringify({ facts: { address: true }, since: {} }));
+    const put = (...v) => putValues(db, "meta", v);
+    put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
+    put("quest_day", townDay());
+    putValues(db, "quest_progress", ["wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"])], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
+    putValues(db, "quest_standing", ["wright", JSON.stringify({ facts: { address: true }, since: {} })]);
   }
   const w = await store.connect("law_ingester");
-  await copyIndexToStore(w, db);
+  await seedTownIndex(w, db);
   await w.end();
-  db.close();
-  // prod has the record (WORLD2_PG) and the switch off; only the switch differs between the two
-  await office("plain", dbPath, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
-  await office("absent", NO_DB, { TOWN_INDEX_READS: "store", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
+  await office("absent", { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") });
 });
 
 after(async () => {
@@ -107,9 +110,46 @@ function firstDiff(a, b) {
   };
   return walk(x, y, "$") ?? { at: "(whitespace)", plain: a.slice(0, 120), absent: b.slice(0, 120) };
 }
-const same = (what, a, b) => { const d = firstDiff(a, b); assert.equal(d, null, `${what}: the answers part at ${d?.at}
-  plain:  ${d?.plain}
-  absent: ${d?.absent}`); };
+// THE ONE DELIBERATE TEXT CHANGE since the record (review-606): the manifest's
+// freshness line said the index "rehydrates", which office.db did and the store
+// does not. The record keeps what the twin said; this is the line it now says
+// instead, and nothing else in that answer may move.
+const CHANGED = {
+  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
+};
+// THE TOWN CLOCK AT THE DOOR: the manifest serves crossing.number as
+// currentCrossing() at the moment it answers (server.mjs § the manifest), so the
+// record's number is the crossing it was made in, not the index's. The expected
+// number is derived as the office derives it, from crossings.mjs, across the ask:
+// the answer must name a crossing between the clock's reading before the ask and
+// its reading after, and the record is held to that number; nothing else moves.
+const CLOCKED = { "REST /": (a) => a?.body?.["<json>"]?.crossing };
+// the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one;
+// `asked` is the town clock's crossing read just before the ask
+const same = (what, label, answer, asked = null) => {
+  const got = steady(answer);
+  let was = TWINS.of(label, { dark: DARK.has(label) });
+  for (const [then, now] of CHANGED[label] ?? []) {
+    assert.ok(was.includes(then), `${label}: the record no longer says "${then}", so this substitution is stale`);
+    was = was.split(then).join(now);
+  }
+  const clocked = CLOCKED[label];
+  if (clocked) {
+    const after = currentCrossing();
+    const rec = JSON.parse(was), live = JSON.parse(got);
+    assert.ok(Number.isInteger(clocked(rec)?.number), `${label}: the record carries no crossing number, so this derivation is stale`);
+    assert.ok(Number.isInteger(asked), `${label}: asked without the town clock's reading before the ask`);
+    const n = clocked(live)?.number;
+    assert.ok(Number.isInteger(n) && n >= asked && n <= after, `${what}: crossing.number ${n}, but the town clock read ${asked}..${after} across the ask`);
+    clocked(rec).number = n;
+    was = JSON.stringify(rec);
+  }
+  if (got === was) return;
+  const d = firstDiff(was, got);
+  assert.fail(`${what}: the answers part at ${d?.at}
+  office.db: ${d?.plain}
+  store:     ${d?.absent}`);
+};
 
 // The doors that read the town index: every family the store answers.
 const REST = [
@@ -161,41 +201,24 @@ async function mcp(name, tool, args) {
   return { status: r.status, body: await r.text() };
 }
 
-test("the absent office booted with no office.db on disk", (t) => {
-  if (skip) return t.skip(skip);
-  assert.equal(existsSync(NO_DB), false, "the switched office was handed a --db path that holds nothing");
-});
-
-test("every index door answers the absent office exactly as the plain one: status, body and as-of", async (t) => {
+test("every index door answers as the unswitched office did: status, body and as-of", async (t) => {
   if (skip) return t.skip(skip);
   for (const [door, headers] of REST) {
-    const a = await rest("plain", door, headers);
+    const asked = currentCrossing();
     const b = await rest("absent", door, headers);
     const what = `${door}${headers ? " (keyed)" : ""}`;
-    assert.equal(b.status, a.status, `${what}: status (absent said ${b.body.slice(0, 300)})`);
-    same(what, a.body, b.body);
-    assert.equal(b.asOf, a.asOf, `${what}: x-postmark-as-of`);
+    same(what, `REST ${door}${headers ? " (keyed)" : ""}`, b, asked);
   }
   for (const door of REST_STATUS_ONLY) {
-    const a = await rest("plain", door), b = await rest("absent", door);
-    assert.equal(b.status, a.status, `${door}: status (absent said ${b.body.slice(0, 300)})`);
+    const b = await rest("absent", door);
+    assert.equal(b.status, JSON.parse(TWINS.of(`REST ${door}`)).status, `${door}: status (said ${b.body.slice(0, 300)})`);
   }
-  assert.doesNotMatch(offices.absent.err(), /office\.db is not opened/, "no reader asked the absent index");
 });
 
-test("every MCP index read answers the absent office exactly as the plain one", async (t) => {
+test("every MCP index read answers as the unswitched office did", async (t) => {
   if (skip) return t.skip(skip);
   for (const [tool, args] of MCP) {
-    const a = await mcp("plain", tool, args);
     const b = await mcp("absent", tool, args);
-    const what = `${tool} ${JSON.stringify(args)}`;
-    assert.equal(b.status, a.status, `${what}: status`);
-    same(what, a.body, b.body);
+    same(`${tool} ${JSON.stringify(args)}`, `MCP ${tool} ${JSON.stringify(args)}`, b);
   }
-  assert.doesNotMatch(offices.absent.err(), /office\.db is not opened/, "no reader asked the absent index");
-});
-
-test("unswitched, an office with no office.db still refuses to boot (the rollback is unchanged)", async (t) => {
-  if (skip) return t.skip(skip);
-  await assert.rejects(office("plain-no-db", NO_DB, {}), /exited early/);
 });

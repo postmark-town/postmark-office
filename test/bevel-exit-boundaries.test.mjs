@@ -8,6 +8,9 @@ import assert from 'node:assert/strict';
 import { callUnits, classViewOf, residentHolds, chestsRead } from '../src/world-units.mjs';
 import { UNIT_ACTION, foldUnits, totalOf } from '../src/world-stacks.mjs';
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 // Independent synthetic collaborator harness; no live pen, database, ledger,
 // resident record or production configuration is invoked.
 const label = 'review-comets';

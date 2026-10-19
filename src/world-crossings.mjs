@@ -27,6 +27,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { classNodeNameOf, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -130,7 +132,7 @@ export function portalEntryFor(markId, worldState, service) {
   if (!vessel || !named || named === vessel) return null;
   if (!isVehicleStop(named, service)) return null;
   const body = (worldState?.marks ?? []).find((m) => m.id === vessel) ?? null;
-  if (String(body?.class ?? "") !== VEHICLE_CLASS) return null;
+  if (markClassOf(body) !== VEHICLE_CLASS) return null;
   return { vessel, stop: named, body };
 }
 
@@ -152,7 +154,7 @@ export function portalEntryFor(markId, worldState, service) {
  * supplies the class mark and the resolved roster.
  */
 export function groundBlockOf({ classMark = null, lends = [], extras = null } = {}) {
-  const cls = String(classMark?.class ?? "").trim();
+  const cls = String(classNodeNameOf(classMark) ?? "").trim();
   const verbs = [...new Set((lends ?? []).map((v) => String(v)).filter(Boolean))];
   if (!cls || !verbs.length) return null;
   return {
@@ -225,7 +227,7 @@ async function serviceFor(worldClone, worldState, deps = {}) {
  *  class marks and their bodies; it drops `actions:`, which is why the roster is
  *  a dep (the store owns it) and the body is not. */
 const classMarkIn = (worldState, className) =>
-  (worldState?.marks ?? []).find((m) => String(m.class ?? "") === String(className ?? "") && (m.kind === "class" || m.subkind === "class")) ?? null;
+  (worldState?.marks ?? []).find((m) => kindFieldOf(m) === "class" && String(classNodeNameOf(m) ?? "") === String(className ?? "")) ?? null;
 
 /**
  * The `ground` block for a target, or null — assembled from the class mark's own
@@ -239,7 +241,7 @@ const classMarkIn = (worldState, className) =>
 async function groundBlockFor(targetId, { w, service, deps, entryStop = null, standingRide = null, nowMs = Date.now(), knockedAt = null }) {
   if (!deps.lends) return null;
   const target = (w?.marks ?? []).find((m) => m.id === targetId) ?? null;
-  const className = String(target?.class ?? "").trim();
+  const className = String(markClassOf(target) ?? "").trim();
   if (!className) return null;
   let lends = [];
   try { lends = (await deps.lends(targetId)) ?? []; } catch { return null; }
@@ -336,7 +338,7 @@ async function enterViaPortal(portal, { who, w, at, iso, occupancy, here, thresh
         await deps.stop(who, stood, key);
         walkEnded = { at: stood, recorded: true, note: "you stopped walking when you went in — the walk that carried you here ended at this door" };
       } catch (e) {
-        walkEnded = { at: stood, recorded: false, error: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+        walkEnded = { at: stood, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
           note: "the entry stands but the walk that carried you here could not be stopped — you may be carried on; walk to where you stand to end it" };
       }
     }
@@ -517,7 +519,7 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   // would be the one resident who could not ride.
   const viaOrdinary = answer.entered.find((id) => {
     const m = (w.marks ?? []).find((x) => x.id === id);
-    return String(m?.class ?? "") === VEHICLE_CLASS && isVehicleStop(id, service);
+    return markClassOf(m) === VEHICLE_CLASS && isVehicleStop(id, service);
   }) ?? null;
 
   // THE SUMMARY MUST NOT CALL AN UN-REFUSED ACT A REFUSAL. Entering nothing has
@@ -573,7 +575,7 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
         await deps.stop(who, stood, key);
         walkEnded = { at: stood, recorded: true, note: "you stopped walking when you went in — the walk that carried you here ended at this door" };
       } catch (e) {
-        walkEnded = { at: stood, recorded: false, error: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+        walkEnded = { at: stood, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
           note: "the entry stands but the walk that carried you here could not be stopped — you may be carried on; walk to where you stand to end it" };
       }
     }
@@ -706,7 +708,7 @@ async function passThroughPortal(answer, { who, w, at, here, markId, verbs, payl
       await deps.land(who, to, key, { via: markId, why: "passage" });
       landed = { ...to, mark: answer.landing.mark, clamped: answer.landing.clamped, recorded: true, via: markId };
     } catch (e) {
-      landed = { ...to, mark: answer.landing.mark, recorded: false, error: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+      landed = { ...to, mark: answer.landing.mark, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
                  note: "the passage stands but you could not be set down at its landing; walk there to stand where it leads" };
     }
   }
@@ -776,7 +778,7 @@ async function leaveTheDungeon(answer, { who, at, markId, held, key, deps }) {
       await deps.land(who, to, key, { via: answer.landing.via, why: "dungeon-exit" });
       setDown = { at: answer.landing.via, ...to, chosen: answer.landing.chosen, recorded: true };
     } catch (e) {
-      setDown = { at: answer.landing.via, ...to, recorded: false, error: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+      setDown = { at: answer.landing.via, ...to, recorded: false, error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
         note: "you are out of the dungeon, and the office could not write down where you were set down: walk to the portal to say where you stand" };
     }
   }
@@ -841,7 +843,7 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   const { service, mod } = await serviceFor(worldClone, w, deps);
   const vessel = vesselIdOf(service);
   const target = (w.marks ?? []).find((m) => m.id === markId) ?? null;
-  const isVehicle = Boolean(vessel) && markId === vessel && String(target?.class ?? "") === VEHICLE_CLASS;
+  const isVehicle = Boolean(vessel) && markId === vessel && markClassOf(target) === VEHICLE_CLASS;
   let deposit = null;
   if (isVehicle && deps.acts) {
     const state = rideStateFrom((await deps.acts(who)) ?? [], { vesselId: vessel });
@@ -903,7 +905,7 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: true };
     } catch (e) {
       setDown = { at: deposit.stop, x: deposit.anchor.x, y: deposit.anchor.y, arrived: deposit.arrived, recorded: false,
-        error: String(e?.defect ?? e?.message ?? e).slice(0, 200),
+        error: String(e?.defect ?? plainReason(e, "record", "a crossing's set-down or walk end")).slice(0, 200),
         note: "you are out of her, and the office could not write down where you were set down — walk to the stop to say where you stand" };
     }
   }

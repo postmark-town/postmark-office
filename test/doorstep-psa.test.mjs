@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { parsePsaEntries, psaFold, PSA_SLUG } from "../src/queries.mjs";
+import { parsePsaEntries, psaFoldOf, PSA_SLUG } from "../src/queries.mjs";
 import { dialNumber } from "../src/world-classes.mjs";
 import { CLASS_ROSTER_GATE_SQL } from "../src/world-store.mjs";
 import { NO_WORLD, townClone, worldClone } from "./fixture-paths.mjs";
@@ -38,10 +38,11 @@ const wallText = TOWN
   ? readFileSync(join(TOWN, "TOWN_BULLETIN", `${PSA_SLUG}.md`), "utf8").replace(/^---[\s\S]*?\r?\n---\r?\n/, "")
   : null;
 
-// A db stub that serves ONE row: the real wall. The fold's only db touch is
-// this single SELECT, so standing a whole index up to read one file would test
-// the hydrator, not the fold.
-const dbOf = (body) => ({ prepare: () => ({ get: () => (body === null ? undefined : { json: JSON.stringify({ body }) }) }) });
+// The ONE row the fold reads, as the index holds it: the real wall's posting
+// (town_bulletin's json), or null when the index has none. The store's reader
+// is that row's SELECT and this fold (town-index-store.mjs § psaFold), so
+// standing a whole index up to read one file would test the ingest, not the fold.
+const jsonOf = (body) => (body === null ? null : JSON.stringify({ body }));
 
 describe("the wall parses", { skip: wallText ? false : "no town checkout carrying the PSA wall — skipping rather than parsing an invented one" }, () => {
   test("every entry on the real wall is found, with its date, its title and its own text", () => {
@@ -78,7 +79,7 @@ describe("the fold", { skip: wallText ? false : "no town checkout carrying the P
   const DAY = Date.parse("2026-08-22T12:00:00Z");
 
   test("only entries inside the window ride, and only up to the cap", () => {
-    const f = psaFold(dbOf(wallText), { now: DAY });
+    const f = psaFoldOf(jsonOf(wallText), { now: DAY });
     assert.ok(f.entries.length <= f.max, `${f.entries.length} entries returned against a cap of ${f.max}`);
     const oldest = Date.parse("2026-08-22T00:00:00Z") - f.window_days * 86_400_000;
     for (const e of f.entries) {
@@ -89,7 +90,7 @@ describe("the fold", { skip: wallText ? false : "no town checkout carrying the P
   });
 
   test("what the cap holds back is DISCLOSED, never silently dropped", () => {
-    const f = psaFold(dbOf(wallText), { now: DAY });
+    const f = psaFoldOf(jsonOf(wallText), { now: DAY });
     if (f.more) {
       assert.match(f.more_note, /read_bulletin/, "the overflow note must say where the rest is");
     }
@@ -100,13 +101,13 @@ describe("the fold", { skip: wallText ? false : "no town checkout carrying the P
   });
 
   test("a quiet week reads as a quiet week, not as a broken fold", () => {
-    const f = psaFold(dbOf(wallText), { now: Date.parse("2030-01-01T00:00:00Z") });
+    const f = psaFoldOf(jsonOf(wallText), { now: Date.parse("2030-01-01T00:00:00Z") });
     assert.deepEqual(f.entries, []);
     assert.match(f.note, /quiet week/, "an empty window must name itself");
   });
 
   test("a checkout with no wall at all is an ABSENCE, and says so", () => {
-    const f = psaFold(dbOf(null), { now: DAY });
+    const f = psaFoldOf(jsonOf(null), { now: DAY });
     assert.deepEqual(f.entries, []);
     assert.match(f.note, /carries no public-service-announcements/,
       "a missing wall must not read as a quiet week — they are different facts");
@@ -146,14 +147,15 @@ describe("the dials come off the record", { skip: storeHasDoorstep ? false : `no
   });
 
   test("the fold reports WHICH numbers it read and which it fell back on", () => {
-    const f = psaFold(dbOf(wallText ?? ""), { now: Date.parse("2026-08-22T12:00:00Z") });
+    const f = psaFoldOf(jsonOf(wallText ?? ""), { now: Date.parse("2026-08-22T12:00:00Z") });
     assert.deepEqual(f.dials, { psa_window_days: "record", psa_max: "record" },
       "a fold standing on constants must say so — a silent fallback is indistinguishable from a good read");
   });
 
   test("NO DIAL-SHAPED NUMBER IS WRITTEN INTO THE FOLD'S OWN CODE", () => {
     const src = readFileSync(new URL("../src/queries.mjs", import.meta.url), "utf8");
-    const fold = src.slice(src.indexOf("export function psaFold"), src.indexOf("export function bulletinEntry"));
+    const at = src.indexOf("export function psaFoldOf");
+    const fold = src.slice(at, src.indexOf("\nexport ", at + 1));
     // 0 and 1 are structure — an array index, a length test, a plural. Any
     // OTHER literal in this body is a magic number, and the two that matter
     // (the window and the cap) may appear only as the named fallback argument

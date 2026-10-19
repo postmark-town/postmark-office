@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { rowsFromRegistry, registryFromRows, pinsFromRows } from "../src/registry-rows.mjs";
@@ -73,8 +73,7 @@ test("a store the office cannot read is a 503, never the printout", async () => 
 let ix, child, base, tmp;
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "pos345-door-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  const town = fixtureTown();
   // The clone's PRINTOUT disagrees with the store: kin alone in a house of their own.
   const clone = join(tmp, "town-clone");
   mkdirSync(join(clone, "tools"), { recursive: true });
@@ -82,10 +81,10 @@ before(async () => {
   writeFileSync(join(clone, "tools", "households.json"), JSON.stringify({ schema_version: 1, households: {
     "kin-alone": { accounts: [{ login: "kin-gh", id: 2 }], residents: ["kin"] } } }));
   writeFileSync(join(clone, "tools", "github-ids.json"), JSON.stringify({ kin: { login: "kin-gh", id: 2 } }));
-  ix = await indexStore(dbPath);
+  ix = await indexStore(town);
   await seedRegistry(ix.store, REGISTRY, PINS);
   ({ child, port: base } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", join(tmp, "oauth.db")], {
+    "--oauth-db", join(tmp, "oauth.db")], {
     env: { ...process.env, WORLD2_PG: ix.env.WORLD2_PG, WORLD2_PG_URL: ix.env.WORLD2_PG_URL, TOWN_CLONE: clone, TOWN_PUSH: "", OFFICE_READ_WORKERS: "0" },
     stdio: ["ignore", "pipe", "pipe"],
   })));

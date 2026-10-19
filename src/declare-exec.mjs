@@ -24,8 +24,7 @@ import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
-import { indexSwitched, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
+import { UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
 import { penCommit, penTransaction, landOrRefuse } from "./write.mjs";
 import { conformance, planDeclaration, readRegisters, LANDING_GROUND } from "./declare.mjs";
 import { gangwayState } from "./residency.mjs";
@@ -53,7 +52,7 @@ function mintRefusal(e) {
 }
 
 async function main() {
-  const { args, key, dbPath, heardFrom = null } = JSON.parse(process.argv[2] ?? "{}");
+  const { args, key, heardFrom = null } = JSON.parse(process.argv[2] ?? "{}");
 
   if (!existsSync(CLONE))
     return err(409, null, "not-yet-open", "the office has no town clone to declare into");
@@ -68,14 +67,11 @@ async function main() {
     if (process.env.TOWN_PUSH === "1")
       execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
 
-    // THE INDEX, UNDER THE LOCK (POS-268): with TOWN_INDEX_READS=store the handle
-    // check reads the store's residents, loaded now, and never office.db; a store
-    // that cannot answer refuses the declaration (503) before anything is written.
-    let db = null;
-    if (indexSwitched()) {
-      const { refreshStoreProbe } = await import("./town-index-store.mjs");
-      if (!(await refreshStoreProbe({ letters: false, logins: false }))) return refusal(503, null, UNREACHABLE_DEFECT, UNREACHABLE_HINT);
-    } else db = new DatabaseSync(dbPath ?? process.env.OFFICE_DB ?? resolve(HERE, "..", "office.db"), { readOnly: true });
+    // THE INDEX, UNDER THE LOCK (POS-268): the handle check reads the store's
+    // residents, loaded now; a store that cannot answer refuses the declaration
+    // (503) before anything is written.
+    const { refreshStoreProbe } = await import("./town-index-store.mjs");
+    if (!(await refreshStoreProbe({ letters: false, logins: false }))) return refusal(503, null, UNREACHABLE_DEFECT, UNREACHABLE_HINT);
 
     // THE REGISTERS, FROM THE RECORD, UNDER THE LOCK (POS-158). These two lines
     // used to read the clone's JSON files with an `?? {}` fallback. The registry
@@ -96,7 +92,7 @@ async function main() {
     // whole list anyway rather than trusting the earlier pass.
     let decl;
     try {
-      decl = conformance(args, { db, registry, clone: CLONE, key });
+      decl = conformance(args, { registry, clone: CLONE, key });
     } catch (e) {
       return refusal(e.code ?? 422, e.field ?? null, e.defect, e.hint);
     }

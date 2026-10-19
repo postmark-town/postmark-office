@@ -88,7 +88,7 @@ test("alertsFor: no handle asks nothing; no store answers none; an unreadable ki
   assert.equal(asked, 0);
   assert.deepEqual(await alertsFor(["rei"], { store: async () => null }), { alerts: [], unread: [] });
   const half = await alertsFor(["rei"], { store: async () => ({ query: async (sql) => { if (/retired_cause/.test(sql)) throw new Error("column \"retired_cause\" does not exist"); return { rows: [] }; } }) });
-  assert.deepEqual(half, { alerts: [], unread: [{ kind: "mark-taken", reason: "column \"retired_cause\" does not exist" }] });
+  assert.deepEqual(half, { alerts: [], unread: [{ kind: "mark-taken", reason: "the record did not answer" }] });
   const down = await alertsFor(["rei"], { store: async () => { throw new Error("ECONNREFUSED"); } });
   assert.deepEqual(down.unread.map((u) => u.kind), ["mark-taken", "escrow-on-missing-mark"]);
 });

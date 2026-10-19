@@ -19,27 +19,28 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { WORLD_CLONE } from "../src/world-store.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const haveClone = existsSync(join(WORLD_CLONE, "WORLD", "walk-ledger.md"));
 const WORKERS = 2;
 
-let tmp;
-before(() => {
+let tmp, IX;
+before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-worker-failsoft-"));
-  fixtureDb(join(tmp, "fixture.db")).close();
+  IX = await indexStore(fixtureTown()); // the town index the office reads: the store (POS-268)
 });
-after(() => { if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+after(async () => { await IX?.stop(); if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 
 /** Boot a real office (on a port the OS picks) with WORKERS read workers against `dynamicDb`; hand `fn` its base URL and its logs. */
 async function withOffice(dynamicDb, fn) {
   const proc = spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", "0",
-    "--db", join(tmp, "fixture.db"), "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
+    "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
-    env: { ...process.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: String(WORKERS), WORLD_DYNAMIC_DB: dynamicDb,
+    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: String(WORKERS), WORLD_DYNAMIC_DB: dynamicDb,
       WORLD_POSITIONS: "1", WORLD_MOVEMENT_V2: "1", WORLD_PRESENCE: "1", TOWN_CLONE: join(ROOT, "town-clone") },
     stdio: ["ignore", "pipe", "pipe"],
   });

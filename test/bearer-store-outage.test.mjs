@@ -33,7 +33,7 @@ import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
@@ -50,9 +50,8 @@ const now = () => Math.floor(Date.now() / 1000);
 const DEFECT = "the town's store is unreachable; your sign-in is intact, retry";
 
 test("POS-480 · a bearer whose lookup cannot reach the store answers 503 with Retry-After, never the sign-in challenge", async (t) => {
-  const dbPath = join(TMP, "fixture.db");
-  fixtureDb(dbPath).close();
-  const ix = await indexStore(dbPath, { db: "bearer_outage", own: true });
+  const town = fixtureTown();
+  const ix = await indexStore(town, { db: "bearer_outage", own: true });
   CLEANUP.push(() => ix.stop());
 
   // A signed-in connector's access token, and an expired one, as issueTokens writes them.
@@ -67,7 +66,7 @@ test("POS-480 · a bearer whose lookup cannot reach the store answers 503 with R
 
   let said = ""; // the office's stderr, for a failure's message
   const office = await bootOnFreePort((port) => { const c = spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
-    "--port", String(port), "--db", dbPath, "--oauth-db", join(TMP, "oauth.db"), "--roles-db", join(TMP, "roles.db")], {
+    "--port", String(port), "--oauth-db", join(TMP, "oauth.db"), "--roles-db", join(TMP, "roles.db")], {
     env: { ...process.env, ...ix.env, OFFICE_PAPERWORK_STORE: "1", OFFICE_READ_WORKERS: "0", WORLD_GRAPH_NONE: "1", OFFICE_KEYS: "",
       TOWN_CLONE: join(TMP, "no-clone"), WORLD_CLONE: join(TMP, "no-world-clone"), TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],

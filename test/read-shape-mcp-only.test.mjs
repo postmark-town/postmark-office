@@ -12,7 +12,7 @@
 // THE RIG: the world-read-shape rig (the real world clone, hydrated and
 // published as the world graph snapshot, a record with no acts; kogane on her
 // parcel) for the world; the town's bare read needs nothing; the household's
-// reads a fixture office.db through a store (foyer-shrink's rig).
+// reads the fixture town through a store (foyer-shrink's rig).
 //
 // Run: WORLD_CLONE=<a world checkout> node --test test/read-shape-mcp-only.test.mjs
 
@@ -22,11 +22,10 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import { NO_WORLD, OFFICE_ROOT, worldClone } from "./fixture-paths.mjs";
 import { publishWorld } from "./helpers/world-rows.mjs";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 
 const CLONE = worldClone();
@@ -51,10 +50,8 @@ let dir;
 
 // the household's fixture and its store (foyer-shrink.test.mjs's rig)
 const hdir = mkdtempSync(join(tmpdir(), "pm-read-shape-"));
-const dbPath = join(hdir, "fixture.db");
-fixtureDb(dbPath).close();
-const db = new DatabaseSync(dbPath, { readOnly: true });
-const IX = await indexStore(dbPath);
+const town = fixtureTown();
+const IX = await indexStore(town);
 const IX_RESTORE = await IX.useInProcess();
 const HKEY = { household: "keemin", handles: new Set(["wright"]), ghId: "42", ghLogin: "keeminlee" };
 const worldBlock = async () => ({ sited: true, unreadable: false, parcel_id: "wright/the-trueing-house-parcel", transport: { line: "a transport line" } });
@@ -81,7 +78,7 @@ before(() => {
 
 after(async () => {
   __setPoolForTest(null);
-  await IX_RESTORE(); await IX.stop(); db.close();
+  await IX_RESTORE(); await IX.stop();
   for (const [k, v] of Object.entries(saved)) setEnv(k, v);
   for (const d of [dir, hdir]) if (d) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -112,18 +109,18 @@ test("town: with TOWN_READ_SHAPE=t1, GET /town/apex's road (the dispatcher, unma
 });
 
 test("household: with HOUSEHOLD_READ_SHAPE=h1, GET /household's ctx answers today's papers and index; the MCP door's call is lean", async () => {
-  const ctx = { db, worldBlock, slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED };
+  const ctx = { worldBlock, slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED };
   const full = await householdApex({}, HKEY, ctx);
   const rest = await under("HOUSEHOLD_READ_SHAPE", "h1", () => householdApex({}, HKEY, ctx));
   assert.equal(JSON.stringify(rest), JSON.stringify(full), "REST answers h0 whole under h1");
-  const mcp = await under("HOUSEHOLD_READ_SHAPE", "h1", () => callTool("household", {}, { db, key: HKEY, door: "mcp" }));
+  const mcp = await under("HOUSEHOLD_READ_SHAPE", "h1", () => callTool("household", {}, { key: HKEY, door: "mcp" }));
   assert.equal(mcp.read_shape, "h1", "the MCP door's own call is shaped");
 });
 
 test("household h0 end to end: through the MCP dispatcher, unset and h0 are byte-identical (#455 review, finding 7)", async () => {
-  const unset = await callTool("household", {}, { db, key: HKEY, door: "mcp" });
+  const unset = await callTool("household", {}, { key: HKEY, door: "mcp" });
   assert.ok(Array.isArray(unset.acts) && unset.papers, "the rig answers a real bare read");
-  const h0 = await under("HOUSEHOLD_READ_SHAPE", "h0", () => callTool("household", {}, { db, key: HKEY, door: "mcp" }));
+  const h0 = await under("HOUSEHOLD_READ_SHAPE", "h0", () => callTool("household", {}, { key: HKEY, door: "mcp" }));
   assert.equal(JSON.stringify(h0), JSON.stringify(unset));
   assert.ok(!JSON.stringify(unset).includes("read_shape"));
 });

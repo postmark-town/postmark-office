@@ -471,7 +471,7 @@ export function plan() {
         const e = ctx.t.env;
         // The flags prod reads the store with (/etc/postmark-office.env, measured 2026-10-07), and
         // STAMP_LINES=store, which the w42 ship sets on prod (POS-341): the rehearsal runs the next tag's path.
-        for (const [k, v] of [["TOWN_INDEX_READS", "store"], ["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
+        for (const [k, v] of [["OFFICE_PAPERWORK_STORE", "1"], ["STATE_LOG_SOURCE", "store"], ["WORLD2_PG", "1"], ["TOWN_SINGLE_LOG", "1"], ["WORLD_SINGLE_LOG", "1"], ["STAMP_LINES", "store"]])
           if (e[k] !== v) p.push(`the dev office runs without ${k}=${v} (prod has it${k === "STAMP_LINES" ? " from the w42 ship" : ""}): a rehearsal on dev would not run the path the box runs`);
         p.push(...(await keyProblems(ctx)));
         if (e.TOWN_PUSH !== "0") p.push(`the dev office's TOWN_PUSH is ${e.TOWN_PUSH ?? "unset"}, not 0: its pen could push the real town`);
@@ -1161,11 +1161,14 @@ export function groundTakenIn(s, OVERLAP, boxOf) {
   return async (footprints) => {
     const boxes = footprints.map((f) => boxOf(f.at, f.extent));
     const rows = await s.q("clearing_job",
-      // every standing mark, of ANY kind (Wright's review of #494): stricter than the clearing, which
-      // judges parcels alone, and so always safe; and on dev the ground no longer sits 30 km out, so
-      // a resident's home or lamp in the town's copy is ground the rehearsal keeps off
+      // every resident's standing mark, of ANY kind (Wright's review of #494): stricter than the clearing,
+      // which judges parcels alone, and so always safe; and on dev the ground no longer sits 30 km out, so
+      // a resident's home or lamp in the town's copy is ground the rehearsal keeps off. The town's own
+      // grounds are not (owner, the mark's `by`, = the-town): its root `let-there-be-light` is sited over
+      // the whole map, and its water and peaks over most of it, so counting them left no place free
+      // (dev, 10-18: 0 of 7,729). Every resident's mark and every pending parcel claim still refuse.
       `SELECT 'the standing ' || b.kind || ' "' || b.slug || '"' AS what FROM marks b, (SELECT unnest($1::text[])::box AS bbox) a
-        WHERE b.status = 'standing' AND ${OVERLAP}
+        WHERE b.status = 'standing' AND b.owner <> 'the-town' AND ${OVERLAP}
        UNION ALL
        SELECT 'the pending parcel claim "' || b.slug || '"' FROM claims b, (SELECT unnest($1::text[])::box AS bbox) a
         WHERE b.class = 'parcel' AND b.status = 'pending' AND ${OVERLAP}

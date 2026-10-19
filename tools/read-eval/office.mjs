@@ -108,7 +108,7 @@ async function seedDoors({ dev, env, key, nKey, seed, log }) {
   const { awaitListening } = await import("../../test/spawn-office.mjs");
   const port = await freePort();
   const child = spawn(process.execPath, [join(OFFICE, "src", "server.mjs"), "--port", String(port),
-    "--db", join(dev.dir, "office.db"), "--oauth-db", join(dev.dir, "oauth.db"), "--roles-db", join(dev.dir, "roles.db")],
+    "--oauth-db", join(dev.dir, "oauth.db"), "--roles-db", join(dev.dir, "roles.db")],
   { cwd: OFFICE, env: { ...cleanEnv(), ...env, PUBLIC_BASE: `http://127.0.0.1:${port}` }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   child.stdout.on("data", () => {}); child.stderr.on("data", () => {});
   try {
@@ -187,7 +187,7 @@ export async function bootRun(round, { shape, runId, log = () => {} }) {
     // the variant's own door: v* is the world's, t* the town's, h* the household's
     [{ t: "TOWN_READ_SHAPE", h: "HOUSEHOLD_READ_SHAPE" }[shape[0]] ?? "WORLD_READ_SHAPE"]: shape };
   const child = spawn(process.execPath, [join(OFFICE, "src", "server.mjs"), "--port", String(port),
-    "--db", join(round.dir, "office.db"), "--oauth-db", join(round.dir, "oauth.db"), "--roles-db", join(round.dir, "roles.db")],
+    "--oauth-db", join(round.dir, "oauth.db"), "--roles-db", join(round.dir, "roles.db")],
   { cwd: OFFICE, env: { ...cleanEnv(), ...env }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let errText = "";
   child.stderr.on("data", (d) => { errText = (errText + d).slice(-20000); });

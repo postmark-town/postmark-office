@@ -19,6 +19,9 @@ import { callUnits, classViewOf, residentHolds, chestsRead, reservedFor } from "
 import { UNIT_ACTION, foldUnits, totalOf } from "../src/world-stacks.mjs";
 import { liveHolder, holdingsOf } from "../src/world-hold.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const LABEL = "test-comets";
 const CLASSES = new Map(Object.entries({
   mark: { extends: null, dials: {} },
@@ -27,6 +30,7 @@ const CLASSES = new Map(Object.entries({
   candy: { extends: "consumable", dials: {}, labels: [{ label: LABEL, name: "Test Comets", creator: "sbx-ana" }] },
   chest: { extends: "thing", dials: { capacity: 30, capacity_min: 1, capacity_max: 120, first_stock: 30, portable: true, welcome: "open" } },
   toaster: { extends: "thing", dials: {} },
+  resident: { extends: null, dials: {} }, // no holders dial: any number carried (Darko 2026-10-18 12:17, POS-679)
 }));
 const view = () => classViewOf({ classes: CLASSES });
 const KEY = (h) => ({ handles: new Set([h]) });
@@ -183,6 +187,31 @@ test("5c · only what you hold goes in; no chest inside itself, however deep", a
   // the bowl sits in the tin; carrying the tin, you cannot put the tin into the bowl
   r.hold("sbx-cy", "sbx-cy/a-tin"); r.hold("sbx-cy/a-tin", CHEST);
   await assert.rejects(callUnits("thing-into-chest", { thing: "sbx-cy/a-tin", to: CHEST }, KEY("sbx-cy"), "sbx-cy", r.deps), /is inside/);
+});
+
+test("5d · plumb-nest-guard at the chest door: a chest 70 levels inside the thing is still refused; a chest counts 1 and all it holds; one chest in hand", { timeout: 10_000 }, async () => {
+  const chests = Object.fromEntries(Array.from({ length: 71 }, (_, k) => [`sbx-cy/c-${k}`, { id: `sbx-cy/c-${k}`, by: "sbx-cy", class: "chest", capacity: 3 }]));
+  const nest = (r, n) => { r.hold("sbx-cy", "sbx-cy/c-0"); for (let k = 1; k <= n; k++) r.hold(`sbx-cy/c-${k - 1}`, `sbx-cy/c-${k}`); };
+  const deep = rig({ marks: chests });
+  nest(deep, 70);
+  await assert.rejects(callUnits("thing-into-chest", { thing: "sbx-cy/c-0", to: "sbx-cy/c-70" }, KEY("sbx-cy"), "sbx-cy", deep.deps),
+    (e) => e.defect === "sbx-cy/c-70 is inside sbx-cy/c-0" && /Nothing was recorded\.$/.test(e.hint));
+  assert.equal(deep.acts.length, 0, "nothing was recorded");
+  // COUNTS CONFER UP: c-1 holds 2 units, so it takes 3 in c-2 (capacity 3); with 1 unit already in c-2 it does not fit
+  const up = rig({ marks: chests });
+  up.hold("sbx-cy", "sbx-cy/c-1"); up.seedUnits("sbx-cy/c-1", 2); up.seedUnits("sbx-cy/c-2", 1);
+  const before = up.acts.length;
+  await assert.rejects(callUnits("thing-into-chest", { thing: "sbx-cy/c-1", to: "sbx-cy/c-2" }, KEY("sbx-cy"), "sbx-cy", up.deps),
+    (e) => e.defect === "sbx-cy/c-2 has no room — 1 of 3, and sbx-cy/c-1 takes 3" && /Nothing was recorded\.$/.test(e.hint));
+  assert.equal(up.acts.length, before, "nothing was recorded");
+  const roomy = rig({ marks: chests });
+  roomy.hold("sbx-cy", "sbx-cy/c-1"); roomy.seedUnits("sbx-cy/c-1", 2);
+  assert.equal((await callUnits("thing-into-chest", { thing: "sbx-cy/c-1", to: "sbx-cy/c-2" }, KEY("sbx-cy"), "sbx-cy", roomy.deps)).did, "give");
+  // ANY NUMBER OF HOLDERS (Darko 2026-10-18 12:17, POS-679): carrying c-0, a take of c-4 out of c-3 lands
+  const hands = rig({ marks: chests });
+  hands.hold("sbx-cy", "sbx-cy/c-0"); hands.hold("sbx-cy/c-3", "sbx-cy/c-4");
+  const second = await callUnits("thing-from-chest", { thing: "sbx-cy/c-4", from: "sbx-cy/c-3" }, KEY("sbx-cy"), "sbx-cy", hands.deps);
+  assert.deepEqual([second.did, second.holder], ["take", "sbx-cy"]);
 });
 
 // ── Wright, 2026-10-13T01:19Z: refill reach stays — the REAL reach, not a stub ─

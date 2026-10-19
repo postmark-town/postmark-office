@@ -15,6 +15,7 @@
 
 import { pgHoldingRows, pgAttachmentsFor } from "../world2/tools/guard-reads.mjs";
 import { foldUnits, totalOf, isUnitRow } from "./world-stacks.mjs";
+import { liveHolders, wholeLoadOf } from "./holder-tree.mjs";
 
 /** The lock's key text; Postgres hashes it to the advisory key. */
 export const chestLockKey = (chest) => `wld27-chest:${chest}`;
@@ -38,13 +39,22 @@ const LAST_WORD_SQL = `
    WHERE class = 'mark' AND object = $1 AND action IN ('leave-mark', 'withdraw')
    ORDER BY id DESC LIMIT 1`;
 
-/** Inside a transaction: take the chest's lock, then read how full it is and whether it is being withdrawn. */
-export async function lockedChestUse(client, chest) {
-  await client.query(CHEST_LOCK_SQL, [chestLockKey(chest)]);
-  const units = (await pgHoldingRows(client, {})).filter(isUnitRow);
+/**
+ * Inside a transaction: take the chest's lock (and, in order, the lock of each
+ * holder named in `also`, the holders above it), then read how full it is and
+ * whether it is being withdrawn. `load` is everything inside it as its room
+ * counts it: its units, and each whole thing at any depth as 1 plus what that
+ * holds (counts confer up, Darko 2026-10-17 23:29; holder-tree.mjs). `loads`
+ * answers the same for each holder in `also`.
+ */
+export async function lockedChestUse(client, chest, { also = [] } = {}) {
+  for (const h of [chest, ...also]) await client.query(CHEST_LOCK_SQL, [chestLockKey(h)]);
+  const fold = foldUnits((await pgHoldingRows(client, {})).filter(isUnitRow));
   const { rows: held } = await pgAttachmentsFor(client);
   const word = (await client.query(LAST_WORD_SQL, [String(chest)])).rows[0]?.action ?? null;
-  return { units: totalOf(foldUnits(units), chest), things: thingsIn(held, chest), withdrawn: word === "withdraw" };
+  const up = liveHolders(held);
+  const loadOf = (h) => totalOf(fold, h) + wholeLoadOf({ up, holder: h, unitsOf: (x) => totalOf(fold, x) });
+  return { units: totalOf(fold, chest), things: thingsIn(held, chest), load: loadOf(chest), loads: also.map(loadOf), withdrawn: word === "withdraw" };
 }
 
 const bounce = (code, defect, hint, extra = {}) => {
@@ -58,16 +68,32 @@ const bounce = (code, defect, hint, extra = {}) => {
  * the write's own transaction, before its act is inserted (world2-pen.mjs §
  * penWrite `guard`). Refuses — and so rolls the transaction back, writing
  * nothing — when the chest has no room for it under the lock.
+ *
+ * `above` (the holders the chest sits inside, with their capacities) and
+ * `adding` (for a whole thing, its weight: 1 and all it holds) are derived by
+ * the door BEFORE this lock, from the rows it read. That is safe because
+ * holdTurn serialises every live door in this one process, so no other door
+ * moves the chest, the thing or a holder above between that read and this
+ * write; the lock is for the other process (the tick's stock), whose loads
+ * are re-read here.
  */
-export const chestRoomGuard = ({ chest, capacity, adding }) => async (client) => {
-  const used = await lockedChestUse(client, chest);
+export const chestRoomGuard = ({ chest, capacity, adding, above = [] }) => async (client) => {
+  const used = await lockedChestUse(client, chest, { also: above.map((a) => a.holder) });
   if (used.withdrawn)
     throw bounce(409, `${chest} was withdrawn`, "its maker took it off the world before this reached it; it takes nothing more. Nothing was recorded.", { room: 0 });
-  const total = used.units + used.things;
+  const total = used.load;
   if (total + adding > capacity)
     throw bounce(409, `${chest} has room for ${Math.max(capacity - total, 0)}, not ${adding}`,
-      `its capacity is ${capacity} and it holds ${total} now (units of every label and whole things); another hand reached it first. Nothing was recorded.`,
+      `its capacity is ${capacity} and it holds ${total} now (units of every label and whole things, each holder 1 and all it holds); another hand reached it first. Nothing was recorded.`,
       { room: Math.max(capacity - total, 0) });
+  // COUNTS CONFER UP: every holder it sits inside takes the same `adding`, judged here under its own lock
+  above.forEach(({ holder, capacity: cap }, i) => {
+    const load = used.loads[i];
+    if (load + adding > cap)
+      throw bounce(409, `${holder} has room for ${Math.max(cap - load, 0)}, not ${adding}`,
+        `${chest} is inside it, and a holder counts 1 and everything it holds: ${holder} holds ${load} of ${cap} now; another hand reached it first. Nothing was recorded.`,
+        { room: Math.max(cap - load, 0), at: holder });
+  });
 };
 
 /**

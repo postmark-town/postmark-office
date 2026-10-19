@@ -92,14 +92,12 @@ import { REGISTRY_PATH } from "./residency.mjs";
 import { readProfile } from "./profiles.mjs";
 import { readWindowState } from "./panes.mjs";
 import { pendingPaperRows, PAPER_ACTS, SETTLES_AT } from "./town-updates.mjs";
-import { standingOf, isSuspended } from "./standing.mjs";
+import { isSuspended } from "./standing.mjs";
 
-// The read's own road to standing: through the town index's read when the
-// office is switched to the store (the pool every read worker already holds),
-// else the record's one pool. Same table, same answer.
+// The read's own road to standing: through the town index's read (the pool
+// every read worker already holds).
 async function standingForRead(handle) {
-  const { townIndexReads, readTownIndex } = await import("./town-index-store.mjs");
-  if (!townIndexReads()) return standingOf(handle);
+  const { readTownIndex } = await import("./town-index-store.mjs");
   const { standingForHandlesVia } = await import("./standing-store.mjs");
   const { out } = await readTownIndex((c) => standingForHandlesVia(c, [handle]));
   return out.get(handle) ?? null;

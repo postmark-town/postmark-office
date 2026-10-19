@@ -627,12 +627,22 @@ test("the id this lane cites is the convention its live siblings keep", async ()
   // and this asserts the convention it rests on against the record — two
   // predicated children of a class, each `<by>/<leaf-directory>`, so the same
   // reading gives `.../attach/the-reach/mark.md` its id.
+  //
+  // ⚑ EITHER FORM (LOGOS v2 part 2, W2): a class's clause child is `kind:
+  // predicated` on the world CI pins and `kind: property` on W2 ("every dial
+  // becomes a property", ruled 16:02). The id convention is the same in both,
+  // so the siblings may stand in either form, but both in ONE form: the record
+  // filed them together.
   const { worldMarkById } = await import("../src/world.mjs");
+  const CLAUSE_FORMS = ["predicated", "property"];
+  const forms = new Set();
   for (const id of ["the-town/the-anchor", "the-town/the-not-ground"]) {
     const { mark } = await worldMarkById(id);
     assert.ok(mark, `${id} must stand in canon for this convention to be evidence`);
-    assert.equal(mark.kind, "predicated");
+    assert.ok(CLAUSE_FORMS.includes(mark.kind), `${id} is kind ${mark.kind}, not a class's clause child in either form`);
+    forms.add(mark.kind);
   }
+  assert.equal(forms.size, 1, `the two siblings stand in different forms (${[...forms]}) — the record filed them together`);
 });
 
 // ── the since: shelf's WIRING (found by this lane's own flip run) ────────────
@@ -805,6 +815,58 @@ test("THE DOOR STILL LETS A HOUSE TAKE ITS OWN LOCKED, NOT-YET-CARRIED CLAIM —
     assert.equal(none?.code, 404, `a name with no row anywhere was admitted: ${JSON.stringify(none?.admitted)}`);
     assert.match(none.defect, /neither published nor one of your household's drafts/);
     assert.equal(rec.pen.rows().length, 1, "the locked take is the one act in the record");
+  } finally { claims.__setPoolForTest(null); rec.restore(); }
+});
+
+// ── ONLY A STANDING CLAIM IS THE HOUSE'S DRAFT (POS-689) ─────────────────────
+//
+// noprotocol-keith's question on #553 (2026-10-15), ruled yes by Darko on
+// 2026-10-18: the docket half above counted ANY row, so a claim the town had
+// refused, or one its author withdrew, still answered "that's your draft" and
+// the take went through, a hold edge on a thing that will never publish. The
+// set is drop-recovery's `standingClaim`, the same one `STANDING_CLAIM_SQL`
+// reads. (A withdrawn DRAFT leaves no row at all, the case the test above
+// already refuses; a withdrawn PENDING claim is `retracted`.)
+
+test("standingClaim is the four live statuses, and a refused or retracted claim is not one", async () => {
+  const { standingClaim, STANDING_CLAIM_STATUSES } = await import("../src/drop-recovery.mjs");
+  assert.deepEqual([...STANDING_CLAIM_STATUSES], ["draft", "pending", "locked", "held_review"]);
+  for (const status of ["draft", "pending", "locked", "held_review"]) assert.equal(standingClaim({ status }), true, status);
+  for (const status of ["refused", "retracted", undefined]) assert.equal(standingClaim({ status }), false, String(status));
+  assert.equal(standingClaim(null), false);
+});
+
+test("THE DOOR REFUSES A TAKE OF THE HOUSE'S REFUSED OR WITHDRAWN CLAIM, and still takes a standing one, end to end", async () => {
+  const { installHoldRecord } = await import("./acts-pen-stub.mjs");
+  const at = { kind: "sited", at: { x: 0, y: 0 }, extent: { w: 1, h: 1 } };
+  const row = (id, slug, status) => ({ id, slug, status, household: "solo:wright", claimant: "wright", window_id: 1,
+    body: slug, geometry: at });
+  const REFUSED = "wright/a-bench-the-town-refused", RETRACTED = "wright/a-bench-withdrawn-last-week";
+  const HELD = "wright/a-bench-held-for-review", DRAFT = "wright/a-bench-still-drafted";
+  const rec = await installHoldRecord({ claims: [
+    row("claim-refused", REFUSED, "refused"), row("claim-retracted", RETRACTED, "retracted"),
+    row("claim-held", HELD, "held_review"), row("claim-draft", DRAFT, "draft"),
+  ] });
+  const claims = await import("../src/world2-claims.mjs");
+  claims.__setPoolForTest(rec.pen);
+  try {
+    const { callHoldTool } = await import("../src/world-hold.mjs");
+    const key = { handles: new Set(["wright"]) };
+    const ask = (thing) => callHoldTool("world_hold", { thing }, key).then((r) => ({ admitted: r }), (e) => e);
+
+    for (const gone of [REFUSED, RETRACTED]) {
+      const e = await ask(gone);
+      assert.equal(e?.code, 404, `${gone}: the door admitted a claim that will never publish: ${JSON.stringify(e?.admitted ?? e?.defect)}`);
+      assert.match(e.defect, /neither published nor one of your household's drafts/);
+    }
+    assert.equal(rec.pen.rows().length, 0, "neither refusal reached the record");
+
+    for (const standing of [HELD, DRAFT]) {
+      const took = await ask(standing);
+      assert.ok(took.admitted, `${standing}: a standing claim of the author's own house was refused: ${took.defect}`);
+      assert.equal(took.admitted.did, "take");
+    }
+    assert.equal(rec.pen.rows().length, 2, "the two standing takes are the only acts in the record");
   } finally { claims.__setPoolForTest(null); rec.restore(); }
 });
 

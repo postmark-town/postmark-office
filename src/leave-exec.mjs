@@ -30,9 +30,10 @@ import { join, resolve, dirname, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penCommit } from "./write.mjs";
-import { markRecord } from "./mark-record.mjs";
+import { markRecord, recordKindOf } from "./mark-record.mjs";
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
+import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578, POS-617)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -227,7 +228,11 @@ async function main() {
   // deletion. This is the one-line minimum that keeps it from writing a filing
   // the world's own gate B would refuse; nothing else here was brought forward.
   let parentDir, parentId, fossilDir = null;
-  if (p.kind === "sited" || p.kind === "parcel") {
+  // SITED IN EITHER FORM (`kind: thing` as much as `kind: sited`), a parcel included. The door has
+  // judged the standing already (world.mjs § leaveMarkAct, under the office's class layer): a sited
+  // or parcel declaration always carries `at` and a description never does, so the place answers
+  // here, as W2's mark-kind § isSited reads it, and the clone's class nodes cannot disagree with it.
+  if (p.at != null) {
     parentId = null;
     // GATE A BEFORE GATE B. A mark's path is wherever it was born, forever: if
     // this id is in the frozen manifest, its filing is the manifest's and this
@@ -241,7 +246,8 @@ async function main() {
     parentId = p.parent_id;
     const parent = byId.get(parentId);
     if (!parent) return err(422, `no mark "${parentId}" to describe`, "predicated/naming marks nest under the mark they describe — pass its id as parent_id");
-    if (parent.kind !== "sited" && parent.kind !== "parcel") return err(422, `"${parentId}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
+    // sited in either form: `kind: thing` stands by its class's lineage, read off the clone's own class nodes
+    if (!isSited(parent, extendsFromMarks(marks))) return err(422, `"${parentId}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
     parentDir = parent._dir;
   }
 
@@ -343,7 +349,8 @@ async function main() {
     const framing = marks.find((m) => m._dir && resolve(m._dir) === resolve(parentDir));
     return framing?.at ?? null;
   };
-  const fileRec = { ...p };
+  // a new description writes `kind: predicate` (W2's rename, WLD-73 G10); the parent check above reads either form
+  const fileRec = { ...p, kind: recordKindOf(p.kind) };
   if (relativeTree) {
     const origin = frameOrigin();
     if (origin) {

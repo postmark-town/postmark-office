@@ -103,8 +103,15 @@ const payloadOf = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) 
  * `n` is what the line would mint (0 for a meep or a capped report); `why` is
  * "owed", "already paid", "meep", "unresolved …" or "capped …"; `owed` is true only for a row
  * the pass should write.
+ *
+ * `payDate` (the town day this pass would write on, optional) is judged by the
+ * meep law too (POS-655): the town's --stage-mint judges the meep law at the
+ * day it WRITES, so a stage advanced before a rules line named its credit a
+ * meep, still unpaid when the line lands, would be refused at every tick
+ * forever. Such a row pays nothing and says so. A stage already paid stays
+ * "already paid".
  */
-export function planStages({ acts, houseOf, isMeep, paid = new Set(), tz = TZ() }) {
+export function planStages({ acts, houseOf, isMeep, paid = new Set(), payDate = null, tz = TZ() }) {
   const rows = [];
   const confirmedPaid = new Map();   // `${household}|${week}` -> paid confirmed stages that week
   for (const a of acts) {
@@ -121,6 +128,10 @@ export function planStages({ acts, houseOf, isMeep, paid = new Set(), tz = TZ() 
     if (isMeep(handle, date)) { rows.push({ ...base, n: 0, why: "meep: a meep never receives stamps", owed: false }); continue; }
     if (!household) {
       rows.push({ ...base, household: "(none)", n: 0, why: `unresolved: ${handle} has no household on record; a person binds them, then the plan pays`, owed: false });
+      continue;
+    }
+    if (payDate && !paid.has(`${post}/${stage}`) && isMeep(handle, payDate)) {
+      rows.push({ ...base, n: 0, why: `meep: the meep law at ${payDate} names ${handle}, and a meep is never paid`, owed: false });
       continue;
     }
     if (stage === STATE_CONFIRMED) {
@@ -146,7 +157,7 @@ export function planStages({ acts, houseOf, isMeep, paid = new Set(), tz = TZ() 
  * `canRecredit` whether the town carries --stage-recredit. One row per recredit
  * act: { post, stage, from, to, household, n, sig, hand, why, owed, act, date }.
  */
-export function planRecredits({ acts, houseOf, isMeep, stageLines, corrected, liquid, canRecredit = true, tz = TZ() }) {
+export function planRecredits({ acts, houseOf, isMeep, stageLines, corrected, liquid, canRecredit = true, payDate = null, tz = TZ() }) {
   const rows = [];
   const burning = new Map();   // handle -> stamps this pass already plans to burn from them
   for (const a of acts) {
@@ -165,7 +176,7 @@ export function planRecredits({ acts, houseOf, isMeep, stageLines, corrected, li
     if (!line) { held(`held: the ledger holds no stage line for post:${key}, so there is no mint to correct`); continue; }
     if (p.was && line.handle !== p.was) { held(`held: the act corrects ${p.was}, and the ledger paid ${line.handle}; a person reads both before anything burns`); continue; }
     if (line.handle === to) { held(`held: the ledger already paid ${to}`); continue; }
-    if (isMeep(to, base.date)) { held("meep: a meep never receives stamps, so nothing is paid and nothing is burned"); continue; }
+    if (isMeep(to, base.date) || (payDate && isMeep(to, payDate))) { held("meep: a meep never receives stamps, so nothing is paid and nothing is burned"); continue; }
     if (!houseOf(to)) { held(`unresolved: ${to} has no household on record; a person binds them, then the pass corrects`); continue; }
     const left = (liquid.get(line.handle) ?? 0) - (burning.get(line.handle) ?? 0);
     if (left < line.n) { held(`held: ${line.handle} holds ${left} liquid stamp(s) and the burn is ${line.n}; a correction burns liquid stamps only, never escrow`); continue; }
@@ -353,10 +364,12 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
     store = facts ?? await storeFacts({ env });
   } catch (e) { err(String(e?.message ?? e)); return 1; }
   const houseOf = (h) => store.houses.get(h) ?? null;
-  const rows = planStages({ acts: store.acts, houseOf, isMeep: engine.isMeep, paid: engine.paid });
+  // the day this pass writes on, judged by the meep law as the town's verb judges it (POS-655)
+  const date = arg("--date", argv) ?? townDate(Date.now());
+  const rows = planStages({ acts: store.acts, houseOf, isMeep: engine.isMeep, paid: engine.paid, payDate: date });
   const text = renderPlan(rows);
   const rcRows = planRecredits({ acts: store.acts, houseOf, isMeep: engine.isMeep, stageLines: engine.stageLines ?? new Map(),
-    corrected: engine.corrected ?? new Set(), liquid: engine.liquid ?? new Map(), canRecredit: engine.canRecredit !== false });
+    corrected: engine.corrected ?? new Set(), liquid: engine.liquid ?? new Map(), canRecredit: engine.canRecredit !== false, payDate: date });
   const rcText = renderRecredits(rcRows);
   // --quiet (the tick's): the header and what this run pays, never the paid
   // past, which grows with every stage and would fill the journal each tick.
@@ -376,7 +389,6 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
   try { rcParsed = parseRecreditPlan(rcText, { recorded: rcRows.length > 0 }); }
   catch (e) { err(e.message); rcParsed = { owed: [], claimed: 0 }; rcBroken = true; }
   if (!parsed.owed.length && !rcParsed.owed.length) { if (!argv.includes("--quiet") && !rcBroken) log("[bug-stage-plan] nothing owed"); return rcBroken ? 1 : 0; }
-  const date = arg("--date", argv) ?? townDate(Date.now());
   const refused = [];
   for (const r of parsed.owed) {
     // ONLY the rows the plan named, one line each, through the town's own verb.

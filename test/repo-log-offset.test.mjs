@@ -1,6 +1,6 @@
 // repo-log-offset.test.mjs — GET /repo/log walks with offset, at the door.
 //
-// queries.repoLog has read `offset` since 2026-08-25, and its page tells the
+// The repo log has read `offset` since 2026-08-25, and its page tells the
 // caller "call again with offset: N". The HTTP door built its opts without it,
 // so every offset served page one and echoed offset: 0. This drives the door
 // itself, over HTTP, against the fixture's three commits.
@@ -13,22 +13,22 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown } from "./fixture.mjs";
+import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-let child, tmp, BASE;
+let child, tmp, BASE, ix;
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-repo-log-"));
-  const dbPath = join(tmp, "fixture.db");
-  fixtureDb(dbPath).close();
+  ix = await indexStore(fixtureTown()); // the town index the office reads: the store (POS-268)
   let port;
-  ({ child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p), "--db", dbPath,
+  ({ child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p),
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db")], {
     env: { ...process.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"),
       VOICES_LOG: join(tmp, "voices.jsonl"), TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"),
-      OFFICE_READ_WORKERS: "0", TOWN_INDEX_READS: undefined, WORLD2_PG: undefined, WORLD2_PG_URL: undefined },
+      ...ix.env, OFFICE_READ_WORKERS: "0" },
     stdio: ["ignore", "pipe", "pipe"],
   })));
   BASE = `http://127.0.0.1:${port}`;
@@ -40,6 +40,7 @@ after(async () => {
     child.kill();
     await gone;
   }
+  await ix?.stop();
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 

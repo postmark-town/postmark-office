@@ -126,12 +126,11 @@ const unsited = async () => ({ mark_id: null, x: null, y: null, sited: false });
 const unreadable = async () => ({ mark_id: null, x: null, y: null, sited: false,
   unreadable: true, unreadable_reason: "the office cannot read the world right now (test)" });
 
-// `n` leads and `json` follows on purpose: this one stub answers every query
-// the standing walks, and `resident()` now also asks the letters table for a
-// COUNT (the address card's mail bound, 2026-08-25), which it reads
-// positionally as Object.values(row)[0]. The resident row is read by NAME.
-const db = { prepare: () => ({ get: () => ({ n: 0, json: JSON.stringify({}) }), all: () => [] }) };
-const ctx = (worldBlock) => ({ db: null, clone: null, worldBlock });
+// The town index the standing walks, stubbed (town-index-store.mjs §
+// storeIndexPooled's shape): "someone" is a resident with no home page, so the
+// world gap is the voice these cases listen for.
+const ix = { hasResident: async () => true, home: async () => null };
+const ctx = (worldBlock) => ({ clone: null, worldBlock, ix });
 
 test("B1: the gap FIRES for a genuinely unsited home — it has never once fired in production", async () => {
   const gaps = await paperGaps("someone", ctx(unsited));
@@ -152,7 +151,7 @@ test("B3: THE DISCLOSURE GUARD — a degraded read must not be dressed as missin
 
 test("B4: the standing's world block is a real object, not a serialized Promise", async () => {
   const s = await householdStanding({ household: "h", handles: new Set(["someone"]) },
-    { db, clone: null, worldBlock: sited });
+    { clone: null, worldBlock: sited, ix });
   const block = s.papers?.someone?.world;
   assert.ok(block, "the standing promised a world block");
   assert.equal(typeof block.then, "undefined", "a Promise here serializes as {} — the household door's empty object");

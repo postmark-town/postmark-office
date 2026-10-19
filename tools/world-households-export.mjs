@@ -149,6 +149,33 @@ const town_sha = (() => {
   } catch { return null; }
 })();
 
+const dest = join(WORLD, "WORLD", "households.json");
+
+// ── THE ADMIN HOUSEHOLDS (WLD-21, Darko 2026-10-18 19:52) ───────────────────
+//
+// "Derived in ONE record that every gate reads … not by each gate asking
+// GitHub." The record is the role book's role `admin` (src/admin-role.mjs, one
+// writer: tools/admin-refresh.mjs, run just before this at the crossing); this
+// prints it for the World's gates (world tools/admin-makers.mjs, read by
+// lane-wall and the live-tree test): the hh:<slug> of every house whose OWN
+// account list holds an account with the role. A book this run cannot read keeps
+// the file's last answer, said on stderr, and never refuses the crossing (G4).
+const admins = await (async () => {
+  const { DEFAULT_ROLES_DB, listRoles } = await import("../src/roles.mjs");
+  const { openPaper } = await import("../src/paperwork.mjs");
+  const { adminHouseholdKeys, ROLE_ADMIN } = await import("../src/admin-role.mjs");
+  try {
+    const book = await openPaper(DEFAULT_ROLES_DB, { readOnly: true });
+    const held = (await listRoles(book, { role: ROLE_ADMIN })).map((r) => r.subject);
+    return adminHouseholdKeys(storeRegistry, held);
+  } catch (e) {
+    let last = [];
+    try { last = JSON.parse(readFileSync(join(WORLD, "WORLD", "households.json"), "utf8")).admins ?? []; } catch {}
+    console.error(`[households-export] the role book could not be read (${String(e?.message ?? e).slice(0, 120)}); admins keeps the file's last answer: ${last.join(", ") || "none"}`);
+    return Array.isArray(last) ? last : [];
+  }
+})();
+
 const out = {
   generated_at: new Date().toISOString(),
   town_sha,
@@ -157,9 +184,10 @@ const out = {
   logins_note: "logins is NOT only GitHub logins. It is the map the authorship wall reads a sketchbook's NAME through, and it binds every household key this registry holds: a pinned handle under its pin's login, and any other key (hh:<house>, solo:<handle>) under the sketchbook name that key carries — the part after its colon. Before 2026-09-09 only gh:/login: keys were bound, so a household of any other shape was invisible to the wall, and invisible SILENTLY: the sweep leaves a branch it cannot bind alone rather than refusing it, so those marks published with their authorship unchecked. A key this file does not bind is a key the export could not name honestly, and it says so on stderr when it happens.",
   households,
   logins: Object.fromEntries(Object.entries(allLogins).sort(([a], [b]) => a.localeCompare(b))),
+  admins_note: "admins: the admin households (WLD-21, Darko 2026-10-18), whose GitHub account on the house's own list owns the postmark-town organisation. They may make the three passage classes, dungeon, stairs and portal-ground (world tools/admin-makers.mjs). Printed from the office's role book (role admin, written at each settlement by tools/admin-refresh.mjs); no gate asks GitHub itself.",
+  admins,
 };
 
-const dest = join(WORLD, "WORLD", "households.json");
 
 // -- `--check`: SAY WHAT WOULD MOVE, WRITE NOTHING (POS-160) ----------------
 //
@@ -199,6 +227,7 @@ if (args.includes("--check")) {
   const both = [
     compare("households", households, had.households),
     compare("logins", out.logins, had.logins),
+    compare("admins", Object.fromEntries(admins.map((k) => [k, true])), Object.fromEntries((had.admins ?? []).map((k) => [k, true]))),
   ];
   const movedAll = both.filter((c) => c.moved.length);
   if (!movedAll.length) {
@@ -209,8 +238,8 @@ if (args.includes("--check")) {
   }
   console.error("households-export --check: THE MAPPING MOVED");
   for (const c of movedAll) {
-    const mine = c.name === "households" ? households : out.logins;
-    const theirs = c.name === "households" ? had.households : had.logins;
+    const mine = c.name === "households" ? households : c.name === "logins" ? out.logins : Object.fromEntries(admins.map((k) => [k, "admin"]));
+    const theirs = c.name === "households" ? had.households : c.name === "logins" ? had.logins : Object.fromEntries((had.admins ?? []).map((k) => [k, "admin"]));
     console.error(`  ${c.name}: ${c.moved.length} of ${c.total} entries differ`);
     for (const k of c.moved.slice(0, 10)) {
       console.error(`    ${k}: file has ${theirs?.[k] ?? "(absent)"} -- this run derives ${mine?.[k] ?? "(absent)"}`);
@@ -224,6 +253,7 @@ if (args.includes("--check")) {
 writeFileSync(dest, JSON.stringify(out, null, 2) + "\n");
 const planted = Object.keys(second.additions).length;
 console.log(`households: ${Object.keys(households).length} handles → ${dest}`);
+console.log(`admins: ${admins.length ? admins.join(", ") : "none"}`);
 console.log(`logins: ${Object.keys(logins).length} from pins + ${planted} second key(s) `
   + `for households no login binds = ${Object.keys(allLogins).length} the wall can read`
   + `${second.collisions.length || second.unnameable.length

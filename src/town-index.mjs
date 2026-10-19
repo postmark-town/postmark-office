@@ -1,21 +1,18 @@
 // town-index.mjs — THE ONE DERIVATION of the office's town index (POS-268).
 //
-// Everything office.db holds is derived here, from a town checkout, as plain
-// rows in office.db's own column order. Two writers take these rows and never
-// derive anything themselves:
+// The whole town index is derived here, from a town checkout, as plain rows in
+// the column order of the store's town_* tables (town-tables.mjs). One writer
+// takes these rows and derives nothing itself:
 //
-//   src/hydrate.mjs                       writes them into office.db (sqlite),
-//                                         as it always has
 //   world2/tools/town-index-ingest.mjs    writes them into the store's town_*
 //                                         tables: whole once at the seed, then
 //                                         only the rows a delta changed
 //
-// So "the store equals office.db" is a claim about the two WRITERS, never about
-// two derivations that drifted. The rules themselves are not restated here:
-// they are the town's own exported folds (mail-state, stamp-mint,
-// quest-progress), the vendored `readTown`, and the office's own readers
-// (residency, profiles, panes, funding, quest-standing), exactly as hydrate.mjs
-// called them before this file existed. The move is a cut and paste; the only
+// (office.db's hydrate.mjs was the second writer until POS-656 retired it.)
+// The rules themselves are not restated here: they are the town's own exported
+// folds (mail-state, stamp-mint, quest-progress), the vendored `readTown`, and
+// the office's own readers (residency, profiles, panes, funding, quest-standing),
+// exactly as hydrate.mjs called them before this file existed. The move is a cut and paste; the only
 // new code is the shape the pieces return in.
 //
 // The pieces are separate on purpose: a delta re-derives only the tables its
@@ -33,35 +30,9 @@ import { homePictureIn } from "./registry-rows.mjs"; // the house's picture, off
 import { readProfile } from "./profiles.mjs"; // PROFILE.md postdates the vendored reader — see that file
 import { readWindowState } from "./panes.mjs"; // the pane's machine twin — one island parser, two readers
 
-/**
- * The tables, in office.db's column order (src/schema.mjs). `key` names the
- * primary key for a keyed table; `seq` marks the AUTOINCREMENT tables, whose
- * `seq` is the row's 1-based position in the derivation, as sqlite assigns it.
- * `repo_log` has neither: it is append-only, one row per commit x file.
- */
-export const TOWN_TABLES = Object.freeze({
-  meta:                 { cols: ["key", "value"], key: ["key"] },
-  residents:            { cols: ["handle", "json"], key: ["handle"] },
-  letters:              { cols: ["id", "from_h", "to_h", "date", "thread", "box", "owner", "path", "json", "delivered_at"], key: ["id"] },
-  threads:              { cols: ["root", "json"], key: ["root"] },
-  bulletin:             { cols: ["slug", "json"], key: ["slug"] },
-  ledger:               { cols: ["seq", "kind", "date", "id", "from_h", "to_h", "json"], seq: true },
-  stamps:               { cols: ["handle", "balance", "mint_count", "staked"], key: ["handle"] },
-  mail_state:           { cols: ["handle", "json"], key: ["handle"] },
-  quest_progress:       { cols: ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"], key: ["handle"] },
-  quest_standing:       { cols: ["handle", "json"], key: ["handle"] },
-  repo_log:             { cols: ["sha", "committed_at", "author", "subject", "op", "path"] },
-  regions:              { cols: ["id", "name", "json"], key: ["id"] },
-  homes:                { cols: ["handle", "region", "json"], key: ["handle"] },
-  pots:                 { cols: ["id", "json"], key: ["id"] },
-  funding_roll:         { cols: ["seq", "patron", "pot", "usd", "date", "receipt", "holo"], seq: true },
-  funding_holo:         { cols: ["seq", "party", "pot", "holo", "epoch", "date", "receipt"], seq: true },
-  funding_keeping_mint: { cols: ["seq", "party", "pot", "n", "epoch", "date"], seq: true },
-  pot_receipts:         { cols: ["seq", "pot", "rail", "usd", "date", "receipt", "payer"], seq: true },
-  pot_escrow:           { cols: ["pot", "staked"], key: ["pot"] },
-  pot_stakers:          { cols: ["pot", "handle", "staked"], key: ["pot", "handle"] },
-  funding_invalid:      { cols: ["seq", "row_kind", "line", "reason"], seq: true },
-});
+// The tables (town-tables.mjs, kept apart so the shape loads without the derivation).
+import { TOWN_TABLES } from "./town-tables.mjs";
+export { TOWN_TABLES };
 
 /** A keyed table's rows, last write wins at the FIRST write's position — sqlite's INSERT OR REPLACE, as an array. */
 function keyed(table) {

@@ -11,6 +11,8 @@
 // UNIT_ACTION.drop), class `holding`, actor the dropper, its one move
 // `{ from: <dropper>, to: null, label, n: 1 }`. No second provenance store.
 
+import { classChainOf } from "./standing.mjs";
+
 export const UNIT_DROP = "units:drop";
 export const DROP_REF = /^act:([1-9][0-9]*)$/;
 /** acts.id is a Postgres bigint: the largest id an act can have. */
@@ -28,8 +30,23 @@ export function dropRefId(ref) {
   return BigInt(m[1]) <= ACT_ID_MAX ? m[1] : null;
 }
 
-/** Is this pending claim a resident's candy mark (a unit set down)? The town's own candy is not. */
-export const isCandyClaim = (c) => (c?.class === "sited" || c?.class == null) && c?.data?.class === "candy" && c?.claimant !== "the-town";
+/**
+ * Is this pending claim a resident's candy mark (a unit set down)? The town's own candy is not.
+ * In either form (LOGOS v2 part 2, W2): `kind: sited` + `class: candy` (the
+ * claim's `class` is the mark's kind, its `data.class` the class), or `kind: candy`.
+ * And by lineage: a class whose chain in `classes` (standing.mjs § classLayerOf)
+ * reaches candy is candy, so a kind of candy is proved as candy is.
+ *
+ * IN A SKEW ONLY `candy` ITSELF IS CAUGHT: when the store's pens disagree on the
+ * commit, `classLayerVia` hands the clearing no layer (null), and a subclass of
+ * candy goes unproved. Acceptable today because W2's class tree has no class
+ * under candy; the day it has one, a skew lets that kind's drop pass unchecked.
+ */
+const isCandyClass = (name, classes) => name != null
+  && (String(name) === "candy" || (classes ? classChainOf(classes, name).includes("candy") : false));
+export const isCandyClaim = (c, classes = null) => c?.claimant !== "the-town"
+  && (isCandyClass(c?.class, classes)
+    || ((c?.class === "sited" || c?.class == null) && isCandyClass(c?.data?.class, classes)));
 
 /**
  * The refusal check for one candy claim, given the act its reference names (or
@@ -57,10 +74,10 @@ export function dropProvenanceCheck(claim, act) {
  * transaction. `refuse(claim, check)` is the clearing's refuse-alone: the claim
  * is refused with the named check and goes on the window's unfileable list.
  */
-export async function checkDroppedUnits(q, pending, { decided = () => false, refuse }) {
+export async function checkDroppedUnits(q, pending, { decided = () => false, refuse, classes = null }) {
   const refused = [];
   for (const c of pending) {
-    if (decided(c) || !isCandyClaim(c)) continue;
+    if (decided(c) || !isCandyClaim(c, classes)) continue;
     const id = dropRefId(c.data?.dropped);
     let act = null;
     if (id != null) {

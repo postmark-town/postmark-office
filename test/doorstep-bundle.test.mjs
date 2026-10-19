@@ -33,8 +33,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA } from "../src/schema.mjs";
-import { doorstep, DOORSTEP_SEGMENTS, INDEX_SEGMENTS, SEGMENT_META, BUNDLE_LAW, mailAwaiting, windowRead, PSA_SLUG } from "../src/queries.mjs";
+import { DOORSTEP_SEGMENTS, INDEX_SEGMENTS, SEGMENT_META, BUNDLE_LAW, PSA_SLUG } from "../src/queries.mjs";
+import { storeIndexPooled, doorstep as storeDoorstep, __resetRosterForTest } from "../src/town-index-store.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { LADDER_NOTE } from "../src/paper-fresh.mjs";
 import { appendTownJournal } from "../src/town-journal.mjs";
@@ -55,50 +55,49 @@ const HANDLE = "r000";
  * awaiting ones parked at indices 25–29, past the page.
  */
 function bundleDb() {
-  const db = new DatabaseSync(":memory:");
-  db.exec(SCHEMA);
-  const put = db.prepare("INSERT INTO meta VALUES (?, ?)");
-  put.run("as_of", AS_OF);
-  put.run("town_path", "fixture");
-  put.run("hydrated_counts", JSON.stringify({}));
+  const db = emptyTown();
+  const put = (...v) => putValues(db, "meta", v);
+  put("as_of", AS_OF);
+  put("town_path", "fixture");
+  put("hydrated_counts", JSON.stringify({}));
 
-  const insR = db.prepare("INSERT INTO residents VALUES (?, ?)");
-  insR.run(HANDLE, JSON.stringify({
+  const insR = (...v) => putValues(db, "residents", v);
+  insR(HANDLE, JSON.stringify({
     handle: HANDLE, is_office: false, last_active: null,
     address: { data: { since: "2026-01-01", joined: "2026-06-10" } },
     // The window island the doorstep has handed back since window-as-channel.
     window_state: { hand_set: "2026-08-24", sections: [{ title: "what I need", body: "the pane" }] },
   }));
-  insR.run("r001", JSON.stringify({ handle: "r001", is_office: false, last_active: null,
+  insR("r001", JSON.stringify({ handle: "r001", is_office: false, last_active: null,
     address: { data: { since: "2026-01-01", joined: "2026-06-11" } } }));
 
-  const insL = db.prepare("INSERT INTO letters VALUES (?,?,?,?,?,?,?,?,?,?)");
+  const insL = (...v) => putValues(db, "letters", v);
   for (let i = 0; i < 40; i++) {
     const id = `r001-2026-07-${String((i % 28) + 1).padStart(2, "0")}-to-r000-n${i}`;
     const at = `2026-07-${String((i % 28) + 1).padStart(2, "0")}T08:00:00.000Z`;
-    insL.run(id, "r001", HANDLE, at.slice(0, 10), null, "inbox", HANDLE,
+    insL(id, "r001", HANDLE, at.slice(0, 10), null, "inbox", HANDLE,
       `WHITE_PAGES/${HANDLE}/inbox/${i}.md`, JSON.stringify({ id, from: "r001", to: HANDLE, body: `# letter ${i}\n\nbody ${i}` }), at);
   }
   for (let i = 0; i < 6; i++) {
     const id = `r000-2026-07-01-to-r001-out${i}`;
-    insL.run(id, HANDLE, "r001", "2026-07-01", null, "outbox", "r001", `x${i}.md`,
+    insL(id, HANDLE, "r001", "2026-07-01", null, "outbox", "r001", `x${i}.md`,
       JSON.stringify({ id, from: HANDLE, to: "r001", body: `# out ${i}\n\nbody` }), "2026-07-01T08:00:00.000Z");
   }
 
-  const insB = db.prepare("INSERT INTO bulletin VALUES (?, ?)");
+  const insB = (...v) => putValues(db, "bulletin", v);
   for (let i = 0; i < 15; i++) {
     const slug = `2026-07-${String(i + 1).padStart(2, "0")}-notice-${i}`;
-    insB.run(slug, JSON.stringify({ slug, data: { title: `notice ${i}` }, body: `# notice ${i}\n\nprose` }));
+    insB(slug, JSON.stringify({ slug, data: { title: `notice ${i}` }, body: `# notice ${i}\n\nprose` }));
   }
 
-  const insLedger = db.prepare("INSERT INTO ledger (kind, date, id, from_h, to_h, json) VALUES (?,?,?,?,?,?)");
+  const insLedger = (...v) => putValues(db, "ledger", v, ["kind", "date", "id", "from_h", "to_h", "json"]);
   for (let i = 0; i < 12; i++) {
     // json is the event itself, as the hydrator writes every ledger line (town-index.mjs § ledgerLines); the store refuses a null
     const date = `2026-07-${String((i % 28) + 1).padStart(2, "0")}`;
-    insLedger.run("delivery", date, `l${i}`, "r001", HANDLE, JSON.stringify({ kind: "delivery", date, id: `l${i}`, from: "r001", to: HANDLE }));
+    insLedger("delivery", date, `l${i}`, "r001", HANDLE, JSON.stringify({ kind: "delivery", date, id: `l${i}`, from: "r001", to: HANDLE }));
   }
 
-  db.prepare("INSERT INTO stamps VALUES (?,?,?,?)").run(HANDLE, 12, 30, 3);
+  putValues(db, "stamps", [HANDLE, 12, 30, 3]);
 
   const conversations = [];
   for (let i = 0; i < 30; i++) {
@@ -111,10 +110,10 @@ function bundleDb() {
       next_actor: i >= 25 ? "you" : "them", others: ["r001"], letters: 2,
     });
   }
-  db.prepare("INSERT INTO mail_state VALUES (?, ?)").run(HANDLE, JSON.stringify({
+  putValues(db, "mail_state", [HANDLE, JSON.stringify({
     handle: HANDLE, language: "sequence, never debt", conversations,
     summary: { they_spoke_last: 5, new_inbound: 5, they_spoke_again: 0, reply_queued: 1, last_word_yours: 25, bounced: 0 },
-  }));
+  })]);
   return db;
 }
 
@@ -124,15 +123,17 @@ const db = bundleDb();
 const IX = await indexStore(db);
 const IX_RESTORE = await IX.useInProcess();
 test.after(async () => { await IX_RESTORE(); await IX.stop(); });
+// The index's own reads (the sync core, the awaiting view, the window), through
+// the store's pooled index as the doors read it (town-index-store.mjs § storeIndexPooled).
+const IXR = storeIndexPooled(null);
 // A real (empty) directory rather than a path that does not exist: the paper
 // acts that FOUND a page will happily mkdir their way toward one, and a
 // throwaway temp dir keeps that off the filesystem the developer lives on.
 const scratch = mkdtempSync(join(tmpdir(), "postmark-bundle-"));
 after(() => rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
-const meta = { as_of: AS_OF, quest_registry: JSON.stringify({ quests: [] }) };
 // canWrite false and clone null: no town checkout in a unit fixture, so the
 // garnishes that need one simply do not attach. The segments need none of them.
-const ctx = { db, key: null, meta, asOf: AS_OF, canWrite: false, clone: null, pen: null, odb: null, dbPath: null };
+const ctx = { key: null, asOf: AS_OF, canWrite: false, clone: null, pen: null, odb: null };
 
 /** The segment, stripped of its two metadata keys — what must equal the read. */
 const answerOf = (seg) => Object.fromEntries(Object.entries(seg).filter(([k]) => !SEGMENT_META.includes(k)));
@@ -217,7 +218,7 @@ test("THE FLIP, ON THE RE-STRUNG LAW: DOMAIN drift in a SHADOW read's segment is
 });
 
 test("THE FLIP: the falsifier above can fail — a tampered segment is caught", async () => {
-  const d = (await doorstep(db, HANDLE, AS_OF));
+  const d = (await IXR.doorstep(HANDLE, AS_OF));
   // If this comparison could not fail, the test above would be decoration. So
   // introduce exactly the drift the bundle exists to prevent — one extra letter
   // on the mail segment — and prove the same comparison rejects it.
@@ -232,13 +233,13 @@ test("the sync core declares only what it fills; the finished bundle declares al
   // inferred: `doorstep()` answers from the hydrated office index, and the
   // consent inbox is derived by the world engine. Each names exactly what it
   // has.
-  assert.deepEqual((await doorstep(db, HANDLE, AS_OF)).segments, [...INDEX_SEGMENTS]);
-  assert.equal((await doorstep(db, HANDLE, AS_OF)).stances, undefined, "the sync core does not pretend to the seventh");
+  assert.deepEqual((await IXR.doorstep(HANDLE, AS_OF)).segments, [...INDEX_SEGMENTS]);
+  assert.equal((await IXR.doorstep(HANDLE, AS_OF)).stances, undefined, "the sync core does not pretend to the seventh");
   assert.deepEqual((await doorstepBundle(HANDLE, ctx)).segments, [...DOORSTEP_SEGMENTS]);
 });
 
 test("the two metadata keys are the ONLY things stripped — no segment answer owns them", async () => {
-  const d = (await doorstep(db, HANDLE, AS_OF));
+  const d = (await IXR.doorstep(HANDLE, AS_OF));
   for (const name of INDEX_SEGMENTS) {
     // `serves` and `args` are metadata ABOUT the segment. If a read ever
     // answered with a field of either name, the strip above would silently eat
@@ -251,7 +252,7 @@ test("the two metadata keys are the ONLY things stripped — no segment answer o
 });
 
 test("the bundle law is on the page, and it says what the pointers mean", async () => {
-  const d = (await doorstep(db, HANDLE, AS_OF));
+  const d = (await IXR.doorstep(HANDLE, AS_OF));
   assert.equal(d.the_bundle, BUNDLE_LAW);
   // ⚠ THE MATCHED PHRASE CHANGED WITH THE LAW, 2026-08-31. It used to be
   // /ask the named read yourself and you get the same object back/ — true while
@@ -264,7 +265,7 @@ test("the bundle law is on the page, and it says what the pointers mean", async 
 // ── the segments' own shapes ────────────────────────────────────────────────
 
 test("segments are BOUNDED, and each carries the total the bound is a cut of", async () => {
-  const d = (await doorstep(db, HANDLE, AS_OF));
+  const d = (await IXR.doorstep(HANDLE, AS_OF));
   // "A bound and its count are ONE change, never two" — a total that cannot
   // differ from its list length is not a total.
   assert.equal(d.mail.letters.length, 20);
@@ -287,7 +288,7 @@ test("awaiting is DERIVED FROM THE WHOLE LEDGER, then bounded", async () => {
   // The five awaiting threads sit at conversation indices 25–29, past the
   // twenty-row page: derive from the slice and the answer is "nothing awaits
   // your reply" to someone with five threads that do.
-  const d = (await doorstep(db, HANDLE, AS_OF));
+  const d = (await IXR.doorstep(HANDLE, AS_OF));
   const a = d.awaiting;
   assert.equal(a.threads_total, 5);
   assert.equal(a.threads.length, 5);
@@ -306,7 +307,7 @@ test("awaiting is DERIVED FROM THE WHOLE LEDGER, then bounded", async () => {
   // it named the repair and then asserted the ordering instead, which is a
   // different claim. Flagged by the fresh reviewer, 2026-09-07. Two rows asked
   // for; the totals must not move.
-  const tight = mailAwaiting(db, HANDLE, { limit: 2 });
+  const tight = await IXR.mailAwaiting(HANDLE, { limit: 2 });
   assert.equal(tight.conversations.length, 2, "the budget did decide how much gets said");
   assert.equal(tight.threads_total, 5, "…and did not decide what is true");
   assert.equal(tight.conversations_total, 30, "the total is the ledger's, never the page's");
@@ -318,8 +319,8 @@ test("awaiting is DERIVED FROM THE WHOLE LEDGER, then bounded", async () => {
   assert.match(a.language, /sequence, never debt/);
 });
 
-test("awaiting's cursor walks to the end and stops, and the total does not shrink", () => {
-  const a = mailAwaiting(db, HANDLE, { offset: 20 });
+test("awaiting's cursor walks to the end and stops, and the total does not shrink", async () => {
+  const a = await IXR.mailAwaiting(HANDLE, { offset: 20 });
   assert.equal(a.conversations.length, 10);
   assert.equal(a.conversations_offset, 20);
   assert.equal(a.conversations_complete, true);
@@ -329,7 +330,7 @@ test("awaiting's cursor walks to the end and stops, and the total does not shrin
 });
 
 test("the correspondence_offset a caller passes reaches the awaiting segment", async () => {
-  const d = (await doorstep(db, HANDLE, AS_OF, { conversationsOffset: 20 }));
+  const d = (await IXR.doorstep(HANDLE, AS_OF, { conversationsOffset: 20 }));
   assert.equal(d.awaiting.conversations_offset, 20);
   // and the pointer says so, so the falsifier asks the SAME page
   assert.equal(d.awaiting.args.offset, 20);
@@ -337,16 +338,16 @@ test("the correspondence_offset a caller passes reaches the awaiting segment", a
 });
 
 test("the window segment is a read of its own now, not a copy the doorstep alone held", async () => {
-  const direct = windowRead(db, HANDLE);
-  const viaDoor = await householdApex({ read: "window", handle: HANDLE }, null, { db });
+  const direct = await IXR.windowRead(HANDLE);
+  const viaDoor = await householdApex({ read: "window", handle: HANDLE }, null, {});
   assert.deepEqual(viaDoor, direct);
   assert.equal(direct.window.hand_set, "2026-08-24");
-  const d = (await doorstep(db, HANDLE, AS_OF));
+  const d = (await IXR.doorstep(HANDLE, AS_OF));
   assert.deepEqual(answerOf(d.window), direct);
 });
 
 test("a resident with no pane reads an honest empty, not a missing field", async () => {
-  const w = await householdApex({ read: "window", handle: "r001" }, null, { db });
+  const w = await householdApex({ read: "window", handle: "r001" }, null, {});
   assert.equal(w.window, null);
   // ⚠ AMENDED 2026-08-26. This test's own message named the distinction the
   // read was not making, and then asserted the collapse: with no clone, this
@@ -363,7 +364,7 @@ test("a resident with no pane reads an honest empty, not a missing field", async
 // ── what the retired keys became ────────────────────────────────────────────
 
 test("the retired top-level keys are GONE, and the page names where each went", async () => {
-  const d = (await doorstep(db, HANDLE, AS_OF));
+  const d = (await IXR.doorstep(HANDLE, AS_OF));
   for (const dead of ["inbox", "awaiting_reply", "awaiting_reply_total", "correspondence", "outgoing", "prs"]) {
     assert.equal(d[dead], undefined, `"${dead}" is a segment's field now — a copy beside it is the drift the bundle forbids`);
     assert.ok(d.moved[dead], `a cached reader losing "${dead}" is owed the door that serves it, not silence`);
@@ -433,7 +434,7 @@ test("the household's three new acts are dispatchable and name the flats they ch
   }
   // An act that dispatches to a flat verb must be CHARGED as that flat verb at
   // the bouncer, or the apex is a second, uncounted door.
-  const bare = await householdApex({}, null, { db });
+  const bare = await householdApex({}, null, {});
   const names = bare.acts.map((c) => c.act);
   for (const a of ["send", "stake-vote", "address-fields"]) assert.ok(names.includes(a), `${a} carries a card on the bare read`);
 });
@@ -453,7 +454,7 @@ test("a paper act follows its OWN card: handle strips from `fields`, so the door
   // clone, so the act cannot land, and a test that demanded a happy answer here
   // would be testing the fixture rather than the door.
   const key = { household: "h", handles: new Set([HANDLE]) };
-  const ctx2 = { db, clone: scratch, odb: null, dbPath: null, pen: null, canWrite: true };
+  const ctx2 = { clone: scratch, odb: null, pen: null, canWrite: true };
   for (const act of ["address", "address-fields", "home", "profile", "window"]) {
     // A THROW COUNTS AS PASSING THE GATE. With no real town checkout some of
     // these reach their writer and die on git; what is being proven is that
@@ -471,7 +472,7 @@ test("…but a key holding several residents is ASKED which, never guessed for",
   // one named person's page, and picking whose would be the worst possible way
   // to be helpful.
   const key = { household: "h", handles: new Set([HANDLE, "r001"]) };
-  const ctx2 = { db, clone: scratch, odb: null, dbPath: null, pen: null, canWrite: true };
+  const ctx2 = { clone: scratch, odb: null, pen: null, canWrite: true };
   const r = await householdApex({ do: "address", args: { body: "prose" } }, key, ctx2);
   assert.equal(r.code, 422);
   assert.match(r.defect, /which of your residents/);
@@ -480,7 +481,7 @@ test("…but a key holding several residents is ASKED which, never guessed for",
 
 test("the READ side already defaulted, and still does — the two branches now agree", async () => {
   const key = { household: "h", handles: new Set([HANDLE]) };
-  const r = await householdApex({ read: "address" }, key, { db });
+  const r = await householdApex({ read: "address" }, key, {});
   assert.equal(r.of, HANDLE, "a sole resident is the standpoint on reads, as it has always been");
 });
 
@@ -493,14 +494,14 @@ test("a multi-resident key's READS ask which, never guess — the write side's l
   // or doorstep is the same wrong, delivered more quietly.
   const key = { household: "h", handles: new Set([HANDLE, "r001"]) };
   for (const read of ["address", "home", "mail", "window", "doorstep"]) {
-    const r = await householdApex({ read }, key, { db });
+    const r = await householdApex({ read }, key, {});
     assert.equal(r.code, 422, `read: "${read}" on a several-resident key must ask, not answer`);
     assert.match(r.defect, /this key holds several residents/, `read: "${read}" must say why it asks`);
     assert.deepEqual([...r.your_residents].sort(), [HANDLE, "r001"].sort(),
       `read: "${read}" must name the residents to choose from`);
   }
   // and naming one still answers exactly that one
-  const named = await householdApex({ read: "address", handle: HANDLE }, key, { db });
+  const named = await householdApex({ read: "address", handle: HANDLE }, key, {});
   assert.equal(named.of, HANDLE, "an explicit handle: is honoured unchanged");
 });
 
@@ -653,7 +654,7 @@ test("THE FLIP: the counter falsifier can fail — the answer Vex read is reject
     // The defect exactly as Vex read it: the disclosure present, the counter
     // answering from the index alone. If this comparison could not reject that
     // page, the two tests above would be decoration.
-    const asShipped = { ...d, pending_outbox: (await doorstep(db, HANDLE, AS_OF)).pending_outbox };
+    const asShipped = { ...d, pending_outbox: (await IXR.doorstep(HANDLE, AS_OF)).pending_outbox };
     assert.ok(asShipped.your_pending_letters.standing.length > 0);
     assert.throws(() => assert.equal(asShipped.pending_outbox, d.pending_outbox),
       "a page that lists standing letters beside an index-only count must be a page this suite refuses");
@@ -765,11 +766,15 @@ test("THE CUT: psa keeps each notice's date, title and url, and never its body",
   // Its OWN index — inserting the wall into the shared fixture would move the
   // bulletin totals the bounded-segments test above asserts.
   const psaDb = bundleDb();
-  psaDb.prepare("INSERT INTO bulletin VALUES (?, ?)")
-    .run(PSA_SLUG, JSON.stringify({ slug: PSA_SLUG, data: { title: "public service announcements" }, body: wall }));
-
-  const fat = (await doorstep(psaDb, HANDLE, AS_OF, { nowMs: DAY }));
-  const slim = (await doorstep(psaDb, HANDLE, AS_OF, { nowMs: DAY, slim: true }));
+  putValues(psaDb, "bulletin", [PSA_SLUG, JSON.stringify({ slug: PSA_SLUG, data: { title: "public service announcements" }, body: wall })]);
+  const own = await indexStore(psaDb, { db: "doorstep_bundle_psa" });
+  const c = await own.store.connect("office_api");
+  let fat, slim;
+  try {
+    __resetRosterForTest(); // the two stores share the fixture's head, and the roster memo keys on it
+    fat = (await storeDoorstep(c, HANDLE, AS_OF, { nowMs: DAY }));
+    slim = (await storeDoorstep(c, HANDLE, AS_OF, { nowMs: DAY, slim: true }));
+  } finally { await c.end().catch(() => {}); await own.stop(); __resetRosterForTest(); }
 
   assert.equal(fat.psa.entries.length, 2, "both notices are inside the window");
   assert.equal(slim.psa.entries.length, fat.psa.entries.length, "the cut is per entry — it drops no notice");
@@ -800,6 +805,7 @@ test("THE CUT: psa keeps each notice's date, title and url, and never its body",
 // "doorstep" all carry the same block, computed with the page's one clock.
 import { __setMistsDepsForTest } from "../src/mists-forecast.mjs";
 import { crossingSailsAt } from "../src/crossings.mjs";
+import { putValues, emptyTown } from "./fixture.mjs";
 const MISTS_ENGINE = {
   mistsAt: (c, m) => {
     if (c < 300) return null;
@@ -854,7 +860,7 @@ test("WLD-38 · A HOUSE OR A GROUND THAT CANNOT BE READ IS NAMED ON THE PAGE —
   const plain = await doorstepBundle(HANDLE, { ...ctx, nowMs: NOW_303 });       // the same clock: the segments are compared whole
   for (const [why, over, said] of [
     ["the registry", { household: async () => null }, /household registry could not be read/],
-    ["a footprint", { ringOf: async () => { throw new Error("parcel dial unread"); } }, /the ground of r000\/east-shed could not be read \(parcel dial unread\)/],
+    ["a footprint", { ringOf: async () => { throw new Error("parcel dial unread"); } }, /the ground of r000\/east-shed could not be read \(the world's files could not be read\)/], // POS-657: a plain reason
   ]) {
     __setMistsDepsForTest(mistsDeps(over));
     try {

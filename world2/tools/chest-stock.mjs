@@ -152,8 +152,8 @@ export async function stockChests(client, { crossing = null } = {}) {
       const used = await lockedChestUse(client, s.chest);
       // a chest whose maker withdrew it takes no stock, even one planned before (F1)
       if (used.withdrawn) { await client.query("ROLLBACK"); skipped.push({ chest: s.chest, why: "withdrawn before its stock" }); continue; }
-      // min(first_stock, capacity), never past what is already inside (units and things)
-      const room = Math.min(Math.min(plan.dials.first_stock, s.capacity), s.capacity - (used.units + used.things));
+      // min(first_stock, capacity), never past what is already inside (units and things, a holder counting 1 and all it holds)
+      const room = Math.min(Math.min(plan.dials.first_stock, s.capacity), s.capacity - used.load);
       // ZERO ROOM COMPLETES THE FIRST STOCK (Wright, 2026-10-13T01:19Z): a
       // labelled, admitted chest that is already full is stocked ZERO — the act
       // is written with no move (so the fold mints no zero edge and names no

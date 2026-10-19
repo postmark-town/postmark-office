@@ -62,8 +62,11 @@ import { worldFreezeBounce } from "./freeze.mjs";
 import { readAttachments, declareAttachment } from "./dynamic-entities.mjs";
 import { holdEdgeOnActs } from "./hold-edge.mjs";
 import { IN_READ_WORKER } from "./read-workers.mjs";
-import { classDials } from "./world-classes.mjs";
+import { classDials, classProperty } from "./world-classes.mjs";
+import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read from the class tree (LOGOS v2, O1)
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -259,6 +262,7 @@ export const HOLD_TOOLS = [
     inputSchema: { type: "object", properties: {
       thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling. A unit that was set down is a mark too: name it to take it back, or with act: \"consume\" to eat it where it stands" },
       to: { type: "string", description: "the resident who takes it (a give), or a chest's id to put counted units into it. Omit to set it down where you stand, or to pick up a thing standing on the ground" },
+      kind: { type: "string", description: "BY KIND (LOGOS v2): which kind — a class id, e.g. a kind of candy. A take that names no kind is pot luck over everything the holder holds, whole things included, and naming one narrows the draw; a draw that lands on a holder hands it over whole, with everything it holds, and it takes 1 slot in your hands; a draw your hands have no slots for is refused whole, saying what it fell on; a give with one kind in hand may omit it. With from: omitted, the one holder in reach that holds it is the source, and several are refused with the candidates listed" },
       label: { type: "string", description: "COUNTED UNITS (candy): which label — e.g. a candy's slug. With one label in hand or in the chest it may be omitted; with several it must be named, and an omission is refused listing what is there" },
       count: { type: "number", description: "COUNTED UNITS: how many, a whole number (default 1). A set-down is always one unit, one mark, one stamp" },
       from: { type: "string", description: "COUNTED UNITS: the chest to take from, <by>/<slug> — you stand within its extent to take" },
@@ -424,12 +428,17 @@ export async function reachContext(thing, actor, { key = null } = {}) {
         // settlements run on time and for hours when one is held (kogane's
         // Swallets sat locked from 18:00Z on 10-13 to the next morning's).
         // So a "no" from the live layer is asked again of the docket, the way
-        // the receipt asks it, and only a docket with NO row for this slug
-        // counts as nothing there.
+        // the receipt asks it, and only a docket with no STANDING row for this
+        // slug counts as nothing there. A refused or retracted claim will never
+        // publish, so it is not a draft either (POS-689, Darko 2026-10-18,
+        // answering noprotocol-keith on #553): the set is drop-recovery's
+        // `standingClaim`, the one definition, never a copy here.
         if (!ownDraftExists) {
-          const { claimRowsForSlug } = await import("./world2-claims.mjs");
+          const [{ claimRowsForSlug }, { standingClaim }] = await Promise.all([
+            import("./world2-claims.mjs"), import("./drop-recovery.mjs"),
+          ]);
           const rows = await claimRowsForSlug(thing, { key });
-          if (rows.length) ownDraftExists = true;
+          if (rows.some(standingClaim)) ownDraftExists = true;
         }
         // DID YOU MEAN, from the same read. Added after the first review of
         // this fix (Emily, 2026-10-14): the commonest way to land in the refusal
@@ -575,6 +584,12 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
  */
 export async function armsLengthOrThrow({ thing, to, here, actor, standpointOfOther = null }) {
   const { withinArmsLength } = await import("./reach.mjs");
+  // A give BY KIND ("units") has no set-down to offer: setting a kind down is not built (G8, w44),
+  // so the other way to reach someone is a holder they can take from (the playground's QA of part 2).
+  const byKind = thing === "units";
+  const setDown = byKind
+    ? `give it into a holder where they can take from it — world { do: "give", args: { kind, count, to: "<a holder>" } } (setting a kind down is not built yet)`
+    : null;
   if (!here)
     throw bounce(409, "the record does not place you anywhere",
       `a give is a take at arm's length (the-town/the-reach), and the walk ledger has no position for ${actor} — there is no length to measure. Walk somewhere first.`);
@@ -583,11 +598,11 @@ export async function armsLengthOrThrow({ thing, to, here, actor, standpointOfOt
     : await (await import("./world.mjs")).residentStandpoint(String(to)).catch(() => null);
   if (!theirs?.placed)
     throw bounce(409, `the record does not place ${to} anywhere`,
-      `a give is a take at arm's length (the-town/the-reach) and the town cannot measure the length: ${to} has no position in the walk ledger. Set it down where you both can reach it instead — world { do: "drop", args: { thing: "${thing}" } }.`);
+      `a give is a take at arm's length (the-town/the-reach) and the town cannot measure the length: ${to} has no position in the walk ledger. ${setDown ? `Instead, ${setDown}.` : `Set it down where you both can reach it instead — world { do: "drop", args: { thing: "${thing}" } }.`}`);
   const reach = withinArmsLength(here, { x: theirs.x, y: theirs.y });
   if (!reach.stands)
     throw bounce(409, `${to} is not within arm's length — they stand ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you`,
-      `a give is a take at arm's length (the-town/the-reach): giver and receiver stand within earshot of each other, ${reach.earshot_m} m, the town's one measure of beside. Walk to them and hand it over there — world { do: "walk", args: { mark_id: "<their ground>", mode: "center" } } — or set it down where they will find it: world { do: "drop", args: { thing: "${thing}" } }. Nothing was recorded.`);
+      `a give is a take at arm's length (the-town/the-reach): giver and receiver stand within earshot of each other, ${reach.earshot_m} m, the town's one measure of beside. Walk to them and hand it over there — world { do: "walk", args: { mark_id: "<their ground>", mode: "center" } } — or ${setDown ?? `set it down where they will find it: world { do: "drop", args: { thing: "${thing}" } }`}. Nothing was recorded.`);
   return reach;
 }
 
@@ -666,7 +681,7 @@ export function amendCallFor(thingId, at) {
   return {
     do: "leave-mark", tool: "world_leave_mark",
     args: { by: id.slice(0, cut), slug: id.slice(cut + 1), amend: true, at: { x: Number(at.x), y: Number(at.y) }, preview: true },
-    note: "the author's own pen: send every other line of the mark as it stands (kind, extent, body, class), read the preview, then send it again without preview: true",
+    note: "the author's own pen: send every other line of the mark as it stands (kind, extent, body, and class if it carries one: a thing is kind: thing now, and the old kind: sited with class: thing is still taken), read the preview, then send it again without preview: true",
   };
 }
 
@@ -917,7 +932,7 @@ export async function readHoldEffects({ handles = [], sinceCrossing, nowCrossing
     const rows = await storeHoldingRows({ since: sinceCrossing, until: nowCrossing });
     return { readable: true, events: holdEffectsFrom({ rows, handles, sinceCrossing, nowCrossing }) };
   } catch (e) {
-    return { readable: false, events: [], reason: `the holding record could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { readable: false, events: [], reason: `the holding record could not be read (${plainReason(e, "record", "the holding record")})` };
   }
 }
 
@@ -1086,7 +1101,11 @@ const placeText = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
  * amend). Any key in neither list is an authored line the door cannot carry,
  * and the amend is refused rather than made to drop it.
  */
-export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image", "capacity", "portable", "welcome"]);
+// `kind` and `class` are carried as the record spells them, in either form: the
+// door judges both alike and writes the form the class tree says (world.mjs §
+// THE FORM IT IS WRITTEN IN). `holder` and `open` are a thing's holder word,
+// which the door re-declares (kind-holding § holderWordOf; O2, review-610 S8).
+export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image", "capacity", "portable", "welcome", "holder", "open"]);
 export const AMEND_LEAVES = Object.freeze([
   "id", "by", "at", "tier", "sovereign", "placementParent", "household", "declared_household",
   "stamps", "weight", "weight_parts", "ledger_weight", "date", "signal",
@@ -1141,7 +1160,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
     const amend = await fileAuthorsAmend({ thing, stood, key, actor, actId, writtenAt: did.at ?? null, deps });
     return { ...base, whose: "your household's", amend };
   } catch (e) {
-    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` } };
+    return { ...base, whose: "your household's", amend: { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` } };
   }
 }
 
@@ -1190,7 +1209,7 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
       ...(res?.put_forward === true ? {} : { to_publish: res?.to_publish ?? null }),
     };
   } catch (e) {
-    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? e?.message ?? e).slice(0, 200)}` };
+    return { filed: false, why: `the amend door refused: ${String(e?.defect ?? plainReason(e, "record", "a set-down's amend")).slice(0, 200)}` };
   }
 }
 
@@ -1276,8 +1295,8 @@ export function setDownNote(setDown) {
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
-export async function callHoldTool(name, args = {}, key = null) { return perceived(() => holdAct(name, args, key)); }
-async function holdAct(name, args = {}, key = null) {
+export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
+async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
   // ⚑ THE READ ASKS FOR A READ HANDLE, AND ONLY THE WRITE ASKS FOR A WRITE ONE
@@ -1339,7 +1358,13 @@ async function holdAct(name, args = {}, key = null) {
           : {}),
         holding: page.map((id) => ({ thing: id, made_by: id.split("/")[0] })),
         // THE COUNTED HOLDING (WLD-27): one edge per label, and what it shows.
-        units: await unitsHeldBy(actor),
+        ...((await import("./chests-candy.mjs")).chestsCandyOn() ? { units: await unitsHeldBy(actor) } : {}),
+        // BY KIND (LOGOS v2, O2; review-610 S1): live whatever WORLD_CHESTS_CANDY says — the kind doors are not #499's
+        ...(await (async () => {
+          const kinds = await (await import("./world-kinds.mjs")).kindsHeldBy(actor);
+          // BOTH NUMBERS (POS-679 D): the slots used of 24, and the things in all, holders' contents counted
+          return { kinds, ...(kinds?.hands ? { hands: kinds.hands } : {}) };
+        })()),
       };
     }
     // ── TWO INPUTS THIS DOOR DOES NOT YET COMPUTE ──────────────────────────
@@ -1368,6 +1393,14 @@ async function holdAct(name, args = {}, key = null) {
     // — a door that promised enforcement it does not perform would be the exact
     // schema-vs-runtime defect this branch flagged on `leave_mark`'s `tier:`, and
     // it is not better for being mine.
+    // ── BY KIND (LOGOS v2, lane O2) — the kind door, the same lane and queue ──
+    // Every count that names no `label:` is a kind's: take, give and refill by
+    // kind (world-kinds.mjs). A `label:` is #499's door, below.
+    {
+      const { kindRouteOf, callKinds } = await import("./world-kinds.mjs");
+      const route = kindRouteOf(args, verb);
+      if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
+    }
     // ── COUNTED UNITS (WLD-27) — their own door, the same lane and queue ─────
     if (args.thing == null && args.to == null && args.from == null && args.label == null && args.count == null && args.act == null)
       throw bounce(422, "which thing?", "a thing's mark id, <by>/<slug> — or label:/count:/from: for counted units");
@@ -1408,10 +1441,12 @@ async function holdAct(name, args = {}, key = null) {
     const { guardedAttachments: guardRows } = await import("./world2-guards.mjs");
     const preRows = await guardRows();
     const preHolder = liveHolder(preRows, String(args.thing));
-    // A THING A CHEST HOLDS (WLD-27): naming it is a take aimed at the chest.
+    // A THING A HOLDER HOLDS (WLD-27; LOGOS v2, O2): naming it takes that mark out
+    // of its holder — the kind door's, whose holder is any thing with holder: true.
     if (preHolder != null && String(preHolder).includes("/") && args.to == null) {
-      const { callUnits, liveUnitDeps } = await import("./world-units.mjs");
-      return await callUnits("thing-from-chest", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
+      const { callKinds } = await import("./world-kinds.mjs");
+      const { liveUnitDeps } = await import("./world-units.mjs");
+      return await callKinds("thing-from-holder", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
     }
     refuseGiveOfUnheld({ thing: args.thing, to: args.to ?? null, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
@@ -1420,8 +1455,9 @@ async function holdAct(name, args = {}, key = null) {
     if (face === "take") {
       let m = null;
       try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { m = null; }
-      if (m?.class === "chest" && m.portable === false)
-        throw bounce(409, `${args.thing} is fixed where it stands`, "a chest declared portable: false (a bowl) is not carried — take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
+      // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
+      if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
+        throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
     }
 
     // The hold lane is flipped here — the door refused above if it was not —
@@ -1543,7 +1579,7 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     // THE CARRY CAP (WLD-27), asked of whoever ends up holding it, inside the
     // turn so two holds cannot both pass a cap only one of them fits. Absent
     // (`carry: null`) for a caller that measures no load.
-    if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows });
+    if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows, thing: String(thing), actor });
     const { at, witnesses } = await witnessStamp(did.declared_by);
     const row = await appendActFlipped(db, holdingEntry(did, { crossing: currentCrossing(), at, witnesses, cls: CLASS_HOLDING, household: resolvedWorldHousehold(key) }));
     // Which store is the RECORD for this act — said in the answer, as the stance
@@ -1584,8 +1620,16 @@ export function holdTurn(fn) {
  * one slot — a portable chest included, whatever it holds — and every counted
  * unit is one. The cap is the thing class's declared `carry_cap`, read here.
  */
-async function carryForThings({ who, attachments }) {
-  const cap = thingDials()?.carry_cap;
+async function carryForThings({ who, attachments, thing = null, actor = null }) {
+  // ONE HOLDER IN A RESIDENT'S HANDS (Darko, 2026-10-17 23:29): a holder taken or given to a resident who carries one is refused
+  if (thing != null) {
+    const [{ refuseSecondHolder }, { classViewOf }, { lawSnapshot }, world] = await Promise.all([
+      import("./kind-holding.mjs"), import("./world-units.mjs"), import("./law-snapshot.mjs"), import("./world.mjs")]);
+    await refuseSecondHolder({ who, actor: actor ?? who, adding: [thing], held: holdingsOf(attachments, who), view: classViewOf(lawSnapshot()),
+      markById: async (id) => (await world.worldMarkById(String(id))).mark, nothing: "Nothing was recorded." });
+  }
+  // the resident's own capacity (constitution, 24), property first; the thing class's older carry_cap second (G4)
+  const cap = holdingOf({ className: "resident", classProperty, legacy: { capacity: thingDials()?.carry_cap } }).capacity;
   if (!Number.isInteger(cap)) return;
   const [{ storeHoldingRows }, { foldUnits, totalOf, isUnitRow, refuseOverCarry }] = await Promise.all([import("./world2-guards.mjs"), import("./world-stacks.mjs")]);
   const { inFlightFor } = await import("./world-units.mjs");
@@ -1603,6 +1647,6 @@ async function unitsHeldBy(handle) {
       import("./world2-guards.mjs"), import("./world-stacks.mjs"), import("./world-units.mjs"), import("./law-snapshot.mjs")]);
     return holdsBlock(foldUnits((await storeHoldingRows()).filter(isUnitRow)), handle, classViewOf(lawSnapshot()));
   } catch (e) {
-    return { unreadable: `the counted holding could not be read (${String(e?.message ?? e).slice(0, 160)})` };
+    return { unreadable: `the counted holding could not be read (${plainReason(e, "record", "the counted holding")})` };
   }
 }

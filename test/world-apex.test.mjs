@@ -160,6 +160,18 @@ const MARKS = [
   { id: "the-town/the-old-signal-hut", by: "the-town", kind: "sited", tier: "market", at: { x: 500, y: 640 }, extent: { w: 20, h: 20 },
     body: "A hut the town keeps but has not made law.",
     props: { class: "timetable", class_version: 1, dials: { pace_km_per_crossing: 405 }, timetable: TIMETABLE, affordances: BOARD_AFFORDANCE } },
+  // ── NO TOWN-WIDE TABLE ON A READ (WLD-29, the pointer model) ──────────────
+  // The mover's class, with a DISTINCTIVE stride no other source names; it has
+  // no place, so no standpoint's spine or field of view ever reaches it — and
+  // so no read may carry it, by name or in a dial table.
+  { id: "the-town/resident", by: "the-town", kind: "class", tier: "constitution", body: "WLD29-CLASS-BODY-NOT-FOR-THE-DIGEST",
+    dials: { pace_km_per_crossing: 47 } },
+  // a dialled mark far from every standpoint the suite reads from, and two
+  // malformed dials GET /world/dials must not carry or choke on
+  { id: "zeta/far-lamp", by: "zeta", kind: "sited", tier: "market", at: { x: -30000, y: -30000 }, extent: { w: 2, h: 2 },
+    body: "WLD29-LAMP-BODY-NOT-FOR-THE-DIGEST", dials: { glow: 3 } },
+  { id: "zeta/empty-dials", by: "zeta", kind: "sited", tier: "market", at: { x: -30010, y: -30000 }, extent: { w: 2, h: 2 }, dials: {} },
+  { id: "zeta/array-dials", by: "zeta", kind: "sited", tier: "market", at: { x: -30020, y: -30000 }, extent: { w: 2, h: 2 }, dials: [1, 2] },
 ];
 
 // THE STAGE-D WORLD: main, plus the wheelhouse's `board` affordance restored.
@@ -342,9 +354,6 @@ let BASE = null; // set per office, since each one is handed a different port
 
 async function withOffice(env, fn) {
   const dir = tempDir("postmark-apex-srv-");
-  const officeDb = join(dir, "fixture.db");
-  const { fixtureDb } = await import("./fixture.mjs");
-  fixtureDb(officeDb).close();
   const port = await freePort();
   BASE = `http://127.0.0.1:${port}`;
   // The child gets its OWN temp and its OWN oauth.db. Without the first it
@@ -353,7 +362,7 @@ async function withOffice(env, fn) {
   // second it opens the CHECKOUT's oauth.db (server.mjs defaults `--oauth-db`
   // to the office root), which is a live file the developer's own office holds:
   // a test must not write there, and two test offices must not write it at once.
-  const child = spawn(process.execPath, [new URL("../src/server.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "--port", String(port), "--db", officeDb, "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), "apexkey=house-a:alpha")], {
+  const child = spawn(process.execPath, [new URL("../src/server.mjs", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "--port", String(port), "--oauth-db", seedStaticKeys(join(dir, "oauth.db"), "apexkey=house-a:alpha")], {
     env: { ...process.env, ...env, TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: repo, ...W.rowsEnv(dbPath, dir), VOICES_LOG: join(dir, "voices.jsonl"), TOWN_PUSH: "", TEMP: dir, TMP: dir, TMPDIR: dir },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -1841,13 +1850,14 @@ test("a class that opens a verb to two kinds keeps both — the human's grant su
 // `since_crossing`; the old spelling answers one cycle with the contract's
 // `renamed` pointer beside the same answer.
 
-test("POS-632 W3 · both crossing numbers still answer the same read for one train, each with a renamed row pointing at the one cursor", async () => {
+test("POS-687 · both crossing numbers still answer the same read, with no end date: each renamed row points at the one cursor and carries no until", async () => {
   on();
   const sc = await worldApex({ x: String(A.x), y: String(A.y), since_crossing: 1 }, null);
   const old = await worldApex({ x: String(A.x), y: String(A.y), since: 1 }, null);
   assert.ok(!sc.error, JSON.stringify(sc).slice(0, 300));
-  assert.deepEqual(sc.renamed?.map((r) => [r.field, r.answers_until]), [["since_crossing", "train/2026-w44"]]);
-  assert.deepEqual(old.renamed?.map((r) => r.field), ["since (a crossing number)"]);
+  assert.deepEqual(sc.renamed?.map((r) => [r.field, r.answers_until]), [["since_crossing", null]]);
+  assert.deepEqual(old.renamed?.map((r) => [r.field, r.answers_until]), [["since (a crossing number)", null]]);
+  for (const r of [...sc.renamed, ...old.renamed]) assert.ok("answers_until" in r, "the one rename shape, kept");
   for (const r of [...sc.renamed, ...old.renamed]) assert.match(r.now, /since: "<cursor>"/);
   const { renamed: _a, ...scBody } = sc;
   const { renamed: _b, ...oldBody } = old;
@@ -1865,11 +1875,11 @@ test("POS-632 · since: takes the cursor; a string that is not one is refused by
   assert.equal(ok.renamed, undefined, "the cursor is the new word: no pointer");
 });
 
-test("POS-632 W3 · the say room's millisecond since still answers, with a renamed row; a top-level cursor carries its clock", async () => {
+test("POS-632 W3, POS-687 · the say room's millisecond since still answers, with a renamed row and no end date; a top-level cursor carries its clock", async () => {
   on();
   const old = await worldApex({ read: "say", args: { since: 1 } }, KEY_ALPHA);
   assert.ok(!old.error, JSON.stringify(old).slice(0, 300));
-  assert.deepEqual(old.renamed?.map((r) => r.field), ["args.since (milliseconds)"]);
+  assert.deepEqual(old.renamed?.map((r) => [r.field, r.answers_until]), [["args.since (milliseconds)", null]]);
   const cur = await worldApex({ read: "say", since: "c1.250.1.5" }, KEY_ALPHA);
   assert.ok(!cur.error, JSON.stringify(cur).slice(0, 300));
   assert.equal(cur.renamed, undefined);
@@ -1939,4 +1949,268 @@ test("THE ARENA IS CLOSED: do: strike and do: loot answer \"the arena is closed\
     if (was === undefined) delete process.env.WORLD_DYNAMIC_DB; else process.env.WORLD_DYNAMIC_DB = was;
   }
   assert.equal(existsSync(dyn), false, "an arena verb at the apex created dynamic.db");
+});
+
+// ── THE POINTER MODEL (WLD-29: Wright, AUTHORITY 2026-10-13T19:16:02.257Z) ──
+//
+// No default read carries a town-wide `dials` table or the `activity` map, at
+// any door. A house the read already shows carries `lit`; an unknown light is
+// null with ONE `lit_unknown` sentence; a focused house says its last active
+// crossing. The page's dials and lights are their own doors (GET /world/dials,
+// GET /world/lights).
+const PAGE_DIALS = { "the-town/resident": { pace_km_per_crossing: 47 }, "zeta/far-lamp": { glow: 3 } };
+const HOUSE = "alpha/quiet-parcel";   // the fixture's one house, beside A
+
+/** Every `lit` a read carries, by id, from within/nearby/objects. */
+const litsOf = (r) => Object.fromEntries([...(r.within ?? []), ...(r.nearby ?? []), ...(r.objects ?? [])]
+  .filter((o) => "lit" in o).map((o) => [o.id, o.lit]));
+
+test("NO DIGEST AT ANY DOOR: apex and eyes, spectator and resident, carry no `dials`, no `activity`, no house map and no class by name; the house they show carries `lit`, unknown here with ONE named sentence", async () => {
+  on();
+  const { worldEyes } = await import("../src/world.mjs");
+  const { ACTIVITY_UNAVAILABLE } = await import("../src/household-activity.mjs");
+  const reads = {
+    "apex · spectator": await worldApex({ ...A }, null),
+    "apex · resident": await worldApex({ handle: "alpha" }, KEY_ALPHA),
+    "eyes · spectator": await worldEyes({ ...A }, null),
+    "eyes · resident": await worldEyes({ handle: "alpha" }, KEY_ALPHA),
+  };
+  for (const [what, r] of Object.entries(reads)) {
+    assert.ok(r && !r.error, `${what}: ${JSON.stringify(r?.error ?? r)}`);
+    for (const k of ["dials", "activity"]) assert.ok(!(k in r), `${what}: the read carries \`${k}\``);
+    const text = JSON.stringify(r);
+    assert.doesNotMatch(text, /"house_of"|"households"|pace_km_per_crossing":47|"glow"/, `${what}: a town-wide table rides the read`);
+    assert.doesNotMatch(text, /"(hh|solo):/, `${what}: a household key rides the read (no fixture mark declares one, so only a lights table could)`);
+    assert.ok(!Object.hasOwn(r.records, "the-town/resident") && !Object.hasOwn(r.records, "zeta/far-lamp"), `${what}: records carry what the answer never named`);
+    // the house it shows: `lit` on it and on nothing else; this suite has no store
+    const lits = litsOf(r);
+    assert.deepEqual(Object.keys(lits), [HOUSE], `${what}: \`lit\` rides the shown house only (${JSON.stringify(lits)})`);
+    assert.equal(lits[HOUSE], null, `${what}: an unread store is unknown, never dark`);
+    assert.equal(r.lit_unknown, ACTIVITY_UNAVAILABLE, `${what}: ONE sentence says why`);
+    assert.equal(text.split(ACTIVITY_UNAVAILABLE).length - 1, 1, `${what}: the sentence is said once, not per house`);
+  }
+});
+
+test("GET /world/dials' table: every dialled published mark, its dials only (empty and array dials excluded); no record body", async () => {
+  on();
+  const { worldDialsPage } = await import("../src/world.mjs");
+  const page = await worldDialsPage();
+  for (const [id, d] of Object.entries(PAGE_DIALS)) assert.deepEqual(page.dials[id], d, id);
+  assert.ok(!("zeta/empty-dials" in page.dials) && !("zeta/array-dials" in page.dials));
+  assert.doesNotMatch(JSON.stringify(page), /WLD29-.*-BODY/, "dials only, never the record");
+  assert.match(page.means, /pace_km_per_crossing/);
+});
+
+// ── A SPY STORE under the pen pool, counting what a read actually sends ──────
+// alpha's house is `hh:alpha-house` (alpha, alpha-kin); dune lives alone. The
+// batch runs in its own transaction with a statement limit (SET LOCAL).
+async function withSpyStore(fn, { kinAt = () => new Date().toISOString() } = {}) {
+  const pen = await import("../src/world2-pen.mjs");
+  const { LAST_ACTIVE_SQL } = await import("../src/last-active.mjs");
+  const { ROLL_SQL } = await import("../src/household-activity.mjs");
+  const { rowsFromRegistry } = await import("../src/registry-rows.mjs");
+  const REG = rowsFromRegistry({ households: { "alpha-house": { residents: ["alpha", "alpha-kin"], accounts: [{ login: "alpha-gh", id: 1 }] } } }, {});
+  const asked = [];
+  const client = {
+    async query(sql, params = []) {
+      const t = String(sql);
+      asked.push(t);
+      if (/^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|SET LOCAL)/i.test(t)) return { rows: [] };
+      if (/FROM households\b/.test(t)) return { rows: REG.households };
+      if (/FROM household_pins\b|FROM registry_meta\b/.test(t)) return { rows: [] };
+      if (t === ROLL_SQL) return { rows: [{ handle: "alpha" }, { handle: "dune" }] };
+      if (t === LAST_ACTIVE_SQL) return { rows: [{ handle: "alpha-kin", at: kinAt(), src: "act" }] };
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  resetActivityCache();   // a cold cache: what one read asks is counted, never hidden by an earlier warm one
+  const env = ["WORLD2_PG", "WORLD2_PG_URL"].map((k) => [k, process.env[k]]);
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://wld29-spy/none" });
+  pen.__setPoolForTest({ connect: async () => client, query: (...a) => client.query(...a) });
+  // The apex's other store read (POS-350: the household registry, through
+  // world2-acts' own pool) answers no rows here, so every handle is its own
+  // solo household; it is not the activity batch and is not counted in `asked`.
+  const acts = await import("../src/world2-acts.mjs");
+  acts.__setPoolForTest({ query: async () => ({ rows: [] }) });
+  try { return await fn({ asked, count: () => asked.filter((t) => t === LAST_ACTIVE_SQL).length }); }
+  finally { pen.__setPoolForTest(null); acts.__setPoolForTest(null); resetActivityCache(); for (const [k, v] of env) { if (v == null) delete process.env[k]; else process.env[k] = v; } }
+}
+
+test("LOCAL LIGHT, ONE BATCH: a co-resident's act lights the shown house (true), in ONE bounded batch per read; the eyes alone ask once; a do:/read: act asks nothing", async () => {
+  on();
+  const { worldEyes } = await import("../src/world.mjs");
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  await withSpyStore(async ({ asked, count }) => {
+    const r = await worldApex({ ...A }, null);
+    assert.ok(!r.error, JSON.stringify(r.error));
+    assert.equal(count(), 1, `last-active asked ${count()} times for one apex read`);
+    assert.equal(asked.filter((t) => /FROM households\b/.test(t)).length, 1, "one registry read");
+    assert.ok(asked.some((t) => /^SET LOCAL statement_timeout = 5000$/.test(t)), "the batch sets its own statement limit");
+    assert.ok(asked.indexOf(asked.find((t) => /^SET LOCAL/.test(t))) < asked.findIndex((t) => /FROM households\b/.test(t)), "before its first read");
+    assert.deepEqual(litsOf(r), { [HOUSE]: true }, "alpha-kin's act lights alpha's house");
+    assert.ok(!("lit_unknown" in r), "a known light says nothing more");
+    assert.doesNotMatch(JSON.stringify(r), /"(hh|solo):|alpha-kin|"dune"/, "no household key, no member: `lit` is all that rides");
+    asked.length = 0; resetActivityCache();
+    const eyes = await worldEyes({ ...A }, null);
+    assert.equal(count(), 1, "the eyes door, alone, asks once too");
+    assert.deepEqual(litsOf(eyes), { [HOUSE]: true });
+    asked.length = 0; resetActivityCache();
+    await worldApex({ read: "say" }, KEY_BETA);
+    await worldApex({ do: "say", text: "hello" }, KEY_BETA);
+    assert.equal(count(), 0, "a read: or do: answer shows no house and asks for none");
+    asked.length = 0; resetActivityCache();
+    await worldApex({ ...FAR }, null);
+    assert.equal(count(), 0, "a read that shows no house asks for no activity");
+  });
+});
+
+test("LOCAL LIGHT · an old act is dark (false), never unknown; the light is C or C-1", async () => {
+  on();
+  const { CROSSING_MS } = await import("../src/crossings.mjs");
+  await withSpyStore(async () => {
+    assert.deepEqual(litsOf(await worldApex({ ...A }, null)), { [HOUSE]: false });
+  }, { kinAt: () => new Date(Date.now() - 3 * CROSSING_MS).toISOString() });
+  await withSpyStore(async () => {
+    assert.deepEqual(litsOf(await worldApex({ ...A }, null)), { [HOUSE]: true }, "C-1 still lights");
+  }, { kinAt: () => new Date(Date.now() - CROSSING_MS).toISOString() });
+});
+
+test("THE READ'S OWN CROSSING: absent, empty, null, malformed and negative stand at today's crossing and light today; a past crossing — 0 included — is historical, never dark, and asks nothing", async () => {
+  on();
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  const { ACTIVITY_HISTORICAL } = await import("../src/household-activity.mjs");
+  await withSpyStore(async ({ count, asked }) => {
+    for (const c of [undefined, "", null, -1, -40, "soon"]) {
+      const r = await worldApex({ ...A, ...(c === undefined ? {} : { crossing: c }) }, null);
+      assert.equal(r.crossing?.n, currentCrossing(), `${JSON.stringify(c)}: the read stands at today's crossing (never 0)`);
+      assert.deepEqual(litsOf(r), { [HOUSE]: true }, `${JSON.stringify(c)}: and lights today`);
+    }
+    asked.length = 0;
+    for (const c of [currentCrossing() - 2, 0, "0", currentCrossing() + 3]) {
+      const r = await worldApex({ ...A, crossing: c }, null);
+      assert.equal(r.crossing?.n, Number(c), `${JSON.stringify(c)}: the read stands where it was asked`);
+      assert.deepEqual(litsOf(r), { [HOUSE]: null }, `${JSON.stringify(c)}: a past or future crossing's light is unknown, not dark`);
+      assert.equal(r.lit_unknown, ACTIVITY_HISTORICAL);
+    }
+    assert.equal(count(), 0, "a historical read asks the store nothing");
+  });
+});
+
+test("SHARED ACROSS DOORS: apex, eyes and apex again against one store inside the TTL send ONE activity batch", async () => {
+  on();
+  await withSpyStore(async ({ count }) => {
+    const { worldEyes } = await import("../src/world.mjs");
+    const a = await worldApex({ ...A }, null);
+    const e = await worldEyes({ ...A }, null);
+    const b = await worldApex({ handle: "alpha" }, KEY_ALPHA);
+    assert.equal(count(), 1, `three reads of one store sent ${count()} batches`);
+    assert.deepEqual([litsOf(e)[HOUSE], litsOf(a)[HOUSE]], [true, true]);
+    assert.ok(!b.error);
+  });
+});
+
+// ── LOGOS v2, lane O2 · leave-mark { kind, count, to } through the apex's do: ──
+//
+// The apex dispatches leave-mark to the flat door, and a `to:` there is the
+// kind door's (world-kinds.mjs). Its first refusals are the class law's, asked
+// before any record is read — so the answers below can only come from the kind
+// door, reached through the apex's own gate and dispatch.
+test("O2 · do: leave-mark { kind, count, to } reaches the kind door through the apex: an unknown kind and a makers-false kind refuse by the class law", async () => {
+  on();
+  const law = [
+    { id: "the-town/resident", by: "the-town", kind: "sited", tier: "constitution", at: { x: 2400, y: 2400 }, extent: { w: 10, h: 10 },
+      body: "A household's living voice.",
+      props: { class: "resident", class_version: 5, ambient: true, actions: [{ action: "leave-mark", residue: "the-town/sound" }] } },
+  ];
+  const path = join(repo, "apex-world-o2-kinds.db");
+  buildStore([...MARKS, ...law], path);
+  const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
+  const row = (key, data) => ({ number: 300, tag_sha: "9".repeat(40), newest: 300, kind: "class", key, data: { class: key, ...data } });
+  const prow = (klass, name, dflt) => ({ number: 300, tag_sha: "9".repeat(40), newest: 300, kind: "property", key: `${klass}/${name}`, data: { class: klass, parent: null, name, tier: "constitution", default: dflt, id: `the-town/${klass}-${name}` } });
+  const rows = [row("postmark-node", {}), row("mark", { extends: "postmark-node" }), row("sited", { extends: "mark" }), row("portal-ground", { extends: "sited" }),
+    row("vehicle", { extends: "portal-ground" }), prow("postmark-node", "makers", false), prow("sited", "makers", true), prow("portal-ground", "makers", false)];
+  await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : rows }) });
+  try {
+    await withStore(path, async () => {
+      const unknown = await worldApex({ do: "leave-mark", args: { kind: "no-such-kind", count: 2, to: "alpha" } }, KEY_ALPHA);
+      assert.equal(unknown.did, "leave-mark", JSON.stringify(unknown).slice(0, 300));
+      assert.match(String(unknown.defect), /no kind "no-such-kind" in the law/, "the kind door's own refusal, through the apex");
+      const vehicle = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha" } }, KEY_ALPHA);
+      assert.match(String(vehicle.defect), /"vehicle" is the town's to make/);
+      const own = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha", body: "mine" } }, KEY_ALPHA);
+      assert.match(String(own.defect), /carries no body/, "a count carries nothing of its own, said before the class law");
+    });
+  } finally { resetLawSnapshot(); }
+});
+
+// ── v2's PORCH LIGHTS (Darko 2026-10-17 20:35 EDT, "Recs are good": A) ──────
+// The v2 read lights the houses ITS blocks show — `you.within` and `view` —
+// by v1's rule, from the same one answer, with one `lit_unknown`; a v2 read
+// that shows no house asks for no activity and waits on nothing.
+const HOUSE_AT = { x: -950, y: -800 };   // alpha/quiet-parcel's own centre (the fixture above)
+const v2Lits = (r) => Object.fromEntries([
+  ...(r.you?.within ?? []),
+  ...Object.entries(r.view ?? {}).filter(([k]) => k !== "how").flatMap(([, rows]) => rows),
+].filter((o) => "lit" in o).map((o) => [o.id, o.lit]));
+
+test("v2 LIGHTS: a house in v2's view carries `lit` from ONE batch; a house you stand within carries it too; unknown is null with one lit_unknown; a v2 read showing no house asks nothing", async () => {
+  on();
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  await withSpyStore(async ({ asked, count }) => {
+    const r = await worldApex({ ...A, read_shape: "v2" }, null);
+    assert.ok(!r.error, JSON.stringify(r.error ?? r).slice(0, 300));
+    assert.equal(r.read_shape, "v2");
+    assert.equal(count(), 1, `a v2 read asked last-active ${count()} times`);
+    assert.deepEqual(v2Lits(r), { [HOUSE]: true }, "alpha-kin's act lights alpha's house in v2's view");
+    assert.ok(!("lit_unknown" in r), "a known light says nothing more");
+    assert.doesNotMatch(JSON.stringify(r), /"(hh|solo):|alpha-kin|"house_of"|"activity"/, "lit is all that rides");
+    // standing within the house: you.within carries it
+    asked.length = 0; resetActivityCache();
+    const inside = await worldApex({ x: HOUSE_AT.x, y: HOUSE_AT.y, read_shape: "v2" }, null);
+    const w = (inside.you?.within ?? []).find((m) => m.id === HOUSE);
+    assert.ok(w, `the house is in you.within: ${JSON.stringify(inside.you?.within?.map((m) => m.id))}`);
+    assert.equal(w.lit, true);
+    // a v2 read with no house in sight: no batch
+    asked.length = 0; resetActivityCache();
+    const far = await worldApex({ ...FAR, read_shape: "v2" }, null);
+    assert.ok(!far.error);
+    assert.equal(count(), 0, "a v2 read that shows no house asks for no activity");
+    assert.deepEqual(v2Lits(far), {});
+  });
+  // an unread store: null on the house, said once
+  resetActivityCache();
+  const unread = await worldApex({ ...A, read_shape: "v2" }, null);
+  assert.equal(v2Lits(unread)[HOUSE], null, "unknown, never dark");
+  assert.equal(typeof unread.lit_unknown, "string", "said once, at the top");
+  // ⚑ THE FLIP: drop `lit` from viewBlock (or v2's lightsFor) → red.
+});
+
+test("v2 LIGHTS · the deep reads: read: \"view\" carries its rows' lit and, when unknown, the one lit_unknown; read: \"who\" (and happened, happening) shows no house and asks for no activity", async () => {
+  on();
+  const { resetActivityCache } = await import("../src/household-activity.mjs");
+  await withSpyStore(async ({ asked, count }) => {
+    const who = await worldApex({ read: "who" }, KEY_ALPHA);
+    assert.ok(!who.error, JSON.stringify(who).slice(0, 300));
+    assert.equal(who.read, "who");
+    assert.equal(count(), 0, "a deep who asks for no activity, with alpha's house in sight");
+    for (const block of ["happened", "happening"]) {
+      asked.length = 0; resetActivityCache();
+      const r = await worldApex({ read: block }, KEY_ALPHA);
+      assert.ok(!r.error, `${block}: ${JSON.stringify(r).slice(0, 200)}`);
+      assert.equal(count(), 0, `a deep ${block} asks for no activity`);
+    }
+    asked.length = 0; resetActivityCache();
+    const view = await worldApex({ read: "view" }, KEY_ALPHA);
+    assert.equal(view.read, "view");
+    assert.equal(count(), 1, "the deep view lights its rows, in one batch");
+    assert.ok(!("lit_unknown" in view), "a known light says nothing more");
+  });
+  // an unread store: the deep view says so, once
+  resetActivityCache();
+  const slow = await worldApex({ read: "view" }, KEY_ALPHA);
+  const rows = Object.entries(slow.view ?? {}).filter(([k]) => k !== "how").flatMap(([, r]) => r);
+  assert.ok(rows.some((r) => r.lit === null), `a house in the deep view is unknown: ${JSON.stringify(rows.map((r) => [r.id, r.lit]))}`);
+  assert.equal(typeof slow.lit_unknown, "string", "the deep view carries lit_unknown");
 });

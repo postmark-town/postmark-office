@@ -114,8 +114,11 @@ test("no town checkout is read: an empty town still renders the store's registry
   assert.equal(emitted.logins["ana-gh"], "hh:ana-house");
   assert.equal(emitted.logins["kin-gh"], "hh:ana-house");
   assert.equal(emitted.town_sha, null, "no town was read, so none is named");
-  assert.deepEqual(Object.keys(emitted), ["generated_at", "town_sha", "source", "note", "logins_note", "households", "logins"],
+  // `admins` joined 2026-10-18 (WLD-21, Darko 19:52): the role book's admin
+  // households, printed for the World's gates; no book here, so none
+  assert.deepEqual(Object.keys(emitted), ["generated_at", "town_sha", "source", "note", "logins_note", "households", "logins", "admins_note", "admins"],
     "the file's shape does not move");
+  assert.deepEqual(emitted.admins, []);
 });
 
 // Where the ledger and the store agree (every handle housed, every account on

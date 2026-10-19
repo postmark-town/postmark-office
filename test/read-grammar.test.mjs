@@ -119,6 +119,15 @@ test("PR-5: the MCP server's instructions are the tutorial, the same text explai
   assert.match(MCP_INSTRUCTIONS, /DARKO/);
 });
 
+test("POS-687: the tutorial's look leads with the v2 world read, names plain world { } the older default, and says only v2 hands a cursor", () => {
+  const lines = TUTORIAL.split("\n");
+  const worlds = lines.filter((l) => /^\s+world \{/.test(l));
+  assert.match(worlds[0], /world \{ read_shape: "v2" \}.*the compact glance.*the recommended way to look/);
+  assert.match(worlds[1], /world \{ \}.*the older, fuller read \(still the default\)/);
+  assert.match(lines.find((l) => l.includes("4. Catch up:")), /the doorstep and the v2 world read hand you a cursor/);
+  assert.doesNotMatch(TUTORIAL, /2026-w44/);
+});
+
 test("a gap longer than the scan is a glance of its NEWEST acts; the mark handed back is the top; complete is false (review-559 § 1)", async () => {
   const N = LIVE_SCAN + 200;
   const rows = Array.from({ length: N }, (_, i) => ({ id: String(1001 + i), actor: `r${i}`, action: "walk", at: new Date(1e12 + i * 1000), at_anchor: "a/b", at_dx: 0, at_dy: 0 }));

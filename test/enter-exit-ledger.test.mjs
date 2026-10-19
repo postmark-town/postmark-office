@@ -56,7 +56,7 @@
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -70,6 +70,7 @@ import { CLASS_FRAME, CLASS_MOVE, readJournal } from "../src/world-journal.mjs";
 // this file, in the office's own row shape. Nothing below claims a door wrote
 // these rows. See test/journal-seed.mjs.
 import { seedJournalRow } from "./journal-seed.mjs";
+import { copyEngineFiles } from "./helpers/engine-closure.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import {
   LEDGER_NEW, LEDGER_OLD, LEDGER_FROZEN, DEPRECATED_DOOR, ledgerHeaderFrom,
@@ -522,7 +523,8 @@ test("AN UNREADABLE RECORD IS NAMED — it must not come back looking like an em
   const broken = await servedEnterExitLedger(repo, { env: RECORD_ON });
   assert.equal(broken.derived.incomplete, true, "a reading that could not reach the record must say so");
   assert.match(broken.derived.journal_unread, /FROZEN ERA ONLY/);
-  assert.match(broken.derived.journal_unread, /acts/, "and it must name what it could not read, not merely that it failed");
+  assert.match(broken.derived.journal_unread, /^the passage record could not be read \(the record did not answer\)/, "and it must name what it could not read, not merely that it failed");
+  assert.doesNotMatch(broken.derived.journal_unread, /relation|does not exist/, "in a plain reason, never the store's own words (POS-657)");
 
   // and the true-empty case must NOT be labelled incomplete, or the label means
   // nothing and every reader learns to ignore it. A record that ANSWERS and
@@ -637,7 +639,8 @@ test("END TO END through the real pen — crossing-exec writes, the mirror carri
   mkdirSync(join(clone, "WORLD"), { recursive: true });
   mkdirSync(join(clone, "tools"), { recursive: true });
   writeFileSync(join(clone, LEDGER_FROZEN), `${FROZEN_HEADER}${FROZEN_A}\n${FROZEN_B}\n`);
-  cpSync(join(WORLD_CLONE_FOR_TEST, GRAMMAR), join(clone, GRAMMAR));
+  // The grammar and what it imports (W2's enter-exit.mjs reads mark-kind.mjs).
+  copyEngineFiles(WORLD_CLONE_FOR_TEST, clone, [GRAMMAR.slice("tools/".length)]);
 
   const penDb = join(scratch, `pen-db-${n}.db`);
   const line = "- 2026-08-26T22:30:00.000Z · wright · enters wright/the-trueing-house · ferry 151.6 · word neutral";

@@ -22,10 +22,11 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { copyEngineFiles } from "./helpers/engine-closure.mjs";
 
 const SOURCE_WORLD = process.env.WORLD_CLONE;
 const SOURCE_ENGINE = SOURCE_WORLD ? join(SOURCE_WORLD, "tools", "world-engine.mjs") : null;
@@ -62,7 +63,9 @@ const PUBLISHED = [
   ...Object.values(MARKS),
 ];
 
-if (haveEngine) { mkdirSync(join(repo, "tools"), { recursive: true }); copyFileSync(SOURCE_ENGINE, join(repo, "tools", "world-engine.mjs")); }
+// The engine with what it imports (W2's world-engine.mjs reads ./mark-kind.mjs);
+// the stand-ins below are written after it, so they win over any real copy.
+if (haveEngine) copyEngineFiles(SOURCE_WORLD, repo, ["world-engine.mjs"]);
 put("tools/world-build.mjs", `export function assembleWorld({ worldState, skeleton }) { return { ...worldState, skeleton }; }\n`);
 put("tools/where-is.mjs", `
 export const NOWHERE = Object.freeze({ x: null, y: null, placed: false, source: null, mark_id: null });
@@ -319,14 +322,14 @@ test("UNKNOWN IS NAMED · a skeleton read as null, a season with no border the e
 
 test("THE HOUSEHOLD, SAID: a registry that should answer and cannot is unavailable; an office with no registry says the block covers the handle alone; a mark with no place is no ground", { skip }, async () => {
   assert.match((await householdMistsForecast("mira", { nowMs: at(300), deps: deps({ household: async () => null }) })).unavailable, /household registry could not be read/);
-  assert.match((await householdMistsForecast("mira", { nowMs: at(300), deps: deps({ household: async () => { throw new Error("store down"); } }) })).unavailable, /store down/);
+  assert.match((await householdMistsForecast("mira", { nowMs: at(300), deps: deps({ household: async () => { throw new Error("store down"); } }) })).unavailable, /the household registry could not be read \(the record did not answer\)/); // POS-657
   const solo = await householdMistsForecast("mira", { nowMs: at(300), deps: deps({ household: async (h) => ({ residents: [h], unasked: true }) }) });
   assert.equal(solo.household, "this office reads no household registry, so this covers mira's own marks only");
   assert.ok(!solo.reaches.some((r) => r.mark.startsWith("ola/")));
   const placeless = { id: "mira/a-thought", by: "mira", kind: "note", body: "no place" };
   const b = await householdMistsForecast("mira", { nowMs: at(300), deps: deps({ publishedMarks: () => [...PUBLISHED, placeless], ringOf: async (m) => (m.at ? groundRingOf(m) : null) }) });
   assert.ok(Array.isArray(b.reaches) && !b.unavailable, "a mark with no place on the map has no ground to reach: quiet, not a failure");
-  assert.match((await householdMistsForecast("mira", { nowMs: at(300), deps: deps({ ringOf: async (m) => { if (m.id === "ola/east-mill") throw new Error("dial unread"); return groundRingOf(m); } }) })).unavailable, /the ground of ola\/east-mill could not be read \(dial unread\)/);
+  assert.match((await householdMistsForecast("mira", { nowMs: at(300), deps: deps({ ringOf: async (m) => { if (m.id === "ola/east-mill") throw new Error("dial unread"); return groundRingOf(m); } }) })).unavailable, /the ground of ola\/east-mill could not be read \(the world's files could not be read\)/); // POS-657
 });
 
 // ── Bevel's second review (2026-10-13T06:18Z): footprints with no area ─────

@@ -189,8 +189,7 @@ export const sweepClaims = (odb) =>
 // the pins, per index. Everything else below, the harbor stamp included,
 // is still recomputed on every lookup, so it falls off the moment the
 // Registrar lands a handle ashore, exactly as before.
-// The index is office.db's or, with TOWN_INDEX_READS=store, the store's probe
-// (index-probe.mjs; its stamp is the store's head).
+// The index is the store's probe (index-probe.mjs; its stamp is the store's head).
 const loginIndexes = new WeakMap(); // probe -> { stamp, map }
 function loginIndex(db, pinnedHandles) {
   const ix = probeOf(db);
@@ -477,7 +476,14 @@ export async function berthLookup(odb, db, clone, token) {
   // household — the agent never fetches a new credential, its standing simply
   // grows. Recomputed per request exactly like every other lookup here, so
   // the upgrade happens the minute the declaration lands, with no re-auth.
-  if (row.cosigned_gh_id && db) {
+  //
+  // NOT GATED ON `db` (#3965). `householdFor` reads the store's pins and asks
+  // `probeOf(db)`, which answers the store's held probe for a null `db`, the
+  // same as every other lookup in this file. The gate dated from office.db;
+  // when POS-656 retired it, the server's resolver began passing null, the
+  // gate went false for every berth, and a co-signed berth answered
+  // berth-cosigned forever while its card told it to ask again.
+  if (row.cosigned_gh_id) {
     const hh = await householdFor(db, row.cosigned_gh_id, row.cosigned_gh_login);
     // A HARBOR household keeps the quay voice (berth + slug ride along, so
     // worldSay's berth branch speaks as berth-<slug>, label intact); a SETTLED

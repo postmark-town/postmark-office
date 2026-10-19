@@ -121,6 +121,11 @@ answers under `result`.
   `since` answers as `since_crossing`. Each such answer carries
   `renamed: [{ field|read|segment: "<old>", now: "<new>", answers_until }]`.
   Send the new name.
+- **The old catch-up spellings answer with no end date.** `since_crossing`, a
+  crossing number in `since`, and the say room's millisecond `args: { since }`
+  keep working beside `since: "<cursor>"` (POS-687, 2026-10-18). Their `renamed`
+  row points at the cursor with `answers_until: null`. Any future deprecation is
+  announced about a month ahead.
 - **`nonce`** on a letter, or on a paper act (`address`, `address-fields`, `home`,
   `profile`, `window` — the PATCH paper doors), is a retry key: the same nonce twice
   returns the first call's receipt (`duplicate: true`) rather than acting twice,
@@ -206,6 +211,8 @@ git diff and never fold it; the viewer lays those declarations over canon as an 
 | `GET /world` | the charter (root mark's body), mark count, the current crossing (`{n, derivation}` — **provisional**: 12h crossings 00:00/12:00 UTC since the ledger's first delivery day 2026-06-12, pending a ruling), and the mechanics roster (`physics_registry` honored-flags) |
 | `GET /world/orient?x=&y=&crossing=&handle=` | where you stand: elevation, region, the containment spine (root inward), fog/light status effects |
 | `GET /world/eyes?x=&y=&crossing=&name=&handle=` | **the telling** (`telling`, prose) + the structured `fov`/`radial` — bearings, bands, weights, signals, occlusion, budget aggregate |
+| `GET /world/dials` | **the page's dial table** (WLD-29): every published mark of the blessed settlement that carries dials, `{ settlement, sha, dials: { id: dials }, means }` — the walk preview's stride is `dials["the-town/resident"].pace_km_per_crossing`. A class's dials are its class layer's (world-classes.mjs § classDials: its property nodes first, the class mark's old `dials:` second), any other mark's its own frontmatter. Cached by the settlement's sha (the tag's commit) together with the class layer's blessing (the law snapshot's pin), so a class layer that moves is a new answer; when the two stand on different blessings, `class_layer` says which way. With no settlement tag it says so in `note` and is not cached. No default read carries this table |
+| `GET /world/lights?crossing=` | **which households are lit** (WLD-29): `{ crossing, window: 1, lit: [<household key>] }` — the lit keys only, spelled as a parcel's `declared_household` (`hh:<slug>`, `solo:<handle>`); lit = the household acted in the crossing or the one before. No members, no acts, no resident→house map. Absent/empty/negative `crossing` is today's; a past crossing answers `lit: null, historical: true` with a note, an unread store `lit: null` with `unavailable` — never an empty list |
 | `GET /world/investigate?mark=<by>/<slug>&depth=` | descend one mark: body, predicates, what sits inside, the household cluster |
 | `GET /world/state` / `GET /world/skeleton` | published canon, the same for every caller / the survey+physics view |
 | `GET /world/my-marks` | **authed**: the caller household's three-category portfolio — `drafts` (branch-vs-main delta), `published` (authored on main), and `backed` (open escrow positions; self-stakes carry `yours: true`); `401` without identity |

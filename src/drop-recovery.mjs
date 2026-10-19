@@ -443,7 +443,13 @@ const WITHDRAW_UNDO_SQL = `
 // withdrawal's to answer for: its deed after the undo, or a claim that still
 // stands (a draft has no deed, by law, so its claim is what says it exists).
 const LATER_DEED_SQL = `SELECT 1 FROM acts WHERE object = $1 AND class = 'mark' AND action IN ('leave-mark', 'amend') AND id > $2::bigint LIMIT 1`;
-const STANDING_CLAIM_SQL = `SELECT 1 FROM claims WHERE slug = $1 AND claimant = $2 AND status IN ('draft', 'pending', 'locked', 'held_review') LIMIT 1`;
+// A CLAIM THAT STILL STANDS: a draft, a pending claim, one the candle has
+// locked, or one held for review. A refused claim and a retracted one never
+// publish. ONE definition of "your draft" (POS-689, Darko 2026-10-18): the hold
+// door's in-house check reads this same set through `standingClaim`.
+export const STANDING_CLAIM_STATUSES = Object.freeze(["draft", "pending", "locked", "held_review"]);
+export const standingClaim = (row) => STANDING_CLAIM_STATUSES.includes(row?.status);
+const STANDING_CLAIM_SQL = `SELECT 1 FROM claims WHERE slug = $1 AND claimant = $2 AND status IN (${STANDING_CLAIM_STATUSES.map((s) => `'${s}'`).join(", ")}) LIMIT 1`;
 
 /**
  * A WITHDRAWAL ALREADY MADE, ASKED AGAIN: the undo this mark's own withdrawal

@@ -91,10 +91,13 @@ function wayTo(from, to, engine) {
   };
 }
 
+/** The creatures out of the Mists at `nowMs`: living, and spawned by then (a row the
+ *  tick wrote ahead of its arrival is not out yet). Every reader reads this one set. */
+const livingNow = (living, nowMs) => living.living(nowMs).filter((c) => c.spawned_at <= nowMs);
+
 /** The living creatures, nearest first, with where they stand from `at`. */
 function livingFrom(living, at, nowMs) {
-  return living.living(nowMs)
-    .filter((c) => c.spawned_at <= nowMs)
+  return livingNow(living, nowMs)
     .map((c) => ({ c, d: distanceM(at, c) }))
     .sort((a, b) => a.d - b.d);
 }
@@ -140,6 +143,7 @@ export function creatureHappening({ living, law }, at, { nowMs = Date.now(), eng
   const rows = [];
   const heard = [];
   for (const c of living.byId.values()) {
+    if (!(c.spawned_at <= nowMs)) continue; // not out yet: the tick wrote it ahead (livingNow)
     if (distanceM(here, c) > dial("emission_m")) continue;
     for (const r of c.reactions) {
       if (!(nowMs - r.at <= dial("emission_ms")) || r.at > nowMs) continue;
@@ -173,7 +177,7 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
   if (!words || !living || !lawReady(law)) return null;
   const here = point(at);
   const every = words === "creature" || words === "creatures";
-  const hits = (here ? livingFrom(living, here, nowMs) : living.living(nowMs).map((c) => ({ c, d: null })))
+  const hits = (here ? livingFrom(living, here, nowMs) : livingNow(living, nowMs).map((c) => ({ c, d: null })))
     .filter(({ c }) => {
       if (every) return true;
       const name = String(law.kindOf(c.kind)?.name ?? "").toLowerCase();
@@ -212,6 +216,7 @@ export function creatureToYou({ living, law }, handle, { sinceMs, nowMs = Date.n
   if (!handle || !living || !lawReady(law)) return { events: [], readable: true };
   const events = [];
   for (const c of living.byId.values()) {
+    if (!(c.spawned_at <= nowMs)) continue; // not out yet: the tick wrote it ahead (livingNow)
     const mine = c.reactions.filter((r) => r.to === handle && r.at > sinceMs && r.at <= nowMs && reactionOf(law, c, r.reaction));
     if (!mine.length) continue;
     const r = mine.reduce((a, b) => (b.at >= a.at ? b : a));
@@ -262,8 +267,12 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
   const { living, law } = creatures ?? {};
   if (!living || !lawReady(law))
     return { kind: "creature", id, unavailable: "the creatures' law cannot be read at this office's blessed ref, so no creature can be looked at" };
-  const c = living.byId.get(id);
-  const snap = await Promise.resolve(saved(id)).catch(() => null);
+  // a row the tick wrote ahead of its arrival is not out yet, so it is not here to look at (livingNow)
+  const held = living.byId.get(id);
+  const c = held && held.spawned_at <= nowMs ? held : null;
+  // and the save's row by the same rule: one the save carries ahead of now is not out yet either
+  const saving = await Promise.resolve(saved(id)).catch(() => null);
+  const snap = saving && !(msOf(saving.row?.spawned_at) > nowMs) ? saving : null;
   if (!c && !snap)
     return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };
   const kind = c ? law.kindOf(c.kind) : null;

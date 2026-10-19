@@ -20,6 +20,9 @@ import { stockedOnTick, chestsAfterCarried } from "../world2/tools/settlements-b
 import { chestRoomGuard, CHEST_LOCK_SQL, chestLockKey } from "../src/chest-lock.mjs";
 import { foldUnits, totalOf, edgesOf, UNIT_ACTION } from "../src/world-stacks.mjs";
 
+// WLD-27's doors ship dark by default (src/chests-candy.mjs); these are their own tests, so they run with them open.
+process.env.WORLD_CHESTS_CANDY = "1";
+
 const store = await startStore({ db: "chest_stock_test" });
 after(() => store.stop());
 const skip = store.skip ?? false;

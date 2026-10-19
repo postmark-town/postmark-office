@@ -26,16 +26,16 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { fixtureDb } from "./fixture.mjs";
+import { putValues, fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { plantStanding, standingStoreFor } from "./helpers/standing-rows.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 
 // The town index this file's offices read: a store seeded from each fixture
-// office.db (POS-268, office-under-test.mjs). Stopped when the file is done.
+// town (POS-268, office-under-test.mjs). Stopped when the file is done.
 const STORES = [];
-const storeFor = async (dbPath) => { const x = await indexStore(dbPath); STORES.push(x); return x; };
+const storeFor = async (town) => { const x = await indexStore(town); STORES.push(x); return x; };
 test.after(async () => { for (const x of STORES) await x.stop(); });
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -81,21 +81,20 @@ const OAUTH_DB = { path: null };   // the ledger is re-read from disk per reques
 
 before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "postmark-office-claim-"));
-  const dbPath = join(tmp, "fixture.db");
-  const seed = fixtureDb(dbPath);
-  seed.prepare("INSERT INTO residents VALUES (?, ?)").run(HANDLE2, JSON.stringify({
+  const seed = fixtureTown();
+  putValues(seed, "residents", [HANDLE2, JSON.stringify({
     handle: HANDLE2, is_office: false, last_active: null,
     address: { data: { since: "2026-08-01", joined: "2026-08-01", github: OWNER.login }, body: `# ${HANDLE2}` },
-  }));
-  seed.prepare("INSERT INTO residents VALUES (?, ?)").run(HANDLE5, JSON.stringify({
+  })]);
+  putValues(seed, "residents", [HANDLE5, JSON.stringify({
     handle: HANDLE5, is_office: false, last_active: null,
     address: { data: { since: "2026-08-01", github: FIFTH.login }, body: `# ${HANDLE5}` },
-  }));
-  seed.prepare("INSERT INTO residents VALUES (?, ?)").run(HANDLE4, JSON.stringify({
+  })]);
+  putValues(seed, "residents", [HANDLE4, JSON.stringify({
     handle: HANDLE4, is_office: false, last_active: null,
     address: { data: { since: "2026-08-01", github: "fourth-keeper" }, body: `# ${HANDLE4}` },
-  }));
-  seed.prepare("INSERT INTO residents VALUES (?, ?)").run(HANDLE3, JSON.stringify({
+  })]);
+  putValues(seed, "residents", [HANDLE3, JSON.stringify({
     handle: HANDLE3, is_office: false, last_active: null,
     // A DIFFERENT ACCOUNT ON PURPOSE. householdFor falls back to the residents
     // index's own `github:` line for unpinned handles, so giving this one the
@@ -104,9 +103,8 @@ before(async () => {
     // about. Standing is per-handle and cares nothing for the household, so
     // the quarantine test works just as well from a house of its own.
     address: { data: { since: "2026-08-01", github: "third-keeper" }, body: `# ${HANDLE3}` },
-  }));
-  seed.close();
-  const IX = await storeFor(dbPath);
+  })]);
+  const IX = await storeFor(seed);
   const IX_ENV = IX.env;
   const LEDGER = await standingStoreFor(IX);
   STORES.push(LEDGER);
@@ -150,7 +148,7 @@ before(async () => {
   GH_PORT = ghServer.address().port;
 
   ({ child, port: PORT } = await bootOnFreePort((port) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(port),
-    "--db", dbPath, "--oauth-db", seedStaticKeys((OAUTH_DB.path = join(tmp, "oauth.db")), `${KEY}=keemin:${HANDLE}`)], {
+    "--oauth-db", seedStaticKeys((OAUTH_DB.path = join(tmp, "oauth.db")), `${KEY}=keemin:${HANDLE}`)], {
     env: {
       ...process.env, WORLD_GRAPH_NONE: "1", ...IX_ENV,
       TOWN_CLONE: clone, TOWN_PUSH: "",

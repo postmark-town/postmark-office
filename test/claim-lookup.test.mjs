@@ -30,7 +30,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fixtureDb } from "./fixture.mjs";
+import { fixtureTown, putValues } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { openOauthDb, claimLookup, householdFor, mintClaim, cosignClaim, claimByAsk } from "../src/oauth.mjs";
 
@@ -45,14 +45,15 @@ async function grant(odb, ask, who) {
 }
 
 // Each bench's doors run in this process and read their town index from a store
-// seeded from the bench's own office.db (POS-268, office-under-test.mjs).
+// seeded from the bench's own fixture town (POS-268, office-under-test.mjs). The
+// checks are handed no index (null): they ask the store's held probe.
 async function bench() {
   const tmp = mkdtempSync(join(tmpdir(), "postmark-claim-lookup-"));
-  const db = fixtureDb(join(tmp, "fixture.db"));
-  db.prepare("INSERT INTO residents VALUES (?, ?)").run("other-resident", JSON.stringify({
+  const db = fixtureTown();
+  putValues(db, "residents", ["other-resident", JSON.stringify({
     handle: "other-resident", is_office: false, last_active: null,
     address: { data: { since: "2026-08-01", github: OTHER.login }, body: "# other-resident" },
-  }));
+  })]);
   const clone = join(tmp, "town-clone");
   mkdirSync(join(clone, "tools"), { recursive: true });
   const odb = openOauthDb(join(tmp, "oauth.db"));
@@ -65,7 +66,7 @@ async function bench() {
     "other-resident": { login: OTHER.login, id: OTHER.id, pinned: "2026-08-01" },
   });
   const unrecord = await recordInProcess(ix.store);
-  return { tmp, db, odb, clone, store: ix.store, done: async () => { await unrecord(); await restore(); await ix.stop(); db.close(); odb.close(); rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } };
+  return { tmp, odb, clone, store: ix.store, done: async () => { await unrecord(); await restore(); await ix.stop(); odb.close(); rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } };
 }
 
 test("THE BINDING: a claim co-signed by a real household that does not hold the handle resolves to nothing", async () => {
@@ -79,11 +80,11 @@ test("THE BINDING: a claim co-signed by a real household that does not hold the 
     await grant(b.odb, ask, OTHER);
 
     // the co-signer is nobody's stranger — householdFor genuinely answers for them
-    const theirs = await householdFor(b.db, OTHER.id, OTHER.login);
+    const theirs = await householdFor(null, OTHER.id, OTHER.login);
     assert.ok(theirs, "the wrong co-signer really does keep a household (or this test proves nothing)");
     assert.ok(!theirs.handles.has("wright"), "and it is not the claimed handle's");
 
-    assert.equal((await claimLookup(b.odb, b.db, b.clone, key)), null,
+    assert.equal((await claimLookup(b.odb, null, b.clone, key)), null,
       "a co-sign by the wrong household must not resolve the claim");
   } finally { await b.done(); }
 });
@@ -93,7 +94,7 @@ test("THE BINDING, the other way: the right household's co-sign does resolve it"
   try {
     const { key, ask } = (await mintClaim(b.odb, "wright"));
     await grant(b.odb, ask, OWNER);
-    const resolved = (await claimLookup(b.odb, b.db, b.clone, key));
+    const resolved = (await claimLookup(b.odb, null, b.clone, key));
     assert.ok(resolved, "the household the record binds resolves the claim");
     assert.equal(resolved.keyKind, "claim");
     assert.equal(resolved.heldBy, "resident");
@@ -106,15 +107,15 @@ test("THE CO-SIGN GATE leans on householdFor answering null for no account — a
   const b = await bench();
   try {
     const { key } = (await mintClaim(b.odb, "wright"));
-    assert.equal((await claimLookup(b.odb, b.db, b.clone, key)), null, "an un-co-signed claim resolves to nothing");
+    assert.equal((await claimLookup(b.odb, null, b.clone, key)), null, "an un-co-signed claim resolves to nothing");
 
     // The guard above it (`!row.cosigned_gh_id`) cannot be driven false, because
     // there is no reachable row with a household and no co-signer. What keeps an
     // un-co-signed claim dead if that guard were ever removed is THIS, and it is
     // a promise another function makes:
-    assert.equal(await householdFor(b.db, null, null), null,
+    assert.equal(await householdFor(null, null, null), null,
       "no account resolves to no household — the day this returns something, an un-co-signed claim goes live");
-    assert.equal(await householdFor(b.db, undefined, ""), null);
+    assert.equal(await householdFor(null, undefined, ""), null);
   } finally { await b.done(); }
 });
 
@@ -136,10 +137,10 @@ test("THE NULL-ID PIN: the record refuses the pin that would make householdFor a
       seedRegistry(b.store, null, { wright: { login: OWNER.login, id: null, pinned: "2026-09-08" } }),
       /null value in column "gh_id"/,
       "the store refuses a pin with no id — the hazard cannot be written into the record sign-in reads");
-    assert.equal(await householdFor(b.db, null, null), null, "so no account still resolves to no household");
+    assert.equal(await householdFor(null, null, null), null, "so no account still resolves to no household");
 
     const { key } = (await mintClaim(b.odb, "wright"));
-    assert.equal((await claimLookup(b.odb, b.db, b.clone, key)), null,
+    assert.equal((await claimLookup(b.odb, null, b.clone, key)), null,
       "and the co-sign gate keeps the un-co-signed claim dead — it is load-bearing, not decorative");
   } finally { await b.done(); }
 });
@@ -147,8 +148,8 @@ test("THE NULL-ID PIN: the record refuses the pin that would make householdFor a
 test("a token that is not a claim is not this lookup's to answer", async () => {
   const b = await bench();
   try {
-    assert.equal((await claimLookup(b.odb, b.db, b.clone, "pmk_not-a-claim")), null);
-    assert.equal((await claimLookup(b.odb, b.db, b.clone, "pmb_not-a-claim")), null);
+    assert.equal((await claimLookup(b.odb, null, b.clone, "pmk_not-a-claim")), null);
+    assert.equal((await claimLookup(b.odb, null, b.clone, "pmb_not-a-claim")), null);
   } finally { await b.done(); }
 });
 
@@ -157,9 +158,9 @@ test("an expired claim is dead even after a co-sign", async () => {
   try {
     const { key, ask } = (await mintClaim(b.odb, "wright"));
     await grant(b.odb, ask, OWNER);
-    assert.ok((await claimLookup(b.odb, b.db, b.clone, key)), "live first");
+    assert.ok((await claimLookup(b.odb, null, b.clone, key)), "live first");
     b.odb.prepare("UPDATE key_claims SET expires = ? WHERE handle = ?").run(1, "wright");
-    assert.equal((await claimLookup(b.odb, b.db, b.clone, key)), null, "and dead once its clock runs out");
+    assert.equal((await claimLookup(b.odb, null, b.clone, key)), null, "and dead once its clock runs out");
   } finally { await b.done(); }
 });
 

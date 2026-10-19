@@ -19,13 +19,12 @@
 //   do:   "stake"   the pot-mode stake write.
 //   do:   "fund-verify"  a tx hash becomes a witnessed receipt, or a refusal.
 //
-// NOTHING HERE FORKS A DERIVATION. stampsDetail, questBoardFor and potBoard are
-// the office's existing reads; fundVerifyViaOffice is fund.mjs's eight-guard
+// NOTHING HERE FORKS A DERIVATION. stampsDetail, the quest board and potBoard are
+// the town index's existing reads (town-index-store.mjs); fundVerifyViaOffice is fund.mjs's eight-guard
 // implementation, wrapped and never reimplemented. Where this file computes at
 // all, it computes only the things no existing read computes: the estate roll-up
 // and the escrow split.
 
-import { potBoard, officeIndex, withGivers } from "./queries.mjs";
 
 // A store the switched index cannot reach is the door's 503, never a quiet null
 // in one section of an answer: these reads' own catches (a board that trips, an
@@ -111,10 +110,9 @@ export function escrowDetail({ total, byHandle, handle }) {
 
 // ── tenant 1 · the estate ────────────────────────────────────────────────────
 //
-// `ix` is the index the reads answer from: office.db's by default
-// (queries.officeIndex), or the store's (town-index-store.mjs § storeIndex) when
-// the door is switched to TOWN_INDEX_READS=store. The same three methods either way.
-export async function estateRead(key, { db, meta, clone, ix = officeIndex(db, meta, clone) }) {
+// `ix` is the index the reads answer from: the store's (town-index-store.mjs
+// § storeIndex, or the door's storeIndexPooled).
+export async function estateRead(key, { clone, ix }) {
   const handles = ownHandles(key);
   if (!handles.length) {
     return bounce(403, "the estate is your household's own books",
@@ -205,7 +203,7 @@ export async function estateRead(key, { db, meta, clone, ix = officeIndex(db, me
 //
 // SO IT TAKES A HANDLE, not a key. The type change is the guard: there is no
 // longer a key here to pick a resident out of, so the guess cannot grow back.
-export async function questsRead(handle, { db, meta, clone, ix = officeIndex(db, meta, clone) }) {
+export async function questsRead(handle, { ix }) {
   let board = null;
   if (handle) { try { board = await ix.questBoard(handle); } catch (e) { if (unreachable(e)) throw e; board = null; } }
   // The pots are the town's, not yours, so they answer with or without a key.
@@ -371,13 +369,7 @@ export function publishedClose(p) {
 //
 // A pot that is not open carries no money moment at all — the same gate the
 // site's /fund/<pot> page keeps.
-export async function fundRead(_key, { db, stripeUrl = process.env.FUND_STRIPE_URL ?? null } = {}) {
-  let list = [];
-  try { list = potBoard(db)?.list ?? []; } catch { list = []; }
-  return fundReadOf((await withGivers({ list }))?.list ?? list, { stripeUrl });
-}
-
-/** fundRead's answer from the pot board's list (office.db's, or the store's). */
+/** The money moment's answer from the pot board's list (the store's). */
 export function fundReadOf(list, { stripeUrl = process.env.FUND_STRIPE_URL ?? null } = {}) {
   // THE MAP IS READ ONCE, THE DISCLOSURE PER POT. Since 2026-08-25 the address
   // is no longer one string for the whole answer: a pot with its own mapped

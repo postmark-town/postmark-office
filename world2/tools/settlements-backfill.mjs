@@ -251,6 +251,8 @@ export const SOFT_STEP_RULES = Object.freeze({
     [/^not stocked — the law at S\d+ declares no chest class, and S\d+'s law is not ingested yet/, "refused prereq:law"],
     [/^not stocked — the store holds no settlement whose law is ingested/, "refused prereq:law"],
     [/^not stocked this tick — the carried step did not settle/, "refused prereq:carried"],
+    // the doors ship dark (src/chests-candy.mjs): a switch, not a failure, so the roll-call stays quiet
+    [/^not stocked — chests and candy are off at this office/, "ok switch-off"],
   ],
   drops: [[/ · \d+ failed \(/, "refused write-failed"], [/^restored \d+/, "ok"]],
 });
@@ -286,7 +288,10 @@ export async function amendsOnTick(client, repo, { record = recordAmendsCarried 
  * settlement rows already committed; a store without the unit acts or the law
  * says so. An unstocked chest is a line, not a failure.
  */
-export async function stockedOnTick(client, { stock = stockChests, crossing = currentCrossing } = {}) {
+export async function stockedOnTick(client, { stock = stockChests, crossing = currentCrossing, on = null } = {}) {
+  // dark by default (src/chests-candy.mjs): the first stock writes nothing
+  const open = on ?? (await import("../../src/chests-candy.mjs")).chestsCandyOn();
+  if (!open) return { verdict: "ok", line: "chests: not stocked — chests and candy are off at this office (WORLD_CHESTS_CANDY unset)" };
   try {
     const r = await stock(client, { crossing: crossing() });
     return { verdict: "ok", line: r.line, result: r };

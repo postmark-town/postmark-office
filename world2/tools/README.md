@@ -1936,7 +1936,7 @@ sqlite.
 | `/world2/walks[?since=][&last=]` | every departure the record holds, in the ledger's grammar | `WORLD/walk-ledger.md` (the site's one still-baked record) |
 | `/world2/positions[?at=]` | every walker's derived position at one instant | `walk.mjs positionsAt` |
 | `/world2/present[?at=][&x=&y=&radius=&limit=]` | every PLACED resident: a walk, else ground, else the porch | `GET /world/present` · `world_walkers` |
-| `/world2/say?at=&x=&y=[&radius=&mode=]` | what is still in the air, and what reaches this point | `presentEmissions` |
+| `/world2/say?at=&x=&y=[&radius=&mode=]` | what is still hearable (said since the last settlement, POS-226 · POS-693), and what reaches this point | `voices.mjs` hearing (`hearing-window.mjs § hearable`) |
 | `/world2/occupancy[?handle=]` | the containment stack, and who is inside each mark | `world_occupancy` |
 
 Keyless, like the rest of this tier and like 1.0's own: `world_walkers` is in

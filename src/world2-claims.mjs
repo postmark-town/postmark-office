@@ -508,7 +508,8 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
       // ring. The door has already derived it; this holds the store to the same
       // arithmetic for any row that reaches the pen another way. A claim that
       // already agrees within the lint's 0.5 m keeps its numbers byte for byte.
-      const derive = placed && points && payload.kind === "sited" && ringOf(points) && !ringAgrees({ at: sentAt, extent: sentExtent }, points);
+      // Every placed mark but a parcel (whose box is the town's dial) is sited, in either form: `kind: thing` included.
+      const derive = placed && points && payload.kind !== "parcel" && ringOf(points) && !ringAgrees({ at: sentAt, extent: sentExtent }, points);
       const { at, extent } = derive ? ringBox(points) : { at: sentAt, extent: sentExtent };
       const geometry = placed ? { slug, at, extent, ...(points ? { points } : {}) } : { slug };
       const bbox = placed ? boxOf(at, extent) : null;
