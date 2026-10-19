@@ -67,7 +67,8 @@ const windowOf = (row) => (row?.crossing == null || !Number.isFinite(Number(row.
  * What the settlement prints this clearing. PURE.
  *
  * @param attachments  the hold rows up to the cutoff, in replay order (last wins)
- * @param drops        `Map(thing → its latest drop act row)` (acts columns)
+ * @param drops        `Map(thing → its latest drop row)`, as guard-reads § pgHoldingRows gives it
+ *                     (`seq` the act id, `at` the witnessed line `{ anchor, dx, dy }`)
  * @param rows         the standing `marks` rows
  * @param from         the first printing clearing's cutoff, or null when none has printed yet
  * @returns `{ prints: [{ slug, row, geometry, data, why }], notes: [string] }`
@@ -99,7 +100,7 @@ export function holdPrintout({ attachments = [], drops = new Map(), rows = [], f
     const legacy = from == null || actIdOf(hold) <= from;
     if (legacy) continue; // the POS-138 era: D2 leaves it alone
     const drop = drops.get(slug) ?? null;
-    const at = drop ? composeAnchor({ anchor: drop.at_anchor, dx: drop.at_dx, dy: drop.at_dy }, centreOf) : null;
+    const at = drop ? composeAnchor(drop.at ?? {}, centreOf) : null;
     if (!at) { notes.push(`${slug}: its set-down could not be placed (the drop's witnessed line does not compose)`); continue; }
     if (!heldBy(row.data) && sameAt(row.geometry?.at, at)) continue; // canon has it there already
     const dropWindow = windowOf(drop);
@@ -129,7 +130,7 @@ export async function writeHoldThrough(q, { windowId, materialize, houseOrRefusa
   const atts = (await pgAttachmentsFor(client, {})).rows.filter((r) => actIdOf(r) <= through);
   const holding = await pgHoldingRows(client, {});
   const drops = new Map();
-  for (const r of holding) if (r.action === "drop" && Number(r.id) <= through) drops.set(String(r.object ?? r.payload?.thing), r);
+  for (const r of holding) if (r.action === "drop" && Number(r.seq) <= through) drops.set(String(r.object ?? r.payload?.thing), r);
   const { rows } = await q(STANDING_ROWS_SQL, []);
   const plan = holdPrintout({ attachments: atts, drops, rows, from });
   const printed = [];

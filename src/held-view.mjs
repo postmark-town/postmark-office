@@ -54,3 +54,36 @@ export async function heldView() {
 
 /** Tests only: forget the kept cutoff and places. */
 export function __resetHeldViewForTest() { kept = { key: null, at: 0, from: null, through: null, placed: new Map() }; }
+
+/**
+ * The same view, read from ONE STORE the caller names (the store twin's pool,
+ * world2-serve.mjs): its hold rows, its cutoffs and its places, never the
+ * office's own store. The twin answers from the pool it is handed, and the
+ * hold record is part of that answer. `null` when the store cannot say.
+ */
+export async function heldViewFrom(p, { markRows = null } = {}) {
+  if (!p) return null;
+  try {
+    const [port, { composeAnchor }, { placedCentreOfRow }] = await Promise.all([
+      import("../world2/tools/guard-reads.mjs"), import("./world-journal.mjs"), import("./held.mjs"),
+    ]);
+    const client = { query: (text, args) => p.query(text, args) };
+    const [atts, holding, cut, rows] = await Promise.all([
+      port.pgAttachmentsFor(client, {}), port.pgHoldingRows(client, {}),
+      p.query(HOLD_THROUGH_SQL).then((r) => r.rows ?? r).catch(() => []),
+      // the caller's own read of the rows when it has one: the twin reads `marks` once per answer
+      markRows ?? p.query("SELECT slug, geometry, data FROM marks WHERE status = 'standing'").then((r) => r.rows ?? r),
+    ]);
+    const bySlug = new Map((rows ?? []).map((r) => [String(r.slug), r]));
+    const drops = new Map();
+    for (const r of holding) if (r.action === "drop" && r.object != null) drops.set(String(r.object), r);
+    const places = new Map();
+    for (const [id, r] of drops) {
+      const at = composeAnchor(r.at ?? {}, (mid) => placedCentreOfRow(bySlug.get(String(mid)) ?? null));
+      if (at) places.set(id, at);
+    }
+    const placed = new Map([...bySlug].map(([s, r]) => [s, (typeof r.data === "string" ? JSON.parse(r.data) : r.data)?.[PLACED]]).filter(([, v]) => v));
+    const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+    return viewOf({ record: { attachments: atts.rows ?? [], drops, places }, from: num(cut?.[0]?.from), through: num(cut?.[0]?.through), placed });
+  } catch { return null; }
+}

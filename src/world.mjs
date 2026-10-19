@@ -200,9 +200,10 @@ async function world() {
 // `worldMarkById` (the take door, the hold reads) and in the store twin, so every
 // reader of a thing's place asks one owner. A hold record that cannot be read is
 // no overlay: canon's record, as before.
-export async function heldPlaced(w) {
-  const [{ heldView }, { unplaceHeld }] = await Promise.all([import("./held-view.mjs"), import("./held.mjs")]);
-  return unplaceHeld(w, await heldView());
+// `pool`: the store twin's own store (world2-serve.mjs), whose hold record is its answer's, never the office's.
+export async function heldPlaced(w, { pool = null, markRows = null } = {}) {
+  const [{ heldView, heldViewFrom }, { unplaceHeld }] = await Promise.all([import("./held-view.mjs"), import("./held.mjs")]);
+  return unplaceHeld(w, await (pool ? heldViewFrom(pool, { markRows }) : heldView()));
 }
 
 // ── WHAT THIS STANDPOINT SEES INSIDE A DUNGEON (WLD-5, Darko 2026-10-13 20:31) ──
