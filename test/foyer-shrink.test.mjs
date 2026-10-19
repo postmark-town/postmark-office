@@ -1077,6 +1077,22 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //      The tenth note's rule stands: a PR that moves the pin re-captures here.
   // The golden's bytes are unchanged (full 24984, slim 22546).
   //
+  // ⚠ AND RE-CAPTURED AN EIGHTEENTH TIME, 2026-10-19 (lane plumb-exitlock, WLD-5 A,
+  // the exit lock), because the PR moved the world pin, daef8487 -> 2ca8291a (the
+  // head of postmark-world#249, on the doors stack #231/#233 over main bccecc66),
+  // as the tenth note says a pin move must. The code was cleared first: at this
+  // PR's head on CI-shaped clones at the OLD pin (suite-clones.sh's fetch, world
+  // daef8487, town 5efee017), F7c5 is green, byte-exact. Then the diff, leaf by
+  // leaf at the new pin BEFORE the capture: 1117 -> 1127 paths, 2 removed, 12
+  // added, 92 changed, and NOT ONE outside `stances`, the world's own data at the
+  // pin: `stances_awaiting` 61 -> 63, newer marks head the five rows
+  // (little-bird/a-page-torn-from-no-notes, seth/seths-folly) and their
+  // `on_your_ground` lists move with them. (This lane's office changes touch no
+  // doorstep segment: the exit act's lock fields, the enter door's lock read.)
+  //
+  //   full  24984 -> 25000 (+16) = stances +16
+  //   slim  22546 -> 22562 (+16) = stances +16
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,

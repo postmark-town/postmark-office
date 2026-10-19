@@ -106,7 +106,7 @@ async function locksInForce(who, w, verbs, judgedMs, deps) {
   try { rows = await deps.dungeonLocks(who); }
   catch (e) {
     throw bounce(503, "the office could not check whether you may enter this dungeon again, so nothing was recorded",
-      `leaving a dungeon by exit closes it to you until the next settlement, and that record could not be read just now (${plainReason(e, "read", "the exit record")}). Try again in a minute`);
+      `leaving a dungeon by exit closes it to you until the next settlement, and that record could not be read just now (${plainReason(e, "record", "the exit record")}). Try again in a minute`);
   }
   const live = {};
   for (const r of rows ?? []) {
