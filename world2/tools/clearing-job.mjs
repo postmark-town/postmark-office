@@ -75,6 +75,8 @@ import { CLEARING_TAKES_THE_CANDLE } from "./candle-lock.mjs";
 import { carryPlan, carrySentence } from "./carry.mjs";
 import { boxOf } from "./seed-import.mjs";
 import { checkDroppedUnits } from "./drop-provenance.mjs";
+// THE HOLD WRITE-THROUGH (POS-688): a held thing is printed unplaced, a drop at a fresh at. See step 6.2.
+import { writeHoldThrough } from "./hold-through.mjs";
 import { OVERLAP } from "./overlap.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -721,6 +723,20 @@ try {
   }
   for (const u of unfiled) console.log(`  ⚑ refused alone: ${u.slug} — ${u.check}`);
 
+  // 6.2 · THE HOLD WRITE-THROUGH (POS-688, Darko 2026-10-18 20:58; W1 a). A held
+  //     thing is published but unplaced: printed with `held_by` and no at/extent,
+  //     and a drop prints a fresh at where the dropper stood. The hold record is
+  //     written through as claims of its own, after every claim and move above has
+  //     filed (so it is compared with the rows as this window leaves them), each
+  //     under its own savepoint: one the store refuses is a note, never the window.
+  //     hold-through.mjs carries the law and the cases it never prints.
+  const held = await writeHoldThrough(q, {
+    windowId, houseOrRefusal, boxOf: (g) => boxOf(g.at, g.extent),
+    materialize: ({ claims, amends, refuseEach }) => materializeClaims(q, { claims, amends, windowId, label: `window ${windowId} hold write-through`, refuseEach }),
+  });
+  for (const h of held.printed) console.log(`  ⚑ hold: ${h.slug} — ${h.why}`);
+  for (const n of held.notes) console.log(`  ⚑ hold, not printed: ${n}`);
+
   // The docket's statuses, written once every claim and every move has settled.
   const sixCount = { locked: 0, refused: 0, held_review: 0, retracted_before_close: 0, pending_carried: 0 };
   for (const c of pending) {
@@ -840,6 +856,11 @@ try {
       // THE CARRY's own account (POS-441): each move, what it carried and what of
       // other households' stayed — the one act, its riders named on the record.
       ...(carriedMoves.length ? { carried: carriedMoves } : {}),
+      // THE HOLD WRITE-THROUGH's own account (POS-688): the cutoff the reads place
+      // things by (held.mjs § placeOf), what this window printed, and what it would not.
+      ...(held.hold_through != null ? { hold_through: held.hold_through } : {}),
+      ...(held.printed.length ? { hold_printed: held.printed } : {}),
+      ...(held.notes.length ? { hold_not_printed: held.notes } : {}),
       // The seal's own account: which snapshot this window wrote.
       snapshot: { id: sealed.id, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
       standing: {
