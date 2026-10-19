@@ -111,6 +111,7 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // here was reachable: the resident class grants no `subscribe`, `gather` or
 // `hand-to-human`, so no resident could open these doors on any day they stood.
 import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.mjs";
+import { termsId, termsOnce } from "./terms-seen.mjs"; // POS-697 G5a: the law you were shown, named on a repeat act
 import { onlyUsable, canOn, viewMarkIds } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
@@ -1870,6 +1871,8 @@ export function buildTerms({ affording, spine, means = null }) {
     ...(dropped ? { dropped, truncated: true } : {}),
     ...(used > TERMS_BUDGET_CHARS ? { over_budget: true } : {}),
   };
+  // the settled law's id (POS-697 G5a): what a repeat act names instead of re-printing it
+  terms.id = termsId(terms);
   return terms;
 }
 
@@ -3187,7 +3190,7 @@ async function apexDo(args, key, ctx = {}) {
     // shown, and being shown it is what the resident is owed whether or not the
     // act landed. The flat write verbs THROW their bounces; the apex catches so
     // that promise holds on the failing path too.
-    const { do: _dropped, telling: _t, args: _envelope, ...rest } = args;
+    const { do: _dropped, telling: _t, args: _envelope, read_shape: _shape, ...rest } = args;
     const fields = toFlatFields(action, envelope ? { ...rest, ...envelope } : rest);
     // ── THE RETRY KEY (POS-246) ──────────────────────────────────────────────
     // A door field: taken off before the handler sees its fields, and kept by
@@ -3894,7 +3897,14 @@ async function worldApexAnswer(args, key, ctx) {
       "world { find: \"snug\", find_offset: 10 } — the offset is the previous answer's found.next_offset");
   }
   if (reading) return apexReadAction(args, key, ctx);
-  if (doing) return apexDo(args, key, ctx);
+  if (doing) {
+    // POS-697 G5a: a v2 caller is shown each body of law whole once, then by
+    // name (terms-seen.mjs); a read: card always carries it whole.
+    const done = await apexDo(args, key, ctx);
+    if ((args.read_shape ?? ctx.readShape) !== "v2" || !done?.terms?.id) return done;
+    const who = standingHandle(args, key);
+    return { ...done, terms: termsOnce(who ? `${args.as === "human" ? "human:" : ""}${who}` : null, done.terms, String(args.do)) };
+  }
   // POS-632: v2's own two words. `diagnostics` is v2's (v1 carries them always),
   // and v2 says each act in one line, so a cards: dial has nothing to size.
   const v2Asked = (args.read_shape ?? ctx.readShape) === "v2";
