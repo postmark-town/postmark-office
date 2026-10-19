@@ -260,6 +260,7 @@ export const HOLD_TOOLS = [
       act: { type: "string", enum: ["consume", "refill"], description: "consume: use up ONE held consumable unit (name label: when you hold several), or name thing: to consume a set-down unit where it stands. refill: the creator of a candy label tops a chest up to its capacity with their own label (name chest:)" },
       chest: { type: "string", description: "with act: \"refill\" — the chest's id, <by>/<slug>" },
       handle: { type: "string", description: "which of YOUR residents acts (omit if your key holds one; a multi-resident key must name one)" },
+      accept: { type: "boolean", description: "a set-down on ground that is not the thing's maker's stakes ✦1 from you onto it (a commons mark stands only with a stamp behind it). Without accept: true that drop answers its terms and records nothing; with it, the thing is set down and the stamp staked. On the maker's own ground a drop is free and asks nothing" },
     }, additionalProperties: false } },
   { name: "world_holdings",
     description: "What you are carrying. Every thing whose live holding edge names one of your residents, with what each one is and who made it. A thing you made and gave away is not here; a thing someone gave you is, whoever authored it.",
@@ -615,6 +616,69 @@ export function refuseGiveOfUnheld({ thing, to, actor, holder }) {
     holder === null
       ? `a give hands over what is in your hands. Take it first (you must be standing within its extent to do that: world { do: "walk", args: { mark_id: "${thing}", mode: "center" } }, then world { do: "take", args: { thing: "${thing}" } }), then give it. Nothing was recorded, and no take was made in your name.`
       : `a give hands over what is in your hands, and ${holder} is holding this one. Nothing was recorded.`);
+}
+
+// ── A DROP ON THE COMMONS STAKES 1✦ (POS-688 D4 step 3, Darko 2026-10-19 09:27) ──
+//
+// A held thing set down stands where its dropper stood, and the settlement
+// judges that ground the way it judges any mark's: on its maker's ground it
+// stands free, and anywhere else it is a commons mark, which leaves the world
+// at the settlement with no stamp behind it. So a drop there stakes 1✦ from
+// the dropper onto the thing, unless stamps already stand behind it, through
+// leave-mark's own amendment verdict (`dropStakeVerdict`), purse
+// (`heldAtOffice`), terms (`markStakeBlock`) and stake (`world_stake`), never a
+// second copy of any of them. All of it is
+// asked BEFORE the drop is written: the terms first (nothing recorded until
+// accept: true), and an empty purse is refused with nothing recorded.
+export const DROP_STAKE = 1;
+
+/** The extent the drop will print: the thing's own, or where it last stood (the store keeps it), or 1×1. */
+async function dropExtentOf(thing) {
+  try {
+    const m = (await (await import("./world.mjs")).canonMarkById(String(thing)))?.mark ?? null;
+    if (m?.extent) return m.extent;
+  } catch { /* the store's copy below */ }
+  try { return (await (await import("./held-view.mjs")).placedNow()).get(String(thing))?.extent ?? null; } catch { return null; }
+}
+
+/**
+ * What a drop of `thing` by `actor` standing at `stood` asks: null (free, or no
+ * place to judge), `{ terms }` (an answer, nothing written), or `{ stake }`
+ * (accepted: stake that many after the drop). Throws the empty-purse refusal.
+ */
+export async function dropStakeTerms({ thing, actor, stood, accept = false }, deps = {}) {
+  if (!stood) return null; // no standpoint: the drop's own path answers
+  const verdictOf = deps.verdict ?? (async (a) => (await import("./world.mjs")).dropStakeVerdict(a));
+  const purseOf = deps.held ?? (async (h) => (await import("./world-stake.mjs")).heldAtOffice(h));
+  const blockOf = deps.block ?? (async (a) => (await import("./world-stake.mjs")).markStakeBlock(a));
+  const maker = String(thing).split("/")[0];
+  const rule = await verdictOf({ thing: String(thing), by: maker, at: { x: stood.x, y: stood.y }, extent: await (deps.extentOf ?? dropExtentOf)(thing) });
+  if (!(Number(rule?.need) >= DROP_STAKE)) return null; // the maker's own ground, or stamps already behind it: free
+  const purse = await purseOf(actor);
+  if (!purse?.unread && !(Number(purse?.liquid) >= DROP_STAKE))
+    throw bounce(422, `you hold 0 stamps, and setting ${thing} down here stakes ✦${DROP_STAKE}`,
+      `this is not ${maker}'s ground, so the thing would stand on the commons, and a commons mark stands only with a stamp behind it; without one it would leave the world at the next settlement. Set it down on ${maker}'s ground, where it is free, or keep holding it until you have a stamp (read_quests shows what pays). Nothing was recorded.`);
+  if (accept === true) return { stake: DROP_STAKE };
+  const confirm = `world { do: "drop", args: { thing: "${thing}", accept: true } }`;
+  return { terms: {
+    handle: actor, thing, recorded: false,
+    stake: DROP_STAKE,
+    terms: `setting ${thing} down here stakes ✦${DROP_STAKE} from you onto it. This is not ${maker}'s ground, and a thing set down anywhere but its maker's ground stands on the commons, where a mark stands only with a stamp behind it. The stamp stays yours, in escrow behind the thing; if you take it back, the thing leaves the world at the next settlement.`,
+    stamps: await blockOf({ handle: actor, stamps: DROP_STAKE,
+      to_confirm: `${confirm}: the same call with accept: true. Not calling is the no; nothing is written until you make it.` }),
+    note: `nothing was recorded. Call again with accept: true to set it down and stake ✦${DROP_STAKE}, or set it down on ${maker}'s ground, where it is free.`,
+  } };
+}
+
+/** The accepted stake, made after the drop stands (leave-mark's order: a stake that bounces never unwrites the act). */
+export async function stakeTheDrop({ thing, actor, key, n = DROP_STAKE }, deps = {}) {
+  const stake = deps.stake ?? (async (a, k) => (await import("./world-stake.mjs")).callWorldStakeTool("world_stake", a, k));
+  let r;
+  try { r = await stake({ mark: String(thing), stamps: n, handle: actor }, key); }
+  catch (e) { (await import("./fault-words.mjs")).faultLogged("a drop's stake did not land", e); r = { error: true, defect: "the stake did not land" }; }
+  if (r?.error) return { stake_bounce: { defect: r.defect ?? "the stake did not land",
+    hint: `${thing} is set down, but no stamp stands behind it yet, so it leaves the world at the next settlement unless one does: world { do: "stake", args: { mark: "${thing}", stamps: ${n} } }` } };
+  return { staked: r, ...(r?.stamps ? { stamps: r.stamps } : {}) };
 }
 
 /**
@@ -1491,15 +1555,19 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // dynamic.db, POS-269.)
     {
       const stood = await standpointOfActor(actor);
+      // a set-down off the maker's ground stakes 1✦: its terms, or its refusal, before anything is written (D4 step 3)
+      const dropStake = face === "drop" ? await dropStakeTerms({ thing: args.thing, actor, stood, accept: args.accept === true }) : null;
+      if (dropStake?.terms) return dropStake.terms;
       const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings });
       if (out?.did !== "drop") return out;
+      const staked = dropStake?.stake ? await stakeTheDrop({ thing: args.thing, actor, key, n: dropStake.stake }) : null;
       // AFTER the drop's COMMIT, never inside its transaction: the amend is the
       // mark lane's own act on the mark lane's own pen, and holding the hold
       // lane's sqlite lock across a second pen's round trip would be a lock
       // this door has no business taking. The drop stands whatever the amend
       // does; the receipt says which happened.
       const setDown = await fileSetDownAmend({ did: out, stood, key, actId: out.seq ?? null });
-      return { ...out, stands_note: setDownNote(setDown), set_down: setDown };
+      return { ...out, ...(staked ?? {}), stands_note: setDownNote(setDown), set_down: setDown };
     }
   } finally { /* no handle is opened: the record is read through the guards */ }
 }
