@@ -71,9 +71,9 @@ async function seed({ from = null, acts = [] } = {}) {
     for (const a of acts)
       await c.query(
         `INSERT INTO acts (id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, class, payload)
-         OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'holding', $10)`,
-        [a.id, a.at, a.crossing ?? WIN + 0.1, a.actor, a.action, CONE, a.anchor ?? null, a.dx ?? null, a.dy ?? null,
-          JSON.stringify({ thing: CONE, holder: a.holder ?? null, policy: a.action === "drop" ? "detach" : "cascade", made_by: "berthillon" })]);
+         OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [a.id, a.at, a.crossing ?? WIN + 0.1, a.actor, a.action, CONE, a.anchor ?? null, a.dx ?? null, a.dy ?? null, a.cls ?? "holding",
+          JSON.stringify(a.payload ?? { thing: CONE, holder: a.holder ?? null, policy: a.action === "drop" ? "detach" : "cascade", made_by: "berthillon" })]);
   } finally { await c.end(); }
 }
 const take = (id, at) => ({ id, at, actor: "sb-ash", action: "take", holder: "sb-ash" });
@@ -159,4 +159,60 @@ test("4. a thing in the OLD form (kind: sited + class) prints held too: 078 lets
   const row = await coneRow();
   assert.equal(row.geometry, null);
   assert.equal(row.data.held_by, "sb-ash");
+});
+
+// ── POS-688 D3 · AN OPPOSED TAKE RETURNS AT THE SETTLEMENT ──────────────────
+const opposeTake = (id, takeId, at, stance = "opposed") => ({ id, at, actor: "berthillon", action: "declare-stance-on", cls: "stance",
+  payload: { on: CONE, stance, by: "berthillon", answers: "take", take: { act_id: String(takeId), by: "sb-ash" } } });
+
+test("5. the maker's house opposed sb-ash's take: nothing prints in sb-ash's hands, and the clearing returns the cone where it was, once", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z")] });
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /⚑ hold: berthillon\/a-cone — returned: its maker's house opposed sb-ash's take \(act 101\)/);
+  const row = await coneRow();
+  assert.deepEqual(row.geometry, { at: { x: 221, y: 95.5 }, extent: { w: 1, h: 1 } }, "canon is untouched: never printed held");
+  assert.equal(row.data.held_by, undefined);
+  const back = await read("SELECT actor, action, at_dx, at_dy, payload FROM acts WHERE class = 'holding' AND actor = 'the-town' AND object = $1", [CONE]);
+  assert.equal(back.length, 1, "one return act");
+  assert.equal(back[0].action, "drop");
+  assert.deepEqual([back[0].at_dx, back[0].at_dy], [221, 95.5], "set down where it was printed");
+  assert.deepEqual(back[0].payload.returned, { take_act: "101", stance_act: "102" });
+  const [win] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
+  assert.equal(win.receipts.hold_returned[0].slug, CONE);
+  // the one return is the only one: 078 refuses a second for the same take (test 6)
+  assert.equal((await read("SELECT count(*)::int AS n FROM acts WHERE actor = 'the-town' AND object = $1", [CONE]))[0].n, 1);
+});
+
+test("5b. a welcomed take, or one already printed, is never returned", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z", "welcomed")] });
+  let r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /⚑ hold: berthillon\/a-cone — held by sb-ash/, "welcomed: the take prints");
+  // printed at an earlier clearing (window 259's cutoff is past the take): too late, it stays in sb-ash's hands
+  await seed({ from: 101, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z")] });
+  r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /returned/);
+});
+
+test("6. 078's acts arm: clearing_job may insert only the return of an opposed take, once", { skip }, async () => {
+  await seed({ from: 100, acts: [take(101, "2026-10-19T01:00:00Z"), opposeTake(102, 101, "2026-10-19T01:30:00Z"),
+    take(103, "2026-10-19T02:00:00Z"), opposeTake(104, 103, "2026-10-19T02:30:00Z", "welcomed")] });
+  const c = await store.connect("clearing_job");
+  const ret = (payload, { actor = "the-town", action = "drop", cls = "holding", object = CONE } = {}) => c.query(
+    `INSERT INTO acts (at, crossing, actor, action, object, class, payload) VALUES (now(), $1, $2, $3, $4, $5, $6)`,
+    [WIN, actor, action, object, cls, JSON.stringify(payload)]);
+  const good = { thing: CONE, holder: null, policy: "detach", returned: { take_act: "101", stance_act: "102" } };
+  const refused = /clearing_job may insert only the return of an opposed take/;
+  try {
+    await c.query("BEGIN");
+    await ret(good);
+    await assert.rejects(ret(good), refused, "once per take");
+    await c.query("ROLLBACK");
+    await assert.rejects(ret({ ...good, returned: { take_act: "103", stance_act: "104" } }), refused, "a welcomed take is not returned");
+    await assert.rejects(ret(good, { actor: "sb-ash" }), refused, "only the town returns");
+    await assert.rejects(ret({ thing: CONE, holder: null, policy: "detach" }), refused, "a drop naming no return is no return");
+    await assert.rejects(ret(good, { cls: "voice", action: "say" }), refused, "nor any other act");
+  } finally { await c.end(); }
 });

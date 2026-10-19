@@ -1250,6 +1250,29 @@ export function draftRecordOf(live) {
 
 /** The stance payload's own word for which question it answers. */
 export const ANSWERS_SET_DOWN = "set-down";
+/** …and for a take (POS-688 D3, Darko 2026-10-19 09:21: opposition to a take, with the same stance machinery). */
+export const ANSWERS_TAKE = "take";
+
+/**
+ * The maker's house's latest answer to one TAKE of its thing, or null (silence).
+ * The set-down's answer, asked of a take: the same rows, the same latest-wins,
+ * the same household test (only the maker's house answers). PURE.
+ */
+export function takeAnswer({ stances = [], thing, takeSeq, madeBy, householdOf = null }) {
+  if (takeSeq == null) return null;
+  let latest = null;
+  for (const r of stances ?? []) {
+    if (r?.class !== "stance" || String(r.object) !== String(thing)) continue;
+    const p = r.payload ?? {};
+    if (p.answers !== ANSWERS_TAKE || String(p.take?.act_id) !== String(takeSeq)) continue;
+    if (p.stance !== "welcomed" && p.stance !== "opposed") continue;
+    if (!sameHousehold(madeBy, String(r.actor), householdOf).same) continue;
+    const later = !latest || String(r.written_at) > String(latest.written_at)
+      || (String(r.written_at) === String(latest.written_at) && Number(r.seq) > Number(latest.seq));
+    if (later) latest = r;
+  }
+  return latest ? { stance: latest.payload.stance, by: String(latest.actor), at: latest.written_at ?? null, seq: latest.seq ?? null } : null;
+}
 
 /**
  * The author's house's latest answer to one set-down, or null (silence). PURE.

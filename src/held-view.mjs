@@ -87,3 +87,28 @@ export async function heldViewFrom(p, { markRows = null } = {}) {
     return viewOf({ record: { attachments: atts.rows ?? [], drops, places }, from: num(cut?.[0]?.from), through: num(cut?.[0]?.through), placed });
   } catch { return null; }
 }
+
+/**
+ * "CARRYING N THINGS" ON THE HOLDER'S ROW (POS-688 D5, ruled by Darko 2026-10-19
+ * 09:21). A held thing never appears as a mark of its own; it reads as its
+ * holder's contents, so the holder's row in anyone's view says how many: the
+ * things in their hands in all, a carried holder counting 1 plus everything in it
+ * (world-units.mjs § heldLoadOf, the hands read's "things in all"). Never which:
+ * looking closer at the holder lists them (investigate). A resident carrying
+ * nothing gets no field; an unread hold record changes nothing.
+ */
+export async function withCarrying(present) {
+  if (!Array.isArray(present?.residents) || !present.residents.length || !world2Enabled()) return present;
+  try {
+    const [{ holdRecordNow }, { heldLoadOf }] = await Promise.all([import("./world-kinds.mjs"), import("./world-units.mjs")]);
+    const { fold, attachments } = await holdRecordNow();
+    let changed = false;
+    const residents = present.residents.map((r) => {
+      const n = r?.handle ? heldLoadOf(attachments, fold, String(r.handle)) : 0;
+      if (!(n > 0)) return r;
+      changed = true;
+      return { ...r, carrying: n };
+    });
+    return changed ? { ...present, residents } : present;
+  } catch { return present; }
+}
