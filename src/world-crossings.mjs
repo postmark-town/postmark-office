@@ -22,7 +22,8 @@ import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door per
 import { standsWithin } from "./reach.mjs"; // the ONE "do you truly stand there" test — shared with the hold door (the-town/the-reach)
 import { anchorOfStop, arrivedNotice, depositAt, depositPointFor, isVehicleStop, rideStateFrom, stopsOfService, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
-import { fractionalCrossing } from "../world2/tools/live-reads.mjs"; // the ferry's clock: the engine's epoch and cadence
+import { fractionalCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "../world2/tools/live-reads.mjs"; // the ferry's clock: the engine's epoch and cadence
+import { nextSettlement } from "./world-forecast.mjs"; // the ONE settlement clock, 06:00/18:00Z (WLD-5's exit lock reads it)
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
@@ -85,7 +86,35 @@ export async function crossingLaw(worldClone) {
 export function passageInstant(thresholds, deps = {}) {
   const ms = deps.nowMs ? deps.nowMs() : Date.now();
   const ferry = deps.now ? deps.now(ms) : fractionalCrossing(ms);
-  return { at: thresholds.stampAt(ferry), iso: new Date(ms).toISOString() };
+  // `judgedMs`: the instant the passage is JUDGED at, which is the ferry's own
+  // reading turned back into a clock. It is `ms` everywhere but the walk's
+  // pre-check, whose ferry is the arrival (WLD-5's exit lock is asked as of then).
+  return { at: thresholds.stampAt(ferry), iso: new Date(ms).toISOString(), judgedMs: CROSSING_EPOCH_UTC + Number(ferry) * CROSSING_MS };
+}
+
+/**
+ * THE EXIT LOCKS IN FORCE FOR THIS WALKER (WLD-5 A; Darko, Sitting B 2026-10-18
+ * 20:22 and 20:27): `{ <dungeon>: { until, left_at } }`, read from the walker's own
+ * exit acts (`deps.dungeonLocks`, the store), keeping only the locks whose
+ * settlement has not come by `judgedMs`. Asked only when the world has a dungeon.
+ * A store that cannot be read REFUSES (503): a lock that fails open lets the
+ * walker in, so the door says it could not check instead (Wright, W1).
+ */
+async function locksInForce(who, w, verbs, judgedMs, deps) {
+  if (!deps.dungeonLocks || typeof verbs.isDungeon !== "function" || !(w.marks ?? []).some(verbs.isDungeon)) return null;
+  let rows;
+  try { rows = await deps.dungeonLocks(who); }
+  catch (e) {
+    throw bounce(503, "the office could not check whether you may enter this dungeon again, so nothing was recorded",
+      `leaving a dungeon by exit closes it to you until the next settlement, and that record could not be read just now (${plainReason(e, "read", "the exit record")}). Try again in a minute`);
+  }
+  const live = {};
+  for (const r of rows ?? []) {
+    const until = Date.parse(r?.locked_until ?? "");
+    if (!r?.dungeon || !Number.isFinite(until) || until <= judgedMs) continue;
+    if (!live[r.dungeon] || Date.parse(live[r.dungeon].until) < until) live[r.dungeon] = { until: new Date(until).toISOString(), left_at: r.left_at ?? null };
+  }
+  return Object.keys(live).length ? live : null;
 }
 
 // ── THE PORTAL LEG (Keemin-ruled 2026-09-19; postmark-town/postmark#2986) ────
@@ -381,7 +410,7 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   const here = await deps.standpointOf(who);
   const { service } = await serviceFor(worldClone, w, deps);
   // The clock is read here, after every read above (POS-618): see passageInstant.
-  const { at, iso } = passageInstant(thresholds, deps);
+  const { at, iso, judgedMs } = passageInstant(thresholds, deps);
   const acts = thresholds.parseEnterExitLedger(ledger).acts;
   const occupancy = thresholds.occupancyAt(acts, at);
 
@@ -394,8 +423,11 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   if (portal)
     return await enterViaPortal(portal, { who, w, at, iso, occupancy, here, thresholds, verbs, service, payload, key, deps });
 
-  const answer = verbs.enter(here, markId, { marks: w.marks ?? [] }, {
+  // WLD-5 A: the exit locks in force, which the clone's passage asks before anything else
+  const lockedOut = await locksInForce(who, w, verbs, judgedMs, deps);
+  const answer = verbs.enter(here, markId, { marks: w.marks ?? [], determined: w.determined ?? {} }, {
     occupancy, handle: who, at, iso, accepted: payload.accept === true,
+    ...(lockedOut ? { lockedOut } : {}),
     // WLD-5: which way, when a portal's `into` is a list
     ...(payload.into !== undefined && payload.into !== null && payload.into !== "" ? { into: String(payload.into) } : {}),
   });
@@ -403,6 +435,13 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
     // A DUNGEON IS ENTERED BY ITS PORTALS, AND INSIDE ONE ONLY A PORTAL ENTERS
     // (WLD-5). The engine said so and named the portals; they ride the bounce as
     // a field, so a client never parses the sentence for them.
+    // LEFT BY EXIT, LOCKED UNTIL THE NEXT SETTLEMENT (WLD-5 A, Darko 2026-10-18
+    // 20:27; the words 2026-10-19 09:21). The sentence is the clone's and names
+    // when; the instant rides as a field, so a client never parses it.
+    if (answer.refused === "dungeon-locked")
+      throw bounce(403, answer.error,
+        "leaving a dungeon by exit closes it to you until the next settlement (06:00 or 18:00Z); walking out through a door costs nothing. Every way in is closed until then, its portals and its outline alike",
+        { law: "the-town/dungeon (WLD-5)", dungeon: answer.dungeon, locked_until: answer.locked_until });
     if (answer.refused === "dungeon")
       throw bounce(403, answer.error,
         "a dungeon's rooms are reached one portal at a time: stand at a portal and enter it (to leave the whole dungeon, exit). Nothing was recorded",
@@ -764,10 +803,14 @@ async function leaveTheDungeon(answer, { who, at, markId, held, key, deps }) {
     return {
       handle: who, target: markId, dungeon: answer.dungeon, within: [...held], leaving: answer.left,
       awaiting: answer.awaiting, ...(answer.landing ? { set_down_at: answer.landing } : {}),
-      note: answer.awaiting.because, reading_law,
+      ...(answer.lock?.until ? { locked_until: answer.lock.until } : {}),
+      note: answer.awaiting.because, ...(answer.awaiting.how ? { how: answer.awaiting.how } : {}), reading_law,
     };
+  // THE LOCK IS WRITTEN ON THE EXIT ITSELF (WLD-5 A): which dungeon, until which
+  // settlement, and when you left. The act is the one record; enter reads it back.
+  const lock = answer.lock?.until ? { dungeon: answer.dungeon, locked_until: answer.lock.until, left_at: answer.lock.left_at ?? null } : null;
   const written = await deps.record({
-    handle: who, act: "exit", at, lines: answer.rows, mark: answer.target,
+    handle: who, act: "exit", at, lines: answer.rows, mark: answer.target, ...(lock ?? {}),
     ...(answer.landing ? { set_down_at: answer.landing.via } : {}),
     summary: `exits ${answer.target}, the whole dungeon${answer.landing ? `, set down at ${answer.landing.via}` : ""}`,
   });
@@ -787,7 +830,9 @@ async function leaveTheDungeon(answer, { who, at, markId, held, key, deps }) {
     left: answer.left, within: written.within ?? answer.within ?? [], into: answer.into ?? null,
     ...(setDown ? { set_down: setDown } : {}),
     ledger: written.commit ? { lines: written.lines, commit: written.commit, pushed: written.pushed } : null,
-    note: `you left the whole of ${answer.dungeon}${setDown ? `, and stand outside at ${setDown.at}` : ""}.`,
+    ...(lock ? { locked_until: lock.locked_until } : {}),
+    note: `you left the whole of ${answer.dungeon}${setDown ? `, and stand outside at ${setDown.at}` : ""}.`
+      + (lock && typeof answer.lock?.note === "string" ? ` ${answer.lock.note}` : ""),
     reading_law,
   };
 }
@@ -820,9 +865,13 @@ async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   const inDungeon = typeof verbs.heldDungeon === "function" ? verbs.heldDungeon(held, w.marks ?? []) : null;
   const enteredVia = inDungeon && deps.acts ? dungeonEntryVia((await deps.acts(who)) ?? [], inDungeon) : null;
   const here = inDungeon && deps.standpointOf ? await deps.standpointOf(who).catch(() => null) : null;
-  const answer = verbs.exit(markId, { marks: w.marks ?? [] }, {
+  // THE LOCK'S SETTLEMENT (WLD-5 A): the next one after THIS exit's own instant,
+  // read once, so the record and the answer say the same time (Wright, W2: a
+  // confirm that comes after a settlement names the next one, and says so).
+  const locksUntil = inDungeon ? nextSettlement(new Date(iso)) : null;
+  const answer = verbs.exit(markId, { marks: w.marks ?? [], determined: w.determined ?? {} }, {
     occupancy, handle: who, at, iso,
-    ...(inDungeon ? { confirm: payload.confirm === true, enteredVia, state: here } : {}),
+    ...(inDungeon ? { confirm: payload.confirm === true, enteredVia, state: here, locksUntil } : {}),
   });
   if (answer.error) throw bounce(422, answer.error, `you are within: ${held.join(", ") || "(nothing)"}`);
   if (answer.dungeon)
@@ -947,7 +996,7 @@ export const CROSSING_EXEC = join(HERE, "crossing-exec.mjs");
 // ── the doors ───────────────────────────────────────────────────────────────
 export const CROSSING_TOOLS = [
   { name: "world_enter",
-    description: "Enter a mark — cross its threshold. This is NOT walking: walking moves you to coordinates and puts you inside nothing, which is a real state (the visitor on the deck who never stepped aboard). Entering is the act with mechanical weight, and it is one edge and two words: your side is your authorship of the act, the mark's side is its automatic answer from its own standing entry law — welcomed, neutral, or opposed. Mutual consent, or the effect is null. A mark that has written no entry law answers neutral and lets you in; a mark whose law declares a counter-edge (the Post Office's `aboard`) shows you its terms and records nothing until you pass accept: true. OPPOSED IS A REFUSAL AT THE THRESHOLD: you are left standing at that door, and everything you crossed before it still stands. A door is entered from within its extent: from outside it, the enter is refused and records nothing, and the refusal names the walk to the threshold in its `walk` field (R15 keeps walk and entry decoupled). To walk there and step in on arrival in one call, use world_walk with mark_id and enter_on_arrival: true. Naming a deep target enters the CHAIN — each door adjudicated in turn, so an effect-bearing door cannot be bypassed by naming a room behind it. A PORTAL (a mark whose entry law carries `into`) enters the mark it leads into and sets you down at its landing; when it leads more than one way, it answers with `choose` and you enter again with into: <id>. Inside a DUNGEON the only enter is a portal and there is no exit: you leave by a portal that leads out, and its rooms are hidden until you enter them.",
+    description: "Enter a mark — cross its threshold. This is NOT walking: walking moves you to coordinates and puts you inside nothing, which is a real state (the visitor on the deck who never stepped aboard). Entering is the act with mechanical weight, and it is one edge and two words: your side is your authorship of the act, the mark's side is its automatic answer from its own standing entry law — welcomed, neutral, or opposed. Mutual consent, or the effect is null. A mark that has written no entry law answers neutral and lets you in; a mark whose law declares a counter-edge (the Post Office's `aboard`) shows you its terms and records nothing until you pass accept: true. OPPOSED IS A REFUSAL AT THE THRESHOLD: you are left standing at that door, and everything you crossed before it still stands. A door is entered from within its extent: from outside it, the enter is refused and records nothing, and the refusal names the walk to the threshold in its `walk` field (R15 keeps walk and entry decoupled). To walk there and step in on arrival in one call, use world_walk with mark_id and enter_on_arrival: true. Naming a deep target enters the CHAIN — each door adjudicated in turn, so an effect-bearing door cannot be bypassed by naming a room behind it. A PORTAL (a mark whose entry law carries `into`) enters the mark it leads into and sets you down at its landing; when it leads more than one way, it answers with `choose` and you enter again with into: <id>. Inside a DUNGEON the only enter is a portal, and its rooms are hidden until you enter them. A dungeon you left by exit stays closed to you until the next settlement (06:00 or 18:00Z): every way in refuses, naming when.",
     inputSchema: { type: "object", properties: {
       mark: { type: "string", description: "the mark to enter — <by>/<slug>, as ids appear in the telling" },
       accept: { type: "boolean", description: "your explicit word, demanded only where the door declares a counter-edge. Call once without it to READ the terms; call again with it to cross." },
@@ -955,7 +1004,7 @@ export const CROSSING_TOOLS = [
       handle: { type: "string", description: "which of YOUR residents is entering (omit if your key holds one; a multi-resident key must name one)" },
     }, additionalProperties: false } },
   { name: "world_exit",
-    description: "Step out of a mark you are within — you nullifying your own side of the edge you authored, which needs nobody's answer. A bare call steps out of the innermost thing you are in. Leaving a thing leaves what stood inside it. Exiting somewhere you are not within is refused with a reason rather than quietly succeeding. INSIDE A DUNGEON, exit leaves the WHOLE dungeon and sets you down outside at the portal you came in by: the first call records nothing and says so; call again with confirm: true to go.",
+    description: "Step out of a mark you are within — you nullifying your own side of the edge you authored, which needs nobody's answer. A bare call steps out of the innermost thing you are in. Leaving a thing leaves what stood inside it. Exiting somewhere you are not within is refused with a reason rather than quietly succeeding. INSIDE A DUNGEON, exit leaves the WHOLE dungeon and sets you down outside at the portal you came in by: the first call records nothing and says so; call again with confirm: true to go. Leaving a dungeon by exit closes it to you until the next settlement (06:00 or 18:00Z); walking out through a door costs nothing.",
     inputSchema: { type: "object", properties: {
       mark: { type: "string", description: "which mark to step out of — omit for the innermost one you are within" },
       confirm: { type: "boolean", description: "inside a dungeon only: your word that you mean to leave the whole of it. Call once without it to read where you will be set down." },

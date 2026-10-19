@@ -123,7 +123,7 @@ export function foreignAnswer(code, obj, { read = true } = {}) {
 //   choose       which way, at a portal whose `into` is a list; a wrong `into` names them again (WLD-5/63)
 //   dungeon, portals, law   a dungeon's refusal names its ways in as a field (WLD-5)
 //   broken, stranded_at     a portal that leads nowhere, quoted by its own field (WLD-18)
-export const BOUNCE_EXTRAS = ["choices", "walk", "choose", "dungeon", "portals", "law", "broken", "stranded_at"];
+export const BOUNCE_EXTRAS = ["choices", "walk", "choose", "dungeon", "portals", "law", "broken", "stranded_at", "locked_until"];
 export const bounceExtras = (e) => Object.fromEntries(BOUNCE_EXTRAS.filter((k) => e?.[k] != null).map((k) => [k, e[k]]));
 
 export function caughtBounce(e, fields) {
