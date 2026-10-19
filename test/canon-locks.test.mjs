@@ -356,3 +356,48 @@ test("a locked claim whose own row stands under a NEW slug is a transfer, never 
   // and the never-stood class is still asked by slug — the first clause stays
   assert.match(UNMATERIALIZED_SELECT, /NOT EXISTS \(SELECT 1 FROM marks m WHERE m\.slug = coalesce\(c\.slug, c\.geometry->>'slug'\)\)/);
 });
+
+// ── THE TOWN'S OWN MARKS NEED NO STAKE (POS-696; Darko, 2026-10-19 09:21) ────
+//
+// "Constitutional marks need no stake." On 2026-10-19 the notary listed 48
+// `escrow_unbacked`, every one the town's: 44 law predicates, 3 things and a
+// note, re-locked at window 258 by the LOGOS v2 carriage. None carries
+// `tier: constitution`, so the standing walk answers `market` for them (prod's
+// /world2/mark: the-town/orient → owner the-town, tier market) and the class
+// rule alone read them as commons. The exemption is the town's own hand,
+// `marks.owner` (escrow-presence.mjs § townsOwn).
+//
+// THE CAN-FAIL FLIP: in `canon-locks.mjs § canonLockFindings`, delete
+//
+//     -    if (townsOwn(r)) continue;
+//
+// The first test reds (both town marks list as unbacked); the resident control
+// stays green.
+
+// Prod's rows, 2026-10-19: locked at window 258, a sha the projection holds.
+const TOWN_LAW = { ...DRIFT, slug: "the-town/orient", owner: "the-town", tier: "market", locked_window: 258, window_id: 258, locking_town_sha: "723005e5" };
+const TOWN_THING = { ...TOWN_LAW, slug: "the-town/a-slice-to-take-home" };
+const RESIDENT = { ...DRIFT, owner: "lupi" };
+const townRegister = { slugs: new Set([TOWN_LAW.slug, TOWN_THING.slug, RESIDENT.slug]), sha: "0".repeat(40) };
+
+test("FALSIFIER, POS-696: the town's own marks at ✦0 are never unbacked; a resident's commons mark at ✦0 still is", () => {
+  const r = canonLockFindings([TOWN_LAW, TOWN_THING, RESIDENT], townRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]) });
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"]);
+  assert.equal(r.escrow_compared, 1, "the town's marks are not judged at all");
+});
+
+test("the town's own marks are not counted unjudgeable either: the question is never asked of them", () => {
+  const old = { ...TOWN_LAW, locking_town_sha: "830a69963d8e4801ad4ed8bb80da38e79fd3fdbf" };   // a sha the projection never held
+  const r = canonLockFindings([old], townRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]) });
+  assert.deepEqual(r.unjudgeable, []);
+  assert.deepEqual(r.unbacked, []);
+});
+
+test("the town's marks are still canon-checked: the exemption is from the stake, not from the register", () => {
+  const r = canonLockFindings([TOWN_LAW], { slugs: new Set(), sha: "0".repeat(40) }, { escrowBySha: new Map() });
+  assert.deepEqual(r.absent.map((a) => a.slug), ["the-town/orient"]);
+});
+
+test("STANDING_SELECT reads the owner, which is what townsOwn asks", () => {
+  assert.match(STANDING_SELECT, /m\.owner/);
+});

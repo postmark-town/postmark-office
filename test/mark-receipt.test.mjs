@@ -274,7 +274,22 @@ const REAL_REFUSAL_CHECKS = [
   ["unfileable: no such household stands in the town for gabo: the town's roll does not name gabo, so this mark had no household to stand in. Nothing else waited on it. Once your house is on the roll, put the mark forward again.", "quarantined", "clearing-job.mjs step 5.4 / materialize.mjs § noHouseCheck"],
   ["unfileable: another mark already carries the name cleo/a-lamp-2, so this one could not be filed under it. Nothing else waited on it. (store: marks_slug_key)", "quarantined", "materialize.mjs § unfileableCheckOf (step 6)"],
   ["unfileable: the move of rei/the-district couldn't carry rei/the-lamp: rei/the-lamp is a sited mark with no place, so it could not be filed. (store: sited_marks_have_a_where)", "quarantined", "clearing-job.mjs step 6.1 (the move as one unit)"],
+  // POS-692, PROPOSED for Darko: a candy whose record names no proved set-down. The first is
+  // amia-semper's four at S118, verbatim; the second is a named act that does not prove.
+  ["dropped-unit-unproven: no act", "malformed", "clearing-job.mjs step 5.45 / drop-provenance.mjs (no act named)"],
+  ["dropped-unit-unproven: act 9223372036854775807", "malformed", "drop-provenance.mjs (an act named, unproved)"],
 ];
+
+test("a candy refused for its set-down reads a word, never the blank cause (POS-692, amia-semper's four)", () => {
+  const r = receiptFrom({ id: ID, canon: null, settlement: S59, claims: [claim({ status: "refused", refusal_check: "dropped-unit-unproven: no act" })] });
+  assert.equal(r.cause, "malformed");
+  assert.match(r.says, /refused at candle 174 — malformed/);
+  assert.doesNotMatch(r.says, /no word in the bulletin's five/);
+  // and the way that works rides beside the word: candy is made by its kind (Darko 2026-10-19)
+  assert.match(r.next, /made by its kind/);
+  assert.ok(r.says.endsWith(`: ${r.next}`), r.says);
+  assert.equal(causeOf("collision").next, undefined, "a check with no next step carries none");
+});
 
 test("EVERY refusal string the town can write gets the word this map decided for it", () => {
   const misses = [];

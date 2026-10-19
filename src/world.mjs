@@ -1494,6 +1494,8 @@ export async function penVoiceAct(voice, spoken = null, deps = {}) {
 // Asked once at import so the first say after a boot already has it.
 const hearing = createHearingWindow({ repo: WORLD_CLONE });
 hearing.refresh().catch(() => {});
+/** The same reader, for the store's say read (`/world2/say`, POS-693): one window, every ear. */
+export const hearingWindowAt = (at) => hearing.read(at);
 
 const voices = createVoices({
   // the record sentence rides the conversation only while the office keeps
@@ -4409,6 +4411,19 @@ async function placementForecast({ worldClone, w, worldUnread, id, ring, mistsCr
   return { as_of: f.as_of, fringe: r.fringe, wall: r.wall, says: r.says };
 }
 
+/**
+ * THE WORDS FOR A PLACED CANDY (POS-692; re-drafted around kinds for Darko,
+ * 2026-10-19 09:21, who reads them before merge). Said only when the door's
+ * candy rule refuses (§ leaveMarkAct): candy is made by its KIND, each a town
+ * subclass of candy that residents asked for, with the resident's own handle
+ * in the call that works. A set-down by kind is not built (world-kinds.mjs §
+ * drop), so it is not offered. A new kind is asked for by letter to wright.
+ */
+export const CANDY_IS_MADE = Object.freeze({
+  defect: "candy is made by its kind, into hands or a bowl, not placed as a mark",
+  hint: (by) => `every kind of candy is the town's, and anyone may make it: explain: "candy" lists the kinds. leave-mark { kind: "<a kind>", count: 5, to: "${by}" } makes five into your hands, and to: a bowl's id (a thing made with holder: true) fills the bowl instead. give { kind: "<the kind>", count: 1, to: <a resident or a bowl> } hands one on, and consume { kind: "<the kind>" } eats one. Your own candy not a kind yet? Write to wright with its name and a line about it, and the town makes it a kind. Nothing was written.`,
+});
+
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
@@ -4421,7 +4436,14 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // its own, applies to a count.
   if (payload.to !== undefined) {
     const handles = [...(key?.handles ?? [])];
-    const actor = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
+    // WHO MAKES IT is the top-level handle, the standpoint the world card keeps
+    // top-level (kogane's bug post, POS-692 ruling 09:21): it wins over a key's
+    // count, and a `by` naming another resident is two actors, refused.
+    const named = payload.handle != null && String(payload.handle).trim() !== "" ? String(payload.handle).trim() : null;
+    if (named && payload.by != null && String(payload.by).trim() !== named)
+      throw bounce(422, `two residents named: handle "${named}" and by "${payload.by}"`,
+        `a make is one resident's act: the top-level handle is who makes it. Leave by: off, or name the same resident. Nothing was made.`);
+    const actor = named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
     if (!actor) throw bounce(422, "which resident is making these?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
     if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
     const own = ["slug", "body", "at", "extent", "points", "slot", "value", "parent_id", "class", "consent", "placed_by", "preview", "amend"].filter((k) => payload[k] !== undefined);
@@ -4597,11 +4619,41 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
       throw bounce(503, `who may make a "${klass}" could not be read`,
         `the class layer is not readable here, so the office cannot tell whether this class is a resident's to make; nothing was written — try again shortly${disclosed ? ` — NOTE: ${disclosed}` : ""}`);
     const makers = droppedUnit ? null : makersOf(klass, classProperty);
-    if (!droppedUnit && !makers.may)
+    // THE ADMIN ROLE (WLD-21, Darko 2026-10-18): an admin household may make the
+    // three passage classes exactly (the world's admin-makers.mjs), asked only
+    // after makers said no; the refusal's words for everyone else are unchanged (G6).
+    if (!droppedUnit && !makers.may && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
       throw bounce(422, `class "${klass}" is town-only`,
         makers.read
           ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
           : `no class in "${klass}"'s lineage states makers, and an unread makers answers false, the root's own answer (postmark-node), so making one is the town's act, not a resident's — world { explain: "${klass}" } says who makes what`);
+    // ── A CANDY ON THE GROUND IS A SET-DOWN UNIT'S, PROVED (POS-692) ──────────
+    // makers lets a resident MAKE candy, and candy is made by the count into
+    // hands or a holder (`to:`, above). A candy mark of its own stands only
+    // where a unit was set down: the clearing refuses every candy claim whose
+    // record does not name its proved `units:drop` act (drop-provenance.mjs,
+    // WLD-27). Taken here, amia-semper's four named sweets stood as drafts and
+    // were refused at S118 with no word. So the door asks the clearing's own
+    // rule, both halves, and refuses at once. The hold door's own set-down is
+    // proved by construction (`droppedUnit`: it hands in the act it just wrote).
+    if (!droppedUnit) {
+      const { isCandyClass, dropRefId, dropProvenanceCheck, dropRefusalOf } = await import("../world2/tools/drop-provenance.mjs");
+      if (isCandyClass(klass, (name) => lineageOf(name, classExtendsOf()))) {
+        const claim = { claimant: by, class: String(klass), data: { label: payload.label, dropped: payload.dropped } };
+        let check;
+        if (dropRefId(payload.dropped) == null) check = dropProvenanceCheck(claim, null);
+        else {
+          try {
+            const { officeRead } = await import("./world2-pen.mjs");
+            check = await officeRead((c) => dropRefusalOf((sql, params) => c.query(sql, params), claim), { by: "candy-door" });
+          } catch (e) {
+            throw bounce(503, "the set-down this candy names could not be checked",
+              faultLogged("the candy door could not read the set-down it names", e));
+          }
+        }
+        if (check) throw bounce(422, CANDY_IS_MADE.defect, CANDY_IS_MADE.hint(by));
+      }
+    }
   }
 
   // ── the thing grammar (the object primitive) ────────────────────────────────
@@ -4719,7 +4771,9 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     : klass === "bounty"
       ? { class: klass, ask: String(ask).trim(), reward: Number(reward), status: status === undefined ? "open" : String(status).trim() }
       : klass === "chest" ? { class: klass, ...chestFields }
-        : klass === "candy" ? { class: klass, label: String(payload.label), dropped: String(payload.dropped) }
+        // only a proved candy reaches here (§ A CANDY ON THE GROUND), and each field is written only when
+        // sent: String(undefined) once wrote the text "undefined" into four claims and their acts (POS-692)
+        : klass === "candy" ? { class: klass, ...(payload.label != null ? { label: String(payload.label) } : {}), ...(payload.dropped != null ? { dropped: String(payload.dropped) } : {}) }
           : { class: klass, ...(holderFields ?? {}) };
   // ── THE FORM IT IS WRITTEN IN (LOGOS v2 part 2; O1's body, G3: "The office's
   // own writers stay on the old form here and flip in O2") ─────────────────────

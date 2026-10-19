@@ -120,6 +120,15 @@ const USAGE = `roles — the office's role registry (hand-kept)
 
 const die = (msg) => { console.error(msg); process.exit(1); };
 
+// THE ADMIN ROLE HAS ONE WRITER, and it is not this desk (WLD-21, Darko
+// 2026-10-18 19:52: "derived in ONE record … not by each gate asking GitHub").
+// Who is admin is GitHub's answer, written by tools/admin-refresh.mjs at each
+// settlement; a hand grant would be a second writer the next refresh undoes.
+if ((CMD === "grant" || CMD === "revoke") && ROLE === "admin")
+  die('refusing: the "admin" role is derived from GitHub (the owners of the postmark-town organisation, on a household\'s own list)\n' +
+    "and has one writer, tools/admin-refresh.mjs, run at each settlement. Change the org's owners on GitHub, then run\n" +
+    "node tools/admin-refresh.mjs --check (and --apply) to see the role follow.");
+
 // ── login -> gh_id ──────────────────────────────────────────────────────────
 
 /** Every {login, id} the town clone pins, as a login -> Set(ids) index. */

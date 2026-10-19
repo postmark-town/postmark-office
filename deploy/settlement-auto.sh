@@ -109,6 +109,11 @@
 #                      already carries, which is the pre-2026-09-09 behaviour and
 #                      the seam this lane's falsifier flips. It lands on the
 #                      receipt as `ran: false` with its reason, never as silence.
+#   SETTLEMENT_ADMIN_REFRESH 1 runs tools/admin-refresh.mjs --apply before the
+#                      registry export (WLD-21): the admin role re-read from the
+#                      owners of the postmark-town GitHub org. Default 0 until the
+#                      box token can read them. Never refuses the crossing; its
+#                      receipt line lands in the log either way.
 #   SETTLEMENT_ISOLATE 0 disables the isolation pass — a red suite refuses the town, as before
 #   SETTLEMENT_RACE_ATTEMPTS  how many times a LOST RACE re-runs the whole crossing (default 3)
 #   SETTLEMENT_ATTEMPT set by the retry wrapper on each child; never set it by hand
@@ -487,6 +492,21 @@ git -C "$SWEEP" clean -fdq  # a killed run leaves untracked debris; the clone is
 # list is a WORLD-repo change, and this office chain must not depend on a world
 # change that has not landed — so the refresh commits itself, ahead of the fold,
 # and world main carries the two commits in the order they actually happened.
+#
+# THE ADMIN ROLE FIRST (WLD-21, Darko 2026-10-18 19:52: "derived in ONE record that
+# every gate reads … not by each gate asking GitHub"). tools/admin-refresh.mjs is
+# the role's one writer: it reads the org's owners once and grants or revokes
+# role `admin` in the role book, and the export below prints it into
+# WORLD/households.json § admins. A read that fails keeps the last answer
+# (UNVERIFIED), and nothing here can refuse the crossing (G4). Not on the dry leg,
+# which writes nothing outside its clone.
+if [ "${SETTLEMENT_ADMIN_REFRESH:-0}" = "1" ] && [ "${SETTLEMENT_DRY:-0}" != "1" ]; then
+  if (cd "$OFFICE" && node "$OFFICE/tools/admin-refresh.mjs" --apply) > "$WORK/admin-refresh.log" 2>&1; then
+    echo "[settlement-auto] $(tail -n 1 "$WORK/admin-refresh.log")"
+  else
+    echo "[settlement-auto] ADMIN REFRESH did not run (non-fatal; the last answer stands): $(head -c 300 "$WORK/admin-refresh.log" | tr '\n' ' ')" >&2
+  fi
+fi
 REGISTRY_JSON=""
 REGISTRY_COMMIT=""
 REGISTRY_FLAG=""

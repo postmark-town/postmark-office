@@ -420,12 +420,17 @@ export async function reachContext(thing, actor, { key = null } = {}) {
         // settlements run on time and for hours when one is held (kogane's
         // Swallets sat locked from 18:00Z on 10-13 to the next morning's).
         // So a "no" from the live layer is asked again of the docket, the way
-        // the receipt asks it, and only a docket with NO row for this slug
-        // counts as nothing there.
+        // the receipt asks it, and only a docket with no STANDING row for this
+        // slug counts as nothing there. A refused or retracted claim will never
+        // publish, so it is not a draft either (POS-689, Darko 2026-10-18,
+        // answering noprotocol-keith on #553): the set is drop-recovery's
+        // `standingClaim`, the one definition, never a copy here.
         if (!ownDraftExists) {
-          const { claimRowsForSlug } = await import("./world2-claims.mjs");
+          const [{ claimRowsForSlug }, { standingClaim }] = await Promise.all([
+            import("./world2-claims.mjs"), import("./drop-recovery.mjs"),
+          ]);
           const rows = await claimRowsForSlug(thing, { key });
-          if (rows.length) ownDraftExists = true;
+          if (rows.some(standingClaim)) ownDraftExists = true;
         }
         // DID YOU MEAN, from the same read. Added after the first review of
         // this fix (Emily, 2026-10-14): the commonest way to land in the refusal

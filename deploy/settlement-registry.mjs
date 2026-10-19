@@ -84,7 +84,8 @@ const dest = join(WORLD, REL);
 let prior = null;
 try { prior = JSON.parse(readFileSync(dest, "utf8")); } catch { /* first refresh, or no registry in this world */ }
 
-const substance = (r) => JSON.stringify([r?.households ?? null, r?.logins ?? null]);
+// `admins` (WLD-21) is substance too: a role granted or revoked with no handle moving is a change the World's gates read.
+const substance = (r) => JSON.stringify([r?.households ?? null, r?.logins ?? null, r?.admins ?? []]);
 
 // ── WRITE WHEN THE MAPPING MOVED, *OR* WHEN THE STANDING FILE IS UNSTAMPED ───
 //
@@ -108,6 +109,9 @@ const added = Object.keys(fh).filter((h) => !(h in ph)).sort();
 const removed = Object.keys(ph).filter((h) => !(h in fh)).sort();
 const rekeyed = Object.keys(fh).filter((h) => h in ph && ph[h] !== fh[h])
   .sort().map((h) => ({ handle: h, from: ph[h], to: fh[h] }));
+const pa = new Set(prior?.admins ?? []), fa = new Set(fresh.admins ?? []);
+const adminsGained = [...fa].filter((k) => !pa.has(k)).sort();
+const adminsLost = [...pa].filter((k) => !fa.has(k)).sort();
 
 if (changed) {
   mkdirSync(dirname(dest), { recursive: true });
@@ -125,6 +129,8 @@ const movedLine = [
   added.length ? `${added.length} handle(s) added` : null,
   removed.length ? `${removed.length} removed` : null,
   rekeyed.length ? `${rekeyed.length} re-keyed` : null,
+  adminsGained.length ? `admin: ${adminsGained.join(", ")}` : null,
+  adminsLost.length ? `admin no longer: ${adminsLost.join(", ")}` : null,
 ].filter(Boolean).join(", ") || "no membership change";
 
 const commitMessage = `settlement: household registry re-derived from the town at ${short}
@@ -175,4 +181,7 @@ process.stdout.write(`${JSON.stringify({
   added,
   removed,
   rekeyed,
+  admins: fresh.admins ?? [],
+  admins_gained: adminsGained,
+  admins_lost: adminsLost,
 }, null, 1)}\n`);

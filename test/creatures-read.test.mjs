@@ -219,7 +219,10 @@ test("to_you: a creature's answer to you rides your own happened, the arrival na
   assert.equal(old.readable, false);
   const shelf = toYou({ creatureEffects: old, sinceCrossing: 270, nowCrossing: 272 });
   assert.equal(shelf.complete, false);
-  assert.match(shelf.note, /older than the last 13 hours are not held here/);
+  assert.match(shelf.note, /older than the last 25 hours are not held here/);
+  assert.deepEqual(shelf.missing, ["creatures' reactions older than 25 h"], "and in a few words, for the glance (POS-697 G4a)");
+  // a bare read reaches back to the previous crossing's start, up to 24 h: held whole (POS-697 G4a)
+  assert.equal(creatureToYou(cur, "kai", { sinceMs: NOW - 20 * 3600_000, nowMs: NOW }).readable, true);
   const whole = toYou({ creatureEffects: got, sinceCrossing: 270, nowCrossing: 272 });
   assert.equal(whole.complete, true);
   assert.equal(whole.count, 2);
@@ -252,8 +255,8 @@ test("C1 (review-574): the reaction from a wolf that FLED 3 h ago is still read"
   assert.equal(got.readable, true);
 });
 
-nodeTest("C1 (review-574): a process boots far enough back to hold every reaction to_you can owe (13 h, from a creature out 12 h before it)", async () => {
-  assert.equal(BOOT_SPAN_S, 26 * 3600);
+nodeTest("C1 (review-574): a process boots far enough back to hold every reaction to_you can owe (25 h since POS-697, from a creature out 12 h before it)", async () => {
+  assert.equal(BOOT_SPAN_S, 38 * 3600);
   let asked = null;
   await new LivingSet({ law: LAW }).refresh({ query: async (sql, params) => { if (sql === LIVING_BOOT_SQL) asked = params; return []; } });
   assert.deepEqual(asked, [BOOT_SPAN_S]);
@@ -353,4 +356,9 @@ test("a read worker folds the record itself, at most once per REFRESH_MS; the wr
   __resetCreaturesReadForTest();
   assert.equal(await creaturesForRead({ hook: null, law: LAW, query: async () => null, nowMs: Date.now() }), null);
   __resetCreaturesReadForTest();
+});
+
+nodeTest("POS-697 G4a: the reach holds a bare read's whole window (back to the previous crossing's start, up to 24 h)", () => {
+  assert.ok(TO_YOU_REACH_MS >= 24 * 3600_000 + 30 * 60_000, `reach ${TO_YOU_REACH_MS / 3600_000} h`);
+  assert.ok(BOOT_SPAN_S * 1000 >= TO_YOU_REACH_MS + 12 * 3600_000, "the boot reads a reaction's creature too");
 });
