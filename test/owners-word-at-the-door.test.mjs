@@ -382,7 +382,7 @@ test("ANSWERED: once Keith's house says neutral (or opposed), nothing waits; and
   assert.notEqual(waiting.note?.startsWith("nothing awaits your word"), true, "a waiting set-down is a word awaited");
   await speak("neutral", "keith", KEITH);
   const after = await inboxOf(["keith"], p);
-  assert.equal(after.awaiting_your_word.some((x) => x.thing === STOOL), false);
+  assert.equal((after.awaiting_your_word ?? []).some((x) => x.thing === STOOL), false);
 });
 
 // ── found on the way, kept from the POS-138 suite ───────────────────────────

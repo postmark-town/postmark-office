@@ -403,7 +403,8 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       rows: stanceRows,
     },
     set_downs_awaiting: { rows: setDowns, ...(stances.set_downs_unavailable ? { unavailable: stances.set_downs_unavailable } : {}) },
-    takes_awaiting: { rows: takes, ...(stances.awaiting_your_word_unavailable ? { unavailable: stances.awaiting_your_word_unavailable } : {}) },
+    // said only when a take waits (POS-688): the page keeps its shape for every house with nothing taken
+    ...(takes.length ? { takes_awaiting: { rows: takes } } : {}),
     unplaced_bounces: { rows: bounces },
     key_asks: { rows: keyAsks, ...(keyAsksUnavailable ? { unavailable: keyAsksUnavailable } : {}) },
     stakes_at_risk: { next_settlement: stakes.next_settlement ?? null, rows: atRisk,
