@@ -26,6 +26,8 @@ import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
 import { makePool, RECORD_ON } from "./registry-pool-stub.mjs";
 import { leadPicture, carryHomePictures } from "../tools/home-picture-carry.mjs";
+import { openOauthDb } from "../src/oauth.mjs";
+import { ensureTownJournal, readTownJournal } from "../src/town-journal.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -182,6 +184,45 @@ test("the home act splits the picture off: image alone writes no paper; a bad UR
   e = null;
   try { await updateHomeAct({ handle: "mari", image: MARIGOLD }, key("rei"), null, "/no/clone", null, { keep }); } catch (x) { e = x; }
   assert.equal(e?.code, 403, "scope binds it like every edit verb");
+});
+
+// POS-711: a picture with a nonce and no prose is a picture-only update. It was
+// refused "nothing to write" after w43.9 (and crashed the office before it, POS-709):
+// the nonce is the paper door's retry key, never paper. Flag-on, with a real log.
+async function withLog(fn) {
+  const dir = mkdtempSync(join(tmpdir(), "pos711-odb-"));
+  dirs.push(dir);
+  const odb = openOauthDb(join(dir, "oauth.db"));
+  ensureTownJournal(odb);
+  process.env.TOWN_SINGLE_LOG = "1";
+  try { return await fn(odb); } finally { delete process.env.TOWN_SINGLE_LOG; odb.close(); }
+}
+
+test("POS-711 · a picture, a nonce and no prose keeps the picture and answers with its receipt; no paper is written", async () => {
+  const clone = cloneWithRegistry();
+  const commits = [];
+  await withStore(async (pool) => withLog(async (odb) => {
+    const keep = (a, k, o) => setHomePicture(a, k, { ...o, drain: recordingDrain(commits) });
+    const r = await updateHomeAct({ handle: "mari", image: MARIGOLD, nonce: "retry-1" }, key("mari"), null, clone, odb, { keep });
+    assert.equal(r.updated, "mari");
+    assert.equal(r.picture.household, "starforge");
+    assert.equal(r.picture.picture, MARIGOLD);
+    assert.equal(r.nonce, "retry-1", "the key it sent is named back");
+    assert.match(r.nonce_note, /kept by value/);
+    assert.deepEqual(pool.state.households.find((h) => h.slug === "starforge").home_images, { mari: MARIGOLD }, "the picture is kept on the record");
+    assert.equal(commits.length, 1, "the drain rendered it");
+    assert.deepEqual(await readTownJournal(odb), [], "no paper act was logged: the nonce never reached the paper door");
+  }));
+});
+
+test("POS-711 · a nonce with nothing else still gets the 422", async () => {
+  const clone = cloneWithRegistry();
+  await withLog(async (odb) => {
+    let e = null;
+    try { await updateHomeAct({ handle: "mari", nonce: "retry-2" }, key("mari"), null, clone, odb); } catch (x) { e = x; }
+    assert.deepEqual([e?.code, e?.defect], [422, "nothing to write"]);
+    assert.deepEqual(await readTownJournal(odb), []);
+  });
 });
 
 // ── the office's reads (R5, R6) ─────────────────────────────────────────────
