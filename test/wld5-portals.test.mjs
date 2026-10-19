@@ -202,7 +202,12 @@ test("EXIT INSIDE A DUNGEON ASKS FIRST: nothing written, and the answer names th
   assert.equal(a.dungeon, SPIRE);
   assert.deepEqual(a.leaving, [SPIRE, "spire/vestibule"]);
   assert.deepEqual(a.set_down_at, { x: 845, y: 1000, via: "spire/doors-outside", chosen: false });
-  assert.match(a.note, /leaves the whole of spire\/the-spire, a dungeon, and sets you down outside, at spire\/doors-outside \(845, 1000\)/);
+  // World main carries WLD-5 A's words (postmark-world#249, Darko 2026-10-19 09:21): the note is his
+  // accept sentence and the instruction is `how`. This office names no settlement yet (office#638
+  // hands the clone its time). Until then it read "… leaves the whole of spire/the-spire, a dungeon,
+  // and sets you down outside, at spire/doors-outside (845, 1000)".
+  assert.match(a.note, /^Leave the Spire from here\? You can't come back in until the next settlement\. Walking out through a door doesn't count\. You'll be set down outside, at Doors Outside\.$/);
+  assert.match(a.awaiting.how, /leaves the whole of spire\/the-spire\. Call again with confirm: true to go; nothing was recorded\.$/);
   assert.equal(o.written.length, 0);
   assert.equal(o.stops.length, 0);
 });
