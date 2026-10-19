@@ -282,6 +282,28 @@ test("APEX: world { find: \"snug\" } finds the Snug Harbour as a focus — the b
   assert.equal("found" in bare, false, "a read without find: grows no key");
 });
 
+test("APEX v2 (POS-697 G2a): a find: alone answers you + found, never the glance again; v1 keeps the whole read", { skip }, async () => {
+  const { worldApex } = await apex();
+  const r = await worldApex({ find: "snug", read_shape: "v2" }, VISITOR);
+  assert.ok(!r.error, JSON.stringify(r).slice(0, 300));
+  assert.deepEqual(Object.keys(r), ["you", "found", "more", "reading_law", "read_shape"]);
+  assert.ok(r.found.hits.some((h) => h.id === SNUG));
+  assert.equal(r.cursor, undefined, "a focus reads nothing of what happened, so it hands out no cursor");
+  const around = JSON.stringify(r, null, 1).length - JSON.stringify(r.found, null, 1).length;
+  assert.ok(around < 1000, `beyond found, the answer is only where you are and the read's tail: ${around}`);
+  const v1 = await worldApex({ find: "snug", read_shape: "v1" }, VISITOR);
+  assert.ok(v1.found && Array.isArray(v1.within), "v1's find is the whole read plus found, as before");
+});
+
+test("APEX: v2FocusAlone is the decision — find alone under v2, never a block read", async () => {
+  const { v2FocusAlone } = await apex();
+  assert.equal(v2FocusAlone({ find: "snug" }, { v2: true }), true);
+  assert.equal(v2FocusAlone({ find: "snug" }, { v2: false }), false, "v1 and v0 keep the whole read");
+  assert.equal(v2FocusAlone({ find: "snug" }, { v2: true, deep: { block: "view" } }), false);
+  assert.equal(v2FocusAlone({ find: "  " }, { v2: true }), false);
+  assert.equal(v2FocusAlone({}, { v2: true }), false);
+});
+
 test("APEX: the focus pages with find_offset, and its more note says so", { skip }, async () => {
   const { worldApex } = await apex();
   const p1 = await worldApex({ find: "the" }, VISITOR);

@@ -449,6 +449,36 @@ export function shapeV2(p) {
   return out;
 }
 
+// ── a focus answers the focus (POS-697 G2a, Darko 2026-10-19 09:21) ────────
+//
+// Under v2, `find:` sent the whole glance back with `found` at the end: 8,668
+// characters on prod to learn one mark's place, 695 of them the find. A focus
+// is one question, so v2 answers it with where you are and the answer. The
+// glance is one call away (world { read_shape: "v2" }), which the more line
+// says. No cursor rides here: this answer reads nothing of what happened, so a
+// cursor from it would skip what the caller has not yet been shown; the
+// caller keeps the cursor from their last glance. v1 and v0 are untouched.
+
+/** The v2 answer to a focus asked alone: where you are, and the focus. */
+export function shapeV2Focus({ handle = null, standpoint = {}, here = null, focus = null, found = null, investigated = null } = {}) {
+  return {
+    you: {
+      ...(handle ? { handle } : {}),
+      at: { x: Math.round(standpoint.x), y: Math.round(standpoint.y) },
+      ...(here ? { here } : {}),
+    },
+    ...(focus ? { focus } : {}),
+    ...(found ? { found } : {}),
+    ...(investigated ? { investigated } : {}),
+    more: FOCUS_MORE_V2,
+    reading_law: READING_LAW_V2,
+    read_shape: "v2",
+  };
+}
+
+/** The focus answer's more line: the glance is a call away, and the caller's own cursor still stands. */
+export const FOCUS_MORE_V2 = 'this answered your focus alone · world { read_shape: "v2" } is the whole glance · since: "<the cursor from your last glance>" still holds · explain: "<path>" what any part is for';
+
 // ── read: "<block>", the deeper read of a v2 block (G9, Wright 2026-10-14) ──
 
 /**

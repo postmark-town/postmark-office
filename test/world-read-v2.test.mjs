@@ -237,3 +237,13 @@ test("G6: heard is the newest three, each cut at 140 characters with an ellipsis
   assert.ok(h[2].said.endsWith("…"));
   assert.equal(h[0].said, "line 2");
 });
+
+test("POS-697 G2a: shapeV2Focus is where you are and the focus, with no cursor and the glance a call away", async () => {
+  const { shapeV2Focus, FOCUS_MORE_V2 } = await import("../src/world-read-v2.mjs");
+  const found = { q: "snug", hits: [{ id: "a/b" }] };
+  const r = shapeV2Focus({ handle: "wright", standpoint: { x: -1476.6, y: -2233 }, here: "the Marquee", found });
+  assert.deepEqual(r, { you: { handle: "wright", at: { x: -1477, y: -2233 }, here: "the Marquee" }, found, more: FOCUS_MORE_V2,
+    reading_law: r.reading_law, read_shape: "v2" });
+  assert.match(FOCUS_MORE_V2, /world \{ read_shape: "v2" \} is the whole glance/);
+  assert.deepEqual(Object.keys(shapeV2Focus({ standpoint: { x: 0, y: 0 } }).you), ["at"], "a spectator names no handle and no place it was not told");
+});

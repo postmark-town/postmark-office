@@ -44,7 +44,7 @@ import { IDENTITIES_SQL } from "./world2-fold.mjs"; // POS-350: the household gr
 import { refShaFromDisk } from "./world-branches.mjs";
 import { arrivesAt, nextCrossingAt } from "./crossings.mjs"; // POS-331 part 3: a walker's arrival on the wall clock; POS-632: v2's next crossing
 import { cardsSchemaAt, describeAt, readShape, shapeRead, READ_SHAPES } from "./world-read-shape.mjs"; // POS-486: the bare read's shape, one env var; v0 untouched
-import { shapeV2, activeOf, paceFrom, inWords, hourZ, eventsHere, markIdsShown, BLOCK_READS, blockFields } from "./world-read-v2.mjs"; // POS-632: the world read v2, opt-in per call
+import { shapeV2, shapeV2Focus, activeOf, paceFrom, inWords, hourZ, eventsHere, markIdsShown, BLOCK_READS, blockFields } from "./world-read-v2.mjs"; // POS-632: the world read v2, opt-in per call
 import { explainAnswer, explainPath, encodeCursor, decodeCursor, CURSOR_RENAMES_UNTIL, moreLine } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table; the one cursor; the more line
 import { entityKindOf, investigateResident, RECENT_SQL, RECENT_CAP } from "./world-investigate-entity.mjs"; // POS-632 PR-4: the entity read
 import { PUBLIC_ACTS as PUBLIC_ACTS_FOR_INVESTIGATE, ACTIVE_WINDOW_MS as ACTIVE_WINDOW_FOR_INVESTIGATE } from "./world-read-v2.mjs"; // POS-632 PR-4: the entity read's public acts and window
@@ -2442,6 +2442,53 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
   }
 }
 
+/**
+ * The three focuses a bare read can carry, read once: mark: (focus), find:
+ * (found) and investigate: (investigated). One copy, for the whole read and
+ * for v2's focus-alone answer (POS-697 G2a).
+ *
+ * WRAPPED, NEVER FORKED: `worldInvestigate` is the implementation, called
+ * whole, so the close look through this door and the close look through the
+ * flat tool cannot drift. `with_image` rides straight through to the content
+ * lane that already carries it.
+ */
+async function closeLooks(args, key, oriented, usable) {
+  const focus = await focusOn(args, key);
+  // ── THE FIND (POS-280) ─────────────────────────────────────────────────────
+  //
+  // Finding a mark by name performs nothing and belongs to no ground, so it
+  // takes the close look's shape rather than a read's: `find:` is a focus on
+  // the bare read, and the hits ride as `found` beside everything the read
+  // answers anyway. It was `read: "find"` for one release (office #212), the
+  // one reverse of "anything you can do, you can read"; that spelling still
+  // answers, with a `renamed` row, until train/2026-w42.
+  const found = await findOn(args, key);
+  // ── THE ENTITY READ (POS-632 PR-4; Sitting E) ───────────────────────────────
+  const investigated = await investigateOn(args, oriented, usable);
+  // THE CLOSE LOOK CARRIES THE MATRIX'S COLUMN (LOGOS v2, O2; 12:01): `can`, the verbs you
+  // can do to this mark now, and for a holder what it holds, sharpened to kinds, never units (15:46).
+  if (focus && !focus.error && focusArgs(args)) {
+    try {
+      const { investigateMark } = await import("./world-kinds.mjs");
+      const close = await investigateMark(focusArgs(args).mark, usable);
+      if (close.can) focus.can = close.can;
+      if (close.holds) Object.assign(focus, { holder: close.holder, holds: close.holds });
+    } catch { /* the close look stands without its column; the doors still answer */ }
+  }
+  return { focus, found, investigated };
+}
+
+/**
+ * Which v2 calls are answered by their focus alone (POS-697): a find: with
+ * no other focus beside it, and never a read: "<block>". Exported to be
+ * falsified bare.
+ */
+export function v2FocusAlone(args = {}, { v2 = false, deep = null } = {}) {
+  if (!v2 || deep) return false;
+  const has = (v) => v != null && String(v).trim() !== "";
+  return has(args.find) && !has(args.mark) && !has(args.investigate);
+}
+
 async function apexRead(args, key, ctx = {}) {
   // THE SHAPE, PER CALL (POS-632 W1): `read_shape` on the call wins over the
   // process's WORLD_READ_SHAPE, which only the MCP door passes in (ctx.readShape).
@@ -2456,6 +2503,14 @@ async function apexRead(args, key, ctx = {}) {
   // Salience is open-your-eyes' ranking, unchanged: the FOV build already
   // decided what is worth seeing from here and capped it at the context budget.
   const deep = ctx.v2Deep ?? null; // POS-632 G9: read: "<block>", the whole of one v2 block
+  // POS-697 G2a: under v2 a focus asked alone is answered alone: where you
+  // stand and the focus, never the glance again (world-read-v2.mjs § shapeV2Focus).
+  if (v2FocusAlone(args, { v2, deep })) {
+    const looks = await closeLooks(args, key, oriented, null);
+    const sp = oriented.standpoint ?? {};
+    return shapeV2Focus({ ...looks, standpoint: sp, here: await placeWords({ x: sp.x, y: sp.y }),
+      handle: sp.stance === "embodied" ? standingHandle(args, key) : null });
+  }
   // The eyes light no houses here: this read lights the houses it shows
   // together, from one activity answer (below; WLD-29).
   const seen = await worldEyes(args, key, { v2, entered: oriented?._entered, ...(deep?.block === "view" ? { budget: deep.limit } : {}), lights: false });
@@ -2622,33 +2677,8 @@ async function apexRead(args, key, ctx = {}) {
   // it is the first reverse that law forbids. A focus on the bare read is
   // neither: you are still standing where you stand, still being told what you
   // may do; you have simply looked closer at one thing while you were there.
-  //
-  // WRAPPED, NEVER FORKED: `worldInvestigate` is the implementation, called
-  // whole, so the close look through this door and the close look through the
-  // flat tool cannot drift. `with_image` rides straight through to the content
-  // lane that already carries it.
-  const focus = await focusOn(args, key);
-  // ── THE FIND (POS-280) ─────────────────────────────────────────────────────
-  //
-  // Finding a mark by name performs nothing and belongs to no ground, so it
-  // takes the close look's shape rather than a read's: `find:` is a focus on
-  // the bare read, and the hits ride as `found` beside everything the read
-  // answers anyway. It was `read: "find"` for one release (office #212), the
-  // one reverse of "anything you can do, you can read"; that spelling still
-  // answers, with a `renamed` row, until train/2026-w42.
-  const found = await findOn(args, key);
-  // ── THE ENTITY READ (POS-632 PR-4; Sitting E) ───────────────────────────────
-  const investigated = await investigateOn(args, oriented, usable);
-  // THE CLOSE LOOK CARRIES THE MATRIX'S COLUMN (LOGOS v2, O2; 12:01): `can`, the verbs you
-  // can do to this mark now, and for a holder what it holds, sharpened to kinds, never units (15:46).
-  if (focus && !focus.error && focusArgs(args)) {
-    try {
-      const { investigateMark } = await import("./world-kinds.mjs");
-      const close = await investigateMark(focusArgs(args).mark, usable);
-      if (close.can) focus.can = close.can;
-      if (close.holds) Object.assign(focus, { holder: close.holder, holds: close.holds });
-    } catch { /* the close look stands without its column; the doors still answer */ }
-  }
+  // (closeLooks reads all three; under v2 a find: alone never reaches here.)
+  const { focus, found, investigated } = await closeLooks(args, key, oriented, usable);
 
   // ── THE RECORDS THIS READ NAMES (2026-09-10) ──────────────────────────────
   const nearbyOut = nearby;
@@ -3920,7 +3950,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     read: { type: "string", examples: DISPATCHABLE, description: "an action's SHADOW — read its domain instead of performing it: read: \"say\" hears what stands in earshot, \"walk\" shows your position and who stands near you (args: {who} finds one resident anywhere on the roll), \"leave-mark\" your marks (args: {mark} to investigate one), \"stake\" the escrow behind a mark (args: {mark}), \"give\"/\"drop\"/\"take\" your holdings, \"note-to-self\" your private note. (Finding a mark by name is not a read: it is the find: focus.) Anything you can do, you can read — and every answer carries the action's full card (blurb, fields, dials, the terms that would bind it), so the law is readable before you act. A read never performs, and it is not a dry run: to try an act without performing it, pass preview: true in that act's args (leave-mark, stake, unstake). Never rides with do:" },
     args: { type: "object", description: "the action's own fields (with do:) or narrowing fields (with read:), exactly as the entry's `fields` block names them — world { do: \"say\", args: { text: \"hello\" } }. Unknown fields bounce by name. Your standpoint (handle) stays top-level.", additionalProperties: true },
     mark: { type: "string", description: "FOCUS the bare read on one mark — <by>/<slug>, as ids appear in the telling. The answer is the read you would have got anyway, plus `focus`: the close look at that mark (its body, the properties predicated on it, what stands inside it). It is a focus rather than an action because investigating performs nothing — do: would be a lie, and read: is an action's shadow, so a shadow with no action is the reverse the apex's law forbids. Never rides with do: or read:." },
-    find: { type: "string", description: "FIND a mark by name from anywhere — its name, slug or id. The answer is the bare read you would have got anyway, plus `found`: the hits, best match first (an exact id, then names and slugs starting with it, then containing it), each with its place, its distance from you and the stops to ride between. A focus, like mark:, because finding performs nothing and no ground grants it. Never rides with do: or read:. (It was read: \"find\" until train/2026-w41; that spelling answers with a `renamed` row until " + FIND_READ_ANSWERS_UNTIL + ".)" },
+    find: { type: "string", description: "FIND a mark by name from anywhere — its name, slug or id. The answer is the bare read you would have got anyway, plus `found`: the hits, best match first (an exact id, then names and slugs starting with it, then containing it), each with its place, its distance from you and the stops to ride between. A focus, like mark:, because finding performs nothing and no ground grants it. Under read_shape: \"v2\" a find: alone answers where you are and `found`, never the glance again (the glance is world { read_shape: \"v2\" }). Never rides with do: or read:. (It was read: \"find\" until train/2026-w41; that spelling answers with a `renamed` row until " + FIND_READ_ANSWERS_UNTIL + ".)" },
     investigate: { type: "string", description: "LOOK CLOSER at a living thing — a resident's handle. The answer is the bare read you would have got anyway, plus `investigated`: where they are now and where the last crossing's save put them, their newest public acts in the last 12 hours (a say is named, never its words), and what they carry. Their household and letters are at household and town. A focus, like mark: (marks) and find:. Creatures join with their class." },
     find_offset: { type: "number", description: "with find:, walk past the first hits — the previous answer's found.next_offset" },
     find_limit: { type: "number", description: "with find:, how many hits (default 10, at most 50)" },
