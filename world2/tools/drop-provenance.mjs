@@ -42,11 +42,23 @@ export function dropRefId(ref) {
  * candy goes unproved. Acceptable today because W2's class tree has no class
  * under candy; the day it has one, a skew lets that kind's drop pass unchecked.
  */
-const isCandyClass = (name, classes) => name != null
-  && (String(name) === "candy" || (classes ? classChainOf(classes, name).includes("candy") : false));
-export const isCandyClaim = (c, classes = null) => c?.claimant !== "the-town"
-  && (isCandyClass(c?.class, classes)
-    || ((c?.class === "sited" || c?.class == null) && isCandyClass(c?.data?.class, classes)));
+export const isCandyClaim = (c, classes = null) => {
+  const chainOf = classes ? (name) => classChainOf(classes, name) : null;
+  return c?.claimant !== "the-town"
+    && (isCandyClass(c?.class, chainOf)
+      || ((c?.class === "sited" || c?.class == null) && isCandyClass(c?.data?.class, chainOf)));
+};
+
+/**
+ * Is this class candy, itself or by lineage? THE ONE RULE's class half (POS-692):
+ * the clearing asks it of every pending claim (above) and the leave door of every
+ * classed mark (src/world.mjs § leaveMarkAct), each through its own reader of the
+ * class layer: `chainOf(name)` is the class's lineage, itself first (the store's
+ * `classChainOf` here, the law snapshot's `lineageOf` at the door). With none,
+ * only `candy` itself is known.
+ */
+export const isCandyClass = (name, chainOf = null) => name != null
+  && (String(name) === "candy" || (chainOf ? chainOf(String(name)).includes("candy") : false));
 
 /**
  * The refusal check for one candy claim, given the act its reference names (or
@@ -70,6 +82,24 @@ export function dropProvenanceCheck(claim, act) {
 }
 
 /**
+ * THE ONE PROOF (POS-692): one candy claim's refusal check, its act read from
+ * `acts`, or null when it is proved. A reference no act id could carry is
+ * refused without asking the store. The clearing asks it of every pending candy
+ * claim (below); the leave door asks it of a candy mark before filing one, so
+ * the door never takes a candy the clearing will refuse. `q(sql, params)`
+ * answers `{ rows }`.
+ */
+export async function dropRefusalOf(q, claim) {
+  const id = dropRefId(claim?.data?.dropped);
+  let act = null;
+  if (id != null) {
+    const { rows } = await q("SELECT id, action, class, actor, payload FROM acts WHERE id = $1::bigint", [id]);
+    act = rows[0] ?? null;
+  }
+  return dropProvenanceCheck(claim, act);
+}
+
+/**
  * Every pending candy claim, checked against `acts` in the clearing's own
  * transaction. `refuse(claim, check)` is the clearing's refuse-alone: the claim
  * is refused with the named check and goes on the window's unfileable list.
@@ -78,13 +108,7 @@ export async function checkDroppedUnits(q, pending, { decided = () => false, ref
   const refused = [];
   for (const c of pending) {
     if (decided(c) || !isCandyClaim(c, classes)) continue;
-    const id = dropRefId(c.data?.dropped);
-    let act = null;
-    if (id != null) {
-      const { rows } = await q("SELECT id, action, class, actor, payload FROM acts WHERE id = $1::bigint", [id]);
-      act = rows[0] ?? null;
-    }
-    const check = dropProvenanceCheck(c, act);
+    const check = await dropRefusalOf(q, c);
     if (check) { refuse(c, check); refused.push({ id: c.id, check }); }
   }
   return refused;
