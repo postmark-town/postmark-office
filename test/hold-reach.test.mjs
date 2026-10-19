@@ -358,17 +358,22 @@ test("WALK #12 item 1, the read half — a thing set down stands WHERE IT WAS SE
   assert.equal(dropped.act_seq, 1326);
 });
 
-test("…a HELD thing rides its holder — the-anchor's sentence, implemented at last", async () => {
+test("…a HELD thing has NO place: published but unplaced, its holder's contents (POS-688, Darko 2026-10-18 20:58)", async () => {
+  // SUPERSEDED: "a HELD thing rides its holder — where its holder is, not where it was made".
+  // The ruling: a held thing never appears as a mark of its own, so it has no position to give.
   const id = "wright/a-try-square-for-the-joinery";
+  let asked = 0;
   const out = await whereThingStands(id, {
     attachments: [{ target: id, entity: "ethan-thorne", policy: "cascade", born_at: "2026-09-07T13:57:16Z" }],
     journal: [],
     fold: { x: 1015, y: -2394 },              // wright's terrace, where it was made
-    standpointOf: async (h) => (h === "ethan-thorne" ? { x: 1394, y: -2394 } : null),
+    standpointOf: async () => { asked += 1; return { x: 1394, y: -2394 }; },
   });
   assert.equal(out.source, "holder");
   assert.equal(out.holder, "ethan-thorne");
-  assert.deepEqual(out.where, { x: 1394, y: -2394 }, "a held thing is where its holder is, not where it was made");
+  assert.equal(out.where, null, "no place: not the holder's, and not where it was made");
+  assert.equal(asked, 0, "the holder's standpoint is not asked: no place is derived from it");
+  assert.match(out.says, /ethan-thorne's contents/);
 });
 
 test("…and canon's fold is the answer ONLY when neither a holder nor a set-down speaks", async () => {
@@ -384,7 +389,7 @@ test("an unreadable holding record is NOT an answer about where a thing stands",
   assert.equal(out.where, null, "a store that did not answer must not be given canon's answer under its name");
 });
 
-test("a holder the record does not place yields NO position, and says whose it is", async () => {
+test("a held thing never falls back to the fold, whoever holds it, and says whose it is", async () => {
   const id = "a/b";
   const out = await whereThingStands(id, {
     attachments: [{ target: id, entity: "nomad", policy: "cascade", born_at: "2026-09-07T00:00:00Z" }],
@@ -392,7 +397,7 @@ test("a holder the record does not place yields NO position, and says whose it i
   });
   assert.equal(out.source, "holder");
   assert.equal(out.where, null, "falling back to the fold here would say a held thing is where it is not");
-  assert.match(out.says, /does not place nomad/);
+  assert.match(out.says, /nomad is holding it/);
 });
 
 // ── WALK #11 · "the town says nothing has happened to me" ────────────────────
