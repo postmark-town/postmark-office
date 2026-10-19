@@ -23,7 +23,8 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { HELD_BY, PLACED, heldBy, placeOf, viewOf, unplaceHeld, placedMark, placedCentreOfRow, isThingMark, actIdOf } from "../src/held.mjs";
+import { HELD_BY, PLACED, heldBy, placeOf, viewOf, unplaceHeld, placedMark, placedCentreOfRow, isThingMark, groundChain, actIdOf } from "../src/held.mjs";
+import { worldClone } from "./fixture-paths.mjs";
 import { holdPrintout } from "../world2/tools/hold-through.mjs";
 import { anchorCentres } from "../world2/tools/conversations.mjs";
 import { refuseTakeOfHeld } from "../src/world-hold.mjs";
@@ -151,9 +152,27 @@ test("7. a thing is a thing by its class chain", () => {
   assert.equal(isThingMark({ kind: "parcel" }, opts), false);
 });
 
-test("8. W4: the witness stamp never anchors an act on a thing (source pin; the probe is the playground's)", () => {
+test("8. W4: the witness stamp never anchors an act on a thing (the call sites)", () => {
   const src = readFileSync(join(ROOT, "src", "world.mjs"), "utf8");
-  assert.ok(src.includes("const groundAt = (p) => chainAt(p).filter((m) => !isThingMark(m, thingOpts));") && src.includes("const at = anchorAt(here, { chain: groundAt(here), centreOf });") && src.includes("chainAt: groundAt }"), "the actor and every witness are pinned to ground");
+  assert.ok(src.includes("const groundAt = (p) => groundChain(chainAt(p), byId, thingOpts);") && src.includes("const at = anchorAt(here, { chain: groundAt(here), centreOf });") && src.includes("chainAt: groundAt }"), "the actor and every witness are pinned to ground");
+});
+
+// THE PLAYGROUND'S FIND (2026-10-19): the engine's chain links are slim, so the
+// first W4 asked a link with no kind and no class, and a tin box on the ground
+// anchored two drops. Driven on the world engine's own containmentChain.
+const WORLD = worldClone();
+test("8b. W4 on the engine's own chain: a thing standing in a parcel is never the anchor, its full record is asked", { skip: WORLD ? false : "no world clone with tools/world-verbs.mjs" }, async () => {
+  const { containmentChain } = await import(pathToFileURL(join(WORLD, "tools", "world-verbs.mjs")).href);
+  const ground = { id: "sb-ash/sb-lantern-ground", kind: "parcel", by: "sb-ash", tier: "home", at: { x: 200, y: -350 }, extent: { w: 25, h: 25 }, body: "ground" };
+  // the old form (kind: sited + class), which every engine chains; world main chains `kind: thing` too (mark-kind § isGround)
+  const box = { id: "sb-ash/a-tin-box", kind: "sited", class: "thing", by: "sb-ash", tier: "home", at: { x: 202, y: -355 }, extent: { w: 1, h: 1 }, body: "A dented tin box.", holder: "true" };
+  const marks = [ground, box];
+  const chain = containmentChain({ x: 202, y: -355 }, marks);
+  assert.deepEqual(chain.map((l) => l.id), [ground.id, box.id], "the engine nests the box inside the ground");
+  assert.deepEqual([chain[1].kind, chain[1].class], [undefined, undefined], "and its links carry no kind and no class: the shape that hid the thing");
+  const opts = { classOf: (m) => (m.kind === "thing" ? "thing" : m.class ?? null), extendsOf: () => null };
+  assert.deepEqual(groundChain(chain, new Map(marks.map((m) => [m.id, m])), opts).map((l) => l.id), [ground.id], "known by its full record, the box is not ground");
+  assert.deepEqual(chain.filter((l) => !isThingMark(l, opts)).map((l) => l.id), [ground.id, box.id], "THE FLIP: asked of the link itself, the box anchors");
 });
 
 test("9. W4: an act anchored on a thing now in someone's hands still composes, against where it last stood", () => {
