@@ -3682,6 +3682,26 @@ async function groundMinimumStake(clean, canon) {
 }
 
 /**
+ * WHAT A DROP STAKES, BY THIS SAME RULE (POS-688 D4 step 3, Darko 2026-10-19
+ * 09:27): a held thing set down on commons ground stakes 1✦ from the dropper,
+ * the same as leave-mark's "elsewhere you stake 1✦". A set-down moves a
+ * published mark's place, so it is leave-mark's AMENDMENT verdict, asked of the
+ * thing as the drop will print it (at the dropper's spot, with its own extent):
+ * `groundMinimumStake`, `escrowBehindMark` and `putForwardVerdict`, never a
+ * second copy. Its maker's ground is free, and so is a thing whose stamps
+ * already cover the ground; anything else needs the ground's minimum staked.
+ * The thing keeps its maker, so the ground is judged for the maker, which is
+ * the answer the settlement gives too: it walks a mark's ground by its author.
+ */
+export async function dropStakeVerdict({ thing, by, at, extent = null }) {
+  const ground = await groundMinimumStake({ by, kind: "sited", at, extent: extent ?? { w: 1, h: 1 } }, canonForGuards());
+  const min = Number(ground?.min) || 0;
+  const escrowBehind = min >= 1 ? await escrowBehindMark(thing) : 0;
+  const verdict = putForwardVerdict({ amending: true, escrowBehind, groundMin: min });
+  return { min, ground: ground?.ground ?? null, escrow_behind: escrowBehind, need: verdict.put_forward ? 0 : min };
+}
+
+/**
  * THE ESCROW ALREADY BEHIND A MARK — the one reader for both halves of the
  * amendment answer (#2614, hotfix w38.3).
  *
