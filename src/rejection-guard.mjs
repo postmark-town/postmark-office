@@ -23,7 +23,7 @@ let seen = 0;
 export function rejectionLine(reason, n = seen) {
   const code = reason?.code != null ? ` code=${reason.code}` : "";
   const defect = reason?.defect ? ` defect="${String(reason.defect).slice(0, 200)}"` : "";
-  const stack = String(reason?.stack ?? reason?.message ?? reason);
+  const stack = String(reason?.stack ?? reason); // an Error without a stack prints as "Error: <its words>"
   return `[unhandled-rejection] #${n} the office kept serving; a promise was rejected and nothing awaited it.${code}${defect}\n${stack}`;
 }
 
