@@ -21,13 +21,16 @@ stays true:
 
 | Cache | Moved by | Kind |
 |---|---|---|
-| `world.mjs § positionProjection` (POS-264) | the walk door, `recordMoved` | `position`: the governing record, as `recordOfMovement` builds it |
+| `world.mjs § positionProjection` (POS-264) | the walk door and the enter door's set-down, `recordMoved` | `position`: `{ record, actId }`, the governing record as `recordOfMovement` builds it and the act's id |
 | `server.mjs` `INDEX` (office.db) | the main thread's reload | `index`: the worker runs its own `reloadIndex` now instead of at its next poll |
 | `server.mjs` world.db caches (the five in the STAMP table) | the main thread's reload | `world-store`: the worker runs its own `reloadWorldCaches` now |
 
-The projection's other writers (the enter door's set-down, any pen outside the
-office) do not call in on the main thread either. The main thread and every
-worker rebuild after `PROJECTION_MAX_AGE_MS` (60 s).
+A writer outside the office (the playground's set-down, any pen in another
+process) does not call in. Since POS-691 the main thread and every worker hear it
+through the store's departure head (`world2-guards.mjs § storeDepartureHead`, ids
+only): before the projection answers, an id it did not record in-step makes it
+rebuild. `PROJECTION_MAX_AGE_MS` (60 s) stays as the backstop: a head that can't be
+read, or a departure from outside that commits under an id already passed.
 
 ## MAIN ONLY
 

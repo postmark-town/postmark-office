@@ -91,6 +91,18 @@ export const paceKmH = (dials) => {
 };
 
 /**
+ * An act's line's tail: its fields in the approved wording, optional ones
+ * marked `?`; an act with no approved line names its own schema's fields. ONE
+ * tail for v1's `oneLine` and v2's `actLine` (POS-697 G1a, Darko 2026-10-19
+ * 09:21: v2's lines carry their fields too, so a first act does not bounce).
+ */
+export function fieldsTail(card) {
+  const fields = ONE_LINERS[card.action]?.fields
+    ?? Object.entries(card.fields ?? {}).map(([name, spec]) => (spec?.required ? name : `${name}?`));
+  return fields.length ? `Fields: ${fields.join(", ")}.` : "No fields.";
+}
+
+/**
  * One card, one line. An act with no approved line says its blurb's first
  * sentence and its own fields. Walk's pace is the resident class's own dial
  * (`the-town/resident`'s `pace_km_per_crossing`, as the walk itself is priced),
@@ -101,9 +113,7 @@ export function oneLine(card, { pace = null } = {}) {
   const fixed = ONE_LINERS[card.action];
   let says = fixed?.says ?? firstSentence(card.blurb);
   if (card.action === "walk") says = pace ? says.replace(/about [\d.]+ km an hour/, `about ${Math.round(pace * 10) / 10} km an hour`) : "Walk to a mark or a point.";
-  const fields = fixed?.fields
-    ?? Object.entries(card.fields ?? {}).map(([name, spec]) => (spec?.required ? name : `${name}?`));
-  return { action: card.action, line: `${says} ${fields.length ? `Fields: ${fields.join(", ")}.` : "No fields."}` };
+  return { action: card.action, line: `${says} ${fieldsTail(card)}` };
 }
 
 // ── the records ─────────────────────────────────────────────────────────────
@@ -218,6 +228,6 @@ export function cardsSchemaAt(schema, shape = "v0") {
   return {
     ...schema,
     enum: ["names", "full"],
-    description: 'the action cards\' size. Omitted, the lean read gives each act as one line (v1) or by name (v2). cards: "full" gives every card whole (its blurb, fields, dials and grant); cards: "names" gives each act\'s name, one line and how it reached you.',
+    description: 'the action cards\' size. Omitted, each act is one line with its fields (v1\'s actions, v2\'s can). cards: "full" gives every card whole (its blurb, fields, dials and grant; in v2, as cards beside can); cards: "names" gives each act\'s name, one line and how it reached you (in v2, can names its acts and nothing more).',
   };
 }

@@ -345,6 +345,10 @@ test("QA fail 4 · standing on a set-out bowl: the bare read, the close look's c
     for (const v of ["take", "give", "refill"]) assert.ok(acts.includes(v), `${v} is admitted here, so it shows (${acts})`);
     // the close look's column, one bowl at a time
     assert.deepEqual((await worldApex({ mark: ANA_DOOR_BOWL }, KEY)).focus?.can, ["take", "give"], "ana's open bowl: take from it and give into it; not cy's to refill");
+    // POS-697 G2b: under v2 the focus is answered alone, and still carries the verbs the eyes decide
+    const alone = await worldApex({ mark: ANA_DOOR_BOWL, read_shape: "v2" }, KEY);
+    assert.deepEqual(Object.keys(alone), ["you", "focus", "more", "reading_law", "read_shape"]);
+    assert.deepEqual(alone.focus?.can, ["take", "give"], "the focus alone reads the eyes for its verbs");
     assert.deepEqual((await worldApex({ mark: CY_DOOR_BOWL }, KEY)).focus?.can, ["give", "refill"], "cy's own empty bowl: give into it and refill it; nothing in it to take");
     // and each verb shown lands at its door
     const took = await callHoldTool("world_hold", { from: ANA_DOOR_BOWL, count: 1 }, KEY, { verb: "take" });

@@ -76,7 +76,7 @@ import { emissionsEnabled } from "./dynamic-store.mjs"; // stage 2: the dynamic 
 import { world2Enabled } from "./world2-acts.mjs"; // the write-path closure: is the shadow mirror on at all
 import { VESSEL_HANDLE, ridesTheVessel } from "./dynamic-entities.mjs"; // the aboard test, one home for two readers
 import { carriersFrom, carriersWithDisclosure, heardFromV2, inRect, movementStandpoint, leavingWhileOccupying, walkFenceRefusal, movementV2Enabled, roadTerms, storedDepartures, storedGoverningDepartures, storedRecordsFor, vehicleStandpoint, vesselPositionAt as vesselFromTimetable, vesselServiceFrom, worldHasVehicle } from "./world-movement.mjs"; // stage D: carriers carry, frames compose; #2986: aboard is occupancy
-import { arrivedNotice, doorstepTransport, isVehicleStop, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable; POS-165: the walk verb asks the same predicate the ride verb does
+import { arrivedNotice, doorstepTransport, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable
 import { findMarks } from "./world-find.mjs"; // find a mark by name from anywhere (2026-09-26)
 import { byBand, presenceEnabled, presentNear, near as presenceNear, everyone as presenceEveryone, PRESENCE_DIALS } from "./dynamic-presence.mjs"; // stage 2: residents revealed to each other
 import { MEDIA_BASE, mediaUrlOk } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks
@@ -574,19 +574,22 @@ export const departuresNow = async (worldClone = WORLD_CLONE, opts = {}) =>
 export const positionsProjected = () => process.env.WORLD_POSITIONS === "1";
 /** The projection's rebuild, exported so a test can stand the same projection on its own clock. */
 export const rebuildPositions = (atMs) => departuresAcrossEras(WORLD_CLONE, { atMs, fromSnapshot: true });
-export const positionProjection = createPositionProjection({ rebuild: rebuildPositions });
+/** The store's departure head (POS-691), only where the projection reads the store at all. */
+export const departureHead = async (after) => (movementV2Enabled() ? (await import("./world2-guards.mjs")).storeDepartureHead(after) : null);
+export const positionProjection = createPositionProjection({ rebuild: rebuildPositions, head: departureHead });
 
 // THE READ WORKERS' COPY (POS-266). Each worker keeps its own projection and
 // the walk door runs only on the main thread, so the door's record is announced
 // and every worker records the same movement. `recordMoved` is the one call the
 // door makes; the announcement rides the port ahead of any read handed over
-// after it (read-workers.mjs § THE SHAPE).
-export function recordMoved(movement) {
+// after it (read-workers.mjs § THE SHAPE). `actId` is the act just written, so
+// each projection's head read knows that writer was heard (POS-691).
+export function recordMoved(movement, actId = null) {
   const rec = recordOfMovement(movement);
-  positionProjection.record(rec);
-  announce("position", rec);
+  positionProjection.record(rec, { actId });
+  announce("position", { record: rec, actId });
 }
-onAnnounce("position", (rec) => positionProjection.record(rec));
+onAnnounce("position", ({ record, actId }) => positionProjection.record(record, { actId }));
 
 /** `departuresAcrossEras`' shape — from the projection when this office keeps one for this clone. */
 async function erasFor(worldClone) {
@@ -4410,6 +4413,19 @@ async function placementForecast({ worldClone, w, worldUnread, id, ring, mistsCr
   return { as_of: f.as_of, fringe: r.fringe, wall: r.wall, says: r.says };
 }
 
+/**
+ * THE WORDS FOR A PLACED CANDY (POS-692; re-drafted around kinds for Darko,
+ * 2026-10-19 09:21, who reads them before merge). Said only when the door's
+ * candy rule refuses (§ leaveMarkAct): candy is made by its KIND, each a town
+ * subclass of candy that residents asked for, with the resident's own handle
+ * in the call that works. A set-down by kind is not built (world-kinds.mjs §
+ * drop), so it is not offered. A new kind is asked for by letter to wright.
+ */
+export const CANDY_IS_MADE = Object.freeze({
+  defect: "candy is made by its kind, into hands or a bowl, not placed as a mark",
+  hint: (by) => `every kind of candy is the town's, and anyone may make it: explain: "candy" lists the kinds. leave-mark { kind: "<a kind>", count: 5, to: "${by}" } makes five into your hands, and to: a bowl's id (a thing made with holder: true) fills the bowl instead. give { kind: "<the kind>", count: 1, to: <a resident or a bowl> } hands one on, and consume { kind: "<the kind>" } eats one. Your own candy not a kind yet? Write to wright with its name and a line about it, and the town makes it a kind. Nothing was written.`,
+});
+
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
@@ -4422,7 +4438,14 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // its own, applies to a count.
   if (payload.to !== undefined) {
     const handles = [...(key?.handles ?? [])];
-    const actor = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
+    // WHO MAKES IT is the top-level handle, the standpoint the world card keeps
+    // top-level (kogane's bug post, POS-692 ruling 09:21): it wins over a key's
+    // count, and a `by` naming another resident is two actors, refused.
+    const named = payload.handle != null && String(payload.handle).trim() !== "" ? String(payload.handle).trim() : null;
+    if (named && payload.by != null && String(payload.by).trim() !== named)
+      throw bounce(422, `two residents named: handle "${named}" and by "${payload.by}"`,
+        `a make is one resident's act: the top-level handle is who makes it. Leave by: off, or name the same resident. Nothing was made.`);
+    const actor = named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
     if (!actor) throw bounce(422, "which resident is making these?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
     if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
     const own = ["slug", "body", "at", "extent", "points", "slot", "value", "parent_id", "class", "consent", "placed_by", "preview", "amend"].filter((k) => payload[k] !== undefined);
@@ -4606,6 +4629,33 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
         makers.read
           ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
           : `no class in "${klass}"'s lineage states makers, and an unread makers answers false, the root's own answer (postmark-node), so making one is the town's act, not a resident's — world { explain: "${klass}" } says who makes what`);
+    // ── A CANDY ON THE GROUND IS A SET-DOWN UNIT'S, PROVED (POS-692) ──────────
+    // makers lets a resident MAKE candy, and candy is made by the count into
+    // hands or a holder (`to:`, above). A candy mark of its own stands only
+    // where a unit was set down: the clearing refuses every candy claim whose
+    // record does not name its proved `units:drop` act (drop-provenance.mjs,
+    // WLD-27). Taken here, amia-semper's four named sweets stood as drafts and
+    // were refused at S118 with no word. So the door asks the clearing's own
+    // rule, both halves, and refuses at once. The hold door's own set-down is
+    // proved by construction (`droppedUnit`: it hands in the act it just wrote).
+    if (!droppedUnit) {
+      const { isCandyClass, dropRefId, dropProvenanceCheck, dropRefusalOf } = await import("../world2/tools/drop-provenance.mjs");
+      if (isCandyClass(klass, (name) => lineageOf(name, classExtendsOf()))) {
+        const claim = { claimant: by, class: String(klass), data: { label: payload.label, dropped: payload.dropped } };
+        let check;
+        if (dropRefId(payload.dropped) == null) check = dropProvenanceCheck(claim, null);
+        else {
+          try {
+            const { officeRead } = await import("./world2-pen.mjs");
+            check = await officeRead((c) => dropRefusalOf((sql, params) => c.query(sql, params), claim), { by: "candy-door" });
+          } catch (e) {
+            throw bounce(503, "the set-down this candy names could not be checked",
+              faultLogged("the candy door could not read the set-down it names", e));
+          }
+        }
+        if (check) throw bounce(422, CANDY_IS_MADE.defect, CANDY_IS_MADE.hint(by));
+      }
+    }
   }
 
   // ── the thing grammar (the object primitive) ────────────────────────────────
@@ -4723,7 +4773,9 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     : klass === "bounty"
       ? { class: klass, ask: String(ask).trim(), reward: Number(reward), status: status === undefined ? "open" : String(status).trim() }
       : klass === "chest" ? { class: klass, ...chestFields }
-        : klass === "candy" ? { class: klass, label: String(payload.label), dropped: String(payload.dropped) }
+        // only a proved candy reaches here (§ A CANDY ON THE GROUND), and each field is written only when
+        // sent: String(undefined) once wrote the text "undefined" into four claims and their acts (POS-692)
+        : klass === "candy" ? { class: klass, ...(payload.label != null ? { label: String(payload.label) } : {}), ...(payload.dropped != null ? { dropped: String(payload.dropped) } : {}) }
           : { class: klass, ...(holderFields ?? {}) };
   // ── THE FORM IT IS WRITTEN IN (LOGOS v2 part 2; O1's body, G3: "The office's
   // own writers stay on the old form here and flip in O2") ─────────────────────
@@ -5318,7 +5370,7 @@ export async function worldNoteViaOffice(worldClone, payload = {}, key = null) {
 // Rulings this implements, named so a reviewer can check each:
 //   2 — destination order: no target → HOME; mark id → its footprint; raw coords
 //       kept for the general case, never the path we teach.
-//   3 — targets are SITED marks only, tier-excluded, extent-capped.
+//   3 — targets are SITED marks only (the tier exclusion was removed by POS-702, Darko 2026-10-19; the extent cap by C7, below).
 //   4 — water is an obstacle and there is NO pathfinding. A leg that crosses
 //       water is refused and the bounce names the nearest crossing; the resident
 //       declares their own waypoints. The resident is the pathfinder.
@@ -5334,7 +5386,6 @@ export async function worldNoteViaOffice(worldClone, payload = {}, key = null) {
 // ("too large to be a meaningful destination") no longer holds. A removed
 // check, not a lost record — CALLS.md C7 (archived in the world repo) keeps
 // the original reasoning.
-const WALK_EXCLUDED_TIERS = new Set(["constitution"]);
 
 // How many sited marks a parcel bounce names before it stops listing. A parcel
 // is 25 m square, so this is a cap that should almost never bite; it exists so a
@@ -5686,50 +5737,18 @@ async function walkAct(worldClone, payload = {}, key = null) {
       const refusal = unwalkableTarget(m, within);
       throw bounce(422, refusal.defect, refusal.hint);
     }
-    // ── A STOP A TIMETABLE NAMES IS A DESTINATION (POS-165, Keemin-ruled
-    //    2026-09-21 on Kogane's letter) ────────────────────────────────────
+    // ── ANYWHERE ON THE MAP IS A DESTINATION (POS-702; Darko, 2026-10-19 13:58) ──
     //
-    // "A mark that any vessel's timetable names as a stop is a destination,
-    // whatever its tier. The furniture refusal stays for furniture no timetable
-    // names."
-    //
-    // The instance: the Post Office's own notes say every stop on her timetable
-    // is a door into her and name `the-town/the-post-office` first — and that
-    // mark wears the constitution tier, so the boat's documented first step was
-    // the one move this verb refused. Kogane's workaround was a 71,340-character
-    // mark read to dig out two coordinates and then a coordinate walk to them,
-    // which this door would have accepted all along. The refusal was never
-    // protecting anything: the same journey, spelled the only way the door
-    // refused to hear.
-    //
-    // THE RIDE VERB SETTLED THIS THREE DAYS AGO, THE OTHER WAY. `world-ride.mjs
-    // § rideRefusal` carries Wright's 2026-09-19 ruling that her own id IS a
-    // valid destination — "on this ring she is both" — and the walk verb was the
-    // lone holdout. So this reads `isVehicleStop`, the predicate that ruling
-    // already runs on, rather than inventing a second spelling of "is a stop".
-    //
-    // ⚑ THE READ IS INSIDE THE REFUSAL BRANCH, AND THAT IS THE WHOLE COST
-    //   ARGUMENT. A walk to a market mark, a home mark, a parcel or a coordinate
-    //   never reaches this line. Only a walk that bounces today pays anything,
-    //   and what it pays is a `WeakMap` hit: `vesselServiceFrom` memoizes on the
-    //   marks array, `world()` hands back the same array until the sha moves,
-    //   and with WORLD_MOVEMENT_V2 on the service is ALREADY folded before this
-    //   block — `residentStandpoint` above → `movementStandpoint` →
-    //   `vesselServiceFrom`, same key, same repo.
-    //
-    // ⚑ ONE SERVICE, NOT EVERY VESSEL — said out loud because the ruling says
-    //   "any vessel". `vesselServiceFrom` collapses `servicesFromFold`'s LIST to
-    //   one (`services.find(…) ?? services[0] ?? null`). Measured on the fold at
-    //   world `caef5eb8`: 1,239 marks, exactly ONE `mechanic: timetable` mark, so
-    //   today the two sets are the same. If a second timetable is ever planted,
-    //   this exemption narrows to the first vessel — as do `world-crossings.mjs`'s
-    //   own two `isVehicleStop` call sites, which share the reader.
-    if (WALK_EXCLUDED_TIERS.has(m.tier)) {
-      const { service } = await vesselServiceFrom(w, { repo: WORLD_CLONE });
-      if (!isVehicleStop(id, service))
-        throw bounce(422, `"${id}" is ${m.tier} — the town's own furniture, not a destination`,
-          "walk to a market or sovereign mark, or give coordinates");
-    }
+    // The tier refusal is gone: "the town's own furniture, not a destination"
+    // refused every constitution mark, and once every town mark stands at the
+    // constitution (POS-702) it would have refused the deck, the gangway and
+    // the quay that residents walk to. Darko ruled A: anything with a place on
+    // the map is walkable, and the Mist (seasonal) is the one exception, which
+    // `mistsRefusal` below still answers. POS-165's exemption for a stop on a
+    // vessel's timetable (Keemin, 2026-09-21) is subsumed: every stop is now a
+    // destination because every placed mark is. A mark with no place of its own
+    // (a law node, a class, a property) is still refused, as not sited (above)
+    // and as having no place on the map (below).
     if (!m.at) throw bounce(422, `"${id}" has no place on the map`, "an unplaced mark cannot be walked to");
     // The C7 size cap once bounced here ("too big to be a destination", ≥2000 m).
     // Removed 2026-08-19, founder-ruled: rim arrival makes any named mark a
@@ -6028,7 +6047,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
       // (position-projection.mjs § recordOfMovement). Recorded whether or not
       // the flag is on — a projection nobody reads costs a Map.set, and one
       // switched on mid-life is then already current.
-      if (worldClone === WORLD_CLONE) recordMoved(movement);
+      if (worldClone === WORLD_CLONE) recordMoved(movement, walkRow?.actId ?? null);
     }
 
     result = {

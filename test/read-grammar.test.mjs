@@ -156,3 +156,23 @@ test("the doors answer explain: before anything is read, and never beside an act
   assert.equal((await townApex({ explain: "reading" }, null, {})).explains, "reading");
   assert.equal((await townApex({ explain: "who" }, null, {})).code, 422, "a world path is not a town path");
 });
+
+test("POS-697 G3a: a live walk carries its destination (the act row's object), and around_you rows say where and how far", async () => {
+  const { aroundYou } = await import("../src/world-happened.mjs");
+  const at = new Date("2026-10-15T00:01:00Z");
+  const rows = [
+    { id: "21", actor: "elowen", action: "walk", object: "a/the-pier", at, at_anchor: "a/b", at_dx: 30, at_dy: 40 },
+    { id: "22", actor: "fizz", action: "walk", object: null, at, at_anchor: "a/b", at_dx: 0, at_dy: 0 },
+    { id: "23", actor: "mari", action: "say", object: "a/b", at, at_anchor: "a/b", at_dx: 0, at_dy: 0 },
+  ];
+  const query = async (sql) => (sql === LIVE_HW_SQL ? [{ hw: "23" }] : [...rows].reverse());
+  const compose = ({ anchor, dx, dy }, centreOf) => { const c = centreOf(anchor); return c ? { x: c.x + dx, y: c.y + dy } : null; };
+  const got = await liveLines({ sinceMs: 0, query, centreOf: () => ({ x: 100, y: 200 }), compose });
+  assert.deepEqual(got.lines.map((l) => l.payload.to ?? null), ["a/the-pier", null, null], "a walk to a point names no mark; a say is never a departure");
+  assert.match(LIVE_NEWEST_SQL, /\bobject\b/);
+  assert.match(LIVE_AFTER_SQL, /\bobject\b/);
+  const around = aroundYou({ lines: got.lines, at: { x: 100, y: 200 } });
+  const elowen = around.events.find((e) => e.actor === "elowen");
+  assert.deepEqual([elowen.x, elowen.y, elowen.m, elowen.toward], [130, 240, 50, "a/the-pier"]);
+  assert.equal(around.events.find((e) => e.actor === "mari").text, undefined, "a say's words never ride around_you");
+});

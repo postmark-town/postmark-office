@@ -621,6 +621,25 @@ export async function storeDepartureSnapshot({ atMs = null } = {}) {
   return reading(async (client) => snapshotRead(client, { atMs }));
 }
 
+/**
+ * THE DEPARTURE HEAD (POS-691): the ids of the departure acts past `after`,
+ * ascending, or, with `after` null, the newest one alone. Ids only, by the
+ * primary key's range (0.1 ms on prod's 20k acts, 2026-10-19), never a record.
+ * Null with the store off, where the projection reads no store record either.
+ */
+export const DEPARTURE_HEAD_SQL = "SELECT id FROM acts WHERE action = ANY($1) AND id > $2 ORDER BY id";
+export const DEPARTURE_NEWEST_SQL = "SELECT id FROM acts WHERE action = ANY($1) ORDER BY id DESC LIMIT 1";
+export async function storeDepartureHead(after = null) {
+  if (!world2Enabled()) return null;
+  const { DEPARTURE_ACTIONS } = await import("../world2/tools/live-reads.mjs");
+  return reading(async (client) => {
+    const { rows } = after == null
+      ? await client.query(DEPARTURE_NEWEST_SQL, [DEPARTURE_ACTIONS])
+      : await client.query(DEPARTURE_HEAD_SQL, [DEPARTURE_ACTIONS, String(after)]);
+    return rows.map((r) => Number(r.id));
+  });
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // NOT A GUARD · the investigate door's `stands` block, read from the store
 // ═════════════════════════════════════════════════════════════════════════════

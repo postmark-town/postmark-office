@@ -362,6 +362,41 @@ export function voiceRecords(rows, { centreOf = null, strict = true } = {}) {
 }
 
 /**
+ * THE LIVE SAYS, IN THE AIR (POS-694). `/world2/say` reads presence through
+ * live-reads.mjs § emissionOf, which knows only the crystallized era: the
+ * crossing-save's emission acts, the last of them written 2026-08-27. Every
+ * say since is a live `say` act, so the say read heard nothing said in seven
+ * weeks. This hands each live say over in the emission row's own shape, placed
+ * by `voiceOf` (the one say → voice mapping, never a second), so every presence
+ * reader downstream reads both eras unchanged.
+ *
+ * A live say stamps no radius and no hearing time of its own, so it carries
+ * the say class's `earshotM` and `fadeMs` as read now (`sayDials`), and says
+ * so (`_live`). Emission rows pass through untouched; a say whose witnessed
+ * line does not compose is left out and named in `unplaced`, as on
+ * /world2/conversations.
+ */
+export function sayActsAsEmissions(rows, { centreOf = null, earshotM, fadeMs } = {}) {
+  const out = [];
+  const unplaced = [];
+  let live = 0;
+  for (const row of rows ?? []) {
+    if (row?.action !== "say") { out.push(row); continue; }
+    const r = voiceOf(row, centreOf);
+    if (r.unplaced) { unplaced.push({ act_id: r.act_id, anchor: r.anchor, reason: r.reason }); continue; }
+    if (!r.voice) continue; // a say with no actor or instant: no one to hear
+    const v = r.voice;
+    const born = new Date(v.at).toISOString();
+    live += 1;
+    out.push({ id: row.id, at: born, actor: v.handle, action: "say", payload: { at: born, payload: {
+      class: SOUND, x: v.x, y: v.y, text: v.text, spoken_by: v.handle, aboard: v.aboard, place: v.place,
+      radius_m: earshotM, ttl_min: fadeMs / 60_000, ttl_expires_at: new Date(v.at + fadeMs).toISOString(), _live: true,
+    } } });
+  }
+  return { rows: out, live, unplaced };
+}
+
+/**
  * The anchors' centres, from EVERY mark the store holds, standing or retired.
  * A say happened where its anchor stood at the time; a mark retired since is
  * still the store's record of that place, so its last geometry composes the
