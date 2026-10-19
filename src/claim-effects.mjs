@@ -122,16 +122,16 @@ export function claimEffectsFrom({ rows = [], sinceCrossing, nowCrossing, mine =
         summary: `${id} was locked at candle ${row.window_id ?? "?"} — the candle ruled for it`,
       });
       else if (row.status === "refused") {
-        const { cause, cause_row } = causeOf(row.refusal_check);
+        const { cause, cause_row, next } = causeOf(row.refusal_check);
         events.push({
           kind: "claim-refused", mark: id, at: at(row.decided_at), crossing: d,
-          window: row.window_id ?? null, cause, cause_row, ...whose,
+          window: row.window_id ?? null, cause, cause_row, ...(next ? { next } : {}), ...whose,
           // THE SENTENCE THE BULLETIN PROMISED, in the backlog as well as on the
           // focus — a resident who reads their delta and never opens a mark
           // still learns the reason.
           summary: opposedLawOf(row.refusal_check)
             ? `${id} was opposed at candle ${row.window_id ?? "?"}, citing ${opposedLawOf(row.refusal_check)}: over its limit, it holds no ground`
-            : `${id} was refused at candle ${row.window_id ?? "?"}${cause ? ` — ${cause}` : ""}`
+            : `${id} was refused at candle ${row.window_id ?? "?"}${cause ? ` — ${cause}` : ""}${next ? `: ${next}` : ""}`
               + (cause ? "" : " (the check that refused it has no word in the bulletin's five yet — see cause_row)"),
         });
       }
