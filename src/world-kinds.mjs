@@ -502,12 +502,19 @@ async function keeper() {
   const [guards, { actsQuery }, journal, world, { holdRecordKeeper, HOLD_TOP_SQL }] = await Promise.all([
     import("./world2-guards.mjs"), import("./world2-acts.mjs"), import("./world-journal.mjs"), import("./world.mjs"), import("./hold-record.mjs"),
   ]);
+  const { OWNER_WORDS_SQL, KEEPER_TOP_SQL } = await import("./hold-record.mjs");
   _keeper = holdRecordKeeper({
-    readTop: async () => (await actsQuery(HOLD_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
+    readTop: async () => (await actsQuery(KEEPER_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
     // the settlement window the office counts by: one full read per settlement (hold-record § ONE FULL READ PER SETTLEMENT)
     readEpoch: async () => { try { return (await import("./crossings.mjs")).currentCrossing(); } catch { return null; } },
     readHolding: ({ afterId = null } = {}) => guards.storeHoldingRows(afterId != null ? { afterId } : {}),
     readAttachments: ({ afterId = null } = {}) => guards.storeAttachmentRows(afterId != null ? { afterId } : {}),
+    // the owner's words (POS-688), and the household map they are folded by
+    readWords: async ({ afterId = null } = {}) => (await actsQuery(OWNER_WORDS_SQL, [afterId == null ? null : Number(afterId)]).catch(() => null)) ?? [],
+    houses: async () => {
+      const look = await (await import("./households.mjs")).householdLookup().catch(() => null);
+      return (h) => look?.(h)?.key ?? `solo:${h}`;
+    },
     // where each set-down thing stands now: its latest drop act's witnessed line, by the anchor it names
     placesOf: async (drops) => {
       const places = new Map();
