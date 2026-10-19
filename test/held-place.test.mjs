@@ -111,7 +111,7 @@ test("6. THE PRINTOUT (W1 a): held printed unplaced with where it last stood; a 
     geometry: { at: { x: 221, y: 95.5 }, extent: { w: 1, h: 1 } }, data: { date: "2026-08-26", _fileAt: { x: 0, y: 0 } }, ...extra });
   const rows = [row(CONE), row("sb-ash/a-tin-box"), row("x/old-set-down"), row("sable/a-box"),
     row("sable/a-boat", { data: { _parentMarkId: "sable/a-box", _fileAt: { x: 0, y: 0 } } })];
-  const drops = new Map([["sb-ash/a-tin-box", { id: 700, actor: "sb-ash", crossing: 258.2, at_anchor: "world", at_dx: 196, at_dy: -352 }]]);
+  const drops = new Map([["sb-ash/a-tin-box", { seq: 700, actor: "sb-ash", crossing: 258.2, at: { anchor: null, dx: 196, dy: -352 } }]]);
   const attachments = [take(CONE, "sb-ash", 660), take("sb-ash/a-tin-box", "sb-ash", 610), drop("sb-ash/a-tin-box", "sb-ash", 700),
     drop("x/old-set-down", "x", 400), take("sable/a-box", "sable", 690), take("u/a-draft", "u", 691)];
   const { prints, notes } = holdPrintout({ attachments, drops, rows, from: 600 });
@@ -132,7 +132,7 @@ test("6. THE PRINTOUT (W1 a): held printed unplaced with where it last stood; a 
   assert.equal(holdPrintout({ attachments, drops, rows: printed, from: 600 }).prints.some((p) => p.slug === CONE), false);
   // a held cone set down later prints its extent back from where it last stood
   const back = holdPrintout({ attachments: [take(CONE, "sb-ash", 660), drop(CONE, "sb-ash", 720)], rows: printed, from: 600,
-    drops: new Map([[CONE, { id: 720, actor: "sb-ash", crossing: 259.1, at_anchor: "world", at_dx: 5, at_dy: 6 }]]) });
+    drops: new Map([[CONE, { seq: 720, actor: "sb-ash", crossing: 259.1, at: { anchor: null, dx: 5, dy: 6 } }]]) });
   assert.deepEqual(back.prints[0].geometry, { at: { x: 5, y: 6 }, extent: { w: 1, h: 1 } });
   assert.equal(back.prints[0].data[PLACED], undefined);
   // the first clearing that prints (no earlier cutoff): held things only
@@ -193,5 +193,5 @@ test("11. ONE OWNER: every reader of a thing's place reads the one answer, and t
   const holderPlace = units.slice(units.indexOf("holderPlace:"), units.indexOf("holderPlace:") + 600);
   assert.match(holderPlace, /placeOf\(/); assert.doesNotMatch(holderPlace, /standsRowsFromStore|composeAnchor/);
   assert.doesNotMatch(apex, /async function holdingRecord\(/, "the ground read's own record read is gone");
-  assert.match(read("src/world2-serve.mjs"), /await heldPlaced\(eng\.build\.assembleWorld\(\{ worldState, skeleton \}\)\)/, "the store twin places its world too");
+  assert.ok(read("src/world2-serve.mjs").includes("await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows })"), "the store twin places its world too, by its own store's holds");
 });

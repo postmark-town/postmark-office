@@ -162,7 +162,7 @@ const SETTLEMENTS = [
   { number: 79, tag_sha: "3493e940402acbd9abf90ce0ac04c379ab4ec873", published_at: new Date("2026-09-24T06:00:27Z"), window_id: 208, blessed_at: null },
   { number: 78, tag_sha: "7c616d9c14c20e4dfd45411fc46a2546a1847f46", published_at: new Date("2026-09-23T18:00:37Z"), window_id: 207, blessed_at: null },
 ];
-function fixturePool({ rows = ROWS, law = undefined, claims = [], settlements = SETTLEMENTS, marksHead = null, claimsThrow = false } = {}) {
+function fixturePool({ rows = ROWS, law = undefined, claims = [], settlements = SETTLEMENTS, marksHead = null, claimsThrow = false, acts = null } = {}) {
   const asked = [];
   return {
     asked,
@@ -181,6 +181,8 @@ function fixturePool({ rows = ROWS, law = undefined, claims = [], settlements = 
       if (/FROM projection_heads/i.test(sql)) return { rows: [{ sha: LAW_SHA }] };
       if (/FROM law_projection/i.test(sql)) return { rows: law === undefined ? (SKELETON_ROWS ?? []) : law };
       if (/FROM marks/i.test(sql)) return { rows };
+      // the hold record, in this store (POS-688: the twin places its world by its own store's holds)
+      if (acts && /FROM acts/i.test(sql)) return acts.query(sql, params);
       return { rows: [] };
     },
   };
@@ -253,13 +255,13 @@ test("the twin's answer is field-for-field 1.0's own, minus the named tree-only 
 
 test("A HELD THING (POS-688): the twin answers it unplaced, `held_by` and no `at`, with no second answer beside it", async (t) => {
   if (!ENGINE) return t.skip(`no world engine: ${ENGINE_WHY}`);
-  const { holdingAct, withActs } = await import("./stands-store-fixture.mjs");
+  const { holdingAct, withActs, actsClient } = await import("./stands-store-fixture.mjs");
   const { thingStandsBlock } = await import("../src/world.mjs");
   const id = "wright/the-trueing-house";
   const HELD = [holdingAct({ id: 101, at: "2026-09-07T21:53:00Z", actor: "wright", action: "take", thing: id, holder: "wright" })];
   let body, expected, reads = 0;
   await withActs(HELD, async (c) => {
-    ({ body } = await investigate(`mark=${id}`, fixturePool()));
+    ({ body } = await investigate(`mark=${id}`, fixturePool({ acts: actsClient(HELD) })));
     reads = c.reads;
     const world = ENGINE.build.assembleWorld({ worldState: apex.worldStateFromMarkRows(ROWS), skeleton: apex.skeletonFromLawRows(SKELETON_ROWS ?? []) });
     expected = await thingStandsBlock(id, world, oracle(id));
@@ -270,7 +272,7 @@ test("A HELD THING (POS-688): the twin answers it unplaced, `held_by` and no `at
   assert.equal(body.at, undefined, "no place while held");
   assert.equal(body.stands, undefined, "and no second answer beside it");
   assert.equal(expected, null, "1.0's own block agrees: nothing to add");
-  assert.ok(reads >= 1, "the hold record was read off the guard reader, i.e. the store");
+  void reads; // the twin reads the holds of the store it is handed (its pool), never the office's guard road
 });
 
 // ONE RECORD (POS-688): where a set-down stands is the kept hold record's
@@ -279,7 +281,7 @@ test("A HELD THING (POS-688): the twin answers it unplaced, `held_by` and no `at
 // anchored on the world here, so the answer is the fixture's own numbers.
 test("A THING SET DOWN: `where` is the one record's, on the twin as on 1.0", async (t) => {
   if (!ENGINE) return t.skip(`no world engine: ${ENGINE_WHY}`);
-  const { holdingAct, withActs } = await import("./stands-store-fixture.mjs");
+  const { holdingAct, withActs, actsClient } = await import("./stands-store-fixture.mjs");
   const { thingStandsBlock } = await import("../src/world.mjs");
   const id = "wright/the-trueing-house";
   const SET_DOWN = [
@@ -289,7 +291,7 @@ test("A THING SET DOWN: `where` is the one record's, on the twin as on 1.0", asy
   ];
   let body, expected;
   await withActs(SET_DOWN, async () => {
-    ({ body } = await investigate(`mark=${id}`, fixturePool()));
+    ({ body } = await investigate(`mark=${id}`, fixturePool({ acts: actsClient(SET_DOWN) })));
     const world = ENGINE.build.assembleWorld({ worldState: apex.worldStateFromMarkRows(ROWS), skeleton: apex.skeletonFromLawRows(SKELETON_ROWS ?? []) });
     expected = await thingStandsBlock(id, world, oracle(id));
   });

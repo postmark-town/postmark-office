@@ -927,7 +927,7 @@ export async function world2Serve(path, searchParams, { p: injected = null } = {
     }
 
     // placed by the hold record, as the office door is (POS-688: a held thing is unplaced)
-    const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }));
+    const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows });
     const r = (await import("./held.mjs")).withHolder(eng.verbs.investigate(String(mark), world, { depth }), world, mark); // POS-688: whose hands it is in
 
     // THE RECEIPT FROM ROWS (POS-142 S3 item 4). 1.0's own pure `receiptFrom`,
@@ -1353,7 +1353,7 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
   }
 
   // placed by the hold record, as the office door is (POS-688: a held thing is unplaced)
-  const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }));
+  const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows });
   const state = { x: near.x, y: near.y };
   const oriented = eng.verbs.orient(state, world, { crossing: n });
   const seen = eng.verbs.openYourEyes(state, world, { crossing: n });
