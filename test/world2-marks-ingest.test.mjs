@@ -225,16 +225,22 @@ before(async () => {
 
   // AMEND — a resident's sited mark: a new image line and a changed body.
   const amended = seed.marks.find((m) => m.kind === "sited" && m.owner !== "the-town" && paths.has(m.slug));
-  // ADD — a predicated child of a CLASS mark, filed the way its siblings are:
-  // a copy of an existing class-parented child's record under a new leaf.
-  const sibling = seed.marks.find((m) => m.data?._parent_is_law && isLeafDir(dirname(abs(m.slug))));
+  // ADD — a child of a CLASS mark, filed the way its siblings are: a copy of an
+  // existing class-parented child's record under a new leaf. Before W2 that was
+  // a predicated child the seed marked `_parent_is_law`; under W2 (POS-703) it
+  // is a `kind: property` node whose `_parentMarkId` is a class the seed
+  // leaves to law (`notPlaced.law`). Either form is the same relation.
+  const lawIds = new Set(seed.notPlaced?.law ?? []);
+  const lawParent = (m) => m.data?._parent_is_law ?? (lawIds.has(m.data?._parentMarkId) ? m.data._parentMarkId : null);
+  const sibling = seed.marks.find((m) => lawParent(m) && paths.has(m.slug) && isLeafDir(dirname(abs(m.slug))));
   const classDir = dirname(dirname(abs(sibling.slug)));
   const addedLeaf = "pos142-fixture-child";
   const added = `${sibling.owner}/${addedLeaf}`;
-  // RETIRE — a leaf continuation (predicated/naming) on a resident's mark, with
-  // nothing filed beneath it, and not the amended mark's own.
-  const retired = seed.marks.find((m) => (m.kind === "predicated" || m.kind === "naming") && m.parent
-    && !m.data?._parent_is_law && m.owner !== "the-town" && m.slug !== "wright/the-lit-name"
+  // RETIRE — a leaf continuation (predicate/naming; W2 spells the predicate
+  // `predicate`, the old form `predicated`) on a resident's mark, with nothing
+  // filed beneath it, and not the amended mark's own.
+  const retired = seed.marks.find((m) => ["predicated", "predicate", "naming"].includes(m.kind) && m.parent
+    && !lawParent(m) && m.owner !== "the-town" && m.slug !== "wright/the-lit-name"
     && isLeafDir(dirname(abs(m.slug))) && !seed.marks.some((x) => String(x.parent) === String(m.id)));
   assert.ok(amended && sibling && retired, "the fixture could not find its three marks in the tag");
 
@@ -247,8 +253,10 @@ before(async () => {
   commit("fixture-amender", `amend: ${amended.slug} (pos142 fixture)`);
 
   mkdirSync(join(classDir, addedLeaf), { recursive: true });
+  // a property is keyed by its class and its `name`, so the copy takes a name of its own (POS-703)
+  const copied = readFileSync(abs(sibling.slug), "utf8");
   writeFileSync(join(classDir, addedLeaf, "mark.md"),
-    readFileSync(abs(sibling.slug), "utf8").replace(/(\r?\n---\r?\n)[\s\S]*$/, "$1A predicated child added at B by the fixture.\n"));
+    (sibling.kind === "property" ? setLine(copied, "name", addedLeaf) : copied).replace(/(\r?\n---\r?\n)[\s\S]*$/, "$1A predicated child added at B by the fixture.\n"));
   git(repo, ["add", "-A"]);
   commit("fixture-founder", `law: ${added} (pos142 fixture)`);
 
