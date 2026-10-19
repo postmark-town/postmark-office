@@ -247,3 +247,16 @@ test("POS-697 G2a: shapeV2Focus is where you are and the focus, with no cursor a
   assert.match(FOCUS_MORE_V2, /world \{ read_shape: "v2" \} is the whole glance/);
   assert.deepEqual(Object.keys(shapeV2Focus({ standpoint: { x: 0, y: 0 } }).you), ["at"], "a spectator names no handle and no place it was not told");
 });
+
+test("POS-697 G3a: an around_you row says where, how far, and a departure's destination whole; a say stays the fact of it (G5)", () => {
+  const pier = { id: "a/the-pier", name: "the Pier", body: "Boards over the water." };
+  const g = happenedGlance({ around_you: { count: 2, events: [
+    { kind: "departure", actor: "elowen", at: "2026-10-15T00:01:00Z", x: 130, y: 240, m: 50, where: "the Quay", toward: pier },
+    { kind: "emission", actor: "mari", at: "2026-10-15T00:00:09Z", x: 100, y: 200, m: 0, where: "the Quay", place: "a/b", text: "hello" },
+  ] } }, { sinceCrossing: 249 });
+  assert.deepEqual(g.around_you.events[0], { who: "elowen", what: "set out", when: "00:01Z", where: "the Quay", m: 50, toward: pier });
+  assert.deepEqual(g.around_you.events[1], { who: "mari", what: "spoke", when: "00:00Z", where: "the Quay", m: 0 }, "no words, no raw place id");
+  // a destination the body read missed (a bare id) is not shown as a mark
+  const bare = happenedGlance({ around_you: { events: [{ kind: "departure", actor: "x", at: "2026-10-15T00:01:00Z", toward: "a/the-pier" }] } }, { sinceCrossing: 249 });
+  assert.equal(bare.around_you.events[0].toward, undefined);
+});

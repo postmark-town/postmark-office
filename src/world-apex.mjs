@@ -44,7 +44,7 @@ import { IDENTITIES_SQL } from "./world2-fold.mjs"; // POS-350: the household gr
 import { refShaFromDisk } from "./world-branches.mjs";
 import { arrivesAt, nextCrossingAt } from "./crossings.mjs"; // POS-331 part 3: a walker's arrival on the wall clock; POS-632: v2's next crossing
 import { cardsSchemaAt, describeAt, readShape, shapeRead, READ_SHAPES } from "./world-read-shape.mjs"; // POS-486: the bare read's shape, one env var; v0 untouched
-import { shapeV2, shapeV2Focus, activeOf, paceFrom, inWords, hourZ, eventsHere, markIdsShown, BLOCK_READS, blockFields } from "./world-read-v2.mjs"; // POS-632: the world read v2, opt-in per call
+import { shapeV2, shapeV2Focus, activeOf, paceFrom, inWords, hourZ, eventsHere, markIdsShown, BLOCK_READS, blockFields, AROUND_SHOWN } from "./world-read-v2.mjs"; // POS-632: the world read v2, opt-in per call
 import { explainAnswer, explainPath, encodeCursor, decodeCursor, CURSOR_RENAMES_UNTIL, moreLine } from "./read-grammar.mjs"; // POS-632: explain:, the read grammar's one table; the one cursor; the more line
 import { entityKindOf, investigateResident, RECENT_SQL, RECENT_CAP } from "./world-investigate-entity.mjs"; // POS-632 PR-4: the entity read
 import { PUBLIC_ACTS as PUBLIC_ACTS_FOR_INVESTIGATE, ACTIVE_WINDOW_MS as ACTIVE_WINDOW_FOR_INVESTIGATE } from "./world-read-v2.mjs"; // POS-632 PR-4: the entity read's public acts and window
@@ -2802,6 +2802,14 @@ async function apexRead(args, key, ctx = {}) {
     } catch { heard = null; }
     // The marks this read names beyond the view, each with its whole body, read
     // once: world-read-v2.mjs § markIdsShown is the one list shapeV2 bodies.
+    // POS-697 G3a: the around_you rows the glance shows say where they happened,
+    // in the words `you.here` uses; a place the words cannot name is left unsaid.
+    if (happened?.around_you?.events?.length) {
+      const shown = happened.around_you.events.slice(0, AROUND_SHOWN);
+      const where = await Promise.all(shown.map((e) => (Number.isFinite(e.x) && Number.isFinite(e.y) ? placeWords({ x: e.x, y: e.y }).catch(() => null) : null)));
+      happened.around_you = { ...happened.around_you,
+        events: happened.around_you.events.map((e, i) => (where[i] ? { ...e, where: where[i] } : e)) };
+    }
     const shownIds = markIdsShown({ spine, events, departures, frame, standpoint: answer.standpoint, happened });
     const marks = new Map((await markRows(shownIds).catch(() => [])).map((r) => [r.id, r]));
     // On open ground the words name the place you are near: it rides as a row too.

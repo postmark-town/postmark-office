@@ -228,9 +228,16 @@ export function happenedGlance(h, { sinceCrossing } = {}) {
   if (!h) return { since: `crossing ${sinceCrossing}`, unavailable: "the delta is not read at this office" };
   if (h.unavailable) return { since: `crossing ${sinceCrossing}`, unavailable: h.unavailable };
   const around = h.around_you ?? {};
+  // POS-697 G3a (Darko 2026-10-19 09:21): each row says where, in the words
+  // `you.here` uses (the apex fills `where`), how far from you, and a
+  // departure's destination whole (BODIES, 10-14 22:33). A say stays the fact
+  // of it, never its words (G5 kept): those are earshot's, in `heard`.
   const events = (around.events ?? []).slice(0, AROUND_SHOWN).map((e) => ({
     who: e.actor, what: e.kind === "departure" ? "set out" : e.kind === "emission" ? "spoke" : e.kind === "attachment" ? "took or left something" : e.kind,
     when: hourZ(e.at),
+    ...(e.where ? { where: e.where } : {}),
+    ...(Number.isFinite(e.m) ? { m: e.m } : {}),
+    ...(e.toward && typeof e.toward === "object" ? { toward: e.toward } : {}),
   }));
   return {
     since: `crossing ${sinceCrossing}`,

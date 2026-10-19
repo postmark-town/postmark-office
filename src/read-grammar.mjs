@@ -54,7 +54,7 @@ export const EXPLAIN = Object.freeze({
     "now.air": row("the light, the fog and the Mists where you stand, in the world's own words", "explain: \"view\" — the air dims what you can see", "live"),
     "now.canon": row("which settlement this world is: the newest crossing the keeper blessed", 'world { diagnostics: true, read_shape: "v2" }', "settled"),
     "now.happened": row("what changed for you, and around you, since the previous crossing began", 'world { read: "happened" }', "live",
-      "to_you is complete; around_you is a glance (the newest few within reach). A crossing's events are published a few minutes after it sails."),
+      "to_you is complete; around_you is a glance (the newest few within reach, each with where it happened, how far from you, and where a walker set out for). A say there is the fact of it; its words are earshot's, in heard. A crossing's events are published a few minutes after it sails."),
     "now.happened.*": row("one shelf of what happened: to_you (complete), around_you (a glance)", 'world { read: "happened" }', "live"),
 
     view: row("what fills your eyes: places ranked by how much of your view they take (size × the town's stamps), by bearing", 'world { read: "view" } · mark: "<id>"', "settled",
