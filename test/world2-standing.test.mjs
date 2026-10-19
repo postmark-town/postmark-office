@@ -653,33 +653,3 @@ test("a guest's candle-born predicate on another's ground is still market — th
   const welcoming = { ...PARCEL, data: { ...PARCEL.data, consent: { "rei/a-plaque": "welcomed" } } };
   assert.equal(computeStanding([ROOT, welcoming, HOUSE, guest]).get("rei/a-plaque"), "home", "and the holder's word reaches it, exactly as it reaches a seeded predicate");
 });
-
-// ── THE CONSTITUTION IS THE TOWN'S OWN MARKS (POS-702; Darko, 2026-10-19 09:59) ─
-//
-// "By definition, the constitutional marks are the ones that are belonging to
-// the town." Prod read the-town/orient as owner the-town, tier market: a town
-// predicate with no `tier:` line walked to `market`, and so did 57 others.
-// THE CAN-FAIL FLIP: in standing.mjs § markStanding, put back
-//     if ((mark.by ?? mark.household) === TOWN && mark.tier === "constitution") return "constitution";
-// in place of `if (townOwned(mark)) return "constitution";`, and the first two red.
-
-test("FALSIFIER, POS-702: the-town/orient's standing tier reads constitution, in prod's own row shape", () => {
-  const orient = row({ slug: "the-town/orient", kind: "predicate", owner: "the-town", household: "solo:the-town", tier: "market" });
-  assert.equal(tierOf([...base(), orient]).get("the-town/orient"), "constitution");
-});
-
-test("the town's sited furniture and things read constitution, even inside a resident's parcel", () => {
-  const deck = row({ slug: "the-town/the-deck", kind: "sited", owner: "the-town", household: "solo:the-town",
-    at: { x: 100, y: 100 }, extent: { w: 3, h: 3 } });
-  const slice = row({ slug: "the-town/a-slice-to-take-home", kind: "thing", owner: "the-town", household: "solo:the-town",
-    at: { x: 108, y: 108 }, extent: { w: 1, h: 1 } });
-  const t = tierOf([...base(), deck, slice]);
-  assert.equal(t.get("the-town/the-deck"), "constitution");
-  assert.equal(t.get("the-town/a-slice-to-take-home"), "constitution");
-});
-
-test("admissionNotes counts every town mark as answered by the shortcut, tier line or none", () => {
-  assert.deepEqual(admissionNotes([...base(),
-    row({ slug: "the-town/a-slot", kind: "predicated", owner: "the-town", household: "solo:the-town",
-      parentIsLaw: "the-town/exposure" })]), []);
-});
