@@ -245,8 +245,22 @@ export function happenedGlance(h, { sinceCrossing } = {}) {
     // a crossing absent from the log, a reach clamped to the last week)
     complete: h.complete !== false,
     ...(h.reach ? { reach: h.reach } : {}),
-    to_you: h.to_you ?? { complete: false, unavailable: "not read" },
+    // POS-697 G4a: the short form. The sentences (complete or INCOMPLETE) are
+    // explain: "now.happened.to_you"'s; a gap is still named, in a few words,
+    // so an absence is never read as nothing having happened.
+    to_you: h.to_you ? toYouShort(h.to_you) : { complete: false, unavailable: "not read" },
     around_you: { shown: events.length, count: around.count ?? events.length, events },
+  };
+}
+
+/** to_you as the glance says it: complete, the gaps by name, the count and the events. */
+export function toYouShort(t) {
+  if (t.unavailable) return { complete: false, unavailable: t.unavailable };
+  return {
+    complete: t.complete !== false,
+    ...(t.complete === false ? { missing: t.missing?.length ? t.missing : ["a shelf could not be read"] } : {}),
+    count: t.count ?? (t.events ?? []).length,
+    events: t.events ?? [],
   };
 }
 

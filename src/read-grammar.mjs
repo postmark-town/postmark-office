@@ -55,6 +55,8 @@ export const EXPLAIN = Object.freeze({
     "now.canon": row("which settlement this world is: the newest crossing the keeper blessed", 'world { diagnostics: true, read_shape: "v2" }', "settled"),
     "now.happened": row("what changed for you, and around you, since the previous crossing began", 'world { read: "happened" }', "live",
       "to_you is complete; around_you is a glance (the newest few within reach, each with where it happened, how far from you, and where a walker set out for). A say there is the fact of it; its words are earshot's, in heard. A crossing's events are published a few minutes after it sails."),
+    "now.happened.to_you": row("what changed for YOU since the previous crossing began: complete, the count and the events", 'world { read: "happened" }', "live",
+      "Complete for you when every shelf answered: frame events are rare by construction, and every claim effect on your marks and your ground, every hold on a thing of yours or by your own hand, and every creature's answer to you rides here. When a shelf could not be read, complete is false and missing names it in a few words (a creature's reactions are held 25 hours, so a cursor older than that misses theirs): its absence is not nothing having happened."),
     "now.happened.*": row("one shelf of what happened: to_you (complete), around_you (a glance)", 'world { read: "happened" }', "live"),
 
     view: row("what fills your eyes: places ranked by how much of your view they take (size × the town's stamps), by bearing", 'world { read: "view" } · mark: "<id>"', "settled",

@@ -260,3 +260,16 @@ test("POS-697 G3a: an around_you row says where, how far, and a departure's dest
   const bare = happenedGlance({ around_you: { events: [{ kind: "departure", actor: "x", at: "2026-10-15T00:01:00Z", toward: "a/the-pier" }] } }, { sinceCrossing: 249 });
   assert.equal(bare.around_you.events[0].toward, undefined);
 });
+
+test("POS-697 G4a: to_you in the glance is the short form; a gap is named in a few words, never a paragraph", async () => {
+  const { toYou } = await import("../src/world-happened.mjs");
+  const whole = toYou({ sinceCrossing: 258, nowCrossing: 259 });
+  const ok = happenedGlance({ to_you: whole, around_you: { events: [] } }, { sinceCrossing: 258 });
+  assert.deepEqual(ok.to_you, { complete: true, count: 0, events: [] });
+  const cut = toYou({ sinceCrossing: 258, nowCrossing: 259, creatureEffects: { events: [], readable: false, missing: "creatures' reactions older than 25 h", reason: "long" } });
+  assert.match(cut.note, /^INCOMPLETE/, "v1 keeps its sentence");
+  assert.deepEqual(cut.missing, ["creatures' reactions older than 25 h"]);
+  const g = happenedGlance({ to_you: cut, around_you: { events: [] } }, { sinceCrossing: 258 });
+  assert.deepEqual(g.to_you, { complete: false, missing: ["creatures' reactions older than 25 h"], count: 0, events: [] });
+  assert.ok(JSON.stringify(g.to_you, null, 1).length < 140, JSON.stringify(g.to_you));
+});

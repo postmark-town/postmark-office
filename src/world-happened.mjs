@@ -214,8 +214,15 @@ export function toYou({ transitions = [], carriedLegs = [], claimEffects = null,
     ...(holdsReadable ? [] : [holdEffects.reason ?? "the holding record could not be read"]),
     ...(creaturesReadable ? [] : [creatureEffects.reason ?? "the creatures could not be read"]),
   ];
+  // the same gaps in a few words each (POS-697 G4a): v2's glance says these, never the sentence
+  const missing = [
+    ...(docketReadable ? [] : [claimEffects.missing ?? "your marks' rulings"]),
+    ...(holdsReadable ? [] : [holdEffects.missing ?? "gives, takes and drops"]),
+    ...(creaturesReadable ? [] : [creatureEffects.missing ?? "creatures' reactions"]),
+  ];
   return {
     complete: docketReadable && holdsReadable && creaturesReadable,
+    ...(missing.length ? { missing } : {}),
     // ⚑ LANE A'S SENTENCE IS KEPT CONTIGUOUS, and that is not cosmetic: its own
     // test binds "every claim effect on your marks and on your ground rides
     // here too" as one string. My first draft spliced this lane's clause into
