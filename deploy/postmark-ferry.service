@@ -5,6 +5,17 @@ Description=Postmark ferry — the town's own tools/ferry.mjs, run at the publis
 # town-clock ferry job stays gated as break-glass; the PC-side original
 # (G:/Starstory/tools/commons-ferry.mjs) is retired break-glass.
 After=network.target
+# THE CROSSING SAVE RUNS WHEN THE FERRY FINISHES (POS-714, Darko 2026-10-20
+# 08:58: "a much better design"). It used to fire on its own clock two minutes
+# behind the crossing and wait 300 s for town.lock; on 2026-10-20 00:00Z the
+# ferry held the lock 7 min 13 s and the save gave up 14 s before it came free.
+# Chained, the save starts after this unit's flock has exited, success or
+# failure alike: the save reads the store, not anything the ferry wrote, so a
+# ferry that refused still leaves a crossing to save. Its own timer stays as a
+# late fallback that skips a crossing already saved
+# (deploy/postmark-crossing-save.service § ExecCondition).
+OnSuccess=postmark-crossing-save.service
+OnFailure=postmark-crossing-save.service
 
 [Service]
 Type=oneshot
