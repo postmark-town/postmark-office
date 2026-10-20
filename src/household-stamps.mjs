@@ -85,11 +85,11 @@ const ownHandles = (key) => [...(key?.handles ?? [])].filter(Boolean).sort();
 // stake moves stamps into: a ballot topic, a world mark, and — since the seam —
 // a funding pot (`stake:pot/<id>`, "reserved out of the ballot topic space like
 // `world-mark/`", stamp-mint.mjs's own words).
-// Folded LIVE from the clone's sealed ledger rather than read from the index,
-// for the reason votes.mjs computes headroom live: the index carries pot escrow
-// keyed by POT only, and adding a per-handle table would be a second store of a
-// number the ledger already answers. `total` stays the index's authoritative
-// figure — the split explains it, and never replaces it.
+// Read from the index's town_pot_stakers, the sealed ledger's fold keyed by who
+// holds each stake. It used to be folded LIVE from the clone's whole ledger on
+// every call, from when the index keyed pot escrow by POT only; the per-handle
+// table has existed since, as the fold's own second key (POS-718). `total` stays
+// the index's authoritative figure — the split explains it, and never replaces it.
 export function escrowDetail({ total, byHandle, handle }) {
   const mine = byHandle?.get(handle) ?? new Map();
   const by_pot = [...mine.entries()]
@@ -112,23 +112,20 @@ export function escrowDetail({ total, byHandle, handle }) {
 //
 // `ix` is the index the reads answer from: the store's (town-index-store.mjs
 // § storeIndex, or the door's storeIndexPooled).
-export async function estateRead(key, { clone, ix }) {
+export async function estateRead(key, { ix }) {
   const handles = ownHandles(key);
   if (!handles.length) {
     return bounce(403, "the estate is your household's own books",
       "call with a key that holds a resident — the public roster is read_stamps, which needs no key");
   }
-  // ONE ledger fold for the whole house, not one per resident — the file is the
-  // town's sealed ledger and a five-resident household would otherwise read it
-  // five times to answer one question.
+  // ONE read for the whole house. The pot stakes are the index's
+  // (town_pot_stakers: foldFunding's own potEscrowByHandle, folded by the ingest
+  // when the ledger moves), never a fold of the whole ~5 MB ledger on every call
+  // (POS-718), and they come from the same index as `total`, so the split and the
+  // total it explains are one snapshot.
   let byHandle = new Map();
-  try {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const { parseLedgerText, foldFunding } = await import("./funding.mjs");
-    const text = readFileSync(join(clone, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
-    byHandle = foldFunding(parseLedgerText(text)).potEscrowByHandle ?? new Map();
-  } catch { byHandle = new Map(); }
+  try { byHandle = await ix.potStakes(handles); }
+  catch (e) { if (unreachable(e)) throw e; byHandle = new Map(); }
 
   const residents = [];
   for (const handle of handles) {

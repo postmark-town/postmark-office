@@ -244,7 +244,11 @@ test("the house and needs-you answer through the store's index as they did over 
     assert.equal(house.read, "house", `a house, not a refusal: ${JSON.stringify(house).slice(0, 160)}`);
     assert.deepEqual(house.ashore, ["wright", "limen", "Zed"]);
     await same("houseBundle", houseBundle({ household: "keemin" }, { ...base, ix }));
-    await same("needsYou", needsYou({ household: "keemin" }, { ...base, ix }));
+    // POS-717: `shown` is new beside `count`, and on this fixture every row is on
+    // the page, so it equals the count; the rest is the record's answer.
+    const { shown, ...asRecorded } = await needsYou({ household: "keemin" }, { ...base, ix });
+    assert.equal(shown, asRecorded.count, "every row waiting is on this answer, so shown is the count");
+    await same("needsYou", asRecorded);
     pen.__setPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
     await assert.rejects(houseBundle({ household: "keemin" }, { ...base, ix: store.storeIndexPooled(clone) }), { name: "TownIndexUnreachable" },
       "the store gone is an error the door answers 503, never a house read from nothing");

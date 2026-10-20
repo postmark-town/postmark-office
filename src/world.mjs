@@ -948,10 +948,24 @@ function prettyName(id) {
 }
 
 // A mark's own naming mark wins over its slug — residents name their places.
-function markName(mark, marks) {
-  const named = marks.find((m) => m.kind === "naming" && m.parent === mark.id && m.value);
-  return named?.value ?? prettyName(mark.id);
+//
+// A NAME IS A SLOT, AND A CONTESTED SLOT NAMES NOTHING (POS-716, 2026-10-19).
+// Every naming mark under a parent is a rival for its `name` slot; the fold
+// decides the slot (world-state.json `determined["<id>::name"]`) and leaves a
+// tie vague. The first naming mark found used to win, so six residents' tied
+// naming marks under the root had the world itself read "One Hundred and One
+// Uses for a Briefcase You Cannot Open". So: the fold's winner when the caller
+// has the world's `determined` in hand (the spectator's rule, postmark-world
+// spectator/viewer.mjs § resolveMarkName), else a name every naming mark agrees
+// on, else the slug in words.
+function markName(mark, marks, determined = null) {
+  const won = String(determined?.[`${mark.id}::name`] ?? "").trim();
+  if (won) return won;
+  const values = new Set(marks.filter((m) => m.kind === "naming" && m.parent === mark.id && m.value).map((m) => m.value));
+  return values.size === 1 ? [...values][0] : prettyName(mark.id);
 }
+/** The fold's determined slots for an assembled world (a sighted copy keeps `_raw`). */
+const determinedOf = (w) => w?._raw?.worldState?.determined ?? null;
 
 // The derivation, over WHICHEVER published-main mark list it is handed — the
 // fold's, or the store's (Stage 1). One body, two sources, and that is the whole
@@ -2188,7 +2202,7 @@ export async function markRows(ids = [], w = null) {
   const out = [];
   for (const id of ids) {
     const m = byId.get(id);
-    if (m) out.push({ id, name: markName(m, w.marks ?? []), body: m.body ?? "" });
+    if (m) out.push({ id, name: markName(m, w.marks ?? [], determinedOf(w)), body: m.body ?? "" });
   }
   return out;
 }
@@ -2203,7 +2217,7 @@ export async function placeMarksAt({ x, y } = {}) {
   const w = await world();
   const { verbs } = await mods();
   const marks = w.marks ?? [];
-  const row = (m) => ({ id: m.id, name: markName(m, marks), body: m.body ?? "" });
+  const row = (m) => ({ id: m.id, name: markName(m, marks, determinedOf(w)), body: m.body ?? "" });
   const { spine, near } = placeMarksFrom(marks, { x, y }, verbs);
   return spine.length ? { within: spine.map(row) } : near ? { near: row(near) } : {};
 }
@@ -2457,7 +2471,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // composes its answer field by field and only v2's shaping reads this.
   const v2Rows = v2 ? [...(r.fov?.carried ?? []), ...(r.fov?.far ?? [])].map((o) => {
     const mark = markById.get(o.id);
-    return { id: o.id, name: o.far && o.label ? o.label : markName(mark ?? { id: o.id }, w.marks ?? []), body: mark?.body ?? o.body ?? "",
+    return { id: o.id, name: o.far && o.label ? o.label : markName(mark ?? { id: o.id }, w.marks ?? [], determinedOf(w)), body: mark?.body ?? o.body ?? "",
       bearing: o.bearing, band: o.band, distM: o.distM, weight: o.weight ?? mark?.weight ?? 0,
       ...(o.lifted ? { lifted: true } : {}), ...(typeof mark?.image === "string" ? { image: true } : {}) };
   }) : null;
