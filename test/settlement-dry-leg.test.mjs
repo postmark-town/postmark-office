@@ -93,7 +93,7 @@ test("D3 · DRY names the store's retirement and writes no store row", { skip },
   assert.equal(run.storeWrites, null, "the store was not written");
   assert.match(argvOf(run, "retire-unpublished")[0] ?? "", /--dry-run/);
   assert.deepEqual(run.receipt.retired,
-    { ran: false, dry_run: true, would_retire: ["alpha/old"], reason: "dry run — the store was not written" });
+    { ran: false, dry_run: true, would_retire: ["alpha/old"], would_retire_withdrawn: [], reason: "dry run — the store was not written" });
   assert.ok(run.receipt.withheld.includes("the store's retirement: 1 mark(s) (alpha/old)"));
 });
 
@@ -220,5 +220,5 @@ test("T1 · the REAL retire-unpublished --dry-run names its marks and opens no c
     encoding: "utf8", env: { ...process.env, WORLD2_CLEARING_URL: "postgres://nobody@127.0.0.1:1/world2_rehearsal" }, timeout: 30_000,
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(JSON.parse(r.stdout), { dry_run: true, would_retire: ["alpha/old", "beta/gone"] });
+  assert.deepEqual(JSON.parse(r.stdout), { dry_run: true, would_retire: ["alpha/old", "beta/gone"], would_retire_withdrawn: [] });
 });

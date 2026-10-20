@@ -8,6 +8,11 @@
 // were dynamic.db's, and the store is retired — POS-269. The box's unit still
 // passes `--prune`.)
 //   node tools/crossing-save.mjs --check [--window <N>[,<N>…]] [--world <clone>]
+//   node tools/crossing-save.mjs --unsaved [--at <iso>] [--world <clone>] [--state <dir>]
+//
+// `--unsaved` (POS-714) is the late fallback timer's ExecCondition: exit 0
+// when the crossing just left is not yet saved COMPLETE (run the save), 1 when
+// it is (skip). Any doubt exits 0. It writes nothing. § `--unsaved` below.
 //
 // `--check` (POS-196) renders the departure record from the REGISTER and diffs
 // it against `STATE/log/<N>.jsonl` on disk, on the fields the world repo
@@ -214,6 +219,53 @@ export function creaturePhotoAt({ crossing, boundaryMs, base, rows, creaturesMod
   const since = rows.filter((r) => { const t = Date.parse(r.at); return t > (base ? Date.parse(base.evaluated_at) : -Infinity) && t <= boundaryMs; });
   if (!since.length && !(base?.creature_count > 0)) return null;
   return creaturesMod.creaturesSnapshot(crossing, boundaryMs, base, since);
+}
+
+/**
+ * Is crossing `n` saved COMPLETE on disk: does its meta cover the window up to
+ * `boundaryMs`, the instant crossing n+1 began? The one reading of "saved",
+ * shared by the save's own step 1 (it closes a crossing that is not) and by
+ * `--unsaved` (the late fallback skips one that is). A missing or unreadable
+ * meta is not saved, which is the direction that writes.
+ */
+export function savedComplete(stateDir, n, boundaryMs) {
+  const meta = join(stateDir, "log", `${n}.meta.json`);
+  if (!existsSync(meta)) return false;
+  try { return Date.parse(JSON.parse(readFileSync(meta, "utf8")).covers_to) >= boundaryMs; }
+  catch { return false; }
+}
+
+// ── `--unsaved`: THE LATE FALLBACK'S QUESTION (POS-714, Darko 2026-10-20) ────
+//
+// The save runs when the ferry finishes (postmark-ferry.service's OnSuccess=
+// and OnFailure=), and its own timer stays as a late fallback that must not
+// write a second time. This is that timer's `ExecCondition=`: exit 0 says
+// "run", exit 1 says "the crossing just left is already saved COMPLETE, skip"
+// (systemd reads 1–254 as a clean skip, never a failure).
+//
+// EVERY DOUBT ANSWERS "RUN", and that is the whole safety of a condition: a
+// skip is silent, so a condition that skipped on an error would turn a broken
+// save into no save at all, with nothing red anywhere. An unreadable clone, a
+// world whose tools will not import, a meta that will not parse — each exits 0,
+// and the save itself then runs and refuses by name. It opens no store, takes
+// no lock and writes nothing.
+async function unsavedVerdict() {
+  try {
+    const walk = await walkModule({ repo: CLONE });
+    const atIso = argOf("--at", null);
+    const nowMs = atIso ? Date.parse(atIso) : Date.now();
+    const crossing = Math.floor(walk.fractionalCrossing(nowMs));
+    const prev = crossing - 1;
+    const boundaryMs = walk.CROSSING_EPOCH_UTC + crossing * walk.CROSSING_MS;
+    if (prev >= 0 && savedComplete(STATE_DIR, prev, boundaryMs)) {
+      console.log(`crossing-save · crossing ${prev} is already saved COMPLETE — the late run has nothing to do`);
+      process.exit(1);
+    }
+    console.log(`crossing-save · crossing ${prev} is not saved complete — the save runs`);
+  } catch (e) {
+    console.log(`crossing-save · could not tell whether the crossing is saved (${String(e?.message ?? e).split("\n")[0].slice(0, 160)}) — the save runs`);
+  }
+  process.exit(0);
 }
 
 const die = (code, gate, detail) => {
@@ -530,6 +582,7 @@ const writeIfChanged = (path, text) => {
 };
 
 async function main() {
+  if (flag("--unsaved")) return unsavedVerdict();
   if (!existsSync(join(CLONE, "WORLD"))) die(1, "world-clone", `no WORLD/ under ${CLONE} — this is not a world checkout`);
 
   const atIso = argOf("--at", null);
@@ -657,13 +710,7 @@ async function main() {
   //    not something a save should quietly paper over by inventing history.
   const prev = crossing - 1;
   if (prev >= 0) {
-    const prevMeta = join(STATE_DIR, "log", `${prev}.meta.json`);
-    let prevComplete = false;
-    if (existsSync(prevMeta)) {
-      try { prevComplete = Date.parse(JSON.parse(readFileSync(prevMeta, "utf8")).covers_to) >= boundaryMs; }
-      catch { prevComplete = false; }
-    }
-    if (!prevComplete) {
+    if (!savedComplete(STATE_DIR, prev, boundaryMs)) {
       saves.push({ ...buildSave({
         crossing: prev, boundaryMs: crossingStartMs(prev),
         fromMs: crossingStartMs(prev), toMs: boundaryMs, crossingMs,

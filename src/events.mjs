@@ -56,6 +56,10 @@ export const ACT_REVEAL = "reveal";
 // stage, the old and new credit, the link and the note. It moves no stage and
 // changes no row; the act is the record, as an award's is.
 export const ACT_RECREDIT = "recredit";
+// A bug stage no one earned, recorded as skipped (POS-713, Darko 2026-10-20):
+// the stage, the hand and the reason. It moves the post to that stage, as an
+// advance does, and credits no one: no payer reads it, so it mints nothing.
+export const ACT_SKIP = "skip";
 // A post's stored state is what its acts made it. An event's clock phases
 // (announced · doors-open · underway · ended) are `phaseAt`'s, never stored.
 export const STATE_ANNOUNCED = "announced";
@@ -452,7 +456,8 @@ export function applyPostAct(state, act) {
     return row;
   }
   // The advance: the state it names, and ONLY the class fields it carries.
-  if (act.action === ACT_ADVANCE) {
+  // A bug's skip (POS-713) moves the state the same way and carries no fields.
+  if (act.action === ACT_ADVANCE || act.action === ACT_SKIP) {
     if (!prev) return null;
     const row = { ...prev, fields: { ...prev.fields, ...(p.fields ?? {}) }, state: p.to, last_act: actId };
     state.posts.set(id, row);

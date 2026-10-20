@@ -15,7 +15,20 @@
 //
 // Any resident posts a bug as themselves. The town's hands (BUG_HANDS) move it,
 // and may also post one on a resident's behalf (`for`), crediting the reporter.
-// An advance may jump forward; a stage it skips pays nothing.
+//
+// ── EVERY RUNG IS RECORDED, IN ORDER (POS-713, a hotfix) ────────────────────
+//
+// Darko, 2026-10-20 08:58: "having an explicit skipped step is going to help
+// us not only … be methodical about this, but also have provenance on … what
+// actually was skipped and have more data on that. That doesn't have to be …
+// derived." On 10-19 a bug reached shipped without ever standing fixed, and
+// its fixer's 10 stamps were owed by hand. So an advance moves exactly one
+// rung along the main line, and a stage no one earned is recorded as skipped:
+// `{ post, skip: "<stage>", reason }`, its own `skip` act, one stage per call,
+// in order, crediting no one and paying nothing (judgeSkip). The bounce names
+// the first unrecorded stage and both ways forward. The rule reads forward
+// from where a post stands, so a post already past a gap before this rule
+// (27 shipped bugs on 2026-10-20) is grandfathered as it is, never back-filled.
 //
 // ── THE ADVANCE RECORDS; IT MINTS NOTHING ───────────────────────────────────
 //
@@ -32,7 +45,7 @@
 // A bug takes no stake, at post and at the stake door alike, refused by name
 // (BUG_NO_STAKE), with the ruling's reason in the refusal.
 
-import { refuse, TITLE_MAX, INVITATION_MAX, ACT_POST, ACT_ADVANCE, ACT_RECREDIT } from "./events.mjs";
+import { refuse, TITLE_MAX, INVITATION_MAX, ACT_POST, ACT_ADVANCE, ACT_RECREDIT, ACT_SKIP } from "./events.mjs";
 import { handsOf, holdsHand, notThisHand } from "./named-hand.mjs";
 
 export const BUG_CLASS = "bug";
@@ -47,7 +60,7 @@ export const STATE_SHIPPED = "shipped";
 export const STATE_DUPLICATE = "duplicate";
 export const STATE_NOT_A_BUG = "not-a-bug";
 
-/** The main line, in order. An advance moves forward along it and may skip. */
+/** The main line, in order. An advance moves one rung along it; a rung no one earned is skipped on the record (POS-713). */
 export const BUG_STAGES = Object.freeze([STATE_REPORTED, STATE_CONFIRMED, STATE_REPRODUCED, STATE_DIAGNOSED,
   STATE_BRIEFED, STATE_FIXED, STATE_SHIPPED]);
 /** The side exits, and the states they leave from. */
@@ -338,7 +351,10 @@ export function judgeAdvance(fields, prev, roll) {
       throw refuse(409, `a bug leaves as ${to} only from ${SIDE_EXIT_FROM.join(" or ")}`, `"${prev.id}" stands ${from}; move it forward along ${BUG_STAGES.join(" → ")}`, { field: "to" });
   } else if (BUG_STAGES.indexOf(to) <= BUG_STAGES.indexOf(from)) {
     throw refuse(409, `"${prev.id}" already stands ${from}`, `an advance moves forward: ${BUG_STAGES.slice(BUG_STAGES.indexOf(from) + 1).join(", ")}`, { field: "to" });
+  } else if (BUG_STAGES.indexOf(to) > BUG_STAGES.indexOf(from) + 1) {
+    throw unrecorded(prev, BUG_STAGES[BUG_STAGES.indexOf(from) + 1]);
   }
+  if (fields.reason !== undefined) throw refuse(422, "reason is a skip's", `an advance says what was earned, not why nothing was; ${SKIP_HOW}`, { field: "reason" });
   const out = { to };
   const paid = Boolean(BUG_LADDER[to]);
   if (fields.credit !== undefined && !paid)
@@ -374,6 +390,50 @@ export function judgeAdvance(fields, prev, roll) {
     out.of = of;
   }
   return out;
+}
+
+// ── THE SKIP (POS-713) ──────────────────────────────────────────────────────
+//
+// A rung no one earned is recorded, never jumped: one `skip` act names the
+// stage, the hand and why. It credits no one, takes no link, size, grade or
+// critter, and pays nothing (the stage pass reads advances only). Only the
+// paid rungs are skipped: reported is the post itself, and shipped is the
+// finish, advanced to when the fix is live. A skipped stage is never
+// re-credited (judgeRecredit: "a skipped stage paid no one").
+export const SKIP_STAGES = PAID_STAGES;
+export const SKIP_REASON_MAX = BODY_MAX;
+const SKIP_HOW = 'a stage no one earned is skipped with town { do: "advance", args: { post, skip: "<stage>", reason } }, one stage per call, in order; it credits no one and pays nothing';
+const SKIP_TAKES_NO = Object.freeze(["to", "credit", "size", "grade", "critter", "link", "of", "recredit", "note"]);
+
+/** The bounce for a rung not yet recorded: it names the stage and both ways forward. */
+function unrecorded(prev, gap, field = "to") {
+  return refuse(409, `"${prev.id}" stands ${prev.state}, and ${gap} is not recorded yet`,
+    `record or skip ${gap} first: { post, to: "${gap}", … } when someone earned it, or { post, skip: "${gap}", reason } when no one did (a skip credits no one and pays nothing)`, { field });
+}
+
+/** Judge a skip against the bug: `{ to, reason }`, the stage recorded as skipped and why. */
+export function judgeSkip(fields, prev) {
+  const stage = typeof fields?.skip === "string" ? fields.skip.trim() : "";
+  if (!stage) throw refuse(422, "skip which stage?", `skip: the next stage, one of ${SKIP_STAGES.join(", ")} — ${SKIP_HOW}`, { field: "skip" });
+  for (const k of SKIP_TAKES_NO)
+    if (fields[k] !== undefined) throw refuse(422, `a skip takes no ${k}`, `a skip records that no one earned the stage — ${SKIP_HOW}`, { field: k });
+  if (stage === STATE_SHIPPED)
+    throw refuse(422, "shipped is not skipped", 'shipped is the finish: advance to it, { post, to: "shipped" }, once the fix is live', { field: "skip" });
+  if (!SKIP_STAGES.includes(stage))
+    throw refuse(422, `"${stage}" is not a stage a bug skips`, `skip: one of ${SKIP_STAGES.join(", ")} — reported is the post itself, and ${BUG_SIDE_EXITS.join(" and ")} are ways out, advanced to`, { field: "skip" });
+  const from = prev.state;
+  if (BUG_FINISHED.includes(from))
+    throw refuse(409, `"${prev.id}" is finished (${from})`, "a finished bug moves no further; post a new one if it came back");
+  const at = BUG_STAGES.indexOf(from), want = BUG_STAGES.indexOf(stage);
+  if (want <= at)
+    throw refuse(409, `"${prev.id}" already stands ${from}`, `a skip records the next stage, ${BUG_STAGES[at + 1]}, and nothing behind it`, { field: "skip" });
+  if (want > at + 1) throw unrecorded(prev, BUG_STAGES[at + 1], "skip");
+  const reason = typeof fields.reason === "string" ? fields.reason.trim() : "";
+  if (!reason)
+    throw refuse(422, "a skip says why", `reason: why no one earned ${stage}, at most ${SKIP_REASON_MAX} characters; it stays on the bug's history`, { field: "reason" });
+  if (reason.length > SKIP_REASON_MAX)
+    throw refuse(422, `a skip's reason is at most ${SKIP_REASON_MAX} characters`, `this one is ${reason.length}`, { field: "reason" });
+  return { to: stage, reason };
 }
 
 // ── THE RECREDIT (POS-649, a hotfix; Darko 2026-10-15) ──────────────────────
@@ -524,6 +584,9 @@ export function judgeReveal(fields, prev, key, { urlOk }) {
 //                 minutes), held by the weekly household cap, a meep's stage,
 //                 or a stage that pays nothing
 //
+//   a skip        (POS-713) the stage no one earned: { stage, skipped: true,
+//                 reason, at, hand, credit: null, link: null, stamps_paid: null }
+//
 //   a recredit    (POS-649) its own row beside the stage it corrects:
 //                 { stage, recredit: true, at, hand, credit, was, link, note,
 //                 stamps_paid } (the `post:<id>/<stage>-recredit` line), and the
@@ -570,7 +633,7 @@ export function bugHistoryOf(acts, paid = []) {
   }
   const out = new Map();
   for (const a of acts) {
-    if (a.action !== ACT_POST && a.action !== ACT_ADVANCE && a.action !== ACT_RECREDIT) continue;
+    if (a.action !== ACT_POST && a.action !== ACT_ADVANCE && a.action !== ACT_RECREDIT && a.action !== ACT_SKIP) continue;
     const p = typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {});
     const post = String(a.object);
     const at = new Date(a.at).toISOString();
@@ -584,6 +647,11 @@ export function bugHistoryOf(acts, paid = []) {
         link: p.link ?? null, note: p.note ?? null, stamps_paid: paid.get(`${post}/${p.to}-recredit`) ?? null });
       const original = rows.find((r) => r.stage === p.to && !r.recredit);
       if (original) original.recredited_to = p.credit ?? null;
+      out.set(post, rows);
+      continue;
+    }
+    if (a.action === ACT_SKIP) {
+      rows.push({ stage: p.to, skipped: true, reason: p.reason ?? null, at, hand: p.hand ?? a.actor ?? null, credit: null, link: null, stamps_paid: null });
       out.set(post, rows);
       continue;
     }

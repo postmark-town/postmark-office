@@ -1,14 +1,16 @@
 [Unit]
-Description=Crystallize the dynamic store at the town's published crossings (00:00 / 12:00 UTC)
+Description=The crossing save's late fallback (00:30 / 12:30 UTC); the ferry starts the save itself when it finishes
 
 [Timer]
-# CROSSING-ALIGNED, and two minutes behind the boundary on purpose. The ferry
-# fires exactly at 00:00/12:00 and takes town.lock for the whole crossing pass;
-# a save contending for the same lock at the same instant would either wait
-# behind it or make the ferry wait. Two minutes late costs nothing — the save
-# writes the crossing it has just LEFT complete to its boundary, so the record
-# has no gap, only a short delay before it is written down.
-OnCalendar=*-*-* 00,12:02:00 UTC
+# THE LATE FALLBACK (POS-714, Darko 2026-10-20). The save's own run is chained
+# to the ferry (postmark-ferry.service's OnSuccess= and OnFailure=), so it
+# starts when the ferry lets go of town.lock instead of racing it. This clock
+# is what remains: thirty minutes behind the crossing, it saves a crossing the
+# chain did not (a ferry that never ran, a chained save that refused), and the
+# service's ExecCondition skips it when the crossing is already saved, which on
+# an ordinary day is every time. It was :02 until 2026-10-20, when the 00:00Z
+# ferry held the lock 7 min 13 s and the save's 300 s wait ran out.
+OnCalendar=*-*-* 00,12:30:00 UTC
 # A crossing missed while the box was down is caught up on the next boot. The
 # save is idempotent (same store, same instant, same bytes) and it closes at
 # most one crossing behind itself, so a late run writes the record rather than

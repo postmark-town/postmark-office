@@ -1398,6 +1398,53 @@ Removing the directory alone is not enough: a locked entry outlives it.
 6. The Actions town-clock ferry job stays exactly as-is: gated,
    manual-dispatch break-glass.
 
+### The crossing save runs when the ferry finishes (POS-714, Darko 2026-10-20 08:58)
+
+The save used to fire on its own clock at :02 and wait `flock -w 300` for
+town.lock. On 2026-10-20 00:00Z the ferry held the lock 7 min 13 s, and the
+save gave up 14 s before it came free (rerun by hand at 01:01Z). Now
+`postmark-ferry.service` starts `postmark-crossing-save.service` when it
+finishes (`OnSuccess=` and `OnFailure=`: the save reads the store, so a ferry
+that refused still leaves a crossing to save). The save's timer moves to :30 as
+the late fallback, and the service's `ExecCondition=` (`crossing-save.mjs
+--unsaved`) skips the run when the crossing just left is already saved
+COMPLETE. Any doubt in that check means "run", so a broken save still fails
+loudly rather than skipping. The box runs systemd 255, and `OnSuccess=` needs 249.
+
+**Install (Wright's hand, away from a crossing: not 23:50–00:40 or 11:50–12:40 UTC).**
+From the deployed release tree, after the release carrying this change is live
+(the ExecCondition calls `crossing-save.mjs --unsaved`, which older trees do
+not have):
+```sh
+sudo cp /etc/systemd/system/postmark-ferry.service /etc/systemd/system/postmark-crossing-save.service \
+        /etc/systemd/system/postmark-crossing-save.timer /var/backups/   # the rollback copies
+sudo cp /srv/postmark-office/deploy/postmark-ferry.service \
+        /srv/postmark-office/deploy/postmark-crossing-save.service \
+        /srv/postmark-office/deploy/postmark-crossing-save.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart postmark-crossing-save.timer
+```
+Nothing is started by hand: the next crossing is the first chained run.
+
+**Prove it (read-only):**
+```sh
+systemctl show postmark-ferry.service -p OnSuccess -p OnFailure
+#   OnSuccess=postmark-crossing-save.service
+#   OnFailure=postmark-crossing-save.service
+systemctl show postmark-crossing-save.timer -p TimersCalendar      # … OnCalendar=*-*-* 00,12:30:00 UTC …
+sudo -u meepo node /srv/postmark-office/tools/crossing-save.mjs --unsaved --world /srv/postmark-office/world-clone; echo "exit $?"
+#   between crossings: "crossing N is already saved COMPLETE …", exit 1 (the fallback would skip)
+```
+After the next crossing: `journalctl -u postmark-crossing-save.service --since -1h`
+shows a run starting within seconds of the ferry's `Finished`/`Failed` line, and
+`crossing N  …  COMPLETE`. At :30 it shows the condition skipping (`… already
+saved COMPLETE`). `systemctl show postmark-crossing-save.service -p Result` reads
+`success`.
+
+**Rollback:** copy the three files back from `/var/backups/`, `daemon-reload`,
+`systemctl restart postmark-crossing-save.timer`. The save is idempotent, so a
+crossing saved by either shape reads the same.
+
 ## The one-hand rule (2026-08-20, after the stranded-crossings incident)
 
 **meepo is the only hand that touches `/srv/postmark-office`. Root never
