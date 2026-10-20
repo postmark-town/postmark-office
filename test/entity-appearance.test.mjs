@@ -18,7 +18,7 @@ import {
   __resetAppearanceForTest, APPEARANCE_CLASS, BODY_MAX,
 } from "../src/entity-predicates.mjs";
 import { entityKindOf, investigateResident } from "../src/world-investigate-entity.mjs";
-import { dispatchToolFor } from "../src/world-apex.mjs";
+import { dispatchToolFor, focusArgs } from "../src/world-apex.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 
 const jetto = { handles: new Set(["jetto-of-starforge"]), household: "starforge" };
@@ -153,6 +153,13 @@ test("INVESTIGATE: a node id is the living's (an appearance), and the resident's
 
 test("THE APEX DISPATCHES describe to its flat schema", () => {
   assert.equal(dispatchToolFor("describe"), "world_describe");
+});
+
+test("THE APEX TAKES depth: the mark: look carries it past 1, and depth 1 asks what it always asked", () => {
+  // found on the walk (docs/2026-10-19/rail/WLD-83/column-walk): depth bounced as an unknown argument
+  assert.deepEqual(focusArgs({ mark: "a/b", depth: 3 }), { mark: "a/b", depth: 3 });
+  assert.deepEqual(focusArgs({ mark: "a/b", depth: 1 }), { mark: "a/b" });
+  assert.deepEqual(focusArgs({ mark: "a/b" }), { mark: "a/b" });
 });
 
 test("AGAINST A REAL STORE: the door writes an `appearance` act, and the fold reads it back at once", async (t) => {
