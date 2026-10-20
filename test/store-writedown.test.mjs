@@ -1191,3 +1191,60 @@ test("F-claim-ingest · marks-ingest never reads claimed_at back as a resident's
   assert.deepEqual(recordDiff({ kind: "parcel", body: "a", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), []);
   assert.deepEqual(recordDiff({ kind: "parcel", body: "b", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), ["body"], "a real change is still read");
 });
+
+// ── W · AN OWED WITHDRAWAL IS A REMOVAL ON ITS SKETCHBOOK (WLD-88) ──────────
+//
+// The store crossing wrote no removal from G1 (2026-09-08) on, so the sweep's
+// withdrawal law never saw a deletion and a published mark its author let go
+// stood in canon. These hold the write-down to the git era's shape: the file
+// leaves the household's sketchbook, and the sweep judges the deletion.
+
+test("W1 · an owed withdrawal removes the mark's canon file from its household's sketchbook", () => {
+  const w = makeWorld("withdraw");
+  const report = storeWriteDown({
+    repo: w.repo, at: Date.parse(AT_ISO),
+    input: foldInput([], { withdrawals: [{ slug: "alpha/published-note", by: "alpha", household: "alpha" }] }),
+  });
+  assert.deepEqual(report.withdrawals, [{ id: "alpha/published-note", household_key: "alpha" }]);
+  assert.equal(report.counts.removed, 1);
+  assert.equal(report.households.length, 1);
+  assert.equal(report.households[0].branch, "draft/alpha");
+  assert.deepEqual(report.households[0].touched, [{ op: "remove", id: "alpha/published-note", path: "WORLD/marks/alpha/published-note/mark.md" }]);
+  const files = w.git("ls-tree", "-r", "--name-only", "draft/alpha", "--", "WORLD/marks").trim().split("\n");
+  assert.ok(!files.includes("WORLD/marks/alpha/published-note/mark.md"), `the sketchbook must not hold it; got ${JSON.stringify(files)}`);
+  assert.ok(w.git("ls-tree", "-r", "--name-only", "main", "--", "WORLD/marks").includes("alpha/published-note"),
+    "main is the sweep's to change, not the write-down's");
+  assert.match(w.git("log", "-1", "--format=%s", "draft/alpha"), /0 mark\(s\), 1 withdrawal\(s\)/);
+});
+
+test("W2 · one mark both written and withdrawn REFUSES: the selector keeps them apart", () => {
+  const e = caught(() => planStoreWriteDown([normalizeMark(storeMark())], {
+    withdrawals: [{ id: "alpha/a-store-mark", by: "alpha", slug: "a-store-mark", household: "alpha" }],
+  }));
+  assert.ok(e instanceof FoldInputRefusal, String(e));
+  assert.equal(e.reason, "withdrawal-and-write");
+});
+
+test("W3 · a withdrawal by the town opens no sketchbook and is held by name", () => {
+  const w = makeWorld("withdraw-town");
+  const report = storeWriteDown({
+    repo: w.repo, at: Date.parse(AT_ISO),
+    input: foldInput([], { withdrawals: [{ slug: "the-town/let-there-be-light", by: "the-town", household: "solo:the-town" }] }),
+  });
+  assert.equal(report.households.length, 0);
+  assert.deepEqual(report.withdrawals, []);
+  assert.deepEqual(report.held_unbound.map((h) => [h.id, h.withdrawal]), [["the-town/let-there-be-light", true]]);
+});
+
+test("W4 · a withdrawal with no slug or no household REFUSES rather than removing nothing", () => {
+  for (const [bad, reason] of [
+    [{ slug: "no-owner", household: "alpha" }, "withdrawal-without-slug"],
+    [{ slug: "alpha/published-note", household: null }, "withdrawal-without-household"],
+  ]) {
+    const e = caught(() => normalizeFoldInput(foldInput([], { withdrawals: [bad] })));
+    assert.ok(e instanceof FoldInputRefusal, String(e));
+    assert.equal(e.reason, reason);
+  }
+  assert.equal(caught(() => normalizeFoldInput(foldInput([], { withdrawals: "x" })))?.reason, "fold-input-shape");
+  assert.deepEqual(normalizeFoldInput(foldInput([])).withdrawals, [], "a supplier from before the term owed none");
+});
