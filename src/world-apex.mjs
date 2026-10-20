@@ -2057,7 +2057,9 @@ export function focusArgs(args = {}) {
   if (!mark) return null;
   // the read's crossing rides too, when it was asked: a focused house's light is
   // the read's own crossing's (WLD-29), never today's painted onto a past read
-  return { mark, ...(args.with_image === true ? { with_image: true } : {}), ...(args.crossing != null ? { crossing: args.crossing } : {}) };
+  return { mark, ...(args.with_image === true ? { with_image: true } : {}), ...(args.crossing != null ? { crossing: args.crossing } : {}),
+    // WLD-83 P10: depth past 1 descends (world-verbs.mjs § descend); 1 is the look it always was
+    ...(Number.isFinite(Number(args.depth)) && Number(args.depth) > 1 ? { depth: Number(args.depth) } : {}) };
 }
 
 /**
@@ -4039,7 +4041,10 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     args: { type: "object", description: "the action's own fields (with do:) or narrowing fields (with read:), exactly as the entry's `fields` block names them — world { do: \"say\", args: { text: \"hello\" } }. Unknown fields bounce by name. Your standpoint (handle) stays top-level.", additionalProperties: true },
     mark: { type: "string", description: "FOCUS the bare read on one mark — <by>/<slug>, as ids appear in the telling. The answer is the read you would have got anyway, plus `focus`: the close look at that mark (its body, the properties predicated on it, what stands inside it); under read_shape: \"v2\", where you are and `focus` alone. It is a focus rather than an action because investigating performs nothing — do: would be a lie, and read: is an action's shadow, so a shadow with no action is the reverse the apex's law forbids. Never rides with do: or read:." },
     find: { type: "string", description: "FIND a mark by name from anywhere — its name, slug or id. The answer is the bare read you would have got anyway, plus `found`: the hits, best match first (an exact id, then names and slugs starting with it, then containing it), each with its place, its distance from you and the stops to ride between. A focus, like mark:, because finding performs nothing and no ground grants it. Under read_shape: \"v2\" a find: alone answers where you are and `found`, never the glance again (the glance is world { read_shape: \"v2\" }). Never rides with do: or read:. (It was read: \"find\" until train/2026-w41; that spelling answers with a `renamed` row until " + FIND_READ_ANSWERS_UNTIL + ".)" },
-    investigate: { type: "string", description: "LOOK CLOSER at a living thing — a resident's handle. The answer is the bare read you would have got anyway (under read_shape: \"v2\", where you are alone), plus `investigated`: where they are now and where the last crossing's save put them, their newest public acts in the last 12 hours (a say is named, never its words), and what they carry. Their household and letters are at household and town. A focus, like mark: (marks) and find:. Creatures join with their class." },
+    investigate: { type: "string", description: "LOOK CLOSER at a living thing — a resident's handle. The answer is the bare read you would have got anyway (under read_shape: \"v2\", where you are alone), plus `investigated`: where they are now and where the last crossing's save put them, their newest public acts in the last 12 hours (a say is named, never its words), and what they carry. Their household and letters are at household and town. A focus, like mark: (marks) and find:. Creatures join with their class. What they look like rides as `appearance`, their own tree (WLD-83); a node of it is investigated by its id, <handle>/appearance.<slot>, and depth: reads further down." },
+    // WLD-83 P10: the close look descends. One cap on the bodies the levels below
+    // add (the telling's context_budget), then call again where `descend` points.
+    depth: { type: "number", description: "with mark: or investigate:, how far down to read (default 1, the look's own level). The levels below ride in `beneath`, under one cap on bodies; `descend` names the ids to look at next." },
     find_offset: { type: "number", description: "with find:, walk past the first hits — the previous answer's found.next_offset" },
     find_limit: { type: "number", description: "with find:, how many hits (default 10, at most 50)" },
     with_image: { type: "boolean", description: "with mark:, also bring that mark's picture back as image bytes if it has one and it fits under the inline cap. The url rides in the answer either way; this only decides whether the office spends the bytes." },
