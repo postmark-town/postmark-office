@@ -113,16 +113,25 @@ export function memberLine(row, { gaps = [], nowMs = Date.now() } = {}) {
  * parcel). Said once in the glance, only for what a member line is missing.
  */
 export const FIRST_STEPS = Object.freeze({
-  home: "home { handle, title, body }",
-  window: "window { handle, html }",
-  address: "address { handle, body }",
-  parcel: 'world leave-mark { slug, kind: "parcel", at, body }, then world stake it: the parcel is the home',
+  home: 'household { do: "home", args: { handle, title, body } }',
+  window: 'household { do: "window", args: { handle, html } }',
+  address: 'household { do: "address", args: { handle, body } }',
+  // eval round 2: parcels publish free (RULED 09-27: min stake 0, everyone), so no stake step;
+  // a literal place, and where to find open ground
+  parcel: 'world { do: "leave-mark", args: { kind: "parcel", slug: "my-home", at: { x: 120, y: -80 }, body: "…" } }: free; world { read_shape: "v2" } shows open ground near you',
 });
+/** The order the steps are taken in (eval round 2: an ordered list): any order works, and this is the one the town teaches. */
+export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel"]);
 
-/** The first-steps line for what the members are missing, or null when nothing is. */
+/**
+ * The first steps for what the members are missing, in order, each naming the
+ * call (and so its tool), or null when nothing is. None of them gates a
+ * resident: each makes the house more visible.
+ */
 export function firstSteps(gaps = {}) {
-  const kinds = [...new Set(Object.values(gaps).flat())].filter((k) => FIRST_STEPS[k]);
-  return kinds.length ? Object.fromEntries(kinds.map((k) => [k, FIRST_STEPS[k]])) : null;
+  const missing = new Set(Object.values(gaps).flat());
+  const steps = FIRST_STEPS_ORDER.filter((k) => missing.has(k)).map((k) => `${k}: ${FIRST_STEPS[k]}`);
+  return steps.length ? steps : null;
 }
 
 /** A paper gap's sentence, as one word: "tend your HOME page — …" → "home". */
@@ -213,7 +222,7 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
 }
 
 /** The waiting block's key (eval round 1): what each count is, and the read that lists it. */
-export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · group: one author over one place of yours, oldest ids first; act answers ids[0] · lists: read "stances" (marks), "stakes" (at_risk), "needs-you" (the rest)';
+export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · act answers ids[0] · all marks: read "stances"';
 
 // ── mail and stamps ──────────────────────────────────────────────────────────
 
@@ -246,27 +255,36 @@ export function unansweredOf(letters = [], { mine, house = mine } = {}) {
   return n;
 }
 
-/** The mail block's key (eval round 1): what each count is, and the read that lists the letters. */
-export const MAIL_KEY = 'unanswered_14d: in 14 days, no letter back · new_inbound: they wrote after your last letter, any age · bounced: yours that never arrived · on_the_next_boat: yours, sailing next · lists: read "mail", view "awaiting", handle';
+/** The mail block's key (eval rounds 1 and 2): what each count is, and the read that lists the letters; about 100 characters. */
+export const MAIL_KEY = 'to answer: 14 days, no reply · boat: sails next crossing · letters: read "mail", view "awaiting"';
 
-/** D7: unanswered (the last 14 days, by the ledger), new_inbound (the awaiting view's own key), bounced, and what sails at the next crossing. */
-export function mailBlock({ unanswered = null, newInbound = null, bounced = null, standing = null } = {}) {
-  return { unanswered_14d: unanswered, new_inbound: newInbound, bounced, on_the_next_boat: standing, key: MAIL_KEY };
+/**
+ * D7, eval round 2: one count to act on, `to_answer_14d` (the ledger's: no
+ * letter back in 14 days), the letters that never arrived, and the house's
+ * letters sailing at the next crossing. Threads of any age where they wrote
+ * last are read: "mail", view: "awaiting", never the glance.
+ */
+export function mailBlock({ unanswered = null, bounced = null, standing = null } = {}) {
+  return { to_answer_14d: unanswered, bounced, on_the_next_boat: standing, key: MAIL_KEY };
 }
 
-/** The stamps block's key (eval round 1). `went` joins it when the block carries a went count. */
+/** The stamps block's key (eval rounds 1 and 2): about 100 characters; went joins it when the block carries a went count. */
 export const stampsKey = ({ went = false } = {}) =>
-  `spendable: every resident's stamps, added up (no house pool yet) · staked: in stakes · earned_total: ever minted · per resident: read "stamps"${went ? ' · went (12 h): read "stamps", view "went" lists where, dated' : ""}`;
+  `stamps; each resident spends their own · per resident: read "stamps"${went ? ' · went: read "stamps", view "went"' : ""}`;
 
-/** The house's stamps: what it can spend, what is staked, what it has earned, today's quests. */
+/**
+ * The house's stamps: the residents' own, added up (eval round 2: `spendable`
+ * misled, as the house spends no pot), what is staked, what has been earned,
+ * and today's quests when there are any.
+ */
 export function stampsBlock(details = [], { quests = [] } = {}) {
   const known = details.filter((d) => d.tenses);
   const sum = (f) => known.reduce((n, d) => n + (Number(d.tenses[f]) || 0), 0);
   return {
-    spendable: sum("liquid"),
+    residents_total: sum("liquid"),
     staked: sum("staked"),
     earned_total: sum("minted"),
-    quests,
+    ...(quests.length ? { quests } : {}),
     ...(known.length < details.length ? { unread: details.filter((d) => !d.tenses).map((d) => d.handle) } : {}),
     key: stampsKey(),
   };
@@ -281,23 +299,30 @@ export function questLines(board) {
 
 // ── the glance ───────────────────────────────────────────────────────────────
 
+/** The member lines' legend, said once (Darko, 2026-10-20; eval round 2: the order is said). */
+export const MEMBERS_KEY = "newest act first · handle · on <mark> | at x, y (m) · last act, age · missing";
+
+/** Members by their last act, newest first; one with no act yet goes last, by handle. */
+export const byLastAct = (a, b) => String(b.last_active ?? "").localeCompare(String(a.last_active ?? "")) || String(a.handle).localeCompare(String(b.handle));
+
+/** The `more` line, with the one sentence about what the glance leaves out (eval round 2). */
+export const glanceMore = (cursor) => `${moreLine(cursor)} · a block with nothing in it is left out`;
+
 /**
  * The house's glance. `parts` is what the door read (household-apex.mjs §
  * householdGlance), so this function is pure and the suite drives it directly.
  */
-/** The member lines' legend, said once (Darko, 2026-10-20): the terms each line's parts stand for. */
-export const MEMBERS_KEY = "handle · on <mark> | at x, y (metres) · last act, age · missing: (first_steps has each call)";
-
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
   const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
+  const steps = firstSteps(gaps);
   return {
     house: {
       name: house.name ?? null, slug: house.slug, human: humanPhrase(house.name), since: house.since ?? null,
       ...(you ? { you } : {}),
       members_key: MEMBERS_KEY,
-      members: rows.map((r) => memberLine(r, { gaps: gaps[r.handle] ?? [], nowMs })),
-      ...(firstSteps(gaps) ? { first_steps: firstSteps(gaps) } : {}),
+      members: [...rows].sort(byLastAct).map((r) => memberLine(r, { gaps: gaps[r.handle] ?? [], nowMs })),
+      ...(steps ? { first_steps: steps, first_steps_note: FIRST_STEPS_NOTE } : {}),
     },
     // eval round 1: "needs" said two things; what waits on the house's word is `waiting`
     waiting: needsBlock({ stances, needs, tail }),
@@ -309,11 +334,14 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
       ...(standing?.world_writes ? { world_writes: `${standing.world_writes.used}/${standing.world_writes.cap} this ${standing.world_writes.per ?? "hour"}` } : {}),
     },
     cursor,
-    more: moreLine(cursor),
+    more: glanceMore(cursor),
     reading_law: READING_LAW_V2,
     read_shape: "v2",
   };
 }
+
+/** Said once beside the first steps (eval round 2): whether the missing papers are required. */
+export const FIRST_STEPS_NOTE = "none is required; each makes your house easier to find";
 
 /**
  * since: "<cursor>" on the glance: only what changed. Needs dated on or after

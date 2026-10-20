@@ -275,9 +275,6 @@ test("THE GATE, ON THE STORE: a threaded standing reply turns r000's thread queu
     assert.deepEqual([pr.they_spoke_last, pr.new_inbound], [d.awaiting.summary.they_spoke_last, d.awaiting.summary.new_inbound],
       "the page row is r000's own doorstep, the queued reply and all");
     assert.equal(pr.new_inbound, 0, "the queued reply took the thread off new_inbound");
-    // and the house's glance (POS-633 part 1) reads the same standing letters
-    const glance = await householdApex({ read_shape: "v2" }, key, { clone: scratch, asOf: AS_OF, odb });
-    assert.equal(glance.mail.new_inbound, d.awaiting.summary.new_inbound, "the glance's mail is r000's own doorstep, the queued reply and all");
 
     const anon = await houseBundle({ household: HOUSE }, sctx({}));
     assert.equal(JSON.stringify(anon).includes(reply), false, "no key: no trace of the standing reply");
@@ -559,10 +556,11 @@ test("THE GLANCE (POS-633): household { read_shape: \"v2\" } answers the house's
   const g = await householdApex({ read_shape: "v2", handle: "r000" }, key, { clone: scratch, asOf: AS_OF, odb: null });
   assert.equal(g.read_shape, "v2", JSON.stringify(g).slice(0, 300));
   assert.deepEqual([g.house.slug, g.house.name, g.house.human, g.house.you], [HOUSE, "Fixture", "Fixture's human", "r000"]);
-  assert.deepEqual(g.house.members.map((m) => m.split(" · ")[0]), ["r000", "r001"], "the members this key holds, ashore, in the house's order");
+  assert.deepEqual(g.house.members.map((m) => m.split(" · ")[0]).sort(), ["r000", "r001"], "the members this key holds, ashore");
+  assert.match(g.house.members_key, /^newest act first/, "their order is said");
   assert.ok(Number.isInteger(g.waiting.count));
   assert.equal(g.mail.bounced, 1, "r000's bounce, from needs-you, rides with the mail");
-  assert.ok(Number.isInteger(g.stamps.spendable) && g.stamps.spendable >= 0, "the residents' stamps added up, a plain number");
+  assert.ok(Number.isInteger(g.stamps.residents_total) && g.stamps.residents_total >= 0, "the residents' stamps added up, a plain number");
   assert.deepEqual(unexplained("household", g, 2), []);
   assert.ok(JSON.stringify(g, null, 1).length <= 4096);
   assert.doesNotMatch(JSON.stringify(g), /https?:\/\//);
