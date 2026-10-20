@@ -65,7 +65,9 @@ test("H2 · the glance stays bounded as served: Starforge, a house of one, a bra
   }
   assert.equal(sf.house.members.length, 9);
   // a new house looks new: founded today, nothing earned, no act yet
-  assert.deepEqual([fresh.house.since, fresh.stamps.earned_total, fresh.stamps.spendable], ["2026-10-20", 0, 0]);
+  assert.deepEqual([fresh.house.since, fresh.stamps.earned_total, fresh.stamps.residents_total], ["2026-10-20", 0, 0]);
+  assert.ok(!("quests" in fresh.stamps), "an empty block is left out (eval round 2)");
+  assert.match(sf.more, /a block with nothing in it is left out$/);
   assert.match(fresh.house.members[0], /no act yet · missing: home, window, parcel$/);
 });
 
@@ -104,8 +106,14 @@ test("D1 · each member is one string: handle · where · last act · what the p
   for (const m of g.house.members) assert.equal(typeof m, "string");
   assert.equal(g.house.members[0], "architect · at -606, 162 · letter 1 h · missing: home, window", "coordinates labelled; missing, never needs");
   assert.match(g.house.members[1], /^illuminator · on illuminator\/the-long-named-home-of-illuminator · say 2 h$/);
-  assert.deepEqual(g.house.first_steps, { home: "home { handle, title, body }", window: "window { handle, html }" }, "one call per missing paper, only those");
-  assert.match(firstSteps({ newbie: ["parcel"] }).parcel, /leave-mark \{ slug, kind: "parcel"/);
+  assert.deepEqual(g.house.first_steps, ['home: household { do: "home", args: { handle, title, body } }', 'window: household { do: "window", args: { handle, html } }'], "one call per missing paper, in order, each naming its tool");
+  assert.equal(g.house.first_steps_note, "none is required; each makes your house easier to find");
+  // eval round 2: parcels publish free (RULED 09-27), so no stake step; a literal place
+  const parcel = firstSteps({ newbie: ["parcel", "window", "home"] });
+  assert.deepEqual(parcel.map((s) => s.split(":")[0]), ["home", "window", "parcel"]);
+  assert.match(parcel[2], /world \{ do: "leave-mark", args: \{ kind: "parcel", slug: "my-home", at: \{ x: 120, y: -80 \}/);
+  assert.match(parcel[2], /free/);
+  assert.doesNotMatch(parcel[2], /stake/);
   assert.equal(firstSteps({ a: [] }), null);
   assert.equal(memberLine({ handle: "newbie", at: null, last_active: null }, { nowMs: NOW }), "newbie · nowhere on the roll · no act yet");
   assert.equal(gapWord("tend your HOME page — your pages tell the town who you are"), "home");
@@ -139,21 +147,24 @@ test("D2 · the house's human is named by the house, from one function", () => {
   assert.equal(humanPhrase(null), "the house's human");
 });
 
-test("D7 · mail says new_inbound and what sails next; no key is called owed", () => {
+test("D7 · mail carries one count to act on, to_answer_14d, and what sails next; no key is called owed", () => {
   const g = glanceV2(partsFor(STARFORGE), { nowMs: NOW });
   const { key, ...counts } = g.mail;
-  assert.deepEqual(counts, { unanswered_14d: 37, new_inbound: 468, bounced: 1, on_the_next_boat: 2 });
-  assert.match(key, /new_inbound: they wrote after your last letter, any age/, "every count says what it is");
+  assert.deepEqual(counts, { to_answer_14d: 37, bounced: 1, on_the_next_boat: 2 });
+  assert.ok(!("new_inbound" in g.mail), "eval round 2: one actionable count in the glance; any-age threads are read mail");
+  assert.match(key, /boat: sails next crossing/, "every count says what it is");
   assert.match(key, /read "mail", view "awaiting"/, "and the read that lists it");
+  for (const k of [g.waiting.key, key, g.stamps.key, g.house.members_key]) assert.ok(k.length <= 104, `a key of about 100 characters: ${k.length}`);
   assert.ok(!("unread" in g.mail), "the office's read flag is not a resident's");
-  assert.match(g.house.members_key, /^handle · on <mark> \| at x, y/, "the members' legend, once");
+  assert.match(g.house.members_key, /^newest act first · handle · on <mark> \| at x, y/, "the members' legend, once, the order said");
   assert.ok(!JSON.stringify(g).includes("owed"));
 });
 
-test("stamps: spendable is the residents' sum, earned a total, and the key names the read per resident", () => {
+test("stamps: residents_total is the residents' sum (each spends their own), earned a total, and the key names the read per resident", () => {
   const s = stampsBlock([{ handle: "a", tenses: { liquid: 5, staked: 1, minted: 9 } }, { handle: "b", tenses: { liquid: 7, staked: 0, minted: 3 } },
     { handle: "c", tenses: { liquid: 1, staked: 2, minted: 12 } }, { handle: "d", tenses: { liquid: 0, staked: 0, minted: 1 } }]);
-  assert.equal(s.spendable, 13, "the residents' stamps added up, named as spendable");
+  assert.equal(s.residents_total, 13, "the residents' stamps added up; no pot the house spends");
+  assert.match(s.key, /each resident spends their own/);
   assert.equal(s.staked, 3);
   assert.equal(s.earned_total, 25);
   assert.match(s.key, /per resident: read "stamps"/);
@@ -275,10 +286,16 @@ test("H2 with every block · Starforge's glance with closer and happened stays b
   t.diagnostic(`Starforge, every block: ${served(g)} characters`);
   assert.ok(served(g) <= FULL_BUDGET, `Starforge's whole glance is ${served(g)} characters as served`);
   assert.equal(g.correspondents_14d.rows.length, 3, "plainly letters, the window in the name");
-  assert.match(g.correspondents_14d.key, /^letters both ways in the last 14 days/);
-  assert.match(g.stamps.key, /went \(12 h\): read "stamps", view "went"/, "went names the read that lists it");
-  assert.equal(g.happened.length, 5);
-  assert.equal(g.stamps.went, 2);
+  assert.match(g.correspondents_14d.key, /^letters both ways, last 14 days/);
+  assert.match(g.stamps.key, /went_12h: household \{ read: "stamps", view: "went" \}/, "went names the exact call that lists it (eval round 2)");
+  assert.equal(g.happened.rows.length, 5);
+  assert.match(g.happened.key, /by Starforge's human for <resident> \(at its wheel\)/, "the three phrases, said once");
+  assert.equal(g.stamps.went_12h, 2, "went says its window and its unit");
+  for (const k of [g.correspondents_14d.key, g.happened.key, g.stamps.key]) assert.ok(k.length <= 112, `a key of about 100 characters: ${k.length}`);
+  // an empty block is left out
+  const quiet = glanceV2({ ...p, closer: [], happened: [], went: [] }, { nowMs: NOW });
+  assert.ok(!("correspondents_14d" in quiet) && !("happened" in quiet));
+  assert.equal(quiet.stamps.went_12h, 0, "a zero is said; an empty list is left out");
   assert.deepEqual(unexplained("household", g, 2), []);
   const s = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, inbound: [], happened, went }, encodeCursor({ crossing: 259, ms: NOW - 5_400_000, hw: "100" }), { nowMs: NOW });
   assert.equal(s.happened.length, 5);
@@ -368,4 +385,16 @@ test("discovery (as world v2): HOUSEHOLD_READ_SHAPE=v2 makes the glance the MCP 
   assert.match(HOUSEHOLD_DESCRIPTION, /read_shape: "v2" answers your house/);
   const { DOORSTEP_MORE } = await import("../src/doorstep-apex.mjs");
   assert.match(DOORSTEP_MORE, /household \{ read_shape: "v2" \} is your house at a glance/, "the doorstep points at it in one line");
+});
+
+test("eval round 2 · members run newest act first, with no act yet last", () => {
+  const p = partsFor(["a", "b", "c"]);
+  p.rows = [{ ...p.rows[0], last_active: "2026-10-18T00:00:00Z" }, { ...p.rows[1], last_active: null }, { ...p.rows[2], last_active: "2026-10-19T23:00:00Z" }];
+  assert.deepEqual(glanceV2(p, { nowMs: NOW }).house.members.map((m) => m.split(" · ")[0]), ["c", "a", "b"]);
+});
+
+test("eval round 2 · the went view is valid where the key names it: in the household tool's view enum, and at the door", async () => {
+  const { HOUSEHOLD_TOOL } = await import("../src/household-apex.mjs");
+  assert.ok(HOUSEHOLD_TOOL.inputSchema.properties.view.enum.includes("went"));
+  assert.match(HOUSEHOLD_TOOL.inputSchema.properties.view.description, /for read: "stamps", went is where your house's stamps went/);
 });
