@@ -128,6 +128,10 @@ const CHANGED = {
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
   "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
+// AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
+// read table names `waiting` and `marks` after `posts`, and nothing else in that answer moves.
+CHANGED["MCP household {}"].push(["others' it takes part in\"}",
+  "others' it takes part in\",\"waiting\":\"what waits on your word, grouped\",\"marks\":\"your marks: by state, decided, at risk\"}"]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };
