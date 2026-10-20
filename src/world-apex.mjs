@@ -2006,6 +2006,7 @@ async function investigateOn(args, oriented, usable = null) {
     placeMarks: (p) => placeMarksAt(p),
     marksOf: (ids) => markRows(ids),
     appearance: (h) => looks(h),
+    pronouns: async (h) => (await import("./entity-predicates.mjs")).pronounsFor(h),
   });
   // what they hold by kind, beside their whole things (review-610 S1): a class and a number each, never a unit
   const kinds = seen && !seen.error ? await (await import("./world-kinds.mjs")).kindsHeldBy(kind.handle) : null;

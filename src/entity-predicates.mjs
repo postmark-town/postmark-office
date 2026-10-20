@@ -195,6 +195,25 @@ export function nodeAnswer(nodes, id, { depth = 1, budget = 12, descend = null }
   return { ...out, more: { ...out.more, beneath: d.cut }, beneath: d.rows, descend: d.descend };
 }
 
+// THEIR PRONOUNS (Darko, 2026-10-20 08:44 EDT: "fold in the pronouns to appearance
+// and then make sure that that gets exposed whenever you … read a resident more
+// closely"). A recognised detail, `slot: "pronouns"` directly under the root, whose
+// value every close look lifts to a top-level `pronouns` beside the name. It is
+// the resident's own word: absent until written, never inferred from anything.
+export const PRONOUNS_SLOT = "pronouns";
+
+/** The value of a resident's `pronouns` detail, trimmed, or null when it has none. */
+export function pronounsIn(nodes, handle) {
+  const n = nodes?.get(`${rootIdOf(handle)}.${PRONOUNS_SLOT}`);
+  return typeof n?.value === "string" && n.value.trim() ? n.value.trim() : null;
+}
+
+/** A resident's pronouns as the record holds them now, or null (none written, or the record unread). */
+export async function pronounsFor(handle, { query = null } = {}) {
+  const nodes = await appearanceNodes({ query });
+  return nodes ? pronounsIn(nodes, handle) : null;
+}
+
 /** A resident's appearance as a close look gives it: the root node's answer, or null when none is set. */
 export async function appearanceFor(handle, { depth = 1, budget, descend = null, query = null } = {}) {
   const nodes = await appearanceNodes({ query });

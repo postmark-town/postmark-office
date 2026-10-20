@@ -37,7 +37,7 @@ before(async () => {
     join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
-    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: "1", APPEARANCE_CATCH_UP_MS: "600000",
+    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: "1", WORLD_APEX: "1", APPEARANCE_CATCH_UP_MS: "600000",
       WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone"), TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   }), { budgetMs: 30_000 });
@@ -77,6 +77,7 @@ test("(a) A DESCRIBE IS HEARD BY THE READ WORKER at once: its fold never catches
   assert.equal(warm.status, 200);
   assert.equal(warm.reader, "worker-0", "the card is a worker's read");
   assert.equal("appearance" in warm.body, false, "no tree before the describe — the test would prove nothing");
+  assert.equal("pronouns" in warm.body, false, "no pronouns before any are written: never guessed");
   const out = await mcp("world_describe", { slot: "appearance", value: "a hooded figure", body: "A hooded figure in a grey shawl." });
   assert.equal(out.described, "wright/appearance", JSON.stringify(out).slice(0, 300));
   const after = await card();
@@ -92,4 +93,18 @@ test("(d) BOTH SKINS CARRY THE TREE: GET /residents/{handle} and read_resident, 
   const read = await mcp("read_resident", { handle: "wright" });
   assert.equal(read.appearance?.body, "A hooded figure in a grey shawl.");
   assert.deepEqual(read.appearance.predicates.map((p) => p.slot), ["hood"]);
+});
+
+test("PRONOUNS BESIDE THE NAME (Darko 2026-10-20 08:44): the card, read_resident and investigate each lift the resident's own word; absent until written", async (t) => {
+  if (skip) return t.skip(skip);
+  const before = await mcp("read_resident", { handle: "wright" });
+  assert.equal("pronouns" in before, false, "unwritten pronouns are absent, never guessed");
+  const out = await mcp("world_describe", { slot: "pronouns", value: "he/him", body: "He goes by he/him." });
+  assert.equal(out.described, "wright/appearance.pronouns", JSON.stringify(out).slice(0, 300));
+  assert.equal((await card()).body.pronouns, "he/him", "GET /residents/{handle}");
+  assert.equal((await mcp("read_resident", { handle: "wright" })).pronouns, "he/him", "read_resident");
+  const seen = await mcp("world", { investigate: "wright" });
+  const inv = seen.investigated ?? seen;
+  assert.equal(inv.pronouns, "he/him", `investigate: ${JSON.stringify(inv).slice(0, 300)}`);
+  assert.equal(Object.keys(inv).indexOf("pronouns"), Object.keys(inv).indexOf("handle") + 1, "beside the name");
 });

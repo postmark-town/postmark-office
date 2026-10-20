@@ -646,6 +646,9 @@ async function residentCard(who, key) {
   // here. Garnish like the marks: a record that cannot be read leaves the card.
   const looks = await import("./entity-predicates.mjs").then((m) => m.appearanceFor(who)).catch(() => null);
   if (looks && !looks.unavailable) card.appearance = looks;
+  // their pronouns beside the name, lifted from that tree; absent when unwritten, never guessed
+  const pronouns = await import("./entity-predicates.mjs").then((m) => m.pronounsFor(who)).catch(() => null);
+  if (pronouns) card.pronouns = pronouns;
   return { card, asOf };
 }
 
