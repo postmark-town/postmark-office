@@ -1167,6 +1167,11 @@ async function householdGlance(args, key, ctx) {
   };
   const { stancesForHandles } = await import("./world-stance.mjs");
   const stances = ashore.length ? await stancesForHandles(ashore, { limit: GLANCE_STANCES, setDowns: true }) : { stances_awaiting: 0, awaiting: [] };
+  // more waiting than one page holds: the inbox's last rows, read on their own, are the true oldest
+  const waiting = Number(stances.stances_awaiting) || 0;
+  const tail = waiting > (stances.awaiting ?? []).length
+    ? (await stancesForHandles(ashore, { cursor: String(Math.max(0, waiting - v2.NEEDS_FIRST)), limit: v2.NEEDS_FIRST })).awaiting ?? null
+    : null;
   const { unreadFor } = await import("./unread-store.mjs");
   const unread = ashore.length ? await soft(() => unreadFor(ashore, { ix })) : new Map();
   const unreadRows = unread ? [...unread.values()].flat() : null;
@@ -1174,17 +1179,18 @@ async function householdGlance(args, key, ctx) {
   // the house's acts and its stamps that went: after the cursor, else the last 12 hours (G3, G4)
   const houseKey = `hh:${house.slug}`;
   const lookback = new Date(nowMs - v2.LOOKBACK_MS).toISOString();
-  const acts = await soft(() => ix.houseActs(houseKey, since?.hw ? { afterId: since.hw } : { sinceIso: since ? new Date(since.ms).toISOString() : lookback }));
+  const actors = [...ashore, `human-of-${house.slug}`];
+  const acts = await soft(() => ix.houseActs(houseKey, { actors, ...(since?.hw ? { afterId: since.hw } : { sinceIso: since ? new Date(since.ms).toISOString() : lookback }) }));
   const happened = acts ? acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name })) : null;
   const mine = new Set(ashore);
   const lines = await soft(() => ix.stampLinesSince(since ? new Date(since.ms).toISOString() : lookback));
-  const went = lines ? v2.wentRows(lines.rows, mine) : null;
+  const went = lines ? v2.wentRows(lines.rows, mine, { house: house.members }) : null;
   if (since) return v2.sinceV2({ stances, unreadRows, happened: happened ?? [], happenedCut: !acts || acts.cut, went: went ?? [], hw: acts?.hw ?? since.hw }, since, { nowMs });
   const letters = await soft(() => ix.lettersAround(ashore, v2.dayBefore(nowMs, v2.CLOSER_DAYS)));
   const reg = await hb.registryFor(clone);
   const { resolveHouse } = await import("./household-deriver.mjs");
   const houseOf = (h) => { try { const { slug } = resolveHouse(h, reg?.registry, reg?.pins); return slug ? (reg.registry.households?.[slug]?.name ?? slug) : null; } catch { return null; } };
-  const closer = letters ? v2.closerRows(letters, { mine, houseOf }) : null;
+  const closer = letters ? v2.closerRows(letters, { mine, house: house.members, houseOf }) : null;
 
   const standing = await householdStanding(key, ctx);
   const needs = ashore.length
@@ -1214,7 +1220,7 @@ async function householdGlance(args, key, ctx) {
   const gaps = Object.fromEntries(Object.entries(standing.papers ?? {}).map(([h, p]) => [h, (p.gaps ?? []).map(v2.gapWord)]));
   return v2.glanceV2({
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
-    you, rows, gaps, stances, needs, details,
+    you, rows, gaps, stances, tail, needs, details,
     mail: { unread: unreadRows ? unreadRows.length : null, newInbound: mailBlind ? null : newInbound, standing: standingLetters },
     quests: v2.questLines(board),
     standing,
@@ -1256,7 +1262,7 @@ async function householdDeep(what, f, args, key, ctx) {
   if (what === "closer") {
     const days = Math.min(Math.max(Number(f.days) || v2.CLOSER_DAYS, 1), 90);
     const sinceDay = v2.dayBefore(nowMs, days);
-    const letters = await ix.lettersAround([...mine], sinceDay);
+    const letters = await ix.lettersAround([...mine], sinceDay, { multi: true });
     const lines = await ix.stampLinesSince(`${sinceDay}T00:00:00.000Z`, { limit: 20000 });
     const milestones = new Map();
     for (const h of mine) {
@@ -1268,7 +1274,7 @@ async function householdDeep(what, f, args, key, ctx) {
     const reg = await hb.registryFor(clone);
     const { resolveHouse } = await import("./household-deriver.mjs");
     const houseOf = (h) => { try { const { slug } = resolveHouse(h, reg?.registry, reg?.pins); return slug ? (reg.registry.households?.[slug]?.name ?? slug) : null; } catch { return null; } };
-    const rows = v2.closerRows(letters, { mine, houseOf, mints: v2.mintsByLetter(lines.rows, mine), milestones });
+    const rows = v2.closerRows(letters, { mine, house: house.members, houseOf, mints: v2.mintsByLetter(lines.rows, mine), milestones });
     return { read: "closer", household: house.slug, since_day: sinceDay, days, ...page(rows),
       ...(lines.cut ? { stamps_between_note: "the window holds more ledger lines than one read takes, so stamps_between may be short" } : {}),
       says: "not counted: a say has no addressee, so nothing records one between two houses (POS-633 D6)" };
@@ -1276,7 +1282,8 @@ async function householdDeep(what, f, args, key, ctx) {
   const after = since ? new Date(since.ms).toISOString() : new Date(nowMs - v2.LOOKBACK_MS).toISOString();
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: null });
   if (what === "happened") {
-    const acts = await ix.houseActs(`hh:${house.slug}`, since?.hw ? { afterId: since.hw } : { sinceIso: after });
+    const actors = [...mine, `human-of-${house.slug}`];
+    const acts = await ix.houseActs(`hh:${house.slug}`, { actors, ...(since?.hw ? { afterId: since.hw } : { sinceIso: after }) });
     const rows = acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name }));
     const next = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: acts.hw });
     const out = { read: "happened", household: house.slug, ...(since ? { since: after } : { window: "the last 12 hours" }), ...page(rows), cursor: next };
@@ -1285,7 +1292,7 @@ async function householdDeep(what, f, args, key, ctx) {
   }
   // stamps, view "went"
   const lines = await ix.stampLinesSince(after);
-  const rows = v2.wentRows(lines.rows, mine);
+  const rows = v2.wentRows(lines.rows, mine, { house: house.members });
   const out = { read: "stamps", view: "went", household: house.slug, ...(since ? { since: after } : { window: "the last 12 hours" }), ...page(rows), cursor };
   out.complete = out.complete && !lines.cut;
   return out;
@@ -1510,8 +1517,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     // POS-633 part 2: the typed deep reads; stamps' default view answers as it always has
     if (what === "closer" || what === "happened" || (what === "stamps" && f.view === "went"))
       return householdDeep(what, { view: f.view, days: f.days, limit: f.limit, offset: f.offset, since: f.since }, args, key, ctx);
-    if (what === "stamps" && f.view != null && f.view !== "")
-      return bounce(422, `read: "stamps" has no view "${f.view}"`, `view: "went" is the house's stamps that went, as dated ledger rows; omit view for your books`);
+    // any other view answers the books exactly as before (old spellings stay working)
     if (what === "stamps" || what === "quests" || what === "fund") {
       const { estateRead, questsRead, fundReadOf } = await import("./household-stamps.mjs");
       // The three reads answer from the store's town index (POS-268); a store

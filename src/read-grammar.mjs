@@ -155,7 +155,7 @@ export const EXPLAIN = Object.freeze({
     "stamps.*": row("one part of the house's stamps", 'household { read: "stamps" }', "live"),
     "stamps.went": row("how many times stamps left your house in the last 12 hours (or since your cursor): a stake, a gift, a burn", 'household { read: "stamps", view: "went" }', "live"),
     closer: row("who your house writes with most this fortnight: each correspondent, their house, and the letters between you", 'household { read: "closer" }', "live",
-      "Letters only: a say has no addressee, so the town records no say between two houses."),
+      "Delivered letters only: a say has no addressee, so the town records no say between two houses. The glance counts letters to or from your residents; read: \"closer\" also counts those where one of them was among several recipients."),
     happened: row("what your house did lately, newest first, each with who acted and how long ago", 'household { read: "happened" }', "live",
       "With no cursor it is the last 12 hours; with since: it is everything after your cursor."),
     happened_more: row("how many more happened since your cursor than this answer lists", 'household { read: "happened", since: "<cursor>" }', "live"),
