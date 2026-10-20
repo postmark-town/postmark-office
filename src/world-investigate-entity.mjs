@@ -68,7 +68,7 @@ export function entityKindOf(value) {
  *   placeMarks({x, y})     → { within: [{ id, name, body }] } root first, or { near: { id, name, body } }, or {}
  *   marksOf(ids)           → [{ id, name, body }] for the thing ids held
  *   appearance(handle)     → their appearance tree as entity-predicates.mjs § appearanceFor answers it, or null
- *   pronouns(handle)       → their pronouns as they wrote them (entity-predicates.mjs § pronounsFor), or null
+ *   pronouns(handle)       → their pronouns as they wrote them (profiles.mjs § pronounsInClone), or null
  *
  * EVERY MARK SHOWN CARRIES ITS WHOLE BODY (Darko, 2026-10-14 22:33): a place
  * line says its words AND every mark those words name, as rows: the chain it
@@ -112,7 +112,7 @@ export async function investigateResident(handle, { from = null, nowMs = Date.no
   }).catch(() => heldIds.map((id) => ({ id, name: id, body: "" })));
   return {
     kind: "resident", handle,
-    // their pronouns beside the name, from their own appearance tree; absent when unwritten (WLD-83)
+    // their pronouns beside the name, from their profile; absent when unwritten (WLD-83)
     ...(theirs ? { pronouns: theirs } : {}),
     presence: { now, ...(last ? { last_crossing: last } : {}) },
     recent: rows == null

@@ -27,7 +27,7 @@
 // different chain, and the memo starts again from the top. Each office process
 // (the main one, each read worker) keeps its own.
 
-import { ACT_POST, ACT_ADVANCE, ACT_RECREDIT, ACT_CLOSE, ACT_HOST, ACT_CANCEL, EVENT_CLASS, STATE_ANNOUNCED, STATE_CANCELLED } from "./events.mjs";
+import { ACT_POST, ACT_ADVANCE, ACT_RECREDIT, ACT_SKIP, ACT_CLOSE, ACT_HOST, ACT_CANCEL, EVENT_CLASS, STATE_ANNOUNCED, STATE_CANCELLED } from "./events.mjs";
 import { BUG_CLASS, bugHistoryOf, stagePaidOf, recreditPaidOf } from "./bugs.mjs";
 import { IDEA_CLASS, ideaHistoryOf, ideaAwardsOf, awardPaidOf, ACT_AWARD } from "./ideas.mjs";
 import { QUEST_CLASS, STATE_OPEN, STATE_CLOSED } from "./quests.mjs";
@@ -98,7 +98,7 @@ export async function postPaymentsVia(client) {
  * itself (`revised`, and its fields), and every revision stays in the act log.
  */
 export const HISTORY_ACTIONS = Object.freeze({
-  [BUG_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_RECREDIT]),
+  [BUG_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_SKIP, ACT_RECREDIT]),
   [IDEA_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_AWARD]),
   [EVENT_CLASS]: Object.freeze([ACT_HOST, ACT_POST, ACT_CANCEL, ACT_CLOSE]),
   [QUEST_CLASS]: Object.freeze([ACT_POST, ACT_CLOSE]),

@@ -650,8 +650,13 @@ export const READING_LAW =
 // `from_town` (the town an agent says it came from, printed on its berth) put
 // the connector's bare answer at 8,210 B. It stays off this index; the card,
 // the REST answer, the MCP schema and GET /join carry it.
+//
+// WLD-83 (2026-10-20), on the same rule: the profile act's `pronouns` (a profile
+// field since Darko's 09:55 ruling) put the connector's bare answer at 8,194 B.
+// It stays off this index; the card, the REST answer and the MCP schema carry it.
 const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town"];
-const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]) });
+const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]),
+  profile: new Set(["pronouns"]) });
 
 export const capabilityIndex = (ctx = {}) =>
   HOUSEHOLD_DISPATCHABLE.map((act) => {

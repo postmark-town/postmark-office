@@ -19,7 +19,7 @@
 
 import test, { after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -315,4 +315,61 @@ test("the record disclosure appears on both doors exactly when the record is bei
 
   delete process.env.WORLD_EMISSIONS;
   assert.equal(say.description, off, "and it goes away again — the promise tracks the machinery, not the deploy date");
+});
+
+// ── 6. the save after the ferry (POS-714, Darko 2026-10-20 08:58) ────────────
+//
+// "Chain the save to run after the ferry finishes." The ferry starts the save
+// (OnSuccess= and OnFailure=); the save's own timer becomes a late fallback,
+// and `--unsaved` is the ExecCondition that makes it a no-op once the crossing
+// is saved. A condition's skip is SILENT, so every doubt must answer "run".
+
+const unsaved = (args) => spawnSync(process.execPath, [join("tools", "crossing-save.mjs"), "--unsaved", ...args],
+  { encoding: "utf8", env: env(), stdio: ["ignore", "pipe", "pipe"] });
+
+test("--unsaved: the late run RUNS while the crossing just left is open on disk, and SKIPS once the save has closed it", () => {
+  const at = ["--world", repo, "--state", STATE, "--at", new Date(NEXT).toISOString()];
+  let v = unsaved(at);
+  assert.equal(v.status, 0, "no meta at all: the save runs");
+
+  runJson("crossing-save.mjs", ["--at", new Date(MID).toISOString(), "--state", STATE]);
+  v = unsaved(at);
+  assert.equal(v.status, 0, "the crossing's file stops at the mid save: not COMPLETE, the save runs");
+  assert.match(v.stdout, new RegExp(`crossing ${N} is not saved complete`));
+
+  runJson("crossing-save.mjs", ["--at", new Date(NEXT).toISOString(), "--state", STATE]);
+  v = unsaved(at);
+  assert.equal(v.status, 1, "the save closed crossing N to its boundary: the late run skips (systemd reads 1 as a clean skip)");
+  assert.match(v.stdout, new RegExp(`crossing ${N} is already saved COMPLETE`));
+});
+
+test("--unsaved: EVERY DOUBT RUNS — a meta that will not parse, a world whose tools cannot be read", () => {
+  const at = ["--state", STATE, "--at", new Date(NEXT).toISOString()];
+  runJson("crossing-save.mjs", ["--at", new Date(NEXT).toISOString(), "--state", STATE]);
+  assert.equal(unsaved(["--world", repo, ...at]).status, 1, "the control: saved, skip");
+
+  writeFileSync(join(STATE, "log", `${N}.meta.json`), "{ not json");
+  assert.equal(unsaved(["--world", repo, ...at]).status, 0, "a meta that will not parse is not saved");
+
+  const v = unsaved(["--world", join(scratch, "no-such-world"), ...at]);
+  assert.equal(v.status, 0, "a world it cannot read: the save runs, and refuses by name itself");
+  assert.match(v.stdout, /could not tell whether the crossing is saved/);
+});
+
+test("the units: the ferry starts the save, the save skips a saved crossing, and its own clock is the :30 fallback", () => {
+  const unit = (f) => readFileSync(join("deploy", f), "utf8");
+  const ferry = unit("postmark-ferry.service");
+  const save = unit("postmark-crossing-save.service");
+  const timer = unit("postmark-crossing-save.timer");
+  const section = (text, name) => text.split(/^\[/m).find((s) => s.startsWith(`${name}]`)) ?? "";
+
+  for (const key of ["OnSuccess", "OnFailure"])
+    assert.match(section(ferry, "Unit"), new RegExp(`^${key}=postmark-crossing-save\\.service$`, "m"),
+      `the ferry's ${key}= starts the save, success or failure alike (the save reads the store, not the ferry's output)`);
+  assert.match(section(save, "Service"), /^ExecCondition=\/usr\/bin\/node \/srv\/postmark-office\/tools\/crossing-save\.mjs --unsaved$/m,
+    "the save skips a crossing already saved");
+  assert.match(save, /^ExecStart=\/usr\/bin\/flock -w 300 \/srv\/postmark-office\/town\.lock \\\n\s+\/usr\/bin\/node \/srv\/postmark-office\/tools\/crossing-save\.mjs$/m,
+    "and still writes under the one town lock");
+  assert.match(section(timer, "Timer"), /^OnCalendar=\*-\*-\* 00,12:30:00 UTC$/m, "the timer is the late fallback");
+  assert.doesNotMatch(timer, /^OnCalendar=.*:02:00/m, "the :02 race with the ferry is gone");
 });

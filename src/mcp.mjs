@@ -706,8 +706,8 @@ export async function callTool(name, args, ctx) {
       try {
         const looks = await (await import("./entity-predicates.mjs")).appearanceFor(args.handle);
         if (looks && !looks.unavailable) r.appearance = looks;
-        // their pronouns beside the name (server.mjs § residentCard), never guessed
-        const pronouns = await (await import("./entity-predicates.mjs")).pronounsFor(args.handle);
+        // their pronouns beside the name, from their profile (server.mjs § residentCard), never guessed
+        const pronouns = (await import("./profiles.mjs")).pronounsOf(r);
         if (pronouns) r.pronouns = pronouns;
       } catch { /* garnish only */ }
       return r;

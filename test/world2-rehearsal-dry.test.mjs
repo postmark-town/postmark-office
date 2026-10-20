@@ -64,7 +64,7 @@ test("runDryLeg crosses the tree's REAL settlement-auto.sh dry: a published rece
   assert.match(d.detail, /^DRY RUN, nothing written — 1 published/);
   assert.ok(d.withheld.some((l) => l.startsWith("world main's push: ")), JSON.stringify(d.withheld));
   assert.ok(d.withheld.includes("escalation: suite-warning"));
-  assert.deepEqual(d.retired, { ran: false, dry_run: true, would_retire: ["alpha/old"], reason: "dry run — the store was not written" });
+  assert.deepEqual(d.retired, { ran: false, dry_run: true, would_retire: ["alpha/old"], would_retire_withdrawn: [], reason: "dry run — the store was not written" });
   assert.equal(originRefs(b.origin), before, "every ref on origin, tags included, is as it was");
   assert.ok(existsSync(d.receipt_path));
   assert.equal(existsSync(join(b.root, "store.log")), false);

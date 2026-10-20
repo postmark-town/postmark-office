@@ -11,7 +11,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -22,7 +22,7 @@ import { seedStaticKeys } from "./helpers/static-keys.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEY = "appearance-reads-key";
-let IX = null, tmp = null, proc = null, base = null, skip = false;
+let IX = null, tmp = null, proc = null, base = null, skip = false, town = null;
 
 before(async () => {
   IX = await indexStore(fixtureTown(), { db: "appearance_reads" });
@@ -33,12 +33,20 @@ before(async () => {
   const { openOauthDb } = await import("../src/oauth.mjs");
   openOauthDb(join(tmp, "oauth.db")).close();
   seedStaticKeys(join(tmp, "oauth.db"), `${KEY}=keemin:wright`);
+  // A town checkout of its own, holding only what this file reads (no deletion of
+  // anything the pool tree's clone holds): wright's PROFILE.md with his pronouns,
+  // and limen's ADDRESS.md with the older ADDRESS line (POS-383) and no profile.
+  town = join(tmp, "town");
+  mkdirSync(join(town, "WHITE_PAGES", "wright"), { recursive: true });
+  mkdirSync(join(town, "WHITE_PAGES", "limen"), { recursive: true });
+  writeFileSync(join(town, "WHITE_PAGES", "wright", "PROFILE.md"), "---\npronouns: \"  he/him  \"\nbio: \"The town's architect.\"\n---\n");
+  writeFileSync(join(town, "WHITE_PAGES", "limen", "ADDRESS.md"), "---\nhandle: limen\nagent: Limen\npronouns: she/her\n---\n\n# Limen\n");
   const booted = await bootOnFreePort((port) => spawn(process.execPath, [
     join(ROOT, "src", "server.mjs"), "--port", String(port),
     "--oauth-db", join(tmp, "oauth.db"), "--roles-db", join(tmp, "roles.db"),
   ], {
     env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", OFFICE_READ_WORKERS: "1", WORLD_APEX: "1", APPEARANCE_CATCH_UP_MS: "600000",
-      WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: join(ROOT, "town-clone"), TOWN_PUSH: "" },
+      WORLD_DYNAMIC_DB: join(tmp, "dynamic.db"), TOWN_CLONE: town, TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   }), { budgetMs: 30_000 });
   proc = booted.child;
@@ -77,7 +85,6 @@ test("(a) A DESCRIBE IS HEARD BY THE READ WORKER at once: its fold never catches
   assert.equal(warm.status, 200);
   assert.equal(warm.reader, "worker-0", "the card is a worker's read");
   assert.equal("appearance" in warm.body, false, "no tree before the describe — the test would prove nothing");
-  assert.equal("pronouns" in warm.body, false, "no pronouns before any are written: never guessed");
   const out = await mcp("world_describe", { slot: "appearance", value: "a hooded figure", body: "A hooded figure in a grey shawl." });
   assert.equal(out.described, "wright/appearance", JSON.stringify(out).slice(0, 300));
   const after = await card();
@@ -95,16 +102,15 @@ test("(d) BOTH SKINS CARRY THE TREE: GET /residents/{handle} and read_resident, 
   assert.deepEqual(read.appearance.predicates.map((p) => p.slot), ["hood"]);
 });
 
-test("PRONOUNS BESIDE THE NAME (Darko 2026-10-20 08:44): the card, read_resident and investigate each lift the resident's own word; absent until written", async (t) => {
+test("PRONOUNS BESIDE THE NAME, FROM THE PROFILE (Darko 2026-10-20 09:55): the card, read_resident and investigate each lift them; ADDRESS's older line still answers; absent when neither says", async (t) => {
   if (skip) return t.skip(skip);
-  const before = await mcp("read_resident", { handle: "wright" });
-  assert.equal("pronouns" in before, false, "unwritten pronouns are absent, never guessed");
-  const out = await mcp("world_describe", { slot: "pronouns", value: "he/him", body: "He goes by he/him." });
-  assert.equal(out.described, "wright/appearance.pronouns", JSON.stringify(out).slice(0, 300));
-  assert.equal((await card()).body.pronouns, "he/him", "GET /residents/{handle}");
+  assert.equal((await card()).body.pronouns, "he/him", "GET /residents/{handle}: the profile's line, trimmed");
   assert.equal((await mcp("read_resident", { handle: "wright" })).pronouns, "he/him", "read_resident");
   const seen = await mcp("world", { investigate: "wright" });
   const inv = seen.investigated ?? seen;
   assert.equal(inv.pronouns, "he/him", `investigate: ${JSON.stringify(inv).slice(0, 300)}`);
   assert.equal(Object.keys(inv).indexOf("pronouns"), Object.keys(inv).indexOf("handle") + 1, "beside the name");
+  assert.equal((await mcp("read_resident", { handle: "limen" })).pronouns, "she/her", "ADDRESS.md's older pronouns line still answers (POS-383)");
+  const zed = await mcp("read_resident", { handle: "Zed" });
+  assert.equal("pronouns" in zed, false, "unwritten pronouns are absent, never guessed");
 });
