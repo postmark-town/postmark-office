@@ -106,7 +106,7 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   // round 3 (Darko 12:47): one act answers the whole group. Sixty marks are more
   // than the glance names, so the act is the read that lists them, then the list stance.
   assert.equal(n.groups[0].act,
-    'household { read: "stances", by: "spark-the-builder", over: "wright/the-trueing-terrace", limit: 100 }, then declare-stance-on { on: <its ids>, stance: welcomed | neutral | opposed }');
+    'household { read: "stances", args: { by: "spark-the-builder", over: "wright/the-trueing-terrace", limit: 100 } }, then declare-stance-on { on: <its ids>, stance: welcomed | neutral | opposed }');
   // a group the glance names whole is answered by its own ids, in one list
   assert.equal(n.groups[1].act, `declare-stance-on { on: ["${n.groups[1].ids[0]}"], stance: welcomed | neutral | opposed }`);
   assert.match(n.key, /act answers the whole group/);
@@ -431,4 +431,24 @@ test("eval round 2 · the went view is valid where the key names it: in the hous
   const { HOUSEHOLD_TOOL } = await import("../src/household-apex.mjs");
   assert.ok(HOUSEHOLD_TOOL.inputSchema.properties.view.enum.includes("went"));
   assert.match(HOUSEHOLD_TOOL.inputSchema.properties.view.description, /for read: "stamps", went is where your house's stamps went/);
+});
+
+// After the loop (round 3's readers): the group act printed `by`, `over` and `limit` at the household
+// tool's top level, which declares none of them and sets additionalProperties: false, so a connector
+// refused the call. The act's read is now checked as the connector checks it, and as the door's read
+// branch checks the envelope.
+test("the group act's read is a call the MCP door's schema accepts, its fields in args where the read takes them", async () => {
+  const { HOUSEHOLD_TOOL, HOUSEHOLD_READ_FIELDS } = await import("../src/household-apex.mjs");
+  const { validateArgs, validateReadArgs } = await import("../src/validate-args.mjs");
+  const many = Array.from({ length: 9 }, (_, i) => ({ mark: `spark-the-builder/m-${i}`, by: "spark-the-builder", on_your_ground: ["wright/the-trueing-terrace"], date: "2026-10-10", body: "b" }));
+  const act = needGroups(many)[0].act;
+  const text = act.split(", then ")[0].replace(/^household /, "");
+  const call = JSON.parse(text.replace(/([{,]\s*)([a-z_]+):/g, '$1"$2":'));
+  assert.deepEqual(call, { read: "stances", args: { by: "spark-the-builder", over: "wright/the-trueing-terrace", limit: 100 } });
+  assert.equal(HOUSEHOLD_TOOL.inputSchema.additionalProperties, false, "the connector refuses an undeclared top-level field");
+  assert.equal(validateArgs(HOUSEHOLD_TOOL, call), null, "every top-level field is one the tool declares");
+  assert.equal(validateReadArgs({ read: "stances", tool: 'household { read: "stances" }', properties: HOUSEHOLD_READ_FIELDS.stances, fields: call.args }), null,
+    "and the read takes every field in args");
+  // the old form, refused by name: the falsifier for the bug
+  assert.match(validateArgs(HOUSEHOLD_TOOL, { read: "stances", by: "x", over: "y", limit: 100 })?.defect ?? "", /unknown argument "by"/);
 });
