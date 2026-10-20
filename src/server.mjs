@@ -53,6 +53,7 @@ import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finishe
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
+import { withRoute, routeOfRequest } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
@@ -2841,7 +2842,9 @@ const resolveBearer = async (token) =>
   ?? (await oauthLookup(odb, null, TOWN_CLONE, token)) ?? (await keyLookup(odb, null, TOWN_CLONE, token))
   ?? (await claimLookup(odb, null, TOWN_CLONE, token)) ?? (await berthLookup(odb, null, TOWN_CLONE, token)) ?? null;
 
-const handle = (req, res) => {
+// POS-633 H4: every act this request writes carries the door's route (act-provenance.mjs).
+const handle = (req, res) => withRoute(routeOfRequest(req), () => handleRequest(req, res));
+const handleRequest = (req, res) => {
   const t0 = Date.now();
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounceFault(res, "the office tripped", e); };
