@@ -68,13 +68,14 @@ export function entityKindOf(value) {
  *   placeMarks({x, y})     → { within: [{ id, name, body }] } root first, or { near: { id, name, body } }, or {}
  *   marksOf(ids)           → [{ id, name, body }] for the thing ids held
  *   appearance(handle)     → their appearance tree as entity-predicates.mjs § appearanceFor answers it, or null
+ *   pronouns(handle)       → their pronouns as they wrote them (entity-predicates.mjs § pronounsFor), or null
  *
  * EVERY MARK SHOWN CARRIES ITS WHOLE BODY (Darko, 2026-10-14 22:33): a place
  * line says its words AND every mark those words name, as rows: the chain it
  * stands in (`within`), or the place it is near (`near`); a held thing is a
  * mark row. Bodies are resident-authored; the block's reading law covers them.
  */
-export async function investigateResident(handle, { from = null, nowMs = Date.now(), known, standpoint, place, saved, recent, holds, placeOf, placeMarks = async () => ({}), marksOf = async (ids) => ids.map((id) => ({ id, name: id, body: "" })), appearance = async () => null }) {
+export async function investigateResident(handle, { from = null, nowMs = Date.now(), known, standpoint, place, saved, recent, holds, placeOf, placeMarks = async () => ({}), marksOf = async (ids) => ids.map((id) => ({ id, name: id, body: "" })), appearance = async () => null, pronouns = async () => null }) {
   if (!(await known(handle)))
     return { error: "bounce", code: 404, defect: `no resident "${handle}"`, hint: 'investigate: takes a resident\'s handle, as who and the white pages name them; a mark is mark: "<by>/<slug>"' };
   const here = await standpoint(handle).catch(() => null);
@@ -104,12 +105,15 @@ export async function investigateResident(handle, { from = null, nowMs = Date.no
   }
   const heldIds = await Promise.resolve(holds(handle)).catch(() => null);
   const looks = await Promise.resolve(appearance(handle)).catch(() => null);
+  const theirs = await Promise.resolve(pronouns(handle)).catch(() => null);
   const held = heldIds == null ? null : await marksOf(heldIds).then((rows) => {
     const byId = new Map(rows.map((m) => [m.id, m]));
     return heldIds.map((id) => byId.get(id) ?? { id, name: id, body: "" });
   }).catch(() => heldIds.map((id) => ({ id, name: id, body: "" })));
   return {
     kind: "resident", handle,
+    // their pronouns beside the name, from their own appearance tree; absent when unwritten (WLD-83)
+    ...(theirs ? { pronouns: theirs } : {}),
     presence: { now, ...(last ? { last_crossing: last } : {}) },
     recent: rows == null
       ? { window: "the last 12 hours", unavailable: "their acts could not be read this time" }

@@ -195,6 +195,43 @@ export function nodeAnswer(nodes, id, { depth = 1, budget = 12, descend = null }
   return { ...out, more: { ...out.more, beneath: d.cut }, beneath: d.rows, descend: d.descend };
 }
 
+// THEIR PRONOUNS (Darko, 2026-10-20 08:44 EDT: "fold in the pronouns to appearance
+// and then make sure that that gets exposed whenever you … read a resident more
+// closely"). A recognised detail, `slot: "pronouns"` directly under the root, whose
+// value every close look lifts to a top-level `pronouns` beside the name. It is
+// the resident's own word: absent until written, never inferred from anything.
+export const PRONOUNS_SLOT = "pronouns";
+
+// THE STARTER SET (Darko, 2026-10-20 08:46 EDT: "that's a great starter list").
+// The slots the appearance class suggests, each with its one-line meaning, all
+// optional; a resident's own slot words stay welcome beside them (P4). The
+// describe card's hint is built from this list, so the card and the class say
+// the same seven (postmark-world#256 declares them on the class).
+export const STARTER_SLOTS = Object.freeze([
+  ["appearance", "the root, the glance: what someone sees first"],
+  ["pronouns", "how to refer to you, shown beside your name on every close look"],
+  ["form", "what you are, bodily"],
+  ["wears", "clothing and costume, the layer that changes (a costume nests here: hood under wears)"],
+  ["sign", "the one detail people recognise you by"],
+  ["voice", "how you sound"],
+  ["manner", "how you move and hold yourself"],
+].map(([slot, meaning]) => Object.freeze({ slot, meaning })));
+
+/** The starter set as the describe card says it: "appearance (the root, …); pronouns (…); …". */
+export const starterHint = () => STARTER_SLOTS.map((s) => `${s.slot} (${s.meaning})`).join("; ");
+
+/** The value of a resident's `pronouns` detail, trimmed, or null when it has none. */
+export function pronounsIn(nodes, handle) {
+  const n = nodes?.get(`${rootIdOf(handle)}.${PRONOUNS_SLOT}`);
+  return typeof n?.value === "string" && n.value.trim() ? n.value.trim() : null;
+}
+
+/** A resident's pronouns as the record holds them now, or null (none written, or the record unread). */
+export async function pronounsFor(handle, { query = null } = {}) {
+  const nodes = await appearanceNodes({ query });
+  return nodes ? pronounsIn(nodes, handle) : null;
+}
+
 /** A resident's appearance as a close look gives it: the root node's answer, or null when none is set. */
 export async function appearanceFor(handle, { depth = 1, budget, descend = null, query = null } = {}) {
   const nodes = await appearanceNodes({ query });
