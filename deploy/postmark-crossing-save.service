@@ -6,10 +6,15 @@ Description=Postmark crossing-save — crystallize the record into the world rep
 # and STATE/log/<N>.jsonl into the world repo, committed with the office pen.
 # dynamic.db is not opened (POS-269).
 #
-# NOT INSTALLED BY THIS BRANCH. Wright installs and enables after review:
-#   sudo cp deploy/postmark-crossing-save.{service,timer} /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now postmark-crossing-save.timer
+# TWO THINGS START IT (POS-714, Darko 2026-10-20 08:58):
+#   · THE FERRY, when it finishes (postmark-ferry.service's OnSuccess= and
+#     OnFailure=). This is the run that saves the crossing, after the ferry has
+#     let go of town.lock rather than racing it for 300 s.
+#   · ITS OWN TIMER, at :30, the late fallback for a crossing the chain did not
+#     save (a ferry that never ran, a chained save that refused). The
+#     ExecCondition below makes it a no-op when the crossing is already saved.
+# Installing is Wright's (deploy/DEPLOY.md § The crossing save runs when the
+# ferry finishes).
 After=network.target
 
 [Service]
@@ -22,18 +27,27 @@ Type=oneshot
 User=meepo
 EnvironmentFile=/etc/postmark-office.env
 WorkingDirectory=/srv/postmark-office
-# ONE FLOCK, THE SAME ONE. The ferry, the rehydrate tick and the office pen all
-# serialize on town.lock — one writer at a time on the clones. A crossing-save
-# that wrote STATE/ while the write pen had the world clone parked on a
-# household draft branch would commit the town's memory onto a sketchbook; the
-# walk ledger lost 17 public lines to exactly that class of race in 2026-07.
+# SKIP A CROSSING ALREADY SAVED. `--unsaved` exits 0 when the crossing just
+# left is not saved COMPLETE in STATE/log/<N>.meta.json (run) and 1 when it is
+# (systemd skips the unit cleanly: not a failure, nothing for the roll-call to
+# alarm on). The chained run always passes it, because the crossing the ferry
+# just closed is still open on disk. ANY DOUBT EXITS 0, so the save runs and
+# refuses by name, rather than a broken save becoming a silent skip. It reads
+# one file, takes no lock and writes nothing (tools/crossing-save.mjs §
+# `--unsaved`). A hand re-save of a COMPLETE crossing is `node
+# tools/crossing-save.mjs` as meepo, not a start of this unit.
+ExecCondition=/usr/bin/node /srv/postmark-office/tools/crossing-save.mjs --unsaved
+# ONE FLOCK, THE SAME ONE. The ferry, the keep tick, the funding watchers and
+# the office pen all serialize on town.lock — one writer at a time on the
+# clones. A crossing-save that wrote STATE/ while the write pen had the world
+# clone parked on a household draft branch would commit the town's memory onto
+# a sketchbook; the walk ledger lost 17 public lines to exactly that class of
+# race in 2026-07. Chained after the ferry, the 300 s wait is for the others.
 #
-# --prune IS A NO-OP SINCE POS-269, and stays on the line on purpose: it pruned
-# faded presence out of dynamic.db, which is retired, and the save accepts it
-# and does nothing, so the installed unit and this file agree without a box
-# step. Drop it at the next reinstall.
+# --prune, a no-op since POS-269, left the line at this reinstall as its note
+# asked (the save still accepts it).
 ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock \
-  /usr/bin/node /srv/postmark-office/tools/crossing-save.mjs --prune
+  /usr/bin/node /srv/postmark-office/tools/crossing-save.mjs
 # A failure here must be loud rather than absorbed: a save that cannot read the
 # record refuses by name and writes nothing, and the missing crossing is only
 # ever noticed by whoever reads this unit's status.
