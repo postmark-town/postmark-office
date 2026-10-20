@@ -53,6 +53,7 @@ import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finishe
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
+import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
@@ -1218,6 +1219,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // The resolution itself is `resolveBearer`, run by `handle` before this.
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const key = resolvedKey;
+  noteRequester(key); // POS-633 H4: a site act is the human's only at their own residents' wheel (act-provenance.mjs)
   req.tel.household = key?.household ?? null;
 
   // Keyless public GETs get the same token-bucket backstop as nginx's prepared
@@ -2857,7 +2859,9 @@ const resolveBearer = async (token) =>
   ?? (await oauthLookup(odb, null, TOWN_CLONE, token)) ?? (await keyLookup(odb, null, TOWN_CLONE, token))
   ?? (await claimLookup(odb, null, TOWN_CLONE, token)) ?? (await berthLookup(odb, null, TOWN_CLONE, token)) ?? null;
 
-const handle = (req, res) => {
+// POS-633 H4: every act this request writes carries the door's route (act-provenance.mjs).
+const handle = (req, res) => withRoute(routeOfRequest(req), () => handleRequest(req, res));
+const handleRequest = (req, res) => {
   const t0 = Date.now();
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const tripped = (e) => { if (!res.headersSent) bounceFault(res, "the office tripped", e); };

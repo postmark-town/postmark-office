@@ -2457,3 +2457,22 @@ When the settlement takes a mark (no stamps behind it), the retire step now writ
    # berth_heard_park|{"search_path=public, pg_temp"}
    ```
 2. **If the apply refuses with `POS-579: these SECURITY DEFINER functions do not search pg_temp last: …`,** nothing was written: a definer function on the box that is not in `world2/schema` was found. Name it to Wright before anything else; it is a finding, not a step to skip.
+
+## 079: every act records whose hand, for whom and by which route (POS-633 H4, the w44 ship)
+
+Three nullable columns on `acts`: `hand` (the resident, or `human` for the household's human), `for_handle` (the resident the act is filed under) and `route` (`mcp`, `api`, `site`, `letter` or `operator`, held by the `acts_route_known` check, NOT VALID so no old row is scanned). The pen writes them from the door's route scope (`src/act-provenance.mjs`), and it names them only once the store has them, so the w44 code runs the same before or after 079 and the order is free. No backfill: rows from before carry NULLs, and the reads say what the record already knows (the actor, `human-of-<slug>`, `payload.as_human`), never "unknown". The columns stay off the notary's `ACT_FIELDS`, so no frozen window moves. Box step (Wright's hand, never a lane's):
+
+1. **Apply 079,** away from the clearing (05:45:40 / 17:45:40Z) and the sweep (06:00 / 18:00Z). Same pipe as 077 above; idempotent:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w44   # the tag being shipped
+   git -C $CLONE fetch -q origin --tags
+   git -C $CLONE show "$TAG:world2/schema/079_act_provenance.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 079):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM information_schema.columns WHERE table_name = 'acts' AND column_name IN ('hand','for_handle','route')"   # 3
+   ```
+2. **A minute after the next act lands** (the office's probe re-asks within 60 s): `SELECT route, count(*) FROM acts WHERE id > <max id before the apply> GROUP BY 1` names `mcp` or `api` (and `site` for a browser's act), never anything else.
