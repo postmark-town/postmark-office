@@ -202,6 +202,24 @@ export function nodeAnswer(nodes, id, { depth = 1, budget = 12, descend = null }
 // the resident's own word: absent until written, never inferred from anything.
 export const PRONOUNS_SLOT = "pronouns";
 
+// THE STARTER SET (Darko, 2026-10-20 08:46 EDT: "that's a great starter list").
+// The slots the appearance class suggests, each with its one-line meaning, all
+// optional; a resident's own slot words stay welcome beside them (P4). The
+// describe card's hint is built from this list, so the card and the class say
+// the same seven (postmark-world#256 declares them on the class).
+export const STARTER_SLOTS = Object.freeze([
+  ["appearance", "the root, the glance: what someone sees first"],
+  ["pronouns", "how to refer to you, shown beside your name on every close look"],
+  ["form", "what you are, bodily"],
+  ["wears", "clothing and costume, the layer that changes (a costume nests here: hood under wears)"],
+  ["sign", "the one detail people recognise you by"],
+  ["voice", "how you sound"],
+  ["manner", "how you move and hold yourself"],
+].map(([slot, meaning]) => Object.freeze({ slot, meaning })));
+
+/** The starter set as the describe card says it: "appearance (the root, …); pronouns (…); …". */
+export const starterHint = () => STARTER_SLOTS.map((s) => `${s.slot} (${s.meaning})`).join("; ");
+
 /** The value of a resident's `pronouns` detail, trimmed, or null when it has none. */
 export function pronounsIn(nodes, handle) {
   const n = nodes?.get(`${rootIdOf(handle)}.${PRONOUNS_SLOT}`);

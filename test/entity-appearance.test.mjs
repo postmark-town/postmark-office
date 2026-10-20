@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 
 import {
   worldDescribe, applyAct, nodeAnswer, appearanceIdOf, rootIdOf, appearanceNodes,
-  __resetAppearanceForTest, APPEARANCE_CLASS, BODY_MAX, ID_MAX, FOLD_SQL, OVERLAP_SQL, pronounsIn,
+  __resetAppearanceForTest, APPEARANCE_CLASS, BODY_MAX, ID_MAX, FOLD_SQL, OVERLAP_SQL, pronounsIn, STARTER_SLOTS,
 } from "../src/entity-predicates.mjs";
 import { entityKindOf, investigateResident } from "../src/world-investigate-entity.mjs";
 import { dispatchToolFor, focusArgs } from "../src/world-apex.mjs";
@@ -280,4 +280,17 @@ test("PRONOUNS ARE THE DETAIL DIRECTLY UNDER THE ROOT, the resident's own word: 
     recent: async () => [], holds: async () => [], placeOf: () => null,
   });
   assert.equal("pronouns" in none, false);
+});
+
+test("THE DESCRIBE CARD NAMES THE STARTER SET (Darko 2026-10-20 08:46), each with its one-line meaning, and welcomes the resident's own words", async () => {
+  assert.deepEqual(STARTER_SLOTS.map((s) => s.slot), ["appearance", "pronouns", "form", "wears", "sign", "voice", "manner"]);
+  const { WORLD_TOOLS } = await import("../src/world.mjs");
+  const card = WORLD_TOOLS.find((t) => t.name === "world_describe");
+  for (const { slot, meaning } of STARTER_SLOTS) {
+    assert.ok(meaning.length > 0 && meaning.length <= 150, `${slot}'s meaning is one line`);
+    assert.ok(card.description.includes(`${slot} (${meaning})`), `the card names ${slot} with its meaning`);
+    assert.ok(card.inputSchema.properties.slot.description.includes(slot), `the slot hint names ${slot}`);
+  }
+  assert.match(card.description, /your own slot words are welcome too/);
+  assert.match(card.description, /your household's to write/, "the scope is the household (P1)");
 });

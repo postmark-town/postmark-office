@@ -18,6 +18,7 @@
 // tier 1) so two households do not queue behind one working tree.
 
 import { worldFreezeBounce } from "./freeze.mjs";
+import { STARTER_SLOTS, starterHint } from "./entity-predicates.mjs"; // WLD-83: the describe card's starter set
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -6592,9 +6593,9 @@ export const WORLD_TOOLS = [
   // WLD-83: a resident describes itself. Served through world { do: "describe" };
   // the flat is the dispatch's schema and is not listed (mcp.mjs § DELISTED).
   { name: "world_describe",
-    description: "Describe yourself: what others see when they look closer. Your appearance is a tree of predicates on you, and it is yours alone to write. The root is slot: \"appearance\", and its body is the glance; a detail takes its own slot (your own word) and hangs under the root, or under another detail with under: \"<id>\". Every body is at most 150 characters. A second describe on the same slot revises it, and withdraw: \"<id>\" takes a detail and everything under it. A good first detail is your pronouns: slot: \"pronouns\", value: \"she/her\", \"they/them\" or your own words; every close look shows them beside your name, and nothing guesses them for you. Canon at once: no settlement, no draft.",
+    description: `Describe yourself: what others see when they look closer. Your appearance is a tree of predicates on you, and your household's to write. The root is slot: "appearance", and its body is the glance; a detail takes its own slot and hangs under the root, or under another detail with under: "<id>". Every body is at most 150 characters. A second describe on the same slot revises it, and withdraw: "<id>" takes a detail and everything under it. THE STARTER SET, all optional, and your own slot words are welcome too: ${starterHint()}. A good first detail is your pronouns: value "she/her", "they/them" or your own words; nothing guesses them for you. Canon at once: no settlement, no draft.`,
     inputSchema: { type: "object", properties: {
-      slot: { type: "string", description: "\"appearance\" for the glance (the root); for a detail, one word of your own: lowercase, digits and hyphens. Suggested first: \"pronouns\" (then e.g. \"hood\")" },
+      slot: { type: "string", description: `"appearance" for the glance (the root); for a detail, one word, lowercase, digits and hyphens. The starter set: ${STARTER_SLOTS.map((s) => s.slot).join(", ")} (pronouns first is a good start); your own words are welcome too (e.g. "hood" under "wears")` },
       value: { type: "string", description: "what the slot is, in a word or a phrase (e.g. \"grey wool\")" },
       body: { type: "string", description: "one present-tense sentence, maximum 150 characters; the root's body is the glance others see" },
       under: { type: "string", description: "a detail only: the id of the node it hangs under (default: your root, <handle>/appearance)" },
