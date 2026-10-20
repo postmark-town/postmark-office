@@ -167,6 +167,18 @@ export const STANCE_WORDS = "welcomed | neutral | opposed";
 export const GROUP_IDS = 3;
 /** A ready-to-run answer to one waiting mark, as v1's rows carried it. */
 export const answerAct = (id) => `declare-stance-on { on: "${id}", stance: ${STANCE_WORDS} }`;
+/** How many ids one stance call takes (world-stance.mjs § STANCE_LIST_MAX). */
+export const STANCE_LIST_CAP = 100;
+/**
+ * ONE CALL ANSWERS THE GROUP (Darko, 2026-10-20 12:47): a group whose ids the
+ * glance holds hands them over as one list stance; a bigger one hands over the
+ * read that lists them, whose `ids` go into the same call.
+ */
+export function groupAct({ by, over, count }, ids) {
+  if (count <= ids.length) return `declare-stance-on { on: [${ids.map((id) => JSON.stringify(id)).join(", ")}], stance: ${STANCE_WORDS} }`;
+  const only = [by != null ? `by: ${JSON.stringify(by)}` : null, over != null ? `over: ${JSON.stringify(over)}` : null].filter(Boolean).join(", ");
+  return `household { read: "stances", ${only}, limit: ${STANCE_LIST_CAP} }, then declare-stance-on { on: <its ids>, stance: ${STANCE_WORDS} }${count > STANCE_LIST_CAP ? `, ${STANCE_LIST_CAP} a call` : ""}`;
+}
 
 export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   const groups = new Map();
@@ -181,13 +193,13 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
     g.marks.push(c.mark);
     groups.set(k, g);
   }
-  // eval round 1: a group a reader can act on, its oldest ids and a ready-to-run answer to the first
+  // eval round 1: a group a reader can act on, its oldest ids; round 3: one act answers the whole group
   return [...groups.values()]
     .sort((a, b) => String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
     .slice(0, max)
     .map((g) => {
       const ids = g.marks.slice(-GROUP_IDS).reverse();
-      return { by: g.by, over: g.over, count: g.count, oldest: g.oldest, newest: g.newest, ids, sample: g.first?.body ?? "", act: answerAct(ids[0]) };
+      return { by: g.by, over: g.over, count: g.count, oldest: g.oldest, newest: g.newest, ids, sample: g.first?.body ?? "", act: groupAct(g, ids) };
     });
 }
 
@@ -222,7 +234,7 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
 }
 
 /** The waiting block's key (eval round 1): what each count is, and the read that lists it. */
-export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · act answers ids[0] · all marks: read "stances"';
+export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · act answers the whole group · all marks: read "stances"';
 
 // ── mail and stamps ──────────────────────────────────────────────────────────
 

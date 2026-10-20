@@ -299,6 +299,15 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   // act. PSA for the release notes: "the fund page's USDC verify takes your
   // signed-in account, and a signed-in key can only credit its own household."
   //
+  // ⚑ REGENERATED 2026-10-20 FOR POS-633 round 3 (Darko 12:47, the bulk
+  // stance): declare-stance-on's `on` takes one id or a list of up to 100. The
+  // capture diff is exactly `/acts/11/fields/on/type` "string" -> ["string"]
+  // (the card now says ["string", "array"]) and `/acts/11/fields/on/items`
+  // added; nothing removed. The card's `type` is RETYPED, so this one is named
+  // for review rather than called additive. PSA for the release notes: "a
+  // stance can answer a whole group: on: takes a list of up to 100 ids, and
+  // each mark gets its own act."
+  //
   // ⚑ REGENERATED 2026-10-06 FOR POS-361 (the town's stance as law, Darko's
   // rulings of 10-06): the declare-stance-on card gained `as` (as: "town", the
   // town's word written by its own pen) and `law` (the law marks an opposition

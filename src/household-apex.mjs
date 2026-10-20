@@ -443,7 +443,9 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
           hide_bounces_older_than_days: { type: "number", description: "awaiting only: drop bounces older than this many days" } },
   window: {},
   stances: { cursor: { type: "string", description: "walk the inbox from where you last looked" },
-             limit: { type: "number", description: "how many candidates" } },
+             limit: { type: "number", description: "how many candidates" },
+             by: { type: "string", description: "only the marks this household laid — the `by` of a waiting group" },
+             over: { type: "string", description: "only the marks lying over this ground of yours — the `over` of a waiting group; the answer's `ids` then go straight into declare-stance-on { on: [...] }" } },
   outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   stakes: {},
@@ -1636,7 +1638,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (!scope.length)
         return bounce(422, "whose word?", "pass handle: — or call with a key that holds a resident; the inbox is derived from the ground your household holds");
       const { stancesForHandles } = await import("./world-stance.mjs");
-      return stancesForHandles(scope, { cursor: f.cursor ?? null, limit: f.limit, setDowns: true });
+      return stancesForHandles(scope, { cursor: f.cursor ?? null, limit: f.limit, by: f.by ?? null, over: f.over ?? null, setDowns: true });
     }
     // ── what the crossings did to your things (2026-09-07, #2526) ───────────
     //

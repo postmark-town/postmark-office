@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { glanceV2, sinceV2, needsBlock, needGroups, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock } from "../src/household-read-v2.mjs";
+import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock } from "../src/household-read-v2.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
 import { unexplained, explainAnswer, decodeCursor, encodeCursor } from "../src/read-grammar.mjs";
@@ -85,9 +85,19 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   assert.equal(n.groups[0].sample, stream.at(-1).body, "the group's oldest body, whole");
   // eval round 1: a group a reader can act on, its oldest ids and a ready-to-run answer with the door's own words
   assert.deepEqual(n.groups[0].ids, [stream[59].mark, stream[58].mark, stream[57].mark]);
-  assert.equal(n.groups[0].act, `declare-stance-on { on: "${stream[59].mark}", stance: welcomed | neutral | opposed }`);
+  // round 3 (Darko 12:47): one act answers the whole group. Sixty marks are more
+  // than the glance names, so the act is the read that lists them, then the list stance.
+  assert.equal(n.groups[0].act,
+    'household { read: "stances", by: "spark-the-builder", over: "wright/the-trueing-terrace", limit: 100 }, then declare-stance-on { on: <its ids>, stance: welcomed | neutral | opposed }');
+  // a group the glance names whole is answered by its own ids, in one list
+  assert.equal(n.groups[1].act, `declare-stance-on { on: ["${n.groups[1].ids[0]}"], stance: welcomed | neutral | opposed }`);
+  assert.match(n.key, /act answers the whole group/);
   assert.match(n.key, /read "stances"/);
   assert.equal(needGroups(rows, { max: 1 }).length, 1);
+  // over a hundred, the act says a call takes a hundred
+  const many = Array.from({ length: 101 }, (_, i) => ({ mark: `spark-the-builder/m-${i}`, by: "spark-the-builder", on_your_ground: ["wright/the-trueing-terrace"], date: "2026-10-10", body: "b" }));
+  assert.match(needGroups(many)[0].act, /, 100 a call$/);
+  assert.equal(groupAct({ by: "a", over: null, count: 2 }, ["a/x", "a/y"]), 'declare-stance-on { on: ["a/x", "a/y"], stance: welcomed | neutral | opposed }');
 });
 
 test("waiting.count is what its key says (marks + set_downs + at_risk + key_asks), never the page's length; a bounce is mail", () => {
