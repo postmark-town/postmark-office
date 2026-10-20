@@ -23,6 +23,9 @@
 //    name; and a second run waits on the first's lock instead of checking out
 //    another sha under it. Part 2 needs bash, flock, git and python3 (the box
 //    has all four; the script's JSON escaping is python3); without them it SKIPS.
+// 3. ONE COPY (Darko 2026-10-20 15:38): the timer's unit runs the release's
+//    script too, keeps its own credential file, and the roll-call's ops-scripts
+//    row no longer compares the retired ops copy (nothing execs it).
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -31,6 +34,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+
+import { compareFileCopy } from "../tools/box-rollcall.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p) => readFileSync(join(OFFICE, p), "utf8");
@@ -96,6 +101,35 @@ test("the unit: the ingest gets ONE credential, by ID from the credstore, and ne
   assert.doesNotMatch(service.map(([k, v]) => `${k}=${v}`).join("\n"), /postmark-world2-dev\.env/,
     "the world2 env file carries the owner's password and is never handed to the ferry");
   assert.ok(SCRIPT.includes(`CRED="\${CREDENTIALS_DIRECTORY:-}/${CRED_ID}"`), "the script reads the credential the unit loads, by the same ID");
+});
+
+test("one copy: the timer's unit runs the release's script, the file the ferry runs, with its own credential file", () => {
+  const timer = directives(read("deploy/postmark-town-index.service"), "Service");
+  const get = (key) => timer.filter(([k]) => k === key).map(([, v]) => v);
+  assert.deepEqual(get("ExecStart"), ["/bin/bash /srv/postmark-office/deploy/town-index-ingest.sh"],
+    "the deployed release's copy, never /srv/world2-lab/ops/ (two copies drift, and the lock only holds when both take it)");
+  assert.deepEqual(get("EnvironmentFile"), ["/etc/postmark-world2-dev.env"], "the timer keeps its own credential path");
+  assert.deepEqual(get("User"), ["meepo"]);
+  assert.match(all("ExecStart").join("\n"), /\/bin\/bash \/srv\/postmark-office\/deploy\/town-index-ingest\.sh/, "and the ferry runs the same file");
+});
+
+test("one copy: the roll-call's ops-scripts row no longer compares the retired ops copy, and still compares every other script", () => {
+  const manifest = JSON.parse(read("deploy/box-rollcall-manifest.json"));
+  const find = (o) => { if (o && typeof o === "object") { if (o.id === "world2-ops-scripts") return o; for (const v of Object.values(o)) { const r = find(v); if (r) return r; } } return null; };
+  const row = find(manifest);
+  assert.ok(row, "the manifest has no world2-ops-scripts row");
+  const box = { "town-index-ingest.sh": "the old copy", "world2-lib.sh": "lib", "world2-ingest.sh": "ingest" };
+  const release = { "town-index-ingest.sh": "the release copy", "world2-lib.sh": "lib", "world2-ingest.sh": "ingest" };
+  const fake = (over = {}) => ({
+    exists: () => true,
+    readdir: () => Object.keys(box),
+    read: (path) => { const name = path.replace(/\\/g, "/").split("/").pop(); return Buffer.from(path.replace(/\\/g, "/").startsWith("/box/") ? (over[name] ?? box[name]) : release[name]); },
+  });
+  const c = compareFileCopy("/box/ops", "/release/deploy", new RegExp(row.match), fake());
+  assert.deepEqual([c.differing, c.missing, c.scanned], [[], [], 2], "the stale town-index-ingest.sh left on the box reddens nothing");
+  const d = compareFileCopy("/box/ops", "/release/deploy", new RegExp(row.match), fake({ "world2-lib.sh": "a drifted lib" }));
+  assert.deepEqual(d.differing, ["world2-lib.sh"], "the control: a drifted ops script is still red");
+  assert.match(row.retired_copies ?? "", /town-index-ingest\.sh/, "the row says why the copy is not compared");
 });
 
 // ── part 2: the shipped script, run whole ─────────────────────────────────────

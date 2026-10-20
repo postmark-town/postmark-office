@@ -1038,7 +1038,8 @@
         "label": "the World 2.0 ops scripts on the box",
         "path": "/srv/world2-lab/ops",
         "from": "deploy",
-        "match": "\\.sh$",
+        "match": "^(?!town-index-ingest\\.sh$).*\\.sh$",
+        "retired_copies": "town-index-ingest.sh is not compared here since POS-341 (Darko 2026-10-20 15:38): postmark-town-index.service runs the release copy, /srv/postmark-office/deploy/town-index-ingest.sh, the same file the ferry runs, so the copy in this directory is execed by nothing. It stays on the box until Wright retires it by hand, and this row must not redden on it meanwhile.",
         "why": "THE SAME CLASS ONE LAYER DOWN, and it is already live. The four world2 units do not exec node directly — their ExecStart is /srv/world2-lab/ops/world2-<lane>.sh, and DEPLOY.md calls that directory 'a plain file copy from this repo'. No deploy writes it. On 2026-09-05 a one-line default in world2-refresh-clone.sh had to be carried by scp, and DEPLOY.md's own sentence for it is 'The box's copy of the script is stale until it is carried.' Nothing goes red while it is uncarried, which is the whole complaint. The drop-in above pins which OFFICE the scripts read; this row is what says the SCRIPTS themselves are the ones that shipped. Read as bytes, so a CRLF from a Windows copy reddens here rather than failing later in a way that reads like a missing file.",
         "repair": "scp deploy/world2-*.sh meepo-ec2:/srv/world2-lab/ops/ && ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/*.sh' — then re-run the roll-call",
         "activation_owner": "Wright — the ops directory was placed by hand on 2026-08-29 with the four world2 lanes and has been carried by hand since."
