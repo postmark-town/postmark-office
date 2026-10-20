@@ -80,7 +80,7 @@ const ALLOWED = {
   "store-pool.mjs": [2, `${OWN}: classifiers`],
   "store-txn-watch.mjs": [1, `${OWN}: a status row`],
   "store-writedown.mjs": [1, `${OPERATOR} (the write-down pass's report)`],
-  "town-bridge.mjs": [2, `${OPERATOR} (the bridge pass's report)`],
+  "town-bridge.mjs": [4, `${OPERATOR} (the bridge pass's report, and the pen batch's held and pull-refused lines, POS-723)`],
   "town-drain.mjs": [1, `${OPERATOR} (the drain's stalled rows)`],
   "town-lock.mjs": [2, `${OWN}: plumbing (stderr onto the error; the busy test)`],
   "town-posts.mjs": [1, `${OWN}: a refusal's \`cause\` field, never sent`],

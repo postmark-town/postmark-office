@@ -340,7 +340,7 @@ export function openPenBatch(clone) {
     // dirt that was here before the batch is not the batch's to put back
     before: new Set(changedPaths(clone)),
     good: new Map(), // path → its bytes after the last act that succeeded (null: absent)
-    records: [], // { message, paths } per pen act that succeeded, in order
+    records: [], // { words, paths } per pen act that succeeded (words: its commit message), in order
     open: null, // the records of the act now running, or null between acts
   };
   return activeBatch;
@@ -354,7 +354,7 @@ export function closePenBatch(batch) {
 const keepGood = (batch, rels) => { for (const rel of rels) batch.good.set(rel, bytesAt(batch.clone, rel)); };
 
 function batchRecord(batch, clone, addPaths, message) {
-  const rec = { message, paths: addPaths.map((p) => relTo(clone, p)) };
+  const rec = { words: message, paths: addPaths.map((p) => relTo(clone, p)) };
   if (batch.open) batch.open.push(rec);
   else { batch.records.push(rec); keepGood(batch, rec.paths); }
   return BATCHED;

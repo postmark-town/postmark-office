@@ -267,7 +267,7 @@ export function batchMessage(inBatch, head) {
   const lo = Math.min(...seqs), hi = Math.max(...seqs);
   const subject = `drain: ${what} into the town record (town log seq ${lo === hi ? lo : `${lo}–${hi}`}, head ${head})`;
   const lines = inBatch.map(({ row, recs }) =>
-    `seq ${row.seq} ${row.act} ${row.cls === "letter" ? (row.payload?.id ?? row.handle) : row.handle} · ${recs.map((r) => r.message).join(" + ")}`);
+    `seq ${row.seq} ${row.act} ${row.cls === "letter" ? (row.payload?.id ?? row.handle) : row.handle} · ${recs.map((r) => r.words).join(" + ")}`);
   return `${subject}\n\n${lines.join("\n")}\n`;
 }
 
