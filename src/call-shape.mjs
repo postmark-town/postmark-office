@@ -125,7 +125,13 @@ export function callShape(tool, args) {
   return bounded(call);
 }
 
-/** The ceiling, as a check after the build rather than a hope about it: the field names go first. */
+/**
+ * The ceiling, as a check after the build rather than a hope about it: the
+ * field names go first. The caps above keep an ordinary call far under it; a
+ * call that names every focus, every enum, both an act and a read and twenty
+ * long field names can reach it, and so can the finished call with its size
+ * and code (finishCall bounds again).
+ */
 function bounded(call) {
   if (Buffer.byteLength(JSON.stringify(call), "utf8") <= CALL_MAX) return call;
   const { keys, keys_more, keys_other, ...rest } = call;
@@ -192,5 +198,5 @@ export function finishCall(tel, status) {
   const call = { ...tel.call };
   if (Number.isFinite(tel.out_bytes)) call.out_bytes = tel.out_bytes;
   if (isHttpStatus(status) && status >= 400) call.bounce = status;
-  return call;
+  return bounded(call);
 }

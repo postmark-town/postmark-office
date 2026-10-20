@@ -102,6 +102,16 @@ test("A HUGE PAYLOAD DOES NOT GROW THE LINE", () => {
   const tidy = callShape("world", Object.fromEntries(Object.entries(names).slice(0, 40)));
   assert.equal(tidy.keys.length, KEYS_MAX);
   assert.equal(tidy.keys_more, 40 - KEYS_MAX);
+  // the widest call the caps allow: every focus, every enum, an act and a read,
+  // twenty 32-character names, then a size and a code. The bound is reached, and holds.
+  const widest = { do: "declare-stance-on", read: "declare-stance-on", read_shape: "x", view: "x", cards: "x", as: "x", stance: "x",
+    mark: 1, find: 1, investigate: 1, explain: 1, since: 1, depth: 1, args: {} };
+  for (let i = 0; i < 30; i++) widest.args[`f${String(i).padStart(2, "0")}${"x".repeat(29)}`] = 1;
+  const full = finishCall({ call: callShape("world", widest), out_bytes: 123456789 }, 503);
+  assert.equal(full.keys_dropped, true, `the widest call reached the bound: ${JSON.stringify(full)}`);
+  assert.ok(bytes(JSON.stringify(full)) <= CALL_MAX, `the finished call is ${bytes(JSON.stringify(full))} bytes`);
+  assert.equal(full.do, "declare-stance-on", "what is kept past the bound is the shape's head: act, read, size, code");
+  assert.equal(full.bounce, 503);
   // names that are not field-shaped are counted, never written
   const odd = callShape("world", { [SENTINEL.toUpperCase()]: 1, "has space": 1, ok: 1 });
   assert.deepEqual(odd.keys, ["ok"]);
