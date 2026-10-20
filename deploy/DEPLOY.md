@@ -758,8 +758,9 @@ is there to raise it, never to remove it (0 means no limit).
    two minutes; and no `NestedStoreError` or `StoreAcquireTimeout` in its journal
    (`journalctl -u postmark-office-dev --since "-2h" | grep -E "NestedStoreError|StoreAcquireTimeout|nested-store|store-acquire"`).
 2. Prod: back up `/etc/postmark-office.env` to `/var/backups`, add
-   `TOWN_INDEX_READS=store`, `sudo systemctl restart postmark-office` (and the read
-   workers, `postmark-office-read@{4391,4392,4393}`, if they are running).
+   `TOWN_INDEX_READS=store`, `sudo systemctl restart postmark-office` (its read
+   workers are threads inside it, src/read-workers.mjs; the systemd read pool was
+   never installed and is archived, POS-729).
 3. Probes, at once and again at +5, +15 and +60 minutes: `/api/residents`,
    `/api/world/apex`, `/api/quests/wright`, a doorstep and MCP `world` each
    answer 200 under 2 s, with the `x-postmark-town-index-as-of` header on the

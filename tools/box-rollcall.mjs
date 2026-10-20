@@ -488,12 +488,13 @@ function readUnit(name) {
 // roll-call, and listing all of them would double every row for no signal.
 //
 // ⚑ A TEMPLATE'S INSTANCES ARE NOT FILES (POS-522, postmark-office#354).
-// `list-unit-files` lists unit FILES, so the read pool's template is one line,
-// `postmark-office-read@.service`, however many instances run, and the instance
-// names that a row can watch (`postmark-office-read@4391.service`) never appear
-// there. Until 2026-10-09 a dead read worker raised no alarm in either
-// direction. So the units systemd has LOADED and live (`list-units`: active,
-// activating, failed) are read too, and every INSTANCE among them is in scope.
+// `list-unit-files` lists unit FILES, so a template is one line however many
+// instances run (the read pool's `postmark-office-read@.service`, archived
+// unadopted by POS-729), and the instance names that a row can watch
+// (`postmark-office-read@4391.service`) never appear there. Until 2026-10-09
+// a dead read worker raised no alarm in either direction. So the units systemd
+// has LOADED and live (`list-units`: active, activating, failed) are read too,
+// and every INSTANCE among them is in scope.
 // A non-instance service there is a timer's body mid-run, or an enabled service
 // the file listing already found, so it adds nothing but a flake. The template
 // line itself is never a unit: `systemctl show` on it answers for no process.

@@ -20,7 +20,9 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const CONFS = ["nginx-api.conf", "nginx-postmark-read-pool.conf"].map((f) => join(ROOT, "deploy", f));
+// The read pool's nginx-postmark-read-pool.conf was archived with its never-installed
+// kit (POS-729, deploy/_archived/), so nginx-api.conf is the one conf in front of the office.
+const CONFS = ["nginx-api.conf"].map((f) => join(ROOT, "deploy", f));
 
 /** Every top-level `location … { … }` in a conf: `{ where, body }`, comments stripped. */
 function locations(text) {
@@ -106,6 +108,6 @@ for (const conf of CONFS) test(`the World page's keyless creature reads are cach
   const valid = /proxy_cache_valid\s+200\s+(\d+)s;/.exec(apex.body);
   assert.ok(valid && Number(valid[1]) >= 15, `the apex copy lives ${valid?.[1] ?? "no"} s; the page polls every 15 s, so under 15 s every poll reaches the office`);
   // ⚑ THE FLIP: drop `apex|` from the shield's regex location → the apex falls to
-  // `location /api/`, uncached → the second assert reds; put `|$http_cookie` back in the
-  // read pool's apex key → its cookie assert reds.
+  // `location /api/`, uncached → the second assert reds; add `|$http_cookie` to the
+  // shield's apex key → the cookie assert reds.
 });
