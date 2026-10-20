@@ -295,28 +295,39 @@ export function nearestClasses(db, name, n = 5) {
 // path shadows an inherited one of the same path and is listed once, as own.
 // `open_from` maps each INHERITED path to the class that declares it; an own
 // path is absent from it. Descent stops where `properties` stops (MAX_DEPTH).
-function sovereignPaths(rows, prefix = "", out = []) {
+//
+// The nearest declaration answers WHATEVER ITS TIER (propertyAt; mark-lint § BY
+// PATH): a class that re-declares an inherited sovereign path as constitution
+// LOCKS it, so the farther sovereign one is not open there. So every declared
+// path is seen, sovereign or not, label-rung dials included (an ancestor's dials
+// read the way makersOf reads them), and only the sovereign ones are open.
+// halloween-candy-bowl's constitution `holder` over thing's sovereign one is
+// the case in the law.
+function declaredPaths(rows, prefix = "", out = []) {
   for (const p of rows) {
     const path = prefix ? `${prefix}.${p.name}` : String(p.name);
-    if (p.tier === "sovereign") out.push(path);
-    if (p.children?.length) sovereignPaths(p.children, path, out);
+    out.push({ path, sovereign: p.tier === "sovereign" });
+    if (p.children?.length) declaredPaths(p.children, path, out);
   }
   return out;
 }
 
 /** The open slots and where each inherited one comes from: `{ open: [path], open_from: { path: class } }`. */
 export function openSlotsOf(db, properties, chain) {
-  const open = sovereignPaths(properties);
-  const seen = new Set(open);
+  const open = [];
+  const seen = new Set();
   const from = {};
-  for (const c of chain) {   // nearest class first: the nearest declaration of a path answers
-    for (const path of sovereignPaths(childProperties(db, c.id))) {
-      if (seen.has(path)) continue;
+  const take = (rows, klass) => {
+    for (const { path, sovereign } of declaredPaths(rows)) {
+      if (seen.has(path)) continue;   // a nearer class declared it: that declaration answers
       seen.add(path);
+      if (!sovereign) continue;       // declared and locked: never open
       open.push(path);
-      from[path] = c.class;
+      if (klass) from[path] = klass;
     }
-  }
+  };
+  take(properties, null);
+  for (const c of chain) take(propertiesOf(db, c.id, residueOf(db, c.id)?.dials), c.class);   // nearest class first
   return { open, open_from: from };
 }
 

@@ -337,6 +337,13 @@ function openLayer() {
     child("the-town/entity-appearance", property(`the-town/entity-appearance-${n}`, n, null, `the ${n}`, "sovereign"));
   // candy says its own capacity, shadowing thing's by the same path
   child("the-town/candy", property("the-town/candy-capacity", "capacity", 50, "A candy dish holds fifty.", "sovereign"));
+  // thing's holder is the maker's; the candy bowl LOCKS it at constitution (as halloween-candy-bowl does in the law)
+  child("the-town/thing", property("the-town/thing-holder", "holder", null, "Who may hold it.", "sovereign"));
+  t.nodes.push(klass("candy-bowl", { extends: "thing", body: "A bowl the town sets out." }));
+  child("the-town/candy-bowl", property("the-town/candy-bowl-holder", "holder", "the-town", "The town holds the bowl."));
+  // a label-rung dial locks a path the same way: the fixed lamp says portable: false inline
+  t.nodes.push(klass("fixed-lamp", { extends: "lamp", dials: { portable: false }, body: "A lamp bolted down." }),
+    klass("desk-lamp", { extends: "fixed-lamp", body: "A lamp on a desk." }));
   return graphDb(t);
 }
 const FIVE = ["appearance.form", "appearance.wears", "appearance.sign", "appearance.voice", "appearance.manner"];
@@ -366,4 +373,19 @@ test("C8d: an own property that shadows an inherited one by the same path shows 
   assert.equal(c.open.filter((p) => p === "capacity").length, 1);
   assert.equal("capacity" in c.open_from, false, "candy's own capacity answers, not thing's");
   assert.equal(c.open_from.body, "mark");
+});
+
+test("C8e: a nearer class that re-declares an inherited sovereign path at constitution locks it: not open, at any depth below", () => {
+  const db = openLayer();
+  const bowl = cr.explainClass(db, "candy-bowl");
+  assert.equal(bowl.open.includes("holder"), false, "the bowl's constitution holder answers, not thing's sovereign one");
+  assert.equal("holder" in bowl.open_from, false);
+  assert.deepEqual(bowl.open, ["capacity", "body"], "thing's capacity and mark's body stay open");
+  assert.equal(cr.explainClass(db, "thing").open.includes("holder"), true, "on thing itself holder is open");
+  assert.equal(cr.explainClass(db, "candy").open_from.holder, "thing", "a class that does not lock it inherits it open");
+  // the label rung locks too, from an ancestor as well as from the class itself
+  const fixed = cr.explainClass(db, "fixed-lamp");
+  assert.equal(fixed.open.includes("portable"), false, "fixed-lamp's inline dial locks lamp's sovereign portable");
+  assert.deepEqual(fixed.open_from, { at: "sited", extent: "sited", body: "mark" });
+  assert.equal(cr.explainClass(db, "desk-lamp").open.includes("portable"), false, "an ancestor's inline dial locks it below too");
 });
