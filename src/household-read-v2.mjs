@@ -199,7 +199,8 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   }
   // eval round 1: a group a reader can act on, its oldest ids; round 3: one act answers the whole group
   return [...groups.values()]
-    .sort((a, b) => String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
+    // after round 4 (Darko 16:49): the largest group first, then the oldest of the rest, so a cut never hides the biggest stream
+    .sort((a, b) => (b.count - a.count) || String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
     .slice(0, max)
     .map((g) => {
       const ids = g.marks.slice(-GROUP_IDS).reverse();
@@ -234,7 +235,7 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
     marks: total,
     groups,
     // round 4: the groups past the first two are named, never dropped silently
-    ...(all.length > groups.length ? { more_groups: moreGroups(all.length - groups.length) } : {}),
+    ...(all.length > groups.length ? { more_groups: moreGroups(all.slice(groups.length)) } : {}),
     ...(setDowns ? { set_downs: setDowns } : {}),
     // round 4: these are the house's own marks the next settlement takes, the ones marks.at_risk names
     marks_at_risk: atRisk, key_asks: keyAsks,
@@ -244,8 +245,8 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   };
 }
 
-/** The groups the glance leaves out, by number, and the read that lists them (round 4). */
-export const moreGroups = (n) => `+${n} more group${n === 1 ? "" : "s"}: household { read: "stances" }`;
+/** The groups the glance leaves out, each named (author, count, place; after round 4), and the read that lists them. */
+export const moreGroups = (hidden) => `+${hidden.length} more: ${hidden.slice(0, 2).map((g) => `${g.by}, ${g.count} over ${g.over}`).join("; ")}${hidden.length > 2 ? "; …" : ""} · read "waiting"`;
 
 /** The waiting block's key (eval round 1): what each count is, and the read that lists it. */
 export const WAITING_KEY = 'count = marks + set_downs + marks_at_risk + key_asks · marks_at_risk: yours, named in marks · act answers the whole group · more: read "waiting"';
@@ -262,8 +263,10 @@ export const WAITING_KEY = 'count = marks + set_downs + marks_at_risk + key_asks
 export const MARKS_KEY = 'pending: on the docket · standing: published · one: world { investigate: "<id>" } · more: read "marks"';
 // round 4 (Wright's look): a refusal's cause is said whole, on one line, never cut mid-sentence
 const oneLine = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
-/** One at-risk mark, what happens and why (round 4): "<id>: ✦0, unpublished at the next settlement unless staked". */
-export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, unpublished at the next settlement unless staked`;
+/** One at-risk mark, what happens, why, and the call that keeps it (round 4 and after). */
+export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, unpublished at the next settlement unless staked: ${keepCall(r.mark ?? r.id)}`;
+/** The world door's stake that keeps a mark, previewed first (world-stake.mjs § world_stake: mark, stamps, preview). After round 4: the fix rides the line. */
+export const keepCall = (id) => `world { do: "stake", args: { mark: "${id}", stamps: 1, preview: true } }`;
 
 /**
  * The house's own building. `counts` is marksCountsFor's three tenses summed
@@ -304,7 +307,7 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
 }
 
 /** The posts block's key: what the counts are, the list, and the acts. */
-export const POSTS_KEY = 'waiting: open, its last act a reply · part_of: RSVPs, answers, Think Tank stakes · other stakes: read "stakes" · join: town { do: "post" } · more: read "posts"';
+export const POSTS_KEY = 'reply waiting: no act answers it; read it: town { read: "posts", args: { class, post } } · part_of: RSVPs, answers, Think Tank stakes · other stakes: read "stakes" · more: read "posts"';
 /** The acts a post's own author takes on it (household-posts.mjs § ACT_WORD): a post whose newest act is none of these was last answered by someone else. */
 export const AUTHOR_ACTS = Object.freeze(["post", "amend", "close"]);
 /** Each content block of the glance and the household read of its own name (round 4: the `more` line's promise). */
@@ -389,7 +392,7 @@ export function mailBlock({ unanswered = null, bounced = null, standing = null }
 
 /** The stamps block's key (eval rounds 1–3): about 100 characters, the four numbers reconciled in plain words; went joins it when the block carries a went count. */
 export const stampsKey = ({ went = false } = {}) =>
-  `yours: you can spend · residents_total: all residents hold now · staked: in stakes · earned_total: ever${went ? ' · went_12h: household { read: "stamps", view: "went" }' : ""}`;
+  `yours: you can spend · residents_total: your residents' stamps, summed · staked: in stakes · earned_total: ever${went ? ' · went_12h: household { read: "stamps", view: "went" }' : ""}`;
 
 /**
  * The house's stamps: the residents' own, added up (eval round 2: `spendable`
@@ -439,7 +442,9 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
   const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
   const steps = firstSteps(gaps);
-  const marksOf = marks ? marksBlock(marks) : null;
+  // after round 4: ONE source for the house's at-risk marks, needs-you's stakes rows, so waiting.marks_at_risk
+  // and marks.at_risk cannot disagree (a fixture that handed marks its own list made them say 0 and 1)
+  const marksOf = marks ? marksBlock({ ...marks, atRisk: needs?.stakes_at_risk?.rows ?? null }) : null;
   const postsOf = posts ? postsBlock(posts, { nowMs, finished: postFinished ?? undefined }) : null;
   return {
     house: {
