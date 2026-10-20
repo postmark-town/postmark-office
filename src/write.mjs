@@ -261,7 +261,7 @@ function commitAndLand(clone, addPaths, message, { rebase = true } = {}) {
 // The landing half of the ceremony, shared with the batch (§ THE PEN BATCH):
 // HEAD is the commit just made; it returns that commit's sha once origin/main
 // holds it, or throws as the comments below say.
-function landCommit(clone, { rebase = true } = {}) {
+function landCommit(clone, { rebase = true, push = ["push", "-q"] } = {}) {
   let commit = git(clone, "rev-parse", "HEAD");
   if (process.env.TOWN_PUSH === "1") {
     // THE PUSH IS NOT THE RECEIPT — THE REMOTE TIP IS. On 2026-08-26 a fund
@@ -273,7 +273,7 @@ function landCommit(clone, { rebase = true } = {}) {
     // On a lost race, rebase onto the fresh tip and try again — every pen
     // commit is an append to town files, which is what makes the rebase safe.
     for (let attempt = 1; ; attempt++) {
-      try { git(clone, "push", "-q"); } catch { /* verified below, not here */ }
+      try { git(clone, ...push); } catch { /* verified below, not here */ }
       git(clone, "fetch", "-q", "origin", "main");
       try {
         git(clone, "merge-base", "--is-ancestor", commit, "origin/main");
@@ -297,19 +297,25 @@ function landCommit(clone, { rebase = true } = {}) {
 // and a fetch, about 2 s an act on the box, so 186 acts held town.lock for
 // 380 s on 2026-10-20 00:00Z (POS-714 is the save that gave up behind it).
 //
-// While a batch is open on a clone, the doors still write every byte (the
-// drain writes nothing of its own), but the ceremony waits:
-//   · `penCommit` records the act's paths and its own message and answers
-//     BATCHED — no git at all;
-//   · the doors' own pulls are skipped (`inPenBatch`): the batch pulls once,
-//     when it opens, and a clone carrying the batch's writes could not pull;
-//   · `penTransaction` keeps its promise — a write that answers "failed"
-//     leaves nothing behind — from snapshots: the bytes every path held after
+// A BATCH IS OPENED ON A PRIVATE WORKTREE, never on the clone the office's
+// server writes (town-bridge.mjs § the drain's worktree). The server's paper
+// doors commit into TOWN_CLONE in-process, without town.lock, so a batch
+// holding its writes there for a whole loop would make each live edit's pull
+// refuse, and an edit's undo could take the batch's letters with it (review
+// of office#673). In its own worktree nothing else writes, so neither can
+// happen.
+//
+// While a batch is open, the doors still write every byte (the drain writes
+// nothing of its own), but the ceremony waits:
+//   · `penCommit` records the act's paths and its own message, tagged with
+//     the act the caller named (`batch.act`), and answers BATCHED: no git;
+//   · the doors' own pulls are skipped (`inPenBatch`): the caller brought the
+//     worktree up to the town's tip before it opened the batch;
+//   · `penTransaction` keeps its promise (a write that answers "failed"
+//     leaves nothing behind) from snapshots: the bytes every path held after
 //     the last act that succeeded. Only a failing act pays a git call.
-// `landPenBatch` then stages every recorded path in one call, makes ONE
-// commit whose body names each act, and lands it through the same loop as
-// every pen commit. A batch that cannot land is put back whole, exactly as a
-// single commit is, so its caller holds every act in it.
+// `landPenBatch` then commits the acts from those snapshots and lands them
+// through the same loop as every pen commit (§ landPenBatch).
 //
 // ONE BATCH AT A TIME, and only the drain opens one: the office's doors run
 // in the server, never inside a batch, and answer exactly as before.
@@ -328,20 +334,20 @@ const bytesAt = (clone, rel) => {
 };
 
 /**
- * Open a batch on `clone`: pull once (pushing), then every pen act on this
- * clone is recorded rather than committed until `landPenBatch`. A pull that
- * refuses throws, and no batch is open.
+ * Open a batch on `dir`, a private worktree the caller has already brought to
+ * the town's tip: every pen act on it is recorded rather than committed until
+ * `landPenBatch`. Set `batch.act` before each act; its records carry it.
  */
-export function openPenBatch(clone) {
+export function openPenBatch(dir) {
   if (activeBatch) throw new Error(`a pen batch is already open on ${activeBatch.clone}`);
-  if (pushing()) git(clone, "pull", "--rebase", "-q");
   activeBatch = {
-    clone: resolve(clone),
+    clone: resolve(dir),
     // dirt that was here before the batch is not the batch's to put back
-    before: new Set(changedPaths(clone)),
+    before: new Set(changedPaths(dir)),
     good: new Map(), // path → its bytes after the last act that succeeded (null: absent)
-    records: [], // { words, paths } per pen act that succeeded (words: its commit message), in order
+    records: [], // { act, words, paths } per pen write that succeeded (words: its commit message), in order
     open: null, // the records of the act now running, or null between acts
+    act: null, // the caller's name for the act now running
   };
   return activeBatch;
 }
@@ -354,7 +360,7 @@ export function closePenBatch(batch) {
 const keepGood = (batch, rels) => { for (const rel of rels) batch.good.set(rel, bytesAt(batch.clone, rel)); };
 
 function batchRecord(batch, clone, addPaths, message) {
-  const rec = { words: message, paths: addPaths.map((p) => relTo(clone, p)) };
+  const rec = { act: batch.act, words: message, paths: addPaths.map((p) => relTo(clone, p)) };
   if (batch.open) batch.open.push(rec);
   else { batch.records.push(rec); keepGood(batch, rec.paths); }
   return BATCHED;
@@ -393,42 +399,148 @@ function putBackAct(batch) {
   if (toHead.length) restore(clone, git(clone, "rev-parse", "HEAD"), toHead);
 }
 
-/**
- * Land a batch: stage every recorded path, commit once with `message`, land
- * it. Answers `{ commit, changed }` (`changed` the set of paths the commit
- * carries; `commit` null when the acts changed nothing). Any throw first puts
- * every recorded path back and unmakes the commit, as `penCommit` does, so
- * the caller holds all of it and retries at the next crossing.
- */
-export function landPenBatch(batch, message) {
-  closePenBatch(batch);
-  const { clone } = batch;
-  const rels = [...batch.good.keys()];
-  if (!rels.length) return { commit: null, changed: new Set() };
-  const base = git(clone, "rev-parse", "HEAD");
-  try {
-    // a path an act removed is staged only if HEAD has it to remove
-    const gone = rels.filter((rel) => batch.good.get(rel) === null);
-    const inHead = gone.length
-      ? new Set(execFileSync("git", ["-C", clone, "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ...gone], { encoding: "utf8" }).split("\0").filter(Boolean))
-      : new Set();
-    const stage = rels.filter((rel) => batch.good.get(rel) !== null || inHead.has(rel));
-    if (stage.length)
-      execFileSync("git", ["-C", clone, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
-        { input: stage.join("\0"), encoding: "utf8" });
-    const changed = new Set(execFileSync("git", ["-C", clone, "diff", "--cached", "--name-only", "-z", "--no-renames"],
-      { encoding: "utf8" }).split("\0").filter(Boolean));
-    if (!changed.size) return { commit: null, changed };
-    const name = process.env.BOT_NAME ?? "postmark-office[bot]";
-    const email = process.env.BOT_EMAIL ?? "office@postmark.invalid";
-    // the message rides stdin: one line per act is longer than a command line may be
-    execFileSync("git", ["-C", clone, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
-      "commit", "-q", "-F", "-", "--author", `${name} <${email}>`], { input: message, encoding: "utf8" });
-    return { commit: landCommit(clone), changed };
-  } catch (e) {
-    restore(clone, base, rels);
-    throw e;
+// Acts that share a path land or hold together: a later edit's bytes carry the
+// earlier one's, so neither can land alone. A UNIT is one such group.
+function unitsOf(batch, acts) {
+  const wanted = new Set(acts);
+  const pathsOf = new Map(); // act → Set(path)
+  for (const rec of batch.records) {
+    if (!wanted.has(rec.act)) continue;
+    if (!pathsOf.has(rec.act)) pathsOf.set(rec.act, new Set());
+    for (const p of rec.paths) pathsOf.get(rec.act).add(p);
   }
+  const owner = new Map(); // path → unit
+  const units = [];
+  for (const act of acts) {
+    const paths = pathsOf.get(act);
+    if (!paths) continue;
+    const joined = [...new Set([...paths].map((p) => owner.get(p)).filter(Boolean))];
+    const unit = joined[0] ?? { acts: [], paths: new Set() };
+    if (!joined.length) units.push(unit);
+    for (const other of joined.slice(1)) {
+      unit.acts.push(...other.acts);
+      for (const p of other.paths) unit.paths.add(p);
+      units.splice(units.indexOf(other), 1);
+    }
+    unit.acts.push(act);
+    for (const p of paths) unit.paths.add(p);
+    for (const p of unit.paths) owner.set(p, unit);
+  }
+  for (const u of units) u.acts.sort((a, b) => acts.indexOf(a) - acts.indexOf(b));
+  return units;
+}
+
+const ATTEMPT_BUDGET = 64;
+const remoteTip = (dir) => { try { return git(dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/main"); } catch { return null; } };
+
+/**
+ * Land a batch's acts: `acts` names which (by the `batch.act` they ran under),
+ * `message(acts)` words a commit for any subset of them.
+ *
+ * FROM THE SNAPSHOTS, NOT FROM THE DISK. Each attempt resets the worktree to
+ * its HEAD and writes the bytes the batch recorded (`good`), so a commit
+ * carries exactly what the acts wrote. And it checks first: a path whose
+ * bytes on disk are not the batch's own (something changed it after the act
+ * that wrote it) HOLDS every act that touched it, rather than committing
+ * someone else's bytes or quietly dropping the act's. An act none of whose
+ * paths the commit changes is one whose bytes HEAD already held: `null`.
+ *
+ * ONE BAD ACT DOES NOT HOLD THE REST (review of office#673). One commit for
+ * every act is the ordinary road. When it fails for a reason that is not a
+ * lost race (the remote answered and did not move: a commit hook, a refused
+ * push, a rebase that will not apply) the acts are landed again by halves,
+ * down to the unit that fails alone, which is held with its reason. A lost
+ * race, or a remote that will not answer, holds every act in that attempt:
+ * splitting cannot help, and each try would cost the lock more time. The
+ * attempts are bounded (ATTEMPT_BUDGET); what is left when they run out is held.
+ *
+ * Answers `{ commits, landed, held }`: the shas that landed in order, a Map of
+ * act → sha | null, and a Map of act → { defect, code }. A held act is the
+ * caller's to keep pending. Nothing is left on the worktree but its HEAD.
+ */
+export function landPenBatch(batch, { acts, message }) {
+  closePenBatch(batch);
+  const { clone: dir } = batch;
+  const landed = new Map(), held = new Map(), commits = [];
+  const holdAll = (unitActs, defect, code = 503) => { for (const a of unitActs) held.set(a, { defect, code }); };
+
+  // THE BYTE CHECK: the disk against the batch's own bytes, before anything moves
+  const units = unitsOf(batch, acts).filter((u) => {
+    const moved = [...u.paths].find((p) => { const now = bytesAt(dir, p); const want = batch.good.get(p);
+      return want === null ? now !== null : !(now && now.equals(want)); });
+    if (!moved) return true;
+    holdAll(u.acts, `the batch's copy of ${moved} was changed under it after the act wrote it, so the act is held for the next crossing rather than landed without its bytes`);
+    return false;
+  });
+
+  const name = process.env.BOT_NAME ?? "postmark-office[bot]";
+  const email = process.env.BOT_EMAIL ?? "office@postmark.invalid";
+  let budget = ATTEMPT_BUDGET;
+
+  // One attempt: the units' bytes, one commit, landed. Throws, leaving HEAD.
+  const attempt = (group) => {
+    const base = git(dir, "rev-parse", "HEAD");
+    const paths = [...new Set(group.flatMap((u) => [...u.paths]))];
+    try {
+      git(dir, "reset", "-q", "--hard", base);
+      git(dir, "clean", "-fdq");
+      for (const p of paths) {
+        const want = batch.good.get(p);
+        if (want === null) { if (existsSync(join(dir, p))) rmSync(join(dir, p), { force: true }); continue; }
+        mkdirSync(dirname(join(dir, p)), { recursive: true });
+        writeFileSync(join(dir, p), want);
+      }
+      // a path an act removed is staged only if HEAD has it to remove
+      const gone = paths.filter((p) => batch.good.get(p) === null);
+      const inHead = gone.length
+        ? new Set(execFileSync("git", ["-C", dir, "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ...gone], { encoding: "utf8" }).split("\0").filter(Boolean))
+        : new Set();
+      const stage = paths.filter((p) => batch.good.get(p) !== null || inHead.has(p));
+      if (stage.length)
+        execFileSync("git", ["-C", dir, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+          { input: stage.join("\0"), encoding: "utf8" });
+      const changed = new Set(execFileSync("git", ["-C", dir, "diff", "--cached", "--name-only", "-z", "--no-renames"],
+        { encoding: "utf8" }).split("\0").filter(Boolean));
+      const groupActs = group.flatMap((u) => u.acts);
+      if (!changed.size) { for (const a of groupActs) landed.set(a, null); return; }
+      // the message rides stdin: one line per act is longer than a command line may be
+      execFileSync("git", ["-C", dir, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
+        "commit", "-q", "-F", "-", "--author", `${name} <${email}>`], { input: message(groupActs), encoding: "utf8" });
+      const sha = landCommit(dir, { push: ["push", "-q", "origin", "HEAD:main"] });
+      commits.push(sha);
+      for (const u of group) for (const a of u.acts)
+        landed.set(a, [...u.paths].some((p) => changed.has(p)) ? sha : null);
+    } catch (e) {
+      abortRebase(dir);
+      try { git(dir, "reset", "-q", "--hard", base); git(dir, "clean", "-fdq"); } catch { /* the next crossing resets the worktree */ }
+      throw e;
+    }
+  };
+
+  const land = (group) => {
+    if (!group.length) return;
+    const groupActs = group.flatMap((u) => u.acts);
+    if (budget <= 0) return holdAll(groupActs, "the batch ran out of landing attempts this crossing; held for the next");
+    budget -= 1;
+    const tip0 = pushing() ? remoteTip(dir) : null;
+    try { return attempt(group); }
+    catch (e) {
+      const defect = e?.defect ?? String(e?.message ?? e).split("\n")[0];
+      if (pushing()) {
+        // a lost race, or a remote that will not answer: splitting cannot help
+        let answered = true;
+        try { git(dir, "fetch", "-q", "origin", "main"); } catch { answered = false; }
+        if (!answered || remoteTip(dir) !== tip0) return holdAll(groupActs, defect, e?.code ?? 503);
+      }
+      if (group.length === 1) return holdAll(groupActs, defect, e?.code ?? 503);
+      const half = Math.ceil(group.length / 2);
+      land(group.slice(0, half));
+      land(group.slice(half));
+    }
+  };
+
+  land(units);
+  return { commits, landed, held };
 }
 
 // vote-by-mail's frontmatter block. The trio is all-or-none: none given → "" (the
