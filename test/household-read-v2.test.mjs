@@ -14,7 +14,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock } from "../src/household-read-v2.mjs";
+import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock, ARRIVED_LINE, isNewHouse } from "../src/household-read-v2.mjs";
+import { DOC_NAMES } from "../src/town-index.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
 import { unexplained, explainAnswer, decodeCursor, encodeCursor } from "../src/read-grammar.mjs";
@@ -68,6 +69,20 @@ test("H2 · the glance stays bounded as served: Starforge, a house of one, a bra
   assert.ok(!("quests" in fresh.stamps), "an empty block is left out (eval round 2)");
   assert.match(sf.more, /a block with nothing in it is left out$/);
   assert.match(fresh.house.members[0], /no act yet · missing: home, window, parcel$/);
+  // eval round 3: one plain line while the house is new, never once it is not; the doc it names is the index's own
+  assert.equal(fresh.house.arrived, ARRIVED_LINE);
+  assert.match(ARRIVED_LINE, /^You've just arrived; nothing is due\. Start with your home page\./);
+  const doc = /doc: "([a-z-]+)"/.exec(ARRIVED_LINE)[1];
+  assert.ok(DOC_NAMES.includes(doc), `the arrived line names a doc the town holds: ${doc}`);
+  assert.equal(sf.house.arrived, undefined, "Starforge, founded 08-08, is not new");
+  assert.equal(isNewHouse({ since: "2026-10-18" }, [], NOW), true, "under three days");
+  assert.equal(isNewHouse({ since: "2026-10-16" }, [], NOW), false);
+  assert.equal(isNewHouse({}, [{ handle: "a", last_active: null }], NOW), true, "no founding date: new while nobody has acted");
+  assert.equal(isNewHouse({}, [{ handle: "a", last_active: "2026-10-19T00:00:00Z" }], NOW), false);
+  // eval round 3: the reader's own spendable stamps
+  assert.equal(sf.house.you, "wright");
+  assert.equal(typeof sf.stamps.yours, "number");
+  assert.deepEqual(Object.keys(sf.stamps).slice(0, 4), ["yours", "residents_total", "staked", "earned_total"]);
 });
 
 test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot are ONE row; two others are their own; the sample is the oldest body, whole", () => {
@@ -80,7 +95,9 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   assert.equal(n.groups.length, 3);
   assert.deepEqual(n.groups.map((r) => [r.by, r.over, r.count]),
     [["spark-the-builder", "wright/the-trueing-terrace", 60], ["binya-vernal", "rei/the-lanternseed-gardens", 1], ["little-bird", "rei/the-lanternseed-gardens", 1]]);
-  assert.deepEqual(Object.keys(n.groups[0]), ["by", "over", "count", "oldest", "newest", "ids", "sample", "act"]);
+  assert.deepEqual(Object.keys(n.groups[0]), ["by", "over", "count", "oldest", "newest", "ids", "ids_shown", "sample", "act"]);
+  assert.equal(n.groups[0].ids_shown, "3 of 60", "eval round 3: the ids never read as the whole group");
+  assert.equal(n.groups[1].ids_shown, undefined, "a group shown whole says nothing more");
   assert.deepEqual([n.groups[0].oldest, n.groups[0].newest], ["2026-10-05", "2026-10-19"]);
   assert.equal(n.groups[0].sample, stream.at(-1).body, "the group's oldest body, whole");
   // eval round 1: a group a reader can act on, its oldest ids and a ready-to-run answer with the door's own words
@@ -115,16 +132,16 @@ test("D1 · each member is one string: handle · where · last act · what the p
   for (const m of g.house.members) assert.equal(typeof m, "string");
   assert.equal(g.house.members[0], "architect · at -606, 162 · letter 1 h · missing: home, window", "coordinates labelled; missing, never needs");
   assert.match(g.house.members[1], /^illuminator · on illuminator\/the-long-named-home-of-illuminator · say 2 h$/);
-  assert.deepEqual(g.house.first_steps, ['home: household { do: "home", args: { handle, title, body } }', 'window: household { do: "window", args: { handle, html } }'], "one call per missing paper, in order, each naming its tool");
+  assert.deepEqual(g.house.first_steps, ['home: household { do: "home", handle, args: { title, body } }', 'window: household { do: "window", handle, args: { html } }'], "one call per missing paper, in order, each naming its tool");
   assert.equal(g.house.first_steps_note, "none is required; each makes your house easier to find");
   // eval round 2: parcels publish free (RULED 09-27), so no stake step; a literal place
   const parcel = firstSteps({ newbie: ["parcel", "window", "home"] });
   assert.deepEqual(parcel.map((s) => s.split(":")[0]), ["home", "window", "parcel"]);
-  assert.match(parcel[2], /world \{ do: "leave-mark", args: \{ kind: "parcel", slug: "my-home", at: \{ x: 120, y: -80 \}/);
+  assert.match(parcel[2], /world \{ do: "leave-mark", args: \{ kind: "parcel", slug: "my-home", at: <open ground from world \{ read_shape: "v2" \}>/);
   assert.match(parcel[2], /free/);
   assert.doesNotMatch(parcel[2], /stake/);
   assert.equal(firstSteps({ a: [] }), null);
-  assert.equal(memberLine({ handle: "newbie", at: null, last_active: null }, { nowMs: NOW }), "newbie · nowhere on the roll · no act yet");
+  assert.equal(memberLine({ handle: "newbie", at: null, last_active: null }, { nowMs: NOW }), "newbie · not placed in the world yet · no act yet");
   assert.equal(gapWord("tend your HOME page — your pages tell the town who you are"), "home");
   assert.equal(gapWord("hang your window"), "window");
 });
@@ -161,7 +178,8 @@ test("D7 · mail carries one count to act on, to_answer_14d, and what sails next
   const { key, ...counts } = g.mail;
   assert.deepEqual(counts, { to_answer_14d: 37, bounced: 1, on_the_next_boat: 2 });
   assert.ok(!("new_inbound" in g.mail), "eval round 2: one actionable count in the glance; any-age threads are read mail");
-  assert.match(key, /boat: sails next crossing/, "every count says what it is");
+  assert.match(key, /boat: next crossing/, "every count says what it is");
+  assert.match(key, /list: read "mail", view "awaiting" \(what you owe\)/, "eval round 3: the count's name meets the view's");
   assert.match(key, /read "mail", view "awaiting"/, "and the read that lists it");
   for (const k of [g.waiting.key, key, g.stamps.key, g.house.members_key]) assert.ok(k.length <= 104, `a key of about 100 characters: ${k.length}`);
   assert.ok(!("unread" in g.mail), "the office's read flag is not a resident's");
@@ -173,10 +191,12 @@ test("stamps: residents_total is the residents' sum (each spends their own), ear
   const s = stampsBlock([{ handle: "a", tenses: { liquid: 5, staked: 1, minted: 9 } }, { handle: "b", tenses: { liquid: 7, staked: 0, minted: 3 } },
     { handle: "c", tenses: { liquid: 1, staked: 2, minted: 12 } }, { handle: "d", tenses: { liquid: 0, staked: 0, minted: 1 } }]);
   assert.equal(s.residents_total, 13, "the residents' stamps added up; no pot the house spends");
-  assert.match(s.key, /each resident spends their own/);
+  // eval round 3: the reader's own balance, and the key reconciles the numbers in plain words
+  assert.equal(s.yours, undefined, "no reader named, no yours");
+  assert.equal(stampsBlock([{ handle: "a", tenses: { liquid: 5, staked: 1, minted: 9 } }, { handle: "b", tenses: { liquid: 7, staked: 0, minted: 3 } }], { you: "b" }).yours, 7);
+  assert.match(s.key, /yours: you can spend · residents_total: all residents hold now · staked: in stakes · earned_total: ever/);
   assert.equal(s.staked, 3);
   assert.equal(s.earned_total, 25);
-  assert.match(s.key, /per resident: read "stamps"/);
   assert.deepEqual(questLines({ quests: [{ cadence: "daily", title: "Reach out", household: { total: 2 }, target: 5 },
     { cadence: "milestone", title: "First idea", progress: 0, target: 1 }] }), ["Reach out 2/5 today"]);
 });

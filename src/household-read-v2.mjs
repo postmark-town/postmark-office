@@ -100,7 +100,7 @@ const lastWord = (what) => (what === "letter" ? "letter" : what === "update" ? "
  * `last_what`) stamped on.
  */
 export function memberLine(row, { gaps = [], nowMs = Date.now() } = {}) {
-  const where = !row.at ? "nowhere on the roll" : String(row.at).includes("/") ? `on ${row.at}` : `at ${row.at}`;
+  const where = !row.at ? "not placed in the world yet" : String(row.at).includes("/") ? `on ${row.at}` : `at ${row.at}`;
   const parts = [row.handle, where];
   const age = shortAgo(row.last_active, nowMs);
   parts.push(age ? `${lastWord(row.last_what)} ${age}` : "no act yet");
@@ -113,12 +113,14 @@ export function memberLine(row, { gaps = [], nowMs = Date.now() } = {}) {
  * parcel). Said once in the glance, only for what a member line is missing.
  */
 export const FIRST_STEPS = Object.freeze({
-  home: 'household { do: "home", args: { handle, title, body } }',
-  window: 'household { do: "window", args: { handle, html } }',
-  address: 'household { do: "address", args: { handle, body } }',
+  // eval round 3: `handle` where the card documents it, beside args (household-apex.mjs § the tool's
+  // `handle`; the paper acts' cards leave it out of their fields), never inside args
+  home: 'household { do: "home", handle, args: { title, body } }',
+  window: 'household { do: "window", handle, args: { html } }',
+  address: 'household { do: "address", handle, args: { body } }',
   // eval round 2: parcels publish free (RULED 09-27: min stake 0, everyone), so no stake step;
-  // a literal place, and where to find open ground
-  parcel: 'world { do: "leave-mark", args: { kind: "parcel", slug: "my-home", at: { x: 120, y: -80 }, body: "…" } }: free; world { read_shape: "v2" } shows open ground near you',
+  // eval round 3: a placeholder that says where the spot comes from, never a copyable place
+  parcel: 'world { do: "leave-mark", args: { kind: "parcel", slug: "my-home", at: <open ground from world { read_shape: "v2" }>, body: "…" } }: free',
 });
 /** The order the steps are taken in (eval round 2: an ordered list): any order works, and this is the one the town teaches. */
 export const FIRST_STEPS_ORDER = Object.freeze(["home", "window", "address", "parcel"]);
@@ -199,7 +201,10 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
     .slice(0, max)
     .map((g) => {
       const ids = g.marks.slice(-GROUP_IDS).reverse();
-      return { by: g.by, over: g.over, count: g.count, oldest: g.oldest, newest: g.newest, ids, sample: g.first?.body ?? "", act: groupAct(g, ids) };
+      // eval round 3: "3 of 50", so the ids never read as the whole group
+      return { by: g.by, over: g.over, count: g.count, oldest: g.oldest, newest: g.newest, ids,
+        ...(g.count > ids.length ? { ids_shown: `${ids.length} of ${g.count}` } : {}),
+        sample: g.first?.body ?? "", act: groupAct(g, ids) };
     });
 }
 
@@ -268,7 +273,7 @@ export function unansweredOf(letters = [], { mine, house = mine } = {}) {
 }
 
 /** The mail block's key (eval rounds 1 and 2): what each count is, and the read that lists the letters; about 100 characters. */
-export const MAIL_KEY = 'to answer: 14 days, no reply · boat: sails next crossing · letters: read "mail", view "awaiting"';
+export const MAIL_KEY = 'to answer: 14 days, no reply · boat: next crossing · list: read "mail", view "awaiting" (what you owe)';
 
 /**
  * D7, eval round 2: one count to act on, `to_answer_14d` (the ledger's: no
@@ -280,19 +285,22 @@ export function mailBlock({ unanswered = null, bounced = null, standing = null }
   return { to_answer_14d: unanswered, bounced, on_the_next_boat: standing, key: MAIL_KEY };
 }
 
-/** The stamps block's key (eval rounds 1 and 2): about 100 characters; went joins it when the block carries a went count. */
+/** The stamps block's key (eval rounds 1–3): about 100 characters, the four numbers reconciled in plain words; went joins it when the block carries a went count. */
 export const stampsKey = ({ went = false } = {}) =>
-  `stamps; each resident spends their own · per resident: read "stamps"${went ? ' · went: read "stamps", view "went"' : ""}`;
+  `yours: you can spend · residents_total: all residents hold now · staked: in stakes · earned_total: ever${went ? ' · went: read "stamps", view "went"' : ""}`;
 
 /**
  * The house's stamps: the residents' own, added up (eval round 2: `spendable`
  * misled, as the house spends no pot), what is staked, what has been earned,
  * and today's quests when there are any.
  */
-export function stampsBlock(details = [], { quests = [] } = {}) {
+export function stampsBlock(details = [], { quests = [], you = null } = {}) {
   const known = details.filter((d) => d.tenses);
   const sum = (f) => known.reduce((n, d) => n + (Number(d.tenses[f]) || 0), 0);
+  // eval round 3: the reader's own spendable balance, when the glance knows who is reading
+  const mine = you ? known.find((d) => d.handle === you) : null;
   return {
+    ...(mine ? { yours: Number(mine.tenses.liquid) || 0 } : {}),
     residents_total: sum("liquid"),
     staked: sum("staked"),
     earned_total: sum("minted"),
@@ -332,6 +340,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     house: {
       name: house.name ?? null, slug: house.slug, human: humanPhrase(house.name), since: house.since ?? null,
       ...(you ? { you } : {}),
+      ...(isNewHouse(house, rows, nowMs) ? { arrived: ARRIVED_LINE } : {}),
       members_key: MEMBERS_KEY,
       members: [...rows].sort(byLastAct).map((r) => memberLine(r, { gaps: gaps[r.handle] ?? [], nowMs })),
       ...(steps ? { first_steps: steps, first_steps_note: FIRST_STEPS_NOTE } : {}),
@@ -339,7 +348,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     // eval round 1: "needs" said two things; what waits on the house's word is `waiting`
     waiting: needsBlock({ stances, needs, tail }),
     mail: mailBlock({ ...mail, bounced: needs ? (needs.unplaced_bounces?.rows?.length ?? 0) : null }),
-    stamps: stampsBlock(details, { quests }),
+    stamps: stampsBlock(details, { quests, you }),
     can: canBlock(standing?.tier, standing?.household),
     law: {
       tier: standing?.tier ?? null,
@@ -350,6 +359,16 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     reading_law: READING_LAW_V2,
     read_shape: "v2",
   };
+}
+
+/** The newcomer's one line (eval round 3): said only while the house is new. The doc is town-index.mjs § DOC_NAMES "joining". */
+export const ARRIVED_LINE = `You've just arrived; nothing is due. Start with your home page. What the town is and its words (stamp, mark, crossing): town { read: "docs", args: { doc: "joining" } }`;
+/** How long a house is new: founded under three days ago, or (no founding date known) no member has acted yet. */
+export const NEW_HOUSE_MS = 3 * 86_400_000;
+export function isNewHouse(house = {}, rows = [], nowMs = Date.now()) {
+  const founded = Date.parse(house?.since ?? "");
+  if (Number.isFinite(founded)) return nowMs - founded < NEW_HOUSE_MS;
+  return rows.length > 0 && rows.every((r) => !r.last_active);
 }
 
 /** Said once beside the first steps (eval round 2): whether the missing papers are required. */
