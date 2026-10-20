@@ -44,12 +44,12 @@ import {
 import {
   BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
-  RECREDIT_HANDS, judgeRecreditFields, judgeRecredit,
+  RECREDIT_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import {
-  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
+  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
   BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO, SECRET_BYTES, SECRET_NOTE, HARNESS_REUSED_NOTE,
   refuse, mintEventId, judgeInterval, judgePlaceShape, placeFromMarkRow, anchorForPlace,
@@ -429,6 +429,9 @@ export async function advanceAtTown(fields, key, { now = Date.now(), env = proce
   const cls = await classOf(fields, id, env);
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
+  // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
+  for (const k of ["skip", "reason"])
+    if (fields?.[k] !== undefined) throw refuse(422, `${k} is a bug's`, "only a bug's stage is skipped on the record; this post moves by its own class's law", { field: k });
   if (cls === IDEA_CLASS) return (await ideaPen()).advanceIdea(fields, key, id, { now, env, roll });
   standpointHandle(fields, key);
   throw refuse(422, "an event's phases follow its clock",
@@ -684,6 +687,7 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
 /** Advance a bug: one `advance` act by a town hand, naming the stage and whom it credits. It mints nothing. */
 async function advanceBug(fields, key, id, { now, env, roll }) {
   if (fields.stamps !== undefined) throw BUG_NO_STAKE(id);
+  if (fields.skip !== undefined) return skipBug(fields, key, id, { now, env });
   if (fields.recredit !== undefined) return recreditBug(fields, key, id, { now, env, roll });
   const hand = judgeBugHand(fields, key, { act: "advance a bug" });
   // POS-649: who wrote an earned stage's linked work is read from GitHub before
@@ -708,16 +712,36 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
       { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
     await updatePost(client, row);
-    const from = BUG_STAGES.indexOf(prev.state);
-    const at = BUG_STAGES.indexOf(j.to);
-    const skipped = at > from ? BUG_STAGES.slice(from + 1, at).filter((s) => BUG_LADDER[s]) : [];
     const n = stageAmount(j.to, j);
     const pays = BUG_LADDER[j.to]
       ? `the ladder owes ${j.credit} ${n} stamps for ${j.to}, paid by the reviewed stage pass (not by this act), subject to the town's meep law and, at confirmed, three paid reports per household a week`
       : `${j.to} pays nothing`;
     return { post: bugAnswer(row), act_id: actId, hand, stage: j.to, ...(j.credit ? { credit: j.credit } : {}), stamps: n,
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}),
-      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${skipped.length ? `; skipped ${skipped.join(", ")}, and a skipped stage pays nothing` : ""}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
+      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
+      read: bugReadHint(id) };
+  }, env);
+}
+
+/**
+ * Skip a bug's next stage (POS-713): one `skip` act by a town hand, naming the
+ * stage no one earned and why. It moves the post to that stage, credits no
+ * one and mints nothing; the history keeps it as skipped.
+ */
+async function skipBug(fields, key, id, { now, env }) {
+  const hand = judgeBugHand(fields, key, { act: "skip a bug's stage" });
+  return write(async (client) => {
+    const prev = await bugRow(client, id);
+    if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
+    const s = judgeSkip(fields, prev);
+    const payload = { post: id, from: prev.state, to: s.to, skipped: true, reason: s.reason, hand };
+    const actId = await insertAct(client, bugActRow({ action: ACT_SKIP, actor: hand, object: id, payload, now }));
+    const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
+      { id: actId, action: ACT_SKIP, actor: hand, object: id, payload, household: prev.household });
+    await updatePost(client, row);
+    const next = BUG_STAGES[BUG_STAGES.indexOf(s.to) + 1];
+    return { post: bugAnswer(row), act_id: actId, hand, stage: s.to, skipped: true, reason: s.reason, stamps: 0,
+      receipt: `skipped: ${id} ${prev.state} → ${s.to} by ${hand}'s hand, because ${s.reason}; a skipped stage credits no one and pays nothing, and the bug's history keeps it as skipped. Next: ${next}`,
       read: bugReadHint(id) };
   }, env);
 }

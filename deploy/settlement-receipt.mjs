@@ -495,6 +495,7 @@ const receipt = {
           // A dry crossing's retirement names its marks and writes none. Not
           // `ran: true` with a count: that would read as the store told.
           ? { ran: false, dry_run: true, would_retire: retire.would_retire ?? [],
+              would_retire_withdrawn: retire.would_retire_withdrawn ?? [],
               reason: "dry run — the store was not written" }
         : {
             ran: true,
@@ -510,6 +511,17 @@ const receipt = {
               returned: (retire.drafts.returned ?? []).map((r) => r.slug),
               kept: (retire.drafts.kept ?? []).map((r) => r.slug),
               unreturned: retire.drafts.unreturned ?? [],
+            } } : {}),
+            // WLD-88: the published marks their authors withdrew, retired under
+            // their own cause and returned nowhere.
+            ...(retire.withdrawn ? { withdrawn: {
+              count: retire.withdrawn.count ?? (retire.withdrawn.retired ?? []).length,
+              slugs: (retire.withdrawn.retired ?? []).map((r) => r.slug),
+              cause: retire.withdrawn.cause ?? null,
+              already_retired: (retire.withdrawn.already_retired ?? []).map((r) => r.slug),
+              absent: (retire.withdrawn.absent ?? []).map((r) => r.slug),
+              // owed from an earlier crossing whose retire step refused
+              retire_only: retire.withdrawn.retire_only ?? [],
             } } : {}),
           })
     : { ran: false, reason: "the retire step did not run for this crossing" },

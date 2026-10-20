@@ -181,6 +181,10 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
       // calendar's announcements): a filter the stub ignored would hand every
       // event act back as an announcement, and the reader would look right.
       const wantAction = /\baction = \$(\d+)/i.exec(q);
+      // and `action = ANY($n)` (POS-713): the posts history reads only the acts
+      // that move a stage (post-history.mjs § HISTORY_ACTIONS), and a stub that
+      // ignored the list proved a read that would drop a new act kind in Postgres.
+      const wantActions = /\baction = ANY\(\$(\d+)(?:::text\[\])?\)/i.exec(q);
       const wantObjects = /\bobject = ANY\(\$(\d+)\)/i.exec(q);
       // The say's spent-nonce lookup (POS-265) asks by actor and nonce.
       const wantActor = /\bactor = \$(\d+)/i.exec(q);
@@ -192,6 +196,7 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
       const rows = state.acts
         .filter((r) => (wantClass ? r.class === params[Number(wantClass[1]) - 1] : true))
         .filter((r) => (wantAction ? r.action === params[Number(wantAction[1]) - 1] : true))
+        .filter((r) => (wantActions ? params[Number(wantActions[1]) - 1].includes(r.action) : true))
         .filter((r) => (wantObjects ? params[Number(wantObjects[1]) - 1].includes(r.object) : true))
         .filter((r) => (wantActor ? r.actor === params[Number(wantActor[1]) - 1] : true))
         .filter((r) => (wantNonce ? r.nonce === params[Number(wantNonce[1]) - 1] : true))

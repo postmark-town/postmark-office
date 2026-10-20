@@ -493,8 +493,10 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
         if (dropped.rowCount) { state.written += 1; return; }
         const rowCount = await retractPendingClaim(client,
           { windowId: win.id, slug, claimant: row.actor });
-        // rowCount 0 is lawful: withdrawing a PUBLISHED 1.0 mark has no pending
-        // claim to retract — that lane is the settlement unpublish, not the docket.
+        // rowCount 0 is lawful: withdrawing a PUBLISHED mark has no pending
+        // claim to retract. This act row IS its carrier: the crossing reads it
+        // as an owed withdrawal (fold-delta.mjs § THE THIRD TERM, WLD-88), the
+        // sweep takes the file out of canon, and the retire step retires the row.
         if (rowCount) state.written += 1;
         return;
       }

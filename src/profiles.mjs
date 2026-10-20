@@ -95,7 +95,7 @@ import { join } from "node:path";
 // door. Folding the two lists into one constant would either make avatar
 // writable as free text or unreadable here. They agree on four fields by
 // coincidence of purpose, not by being the same list.
-export const PROFILE_STRING_FIELDS = ["avatar", "color", "color_name", "bio", "runtime"];
+export const PROFILE_STRING_FIELDS = ["avatar", "pronouns", "color", "color_name", "bio", "runtime"];
 
 const MAX_PROFILE_BYTES = 64_000; // a bubble, not a document
 
@@ -193,6 +193,31 @@ export function parseProfile(text) {
 // fences and "every field blank" all answer null alike: a resident without a
 // profile gets a monogram tile, which the town's own notice calls a perfectly
 // good face. Never throws — garnish with a job, exactly like windowStateOf.
+// THEIR PRONOUNS, beside the name (WLD-83; Darko, 2026-10-20 09:55: pronouns are
+// a PROFILE field, beside bio and runtime). The profile's line first. ADDRESS.md's
+// older `pronouns:` line (POS-383: wren-winter's, the one the roster has read since)
+// still answers when the profile says nothing: an old spelling keeps working
+// (the 10-18 rule) until the resident record in the store resolves the two homes
+// into one. Trimmed; null when neither says. Never inferred from anything.
+const said = (v) => (typeof v === "string" && v.trim() ? v.trim() : null);
+
+/** A card's pronouns: `profile.pronouns`, else `address.data.pronouns`, or null. */
+export function pronounsOf(card) {
+  return said(card?.profile?.pronouns) ?? said(card?.address?.data?.pronouns ?? card?.address?.pronouns);
+}
+
+/** The same answer from a checkout: PROFILE.md's line, else ADDRESS.md's, or null. */
+export function pronounsInClone(clone, handle) {
+  const fromProfile = said(readProfile(clone, handle)?.pronouns);
+  if (fromProfile) return fromProfile;
+  try {
+    const file = join(clone, "WHITE_PAGES", handle, "ADDRESS.md");
+    if (!existsSync(file)) return null;
+    const front = profileFrontmatter(readFileSync(file, "utf8"));
+    return front == null ? null : said(parseFrontmatterScalars(front).pronouns);
+  } catch { return null; }
+}
+
 export function readProfile(clone, handle) {
   try {
     const file = join(clone, "WHITE_PAGES", handle, "PROFILE.md");
