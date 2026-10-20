@@ -60,10 +60,20 @@ WorkingDirectory=/srv/postmark-office
 # quest-snapshot-run.mjs folds the leaderboard on the store's key base; unset,
 # the town's own --snapshot runs, as before. The ingest is the office
 # tree's own deploy/town-index-ingest.sh, the script the timer's unit runs from
-# its installed copy: it keeps its own clone and the law pen's credentials, and
-# its advisory lock serialises it with the timer's run. A failed ingest stops
-# nothing: the store's deliveries are a prefix of the mail, so the mint only
-# owes more, and the keep tick (or the next crossing) pays it. The runner verifies the
+# its installed copy: it keeps its own clone, and its lock file serialises it
+# with the timer's run (the script's header). It runs in THIS unit's sandbox,
+# so the unit grants exactly what it writes and the one password it needs (the
+# sandbox lines at the foot of this file). A failed ingest is not harmless.
+# The `||` lets the chain go on, but the store's deliveries are then a
+# prefix of the mail, so the mint decides on the deliveries before this
+# crossing, and the town's stamp-verify, run inside stamp-mint-run over the
+# appended ledger, reads the crossing's mints as owed and refuses (stamp-verify
+# .mjs: "mints owed, run the mint pass"). The chain stops there and undo puts
+# the clone back: the crossing's mail stays delivered, the keep tick pays the
+# mints within about 20 minutes, and this crossing's ballot, quest and seal
+# passes are skipped until the next one. What a failed ingest SHOULD do in
+# store mode (skip the store mint and let the tick catch up, or stop the
+# crossing) is Darko's call, open on POS-341. The runner verifies the
 # appended ledger before it commits (only a green verify commits, as before).
 # Then the ballot pass (gold plan postmark-ballot), the OFFICE'S since POS-349
 # (ballots are posts): tools/ballot-pass-run.mjs reads the mailed ballots in
@@ -98,9 +108,10 @@ WorkingDirectory=/srv/postmark-office
 #     CHECKS that the lock is held and refuses if it is not, so running it
 #     outside a unit like this one fails loudly instead of racing the pen.
 #
-# Flag-off (TOWN_SINGLE_LOG unset, which is the state on the box today) this is
-# a no-op that prints one line saying so and exits 0 — the crossing is
-# byte-identical to what it was. A refusal exits 1 and holds the rest of the
+# Flag-on (TOWN_SINGLE_LOG=1, set in /etc/postmark-office.env on the box, read
+# 2026-10-20) it drains. Flag-off it is a no-op that prints one line saying so
+# and exits 0, and the crossing is byte-identical to what it was before the
+# drain existed. A refusal exits 1 and holds the rest of the
 # chain on purpose: the office not understanding its own log is not a condition
 # to deliver mail on top of.
 #
@@ -165,3 +176,23 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/srv/postmark-office
 PrivateTmp=yes
+# THE INGEST'S SANDBOX (POS-341, Darko 2026-10-20 14:53). In store mode the
+# chain runs deploy/town-index-ingest.sh, and under ProtectSystem=strict it can
+# write only what is named here. It writes two places outside the office tree:
+# its own town clone (fetch, checkout, clean) and the state directory (its
+# town-index.json, written by tmp-and-rename, so the directory and not the
+# file, and its .town-index.lock). Its mktemp goes to PrivateTmp above; HOME is
+# only read (git needs no write there for a fetch of the public town). The "-"
+# makes a missing path ignored rather than a unit that cannot start: without
+# them the ingest refuses by name and the crossing still runs.
+ReadWritePaths=-/srv/world2-lab/ingest-clones/town-index
+ReadWritePaths=-/srv/world2-lab/state
+# The law pen's password, and nothing else from /etc/postmark-world2-dev.env
+# (that file also carries the owner's password and is never handed to the
+# ferry). A credential ID with no path is looked up in /etc/credstore/, and a
+# missing one is skipped, where an absolute path that is missing fails the
+# whole unit, every crossing (systemd 255, exec-credential.c: missing_ok). The
+# file is root 0600 and holds the password alone (DEPLOY.md § POS-341); systemd
+# reads it as root and hands meepo a copy under $CREDENTIALS_DIRECTORY, readable
+# by this unit only. The script reads it there when the environment has none.
+LoadCredential=postmark-law-ingester-password
