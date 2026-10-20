@@ -1044,7 +1044,11 @@ async function handleMessage(msg, ctx) {
 
   // telemetry: stamp the tool name (never the arguments) for the access log.
   // Batched messages overwrite each other — last one wins; batches are rare.
-  if (ctx.req?.tel) ctx.req.tel.mcp = msg.method === "tools/call" ? (msg.params?.name ?? "tools/call") : msg.method;
+  // A name the office does not answer is the caller's own text, so it reads
+  // "other" (POS-722: the line holds no string a caller wrote).
+  if (ctx.req?.tel) ctx.req.tel.mcp = msg.method !== "tools/call" ? msg.method
+    : msg.params?.name == null ? "tools/call"
+    : callableList().some((t) => t.name === msg.params.name) ? msg.params.name : "other";
 
   switch (msg.method) {
     case "initialize": {

@@ -218,7 +218,7 @@ test("THE OFFICE'S OWN LINES: every door's call shaped, sized and refused by cod
     { what: "a worker's poisoned world read", r: await mcp("world", { read: SENTINEL, handle: SENTINEL, args: { mark: SENTINEL } }), mcp: "world", call: { tool: "world", read: "other" } },
     { what: "the household house read", r: await mcp("household", { read: "house", handle: SENTINEL }), mcp: "household", call: { tool: "household", read: "house" } },
     { what: "a poisoned letter", r: await mcp("household", { do: "send", args: { from: SENTINEL, to: SENTINEL, title: SENTINEL, body: SENTINEL.repeat(500) } }), mcp: "household", call: { tool: "household", do: "send" } },
-    { what: "an unknown tool", r: await mcp("world_nonesuch", { body: SENTINEL }), mcp: "world_nonesuch", call: { tool: "other" }, bounce: -32602 },
+    { what: "an unknown tool", r: await mcp(SENTINEL, { body: SENTINEL }), mcp: "other", call: { tool: "other" }, bounce: -32602 },
     { what: "GET /household", r: await rest("GET", `/household?read=house&handle=${SENTINEL}&args=${encodeURIComponent(JSON.stringify({ q: SENTINEL }))}`), call: { tool: "household", read: "house" } },
     { what: "POST /world/apex", r: await rest("POST", "/world/apex", { do: SENTINEL, args: { text: SENTINEL } }), call: { tool: "world", do: "other" } },
     { what: "POST /town/apex", r: await rest("POST", "/town/apex", { read: "bulletin", args: { q: SENTINEL } }), call: { tool: "town", read: "bulletin" } },
