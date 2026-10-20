@@ -48,7 +48,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { retireMarks } from "../world2/tools/materialize.mjs";
-import { WITHDRAW_CAUSE, retireFromSweep, slugsFromSweep, withdrawnSlugsFromSweep } from "../world2/tools/retire-unpublished.mjs";
+import { WITHDRAW_CAUSE, retireFromSweep, retireOnlyFromFoldInput, slugsFromSweep, withdrawnSlugsFromSweep } from "../world2/tools/retire-unpublished.mjs";
 
 /**
  * A register, as a fake `q`. It answers exactly the two statements
@@ -238,5 +238,22 @@ test("retireFromSweep retires the withdrawn under their own cause and returns no
   assert.equal(r.count, 1, "`count` stays the unpublish door's, as every earlier receipt read it");
   assert.equal(r.withdrawn.count, 1);
   assert.deepEqual(r.withdrawn.retired.map((x) => [x.slug, x.window, x.cause]), [["current/the-bed", 251, WITHDRAW_CAUSE]]);
+  assert.equal(marks.get("current/the-bed").status, "retired");
+});
+
+test("an owed withdrawal retirement from the fold input retires as settlement-withdraw, returns to no drafts, and is named", async () => {
+  assert.deepEqual(retireOnlyFromFoldInput({ selection: { withdrawn_owed: { retire_only: ["current/the-bed", "", 7] } } }), ["current/the-bed"]);
+  assert.deepEqual(retireOnlyFromFoldInput({}), [], "a fold input from before the field owes nothing");
+  assert.deepEqual(retireOnlyFromFoldInput(null), []);
+
+  const { q, marks } = register([standing("current/the-bed")]);
+  const asked = [];
+  const r = await retireFromSweep(q, {
+    sweep: { unpublished: [], withdrawn: [] }, windowId: 252, retireOnly: ["current/the-bed"],
+    returnDrafts: async (_q, { slugs }) => { asked.push(slugs); return { returned: [], kept: [], unreturned: [] }; },
+  });
+  assert.deepEqual(r.withdrawn.retired.map((x) => [x.slug, x.window, x.cause]), [["current/the-bed", 252, WITHDRAW_CAUSE]]);
+  assert.deepEqual(r.withdrawn.retire_only, ["current/the-bed"]);
+  assert.deepEqual(asked, [[]], "nothing goes back to drafts");
   assert.equal(marks.get("current/the-bed").status, "retired");
 });

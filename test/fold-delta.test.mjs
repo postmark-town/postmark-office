@@ -635,11 +635,11 @@ test("WITHDRAWN · a standing mark whose latest act is a withdraw, and which can
   assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one"], "a withdrawal is never written as a mark");
   assert.deepEqual(out.selection.withdrawn_owed, {
     checked: true, count: 1, slugs: [BED], acts: [{ slug: BED, act: 18087, crossing: 250 }],
-    deferred_to_docket: [], skipped_no_household: [], canon_sha: WORLD_SHA,
+    deferred_to_docket: [], retire_only: [], skipped_no_household: [], canon_sha: WORLD_SHA,
   });
 });
 
-test("WITHDRAWN · a withdrawal canon has already carried is not owed again", async () => {
+test("WITHDRAWN · a withdrawal canon has already carried is not removed again — only its retirement is owed (retire_only)", async () => {
   const client = carryClient({
     marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1,
     standing: [standingRow("alpha/one", { window: 185 })],
@@ -648,6 +648,7 @@ test("WITHDRAWN · a withdrawal canon has already carried is not owed again", as
   const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one") });
   assert.deepEqual(out.withdrawals, []);
   assert.equal(out.selection.withdrawn_owed.count, 0);
+  assert.deepEqual(out.selection.withdrawn_owed.retire_only, [BED], "the retire step reads this from the fold input");
 });
 
 test("WITHDRAWN · THE CARRY NEVER WRITES IT BACK: standing, canon-absent, latest act a withdraw", async () => {
@@ -664,6 +665,18 @@ test("WITHDRAWN · THE CARRY NEVER WRITES IT BACK: standing, canon-absent, lates
   assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one"]);
   assert.equal(out.selection.carried_absent.count, 0);
   assert.deepEqual(out.withdrawals, []);
+  assert.deepEqual(out.selection.withdrawn_owed.retire_only, [BED]);
+});
+
+test("WITHDRAWN · a docket slug canon does not yet hold is deferred, never retired under the docket's write", async () => {
+  const client = carryClient({
+    marks: [markRow(BED, { window: 185 })], docketClaims: 1,
+    standing: [standingRow(BED, { window: 185 })],
+    withdrawnOwed: [owedRow(BED)],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one") });
+  assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, [BED]);
+  assert.deepEqual(out.selection.withdrawn_owed.retire_only, []);
 });
 
 test("WITHDRAWN · the docket wins its own crossing: a docket slug is deferred, not also removed", async () => {

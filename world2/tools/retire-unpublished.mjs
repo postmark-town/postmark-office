@@ -2,6 +2,7 @@
 // retire-unpublished.mjs — THE RETIRE STEP AT THE SETTLEMENT SEAM.
 //
 //   node world2/tools/retire-unpublished.mjs --sweep <sweep.json> [--window N]
+//                                            [--fold-input <fold-input.json>]
 //                                            [--dry-run] [--json]
 //
 //   env: WORLD2_CLEARING_URL = postgres://clearing_job:…@localhost/world2_dev
@@ -178,20 +179,32 @@ export function withdrawnSlugsFromSweep(sweep) {
  * retire as `settlement-withdraw` and go nowhere. `count` stays the unpublish
  * door's, as every receipt before this read it; the withdrawn ride apart.
  */
-export async function retireFromSweep(q, { sweep, windowId, returnDrafts = returnToDrafts }) {
+/**
+ * The withdrawn retirements a fold input says are still owed: rows standing in
+ * the store whose file has left canon and whose author's latest act is a
+ * withdraw (fold-delta.mjs § THE THIRD TERM, `retire_only`). A retire step that
+ * refused at crossing N is finished by N+1 this way, not by a hand.
+ */
+export function retireOnlyFromFoldInput(input) {
+  const rows = input?.selection?.withdrawn_owed?.retire_only;
+  return Array.isArray(rows) ? rows.filter((id) => typeof id === "string" && id.length > 0) : [];
+}
+
+export async function retireFromSweep(q, { sweep, windowId, retireOnly = [], returnDrafts = returnToDrafts }) {
   const report = await retireMarks(q, { slugs: slugsFromSweep(sweep), windowId, cause: "settlement-unpublish" });
   // WLD-51 G1 (Darko, 2026-10-15 13:00): each mark this crossing took goes
   // back to its household's drafts, in the same transaction, so a retirement
   // and its return commit together or not at all. Only the marks retired NOW:
   // a re-run retires nothing and so returns nothing twice.
   const drafts = await returnDrafts(q, { slugs: report.retired.map((r) => r.slug), windowId });
-  const withdrawn = await retireMarks(q, { slugs: withdrawnSlugsFromSweep(sweep), windowId, cause: WITHDRAW_CAUSE });
-  return { ...report, count: report.retired.length, drafts, withdrawn: { ...withdrawn, count: withdrawn.retired.length } };
+  const withdrawn = await retireMarks(q, { slugs: [...withdrawnSlugsFromSweep(sweep), ...retireOnly], windowId, cause: WITHDRAW_CAUSE });
+  return { ...report, count: report.retired.length, drafts,
+    withdrawn: { ...withdrawn, count: withdrawn.retired.length, retire_only: [...new Set(retireOnly)].sort() } };
 }
 
 async function main() {
   const sweepPath = arg("--sweep");
-  if (!sweepPath) { console.error("usage: retire-unpublished.mjs --sweep <sweep.json> [--window N] [--dry-run] [--json]"); process.exit(2); }
+  if (!sweepPath) { console.error("usage: retire-unpublished.mjs --sweep <sweep.json> [--window N] [--fold-input <fold-input.json>] [--dry-run] [--json]"); process.exit(2); }
 
   let sweep;
   try { sweep = JSON.parse(readFileSync(sweepPath, "utf8")); }
@@ -203,8 +216,16 @@ async function main() {
     process.exit(1);
   }
 
+  // The fold input, when the crossing has one (the store path): an unreadable
+  // one is a refusal, as an unreadable sweep is, never "nothing owed".
+  let retireOnly = [];
+  const foldInputPath = arg("--fold-input");
+  if (foldInputPath) {
+    try { retireOnly = retireOnlyFromFoldInput(JSON.parse(readFileSync(foldInputPath, "utf8"))); }
+    catch (e) { console.error(`cannot read the fold input at ${foldInputPath}: ${e.message}`); process.exit(1); }
+  }
   const slugs = slugsFromSweep(sweep);
-  const withdrawnSlugs = withdrawnSlugsFromSweep(sweep);
+  const withdrawnSlugs = [...new Set([...withdrawnSlugsFromSweep(sweep), ...retireOnly])].sort();
   if (has("--dry-run")) {
     process.stdout.write(`${JSON.stringify({ dry_run: true, would_retire: slugs, would_retire_withdrawn: withdrawnSlugs }, null, 1)}\n`);
     process.exit(0);
@@ -216,7 +237,7 @@ async function main() {
   // whole lesson of the drain's three caller-less days.
   if (!slugs.length && !withdrawnSlugs.length) {
     process.stdout.write(`${JSON.stringify({ ran: true, retired: [], already_retired: [], absent: [], count: 0, drafts: { returned: [], kept: [], unreturned: [] },
-      withdrawn: { retired: [], already_retired: [], absent: [], count: 0, cause: WITHDRAW_CAUSE } }, null, 1)}\n`);
+      withdrawn: { retired: [], already_retired: [], absent: [], count: 0, cause: WITHDRAW_CAUSE, retire_only: [] } }, null, 1)}\n`);
     process.exit(0);
   }
 
@@ -238,7 +259,7 @@ async function main() {
       if (!rows.length) throw new Error("no open window — the candle is dark; a retirement must be ruled at a window");
       windowId = Number(rows[0].id);
     }
-    const report = await retireFromSweep(q, { sweep, windowId });
+    const report = await retireFromSweep(q, { sweep, windowId, retireOnly });
     await q("COMMIT");
     process.stdout.write(`${JSON.stringify({ ran: true, ...report }, null, 1)}\n`);
     process.exit(0);

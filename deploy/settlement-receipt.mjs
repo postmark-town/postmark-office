@@ -520,6 +520,8 @@ const receipt = {
               cause: retire.withdrawn.cause ?? null,
               already_retired: (retire.withdrawn.already_retired ?? []).map((r) => r.slug),
               absent: (retire.withdrawn.absent ?? []).map((r) => r.slug),
+              // owed from an earlier crossing whose retire step refused
+              retire_only: retire.withdrawn.retire_only ?? [],
             } } : {}),
           })
     : { ran: false, reason: "the retire step did not run for this crossing" },

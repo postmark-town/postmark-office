@@ -21,6 +21,9 @@
 //   · mari's garland: published, withdrawn, LEFT AGAIN. Its latest word is the
 //     leave, so it is never removed.
 //   · current's draft: withdrawn before it ever crossed. No row, nothing to do.
+//   · kino's fireplace: published, and a withdraw by `the-town` on it (the
+//     shape replay-ingest synthesises). The town is not its author, so it is
+//     never owed (Wright's review of #672).
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
@@ -56,10 +59,11 @@ const TOWN_SHA = "t".repeat(40);
 const BED = "current/the-bed-under-the-moons-road";
 const GARLAND = "mari/first-night-garland";
 const DRAFT = "current/a-draft-that-never-crossed";
-const IDS = { bed: "d0000000-0000-4000-8000-000000000001", garland: "d0000000-0000-4000-8000-000000000002" };
+const FIREPLACE = "kino/the-fireplace";
+const IDS = { bed: "d0000000-0000-4000-8000-000000000001", garland: "d0000000-0000-4000-8000-000000000002", fireplace: "d0000000-0000-4000-8000-000000000003" };
 const REGISTRY = {
-  households: { current: "gh:7", mari: "gh:8" },
-  logins: { "current-hub": "gh:7", "mari-hub": "gh:8" },
+  households: { current: "gh:7", mari: "gh:8", kino: "gh:9" },
+  logins: { "current-hub": "gh:7", "mari-hub": "gh:8", "kino-hub": "gh:9" },
 };
 const record = (by, x, body) =>
   `---\nkind: sited\nby: ${by}\ndate: 2026-10-14\nat: { x: ${x}, y: 10 }\nextent: { w: 3, h: 3 }\n---\n\n${body}\n`;
@@ -93,6 +97,7 @@ async function seed() {
         JSON.stringify({ by: owner, date: "2026-10-14" })]);
     await mark(IDS.bed, BED, "current", "gh:7", 10);
     await mark(IDS.garland, GARLAND, "mari", "gh:8", 30);
+    await mark(IDS.fireplace, FIREPLACE, "kino", "gh:9", 50);
     const act = (id, crossing, actor, action, object, household, payload) => c.query(
       `INSERT INTO acts (at, crossing, actor, action, object, class, payload, household)
        VALUES ($1, $2, $3, $4, $5, 'mark', $6, $7)`,
@@ -103,6 +108,8 @@ async function seed() {
     await act(4, 250, "mari", "withdraw", GARLAND, "gh:8", { by: "mari", slug: "first-night-garland", was_published: true });
     await act(5, 250, "mari", "leave-mark", GARLAND, "gh:8", { by: "mari", slug: "first-night-garland" });
     await act(6, 250, "current", "withdraw", DRAFT, "gh:7", { by: "current", slug: "a-draft-that-never-crossed", was_published: false });
+    await act(7, 249, "kino", "leave-mark", FIREPLACE, "gh:9", { by: "kino", slug: "the-fireplace" });
+    await act(8, 250, "the-town", "withdraw", FIREPLACE, null, { type: "withdraw", actor: "the-town", object: FIREPLACE, _synthesised: "replay-ingest DEC-15 case (b)" });
   });
 }
 
@@ -117,6 +124,7 @@ function world(t) {
     + "extent: { w: 320000, h: 320000 }\ndate: 2026-07-01\n---\n\nthe frame\n");
   put(`WORLD/marks/${BED}/mark.md`, record("current", 10, "The flat's bed under the eaves, never made."));
   put(`WORLD/marks/${GARLAND}/mark.md`, record("mari", 30, "A garland for the first night."));
+  put(`WORLD/marks/${FIREPLACE}/mark.md`, record("kino", 50, "A fireplace with a kettle on the hob."));
   put("WORLD/households.json", `${JSON.stringify(REGISTRY, null, 2)}\n`);
   put("package.json", JSON.stringify({ name: "world-fixture", type: "module" }));
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -136,6 +144,8 @@ async function cross(w) {
   try { input = await foldDelta(client, { window: 250, worldSha: sha, canonRegister }); }
   finally { await client.end(); }
   const writeDown = storeWriteDown({ repo: w.repo, input, at: Date.UTC(2026, 9, 15, 18, 0, 0) });
+  const inputPath = join(scratch, `fold-input-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(inputPath, JSON.stringify(input));
   const stakes = join(scratch, `stakes-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(stakes, JSON.stringify(input.stakes));
   const r = spawnSync(process.execPath, [join(w.repo, "tools", "settlement-sweep.mjs"), "--stakes", stakes, "--json"],
@@ -143,13 +153,13 @@ async function cross(w) {
   assert.equal(r.status, 0, `the world's sweep refused:\n${r.stdout}\n${r.stderr}`);
   const sweepPath = join(scratch, `sweep-${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(sweepPath, r.stdout);
-  return { input, writeDown, sweep: JSON.parse(r.stdout), sweepPath };
+  return { input, inputPath, writeDown, sweep: JSON.parse(r.stdout), sweepPath };
 }
 
-function retire(sweepPath) {
-  const r = spawnSync(process.execPath, [RETIRE, "--sweep", sweepPath], {
-    cwd: OFFICE, encoding: "utf8",
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
+function retire(sweepPath, { foldInput = null, url = store.url("clearing_job") } = {}) {
+  const r = spawnSync(process.execPath, [RETIRE, "--sweep", sweepPath, ...(foldInput ? ["--fold-input", foldInput] : [])], {
+    cwd: OFFICE, encoding: "utf8", timeout: 60_000,
+    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: url },
   });
   let out = null;
   try { out = JSON.parse(r.stdout); } catch { /* the assertion prints it */ }
@@ -190,19 +200,45 @@ test("THE PROMISE · a published mark withdrawn at crossing N is out of canon af
   assert.equal(onMain(w, BED), false);
 });
 
-test("THE CARRY NEVER WRITES IT BACK · a withdrawal out of canon whose retire did not run is not republished", { skip }, async (t) => {
+test("THE RETRY · a retire that refused at N leaves the row owed, the carry never republishes it, and N+1 retires it", { skip }, async (t) => {
   await seed();
   const w = world(t);
   const one = await cross(w);
   assert.deepEqual(ids(one.sweep.withdrawn), [BED]);
-  // No retire step: the store row still stands, and canon no longer holds the
-  // file. That is exactly the carry's set, and the carry must leave it alone.
-  const [bed] = await read("SELECT status FROM marks WHERE slug = $1", [BED]);
-  assert.equal(bed.status, "standing");
+  // The retire step refuses at N: the store cannot be reached. The world is
+  // already published, so the row stands with no file in canon.
+  const refused = retire(one.sweepPath, { foldInput: one.inputPath, url: "postgres://clearing_job:x@127.0.0.1:1/nowhere" });
+  assert.notEqual(refused.code, 0, refused.raw);
+  assert.equal((await read("SELECT status FROM marks WHERE slug = $1", [BED]))[0].status, "standing");
 
+  // N+1: that row is the carry's set (standing, canon-absent), and the carry
+  // must leave it alone; the fold names its retirement as owed instead.
   const two = await cross(w);
   assert.equal(two.input.selection.carried_absent.count, 0, JSON.stringify(two.input.selection.carried_absent));
-  assert.equal(two.input.selection.withdrawn_owed.count, 0);
+  assert.equal(two.input.selection.withdrawn_owed.count, 0, "nothing left to remove");
+  assert.deepEqual(two.input.selection.withdrawn_owed.retire_only, [BED]);
   assert.deepEqual(ids(two.sweep.published), []);
   assert.equal(onMain(w, BED), false, "the bed must not come back");
+
+  const run = retire(two.sweepPath, { foldInput: two.inputPath });
+  assert.equal(run.code, 0, run.raw);
+  assert.deepEqual(run.out.withdrawn.retire_only, [BED]);
+  assert.deepEqual(run.out.withdrawn.retired.map((r) => [r.slug, r.cause]), [[BED, "settlement-withdraw"]]);
+  const [bed] = await read("SELECT status, retired_cause FROM marks WHERE slug = $1", [BED]);
+  assert.deepEqual(bed, { status: "retired", retired_cause: "settlement-withdraw" });
+  assert.deepEqual(await read("SELECT id FROM claims WHERE slug = $1", [BED]), [], "and goes back to no one's drafts");
+
+  const three = await cross(w);
+  assert.deepEqual(three.input.selection.withdrawn_owed.retire_only, [], "owed once, retired once");
+});
+
+test("THE AUTHOR'S WORD ONLY · a withdraw by the town on a resident's standing mark is not owed, and the mark stays in canon", { skip }, async (t) => {
+  await seed();
+  const w = world(t);
+  const one = await cross(w);
+  const owed = one.input.selection.withdrawn_owed;
+  assert.ok(!owed.slugs.includes(FIREPLACE) && !owed.retire_only.includes(FIREPLACE), JSON.stringify(owed));
+  assert.ok(!ids(one.sweep.withdrawn).includes(FIREPLACE));
+  assert.equal(onMain(w, FIREPLACE), true);
+  assert.equal((await read("SELECT status FROM marks WHERE slug = $1", [FIREPLACE]))[0].status, "standing");
 });

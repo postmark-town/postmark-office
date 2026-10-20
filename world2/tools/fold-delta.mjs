@@ -148,8 +148,8 @@ import { STANDING_SELECT, canonLockFindings } from "./canon-locks.mjs";
 // (`current-the-reader/the-bed-under-the-moons-road`, act 18087, S250) stood
 // in canon ten settlements after its author let it go.
 //
-// THE TERM. Every STANDING mark whose latest mark act (leave-mark, amend,
-// withdraw) is a withdraw, and which canon still holds. It is STATE, not a
+// THE TERM. Every STANDING mark whose latest mark act BY ITS OWNER (leave-mark,
+// amend, withdraw) is a withdraw, and which canon still holds. It is STATE, not a
 // window: a withdrawal owed since S250 is carried by the first crossing that
 // looks, with no act from its author. It is bounded by what it repairs — a
 // mark leaves the set when its file leaves canon, and the retire step
@@ -161,6 +161,22 @@ import { STANDING_SELECT, canonLockFindings } from "./canon-locks.mjs";
 // absent" — exactly the carry's set — and the carry would write it back. So
 // the carry skips every slug this term's predicate names, whether canon holds
 // it or not: one read, two readers.
+//
+// AND THE RETIREMENT IS OWED UNTIL IT LANDS (Wright's review of #672). The
+// retire step reads its crossing's own sweep, so a refused retire would leave
+// that row standing for good with no file in canon. Such a row (standing,
+// canon-absent, latest owner act a withdraw) is named as `retire_only`, and
+// the retire step reads it from the fold input: retired as settlement-withdraw,
+// returned to no drafts, at the next crossing that runs it.
+//
+// ONLY THE OWNER'S ACTS COUNT. The door files a withdraw with the author as the
+// actor, the WLD-27 `cause` withdrawals included (world-units.mjs passes the
+// mark's own `by`). replay-ingest's synthesised withdraw is an act by
+// `the-town` (DEC-15 case b), and a pre-flip re-leave has a NULL object, so
+// without the actor test a founder-removed mark left again would read as
+// withdrawn and be pulled from live canon. Measured 2026-10-20: marks.owner is
+// the slug's prefix on 1,672 of 1,672 rows, and 13 of 13 door withdraws on a
+// marks row carry the owner as actor.
 //
 // THE DOCKET WINS ITS OWN CROSSING. A slug in this window's docket is written
 // by the docket and is not also removed; its withdrawal is owed, and carried,
@@ -175,7 +191,8 @@ export const WITHDRAWN_OWED_SELECT = `
     FROM marks m
     JOIN LATERAL (
       SELECT a.id, a.action, a.crossing FROM acts a
-       WHERE a.object = m.slug AND a.class = 'mark' AND a.action IN ('leave-mark', 'amend', 'withdraw')
+       WHERE a.object = m.slug AND a.class = 'mark' AND a.actor = m.owner
+         AND a.action IN ('leave-mark', 'amend', 'withdraw')
        ORDER BY a.id DESC LIMIT 1
     ) latest_mark_act ON true
    WHERE m.status = 'standing' AND latest_mark_act.action = 'withdraw'
@@ -399,13 +416,15 @@ export async function foldDelta(
   const withdrawals = [];
   const withdrawnSkippedNoHousehold = [];
   const withdrawnDeferred = [];
+  const retireOnly = [];
   if (canonRegister) {
     const docketSlugs = new Set(rows.map((r) => r.slug));
     const owed = await client.query(WITHDRAWN_OWED_SELECT);
     const withdrawnLatest = new Set(owed.rows.map((r) => r.slug));
     for (const r of owed.rows) {
-      if (!canonRegister.slugs.has(r.slug)) continue;            // carried already: the file has left canon
       if (docketSlugs.has(r.slug)) { withdrawnDeferred.push(r.slug); continue; }
+      // the file has left canon and the row still stands: the retirement is owed
+      if (!canonRegister.slugs.has(r.slug)) { retireOnly.push(r.slug); continue; }
       if (!r.household) { withdrawnSkippedNoHousehold.push(r.slug); continue; }
       withdrawals.push({
         slug: r.slug, by: r.owner, household: r.household,
@@ -526,6 +545,7 @@ export async function foldDelta(
         slugs: withdrawals.map((w) => w.slug),
         acts: withdrawals.map((w) => ({ slug: w.slug, act: w.act, crossing: w.crossing })),
         deferred_to_docket: withdrawnDeferred,
+        retire_only: retireOnly,
         skipped_no_household: withdrawnSkippedNoHousehold,
         canon_sha: canonRegister ? canonRegister.sha : null,
       },
