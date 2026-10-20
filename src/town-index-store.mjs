@@ -378,6 +378,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     houseActs: via((c, household, opts) => houseActs(c, household, opts)),
     lettersAround: via((c, handles, sinceDay, opts) => lettersAround(c, handles, sinceDay, opts)),
     stampLinesSince: via((c, sinceIso, opts) => stampLinesSince(c, sinceIso, opts)),
+    // the household glance's mail window (POS-633): letters in, and the house's letters out
+    mailWindow: via((c, handles, house, sinceDay) => mailWindow(c, handles, house, sinceDay)),
     mailAwaiting: via((c, handle, opts) => mailAwaiting(c, handle, opts)),
     standing: via((c, handle) => standingFor(c, handle)),
     // the town's quest registry (town_meta `quest_registry`), as the doorstep's next steps read it; null when the index has none
@@ -682,6 +684,18 @@ export async function stampLinesSince(q, sinceIso, { limit = 5000 } = {}) {
   const rows = (await q.query(`SELECT seq, canonical, written_at FROM stamp_lines WHERE seq >= $1 ORDER BY seq DESC LIMIT ${cap + 1}`, [lo])).rows
     .filter((r) => new Date(r.written_at).getTime() >= since);
   return { rows: rows.slice(0, cap), cut: rows.length > cap };
+}
+
+/**
+ * The household glance's mail window (POS-633; Darko 2026-10-20): letters
+ * delivered to `handles` since `sinceDay`, and every letter the house wrote
+ * since then (delivered or not: an answer counts the day it is written). Both
+ * halves ride the (to_h, date) and (from_h, date) indexes.
+ */
+export async function mailWindow(q, handles, house, sinceDay) {
+  const cols = "id, from_h, to_h, thread, date, delivered_at";
+  return (await q.query(`SELECT ${cols} FROM town_letters WHERE to_h = ANY($1::text[]) AND date >= $3 AND delivered_at IS NOT NULL
+    UNION SELECT ${cols} FROM town_letters WHERE from_h = ANY($2::text[]) AND date >= $3`, [[...handles], [...house], sinceDay])).rows;
 }
 
 /** house-bundle § residentSegments, from the store: one resident's own segments, at the house read's bounds. */
