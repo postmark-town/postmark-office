@@ -133,10 +133,12 @@
 // REFUSES the crossing over any other deferred row rather than walking past it.
 
 import { existsSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-import { enqueueLetter, penCommit, NOT_LANDED } from "./write.mjs";
+import {
+  enqueueLetter, penCommit, NOT_LANDED, openPenBatch, closePenBatch, landPenBatch,
+} from "./write.mjs";
 import {
   updateAddressBody, updateAddressFields, updateHome, updateProfile, updateWindow,
 } from "./edit.mjs";
@@ -216,6 +218,104 @@ export function isAncestorOfHead(clone, sha) {
   return !r.error && r.status === 0;
 }
 
+// ── THE DRAIN'S WORKTREE (POS-723, review of office#673) ───────────────────
+//
+// The batch writes into a git worktree of the town clone that only the drain
+// uses, and never into TOWN_CLONE itself. The office's server commits paper
+// edits into TOWN_CLONE in-process and without town.lock, so a batch that left
+// its writes there for the whole loop would make every live edit's
+// `pull --rebase` refuse, and a refused edit's undo could remove the batch's
+// letters (the review's mail-loss path). In a worktree of its own, nothing
+// else writes; the clone only ever moves by fast-forward to what landed.
+//
+// It lives INSIDE the clone's git directory (`<clone>/.git/drain-worktree`,
+// or TOWN_DRAIN_WORKTREE), so it is the clone's in every sense: it goes where
+// the clone goes, no status or clean of the clone ever sees it, and on the box
+// it is inside the units' ReadWritePaths. The first crossing makes it (one
+// checkout of the town, about the clone's 453 MB of files, measured
+// 2026-10-20); every crossing after resets it, so a crash mid-batch leaves
+// nothing that outlives the next crossing.
+const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+export const drainWorktreePath = (clone) =>
+  process.env.TOWN_DRAIN_WORKTREE ?? join(git(clone, "rev-parse", "--absolute-git-dir"), "drain-worktree");
+
+/**
+ * Bring the drain's worktree to the town's tip: pushing, the remote's main
+ * (the join commit this crossing made has landed there; a commit the server
+ * has made and not yet pushed is the server's to land, never the batch's to
+ * carry); not pushing, the clone's HEAD. Throws if it cannot, and the caller
+ * holds every row.
+ *
+ * A WORKTREE BROKEN MID-MAKING IS REMADE, ONCE (review 2 of office#673). A
+ * SIGKILL or a power loss inside `worktree add` or a reset leaves the entry
+ * "locked: initializing" or an index.lock behind, and then every crossing
+ * would hold all mail, and removing the directory by hand would not clear
+ * it (`prune` skips a locked entry; `add` refuses a missing-but-locked one).
+ * So when the reset fails, `worktree remove -f -f` clears the entry, locked
+ * or missing, and the worktree is made once more. Only if that fails too is
+ * the crossing's mail held. `remove` takes only a registered worktree: a
+ * path that is anything else is never touched.
+ */
+export function prepareDrainWorktree(clone, log = console.error) {
+  const wt = drainWorktreePath(clone);
+  const pushingNow = process.env.TOWN_PUSH === "1";
+  if (pushingNow) git(clone, "fetch", "-q", "origin", "main");
+  const base = git(clone, "rev-parse", pushingNow ? "refs/remotes/origin/main" : "HEAD");
+  const make = () => {
+    git(clone, "worktree", "prune");
+    git(clone, "worktree", "add", "-q", "--detach", wt, base);
+  };
+  try {
+    if (!existsSync(join(wt, ".git"))) make();
+    else {
+      try { git(wt, "rebase", "--abort"); } catch { /* none in progress */ }
+      git(wt, "reset", "-q", "--hard", base);
+      git(wt, "clean", "-fdq");
+    }
+  } catch (e) {
+    log(`drain: the drain's worktree would not come up (${String(e?.message ?? e).split("\n")[0]}); clearing its entry and making it again`);
+    try { git(clone, "worktree", "remove", "-f", "-f", wt); } catch { /* not a registered worktree: nothing of ours to clear */ }
+    make();
+  }
+  return wt;
+}
+
+/**
+ * The town clone takes the worktree's tip (what the batch landed, on the
+ * town's main), by fast-forward only. The ferry's sweep reads the clone, and
+ * the unit's belt push refuses a clone left behind the remote. A
+ * fast-forward refuses only while a live edit holds a file the tip changed,
+ * or a server commit is between its commit and its push (its own rebase puts
+ * it on top), so it is tried a few times, a second apart.
+ *
+ * STILL REFUSED, PUSHING: the clone's own commits go on top of the tip
+ * (a rebase, as the old per-act pull did), so a stray unpushed server commit
+ * cannot leave the clone diverged and stop the unit's push, and with it the
+ * ferry, every crossing (review 2 of office#673). Answers whether the clone
+ * now holds the tip; the caller decides what a `false` costs.
+ */
+export function catchUpClone(clone, sha, log = console.error) {
+  for (let i = 1; ; i++) {
+    try { git(clone, "merge", "--ff-only", "-q", sha); return true; }
+    catch (e) {
+      if (i < 5) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000); continue; }
+      const why = String(e?.message ?? e).split("\n")[0];
+      if (process.env.TOWN_PUSH === "1") {
+        try {
+          git(clone, "rebase", "-q", sha);
+          log(`drain: the town clone would not fast-forward to the batch ${sha.slice(0, 12)} (${why}); its own commits are rebased on top of it`);
+          return true;
+        } catch {
+          try { git(clone, "rebase", "--abort"); } catch { /* none in progress */ }
+        }
+      }
+      log(`drain: the town clone would not fast-forward to the batch ${sha.slice(0, 12)} (${why}), nor take it any other way`);
+      return false;
+    }
+  }
+}
+
 // THE TOWN'S DAY, NOT THE WIRE'S (found live 2026-08-30 ~20:22 EDT, the gift
 // blackout): this was `utcDate` — `toISOString().slice(0, 10)` — so the 00:00Z
 // crossing (8 PM in town) stamped its registry lines with TOMORROW's date
@@ -238,12 +338,37 @@ const townDayOf = (ms) => new Intl.DateTimeFormat("en-CA",
  */
 export const drainLine = (r) =>
   `[town-drain] ${r.ran ? `date=${r.date} joins=${r.counts.join} updates=${r.counts.update} letters=${r.counts.letter}`
-    + ` head=${r.head} cursor=${r.cursor} commit=${r.commit ?? "none"}`
+    + ` head=${r.head} cursor=${r.cursor} commit=${r.commit ?? "none"} batch=${r.batch_commit ?? "none"}`
+    + (r.batch_commits ? `(${r.batch_commits.length} commits)` : "")
     + (r.gangway_held ? ` GANGWAY=${r.gangway}(${r.gangway_held} held, cursor still)` : "")
     + (r.bounced ? ` BOUNCED=${r.bounced}` : "")
     + (r.held ? ` HELD=${r.held}(not landed, cursor still)` : "")
     + (r.refused ? ` REFUSED=${r.refused}` : "")
     : `skipped — ${r.skipped}`} took=${r.took_ms}ms`;
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * THE BATCH'S MESSAGE (POS-723): the provenance one commit per act used to
+ * carry, kept in the one commit. The subject counts and bounds the acts by
+ * their town log seq; the body names each act on its own line, by its seq,
+ * its act, its letter id or handle, and the message its door would have
+ * committed under — so a grep for a slug, a handle or "via postmark-office"
+ * still finds the act it found before. The store's town log is the record of
+ * record; this is its printed copy in the town's history.
+ */
+export function batchMessage(inBatch, head) {
+  const letters = inBatch.filter((b) => b.row.cls === "letter").length;
+  const papers = inBatch.length - letters;
+  const seqs = inBatch.map((b) => b.row.seq);
+  const what = [letters && plural(letters, "letter", "letters"), papers && plural(papers, "paper act", "paper acts")]
+    .filter(Boolean).join(" and ");
+  const lo = Math.min(...seqs), hi = Math.max(...seqs);
+  const subject = `drain: ${what} into the town record (town log seq ${lo === hi ? lo : `${lo}–${hi}`}, head ${head})`;
+  const lines = inBatch.map(({ row, recs }) =>
+    `seq ${row.seq} ${row.act} ${row.cls === "letter" ? (row.payload?.id ?? row.handle) : row.handle} · ${recs.map((r) => r.words).join(" + ")}`);
+  return `${subject}\n\n${lines.join("\n")}\n`;
+}
 
 /**
  * Drain the town log into the record. One crossing, one call.
@@ -529,10 +654,10 @@ export async function runTownDrain(odb, {
     log(`drain: ${touched.keyHeld.length} landed join row(s) held by the house-key judgment re-run after the store loop — no card, key line or register written for them; the record may hold their membership; still pending, the cursor is held`);
 
   // The join files are the only bytes the bridge itself put on disk, so they
-  // are the only ones it commits. Every door below commits its own work through
-  // the same pen — one commit per act, exactly as that act would have made had
-  // the flag been off, which is what keeps the drain's history readable as the
-  // history it replaced.
+  // are the only ones it commits here, in their own commit: the joins carry
+  // signed registry lines and the store-first order, and stay separable from
+  // the mail. Every door below writes its own work through the same pen, and
+  // the pen batch makes all of it ONE commit (§ the pen batch, POS-723).
   // the rows that SETTLED: neither stalled at the store nor held by a key judgment (POS-600)
   const settledHandles = plan.plans.map(({ row }) => row.handle).filter((h) => !stalledRows.some(({ row }) => row.handle === h));
   const commit = touched.length
@@ -592,37 +717,108 @@ export async function runTownDrain(odb, {
     return { bounced: e?.defect ?? String(e?.message ?? e), code: e?.code ?? null };
   };
 
-  for (const row of rows) {
-    if (row.cls === "update") {
-      // the resume check — see § idempotence in this file's header
-      const applied = row.payload?.commits;
-      if (Array.isArray(applied) && applied.length && applied.every((sha) => isAncestorOfHead(clone, sha))) {
-        updates.push({ seq: row.seq, act: row.act, handle: row.handle, already: true, commits: applied });
+  // ── THE PEN BATCH (POS-723, Darko 2026-10-20 08:58) ──────────────────────
+  //
+  // ONE COMMIT AND ONE PUSH FOR THE CROSSING'S MAIL AND PAPER, not one per
+  // act. The doors still write every byte, but into THE DRAIN'S OWN WORKTREE
+  // (§ the drain's worktree), where the pen records each act instead of
+  // committing it (write.mjs § THE PEN BATCH). After the loop the batch lands
+  // as one commit whose body names every act by its town log seq, and the
+  // town clone fast-forwards to it. The store's town log stays the record of
+  // record.
+  //
+  // What each promise above costs now:
+  //   · A REPLAY THAT BOUNCES is still recorded and passed over, and its own
+  //     writes are put back, so the batch carries nothing of it.
+  //   · AN ACT THE BATCH CANNOT LAND is HELD, never bounced, for the reason a
+  //     single held push is: the cursor stays and the next crossing re-drains
+  //     the same rows. A commit that fails for a reason of its own is landed
+  //     again by halves, so one bad act is held alone and the rest sail; a
+  //     lost race or a silent remote holds every act in that attempt.
+  //   · AN ACT WHOSE BYTES CHANGED UNDER THE BATCH before the commit is held,
+  //     never landed without them and never passed over.
+  //   · A CRASH BEFORE THE COMMIT leaves dirt only in the drain's worktree,
+  //     which the next crossing resets, and the cursor never moved.
+  //   · A WORKTREE THAT WILL NOT COME UP TO THE TOWN'S TIP holds every row the
+  //     same way: nothing was written yet.
+  const rowsToReplay = rows.some((r) => r.cls === "update" || r.cls === "letter");
+  let batch = null, batchRefused = null, wt = null;
+  if (rowsToReplay) {
+    try { wt = prepareDrainWorktree(clone, log); batch = openPenBatch(wt); }
+    catch (e) {
+      batchRefused = `the drain's worktree would not come up to the town's tip: ${String(e?.message ?? e).split("\n")[0]}`;
+      log(`drain: ${batchRefused} — every mail and paper row is held`);
+    }
+  }
+  const inBatch = new Map(); // act name → { entry, row, recs } for every act the batch carries
+  // `entry` is the report's own object, filled in place, so the landing
+  // below can give each act its commit (or its hold) where the report reads it.
+  const replay = (entry, row, run) => {
+    if (!batch) {
+      held += 1;
+      return Object.assign(entry, { held: batchRefused, code: 503 });
+    }
+    const mark = batch.records.length;
+    batch.act = row.seq;
+    try {
+      const out = run();
+      Object.assign(entry, out.skipped ? { skipped: out.skipped } : { commit: out.result?.commit ?? null });
+    } catch (e) { Object.assign(entry, bounce(e)); }
+    const recs = batch.records.slice(mark);
+    if (recs.length && entry.bounced === undefined) inBatch.set(row.seq, { entry, row, recs });
+    return entry;
+  };
+
+  try {
+    for (const row of rows) {
+      if (row.cls === "update") {
+        // the resume check — see § idempotence in this file's header
+        const applied = row.payload?.commits;
+        if (Array.isArray(applied) && applied.length && applied.every((sha) => isAncestorOfHead(clone, sha))) {
+          updates.push({ seq: row.seq, act: row.act, handle: row.handle, already: true, commits: applied });
+          continue;
+        }
+        updates.push(replay({ seq: row.seq, act: row.act, handle: row.handle }, row,
+          () => replayPaperAct(row, { doors, db, clone: wt })));
         continue;
       }
-      let entry;
-      try {
-        const out = replayPaperAct(row, { doors, db, clone });
-        entry = out.skipped ? { skipped: out.skipped } : { commit: out.result?.commit ?? null };
-      } catch (e) { entry = bounce(e); }
-      updates.push({ seq: row.seq, act: row.act, handle: row.handle, ...entry });
-      continue;
+      if (row.cls !== "letter") continue;
+      const file = row.payload?.file ?? null;
+      const id = row.payload?.id ?? null;
+      // the resume check — see § idempotence in this file's header (the
+      // worktree stands at the town's tip, the clone at most behind it)
+      if (file && (existsSync(join(clone, file)) || (wt && existsSync(join(wt, file))))) {
+        letters.push({ seq: row.seq, id, file, already: true });
+        continue;
+      }
+      letters.push(replay({ seq: row.seq, id, file }, row,
+        () => replayLetter(row, { doors, db: letterDb, clone: wt })));
     }
-    if (row.cls !== "letter") continue;
-    const file = row.payload?.file ?? null;
-    const id = row.payload?.id ?? null;
-    // the resume check — see § idempotence in this file's header
-    if (file && existsSync(join(clone, file))) {
-      letters.push({ seq: row.seq, id, file, already: true });
-      continue;
+  } finally { if (batch) closePenBatch(batch); }
+
+  // ── the batch lands: one commit, or the acts it cannot land held ─────────
+  let batchCommits = [];
+  if (batch && inBatch.size) {
+    const fill = ({ entry }, fields) => { for (const k of ["commit", "held", "code"]) delete entry[k]; Object.assign(entry, fields); };
+    const out = landPenBatch(batch, {
+      acts: [...inBatch.keys()],
+      message: (acts) => batchMessage(acts.map((a) => inBatch.get(a)), head),
+    });
+    batchCommits = out.commits;
+    for (const [act, b] of inBatch) {
+      if (out.held.has(act)) { fill(b, { held: out.held.get(act).defect, code: out.held.get(act).code }); held += 1; }
+      // an act whose bytes were already the town's changed nothing: no commit is its
+      else fill(b, { commit: out.landed.get(act) ?? null });
     }
-    let entry;
-    try {
-      const out = replayLetter(row, { doors, db: letterDb, clone });
-      entry = out.skipped ? { skipped: out.skipped } : { commit: out.result?.commit ?? null };
-    } catch (e) { entry = bounce(e); }
-    letters.push({ seq: row.seq, id, file, ...entry });
+    if (out.held.size)
+      log(`drain: ${out.held.size} of ${inBatch.size} act(s) in the batch did not land and are held — the cursor is held`);
   }
+  // the town clone takes the worktree's tip, so the ferry's sweep finds what
+  // landed and the clone stands no further behind the town than the drain read
+  // NOT PUSHING (dev, the sandbox), what landed is only in the worktree, which the
+  // next crossing resets: a clone that did not take it keeps the cursor still
+  const cloneBehind = batch ? !catchUpClone(clone, git(wt, "rev-parse", "HEAD"), log) && process.env.TOWN_PUSH !== "1" : false;
+  if (cloneBehind) log("drain: not pushing, and the clone did not take the batch — the cursor is held");
 
   // ── the first-idea sweep (the Think Tank, 2026-08-30) ────────────────────
   // Rides every crossing beside the join drain: a household's first published
@@ -658,11 +854,12 @@ export async function runTownDrain(odb, {
   // ── the cursor, LAST — and not at all while the gangway holds a row ──────
   if (held)
     log(`drain: ${held} row(s) could not land on the town's remote and are held — the cursor stays for the next crossing`);
-  if (!gangwayHold && !stalledRows.length && !held) await advanceTownCursor(odb, head);
+  if (!gangwayHold && !stalledRows.length && !held && !cloneBehind) await advanceTownCursor(odb, head);
 
   return done({
     ran: true, date: stamp, drained: rows.length, counts, head,
-    cursor: (await townDrainCursor(odb)), commit, first_idea: firstIdea, ...gangwayFields,
+    cursor: (await townDrainCursor(odb)), commit, batch_commit: batchCommits.at(-1) ?? null,
+    ...(batchCommits.length > 1 ? { batch_commits: batchCommits } : {}), ...(cloneBehind ? { clone_behind: true } : {}), first_idea: firstIdea, ...gangwayFields,
     ...(registryRefused ? { registry_refused: registryRefused } : {}),
     ...(stalledRows.length ? { store: stalledRows.map(({ row, why }) => ({ seq: row.seq, handle: row.handle, why })) } : {}),
     // Only rows that SETTLED (POS-600): a row the store stalled or the post-store

@@ -3,6 +3,11 @@ Description=Postmark office — API front door (gold plan postmark-doors)
 After=network.target
 
 [Service]
+# The office runs as meepo, as every other postmark unit does. The box's
+# installed copy has carried this line since it was installed by hand; the repo
+# copy lacked it, so a reinstall from here would have run the office as root
+# (found 2026-10-20, POS-729).
+User=meepo
 Type=simple
 EnvironmentFile=/etc/postmark-office.env
 WorkingDirectory=/srv/postmark-office
