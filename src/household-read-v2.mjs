@@ -301,7 +301,7 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
 }
 
 /** The posts block's key: what the counts are, the list, and the acts. */
-export const POSTS_KEY = 'waiting: a response is the newest act · all: household { read: "posts" } · join: town { do: "post" | "stake" }';
+export const POSTS_KEY = 'waiting: open, its last act a reply · all: household { read: "posts" } · join: town { do: "post" | "stake" }';
 /** The acts a post's own author takes on it (household-posts.mjs § ACT_WORD): a post whose newest act is none of these was last answered by someone else. */
 export const AUTHOR_ACTS = Object.freeze(["post", "amend", "close"]);
 const FINISHED_DEFAULT = Object.freeze(["ended", "cancelled"]);
