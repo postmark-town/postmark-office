@@ -22,6 +22,9 @@
 //      line, a ledger that paid someone else, a town without the grammar),
 //      bound to its own plan, and end to end through the town's
 //      --stage-recredit (skips on a town without it, and says so).
+//   9. (POS-713) a skipped stage mints nothing: the plan has no row for it,
+//      the earned stages around it plan exactly as they would, and a bug whose
+//      every rung after its report was skipped owes nothing at all.
 //
 // 5 runs the TOWN'S OWN verb, so it needs a town whose stamp-mint.mjs carries
 // --stage-mint. The office's pinned town-clone gains it when the town branch
@@ -305,6 +308,8 @@ test("5 · the pass refuses a town whose stamp-mint has no stage grammar, before
 test("6 · (POS-298) the critter changes no amount: the plan for a fixed bug is the same with and without its name", async () => {
   setup();
   const r = await postAtTown({ class: "bug", title: "The bell rings twice", body: "It broke." }, key("carol"), { now: NOW, roll: ROLL });
+  for (const stage of ["confirmed", "reproduced"])   // POS-713: an advance moves one rung; these are skipped on the record
+    await advanceAtTown({ post: r.post.id, skip: stage, reason: "the test starts at the cause" }, WRIGHT, { now: NOW, roll: ROLL });
   for (const [to, more] of [["diagnosed", { link: ADA_LETTER }], ["briefed", { grade: "heavy", link: ADA_LETTER }], ["fixed", { size: "L", critter: "Double Dinger", link: ADA_PR }]])
     await advanceAtTown({ post: r.post.id, to, credit: "ada", ...more }, WRIGHT, { now: NOW, roll: ROLL });
   const facts = await storeFacts();
@@ -425,6 +430,7 @@ test("8 · end to end: the pass pays a stage, then corrects it — both lines in
   async () => {
     setup();
     const id = await confirmed("carol", "The bell rings twice");
+    await advanceAtTown({ post: id, skip: "reproduced", reason: "the cause came with the report" }, WRIGHT, { now: NOW, roll: ROLL });
     await advanceAtTown({ post: id, to: "diagnosed", credit: "ada", link: ADA_LETTER }, WRIGHT, { now: NOW, roll: ROLL });
     const { repo, keyFile } = syntheticTown();
     try {
@@ -487,6 +493,7 @@ test("8 · a town without the correction grammar holds the recredit, says why, a
   async () => {
     setup();
     const id = await confirmed("carol", "The bell rings twice");
+    await advanceAtTown({ post: id, skip: "reproduced", reason: "the cause came with the report" }, WRIGHT, { now: NOW, roll: ROLL });
     await advanceAtTown({ post: id, to: "diagnosed", credit: "ada", link: ADA_LETTER }, WRIGHT, { now: NOW, roll: ROLL });
     const { repo, keyFile } = syntheticTown();
     try {
@@ -499,3 +506,40 @@ test("8 · a town without the correction grammar holds the recredit, says why, a
       assert.ok(!stageLinesOf(repo).some((l) => l.includes("recredit")), "a town without the grammar was handed a correction");
     } finally { rmSync(repo, { recursive: true, force: true }); }
   });
+
+// ── 9 · a skipped stage mints nothing (POS-713, Darko 2026-10-20 08:58) ─────
+//
+// A skip is its own act (`skip`, src/events.mjs § ACT_SKIP), crediting no one,
+// and the plan reads advances only. THE FLIP: write the skip as an `advance`
+// act (events-store.mjs § skipBug) and the plan grows a row for each skipped
+// paid stage, so both tests here go red.
+
+test("9 · (POS-713) a skipped stage mints nothing: no row for it, and the earned stages around it plan as they would", async () => {
+  setup();
+  const r = await postAtTown({ class: "bug", title: "The bell rings twice", body: "It broke." }, key("carol"), { now: NOW, roll: ROLL });
+  const id = r.post.id;
+  const skip = (stage) => advanceAtTown({ post: id, skip: stage, reason: "no one earned it" }, WRIGHT, { now: NOW, roll: ROLL });
+  const s1 = await skip("confirmed");
+  assert.deepEqual([s1.stage, s1.skipped, s1.stamps], ["confirmed", true, 0]);
+  await skip("reproduced");
+  await advanceAtTown({ post: id, to: "diagnosed", credit: "ada", link: ADA_LETTER }, WRIGHT, { now: NOW, roll: ROLL });
+  await skip("briefed");
+  await advanceAtTown({ post: id, to: "fixed", credit: "ada", size: "M", critter: "Double Dinger", link: ADA_PR }, WRIGHT, { now: NOW, roll: ROLL });
+  const facts = await storeFacts();
+  assert.deepEqual(facts.acts.map((a) => a.action), ["post", "skip", "skip", "advance", "skip", "advance"], "the store holds each skip as its own act");
+  const rows = planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep: noMeeps });
+  assert.deepEqual(rows.map((x) => [x.stage, x.handle, x.n, x.why]), [["diagnosed", "ada", 5, "owed"], ["fixed", "ada", 25, "owed"]]);
+  assert.match(renderPlan(rows), /^bug stage plan — 2 paid stage\(s\) recorded, 0 already paid, 0 pay nothing, 2 owed \(30 stamps\)$/m);
+  assert.ok(![...facts.houses.keys()].includes(undefined), "a skip named a household to resolve");
+});
+
+test("9 · (POS-713) a bug whose every rung was skipped to fixed owes nothing at all", async () => {
+  setup();
+  const r = await postAtTown({ class: "bug", title: "The bell rings twice", body: "It broke." }, key("carol"), { now: NOW, roll: ROLL });
+  for (const stage of ["confirmed", "reproduced", "diagnosed", "briefed", "fixed"])
+    await advanceAtTown({ post: r.post.id, skip: stage, reason: "fixed before anyone reported it here" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: r.post.id, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
+  const facts = await storeFacts();
+  assert.equal(facts.acts.filter((a) => a.action === "skip").length, 5);
+  assert.deepEqual(planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep: noMeeps }), []);
+});

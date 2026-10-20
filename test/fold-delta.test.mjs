@@ -50,13 +50,17 @@ import { canonRegisterAtSha } from "../world2/tools/canon-register.mjs";
  * as an unanticipated read rather than as a silent pass.
  */
 function stubClient(windows, {
-  marks = [], docketClaims = null, standing = null, absentRows = [], onUnexpected = null,
+  marks = [], docketClaims = null, standing = null, absentRows = [], onUnexpected = null, withdrawnOwed = [],
 } = {}) {
   const seen = [];
   return {
     seen,
     async query(text, params) {
       seen.push(text.trim().split("\n")[0].trim());
+      // THE THIRD TERM'S READ (WLD-88): standing marks whose latest mark act is
+      // a withdraw. Matched FIRST, because its text names `m.status =
+      // 'standing'` too and would otherwise be answered as the notary's read.
+      if (/latest_mark_act/.test(text)) return { rows: withdrawnOwed };
       // ── THE CARRY'S TWO READS ────────────────────────────────────────────
       //
       // `standing` is the notary's own `STANDING_SELECT` answer, and it is NULL
@@ -605,4 +609,104 @@ test("NULL HOUSEHOLD · an empty-string household is skipped too, not written as
   });
   assert.equal(out.selection.carried_absent.count, 0);
   assert.deepEqual(out.selection.carried_absent.skipped_no_household, ["nobody/blank-household"]);
+});
+
+// ── THE THIRD TERM: A WITHDRAWAL CANON HAS NOT YET CARRIED (WLD-88) ─────────
+//
+// The instance: Current withdrew the bed (act 18087, S250), the door promised
+// "canon lets it go at the next crossing", and no store crossing could name it.
+// The rows below are the shape `WITHDRAWN_OWED_SELECT` returns; the read itself
+// is proven against a real Postgres in withdrawal-carried.test.mjs.
+
+const BED = "current-the-reader/the-bed-under-the-moons-road";
+const owedRow = (slug, { household = "hh:deva-s-commons", act = 18087, crossing = "250" } = {}) => ({
+  slug, owner: slug.split("/")[0], household, act_id: String(act), crossing,
+});
+
+test("WITHDRAWN · a standing mark whose latest act is a withdraw, and which canon holds, is owed — as a removal, never a mark", async () => {
+  const client = carryClient({
+    marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1,
+    standing: [standingRow("alpha/one", { window: 185 }), standingRow(BED, { window: 184 })],
+    withdrawnOwed: [owedRow(BED)],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one", BED) });
+
+  assert.deepEqual(out.withdrawals, [{ slug: BED, by: "current-the-reader", household: "hh:deva-s-commons" }]);
+  assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one"], "a withdrawal is never written as a mark");
+  assert.deepEqual(out.selection.withdrawn_owed, {
+    checked: true, count: 1, slugs: [BED], acts: [{ slug: BED, act: 18087, crossing: 250 }],
+    deferred_to_docket: [], retire_only: [], skipped_no_household: [], canon_sha: WORLD_SHA,
+  });
+});
+
+test("WITHDRAWN · a withdrawal canon has already carried is not removed again — only its retirement is owed (retire_only)", async () => {
+  const client = carryClient({
+    marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1,
+    standing: [standingRow("alpha/one", { window: 185 })],
+    withdrawnOwed: [owedRow(BED)],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one") });
+  assert.deepEqual(out.withdrawals, []);
+  assert.equal(out.selection.withdrawn_owed.count, 0);
+  assert.deepEqual(out.selection.withdrawn_owed.retire_only, [BED], "the retire step reads this from the fold input");
+});
+
+test("WITHDRAWN · THE CARRY NEVER WRITES IT BACK: standing, canon-absent, latest act a withdraw", async () => {
+  // A refused retire step leaves the row standing after the file left canon,
+  // which is the carry's own set. Without the shared predicate the next
+  // crossing would publish the bed again.
+  const client = carryClient({
+    marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1,
+    standing: [standingRow("alpha/one", { window: 185 }), standingRow(BED, { window: 184 })],
+    absentRows: [markRow(BED, { window: 184 })],
+    withdrawnOwed: [owedRow(BED)],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one") });
+  assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one"]);
+  assert.equal(out.selection.carried_absent.count, 0);
+  assert.deepEqual(out.withdrawals, []);
+  assert.deepEqual(out.selection.withdrawn_owed.retire_only, [BED]);
+});
+
+test("WITHDRAWN · a docket slug canon does not yet hold is deferred, never retired under the docket's write", async () => {
+  const client = carryClient({
+    marks: [markRow(BED, { window: 185 })], docketClaims: 1,
+    standing: [standingRow(BED, { window: 185 })],
+    withdrawnOwed: [owedRow(BED)],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one") });
+  assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, [BED]);
+  assert.deepEqual(out.selection.withdrawn_owed.retire_only, []);
+});
+
+test("WITHDRAWN · the docket wins its own crossing: a docket slug is deferred, not also removed", async () => {
+  const client = carryClient({
+    marks: [markRow(BED, { window: 185 })], docketClaims: 1,
+    standing: [standingRow(BED, { window: 185 })],
+    withdrawnOwed: [owedRow(BED)],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf(BED) });
+  assert.deepEqual(out.marks.map((m) => m.slug), [BED]);
+  assert.deepEqual(out.withdrawals, []);
+  assert.deepEqual(out.selection.withdrawn_owed.deferred_to_docket, [BED]);
+});
+
+test("WITHDRAWN · an owed withdrawal with no household is NAMED AND SKIPPED", async () => {
+  const client = carryClient({
+    marks: [], docketClaims: 0, standing: [],
+    withdrawnOwed: [owedRow(BED, { household: null })],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf(BED) });
+  assert.deepEqual(out.withdrawals, []);
+  assert.deepEqual(out.selection.withdrawn_owed.skipped_no_household, [BED]);
+});
+
+test("WITHDRAWN · no register: the term says it did not check, and asks nothing", async () => {
+  const client = stubClient(CARRY_WINDOWS, {
+    marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1, onUnexpected: escrowStub,
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA });
+  assert.equal(out.selection.withdrawn_owed.checked, false);
+  assert.deepEqual(out.withdrawals, []);
+  assert.ok(!client.seen.some((q) => /latest_mark_act|m\.owner/.test(q)), JSON.stringify(client.seen));
 });

@@ -2,6 +2,7 @@
 // retire-unpublished.mjs — THE RETIRE STEP AT THE SETTLEMENT SEAM.
 //
 //   node world2/tools/retire-unpublished.mjs --sweep <sweep.json> [--window N]
+//                                            [--fold-input <fold-input.json>]
 //                                            [--dry-run] [--json]
 //
 //   env: WORLD2_CLEARING_URL = postgres://clearing_job:…@localhost/world2_dev
@@ -86,10 +87,14 @@ const has = (n) => process.argv.includes(n);
 /**
  * The slugs a sweep report says left canon.
  *
- * ONLY `unpublished`. The sweep has six other outcome channels and none of them
- * is a retirement: `left_drafted` never published, `withdrawn` is the docket's
- * own lane (world2-claims.mjs:228), `quarantined` and `suite_quarantined` are
- * held back rather than let go, `dropped` is the-already-standing (a copy that
+ * ONLY `unpublished`. `withdrawn` is the other door out of canon and has its
+ * own reader below (`withdrawnSlugsFromSweep`, WLD-88), because it retires
+ * under its own cause and never returns to drafts. An earlier version of this
+ * sentence called `withdrawn` "the docket's own lane": that is true of a
+ * withdrawn DRAFT, and false of a published mark, whose withdrawal leaves canon
+ * only by the sweep. None of the other channels is a retirement: `left_drafted`
+ * never published, `quarantined` and `suite_quarantined` are held back rather
+ * than let go, `dropped` is the-already-standing (a copy that
  * was never a conflict — the ORIGINAL still stands and retiring by that id
  * would retire the survivor), and `rebased` is git mechanics. Reading a second
  * channel into this step is how it would start retiring marks the world still
@@ -151,9 +156,55 @@ export function slugsFromSweep(sweep) {
   return rows.map((r) => r?.id).filter((id) => typeof id === "string" && id.length > 0);
 }
 
+/**
+ * The slugs a sweep report says were WITHDRAWN: published marks their authors
+ * let go, which the sweep took out of canon (WLD-88). They retire under their
+ * own cause and are NOT returned to drafts: the author let the mark go, and the
+ * door's answer to a retired mark is "leave it again to bring it back"
+ * (world2-claims.mjs § withdrawRetiredRefusal). Settled on WLD-88, 2026-10-20.
+ *
+ * Without this the store row stays standing after its file leaves canon:
+ * marks-ingest never retires it (a settlement commit is printout-only,
+ * POS-614), and the fold's carry would write it back the next crossing.
+ */
+export const WITHDRAW_CAUSE = "settlement-withdraw";
+export function withdrawnSlugsFromSweep(sweep) {
+  const rows = Array.isArray(sweep?.withdrawn) ? sweep.withdrawn : [];
+  return rows.map((r) => r?.id).filter((id) => typeof id === "string" && id.length > 0);
+}
+
+/**
+ * Both doors out of canon, in the caller's transaction. The unpublished retire
+ * as `settlement-unpublish` and go back to drafts (WLD-51 G1); the withdrawn
+ * retire as `settlement-withdraw` and go nowhere. `count` stays the unpublish
+ * door's, as every receipt before this read it; the withdrawn ride apart.
+ */
+/**
+ * The withdrawn retirements a fold input says are still owed: rows standing in
+ * the store whose file has left canon and whose author's latest act is a
+ * withdraw (fold-delta.mjs § THE THIRD TERM, `retire_only`). A retire step that
+ * refused at crossing N is finished by N+1 this way, not by a hand.
+ */
+export function retireOnlyFromFoldInput(input) {
+  const rows = input?.selection?.withdrawn_owed?.retire_only;
+  return Array.isArray(rows) ? rows.filter((id) => typeof id === "string" && id.length > 0) : [];
+}
+
+export async function retireFromSweep(q, { sweep, windowId, retireOnly = [], returnDrafts = returnToDrafts }) {
+  const report = await retireMarks(q, { slugs: slugsFromSweep(sweep), windowId, cause: "settlement-unpublish" });
+  // WLD-51 G1 (Darko, 2026-10-15 13:00): each mark this crossing took goes
+  // back to its household's drafts, in the same transaction, so a retirement
+  // and its return commit together or not at all. Only the marks retired NOW:
+  // a re-run retires nothing and so returns nothing twice.
+  const drafts = await returnDrafts(q, { slugs: report.retired.map((r) => r.slug), windowId });
+  const withdrawn = await retireMarks(q, { slugs: [...withdrawnSlugsFromSweep(sweep), ...retireOnly], windowId, cause: WITHDRAW_CAUSE });
+  return { ...report, count: report.retired.length, drafts,
+    withdrawn: { ...withdrawn, count: withdrawn.retired.length, retire_only: [...new Set(retireOnly)].sort() } };
+}
+
 async function main() {
   const sweepPath = arg("--sweep");
-  if (!sweepPath) { console.error("usage: retire-unpublished.mjs --sweep <sweep.json> [--window N] [--dry-run] [--json]"); process.exit(2); }
+  if (!sweepPath) { console.error("usage: retire-unpublished.mjs --sweep <sweep.json> [--window N] [--fold-input <fold-input.json>] [--dry-run] [--json]"); process.exit(2); }
 
   let sweep;
   try { sweep = JSON.parse(readFileSync(sweepPath, "utf8")); }
@@ -165,9 +216,18 @@ async function main() {
     process.exit(1);
   }
 
+  // The fold input, when the crossing has one (the store path): an unreadable
+  // one is a refusal, as an unreadable sweep is, never "nothing owed".
+  let retireOnly = [];
+  const foldInputPath = arg("--fold-input");
+  if (foldInputPath) {
+    try { retireOnly = retireOnlyFromFoldInput(JSON.parse(readFileSync(foldInputPath, "utf8"))); }
+    catch (e) { console.error(`cannot read the fold input at ${foldInputPath}: ${e.message}`); process.exit(1); }
+  }
   const slugs = slugsFromSweep(sweep);
+  const withdrawnSlugs = [...new Set([...withdrawnSlugsFromSweep(sweep), ...retireOnly])].sort();
   if (has("--dry-run")) {
-    process.stdout.write(`${JSON.stringify({ dry_run: true, would_retire: slugs }, null, 1)}\n`);
+    process.stdout.write(`${JSON.stringify({ dry_run: true, would_retire: slugs, would_retire_withdrawn: withdrawnSlugs }, null, 1)}\n`);
     process.exit(0);
   }
 
@@ -175,8 +235,9 @@ async function main() {
   // receipt, because "0 retired" is the evidence the step RAN and its absence
   // is indistinguishable from a step nobody called. That distinction is the
   // whole lesson of the drain's three caller-less days.
-  if (!slugs.length) {
-    process.stdout.write(`${JSON.stringify({ ran: true, retired: [], already_retired: [], absent: [], count: 0, drafts: { returned: [], kept: [], unreturned: [] } }, null, 1)}\n`);
+  if (!slugs.length && !withdrawnSlugs.length) {
+    process.stdout.write(`${JSON.stringify({ ran: true, retired: [], already_retired: [], absent: [], count: 0, drafts: { returned: [], kept: [], unreturned: [] },
+      withdrawn: { retired: [], already_retired: [], absent: [], count: 0, cause: WITHDRAW_CAUSE, retire_only: [] } }, null, 1)}\n`);
     process.exit(0);
   }
 
@@ -198,14 +259,9 @@ async function main() {
       if (!rows.length) throw new Error("no open window — the candle is dark; a retirement must be ruled at a window");
       windowId = Number(rows[0].id);
     }
-    const report = await retireMarks(q, { slugs, windowId, cause: "settlement-unpublish" });
-    // WLD-51 G1 (Darko, 2026-10-15 13:00): each mark this crossing took goes
-    // back to its household's drafts, in the same transaction, so a retirement
-    // and its return commit together or not at all. Only the marks retired NOW:
-    // a re-run retires nothing and so returns nothing twice.
-    const drafts = await returnToDrafts(q, { slugs: report.retired.map((r) => r.slug), windowId });
+    const report = await retireFromSweep(q, { sweep, windowId, retireOnly });
     await q("COMMIT");
-    process.stdout.write(`${JSON.stringify({ ran: true, ...report, count: report.retired.length, drafts }, null, 1)}\n`);
+    process.stdout.write(`${JSON.stringify({ ran: true, ...report }, null, 1)}\n`);
     process.exit(0);
   } catch (e) {
     try { await q("ROLLBACK"); } catch { /* the connection is already gone */ }
