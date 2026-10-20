@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isPrincipal } from "./ops.mjs";
+import { pronounsOf } from "./profiles.mjs"; // WLD-83: pronouns, profile first
 import { householdOf, giverLookup } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's own admission grammar — one definition of what a handle is
@@ -275,7 +276,10 @@ export function townSummaryOf(meta, all, residents) {
  * a default: a resident who has said nothing has said nothing.
  */
 export const rollEntry = (handle, d) => {
-  const pronouns = typeof d.address?.data?.pronouns === "string" ? d.address.data.pronouns.trim() : "";
+  // the profile's pronouns first, the ADDRESS line after (WLD-83, 2026-10-20: a
+  // profile field; profiles.mjs § pronounsOf, the one rule), so the roll Ferry's
+  // daily reads says what every close look says
+  const pronouns = pronounsOf(d) ?? "";
   return { handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null,
     ...(pronouns ? { pronouns } : {}) };
 };

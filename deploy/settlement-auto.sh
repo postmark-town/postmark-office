@@ -1093,7 +1093,7 @@ if [ "$SOURCE" = "store" ]; then
     cat "$STORE_JSON" >&2 2>/dev/null || true; cat "$WORK/store.err" >&2
     exit 1
   fi
-  echo "[settlement-auto] store: $(node -e 'const r=require(process.argv[1]);const a=r.as_of||{};const g=r.ingest||{};process.stdout.write(String(r.written||0)+" of "+String(r.marks||0)+" mark(s) written into "+String((r.households||[]).length)+" sketchbook(s) at window "+String(a.window)+" ("+String(r.unchanged_skipped||0)+" unchanged, not re-materialized)"+(function(c){return c&&c.checked?(c.count?"; CARRIED "+c.count+" canon-absent mark(s) from earlier window(s): "+c.slugs.join(", "):((c.skipped_no_household||[]).length?"; carried 0 of "+(c.count+(c.skipped_no_household||[]).length)+" canon-absent mark(s)":"; carried 0, canon complete at "+String(c.canon_sha||"?").slice(0,9)))+((c.skipped_no_household||[]).length?"; SKIPPED "+c.skipped_no_household.length+" canon-absent mark(s) with NO HOUSEHOLD (needs a person, not a crossing): "+c.skipped_no_household.join(", "):""):"; CARRY NOT CHECKED (no --world-repo)";})(((r.selection||{}).carried_absent)||null)+"; escrow ingested at town "+String(g.storeSha||"?").slice(0,9)+" ("+String(g.reason||"?")+(Number.isFinite(g.behind)?", behind "+g.behind:"")+"); cleared "+String((r.sketchbooks_cleared||{}).removed_remote||0)+" origin + "+String((r.sketchbooks_cleared||{}).removed_local||0)+" local git-era draft ref(s)")' "$STORE_JSON")" >&2
+  echo "[settlement-auto] store: $(node -e 'const r=require(process.argv[1]);const a=r.as_of||{};const g=r.ingest||{};process.stdout.write(String(r.written||0)+" of "+String(r.marks||0)+" mark(s) written into "+String((r.households||[]).length)+" sketchbook(s) at window "+String(a.window)+" ("+String(r.unchanged_skipped||0)+" unchanged, not re-materialized)"+(function(c){return c&&c.checked?(c.count?"; CARRIED "+c.count+" canon-absent mark(s) from earlier window(s): "+c.slugs.join(", "):((c.skipped_no_household||[]).length?"; carried 0 of "+(c.count+(c.skipped_no_household||[]).length)+" canon-absent mark(s)":"; carried 0, canon complete at "+String(c.canon_sha||"?").slice(0,9)))+((c.skipped_no_household||[]).length?"; SKIPPED "+c.skipped_no_household.length+" canon-absent mark(s) with NO HOUSEHOLD (needs a person, not a crossing): "+c.skipped_no_household.join(", "):""):"; CARRY NOT CHECKED (no --world-repo)";})(((r.selection||{}).carried_absent)||null)+(function(w){return w&&w.checked?(w.count?"; WITHDRAWN-OWED "+w.count+" published mark(s) their authors let go: "+w.slugs.join(", "):"")+((w.skipped_no_household||[]).length?"; SKIPPED "+w.skipped_no_household.length+" owed withdrawal(s) with NO HOUSEHOLD: "+w.skipped_no_household.join(", "):"")+((w.retire_only||[]).length?"; RETIRE-OWED "+w.retire_only.length+" withdrawn mark(s) out of canon, still standing in the store: "+w.retire_only.join(", "):""):"";})(((r.selection||{}).withdrawn_owed)||null)+"; escrow ingested at town "+String(g.storeSha||"?").slice(0,9)+" ("+String(g.reason||"?")+(Number.isFinite(g.behind)?", behind "+g.behind:"")+"); cleared "+String((r.sketchbooks_cleared||{}).removed_remote||0)+" origin + "+String((r.sketchbooks_cleared||{}).removed_local||0)+" local git-era draft ref(s)")' "$STORE_JSON")" >&2
   # THE FRAMER'S ROWS, SHOUTED. A world-framed record carried into a nested
   # frozen filing is re-expressed in that filing's frame by the drain's one
   # framer (postmark#2865, the third bite, 2026-09-18: without it Berthillon's
@@ -1423,14 +1423,18 @@ done < "$WORK/tips"
 # it lands in the receipt as `ran: false` with its reason, and the keeper reads a
 # crossing whose retirement is owed — but it does not retract a real publication.
 # The step is idempotent, so the next crossing picks up what this one missed.
+# For a WITHDRAWN mark that holds through the fold input (WLD-88): its file
+# has left canon, so the next crossing names it `withdrawn_owed.retire_only`
+# and this step retires it then. (A missed UNPUBLISH retirement has no such
+# carrier yet: this step reads only its own sweep. Named on WLD-88.)
 RETIRE_JSON=""
 if [ "$DRY" = "1" ] && [ "${SETTLEMENT_RETIRE:-1}" = "1" ]; then
   # DRY: the tool's own --dry-run names the marks and exits before it reads
   # WORLD2_CLEARING_URL, so it needs no pen and opens no connection.
   RETIRE_JSON="$WORK/retire.json"
   if (cd "$OFFICE" && node "$OFFICE/world2/tools/retire-unpublished.mjs" \
-        --sweep "$SWEEP_JSON" --dry-run) > "$RETIRE_JSON" 2>"$WORK/retire.err"; then
-    withheld "the store's retirement: $(node -e 'const r=require(process.argv[1]);const w=r.would_retire||[];process.stdout.write(w.length+" mark(s)"+(w.length?" ("+w.join(", ")+")":""))' "$RETIRE_JSON" 2>/dev/null || echo "?")"
+        --sweep "$SWEEP_JSON" ${FOLD_INPUT:+--fold-input "$FOLD_INPUT"} --dry-run) > "$RETIRE_JSON" 2>"$WORK/retire.err"; then
+    withheld "the store's retirement: $(node -e 'const r=require(process.argv[1]);const w=r.would_retire||[];const x=r.would_retire_withdrawn||[];process.stdout.write(w.length+" mark(s)"+(w.length?" ("+w.join(", ")+")":"")+(x.length?", "+x.length+" withdrawn ("+x.join(", ")+")":""))' "$RETIRE_JSON" 2>/dev/null || echo "?")"
   else
     node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({ran:false,reason:process.argv[2]},null,1)+"\n")' \
       "$RETIRE_JSON" "the retire step's dry run refused: $(head -c 200 "$WORK/retire.err" | tr '\n"' ' .')" 2>/dev/null || RETIRE_JSON=""
@@ -1438,8 +1442,8 @@ if [ "$DRY" = "1" ] && [ "${SETTLEMENT_RETIRE:-1}" = "1" ]; then
 elif [ "${SETTLEMENT_RETIRE:-1}" = "1" ] && [ -n "${WORLD2_CLEARING_URL:-}" ]; then
   RETIRE_JSON="$WORK/retire.json"
   if (cd "$OFFICE" && node "$OFFICE/world2/tools/retire-unpublished.mjs" \
-        --sweep "$SWEEP_JSON") > "$RETIRE_JSON" 2>"$WORK/retire.err"; then
-    echo "[settlement-auto] retired: $(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.count||0)+" mark(s) in the store"+((r.absent||[]).length?" ("+r.absent.length+" absent — the store never held them)":""))' "$RETIRE_JSON" 2>/dev/null || echo "?")" >&2
+        --sweep "$SWEEP_JSON" ${FOLD_INPUT:+--fold-input "$FOLD_INPUT"}) > "$RETIRE_JSON" 2>"$WORK/retire.err"; then
+    echo "[settlement-auto] retired: $(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.count||0)+" mark(s) in the store"+((r.absent||[]).length?" ("+r.absent.length+" absent — the store never held them)":"")+(r.withdrawn&&r.withdrawn.count?", "+r.withdrawn.count+" withdrawn ("+r.withdrawn.retired.map((x)=>x.slug).join(", ")+")":""))' "$RETIRE_JSON" 2>/dev/null || echo "?")" >&2
   else
     echo "[settlement-auto] RETIRE REFUSED — the world published but the store was not told; the next crossing retries" >&2
     cat "$WORK/retire.err" >&2

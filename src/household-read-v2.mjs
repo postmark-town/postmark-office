@@ -25,6 +25,7 @@ import { memberRow } from "./house-bundle.mjs";
 import { HOUSEHOLD_LINES, usableActs } from "./door-read-shape.mjs";
 import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
 
 /** How many of what waits the glance shows whole: the oldest first (they have waited longest). */
 export const NEEDS_FIRST = 3;
@@ -49,10 +50,19 @@ export const CAN_GROUPS = Object.freeze({
   house: ["add-resident", "declare", "begin"],
 });
 
+/**
+ * The acts whose fields have one owner elsewhere, read from it rather than
+ * hand-listed: profile's are edit.mjs § PROFILE_FIELD_DOC, the table the verb
+ * whitelists and update_profile's schema is built from (every one optional).
+ */
+const FIELDS_FROM_OWNER = Object.freeze({
+  profile: () => Object.keys(PROFILE_FIELD_DOC).map((f) => `${f}?`),
+});
+
 /** One act as D1 says it: its name and every field it takes (a ? marks an optional one). */
 export const actFields = (act) => {
-  const l = HOUSEHOLD_LINES[act];
-  return l?.fields?.length ? `${act} { ${l.fields.join(", ")} }` : act;
+  const fields = FIELDS_FROM_OWNER[act]?.() ?? HOUSEHOLD_LINES[act]?.fields ?? [];
+  return fields.length ? `${act} { ${fields.join(", ")} }` : act;
 };
 
 /** The groups, each one line of `act { fields }`, for the acts this caller can use. */
@@ -157,7 +167,8 @@ export function stampsBlock(details = [], { quests = [], went = null } = {}) {
   const named = earned.slice(0, EARNED_NAMED).map((d) => `${d.handle} ${d.tenses.minted ?? 0}`);
   const more = earned.length - named.length;
   return {
-    pool: { sum: sum("liquid"), pending: "POS-326" },
+    // the residents' stamps added up; a house pool of its own is not ruled yet, which explain: "stamps.pool" says
+    pool: sum("liquid"),
     staked: sum("staked"),
     earned: named.join(" · ") + (more > 0 ? ` · ${more} more` : ""),
     ...(went != null ? { went } : {}),

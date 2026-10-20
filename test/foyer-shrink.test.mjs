@@ -466,6 +466,21 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   // the live door.
   assert.equal(heardShapes[0].fields.from_town?.type, "string", "the frozen arrival shape carries from_town");
   assert.equal(beginLive.fields.from_town?.type, "string", "and the live begin card takes it");
+
+  // ⚑ REGENERATED 2026-10-20 FOR WLD-83 (Darko 09:55: pronouns are a profile
+  // field, beside the name). What grew: the profile act's fields gained one
+  // optional field, `pronouns`. ADDITIVE and proven so: the capture diff added
+  // exactly `/acts/4/fields/pronouns/{type,description}` and removed or retyped
+  // none. It stays off the abridged index (household-apex.mjs § OFF_INDEX, F5d's
+  // rule), which kept the connector's bare answer at its 8,192 B bound (it read
+  // 8,194 B with it on). PSA for the release notes: "update_profile takes
+  // pronouns: your own words (she/her, they/them, …), shown beside your name on
+  // every close look; nothing guesses them."
+  //
+  // The witness: the frozen profile card carries pronouns, and so does the live one.
+  const profileFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
+  assert.equal(profileFrozen?.fields.pronouns?.type, "string", "the frozen profile card carries pronouns");
+  assert.equal(full.acts.find((a) => a.act === "profile")?.fields.pronouns?.type, "string", "and the live profile card takes it");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {

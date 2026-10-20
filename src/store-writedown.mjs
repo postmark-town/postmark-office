@@ -260,6 +260,23 @@ export function normalizeMark(m) {
  * lawful answer here and is refused one level up by the sweep's own loud-empty
  * guard, where that judgment belongs.
  */
+/**
+ * ONE OWED WITHDRAWAL, as the write-down removes it: `{ id, by, slug, household }`.
+ * `writeDownHousehold` finds the file by `slug` and `by` (world-drain.mjs §
+ * findMarkPath), so a row missing either is refused rather than removing nothing.
+ */
+export function normalizeWithdrawal(w) {
+  const id = String(w?.slug ?? "");
+  const cut = id.indexOf("/");
+  if (cut <= 0 || cut === id.length - 1) {
+    throw new FoldInputRefusal("withdrawal-without-slug", `an owed withdrawal carries no <by>/<name> slug: ${JSON.stringify(w)}`);
+  }
+  if (!w.household) {
+    throw new FoldInputRefusal("withdrawal-without-household", `${id}: an owed withdrawal names no household, so no sketchbook can carry it`);
+  }
+  return { id, by: w.by ?? id.slice(0, cut), slug: id.slice(cut + 1), household: w.household };
+}
+
 export function normalizeFoldInput(input) {
   if (!input || typeof input !== "object") {
     throw new FoldInputRefusal("no-fold-input", "the store side returned nothing this crossing could read");
@@ -283,8 +300,14 @@ export function normalizeFoldInput(input) {
       );
     }
   }
+  if (input.withdrawals !== undefined && !Array.isArray(input.withdrawals)) {
+    throw new FoldInputRefusal("fold-input-shape", "`withdrawals` is not an array");
+  }
   return {
     marks: input.marks.map(normalizeMark),
+    // THE WITHDRAWALS CANON OWES (fold-delta.mjs § THE THIRD TERM, WLD-88).
+    // Absent from a supplier written before the term existed, which owed none.
+    withdrawals: (input.withdrawals ?? []).map(normalizeWithdrawal),
     stakes: input.stakes,
     // WHICH MODULE ANSWERED. Carried through to the receipt because `source:
     // store` alone does not say WHOSE store read it was: a rehearsal instrument
@@ -341,7 +364,7 @@ export function normalizeFoldInput(input) {
  * rather than read, so the pure half stays pure. GATE A before GATE B, exactly
  * as `planDrain` does it.
  */
-export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt = null, toFileFrame = null } = {}) {
+export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt = null, toFileFrame = null, withdrawals = [] } = {}) {
   const byHousehold = new Map();
   const bucket = (h) => {
     if (!byHousehold.has(h)) byHousehold.set(h, { household: h, upserts: [], removals: [] });
@@ -599,7 +622,27 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
     });
   }
 
-  for (const b of byHousehold.values()) b.upserts.sort((a, c) => a.path.localeCompare(c.path));
+  // ── A WITHDRAWAL IS A REMOVAL ON ITS HOUSEHOLD'S SKETCHBOOK (WLD-88) ───────
+  //
+  // The git era's drain wrote it so, and the sweep's withdrawal law reads
+  // nothing else. The selector never hands one mark to both lists (the docket
+  // wins its own crossing: fold-delta.mjs § THE THIRD TERM), so a mark in both
+  // is a selector that has changed, and it refuses rather than writing a file
+  // and removing it in one commit.
+  const writing = new Set(marks.map((m) => m.id));
+  for (const w of withdrawals) {
+    if (writing.has(w.id)) {
+      throw new FoldInputRefusal("withdrawal-and-write",
+        `${w.id} is both written and withdrawn by this crossing. The docket wins its own crossing and the withdrawal `
+        + "is carried at the next, so a fold input holding both came from a selector that no longer keeps them apart.");
+    }
+    bucket(w.household).removals.push({ id: w.id, by: w.by, slug: w.slug });
+  }
+
+  for (const b of byHousehold.values()) {
+    b.upserts.sort((a, c) => a.path.localeCompare(c.path));
+    b.removals.sort((a, c) => a.id.localeCompare(c.id));
+  }
 
   const written = marks.filter((m) => !unchanged.some((u) => u.id === m.id));
   const byWindow = {};
@@ -622,6 +665,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
       unchanged: unchanged.length,
       framed: framed.length,
       households: byHousehold.size,
+      removed: withdrawals.length,
       // WHICH WINDOWS THE WRITTEN MARKS WERE LOCKED AT. The delta contract says a
       // crossing's fold should carry the window's own locked marks; this is the
       // measurement that says whether it does. A crossing writing marks locked at
@@ -1170,8 +1214,19 @@ export function storeWriteDown({
     }
     carried.push(m);
   }
+  // A withdrawal is held out by the same test: the town opens no sketchbook,
+  // and its records never withdraw from one (the sweep's town wall).
+  const withdrawals = [];
+  for (const w of normalized.withdrawals) {
+    if (isTheTown(w.household) || w.by === TOWN) {
+      held.push({ id: w.id, household_key: w.household, sketchbook: sketchbookNameFor(w.household, registry),
+        crossing_output: "unbound-household", withdrawal: true });
+      continue;
+    }
+    withdrawals.push(w);
+  }
 
-  const plan = planStoreWriteDown(carried, { publishedPathOf, canonBytesAt, toFileFrame });
+  const plan = planStoreWriteDown(carried, { publishedPathOf, canonBytesAt, toFileFrame, withdrawals });
 
   const naming = plan.households.map((h) => ({
     household: h.household,
@@ -1193,7 +1248,7 @@ export function storeWriteDown({
     households.push({
       ...writeDownHousehold(world, { ...h, household: name }, {
         whenIso,
-        message: `store write-down: ${h.upserts.length} mark(s) — ${h.household} (window ${normalized.as_of.window})`,
+        message: `store write-down: ${h.upserts.length} mark(s)${h.removals.length ? `, ${h.removals.length} withdrawal(s)` : ""} — ${h.household} (window ${normalized.as_of.window})`,
       }),
       // BOTH NAMES, always. The store speaks household KEYS and the world repo
       // speaks sketchbook names, and a receipt carrying only one of them cannot
@@ -1218,6 +1273,9 @@ export function storeWriteDown({
     // rewriting the town: `written` close to `marks` on a quiet crossing means
     // the fold is re-rendering standing state.
     written: plan.counts.written,
+    // THE WITHDRAWALS THIS CROSSING HANDED THE SWEEP (WLD-88), by name: each is
+    // a removal on its household's sketchbook, judged by the sweep's own law.
+    withdrawals: withdrawals.map((w) => ({ id: w.id, household_key: w.household })),
     unchanged_skipped: plan.counts.unchanged,
     // The guard's own answer, on every crossing including the ones it passed.
     // "It did not fire" and "nobody asked" are different states, and only one of
