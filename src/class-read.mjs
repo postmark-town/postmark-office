@@ -280,10 +280,51 @@ export function nearestClasses(db, name, n = 5) {
     .slice(0, n).map((x) => x.c);
 }
 
+// ── THE OPEN SLOTS: everything left to the maker (Darko, 2026-10-20 11:22, WLD-83) ──
+//
+// `properties` are what a class ADDS: its own rows, as they always were. `open`
+// is everything an instance's maker fills, which is every SOVEREIGN property the
+// class has, its own and every one it inherits up `extends`. Until 10-20 open
+// was the own sovereign names only, so `explain: "resident"` never said that an
+// entity's appearance slots were there to fill; now it does, and `thing` lists
+// mark's body, sited's at and extent beside its own portable (intended).
+//
+// A NESTED property is named by its PATH, dotted from the class: `appearance`,
+// `appearance.form`. The path rule is the one the world's propertyAt keeps (the
+// nearest class in the chain that declares the whole path answers), so an own
+// path shadows an inherited one of the same path and is listed once, as own.
+// `open_from` maps each INHERITED path to the class that declares it; an own
+// path is absent from it. Descent stops where `properties` stops (MAX_DEPTH).
+function sovereignPaths(rows, prefix = "", out = []) {
+  for (const p of rows) {
+    const path = prefix ? `${prefix}.${p.name}` : String(p.name);
+    if (p.tier === "sovereign") out.push(path);
+    if (p.children?.length) sovereignPaths(p.children, path, out);
+  }
+  return out;
+}
+
+/** The open slots and where each inherited one comes from: `{ open: [path], open_from: { path: class } }`. */
+export function openSlotsOf(db, properties, chain) {
+  const open = sovereignPaths(properties);
+  const seen = new Set(open);
+  const from = {};
+  for (const c of chain) {   // nearest class first: the nearest declaration of a path answers
+    for (const path of sovereignPaths(childProperties(db, c.id))) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      open.push(path);
+      from[path] = c.class;
+    }
+  }
+  return { open, open_from: from };
+}
+
 /**
  * The answer to `explain: "<class>"`, or null when `name` declares no class
  * (the caller then answers its own bounce). One shape at every rung, so each
- * step up the chain is the same move.
+ * step up the chain is the same move: `properties` are what the class adds,
+ * and `open` is everything left to the maker, inherited slots included.
  */
 export function explainClass(db, name) {
   const id = classIdOf(db, name);
@@ -302,13 +343,14 @@ export function explainClass(db, name) {
     what: own?.text ?? "",
     extends: chain.map((c) => ({ class: c.class, explain: `explain: "${c.class}"` })),
     properties,
-    // The slots left to the maker: the sovereign properties, which an instance fills.
-    open: properties.filter((p) => p.tier === "sovereign").map((p) => p.name),
+    // Everything left to the maker: every sovereign property, own and inherited, by
+    // path; open_from names the class each inherited one comes from (§ THE OPEN SLOTS).
+    ...openSlotsOf(db, properties, chain),
     actions: actionsOf(db, shape),
     makers: makers.value === null
       ? { value: null, from: null, note: "not declared on this chain yet (WLD-73 part 2 writes it)" }
       : { value: makers.value, from: makers.from, ...(makers.from !== id ? { inherited: true } : {}) },
-    deeper: up ? `explain: "${up}" — the class above, read the same way; each class answers only what it adds` : "this is the root: every class climbs to it",
+    deeper: up ? `explain: "${up}" — the class above, read the same way; its properties are what it adds, and open is everything left to the maker` : "this is the root: every class climbs to it",
     // the classes under this one, by name (explain: "<kind>" reads one); every class answers the key, so the climb keeps one shape
     kinds,
     changes: "at a settlement that changes the class layer",

@@ -317,3 +317,53 @@ test("C7: every statement class-read registers is its SQL, row for row, over eac
     } finally { sqlite.close(); }
   }
 });
+
+// ── C8 · THE OPEN SLOTS: everything left to the maker (Darko 2026-10-20 11:22, WLD-83) ──
+// `properties` are what a class adds; `open` is every sovereign property it has,
+// its own and every one it inherits, by path; `open_from` names the class each
+// inherited one comes from. Until 10-20 open was the own sovereign names only.
+function openLayer() {
+  const t = layer("property");
+  const child = (cls, n) => { t.nodes.push(n); t.edges.push(describes(cls, n.id)); };
+  // mark's body and sited's at and extent are the maker's, as in the law
+  t.nodes.push(klass("sited", { extends: "mark", body: "A sited mark stands somewhere." }), klass("lamp", { extends: "sited", body: "A lamp is a sited thing." }));
+  child("the-town/mark", property("the-town/mark-body", "body", null, "A mark's one claim.", "sovereign"));
+  child("the-town/sited", property("the-town/sited-at", "at", null, "Where it stands.", "sovereign"));
+  child("the-town/sited", property("the-town/sited-extent", "extent", null, "How big it is.", "sovereign"));
+  child("the-town/lamp", property("the-town/lamp-portable", "portable", false, "Whether it can be carried.", "sovereign"));
+  // entity's default predicate slots: appearance, and the five under it
+  child("the-town/entity", property("the-town/entity-appearance", "appearance", null, "The glance.", "sovereign"));
+  for (const n of ["form", "wears", "sign", "voice", "manner"])
+    child("the-town/entity-appearance", property(`the-town/entity-appearance-${n}`, n, null, `the ${n}`, "sovereign"));
+  // candy says its own capacity, shadowing thing's by the same path
+  child("the-town/candy", property("the-town/candy-capacity", "capacity", 50, "A candy dish holds fifty.", "sovereign"));
+  return graphDb(t);
+}
+const FIVE = ["appearance.form", "appearance.wears", "appearance.sign", "appearance.voice", "appearance.manner"];
+
+test("C8a: explain resident lists appearance and its five as open, each from entity; its properties stay its own", () => {
+  const r = cr.explainClass(openLayer(), "resident");
+  assert.deepEqual(r.open, ["appearance", ...FIVE]);
+  for (const p of r.open) assert.equal(r.open_from[p], "entity", `${p} comes from entity`);
+  assert.equal(r.properties.some((p) => p.name === "appearance"), false, "properties are what resident adds");
+});
+
+test("C8b: explain entity lists them as its own: open, with no open_from for any", () => {
+  const e = cr.explainClass(openLayer(), "entity");
+  assert.deepEqual(e.open, ["appearance", ...FIVE]);
+  assert.deepEqual(e.open_from, {});
+  assert.match(e.deeper, /its properties are what it adds, and open is everything left to the maker/);
+});
+
+test("C8c: a sited class gains body from mark and at and extent from sited, beside its own portable", () => {
+  const l = cr.explainClass(openLayer(), "lamp");
+  assert.deepEqual(l.open, ["portable", "at", "extent", "body"]);
+  assert.deepEqual(l.open_from, { at: "sited", extent: "sited", body: "mark" });
+});
+
+test("C8d: an own property that shadows an inherited one by the same path shows once, as own", () => {
+  const c = cr.explainClass(openLayer(), "candy");
+  assert.equal(c.open.filter((p) => p === "capacity").length, 1);
+  assert.equal("capacity" in c.open_from, false, "candy's own capacity answers, not thing's");
+  assert.equal(c.open_from.body, "mark");
+});
