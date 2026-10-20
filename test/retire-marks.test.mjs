@@ -48,7 +48,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { retireMarks } from "../world2/tools/materialize.mjs";
-import { slugsFromSweep } from "../world2/tools/retire-unpublished.mjs";
+import { WITHDRAW_CAUSE, retireFromSweep, slugsFromSweep, withdrawnSlugsFromSweep } from "../world2/tools/retire-unpublished.mjs";
 
 /**
  * A register, as a fake `q`. It answers exactly the two statements
@@ -199,4 +199,44 @@ test("the receipt names every slug and the door it left by", async () => {
     assert.equal(row.cause, "settlement-unpublish");
     assert.equal(row.window, 174);
   }
+});
+
+// ── 9 · THE WITHDRAWN CHANNEL IS THE OTHER DOOR OUT OF CANON (WLD-88) ────────
+//
+// A published mark its author withdrew leaves canon by the sweep's `withdrawn`
+// channel. Its store row must retire too, or it keeps holding ground and the
+// fold's carry writes it back the next crossing. It retires under its own
+// cause and is returned to no one's drafts: the author let it go (settled on
+// WLD-88, 2026-10-20).
+test("only the withdrawn channel becomes a withdrawal's retirement", () => {
+  const sweep = {
+    published: [{ id: "a/one" }], unpublished: [{ id: "b/two" }], left_drafted: [{ id: "d/four" }],
+    withdrawn: [{ id: "e/five" }], quarantined: [{ id: "f/six" }], dropped: [{ id: "h/eight" }],
+  };
+  assert.deepEqual(withdrawnSlugsFromSweep(sweep), ["e/five"]);
+  assert.deepEqual(slugsFromSweep(sweep), ["b/two"], "and the unpublish reader still reads its own channel only");
+  assert.deepEqual(withdrawnSlugsFromSweep({}), []);
+  assert.deepEqual(withdrawnSlugsFromSweep(null), []);
+});
+
+test("retireFromSweep retires the withdrawn under their own cause and returns none of them to drafts", async () => {
+  const { q, marks } = register([standing("b/two"), standing("current/the-bed")]);
+  const causes = [];
+  const wrapped = async (text, args) => {
+    if (/^UPDATE marks SET status = 'retired'/.test(text.trim())) causes.push([args[0], args[2]]);
+    return q(text, args);
+  };
+  const asked = [];
+  const returnDrafts = async (_q, { slugs }) => { asked.push(slugs); return { returned: [], kept: [], unreturned: [] }; };
+  const r = await retireFromSweep(wrapped, {
+    sweep: { unpublished: [{ id: "b/two" }], withdrawn: [{ id: "current/the-bed" }] }, windowId: 251, returnDrafts,
+  });
+
+  assert.deepEqual(causes, [["b/two", "settlement-unpublish"], ["current/the-bed", WITHDRAW_CAUSE]]);
+  assert.equal(WITHDRAW_CAUSE, "settlement-withdraw");
+  assert.deepEqual(asked, [["b/two"]], "only the taken go back to drafts");
+  assert.equal(r.count, 1, "`count` stays the unpublish door's, as every earlier receipt read it");
+  assert.equal(r.withdrawn.count, 1);
+  assert.deepEqual(r.withdrawn.retired.map((x) => [x.slug, x.window, x.cause]), [["current/the-bed", 251, WITHDRAW_CAUSE]]);
+  assert.equal(marks.get("current/the-bed").status, "retired");
 });

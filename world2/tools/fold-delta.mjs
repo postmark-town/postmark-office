@@ -129,9 +129,58 @@
 // `canonRegisterAt` reads a git checkout and this function has never touched a
 // filesystem — which is what keeps every rule below provable on hand-built rows
 // with no Postgres and no clone.
+
 import { renderedMark, MARK_COLUMNS } from "./mark-render.mjs";
 import { stakesFromStore } from "./fold-input.mjs";
 import { STANDING_SELECT, canonLockFindings } from "./canon-locks.mjs";
+
+// ── THE THIRD TERM: A WITHDRAWAL CANON HAS NOT YET CARRIED (WLD-88) ─────────
+//
+// THE DEFECT. The withdraw door answers "canon lets it go at the next crossing
+// — the settlement unpublishes it" (src/world.mjs § journalWithdraw). In the
+// git era the drain wrote that as a deletion on the household's sketchbook, and
+// the sweep's withdrawal branch (settlement-sweep.mjs, "WITHDRAWAL") executed
+// it. The store crossing (G1, 2026-09-08) dropped the drain and never wrote a
+// removal: a withdraw of a published mark files no claim, so neither the docket
+// nor the carry above could name it. The `withdrawn` channel read 0 on every
+// crossing from 09-08, and a withdrawn ✦0 commons mark only ever left by the
+// escrow unpublish, by accident. A home mark had no way out: Current's bed
+// (`current-the-reader/the-bed-under-the-moons-road`, act 18087, S250) stood
+// in canon ten settlements after its author let it go.
+//
+// THE TERM. Every STANDING mark whose latest mark act (leave-mark, amend,
+// withdraw) is a withdraw, and which canon still holds. It is STATE, not a
+// window: a withdrawal owed since S250 is carried by the first crossing that
+// looks, with no act from its author. It is bounded by what it repairs — a
+// mark leaves the set when its file leaves canon, and the retire step
+// (retire-unpublished.mjs) retires its row in the same crossing — so on an
+// ordinary crossing it is empty.
+//
+// THE CARRY ABOVE MUST NOT UNDO IT. A withdrawn mark whose file has left canon
+// and whose row did not retire (a refused retire step) is "standing, canon
+// absent" — exactly the carry's set — and the carry would write it back. So
+// the carry skips every slug this term's predicate names, whether canon holds
+// it or not: one read, two readers.
+//
+// THE DOCKET WINS ITS OWN CROSSING. A slug in this window's docket is written
+// by the docket and is not also removed; its withdrawal is owed, and carried,
+// at the next crossing. One sketchbook never writes and removes one mark.
+//
+// The rows go to the write-down as `withdrawals`, beside `marks`, and become
+// removals on the household's sketchbook. The sweep's withdrawal law judges
+// them exactly as it judged a drained deletion: the town wall, authorship,
+// escrow, stranded children and the gate.
+export const WITHDRAWN_OWED_SELECT = `
+  SELECT m.slug, m.owner, m.household, latest_mark_act.id AS act_id, latest_mark_act.crossing
+    FROM marks m
+    JOIN LATERAL (
+      SELECT a.id, a.action, a.crossing FROM acts a
+       WHERE a.object = m.slug AND a.class = 'mark' AND a.action IN ('leave-mark', 'amend', 'withdraw')
+       ORDER BY a.id DESC LIMIT 1
+    ) latest_mark_act ON true
+   WHERE m.status = 'standing' AND latest_mark_act.action = 'withdraw'
+   ORDER BY m.slug`;
+
 
 /**
  * WHAT COUNTS AS A DOCKET COUNT — one rule, one home, two readers.
@@ -345,11 +394,29 @@ export async function foldDelta(
   let carriedSlugs = [];
   let carriedRows = [];
   let skippedNoHousehold = [];
+  // § THE THIRD TERM (WLD-88): the withdrawals canon still owes, and the
+  // predicate's whole answer, which the carry below must not write back.
+  const withdrawals = [];
+  const withdrawnSkippedNoHousehold = [];
+  const withdrawnDeferred = [];
   if (canonRegister) {
+    const docketSlugs = new Set(rows.map((r) => r.slug));
+    const owed = await client.query(WITHDRAWN_OWED_SELECT);
+    const withdrawnLatest = new Set(owed.rows.map((r) => r.slug));
+    for (const r of owed.rows) {
+      if (!canonRegister.slugs.has(r.slug)) continue;            // carried already: the file has left canon
+      if (docketSlugs.has(r.slug)) { withdrawnDeferred.push(r.slug); continue; }
+      if (!r.household) { withdrawnSkippedNoHousehold.push(r.slug); continue; }
+      withdrawals.push({
+        slug: r.slug, by: r.owner, household: r.household,
+        act: Number(r.act_id), crossing: r.crossing === null || r.crossing === undefined ? null : Number(r.crossing),
+      });
+    }
+
     const standing = await client.query(STANDING_SELECT);
     const { absent } = canonLockFindings(standing.rows, canonRegister);
-    const docketSlugs = new Set(rows.map((r) => r.slug));
-    const candidates = absent.map((r) => r.slug).filter((s) => !docketSlugs.has(s)).sort();
+    const candidates = absent.map((r) => r.slug)
+      .filter((s) => !docketSlugs.has(s) && !withdrawnLatest.has(s)).sort();
     if (candidates.length) {
       const carried = await client.query(
         `SELECT ${MARK_COLUMNS} FROM marks WHERE slug = ANY($1::text[]) ORDER BY slug`, [candidates]);
@@ -451,6 +518,17 @@ export async function foldDelta(
         skipped_no_household: skippedNoHousehold,
         canon_sha: canonRegister ? canonRegister.sha : null,
       },
+      // THE THIRD TERM (WLD-88). `checked: false` with no register, as the
+      // carry says it, because "owed nothing" and "never looked" differ.
+      withdrawn_owed: {
+        checked: Boolean(canonRegister),
+        count: withdrawals.length,
+        slugs: withdrawals.map((w) => w.slug),
+        acts: withdrawals.map((w) => ({ slug: w.slug, act: w.act, crossing: w.crossing })),
+        deferred_to_docket: withdrawnDeferred,
+        skipped_no_household: withdrawnSkippedNoHousehold,
+        canon_sha: canonRegister ? canonRegister.sha : null,
+      },
       // `note: null` is not decoration. There is one selector now and no
       // fallback, so nothing ever fills this — and that is exactly when a field
       // goes missing and its absence starts meaning "fine". An empty channel is
@@ -478,6 +556,8 @@ export async function foldDelta(
       // record landing at a nested frozen path; bytes alone cannot be framed.
       ...renderedMark(r),
     })),
+    // THE WITHDRAWALS CANON OWES (§ THE THIRD TERM): removals, never marks.
+    withdrawals: withdrawals.map(({ slug, by, household }) => ({ slug, by, household })),
     stakes,
     as_of: { window: w, town_sha: sha, world_sha: worldSha },
   };
