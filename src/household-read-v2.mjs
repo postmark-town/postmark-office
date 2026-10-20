@@ -260,8 +260,8 @@ export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · ac
 /** The marks block's key: what each count is, and the reads behind it. */
 export const MARKS_KEY = 'pending: on the docket · standing: published · read "stakes", "outcomes" · one: world { investigate: "<id>" }';
 /** How long a refusal's cause runs in the glance; the outcomes read has it whole. */
-export const CAUSE_CHARS = 60;
-const clip = (t, n) => { const x = String(t ?? "").replace(/\s+/g, " ").trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
+export const CAUSE_CHARS = 40;
+const clip = (t, n) => { const x = String(t ?? "").replace(/\s+/g, " ").trim(); return x.length > n ? `${x.slice(0, n - 1).trimEnd()}…` : x; };
 
 /**
  * The house's own building. `counts` is marksCountsFor's three tenses summed
@@ -276,11 +276,11 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
   const last = decided.reduce((c, e) => Math.max(c, Number(e.crossing) || 0), 0);
   const at = decided.filter((e) => Number(e.crossing) === last);
   const refused = at.filter((e) => e.kind === "claim-refused");
-  const lastCrossing = at.length ? {
-    crossing: last,
-    ...(n(at.length - refused.length) ? { published: at.length - refused.length } : {}),
-    ...(refused.length ? { refused: refused.length, first_refusal: `${refused[0].mark}: ${clip(refused[0].cause ?? "no cause recorded", CAUSE_CHARS)}` } : {}),
-  } : null;
+  // one line each, the brief's 300-350 characters (round 4): "crossing 259: 2 published · 1 refused (<first>: <cause>)"
+  const landed = at.length - refused.length;
+  const lastCrossing = at.length
+    ? `crossing ${last}: ${[landed ? `${landed} published` : null, refused.length ? `${refused.length} refused (${refused[0].mark}: ${clip(refused[0].cause ?? "no cause recorded", CAUSE_CHARS)})` : null].filter(Boolean).join(" · ")}`
+    : null;
   const risky = (atRisk ?? []).map((r) => r.mark ?? r.id).filter(Boolean);
   const newest = [...published].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || String(a.id).localeCompare(String(b.id)))
     .slice(0, 2).map((m) => m.id);
@@ -289,7 +289,7 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
     ...(n(counts.pending) ? { pending: counts.pending } : {}),
     ...(n(counts.standing) ? { standing: counts.standing } : {}),
     ...(lastCrossing ? { last_crossing: lastCrossing } : {}),
-    ...(risky.length ? { at_risk: { count: risky.length, ids: risky.slice(0, 2) } } : {}),
+    ...(risky.length ? { at_risk: `${risky.length}: ${risky.slice(0, 2).join(", ")}${risky.length > 2 ? ", …" : ""}` } : {}),
     ...(newest.length ? { newest } : {}),
   };
   // a tense nobody could read is said, never shown as none (the-town/the-disclosure)
