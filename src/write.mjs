@@ -9,7 +9,7 @@
 // Env: TOWN_CLONE (path), TOWN_PUSH=1 to push, BOT_NAME / BOT_EMAIL.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, writeFileSync, mkdirSync, rmSync, readdirSync, rmdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, rmdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, isAbsolute, resolve } from "node:path";
 
 import { nextCrossingAt, nextCrossingForReceipt } from "./crossings.mjs";
@@ -180,6 +180,9 @@ const relTo = (clone, p) => {
  * answer returned unchanged. Dirt present before `fn` ran is left alone.
  */
 export function penTransaction(clone, fn) {
+  // Inside the drain's batch the act's undo is the batch's (§ THE PEN BATCH):
+  // the same promise, kept from snapshots instead of a status per act.
+  if (inPenBatch(clone)) return batchTransaction(activeBatch, fn);
   // No clone, or no git in it, is nothing a restore could protect: the write
   // either bounces before the clone is touched (a door's own checks) or fails
   // at the pen the way it always did. Run it as it is.
@@ -230,6 +233,7 @@ export function penTransaction(clone, fn) {
 // unmade, the clone is brought up to the remote's tip (`restore`), and
 // `lostRaceError` (`pen: LOST_RACE`) tells the caller to decide again from it.
 export function penCommit(clone, addPaths, message, { rebase = true } = {}) {
+  if (inPenBatch(clone)) return batchRecord(activeBatch, clone, addPaths, message);
   const base = git(clone, "rev-parse", "HEAD");
   try { return commitAndLand(clone, addPaths, message, { rebase }); }
   catch (e) { restore(clone, base, addPaths.map((p) => relTo(clone, p))); throw e; }
@@ -251,6 +255,13 @@ function commitAndLand(clone, addPaths, message, { rebase = true } = {}) {
   if (!git(clone, "status", "--porcelain", "--", ...addPaths)) return null;
   git(clone, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
       "commit", "-q", "-m", message, "--author", `${name} <${email}>`);
+  return landCommit(clone, { rebase });
+}
+
+// The landing half of the ceremony, shared with the batch (§ THE PEN BATCH):
+// HEAD is the commit just made; it returns that commit's sha once origin/main
+// holds it, or throws as the comments below say.
+function landCommit(clone, { rebase = true } = {}) {
   let commit = git(clone, "rev-parse", "HEAD");
   if (process.env.TOWN_PUSH === "1") {
     // THE PUSH IS NOT THE RECEIPT — THE REMOTE TIP IS. On 2026-08-26 a fund
@@ -275,6 +286,149 @@ function commitAndLand(clone, addPaths, message, { rebase = true } = {}) {
     }
   }
   return commit;
+}
+
+// ── THE PEN BATCH (POS-723, Darko 2026-10-20 08:58) ──────────────────────────
+//
+// "The suggestion that you had to batch into a commit is a no-brainer. We
+// should 100% do that rather than have individual commits for every piece of
+// mail." The ferry's town drain replayed every letter and paper act through
+// its door, and every door paid the whole ceremony: a pull, a commit, a push
+// and a fetch, about 2 s an act on the box, so 186 acts held town.lock for
+// 380 s on 2026-10-20 00:00Z (POS-714 is the save that gave up behind it).
+//
+// While a batch is open on a clone, the doors still write every byte (the
+// drain writes nothing of its own), but the ceremony waits:
+//   · `penCommit` records the act's paths and its own message and answers
+//     BATCHED — no git at all;
+//   · the doors' own pulls are skipped (`inPenBatch`): the batch pulls once,
+//     when it opens, and a clone carrying the batch's writes could not pull;
+//   · `penTransaction` keeps its promise — a write that answers "failed"
+//     leaves nothing behind — from snapshots: the bytes every path held after
+//     the last act that succeeded. Only a failing act pays a git call.
+// `landPenBatch` then stages every recorded path in one call, makes ONE
+// commit whose body names each act, and lands it through the same loop as
+// every pen commit. A batch that cannot land is put back whole, exactly as a
+// single commit is, so its caller holds every act in it.
+//
+// ONE BATCH AT A TIME, and only the drain opens one: the office's doors run
+// in the server, never inside a batch, and answer exactly as before.
+
+/** What `penCommit` answers inside a batch: recorded, not yet a commit. */
+export const BATCHED = "batched";
+
+let activeBatch = null;
+
+/** Is a batch open on this clone? The doors skip their own pull when it is. */
+export const inPenBatch = (clone) => activeBatch !== null && !!clone && resolve(clone) === activeBatch.clone;
+
+const bytesAt = (clone, rel) => {
+  const p = join(clone, rel);
+  return existsSync(p) ? readFileSync(p) : null;
+};
+
+/**
+ * Open a batch on `clone`: pull once (pushing), then every pen act on this
+ * clone is recorded rather than committed until `landPenBatch`. A pull that
+ * refuses throws, and no batch is open.
+ */
+export function openPenBatch(clone) {
+  if (activeBatch) throw new Error(`a pen batch is already open on ${activeBatch.clone}`);
+  if (pushing()) git(clone, "pull", "--rebase", "-q");
+  activeBatch = {
+    clone: resolve(clone),
+    // dirt that was here before the batch is not the batch's to put back
+    before: new Set(changedPaths(clone)),
+    good: new Map(), // path → its bytes after the last act that succeeded (null: absent)
+    records: [], // { message, paths } per pen act that succeeded, in order
+    open: null, // the records of the act now running, or null between acts
+  };
+  return activeBatch;
+}
+
+/** Close a batch without landing it. Safe to call twice. */
+export function closePenBatch(batch) {
+  if (activeBatch === batch) activeBatch = null;
+}
+
+const keepGood = (batch, rels) => { for (const rel of rels) batch.good.set(rel, bytesAt(batch.clone, rel)); };
+
+function batchRecord(batch, clone, addPaths, message) {
+  const rec = { message, paths: addPaths.map((p) => relTo(clone, p)) };
+  if (batch.open) batch.open.push(rec);
+  else { batch.records.push(rec); keepGood(batch, rec.paths); }
+  return BATCHED;
+}
+
+function batchTransaction(batch, fn) {
+  if (batch.open) return fn(); // nested: the outer act owns the undo
+  batch.open = [];
+  const take = () => { const recs = batch.open; batch.open = null; return recs; };
+  const keep = () => { for (const rec of take()) { batch.records.push(rec); keepGood(batch, rec.paths); } };
+  const undo = () => { take(); putBackAct(batch); };
+  const settle = (out) => { if (out?.error) undo(); else keep(); return out; };
+  let out;
+  try { out = fn(); } catch (e) { undo(); throw e; }
+  if (out && typeof out.then === "function")
+    return out.then(settle, (e) => { undo(); throw e; });
+  return settle(out);
+}
+
+// A failed act's paths go back to where the batch had them: a path an earlier
+// act wrote gets that act's bytes back, any other goes back to HEAD (`restore`).
+function putBackAct(batch) {
+  const { clone } = batch;
+  const toHead = [];
+  for (const rel of changedPaths(clone)) {
+    if (batch.before.has(rel)) continue;
+    if (!batch.good.has(rel)) { toHead.push(rel); continue; }
+    const want = batch.good.get(rel);
+    const now = bytesAt(clone, rel);
+    if (want === null) { if (now !== null) removeCreated(clone, rel); }
+    else if (now === null || !now.equals(want)) {
+      mkdirSync(dirname(join(clone, rel)), { recursive: true });
+      writeFileSync(join(clone, rel), want);
+    }
+  }
+  if (toHead.length) restore(clone, git(clone, "rev-parse", "HEAD"), toHead);
+}
+
+/**
+ * Land a batch: stage every recorded path, commit once with `message`, land
+ * it. Answers `{ commit, changed }` (`changed` the set of paths the commit
+ * carries; `commit` null when the acts changed nothing). Any throw first puts
+ * every recorded path back and unmakes the commit, as `penCommit` does, so
+ * the caller holds all of it and retries at the next crossing.
+ */
+export function landPenBatch(batch, message) {
+  closePenBatch(batch);
+  const { clone } = batch;
+  const rels = [...batch.good.keys()];
+  if (!rels.length) return { commit: null, changed: new Set() };
+  const base = git(clone, "rev-parse", "HEAD");
+  try {
+    // a path an act removed is staged only if HEAD has it to remove
+    const gone = rels.filter((rel) => batch.good.get(rel) === null);
+    const inHead = gone.length
+      ? new Set(execFileSync("git", ["-C", clone, "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ...gone], { encoding: "utf8" }).split("\0").filter(Boolean))
+      : new Set();
+    const stage = rels.filter((rel) => batch.good.get(rel) !== null || inHead.has(rel));
+    if (stage.length)
+      execFileSync("git", ["-C", clone, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+        { input: stage.join("\0"), encoding: "utf8" });
+    const changed = new Set(execFileSync("git", ["-C", clone, "diff", "--cached", "--name-only", "-z", "--no-renames"],
+      { encoding: "utf8" }).split("\0").filter(Boolean));
+    if (!changed.size) return { commit: null, changed };
+    const name = process.env.BOT_NAME ?? "postmark-office[bot]";
+    const email = process.env.BOT_EMAIL ?? "office@postmark.invalid";
+    // the message rides stdin: one line per act is longer than a command line may be
+    execFileSync("git", ["-C", clone, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
+      "commit", "-q", "-F", "-", "--author", `${name} <${email}>`], { input: message, encoding: "utf8" });
+    return { commit: landCommit(clone), changed };
+  } catch (e) {
+    restore(clone, base, rels);
+    throw e;
+  }
 }
 
 // vote-by-mail's frontmatter block. The trio is all-or-none: none given → "" (the
@@ -437,7 +591,7 @@ export function enqueueLetter(args, key, db, clone, acceptedIdentity = null) {
   // or nothing (POS-296): a letter that is refused leaves no file behind, so a
   // re-send is not bounced 409 by the corpse of the first try.
   const commit = penTransaction(clone, () => {
-    if (process.env.TOWN_PUSH === "1") git(clone, "pull", "--rebase", "-q");
+    if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) git(clone, "pull", "--rebase", "-q");
     const file = join(clone, relFile);
     const outbox = dirname(file);
     if (existsSync(file)) throw bounce(409, "that letter file already exists", "change the title");

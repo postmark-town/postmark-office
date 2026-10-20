@@ -136,7 +136,9 @@ import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-import { enqueueLetter, penCommit, NOT_LANDED } from "./write.mjs";
+import {
+  enqueueLetter, penCommit, NOT_LANDED, openPenBatch, closePenBatch, landPenBatch,
+} from "./write.mjs";
 import {
   updateAddressBody, updateAddressFields, updateHome, updateProfile, updateWindow,
 } from "./edit.mjs";
@@ -238,12 +240,36 @@ const townDayOf = (ms) => new Intl.DateTimeFormat("en-CA",
  */
 export const drainLine = (r) =>
   `[town-drain] ${r.ran ? `date=${r.date} joins=${r.counts.join} updates=${r.counts.update} letters=${r.counts.letter}`
-    + ` head=${r.head} cursor=${r.cursor} commit=${r.commit ?? "none"}`
+    + ` head=${r.head} cursor=${r.cursor} commit=${r.commit ?? "none"} batch=${r.batch_commit ?? "none"}`
     + (r.gangway_held ? ` GANGWAY=${r.gangway}(${r.gangway_held} held, cursor still)` : "")
     + (r.bounced ? ` BOUNCED=${r.bounced}` : "")
     + (r.held ? ` HELD=${r.held}(not landed, cursor still)` : "")
     + (r.refused ? ` REFUSED=${r.refused}` : "")
     : `skipped — ${r.skipped}`} took=${r.took_ms}ms`;
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * THE BATCH'S MESSAGE (POS-723): the provenance one commit per act used to
+ * carry, kept in the one commit. The subject counts and bounds the acts by
+ * their town log seq; the body names each act on its own line, by its seq,
+ * its act, its letter id or handle, and the message its door would have
+ * committed under — so a grep for a slug, a handle or "via postmark-office"
+ * still finds the act it found before. The store's town log is the record of
+ * record; this is its printed copy in the town's history.
+ */
+export function batchMessage(inBatch, head) {
+  const letters = inBatch.filter((b) => b.row.cls === "letter").length;
+  const papers = inBatch.length - letters;
+  const seqs = inBatch.map((b) => b.row.seq);
+  const what = [letters && plural(letters, "letter", "letters"), papers && plural(papers, "paper act", "paper acts")]
+    .filter(Boolean).join(" and ");
+  const lo = Math.min(...seqs), hi = Math.max(...seqs);
+  const subject = `drain: ${what} into the town record (town log seq ${lo === hi ? lo : `${lo}–${hi}`}, head ${head})`;
+  const lines = inBatch.map(({ row, recs }) =>
+    `seq ${row.seq} ${row.act} ${row.cls === "letter" ? (row.payload?.id ?? row.handle) : row.handle} · ${recs.map((r) => r.message).join(" + ")}`);
+  return `${subject}\n\n${lines.join("\n")}\n`;
+}
 
 /**
  * Drain the town log into the record. One crossing, one call.
@@ -529,10 +555,10 @@ export async function runTownDrain(odb, {
     log(`drain: ${touched.keyHeld.length} landed join row(s) held by the house-key judgment re-run after the store loop — no card, key line or register written for them; the record may hold their membership; still pending, the cursor is held`);
 
   // The join files are the only bytes the bridge itself put on disk, so they
-  // are the only ones it commits. Every door below commits its own work through
-  // the same pen — one commit per act, exactly as that act would have made had
-  // the flag been off, which is what keeps the drain's history readable as the
-  // history it replaced.
+  // are the only ones it commits here, in their own commit: the joins carry
+  // signed registry lines and the store-first order, and stay separable from
+  // the mail. Every door below writes its own work through the same pen, and
+  // the pen batch makes all of it ONE commit (§ the pen batch, POS-723).
   // the rows that SETTLED: neither stalled at the store nor held by a key judgment (POS-600)
   const settledHandles = plan.plans.map(({ row }) => row.handle).filter((h) => !stalledRows.some(({ row }) => row.handle === h));
   const commit = touched.length
@@ -592,36 +618,94 @@ export async function runTownDrain(odb, {
     return { bounced: e?.defect ?? String(e?.message ?? e), code: e?.code ?? null };
   };
 
-  for (const row of rows) {
-    if (row.cls === "update") {
-      // the resume check — see § idempotence in this file's header
-      const applied = row.payload?.commits;
-      if (Array.isArray(applied) && applied.length && applied.every((sha) => isAncestorOfHead(clone, sha))) {
-        updates.push({ seq: row.seq, act: row.act, handle: row.handle, already: true, commits: applied });
+  // ── THE PEN BATCH (POS-723, Darko 2026-10-20 08:58) ──────────────────────
+  //
+  // ONE COMMIT AND ONE PUSH FOR THE CROSSING'S MAIL AND PAPER, not one per
+  // act. The doors still write every byte; inside the batch the pen records
+  // each act instead of committing it (write.mjs § THE PEN BATCH), and after
+  // the loop the batch lands as one commit whose body names every act by its
+  // town log seq. The store's town log stays the record of record.
+  //
+  // What each promise above costs now:
+  //   · A REPLAY THAT BOUNCES is still recorded and passed over, and its own
+  //     writes are put back, so the batch carries nothing of it.
+  //   · A BATCH THAT CANNOT LAND is put back whole, and every act in it is
+  //     HELD, never bounced, for the reason a single held push is: the cursor
+  //     stays and the next crossing re-drains the same rows. Any landing throw
+  //     holds, not only a lost race; holding is the direction that loses
+  //     nothing.
+  //   · A CRASH BEFORE THE COMMIT leaves only dirt, which the unit's EXIT trap
+  //     and its opening reset/clean put back, and the cursor never moved.
+  //   · A PULL THAT REFUSES when the batch opens holds every row the same way:
+  //     nothing was written yet.
+  const rowsToReplay = rows.some((r) => r.cls === "update" || r.cls === "letter");
+  let batch = null, batchRefused = null;
+  if (rowsToReplay) {
+    try { batch = openPenBatch(clone); }
+    catch (e) { batchRefused = `the town clone would not pull before the drain: ${String(e?.message ?? e).split("\n")[0]}`; }
+  }
+  const inBatch = []; // { entry, row, recs } for every act the batch carries
+  // `entry` is the report's own object, filled in place, so the landing
+  // below can give each act its commit (or its hold) where the report reads it.
+  const replay = (entry, row, run) => {
+    if (!batch) {
+      held += 1;
+      return Object.assign(entry, { held: batchRefused, code: 503 });
+    }
+    const mark = batch.records.length;
+    try {
+      const out = run();
+      Object.assign(entry, out.skipped ? { skipped: out.skipped } : { commit: out.result?.commit ?? null });
+    } catch (e) { Object.assign(entry, bounce(e)); }
+    const recs = batch.records.slice(mark);
+    if (recs.length && entry.bounced === undefined) inBatch.push({ entry, row, recs });
+    return entry;
+  };
+
+  try {
+    for (const row of rows) {
+      if (row.cls === "update") {
+        // the resume check — see § idempotence in this file's header
+        const applied = row.payload?.commits;
+        if (Array.isArray(applied) && applied.length && applied.every((sha) => isAncestorOfHead(clone, sha))) {
+          updates.push({ seq: row.seq, act: row.act, handle: row.handle, already: true, commits: applied });
+          continue;
+        }
+        updates.push(replay({ seq: row.seq, act: row.act, handle: row.handle }, row,
+          () => replayPaperAct(row, { doors, db, clone })));
         continue;
       }
-      let entry;
-      try {
-        const out = replayPaperAct(row, { doors, db, clone });
-        entry = out.skipped ? { skipped: out.skipped } : { commit: out.result?.commit ?? null };
-      } catch (e) { entry = bounce(e); }
-      updates.push({ seq: row.seq, act: row.act, handle: row.handle, ...entry });
-      continue;
+      if (row.cls !== "letter") continue;
+      const file = row.payload?.file ?? null;
+      const id = row.payload?.id ?? null;
+      // the resume check — see § idempotence in this file's header
+      if (file && existsSync(join(clone, file))) {
+        letters.push({ seq: row.seq, id, file, already: true });
+        continue;
+      }
+      letters.push(replay({ seq: row.seq, id, file }, row,
+        () => replayLetter(row, { doors, db: letterDb, clone })));
     }
-    if (row.cls !== "letter") continue;
-    const file = row.payload?.file ?? null;
-    const id = row.payload?.id ?? null;
-    // the resume check — see § idempotence in this file's header
-    if (file && existsSync(join(clone, file))) {
-      letters.push({ seq: row.seq, id, file, already: true });
-      continue;
-    }
-    let entry;
+  } finally { if (batch) closePenBatch(batch); }
+
+  // ── the batch lands: one commit, or every act in it held ─────────────────
+  let batchCommit = null;
+  if (batch && inBatch.length) {
+    const fill = ({ entry }, fields) => { for (const k of ["commit", "held", "code"]) delete entry[k]; Object.assign(entry, fields); };
     try {
-      const out = replayLetter(row, { doors, db: letterDb, clone });
-      entry = out.skipped ? { skipped: out.skipped } : { commit: out.result?.commit ?? null };
-    } catch (e) { entry = bounce(e); }
-    letters.push({ seq: row.seq, id, file, ...entry });
+      const landed = landPenBatch(batch, batchMessage(inBatch, head));
+      batchCommit = landed.commit;
+      for (const b of inBatch) {
+        // an act whose bytes were already the town's changed nothing: no commit is its
+        const carried = landed.commit && b.recs.some((rec) => rec.paths.some((p) => landed.changed.has(p)));
+        fill(b, { commit: carried ? landed.commit : null });
+      }
+    } catch (e) {
+      const defect = e?.defect ?? String(e?.message ?? e).split("\n")[0];
+      for (const b of inBatch) fill(b, { held: defect, code: e?.code ?? 503 });
+      held += inBatch.length;
+      log(`drain: the batch of ${inBatch.length} act(s) did not land (${defect}) — put back whole, every act held`);
+    }
   }
 
   // ── the first-idea sweep (the Think Tank, 2026-08-30) ────────────────────
@@ -662,7 +746,7 @@ export async function runTownDrain(odb, {
 
   return done({
     ran: true, date: stamp, drained: rows.length, counts, head,
-    cursor: (await townDrainCursor(odb)), commit, first_idea: firstIdea, ...gangwayFields,
+    cursor: (await townDrainCursor(odb)), commit, batch_commit: batchCommit, first_idea: firstIdea, ...gangwayFields,
     ...(registryRefused ? { registry_refused: registryRefused } : {}),
     ...(stalledRows.length ? { store: stalledRows.map(({ row, why }) => ({ seq: row.seq, handle: row.handle, why })) } : {}),
     // Only rows that SETTLED (POS-600): a row the store stalled or the post-store
