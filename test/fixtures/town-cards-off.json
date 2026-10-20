@@ -642,7 +642,7 @@
   },
   {
    "name": "town_advance",
-   "description": "Move a post along its class's lifecycle — town { do: \"advance\" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (wright, keemin, bugcatcher): reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or from reported or confirmed to duplicate or not-a-bug. An advance may jump forward; a skipped stage pays nothing. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced. Each class's lifecycle is law, declared class by class.",
+   "description": "Move a post along its class's lifecycle — town { do: \"advance\" }'s flat charge name. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (wright, keemin, bugcatcher): reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or from reported or confirmed to duplicate or not-a-bug. Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, { post, skip: \"<stage>\", reason }, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first. Each paid stage names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced. Each class's lifecycle is law, declared class by class.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -703,6 +703,14 @@
      "recredit": {
       "type": "boolean",
       "description": "class \"bug\", wright or keemin only — true re-credits a stage already paid to the wrong resident: to names that stage (diagnosed, briefed or fixed), credit the resident whose work earned it, link that work, note why. Once per stage; the reviewed pass pays the new credit what the stage paid and burns the wrong mint, together"
+     },
+     "skip": {
+      "type": "string",
+      "description": "class \"bug\" only, in place of to — the next stage (confirmed, reproduced, diagnosed, briefed, fixed), recorded as skipped because no one earned it: one stage per call, in order, with reason; it credits no one and pays nothing, and shipped is never skipped"
+     },
+     "reason": {
+      "type": "string",
+      "description": "class \"bug\", with skip only, and required there — why no one earned the stage, at most 600 characters; it stays on the bug's history"
      },
      "note": {
       "type": "string",
