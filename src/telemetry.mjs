@@ -4,15 +4,23 @@
 // under the office root (systemd ProtectSystem=strict permits writes only inside
 // /srv/postmark-office, so the log lives here; the dashboard generator reads it).
 //
-// Privacy stance: we log WHO read WHAT SURFACE (household, path, MCP tool name)
-// and never payloads — tool arguments can carry letter bodies and are deliberately
-// not recorded. Provenance: 2026-07-11 traffic-dashboard arc (Keemin + Wright).
+// Privacy stance: we log WHO read WHAT SURFACE, AND THE SHAPE OF WHAT THEY ASKED
+// (household, path, MCP tool name, and the `call` object: the act or read by
+// name, the argument field names, values from the office's own fixed sets, the
+// answer's size and the refusal's code), and never payloads: no string value an
+// argument carried, no number, no defect text. Tool arguments can carry letter
+// bodies, handles and ids; src/call-shape.mjs is the one place that reads them,
+// and its sentinel test reads the whole line for a planted value.
+// Provenance: 2026-07-11 traffic-dashboard arc (Keemin + Wright); the call's
+// shape added 2026-10-19 (POS-722, Darko: "collecting data on how the MCP is
+// actually being used").
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "telemetry");
+// OFFICE_ACCESS_LOG_DIR moves the log for a test's own office; the box sets none.
+const DIR = process.env.OFFICE_ACCESS_LOG_DIR || join(dirname(fileURLToPath(import.meta.url)), "..", "telemetry");
 let made = false;
 
 // ── THE LINE IS BOUNDED, because N READERS SHARE THIS FILE ───────────────────
@@ -75,6 +83,8 @@ export function accessLine(entry) {
   // readable; a torn one is not, and neither is its neighbour.
   line = JSON.stringify({ ...capped, path: "", path_dropped: true });
   if (Buffer.byteLength(line, "utf8") + 1 <= LINE_MAX) return line;
+  // `call` rides the first two stages: it is bounded at call-shape.mjs §
+  // CALL_MAX, so it is never what made the line long. Only this resort drops it.
   // The last resort keeps only what the three readers actually consume — AND
   // CAPS THOSE TOO. The first draft of this line kept `household` and `mcp`
   // verbatim, which put the guarantee straight back where it started: the test

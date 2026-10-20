@@ -134,6 +134,8 @@ const ROSTER = {
   // POS-219: refuses with neither --dry-run nor --apply before it imports a door or reads anything
   "tools/home-picture-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/media-thumbnails-backfill.mjs": { args: ["--from-record", NOWHERE], code: 2, needle: "no record at" },
+  // POS-722: with no telemetry dir it refuses by name before reading anything
+  "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.
   "tools/traffic-snapshot.mjs": { args: [], env: { TELEMETRY_REPO: NOWHERE }, code: 1, needle: "no clone at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },
