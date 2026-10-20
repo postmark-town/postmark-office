@@ -645,3 +645,21 @@ test("THE DEEP READS ON THE STORE (POS-633 part 2): every window held", async ()
     await owner.end();
   }
 });
+
+// POS-633 round 4 (Darko 15:46): the glance's blocks are reads of their own names
+test("read: \"waiting\" and read: \"marks\" answer through the store: needs-you whole with every group; the house's marks by state", async () => {
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const ctx = { clone: scratch, asOf: AS_OF, odb: null };
+  const w = await householdApex({ read: "waiting" }, key, ctx);
+  assert.equal(w.read, "waiting", JSON.stringify(w).slice(0, 300));
+  assert.ok(Array.isArray(w.groups), "every group the glance draws, none cut");
+  assert.ok(Number.isInteger(w.count) && "stances_awaiting" in w && "stakes_at_risk" in w, "needs-you's own answer, whole");
+  const m = await householdApex({ read: "marks", args: { limit: 5 } }, key, ctx);
+  assert.equal(m.read, "marks", JSON.stringify(m).slice(0, 300));
+  for (const k of ["drafts", "pending", "standing"]) assert.ok(Number.isInteger(m[k].total) && Array.isArray(m[k].rows), `the ${k} list, paged`);
+  assert.ok("decided" in m && Array.isArray(m.at_risk.rows));
+  const one = await householdApex({ read: "marks", args: { state: "standing" } }, key, ctx);
+  assert.deepEqual(["drafts", "pending", "standing"].filter((k) => k in one), ["standing"], "state: narrows to one list");
+  const bad = await householdApex({ read: "marks", args: { state: "retired" } }, key, ctx);
+  assert.match(bad.defect ?? "", /state/, "a state the read does not list is refused by name");
+});

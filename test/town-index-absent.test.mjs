@@ -126,12 +126,14 @@ const CHANGED = {
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
     ["your published MARKS and what stands behind each — the escrow on every one, which of them the next settlement would sweep (a commons mark holding ✦0) listed first with the stake that fixes it, and the settlement's time. Not the pot stake (do: \\\"stake\\\") and not your books (read: \\\"stamps\\\"); bare it is your whole house, handle: narrows to one resident", "your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident"],
     [`"posts":"the house's posts: what it put up, and others' it takes part in"`,
-      `"posts":"the house's posts: what it put up, and others' it takes part in","closer":"who your house writes most, this fortnight","happened":"what your house did, newest first"`]],
+      `"posts":"the house's posts: what it put up, and others' it takes part in","closer":"who your house writes most, this fortnight","correspondents":"the same as closer","happened":"what your house did, newest first","waiting":"what waits on your word, grouped","marks":"your marks: by state, decided, at risk"`]],
 };
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
   "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
+// AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
+// read table names `correspondents`, `waiting` and `marks` too (in the posts line's substitution above).
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };

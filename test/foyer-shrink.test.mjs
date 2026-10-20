@@ -1124,6 +1124,22 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  24984 -> 25070 (+86) · slim  22546 -> 22632 (+86)
   //
+  // ⚠ AND MOVED AN EIGHTEENTH TIME, 2026-10-20 (lane plumb-hhv2, POS-633 round 4;
+  // Wright's call A, "one record every reader reads", the 10-04 ruling). The
+  // posts segment IS household { read: "posts" } (the bundle law), and that read
+  // gained its bug half (household-posts.mjs § bugRows): one row per bug the
+  // house reported (put_up) or answered (taking_part), its stage as its state,
+  // and, when the half cannot be read, one line in `unavailable`. On this
+  // fixture the half is unreadable, so the page moved by exactly TWO paths,
+  // `full.posts.unavailable.3` and `slim.posts.unavailable.3`, both "the bugs
+  // could not be read from the office's record". Diffed leaf by leaf between a
+  // capture at the PR's base and one at its head (the same machine, so its own
+  // world-data noise cancels) BEFORE the edit; the golden was then edited by
+  // those two paths and nothing else, since a pool tree's capture differs from a
+  // CI-shaped clone's in the stances segment's world data.
+  //
+  //   full  25070 -> 25124 (+54) · slim  22632 -> 22686 (+54)
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,

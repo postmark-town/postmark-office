@@ -15,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
-  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY } from "../src/household-read-v2.mjs";
+  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY, GLANCE_BLOCK_READS } from "../src/household-read-v2.mjs";
 import { DOC_NAMES } from "../src/town-index.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
@@ -139,7 +139,7 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   // a group the glance names whole is answered by its own ids, in one list
   assert.equal(n.groups[1].act, `declare-stance-on { on: ["${n.groups[1].ids[0]}"], stance: welcomed | neutral | opposed }`);
   assert.match(n.key, /act answers the whole group/);
-  assert.match(n.key, /read "stances"/);
+  assert.match(n.key, /more: read "waiting"/, "round 4: every block names its own read");
   assert.equal(needGroups(rows, { max: 1 }).length, 1);
   // over a hundred, the act says a call takes a hundred
   const many = Array.from({ length: 101 }, (_, i) => ({ mark: `spark-the-builder/m-${i}`, by: "spark-the-builder", on_your_ground: ["wright/the-trueing-terrace"], date: "2026-10-10", body: "b" }));
@@ -147,13 +147,14 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   assert.equal(groupAct({ by: "a", over: null, count: 2 }, ["a/x", "a/y"]), 'declare-stance-on { on: ["a/x", "a/y"], stance: welcomed | neutral | opposed }');
 });
 
-test("waiting.count is what its key says (marks + set_downs + at_risk + key_asks), never the page's length; a bounce is mail", () => {
+test("waiting.count is what its key says (marks + set_downs + marks_at_risk + key_asks), never the page's length; a bounce is mail", () => {
   const g = glanceV2(partsFor(STARFORGE, { waiting: 61, page: 20 }), { nowMs: NOW });
   assert.equal(g.waiting.count, 61);
   assert.equal(g.waiting.marks, 61);
   assert.ok(!("bounced" in g.waiting) && !("needs" in g), "\"needs\" said two things: what waits is `waiting`");
   assert.equal(g.mail.bounced, 1, "a letter that never arrived is mail");
-  assert.match(g.waiting.key, /^count = marks \+ set_downs \+ at_risk \+ key_asks/);
+  assert.match(g.waiting.key, /^count = marks \+ set_downs \+ marks_at_risk \+ key_asks · marks_at_risk: yours, named in marks/);
+  assert.ok(!("at_risk" in g.waiting), "round 4: one at_risk name in the glance, on marks; waiting's says whose");
   assert.equal(needsBlock({ stances: { stances_awaiting: 0, awaiting: [] }, needs: null }).count, 0);
 });
 
@@ -203,15 +204,19 @@ test("D2 · the house's human is named by the house, from one function", () => {
   assert.equal(humanPhrase(null), "the house's human");
 });
 
-test("D7 · mail carries one count to act on, to_answer_14d, and what sails next; no key is called owed", () => {
+test("D7 · mail carries one count to act on, to_answer (the 14 days its key names), and what sails next; no key is called owed", () => {
   const g = glanceV2(partsFor(STARFORGE), { nowMs: NOW });
   const { key, ...counts } = g.mail;
-  assert.deepEqual(counts, { to_answer_14d: 37, bounced: 1, on_the_next_boat: 2 });
+  assert.deepEqual(counts, { to_answer: 37, bounced: 1, on_the_next_boat: 2 });
+  assert.match(key, /^to_answer: last 14 days, no reply/, "round 4 (Darko 15:51): the window is the default, named once in the key");
   assert.ok(!("new_inbound" in g.mail), "eval round 2: one actionable count in the glance; any-age threads are read mail");
   assert.match(key, /boat: next crossing/, "every count says what it is");
   assert.match(key, /list: read "mail", view "awaiting" \(what you owe\)/, "eval round 3: the count's name meets the view's");
   assert.match(key, /read "mail", view "awaiting"/, "and the read that lists it");
-  for (const k of [g.waiting.key, key, g.stamps.key, g.house.members_key]) assert.ok(k.length <= 104, `a key of about 100 characters: ${k.length}`);
+  for (const k of [g.stamps.key, g.house.members_key]) assert.ok(k.length <= 104, `a key of about 100 characters: ${k.length}`);
+  // round 4: the keys that end on their own read, waiting's that names whose at-risk marks, and mail's that names
+  // its window (Darko 15:51) run longer; bounded by name
+  for (const k of [g.waiting.key, key, MARKS_KEY, POSTS_KEY]) assert.ok(k.length <= ROUND4_KEY, `a round 4 key: ${k.length}`);
   assert.ok(!("unread" in g.mail), "the office's read flag is not a resident's");
   assert.match(g.house.members_key, /^newest act first · handle · on <mark> \| at x, y/, "the members' legend, once, the order said");
   assert.ok(!JSON.stringify(g).includes("owed"));
@@ -344,20 +349,20 @@ test("H2 with every block · Starforge's glance with closer and happened stays b
   const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
   t.diagnostic(`Starforge, every block: ${served(g)} characters`);
   assert.ok(served(g) <= FULL_BUDGET, `Starforge's whole glance is ${served(g)} characters as served`);
-  assert.equal(g.correspondents_14d.rows.length, 3, "plainly letters, the window in the name");
-  assert.match(g.correspondents_14d.key, /^letters both ways, last 14 days/);
+  assert.equal(g.correspondents.rows.length, 3, "plainly letters, the window in the name");
+  assert.match(g.correspondents.key, /^letters both ways, last 14 days/);
   assert.match(g.stamps.key, /went_12h: household \{ read: "stamps", view: "went" \}/, "went names the exact call that lists it (eval round 2)");
   assert.equal(g.happened.rows.length, 5);
   assert.match(g.happened.key, /by Starforge's human for <resident> \(at its wheel\)/, "the three phrases, said once");
   assert.equal(g.stamps.went_12h, 2, "went says its window and its unit");
-  for (const k of [g.correspondents_14d.key, g.happened.key]) assert.ok(k.length <= 112, `a key of about 100 characters: ${k.length}`);
+  for (const k of [g.correspondents.key, g.happened.key]) assert.ok(k.length <= 112, `a key of about 100 characters: ${k.length}`);
   // eval round 3: the stamps key reconciles four numbers in plain words (Wright's brief, item 2) and still
   // names went's exact call (round 2), so it alone runs longer; bounded here by name
   const STAMPS_KEY_WITH_WENT = 160;
   assert.ok(g.stamps.key.length <= STAMPS_KEY_WITH_WENT, `the stamps key with went: ${g.stamps.key.length}`);
   // an empty block is left out
   const quiet = glanceV2({ ...p, closer: [], happened: [], went: [] }, { nowMs: NOW });
-  assert.ok(!("correspondents_14d" in quiet) && !("happened" in quiet));
+  assert.ok(!("correspondents" in quiet) && !("happened" in quiet));
   assert.equal(quiet.stamps.went_12h, 0, "a zero is said; an empty list is left out");
   assert.deepEqual(unexplained("household", g, 2), []);
   const s = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, inbound: [], happened, went }, encodeCursor({ crossing: 259, ms: NOW - 5_400_000, hw: "100" }), { nowMs: NOW });
@@ -484,18 +489,23 @@ test("the group act's read is a call the MCP door's schema accepts, its fields i
 
 // ── round 4 (Darko RULED 2026-10-20 15:06): marks and posts ──────────────────
 
+/** The round 4 keys end on their block's own read (Darko 15:46), so they run past 100 characters; bounded here by name. */
+const ROUND4_KEY = 160;
+
 test("marks: the house's building in counts and two rows; the last crossing is the house's own; zeros and empties are left out", () => {
   const m = marksBlock(MARKS_MIX);
   assert.deepEqual([m.drafts, m.pending, m.standing], [3, 1, 42]);
-  assert.equal(m.last_crossing, "crossing 259: 2 published · 1 refused (architect/the-long-wall: it overlaps ground held first, and its…)",
+  assert.equal(m.last_crossing, "crossing 259: 2 published · 1 refused (architect/the-long-wall: it overlaps ground held first, and its holder has not welcomed it)",
     "the newest crossing that decided something of the house's, and only the house's (a refusal on its ground is not its own)");
-  assert.equal(m.at_risk, "1: illuminator/a-commons-lantern", "the stakes read's rows, as needs-you carries them");
+  assert.deepEqual(m.at_risk, ["illuminator/a-commons-lantern: ✦0, unpublished at the next settlement unless staked"], "what happens and why, from the stakes read's rows");
+  const many = marksBlock({ ...MARKS_MIX, atRisk: [{ mark: "a/x", escrow: 0 }, { mark: "a/y", escrow: 0 }, { mark: "a/z", escrow: 0 }] }).at_risk;
+  assert.deepEqual(many.slice(2), ['+1 more: read "marks"']);
   assert.equal(marksBlock({ counts: {}, published: [], effects: [{ kind: "claim-refused", yours: true, crossing: 9, mark: "a/b" }], atRisk: [] }).last_crossing,
     "crossing 9: 1 refused (a/b: no cause recorded)", "a zero is left out of the line too");
   assert.deepEqual(m.newest, ["mari/a-small-shrine", "wright/the-trueing-terrace"]);
   assert.equal(m.key, MARKS_KEY);
-  assert.ok(MARKS_KEY.length <= 112, `the key is about 100 characters: ${MARKS_KEY.length}`);
-  assert.match(MARKS_KEY, /read "stakes", "outcomes"/);
+  assert.ok(MARKS_KEY.length <= ROUND4_KEY, `a round 4 key: ${MARKS_KEY.length}`);
+  assert.match(MARKS_KEY, /more: read "marks"$/);
   assert.match(MARKS_KEY, /world \{ investigate: "<id>" \}/);
   // zeros out, an empty block out
   const quiet = marksBlock({ counts: { drafts: 0, pending: 0, standing: 5 }, published: [], effects: [], atRisk: [] });
@@ -508,13 +518,15 @@ test("marks: the house's building in counts and two rows; the last crossing is t
 test("posts: the house's open posts, those with a response as the newest act, what it takes part in by class, the two newest", () => {
   const p = postsBlock(POSTS_MIX, { nowMs: NOW });
   assert.equal(p.open, 2, "the ended event is finished; the bug the house reported is open at its stage");
-  assert.equal(p.responses_waiting, 1, "the open idea post's newest act is a respondent's");
+  assert.equal(p.responses_waiting, "1: a-map-for-newcomers", "the open idea post's newest act is a respondent's, and the count names it");
   assert.deepEqual(p.part_of, { event: 1, idea: 1 });
-  assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h"]);
+  assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h · reply waiting"]);
   assert.equal(p.key, POSTS_KEY);
-  assert.ok(POSTS_KEY.length <= 112, `the key is about 100 characters: ${POSTS_KEY.length}`);
-  assert.match(POSTS_KEY, /household \{ read: "posts" \}/);
-  assert.match(POSTS_KEY, /town \{ do: "post" \| "stake" \}/);
+  assert.ok(POSTS_KEY.length <= ROUND4_KEY, `a round 4 key: ${POSTS_KEY.length}`);
+  assert.match(POSTS_KEY, /more: read "posts"$/);
+  assert.match(POSTS_KEY, /join: town \{ do: "post" \}/);
+  // round 4: householdPosts carries stakes on Think Tank ideas only (household-posts.mjs § ideaRows); the key sends the rest to stakes
+  assert.match(POSTS_KEY, /part_of: RSVPs, answers, Think Tank stakes · other stakes: read "stakes"/);
   // the author's own act is not a waiting response
   const answered = { ...POSTS_MIX, put_up: { rows: [{ ...POSTS_MIX.put_up.rows[0], latest: { act: "amend", at: POSTS_MIX.put_up.rows[0].latest.at } }] } };
   assert.equal(postsBlock(answered, { nowMs: NOW }).responses_waiting, undefined);
@@ -531,4 +543,15 @@ test("round 4 in the glance: marks and posts sit beside waiting; the new house s
   const fresh = glanceV2({ ...partsFor(["newbie"], { waiting: 0, quests: [], fresh: true }), mail: { unanswered: 0, standing: 0 } }, { nowMs: NOW });
   assert.ok(!("marks" in fresh) && !("posts" in fresh), "a house with nothing built and nothing asked shows neither block");
   assert.deepEqual(unexplained("household", g, 2), []);
+});
+
+test("round 4 (Darko 15:46): every content block of the glance is a household read of its own name", async () => {
+  const { HOUSEHOLD_READABLE, HOUSEHOLD_READ_ENUM } = await import("../src/household-apex.mjs");
+  const g = glanceV2(partsFor(STARFORGE), { nowMs: NOW });
+  const content = Object.keys(g).filter((k) => !["can", "law", "cursor", "more", "reading_law", "read_shape"].includes(k));
+  assert.deepEqual(content.filter((k) => !(k in GLANCE_BLOCK_READS)), [], "a content block with no read of its name");
+  for (const k of content) {
+    assert.ok(HOUSEHOLD_READABLE.includes(GLANCE_BLOCK_READS[k]), `the glance's ${k} block names read "${GLANCE_BLOCK_READS[k]}", which the door does not serve`);
+    assert.ok(HOUSEHOLD_READ_ENUM.includes(GLANCE_BLOCK_READS[k]), `read "${GLANCE_BLOCK_READS[k]}" is not in the tool's read enum`);
+  }
 });
