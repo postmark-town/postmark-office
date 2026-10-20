@@ -562,7 +562,7 @@ test("THE GLANCE (POS-633): household { read_shape: \"v2\" } answers the house's
   assert.deepEqual(g.house.members.map((m) => m.split(" · ")[0]), ["r000", "r001"], "the members this key holds, ashore, in the house's order");
   assert.ok(Number.isInteger(g.needs.count));
   assert.equal(g.needs.bounced, 1, "r000's bounce, from needs-you");
-  assert.ok(g.stamps.pool.sum >= 0 && g.stamps.pool.pending === "POS-326");
+  assert.ok(Number.isInteger(g.stamps.pool) && g.stamps.pool >= 0, "the residents' stamps added up, a plain number");
   assert.deepEqual(unexplained("household", g, 2), []);
   assert.ok(JSON.stringify(g, null, 1).length <= 4096);
   assert.doesNotMatch(JSON.stringify(g), /https?:\/\//);

@@ -86,7 +86,7 @@ test("D1 · each member is one string: handle · where · last act · what the p
   assert.equal(gapWord("hang your window"), "window");
 });
 
-test("D1 · every can act names every field it takes, grouped by intent", () => {
+test("D1 · every can act names every field it takes, grouped by intent", async () => {
   const can = canBlock("resident", "keeminlee");
   assert.deepEqual(Object.keys(can), ["answer", "write", "tend", "back", "host", "house"]);
   const text = Object.values(can).join(" · ");
@@ -96,6 +96,10 @@ test("D1 · every can act names every field it takes, grouped by intent", () => 
     for (const f of lineFields(HOUSEHOLD_LINES[act].fields)) assert.ok(actFields(act).includes(f), `${act} names ${f}`);
   }
   assert.equal(actFields("send"), "send { from, to, title, body, thread? }");
+  // profile's fields are read from their one owner (edit.mjs § PROFILE_FIELD_DOC), pronouns included (#677)
+  const { PROFILE_FIELD_DOC } = await import("../src/edit.mjs");
+  assert.equal(actFields("profile"), `profile { ${Object.keys(PROFILE_FIELD_DOC).map((f) => `${f}?`).join(", ")} }`);
+  assert.match(actFields("profile"), /pronouns\?/);
   // a berth sees begin and no declare; a caller with no household sees declare and no begin
   assert.match(canBlock("berth", null).house, /begin \{/);
   assert.doesNotMatch(canBlock("berth", null).house, /declare \{/);
@@ -118,7 +122,7 @@ test("D7 · mail says new_inbound and what sails next; no key is called owed", (
 test("stamps: the pool is the residents' sum, labelled pending POS-326; earned names three and counts the rest", () => {
   const s = stampsBlock([{ handle: "a", tenses: { liquid: 5, staked: 1, minted: 9 } }, { handle: "b", tenses: { liquid: 7, staked: 0, minted: 3 } },
     { handle: "c", tenses: { liquid: 1, staked: 2, minted: 12 } }, { handle: "d", tenses: { liquid: 0, staked: 0, minted: 1 } }]);
-  assert.deepEqual(s.pool, { sum: 13, pending: "POS-326" });
+  assert.equal(s.pool, 13, "the residents' stamps added up; no tracker id reaches a resident");
   assert.equal(s.staked, 3);
   assert.equal(s.earned, "c 12 · a 9 · b 3 · 1 more");
   assert.deepEqual(questLines({ quests: [{ cadence: "daily", title: "Reach out", household: { total: 2 }, target: 5 },
