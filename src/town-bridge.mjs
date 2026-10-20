@@ -246,19 +246,37 @@ export const drainWorktreePath = (clone) =>
  * has made and not yet pushed is the server's to land, never the batch's to
  * carry); not pushing, the clone's HEAD. Throws if it cannot, and the caller
  * holds every row.
+ *
+ * A WORKTREE BROKEN MID-MAKING IS REMADE, ONCE (review 2 of office#673). A
+ * SIGKILL or a power loss inside `worktree add` or a reset leaves the entry
+ * "locked: initializing" or an index.lock behind, and then every crossing
+ * would hold all mail, and removing the directory by hand would not clear
+ * it (`prune` skips a locked entry; `add` refuses a missing-but-locked one).
+ * So when the reset fails, `worktree remove -f -f` clears the entry, locked
+ * or missing, and the worktree is made once more. Only if that fails too is
+ * the crossing's mail held. `remove` takes only a registered worktree: a
+ * path that is anything else is never touched.
  */
-export function prepareDrainWorktree(clone) {
+export function prepareDrainWorktree(clone, log = console.error) {
   const wt = drainWorktreePath(clone);
   const pushingNow = process.env.TOWN_PUSH === "1";
   if (pushingNow) git(clone, "fetch", "-q", "origin", "main");
   const base = git(clone, "rev-parse", pushingNow ? "refs/remotes/origin/main" : "HEAD");
-  if (!existsSync(join(wt, ".git"))) {
+  const make = () => {
     git(clone, "worktree", "prune");
     git(clone, "worktree", "add", "-q", "--detach", wt, base);
-  } else {
-    try { git(wt, "rebase", "--abort"); } catch { /* none in progress */ }
-    git(wt, "reset", "-q", "--hard", base);
-    git(wt, "clean", "-fdq");
+  };
+  try {
+    if (!existsSync(join(wt, ".git"))) make();
+    else {
+      try { git(wt, "rebase", "--abort"); } catch { /* none in progress */ }
+      git(wt, "reset", "-q", "--hard", base);
+      git(wt, "clean", "-fdq");
+    }
+  } catch (e) {
+    log(`drain: the drain's worktree would not come up (${String(e?.message ?? e).split("\n")[0]}); clearing its entry and making it again`);
+    try { git(clone, "worktree", "remove", "-f", "-f", wt); } catch { /* not a registered worktree: nothing of ours to clear */ }
+    make();
   }
   return wt;
 }
@@ -269,18 +287,31 @@ export function prepareDrainWorktree(clone) {
  * the unit's belt push refuses a clone left behind the remote. A
  * fast-forward refuses only while a live edit holds a file the tip changed,
  * or a server commit is between its commit and its push (its own rebase puts
- * it on top), so it is tried a few times, a second apart; if it still
- * refuses, the line says so.
+ * it on top), so it is tried a few times, a second apart.
+ *
+ * STILL REFUSED, PUSHING: the clone's own commits go on top of the tip
+ * (a rebase, as the old per-act pull did), so a stray unpushed server commit
+ * cannot leave the clone diverged and stop the unit's push, and with it the
+ * ferry, every crossing (review 2 of office#673). Answers whether the clone
+ * now holds the tip; the caller decides what a `false` costs.
  */
 export function catchUpClone(clone, sha, log = console.error) {
   for (let i = 1; ; i++) {
     try { git(clone, "merge", "--ff-only", "-q", sha); return true; }
     catch (e) {
-      if (i >= 5) {
-        log(`drain: the town clone would not fast-forward to the batch ${sha.slice(0, 12)} (${String(e?.message ?? e).split("\n")[0]}); it is on the town's main, and the ferry's pull takes it`);
-        return false;
+      if (i < 5) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000); continue; }
+      const why = String(e?.message ?? e).split("\n")[0];
+      if (process.env.TOWN_PUSH === "1") {
+        try {
+          git(clone, "rebase", "-q", sha);
+          log(`drain: the town clone would not fast-forward to the batch ${sha.slice(0, 12)} (${why}); its own commits are rebased on top of it`);
+          return true;
+        } catch {
+          try { git(clone, "rebase", "--abort"); } catch { /* none in progress */ }
+        }
       }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+      log(`drain: the town clone would not fast-forward to the batch ${sha.slice(0, 12)} (${why}), nor take it any other way`);
+      return false;
     }
   }
 }
@@ -713,7 +744,7 @@ export async function runTownDrain(odb, {
   const rowsToReplay = rows.some((r) => r.cls === "update" || r.cls === "letter");
   let batch = null, batchRefused = null, wt = null;
   if (rowsToReplay) {
-    try { wt = prepareDrainWorktree(clone); batch = openPenBatch(wt); }
+    try { wt = prepareDrainWorktree(clone, log); batch = openPenBatch(wt); }
     catch (e) {
       batchRefused = `the drain's worktree would not come up to the town's tip: ${String(e?.message ?? e).split("\n")[0]}`;
       log(`drain: ${batchRefused} — every mail and paper row is held`);
@@ -784,7 +815,10 @@ export async function runTownDrain(odb, {
   }
   // the town clone takes the worktree's tip, so the ferry's sweep finds what
   // landed and the clone stands no further behind the town than the drain read
-  if (batch) catchUpClone(clone, git(wt, "rev-parse", "HEAD"), log);
+  // NOT PUSHING (dev, the sandbox), what landed is only in the worktree, which the
+  // next crossing resets: a clone that did not take it keeps the cursor still
+  const cloneBehind = batch ? !catchUpClone(clone, git(wt, "rev-parse", "HEAD"), log) && process.env.TOWN_PUSH !== "1" : false;
+  if (cloneBehind) log("drain: not pushing, and the clone did not take the batch — the cursor is held");
 
   // ── the first-idea sweep (the Think Tank, 2026-08-30) ────────────────────
   // Rides every crossing beside the join drain: a household's first published
@@ -820,12 +854,12 @@ export async function runTownDrain(odb, {
   // ── the cursor, LAST — and not at all while the gangway holds a row ──────
   if (held)
     log(`drain: ${held} row(s) could not land on the town's remote and are held — the cursor stays for the next crossing`);
-  if (!gangwayHold && !stalledRows.length && !held) await advanceTownCursor(odb, head);
+  if (!gangwayHold && !stalledRows.length && !held && !cloneBehind) await advanceTownCursor(odb, head);
 
   return done({
     ran: true, date: stamp, drained: rows.length, counts, head,
     cursor: (await townDrainCursor(odb)), commit, batch_commit: batchCommits.at(-1) ?? null,
-    ...(batchCommits.length > 1 ? { batch_commits: batchCommits } : {}), first_idea: firstIdea, ...gangwayFields,
+    ...(batchCommits.length > 1 ? { batch_commits: batchCommits } : {}), ...(cloneBehind ? { clone_behind: true } : {}), first_idea: firstIdea, ...gangwayFields,
     ...(registryRefused ? { registry_refused: registryRefused } : {}),
     ...(stalledRows.length ? { store: stalledRows.map(({ row, why }) => ({ seq: row.seq, handle: row.handle, why })) } : {}),
     // Only rows that SETTLED (POS-600): a row the store stalled or the post-store

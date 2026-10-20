@@ -431,6 +431,10 @@ function unitsOf(batch, acts) {
 }
 
 const ATTEMPT_BUDGET = 64;
+const landedOnRemote = (dir, sha) => {
+  try { git(dir, "fetch", "-q", "origin", "main"); } catch { /* the tracking ref the push moved still answers */ }
+  try { git(dir, "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"); return true; } catch { return false; }
+};
 const remoteTip = (dir) => { try { return git(dir, "rev-parse", "-q", "--verify", "refs/remotes/origin/main"); } catch { return null; } };
 
 /**
@@ -483,6 +487,12 @@ export function landPenBatch(batch, { acts, message }) {
   const attempt = (group) => {
     const base = git(dir, "rev-parse", "HEAD");
     const paths = [...new Set(group.flatMap((u) => [...u.paths]))];
+    let changed = null;
+    const record = (sha) => {
+      commits.push(sha);
+      for (const u of group) for (const a of u.acts)
+        landed.set(a, [...u.paths].some((p) => changed.has(p)) ? sha : null);
+    };
     try {
       git(dir, "reset", "-q", "--hard", base);
       git(dir, "clean", "-fdq");
@@ -501,19 +511,23 @@ export function landPenBatch(batch, { acts, message }) {
       if (stage.length)
         execFileSync("git", ["-C", dir, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
           { input: stage.join("\0"), encoding: "utf8" });
-      const changed = new Set(execFileSync("git", ["-C", dir, "diff", "--cached", "--name-only", "-z", "--no-renames"],
+      changed = new Set(execFileSync("git", ["-C", dir, "diff", "--cached", "--name-only", "-z", "--no-renames"],
         { encoding: "utf8" }).split("\0").filter(Boolean));
       const groupActs = group.flatMap((u) => u.acts);
       if (!changed.size) { for (const a of groupActs) landed.set(a, null); return; }
       // the message rides stdin: one line per act is longer than a command line may be
       execFileSync("git", ["-C", dir, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
         "commit", "-q", "-F", "-", "--author", `${name} <${email}>`], { input: message(groupActs), encoding: "utf8" });
-      const sha = landCommit(dir, { push: ["push", "-q", "origin", "HEAD:main"] });
-      commits.push(sha);
-      for (const u of group) for (const a of u.acts)
-        landed.set(a, [...u.paths].some((p) => changed.has(p)) ? sha : null);
+      record(landCommit(dir, { push: ["push", "-q", "origin", "HEAD:main"] }));
     } catch (e) {
       abortRebase(dir);
+      // LANDED, THEN A THROW (review 2 of office#673): a push that took and a
+      // fetch that then failed is a commit the town holds. Held, its acts would
+      // be delivered by this crossing's ferry and replayed into duplicate-id
+      // bounces by the next. The push updates the tracking ref itself, so the
+      // question is answerable even when the remote stops answering.
+      const tip = (() => { try { return git(dir, "rev-parse", "HEAD"); } catch { return null; } })();
+      if (pushing() && changed?.size && tip && tip !== base && landedOnRemote(dir, tip)) return record(tip);
       try { git(dir, "reset", "-q", "--hard", base); git(dir, "clean", "-fdq"); } catch { /* the next crossing resets the worktree */ }
       throw e;
     }
