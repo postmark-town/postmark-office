@@ -624,7 +624,10 @@ export async function houseActs(q, household, { afterId = null, sinceIso = null,
   const n = Math.min(Math.max(Number(limit) || DEEP_ROWS, 1), DEEP_ROWS);
   const hw = (await q.query("SELECT max(id)::text AS hw FROM acts")).rows[0]?.hw ?? null;
   const after = afterId != null && /^d+$/.test(String(afterId)) ? String(afterId) : null;
-  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human
+  // 079's columns, when the store has them (POS-633 part 3): the recorded hand, for and route
+  const { actsHaveProvenance } = await import("./act-provenance.mjs");
+  const recorded = (await actsHaveProvenance(q)) ? ", hand, for_handle, route" : "";
+  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}
       FROM acts WHERE household = $1 AND ${after ? "id > $2::bigint" : "at >= $2::timestamptz"}
       ORDER BY id DESC LIMIT ${n + 1}`, [household, after ?? sinceIso ?? new Date(0).toISOString()])).rows;
   return { hw, rows: rows.slice(0, n), cut: rows.length > n };

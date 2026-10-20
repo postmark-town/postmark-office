@@ -246,3 +246,18 @@ test("H2 with every block · Starforge's glance with closer and happened stays �
   assert.equal(s.stamps.went, 1, "only what went after the cursor");
   assert.deepEqual(unexplained("household", s, 2), []);
 });
+
+// ── part 4: the recorded triple, said as the reads say it ────────────────────
+test("H4 phrases · a recorded hand and for win over the actor; a recorded route rides; one phrase function says them", async () => {
+  const { byPhrase } = await import("../src/household-read-v2.mjs");
+  const site = happenedRow({ at: "2026-10-20T08:00:00Z", actor: "rei", action: "home", hand: "human", for_handle: "rei", route: "site" }, { houseName: "Starforge" });
+  assert.deepEqual([site.hand, site.for, site.route, site.by], ["human", "rei", "site", "Starforge's human for rei"]);
+  const own = happenedRow({ at: "2026-10-20T08:00:00Z", actor: "rei", action: "say", hand: "rei", for_handle: "rei", route: "mcp" }, { houseName: "Starforge" });
+  assert.deepEqual([own.hand, own.for, own.route, own.by], ["rei", "rei", "mcp", "rei"]);
+  const humanOwn = happenedRow({ actor: "human-of-starforge", action: "say", hand: "human", for_handle: null, route: "site" }, { houseName: "Starforge" });
+  assert.deepEqual([humanOwn.hand, humanOwn.for, humanOwn.by], ["human", null, "Starforge's human"]);
+  const noDoor = happenedRow({ actor: "rei", action: "walk", hand: "rei", for_handle: "rei", route: null }, { houseName: "Starforge" });
+  assert.ok(!("route" in noDoor), "a NULL route is absent");
+  assert.equal(byPhrase({ human: true, for: "rei" }, "Mayflower"), "Mayflower's human for rei");
+  assert.equal(byPhrase({ human: false, hand: "damaris" }, "Mayflower"), "damaris");
+});
