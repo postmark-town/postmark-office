@@ -641,6 +641,11 @@ async function residentCard(who, key) {
   const card = await marksCountsFor(who, { key })
     .then((marks) => ({ ...r, marks }))
     .catch(() => r); // garnish only — the card stands without it
+  // WHAT THEY LOOK LIKE (WLD-83): their own appearance tree, the glance and its
+  // details, live (canon at the act). The World page's resident column reads it
+  // here. Garnish like the marks: a record that cannot be read leaves the card.
+  const looks = await import("./entity-predicates.mjs").then((m) => m.appearanceFor(who)).catch(() => null);
+  if (looks && !looks.unavailable) card.appearance = looks;
   return { card, asOf };
 }
 

@@ -103,7 +103,7 @@ import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows
 export const WRITE_TOOLS = new Set(["send_letter", "stake_vote", "request_residency", "declare_household",
   "update_address_body", "update_home", "update_profile", "update_window", "world_leave_mark",
   "world_withdraw_mark", "world_note", "world_walk", "world_stake", "world_unstake",
-  "world_say", "upload_media",
+  "world_say", "upload_media", "world_describe",
   // The town door's own writes (town_post added 2026-08-31 beside the stake
   // gesture — it was missing, and it publishes a mark and stakes 1✦ escrow, so
   // a cached client calling the delisted flat name got no auth challenge for a
@@ -130,6 +130,8 @@ export const DELISTED = new Set([
   // delist was hiding a capability with NO other door (the L6 spirit: law
   // with no room). Re-delist the day the apex grows an equivalent.
   "world_my_marks", "world_walkers",
+  // WLD-83: describe is served by world { do: "describe" }; the flat is its schema.
+  "world_describe",
   "world_stake_read", "world_holdings",
   // THE SLIM, THIRD ROUND (POS-46, 2026-08-24): the town apex serves these,
   // so they stop being listed. Definitions stand and every one still ANSWERS
@@ -699,6 +701,11 @@ export async function callTool(name, args, ctx) {
         const { marksCountsFor } = await import("./town-marks.mjs");
         r.marks = await marksCountsFor(args.handle, { key });
       } catch { /* garnish only — the card stands without it */ }
+      // what they look like (WLD-83), live, on both skins (server.mjs § residentCard)
+      try {
+        const looks = await (await import("./entity-predicates.mjs")).appearanceFor(args.handle);
+        if (looks && !looks.unavailable) r.appearance = looks;
+      } catch { /* garnish only */ }
       return r;
     }
     // ── the marks read (walk #2 item 2) ──────────────────────────────────────

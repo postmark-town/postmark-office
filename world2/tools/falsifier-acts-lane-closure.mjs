@@ -132,6 +132,11 @@ const LANE_OF = Object.freeze({
   // to mirror and nothing for check 2's attachments to twin. Answered here
   // because the census asked, as it did for `ride`.
   consume: "lane", refill: "lane",
+  // WLD-83: a resident describes itself. Which lane: its own. Which table: `acts`
+  // itself, class `appearance` (entity-predicates.mjs § defaultWrite, through
+  // appendActFlipped), the only record an appearance has, so there is no first
+  // pen to close against. Canon at the act; the notary publishes it.
+  describe: "lane",
 
   // ruled out, each with its reason
   "note-to-self": "none",
@@ -196,6 +201,9 @@ const CLASS_LANE_OF = Object.freeze({
   // there is no first pen to close against. Its payload was checked against
   // the public export: a reaction row never carries the slice Jev read.
   creature: "lane",
+  // WLD-83: a resident's appearance tree, describe and withdraw. `acts` is its only
+  // pen (entity-predicates.mjs), and every payload is the resident's own public words.
+  appearance: "lane",
 });
 
 function checkClassCensus(classesInJournal) {
