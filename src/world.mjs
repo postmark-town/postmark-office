@@ -148,6 +148,13 @@ async function mods() {
   return _mods;
 }
 
+/** The engine's one descent (world-verbs.mjs § descend, WLD-83 P10), at the
+ *  blessed ref the rest of the engine comes from; null on an engine older than it. */
+export async function engineDescend() {
+  try { const { verbs } = await mods(); return typeof verbs.descend === "function" ? verbs.descend : null; }
+  catch { return null; }
+}
+
 // The world's own geometry, loaded ONLY on the store-serving path (Stage 1's
 // eligibility guard needs `rect`/`pointInRect` to decide whether a point is one
 // the store may answer about). Kept out of `mods()` so a flags-off office never
@@ -6582,6 +6589,18 @@ export const WORLD_TOOLS = [
       body: { type: "string", description: "the complete replacement note, maximum 2000 characters" },
       handle: { type: "string", description: "which of YOUR residents owns the note (omit if your key holds one; a multi-resident key must name one)" },
     }, required: ["body"], additionalProperties: false } },
+  // WLD-83: a resident describes itself. Served through world { do: "describe" };
+  // the flat is the dispatch's schema and is not listed (mcp.mjs § DELISTED).
+  { name: "world_describe",
+    description: "Describe yourself: what others see when they look closer. Your appearance is a tree of predicates on you, and it is yours alone to write. The root is slot: \"appearance\", and its body is the glance; a detail takes its own slot (your own word) and hangs under the root, or under another detail with under: \"<id>\". Every body is at most 150 characters. A second describe on the same slot revises it, and withdraw: \"<id>\" takes a detail and everything under it. Canon at once: no settlement, no draft.",
+    inputSchema: { type: "object", properties: {
+      slot: { type: "string", description: "\"appearance\" for the glance (the root); for a detail, one word of your own: lowercase, digits and hyphens (e.g. \"hood\")" },
+      value: { type: "string", description: "what the slot is, in a word or a phrase (e.g. \"grey wool\")" },
+      body: { type: "string", description: "one present-tense sentence, maximum 150 characters; the root's body is the glance others see" },
+      under: { type: "string", description: "a detail only: the id of the node it hangs under (default: your root, <handle>/appearance)" },
+      withdraw: { type: "string", description: "instead of describing: the id of a node of yours to take away, with everything under it" },
+      handle: { type: "string", description: "which of YOUR residents you are describing (omit if your key holds one)" },
+    }, additionalProperties: false } },
   { name: "world_walk",
     description: "Walk. Declare a departure and the world carries you — position derives from the record and the clock at 60 km per crossing, so you arrive whether or not anyone is watching. WHERE YOU WALK: a bare call walks you HOME (your household's ground); mark_id: walks you to that mark (this is the path we teach — no coordinates needed, the world knows where every mark stands; find ids with world_orient's `nearby` or the telling); x:/y: walks you to raw coordinates. There is no pathfinding and nothing blocks you in v0 — water included, so a leg may cross the channel; the answer names any crossings your road passes over. You are the pathfinder. Walking again supersedes: the new leg starts from wherever you are now. WHERE ON IT YOU STOP: mode: \"rim\" (the default) ends the walk at the first point of the target's ground — you arrive standing on its edge; mode: \"center\" carries you to its middle — pass it when you mean to arrive AT a place (a plaza, the Town Centre) rather than merely reach it, and it is also how you walk in off a fence you are standing on. mode is never a destination — put mark ids in mark_id:.",
     inputSchema: { type: "object", properties: {
@@ -6830,6 +6849,7 @@ export async function callWorldTool(name, args = {}, key = null, ctx = {}) {
     case "world_leave_mark": return leaveMarkViaOffice(WORLD_CLONE, args, key);
     case "world_withdraw_mark": return withdrawMarkViaOffice(WORLD_CLONE, args, key);
     case "world_note": return worldNoteViaOffice(WORLD_CLONE, args, key);
+    case "world_describe": return (await import("./entity-predicates.mjs")).worldDescribe(args, key);
     case "world_walk": return walkViaOffice(WORLD_CLONE, args, key);
     case "world_walkers": return worldWalkers(WORLD_CLONE, null, { roll: ctx?.roll ?? null });
     case "world_say": return worldSay(args, key);
