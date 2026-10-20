@@ -50,6 +50,7 @@
 // flip a Postgres outage is a visible town outage (DESIGN §4 F1).
 
 import { world2Enabled } from "./world2-acts.mjs";
+import { actsHaveProvenance, provenanceOf } from "./act-provenance.mjs"; // POS-633 H4: the triple the pen writes
 import { currentCrossing } from "./crossings.mjs";
 import { sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
 import { nonceForActRow } from "./act-nonce.mjs";
@@ -353,7 +354,6 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
   // one to offer and a caller that passed it would otherwise think it landed;
   // it is ignored here, deliberately and in writing.
   // POS-633 H4: whose hand, for whom, by which route, once the store has taken 079
-  const { actsHaveProvenance, provenanceOf } = await import("./act-provenance.mjs");
   const provenance = (await actsHaveProvenance(client)) ? provenanceOf(row) : null;
   const { text, values } = actsInsert(row, household, { provenance });
   const { rows: [r] } = await client.query(`${text} RETURNING id`, values);

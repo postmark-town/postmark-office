@@ -21,8 +21,15 @@
 //
 // THE HAND IS THE RECORD'S: `human-of-<slug>` is the human's own hand (the
 // human class's say); `payload.as_human` is the human beside a seat (LOGOS §
-// The three channels); a site act is the human at a resident's wheel. Anything
-// else is the actor's own.
+// The three channels); a site act is the human at THEIR OWN resident's wheel.
+// Anything else is the actor's own.
+//
+// THE WHEEL IS THE REQUESTER'S HOUSE (review of #671): the scope also carries
+// the requesting key's residents, noted once the bearer resolves
+// (server.mjs § route). A request can cause acts by other actors: the town's
+// quest and ballot acts (QUEST_AUTHOR, BALLOT_AUTHOR), a creature's reaction
+// inside the act's door (act-watch.mjs), the town's hands on a bug post. Those
+// keep their own hand, never "by <requester>'s human for <someone else>".
 //
 // `letter` is a route word with no office writer yet: a vote that rides a
 // letter is executed by the town's mint, which writes a ledger line, not an act.
@@ -34,7 +41,16 @@ export const ROUTES = Object.freeze(["mcp", "api", "site", "letter", "operator"]
 const scope = new AsyncLocalStorage();
 
 /** Run `fn` with `route` as the door's route for every act it writes. An unknown word is no route. */
-export const withRoute = (route, fn) => scope.run({ route: ROUTES.includes(route) ? route : null }, fn);
+export const withRoute = (route, fn) => scope.run({ route: ROUTES.includes(route) ? route : null, residents: null }, fn);
+
+/** Once the bearer resolves: the residents the requesting key holds, for the site rule. Outside a scope, nothing. */
+export function noteRequester(key) {
+  const s = scope.getStore();
+  if (s) s.residents = new Set([...(key?.handles ?? [])].map(String));
+}
+
+/** The open scope's requesting residents, or null. */
+export const currentResidents = () => scope.getStore()?.residents ?? null;
 
 /** The route an incoming request travels: the site's header first, then the MCP door, else the REST API. */
 export function routeOfRequest(req) {
@@ -54,12 +70,17 @@ const parsed = (payload) => {
   try { return JSON.parse(payload); } catch { return null; }
 };
 
-/** The triple for one acts row, from the row and the open scope. `for` is spelled `for_handle` in SQL. */
-export function provenanceOf(row, route = currentRoute()) {
+/**
+ * The triple for one acts row, from the row and the open scope. `for` is
+ * spelled `for_handle` in SQL. A site act is the human's only when its actor
+ * is one of the requesting key's own residents.
+ */
+export function provenanceOf(row, route = currentRoute(), residents = currentResidents()) {
   const actor = String(row?.actor ?? "");
   if (/^human-of-/.test(actor)) return { hand: "human", for_handle: null, route };
   const seated = parsed(row?.payload)?.as_human;
-  if (seated || route === "site") return { hand: "human", for_handle: actor || null, route };
+  const atTheirWheel = route === "site" && residents instanceof Set && residents.has(actor);
+  if (seated || atTheirWheel) return { hand: "human", for_handle: actor || null, route };
   return { hand: actor || null, for_handle: actor || null, route };
 }
 

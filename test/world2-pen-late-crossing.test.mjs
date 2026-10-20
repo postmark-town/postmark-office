@@ -52,7 +52,7 @@ test("a row with no crossing is not judged (the seed's legacy rows and null-cros
 test("insertAct runs the guard BEFORE any SQL — a refused row never reaches the client (can-fail: the stub would record the INSERT)", async () => {
   process.env.W2_LATE_ARRIVAL = "";
   const seen = [];
-  const client = { query: async (sql, params) => { if (/^s*INSERT/i.test(sql)) seen.push(params?.[1]); return { rows: [{ id: 1 }] }; } };
+  const client = { query: async (sql, params) => { if (/^\s*INSERT/i.test(sql)) seen.push(params?.[1]); return { rows: [{ id: 1 }] }; } };
   await assert.rejects(() => insertAct(client, { ...row(open - 3), household: null }), LateCrossingError);
   assert.equal(seen.length, 0, "the INSERT ran for a refused row");
 });
@@ -63,7 +63,7 @@ test("CAN-FAIL: with the reason set, insertAct writes the ARRIVAL window, not th
   process.env.W2_LATE_ARRIVAL = "test";
   try {
     const seen = [];
-    const client = { query: async (sql, params) => { if (/^s*INSERT/i.test(sql)) seen.push(params?.[1]); return { rows: [{ id: 1 }] }; } };
+    const client = { query: async (sql, params) => { if (/^\s*INSERT/i.test(sql)) seen.push(params?.[1]); return { rows: [{ id: 1 }] }; } };
     await insertAct(client, { ...row(open - 3), household: null });
     assert.equal(seen.length, 1);
     assert.equal(seen[0], currentCrossing(), "the crossing written is the open window at write time");

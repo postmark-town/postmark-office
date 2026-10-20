@@ -53,7 +53,7 @@ import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finishe
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
-import { withRoute, routeOfRequest } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
+import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
@@ -1206,6 +1206,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // The resolution itself is `resolveBearer`, run by `handle` before this.
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
   const key = resolvedKey;
+  noteRequester(key); // POS-633 H4: a site act is the human's only at their own residents' wheel (act-provenance.mjs)
   req.tel.household = key?.household ?? null;
 
   // Keyless public GETs get the same token-bucket backstop as nginx's prepared
