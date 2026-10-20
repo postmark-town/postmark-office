@@ -80,7 +80,7 @@ const ALLOWED = {
   "store-pool.mjs": [2, `${OWN}: classifiers`],
   "store-txn-watch.mjs": [1, `${OWN}: a status row`],
   "store-writedown.mjs": [1, `${OPERATOR} (the write-down pass's report)`],
-  "town-bridge.mjs": [2, `${OPERATOR} (the bridge pass's report)`],
+  "town-bridge.mjs": [4, `${OPERATOR} (the bridge pass's report, the drain worktree's refusal, and the clone's refused fast-forward, POS-723)`],
   "town-drain.mjs": [1, `${OPERATOR} (the drain's stalled rows)`],
   "town-lock.mjs": [2, `${OWN}: plumbing (stderr onto the error; the busy test)`],
   "town-posts.mjs": [1, `${OWN}: a refusal's \`cause\` field, never sent`],
@@ -102,6 +102,7 @@ const ALLOWED = {
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
   "world2-pen.mjs": [2, `${OWN}: status fields`],
+  "write.mjs": [1, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723)`],
 };
 
 const walk = (d) => readdirSync(d).flatMap((n) => {

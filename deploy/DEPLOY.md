@@ -1361,6 +1361,24 @@ repo-shipped code with the pen's write authority, so `tools/` and
 pen's token deliberately lacks the `workflow` scope, so it cannot alter the
 town clock even if compromised.
 
+**The drain's own worktree (POS-723, 2026-10-20).** The town drain lands a
+crossing's letters and paper acts as one commit, written in a git worktree of
+the town clone that only the drain uses:
+`/srv/postmark-office/town-clone/.git/drain-worktree` (or `TOWN_DRAIN_WORKTREE`).
+The office's server commits live paper edits into the clone itself, so the
+batch never writes there; the clone fast-forwards to what landed. The first
+crossing after the deploy creates the worktree (one checkout of the town:
+about 453 MB of files, measured 2026-10-20, with 38 GB free), and every
+crossing after resets it. No box step is needed. A worktree broken
+mid-making (a SIGKILL or power loss leaves it "locked: initializing", or an
+index.lock) is cleared and made again by the drain itself, once
+("clearing its entry and making it again" on the operator's line). If it
+still will not come up, every mail and paper row is held with "the drain's
+worktree would not come up to the town's tip". Then, as meepo, clear it the
+way the drain does, and let the next crossing make it:
+`git -C /srv/postmark-office/town-clone worktree remove -f -f /srv/postmark-office/town-clone/.git/drain-worktree && git -C /srv/postmark-office/town-clone worktree prune`.
+Removing the directory alone is not enough: a locked entry outlives it.
+
 ### Cutover checklist (run once, supervised)
 
 1. Pre-flight: parity audit PASSED 2026-07-08 (twin carries folder letters,

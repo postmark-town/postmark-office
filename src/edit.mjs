@@ -27,7 +27,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { penCommit, penTransaction } from "./write.mjs";
+import { inPenBatch, penCommit, penTransaction } from "./write.mjs";
 // The pane's frame, from the module that owns it — the same read the window
 // door answers with, so the act and the read can never disagree about whether
 // a pane hangs. (src/panes.mjs § THE FRAME AND THE WORDS.)
@@ -238,8 +238,10 @@ function selfContainedOnly(html) {
       `it may only CALL the town's own surfaces (postmark.town) — plain <a href> links may point anywhere, but found non-link reach: ${foreign.slice(0, 3).join(" ")}${foreign.length > 3 ? " …" : ""}`);
 }
 
+// Skipped inside the drain's pen batch, which pulled once when it opened
+// (write.mjs § THE PEN BATCH, POS-723).
 const pullIfPush = (clone) => {
-  if (process.env.TOWN_PUSH === "1") execFileSync("git", ["-C", clone, "pull", "--rebase", "-q"], { encoding: "utf8" });
+  if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) execFileSync("git", ["-C", clone, "pull", "--rebase", "-q"], { encoding: "utf8" });
 };
 
 // The last commit that touched one town path, or null. Garnish discipline: a
