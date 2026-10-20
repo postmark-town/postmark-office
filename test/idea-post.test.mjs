@@ -362,6 +362,29 @@ test("7 · the Think Tank's read adds nothing while the store holds no idea post
   assert.deepEqual(t.posts.map((p) => [p.id, p.state, p.title]), [[ID, "posted", IDEA.title]]);
 });
 
+// POS-715 (Wright 2026-10-20, A): GET /posts?class=idea answered `total: 0` while
+// every doorstep listed ideas, because those are the Think Tank's marks. The idea
+// list now points at them, after its own rows; nothing a reader had moves.
+// FLIP: drop the think_tank spread in town-posts.mjs § postsAtOffice → this goes red.
+test("7b · the idea list points at the Think Tank's marks, after its rows: their count, the read and one sentence", async () => {
+  setup();
+  const TANK = () => ({ tank: "the-town/the-think-tank", ideas: [{ id: "errant/a-tank-mark" }, { id: "wright/a-newcomers-first-hour" }], source: "store" });
+  const empty = await postsAtOffice({ class: "idea" }, { now: NOW, env: OFF, tank: TANK });
+  assert.equal(empty.total, 0, "the posts table holds no idea post: the list is still empty, and says so");
+  assert.deepEqual(empty.think_tank, { ideas: 2, read: 'town { read: "ideas" }',
+    note: `the Think Tank's ideas are world marks, not posts, so they are not in this list: town { read: "ideas" } answers them` });
+  assert.deepEqual(Object.keys(empty), ["as_of", "class", "finished", "total", "posts", "think_tank"], "additive: the pointer rides after the rows");
+  await post();
+  const one = await postsAtOffice({ class: "idea" }, { now: NOW, env: ON, tank: TANK });
+  assert.deepEqual([one.total, one.think_tank.ideas], [1, 2], "with an idea post, the rows are the posts and the pointer still counts the marks");
+  // a tank that cannot be read is not an empty tank
+  assert.equal((await postsAtOffice({ class: "idea" }, { now: NOW, env: ON, tank: () => ({ ideas: [], source: "floor" }) })).think_tank.ideas, null);
+  assert.equal((await postsAtOffice({ class: "idea" }, { now: NOW, env: ON, tank: () => { throw new Error("no store"); } })).think_tank.ideas, null);
+  // only the idea list: not one post, and not the tank's own read of the posts
+  assert.equal("think_tank" in (await postsAtOffice({ class: "idea", post: ID }, { now: NOW, env: ON, tank: TANK })), false);
+  assert.equal("think_tank" in (await ideaPostsForTank({ env: ON })), false);
+});
+
 // ── 8 · the rebuild ─────────────────────────────────────────────────────────
 
 test("8 · the rebuild folds the idea acts (post, amend, advance, sign-ups, answers, awards) into exactly the rows the pen wrote", async () => {

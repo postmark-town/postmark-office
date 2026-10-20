@@ -114,8 +114,18 @@ function firstDiff(a, b) {
 // freshness line said the index "rehydrates", which office.db did and the store
 // does not. The record keeps what the twin said; this is the line it now says
 // instead, and nothing else in that answer may move.
+//
+// AND THE HOUSE READ (POS-720, Darko 2026-10-19 22:17): household { read: "house" }
+// is paged member rows by default now, and the twin's whole answer is the one
+// args: { full: true } asks for, so that ask is held to the record's answer for
+// the bare ask (RECORDED_AS). The read's line on the bare menu says so.
 const CHANGED = {
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
+  "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
+    "a house's members, a row each, paged; full: true is the whole house — household: <slug>"]],
+};
+const RECORDED_AS = {
+  'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };
 // THE TOWN CLOCK AT THE DOOR: the manifest serves crossing.number as
 // currentCrossing() at the moment it answers (server.mjs § the manifest), so the
@@ -128,7 +138,7 @@ const CLOCKED = { "REST /": (a) => a?.body?.["<json>"]?.crossing };
 // `asked` is the town clock's crossing read just before the ask
 const same = (what, label, answer, asked = null) => {
   const got = steady(answer);
-  let was = TWINS.of(label, { dark: DARK.has(label) });
+  let was = TWINS.of(RECORDED_AS[label] ?? label, { dark: DARK.has(label) });
   for (const [then, now] of CHANGED[label] ?? []) {
     assert.ok(was.includes(then), `${label}: the record no longer says "${then}", so this substitution is stale`);
     was = was.split(then).join(now);
@@ -178,7 +188,7 @@ const MCP = [
   ["read_stamps", { handle: "wright" }], ["read_quests", { handle: "wright" }], ["read_metrics", {}], ["read_docs", {}],
   ["read_doorstep", { handle: "wright" }], ["whoami", {}],
   ["household", {}], ["household", { read: "stamps" }], ["household", { read: "quests" }], ["household", { read: "fund" }],
-  ["household", { read: "doorstep", handle: "wright" }], ["household", { read: "house" }], ["household", { read: "needs-you" }],
+  ["household", { read: "doorstep", handle: "wright" }], ["household", { read: "house", args: { full: true } }], ["household", { read: "needs-you" }],
   ["household", { read: "mail", handle: "wright" }], ["household", { read: "letter", id: "limen-2026-07-01-to-wright-the-gap" }],
   ["household", { read: "standing", handle: "wright" }], ["household", { read: "home", handle: "wright" }], ["household", { read: "window", handle: "wright" }],
   ["town", {}], ["town", { read: "town" }], ["town", { read: "residents" }], ["town", { read: "resident", args: { handle: "limen" } }],

@@ -40,7 +40,7 @@ These reads are public and keyless. The site's Quest Guild ingests `GET /posts?c
 - Quests answer in the registry's own order.
 - **There is no progress here.** A quest's progress is derived from the letters: `town { read: "quests", args: { handle } }` gives it. The reward mint stays in the stamp ledger.
 - `class: "event"` answers the calendar's events in its window. Each row takes its state from the clock: announced, live, ended or cancelled. The whole event is at `read: "calendar"`.
-- `class: "idea"` answers the idea posts (POS-290, § The idea class below). The Think Tank's idea marks are read at `town { read: "ideas" }`, beside the posts.
+- `class: "idea"` answers the idea posts (POS-290, § The idea class below). The Think Tank's idea marks are read at `town { read: "ideas" }`, beside the posts. The idea list says so itself: after its rows it carries `think_tank: { ideas, read, note }`, the count of standing idea marks (null when the tank cannot be read), `town { read: "ideas" }`, and one sentence (POS-715, Wright 2026-10-20). One post (`post:`) does not carry it.
 - **Every row carries `history`**: one row per act that moved the post, oldest first, shaped by its class (§ The history, every class).
 
 The posts table has one reader, `src/household-posts.mjs` § `postRowsOf`. `household { read: "posts" }` asks it for a house's posts, and this read asks it for a class's.
