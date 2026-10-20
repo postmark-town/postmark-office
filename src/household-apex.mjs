@@ -1192,7 +1192,42 @@ async function householdGlance(args, key, ctx) {
   const standingLetters = await soft(async () => (await hotMailBlock(odb, key))?.standing?.length ?? 0);
   const board = await soft(() => ix.questBoard(you ?? ashore[0]));
   const gaps = Object.fromEntries(Object.entries(standing.papers ?? {}).map(([h, p]) => [h, (p.gaps ?? []).map(v2.gapWord)]));
+  // ── marks and posts (round 4, Darko 15:06), each from the read that already answers it ──
+  //   counts     town-marks.mjs § marksCountsFor, per resident (drafts, the docket, published),
+  //              the public docket read once (§ liveDocket) and the published rows kept for `newest`
+  //   decided    claim-effects.mjs § readClaimEffects, the outcomes read's one derivation, the
+  //              house's own marks over the same two crossings (no ground axis: these are its own)
+  //   at risk    the stakes read's rows, as needs-you already carries them (no second read)
+  //   posts      household-posts.mjs § householdPosts, the posts read's own answer
+  const tm = await import("./town-marks.mjs");
+  const { readClaimEffects, RULINGS_SINCE_CROSSINGS } = await import("./claim-effects.mjs");
+  const { currentCrossing: crossingAt } = await import("./crossings.mjs");
+  const { householdPosts } = await import("./household-posts.mjs");
+  const { POST_CLASSES } = await import("./town-posts.mjs");
+  const published = [];
+  const counts = { drafts: null, pending: null, standing: null };
+  const add = (k, v) => { if (Number.isFinite(v)) counts[k] = (counts[k] ?? 0) + v; };
+  const nowCrossing = crossingAt(nowMs);
+  // three independent reads, side by side
+  const [, effects, posts] = !ashore.length ? [null, null, null] : await Promise.all([
+    (async () => {
+      const docket = await tm.liveDocket();
+      for (const h of ashore) {
+        const c = await soft(() => tm.marksCountsFor(h, { key,
+          docketFor: (who) => tm.liveDocketFor(who, { docket }),
+          publishedOf: (who, o) => { const r = tm.publishedMarksOf(who, o); published.push(...r); return r; } }));
+        add("drafts", c?.drafts_mine); add("pending", c?.docket); add("standing", c?.published);
+      }
+    })(),
+    soft(async () => {
+      const read = await readClaimEffects({ key, handles: ashore, sinceCrossing: Math.max(0, nowCrossing - RULINGS_SINCE_CROSSINGS), nowCrossing });
+      return read.readable === false ? null : (read.events ?? []); // unreadable is said, never shown as none
+    }),
+    soft(() => householdPosts(you ?? ashore[0], { clone, now: nowMs })),
+  ]);
   return v2.glanceV2({
+    marks: ashore.length ? { counts, published, effects, atRisk: needs?.stakes_at_risk?.rows ?? null } : null,
+    posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
     you, rows, gaps, stances, tail, needs, details,
     mail: { unanswered: letters ? v2.unansweredOf(letters, { mine: new Set(ashore), house: house.members }) : null, standing: standingLetters },
