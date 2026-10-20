@@ -269,6 +269,12 @@ test("THE GATE, ON THE STORE: a threaded standing reply turns r000's thread queu
     assert.equal(row.attention_state, "reply_queued", "the house read's store road turns the thread queued");
     assert.equal(row.queued_reply_id, reply);
     assert.deepEqual(h.residents.r000.awaiting, d.awaiting, "the house's segment is the doorstep's");
+    // POS-720 review item 4: the page's row reads the same standing letters, so it is r000's own doorstep's
+    const page = await housePage({ household: HOUSE }, sctx({ key }));
+    const pr = page.members.find((m) => m.handle === "r000");
+    assert.deepEqual([pr.they_spoke_last, pr.new_inbound], [d.awaiting.summary.they_spoke_last, d.awaiting.summary.new_inbound],
+      "the page row is r000's own doorstep, the queued reply and all");
+    assert.equal(pr.new_inbound, 0, "the queued reply took the thread off new_inbound");
 
     const anon = await houseBundle({ household: HOUSE }, sctx({}));
     assert.equal(JSON.stringify(anon).includes(reply), false, "no key: no trace of the standing reply");
@@ -427,7 +433,16 @@ test("THE PAGE (POS-720): stances and stakes are counts with their reads named; 
   assert.equal(calls.walkers, 1);
   assert.deepEqual(calls.lastActive, [["r000", "r001", "r002"]]);
   const whole = await houseBundle({ household: HOUSE }, ctx({ readers: worldReaders().readers }));
-  assert.deepEqual(p.outcomes, whole.outcomes);
+  // outcomes are a count with their read named, the full answer's own numbers (review #664 item 2)
+  assert.deepEqual([p.outcomes.count, p.outcomes.since_crossing, p.outcomes.through_crossing], [whole.outcomes.count, whole.outcomes.since_crossing, whole.outcomes.through_crossing]);
+  assert.ok(!("events" in p.outcomes));
+  assert.match(p.outcomes.read, /household { read: "outcomes" }/);
+  // at_risk is the stakes read's own, so an unmeasured escrow stays null (review #664 item 3)
+  const blindReaders = worldReaders().readers;
+  blindReaders.stakesFor = async () => ({ next_settlement: null, count: 2, at_risk: null, unavailable: "the escrow projection did not answer", rows: [{ mark: "r001/shed", at_risk: true }] });
+  const blind = await housePage({ household: HOUSE }, ctx({ readers: blindReaders }));
+  assert.equal(blind.stakes.at_risk, null, "unknown, never a recount of the rows");
+  assert.match(blind.stakes.unavailable, /escrow/);
   assert.match(p.shape, /full: true/);
 });
 
@@ -442,8 +457,14 @@ test("THE PAGE (POS-720): limit and offset walk the members, and the last page s
   assert.equal(b.complete, true);
   assert.ok(!("next_offset" in b) && !("more_note" in b));
   assert.deepEqual(pageBounds(undefined, undefined), { limit: HOUSE_PAGE, offset: 0 });
-  assert.deepEqual(pageBounds(0, -3), { limit: HOUSE_PAGE, offset: 0 });
-  assert.deepEqual(pageBounds(999, "4"), { limit: HOUSE_PAGE_MAX, offset: 4 });
+  assert.deepEqual([pageBounds(0, -3).limit, pageBounds(0, -3).offset], [HOUSE_PAGE, 0]);
+  assert.match(pageBounds(0, -3).limit_note, /limit 0 is not a whole number/);
+  assert.deepEqual(pageBounds(999, "4"), { limit: HOUSE_PAGE_MAX, offset: 4, limit_note: `limit 999 is more than a page carries: ${HOUSE_PAGE_MAX} is the most` });
+  assert.match(pageBounds("x", 0).limit_note, /not a whole number/, "a limit that was asked and coerced says so");
+  assert.ok(!("limit_note" in pageBounds(3, 0)));
+  const past = await housePage({ household: HOUSE, offset: 9 }, ctx({ readers: worldReaders().readers }));
+  assert.deepEqual(past.members, []);
+  assert.match(past.offset_note, /offset 9 is past the last member \(3 in all\)/);
 });
 
 test("THE PAGE (POS-720): a member row is about 300 characters as served", async () => {
@@ -480,4 +501,34 @@ test("THE DOOR (POS-720): read: \"house\" answers the page; full: true answers t
   assert.deepEqual(Object.keys(viaGet.residents ?? {}), ["r000", "r001", "r002"]);
   const paged = await householdApex({ read: "house", args: { household: HOUSE, limit: 1 } }, null, { clone: scratch, asOf: AS_OF, strictFields: true });
   assert.deepEqual(paged.members.map((m) => m.handle), ["r000"]);
+});
+
+// POS-720 review item 1, the issue's own done line: the default page stays bounded at
+// Starforge's scale. Ten busy members, 61 stances waiting, 40 outcomes, every block
+// at its widest, through housePage itself with the store's readers stubbed.
+test("THE PAGE (POS-720): ten busy members at Starforge's scale serve under 8K", async (t) => {
+  const members = Array.from({ length: 10 }, (_, i) => `a-busy-resident-handle-${String(i).padStart(2, "0")}`);
+  const body = "A gold drawing left on the terrace steps: a plumb line from a scaffold, its bob pointing at a mark on the floor. The line goes up.";
+  const readers = {
+    registry: { registry: { households: { starforge: { name: "Starforge", residents: members } } }, pins: {}, from: "the registry store" },
+    stances: async () => ({ stances_awaiting: 61, awaiting: Array.from({ length: 20 }, (_, i) => ({ mark: `spark-the-builder/the-datum-mark-${i}`, by: "spark-the-builder", body, on_your_ground: ["wright/the-trueing-terrace"] })),
+      standing: [], cursor: "20", complete: false, set_downs_awaiting: [{ thing: "x/y" }] }),
+    stakesFor: async () => ({ next_settlement: { at: "2026-10-20T18:00:00.000Z" }, count: 120, at_risk: 4,
+      rows: Array.from({ length: 120 }, (_, i) => ({ mark: `rei/mark-${i}`, kind: "sited", body, escrow: i % 5, at_risk: i < 4 })) }),
+    walkers: async () => ({ at: 260.4, walkers: members.map((h, i) => ({ handle: h, x: -12345.6 + i, y: 23456.7, mark_id: i % 2 ? `${h}/the-long-named-home-of-${h}` : null, moving: i % 3 === 0 })) }),
+    claimEffects: async () => ({ readable: true, store: "docket", events: Array.from({ length: 40 }, (_, i) => ({ kind: "claim-locked", mark: `rei/mark-${i}`, at: "2026-10-19T18:00:00.000Z", crossing: 259, cause: body })) }),
+  };
+  const ix = {
+    asOf: async () => "fixture-as-of",
+    hasResident: async () => true,
+    mailAwaiting: async () => ({ summary: { they_spoke_last: 1193, new_inbound: 552, they_spoke_again: 641, reply_queued: 0, last_word_yours: 226, bounced: 12 } }),
+    stampsDetail: async () => ({ tenses: { liquid: 123906, staked: 12424, minted: 129943 } }),
+    lastActiveFor: async (hs) => new Map(hs.map((h) => [h, { at: "2026-10-20T01:06:25.633Z", crossing: 260 }])),
+  };
+  const p = await housePage({ household: "starforge" }, { key: null, clone: scratch, odb: null, nowMs: NOW, ix, readers });
+  assert.equal(p.members.length, 10);
+  assert.equal(p.outcomes.count, 40);
+  const n = served(p);
+  t.diagnostic(`served: ${n} characters`);
+  assert.ok(n <= 8192, `the default page at Starforge's scale is ${n} characters as served`);
 });

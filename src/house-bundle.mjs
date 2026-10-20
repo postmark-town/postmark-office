@@ -376,14 +376,24 @@ export function memberRow(handle, { stands = null, awaiting = null, stamps = nul
   };
 }
 
-/** The page's bounds: `limit` within 1..HOUSE_PAGE_MAX (HOUSE_PAGE when absent), `offset` ≥ 0. */
+/**
+ * The page's bounds: `limit` within 1..HOUSE_PAGE_MAX (HOUSE_PAGE when absent),
+ * `offset` ≥ 0. A limit that was asked and could not be honoured as asked says
+ * so in `limit_note`, rather than being quietly changed.
+ */
 export function pageBounds(limit, offset) {
   const n = Number(limit);
   const o = Number(offset);
-  return {
+  const asked = limit != null && limit !== "";
+  const out = {
     limit: Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), HOUSE_PAGE_MAX) : HOUSE_PAGE,
     offset: Number.isFinite(o) && o > 0 ? Math.floor(o) : 0,
   };
+  if (asked && out.limit !== n)
+    out.limit_note = Number.isFinite(n) && n > HOUSE_PAGE_MAX
+      ? `limit ${limit} is more than a page carries: ${HOUSE_PAGE_MAX} is the most`
+      : `limit ${JSON.stringify(limit)} is not a whole number of members from 1 to ${HOUSE_PAGE_MAX}: this page carries ${out.limit}`;
+  return out;
 }
 
 /**
@@ -424,9 +434,12 @@ export async function housePage({ household = null, limit = null, offset = null 
   const members = [];
   for (const h of page) {
     const own = held.includes(h);
+    // On a key that holds the resident, their standing letters, as the doorstep
+    // and the full house pass them (POS-375): a queued reply reads reply_queued here too.
+    const standing = own ? (await soft(() => hotMailBlock(odb, key, { handle: h })))?.standing ?? null : null;
     members.push(memberRow(h, {
       stands: stands.byHandle[h] ?? null,
-      awaiting: await soft(() => ix.mailAwaiting(h, { offset: 0 })),
+      awaiting: await soft(() => ix.mailAwaiting(h, { offset: 0, standing })),
       stamps: await soft(() => ix.stampsDetail(h)),
       unread: !own ? undefined : unread?.error ? null : (unread?.rows?.get(h) ?? []).length,
     }));
@@ -444,8 +457,10 @@ export async function housePage({ household = null, limit = null, offset = null 
     as_of: asOf, next_crossing: nextCrossingForDoorstep(nowMs),
     ashore,
     ...(notAshore.length ? { not_ashore: notAshore, not_ashore_note: "declared members of this house the office index holds no resident for — at the harbor, or not yet hydrated. They have no page to bundle." } : {}),
-    shape: `the house's members, one typed row each, paged; each row names its resident's whole read. The house's stances and stakes are counts with their reads named. The whole house, every resident's segments and the town-wide blocks: ${whole}`,
+    shape: `the house's members, one typed row each, paged; each row names its resident's whole read. The house's stances, outcomes and stakes are counts with their reads named. The whole house, every resident's segments and the town-wide blocks: ${whole}`,
     total: ashore.length, shown: rows.length, limit: bounds.limit, offset: bounds.offset, complete,
+    ...(bounds.limit_note ? { limit_note: bounds.limit_note } : {}),
+    ...(ashore.length && bounds.offset >= ashore.length ? { offset_note: `offset ${bounds.offset} is past the last member (${ashore.length} in all): offset 0 starts the house again` } : {}),
     ...(complete ? {} : { next_offset: next, more_note: `${ashore.length - next} further member${ashore.length - next === 1 ? "" : "s"} — call again with offset: ${next}` }),
     stances: {
       serves: "household.stances", scope: ashore,
@@ -454,11 +469,17 @@ export async function housePage({ household = null, limit = null, offset = null 
       ...(stances.unavailable ? { unavailable: stances.unavailable } : {}),
       read: 'household { read: "stances" } for your own house; handle: narrows to one resident',
     },
-    outcomes: { serves: "household.outcomes", scope: ashore, ...outcomes },
+    outcomes: {
+      serves: "household.outcomes", scope: ashore,
+      count: outcomes.count, since_crossing: outcomes.since_crossing, through_crossing: outcomes.through_crossing,
+      ...(outcomes.unavailable ? { unavailable: outcomes.unavailable } : {}),
+      ...(outcomes.note ? { note: outcomes.note } : {}),
+      read: 'household { read: "outcomes" } for your own house; handle: narrows to one resident',
+    },
     stakes: {
       serves: "household.stakes", scope: ashore,
       published: stakes.count ?? (stakes.rows ?? []).length,
-      at_risk: (stakes.rows ?? []).filter((r) => r.at_risk === true).length,
+      at_risk: stakes.at_risk ?? null, // the stakes read's own: null while escrow is unmeasured or the world unread
       next_settlement: stakes.next_settlement ?? null,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}),
       read: 'household { read: "stakes" } for your own house; handle: narrows to one resident',
