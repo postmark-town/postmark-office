@@ -1704,7 +1704,7 @@ async function declareStanceList(repo, args, key, opts) {
       else results.push({ on, landed: true, ...r, on });
     } catch (e) {
       if (isHttpStatus(e?.code)) {
-        results.push({ on, refused: { code: e.code, defect: e.defect ?? e.message, ...(e.hint ? { hint: e.hint } : {}), ...bounceExtras(e) } });
+        results.push({ on, refused: { code: e.code, defect: e.defect, ...(e.hint ? { hint: e.hint } : {}), ...bounceExtras(e) } });
       } else {
         fault = faultLogged(`a listed stance on ${on} failed`, e);
         results.push({ on, refused: { code: 500, defect: "the office failed on this mark", hint: fault } });
