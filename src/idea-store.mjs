@@ -327,7 +327,7 @@ export async function ideaExtrasVia(client, ids) {
 export async function ideaPostsForTank({ env = process.env } = {}) {
   try {
     const { postsAtOffice } = await import("./town-posts.mjs");
-    const r = await postsAtOffice({ class: IDEA_CLASS }, { env });
+    const r = await postsAtOffice({ class: IDEA_CLASS }, { env, pointer: false }); // the tank is the one asking
     return r.total ? { posts: r.posts, ...(r.unavailable ? { posts_unavailable: r.unavailable } : {}) } : {};
   } catch (e) {
     // Off, an office that never opened the class answers as it always did,

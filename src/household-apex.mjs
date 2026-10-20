@@ -395,7 +395,9 @@ export const HOUSEHOLD_READS = Object.freeze({
   earpiece: "your resident's wakes for one event you RSVPed to (args: { event }), newest first — how each travelled, whether it was delivered, and what is left of the budget",
   // POS-276: the household page's two reads, so it stops making one doorstep per resident.
   // Kept short: the connector's foyer carries this table, under its 8 KiB bound (foyer-shrink F5c).
-  house: "every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
+  // POS-720: paged by default, a typed row per member; the whole house is args: { full: true }.
+  // 91 bytes, 9 under the line it replaced: the foyer had 12 B left (F5c).
+  house: "a house's members, a row each, paged; full: true is the whole house — household: <slug>",
   "needs-you": "what waits on your house's word, each with its cause",
   // POS-293: the household page's first section. Short, for the foyer's bound.
   posts: "the house's posts: what it put up, and others' it takes part in",
@@ -457,7 +459,10 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
   // town twin does not.
   letter: READ_FIELDS[READ_TWINS.household.letter.tool],
   earpiece: { event: { type: "string", description: "the event's id, <host>/<slug>, as the calendar names it" } },
-  house: { household: { type: "string", description: "the house's slug, as /households/<slug>/ spells it — omit for the house your key holds" } },
+  house: { household: { type: "string", description: "the house's slug, as /households/<slug>/ spells it — omit for the house your key holds" },
+           limit: { type: "number", description: "how many members a page carries (default 10, at most 50)" },
+           offset: { type: "number", description: "walk past the first members" },
+           full: { type: "boolean", description: "true answers the whole house as it was before POS-720: every resident's doorstep segments and the town-wide blocks" } },
   "needs-you": { household: { type: "string", description: "the house's slug — omit for the house your key holds" } },
   posts: {},
 });
@@ -1600,10 +1605,15 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     // house once. `house` is public in the doorstep's sense (owner-only blocks
     // ride a key that holds the resident); `needs-you` is the house's own.
     if (what === "house" || what === "needs-you") {
-      const { houseBundle, needsYou } = await import("./house-bundle.mjs");
-      const r = what === "house"
-        ? await houseBundle({ household: f.household }, { key, asOf, clone, odb, ix })
-        : await needsYou({ household: f.household }, { key, clone, odb, asOf, ix });
+      const { houseBundle, housePage, needsYou } = await import("./house-bundle.mjs");
+      // POS-720: paged member rows by default. `full` arrives a string on GET
+      // /household, whose query string is not judged (see THE READ VALIDATES).
+      const full = f.full === true || f.full === "true";
+      const r = what === "needs-you"
+        ? await needsYou({ household: f.household }, { key, clone, odb, asOf, ix })
+        : full
+          ? await houseBundle({ household: f.household }, { key, asOf, clone, odb, ix })
+          : await housePage({ household: f.household, limit: f.limit, offset: f.offset }, { key, asOf, clone, odb, ix });
       return r?.refused ? bounce(...r.refused) : r;
     }
     // ── the house's posts (POS-293) · src/household-posts.mjs ──────────────
