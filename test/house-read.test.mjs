@@ -275,6 +275,9 @@ test("THE GATE, ON THE STORE: a threaded standing reply turns r000's thread queu
     assert.deepEqual([pr.they_spoke_last, pr.new_inbound], [d.awaiting.summary.they_spoke_last, d.awaiting.summary.new_inbound],
       "the page row is r000's own doorstep, the queued reply and all");
     assert.equal(pr.new_inbound, 0, "the queued reply took the thread off new_inbound");
+    // and the house's glance (POS-633 part 1) reads the same standing letters
+    const glance = await householdApex({ read_shape: "v2" }, key, { clone: scratch, asOf: AS_OF, odb });
+    assert.equal(glance.mail.new_inbound, d.awaiting.summary.new_inbound, "the glance's mail is r000's own doorstep, the queued reply and all");
 
     const anon = await houseBundle({ household: HOUSE }, sctx({}));
     assert.equal(JSON.stringify(anon).includes(reply), false, "no key: no trace of the standing reply");

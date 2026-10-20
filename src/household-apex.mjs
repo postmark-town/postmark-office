@@ -1170,8 +1170,11 @@ async function householdGlance(args, key, ctx) {
   const details = [];
   let newInbound = 0;
   let mailBlind = false;
+  // the owner's standing letters, as the doorstep and the house page read them (POS-720 review item 4)
+  const { hotMailBlock: standingOf } = await import("./town-mail.mjs");
   for (const h of ashore) {
-    const awaiting = await soft(() => ix.mailAwaiting(h, { offset: 0 }));
+    const standingLetters = (await soft(() => standingOf(odb, key, { handle: h })))?.standing ?? null;
+    const awaiting = await soft(() => ix.mailAwaiting(h, { offset: 0, standing: standingLetters }));
     const stamps = await soft(() => ix.stampsDetail(h));
     if (awaiting?.summary) newInbound += Number(awaiting.summary.new_inbound) || 0; else mailBlind = true;
     const row = hb.memberRow(h, { stands: stands.byHandle[h] ?? null, awaiting, stamps });
