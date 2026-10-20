@@ -337,6 +337,22 @@ test("NEEDS-YOU, ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's alerts in 
   assert.deepEqual([blind.alerts, blind.alerts_unread], [[], [{ kind: "mark-taken", reason: "down" }]]);
 });
 
+// POS-717: Starforge's needs-you said count 20 while 61 marks waited. The
+// stances list is a page of NEEDS_YOU_STANCES; the count is the whole of it.
+test("NEEDS-YOU (POS-717): count is everything waiting, shown is the rows on this answer", async () => {
+  const { readers } = worldReaders();
+  const page = Array.from({ length: 20 }, (_, i) => ({ mark: `r-stranger/fence-${i}`, by: "r-stranger", on_your_ground: ["r000/garden"] }));
+  readers.stances = async () => ({ stances_awaiting: 61, awaiting: page, standing: [], cursor: "c20", complete: false, set_downs_awaiting: [] });
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.equal(n.stances_awaiting.total, 61);
+  assert.equal(n.stances_awaiting.shown, 20);
+  // 61 stances, r000's bounce and r001's at-risk shed; 20 of the stances are on this answer
+  assert.equal(n.count, 61 + 1 + 1, "count is the true total");
+  assert.equal(n.shown, 20 + 1 + 1, "shown is what this answer lists");
+  assert.match(n.stances_awaiting.more, /cursor: "c20"/);
+});
+
 // ── the door ────────────────────────────────────────────────────────────────
 
 test("THE DOOR: both reads are on the household door's list, declare their field, and refuse an unknown one", async () => {

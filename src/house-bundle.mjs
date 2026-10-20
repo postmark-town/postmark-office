@@ -388,10 +388,16 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // the loose `left_the_world` rows the 7-day take note rode first.
   const alerts = alerted.alerts ?? [];
 
-  const count = stanceRows.length + setDowns.length + bounces.length + keyAsks.length + atRisk.length + alerts.length;
+  // THE TRUE TOTAL (POS-717). The stances list is a page (NEEDS_YOU_STANCES),
+  // and `count` used to add the page's length, so Starforge read 20 while 61
+  // waited. `count` is everything waiting; `shown` is the rows on this answer.
+  const stancesTotal = Math.max(Number(stances.stances_awaiting) || 0, stanceRows.length);
+  const rest = setDowns.length + bounces.length + keyAsks.length + atRisk.length + alerts.length;
+  const count = stancesTotal + rest;
+  const shown = stanceRows.length + rest;
   return {
     read: "needs-you", household: house.slug, residents: mine, as_of: ctx.asOf ?? null,
-    count,
+    count, shown,
     stances_awaiting: {
       total: stances.stances_awaiting ?? stanceRows.length, shown: stanceRows.length,
       ...(stances.cursor ? { more: `household { read: "stances", cursor: "${stances.cursor}" }` } : {}),
