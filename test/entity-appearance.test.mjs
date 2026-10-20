@@ -15,11 +15,14 @@ import assert from "node:assert/strict";
 
 import {
   worldDescribe, applyAct, nodeAnswer, appearanceIdOf, rootIdOf, appearanceNodes,
-  __resetAppearanceForTest, APPEARANCE_CLASS, BODY_MAX,
+  __resetAppearanceForTest, APPEARANCE_CLASS, BODY_MAX, ID_MAX, FOLD_SQL, OVERLAP_SQL,
 } from "../src/entity-predicates.mjs";
 import { entityKindOf, investigateResident } from "../src/world-investigate-entity.mjs";
 import { dispatchToolFor, focusArgs } from "../src/world-apex.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
+import { worldClone } from "./fixture-paths.mjs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const jetto = { handles: new Set(["jetto-of-starforge"]), household: "starforge" };
 
@@ -99,6 +102,67 @@ test("P1: ONLY THE RESIDENT'S OWN HOUSEHOLD WRITES IT — another resident, anot
   assert.equal(d.written.length, 1, "nothing was written for a refusal");
 });
 
+test("THE SCOPE IS THE HOUSEHOLD (P1; Darko 2026-10-19 18:21): a housemate may write and withdraw, another household is refused", async () => {
+  const d = door();
+  const house = { handles: new Set(["sb-ash", "sb-bram"]), household: "sb-lantern" };
+  await d.describe({ handle: "sb-ash", slot: "appearance", value: "x", body: "Ash's glance." }, house);
+  const bram = await d.describe({ handle: "sb-ash", slot: "boots", value: "worn", body: "Worn boots." }, house);
+  assert.equal(bram.described, "sb-ash/appearance.boots", "a key of the same household writes on its housemate");
+  await d.describe({ handle: "sb-ash", withdraw: "sb-ash/appearance.boots" }, house);
+  const other = { handles: new Set(["sb-cleo"]), household: "sb-quill" };
+  await refused(d.describe({ handle: "sb-ash", slot: "hat", value: "x", body: "y" }, other), 403, /not one of your residents/);
+  await refused(d.describe({ withdraw: "sb-ash/appearance" }, other), 403);
+  assert.ok(d.nodes.has("sb-ash/appearance"), "another household's withdraw took nothing");
+});
+
+test("A PATH ID PAST WHAT AN INDEX ROW HOLDS is a 422 before the record is asked", async () => {
+  const d = door();
+  await d.describe({ slot: "appearance", value: "x", body: "y" });
+  let under = "jetto-of-starforge/appearance";
+  const slot = "s".repeat(48);
+  while (under.length + 1 + slot.length <= ID_MAX) {
+    const out = await d.describe({ slot, value: "v", body: "b", under });
+    under = out.described;
+  }
+  const writes = d.written.length;
+  await refused(d.describe({ slot, value: "v", body: "b", under }), 422, /ids stop at 1000/);
+  assert.equal(d.written.length, writes, "nothing was written");
+});
+
+test("THE FOLD ORDERS BY ACT ID, whatever order the rows arrive in: an older revision read late never wins, a withdraw buries only what came before it", () => {
+  const nodes = new Map();
+  const describe = (id, act, parent, body) => applyAct(nodes, { id: String(act), action: "describe", object: id, actor: "j", payload: { parent, slot: id.split(".").pop().split("/").pop(), value: "v", body } });
+  describe("j/appearance", 1, "resident:j", "root");
+  describe("j/appearance.hood", 5, "j/appearance", "newer");
+  describe("j/appearance.hood", 3, "j/appearance", "older, committed late");
+  assert.equal(nodes.get("j/appearance.hood").body, "newer");
+  applyAct(nodes, { id: "10", action: "withdraw", object: "j/appearance.hood", actor: "j" });
+  describe("j/appearance.hood.clasp", 8, "j/appearance.hood", "written before the withdraw, read after it");
+  assert.equal(nodes.has("j/appearance.hood.clasp"), false, "the tombstone holds it");
+  assert.equal(nodes.has("j/appearance.hood"), false);
+  describe("j/appearance.hood", 12, "j/appearance", "described again after the withdraw");
+  assert.equal(nodes.get("j/appearance.hood").body, "described again after the withdraw");
+});
+
+test("THE CATCH-UP RE-READS BEHIND ITS CURSOR: an act that commits after a higher one was read is still folded", async () => {
+  __resetAppearanceForTest();
+  const committed = [{ id: "1", action: "describe", object: "j/appearance", actor: "j", payload: { parent: "resident:j", slot: "appearance", value: "v", body: "root" } },
+    { id: "3", action: "describe", object: "j/appearance.boots", actor: "j", payload: { parent: "j/appearance", slot: "boots", value: "v", body: "boots" } }];
+  const late = { id: "2", action: "describe", object: "j/appearance.hood", actor: "j", payload: { parent: "j/appearance", slot: "hood", value: "v", body: "hood" } };
+  const query = async (sql, [cursor]) => {
+    if (sql === FOLD_SQL) return committed.filter((r) => BigInt(r.id) > BigInt(cursor));
+    if (sql === OVERLAP_SQL) return committed.filter((r) => BigInt(r.id) <= BigInt(cursor));
+    throw new Error("an unexpected read");
+  };
+  const t0 = Date.now();
+  const first = await appearanceNodes({ query, now: t0 });
+  assert.deepEqual([...first.keys()].sort(), ["j/appearance", "j/appearance.boots"]);
+  committed.push(late);   // act 2 commits now, behind the cursor (3)
+  const again = await appearanceNodes({ query, now: t0 + 5000 });
+  assert.equal(again.get("j/appearance.hood")?.body, "hood", "the overlap found the late commit");
+  __resetAppearanceForTest();
+});
+
 test("THE GRAMMAR: a detail needs the root first, a slot is one word, the root takes no under, value and body are required", async () => {
   const d = door();
   await refused(d.describe({ slot: "hood", value: "x", body: "y" }), 422, /no appearance yet/);
@@ -110,7 +174,7 @@ test("THE GRAMMAR: a detail needs the root first, a slot is one word, the root t
   assert.equal(d.written.length, 0);
 });
 
-test("THE CLOSE LOOK (P10): a node in investigate's shape, depth 1 its own details, depth N through the engine's one descent", () => {
+test("THE CLOSE LOOK (P10): a node in investigate's shape, depth 1 its own details, depth N through the engine's one descent", async () => {
   const nodes = new Map();
   const add = (id, parent, slot) => applyAct(nodes, { id: String(nodes.size + 1), action: "describe", object: id, actor: "j", payload: { parent, slot, value: slot, body: `${slot}.` } });
   add("j/appearance", "resident:j", "appearance");
@@ -121,14 +185,15 @@ test("THE CLOSE LOOK (P10): a node in investigate's shape, depth 1 its own detai
   assert.deepEqual(one.predicates.map((p) => p.id), ["j/appearance.boots", "j/appearance.hood"]);
   assert.deepEqual(one.more, { predicates: 0 });
   assert.equal("beneath" in one, false, "depth 1 reads nothing below its own details");
-  // the engine's descent (world-verbs.mjs § descend), as the office hands it in
-  const descend = (from, childrenOf, { depth, budget }) => {
-    const rows = []; let level = [...from];
-    for (let d = 2; d <= depth; d++) { const next = []; for (const id of level) for (const k of childrenOf(id)) { if (rows.length < budget) { rows.push({ ...k, under: id, depth: d }); next.push(k.id); } } level = next; }
-    return { rows, cut: 0, descend: [] };
-  };
+  // the engine's own descent, from the pinned world clone (world-verbs.mjs § descend, world#257)
+  const { descend } = await import(pathToFileURL(join(worldClone(), "tools", "world-verbs.mjs")).href);
+  assert.equal(typeof descend, "function", "the pinned engine carries the descent");
   const deep = nodeAnswer(nodes, "j/appearance", { depth: 2, descend });
-  assert.deepEqual(deep.beneath.map((b) => [b.id, b.under]), [["j/appearance.hood.clasp", "j/appearance.hood"]]);
+  assert.deepEqual(deep.beneath.map((b) => [b.id, b.under, b.depth]), [["j/appearance.hood.clasp", "j/appearance.hood", 2]]);
+  assert.deepEqual(deep.descend, [], "the clasp has nothing under it");
+  const capped = nodeAnswer(nodes, "j/appearance", { depth: 3, budget: 1, descend });
+  assert.equal(capped.predicates.length, 1, "one cap: one detail at the look's own level");
+  assert.ok(capped.more.predicates >= 1);
   const old = nodeAnswer(nodes, "j/appearance", { depth: 2, descend: null });
   assert.match(old.beneath_unavailable, /predates the descent/, "an older engine says so, and the look stays one level deep");
 });
@@ -179,6 +244,9 @@ test("AGAINST A REAL STORE: the door writes an `appearance` act, and the fold re
     __resetAppearanceForTest(); // a second process: nothing in RAM, the fold reads the record
     const nodes = await appearanceNodes();
     assert.equal(nodes.get("jetto-of-starforge/appearance")?.body, "A hooded figure.");
+    // and a second catch-up runs the overlap read behind the cursor, against the real schema
+    const again = await appearanceNodes({ now: Date.now() + 5000 });
+    assert.equal(again?.get("jetto-of-starforge/appearance")?.body, "A hooded figure.", "the overlap read answered on the real store");
   } finally {
     await api.end(); await s.stop();
     __resetAppearanceForTest();
