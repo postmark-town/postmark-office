@@ -50,7 +50,8 @@ const postRow = (cls, id, state, role, responses, act, hoursAgo) => ({ class: cl
   latest: { act, at: new Date(NOW - hoursAgo * 3_600_000).toISOString() }, responses, role });
 export const POSTS_MIX = {
   household: "hh:starforge", residents: STARFORGE,
-  put_up: { total: 2, shown: 2, rows: [postRow("idea", "a-map-for-newcomers", "open", "author", 2, "sign-up", 5), postRow("event", "the-lantern-walk", "ended", "author", 6, "post", 300)] },
+  put_up: { total: 3, shown: 3, rows: [postRow("idea", "a-map-for-newcomers", "open", "author", 2, "sign-up", 5), postRow("bug", "rei/the-map-forgets", "confirmed", "author", 0, "advance", 9),
+    postRow("event", "the-lantern-walk", "ended", "author", 6, "post", 300)] },
   taking_part: { total: 2, shown: 2, rows: [postRow("event", "halloween-at-the-wharf", "announced", "participant", 14, "rsvp", 2), postRow("idea", "binya-vernal/a-tide-clock", "posted", "participant", 3, "stake", 30)] },
 };
 
@@ -506,7 +507,7 @@ test("marks: the house's building in counts and two rows; the last crossing is t
 
 test("posts: the house's open posts, those with a response as the newest act, what it takes part in by class, the two newest", () => {
   const p = postsBlock(POSTS_MIX, { nowMs: NOW });
-  assert.equal(p.open, 1, "the ended event is finished");
+  assert.equal(p.open, 2, "the ended event is finished; the bug the house reported is open at its stage");
   assert.equal(p.responses_waiting, 1, "the open idea post's newest act is a respondent's");
   assert.deepEqual(p.part_of, { event: 1, idea: 1 });
   assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h"]);
