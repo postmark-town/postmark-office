@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { glanceV2, sinceV2, needsBlock, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
+import { glanceV2, sinceV2, needsBlock, needGroups, unansweredOf, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
   closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN } from "../src/household-read-v2.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
@@ -43,7 +43,7 @@ function partsFor(handles, { waiting = 61, page = waiting, papersGaps = {}, ques
     gaps: papersGaps,
     stances: { stances_awaiting: waiting, awaiting: Array.from({ length: Math.min(page, waiting) }, (_, i) => candidate(i)) },
     needs: { set_downs_awaiting: { rows: [] }, unplaced_bounces: { rows: [{}] }, stakes_at_risk: { rows: [] }, key_asks: { rows: [] }, alerts: [] },
-    mail: { unread: 4013, newInbound: 468, standing: 2 },
+    mail: { unanswered: 37, newInbound: 468, standing: 2 },
     details: rows.map((r, i) => ({ handle: r.handle, tenses: { liquid: 906 - i, staked: 24, minted: 943 - i } })),
     quests,
     standing: { tier: "resident", household: "keeminlee", world_writes: { used: 3, cap: 200, per: "hour" } },
@@ -54,20 +54,26 @@ test("H2 · ≤ 4K as served: Starforge, a house of one, a brand-new house", () 
   const sf = glanceV2(partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } }), { nowMs: NOW });
   const one = glanceV2(partsFor(["kai"], { waiting: 3 }), { nowMs: NOW });
   const fresh = glanceV2({ ...partsFor(["newbie"], { waiting: 0, papersGaps: { newbie: ["home", "window", "parcel"] }, quests: [] }),
-    mail: { unread: 0, newInbound: 0, standing: 0 } }, { nowMs: NOW });
+    mail: { unanswered: 0, newInbound: 0, standing: 0 } }, { nowMs: NOW });
   for (const [name, g] of [["Starforge", sf], ["a house of one", one], ["a new house", fresh]])
     assert.ok(served(g) <= 4096, `${name}'s glance is ${served(g)} characters as served`);
   assert.equal(sf.house.members.length, 9);
 });
 
-test("H2 · a mark's body is never cut, and needs.first is the oldest three, oldest first", () => {
-  const p = partsFor(STARFORGE);
-  const g = glanceV2(p, { nowMs: NOW });
-  assert.equal(g.needs.first.length, NEEDS_FIRST);
-  const oldest = p.stances.awaiting.slice(-NEEDS_FIRST).reverse();
-  assert.deepEqual(g.needs.first.map((r) => r.mark), oldest.map((c) => c.mark));
-  for (const r of g.needs.first) assert.equal(r.body, BODY, "whole");
-  assert.deepEqual(Object.keys(g.needs.first[0]), ["mark", "by", "kind", "body", "over", "since"]);
+test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot are ONE row; two others are their own; the sample is the oldest body, whole", () => {
+  const stream = Array.from({ length: 60 }, (_, i) => ({ ...candidate(i), body: `mark ${i}: ${BODY}`.slice(0, 150) })); // newest first
+  const other = { mark: "binya-vernal/the-lantern", by: "binya-vernal", kind: "sited", body: BODY, date: "2026-10-12", on_your_ground: ["rei/the-lanternseed-gardens"] };
+  const third = { mark: "little-bird/a-page", by: "little-bird", kind: "sited", body: BODY, date: "2026-10-17", on_your_ground: ["rei/the-lanternseed-gardens"] };
+  const rows = [...stream.slice(0, 30), third, ...stream.slice(30), other];
+  const n = needsBlock({ stances: { stances_awaiting: 62, awaiting: rows }, needs: null });
+  assert.equal(n.count, 62, "the count stays the total");
+  assert.equal(n.first.length, 3);
+  assert.deepEqual(n.first.map((r) => [r.by, r.over, r.count]),
+    [["spark-the-builder", "wright/the-trueing-terrace", 60], ["binya-vernal", "rei/the-lanternseed-gardens", 1], ["little-bird", "rei/the-lanternseed-gardens", 1]]);
+  assert.deepEqual(Object.keys(n.first[0]), ["by", "over", "count", "oldest", "newest", "sample"]);
+  assert.deepEqual([n.first[0].oldest, n.first[0].newest], ["2026-10-05", "2026-10-19"]);
+  assert.equal(n.first[0].sample, stream.at(-1).body, "the group's oldest body, whole");
+  assert.equal(needGroups(rows, { max: 1 }).length, 1);
 });
 
 test("needs.count is everything waiting (61 stances and a bounce), never the page's length", () => {
@@ -116,7 +122,9 @@ test("D2 · the house's human is named by the house, from one function", () => {
 
 test("D7 · mail says new_inbound and what sails next; no key is called owed", () => {
   const g = glanceV2(partsFor(STARFORGE), { nowMs: NOW });
-  assert.deepEqual(g.mail, { unread: 4013, new_inbound: 468, on_the_next_boat: 2 });
+  assert.deepEqual(g.mail, { unanswered_14d: 37, new_inbound: 468, on_the_next_boat: 2 });
+  assert.ok(!("unread" in g.mail), "the office's read flag is not a resident's");
+  assert.equal(g.house.members_key, "handle · where · last act, age · needs", "the members' legend, once");
   assert.ok(!JSON.stringify(g).includes("owed"));
 });
 
@@ -133,9 +141,9 @@ test("stamps: the pool is the residents' sum, labelled pending POS-326; earned n
 test("the grammar · every key of the glance and of a since: answer has an explain row, and none carries a URL", () => {
   const g = glanceV2(partsFor(STARFORGE, { papersGaps: { architect: ["home"] } }), { nowMs: NOW });
   assert.deepEqual(unexplained("household", g, 2), []);
-  const s = sinceV2({ stances: partsFor(STARFORGE).stances, unreadRows: [] }, encodeCursor({ crossing: 259, ms: NOW - 86_400_000 }), { nowMs: NOW });
+  const s = sinceV2({ stances: partsFor(STARFORGE).stances, inbound: [] }, encodeCursor({ crossing: 259, ms: NOW - 86_400_000 }), { nowMs: NOW });
   assert.deepEqual(unexplained("household", s, 2), []);
-  const blind = sinceV2({ stances: { unavailable: "down", awaiting: [] }, unreadRows: null }, encodeCursor({ crossing: 259, ms: NOW }), { nowMs: NOW });
+  const blind = sinceV2({ stances: { unavailable: "down", awaiting: [] }, inbound: null }, encodeCursor({ crossing: 259, ms: NOW }), { nowMs: NOW });
   assert.deepEqual(unexplained("household", blind, 2), []);
   for (const x of [g, s]) assert.doesNotMatch(JSON.stringify(x), /https?:\/\//);
   assert.equal(explainAnswer("household", "house.members").what.startsWith("each member in one line"), true);
@@ -150,7 +158,7 @@ test("the cursor · since: answers only what changed, complete when nothing was 
   // a cursor from 2026-10-18: the needs dated the 18th or later, and two letters since
   const at = Date.parse("2026-10-18T12:00:00Z");
   const letters = [{ id: "a", delivered_at: "2026-10-19T00:06:00.000Z" }, { id: "b", delivered_at: "2026-10-18T13:00:00.000Z" }, { id: "c", delivered_at: "2026-10-17T00:06:00.000Z" }];
-  const small = { stances: { stances_awaiting: 6, awaiting: p.stances.awaiting.slice(0, 6) }, unreadRows: letters };
+  const small = { stances: { stances_awaiting: 6, awaiting: p.stances.awaiting.slice(0, 6) }, inbound: letters };
   const s = sinceV2(small, encodeCursor({ crossing: 256, ms: at }), { nowMs: NOW });
   assert.deepEqual(Object.keys(s), ["since", "needs", "mail", "complete", "cursor", "more", "reading_law", "read_shape"]);
   assert.ok(s.needs.new.every((r) => r.since >= "2026-10-18"));
@@ -159,7 +167,7 @@ test("the cursor · since: answers only what changed, complete when nothing was 
   assert.equal(s.mail.new, 2);
   assert.equal(s.complete, false, "a list was cut, so it says so");
   assert.ok(!("house" in s) && !("can" in s), "only what changed");
-  const quiet = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, unreadRows: [] }, encodeCursor({ crossing: 259, ms: NOW }), { nowMs: NOW });
+  const quiet = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, inbound: [] }, encodeCursor({ crossing: 259, ms: NOW }), { nowMs: NOW });
   assert.equal(quiet.nothing_new, true);
   assert.equal(quiet.complete, true);
 });
@@ -240,11 +248,11 @@ test("H2 with every block · Starforge's glance with closer and happened stays �
   const went = [{ at: new Date(NOW - 3_600_000).toISOString() }, { at: new Date(NOW - 7_200_000).toISOString() }];
   const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
   assert.ok(served(g) <= 4096, `Starforge's whole glance is ${served(g)} characters as served`);
-  assert.equal(g.closer.length, 3);
+  assert.equal(g.closer_14d.length, 3, "the window rides the key");
   assert.equal(g.happened.length, 5);
   assert.equal(g.stamps.went, 2);
   assert.deepEqual(unexplained("household", g, 2), []);
-  const s = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, unreadRows: [], happened, went }, encodeCursor({ crossing: 259, ms: NOW - 5_400_000, hw: "100" }), { nowMs: NOW });
+  const s = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, inbound: [], happened, went }, encodeCursor({ crossing: 259, ms: NOW - 5_400_000, hw: "100" }), { nowMs: NOW });
   assert.equal(s.happened.length, 5);
   assert.equal(s.happened_more, 4);
   assert.equal(s.stamps.went, 1, "only what went after the cursor");
@@ -269,13 +277,15 @@ test("H4 phrases · a recorded hand and for win over the actor; a recorded route
 // ── the review of #679 ───────────────────────────────────────────────────────
 test("needs.first at 101 waiting is the house's true oldest, never the oldest of the newest page", () => {
   const page = Array.from({ length: 100 }, (_, i) => candidate(i)); // newest first, as the inbox orders it
-  const tail = [candidate(98), candidate(99), { ...candidate(100), mark: "spark-the-builder/the-very-oldest" }];
+  // the inbox's last rows, read on their own: two already on the page, and the house's oldest, by another author
+  const oldest = { mark: "binya-vernal/the-very-oldest", by: "binya-vernal", kind: "sited", body: BODY, date: "2026-09-30", on_your_ground: ["rei/the-lanternseed-gardens"] };
+  const tail = [candidate(98), candidate(99), oldest];
   const n = needsBlock({ stances: { stances_awaiting: 101, awaiting: page }, needs: null, tail });
   assert.equal(n.count, 101);
-  assert.equal(n.first[0].mark, "spark-the-builder/the-very-oldest", "the oldest, first");
-  assert.deepEqual(n.first.map((r) => r.mark), tail.slice().reverse().map((c) => c.mark));
-  // a page that holds everything needs no tail
-  assert.deepEqual(needsBlock({ stances: { stances_awaiting: 3, awaiting: page.slice(0, 3) } }).first.map((r) => r.mark), page.slice(0, 3).reverse().map((c) => c.mark));
+  assert.deepEqual(n.first.map((r) => [r.by, r.count]), [["binya-vernal", 1], ["spark-the-builder", 100]], "the oldest group first; the tail's rows on the page are not counted twice");
+  assert.equal(n.first[0].sample, BODY);
+  // without the tail, the oldest is not there: that is why it is read
+  assert.deepEqual(needsBlock({ stances: { stances_awaiting: 101, awaiting: page } }).first.map((r) => r.by), ["spark-the-builder"]);
 });
 
 test("went leaves out a gift between housemates; closer counts delivered letters only, never a housemate", () => {
@@ -320,4 +330,35 @@ test("H4 phrases · a row with no actor says no \"by\" at all", () => {
   const r = happenedRow({ at: "2026-10-20T08:00:00Z", actor: null, action: "legacy:seed", object: "x/y" }, { houseName: "Starforge" });
   assert.ok(!("by" in r));
   assert.equal(happenedLine(r, { nowMs: Date.parse("2026-10-20T10:00:00Z") }), "legacy:seed x/y · 2 h");
+});
+
+// ── Darko's notes, 2026-10-20 ────────────────────────────────────────────────
+test("mail that can be acted on: unanswered_14d by the ledger, answered by thread or by any later letter to the sender", () => {
+  const house = ["rei", "wright", "mari"];
+  const letters = [
+    { id: "in-1", from_h: "damaris", to_h: "rei", thread: null, date: "2026-10-15", delivered_at: "2026-10-15T12:06:00Z" },  // answered by thread
+    { id: "out-1", from_h: "rei", to_h: "a-third-party", thread: "in-1", date: "2026-10-16", delivered_at: null }, // the thread is the answer, whoever it went to
+    { id: "in-2", from_h: "kai", to_h: "wright", thread: null, date: "2026-10-15", delivered_at: "2026-10-15T12:06:00Z" },    // answered by a later letter (from a housemate)
+    { id: "out-2", from_h: "mari", to_h: "kai", thread: null, date: "2026-10-17", delivered_at: "2026-10-18T00:06:00Z" },
+    { id: "in-3", from_h: "lupi", to_h: "rei", thread: null, date: "2026-10-18", delivered_at: "2026-10-18T12:06:00Z" },     // unanswered
+    { id: "in-4", from_h: "zed", to_h: "rei", thread: null, date: "2026-10-18", delivered_at: "2026-10-19T00:06:00Z" },      // an earlier letter to zed is no answer
+    { id: "out-4", from_h: "rei", to_h: "zed", thread: null, date: "2026-10-10", delivered_at: "2026-10-10T12:06:00Z" },
+    { id: "in-5", from_h: "wright", to_h: "rei", thread: null, date: "2026-10-18", delivered_at: "2026-10-18T12:06:00Z" },    // a housemate's letter is not the town's mail
+  ];
+  assert.equal(unansweredOf(letters, { mine: new Set(["rei", "wright"]), house }), 2);
+});
+
+test("discovery (as world v2): HOUSEHOLD_READ_SHAPE=v2 makes the glance the MCP door's default; read_shape: \"v1\" still asks for today's read; the card names it", async () => {
+  const { doorShape, householdLeanShape } = await import("../src/door-read-shape.mjs");
+  assert.equal(doorShape("household", { HOUSEHOLD_READ_SHAPE: "v2" }), "v2");
+  assert.equal(doorShape("household", {}), "h0", "unset is today's read: v1 stays the default until Darko sets the date");
+  assert.equal(householdLeanShape("v2"), "h0");
+  const glance = await householdApex({}, null, { readShape: "v2" });
+  assert.equal(glance.read_shape, "v2", "the env's default answers the glance");
+  const v1 = await householdApex({ read_shape: "v1" }, null, { readShape: "v2" });
+  assert.deepEqual(v1, await householdApex({}, null, {}), "read_shape: \"v1\" is today's read, whatever the default");
+  const { HOUSEHOLD_DESCRIPTION } = await import("../src/household-apex.mjs");
+  assert.match(HOUSEHOLD_DESCRIPTION, /read_shape: "v2" answers your house/);
+  const { DOORSTEP_MORE } = await import("../src/doorstep-apex.mjs");
+  assert.match(DOORSTEP_MORE, /household \{ read_shape: "v2" \} is your house at a glance/, "the doorstep points at it in one line");
 });
