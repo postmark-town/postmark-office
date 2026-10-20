@@ -32,7 +32,7 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -138,6 +138,12 @@ const bug = (id, author, household, state, at) => {
   acts.push({ id: nextAct++, class: "bug", action: "post", object: id, at: iso(at) });
 };
 bug("rei/the-map-forgets", "rei", "hh:starforge", "confirmed", NOW - 4 * H);
+// a quest the town posted that a Starforge resident answered (Darko 15:54: every class through the one pass)
+posts.set("the-town/reach-out", { id: "the-town/reach-out", class: "quest", title: "Reach out", body: "write to five", author: "the-town", household: "the-town",
+  place_mark: null, place_x: null, place_y: null, starts: null, ends: null, state: "open", fields: {}, revised: 0, posted_act: nextAct, last_act: nextAct });
+acts.push({ id: nextAct++, class: "quest", action: "post", object: "the-town/reach-out", at: iso(NOW - D) });
+responses.push({ post: "the-town/reach-out", handle: "rei", household: "hh:starforge", kind: "join", state: "standing", fields: {}, act: nextAct });
+acts.push({ id: nextAct++, class: "quest", action: "join", object: "the-town/reach-out", at: iso(NOW - 6 * H) });
 bug("zed/not-ours", "zed", "solo:zed", "reported", NOW - 5 * H);
 rsvp("kogane/tea", "mari", "hh:starforge", NOW - 2 * H);
 rsvp("wright/office-hours", "kogane", "hh:shard-house", NOW - D);
@@ -328,9 +334,12 @@ test("a class the office cannot read is named, and its rows are left out rather 
   try {
     const a = await withNoWorld(() => householdPosts("wright", { now: NOW, townClone: TOWN, readers: REGISTRY }));
     assert.deepEqual(a.unavailable, [
+      // every post class in POST_CLASSES order (Darko 15:54: one generic pass), the idea posts quiet while closed,
+      // then the Think Tank's marks, which are world marks and not posts
       "the events could not be read from the office's record",
-      "the Think Tank could not be read from the world record",
+      "the quests could not be read from the office's record",
       "the bugs could not be read from the office's record",
+      "the Think Tank could not be read from the world record",
     ]);
     assert.deepEqual([a.put_up.total, a.taking_part.total], [0, 0]);
     const noRegistry = await householdPosts("wright", { now: NOW, townClone: TOWN, clone: join(DIR, "no-such-town") });
@@ -350,4 +359,18 @@ test("a bug the house reported is put up, its state is its stage; another house'
   assert.deepEqual([mine.class, mine.role, mine.state, mine.responses], ["bug", "author", "confirmed", 0]);
   assert.equal(row(a.put_up, "zed/not-ours"), null);
   assert.equal(row(a.taking_part, "zed/not-ours"), null);
+});
+
+// Darko 2026-10-20 15:54: "handle all posts the same whatever's intersecting"
+test("every post class goes through the one generic pass: a quest the house answered is taken part in, and the class list is POST_CLASSES", async () => {
+  const a = await read("wright");
+  const q = row(a.taking_part, "the-town/reach-out");
+  assert.ok(q, "the quest rei answered is the house's to take part in");
+  assert.deepEqual([q.class, q.role, q.state, q.responses], ["quest", "participant", "open", 1]);
+  // the one pass reads what the post machine declares: a class added there is read here with no change
+  const { POST_CLASSES } = await import("../src/town-posts.mjs");
+  const src = readFileSync(new URL("../src/household-posts.mjs", import.meta.url), "utf8");
+  assert.match(src, /Object\.keys\(\(await import\("\.\/town-posts\.mjs"\)\)\.POST_CLASSES\)/);
+  assert.doesNotMatch(src, /tableRows\((EVENT|IDEA|BUG|QUEST)_CLASS/, "no class has a half of its own");
+  assert.deepEqual(Object.keys(POST_CLASSES).sort(), ["bug", "event", "idea", "quest"]);
 });

@@ -177,16 +177,27 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
   }));
 }
 
-/** The events half: `{ rows }` or `{ unavailable }`. */
-const eventRows = (members, now, { env }) => tableRows(EVENT_CLASS, members, now, { env, what: "the events" });
-/**
- * The idea posts' half (POS-290). No stake can stand on an idea post yet (the
- * stake on posts is w43's), so `stake` and `ours` are 0, which is true.
- */
-const ideaPostRows = (members, now, { env }) => tableRows(IDEA_CLASS, members, now, { env, what: "the idea posts" });
+// ── EVERY POST CLASS, ONE PASS (Darko 2026-10-20 15:54, POS-633 round 4) ──
+//
+// "handle all posts the same whatever's intersecting, and then decide case by
+// case what's unique to bugs or ideas or events or votes". Every class the post
+// machine declares (town-posts.mjs § POST_CLASSES) is read by the one generic
+// table read below, which gives the shared fields (class, id, state, put up or
+// taking part, responses, the newest act). What is unique to a class is layered
+// on top, here and nowhere else:
+//   event   its window (postRowsOf § WINDOWED) and its state from the clock (§ stateOf)
+//   bug     its stage, which is its stored state
+//   idea    no stake stands on an idea post yet (the stake on posts is w43's), so
+//           `stake` and `ours` are 0, which is true; and the half is quiet when it
+//           cannot be read while the class is closed (ideas.mjs § ideaPostsOn)
+// A class added to POST_CLASSES is read with no change here. The Think Tank's
+// idea MARKS are world marks, not posts, and keep their own read (§ ideaRows).
 
-/** The bugs' half (POS-633 round 4): the same table read, the stage as the state. */
-const bugRows = (members, now, { env }) => tableRows(BUG_CLASS, members, now, { env, what: "the bugs" });
+/** What each class's half is called when it cannot be read; a class not named here says "the <class> posts". */
+const CLASS_WORDS = Object.freeze({ [EVENT_CLASS]: "the events", [IDEA_CLASS]: "the idea posts", [BUG_CLASS]: "the bugs", quest: "the quests" });
+
+/** A class whose unreadable half says nothing while the class is closed. */
+const QUIET_WHEN_CLOSED = Object.freeze({ [IDEA_CLASS]: (env) => !ideaPostsOn(env) });
 
 /** One class of the posts table: the house's own posts and the ones it answered. `{ rows }` or `{ unavailable }`. */
 async function tableRows(cls, members, now, { env, what }) {
@@ -318,22 +329,21 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const house = await houseOf(h, { clone, readers });
   const mine = house.resolve ? house.resolve(h) : { key: `solo:${h}`, members: [h] };
   const whose = (author) => (house.resolve ? house.resolve(author).key : author === h ? mine.key : null);
-  const [events, ideas, ideaPosts, bugs] = await Promise.all([
-    eventRows(mine.members, now, { env }),
+  // the class list is read at call time: town-posts.mjs imports this module, so a static import would be a cycle
+  const classes = Object.keys((await import("./town-posts.mjs")).POST_CLASSES);
+  const [ideas, ...halves] = await Promise.all([
     ideaRows(mine.members, whose, { townClone }),
-    ideaPostRows(mine.members, now, { env }),
-    bugRows(mine.members, now, { env }),
+    ...classes.map((cls) => tableRows(cls, mine.members, now, { env, what: CLASS_WORDS[cls] ?? `the ${cls} posts` })),
   ]);
-  const rows = [...(events.rows ?? []), ...(ideas.rows ?? []), ...(ideaPosts.rows ?? []), ...(bugs.rows ?? [])].sort(postOrder);
+  const rows = [...halves.flatMap((x) => x.rows ?? []), ...(ideas.rows ?? [])].sort(postOrder);
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, ...r }) => r;
     return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
   };
-  // The idea posts' half is quiet when it cannot be read while the class is
-  // closed: an office that never opened it answers as it always did.
-  const ideaPostsGap = ideaPostsOn(env) ? ideaPosts.unavailable : null;
-  const unavailable = [house.unread, events.unavailable, ideas.unavailable, ideaPostsGap, bugs.unavailable].filter(Boolean);
+  // a half that cannot be read is said, in class order, unless its class is closed (QUIET_WHEN_CLOSED)
+  const gaps = halves.map((x, i) => (QUIET_WHEN_CLOSED[classes[i]]?.(env) ? null : x.unavailable));
+  const unavailable = [house.unread, ...gaps, ideas.unavailable].filter(Boolean);
   return {
     household: mine.key,
     residents: mine.members,
