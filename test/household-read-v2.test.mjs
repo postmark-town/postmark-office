@@ -183,7 +183,7 @@ test("closer · pairs with everyone outside the house, a multi-recipient letter 
     { id: "l1", from_h: "wright", to_h: "damaris", date: "2026-10-18", delivered_at: "2026-10-19T00:06:00.000Z" },
     { id: "l2", from_h: "damaris", to_h: "rei", date: "2026-10-19", delivered_at: "2026-10-19T12:06:00.000Z" },
     { id: "l3", from_h: "wright", to_h: "rei", date: "2026-10-19", delivered_at: null }, // housemates: not closer
-    { id: "l4", from_h: "isabella-cognita", to_h: "kai", date: "2026-10-19", multi: JSON.stringify({ toList: ["kai", "mari"] }) },
+    { id: "l4", from_h: "isabella-cognita", to_h: "kai", date: "2026-10-19", delivered_at: "2026-10-19T00:06:00.000Z", multi: JSON.stringify({ toList: ["kai", "mari"] }) },
     { id: "l5", from_h: "zed", to_h: "kai", date: "2026-10-19" }, // nobody of ours
   ];
   const houseOf = (h) => ({ damaris: "Mayflower", "isabella-cognita": "Casa Cognita", kai: "Kai's House" })[h] ?? null;
@@ -260,4 +260,60 @@ test("H4 phrases · a recorded hand and for win over the actor; a recorded route
   assert.ok(!("route" in noDoor), "a NULL route is absent");
   assert.equal(byPhrase({ human: true, for: "rei" }, "Mayflower"), "Mayflower's human for rei");
   assert.equal(byPhrase({ human: false, hand: "damaris" }, "Mayflower"), "damaris");
+});
+
+// ── the review of #679 ───────────────────────────────────────────────────────
+test("needs.first at 101 waiting is the house's true oldest, never the oldest of the newest page", () => {
+  const page = Array.from({ length: 100 }, (_, i) => candidate(i)); // newest first, as the inbox orders it
+  const tail = [candidate(98), candidate(99), { ...candidate(100), mark: "spark-the-builder/the-very-oldest" }];
+  const n = needsBlock({ stances: { stances_awaiting: 101, awaiting: page }, needs: null, tail });
+  assert.equal(n.count, 101);
+  assert.equal(n.first[0].mark, "spark-the-builder/the-very-oldest", "the oldest, first");
+  assert.deepEqual(n.first.map((r) => r.mark), tail.slice().reverse().map((c) => c.mark));
+  // a page that holds everything needs no tail
+  assert.deepEqual(needsBlock({ stances: { stances_awaiting: 3, awaiting: page.slice(0, 3) } }).first.map((r) => r.mark), page.slice(0, 3).reverse().map((c) => c.mark));
+});
+
+test("went leaves out a gift between housemates; closer counts delivered letters only, never a housemate", () => {
+  const lines = [
+    { canonical: "- 2026-10-20 · rei → wright · 3 · for: gift", written_at: "2026-10-20T01:00:00Z" },
+    { canonical: "- 2026-10-20 · rei → mari · 2 · for: gift", written_at: "2026-10-20T01:00:00Z" },
+    { canonical: "- 2026-10-20 · rei → damaris · 1 · for: gift", written_at: "2026-10-20T01:00:00Z" },
+  ];
+  // the key holds rei and wright; mari is a housemate it does not hold
+  const held = new Set(["rei", "wright"]);
+  assert.deepEqual(wentRows(lines, held, { house: ["rei", "wright", "mari"] }).map((r) => r.to), ["damaris"]);
+  const letters = [
+    { id: "a", from_h: "damaris", to_h: "rei", date: "2026-10-19", delivered_at: "2026-10-19T12:00:00Z" },
+    { id: "b", from_h: "damaris", to_h: "rei", date: "2026-10-19", delivered_at: null },        // never arrived
+    { id: "c", from_h: "rei", to_h: "nobody", date: "2026-10-19", delivered_at: null },          // bounced
+    { id: "d", from_h: "rei", to_h: "mari", date: "2026-10-19", delivered_at: "2026-10-19T12:00:00Z" }, // a housemate
+  ];
+  assert.deepEqual(closerRows(letters, { mine: held, house: ["rei", "wright", "mari"] }).map((r) => [r.with, r.letters]), [["damaris", 1]]);
+});
+
+test("went's ledger read is bounded by seq: a binary search of point lookups finds the window, never a walk of the whole ledger", async () => {
+  const { stampLinesSince } = await import("../src/town-index-store.mjs");
+  const T0 = Date.parse("2026-10-01T00:00:00Z");
+  const at = (seq) => new Date(T0 + seq * 60_000).toISOString(); // one line a minute, in seq order
+  const asked = [];
+  const q = { query: async (sql, params = []) => {
+    asked.push([sql.replace(/\s+/g, " ").trim(), params]);
+    if (/max\(seq\)/.test(sql)) return { rows: [{ s: 23181 }] };
+    if (/WHERE seq = \$1/.test(sql)) return { rows: [{ written_at: at(params[0]) }] };
+    if (/WHERE seq >= \$1/.test(sql)) return { rows: Array.from({ length: 23181 - params[0] + 1 }, (_, i) => ({ seq: 23181 - i, canonical: "-", written_at: at(23181 - i) })) };
+    throw new Error(`unexpected: ${sql}`);
+  } };
+  const r = await stampLinesSince(q, at(23100));
+  const range = asked.find(([sql]) => /WHERE seq >= \$1/.test(sql));
+  assert.equal(range[1][0], 23100, "the range starts at the window's first seq");
+  assert.ok(asked.filter(([sql]) => /WHERE seq = \$1/.test(sql)).length <= 16, `point lookups: ${asked.length}`);
+  assert.equal(r.rows.length, 82);
+  assert.equal(r.rows[0].seq, 23181);
+});
+
+test("H4 phrases · a row with no actor says no \"by\" at all", () => {
+  const r = happenedRow({ at: "2026-10-20T08:00:00Z", actor: null, action: "legacy:seed", object: "x/y" }, { houseName: "Starforge" });
+  assert.ok(!("by" in r));
+  assert.equal(happenedLine(r, { nowMs: Date.parse("2026-10-20T10:00:00Z") }), "legacy:seed x/y · 2 h");
 });

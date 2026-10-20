@@ -116,12 +116,16 @@ export const needRow = (c) => ({
 
 /**
  * The needs block from the inbox page (newest first, as stanceShadow orders it)
- * and needs-you's counts. `first` is the oldest NEEDS_FIRST, oldest first.
+ * and needs-you's counts. `first` is the oldest NEEDS_FIRST, oldest first: the
+ * page's own tail when the page holds every waiting mark, else `tail`, the
+ * inbox's last rows read on their own (tailCursor), so "oldest" is the house's
+ * true oldest and never the oldest of the newest page.
  */
-export function needsBlock({ stances = {}, needs = {} } = {}) {
+export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   const page = stances.awaiting ?? [];
   const total = Math.max(Number(stances.stances_awaiting) || 0, page.length);
-  const oldest = page.slice(-NEEDS_FIRST).reverse().map(needRow);
+  const last = total > page.length && Array.isArray(tail) ? tail : page;
+  const oldest = last.slice(-NEEDS_FIRST).reverse().map(needRow);
   const rows = (k) => needs?.[k]?.rows?.length ?? 0;
   const setDowns = rows("set_downs_awaiting");
   const bounced = rows("unplaced_bounces");
@@ -176,7 +180,7 @@ export function questLines(board) {
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, stances, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null } = parts;
+  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
   return {
     house: {
@@ -184,7 +188,7 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
       ...(you ? { you } : {}),
       members: rows.map((r) => memberLine(r, { gaps: gaps[r.handle] ?? [], nowMs })),
     },
-    needs: needsBlock({ stances, needs }),
+    needs: needsBlock({ stances, needs, tail }),
     mail: mailBlock(mail),
     stamps: stampsBlock(details, { quests, went: went ? went.length : null }),
     ...(closer ? { closer: closerGlance(closer) } : {}),
@@ -257,17 +261,21 @@ export const dayBefore = (nowMs, days) => new Date(nowMs - days * 86_400_000).to
  * `mints` maps a letter id to the stamps it minted the house, for
  * stamps_between; `milestones` maps a correspondent to the rungs crossed.
  */
-export function closerRows(letters, { mine, houseOf = () => null, mints = null, milestones = null } = {}) {
+export function closerRows(letters, { mine, house = null, houseOf = () => null, mints = null, milestones = null } = {}) {
   const ours = mine instanceof Set ? mine : new Set(mine ?? []);
+  // every member of the house, held or not: a housemate is never a correspondent
+  const home = house ? new Set(house) : ours;
   const by = new Map();
   for (const r of letters ?? []) {
     let to = r.to_h ? [r.to_h] : [];
     if (r.multi) { try { const l = JSON.parse(r.multi); if (Array.isArray(l?.toList) && l.toList.length) to = l.toList.filter(Boolean); } catch { /* the column's own recipient */ } }
     const parties = [...new Set([r.from_h, ...to].filter(Boolean))];
     if (!parties.some((h) => ours.has(h))) continue;
-    const at = r.delivered_at ?? r.date ?? null;
+    // a letter that never arrived (undelivered, bounced) is no correspondence (review of #679, item 6)
+    if (!r.delivered_at) continue;
+    const at = r.delivered_at;
     for (const other of parties) {
-      if (ours.has(other)) continue;
+      if (home.has(other)) continue;
       const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null };
       cur.letters += 1;
       cur.ids.push(r.id);
@@ -302,13 +310,15 @@ export function mintsByLetter(lines, mine) {
 /**
  * The house's stamps that WENT, as dated ledger rows, newest first: every
  * line whose giver is one of `mine` (a stake, a gift, a burn, a pot stake).
- * A MINT is not one (stamps arriving), and nor is an escrow coming home.
+ * A MINT is not one (stamps arriving), nor is an escrow coming home, nor a
+ * gift between two residents of the house: it never left the house.
  */
-export function wentRows(lines, mine) {
+export function wentRows(lines, mine, { house = mine } = {}) {
+  const home = house instanceof Set ? house : new Set(house ?? []);
   const out = [];
   for (const { canonical, written_at } of lines ?? []) {
     const m = OUT_RE.exec(canonical ?? "");
-    if (!m || !mine.has(m[2])) continue;
+    if (!m || !mine.has(m[2]) || home.has(m[3])) continue;
     const note = m[5] ?? "";
     const via = /(?:^| · )via: (\S+)/.exec(note)?.[1] ?? null;
     const why = /(?:^| · )for: (\S+)/.exec(note)?.[1] ?? null;
@@ -331,6 +341,8 @@ export function happenedRow(a, { houseName = null } = {}) {
   const recorded = a.hand != null;
   const human = recorded ? a.hand === "human" : /^human-of-/.test(actor) || Boolean(a.as_human);
   const forWhom = recorded ? (a.for_handle ?? null) : /^human-of-/.test(actor) ? null : actor;
+  // a row with no actor (before 079) says no "by" at all, never "by " and nothing
+  const by = byPhrase({ human, hand: recorded ? a.hand : actor, for: forWhom }, houseName);
   return {
     at: a.at ? new Date(a.at).toISOString() : null,
     hand: human ? "human" : (recorded ? a.hand : actor),
@@ -339,7 +351,7 @@ export function happenedRow(a, { houseName = null } = {}) {
     verb: a.action ?? null,
     object: a.object ?? null,
     place: a.at_anchor ?? null,
-    by: byPhrase({ human, hand: recorded ? a.hand : actor, for: forWhom }, houseName),
+    ...(by ? { by } : {}),
   };
 }
 
@@ -348,14 +360,15 @@ export function happenedRow(a, { houseName = null } = {}) {
  * "by Starforge's human". The words before "by" are the caller's.
  */
 export function byPhrase({ human, hand, for: forWhom }, houseName) {
-  if (!human) return hand;
+  if (!human) return hand || null;
   return forWhom ? `${humanPhrase(houseName)} for ${forWhom}` : humanPhrase(houseName);
 }
 
 /** A happening in one line for the glance: "say · by rei · 2 h", "walk the-town/quay · by Starforge's human for rei · 5 h". */
 export function happenedLine(r, { nowMs = Date.now() } = {}) {
   const what = [r.verb, r.object].filter(Boolean).join(" ");
-  return `${what} · by ${r.by ?? r.hand}${r.at ? ` · ${shortAgo(r.at, nowMs) ?? ""}` : ""}`.trim();
+  const who = r.by ?? r.hand;
+  return [what, who ? `by ${who}` : null, r.at ? shortAgo(r.at, nowMs) : null].filter(Boolean).join(" · ");
 }
 
 /** The glance's closer: the top correspondents this fortnight, letters counted. */
