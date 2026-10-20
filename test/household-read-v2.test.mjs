@@ -339,11 +339,11 @@ test("the group act's read is a call the MCP door's schema accepts, its fields i
 test("marks: the house's building in counts and two rows; the last crossing is the house's own; zeros and empties are left out", () => {
   const m = marksBlock(MARKS_MIX);
   assert.deepEqual([m.drafts, m.pending, m.standing], [3, 1, 42]);
-  assert.deepEqual(m.last_crossing, { crossing: 259, published: 2, refused: 1,
-    first_refusal: "architect/the-long-wall: it overlaps ground held first, and its holder has not welco…" },
+  assert.equal(m.last_crossing, "crossing 259: 2 published · 1 refused (architect/the-long-wall: it overlaps ground held first, and its…)",
     "the newest crossing that decided something of the house's, and only the house's (a refusal on its ground is not its own)");
-  assert.ok(m.last_crossing.first_refusal.length <= "architect/the-long-wall: ".length + 60, "the cause is cut to a few words; the outcomes read has it whole");
-  assert.deepEqual(m.at_risk, { count: 1, ids: ["illuminator/a-commons-lantern"] }, "the stakes read's rows, as needs-you carries them");
+  assert.equal(m.at_risk, "1: illuminator/a-commons-lantern", "the stakes read's rows, as needs-you carries them");
+  assert.equal(marksBlock({ counts: {}, published: [], effects: [{ kind: "claim-refused", yours: true, crossing: 9, mark: "a/b" }], atRisk: [] }).last_crossing,
+    "crossing 9: 1 refused (a/b: no cause recorded)", "a zero is left out of the line too");
   assert.deepEqual(m.newest, ["mari/a-small-shrine", "wright/the-trueing-terrace"]);
   assert.equal(m.key, MARKS_KEY);
   assert.ok(MARKS_KEY.length <= 112, `the key is about 100 characters: ${MARKS_KEY.length}`);
