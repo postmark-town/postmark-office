@@ -73,8 +73,12 @@ export const FOLD_SQL = `SELECT id::text AS id, at, actor, action, object, paylo
 // were inserted lately; applyAct is idempotent and ordered by act id, so a row
 // read twice changes nothing and an older revision never overwrites a newer one.
 export const OVERLAP_SECONDS = 120;
+// and by id, so the re-read walks the class index over a bounded range rather
+// than all appearance history: a late commit is one of the few transactions in
+// flight beside the newest, never ten thousand acts behind it
+export const OVERLAP_IDS = 10000;
 export const OVERLAP_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
-  WHERE class = '${APPEARANCE_CLASS}' AND id <= $1::bigint AND inserted_at > now() - make_interval(secs => ${OVERLAP_SECONDS})
+  WHERE class = '${APPEARANCE_CLASS}' AND id <= $1::bigint AND id > $1::bigint - ${OVERLAP_IDS} AND inserted_at > now() - make_interval(secs => ${OVERLAP_SECONDS})
   ORDER BY id LIMIT 5000`;
 
 const fold = { cursor: 0n, nodes: new Map(), at: 0, inflight: null };

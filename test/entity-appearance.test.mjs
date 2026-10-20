@@ -109,6 +109,12 @@ test("THE SCOPE IS THE HOUSEHOLD (P1; Darko 2026-10-19 18:21): a housemate may w
   const bram = await d.describe({ handle: "sb-ash", slot: "boots", value: "worn", body: "Worn boots." }, house);
   assert.equal(bram.described, "sb-ash/appearance.boots", "a key of the same household writes on its housemate");
   await d.describe({ handle: "sb-ash", withdraw: "sb-ash/appearance.boots" }, house);
+  // and a resident's own claim key (oauth.mjs § keyLookup: custody beside the household's handles),
+  // so narrowing those keys to their claimed resident would turn this red
+  const bramsOwn = { ...house, heldBy: "resident", claimedHandle: "sb-bram" };
+  const byClaim = await d.describe({ handle: "sb-ash", slot: "hat", value: "felt", body: "A felt hat." }, bramsOwn);
+  assert.equal(byClaim.described, "sb-ash/appearance.hat", "a housemate's own claim key writes on sb-ash's tree");
+  await d.describe({ handle: "sb-ash", withdraw: "sb-ash/appearance.hat" }, bramsOwn);
   const other = { handles: new Set(["sb-cleo"]), household: "sb-quill" };
   await refused(d.describe({ handle: "sb-ash", slot: "hat", value: "x", body: "y" }, other), 403, /not one of your residents/);
   await refused(d.describe({ withdraw: "sb-ash/appearance" }, other), 403);
