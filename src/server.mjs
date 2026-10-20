@@ -54,6 +54,7 @@ import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } fro
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
 import { logAccess } from "./telemetry.mjs";
+import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
@@ -796,7 +797,15 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   // and the MCP skin stamps the tool name (never the arguments) as it dispatches.
   // `t0` is taken by `handle`, BEFORE the credential is resolved, so the
   // line's duration still covers the whole request, the lookup included.
-  req.tel = { household: null, mcp: null };
+  req.tel = { household: null, mcp: null, call: null };
+  // THE CALL'S SHAPE (POS-722, src/call-shape.mjs): an apex call and an MCP
+  // tools/call carry `call`, the act or read by name, the field names, the
+  // fixed-set values, the answer's size and the refusal's code, and never a
+  // value the caller wrote. A GET's shape is taken here, before a read worker
+  // can take the request; a POST's where its body is parsed; MCP's in mcp.mjs.
+  const apexDoor = APEX_DOORS[path];
+  if (!IN_READ_WORKER && (apexDoor || path === "/mcp")) meterOut(res, req.tel, { mcp: path === "/mcp" });
+  if (apexDoor && req.method === "GET") req.tel.call = callShape(apexDoor, queryArgs(url.searchParams));
   // A read worker writes no line: the main thread that handed it the read
   // already wrote one for the same request, with the same status.
   if (!IN_READ_WORKER) res.on("finish", () => logAccess({
@@ -809,6 +818,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     ua: String(req.headers["user-agent"] ?? "").slice(0, 120),
     household: req.tel.household,
     mcp: req.tel.mcp,
+    call: finishCall(req.tel, res.statusCode),
   }));
 
   // ── CORS: windows are first-class callers. Resident dashboards run on the
@@ -2365,6 +2375,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       readJsonBody(req).then(async (raw) => {
         try {
           const payload = JSON.parse(raw || "{}");
+          req.tel.call = callShape("household", payload);
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
@@ -2523,6 +2534,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       readJsonBody(req).then(async (raw) => {
         try {
           const payload = JSON.parse(raw || "{}");
+          req.tel.call = callShape("world", payload);
           if (payload?.do != null && payload.do !== "") {
             const verb = dispatchToolFor(payload.do) ?? "world";
             const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb });
@@ -2566,6 +2578,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       readJsonBody(req).then(async (raw) => {
         try {
           const payload = JSON.parse(raw || "{}");
+          req.tel.call = callShape("town", payload);
           if (payload?.do != null && payload.do !== "") {
             const verb = townDispatchToolFor(payload.do) ?? "town";
             const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb });

@@ -40,6 +40,7 @@ import { uploadMedia } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { validateArgs } from "./validate-args.mjs"; // one owner for "does this door take that field" — re-exported below
+import { callShape } from "./call-shape.mjs"; // POS-722: the access line's call shape
 import { ACT_RETRY, READ_RETRY, STORE_LOST, STORE_RETRY_AFTER_S, bounceExtras, caughtBounce, faultLogged, foreignAnswer, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573)
 import { isStoreUnreachable } from "./store-pool.mjs"; // a lost store, said as an outage (POS-573)
 import { standingBounce } from "./standing.mjs";
@@ -1197,6 +1198,14 @@ export function handleMcp(req, res, ctx) {
     catch { res.writeHead(400, { "content-type": "application/json" }); return res.end(JSON.stringify(rpcError(null, -32700, "parse error"))); }
 
     const messages = Array.isArray(parsed) ? parsed : [parsed];
+    // telemetry: the call's SHAPE, never its arguments (POS-722, call-shape.mjs).
+    // Taken here, on the thread that writes the access line, before a read
+    // worker can take the call; a batch is shaped by its last tools/call.
+    if (ctx.req?.tel) {
+      const last = messages.findLast((m) => m?.method === "tools/call");
+      const name = last?.params?.name;
+      ctx.req.tel.call = last ? callShape(callableList().some((t) => t.name === name) ? name : "other", last.params?.arguments) : null;
+    }
     // The bouncer works in contract verbs, not the MCP transport's always-POST
     // method. Preflight before dispatch so a throttle is an honest HTTP 429 with
     // the same small JSON shape as REST, rather than a successful JSON-RPC skin
