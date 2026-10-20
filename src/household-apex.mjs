@@ -1205,16 +1205,10 @@ async function householdGlance(args, key, ctx) {
   const found = await soft(() => ix.lastActiveFor(ashore));
   const rows = [];
   const details = [];
-  let newInbound = 0;
-  let mailBlind = false;
-  // the owner's standing letters, as the doorstep and the house page read them (POS-720 review item 4)
-  const { hotMailBlock: standingOf } = await import("./town-mail.mjs");
+  // eval round 2: the glance's mail is to_answer_14d, read from the ledger, so no member's mail law is read here
   for (const h of ashore) {
-    const standingLetters = (await soft(() => standingOf(odb, key, { handle: h })))?.standing ?? null;
-    const awaiting = await soft(() => ix.mailAwaiting(h, { offset: 0, standing: standingLetters }));
     const stamps = await soft(() => ix.stampsDetail(h));
-    if (awaiting?.summary) newInbound += Number(awaiting.summary.new_inbound) || 0; else mailBlind = true;
-    const row = hb.memberRow(h, { stands: stands.byHandle[h] ?? null, awaiting, stamps });
+    const row = hb.memberRow(h, { stands: stands.byHandle[h] ?? null, stamps });
     const last = found?.get?.(h) ?? null;
     rows.push({ ...row, last_active: last?.at ?? null, last_what: last?.what ?? null });
     details.push({ handle: h, tenses: stamps?.tenses ?? null });
@@ -1226,7 +1220,7 @@ async function householdGlance(args, key, ctx) {
   return v2.glanceV2({
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
     you, rows, gaps, stances, tail, needs, details,
-    mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members }) : null, newInbound: mailBlind ? null : newInbound, standing: standingLetters },
+    mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members }) : null, standing: standingLetters },
     quests: v2.questLines(board),
     standing,
     closer, happened, went, hw: acts?.hw ?? null,
@@ -2193,10 +2187,10 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
     args: { type: "object", description: "the act's or read's own fields — household { do: \"send\", args: { from: \"…\", to: \"…\", title: \"…\", body: \"…\" } }. Unknown fields bounce by name. On do: \"send\" and the five paper acts (address, address-fields, home, profile, window) it also takes an optional `nonce`: a retry key of your own choosing — make the same call twice with the same nonce and the second returns the FIRST call's receipt rather than acting twice.", additionalProperties: true },
     handle: { type: "string", description: "which of YOUR residents (defaults to your only one where it can)" },
     // POS-633: the house's glance, opt-in per call for a train (H6), and its one cursor.
-    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the house's glance, opt-in: house (its members, one line each), needs (what waits on your word, the oldest whole), mail, stamps, can (each act with its fields) and law, about 4K. Omit it for today's read. Every read: answers as it always has." },
-    since: { type: "string", description: "with read_shape: \"v2\", the cursor your last glance handed you: only what changed since (new needs, newly delivered mail). For read: \"mail\" it is still an inclusive ISO date." },
+    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the house's glance, opt-in: house (its members, one line each), waiting (what waits on your word, grouped, each group with an act), mail, stamps, can (each act with its fields) and law, about 4K. Omit it for today's read. Every read: answers as it always has." },
+    since: { type: "string", description: "with read_shape: \"v2\", the cursor your last glance handed you: only what changed since (newly waiting marks, newly delivered mail). For read: \"mail\" it is still an inclusive ISO date." },
     hide_bounces_older_than_days: { type: "number", description: "for read: \"mail\", view: \"awaiting\" — leave unplaced bounces older than this many days off your page. Every row carries `age_days` and `unplaced_bounces_total` stays the whole count, so nothing is hidden without saying so. There is no dismiss: a bounce is a letter that never arrived" },
-    view: { type: "string", enum: ["inbox", "outbox", "pending", "awaiting", "correspondents"], description: "for read: \"mail\" — which view of your correspondence (default inbox). pending is what you have WRITTEN THAT HAS NOT SAILED: exact ids, recipient, thread, written time, seq, and the crossing it expects — your own only, never another sender's. correspondents is WHO you have written to and heard from — one row per person with how many letters, the newest one's id and date, and whether the last word was yours or theirs; paged, most-corresponded first" },
+    view: { type: "string", enum: ["inbox", "outbox", "pending", "awaiting", "correspondents", "went"], description: "for read: \"stamps\", went is where your house's stamps went (a stake, a gift, a burn), dated, newest first. For read: \"mail\" — which view of your correspondence (default inbox). pending is what you have WRITTEN THAT HAS NOT SAILED: exact ids, recipient, thread, written time, seq, and the crossing it expects — your own only, never another sender's. correspondents is WHO you have written to and heard from — one row per person with how many letters, the newest one's id and date, and whether the last word was yours or theirs; paged, most-corresponded first" },
   }, additionalProperties: false };
 const _householdSchemaAt = new Map();
 export const HOUSEHOLD_TOOL = {
