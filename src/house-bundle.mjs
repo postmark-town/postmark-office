@@ -320,6 +320,159 @@ export async function houseBundle({ household = null } = {}, ctx = {}) {
   };
 }
 
+// ── household { read: "house" }, paged (POS-720, Darko 2026-10-19 22:17) ────
+//
+// The whole house above measured 421K as served for Starforge, 364K of it the
+// nine residents' doorstep segments (awaiting alone 10–21K each). That is not a
+// read anyone can use, so the door's default is now this: the house's members
+// as typed rows of about 300 characters, paged, each naming its resident's
+// whole read. The world's house-wide blocks are counts with their reads named.
+// The whole answer is still one field away: args: { full: true }.
+//
+// THE ROW IS BUILT ONCE (`memberRow`), because the household read v2 (POS-633)
+// draws its members from the same shape. Every field in it is a number or a
+// short id the house read already paid for, read per member on the page only.
+// The town-wide blocks (clocks, psa, town, bulletin, town_pulse) are not
+// composed here at all: they ride every doorstep and the full answer.
+
+/** How many members a page carries when no limit is named, and the most it may. */
+export const HOUSE_PAGE = 10;
+export const HOUSE_PAGE_MAX = 50;
+
+/** Each member's whole read: the resident's doorstep, which is public. */
+export const memberRead = (handle) => `household { read: "doorstep", handle: "${handle}" }`;
+
+/**
+ * One member, as a typed row, flat: as served (`JSON.stringify(x, null, 1)`)
+ * every nested object costs its braces a line each, and a row of about 300
+ * characters has no room for them.
+ *
+ *   at                  the mark they stand on, else "x, y" in metres (the walkers roll); null when the roll places them nowhere
+ *   moving              true while a walk carries them (absent otherwise)
+ *   they_spoke_last     threads where the other side spoke last; new_inbound, the ones that arrived since (the mail law's summary)
+ *   bounced             letters that never arrived (absent at 0)
+ *   stamps, staked      liquid and escrowed stamps (the stamps detail's tenses)
+ *   unread              the owner-only count, on a key that holds this resident (absent otherwise; null when unreadable)
+ *   read                the resident's whole read
+ *
+ * A source that could not be read leaves its fields null rather than 0.
+ * `last_active` and `last_active_crossing` are stamped on afterwards, once for the page.
+ */
+export function memberRow(handle, { stands = null, awaiting = null, stamps = null, unread = undefined } = {}) {
+  const round = (n) => (Number.isFinite(n) ? Math.round(n) : n);
+  const s = awaiting?.summary ?? null;
+  const t = stamps?.tenses ?? null;
+  return {
+    handle,
+    at: !stands ? null : stands.mark_id ? stands.mark_id : `${round(stands.x)}, ${round(stands.y)}`,
+    ...(stands?.moving ? { moving: true } : {}),
+    they_spoke_last: s ? s.they_spoke_last ?? 0 : null,
+    new_inbound: s ? s.new_inbound ?? 0 : null,
+    ...(s?.bounced ? { bounced: s.bounced } : {}),
+    stamps: t ? t.liquid ?? 0 : null,
+    staked: t ? t.staked ?? 0 : null,
+    ...(unread !== undefined ? { unread } : {}),
+    read: memberRead(handle),
+  };
+}
+
+/** The page's bounds: `limit` within 1..HOUSE_PAGE_MAX (HOUSE_PAGE when absent), `offset` ≥ 0. */
+export function pageBounds(limit, offset) {
+  const n = Number(limit);
+  const o = Number(offset);
+  return {
+    limit: Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), HOUSE_PAGE_MAX) : HOUSE_PAGE,
+    offset: Number.isFinite(o) && o > 0 ? Math.floor(o) : 0,
+  };
+}
+
+/**
+ * The house, paged: the default answer of household { read: "house" }. Same
+ * `ctx` as houseBundle. Returns the answer or `{ refused: [code, defect, hint] }`.
+ */
+export async function housePage({ household = null, limit = null, offset = null } = {}, ctx = {}) {
+  const { key = null, clone, odb, nowMs = Date.now(), readers = {} } = ctx;
+  const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
+  const house = await houseMembers({ household, key, clone, readers });
+  if (house.refused) return house;
+  const asOf = await ix.asOf();
+  const ashore = await ashoreVia(ix, house.members);
+  const notAshore = house.members.filter((h) => !ashore.includes(h));
+  const holds = ashore.some((h) => key?.handles?.has?.(h) === true);
+  const bounds = pageBounds(limit, offset);
+  const page = ashore.slice(bounds.offset, bounds.offset + bounds.limit);
+  const next = bounds.offset + page.length;
+  const complete = next >= ashore.length;
+
+  // The world's three, for the whole house, as the full answer asks them; the
+  // walkers roll is read once, for the page.
+  const [stances, stakes, stands] = await Promise.all([
+    stancesOf(ashore, { limit: DOORSTEP_STANCES, readers }),
+    stakesOf(ashore, { nowMs, readers }),
+    standsOf(page, readers),
+  ]);
+  const outcomes = await outcomesOf(ashore, { stances, key: holds ? key : null, nowMs, readers });
+
+  const held = page.filter((h) => key?.handles?.has?.(h) === true);
+  const unread = held.length
+    ? await unreadFor(held, { ix }).then((rows) => ({ rows }), (error) => ({ error }))
+    : null;
+  // A member's own read that fails says null on its row; an unreachable store is the door's 503.
+  const soft = async (read) => {
+    try { return await read(); } catch (e) { if (e?.name === "TownIndexUnreachable") throw e; return null; }
+  };
+  const members = [];
+  for (const h of page) {
+    const own = held.includes(h);
+    members.push(memberRow(h, {
+      stands: stands.byHandle[h] ?? null,
+      awaiting: await soft(() => ix.mailAwaiting(h, { offset: 0 })),
+      stamps: await soft(() => ix.stampsDetail(h)),
+      unread: !own ? undefined : unread?.error ? null : (unread?.rows?.get(h) ?? []).length,
+    }));
+  }
+  const lastActiveUnavailable = await stampRows(members, { find: (handles) => ix.lastActiveFor(handles) });
+  // stampRows writes the two fields last; they read better beside `at`.
+  const rows = members.map(({ handle, at, moving, last_active, last_active_crossing, ...rest }) =>
+    ({ handle, at, ...(moving ? { moving } : {}), last_active, last_active_crossing, ...rest }));
+
+  const whole = `household { read: "house", args: { household: "${house.slug}", full: true } }`;
+  return {
+    read: "house", household: house.slug,
+    name: house.rec.name ?? null, // never `human` (POS-394): the house's display name only
+    members_from: house.from,
+    as_of: asOf, next_crossing: nextCrossingForDoorstep(nowMs),
+    ashore,
+    ...(notAshore.length ? { not_ashore: notAshore, not_ashore_note: "declared members of this house the office index holds no resident for — at the harbor, or not yet hydrated. They have no page to bundle." } : {}),
+    shape: `the house's members, one typed row each, paged; each row names its resident's whole read. The house's stances and stakes are counts with their reads named. The whole house, every resident's segments and the town-wide blocks: ${whole}`,
+    total: ashore.length, shown: rows.length, limit: bounds.limit, offset: bounds.offset, complete,
+    ...(complete ? {} : { next_offset: next, more_note: `${ashore.length - next} further member${ashore.length - next === 1 ? "" : "s"} — call again with offset: ${next}` }),
+    stances: {
+      serves: "household.stances", scope: ashore,
+      awaiting: stances.stances_awaiting ?? (stances.awaiting ?? []).length,
+      set_downs_awaiting: (stances.set_downs_awaiting ?? []).length,
+      ...(stances.unavailable ? { unavailable: stances.unavailable } : {}),
+      read: 'household { read: "stances" } for your own house; handle: narrows to one resident',
+    },
+    outcomes: { serves: "household.outcomes", scope: ashore, ...outcomes },
+    stakes: {
+      serves: "household.stakes", scope: ashore,
+      published: stakes.count ?? (stakes.rows ?? []).length,
+      at_risk: (stakes.rows ?? []).filter((r) => r.at_risk === true).length,
+      next_settlement: stakes.next_settlement ?? null,
+      ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}),
+      read: 'household { read: "stakes" } for your own house; handle: narrows to one resident',
+    },
+    stands: { from: "the walkers roll (GET /world/walkers), read once for the page", at: stands.at ?? null,
+      null_means: "the roll places this resident nowhere: no walk on record and no ground of their own",
+      ...(stands.disclosed ? { disclosed: stands.disclosed } : {}),
+      ...(stands.unavailable ? { unavailable: stands.unavailable } : {}) },
+    last_active: `per member, with last_active_crossing beside it: ${LAST_ACTIVE_MEANS}`,
+    ...(lastActiveUnavailable ? { last_active_unavailable: lastActiveUnavailable } : {}),
+    members: rows,
+  };
+}
+
 // ── household { read: "needs-you" } ──────────────────────────────────────────
 
 /**

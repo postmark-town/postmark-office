@@ -25,7 +25,7 @@ import { DatabaseSync } from "node:sqlite";
 import { storeIndexPooled } from "../src/town-index-store.mjs";
 import { doorstepBundle } from "../src/doorstep-bundle.mjs";
 import { appendTownJournal } from "../src/town-journal.mjs";
-import { houseBundle, needsYou, isoAt, isoEvents, HOUSE_ONCE } from "../src/house-bundle.mjs";
+import { houseBundle, housePage, memberRow, pageBounds, HOUSE_PAGE, HOUSE_PAGE_MAX, needsYou, isoAt, isoEvents, HOUSE_ONCE } from "../src/house-bundle.mjs";
 import { householdApex, HOUSEHOLD_READS, HOUSEHOLD_READ_FIELDS } from "../src/household-apex.mjs";
 import { poolFromClone, RECORD_ON } from "./registry-pool-stub.mjs";
 import { __setPoolForTest } from "../src/world2-acts.mjs";
@@ -341,7 +341,7 @@ test("NEEDS-YOU, ALERTS (WLD-51, Darko 2026-10-15 19:29): the house's alerts in 
 
 test("THE DOOR: both reads are on the household door's list, declare their field, and refuse an unknown one", async () => {
   assert.ok(HOUSEHOLD_READS.house && HOUSEHOLD_READS["needs-you"]);
-  assert.deepEqual(Object.keys(HOUSEHOLD_READ_FIELDS.house), ["household"]);
+  assert.deepEqual(Object.keys(HOUSEHOLD_READ_FIELDS.house), ["household", "limit", "offset", "full"]);
   const bad = await householdApex({ read: "house", args: { household: HOUSE, bogus: 1 } }, null,
     { clone: scratch, asOf: AS_OF, strictFields: true });
   assert.equal(bad.code, 422);
@@ -372,4 +372,112 @@ test("A STORE THE OFFICE CANNOT ASK is a refusal, never the clone's printed hous
     assert.equal(h.refused?.[0], 503, "the house is the store's, and the store did not answer");
     assert.match(h.refused[2], /registry store did not answer/);
   } finally { process.env.WORLD2_PG = keep; }
+});
+
+// ── the page (POS-720, Darko 2026-10-19 22:17) ──────────────────────────────
+//
+// The whole house measured 421K as served for Starforge. The door's default is
+// now the members as typed rows, paged, each naming its resident's whole read,
+// with the world's house-wide blocks as counts; args: { full: true } is the
+// whole house above, unchanged.
+
+const served = (x) => JSON.stringify(x, null, 1).length; // the MCP's own serialization (mcp.mjs)
+
+test("THE PAGE (POS-720): one typed row per member, each the doorstep's own numbers and naming its whole read", async () => {
+  const { readers } = worldReaders();
+  const p = await housePage({ household: HOUSE }, ctx({ readers }));
+  assert.equal(p.read, "house");
+  assert.equal(p.household, HOUSE);
+  assert.equal(p.name, "Fixture");
+  assert.deepEqual(p.ashore, ["r000", "r001", "r002"]);
+  assert.deepEqual(p.not_ashore, ["r-harbor"]);
+  assert.deepEqual(p.members.map((m) => m.handle), ["r000", "r001", "r002"]);
+  assert.ok(!("residents" in p), "no resident's segments ride the page");
+  for (const k of HOUSE_ONCE) assert.ok(!(k in p), `${k} rides the doorstep and the full answer, not the page`);
+  for (const m of p.members) {
+    const d = await doorstep(m.handle, { fresh: { odb: null, clone: scratch, asOf: AS_OF }, nowMs: NOW });
+    const s = d.awaiting?.summary ?? null;
+    const t = d.stamps?.tenses ?? null;
+    assert.deepEqual([m.they_spoke_last, m.new_inbound, m.bounced], s ? [s.they_spoke_last, s.new_inbound, s.bounced || undefined] : [null, null, undefined], `${m.handle}'s mail is the doorstep's summary`);
+    assert.deepEqual([m.stamps, m.staked], t ? [t.liquid, t.staked] : [null, null], `${m.handle}'s stamps are the doorstep's tenses`);
+    assert.equal(m.read, `household { read: "doorstep", handle: "${m.handle}" }`);
+    assert.ok(!("unread" in m), "no key, no owner-only count");
+  }
+  assert.deepEqual([p.members[0].they_spoke_last, p.members[0].new_inbound, p.members[0].bounced], [0, 0, 1]);
+  assert.equal(p.members[0].at, "the-town/quay");
+  assert.ok(!("moving" in p.members[0]));
+  assert.deepEqual([p.members[0].last_active, p.members[0].last_active_crossing], ["2026-09-26T08:00:00.000Z", 213]);
+  assert.equal(p.members[1].at, null);
+  assert.deepEqual(Object.keys(p.members[0]), ["handle", "at", "last_active", "last_active_crossing", "they_spoke_last", "new_inbound", "bounced", "stamps", "staked", "read"]);
+  assert.equal(memberRow("x", { stands: { x: -606.5, y: 161.7, mark_id: null, moving: true } }).at, "-606, 162", "open ground reads as metres");
+});
+
+test("THE PAGE (POS-720): stances and stakes are counts with their reads named; outcomes are the full answer's own", async () => {
+  const { readers, calls } = worldReaders();
+  const p = await housePage({ household: HOUSE }, ctx({ readers }));
+  assert.equal(p.stances.awaiting, 1);
+  assert.equal(p.stances.set_downs_awaiting, 0);
+  assert.match(p.stances.read, /household \{ read: "stances" \}/);
+  assert.ok(!("awaiting" in p.stances && Array.isArray(p.stances.awaiting)), "a count, never the rows");
+  assert.deepEqual([p.stakes.published, p.stakes.at_risk], [2, 1]);
+  assert.match(p.stakes.read, /household \{ read: "stakes" \}/);
+  assert.ok(!("rows" in p.stakes));
+  assert.deepEqual(calls.stances, [["r000", "r001", "r002"]], "asked once, for the whole house");
+  assert.deepEqual(calls.stakesFor, [["r000", "r001", "r002"]]);
+  assert.equal(calls.walkers, 1);
+  assert.deepEqual(calls.lastActive, [["r000", "r001", "r002"]]);
+  const whole = await houseBundle({ household: HOUSE }, ctx({ readers: worldReaders().readers }));
+  assert.deepEqual(p.outcomes, whole.outcomes);
+  assert.match(p.shape, /full: true/);
+});
+
+test("THE PAGE (POS-720): limit and offset walk the members, and the last page says it is complete", async () => {
+  const { readers } = worldReaders();
+  const a = await housePage({ household: HOUSE, limit: 2 }, ctx({ readers }));
+  assert.deepEqual(a.members.map((m) => m.handle), ["r000", "r001"]);
+  assert.deepEqual([a.total, a.shown, a.limit, a.offset, a.complete, a.next_offset], [3, 2, 2, 0, false, 2]);
+  assert.match(a.more_note, /1 further member — call again with offset: 2/);
+  const b = await housePage({ household: HOUSE, limit: 2, offset: 2 }, ctx({ readers: worldReaders().readers }));
+  assert.deepEqual(b.members.map((m) => m.handle), ["r002"]);
+  assert.equal(b.complete, true);
+  assert.ok(!("next_offset" in b) && !("more_note" in b));
+  assert.deepEqual(pageBounds(undefined, undefined), { limit: HOUSE_PAGE, offset: 0 });
+  assert.deepEqual(pageBounds(0, -3), { limit: HOUSE_PAGE, offset: 0 });
+  assert.deepEqual(pageBounds(999, "4"), { limit: HOUSE_PAGE_MAX, offset: 4 });
+});
+
+test("THE PAGE (POS-720): a member row is about 300 characters as served", async () => {
+  // Starforge's busiest resident on 10-19 (house.out, 21:36 EDT): every field present.
+  const busy = memberRow("jetto-of-starforge", {
+    stands: { x: -606.5, y: 161.7, mark_id: null, moving: true },
+    awaiting: { summary: { they_spoke_last: 193, new_inbound: 52, bounced: 3 } },
+    stamps: { tenses: { liquid: 906, staked: 24, minted: 943 } },
+    unread: 576,
+  });
+  Object.assign(busy, { last_active: "2026-10-20T01:06:25.633Z", last_active_crossing: 260 });
+  assert.ok(served(busy) <= 340, `a busy row is ${served(busy)} characters as served`);
+  const { readers } = worldReaders();
+  const p = await housePage({ household: HOUSE }, ctx({ readers }));
+  for (const m of p.members) assert.ok(served(m) <= 320, `${m.handle}'s row is ${served(m)} characters`);
+});
+
+test("THE PAGE (POS-720): the owner-only unread count rides a member the key holds, and no other", async () => {
+  const key = { household: "fixture", handles: new Set(["r000"]) };
+  const { readers } = worldReaders();
+  const p = await housePage({ household: HOUSE }, ctx({ readers, key }));
+  assert.ok("unread" in p.members[0], "the key holds r000");
+  assert.ok(p.members[0].unread === null || Number.isInteger(p.members[0].unread));
+  assert.ok(!("unread" in p.members[1]) && !("unread" in p.members[2]), "a housemate the key does not hold reads public");
+});
+
+test("THE DOOR (POS-720): read: \"house\" answers the page; full: true answers the whole house, from MCP args and from a GET's query string", async () => {
+  const page = await householdApex({ read: "house", household: HOUSE }, null, { clone: scratch, asOf: AS_OF });
+  assert.ok(Array.isArray(page.members), JSON.stringify(page).slice(0, 300));
+  assert.ok(!("residents" in page));
+  const viaArgs = await householdApex({ read: "house", args: { household: HOUSE, full: true } }, null, { clone: scratch, asOf: AS_OF, strictFields: true });
+  assert.deepEqual(Object.keys(viaArgs.residents ?? {}), ["r000", "r001", "r002"], JSON.stringify(viaArgs).slice(0, 300));
+  const viaGet = await householdApex({ read: "house", household: HOUSE, full: "true" }, null, { clone: scratch, asOf: AS_OF });
+  assert.deepEqual(Object.keys(viaGet.residents ?? {}), ["r000", "r001", "r002"]);
+  const paged = await householdApex({ read: "house", args: { household: HOUSE, limit: 1 } }, null, { clone: scratch, asOf: AS_OF, strictFields: true });
+  assert.deepEqual(paged.members.map((m) => m.handle), ["r000"]);
 });
