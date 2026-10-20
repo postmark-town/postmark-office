@@ -33,6 +33,11 @@
 // the posts table's, read like the events (§ ideaPostRows): their state is
 // their stage, and a resident who signed up to build a part takes part.
 //
+// BUGS are the posts table's too (POS-633 round 4, Wright 2026-10-20): read
+// like the idea posts, a bug the house reported is put up, a counted response
+// on another's is taking part, and its state is its stage (bugs.mjs §
+// BUG_STAGES), as the bug's own acts store it.
+//
 // QUESTS are not here. The town posts them and the household page keeps its
 // quest board beside these lists.
 //
@@ -58,6 +63,7 @@ import { resolveHouse } from "./household-deriver.mjs";
 import { registryFor } from "./house-bundle.mjs";
 import { EVENT_CLASS, ENDED_LIST_DAYS, STATE_CANCELLED, phaseAt } from "./events.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
+import { BUG_CLASS } from "./bugs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -178,6 +184,9 @@ const eventRows = (members, now, { env }) => tableRows(EVENT_CLASS, members, now
  * stake on posts is w43's), so `stake` and `ours` are 0, which is true.
  */
 const ideaPostRows = (members, now, { env }) => tableRows(IDEA_CLASS, members, now, { env, what: "the idea posts" });
+
+/** The bugs' half (POS-633 round 4): the same table read, the stage as the state. */
+const bugRows = (members, now, { env }) => tableRows(BUG_CLASS, members, now, { env, what: "the bugs" });
 
 /** One class of the posts table: the house's own posts and the ones it answered. `{ rows }` or `{ unavailable }`. */
 async function tableRows(cls, members, now, { env, what }) {
@@ -309,12 +318,13 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const house = await houseOf(h, { clone, readers });
   const mine = house.resolve ? house.resolve(h) : { key: `solo:${h}`, members: [h] };
   const whose = (author) => (house.resolve ? house.resolve(author).key : author === h ? mine.key : null);
-  const [events, ideas, ideaPosts] = await Promise.all([
+  const [events, ideas, ideaPosts, bugs] = await Promise.all([
     eventRows(mine.members, now, { env }),
     ideaRows(mine.members, whose, { townClone }),
     ideaPostRows(mine.members, now, { env }),
+    bugRows(mine.members, now, { env }),
   ]);
-  const rows = [...(events.rows ?? []), ...(ideas.rows ?? []), ...(ideaPosts.rows ?? [])].sort(postOrder);
+  const rows = [...(events.rows ?? []), ...(ideas.rows ?? []), ...(ideaPosts.rows ?? []), ...(bugs.rows ?? [])].sort(postOrder);
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
     const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, ...r }) => r;
@@ -323,7 +333,7 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   // The idea posts' half is quiet when it cannot be read while the class is
   // closed: an office that never opened it answers as it always did.
   const ideaPostsGap = ideaPostsOn(env) ? ideaPosts.unavailable : null;
-  const unavailable = [house.unread, events.unavailable, ideas.unavailable, ideaPostsGap].filter(Boolean);
+  const unavailable = [house.unread, events.unavailable, ideas.unavailable, ideaPostsGap, bugs.unavailable].filter(Boolean);
   return {
     household: mine.key,
     residents: mine.members,

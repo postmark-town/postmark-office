@@ -131,6 +131,14 @@ event("zed/elsewhere", "zed", "solo:zed", NOW + D, NOW + D + H);
 // and one that ended within the week
 event("mari/tomorrow", "mari", "hh:starforge", NOW + D, NOW + D + H);
 event("rei/last-week", "rei", "hh:starforge", NOW - 3 * D, NOW - 2 * D);
+// a bug Starforge reported, at its second stage (POS-633 round 4), and one nobody in the house touched
+const bug = (id, author, household, state, at) => {
+  posts.set(id, { id, class: "bug", title: `the ${id.split("/")[1]}`, body: "it broke", author, household,
+    place_mark: null, place_x: null, place_y: null, starts: null, ends: null, state, fields: {}, revised: 0, posted_act: nextAct, last_act: nextAct });
+  acts.push({ id: nextAct++, class: "bug", action: "post", object: id, at: iso(at) });
+};
+bug("rei/the-map-forgets", "rei", "hh:starforge", "confirmed", NOW - 4 * H);
+bug("zed/not-ours", "zed", "solo:zed", "reported", NOW - 5 * H);
 rsvp("kogane/tea", "mari", "hh:starforge", NOW - 2 * H);
 rsvp("wright/office-hours", "kogane", "hh:shard-house", NOW - D);
 rsvp("zed/elsewhere", "zed", "solo:zed", NOW - D);
@@ -139,6 +147,11 @@ const ALSO = [
   [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 AND ends > \$2 ORDER BY starts, id$/i, (q, p) => {
     const rows = [...posts.values()].filter((r) => r.class === p[0] && Date.parse(r.ends) > Date.parse(p[1]))
       .sort((a, b) => Date.parse(a.starts) - Date.parse(b.starts) || a.id.localeCompare(b.id)).map((r) => ({ ...r, fields: { ...r.fields } }));
+    return { rows, rowCount: rows.length };
+  }],
+  // the classes with no window (bugs, idea posts): every row of the class, by id
+  [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
+    const rows = [...posts.values()].filter((r) => r.class === p[0]).sort((a, b) => a.id.localeCompare(b.id)).map((r) => ({ ...r, fields: { ...r.fields } }));
     return { rows, rowCount: rows.length };
   }],
   // WHOLE ROWS, whatever the SELECT named: the read must pick its columns itself
@@ -273,7 +286,8 @@ test("7 · each list is cut at the cap and says the true total", async () => {
     const a = await read("wright");
     const all = [...posts.values()].filter((p) => ["wright", "rei", "mari"].includes(p.author) && Date.parse(p.ends) > NOW - 7 * D).length;
     const ideas = 1; // rei/events-as-objects
-    assert.equal(a.put_up.total, all + ideas, "the total is every post the house put up in the window");
+    const bugs = 1; // rei/the-map-forgets (a bug has no window)
+    assert.equal(a.put_up.total, all + ideas + bugs, "the total is every post the house put up in the window");
     assert.equal(a.put_up.shown, POSTS_CAP);
     assert.equal(a.put_up.rows.length, POSTS_CAP);
     assert.ok(a.put_up.total > a.put_up.shown, "the cut is said, not silent");
@@ -287,6 +301,7 @@ test("8 · the order: open posts first (a span by its soonest start, then the re
   assert.deepEqual(a.put_up.rows.map((r) => r.id), [
     "mari/tomorrow",          // open, starts in a day (its last act is older than office hours')
     "wright/office-hours",    // open, starts in two
+    "rei/the-map-forgets",    // open, no span: by its newest act (a bug, reported four hours ago)
     "rei/events-as-objects",  // open, no span: by its newest act
     "rei/called-off",         // terminal: acted two days ago
     "rei/last-week",          // terminal: acted six days ago
@@ -315,6 +330,7 @@ test("a class the office cannot read is named, and its rows are left out rather 
     assert.deepEqual(a.unavailable, [
       "the events could not be read from the office's record",
       "the Think Tank could not be read from the world record",
+      "the bugs could not be read from the office's record",
     ]);
     assert.deepEqual([a.put_up.total, a.taking_part.total], [0, 0]);
     const noRegistry = await householdPosts("wright", { now: NOW, townClone: TOWN, clone: join(DIR, "no-such-town") });
@@ -324,4 +340,14 @@ test("a class the office cannot read is named, and its rows are left out rather 
     Object.assign(process.env, RECORD_ON);
     pen = await penWith();
   }
+});
+
+// POS-633 round 4 (Wright, 2026-10-20): the bugs are the posts table's, read like the idea posts
+test("a bug the house reported is put up, its state is its stage; another house's bug is not the house's", async () => {
+  const a = await read("wright");
+  const mine = row(a.put_up, "rei/the-map-forgets");
+  assert.ok(mine, "the bug rei reported is the house's");
+  assert.deepEqual([mine.class, mine.role, mine.state, mine.responses], ["bug", "author", "confirmed", 0]);
+  assert.equal(row(a.put_up, "zed/not-ours"), null);
+  assert.equal(row(a.taking_part, "zed/not-ours"), null);
 });
