@@ -36,6 +36,15 @@
 // nothing until the switch has been on). The Think Tank's marks stay marks and
 // are read at town { read: "ideas" }, beside these posts.
 //
+// ── THE THINK TANK'S POINTER (POS-715, Wright 2026-10-20: A) ────────────────
+//
+// The idea list answered `total: 0` while every doorstep listed ideas: the
+// doorstep's are the Think Tank's MARKS (household-posts.mjs § ideaRows), and
+// this read holds the idea POSTS only. So the idea list (never the one post)
+// carries `think_tank` after its rows: how many standing idea marks the tank
+// holds, the read that answers them, and one sentence. Additive: nothing a
+// reader had moves. `ideas` is null when the tank cannot be read.
+//
 // ── THE BUG READ PAGES (POS-558, Darko 2026-10-10) ──────────────────────────
 //
 // "We already need a page-based load instead of just dropping all of them,
@@ -83,6 +92,7 @@ import { BUG_CLASS, BUG_FINISHED, bugCatchersOf, bugJarOrder } from "./bugs.mjs"
 import { IDEA_CLASS, IDEA_FINISHED, ideaResponsesOf } from "./ideas.mjs";
 import { postHistoryVia, NO_CHAIN } from "./post-history.mjs";
 import { ideaExtrasVia } from "./idea-store.mjs";
+import { ideasTank } from "./world-classes.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = () => process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -103,6 +113,16 @@ function judgePostsClass(fields) {
   if (!c) throw refuse(422, "which class?", `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
   if (!Object.hasOwn(POST_CLASSES, c)) throw refuse(422, `"${c}" is not a post class`, `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
   return c;
+}
+
+/** Where the Think Tank's ideas are read, beside the idea posts (POS-715). */
+export const THINK_TANK_READ = 'town { read: "ideas" }';
+export function thinkTankPointer(tank) {
+  return {
+    ideas: !Array.isArray(tank?.ideas) || tank.source === "floor" ? null : tank.ideas.length,
+    read: THINK_TANK_READ,
+    note: `the Think Tank's ideas are world marks, not posts, so they are not in this list: ${THINK_TANK_READ} answers them`,
+  };
 }
 
 /** Bugs on one page of the bug read, unless the caller asks for another number (max 200). */
@@ -134,7 +154,7 @@ export { NO_CHAIN };
  * `town { read: "posts", args: { class, post?, limit?, offset? } }` (limit and offset page the bug class).
  * @param {{ now?: number, env?: object, townClone?: string }} ctx
  */
-export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE() } = {}) {
+export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true } = {}) {
   const cls = judgePostsClass(fields);
   const one = String(fields?.post ?? "").trim();
   let rows;
@@ -191,5 +211,6 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     const { posts: page, ...paging } = bugPageOf(posts, fields);
     return { ...head, ...paging, catchers: bugCatchersOf(posts, { unavailable: Boolean(history?.unavailable) }), posts: page };
   }
-  return { ...head, total: posts.length, posts };
+  return { ...head, total: posts.length, posts,
+    ...(cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {}) };
 }
