@@ -15,7 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
-  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse } from "../src/household-read-v2.mjs";
+  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY } from "../src/household-read-v2.mjs";
 import { DOC_NAMES } from "../src/town-index.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
@@ -31,8 +31,31 @@ const STARFORGE = ["architect", "illuminator", "jetto-of-starforge", "postmaster
 const candidate = (i) => ({ mark: `spark-the-builder/the-datum-mark-${String(i).padStart(2, "0")}`, by: "spark-the-builder", kind: "sited",
   body: BODY, date: `2026-10-${String(19 - Math.floor(i / 4)).padStart(2, "0")}`, on_your_ground: ["wright/the-trueing-terrace"] });
 
+// round 4 (Darko 15:06): a realistic mix of marks and posts, as the reads behind them answer
+export const MARKS_MIX = {
+  counts: { drafts: 3, pending: 1, standing: 42 },
+  published: [{ id: "rei/the-lanternseed-gardens", date: "2026-10-02" }, { id: "wright/the-trueing-terrace", date: "2026-10-18" },
+    { id: "mari/a-small-shrine", date: "2026-10-19" }, { id: "illuminator/a-commons-lantern", date: "2026-09-30" }],
+  effects: [
+    { kind: "claim-pending", yours: true, crossing: 260, mark: "wright/the-plumb-line" },
+    { kind: "claim-locked", yours: true, crossing: 259, mark: "rei/a-seed-bed" },
+    { kind: "claim-locked", yours: true, crossing: 259, mark: "mari/a-small-shrine" },
+    { kind: "claim-refused", yours: true, crossing: 259, mark: "architect/the-long-wall", cause: "it overlaps ground held first, and its holder has not welcomed it" },
+    { kind: "claim-refused", yours: false, on_your_ground: true, crossing: 259, mark: "spark-the-builder/x", cause: "not ours" },
+    { kind: "claim-locked", yours: true, crossing: 258, mark: "wright/an-older-one" },
+  ],
+  atRisk: [{ mark: "illuminator/a-commons-lantern", act: 'world { do: "stake", args: { mark: "illuminator/a-commons-lantern", stamps: 1 } }' }],
+};
+const postRow = (cls, id, state, role, responses, act, hoursAgo) => ({ class: cls, id, title: id, author: role === "author" ? "rei" : "someone", state,
+  latest: { act, at: new Date(NOW - hoursAgo * 3_600_000).toISOString() }, responses, role });
+export const POSTS_MIX = {
+  household: "hh:starforge", residents: STARFORGE,
+  put_up: { total: 2, shown: 2, rows: [postRow("idea", "a-map-for-newcomers", "open", "author", 2, "sign-up", 5), postRow("event", "the-lantern-walk", "ended", "author", 6, "post", 300)] },
+  taking_part: { total: 2, shown: 2, rows: [postRow("event", "halloween-at-the-wharf", "announced", "participant", 14, "rsvp", 2), postRow("idea", "binya-vernal/a-tide-clock", "posted", "participant", 3, "stake", 30)] },
+};
+
 // `fresh`: a house founded today, nothing earned and no act yet (eval round 1: a new house must look new)
-function partsFor(handles, { waiting = 61, page = waiting, papersGaps = {}, quests = ["Reach out 0/5 today", "Be reached 0/5 today"], fresh = false } = {}) {
+function partsFor(handles, { waiting = 61, page = waiting, papersGaps = {}, quests = ["Reach out 0/5 today", "Be reached 0/5 today"], fresh = false, marks = fresh ? null : MARKS_MIX, posts = fresh ? null : POSTS_MIX } = {}) {
   const tenses = (i) => (fresh ? { liquid: 0, staked: 0, minted: 0 } : { liquid: 906 - i, staked: 24, minted: 943 - i });
   const rows = handles.map((h, i) => ({
     ...memberRow(h, { stands: fresh ? null : { x: -606.5 + i, y: 161.7, mark_id: i % 2 ? `${h}/the-long-named-home-of-${h}` : null, moving: i === 2 },
@@ -50,6 +73,7 @@ function partsFor(handles, { waiting = 61, page = waiting, papersGaps = {}, ques
     details: rows.map((r, i) => ({ handle: r.handle, tenses: tenses(i) })),
     quests,
     standing: { tier: "resident", household: "keeminlee", world_writes: { used: 3, cap: 200, per: "hour" } },
+    marks, posts,
   };
 }
 
@@ -93,9 +117,13 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   const rows = [...stream.slice(0, 30), third, ...stream.slice(30), other];
   const n = needsBlock({ stances: { stances_awaiting: 62, awaiting: rows }, needs: null });
   assert.equal(n.count, 62, "the count stays the total");
-  assert.equal(n.groups.length, 3);
+  // round 4 (Darko 15:06): two groups show, and the rest are named with the read that lists them
+  assert.equal(n.groups.length, 2);
   assert.deepEqual(n.groups.map((r) => [r.by, r.over, r.count]),
-    [["spark-the-builder", "wright/the-trueing-terrace", 60], ["binya-vernal", "rei/the-lanternseed-gardens", 1], ["little-bird", "rei/the-lanternseed-gardens", 1]]);
+    [["spark-the-builder", "wright/the-trueing-terrace", 60], ["binya-vernal", "rei/the-lanternseed-gardens", 1]]);
+  assert.equal(n.more_groups, '+1 more group: household { read: "stances" }');
+  assert.equal(needsBlock({ stances: { stances_awaiting: 61, awaiting: [...stream.slice(0, 30), ...stream.slice(30), other] }, needs: null }).more_groups, undefined,
+    "two groups, nothing more to name");
   assert.deepEqual(Object.keys(n.groups[0]), ["by", "over", "count", "oldest", "newest", "ids", "ids_shown", "sample", "act"]);
   assert.equal(n.groups[0].ids_shown, "3 of 60", "eval round 3: the ids never read as the whole group");
   assert.equal(n.groups[1].ids_shown, undefined, "a group shown whole says nothing more");
@@ -451,4 +479,55 @@ test("the group act's read is a call the MCP door's schema accepts, its fields i
     "and the read takes every field in args");
   // the old form, refused by name: the falsifier for the bug
   assert.match(validateArgs(HOUSEHOLD_TOOL, { read: "stances", by: "x", over: "y", limit: 100 })?.defect ?? "", /unknown argument "by"/);
+});
+
+// ── round 4 (Darko RULED 2026-10-20 15:06): marks and posts ──────────────────
+
+test("marks: the house's building in counts and two rows; the last crossing is the house's own; zeros and empties are left out", () => {
+  const m = marksBlock(MARKS_MIX);
+  assert.deepEqual([m.drafts, m.pending, m.standing], [3, 1, 42]);
+  assert.deepEqual(m.last_crossing, { crossing: 259, published: 2, refused: 1,
+    first_refusal: "architect/the-long-wall: it overlaps ground held first, and its holder has not welco…" },
+    "the newest crossing that decided something of the house's, and only the house's (a refusal on its ground is not its own)");
+  assert.ok(m.last_crossing.first_refusal.length <= "architect/the-long-wall: ".length + 60, "the cause is cut to a few words; the outcomes read has it whole");
+  assert.deepEqual(m.at_risk, { count: 1, ids: ["illuminator/a-commons-lantern"] }, "the stakes read's rows, as needs-you carries them");
+  assert.deepEqual(m.newest, ["mari/a-small-shrine", "wright/the-trueing-terrace"]);
+  assert.equal(m.key, MARKS_KEY);
+  assert.ok(MARKS_KEY.length <= 112, `the key is about 100 characters: ${MARKS_KEY.length}`);
+  assert.match(MARKS_KEY, /read "stakes", "outcomes"/);
+  assert.match(MARKS_KEY, /world \{ investigate: "<id>" \}/);
+  // zeros out, an empty block out
+  const quiet = marksBlock({ counts: { drafts: 0, pending: 0, standing: 5 }, published: [], effects: [], atRisk: [] });
+  assert.deepEqual(Object.keys(quiet), ["standing", "key"]);
+  assert.equal(marksBlock({ counts: { drafts: 0, pending: 0, standing: 0 }, published: [], effects: [], atRisk: [] }), null);
+  // a tense nobody could read is said
+  assert.deepEqual(marksBlock({ counts: { drafts: null, pending: 0, standing: 2 }, published: [], effects: null, atRisk: [] }).unread, ["drafts", "last_crossing"]);
+});
+
+test("posts: the house's open posts, those with a response as the newest act, what it takes part in by class, the two newest", () => {
+  const p = postsBlock(POSTS_MIX, { nowMs: NOW });
+  assert.equal(p.open, 1, "the ended event is finished");
+  assert.equal(p.responses_waiting, 1, "the open idea post's newest act is a respondent's");
+  assert.deepEqual(p.part_of, { event: 1, idea: 1 });
+  assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h"]);
+  assert.equal(p.key, POSTS_KEY);
+  assert.ok(POSTS_KEY.length <= 112, `the key is about 100 characters: ${POSTS_KEY.length}`);
+  assert.match(POSTS_KEY, /household \{ read: "posts" \}/);
+  assert.match(POSTS_KEY, /town \{ do: "post" \| "stake" \}/);
+  // the author's own act is not a waiting response
+  const answered = { ...POSTS_MIX, put_up: { rows: [{ ...POSTS_MIX.put_up.rows[0], latest: { act: "amend", at: POSTS_MIX.put_up.rows[0].latest.at } }] } };
+  assert.equal(postsBlock(answered, { nowMs: NOW }).responses_waiting, undefined);
+  // an empty read leaves the block out; a half it could not read is said
+  assert.equal(postsBlock({ put_up: { rows: [] }, taking_part: { rows: [] } }, { nowMs: NOW }), null);
+  assert.deepEqual(postsBlock({ put_up: { rows: [] }, taking_part: { rows: [] }, unavailable: ["the events could not be read from the office's record"] }, { nowMs: NOW }).unavailable,
+    ["the events could not be read from the office's record"]);
+});
+
+test("round 4 in the glance: marks and posts sit beside waiting; the new house shows neither; every key is explained", () => {
+  const g = glanceV2(partsFor(STARFORGE), { nowMs: NOW });
+  assert.deepEqual(Object.keys(g).slice(0, 4), ["house", "waiting", "marks", "posts"]);
+  assert.equal(g.waiting.groups.length, 1, "the fixture's one stream is one group");
+  const fresh = glanceV2({ ...partsFor(["newbie"], { waiting: 0, quests: [], fresh: true }), mail: { unanswered: 0, standing: 0 } }, { nowMs: NOW });
+  assert.ok(!("marks" in fresh) && !("posts" in fresh), "a house with nothing built and nothing asked shows neither block");
+  assert.deepEqual(unexplained("household", g, 2), []);
 });

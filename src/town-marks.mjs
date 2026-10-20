@@ -140,12 +140,14 @@ export function publishedMarksTownwide({ repo = WORLD_CLONE } = {}) {
  */
 export async function marksCountsFor(handle, {
   repo = WORLD_CLONE, key = null,
-  docketFor = liveDocketFor, draftsFor = liveDraftsFor,
+  docketFor = liveDocketFor, draftsFor = liveDraftsFor, publishedOf = publishedMarksOf,
 } = {}) {
   const out = { published: null, docket: null, drafts_mine: null };
   const notes = {};
 
-  try { out.published = publishedMarksOf(handle, { repo }).length; }
+  // `publishedOf` is a seam like the two below: the household glance hands its
+  // own wrapper so the rows these counts were taken from are its newest marks too
+  try { out.published = publishedOf(handle, { repo }).length; }
   catch (e) { notes.published_unreadable = `the world checkout could not be read (${plainReason(e, "files", "the town's published marks")})`; }
 
   const docket = await docketFor(handle, { repo });
@@ -279,15 +281,24 @@ export async function marksRead(handle, {
  * whole of it is a small answer; if it ever is not, the fix is a filter
  * argument on that route, not a pool here.
  */
-export async function liveDocketFor(handle, _opts = {}) {
+export async function liveDocketFor(handle, { docket: read = null } = {}) {
+  const docket = read ?? await liveDocket();
+  return docket.readable ? { readable: true, rows: docket.rows.filter((c) => c?.claimant === handle) } : docket;
+}
+
+/**
+ * The whole public docket, once: what `liveDocketFor` filters by claimant. A
+ * reader asking for several residents (the household glance) reads it once and
+ * filters it the same way, rather than asking the route once per resident.
+ */
+export async function liveDocket() {
   const { world2ServeEnabled, world2Serve } = await import("./world2-serve.mjs");
   if (!world2ServeEnabled()) return { readable: false, reason: DOCKET_UNREADABLE };
   try {
     const answer = await world2Serve("/world2/docket", new URLSearchParams());
     if (!answer || answer.code !== 200)
       return { readable: false, reason: `the public docket answered ${answer?.code ?? "nothing"}` };
-    const claims = answer.body?.claims ?? [];
-    return { readable: true, rows: claims.filter((c) => c?.claimant === handle) };
+    return { readable: true, rows: answer.body?.claims ?? [] };
   } catch (e) {
     // A store that is CONFIGURED and unreachable is a third state, and it must
     // not read as "nothing pending" either.
