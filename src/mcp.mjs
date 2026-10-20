@@ -40,7 +40,7 @@ import { uploadMedia } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { validateArgs } from "./validate-args.mjs"; // one owner for "does this door take that field" — re-exported below
-import { callShape } from "./call-shape.mjs"; // POS-722: the access line's call shape
+import { callShape, methodForLog } from "./call-shape.mjs"; // POS-722: the access line's call shape
 import { ACT_RETRY, READ_RETRY, STORE_LOST, STORE_RETRY_AFTER_S, bounceExtras, caughtBounce, faultLogged, foreignAnswer, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573)
 import { isStoreUnreachable } from "./store-pool.mjs"; // a lost store, said as an outage (POS-573)
 import { standingBounce } from "./standing.mjs";
@@ -1044,9 +1044,10 @@ async function handleMessage(msg, ctx) {
 
   // telemetry: stamp the tool name (never the arguments) for the access log.
   // Batched messages overwrite each other — last one wins; batches are rare.
-  // A name the office does not answer is the caller's own text, so it reads
-  // "other" (POS-722: the line holds no string a caller wrote).
-  if (ctx.req?.tel) ctx.req.tel.mcp = msg.method !== "tools/call" ? msg.method
+  // A tool name the office does not answer, or a method no MCP client is known
+  // to send, is the caller's own text, so it reads "other" (POS-722: the line
+  // holds no string a caller wrote).
+  if (ctx.req?.tel) ctx.req.tel.mcp = msg.method !== "tools/call" ? methodForLog(msg.method)
     : msg.params?.name == null ? "tools/call"
     : callableList().some((t) => t.name === msg.params.name) ? msg.params.name : "other";
 

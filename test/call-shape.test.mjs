@@ -17,10 +17,12 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { callShape, finishCall, meterOut, replyBounce, queryArgs, CALL_MAX, KEYS_MAX } from "../src/call-shape.mjs";
+import { bounded, callShape, finishCall, meterOut, methodForLog, replyBounce, queryArgs, CALL_MAX, KEYS_MAX } from "../src/call-shape.mjs";
 import { accessLine, LINE_MAX } from "../src/telemetry.mjs";
 import { APEX_TOOL } from "../src/world-apex.mjs";
-import { HOUSEHOLD_TOOL } from "../src/household-apex.mjs";
+import { HOUSEHOLD_TOOL, HOUSEHOLD_READ_FIELDS } from "../src/household-apex.mjs";
+import { HOUSEHOLD_LINES, TOWN_LINES } from "../src/door-read-shape.mjs";
+import { TOOLS } from "../src/mcp.mjs";
 import { TOWN_TOOL } from "../src/town-apex.mjs";
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
@@ -28,8 +30,9 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { removeTempDir, tempDir } from "./helpers/temp-dir.mjs";
 
-// Lowercase and dashed, so it would pass the key pattern if it were ever
-// copied as a name: only a value-copy can put it in the line, and nothing else.
+// Lowercase and dashed: a well-formed field name, so as a KEY only the
+// allowlist of declared names keeps it off the line, and as a value only the
+// rule that no value is copied.
 const SENTINEL = "zq-sentinel-7c1f";
 const bytes = (s) => Buffer.byteLength(s, "utf8");
 const lineOf = (call, over = {}) => accessLine({ ts: "2026-10-19T22:32:00.000Z", ip: "127.0.0.1", method: "POST", path: "/mcp",
@@ -93,29 +96,85 @@ test("A HUGE PAYLOAD DOES NOT GROW THE LINE", () => {
   const small = lineOf(callShape("household", { do: "send", args: { from: "a", to: "b", title: "c", body: "d" } }));
   const huge = lineOf(callShape("household", { do: "send", args: { from: "a".repeat(1e5), to: "b".repeat(1e5), title: "c".repeat(1e5), body: "d".repeat(2e6) } }));
   assert.equal(bytes(huge), bytes(small), "a value's length is never measured into the line");
-  // and a flood of field NAMES is capped, then bounded
+  // a flood of undeclared names is only counted
   const names = {};
   for (let i = 0; i < 5000; i++) names[`field_${String(i).padStart(4, "0")}_${"x".repeat(20)}`] = SENTINEL;
   const flood = callShape("world", { ...names, args: names });
-  assert.ok(bytes(JSON.stringify(flood)) <= CALL_MAX, `the call is ${bytes(JSON.stringify(flood))} bytes`);
+  assert.equal(flood.keys_other, 10000);
   assert.ok(bytes(lineOf(flood)) + 1 <= LINE_MAX);
-  const tidy = callShape("world", Object.fromEntries(Object.entries(names).slice(0, 40)));
+  // the declared names are capped, and the widest real call (every focus, every
+  // enum, an act and a read, the longest declared names) stays under the bound
+  const longest = [...declared()].sort((a, b) => b.length - a.length).slice(0, 40);
+  const tidy = callShape("world", { args: Object.fromEntries(longest.map((k) => [k, 1])) });
   assert.equal(tidy.keys.length, KEYS_MAX);
-  assert.equal(tidy.keys_more, 40 - KEYS_MAX);
-  // the widest call the caps allow: every focus, every enum, an act and a read,
-  // twenty 32-character names, then a size and a code. The bound is reached, and holds.
+  assert.equal(tidy.keys_more, 41 - KEYS_MAX, "the 40 names and the envelope itself");
   const widest = { do: "declare-stance-on", read: "declare-stance-on", read_shape: "x", view: "x", cards: "x", as: "x", stance: "x",
-    mark: 1, find: 1, investigate: 1, explain: 1, since: 1, depth: 1, args: {} };
-  for (let i = 0; i < 30; i++) widest.args[`f${String(i).padStart(2, "0")}${"x".repeat(29)}`] = 1;
+    mark: 1, find: 1, investigate: 1, explain: 1, since: 1, depth: 1, args: Object.fromEntries(longest.map((k) => [k, 1])) };
   const full = finishCall({ call: callShape("world", widest), out_bytes: 123456789 }, 503);
-  assert.equal(full.keys_dropped, true, `the widest call reached the bound: ${JSON.stringify(full)}`);
-  assert.ok(bytes(JSON.stringify(full)) <= CALL_MAX, `the finished call is ${bytes(JSON.stringify(full))} bytes`);
-  assert.equal(full.do, "declare-stance-on", "what is kept past the bound is the shape's head: act, read, size, code");
-  assert.equal(full.bounce, 503);
-  // names that are not field-shaped are counted, never written
-  const odd = callShape("world", { [SENTINEL.toUpperCase()]: 1, "has space": 1, ok: 1 });
-  assert.deepEqual(odd.keys, ["ok"]);
-  assert.equal(odd.keys_other, 2);
+  assert.ok(bytes(JSON.stringify(full)) <= CALL_MAX, `the widest real call is ${bytes(JSON.stringify(full))} bytes`);
+});
+
+test("THE BOUND HOLDS PAST THE CAPS: a call over CALL_MAX drops its field names and says so", () => {
+  // No declared name reaches it today (the widest real call is ~700 bytes); the
+  // check is what keeps the line bounded the day a cap or a schema grows.
+  const over = { tool: "world", do: "send", keys: Array.from({ length: 40 }, (_, i) => `args.${"n".repeat(28)}${i}`), out_bytes: 1, bounce: 503 };
+  const b = bounded(over);
+  assert.ok(bytes(JSON.stringify(b)) <= CALL_MAX, `${bytes(JSON.stringify(b))} bytes`);
+  assert.deepEqual(b, { tool: "world", do: "send", out_bytes: 1, bounce: 503, keys_dropped: true });
+  const under = { tool: "world", keys: ["mark"] };
+  assert.equal(bounded(under), under, "an ordinary call passes through as the same object");
+});
+
+/** Every field name the tools' own schemas declare, gathered here apart from call-shape.mjs. */
+function declared() {
+  const names = new Set();
+  const walk = (s) => { if (!s || typeof s !== "object") return; if (s.properties) for (const [k, v] of Object.entries(s.properties)) { names.add(k); walk(v); } if (s.items) walk(s.items); };
+  for (const t of [APEX_TOOL, HOUSEHOLD_TOOL, TOWN_TOOL, ...TOOLS]) walk(t.inputSchema);
+  return names;
+}
+
+test("KEY NAMES ARE ALLOWLISTED: a name the office does not declare is counted, never written", () => {
+  const call = callShape("household", { do: "send", [SENTINEL]: 1, "has space": 1, args: { [SENTINEL]: 1, "jane-at-42-elm-st": 1, from: "a", body: "b" } });
+  const line = lineOf(finishCall({ call }, 200));
+  assert.ok(!line.includes(SENTINEL) && !line.includes("jane"), `a caller's key reached the line: ${line}`);
+  assert.deepEqual(call.keys, ["args", "args.body", "args.from", "do"]);
+  assert.equal(call.keys_other, 4);
+  // every act field the doors' own one-liners name (door-read-shape.mjs, held against the schemas there) is kept
+  for (const [act, card] of Object.entries({ ...HOUSEHOLD_LINES, ...TOWN_LINES })) {
+    for (const f of card.fields.map((x) => x.replace(/\?$/, "")).filter((x) => /^[a-z_]+$/.test(x))) {
+      const c = callShape(act in HOUSEHOLD_LINES ? "household" : "town", { do: act, args: { [f]: 1 } });
+      assert.ok(c.keys?.includes(`args.${f}`), `${act}: its field ${f} is not kept (${JSON.stringify(c)})`);
+    }
+  }
+  // and every household read's own fields
+  for (const [read, fields] of Object.entries(HOUSEHOLD_READ_FIELDS)) for (const f of Object.keys(fields)) {
+    assert.ok(callShape("household", { read, args: { [f]: 1 } }).keys.includes(`args.${f}`), `read ${read}: ${f} is not kept`);
+  }
+});
+
+test("a sentinel in every household read's fields and in every enum, at both levels, never reaches the line", () => {
+  for (const [read, fields] of Object.entries(HOUSEHOLD_READ_FIELDS)) {
+    const planted = Object.fromEntries(Object.keys(fields).map((f) => [f, SENTINEL]));
+    const call = callShape("household", { read, ...planted, args: planted });
+    assert.ok(!lineOf(call).includes(SENTINEL), `read ${read}: ${lineOf(call)}`);
+  }
+  const ENUM_FIELDS = ["read_shape", "view", "cards", "as", "stance", "class", "to"];
+  for (const tool of ["world", "household", "town"]) {
+    for (const at of ["top", "args"]) {
+      const values = Object.fromEntries(ENUM_FIELDS.map((f) => [f, SENTINEL]));
+      const call = callShape(tool, at === "top" ? values : { args: values });
+      assert.ok(!lineOf(call).includes(SENTINEL), `${tool} ${at}: ${lineOf(call)}`);
+      assert.ok(Object.keys(call.enums ?? {}).length >= 5, `${tool} ${at}: the enums were read (${JSON.stringify(call.enums)})`);
+      for (const v of Object.values(call.enums)) assert.equal(v, "other");
+    }
+  }
+});
+
+test("the `mcp` field's word for a JSON-RPC method: a known one, else \"other\"", () => {
+  for (const m of ["initialize", "tools/list", "tools/call", "ping", "notifications/initialized", "resources/list"]) assert.equal(methodForLog(m), m);
+  assert.equal(methodForLog(SENTINEL), "other");
+  assert.equal(methodForLog(`notifications/${SENTINEL}`), "other");
+  assert.equal(methodForLog(undefined), "other");
 });
 
 test("the REST query: args= is read for its names only", () => {
@@ -194,6 +253,11 @@ async function mcp(name, args) {
     body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "tools/call", params: { name, arguments: args } }) });
   return { status: r.status, reader: r.headers.get("x-pm-reader"), body: Buffer.from(await r.arrayBuffer()) };
 }
+async function rpc(method) {
+  const r = await fetch(`${base}/mcp`, { method: "POST", headers: { ...auth, "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method }) });
+  return { status: r.status, body: Buffer.from(await r.arrayBuffer()) };
+}
 async function rest(method, path, payload) {
   const r = await fetch(`${base}${path}`, { method, headers: { ...auth, "content-type": "application/json" }, ...(payload ? { body: JSON.stringify(payload) } : {}) });
   return { status: r.status, body: Buffer.from(await r.arrayBuffer()) };
@@ -217,7 +281,7 @@ test("THE OFFICE'S OWN LINES: every door's call shaped, sized and refused by cod
     { what: "a worker's bare world read", r: bare, mcp: "world", call: { tool: "world" } },
     { what: "a worker's poisoned world read", r: await mcp("world", { read: SENTINEL, handle: SENTINEL, args: { mark: SENTINEL } }), mcp: "world", call: { tool: "world", read: "other" } },
     { what: "the household house read", r: await mcp("household", { read: "house", handle: SENTINEL }), mcp: "household", call: { tool: "household", read: "house" } },
-    { what: "a poisoned letter", r: await mcp("household", { do: "send", args: { from: SENTINEL, to: SENTINEL, title: SENTINEL, body: SENTINEL.repeat(500) } }), mcp: "household", call: { tool: "household", do: "send" } },
+    { what: "a poisoned letter", r: await mcp("household", { do: "send", args: { from: SENTINEL, to: SENTINEL, title: SENTINEL, body: SENTINEL.repeat(500), [SENTINEL]: 1, "jane-at-42-elm-st": 1 } }), mcp: "household", call: { tool: "household", do: "send" } },
     { what: "an unknown tool", r: await mcp(SENTINEL, { body: SENTINEL }), mcp: "other", call: { tool: "other" }, bounce: -32602 },
     { what: "GET /household", r: await rest("GET", `/household?read=house&handle=${SENTINEL}&args=${encodeURIComponent(JSON.stringify({ q: SENTINEL }))}`), call: { tool: "household", read: "house" } },
     { what: "POST /world/apex", r: await rest("POST", "/world/apex", { do: SENTINEL, args: { text: SENTINEL } }), call: { tool: "world", do: "other" } },
@@ -232,10 +296,17 @@ test("THE OFFICE'S OWN LINES: every door's call shaped, sized and refused by cod
       && ["tool", "do", "read"].every((k) => r.call[k] === a.call[k]);
   });
   const parse = (all) => all.map((l) => JSON.parse(l));
-  const lines = await officeLines((all) => asked.every((a) => lineFor(parse(all), a)));
+  // and two JSON-RPC methods that are not tools/call: a known one, and the caller's own text
+  await rpc("tools/list");
+  await rpc(SENTINEL);
+  const methodLine = (records, word) => records.findLast((r) => r.path === "/mcp" && !r.call && r.mcp === word);
+  const lines = await officeLines((all) => asked.every((a) => lineFor(parse(all), a)) && methodLine(parse(all), "tools/list") && methodLine(parse(all), "other"));
   for (const l of lines) assert.ok(!l.includes(SENTINEL), `the sentinel reached the office's line: ${l}`);
   assert.ok(bare.reader, `a read worker answered the bare read (the handed path is measured, not assumed); the office said: ${stderr.slice(-1500)}`);
   const records = parse(lines);
+  assert.ok(methodLine(records, "tools/list") && methodLine(records, "other"), "a known method is named, an unknown one reads \"other\"");
+  const letter = lineFor(records, asked[3]);
+  assert.equal(letter.call.keys_other, 2, "the letter's two undeclared field names are counted, not written");
   asked.forEach((a) => {
     const got = lineFor(records, a);
     assert.ok(got, `${a.what}: no line carries its call`);

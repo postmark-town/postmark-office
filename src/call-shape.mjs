@@ -10,9 +10,11 @@
 //   tool       the apex or tool, when it is one the office answers; else "other"
 //   do / read  the act or read name, ONLY when it is a name the apex knows; else "other"
 //   focus      { mark, find, investigate, explain, since, depth }: present ones only, as true
-//   keys       the argument field NAMES, sorted, pattern-checked and capped; an
-//              envelope's fields are "args.<name>"; names that fail the pattern
-//              are only counted (keys_other), never written
+//   keys       the argument field NAMES the office itself declares (a tool's
+//              schema, a read's fields), sorted and capped; an envelope's fields
+//              are "args.<name>". A name the office does not declare is the
+//              caller's text (`{ "jane-at-42-elm-st": 1 }`), so it is only
+//              counted (keys_other), never written
 //   enums      fields whose value comes from a fixed set (read_shape, view, cards,
 //              as, stance; class and to at the town door), the value only when it
 //              IS in that set; anything else reads "other"
@@ -24,13 +26,15 @@
 //
 // THE PRIVACY LINE IS ABSOLUTE. Nothing here copies a string value out of an
 // argument unless it is a member of a fixed set the office itself declares; a
-// handle, a slug, a body, an id, a number: none of them is ever written. The
-// sentinel test (test/call-shape.test.mjs) puts one string in every value and
-// reads the whole line for it.
+// handle, a slug, a body, an id, a number: none of them is ever written. A field
+// NAME, an MCP tool name and a JSON-RPC method are caller text too, and the same
+// rule holds for each: written only when the office declares it. The sentinel
+// test (test/call-shape.test.mjs) plants one string in every value and in a
+// key's place, and reads the whole line for it.
 
-import { DISPATCHABLE as WORLD_ACTS, FIND_READ } from "./world-apex.mjs";
+import { APEX_TOOL, DISPATCHABLE as WORLD_ACTS, FIND_READ, FIND_READ_FIELDS, WORLD_READ_FIELDS } from "./world-apex.mjs";
 import { BLOCK_READS } from "./world-read-v2.mjs";
-import { HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READ_ENUM, HOUSEHOLD_TOOL } from "./household-apex.mjs";
+import { APEX_ONLY_FIELDS, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READ_ENUM, HOUSEHOLD_READ_FIELDS, HOUSEHOLD_TOOL } from "./household-apex.mjs";
 import { TOWN_TOOL } from "./town-apex.mjs";
 import { READ_SHAPES } from "./world-read-shape.mjs";
 import { RESIDENT_WORDS } from "./town-stance.mjs";
@@ -38,13 +42,28 @@ import { POST_CLASSES } from "./town-posts.mjs";
 import { BUG_STAGES, BUG_SIDE_EXITS } from "./bugs.mjs";
 import { IDEA_STAGES } from "./ideas.mjs";
 import { isHttpStatus } from "./fault-words.mjs";
+import { DOORSTEP_TOOL } from "./doorstep-apex.mjs";
+// A CYCLE, read lazily: mcp.mjs imports this module, and the flat tools' schemas
+// (every act's own fields) are declared there. TOOLS is read at the first call,
+// never while the modules evaluate.
+import { TOOLS } from "./mcp.mjs";
 
 /** The `call` object's own ceiling, in bytes of JSON (POS-722: ≤ 1 KB, inside telemetry.mjs § LINE_MAX). */
 export const CALL_MAX = 1024;
 /** At most this many field names; the rest are counted as keys_more. */
 export const KEYS_MAX = 20;
-/** A field name as the office's own schemas spell them (the longest today is 28 characters). */
-export const KEY_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+/** A tool name's shape; the name itself is the caller's to check (mcp.mjs passes "other" for one it does not answer). */
+const TOOL_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+/**
+ * The JSON-RPC methods an MCP client is known to send (the protocol's own, the
+ * ones this door answers and the ones it refuses by name). Any other method is
+ * the caller's text and reads "other" in the `mcp` field.
+ */
+export const MCP_METHODS = Object.freeze(new Set(["initialize", "ping", "tools/list", "tools/call", "resources/list",
+  "resources/templates/list", "resources/read", "prompts/list", "prompts/get", "logging/setLevel", "completion/complete",
+  "notifications/initialized", "notifications/cancelled", "notifications/progress", "notifications/roots/list_changed"]));
+/** The `mcp` field's word for a JSON-RPC method. */
+export const methodForLog = (method) => (MCP_METHODS.has(method) ? method : "other");
 export const FOCUS = Object.freeze(["mark", "find", "investigate", "explain", "since", "depth"]);
 /** The paths whose calls are shaped at the REST door, and the apex each one is. */
 export const APEX_DOORS = Object.freeze({ "/household": "household", "/world/apex": "world", "/town/apex": "town" });
@@ -59,6 +78,7 @@ function knownNames() {
   const set = (...lists) => new Set(lists.flat().filter((s) => typeof s === "string"));
   const town = TOWN_TOOL.inputSchema.properties;
   known = {
+    fields: declaredFields(),
     names: {
       world: { do: set(WORLD_ACTS), read: set(WORLD_ACTS, Object.keys(BLOCK_READS), FIND_READ) },
       household: { do: set(HOUSEHOLD_DISPATCHABLE), read: set(HOUSEHOLD_READ_ENUM) },
@@ -81,6 +101,31 @@ function knownNames() {
 }
 
 const isObj = (v) => v != null && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Every field name the office declares: each tool's input schema (the apexes,
+ * the doorstep, every flat tool, which is where most acts' own fields live),
+ * walked through its nested objects; the household's apex-only acts (stake,
+ * fund-verify, rsvp: no flat tool to borrow from); and every read's own fields
+ * (the world's, the find read's, the v2 blocks', the household's).
+ */
+function declaredFields() {
+  const names = new Set();
+  const walk = (schema, depth = 0) => {
+    if (!isObj(schema) || depth > 8) return;
+    if (isObj(schema.properties)) for (const [k, v] of Object.entries(schema.properties)) { names.add(k); walk(v, depth + 1); }
+    if (isObj(schema.items)) walk(schema.items, depth + 1);
+    for (const alt of ["anyOf", "oneOf", "allOf"]) if (Array.isArray(schema[alt])) for (const s of schema[alt]) walk(s, depth + 1);
+  };
+  for (const tool of [APEX_TOOL, HOUSEHOLD_TOOL, TOWN_TOOL, DOORSTEP_TOOL, ...TOOLS]) walk(tool?.inputSchema);
+  for (const schema of Object.values(APEX_ONLY_FIELDS)) walk(schema);
+  const fieldsOf = (byRead) => { for (const fields of Object.values(byRead ?? {})) walk({ properties: fields }); };
+  fieldsOf(WORLD_READ_FIELDS);
+  fieldsOf(BLOCK_READS);
+  fieldsOf(HOUSEHOLD_READ_FIELDS);
+  walk({ properties: FIND_READ_FIELDS });
+  return names;
+}
 const present = (v) => v != null && v !== "" && v !== false;
 const nameIn = (v, names) => (typeof v === "string" && names.has(v.trim()) ? v.trim() : "other");
 
@@ -90,10 +135,10 @@ const nameIn = (v, names) => (typeof v === "string" && names.has(v.trim()) ? v.t
  * as they arrived. Answers a plain object of at most CALL_MAX bytes of JSON.
  */
 export function callShape(tool, args) {
-  const { names, enums } = knownNames();
+  const { fields, names, enums } = knownNames();
   const top = isObj(args) ? args : {};
   const env = isObj(top.args) ? top.args : {};
-  const call = { tool: typeof tool === "string" && KEY_RE.test(tool) ? tool : "other" };
+  const call = { tool: typeof tool === "string" && TOOL_RE.test(tool) ? tool : "other" };
 
   const apex = names[call.tool];
   if (apex) {
@@ -107,8 +152,8 @@ export function callShape(tool, args) {
 
   const good = [];
   let other = 0;
-  for (const k of Object.keys(top)) (KEY_RE.test(k) ? good.push(k) : other++);
-  for (const k of Object.keys(env)) (KEY_RE.test(k) ? good.push(`args.${k}`) : other++);
+  for (const k of Object.keys(top)) (fields.has(k) ? good.push(k) : other++);
+  for (const k of Object.keys(env)) (fields.has(k) ? good.push(`args.${k}`) : other++);
   good.sort();
   if (good.length) call.keys = good.slice(0, KEYS_MAX);
   if (good.length > KEYS_MAX) call.keys_more = good.length - KEYS_MAX;
@@ -132,7 +177,7 @@ export function callShape(tool, args) {
  * long field names can reach it, and so can the finished call with its size
  * and code (finishCall bounds again).
  */
-function bounded(call) {
+export function bounded(call) {
   if (Buffer.byteLength(JSON.stringify(call), "utf8") <= CALL_MAX) return call;
   const { keys, keys_more, keys_other, ...rest } = call;
   return { ...rest, keys_dropped: true };
