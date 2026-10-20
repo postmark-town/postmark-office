@@ -351,15 +351,16 @@ test("the group act's read is a call the MCP door's schema accepts, its fields i
 // ── round 4 (Darko RULED 2026-10-20 15:06): marks and posts ──────────────────
 
 /** The round 4 keys end on their block's own read (Darko 15:46), so they run past 100 characters; bounded here by name. */
-const ROUND4_KEY = 192; // after round 4: the posts key carries the read for a waiting reply, since no act answers one
+const ROUND4_KEY = 208; // after round 4: the posts key carries the read for a new response, since no act answers one
 
 test("marks: the house's building in counts and two rows; the last crossing is the house's own; zeros and empties are left out", () => {
   const m = marksBlock(MARKS_MIX);
   assert.deepEqual([m.drafts, m.pending, m.standing], [3, 1, 42]);
   assert.equal(m.last_crossing, "crossing 259: 2 published · 1 refused (architect/the-long-wall: it overlaps ground held first, and its holder has not welcomed it)",
     "the newest crossing that decided something of the house's, and only the house's (a refusal on its ground is not its own)");
-  assert.deepEqual(m.at_risk, ['illuminator/a-commons-lantern: ✦0, unpublished at the next settlement unless staked: world { do: "stake", args: { mark: "illuminator/a-commons-lantern", stamps: 1, preview: true } }'],
-    "what happens, why, and the world door's call that keeps it (after round 4)");
+  assert.deepEqual(m.at_risk, ["illuminator/a-commons-lantern: ✦0, unpublished at the next settlement unless staked"], "what happens and why, by mark id");
+  // Darko 18:04: the call that keeps one is named once, in the key
+  assert.match(MARKS_KEY, /keep: world \{ do: "stake", args: \{ mark, stamps: 1, preview: true \} \}/);
   const many = marksBlock({ ...MARKS_MIX, atRisk: [{ mark: "a/x", escrow: 0 }, { mark: "a/y", escrow: 0 }, { mark: "a/z", escrow: 0 }] }).at_risk;
   assert.deepEqual(many.slice(2), ['+1 more: read "marks"']);
   assert.equal(marksBlock({ counts: {}, published: [], effects: [{ kind: "claim-refused", yours: true, crossing: 9, mark: "a/b" }], atRisk: [] }).last_crossing,
@@ -380,20 +381,22 @@ test("marks: the house's building in counts and two rows; the last crossing is t
 test("posts: the house's open posts, those with a response as the newest act, what it takes part in by class, the two newest", () => {
   const p = postsBlock(POSTS_MIX, { nowMs: NOW });
   assert.equal(p.open, 2, "the ended event is finished; the bug the house reported is open at its stage");
-  assert.equal(p.responses_waiting, "1: a-map-for-newcomers", "the open idea post's newest act is a respondent's, and the count names it");
+  assert.equal(p.new_responses, "1: a-map-for-newcomers", "the open idea post's newest act is a respondent's, and the count names it (Darko 18:04: new_responses, a fact of order)");
+  assert.equal(p.responses_waiting, undefined, "the old name is gone: it read as owed");
   assert.deepEqual(p.part_of, { event: 1, idea: 1 });
-  assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h · reply waiting"]);
+  assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h · new response"]);
   assert.equal(p.key, POSTS_KEY);
   assert.ok(POSTS_KEY.length <= ROUND4_KEY, `a round 4 key: ${POSTS_KEY.length}`);
   assert.match(POSTS_KEY, /more: read "posts"$/);
   // after round 4: the post machine has no act by which an author answers a response (idea sign-ups are the town's
   // hands' answer-sign-up; an RSVP asks nothing), so the key says so and names the read, and invents no verb
-  assert.match(POSTS_KEY, /^reply waiting: no act answers it; read it: town \{ read: "posts", args: \{ class, post \} \}/);
+  assert.match(POSTS_KEY, /^new_responses: someone else acted last, and no act answers it; read: town \{ read: "posts", args: \{ class, post \} \}/);
+  assert.doesNotMatch(POSTS_KEY, /waiting/, "nothing in the key reads as owed");
   // round 4: householdPosts carries stakes on Think Tank ideas only (household-posts.mjs § ideaRows); the key sends the rest to stakes
-  assert.match(POSTS_KEY, /part_of: RSVPs, answers, Think Tank stakes · other stakes: read "stakes"/);
+  assert.match(POSTS_KEY, /part_of: RSVPs, answers, Think Tank stakes \(others: read "stakes"\)/);
   // the author's own act is not a waiting response
   const answered = { ...POSTS_MIX, put_up: { rows: [{ ...POSTS_MIX.put_up.rows[0], latest: { act: "amend", at: POSTS_MIX.put_up.rows[0].latest.at } }] } };
-  assert.equal(postsBlock(answered, { nowMs: NOW }).responses_waiting, undefined);
+  assert.equal(postsBlock(answered, { nowMs: NOW }).new_responses, undefined);
   // an empty read leaves the block out; a half it could not read is said
   assert.equal(postsBlock({ put_up: { rows: [] }, taking_part: { rows: [] } }, { nowMs: NOW }), null);
   assert.deepEqual(postsBlock({ put_up: { rows: [] }, taking_part: { rows: [] }, unavailable: ["the events could not be read from the office's record"] }, { nowMs: NOW }).unavailable,
