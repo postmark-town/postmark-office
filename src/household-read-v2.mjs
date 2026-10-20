@@ -236,7 +236,8 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
     // round 4: the groups past the first two are named, never dropped silently
     ...(all.length > groups.length ? { more_groups: moreGroups(all.length - groups.length) } : {}),
     ...(setDowns ? { set_downs: setDowns } : {}),
-    at_risk: atRisk, key_asks: keyAsks,
+    // round 4: these are the house's own marks the next settlement takes, the ones marks.at_risk names
+    marks_at_risk: atRisk, key_asks: keyAsks,
     ...(alerts ? { alerts } : {}),
     ...(stances.unavailable ? { unavailable: stances.unavailable } : {}),
     key: WAITING_KEY,
@@ -247,7 +248,7 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
 export const moreGroups = (n) => `+${n} more group${n === 1 ? "" : "s"}: household { read: "stances" }`;
 
 /** The waiting block's key (eval round 1): what each count is, and the read that lists it. */
-export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · act answers the whole group · all marks: read "stances"';
+export const WAITING_KEY = 'count = marks + set_downs + marks_at_risk + key_asks · marks_at_risk: yours, named in marks · act answers the whole group · more: read "waiting"';
 
 // ── marks and posts (round 4, Darko RULED 2026-10-20 15:06) ─────────────────
 //
@@ -258,10 +259,11 @@ export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · ac
 // second derivation. A zero is left out, and a block with nothing in it is.
 
 /** The marks block's key: what each count is, and the reads behind it. */
-export const MARKS_KEY = 'pending: on the docket · standing: published · read "stakes", "outcomes" · one: world { investigate: "<id>" }';
-/** How long a refusal's cause runs in the glance; the outcomes read has it whole. */
-export const CAUSE_CHARS = 40;
-const clip = (t, n) => { const x = String(t ?? "").replace(/\s+/g, " ").trim(); return x.length > n ? `${x.slice(0, n - 1).trimEnd()}…` : x; };
+export const MARKS_KEY = 'pending: on the docket · standing: published · one: world { investigate: "<id>" } · more: read "marks"';
+// round 4 (Wright's look): a refusal's cause is said whole, on one line, never cut mid-sentence
+const oneLine = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
+/** One at-risk mark, what happens and why (round 4): "<id>: ✦0, unpublished at the next settlement unless staked". */
+export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, unpublished at the next settlement unless staked`;
 
 /**
  * The house's own building. `counts` is marksCountsFor's three tenses summed
@@ -279,9 +281,9 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
   // one line each, the brief's 300-350 characters (round 4): "crossing 259: 2 published · 1 refused (<first>: <cause>)"
   const landed = at.length - refused.length;
   const lastCrossing = at.length
-    ? `crossing ${last}: ${[landed ? `${landed} published` : null, refused.length ? `${refused.length} refused (${refused[0].mark}: ${clip(refused[0].cause ?? "no cause recorded", CAUSE_CHARS)})` : null].filter(Boolean).join(" · ")}`
+    ? `crossing ${last}: ${[landed ? `${landed} published` : null, refused.length ? `${refused.length} refused (${refused[0].mark}: ${oneLine(refused[0].cause ?? "no cause recorded")})` : null].filter(Boolean).join(" · ")}`
     : null;
-  const risky = (atRisk ?? []).map((r) => r.mark ?? r.id).filter(Boolean);
+  const risky = (atRisk ?? []).filter((r) => r.mark ?? r.id);
   const newest = [...published].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || String(a.id).localeCompare(String(b.id)))
     .slice(0, 2).map((m) => m.id);
   const block = {
@@ -289,7 +291,8 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
     ...(n(counts.pending) ? { pending: counts.pending } : {}),
     ...(n(counts.standing) ? { standing: counts.standing } : {}),
     ...(lastCrossing ? { last_crossing: lastCrossing } : {}),
-    ...(risky.length ? { at_risk: `${risky.length}: ${risky.slice(0, 2).join(", ")}${risky.length > 2 ? ", …" : ""}` } : {}),
+    // round 4: what happens and why, one line a mark (Wright's look)
+    ...(risky.length ? { at_risk: [...risky.slice(0, 2).map(riskLine), ...(risky.length > 2 ? [`+${risky.length - 2} more: read "marks"`] : [])] } : {}),
     ...(newest.length ? { newest } : {}),
   };
   // a tense nobody could read is said, never shown as none (the-town/the-disclosure)
@@ -301,9 +304,12 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
 }
 
 /** The posts block's key: what the counts are, the list, and the acts. */
-export const POSTS_KEY = 'waiting: open, its last act a reply · all: household { read: "posts" } · join: town { do: "post" | "stake" }';
+export const POSTS_KEY = 'waiting: open, its last act a reply · part_of: RSVPs, answers, Think Tank stakes · other stakes: read "stakes" · join: town { do: "post" } · more: read "posts"';
 /** The acts a post's own author takes on it (household-posts.mjs § ACT_WORD): a post whose newest act is none of these was last answered by someone else. */
 export const AUTHOR_ACTS = Object.freeze(["post", "amend", "close"]);
+/** Each content block of the glance and the household read of its own name (round 4: the `more` line's promise). */
+export const GLANCE_BLOCK_READS = Object.freeze({ house: "house", waiting: "waiting", marks: "marks", posts: "posts", mail: "mail", stamps: "stamps",
+  correspondents: "correspondents", happened: "happened" });
 const FINISHED_DEFAULT = Object.freeze(["ended", "cancelled"]);
 
 /**
@@ -323,10 +329,11 @@ export function postsBlock(posts = null, { nowMs = Date.now(), finished = (r) =>
   for (const r of part) byClass[r.class] = (byClass[r.class] ?? 0) + 1;
   const newest = [...mine, ...part].filter((r) => r.latest?.at)
     .sort((a, b) => String(b.latest.at).localeCompare(String(a.latest.at))).slice(0, 2)
-    .map((r) => `${r.class} ${r.id} · ${r.state ?? "?"} · ${shortAgo(r.latest.at, nowMs) ?? "now"}`);
+    .map((r) => `${r.class} ${r.id} · ${r.state ?? "?"} · ${shortAgo(r.latest.at, nowMs) ?? "now"}${waiting.includes(r) ? " · reply waiting" : ""}`);
   const block = {
     ...(open.length ? { open: open.length } : {}),
-    ...(waiting.length ? { responses_waiting: waiting.length } : {}),
+    // round 4: the count names its posts, so the reader can tell which
+    ...(waiting.length ? { responses_waiting: `${waiting.length}: ${waiting.slice(0, 2).map((r) => r.id).join(", ")}${waiting.length > 2 ? ", …" : ""}` } : {}),
     ...(part.length ? { part_of: byClass } : {}),
     ...(newest.length ? { newest } : {}),
     // a half the posts read could not read is said, never shown as none
@@ -367,16 +374,17 @@ export function unansweredOf(letters = [], { mine, house = mine } = {}) {
 }
 
 /** The mail block's key (eval rounds 1 and 2): what each count is, and the read that lists the letters; about 100 characters. */
-export const MAIL_KEY = 'to answer: 14 days, no reply · boat: next crossing · list: read "mail", view "awaiting" (what you owe)';
+export const MAIL_KEY = 'to_answer: last 14 days, no reply · boat: next crossing · list: read "mail", view "awaiting" (what you owe)';
 
 /**
- * D7, eval round 2: one count to act on, `to_answer_14d` (the ledger's: no
+ * D7, eval round 2: one count to act on, `to_answer` (the ledger's: no
  * letter back in 14 days), the letters that never arrived, and the house's
  * letters sailing at the next crossing. Threads of any age where they wrote
  * last are read: "mail", view: "awaiting", never the glance.
  */
 export function mailBlock({ unanswered = null, bounced = null, standing = null } = {}) {
-  return { to_answer_14d: unanswered, bounced, on_the_next_boat: standing, key: MAIL_KEY };
+  // round 4 (Darko 15:51): the 14 days are the default, named once in the key
+  return { to_answer: unanswered, bounced, on_the_next_boat: standing, key: MAIL_KEY };
 }
 
 /** The stamps block's key (eval rounds 1–3): about 100 characters, the four numbers reconciled in plain words; went joins it when the block carries a went count. */
@@ -451,7 +459,8 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     stamps: stampsBlock(details, { quests, went: went ? went.length : null, you }),
     // eval round 1: plainly letters, the window in the name (Darko 2026-10-20), with its key
     // eval round 2: an empty block is left out (more says so), and happened carries its key
-    ...(closer?.length ? { correspondents_14d: { rows: closerGlance(closer), key: CLOSER_KEY } } : {}),
+    // round 4 (Darko 15:51): the 14 days are the default, named in the key, not the block's name
+    ...(closer?.length ? { correspondents: { rows: closerGlance(closer), key: CLOSER_KEY } } : {}),
     ...(happened?.length ? { happened: { rows: happened.slice(0, HAPPENED_SHOWN).map((r) => happenedLine(r, { nowMs })), key: happenedKey(house.name) } } : {}),
     can: canBlock(standing?.tier, standing?.household),
     law: {
@@ -642,7 +651,7 @@ export function happenedLine(r, { nowMs = Date.now() } = {}) {
 }
 
 /** The correspondents block's key (eval round 1: a reader took closer for a relationship score; these are letters). */
-export const CLOSER_KEY = 'letters both ways, last 14 days · all: household { read: "closer" }';
+export const CLOSER_KEY = 'letters both ways, last 14 days · more: read "correspondents"';
 
 /** happened's key (eval round 2: readers guessed at "for rei"): the three phrases, said once. */
 export const happenedKey = (houseName) => {

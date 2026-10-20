@@ -404,7 +404,12 @@ export const HOUSEHOLD_READS = Object.freeze({
   posts: "the house's posts: what it put up, and others' it takes part in",
   // POS-633 part 2: the typed deep reads
   closer: "who your house writes most, this fortnight",
+  // round 4 (Darko 15:46): the glance's block by its own name; the same answer as closer
+  correspondents: "the same as closer",
   happened: "what your house did, newest first",
+  // POS-633 round 4 (Darko 15:46): every block of the glance is a read of its own name
+  waiting: "what waits on your word, grouped",
+  marks: "your marks: by state, decided, at risk",
 });
 
 export const HOUSEHOLD_READABLE = Object.freeze(Object.keys(HOUSEHOLD_READS));
@@ -436,6 +441,11 @@ export const HOUSEHOLD_READABLE = Object.freeze(Object.keys(HOUSEHOLD_READS));
  * door's standpoint field, resolved from the key for every read at one line,
  * exactly as the ACT branch exempts it (`k !== "handle"`).
  */
+/** closer's fields, which correspondents shares (POS-633 round 4: the same read by the glance block's name). */
+const CLOSER_FIELDS = { days: { type: "number", description: "how many days back to count (default 14, at most 90)" },
+            limit: { type: "number", description: "how many correspondents" },
+            offset: { type: "number", description: "walk past the first correspondents" } };
+
 export const HOUSEHOLD_READ_FIELDS = Object.freeze({
   doorstep: { correspondence_offset: { type: "number", description: "walk the correspondence ledger — the same offset the flat read_doorstep spells correspondence_offset" },
               offset: { type: "number", description: "alias of correspondence_offset, honoured since before it had its own name" } },
@@ -474,12 +484,15 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
            full: { type: "boolean", description: "true answers the whole house as it was before POS-720: every resident's doorstep segments and the town-wide blocks" } },
   "needs-you": { household: { type: "string", description: "the house's slug — omit for the house your key holds" } },
   posts: {},
-  closer: { days: { type: "number", description: "how many days back to count (default 14, at most 90)" },
-            limit: { type: "number", description: "how many correspondents" },
-            offset: { type: "number", description: "walk past the first correspondents" } },
+  closer: CLOSER_FIELDS,
+  correspondents: CLOSER_FIELDS, // round 4: the glance block's own name for closer
   happened: { limit: { type: "number", description: "how many rows" },
               offset: { type: "number", description: "walk past the first rows" },
               since: { type: "string", description: "the cursor your last answer handed you: only what happened after it (without one, the last 12 hours)" } },
+  waiting: {},
+  marks: { state: { type: "string", enum: ["drafts", "pending", "standing"], description: "one list only; omit for all three" },
+           limit: { type: "number", description: "rows per list (default 20, cap 100)" },
+           offset: { type: "number", description: "walk past the first rows of each list" } },
 });
 
 /**
@@ -1207,7 +1220,7 @@ async function householdGlance(args, key, ctx) {
   const found = await soft(() => ix.lastActiveFor(ashore));
   const rows = [];
   const details = [];
-  // eval round 2: the glance's mail is to_answer_14d, read from the ledger, so no member's mail law is read here
+  // eval round 2: the glance's mail is to_answer, read from the ledger, so no member's mail law is read here
   for (const h of ashore) {
     const stamps = await soft(() => ix.stampsDetail(h));
     const row = hb.memberRow(h, { stands: stands.byHandle[h] ?? null, stamps });
@@ -1295,7 +1308,7 @@ async function householdDeep(what, f, args, key, ctx) {
     return { total: rows.length, shown: shown.length, limit, offset, complete: next >= rows.length,
       ...(next < rows.length ? { next_offset: next, more_note: `${rows.length - next} further — call again with offset: ${next}` } : {}), rows: shown };
   };
-  if (what === "closer") {
+  if (what === "closer" || what === "correspondents") {
     const days = Math.min(Math.max(Number(f.days) || v2.CLOSER_DAYS, 1), 90);
     const sinceDay = v2.dayBefore(nowMs, days);
     const letters = await ix.lettersAround([...mine], sinceDay, { multi: true });
@@ -1311,7 +1324,7 @@ async function householdDeep(what, f, args, key, ctx) {
     const { resolveHouse } = await import("./household-deriver.mjs");
     const houseOf = (h) => { try { const { slug } = resolveHouse(h, reg?.registry, reg?.pins); return slug ? (reg.registry.households?.[slug]?.name ?? slug) : null; } catch { return null; } };
     const rows = v2.closerRows(letters, { mine, house: house.members, houseOf, mints: v2.mintsByLetter(lines.rows, mine), milestones });
-    return { read: "closer", household: house.slug, since_day: sinceDay, days, ...page(rows),
+    return { read: what, household: house.slug, since_day: sinceDay, days, ...page(rows),
       ...(lines.cut ? { stamps_between_note: "the window holds more ledger lines than one read takes, so stamps_between may be short" } : {}),
       says: "not counted: a say has no addressee, so nothing records one between two houses (POS-633 D6)" };
   }
@@ -1332,6 +1345,87 @@ async function householdDeep(what, f, args, key, ctx) {
   const out = { read: "stamps", view: "went", household: house.slug, ...(since ? { since: after } : { window: "the last 12 hours" }), ...page(rows), cursor };
   out.complete = out.complete && !lines.cut;
   return out;
+}
+
+/** The house's members ashore that the key holds: the glance's own scope. */
+async function glanceScope(key, ctx) {
+  const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(ctx.clone);
+  const hb = await import("./house-bundle.mjs");
+  const house = await hb.houseMembers({ key, clone: ctx.clone });
+  if (house.refused) return { refused: house.refused };
+  const held = [...(key?.handles ?? [])];
+  return { ix, hb, house, ashore: (await hb.ashoreVia(ix, house.members)).filter((h) => held.includes(h)) };
+}
+
+/**
+ * `read: "waiting"` (POS-633 round 4): the glance's waiting block whole. It is
+ * needs-you's answer (household-bundle § needsYou) over the inbox's first
+ * hundred, with every group the glance draws, none cut.
+ */
+async function householdWaiting(key, ctx) {
+  if (!key?.household) return bounce(422, "whose house?", "this read is a household's; this key holds none yet");
+  const scope = await glanceScope(key, ctx);
+  if (scope.refused) return bounce(...scope.refused);
+  const { ix, hb, ashore } = scope;
+  const { stancesForHandles } = await import("./world-stance.mjs");
+  const stances = ashore.length ? await stancesForHandles(ashore, { limit: 100, setDowns: true }) : { stances_awaiting: 0, awaiting: [] };
+  const needs = await hb.needsYou({}, { key, clone: ctx.clone, odb: ctx.odb, asOf: ctx.asOf, ix, readers: { stances: async () => stances } });
+  if (needs?.refused) return bounce(...needs.refused);
+  const v2 = await import("./household-read-v2.mjs");
+  return { ...needs, read: "waiting", groups: v2.needGroups(stances.awaiting ?? [], { max: Infinity }),
+    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) };
+}
+
+/**
+ * `read: "marks"` (POS-633 round 4): the house's own building, composed from
+ * the reads that already answer each part and no new derivation:
+ *   lists      town-marks.mjs § liveDraftsFor, liveDocketFor and publishedMarksOf,
+ *              the three tenses marksCountsFor counts, per resident; newest first,
+ *              each list paged by limit/offset; `state` narrows to one
+ *   decided    claim-effects.mjs § readClaimEffects, the outcomes read's derivation,
+ *              the house's own marks over its same two crossings
+ *   at_risk    doorstep-stakes.mjs § stakesFor, the stakes read's rows the next
+ *              settlement would take
+ */
+async function householdMarks(f, key, ctx) {
+  if (!key?.household) return bounce(422, "whose house?", "this read is a household's; this key holds none yet");
+  const scope = await glanceScope(key, ctx);
+  if (scope.refused) return bounce(...scope.refused);
+  const { ashore } = scope;
+  const nowMs = ctx.nowMs ?? Date.now();
+  const limit = Math.min(Math.max(Number(f.limit) || 20, 1), 100);
+  const offset = Math.max(Number(f.offset) || 0, 0);
+  const only = f.state == null || f.state === "" ? null : String(f.state);
+  const tm = await import("./town-marks.mjs");
+  const docket = ashore.length ? await tm.liveDocket() : null;
+  const lists = { drafts: [], pending: [], standing: [] };
+  const unread = {};
+  for (const h of ashore) {
+    const d = await tm.liveDraftsFor(h, { key });
+    if (d.readable) lists.drafts.push(...d.rows.map((r) => ({ ...r, by: h }))); else unread.drafts = d.reason;
+    const p = await tm.liveDocketFor(h, { docket });
+    if (p.readable) lists.pending.push(...p.rows); else unread.pending = p.reason;
+    try { lists.standing.push(...tm.publishedMarksOf(h).map((r) => ({ ...r, by: h }))); }
+    catch { unread.standing = "the world checkout could not be read"; }
+  }
+  const newestFirst = (a, b) => String(b.date ?? b.submitted_at ?? "").localeCompare(String(a.date ?? a.submitted_at ?? "")) || String(a.id ?? a.slug).localeCompare(String(b.id ?? b.slug));
+  const page = (rows) => { const all = [...rows].sort(newestFirst); return { total: all.length, shown: Math.min(Math.max(all.length - offset, 0), limit), rows: all.slice(offset, offset + limit) }; };
+  const { readClaimEffects, RULINGS_SINCE_CROSSINGS } = await import("./claim-effects.mjs");
+  const { currentCrossing: crossingAt } = await import("./crossings.mjs");
+  const nowCrossing = crossingAt(nowMs);
+  const effects = ashore.length ? await readClaimEffects({ key, handles: ashore, sinceCrossing: Math.max(0, nowCrossing - RULINGS_SINCE_CROSSINGS), nowCrossing }) : { events: [] };
+  const { stakesFor } = await import("./doorstep-stakes.mjs");
+  const stakes = ashore.length ? await stakesFor(ashore, { now: new Date(nowMs) }) : { rows: [] };
+  return {
+    read: "marks", residents: ashore,
+    ...Object.fromEntries(["drafts", "pending", "standing"].filter((k) => !only || k === only).map((k) => [k, page(lists[k])])),
+    decided: effects.readable === false ? { unavailable: effects.reason ?? "the docket store could not be read" }
+      : { since_crossing: Math.max(0, nowCrossing - RULINGS_SINCE_CROSSINGS), rows: (effects.events ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused")) },
+    at_risk: { next_settlement: stakes.next_settlement ?? null, rows: (stakes.rows ?? []).filter((r) => r.at_risk === true),
+      ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
+    ...(Object.keys(unread).length ? { unread } : {}),
+    note: "drafts are your residents' own; pending is on the public docket; standing is published on world main. One mark whole: world { investigate: \"<id>\" }",
+  };
 }
 
 async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas, schemaRequired, asOf, canWrite, channel, slim, ix }) {
@@ -1552,7 +1646,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     // read_stamps stays the PUBLIC roster; these are your household's own books
     // and the town's board. The split is public-record vs. your-books.
     // POS-633 part 2: the typed deep reads; stamps' default view answers as it always has
-    if (what === "closer" || what === "happened" || (what === "stamps" && f.view === "went"))
+    if (what === "closer" || what === "correspondents" || what === "happened" || (what === "stamps" && f.view === "went"))
       return householdDeep(what, { view: f.view, days: f.days, limit: f.limit, offset: f.offset, since: f.since }, args, key, ctx);
     // any other view answers the books exactly as before (old spellings stay working)
     if (what === "stamps" || what === "quests" || what === "fund") {
@@ -1852,6 +1946,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       const { householdPosts } = await import("./household-posts.mjs");
       return householdPosts(handle, { clone });
     }
+    // ── the glance's blocks, each a read of its own name (POS-633 round 4) ──
+    if (what === "waiting") return householdWaiting(key, ctx);
+    if (what === "marks") return householdMarks({ state: f.state, limit: f.limit, offset: f.offset }, key, ctx);
     if (what === "stakes") {
       const named = String(f.handle ?? "").trim();
       const held = [...(key?.handles ?? [])];
