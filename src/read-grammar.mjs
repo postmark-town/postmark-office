@@ -158,7 +158,7 @@ export const EXPLAIN = Object.freeze({
       "Counts are your residents' together; a count of zero is left out. last_crossing is the outcomes read's, for the house's own marks, its first refusal's cause whole; at_risk is the stakes read's, each mark with what happens to it. One mark whole: world { investigate: \"<id>\" }."),
     "marks.*": row("one part of your house's marks; the block's key names the read behind it", 'household { read: "outcomes" }', "live"),
     posts: row("your house's posts: how many of yours are open, how many have a response as their newest act, the posts you take part in by class, and the two newest", 'household { read: "posts" }', "live",
-      "A response is waiting when someone else's act is the newest on an open post of yours (your own acts on a post are post, amend and close). To take part: town { do: \"post\" } and its siblings."),
+      "new_responses counts the open posts of yours where someone else's act is the newest (your own acts on a post are post, amend and close): a fact of order, never a debt, and no act answers one. To take part: town { do: \"post\" } and its siblings."),
     "posts.*": row("one part of your house's posts", 'household { read: "posts" }', "live"),
     stamps: row("your house's stamps: the pool, what is staked, who has earned most, and today's quests", 'household { read: "stamps" }', "live"),
     "stamps.pool": row("the house's stamps to spend: every resident's stamps added up", 'household { read: "stamps" }', "live",

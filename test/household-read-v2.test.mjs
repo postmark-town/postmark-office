@@ -347,15 +347,26 @@ test("happened · D4: hand and for from what the record knows; a route never rec
 });
 
 // With every block and the eval's keys: Darko's 4K plus what round 1 asked for, at the fixture's widest.
-const FULL_BUDGET = 6144;
+// Darko 2026-10-20 18:04 ("good with ur recs for 633"): 6,656, after round 4 added marks and posts and every block's
+// own read; measured on the compare fixture's Starforge (three waiting streams of 50, 6 and 5, each author's own words).
+const FULL_BUDGET = 6656;
 test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
   const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
+  // the widest realistic waiting block: three streams, as Starforge had on 10-19 (the compare fixture's)
+  const stream = (by, over, n, body) => Array.from({ length: n }, (_, i) => ({ mark: `${by}/a-mark-of-theirs-${String(i).padStart(2, "0")}`, by, kind: "sited",
+    body: body.slice(0, 150), date: `2026-10-${String(19 - Math.floor(i / 4)).padStart(2, "0")}`, on_your_ground: [over] }));
+  const awaiting = [...stream("spark-the-builder", "wright/the-trueing-terrace", 50, BODY),
+    ...stream("binya-vernal", "rei/the-lanternseed-gardens", 6, "A paper lantern hung low over the garden path, its seed-shaped light swinging when anyone passes. Leave it lit for the evening walkers."),
+    ...stream("little-bird", "rei/the-lanternseed-gardens", 5, "Small footprints in the soft bed by the gate, and a note pinned to the fence: I was here at dawn, the beans are up.")];
+  p.stances = { stances_awaiting: awaiting.length, awaiting };
   const closer = Array.from({ length: 12 }, (_, i) => ({ with: `isabella-cognita-${i}`, of: "Casa Cognita", letters: 30 - i, last_at: "2026-10-19" }));
-  const happened = Array.from({ length: 9 }, (_, i) => happenedRow({ at: new Date(NOW - i * 3_600_000).toISOString(), actor: i % 3 ? "jetto-of-starforge" : "human-of-starforge",
-    action: "leave-mark", object: `jetto-of-starforge/a-mark-with-a-long-slug-${i}` }, { houseName: "Starforge" }));
+  // the compare fixture's happened (G:/Starstory/docs/2026-10-19/rail/POS-633/compare), so this asserts the size that file reports
+  const happened = Array.from({ length: 9 }, (_, i) => happenedRow({ at: new Date(NOW - i * 3_600_000).toISOString(), actor: i % 3 ? STARFORGE[i % STARFORGE.length] : "human-of-starforge",
+    action: "leave-mark", object: `${STARFORGE[i % STARFORGE.length]}/a-mark-with-a-long-slug-${i}` }, { houseName: "Starforge" }));
+  happened[1] = happenedRow({ at: new Date(NOW - 3_600_000).toISOString(), actor: "rei", hand: "human", for_handle: "rei", route: "site", action: "home", object: "rei/home" }, { houseName: "Starforge" });
   const went = [{ at: new Date(NOW - 3_600_000).toISOString() }, { at: new Date(NOW - 7_200_000).toISOString() }];
   const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
-  t.diagnostic(`Starforge, every block: ${served(g)} characters`);
+  t.diagnostic(`Starforge, every block: ${served(g)} characters (${Object.entries(g).map(([k, v]) => `${k} ${served(v)}`).join(", ")})`);
   assert.ok(served(g) <= FULL_BUDGET, `Starforge's whole glance is ${served(g)} characters as served`);
   assert.equal(g.correspondents.rows.length, 3, "plainly letters, the window in the name");
   assert.match(g.correspondents.key, /^letters both ways, last 14 days/);
@@ -520,15 +531,16 @@ test("the group act's read is a call the MCP door's schema accepts, its fields i
 // ── round 4 (Darko RULED 2026-10-20 15:06): marks and posts ──────────────────
 
 /** The round 4 keys end on their block's own read (Darko 15:46), so they run past 100 characters; bounded here by name. */
-const ROUND4_KEY = 192; // after round 4: the posts key carries the read for a waiting reply, since no act answers one
+const ROUND4_KEY = 208; // after round 4: the posts key carries the read for a new response, since no act answers one
 
 test("marks: the house's building in counts and two rows; the last crossing is the house's own; zeros and empties are left out", () => {
   const m = marksBlock(MARKS_MIX);
   assert.deepEqual([m.drafts, m.pending, m.standing], [3, 1, 42]);
   assert.equal(m.last_crossing, "crossing 259: 2 published · 1 refused (architect/the-long-wall: it overlaps ground held first, and its holder has not welcomed it)",
     "the newest crossing that decided something of the house's, and only the house's (a refusal on its ground is not its own)");
-  assert.deepEqual(m.at_risk, ['illuminator/a-commons-lantern: ✦0, unpublished at the next settlement unless staked: world { do: "stake", args: { mark: "illuminator/a-commons-lantern", stamps: 1, preview: true } }'],
-    "what happens, why, and the world door's call that keeps it (after round 4)");
+  assert.deepEqual(m.at_risk, ["illuminator/a-commons-lantern: ✦0, unpublished at the next settlement unless staked"], "what happens and why, by mark id");
+  // Darko 18:04: the call that keeps one is named once, in the key
+  assert.match(MARKS_KEY, /keep: world \{ do: "stake", args: \{ mark, stamps: 1, preview: true \} \}/);
   const many = marksBlock({ ...MARKS_MIX, atRisk: [{ mark: "a/x", escrow: 0 }, { mark: "a/y", escrow: 0 }, { mark: "a/z", escrow: 0 }] }).at_risk;
   assert.deepEqual(many.slice(2), ['+1 more: read "marks"']);
   assert.equal(marksBlock({ counts: {}, published: [], effects: [{ kind: "claim-refused", yours: true, crossing: 9, mark: "a/b" }], atRisk: [] }).last_crossing,
@@ -549,20 +561,22 @@ test("marks: the house's building in counts and two rows; the last crossing is t
 test("posts: the house's open posts, those with a response as the newest act, what it takes part in by class, the two newest", () => {
   const p = postsBlock(POSTS_MIX, { nowMs: NOW });
   assert.equal(p.open, 2, "the ended event is finished; the bug the house reported is open at its stage");
-  assert.equal(p.responses_waiting, "1: a-map-for-newcomers", "the open idea post's newest act is a respondent's, and the count names it");
+  assert.equal(p.new_responses, "1: a-map-for-newcomers", "the open idea post's newest act is a respondent's, and the count names it (Darko 18:04: new_responses, a fact of order)");
+  assert.equal(p.responses_waiting, undefined, "the old name is gone: it read as owed");
   assert.deepEqual(p.part_of, { event: 1, idea: 1 });
-  assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h · reply waiting"]);
+  assert.deepEqual(p.newest, ["event halloween-at-the-wharf · announced · 2 h", "idea a-map-for-newcomers · open · 5 h · new response"]);
   assert.equal(p.key, POSTS_KEY);
   assert.ok(POSTS_KEY.length <= ROUND4_KEY, `a round 4 key: ${POSTS_KEY.length}`);
   assert.match(POSTS_KEY, /more: read "posts"$/);
   // after round 4: the post machine has no act by which an author answers a response (idea sign-ups are the town's
   // hands' answer-sign-up; an RSVP asks nothing), so the key says so and names the read, and invents no verb
-  assert.match(POSTS_KEY, /^reply waiting: no act answers it; read it: town \{ read: "posts", args: \{ class, post \} \}/);
+  assert.match(POSTS_KEY, /^new_responses: someone else acted last, and no act answers it; read: town \{ read: "posts", args: \{ class, post \} \}/);
+  assert.doesNotMatch(POSTS_KEY, /waiting/, "nothing in the key reads as owed");
   // round 4: householdPosts carries stakes on Think Tank ideas only (household-posts.mjs § ideaRows); the key sends the rest to stakes
-  assert.match(POSTS_KEY, /part_of: RSVPs, answers, Think Tank stakes · other stakes: read "stakes"/);
+  assert.match(POSTS_KEY, /part_of: RSVPs, answers, Think Tank stakes \(others: read "stakes"\)/);
   // the author's own act is not a waiting response
   const answered = { ...POSTS_MIX, put_up: { rows: [{ ...POSTS_MIX.put_up.rows[0], latest: { act: "amend", at: POSTS_MIX.put_up.rows[0].latest.at } }] } };
-  assert.equal(postsBlock(answered, { nowMs: NOW }).responses_waiting, undefined);
+  assert.equal(postsBlock(answered, { nowMs: NOW }).new_responses, undefined);
   // an empty read leaves the block out; a half it could not read is said
   assert.equal(postsBlock({ put_up: { rows: [] }, taking_part: { rows: [] } }, { nowMs: NOW }), null);
   assert.deepEqual(postsBlock({ put_up: { rows: [] }, taking_part: { rows: [] }, unavailable: ["the events could not be read from the office's record"] }, { nowMs: NOW }).unavailable,

@@ -260,13 +260,13 @@ export const WAITING_KEY = 'count = marks + set_downs + marks_at_risk + key_asks
 // second derivation. A zero is left out, and a block with nothing in it is.
 
 /** The marks block's key: what each count is, and the reads behind it. */
-export const MARKS_KEY = 'pending: on the docket · standing: published · one: world { investigate: "<id>" } · more: read "marks"';
+export const MARKS_KEY = 'pending: on the docket · standing: published · keep: world { do: "stake", args: { mark, stamps: 1, preview: true } } · one: world { investigate: "<id>" } · more: read "marks"';
 // round 4 (Wright's look): a refusal's cause is said whole, on one line, never cut mid-sentence
 const oneLine = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
-/** One at-risk mark, what happens, why, and the call that keeps it (round 4 and after). */
-export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, unpublished at the next settlement unless staked: ${keepCall(r.mark ?? r.id)}`;
-/** The world door's stake that keeps a mark, previewed first (world-stake.mjs § world_stake: mark, stamps, preview). After round 4: the fix rides the line. */
-export const keepCall = (id) => `world { do: "stake", args: { mark: "${id}", stamps: 1, preview: true } }`;
+/** One at-risk mark, what happens and why; the keeping call is the key's `keep:`. */
+export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, unpublished at the next settlement unless staked`;
+// the call that keeps one is named once, in MARKS_KEY's `keep:` (world-stake.mjs § world_stake: mark, stamps, preview;
+// Darko 18:04, a line per mark carried it first)
 
 /**
  * The house's own building. `counts` is marksCountsFor's three tenses summed
@@ -307,7 +307,7 @@ export function marksBlock({ counts = {}, published = [], effects = null, atRisk
 }
 
 /** The posts block's key: what the counts are, the list, and the acts. */
-export const POSTS_KEY = 'reply waiting: no act answers it; read it: town { read: "posts", args: { class, post } } · part_of: RSVPs, answers, Think Tank stakes · other stakes: read "stakes" · more: read "posts"';
+export const POSTS_KEY = 'new_responses: someone else acted last, and no act answers it; read: town { read: "posts", args: { class, post } } · part_of: RSVPs, answers, Think Tank stakes (others: read "stakes") · more: read "posts"';
 /** The acts a post's own author takes on it (household-posts.mjs § ACT_WORD): a post whose newest act is none of these was last answered by someone else. */
 export const AUTHOR_ACTS = Object.freeze(["post", "amend", "close"]);
 /** Each content block of the glance and the household read of its own name (round 4: the `more` line's promise). */
@@ -317,9 +317,10 @@ const FINISHED_DEFAULT = Object.freeze(["ended", "cancelled"]);
 
 /**
  * The house's asks, from householdPosts' answer (put_up, taking_part). `open`
- * is a post the house put up that is not finished; `responses_waiting` is an
- * open one holding standing responses whose newest act is not one an author
- * takes (AUTHOR_ACTS), so its last word is a respondent's. `finished(row)` is
+ * is a post the house put up that is not finished; `new_responses` is an open
+ * one holding standing responses whose newest act is not one an author takes
+ * (AUTHOR_ACTS), so its last word is a respondent's: a fact of order, never a
+ * debt (Darko 18:04), counted the same way for every class. `finished(row)` is
  * the post machine's (town-posts.mjs § POST_CLASSES).
  */
 export function postsBlock(posts = null, { nowMs = Date.now(), finished = (r) => FINISHED_DEFAULT.includes(r.state) } = {}) {
@@ -327,16 +328,16 @@ export function postsBlock(posts = null, { nowMs = Date.now(), finished = (r) =>
   const mine = posts.put_up?.rows ?? [];
   const part = posts.taking_part?.rows ?? [];
   const open = mine.filter((r) => !finished(r));
-  const waiting = open.filter((r) => (Number(r.responses) || 0) > 0 && !AUTHOR_ACTS.includes(r.latest?.act));
+  const fresh = open.filter((r) => (Number(r.responses) || 0) > 0 && !AUTHOR_ACTS.includes(r.latest?.act));
   const byClass = {};
   for (const r of part) byClass[r.class] = (byClass[r.class] ?? 0) + 1;
   const newest = [...mine, ...part].filter((r) => r.latest?.at)
     .sort((a, b) => String(b.latest.at).localeCompare(String(a.latest.at))).slice(0, 2)
-    .map((r) => `${r.class} ${r.id} · ${r.state ?? "?"} · ${shortAgo(r.latest.at, nowMs) ?? "now"}${waiting.includes(r) ? " · reply waiting" : ""}`);
+    .map((r) => `${r.class} ${r.id} · ${r.state ?? "?"} · ${shortAgo(r.latest.at, nowMs) ?? "now"}${fresh.includes(r) ? " · new response" : ""}`);
   const block = {
     ...(open.length ? { open: open.length } : {}),
     // round 4: the count names its posts, so the reader can tell which
-    ...(waiting.length ? { responses_waiting: `${waiting.length}: ${waiting.slice(0, 2).map((r) => r.id).join(", ")}${waiting.length > 2 ? ", …" : ""}` } : {}),
+    ...(fresh.length ? { new_responses: `${fresh.length}: ${fresh.slice(0, 2).map((r) => r.id).join(", ")}${fresh.length > 2 ? ", …" : ""}` } : {}),
     ...(part.length ? { part_of: byClass } : {}),
     ...(newest.length ? { newest } : {}),
     // a half the posts read could not read is said, never shown as none
