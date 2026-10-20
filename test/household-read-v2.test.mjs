@@ -14,7 +14,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { glanceV2, sinceV2, needsBlock, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock } from "../src/household-read-v2.mjs";
+import { glanceV2, sinceV2, needsBlock, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
+  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN } from "../src/household-read-v2.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
 import { unexplained, explainAnswer, decodeCursor, encodeCursor } from "../src/read-grammar.mjs";
@@ -171,4 +172,77 @@ test("the door · v1 is untouched, a stranger shape is refused, a bad cursor is 
   assert.match(none.note, /no house|holds none/);
   // v1: an explicit read_shape: "v1" is the same read as none at all
   assert.deepEqual(await householdApex({ read_shape: "v1" }, null, {}), await householdApex({}, null, {}));
+});
+
+// ── part 2: closer, went, happened ───────────────────────────────────────────
+
+const HOUSE9 = new Set(STARFORGE);
+
+test("closer · pairs with everyone outside the house, a multi-recipient letter counting for each party, never a housemate", () => {
+  const letters = [
+    { id: "l1", from_h: "wright", to_h: "damaris", date: "2026-10-18", delivered_at: "2026-10-19T00:06:00.000Z" },
+    { id: "l2", from_h: "damaris", to_h: "rei", date: "2026-10-19", delivered_at: "2026-10-19T12:06:00.000Z" },
+    { id: "l3", from_h: "wright", to_h: "rei", date: "2026-10-19", delivered_at: null }, // housemates: not closer
+    { id: "l4", from_h: "isabella-cognita", to_h: "kai", date: "2026-10-19", multi: JSON.stringify({ toList: ["kai", "mari"] }) },
+    { id: "l5", from_h: "zed", to_h: "kai", date: "2026-10-19" }, // nobody of ours
+  ];
+  const houseOf = (h) => ({ damaris: "Mayflower", "isabella-cognita": "Casa Cognita", kai: "Kai's House" })[h] ?? null;
+  const rows = closerRows(letters, { mine: HOUSE9, houseOf, mints: new Map([["l1", 1], ["l2", 1], ["l4", 1]]), milestones: new Map([["damaris", [{ by: "wright", rung: 1 }]]]) });
+  assert.deepEqual(rows.map((r) => [r.with, r.of, r.letters]), [["damaris", "Mayflower", 2], ["isabella-cognita", "Casa Cognita", 1], ["kai", "Kai's House", 1]]);
+  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "milestones", "stamps_between", "last_at"]);
+  assert.equal(rows[0].stamps_between, 2);
+  assert.equal(rows[0].last_at, "2026-10-19T12:06:00.000Z");
+  assert.ok(!rows.some((r) => "says" in r), "D6: no says");
+  assert.deepEqual(closerGlance(rows)[0], { with: "damaris", of: "Mayflower", letters: 2 });
+  assert.equal(closerGlance([...rows, ...rows]).length, CLOSER_SHOWN);
+  assert.equal(dayBefore(Date.parse("2026-10-20T02:00:00Z"), 14), "2026-10-06");
+});
+
+test("went and mints · read by the ledger's own grammar: a giver of ours is went, a MINT to ours is a mint", () => {
+  const lines = [
+    { canonical: "- 2026-10-19 · rei → stake:world-mark/damaris/the-spring · 1 · via: api", written_at: "2026-10-19T20:00:00Z" },
+    { canonical: "- 2026-10-15 · wright → BURN · 10 · for: correction:abc · by: wright", written_at: "2026-10-15T09:00:00Z" },
+    { canonical: "- 2026-10-19 · MINT → mari · 1 · for: augie-2026-10-19-to-mari-the-view (received)", written_at: "2026-10-19T20:00:00Z" },
+    { canonical: "- 2026-10-19 · stake:pot/the-lamp → rei · 3 · for: unstake · via: web", written_at: "2026-10-19T20:00:00Z" },
+    { canonical: "- 2026-10-19 · damaris → stake:world-mark/x/y · 1 · via: api", written_at: "2026-10-19T20:00:00Z" },
+  ];
+  assert.deepEqual(wentRows(lines, HOUSE9), [
+    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, via: "api" },
+    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, for: "correction:abc" },
+  ]);
+  assert.deepEqual([...mintsByLetter(lines, HOUSE9)], [["augie-2026-10-19-to-mari-the-view", 1]]);
+});
+
+test("happened · D4: hand and for from what the record knows; a route never recorded is absent, never the word unknown", () => {
+  const own = happenedRow({ at: "2026-10-19T20:00:00Z", actor: "rei", action: "say", object: null, at_anchor: "the-town/quay" }, { houseName: "Starforge" });
+  assert.deepEqual(own, { at: "2026-10-19T20:00:00.000Z", hand: "rei", for: "rei", verb: "say", object: null, place: "the-town/quay", by: "rei" });
+  const human = happenedRow({ at: "2026-10-19T20:00:00Z", actor: "human-of-starforge", action: "say" }, { houseName: "Starforge" });
+  assert.deepEqual([human.hand, human.for, human.by], ["human", null, "Starforge's human"]);
+  const seated = happenedRow({ at: "2026-10-19T20:00:00Z", actor: "rei", action: "walk", object: "the-town/quay", as_human: "human-of-starforge" }, { houseName: "Starforge" });
+  assert.deepEqual([seated.hand, seated.for, seated.by], ["human", "rei", "Starforge's human for rei"]);
+  for (const r of [own, human, seated]) {
+    assert.ok(!("route" in r), "no route was recorded");
+    assert.ok(!JSON.stringify(r).includes("unknown"));
+  }
+  assert.equal(happenedRow({ actor: "rei", action: "say", route: "mcp" }).route, "mcp", "a recorded route rides");
+  assert.equal(happenedLine(seated, { nowMs: Date.parse("2026-10-19T22:00:00Z") }), "walk the-town/quay · by Starforge's human for rei · 2 h");
+});
+
+test("H2 with every block · Starforge's glance with closer and happened stays ≤ 4K, every key explained", () => {
+  const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
+  const closer = Array.from({ length: 12 }, (_, i) => ({ with: `isabella-cognita-${i}`, of: "Casa Cognita", letters: 30 - i, last_at: "2026-10-19" }));
+  const happened = Array.from({ length: 9 }, (_, i) => happenedRow({ at: new Date(NOW - i * 3_600_000).toISOString(), actor: i % 3 ? "jetto-of-starforge" : "human-of-starforge",
+    action: "leave-mark", object: `jetto-of-starforge/a-mark-with-a-long-slug-${i}` }, { houseName: "Starforge" }));
+  const went = [{ at: new Date(NOW - 3_600_000).toISOString() }, { at: new Date(NOW - 7_200_000).toISOString() }];
+  const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
+  assert.ok(served(g) <= 4096, `Starforge's whole glance is ${served(g)} characters as served`);
+  assert.equal(g.closer.length, 3);
+  assert.equal(g.happened.length, 5);
+  assert.equal(g.stamps.went, 2);
+  assert.deepEqual(unexplained("household", g, 2), []);
+  const s = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, unreadRows: [], happened, went }, encodeCursor({ crossing: 259, ms: NOW - 5_400_000, hw: "100" }), { nowMs: NOW });
+  assert.equal(s.happened.length, 5);
+  assert.equal(s.happened_more, 4);
+  assert.equal(s.stamps.went, 1, "only what went after the cursor");
+  assert.deepEqual(unexplained("household", s, 2), []);
 });

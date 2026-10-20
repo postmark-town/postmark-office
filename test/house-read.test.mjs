@@ -571,3 +571,24 @@ test("THE GLANCE (POS-633): household { read_shape: \"v2\" } answers the house's
   assert.ok("complete" in s && typeof s.cursor === "string");
   assert.deepEqual(unexplained("household", s, 2), []);
 });
+
+test("THE DEEP READS (POS-633 part 2): closer, happened and stamps' went answer typed rows for a key that holds the house", async () => {
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const ctxD = { clone: scratch, asOf: AS_OF, odb: null, strictFields: true };
+  const c = await householdApex({ read: "closer" }, key, ctxD);
+  assert.equal(c.read, "closer", JSON.stringify(c).slice(0, 300));
+  assert.ok(Array.isArray(c.rows));
+  assert.deepEqual(c.rows.map((r) => r.with), [], "the fixture's letters are between housemates: none are closer");
+  assert.match(c.says, /no addressee/);
+  const h = await householdApex({ read: "happened" }, key, ctxD);
+  assert.equal(h.read, "happened", JSON.stringify(h).slice(0, 300));
+  assert.ok(Array.isArray(h.rows) && typeof h.cursor === "string");
+  const h2 = await householdApex({ read: "happened", since: h.cursor }, key, ctxD);
+  assert.ok(Array.isArray(h2.rows) && h2.since, JSON.stringify(h2).slice(0, 300));
+  const w = await householdApex({ read: "stamps", args: { view: "went" } }, key, ctxD);
+  assert.deepEqual([w.read, w.view], ["stamps", "went"], JSON.stringify(w).slice(0, 300));
+  assert.equal((await householdApex({ read: "stamps", args: { view: "gone" } }, key, ctxD)).code, 422);
+  assert.equal((await householdApex({ read: "happened", since: "yesterday" }, key, ctxD)).code, 422);
+  assert.equal((await householdApex({ read: "closer" }, null, ctxD)).code, 401);
+  assert.equal((await householdApex({ read: "closer", since: "c1.1.1." }, key, ctxD)).code, 422, "closer takes no cursor");
+});

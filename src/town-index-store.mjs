@@ -374,6 +374,10 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     hasResident: via((c, handle) => hasResident(c, handle)),
     // the house's last_active, every resident in one statement (POS-481)
     lastActiveFor: via((c, handles) => lastActiveFor(c, handles)),
+    // the household read v2's deep reads (POS-633 part 2): the house's acts, its letters, its ledger lines
+    houseActs: via((c, household, opts) => houseActs(c, household, opts)),
+    lettersAround: via((c, handles, sinceDay) => lettersAround(c, handles, sinceDay)),
+    stampLinesSince: via((c, sinceIso, opts) => stampLinesSince(c, sinceIso, opts)),
     mailAwaiting: via((c, handle, opts) => mailAwaiting(c, handle, opts)),
     standing: via((c, handle) => standingFor(c, handle)),
     // the town's quest registry (town_meta `quest_registry`), as the doorstep's next steps read it; null when the index has none
@@ -603,6 +607,46 @@ export async function windowRead(q, handle, fresh = null) {
 export async function psaFold(q, opts = {}) {
   const row = (await q.query("SELECT json FROM town_bulletin WHERE slug = $1", [PSA_SLUG])).rows[0];
   return psaFoldOf(row?.json ?? null, opts);
+}
+
+// ── the household read v2's deep reads (POS-633 part 2) ──────────────────────
+
+/** How many rows a deep read takes from the store at most, whatever the window. */
+export const DEEP_ROWS = 500;
+
+/**
+ * The house's own acts, newest first: every act the record files under the
+ * house's key (`hh:<slug>`, acts_household_idx). After `afterId` (the
+ * cursor's high-water mark) when one is given, else since `sinceIso`. Also
+ * answers the store's act high-water mark, for the next cursor.
+ */
+export async function houseActs(q, household, { afterId = null, sinceIso = null, limit = DEEP_ROWS } = {}) {
+  const n = Math.min(Math.max(Number(limit) || DEEP_ROWS, 1), DEEP_ROWS);
+  const hw = (await q.query("SELECT max(id)::text AS hw FROM acts")).rows[0]?.hw ?? null;
+  const after = afterId != null && /^d+$/.test(String(afterId)) ? String(afterId) : null;
+  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human
+      FROM acts WHERE household = $1 AND ${after ? "id > $2::bigint" : "at >= $2::timestamptz"}
+      ORDER BY id DESC LIMIT ${n + 1}`, [household, after ?? sinceIso ?? new Date(0).toISOString()])).rows;
+  return { hw, rows: rows.slice(0, n), cut: rows.length > n };
+}
+
+/**
+ * Every letter to or from `handles` delivered (or dated) since `sinceDay`,
+ * multi-recipient ones included: the correspondents view's semantics
+ * (queries.mjs § correspondentsOf), over a window rather than the whole record.
+ */
+export async function lettersAround(q, handles, sinceDay) {
+  return (await q.query(`SELECT id, from_h, to_h, date, delivered_at,
+      CASE WHEN strpos(json, '"toList"') > 0 THEN json ELSE NULL END AS multi
+    FROM town_letters
+   WHERE (from_h = ANY($1::text[]) OR to_h = ANY($1::text[]) OR strpos(json, '"toList"') > 0)
+     AND COALESCE(delivered_at, date) >= $2`, [[...handles], sinceDay])).rows;
+}
+
+/** The stamp ledger's lines written since `sinceIso`, newest first (stamp_lines, 066). */
+export async function stampLinesSince(q, sinceIso, { limit = 5000 } = {}) {
+  const rows = (await q.query(`SELECT seq, canonical, written_at FROM stamp_lines WHERE written_at >= $1::timestamptz ORDER BY seq DESC LIMIT ${Math.max(1, Math.min(Number(limit) || 5000, 20000)) + 1}`, [sinceIso])).rows;
+  return { rows: rows.slice(0, limit), cut: rows.length > limit };
 }
 
 /** house-bundle § residentSegments, from the store: one resident's own segments, at the house read's bounds. */
