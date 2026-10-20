@@ -374,6 +374,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
     hasResident: via((c, handle) => hasResident(c, handle)),
     // the house's last_active, every resident in one statement (POS-481)
     lastActiveFor: via((c, handles) => lastActiveFor(c, handles)),
+    // the household glance's mail window (POS-633): letters in, and the house's letters out
+    mailWindow: via((c, handles, house, sinceDay) => mailWindow(c, handles, house, sinceDay)),
     mailAwaiting: via((c, handle, opts) => mailAwaiting(c, handle, opts)),
     standing: via((c, handle) => standingFor(c, handle)),
     // the town's quest registry (town_meta `quest_registry`), as the doorstep's next steps read it; null when the index has none
@@ -603,6 +605,18 @@ export async function windowRead(q, handle, fresh = null) {
 export async function psaFold(q, opts = {}) {
   const row = (await q.query("SELECT json FROM town_bulletin WHERE slug = $1", [PSA_SLUG])).rows[0];
   return psaFoldOf(row?.json ?? null, opts);
+}
+
+/**
+ * The household glance's mail window (POS-633; Darko 2026-10-20): letters
+ * delivered to `handles` since `sinceDay`, and every letter the house wrote
+ * since then (delivered or not: an answer counts the day it is written). Both
+ * halves ride the (to_h, date) and (from_h, date) indexes.
+ */
+export async function mailWindow(q, handles, house, sinceDay) {
+  const cols = "id, from_h, to_h, thread, date, delivered_at";
+  return (await q.query(`SELECT ${cols} FROM town_letters WHERE to_h = ANY($1::text[]) AND date >= $3 AND delivered_at IS NOT NULL
+    UNION SELECT ${cols} FROM town_letters WHERE from_h = ANY($2::text[]) AND date >= $3`, [[...handles], [...house], sinceDay])).rows;
 }
 
 /** house-bundle § residentSegments, from the store: one resident's own segments, at the house read's bounds. */

@@ -27,8 +27,10 @@ import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
 
-/** How many of what waits the glance shows whole: the oldest first (they have waited longest). */
+/** How many groups of what waits the glance shows: the oldest first (they have waited longest). */
 export const NEEDS_FIRST = 3;
+/** With more waiting than a page holds, how many of the inbox's last rows are read on their own for the oldest groups. */
+export const TAIL_ROWS = 100;
 /** How many residents the stamps line names before "n more". */
 export const EARNED_NAMED = 3;
 /** How many new needs a since: answer lists whole before it says there are more. */
@@ -125,13 +127,42 @@ export const needRow = (c) => ({
 });
 
 /**
- * The needs block from the inbox page (newest first, as stanceShadow orders it)
- * and needs-you's counts. `first` is the oldest NEEDS_FIRST, oldest first.
+ * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
+ * marks over one place of yours is ONE row, `{ by, over, count, oldest,
+ * newest, sample }`, the sample being the group's oldest body, whole. Groups
+ * run oldest first, up to NEEDS_FIRST. `rows` is newest first, as the inbox
+ * orders it.
  */
-export function needsBlock({ stances = {}, needs = {} } = {}) {
+export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
+  const groups = new Map();
+  for (const c of rows) {
+    const over = (c.on_your_ground ?? [])[0] ?? null;
+    const k = `${c.by}\u0000${over}`;
+    // the inbox's own order is newest first, so a group's first row is its newest and its last row its oldest
+    const g = groups.get(k) ?? { by: c.by ?? null, over, count: 0, oldest: null, newest: c.date ?? null, first: null };
+    g.count += 1;
+    g.oldest = c.date ?? g.oldest;
+    g.first = c;
+    groups.set(k, g);
+  }
+  return [...groups.values()]
+    .sort((a, b) => String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
+    .slice(0, max)
+    .map((g) => ({ by: g.by, over: g.over, count: g.count, oldest: g.oldest, newest: g.newest, sample: g.first?.body ?? "" }));
+}
+
+/**
+ * The needs block from the inbox page (newest first, as stanceShadow orders it)
+ * and needs-you's counts. `first` is the waiting marks grouped by author and
+ * place, oldest group first. When more wait than the page holds, `tail` (the
+ * inbox's last rows, read on their own) joins the page so the oldest are there.
+ */
+export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   const page = stances.awaiting ?? [];
   const total = Math.max(Number(stances.stances_awaiting) || 0, page.length);
-  const oldest = page.slice(-NEEDS_FIRST).reverse().map(needRow);
+  const seen = new Set(page.map((c) => c.mark));
+  const rowsSeen = total > page.length && Array.isArray(tail) ? [...page, ...tail.filter((c) => !seen.has(c.mark))] : page;
+  const oldest = needGroups(rowsSeen);
   const rows = (k) => needs?.[k]?.rows?.length ?? 0;
   const setDowns = rows("set_downs_awaiting");
   const bounced = rows("unplaced_bounces");
@@ -150,9 +181,38 @@ export function needsBlock({ stances = {}, needs = {} } = {}) {
 
 // ── mail and stamps ──────────────────────────────────────────────────────────
 
-/** D7: unread, new_inbound (the awaiting view's own key), and what sails at the next crossing. */
-export function mailBlock({ unread = null, newInbound = null, standing = null } = {}) {
-  return { unread, new_inbound: newInbound, on_the_next_boat: standing };
+/** How far back `unanswered_14d` looks, and the fortnight `closer_14d` counts. */
+export const MAIL_WINDOW_DAYS = 14;
+
+/** A day N days before `nowMs`, as the letters' own dates spell it. */
+export const dayBefore = (nowMs, days) => new Date(nowMs - days * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * Mail that can be acted on (Darko, 2026-10-20): letters delivered to the
+ * house's residents in the last 14 days with no letter back to that sender
+ * from the house, by thread (a reply naming it) or by any later letter to
+ * them: the ledger's semantics. The office's read flag is not used: residents
+ * who read through git never set it. `letters` are the window's rows, both
+ * directions (to_h, from_h, thread, date, delivered_at); `house` is every
+ * resident of the house.
+ */
+export function unansweredOf(letters = [], { mine, house = mine } = {}) {
+  const ours = mine instanceof Set ? mine : new Set(mine ?? []);
+  const home = house instanceof Set ? house : new Set(house ?? []);
+  const when = (r) => String(r.delivered_at ?? r.date ?? "");
+  const out = letters.filter((r) => home.has(r.from_h));
+  let n = 0;
+  for (const r of letters) {
+    if (!r.delivered_at || !ours.has(r.to_h) || home.has(r.from_h)) continue;
+    const answered = out.some((o) => o.thread === r.id || (o.to_h === r.from_h && when(o) >= when(r)));
+    if (!answered) n += 1;
+  }
+  return n;
+}
+
+/** D7: unanswered (the last 14 days, by the ledger), new_inbound (the awaiting view's own key), and what sails at the next crossing. */
+export function mailBlock({ unanswered = null, newInbound = null, standing = null } = {}) {
+  return { unanswered_14d: unanswered, new_inbound: newInbound, on_the_next_boat: standing };
 }
 
 /** The house's stamps: the pool (the residents' sum until POS-326), what is staked, who earned most, today's quests. */
@@ -185,16 +245,20 @@ export function questLines(board) {
  * The house's glance. `parts` is what the door read (household-apex.mjs §
  * householdGlance), so this function is pure and the suite drives it directly.
  */
+/** The member lines' legend, said once (Darko, 2026-10-20): the terms each line's parts stand for. */
+export const MEMBERS_KEY = "handle · where · last act, age · needs";
+
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, stances, needs, mail, details, quests, standing, hw = null } = parts;
+  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
   return {
     house: {
       name: house.name ?? null, slug: house.slug, human: humanPhrase(house.name), since: house.since ?? null,
       ...(you ? { you } : {}),
+      members_key: MEMBERS_KEY,
       members: rows.map((r) => memberLine(r, { gaps: gaps[r.handle] ?? [], nowMs })),
     },
-    needs: needsBlock({ stances, needs }),
+    needs: needsBlock({ stances, needs, tail }),
     mail: mailBlock(mail),
     stamps: stampsBlock(details, { quests }),
     can: canBlock(standing?.tier, standing?.household),
@@ -222,16 +286,16 @@ export function sinceV2(parts, sinceCursor, { nowMs = Date.now() } = {}) {
   const page = parts.stances?.awaiting ?? [];
   const fresh = page.filter((r) => String(r.date ?? "") >= day);
   const shown = fresh.slice(0, SINCE_NEEDS).map(needRow);
-  const letters = (parts.unreadRows ?? []).filter((l) => Date.parse(l.delivered_at ?? "") > c.ms);
+  const letters = (parts.inbound ?? []).filter((l) => Date.parse(l.delivered_at ?? "") > c.ms);
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: parts.hw ?? null });
   const cut = fresh.length > shown.length || page.length < (Number(parts.stances?.stances_awaiting) || 0);
-  const blind = Boolean(parts.stances?.unavailable) || parts.unreadRows == null;
+  const blind = Boolean(parts.stances?.unavailable) || parts.inbound == null;
   const out = {
     since: sinceIso,
     ...(shown.length ? { needs: { new: shown, ...(fresh.length > shown.length ? { more: fresh.length - shown.length } : {}) } } : {}),
     ...(letters.length ? { mail: { new: letters.length } } : {}),
     complete: !cut && !blind,
-    ...(blind ? { unavailable: [parts.stances?.unavailable, parts.unreadRows == null ? "unread mail could not be read" : null].filter(Boolean) } : {}),
+    ...(blind ? { unavailable: [parts.stances?.unavailable, parts.inbound == null ? "the mail could not be read" : null].filter(Boolean) } : {}),
   };
   if (!shown.length && !letters.length && !blind) out.nothing_new = true;
   return { ...out, cursor, more: moreLine(cursor), reading_law: READING_LAW_V2, read_shape: "v2" };
