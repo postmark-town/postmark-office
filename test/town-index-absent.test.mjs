@@ -124,6 +124,10 @@ const CHANGED = {
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"]],
 };
+// AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
+// since now, and the one recorded answer that lists the tool's fields says so.
+CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
+  "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };

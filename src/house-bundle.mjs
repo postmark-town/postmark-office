@@ -128,7 +128,7 @@ export async function houseMembers({ household, key, clone, readers = {} }) {
 // ── THE READERS, EACH ASKED ONCE FOR THE HOUSE ───────────────────────────────
 
 /** Where each resident stands: the walkers roll, read once. */
-async function standsOf(handles, readers = {}) {
+export async function standsOf(handles, readers = {}) {
   try {
     const roll = readers.walkers
       ? await readers.walkers()
@@ -226,7 +226,7 @@ export function residentSegmentsOf({ mail, awaiting, stamps, window, pendingOutb
 }
 
 // Which of `handles` the town index holds a resident for, in the house's order (POS-268).
-const ashoreVia = async (ix, handles) => {
+export const ashoreVia = async (ix, handles) => {
   const out = [];
   for (const h of handles) if (await ix.hasResident(h)) out.push(h);
   return out;

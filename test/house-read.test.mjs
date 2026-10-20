@@ -548,3 +548,23 @@ test("THE PAGE (POS-720): ten busy members at Starforge's scale serve under 8K",
   t.diagnostic(`served: ${n} characters`);
   assert.ok(n <= 8192, `the default page at Starforge's scale is ${n} characters as served`);
 });
+
+// ── the house's glance through the door (POS-633 PR-1) ──────────────────────
+test("THE GLANCE (POS-633): household { read_shape: \"v2\" } answers the house's glance through the store, every key explained", async () => {
+  const { unexplained } = await import("../src/read-grammar.mjs");
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const g = await householdApex({ read_shape: "v2", handle: "r000" }, key, { clone: scratch, asOf: AS_OF, odb: null });
+  assert.equal(g.read_shape, "v2", JSON.stringify(g).slice(0, 300));
+  assert.deepEqual([g.house.slug, g.house.name, g.house.human, g.house.you], [HOUSE, "Fixture", "Fixture's human", "r000"]);
+  assert.deepEqual(g.house.members.map((m) => m.split(" · ")[0]), ["r000", "r001"], "the members this key holds, ashore, in the house's order");
+  assert.ok(Number.isInteger(g.needs.count));
+  assert.equal(g.needs.bounced, 1, "r000's bounce, from needs-you");
+  assert.ok(g.stamps.pool.sum >= 0 && g.stamps.pool.pending === "POS-326");
+  assert.deepEqual(unexplained("household", g, 2), []);
+  assert.ok(JSON.stringify(g, null, 1).length <= 4096);
+  assert.doesNotMatch(JSON.stringify(g), /https?:\/\//);
+  const s = await householdApex({ read_shape: "v2", since: g.cursor }, key, { clone: scratch, asOf: AS_OF, odb: null });
+  assert.equal(s.read_shape, "v2");
+  assert.ok("complete" in s && typeof s.cursor === "string");
+  assert.deepEqual(unexplained("household", s, 2), []);
+});

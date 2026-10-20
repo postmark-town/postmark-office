@@ -1118,6 +1118,80 @@ export async function householdApex(args = {}, key = null, ctx = {}) {
   }
 }
 
+// ── household { read_shape: "v2" } · the house's glance (POS-633) ──────────
+//
+// The reads behind household-read-v2.mjs § glanceV2, each asked once for the
+// house: the standing (tier, papers' gaps, the world-write budget), the
+// registry's house, the walkers roll, the stance inbox (one page, newest
+// first, wide enough to hold the oldest), needs-you's counts over that same
+// page, each member's mail law and stamps, the house's unread and standing
+// letters, the newest act per member, and today's quests. A member's own read
+// that fails leaves its fields null; an unreachable store is the door's 503.
+// `since: "<cursor>"` reads only what can change (the inbox and unread mail).
+export const GLANCE_STANCES = 100;
+
+async function householdGlance(args, key, ctx) {
+  const v2 = await import("./household-read-v2.mjs");
+  const { decodeCursor } = await import("./read-grammar.mjs");
+  const since = typeof args.since === "string" && args.since.trim() !== "" ? decodeCursor(args.since) : null;
+  if (args.since != null && args.since !== "" && !since)
+    return bounce(422, "since: takes the cursor your last glance handed you", 'pass the `cursor` field from your last household { read_shape: "v2" } back as since: — it looks like "c1.260.1792022882579."');
+  if (!key?.household) {
+    // A berth, a visitor or no key has no house to glance at: the standing is the answer.
+    return { ...(await householdStanding(key, ctx)), note: "the house's glance is a household's; this key holds none yet", read_shape: "v2" };
+  }
+  const { clone, odb, asOf } = ctx;
+  const ix = ctx.ix ?? (await import("./town-index-store.mjs")).storeIndexPooled(clone);
+  const hb = await import("./house-bundle.mjs");
+  const house = await hb.houseMembers({ key, clone });
+  if (house.refused) return bounce(...house.refused);
+  const held = [...(key.handles ?? [])];
+  const ashore = (await hb.ashoreVia(ix, house.members)).filter((h) => held.includes(h));
+  const named = String(args.handle ?? "").trim();
+  const you = named && held.includes(named) ? named : null;
+  const soft = async (read) => {
+    try { return await read(); } catch (e) { if (e?.name === "TownIndexUnreachable") throw e; return null; }
+  };
+  const { stancesForHandles } = await import("./world-stance.mjs");
+  const stances = ashore.length ? await stancesForHandles(ashore, { limit: GLANCE_STANCES, setDowns: true }) : { stances_awaiting: 0, awaiting: [] };
+  const { unreadFor } = await import("./unread-store.mjs");
+  const unread = ashore.length ? await soft(() => unreadFor(ashore, { ix })) : new Map();
+  const unreadRows = unread ? [...unread.values()].flat() : null;
+  const nowMs = ctx.nowMs ?? Date.now();
+  if (since) return v2.sinceV2({ stances, unreadRows }, since, { nowMs });
+
+  const standing = await householdStanding(key, ctx);
+  const needs = ashore.length
+    ? await hb.needsYou({}, { key, clone, odb, asOf, ix, readers: { stances: async () => stances } })
+    : null;
+  const stands = await hb.standsOf(ashore);
+  const found = await soft(() => ix.lastActiveFor(ashore));
+  const rows = [];
+  const details = [];
+  let newInbound = 0;
+  let mailBlind = false;
+  for (const h of ashore) {
+    const awaiting = await soft(() => ix.mailAwaiting(h, { offset: 0 }));
+    const stamps = await soft(() => ix.stampsDetail(h));
+    if (awaiting?.summary) newInbound += Number(awaiting.summary.new_inbound) || 0; else mailBlind = true;
+    const row = hb.memberRow(h, { stands: stands.byHandle[h] ?? null, awaiting, stamps });
+    const last = found?.get?.(h) ?? null;
+    rows.push({ ...row, last_active: last?.at ?? null, last_what: last?.what ?? null });
+    details.push({ handle: h, tenses: stamps?.tenses ?? null });
+  }
+  const { hotMailBlock } = await import("./town-mail.mjs");
+  const standingLetters = await soft(async () => (await hotMailBlock(odb, key))?.standing?.length ?? 0);
+  const board = await soft(() => ix.questBoard(you ?? ashore[0]));
+  const gaps = Object.fromEntries(Object.entries(standing.papers ?? {}).map(([h, p]) => [h, (p.gaps ?? []).map(v2.gapWord)]));
+  return v2.glanceV2({
+    house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
+    you, rows, gaps, stances, needs, details,
+    mail: { unread: unreadRows ? unreadRows.length : null, newInbound: mailBlind ? null : newInbound, standing: standingLetters },
+    quests: v2.questLines(board),
+    standing,
+  }, { nowMs });
+}
+
 async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas, schemaRequired, asOf, canWrite, channel, slim, ix }) {
   // POS-632: explain: answers from the read grammar's one table, before anything
   // is read, and never with an act or a read beside it ("one call does one thing").
@@ -1132,6 +1206,13 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
   const doing = args.do != null && args.do !== "";
   const reading = args.read != null && args.read !== "";
   if (doing && reading) return bounce(422, "one call does one thing — do: performs, read: observes", "they never ride together; call twice");
+
+  // ── the bare read, v2 · the house's glance (POS-633) ──────────────────────
+  // Opt-in per call (H6), exactly as the world door's read_shape is (W1). Only
+  // the bare read changes shape; every read: answers as it always has.
+  if (!doing && !reading && args.read_shape === "v2") return householdGlance(args, key, ctx);
+  if (!doing && !reading && args.read_shape != null && args.read_shape !== "v1")
+    return bounce(422, `read_shape: "${args.read_shape}" is not a household shape`, `household { read_shape: "v2" } is the house's glance; omit read_shape for today's read`);
 
   // ── the bare read · the checklist ─────────────────────────────────────────
   if (!doing && !reading) {
@@ -1234,7 +1315,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (judged) {
         const declared = HOUSEHOLD_READ_FIELDS[what] ?? (ACTS[what] ? {} : null);
         if (declared) {
-          const bad = validateReadArgs({ read: what, tool: `household { read: "${what}" }`, properties: declared, fields: judged, exempt: ["handle"] });
+          const bad = validateReadArgs({ read: what, tool: `household { read: "${what}" }`, properties: declared, fields: judged, exempt: ["handle", "read_shape"] });
           if (bad) return bounce(422, bad.defect, bad.hint, bad.extra);
           for (const k of Object.keys(judged)) f[k] = judged[k]; // carry the coercion back
         }
@@ -1995,6 +2076,9 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"papers\" or \"next\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
     args: { type: "object", description: "the act's or read's own fields — household { do: \"send\", args: { from: \"…\", to: \"…\", title: \"…\", body: \"…\" } }. Unknown fields bounce by name. On do: \"send\" and the five paper acts (address, address-fields, home, profile, window) it also takes an optional `nonce`: a retry key of your own choosing — make the same call twice with the same nonce and the second returns the FIRST call's receipt rather than acting twice.", additionalProperties: true },
     handle: { type: "string", description: "which of YOUR residents (defaults to your only one where it can)" },
+    // POS-633: the house's glance, opt-in per call for a train (H6), and its one cursor.
+    read_shape: { type: "string", enum: ["v1", "v2"], description: "read_shape: \"v2\" is the house's glance, opt-in: house (its members, one line each), needs (what waits on your word, the oldest whole), mail, stamps, can (each act with its fields) and law, about 4K. Omit it for today's read. Every read: answers as it always has." },
+    since: { type: "string", description: "with read_shape: \"v2\", the cursor your last glance handed you: only what changed since (new needs, newly delivered mail). For read: \"mail\" it is still an inclusive ISO date." },
     hide_bounces_older_than_days: { type: "number", description: "for read: \"mail\", view: \"awaiting\" — leave unplaced bounces older than this many days off your page. Every row carries `age_days` and `unplaced_bounces_total` stays the whole count, so nothing is hidden without saying so. There is no dismiss: a bounce is a letter that never arrived" },
     view: { type: "string", enum: ["inbox", "outbox", "pending", "awaiting", "correspondents"], description: "for read: \"mail\" — which view of your correspondence (default inbox). pending is what you have WRITTEN THAT HAS NOT SAILED: exact ids, recipient, thread, written time, seq, and the crossing it expects — your own only, never another sender's. correspondents is WHO you have written to and heard from — one row per person with how many letters, the newest one's id and date, and whether the last word was yours or theirs; paged, most-corresponded first" },
   }, additionalProperties: false };
