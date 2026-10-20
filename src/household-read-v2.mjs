@@ -28,7 +28,7 @@ import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
 
 /** How many groups of what waits the glance shows: the oldest first (they have waited longest). */
-export const NEEDS_FIRST = 3;
+export const NEEDS_FIRST = 2; // round 4 (Darko 15:06): two groups, paying for marks and posts
 /** With more waiting than a page holds, how many of the inbox's last rows are read on their own for the oldest groups. */
 export const TAIL_ROWS = 100;
 /** How many new needs a since: answer lists whole before it says there are more. */
@@ -221,7 +221,8 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   const total = Math.max(Number(stances.stances_awaiting) || 0, page.length);
   const seen = new Set(page.map((c) => c.mark));
   const rowsSeen = total > page.length && Array.isArray(tail) ? [...page, ...tail.filter((c) => !seen.has(c.mark))] : page;
-  const groups = needGroups(rowsSeen);
+  const all = needGroups(rowsSeen, { max: Infinity });
+  const groups = all.slice(0, NEEDS_FIRST);
   const rows = (k) => needs?.[k]?.rows?.length ?? 0;
   const setDowns = rows("set_downs_awaiting");
   const atRisk = rows("stakes_at_risk");
@@ -232,6 +233,8 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
     count: total + setDowns + atRisk + keyAsks + alerts,
     marks: total,
     groups,
+    // round 4: the groups past the first two are named, never dropped silently
+    ...(all.length > groups.length ? { more_groups: moreGroups(all.length - groups.length) } : {}),
     ...(setDowns ? { set_downs: setDowns } : {}),
     at_risk: atRisk, key_asks: keyAsks,
     ...(alerts ? { alerts } : {}),
@@ -240,8 +243,97 @@ export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   };
 }
 
+/** The groups the glance leaves out, by number, and the read that lists them (round 4). */
+export const moreGroups = (n) => `+${n} more group${n === 1 ? "" : "s"}: household { read: "stances" }`;
+
 /** The waiting block's key (eval round 1): what each count is, and the read that lists it. */
 export const WAITING_KEY = 'count = marks + set_downs + at_risk + key_asks · act answers the whole group · all marks: read "stances"';
+
+// ── marks and posts (round 4, Darko RULED 2026-10-20 15:06) ─────────────────
+//
+// "the two of them kind of form the bulk of … the way you interact with
+// postmark". Each block is counts plus at most two rows, and each is shaped
+// from what the existing reads already answer (household-apex.mjs §
+// householdGlance names the function behind every input); nothing here is a
+// second derivation. A zero is left out, and a block with nothing in it is.
+
+/** The marks block's key: what each count is, and the reads behind it. */
+export const MARKS_KEY = 'pending: on the docket · standing: published · read "stakes", "outcomes" · one: world { investigate: "<id>" }';
+/** How long a refusal's cause runs in the glance; the outcomes read has it whole. */
+export const CAUSE_CHARS = 60;
+const clip = (t, n) => { const x = String(t ?? "").replace(/\s+/g, " ").trim(); return x.length > n ? `${x.slice(0, n - 1)}…` : x; };
+
+/**
+ * The house's own building. `counts` is marksCountsFor's three tenses summed
+ * over the house (drafts, docket, published; null where a tense was not read),
+ * `published` the published rows those counts were taken from (id, date),
+ * `effects` readClaimEffects' events (the outcomes read's one derivation) or
+ * null, and `atRisk` the stakes read's at-risk rows as needs-you carries them.
+ */
+export function marksBlock({ counts = {}, published = [], effects = null, atRisk = null } = {}) {
+  const n = (v) => (Number.isFinite(v) && v > 0 ? v : null);
+  const decided = (effects ?? []).filter((e) => e.yours && (e.kind === "claim-locked" || e.kind === "claim-refused"));
+  const last = decided.reduce((c, e) => Math.max(c, Number(e.crossing) || 0), 0);
+  const at = decided.filter((e) => Number(e.crossing) === last);
+  const refused = at.filter((e) => e.kind === "claim-refused");
+  const lastCrossing = at.length ? {
+    crossing: last,
+    ...(n(at.length - refused.length) ? { published: at.length - refused.length } : {}),
+    ...(refused.length ? { refused: refused.length, first_refusal: `${refused[0].mark}: ${clip(refused[0].cause ?? "no cause recorded", CAUSE_CHARS)}` } : {}),
+  } : null;
+  const risky = (atRisk ?? []).map((r) => r.mark ?? r.id).filter(Boolean);
+  const newest = [...published].sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) || String(a.id).localeCompare(String(b.id)))
+    .slice(0, 2).map((m) => m.id);
+  const block = {
+    ...(n(counts.drafts) ? { drafts: counts.drafts } : {}),
+    ...(n(counts.pending) ? { pending: counts.pending } : {}),
+    ...(n(counts.standing) ? { standing: counts.standing } : {}),
+    ...(lastCrossing ? { last_crossing: lastCrossing } : {}),
+    ...(risky.length ? { at_risk: { count: risky.length, ids: risky.slice(0, 2) } } : {}),
+    ...(newest.length ? { newest } : {}),
+  };
+  // a tense nobody could read is said, never shown as none (the-town/the-disclosure)
+  const unread = ["drafts", "pending", "standing"].filter((k) => counts[k] === null);
+  if (effects === null) unread.push("last_crossing");
+  if (unread.length && Object.keys(block).length) block.unread = unread;
+  else if (unread.length) return { unread, key: MARKS_KEY };
+  return Object.keys(block).length ? { ...block, key: MARKS_KEY } : null;
+}
+
+/** The posts block's key: what the counts are, the list, and the acts. */
+export const POSTS_KEY = 'waiting: a response is the newest act · all: household { read: "posts" } · join: town { do: "post" | "stake" }';
+/** The acts a post's own author takes on it (household-posts.mjs § ACT_WORD): a post whose newest act is none of these was last answered by someone else. */
+export const AUTHOR_ACTS = Object.freeze(["post", "amend", "close"]);
+const FINISHED_DEFAULT = Object.freeze(["ended", "cancelled"]);
+
+/**
+ * The house's asks, from householdPosts' answer (put_up, taking_part). `open`
+ * is a post the house put up that is not finished; `responses_waiting` is an
+ * open one holding standing responses whose newest act is not one an author
+ * takes (AUTHOR_ACTS), so its last word is a respondent's. `finished(row)` is
+ * the post machine's (town-posts.mjs § POST_CLASSES).
+ */
+export function postsBlock(posts = null, { nowMs = Date.now(), finished = (r) => FINISHED_DEFAULT.includes(r.state) } = {}) {
+  if (!posts) return null;
+  const mine = posts.put_up?.rows ?? [];
+  const part = posts.taking_part?.rows ?? [];
+  const open = mine.filter((r) => !finished(r));
+  const waiting = open.filter((r) => (Number(r.responses) || 0) > 0 && !AUTHOR_ACTS.includes(r.latest?.act));
+  const byClass = {};
+  for (const r of part) byClass[r.class] = (byClass[r.class] ?? 0) + 1;
+  const newest = [...mine, ...part].filter((r) => r.latest?.at)
+    .sort((a, b) => String(b.latest.at).localeCompare(String(a.latest.at))).slice(0, 2)
+    .map((r) => `${r.class} ${r.id} · ${r.state ?? "?"} · ${shortAgo(r.latest.at, nowMs) ?? "now"}`);
+  const block = {
+    ...(open.length ? { open: open.length } : {}),
+    ...(waiting.length ? { responses_waiting: waiting.length } : {}),
+    ...(part.length ? { part_of: byClass } : {}),
+    ...(newest.length ? { newest } : {}),
+    // a half the posts read could not read is said, never shown as none
+    ...(posts.unavailable?.length ? { unavailable: posts.unavailable } : {}),
+  };
+  return Object.keys(block).length ? { ...block, key: POSTS_KEY } : null;
+}
 
 // ── mail and stamps ──────────────────────────────────────────────────────────
 
@@ -336,9 +428,11 @@ export const glanceMore = (cursor) => `${moreLine(cursor)} · a block with nothi
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null } = parts;
+  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
   const steps = firstSteps(gaps);
+  const marksOf = marks ? marksBlock(marks) : null;
+  const postsOf = posts ? postsBlock(posts, { nowMs, finished: postFinished ?? undefined }) : null;
   return {
     house: {
       name: house.name ?? null, slug: house.slug, human: humanPhrase(house.name), since: house.since ?? null,
@@ -350,6 +444,9 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     },
     // eval round 1: "needs" said two things; what waits on the house's word is `waiting`
     waiting: needsBlock({ stances, needs, tail }),
+    // round 4: what the house builds and what it asks, beside what waits on its word
+    ...(marksOf ? { marks: marksOf } : {}),
+    ...(postsOf ? { posts: postsOf } : {}),
     mail: mailBlock({ ...mail, bounced: needs ? (needs.unplaced_bounces?.rows?.length ?? 0) : null }),
     stamps: stampsBlock(details, { quests, went: went ? went.length : null, you }),
     // eval round 1: plainly letters, the window in the name (Darko 2026-10-20), with its key
