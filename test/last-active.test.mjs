@@ -177,10 +177,15 @@ for (const office of ["office"]) {
       const card = await mcp(office, "town", { read: "resident", args: { handle: h } });
       assert.deepEqual(pick(card.resident ?? card), EXPECT[h], `town resident ${h}: ${JSON.stringify(card).slice(0, 200)}`);
     }
+    // POS-720: the page's member rows carry them, and so does the whole house (full=true)
     const house = await get(office, "/household?read=house&household=fixture-house");
     assert.equal(house.read, "house", JSON.stringify(house).slice(0, 200));
-    for (const h of ["wright", "limen", "quiet", "decorator"]) assert.deepEqual(pick(house.residents[h]), EXPECT[h], `house ${h}`);
+    const row = (h) => house.members.find((m) => m.handle === h);
+    for (const h of ["wright", "limen", "quiet", "decorator"]) assert.deepEqual(pick(row(h)), EXPECT[h], `house ${h}`);
     assert.equal(house.last_active_unavailable, undefined);
+    const whole = await get(office, "/household?read=house&household=fixture-house&full=true");
+    for (const h of ["wright", "limen", "quiet", "decorator"]) assert.deepEqual(pick(whole.residents[h]), EXPECT[h], `whole house ${h}`);
+    assert.equal(whole.last_active_unavailable, undefined);
   });
 
   test(`${office} office: household { read: "address" } carries the same two fields as /residents/{h}`, async (t) => {

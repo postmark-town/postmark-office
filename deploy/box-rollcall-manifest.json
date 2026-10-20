@@ -101,14 +101,14 @@
       "unit": "postmark-crossing-save.timer",
       "label": "the crossing save",
       "stage": "live",
-      "activation_owner": "Wright — added 2026-08-09 45b9dcf, crossing-aligned two minutes behind the ferry so the two never contend for town.lock",
-      "cadence": "00:02 and 12:02 UTC, two minutes behind each crossing on purpose",
-      "cadence_source": "systemctl show postmark-crossing-save.timer -p TimersCalendar",
+      "activation_owner": "Wright — added 2026-08-09 45b9dcf at :02; since POS-714 (Darko 2026-10-20 08:58, \"chain the save to run after the ferry finishes\") the ferry starts the save itself (postmark-ferry.service OnSuccess= and OnFailure=) and this timer is the late fallback at :30, a no-op when the crossing is already saved (the service's ExecCondition, crossing-save.mjs --unsaved)",
+      "cadence": "00:30 and 12:30 UTC, the late fallback; the save's own run follows the ferry at each crossing",
+      "cadence_source": "systemctl show postmark-crossing-save.timer -p TimersCalendar; the chain: systemctl show postmark-ferry.service -p OnSuccess -p OnFailure",
       "heartbeat": {
         "kind": "unit_trigger",
         "stale_after_minutes": 780
       },
-      "stale_means": "The dynamic store is not crystallized at the boundary it just left, so the record of that crossing has a hole in it that no later run fills — the save writes the crossing it has left, not the ones it slept through. Same allowance as the ferry it follows."
+      "stale_means": "The fallback clock has stopped, so a crossing the ferry's chain did not save stays unsaved: the record of that crossing has a hole that no later run fills, since the save writes the crossing it has left, not the ones it slept through. A failing save, chained or late, shows as ALARM-failed on the service this timer triggers. Same allowance as the ferry it follows."
     },
     {
       "unit": "postmark-office-rehydrate.timer",
