@@ -181,7 +181,7 @@ export function groupAct({ by, over, count }, ids) {
   const only = [by != null ? `by: ${JSON.stringify(by)}` : null, over != null ? `over: ${JSON.stringify(over)}` : null].filter(Boolean).join(", ");
   // a read's own fields ride in args (household-apex.mjs § A READ TAKES FIELDS TOO): the tool's top level
   // declares no by, over or limit, and a connector refuses a field its schema does not declare
-  return `household { read: "stances", args: { ${only}, limit: ${STANCE_LIST_CAP} } }, then declare-stance-on { on: <its ids>, stance: ${STANCE_WORDS} }${count > STANCE_LIST_CAP ? `, ${STANCE_LIST_CAP} a call` : ""}`;
+  return `household { read: "stances", args: { ${only}, limit: ${STANCE_LIST_CAP} } }, then declare-stance-on { on: <ids>, stance: ${STANCE_WORDS} }${count > STANCE_LIST_CAP ? `, ${STANCE_LIST_CAP} a call` : ""}`;
 }
 
 export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {

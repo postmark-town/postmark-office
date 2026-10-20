@@ -105,7 +105,7 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   // round 3 (Darko 12:47): one act answers the whole group. Sixty marks are more
   // than the glance names, so the act is the read that lists them, then the list stance.
   assert.equal(n.groups[0].act,
-    'household { read: "stances", args: { by: "spark-the-builder", over: "wright/the-trueing-terrace", limit: 100 } }, then declare-stance-on { on: <its ids>, stance: welcomed | neutral | opposed }');
+    'household { read: "stances", args: { by: "spark-the-builder", over: "wright/the-trueing-terrace", limit: 100 } }, then declare-stance-on { on: <ids>, stance: welcomed | neutral | opposed }');
   // a group the glance names whole is answered by its own ids, in one list
   assert.equal(n.groups[1].act, `declare-stance-on { on: ["${n.groups[1].ids[0]}"], stance: welcomed | neutral | opposed }`);
   assert.match(n.key, /act answers the whole group/);
