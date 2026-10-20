@@ -448,11 +448,13 @@ const remoteTip = (dir) => { try { return git(dir, "rev-parse", "-q", "--verify"
  * ONE BAD ACT DOES NOT HOLD THE REST (review of office#673). One commit for
  * every act is the ordinary road. When it fails for a reason that is not a
  * lost race (the remote answered and did not move: a commit hook, a refused
- * push, a rebase that will not apply) the acts are landed again by halves,
- * down to the unit that fails alone, which is held with its reason. A lost
- * race, or a remote that will not answer, holds every act in that attempt:
- * splitting cannot help, and each try would cost the lock more time. The
- * attempts are bounded (ATTEMPT_BUDGET); what is left when they run out is held.
+ * push) the acts are landed again by halves, down to the unit that fails
+ * alone, which is held with its reason. A lost race, or a remote that will
+ * not answer, holds every act in that attempt: splitting cannot help, and
+ * each try would cost the lock more time. A rebase that will not apply is
+ * one of those (the remote moved, which is why there was a rebase): the
+ * attempt is held whole for one crossing, the safe direction. The attempts
+ * are bounded (ATTEMPT_BUDGET); what is left when they run out is held.
  *
  * Answers `{ commits, landed, held }`: the shas that landed in order, a Map of
  * act → sha | null, and a Map of act → { defect, code }. A held act is the
