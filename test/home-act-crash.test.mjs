@@ -1,7 +1,9 @@
 // home-act-crash.test.mjs — POS-709: an empty home update answers its resident, never the process.
 //
 // On 2026-10-19 a resident's home update carrying a picture and a nonce, and no
-// prose, killed postmark-office six times. updateHomeAct split the picture off
+// prose, killed postmark-office six times. (Since POS-711 that exact call keeps its
+// picture, home-picture.test.mjs; any paper bounce beside a picture took the
+// same path, so these drive one: prose that is only whitespace.) updateHomeAct split the picture off
 // and called the paper door WITHOUT awaiting it; flag-on the door is async, so
 // its 422 "nothing to write" became a rejection nobody held, and Node's default
 // exit took the office down. These drive the real routes on a spawned office,
@@ -80,12 +82,12 @@ test("POS-709 · an empty home update with a picture answers 422 on both skins, 
     // The household apex, the listed way (the incident's skin).
     const apexRes = await fetch(`${BASE}/household`, {
       method: "POST", headers: auth,
-      body: JSON.stringify({ do: "home", handle: "wright", image: PICTURE, nonce: "pos709-a" }),
+      body: JSON.stringify({ do: "home", handle: "wright", image: PICTURE, nonce: "pos709-a", body: "  " }),
     });
     const apex = await apexRes.json();
     await new Promise((ok) => setTimeout(ok, 300)); // a stray rejection fires on the next ticks
     await alive("after the apex's empty home update");
-    assert.deepEqual([apex.code, apex.defect], [422, "nothing to write"], `the resident gets the 422: ${JSON.stringify(apex).slice(0, 400)}`);
+    assert.deepEqual([apex.code, apex.defect], [422, "empty body"], `the resident gets the 422: ${JSON.stringify(apex).slice(0, 400)}`);
 
     // The flat tool, the same act. Its schema refuses a nonce, so its empty
     // update is prose that is only whitespace: any paper bounce took this path.
