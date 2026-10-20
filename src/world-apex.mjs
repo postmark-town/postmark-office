@@ -2006,7 +2006,8 @@ async function investigateOn(args, oriented, usable = null) {
     placeMarks: (p) => placeMarksAt(p),
     marksOf: (ids) => markRows(ids),
     appearance: (h) => looks(h),
-    pronouns: async (h) => (await import("./entity-predicates.mjs")).pronounsFor(h),
+    // their pronouns from their profile, read off the office's town checkout (WLD-83, 10-20)
+    pronouns: async (h) => (await import("./profiles.mjs")).pronounsInClone(process.env.TOWN_CLONE ?? (await import("node:url")).fileURLToPath(new URL("../town-clone", import.meta.url)), h),
   });
   // what they hold by kind, beside their whole things (review-610 S1): a class and a number each, never a unit
   const kinds = seen && !seen.error ? await (await import("./world-kinds.mjs")).kindsHeldBy(kind.handle) : null;

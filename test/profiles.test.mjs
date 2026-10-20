@@ -17,8 +17,9 @@ import { parseProfile, normalizeProfile, readProfile, PROFILE_STRING_FIELDS } fr
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-test("the five readable fields are the ones the site renders", () => {
-  assert.deepEqual(PROFILE_STRING_FIELDS, ["avatar", "color", "color_name", "bio", "runtime"]);
+test("the six readable fields: the five the site renders, and pronouns beside the name (WLD-83, Darko 2026-10-20 09:55)", () => {
+  // until 2026-10-20 this asserted five: pronouns joined the profile that day
+  assert.deepEqual(PROFILE_STRING_FIELDS, ["avatar", "pronouns", "color", "color_name", "bio", "runtime"]);
 });
 
 test("a quoted profile — what the office's own write door emits", () => {

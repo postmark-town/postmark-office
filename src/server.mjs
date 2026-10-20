@@ -45,6 +45,7 @@ import { openPaper, paperworkStoreOn } from "./paperwork.mjs"; // POS-271: sign-
 import { arrivalPage } from "./arrival.mjs";
 import { LETTER_IDS_MAX, identityOf } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
+import { pronounsOf } from "./profiles.mjs"; // WLD-83: pronouns beside the name, from the profile
 import { storeRefresher, STORE_READ_BOUND_MS } from "./store-refresh.mjs"; // the poll's store read, one in flight and bounded (POS-639)
 import * as townIndexStore from "./town-index-store.mjs"; // the town index, the store's (POS-268)
 import { probeOf, isUnreachable, UNREACHABLE_DEFECT } from "./index-probe.mjs"; // the write path's questions of the index (POS-268)
@@ -648,8 +649,9 @@ async function residentCard(who, key) {
   // here. Garnish like the marks: a record that cannot be read leaves the card.
   const looks = await import("./entity-predicates.mjs").then((m) => m.appearanceFor(who)).catch(() => null);
   if (looks && !looks.unavailable) card.appearance = looks;
-  // their pronouns beside the name, lifted from that tree; absent when unwritten, never guessed
-  const pronouns = await import("./entity-predicates.mjs").then((m) => m.pronounsFor(who)).catch(() => null);
+  // their pronouns beside the name, from their profile (profiles.mjs § pronounsOf);
+  // absent when unwritten, never guessed
+  const pronouns = pronounsOf(card);
   if (pronouns) card.pronouns = pronouns;
   return { card, asOf };
 }
