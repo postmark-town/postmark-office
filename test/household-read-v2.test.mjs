@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { glanceV2, sinceV2, needsBlock, needGroups, unansweredOf, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
+import { glanceV2, sinceV2, needsBlock, needGroups, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
   closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN } from "../src/household-read-v2.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
@@ -30,34 +30,43 @@ const STARFORGE = ["architect", "illuminator", "jetto-of-starforge", "postmaster
 const candidate = (i) => ({ mark: `spark-the-builder/the-datum-mark-${String(i).padStart(2, "0")}`, by: "spark-the-builder", kind: "sited",
   body: BODY, date: `2026-10-${String(19 - Math.floor(i / 4)).padStart(2, "0")}`, on_your_ground: ["wright/the-trueing-terrace"] });
 
-function partsFor(handles, { waiting = 61, page = waiting, papersGaps = {}, quests = ["Reach out 0/5 today", "Be reached 0/5 today"] } = {}) {
+// `fresh`: a house founded today, nothing earned and no act yet (eval round 1: a new house must look new)
+function partsFor(handles, { waiting = 61, page = waiting, papersGaps = {}, quests = ["Reach out 0/5 today", "Be reached 0/5 today"], fresh = false } = {}) {
+  const tenses = (i) => (fresh ? { liquid: 0, staked: 0, minted: 0 } : { liquid: 906 - i, staked: 24, minted: 943 - i });
   const rows = handles.map((h, i) => ({
-    ...memberRow(h, { stands: { x: -606.5 + i, y: 161.7, mark_id: i % 2 ? `${h}/the-long-named-home-of-${h}` : null, moving: i === 2 },
-      awaiting: { summary: { they_spoke_last: 193, new_inbound: 52, bounced: 0 } }, stamps: { tenses: { liquid: 906 - i, staked: 24, minted: 943 - i } } }),
-    last_active: new Date(NOW - (i + 1) * 3_600_000).toISOString(), last_what: i % 3 ? "say" : "letter",
+    ...memberRow(h, { stands: fresh ? null : { x: -606.5 + i, y: 161.7, mark_id: i % 2 ? `${h}/the-long-named-home-of-${h}` : null, moving: i === 2 },
+      awaiting: { summary: { they_spoke_last: fresh ? 0 : 193, new_inbound: fresh ? 0 : 52, bounced: 0 } }, stamps: { tenses: tenses(i) } }),
+    last_active: fresh ? null : new Date(NOW - (i + 1) * 3_600_000).toISOString(), last_what: i % 3 ? "say" : "letter",
   }));
   return {
-    house: { name: "Starforge", slug: "starforge", since: "2026-08-08" },
+    house: { name: fresh ? "New House" : "Starforge", slug: fresh ? "new-house" : "starforge", since: fresh ? "2026-10-20" : "2026-08-08" },
     you: handles.includes("wright") ? "wright" : null,
     rows,
     gaps: papersGaps,
     stances: { stances_awaiting: waiting, awaiting: Array.from({ length: Math.min(page, waiting) }, (_, i) => candidate(i)) },
     needs: { set_downs_awaiting: { rows: [] }, unplaced_bounces: { rows: [{}] }, stakes_at_risk: { rows: [] }, key_asks: { rows: [] }, alerts: [] },
     mail: { unanswered: 37, newInbound: 468, standing: 2 },
-    details: rows.map((r, i) => ({ handle: r.handle, tenses: { liquid: 906 - i, staked: 24, minted: 943 - i } })),
+    details: rows.map((r, i) => ({ handle: r.handle, tenses: tenses(i) })),
     quests,
     standing: { tier: "resident", household: "keeminlee", world_writes: { used: 3, cap: 200, per: "hour" } },
   };
 }
 
-test("H2 · ≤ 4K as served: Starforge, a house of one, a brand-new house", () => {
+// The budget at the fixture's widest (eval round 1 made each group actionable and gave every block a key: Darko's 4K, plus that).
+const PART1_BUDGET = 5120;
+test("H2 · the glance stays bounded as served: Starforge, a house of one, a brand-new house", (t) => {
   const sf = glanceV2(partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } }), { nowMs: NOW });
   const one = glanceV2(partsFor(["kai"], { waiting: 3 }), { nowMs: NOW });
-  const fresh = glanceV2({ ...partsFor(["newbie"], { waiting: 0, papersGaps: { newbie: ["home", "window", "parcel"] }, quests: [] }),
+  const fresh = glanceV2({ ...partsFor(["newbie"], { waiting: 0, papersGaps: { newbie: ["home", "window", "parcel"] }, quests: [], fresh: true }),
     mail: { unanswered: 0, newInbound: 0, standing: 0 } }, { nowMs: NOW });
-  for (const [name, g] of [["Starforge", sf], ["a house of one", one], ["a new house", fresh]])
-    assert.ok(served(g) <= 4096, `${name}'s glance is ${served(g)} characters as served`);
+  for (const [name, g] of [["Starforge", sf], ["a house of one", one], ["a new house", fresh]]) {
+    t.diagnostic(`${name}: ${served(g)} characters`);
+    assert.ok(served(g) <= PART1_BUDGET, `${name}'s glance is ${served(g)} characters as served`);
+  }
   assert.equal(sf.house.members.length, 9);
+  // a new house looks new: founded today, nothing earned, no act yet
+  assert.deepEqual([fresh.house.since, fresh.stamps.earned_total, fresh.stamps.spendable], ["2026-10-20", 0, 0]);
+  assert.match(fresh.house.members[0], /no act yet · missing: home, window, parcel$/);
 });
 
 test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot are ONE row; two others are their own; the sample is the oldest body, whole", () => {
@@ -67,27 +76,37 @@ test("needs grouped (Darko 2026-10-20): 60 of one author's marks over one spot a
   const rows = [...stream.slice(0, 30), third, ...stream.slice(30), other];
   const n = needsBlock({ stances: { stances_awaiting: 62, awaiting: rows }, needs: null });
   assert.equal(n.count, 62, "the count stays the total");
-  assert.equal(n.first.length, 3);
-  assert.deepEqual(n.first.map((r) => [r.by, r.over, r.count]),
+  assert.equal(n.groups.length, 3);
+  assert.deepEqual(n.groups.map((r) => [r.by, r.over, r.count]),
     [["spark-the-builder", "wright/the-trueing-terrace", 60], ["binya-vernal", "rei/the-lanternseed-gardens", 1], ["little-bird", "rei/the-lanternseed-gardens", 1]]);
-  assert.deepEqual(Object.keys(n.first[0]), ["by", "over", "count", "oldest", "newest", "sample"]);
-  assert.deepEqual([n.first[0].oldest, n.first[0].newest], ["2026-10-05", "2026-10-19"]);
-  assert.equal(n.first[0].sample, stream.at(-1).body, "the group's oldest body, whole");
+  assert.deepEqual(Object.keys(n.groups[0]), ["by", "over", "count", "oldest", "newest", "ids", "sample", "act"]);
+  assert.deepEqual([n.groups[0].oldest, n.groups[0].newest], ["2026-10-05", "2026-10-19"]);
+  assert.equal(n.groups[0].sample, stream.at(-1).body, "the group's oldest body, whole");
+  // eval round 1: a group a reader can act on, its oldest ids and a ready-to-run answer with the door's own words
+  assert.deepEqual(n.groups[0].ids, [stream[59].mark, stream[58].mark, stream[57].mark]);
+  assert.equal(n.groups[0].act, `declare-stance-on { on: "${stream[59].mark}", stance: welcomed | neutral | opposed }`);
+  assert.match(n.key, /read "stances"/);
   assert.equal(needGroups(rows, { max: 1 }).length, 1);
 });
 
-test("needs.count is everything waiting (61 stances and a bounce), never the page's length", () => {
+test("waiting.count is what its key says (marks + set_downs + at_risk + key_asks), never the page's length; a bounce is mail", () => {
   const g = glanceV2(partsFor(STARFORGE, { waiting: 61, page: 20 }), { nowMs: NOW });
-  assert.equal(g.needs.count, 62);
-  assert.equal(g.needs.bounced, 1);
+  assert.equal(g.waiting.count, 61);
+  assert.equal(g.waiting.marks, 61);
+  assert.ok(!("bounced" in g.waiting) && !("needs" in g), "\"needs\" said two things: what waits is `waiting`");
+  assert.equal(g.mail.bounced, 1, "a letter that never arrived is mail");
+  assert.match(g.waiting.key, /^count = marks \+ set_downs \+ at_risk \+ key_asks/);
   assert.equal(needsBlock({ stances: { stances_awaiting: 0, awaiting: [] }, needs: null }).count, 0);
 });
 
 test("D1 · each member is one string: handle · where · last act · what the papers need", () => {
   const g = glanceV2(partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"] } }), { nowMs: NOW });
   for (const m of g.house.members) assert.equal(typeof m, "string");
-  assert.equal(g.house.members[0], "architect · -606, 162 · letter 1 h · needs home, window");
-  assert.match(g.house.members[1], /^illuminator · illuminator\/the-long-named-home-of-illuminator · say 2 h$/);
+  assert.equal(g.house.members[0], "architect · at -606, 162 · letter 1 h · missing: home, window", "coordinates labelled; missing, never needs");
+  assert.match(g.house.members[1], /^illuminator · on illuminator\/the-long-named-home-of-illuminator · say 2 h$/);
+  assert.deepEqual(g.house.first_steps, { home: "home { handle, title, body }", window: "window { handle, html }" }, "one call per missing paper, only those");
+  assert.match(firstSteps({ newbie: ["parcel"] }).parcel, /leave-mark \{ slug, kind: "parcel"/);
+  assert.equal(firstSteps({ a: [] }), null);
   assert.equal(memberLine({ handle: "newbie", at: null, last_active: null }, { nowMs: NOW }), "newbie · nowhere on the roll · no act yet");
   assert.equal(gapWord("tend your HOME page — your pages tell the town who you are"), "home");
   assert.equal(gapWord("hang your window"), "window");
@@ -122,18 +141,22 @@ test("D2 · the house's human is named by the house, from one function", () => {
 
 test("D7 · mail says new_inbound and what sails next; no key is called owed", () => {
   const g = glanceV2(partsFor(STARFORGE), { nowMs: NOW });
-  assert.deepEqual(g.mail, { unanswered_14d: 37, new_inbound: 468, on_the_next_boat: 2 });
+  const { key, ...counts } = g.mail;
+  assert.deepEqual(counts, { unanswered_14d: 37, new_inbound: 468, bounced: 1, on_the_next_boat: 2 });
+  assert.match(key, /new_inbound: they wrote after your last letter, any age/, "every count says what it is");
+  assert.match(key, /read "mail", view "awaiting"/, "and the read that lists it");
   assert.ok(!("unread" in g.mail), "the office's read flag is not a resident's");
-  assert.equal(g.house.members_key, "handle · where · last act, age · needs", "the members' legend, once");
+  assert.match(g.house.members_key, /^handle · on <mark> \| at x, y/, "the members' legend, once");
   assert.ok(!JSON.stringify(g).includes("owed"));
 });
 
-test("stamps: the pool is the residents' sum, labelled pending POS-326; earned names three and counts the rest", () => {
+test("stamps: spendable is the residents' sum, earned a total, and the key names the read per resident", () => {
   const s = stampsBlock([{ handle: "a", tenses: { liquid: 5, staked: 1, minted: 9 } }, { handle: "b", tenses: { liquid: 7, staked: 0, minted: 3 } },
     { handle: "c", tenses: { liquid: 1, staked: 2, minted: 12 } }, { handle: "d", tenses: { liquid: 0, staked: 0, minted: 1 } }]);
-  assert.equal(s.pool, 13, "the residents' stamps added up; no tracker id reaches a resident");
+  assert.equal(s.spendable, 13, "the residents' stamps added up, named as spendable");
   assert.equal(s.staked, 3);
-  assert.equal(s.earned, "c 12 · a 9 · b 3 · 1 more");
+  assert.equal(s.earned_total, 25);
+  assert.match(s.key, /per resident: read "stamps"/);
   assert.deepEqual(questLines({ quests: [{ cadence: "daily", title: "Reach out", household: { total: 2 }, target: 5 },
     { cadence: "milestone", title: "First idea", progress: 0, target: 1 }] }), ["Reach out 2/5 today"]);
 });
@@ -160,10 +183,10 @@ test("the cursor · since: answers only what changed, complete when nothing was 
   const letters = [{ id: "a", delivered_at: "2026-10-19T00:06:00.000Z" }, { id: "b", delivered_at: "2026-10-18T13:00:00.000Z" }, { id: "c", delivered_at: "2026-10-17T00:06:00.000Z" }];
   const small = { stances: { stances_awaiting: 6, awaiting: p.stances.awaiting.slice(0, 6) }, inbound: letters };
   const s = sinceV2(small, encodeCursor({ crossing: 256, ms: at }), { nowMs: NOW });
-  assert.deepEqual(Object.keys(s), ["since", "needs", "mail", "complete", "cursor", "more", "reading_law", "read_shape"]);
-  assert.ok(s.needs.new.every((r) => r.since >= "2026-10-18"));
-  assert.equal(s.needs.new.length, 5);
-  assert.equal(s.needs.more, 1);
+  assert.deepEqual(Object.keys(s), ["since", "waiting", "mail", "complete", "cursor", "more", "reading_law", "read_shape"]);
+  assert.ok(s.waiting.new.every((r) => r.since >= "2026-10-18"));
+  assert.equal(s.waiting.new.length, 5);
+  assert.equal(s.waiting.more, 1);
   assert.equal(s.mail.new, 2);
   assert.equal(s.complete, false, "a list was cut, so it says so");
   assert.ok(!("house" in s) && !("can" in s), "only what changed");
@@ -240,15 +263,20 @@ test("happened · D4: hand and for from what the record knows; a route never rec
   assert.equal(happenedLine(seated, { nowMs: Date.parse("2026-10-19T22:00:00Z") }), "walk the-town/quay · by Starforge's human for rei · 2 h");
 });
 
-test("H2 with every block · Starforge's glance with closer and happened stays ≤ 4K, every key explained", () => {
+// With every block and the eval's keys: Darko's 4K plus what round 1 asked for, at the fixture's widest.
+const FULL_BUDGET = 6144;
+test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
   const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
   const closer = Array.from({ length: 12 }, (_, i) => ({ with: `isabella-cognita-${i}`, of: "Casa Cognita", letters: 30 - i, last_at: "2026-10-19" }));
   const happened = Array.from({ length: 9 }, (_, i) => happenedRow({ at: new Date(NOW - i * 3_600_000).toISOString(), actor: i % 3 ? "jetto-of-starforge" : "human-of-starforge",
     action: "leave-mark", object: `jetto-of-starforge/a-mark-with-a-long-slug-${i}` }, { houseName: "Starforge" }));
   const went = [{ at: new Date(NOW - 3_600_000).toISOString() }, { at: new Date(NOW - 7_200_000).toISOString() }];
   const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
-  assert.ok(served(g) <= 4096, `Starforge's whole glance is ${served(g)} characters as served`);
-  assert.equal(g.closer_14d.length, 3, "the window rides the key");
+  t.diagnostic(`Starforge, every block: ${served(g)} characters`);
+  assert.ok(served(g) <= FULL_BUDGET, `Starforge's whole glance is ${served(g)} characters as served`);
+  assert.equal(g.correspondents_14d.rows.length, 3, "plainly letters, the window in the name");
+  assert.match(g.correspondents_14d.key, /^letters both ways in the last 14 days/);
+  assert.match(g.stamps.key, /went \(12 h\): read "stamps", view "went"/, "went names the read that lists it");
   assert.equal(g.happened.length, 5);
   assert.equal(g.stamps.went, 2);
   assert.deepEqual(unexplained("household", g, 2), []);
@@ -282,10 +310,10 @@ test("needs.first at 101 waiting is the house's true oldest, never the oldest of
   const tail = [candidate(98), candidate(99), oldest];
   const n = needsBlock({ stances: { stances_awaiting: 101, awaiting: page }, needs: null, tail });
   assert.equal(n.count, 101);
-  assert.deepEqual(n.first.map((r) => [r.by, r.count]), [["binya-vernal", 1], ["spark-the-builder", 100]], "the oldest group first; the tail's rows on the page are not counted twice");
-  assert.equal(n.first[0].sample, BODY);
+  assert.deepEqual(n.groups.map((r) => [r.by, r.count]), [["binya-vernal", 1], ["spark-the-builder", 100]], "the oldest group first; the tail's rows on the page are not counted twice");
+  assert.equal(n.groups[0].sample, BODY);
   // without the tail, the oldest is not there: that is why it is read
-  assert.deepEqual(needsBlock({ stances: { stances_awaiting: 101, awaiting: page } }).first.map((r) => r.by), ["spark-the-builder"]);
+  assert.deepEqual(needsBlock({ stances: { stances_awaiting: 101, awaiting: page } }).groups.map((r) => r.by), ["spark-the-builder"]);
 });
 
 test("went leaves out a gift between housemates; closer counts delivered letters only, never a housemate", () => {
