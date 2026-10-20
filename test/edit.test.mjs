@@ -925,3 +925,21 @@ test("#865 image door: scope binds it like every other edit verb", async () => {
     assert.equal((await bounceOfAsync(() => updateHomeImage({ handle: "wright", image: b64(PNG) }, visitorKey, db, clone))).code, 403);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
+
+// ── PRONOUNS, A PROFILE FIELD (WLD-83; Darko 2026-10-20 09:55) ──────────────
+test("update_profile writes pronouns beside the other profile fields: trimmed, capped at 56, an empty string clears them", async () => {
+  const clone = editClone();
+  try {
+    const { pronounsInClone } = await import("../src/profiles.mjs");
+    const r = updateProfile({ handle: "wright", pronouns: "  he/him  " }, fixtureKey, db, clone);
+    assert.equal(r.profile.pronouns, "he/him");
+    assert.match(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), /pronouns: "he\/him"/);
+    assert.equal(pronounsInClone(clone, "wright"), "he/him", "the reader lifts what the door wrote");
+    const long = bounceOf(() => updateProfile({ handle: "wright", pronouns: "x".repeat(57) }, fixtureKey, db, clone));
+    assert.equal(long.code, 422);
+    assert.match(long.defect, /pronouns is longer than 56 characters/);
+    updateProfile({ handle: "wright", pronouns: "" }, fixtureKey, db, clone);
+    assert.doesNotMatch(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), /pronouns:/);
+    assert.equal(pronounsInClone(clone, "wright"), null, "cleared, and nothing guessed in its place");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});

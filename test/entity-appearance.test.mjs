@@ -15,12 +15,14 @@ import assert from "node:assert/strict";
 
 import {
   worldDescribe, applyAct, nodeAnswer, appearanceIdOf, rootIdOf, appearanceNodes,
-  __resetAppearanceForTest, APPEARANCE_CLASS, BODY_MAX, ID_MAX, FOLD_SQL, OVERLAP_SQL, pronounsIn, STARTER_SLOTS,
+  __resetAppearanceForTest, APPEARANCE_CLASS, BODY_MAX, ID_MAX, FOLD_SQL, OVERLAP_SQL, STARTER_SLOTS,
 } from "../src/entity-predicates.mjs";
 import { entityKindOf, investigateResident } from "../src/world-investigate-entity.mjs";
 import { dispatchToolFor, focusArgs } from "../src/world-apex.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { worldClone } from "./fixture-paths.mjs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -260,21 +262,30 @@ test("AGAINST A REAL STORE: the door writes an `appearance` act, and the fold re
   }
 });
 
-test("PRONOUNS ARE THE DETAIL DIRECTLY UNDER THE ROOT, the resident's own word: never read from deeper in the tree, never guessed", async () => {
+test("PRONOUNS ARE A PROFILE FIELD (Darko 2026-10-20 09:55): the profile's line first, ADDRESS's older line after, trimmed; never read from the appearance tree, never guessed", async () => {
+  const { pronounsOf, pronounsInClone } = await import("../src/profiles.mjs");
+  assert.equal(pronounsOf({ profile: { pronouns: "  he/him " } }), "he/him");
+  assert.equal(pronounsOf({ profile: { pronouns: "he/him" }, address: { data: { pronouns: "she/her" } } }), "he/him", "the profile wins");
+  assert.equal(pronounsOf({ profile: { bio: "x" }, address: { data: { pronouns: "she/her" } } }), "she/her", "ADDRESS's older line still answers (POS-383)");
+  assert.equal(pronounsOf({ profile: { pronouns: "   " } }), null, "blank is not a word");
+  assert.equal(pronounsOf({}), null);
+  const town = mkdtempSync(join(tmpdir(), "pronouns-clone-"));
+  mkdirSync(join(town, "WHITE_PAGES", "a"), { recursive: true });
+  mkdirSync(join(town, "WHITE_PAGES", "b"), { recursive: true });
+  writeFileSync(join(town, "WHITE_PAGES", "a", "PROFILE.md"), "---\npronouns: \"they/them\"\n---\n");
+  writeFileSync(join(town, "WHITE_PAGES", "b", "ADDRESS.md"), "---\nhandle: b\npronouns: it/its\n---\n");
+  assert.equal(pronounsInClone(town, "a"), "they/them");
+  assert.equal(pronounsInClone(town, "b"), "it/its");
+  assert.equal(pronounsInClone(town, "c"), null);
+  // an appearance detail named pronouns is just a detail: nothing lifts it
   const d = door();
-  assert.equal(pronounsIn(d.nodes, "jetto-of-starforge"), null, "nothing written, nothing said");
   await d.describe({ slot: "appearance", value: "x", body: "A hooded figure." });
-  await d.describe({ slot: "hood", value: "grey", body: "Grey." });
-  await d.describe({ slot: "pronouns", value: "it/its", body: "A slot of the same name under a detail is that detail's.", under: "jetto-of-starforge/appearance.hood" });
-  assert.equal(pronounsIn(d.nodes, "jetto-of-starforge"), null, "a pronouns slot under the hood is not the resident's pronouns");
-  await d.describe({ slot: "pronouns", value: "  he/him  ", body: "Jetto goes by he/him." });
-  assert.equal(pronounsIn(d.nodes, "jetto-of-starforge"), "he/him");
+  await d.describe({ slot: "pronouns", value: "he/him", body: "A detail with that name is only a detail." });
   const seen = await investigateResident("jetto-of-starforge", {
     known: async () => true, standpoint: async () => null, place: async () => "", saved: () => null,
     recent: async () => [], holds: async () => [], placeOf: () => null, pronouns: async () => "he/him",
   });
   assert.deepEqual(Object.keys(seen).slice(0, 3), ["kind", "handle", "pronouns"], "beside the name");
-  assert.equal(seen.pronouns, "he/him");
   const none = await investigateResident("milo", {
     known: async () => true, standpoint: async () => null, place: async () => "", saved: () => null,
     recent: async () => [], holds: async () => [], placeOf: () => null,
@@ -282,8 +293,8 @@ test("PRONOUNS ARE THE DETAIL DIRECTLY UNDER THE ROOT, the resident's own word: 
   assert.equal("pronouns" in none, false);
 });
 
-test("THE DESCRIBE CARD NAMES THE STARTER SET (Darko 2026-10-20 08:46), each with its one-line meaning, and welcomes the resident's own words", async () => {
-  assert.deepEqual(STARTER_SLOTS.map((s) => s.slot), ["appearance", "pronouns", "form", "wears", "sign", "voice", "manner"]);
+test("THE DESCRIBE CARD NAMES THE DEFAULT SLOTS (Darko 2026-10-20 08:46, re-shaped 09:55), each with its one-line meaning; pronouns live on the profile", async () => {
+  assert.deepEqual(STARTER_SLOTS.map((s) => s.slot), ["appearance", "form", "wears", "sign", "voice", "manner"]);
   const { WORLD_TOOLS } = await import("../src/world.mjs");
   const card = WORLD_TOOLS.find((t) => t.name === "world_describe");
   for (const { slot, meaning } of STARTER_SLOTS) {
@@ -293,4 +304,6 @@ test("THE DESCRIBE CARD NAMES THE STARTER SET (Darko 2026-10-20 08:46), each wit
   }
   assert.match(card.description, /your own slot words are welcome too/);
   assert.match(card.description, /your household's to write/, "the scope is the household (P1)");
+  assert.match(card.description, /PRONOUNS are not a slot here: they live on your profile \(update_profile/);
+  assert.equal(STARTER_SLOTS.some((s) => s.slot === "pronouns"), false);
 });

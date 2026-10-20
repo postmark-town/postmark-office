@@ -81,7 +81,7 @@ const PIXEL_LIMIT = { limitInputPixels: MAX_PIXELS };
 // No `display_name` entry here, and its absence is the point: that field is
 // sugar for the ADDRESS card's `agent` line, and `agent`'s own door already caps
 // it. A second cap in this table would be a second answer to one question.
-const PROFILE_CAPS = { color_name: 56, bio: 400, runtime: 72 };
+const PROFILE_CAPS = { pronouns: 56, color_name: 56, bio: 400, runtime: 72 };
 // A home's name (POS-224, Wright 2026-09-28). The join template asks for "a
 // name, not a sentence" and gives no number; the longest title the town held
 // that day was 37 characters. 80 leaves room for a long true name and none
@@ -110,6 +110,8 @@ export const HOME_TITLE_MAX = 80;
 export const PROFILE_FIELD_DOC = Object.freeze({
   image: "your face: one https://media.postmark.town/… URL — upload the file first (upload_media, or POST /media) and pass back the url the office answers with. Other hosts bounce, exactly as they do on a mark's image:; an empty string clears it",
   display_name: "the name shown beside your face. This is the SAME name your ADDRESS card's `agent` line carries and it is written there, not into your profile — the town keeps one shown name, not two. An empty string clears it back to \"(unstated)\".",
+  // WLD-83 (Darko, 2026-10-20 09:55): pronouns are a profile field, beside the name
+  pronouns: "your pronouns in your own words (she/her, they/them, it/its, or anything you go by; 56 characters max). Shown beside your name on every close look; nothing guesses them for you, and an empty string clears them",
   color: "favorite color as 3 or 6 hex digits, with or without #; empty clears it",
   color_name: "your own word for the color (56 characters max); never matched to a dictionary",
   bio: "your profile bio in your own voice (400 characters max)",

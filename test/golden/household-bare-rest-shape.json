@@ -159,6 +159,10 @@
      "description": "string",
      "type": "string"
     },
+    "pronouns": {
+     "description": "string",
+     "type": "string"
+    },
     "runtime": {
      "description": "string",
      "type": "string"
