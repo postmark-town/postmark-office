@@ -34,7 +34,7 @@ import {
 import { openOauthDb } from "../src/oauth.mjs";
 import { PAPER_ACTS } from "../src/town-updates.mjs";
 import { MAIL_ACT, MAIL_DOOR } from "../src/town-mail.mjs";
-import { letterDate, outboxRelPath } from "../src/write.mjs";
+import { letterDate, outboxRelPath, penCommit, penTransaction } from "../src/write.mjs";
 import { declareStanceViaOffice } from "../src/world-stance.mjs";
 import { worldFreezeBounce } from "../src/freeze.mjs";
 import { TOOLS } from "../src/mcp.mjs";
@@ -144,6 +144,9 @@ function townClone({ handles = ["wright", "limen"] } = {}) {
   writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "# the stamp ledger\n\n- 2026-08-01 · registry: someone = hh:elsewhere\n");
   const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
   git("init", "-q");
+  // the bytes a door writes are the bytes the clone holds: a Windows checkout
+  // must not turn the batch's fast-forward into a CRLF rewrite (the box never does)
+  git("config", "core.autocrlf", "false");
   git("add", "-A");
   git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
   return dir;
@@ -598,8 +601,8 @@ test("F7 · every run leaves exactly one line, and it says what happened", async
       const lines = [];
       const r = await run(o, { clone, date: "2026-08-24", log: (l) => lines.push(l) });
       assert.equal(lines.length, 1);
-      assert.match(lines[0], /^\[town-drain\] date=2026-08-24 joins=1 updates=1 letters=1 head=\d+ cursor=\d+ commit=[0-9a-f]{40} took=\d+ms$/,
-        "the counts, the head, the cursor and the commit — everything an operator needs to tell a quiet crossing from a broken one");
+      assert.match(lines[0], /^\[town-drain\] date=2026-08-24 joins=1 updates=1 letters=1 head=\d+ cursor=\d+ commit=[0-9a-f]{40} batch=[0-9a-f]{40} took=\d+ms$/,
+        "the counts, the head, the cursor, the join commit and the batch's one commit (POS-723) — everything an operator needs to tell a quiet crossing from a broken one");
       assert.equal(drainLine(r).startsWith("[town-drain] "), true);
     });
   } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
@@ -843,6 +846,489 @@ test("F13 · A LETTER AND A PAPER ACT WHOSE PUSH CANNOT LAND ARE HELD, and the n
     });
   } finally {
     if (was === undefined) delete process.env.TOWN_PUSH; else process.env.TOWN_PUSH = was;
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F14–F17 · THE PEN BATCH (POS-723, Darko 2026-10-20 08:58): "the suggestion
+// that you had to batch into a commit is a no-brainer. We should 100% do that
+// rather than have individual commits for every piece of mail." One commit and
+// one push for a crossing's mail and paper, every act named in it, the cursor
+// still last, and a batch that cannot land put back whole and held.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** A bare origin for `clone` that counts every push it receives. */
+function originFor(clone) {
+  const bare = `${clone}-origin.git`;
+  const g = (...a) => execFileSync("git", ["-C", clone, ...a], { encoding: "utf8" }).trim();
+  g("branch", "-M", "main");
+  execFileSync("git", ["clone", "-q", "--bare", clone, bare]);
+  g("remote", "add", "origin", bare);
+  g("fetch", "-q", "origin");
+  g("branch", "-q", "--set-upstream-to=origin/main", "main");
+  writeFileSync(join(bare, "hooks", "post-receive"), "#!/bin/sh\necho push >> pushes.log\n", { mode: 0o755 });
+  const origin = (...a) => execFileSync("git", ["-C", bare, ...a], { encoding: "utf8" }).trim();
+  const pushes = () => existsSync(join(bare, "pushes.log"))
+    ? readFileSync(join(bare, "pushes.log"), "utf8").split("\n").filter(Boolean).length : 0;
+  return { bare, g, origin, pushes };
+}
+
+/** A paper act and three letters: a crossing's mail and paper, no joins. */
+async function seedMailAndPaper(o) {
+  await appendTownJournal(o, {
+    cls: "update", act: "home", household: "keemin", handle: "wright", ghId: "42", ghLogin: "keeminlee",
+    payload: { args: { handle: "wright", body: "A home in the batch." } },
+  });
+  for (const slug of ["one-hat", "two-hats", "three-hats"])
+    await seedLetter(o, { title: slug.replace(/-/g, " "), slug });
+}
+
+/** The town log's rows, all of them (the cursor hides none here). */
+const townRows = (o) => o.prepare("SELECT seq, act FROM town_journal ORDER BY seq").all();
+
+const pushingOn = async (fn) => {
+  const was = process.env.TOWN_PUSH;
+  process.env.TOWN_PUSH = "1";
+  try { return await fn(); } finally { if (was === undefined) delete process.env.TOWN_PUSH; else process.env.TOWN_PUSH = was; }
+};
+
+test("F14 · N ACTS, ONE COMMIT AND ONE PUSH, every act named in it", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin, pushes } = originFor(clone);
+  try {
+    await pushingOn(() => flagOn(async () => {
+      const before = g("rev-parse", "HEAD");
+      await seedMailAndPaper(o);
+      const head = (await pendingRows(o)).at(-1).seq;
+      const lines = [];
+      const r = await run(o, { clone, date: "2026-10-20", log: (l) => lines.push(l) });
+
+      assert.equal(r.ran, true);
+      assert.equal(r.bounced, 0);
+      assert.equal(r.held ?? 0, 0);
+      assert.equal(origin("rev-list", "--count", `${before}..main`), "1", "ONE commit for four acts, not four");
+      assert.equal(pushes(), 1, "and ONE push");
+      assert.match(r.batch_commit, /^[0-9a-f]{40}$/);
+      assert.equal(origin("rev-parse", "main"), r.batch_commit, "the batch is the town's tip");
+      for (const e of [...r.updates, ...r.letters])
+        assert.equal(e.commit, r.batch_commit, `seq ${e.seq} names the batch as its commit`);
+
+      // PER-ACT PROVENANCE: each act on its own line, in its door's own words
+      const body = origin("log", "-1", "--format=%B", "main");
+      assert.match(body.split("\n")[0], /^drain: 3 letters and 1 paper act into the town record \(town log seq \d+–\d+, head \d+\)$/);
+      for (const row of townRows(o))
+        assert.match(body, new RegExp(`^seq ${row.seq} ${row.act} `, "m"), `seq ${row.seq} is named in the commit`);
+      assert.equal(body.match(/\(via postmark-office, key household keemin\)/g)?.length, 4,
+        "every act keeps the message its door would have committed under");
+      assert.match(body, /wright -> limen: two-hats/, "a slug grep still finds its letter");
+
+      assert.equal(outboxFiles(clone, "wright").length, 3);
+      assert.equal((await townDrainCursor(o)), head, "and the cursor moved, last");
+      assert.equal(g("status", "--porcelain", "--untracked-files=all"), "", "nothing is left on the clone");
+      assert.match(lines.at(-1), new RegExp(`batch=${r.batch_commit}`), "the operator's line names the one commit");
+    }));
+  } finally {
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("F15 · A BATCH THAT CANNOT COMMIT IS PUT BACK WHOLE AND HELD, and the next crossing drains the same rows into one commit", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin, pushes } = originFor(clone);
+  const hooks = mkdtempSync(join(tmpdir(), "pm-hooks-"));
+  try {
+    await pushingOn(() => flagOn(async () => {
+      const before = g("rev-parse", "HEAD");
+      const cursor0 = await townDrainCursor(o);
+      await seedMailAndPaper(o);
+      const head = (await pendingRows(o)).at(-1).seq;
+
+      // the crash stand-in: the commit itself refuses, after every door has written
+      writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      g("config", "core.hooksPath", hooks);
+      const r1 = await run(o, { clone, date: "2026-10-20" });
+      assert.equal(r1.ran, true, "the crossing completes: a held batch never stops the boat");
+      assert.equal(r1.held, 4, "every act in the batch is held");
+      assert.equal(r1.bounced, 0, "…and none is called a bounce: a bounce is passed over forever");
+      assert.equal(r1.batch_commit, null);
+      for (const e of [...r1.updates, ...r1.letters]) assert.equal(e.commit, undefined, `seq ${e.seq} names no commit`);
+      assert.equal((await townDrainCursor(o)), cursor0, "THE CURSOR STAYS below every held row");
+      assert.equal(g("rev-parse", "HEAD"), before, "no commit stands");
+      assert.equal(g("status", "--porcelain", "--untracked-files=all"), "", "the clone is back where it was");
+      assert.equal(pushes(), 0, "nothing reached the town");
+
+      // the next crossing, the commit possible again
+      g("config", "--unset", "core.hooksPath");
+      const r2 = await run(o, { clone, date: "2026-10-20" });
+      assert.equal(r2.held ?? 0, 0);
+      assert.equal(r2.letters.length + r2.updates.length, 4, "the SAME rows drain");
+      assert.equal(origin("rev-list", "--count", `${before}..main`), "1", "into one commit");
+      assert.equal(pushes(), 1);
+      assert.equal((await townDrainCursor(o)), head);
+      assert.equal(outboxFiles(clone, "wright").length, 3, "each letter once");
+    }));
+  } finally {
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare, hooks]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("F16 · A BATCH WHOSE PUSH CANNOT LAND IS PUT BACK WHOLE: nothing on the clone, nothing on the town, the cursor still", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin } = originFor(clone);
+  try {
+    g("remote", "set-url", "--push", "origin", `${clone}-nowhere.git`);
+    await pushingOn(() => flagOn(async () => {
+      const before = g("rev-parse", "HEAD");
+      const cursor0 = await townDrainCursor(o);
+      await seedMailAndPaper(o);
+      const lines = [];
+      const r = await run(o, { clone, date: "2026-10-20", log: (l) => lines.push(l) });
+      assert.equal(r.held, 4);
+      assert.equal(r.bounced, 0);
+      for (const e of [...r.updates, ...r.letters]) assert.match(e.held, /the town did not take this write/);
+      assert.equal((await townDrainCursor(o)), cursor0);
+      assert.equal(g("rev-parse", "HEAD"), before, "the unlanded commit is unmade");
+      assert.equal(g("status", "--porcelain", "--untracked-files=all"), "");
+      assert.equal(origin("rev-parse", "main"), before);
+      assert.match(lines.at(-1), /HELD=4/);
+    }));
+  } finally {
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("F17 · A MID-BATCH BOUNCE PUTS BACK ITS OWN WRITES ONLY, even over a file an earlier act in the batch wrote", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const home = join(clone, "WHITE_PAGES", "wright", "HOME", "HOME.md");
+  const stray = join(clone, "WHITE_PAGES", "wright", "HOME", "stray.md");
+  // A home door that writes and then refuses when told to: no live door has
+  // this shape today, and it is the one the batch's snapshots exist to answer.
+  // It writes where it is handed (`c`, the drain's worktree), as a door does.
+  const doors = {
+    ...TOWN_DOORS,
+    update_home: (args, k, d, c) => penTransaction(c, () => {
+      const at = join(c, "WHITE_PAGES", "wright", "HOME");
+      mkdirSync(at, { recursive: true });
+      writeFileSync(join(at, "HOME.md"), `${args.body}\n`);
+      if (args.body.startsWith("FAIL")) {
+        writeFileSync(join(at, "stray.md"), "half a write\n");
+        throw Object.assign(new Error("refused after writing"), { code: 422, defect: "refused after writing" });
+      }
+      return penCommit(c, [join(at, "HOME.md")], `wright: home ${args.body} (via postmark-office, key household keemin)`);
+    }),
+  };
+  try {
+    await flagOn(async () => {
+      for (const body of ["the first home", "FAIL the second home"])
+        await appendTownJournal(o, {
+          cls: "update", act: "home", household: "keemin", handle: "wright", ghId: "42", ghLogin: "keeminlee",
+          payload: { args: { handle: "wright", body } },
+        });
+      await seedLetter(o);
+      const r = await run(o, { clone, date: "2026-10-20", doors });
+      assert.equal(r.bounced, 1, "the refusing act is a bounce, recorded and passed over");
+      assert.match(r.updates[1].bounced, /refused after writing/);
+      assert.match(r.batch_commit, /^[0-9a-f]{40}$/);
+      assert.equal(r.updates[0].commit, r.batch_commit);
+      assert.equal(r.letters[0].commit, r.batch_commit);
+      assert.equal(readFileSync(home, "utf8"), "the first home\n",
+        "the file holds the FIRST act's bytes: the bounce put back its own write, not the batch's");
+      assert.equal(existsSync(stray), false, "the file the bouncing act created is gone");
+      const g = (...a) => execFileSync("git", ["-C", clone, ...a], { encoding: "utf8" }).trim();
+      assert.equal(g("show", "HEAD:WHITE_PAGES/wright/HOME/HOME.md"), "the first home", "and that is what the commit carries");
+      assert.equal(g("status", "--porcelain", "--untracked-files=all"), "", "nothing else is left behind");
+      assert.doesNotMatch(g("log", "-1", "--format=%B"), /FAIL/, "the bounced act is not in the batch");
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F18–F20 · THE REVIEW OF office#673. The office's server commits paper edits
+// into TOWN_CLONE in-process, without town.lock. A batch that held its writes
+// there made every live edit's pull refuse, and a refused edit's undo could
+// take the batch's letters with it, which the landing then passed over. And
+// one act the town refuses held every other act behind it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** A letter row with its own body, in seedLetter's shape. */
+async function seedLetterSaying(o, { slug, body, to = "limen", from = "wright" }) {
+  const date = letterDate();
+  return appendTownJournal(o, {
+    cls: "letter", act: MAIL_ACT, household: "keemin", handle: from, ghId: "42", ghLogin: "keeminlee",
+    payload: { args: { from, to, title: slug.replace(/-/g, " "), thread: "new", body }, id: `${from}-${date}-to-${to}-${slug}`, file: outboxRelPath(from, date, to, slug) },
+  });
+}
+
+test("F18 · A LETTER WHOSE BYTES CHANGE UNDER THE BATCH IS HELD, never passed over, and the next crossing delivers it once", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin } = originFor(clone);
+  // the review's path, at the one place it can still be staged: something
+  // removes a letter the batch already wrote, before the batch commits
+  let calls = 0, first = null;
+  const doors = {
+    ...TOWN_DOORS,
+    send_letter: (args, k, d, c, acc) => {
+      calls += 1;
+      if (calls === 2) rmSync(join(c, first), { force: true });
+      const out = TOWN_DOORS.send_letter(args, k, d, c, acc);
+      if (calls === 1) first = acc.file;
+      return out;
+    },
+  };
+  try {
+    await pushingOn(() => flagOn(async () => {
+      for (const slug of ["one-hat", "two-hats", "three-hats"]) await seedLetter(o, { title: slug.replace(/-/g, " "), slug });
+      const cursor0 = await townDrainCursor(o);
+      const head = (await pendingRows(o)).at(-1).seq;
+
+      const r1 = await run(o, { clone, date: "2026-10-20", doors });
+      assert.equal(r1.held, 1, "the letter whose file went missing is HELD");
+      assert.match(r1.letters[0].held, /changed under it/);
+      assert.equal(r1.letters[0].commit, undefined, "and names no commit: it is not passed over as unchanged");
+      assert.match(r1.letters[1].commit, /^[0-9a-f]{40}$/, "the others sail");
+      assert.match(r1.letters[2].commit, /^[0-9a-f]{40}$/);
+      assert.equal((await townDrainCursor(o)), cursor0, "THE CURSOR STAYS below the held letter");
+      assert.equal(origin("ls-tree", "--name-only", "main", "--", first), "", "the held letter is not on the town's main");
+
+      const r2 = await run(o, { clone, date: "2026-10-20" });
+      assert.equal(r2.held ?? 0, 0);
+      assert.equal(r2.letters.filter((e) => e.already).length, 2, "the two that sailed answer `already`");
+      assert.match(r2.letters[0].commit, /^[0-9a-f]{40}$/, "and the held one is delivered");
+      assert.equal(origin("log", "--format=%H", "main", "--", first).split("\n").filter(Boolean).length, 1, "once");
+      assert.equal((await townDrainCursor(o)), head);
+      assert.equal(g("status", "--porcelain", "--untracked-files=all"), "");
+    }));
+  } finally {
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("F19 · ONE ACT THE TOWN REFUSES IS HELD ALONE: the rest land, by halves", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin, pushes } = originFor(clone);
+  // push protection's shape: the remote refuses any push that carries the string
+  writeFileSync(join(bare, "hooks", "pre-receive"),
+    "#!/bin/sh\nwhile read old new ref; do\n  if git log -p \"$old..$new\" | grep -q NOT-A-REAL-TOKEN; then echo 'refused: a secret' >&2; exit 1; fi\ndone\nexit 0\n",
+    { mode: 0o755 });
+  try {
+    await pushingOn(() => flagOn(async () => {
+      const before = g("rev-parse", "HEAD");
+      await seedLetterSaying(o, { slug: "one-hat", body: "limen —\n\nThe first hat." });
+      await seedLetterSaying(o, { slug: "the-key", body: "limen —\n\nHere it is: NOT-A-REAL-TOKEN." });
+      await seedLetterSaying(o, { slug: "three-hats", body: "limen —\n\nThe third hat." });
+      const cursor0 = await townDrainCursor(o);
+
+      const lines = [];
+      const r = await run(o, { clone, date: "2026-10-20", log: (l) => lines.push(l) });
+      assert.equal(r.held, 1, "only the refused letter is held");
+      assert.equal(r.bounced, 0, "and it is held, not bounced: the town may take it once it is fixed");
+      assert.match(r.letters[1].held, /the town did not take this write/);
+      assert.match(r.letters[0].commit, /^[0-9a-f]{40}$/, "the letter before it sails");
+      assert.match(r.letters[2].commit, /^[0-9a-f]{40}$/, "and the one after it");
+      const onMain = origin("log", "--format=%B", `${before}..main`);
+      assert.match(onMain, /one-hat/);
+      assert.match(onMain, /three-hats/);
+      assert.doesNotMatch(onMain, /the-key/, "the refused letter never reached the town");
+      assert.ok(pushes() >= 1);
+      assert.equal((await townDrainCursor(o)), cursor0, "the cursor stays below the held letter");
+      assert.equal(g("status", "--porcelain", "--untracked-files=all"), "");
+      assert.match(lines.at(-1), /HELD=1/);
+    }));
+  } finally {
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("F20 · A LIVE EDIT IN THE MIDDLE OF THE BATCH LANDS: the town clone carries none of the batch's writes until it lands", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin } = originFor(clone);
+  const seen = [];
+  let live = null;
+  const doors = {
+    ...TOWN_DOORS,
+    send_letter: (args, k, d, c, acc) => {
+      const out = TOWN_DOORS.send_letter(args, k, d, c, acc);
+      seen.push(g("status", "--porcelain", "--untracked-files=all"));
+      // the office's server, mid-crossing: a resident's paper edit on TOWN_CLONE
+      if (!live) live = TOWN_DOORS.update_home({ handle: "wright", title: "The Live House", body: "A live edit, mid-crossing." }, key, db, clone);
+      return out;
+    },
+  };
+  try {
+    await pushingOn(() => flagOn(async () => {
+      for (const slug of ["one-hat", "two-hats"]) await seedLetter(o, { title: slug.replace(/-/g, " "), slug });
+      const r = await run(o, { clone, date: "2026-10-20", doors });
+      assert.deepEqual(seen, ["", ""], "the town clone is clean while the batch writes: its writes are in the drain's worktree");
+      assert.match(live.commit, /^[0-9a-f]{40}$/, "the live edit's pull and push worked mid-crossing");
+      assert.equal(r.held ?? 0, 0);
+      assert.match(r.batch_commit, /^[0-9a-f]{40}$/);
+      assert.match(origin("show", "main:WHITE_PAGES/wright/HOME/HOME.md"), /A live edit, mid-crossing\./, "the live edit is on the town's main");
+      assert.equal(outboxFiles(clone, "wright").length, 2, "and so are both letters, in the clone the ferry sweeps");
+      assert.equal(g("rev-parse", "HEAD"), origin("rev-parse", "main"), "the clone stands at the town's tip");
+    }));
+  } finally {
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("F21 · A DRAIN WORKTREE THAT WILL NOT COME UP HOLDS EVERY MAIL AND PAPER ROW, says so, and writes nothing", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const blocker = join(clone, ".git", "not-a-worktree");
+  writeFileSync(blocker, "a file where the worktree would go\n");
+  const was = process.env.TOWN_DRAIN_WORKTREE;
+  process.env.TOWN_DRAIN_WORKTREE = blocker;
+  try {
+    await flagOn(async () => {
+      await seedMailAndPaper(o);
+      const cursor0 = await townDrainCursor(o);
+      const lines = [];
+      const r = await run(o, { clone, date: "2026-10-20", log: (l) => lines.push(l) });
+      assert.equal(r.held, 4, "every row is held");
+      assert.equal(r.bounced, 0);
+      for (const e of [...r.updates, ...r.letters]) assert.match(e.held, /the drain's worktree would not come up/);
+      assert.equal((await townDrainCursor(o)), cursor0, "the cursor stays");
+      assert.ok(lines.some((l) => /every mail and paper row is held/.test(l)), "the operator is told why");
+      const g = (...a) => execFileSync("git", ["-C", clone, ...a], { encoding: "utf8" }).trim();
+      assert.equal(g("status", "--porcelain", "--untracked-files=all"), "", "and the town clone is untouched");
+    });
+  } finally {
+    if (was === undefined) delete process.env.TOWN_DRAIN_WORKTREE; else process.env.TOWN_DRAIN_WORKTREE = was;
+    o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F22–F25 · REVIEW 2 OF office#673: a worktree broken mid-making is remade;
+// a batch that landed is never held; the clone is never left where the
+// unit's push would stop the ferry; and not pushing, a batch the clone did
+// not take keeps the cursor still.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const wtOf = (clone) => join(clone, ".git", "drain-worktree");
+
+test("F22 · A WORKTREE LEFT LOCKED MID-MAKING, OR REMOVED BY HAND, IS REMADE: the next crossing's mail sails", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const g = (...a) => execFileSync("git", ["-C", clone, ...a], { encoding: "utf8" }).trim();
+  try {
+    await flagOn(async () => {
+      await seedLetter(o, { title: "one hat", slug: "one-hat" });
+      await run(o, { clone, date: "2026-10-20" }); // the worktree now exists
+      const wt = wtOf(clone);
+      assert.ok(existsSync(join(wt, ".git")));
+
+      // a SIGKILL inside `worktree add` or a reset: the entry locked, an index.lock left
+      g("worktree", "lock", "--reason", "initializing", wt);
+      writeFileSync(join(clone, ".git", "worktrees", "drain-worktree", "index.lock"), "");
+      await seedLetter(o, { title: "two hats", slug: "two-hats" });
+      const lines = [];
+      const r1 = await run(o, { clone, date: "2026-10-20", log: (l) => lines.push(l) });
+      assert.equal(r1.held ?? 0, 0, "the crossing's mail is not held");
+      assert.match(r1.letters.at(-1).commit, /^[0-9a-f]{40}$/);
+      assert.ok(lines.some((l) => /clearing its entry and making it again/.test(l)), "and the operator is told it was remade");
+
+      // …and the old DEPLOY recovery: the directory removed by hand, the entry still locked
+      g("worktree", "lock", "--reason", "initializing", wt);
+      rmSync(wt, { recursive: true, force: true, maxRetries: 5 });
+      await seedLetter(o, { title: "three hats", slug: "three-hats" });
+      const r2 = await run(o, { clone, date: "2026-10-20" });
+      assert.equal(r2.held ?? 0, 0, "a missing-but-locked worktree is remade too");
+      assert.match(r2.letters.at(-1).commit, /^[0-9a-f]{40}$/);
+      assert.deepEqual(await pendingRows(o), [], "nothing is left pending");
+      assert.equal(outboxFiles(clone, "wright").length, 3);
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("F23 · A BATCH WHOSE PUSH LANDED IS LANDED, even when the fetch after it throws", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin } = originFor(clone);
+  // fetches read a mirror; pushes go to the town; the town's post-receive takes
+  // the mirror away, so the push lands and every fetch after it fails
+  const mirror = `${clone}-mirror.git`;
+  execFileSync("git", ["clone", "-q", "--bare", bare, mirror]);
+  g("remote", "set-url", "origin", mirror);
+  g("remote", "set-url", "--push", "origin", bare);
+  const fwd = (p) => p.replace(/\\/g, "/");
+  writeFileSync(join(bare, "hooks", "post-receive"), `#!/bin/sh\nmv "${fwd(mirror)}" "${fwd(mirror)}-gone"\n`, { mode: 0o755 });
+  try {
+    await pushingOn(() => flagOn(async () => {
+      await seedMailAndPaper(o);
+      const head = (await pendingRows(o)).at(-1).seq;
+      const r = await run(o, { clone, date: "2026-10-20" });
+      assert.equal(r.held ?? 0, 0, "nothing is held: the town has every act");
+      assert.match(r.batch_commit, /^[0-9a-f]{40}$/);
+      assert.equal(origin("rev-parse", "main"), r.batch_commit, "the batch is the town's tip");
+      for (const e of [...r.updates, ...r.letters]) assert.equal(e.commit, r.batch_commit, `seq ${e.seq} names the commit that carried it`);
+      assert.equal((await townDrainCursor(o)), head, "and the cursor moves past them, so the next crossing replays none");
+    }));
+  } finally {
+    o.close(); dropOdbHomes();
+    for (const d of [clone, bare, mirror, `${mirror}-gone`]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("F24 · NOT PUSHING, A BATCH THE CLONE DID NOT TAKE KEEPS THE CURSOR STILL: the next reset would discard it", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  try {
+    await flagOn(async () => {
+      await appendTownJournal(o, {
+        cls: "update", act: "home", household: "keemin", handle: "wright", ghId: "42", ghLogin: "keeminlee",
+        payload: { args: { handle: "wright", body: "A home the clone cannot take yet." } },
+      });
+      const cursor0 = await townDrainCursor(o);
+      // a file in the clone where the batch's file would land: the fast-forward refuses
+      mkdirSync(join(clone, "WHITE_PAGES", "wright", "HOME"), { recursive: true });
+      writeFileSync(join(clone, "WHITE_PAGES", "wright", "HOME", "HOME.md"), "in the way\n");
+      const lines = [];
+      const r = await run(o, { clone, date: "2026-10-20", log: (l) => lines.push(l) });
+      assert.equal(r.clone_behind, true);
+      assert.equal((await townDrainCursor(o)), cursor0, "THE CURSOR STAYS: the batch lives only in a worktree the next crossing resets");
+      assert.ok(lines.some((l) => /the clone did not take the batch/.test(l)));
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("F25 · PUSHING, A CLONE DIVERGED BY A STRAY UNPUSHED COMMIT TAKES THE BATCH UNDER IT, so the unit's push still sails", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  const { bare, g, origin } = originFor(clone);
+  try {
+    await pushingOn(() => flagOn(async () => {
+      // the server's commit, made and not yet pushed
+      writeFileSync(join(clone, "WHITE_PAGES", "limen", "ADDRESS.md"), "---\nhandle: limen\ngithub: gh-limen\nsince: 2026-01-01\n---\n\n# limen, edited\n");
+      g("-c", "user.name=server", "-c", "user.email=server@test.invalid", "commit", "-q", "-am", "a stray server commit");
+      const stray = g("rev-parse", "HEAD");
+      await seedLetter(o);
+      const lines = [];
+      const r = await run(o, { clone, date: "2026-10-20", log: (l) => lines.push(l) });
+      assert.match(r.batch_commit, /^[0-9a-f]{40}$/);
+      assert.equal(origin("rev-parse", "main"), r.batch_commit);
+      assert.equal(g("rev-parse", "HEAD~1"), r.batch_commit, "the clone's own commit now sits on the batch");
+      assert.notEqual(g("rev-parse", "HEAD"), stray, "rebased, not merged");
+      assert.ok(lines.some((l) => /its own commits are rebased on top of it/.test(l)), "and the line says so");
+      g("push", "-q"); // the unit's belt push: it no longer refuses
+      assert.equal(origin("rev-parse", "main"), g("rev-parse", "HEAD"));
+    }));
+  } finally {
     o.close(); dropOdbHomes();
     for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
   }
