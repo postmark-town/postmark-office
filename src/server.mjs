@@ -30,7 +30,7 @@ import { handleMcp, callTool, TOOLS as MCP_TOOLS, validateArgs, visitorBounces, 
 import { judgeRoute, withRenamed, PATCH_PAPER_DOORS, markRefused } from "./one-contract.mjs";
 import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
-import { householdApex, APEX_ONLY_FIELDS } from "./household-apex.mjs"; // the third door (2026-08-15)
+import { householdApex, APEX_ONLY_FIELDS, householdDispatchToolFor } from "./household-apex.mjs"; // the third door (2026-08-15)
 import { readBody, isBodyTooLarge, refuseTooLarge } from "./body.mjs";
 import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, arrivalsReader, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
 import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
@@ -79,7 +79,7 @@ import { storeEngaged, storeSnapshot, worldStoreHealth } from "./world-serve.mjs
 import { worldGraphView, NODE_KINDS, gexfPath } from "./world-graph.mjs"; // stage E: the window
 import { dynamicHealth, dynamicDbPath, dynamicRetired } from "./dynamic-store.mjs"; // stage 2: the dynamic layer's instrument panel
 import { servedEnterExitLedger, DEPRECATED_DOOR } from "./enter-exit-ledger.mjs"; // the passages, derived from the frozen era + the journal (2026-08-26)
-import { Bouncer, DOORSTEPS_PER_READ, bulkCost, listParam, boxLocal, clientIp, keyIdForToken, worldWriteVerbForRest } from "./bouncer.mjs";
+import { Bouncer, DOORSTEPS_PER_READ, bulkCost, listParam, boxLocal, clientIp, keyIdForToken, worldWriteVerbForRest, worldWriteCost } from "./bouncer.mjs";
 import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread keeps a caller waiting
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
@@ -1239,11 +1239,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   }
 
   const keyId = key && auth ? keyIdForToken(auth[1]) : null;
-  const checkCredentialed = ({ verb, write, worldVerb = null }) => {
+  const checkCredentialed = ({ verb, write, worldVerb = null, worldCost = 1 }) => {
     const limited = bouncer.checkKey({ keyId, verb, write, cost: write ? 1 : cost });
     if (limited) return limited;
     return worldVerb
-      ? bouncer.checkHouseholdWorldWrite({ household: key.household, verb: worldVerb })
+      ? bouncer.checkHouseholdWorldWrite({ household: key.household, verb: worldVerb, cost: worldCost })
       : null;
   };
 
@@ -1329,10 +1329,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       rdb,
       // A read worker charges nothing: the main thread admitted and charged the
       // call before it handed it over, as it does for a GET.
-      rateLimit: IN_READ_WORKER ? null : ({ verb, write }) => checkCredentialed({
+      rateLimit: IN_READ_WORKER ? null : ({ verb, write, cost = 1 }) => checkCredentialed({
         verb,
         write,
         worldVerb: write ? verb : null,
+        worldCost: cost,
       }),
       // POS-284: the agents' reads, on another core (read-workers.mjs § mcpWorkerTakes).
       handOver: readPool ? (raw, messages) => handOverRead(req, res, raw, messages) : null, // + POS-632 W4's earshot
@@ -2391,6 +2392,13 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // A visitor's act, decided by the verb it resolves to — the same
           // decision and the same words as the MCP door (postmark#2816 sweep).
           if (visitorBounces("household", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
+          // an act that is a world write spends the household's budget at this door as at the MCP door (review of #678:
+          // the stance, the household door's one such act, is charged one a mark)
+          if (payload?.do != null && payload.do !== "") {
+            const verb = householdDispatchToolFor(payload.do);
+            const limited = verb ? bouncer.checkHouseholdWorldWrite({ household: key.household, verb, cost: worldWriteCost(verb, payload) }) : null;
+            if (limited) return rateResponse(res, limited);
+          }
           const r = await householdApex(payload, key, { clone: TOWN_CLONE, odb, pen: PEN, rdb, canWrite, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
           return j(res, r?.error ? (r.code ?? 400) : 200, r);
         } catch (e) {
@@ -2549,7 +2557,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           req.tel.call = callShape("world", payload);
           if (payload?.do != null && payload.do !== "") {
             const verb = dispatchToolFor(payload.do) ?? "world";
-            const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb });
+            const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb, cost: worldWriteCost(verb, payload) });
             if (limited) return rateResponse(res, limited);
             if (harborGated(key, verb)) return bounce(res, HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
             if (visitorBounces("world", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);

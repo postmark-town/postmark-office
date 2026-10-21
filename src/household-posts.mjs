@@ -30,16 +30,15 @@
 // stamp ledger's world-stake rows). Every standing idea mark is in the window,
 // and every one is `posted`. An idea mark's title is its body, resident text,
 // never folded into a sentence of the office's. The idea POSTS (IDEA_POSTS) are
-// the posts table's, read like the events (§ ideaPostRows): their state is
-// their stage, and a resident who signed up to build a part takes part.
+// the posts table's: their state is their stage, and a resident who signed up
+// to build a part takes part.
 //
-// BUGS are the posts table's too (POS-633 round 4, Wright 2026-10-20): read
-// like the idea posts, a bug the house reported is put up, a counted response
-// on another's is taking part, and its state is its stage (bugs.mjs §
-// BUG_STAGES), as the bug's own acts store it.
-//
-// QUESTS are not here. The town posts them and the household page keeps its
-// quest board beside these lists.
+// BUGS and QUESTS are the posts table's too (POS-633 round 4: Wright's call A,
+// 2026-10-20, and Darko 15:54, "handle all posts the same"). Every class in
+// POST_CLASSES is read by the one generic pass (§ EVERY POST CLASS, ONE PASS
+// below): a bug the house reported is put up and its state is its stage; a
+// quest the town posted that a resident answered is taken part in. The house's
+// quest BOARD (progress, rewards) still lives beside these lists.
 //
 // ── PUBLIC, AND IT NEVER LOOKS AT WHAT IS NOT ───────────────────────────────
 //
