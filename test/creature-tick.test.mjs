@@ -23,7 +23,7 @@ import { readFileSync } from "node:fs";
 
 import {
   ABANDON_ACTION, CREATURE_TICK_MS, LOOKBACK_MS, PRIOR_ROW_SQL, REVEAL_ACTION, SEED_ACTION, TICK_ACTIONS, keyFingerprint,
-  creatureTick, startCreatureTick, stopCreatureTick, townRow, windowInputsAt, windowObject, writeOnce,
+  creatureTick, startCreatureTick, stopCreatureTick, townRow, windowInputsAt, windowObject, writeOnce, UNSEAL_DUE_SQL,
 } from "../src/creature-tick.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
@@ -51,6 +51,7 @@ function store() {
     acts,
     query: async (sql, [actions, since]) => {
       assert.match(sql, /class = 'creature'/);
+      if (sql === UNSEAL_DUE_SQL) return []; // no creature here tells (POS-712)
       return acts.filter((a) => actions.includes(a.action) && Date.parse(a.at) > Date.parse(since)).map((a) => ({ ...a, payload: JSON.stringify(a.payload) }));
     },
     write: async (row) => {
@@ -99,9 +100,9 @@ test("the pin's own law through the tick: every kind in the window, at its count
 test("off by the launch dial, or with no key: nothing is seeded or spawned", async () => {
   const s = store();
   const r = await tickAt(s, startMs + MIN, { inputsAt: async () => off() });
-  assert.deepEqual([r.wrote, s.acts.length], [{ seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, 0], "a launch dial written null");
+  assert.deepEqual([r.wrote, s.acts.length], [{ seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0, unseal: 0 }, 0], "a launch dial written null");
   const k = await tickAt(s, startMs + MIN, { key: null });
-  assert.deepEqual([k.wrote, s.acts.length], [{ seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, 0], "no key: no seed, even with the dial on");
+  assert.deepEqual([k.wrote, s.acts.length], [{ seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0, unseal: 0 }, 0], "no key: no seed, even with the dial on");
   assert.match(k.line, /no key \(fades only\)/);
   const n = await tickAt(s, startMs + MIN, { query: async () => null });
   assert.match(n.line, /not switched on/);
