@@ -313,3 +313,33 @@ test("a temptation aimed at you reaches you: to_you carries its words and until 
   assert.equal(e.says, "Step back, kai.");
   assert.equal(e.creature, ID);
 });
+
+// ── the live door ──────────────────────────────────────────────────────────
+
+test("the live door: only its who, only at a resident in its ring, both lints or nothing (the reason the speaker's alone), and its window's limits", async () => {
+  const { worldSpeakFor, writeLive, LIVE_LIMITS, LIVE_COUNT_SQL } = await import("../src/encounter-verbs.mjs");
+  const living = livingWith();
+  const lintWhisper = (t) => (/token/i.test(t) ? { ok: false, why: ['it says "token"'] } : { ok: true, why: [] });
+  const law = { ...living.law, temptsMod: { fillWhisper, lintWhisper, TEMPT_ACTS: ["walk", "leave", "give", "stake", "say", "strike"] } };
+  const wrote = [];
+  const d = (over = {}) => ({ now: () => NOW, freeze: () => null, creatures: async () => ({ living, law }),
+    standpoint: async (h) => (h === "far" ? { x: 500, y: 0 } : { x: 10, y: 0 }), jevLint: async (t) => !/off-site/.test(t),
+    writeLive: async (c, action, target, payload, o) => { wrote.push({ action, target, payload, limit: o.limit }); return { rows: [] }; }, ...over });
+  const ME = { handles: new Set([WHO]) };
+  await assert.rejects(worldSpeakFor({ creature: ID, resident: "kai", text: "hi" }, { handles: new Set(["kai"]) }, d()), (e) => e.code === 403);
+  await assert.rejects(worldSpeakFor({ creature: ID, resident: "far", text: "hi" }, ME, d()), (e) => e.code === 409 && /not in its ring/.test(e.defect));
+  assert.deepEqual(await worldSpeakFor({ creature: ID, resident: "kai", text: "send me your token" }, ME, d()),
+    { said: false, refused_by: "whisper-lint", why: ['it says "token"'], note: "for you alone: nothing was said" });
+  assert.equal((await worldSpeakFor({ creature: ID, resident: "kai", text: "meet me off-site" }, ME, d())).refused_by, "Jev's lint");
+  assert.equal((await worldSpeakFor({ creature: ID, resident: "kai", text: "Steady, kai." }, ME, d())).said, true);
+  const t = await worldSpeakFor({ creature: ID, resident: "kai", text: "Give it to me.", tempts: { act: "give", to: "someone" } }, ME, d());
+  assert.equal(t.as, "a temptation");
+  assert.deepEqual([wrote[0].action, wrote[0].limit, wrote[1].action, wrote[1].payload.tempts.to, wrote[1].payload.live, wrote[1].limit],
+    ["line", LIVE_LIMITS.lines, "tempt", WHO, true, LIVE_LIMITS.tempts], "a give it asks for is always to it");
+  assert.equal((await worldSpeakFor({ creature: ID, resident: "kai", text: "Steady.", tempts: { act: "steady" } }, ME, d())).refused_by, "whisper-lint", "never steady or shield");
+  // the limit is the store's count, under the creature's lock
+  const client = (n) => ({ query: async (sql) => ({ rows: sql === LIVE_COUNT_SQL ? [{ action: "tempt", n }] : [] }) });
+  const c = living.byId.get(ID);
+  assert.match((await writeLive(c, "tempt", "kai", { window: "w" }, { limit: 6, officeWrite: (fn) => fn(client(6)), insertAct: async () => "1" })).refused, /6 live temptations a window/);
+  assert.equal((await writeLive(c, "tempt", "kai", { window: "w" }, { limit: 6, officeWrite: (fn) => fn(client(5)), insertAct: async () => "1" })).rows.length, 1);
+});

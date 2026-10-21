@@ -143,7 +143,7 @@ export const ENCOUNTER_KEEP_MS = 25 * 3600_000;
 
 /** A row the living set keeps for the encounter, or null. */
 /** The actions of a creature that tempts (temptation.mjs), kept beside the encounter's own. */
-const TEMPTING_ACTIONS = ["tempt", "tempted", "tally"];
+const TEMPTING_ACTIONS = ["tempt", "tempted", "tally", "line"];
 export function encounterRowOf(r) {
   if (![NERVE_ACTION, STRIKE_ACTION, STEADY_ACTION, SHIELD_ACTION, ...TEMPTING_ACTIONS].includes(r.action)) return null;
   return { id: String(r.id), at: msOf(r.at ?? r.written_at), actor: r.actor, action: r.action, object: r.object, payload: asPayload(r.payload) };

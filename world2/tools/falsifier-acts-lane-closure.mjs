@@ -151,6 +151,8 @@ const LANE_OF = Object.freeze({
   // afforded actions' rows are. `strike` was the closed arena's beat (journal, above); the apex hands it
   // to the encounter's door once the blessed law knows encounters, and the arena's refusal before that.
   steady: "lane", shield: "lane",
+  // the live door (a creature that tempts): one creature-class row, a line or a temptation, through the pen
+  "speak-for": "lane",
 
   // ruled out, each with its reason
   "note-to-self": "none",

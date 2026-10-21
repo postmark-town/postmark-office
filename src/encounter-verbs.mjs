@@ -320,7 +320,7 @@ async function houseOfNow() {
 /** The office's own collaborators, imported lazily; a test hands in its own. */
 async function liveDeps(given) {
   const need = ["creatures", "standpoint", "write", "answer", "answerRing", "strikes", "finish", "flee", "freeze",
-    "actsSince", "outside", "gist", "roster", "writeTempted", "jevLint"].filter((k) => !(k in given));
+    "actsSince", "outside", "gist", "roster", "writeTempted", "jevLint", "writeLive"].filter((k) => !(k in given));
   if (!need.length) return { now: Date.now, clock: Date.now, env: process.env };
   const [hook, world, freeze, crossings, branches, journal, acts] = await Promise.all([
     import("./creatures-hook.mjs"), import("./world.mjs"), import("./freeze.mjs"), import("./crossings.mjs"),
@@ -349,6 +349,7 @@ async function liveDeps(given) {
     roster: (c, o) => ringRosterNow(c, o),
     writeTempted: (t, rows) => writeTempted(t, rows),
     jevLint: (text) => jevLints(text, { ask: askJev }),
+    writeLive: (c, action, target, payload, o) => writeLive(c, action, target, payload, o),
   };
 }
 
@@ -454,4 +455,84 @@ export async function givenToATempter(args = {}, key = null, actor = null, deps 
   const row = await d.write({ actor, action: "give", object: c.id, cls: "creature", payload, effect: `${actor} gives to ${theOf(law, c)}, and nothing moves` }, key, {});
   return { did: "give", to, creature: c.id, counted: true, act: String(row.actId),
     note: `${theOf(law, c)} takes nothing: your give is answered and counted, and nothing left your hands` };
+}
+
+// ── the live door: the one who speaks for a creature that tempts ────────────
+
+/** The door's verb (settled: "the live door stays", the first thing cut if time runs short). */
+export const SPEAK_FOR = "speak-for";
+/** Per creature, per window: settled 6 live temptations and 12 live lines. */
+export const LIVE_LIMITS = Object.freeze({ tempts: 6, lines: 12 });
+export const LINE_ACTION = "line";
+export const LIVE_COUNT_SQL = `SELECT action, count(*)::int AS n FROM acts
+  WHERE class = 'creature' AND actor = $1 AND action IN ('tempt', '${LINE_ACTION}') AND payload->>'live' = 'true' AND payload->>'window' = $2
+  GROUP BY action`;
+
+const liveRefusal = (by, why) => ({ said: false, refused_by: by, why, note: "for you alone: nothing was said" });
+
+/**
+ * world { do: "speak-for", args: { creature, resident, text, tempts? } }: the
+ * creature's `who` (and no one else) says one line into its ring while it is out,
+ * aimed at a resident who stands in it; with `tempts`, the line is a temptation and
+ * resolves exactly as a menu one does. Both of whisper-lint's checks must pass (the
+ * world's keywords and Jev's), or nothing is said and the reason is the speaker's
+ * alone. The door moves no tally, no nerve and no phase: code decides, it only speaks.
+ */
+export async function worldSpeakFor(args = {}, key = null, deps = {}) {
+  const d = { ...(await liveDeps(deps)), ...deps };
+  const fz = d.freeze?.();
+  if (fz) return fz;
+  const cr = await d.creatures();
+  if (!cr?.living || !cr?.law || cr.law.unavailable) throw bounce(503, "the creatures cannot be read here", "Nothing was said.");
+  const { living, law } = cr;
+  const raw = String(args.creature ?? "").trim();
+  const id = raw.startsWith("creature:") ? raw : `creature:${raw}`;
+  const c = living.byId.get(id);
+  const kind = c ? law.kindOf(c.kind) : null;
+  if (!c || c.gone || !isTempter(kind)) throw bounce(404, `no creature that tempts is out as ${id}`, "Nothing was said.");
+  const who = kind.who;
+  if (!key?.handles?.has(who)) throw bounce(403, `only ${who} speaks for ${theOf(law, c)}`, "Nothing was said.");
+  const target = String(args.resident ?? "").trim();
+  const there = target ? await d.standpoint(target) : null;
+  if (!there || !ringHolds(law, c, there)) throw bounce(409, `${target || "no one"} is not in its ring`, "a live line is aimed at a resident in its ring. Nothing was said.");
+  const text = String(args.text ?? "").replace(/\s+/g, " ").trim();
+  const mod = law.temptsMod;
+  if (typeof mod?.lintWhisper !== "function") throw bounce(409, "a live line is not law yet", "the blessed law has no whisper-lint. Nothing was said.");
+  const lint = mod.lintWhisper(text);
+  if (!lint.ok) return liveRefusal("whisper-lint", lint.why);
+  const tempts = args.tempts && typeof args.tempts === "object" ? { ...args.tempts } : null;
+  if (tempts) {
+    if (!(mod.TEMPT_ACTS ?? []).includes(tempts.act)) return liveRefusal("whisper-lint", [`a temptation asks only for ${(mod.TEMPT_ACTS ?? []).join(", ")}`]);
+    if (tempts.act === "give" || tempts.act === "stake") tempts.to = who;
+    if (tempts.act === "strike") tempts.target = who;
+    if (tempts.act === "say" && !tempts.gist) return liveRefusal("whisper-lint", ["a say it asks for names its gist"]);
+  }
+  const jev = await d.jevLint(text);
+  if (jev !== true) return liveRefusal("Jev's lint", [jev === false ? "it reaches outside the town or claims a real voice" : "Jev could not judge it just now"]);
+  const now = d.now();
+  const w = windowAt(now);
+  const action = tempts ? "tempt" : LINE_ACTION;
+  const phase = phaseOf(living, c, kind, law.menuOf?.(c.kind) ?? { phaseOrder: [] }, now)?.name ?? null;
+  const payload = tempts
+    ? { whisper: "live", phase, to: target, says: text, tempts, until: new Date(now + 30 * 60_000).toISOString(), window: w.id, live: true }
+    : { to: target, says: text, window: w.id, live: true };
+  const written = await d.writeLive(c, action, target, payload, { limit: tempts ? LIVE_LIMITS.tempts : LIVE_LIMITS.lines });
+  if (written?.refused) return liveRefusal("the door's limit", [written.refused]);
+  living.fold(written.rows, { advance: false });
+  return { said: true, as: action === "tempt" ? "a temptation" : "a line", to: target, creature: id, window_ends: new Date(w.ends).toISOString() };
+}
+
+/** The live row, under the creature's lock: refused past its window's limit (the store's count). */
+export async function writeLive(c, action, target, payload, { limit, officeWrite: ow = null, insertAct: ins = null } = {}) {
+  const pen = ow && ins ? null : await import("./world2-pen.mjs");
+  const officeWrite = ow ?? pen.officeWrite, insertAct = ins ?? pen.insertAct;
+  const r = creatureRow(c, action, target, payload, action === "tempt" ? `the ${c.kind} tempts ${target}` : `the ${c.kind} speaks to ${target}`);
+  return officeWrite(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-live:${c.id}`]);
+    const { rows } = await client.query(LIVE_COUNT_SQL, [c.id, payload.window]);
+    const n = rows.find((x) => x.action === action)?.n ?? 0;
+    if (n >= limit) return { refused: `${limit} live ${action === "tempt" ? "temptations" : "lines"} a window, and this window's are said` };
+    const id = await insertAct(client, r);
+    return { rows: [{ id: String(id), at: r.written_at, actor: r.actor, action: r.action, object: r.object, payload: r.payload }] };
+  });
 }
