@@ -14,7 +14,9 @@
 // room and a fifth inside the ring's radius but beyond the room's wall, the
 // positions kept (WORLD_POSITIONS=1, WORLD_PRESENCE=1), the creature's room found
 // by LivingSet § warmRooms over the published marks, the tick's warmRosters with
-// its own presence read, and the act's turn reading what the tick kept.
+// its own presence read, and the act's turn reading what the tick kept, with the
+// world's own scope: ring.households reads 3, a shield moves a press, housemates
+// split one, and the one alone is not the actor.
 //
 // The flip: presentAt calling presentNear bare again. The ring reads the actor
 // alone, and this file goes red.
@@ -29,7 +31,7 @@ import { join } from "node:path";
 import { fixtureWorldCloneWithEngine, fixtureWorldDb, mainShaOf, scratchDir, crossingStart } from "./dynamic-fixture.mjs";
 import { NO_WORLD_DB } from "./helpers/world-rows.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
-import { NERVE_ACTION } from "../src/encounter.mjs";
+import { NERVE_ACTION, windowAt } from "../src/encounter.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
 
@@ -77,26 +79,32 @@ before(async () => {
   const keeper = {
     ...base.kindOf("keeper"), finishable: true, resolve: 10, strike: 4,
     reactions: [
-      reaction("glare", `act.verb == "say"`, [{ do: "press", n: 2, on: ["actor"] }], "It glares."),
+      // a pack's answer, open only when three households stand in its ring
+      reaction("pack", `act.verb == "say" and ring.households >= 3`, [{ do: "nothing" }], "It sees a pack."),
+      reaction("glare", `act.verb == "say" or act.verb == "give"`, [{ do: "press", n: 2, on: ["actor"] }], "It glares."),
       reaction("circle", `act.verb == "drop"`, [{ do: "press", n: 1, on: ["alone"] }], "It circles."),
+      reaction("snap", `act.verb == "take"`, [{ do: "press", n: 2, on: ["actor"] }], "It snaps."),
     ],
   };
   law = { ...base, kindOf: (n) => (n === "keeper" ? keeper : null),
     kindMod: { ...base.kindMod, ENCOUNTER_VERBS: ["strike", "steady", "shield"], PRESS_ON,
-      scopeOf: (s, a, actor, enc = {}) => { const sc = base.kindMod.scopeOf(s, a, actor); if (enc.resolve != null) sc.self.resolve = enc.resolve; return sc; } } };
+      scopeOf: base.kindMod.scopeOf } }; // the world's own scope: ring.households is read from what the ring held
 });
 
-test("the ring is presence's own: four at one point in the room are the ring, the one beyond its wall is not, and the press reads them", async () => {
+test("the ring is presence's own: four at one point in the room are the ring (three households), the one beyond its wall is not, and the press, the house split and a shield read them", async () => {
   process.env.WORLD_POSITIONS = "1";
   process.env.WORLD_PRESENCE = "1";
   try {
     assert.equal(typeof law.inCreatureRing, "function", "the pinned world's room clip");
-    const now = Date.now();
+    // inside one settlement window: the shield and the acts after it must share one
+    const now = Math.min(Date.now(), windowAt(Date.now()).ends - 120_000);
     const iso = (ms) => new Date(ms).toISOString();
     let n = 30000;
     const nextId = () => String(++n);
     const living = new creatures.LivingSet({ law }).fold([{ id: nextId(), at: iso(now - 3600_000), actor: "the-town", action: "spawn", object: ID,
       payload: { kind: "keeper", at: iso(now - 3600_000), stays: true, x: 100, y: 0 } }]);
+    // gale shields heron, before any of it
+    living.fold([{ id: nextId(), at: iso(now - 30_000), actor: "gale", action: "shield", object: "heron", payload: { creature: ID, cost: 1 } }], { advance: false });
     // the creature's room, as the tick finds it: the published marks
     const pub = await creatures.publishedMarks({ repo });
     assert.ok(pub?.marks?.length, "the published marks are read");
@@ -107,27 +115,39 @@ test("the ring is presence's own: four at one point in the room are the ring, th
     creatures.__resetRostersForTest();
     assert.equal(await creatures.warmRosters(living, { now }), 1, "the tick kept one ring");
 
-    const turn = async (verb, actor, at = now) => {
+    const turn = async (verb, actor, at, pick) => {
+      assert.equal(await creatures.warmRosters(living, { now: at }), 1, "the tick keeps the ring");
       const calls = [];
       const write = async (rows) => { calls.push(rows); return { prior: false, rows: rows.map((r) => ({ id: nextId(), at: r.written_at, actor: r.actor, action: r.action, object: r.object, payload: r.payload })) }; };
-      const ask = async (s, q) => ({ response: { answers: { reaction: { probabilities: { [verb === "say" ? "glare" : "circle"]: 1 } } } } });
+      const ask = async (s, q) => ({ response: { answers: { reaction: { probabilities: { [pick]: 1 } } } } });
       await creatures.reactTo({ actor, verb, actId: nextId(), atIso: iso(at), point: { x: 100, y: 0 } },
         { living, law, write, writeCost: write, now: at, env: { TYPESAFE_API_KEY: "k" }, ask, households: async () => lookup, flee: () => {} });
       return calls[0];
     };
 
-    // ash speaks: the ring is the four in the room, never oak beyond the wall, and the press on ash splits with bram
-    const said = await turn("say", "ash");
-    const react = said.find((r) => r.action === "react");
-    assert.deepEqual([...payloadOf(react).ring].sort(), ["ash", "bram", "gale", "heron"], "the four standing in the room, and not oak");
-    const pressed = said.filter((r) => r.action === NERVE_ACTION && payloadOf(r).why === "press")
-      .map((r) => [r.object, payloadOf(r).by, payloadOf(r).split_of ?? null]);
-    assert.deepEqual(pressed.sort(), [["ash", -1, 2], ["bram", -1, 2]], "the press of 2 on ash is split with her housemate");
+    const presses = (rows) => rows.filter((r) => r.action === NERVE_ACTION && payloadOf(r).why === "press")
+      .map((r) => [r.object, payloadOf(r).by, payloadOf(r).split_of ?? null, payloadOf(r).shield ?? null]).sort();
+    // each act past the creature's answering window (10 s), the tick's ring warmed at its instant
 
-    // gale drops something, past the creature's answering window: the one alone is someone other than the actor, so Jev has a choice
-    const watched = await turn("drop", "gale", now + 15_000);
-    const menu = payloadOf(watched.find((r) => r.action === "react")).press.menu.map((e) => e.on);
-    assert.deepEqual(menu, ["heron"], "heron is the other one alone; gale, the actor, only when no one else is");
+    // ash speaks: the ring is the four in the room, never oak beyond the wall, three households, so a pack's answer is open
+    const said = await turn("say", "ash", now, "pack");
+    const react = payloadOf(said.find((r) => r.action === "react"));
+    assert.deepEqual([...react.ring].sort(), ["ash", "bram", "gale", "heron"], "the four standing in the room, and not oak");
+    assert.equal(react.reaction, "pack", "ring.households is 3: the pack's answer was on the menu, and taken");
+
+    // ash gives: the press of 2 on ash is split with their housemate
+    assert.deepEqual(presses(await turn("give", "ash", now + 15_000, "glare")), [["ash", -1, 2, null], ["bram", -1, 2, null]], "the house split");
+
+    // heron takes something: the press on heron lands on gale, who shields them (once: a shield takes the next press)
+    const taken = presses(await turn("take", "heron", now + 30_000, "snap"));
+    assert.equal(taken.length, 1);
+    assert.deepEqual(taken[0].slice(0, 2), ["gale", -2], "the shield moved the press");
+    assert.ok(taken[0][3], "and the row says it was the shield");
+
+    // gale drops something: the one alone is someone other than the actor, so Jev has a choice
+    const dropped = await turn("drop", "gale", now + 45_000, "circle");
+    assert.deepEqual(payloadOf(dropped.find((r) => r.action === "react")).press.menu.map((e) => e.on), ["heron"], "heron is the other one alone; gale, the actor, only when no one else is");
+
   } finally {
     delete process.env.WORLD_PRESENCE;
     delete process.env.WORLD_POSITIONS;
