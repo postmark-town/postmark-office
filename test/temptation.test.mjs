@@ -373,3 +373,10 @@ test("on a steady or a shield, {ally} is the friend it was for, never the one a 
   const [answer] = await reactTo(act({ verb: "shield", target: "ren" }), d);
   assert.equal(answer.line, "kai stood in front of ren.");
 });
+
+test("a temptation said just before a settlement still waits out its 30 min after it, and resolves", async () => {
+  const end = windowAt(NOW).ends;
+  const living = livingWith(lawWith(), tempt("kai", {}, end - 5 * 60_000));
+  const { openTemptations } = await import("../src/temptation.mjs");
+  assert.equal(openTemptations(living, living.byId.get(ID), end + 26 * 60_000).length, 1, "across the settlement");
+});

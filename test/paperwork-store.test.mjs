@@ -120,7 +120,7 @@ test(`THE SWITCH on a real store: G1–G5 ${SKIP ? `(${SKIP})` : ""}`, { skip: S
     });
     const ledgers = async (o) => plain({
       media: await mediaLedgerRows(o, "keeminlee"),
-      quota: await mediaQuota(o, "keeminlee", 2),
+      quota: await mediaQuota(o, "keeminlee"),
       log: await readTownJournal(o),
       cursor: await townDrainCursor(o),
       pending: await pendingRows(o),

@@ -16,7 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 process.env.R2_ACCOUNT_ID = "test-account";
 process.env.R2_ACCESS_KEY_ID = "test-key";
 process.env.R2_SECRET_ACCESS_KEY = "test-secret";
-process.env.MEDIA_QUOTA_BYTES = "100"; // per resident — tiny, so the wall is testable
+process.env.MEDIA_QUOTA_BYTES = "100"; // the household's one wall (POS-736) — tiny, so the wall is testable
 
 const { uploadMedia, mediaUrlOk, MEDIA_BASE } = await import("../src/media.mjs");
 
@@ -97,7 +97,7 @@ test("the happy path: content-addressed key, URL on the media host, ledger row",
   assert.equal(calls[0][2], "image/png");
   assert.ok(mediaUrlOk(r.url), "the media door's own URL passes the mark door's allowlist");
   assert.equal(r.quota.used, 70);
-  assert.equal(r.quota.ceiling, 100, "one resident, one quota");
+  assert.equal(r.quota.ceiling, 100, "the household's one wall");
 });
 
 test("dedup: the same bytes answer with the same URL and never spend twice", async () => {
@@ -121,11 +121,32 @@ test("the quota wall: a full wall bounces 413 with the honest arithmetic", async
     (e) => e.code === 413 && /full/.test(e.defect));
 });
 
-test("the ceiling scales per resident: a two-handle household holds twice the wall", async () => {
+// POS-736 (Darko 2026-10-20): "This definitely should not be per resident."
+// The wall is the household's, one size: a key acting for two residents spends
+// against the same ceiling a key for one does, and the refusal says so in
+// those words.
+test("the wall is flat per household: a two-handle household holds the same wall as a house of one", async () => {
   const db = odb();
   const { put } = stubPut();
   const r = await upload({ image: PNG, by: "a" }, key({ handles: new Set(["a", "b"]) }), db, { put });
-  assert.equal(r.quota.ceiling, 200);
+  assert.equal(r.quota.ceiling, 100, "two residents, one wall");
+  const PNG2 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  await assert.rejects(upload({ image: PNG2, by: "b" }, key({ handles: new Set(["a", "b"]) }), db, { put }),
+    (e) => e.code === 413 && /per household/.test(e.hint),
+    "the second file walks into the same 100-byte wall, and the refusal names the household as the wall's grain");
+});
+
+// The default is read at module load, so it is asked in a child that never set
+// MEDIA_QUOTA_BYTES: the box runs with it unset (POS-736, measured 2026-10-20).
+test("unset, the wall is 200 MB per household: Darko's figure (POS-736, 2026-10-20 19:11)", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const env = { ...process.env };
+  delete env.MEDIA_QUOTA_BYTES;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", `
+    import { DatabaseSync } from "node:sqlite";
+    const { mediaQuota } = await import(${JSON.stringify(new URL("../src/media.mjs", import.meta.url).href)});
+    process.stdout.write(JSON.stringify(await mediaQuota(new DatabaseSync(":memory:"), "solo")));`], { env, encoding: "utf8" });
+  assert.deepEqual(JSON.parse(out), { ceiling: 200 * 1024 * 1024, used: 0, remaining: 200 * 1024 * 1024 });
 });
 
 test("the mark door's allowlist: only the media door's own URLs pass", () => {

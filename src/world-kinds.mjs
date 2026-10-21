@@ -303,6 +303,23 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
   });
 }
 
+/**
+ * Does this take out of `from` pass ownership (POS-688)? The holder open, and the
+ * thing put in it by its owner's house: the kept record's fold says who put it in.
+ * False when the record or the household map cannot say: a take is a borrow
+ * unless the record proves the bowl.
+ */
+async function takeOwnsNow(thing, from, actor, law) {
+  try {
+    const [{ ownershipOf, takeOwns }, { householdLookup }] = await Promise.all([import("./ownership.mjs"), import("./households.mjs")]);
+    const rec = await holdRecordNow();
+    const st = rec?.owners?.get(String(thing));
+    if (!st) return false;
+    const look = await householdLookup().catch(() => null);
+    return takeOwns({ ...ownershipOf(rec.owners, thing), putIn: st.putIn }, { from, actor, open: law?.open, houseOf: (h) => look?.(h)?.key ?? `solo:${h}` });
+  } catch { return false; }
+}
+
 /** A WHOLE MARK OUT OF A HOLDER: `take { thing, from: <holder> }`, or naming a thing a holder holds: reach, open, the carry. */
 export async function thingFromHolder({ args, key, actor, deps, view }) {
   const thing = String(args.thing), from = String(args.from);
@@ -318,7 +335,8 @@ export async function thingFromHolder({ args, key, actor, deps, view }) {
     if (holder !== from) throw bounce(409, `${from} is not holding ${thing}`, holder ? `${holder} is. Nothing was changed.` : "it stands on the ground. Nothing was changed.");
     refuseOverCarry({ who: actor, units: totalOf(foldUnits(units), actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: 1, cap: carryOf(view) });
     await refuseSecondHolder({ who: actor, actor, adding: [thing], held: holdingsOf(attachments, actor), markById: deps.markById, view });
-    const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: String(actor), previous: from, madeBy: ownerOf(mark, thing) });
+    const owns = await takeOwnsNow(thing, from, actor, law);
+    const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: String(actor), previous: from, madeBy: ownerOf(mark, thing), owns });
     return { did: "take", thing, from, holder: String(actor), ...w, edge: { giver: from, receiver: String(actor) } };
   });
 }
@@ -409,7 +427,8 @@ export async function callKinds(route, args, key, actor, deps) {
         let rows = attachments;
         for (const t of plan.things) {
           const m = await deps.markById(t).catch(() => null);
-          const { entry, at } = await thingHoldingEntry(deps, key, actor, rows, { did: "take", thing: t, holder: String(actor), previous: from, madeBy: ownerOf(m, t) }, stamp);
+          const owns = await takeOwnsNow(t, from, actor, (await holderOrThrow(deps, from, view).catch(() => null))?.law ?? null);
+          const { entry, at } = await thingHoldingEntry(deps, key, actor, rows, { did: "take", thing: t, holder: String(actor), previous: from, madeBy: ownerOf(m, t), owns }, stamp);
           also.push(entry);
           rows = [...rows, { entity: String(actor), target: t, policy: "cascade", born_at: at }];
         }
@@ -561,19 +580,27 @@ async function keeper() {
   const [guards, { actsQuery }, journal, world, { holdRecordKeeper, HOLD_TOP_SQL }] = await Promise.all([
     import("./world2-guards.mjs"), import("./world2-acts.mjs"), import("./world-journal.mjs"), import("./world.mjs"), import("./hold-record.mjs"),
   ]);
+  const { OWNER_WORDS_SQL, KEEPER_TOP_SQL } = await import("./hold-record.mjs");
   _keeper = holdRecordKeeper({
-    readTop: async () => (await actsQuery(HOLD_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
+    readTop: async () => (await actsQuery(KEEPER_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
     // the settlement window the office counts by: one full read per settlement (hold-record § ONE FULL READ PER SETTLEMENT)
     readEpoch: async () => { try { return (await import("./crossings.mjs")).currentCrossing(); } catch { return null; } },
     readHolding: ({ afterId = null } = {}) => guards.storeHoldingRows(afterId != null ? { afterId } : {}),
     readAttachments: ({ afterId = null } = {}) => guards.storeAttachmentRows(afterId != null ? { afterId } : {}),
+    // the owner's words (POS-688), and the household map they are folded by
+    readWords: async ({ afterId = null } = {}) => (await actsQuery(OWNER_WORDS_SQL, [afterId == null ? null : Number(afterId)]).catch(() => null)) ?? [],
+    houses: async () => {
+      const look = await (await import("./households.mjs")).householdLookup().catch(() => null);
+      return (h) => look?.(h)?.key ?? `solo:${h}`;
+    },
     // where each set-down thing stands now: its latest drop act's witnessed line, by the anchor it names
     placesOf: async (drops) => {
       const places = new Map();
       if (!drops.size) return places;
-      const marks = await world.worldMarksAll().catch(() => []);
+      // the one centre reader: canon's, or where a held anchor last stood (POS-688, W4)
+      const centreOf = await world.markCentreOf().catch(() => () => null);
       for (const [id, r] of drops) {
-        const at = journal.composeAnchor(r.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+        const at = journal.composeAnchor(r.at ?? {}, centreOf);
         if (at) places.set(id, at);
       }
       return places;

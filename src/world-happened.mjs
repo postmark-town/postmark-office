@@ -86,9 +86,9 @@ export const LIVE_HW_SQL = "SELECT max(id)::text AS hw FROM acts";
 // of its NEWEST acts, and the cursor handed back is the top, so nothing between
 // is skipped silently; `complete` says when the gap was cut.
 export const LIVE_AFTER_SQL = `SELECT id::text AS id, actor, action, object, at, at_anchor, at_dx, at_dy FROM acts
-  WHERE id > $1::bigint AND action = ANY($2::text[]) ORDER BY id DESC LIMIT $3`;
+  WHERE id > $1::bigint AND action = ANY($2::text[]) ORDER BY acts.id DESC LIMIT $3`;
 export const LIVE_NEWEST_SQL = `SELECT id::text AS id, actor, action, object, at, at_anchor, at_dx, at_dy FROM acts
-  WHERE action = ANY($1::text[]) ORDER BY id DESC LIMIT $2`;
+  WHERE action = ANY($1::text[]) ORDER BY acts.id DESC LIMIT $2`;
 
 /**
  * { lines, hw, complete } — the log's line shape for the live window — or null

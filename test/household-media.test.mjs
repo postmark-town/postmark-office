@@ -33,7 +33,7 @@ test.after(async () => { await IX_RESTORE(); await IX.stop(); });
 process.env.R2_ACCOUNT_ID = "test-account";
 process.env.R2_ACCESS_KEY_ID = "test-key";
 process.env.R2_SECRET_ACCESS_KEY = "test-secret";
-process.env.MEDIA_QUOTA_BYTES = "400"; // per resident — small, so the ceiling arithmetic is visible
+process.env.MEDIA_QUOTA_BYTES = "400"; // the household's one wall (POS-736) — small, so the arithmetic is visible
 
 // THE REAL world clone, found BEFORE the temp one is named below. The law
 // falsifiers read the planted marks off the record's own working tree, and the
@@ -202,18 +202,19 @@ test("the quota block matches the numbers uploadMedia itself answered with", asy
   assert.equal(r.quota.ceiling, second.quota.ceiling, "and the same ceiling");
   assert.equal(r.quota.used, first.bytes + second.bytes, "which is simply the bytes behind the door");
   assert.equal(r.quota.remaining, r.quota.ceiling - r.quota.used);
-  assert.equal(r.quota.per_resident, 400);
+  assert.equal(r.quota.ceiling, 400, "the household's one wall (POS-736)");
+  assert.equal("per_resident" in r.quota, false, "a per-resident figure is gone with the per-resident wall");
 });
 
-test("the ceiling is sized per resident the KEY holds — the write's own grain", async () => {
+test("the ceiling is one wall per household, whatever the key holds (POS-736)", async () => {
   const db = odb();
   const three = key({ handles: new Set(["tester", "second", "third"]) });
   const answer = await uploadMedia({ image_url: FIXTURE_URL, by: "tester" }, three, db, { put, ...serving(PNG) });
   const r = await mediaRead(three, { odb: db, embedded: async () => ({ hits: new Set(), unreadable: [] }) });
-  assert.equal(r.quota.ceiling, 1200, "three residents, three shares of 400");
+  assert.equal(r.quota.ceiling, 400, "three residents, one wall");
   assert.equal(r.quota.ceiling, answer.quota.ceiling, "and exactly what the upload charged against");
-  // The same ledger read through a one-resident key quotes the smaller wall:
-  // the ceiling follows the credential, not the bytes.
+  // The same ledger read through a one-resident key quotes the same wall: the
+  // ceiling is the household's, never the credential's.
   const one = await mediaRead(key(), { odb: db, embedded: async () => ({ hits: new Set(), unreadable: [] }) });
   assert.equal(one.quota.ceiling, 400);
   assert.equal(one.quota.used, r.quota.used, "the same bytes, both times");
