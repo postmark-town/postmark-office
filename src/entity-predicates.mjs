@@ -314,7 +314,7 @@ export async function worldDescribe(args = {}, key = null, deps = {}) {
   };
   // the glance just set asks the likeness question while it is unanswered (WLD-83, 18:24)
   if (slot !== ROOT_SLOT) return answer;
-  const ask = deps.likenessQuestion ?? (async (a, h) => (await import("./likeness.mjs")).withLikenessQuestion(a, h));
+  const ask = deps.likenessQuestion ?? (async (a, h) => (await import("./depictions.mjs")).withPictureAsks(a, h));
   return ask(answer, handle);
 }
 

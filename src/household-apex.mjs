@@ -35,7 +35,7 @@ import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arriv
 // and nothing in that graph reaches back to this door.
 import { REFUSALS } from "./ceremony.mjs";
 import { requestResidency } from "./residency.mjs";
-import { updateAddressBody, updateHomeAct, updateProfile, updateWindow } from "./edit.mjs";
+import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
 // POS-70: the act-field judgement, the aliases and the rename pointer — one
@@ -671,9 +671,11 @@ export const READING_LAW =
 // WLD-83 (2026-10-20), on the same rule: the profile act's `pronouns` (a profile
 // field since Darko's 09:55 ruling) put the connector's bare answer at 8,194 B.
 // It stays off this index; the card, the REST answer and the MCP schema carry it.
+// And the profile's `sheet` (WLD-83, 2026-10-21), on the same rule: it is handed
+// with the template at the moment a picture is set, and the card carries it.
 const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town"];
 const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]),
-  profile: new Set(["pronouns"]) });
+  profile: new Set(["pronouns", "sheet"]) });
 
 export const capabilityIndex = (ctx = {}) =>
   HOUSEHOLD_DISPATCHABLE.map((act) => {
@@ -2141,9 +2143,9 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "address": result = await updateAddressBody(fields, key, db, clone, odb); break;
       case "home": result = await updateHomeAct(fields, key, db, clone, odb); break;
       case "profile":
-        result = await updateProfile(fields, key, db, clone, odb);
-        // a picture just set asks the likeness question while it is unanswered (WLD-83)
-        if (fields?.image !== undefined) result = await (await import("./likeness.mjs")).withLikenessQuestion(result, fields.handle);
+        result = await updateProfileAct(fields, key, db, clone, odb);
+        // a picture just set asks the likeness question and hands the sheet's template (WLD-83)
+        if (fields?.image !== undefined) result = await (await import("./depictions.mjs")).withPictureAsks(result, fields.handle);
         break;
       case "window": result = await updateWindow(fields, key, db, clone, odb); break;
       // ── the stamps tenancy's writes ─────────────────────────────────────

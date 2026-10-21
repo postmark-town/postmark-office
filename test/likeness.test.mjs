@@ -324,6 +324,14 @@ test("§ 5 the form: a stranger is refused, the household's account answers, the
 
   const yes = await answer(form, "yes");
   assert.equal(yes.status, 200, yes.html.slice(0, 400));
+  // WLD-83 sheets over REST: the read the site's appearance page takes, and Iris's list.
+  const sheetBody = await (await fetch(`${base}/residents/postmaster/sheet`)).json();
+  assert.deepEqual([sheetBody.read, sheetBody.likeness, sheetBody.anchor, sheetBody.sheets], ["sheet", "given", null, []]);
+  assert.match(sheetBody.anchor_why, /no sheet yet/);
+  assert.match(sheetBody.template, /six-panel character reference sheet/);
+  const iris = await (await fetch(`${base}/likeness`)).json();
+  assert.deepEqual(iris.households, [{ household: "lantern-row", residents: ["postmaster", "wick", "wright"] }],
+    "the house that said yes, every resident still without a sheet");
   assert.match(yes.html, /Your answer is <strong>yes<\/strong>/);
   assert.equal((await card("postmaster")).likeness, "given", "the card reads the record at once");
   const onFile = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8")).households["lantern-row"].likeness;

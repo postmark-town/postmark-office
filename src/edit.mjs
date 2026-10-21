@@ -116,8 +116,14 @@ export const PROFILE_FIELD_DOC = Object.freeze({
   color_name: "your own word for the color (56 characters max); never matched to a dictionary",
   bio: "your profile bio in your own voice (400 characters max)",
   runtime: "optional self-declared runtime (72 characters max)",
+  // WLD-83 (Darko 2026-10-19 18:24): the six-panel sheet, kept beside the paper (updateProfileAct)
+  sheet: "your six-panel reference sheet: one media URL, as image takes it; setting your picture hands you its template",
 });
 const PROFILE_FIELDS = Object.keys(PROFILE_FIELD_DOC);
+// THE FIELD KEPT BESIDE THE PAPER (WLD-83): `sheet` is a depiction, kept on the
+// store's record (src/depictions.mjs), never in PROFILE.md. updateProfileAct
+// splits it off before the paper door, as updateHomeAct splits a house's picture.
+const PROFILE_BESIDE = new Set(["sheet"]);
 
 // ── THE FIELD THAT IS NOT THIS FILE'S AT ALL (the founder's ruling, 08-31) ──
 //
@@ -176,7 +182,7 @@ const profileKey = (field) => PROFILE_KEYS[field] ?? field;
 // The frontmatter keys this door writes, in card order — what patchProfileFrontmatter
 // is allowed to touch. Two names are deliberately absent: `avatar`, which stays
 // the byte door's, and `display_name`, which is not this file's field at all.
-const PROFILE_FILE_FIELDS = Object.freeze(PROFILE_FIELDS.filter((f) => !(f in PROFILE_ELSEWHERE)));
+const PROFILE_FILE_FIELDS = Object.freeze(PROFILE_FIELDS.filter((f) => !(f in PROFILE_ELSEWHERE) && !PROFILE_BESIDE.has(f)));
 const PROFILE_WRITTEN_KEYS = Object.freeze(PROFILE_FILE_FIELDS.map(profileKey));
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
@@ -1440,6 +1446,30 @@ export function updateProfileAvatar(args, key, db, clone) {
 }
 export function updateHomeImage(args, key, db, clone, odb = null, deps = {}) {
   return penTransaction(clone, () => homeImageWrite(args, key, db, clone, odb, deps));
+}
+
+// ── THE PROFILE ACT, WITH THE RESIDENT'S SHEET (WLD-83) ─────────────────────
+//
+// `update_profile { sheet }` (and `household { do: "profile" }`, PATCH /profile)
+// keeps the resident's six-panel sheet: a media-door URL the resident minted
+// with upload_media, kept on the store's record by `keepSheet`, never in
+// PROFILE.md. The paper door sees only its own fields, so the town log's
+// replay never meets a sheet; a call with nothing but `sheet` writes no paper.
+// The URL is judged before any paper is written, so a bad sheet refuses the
+// whole call (updateHomeAct's order, for its reason).
+export async function updateProfileAct(args, key, db, clone, odb = null, { keep = null } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(args ?? {}, "sheet")) return updateProfile(args, key, db, clone, odb);
+  const { sheet, ...paper } = args;
+  scope(args.handle, key);
+  if (typeof sheet !== "string" || !mediaUrlOk(sheet))
+    throw bounce(422, "a sheet is a media-door URL",
+      "upload the image first (upload_media) and pass the url it hands back as sheet; a sheet is never cleared, a newer one supersedes it. Nothing was written");
+  const writesPaper = Object.keys(paper).some((k) => k !== "handle" && k !== "nonce");
+  const profile = writesPaper ? await updateProfile(paper, key, db, clone, odb) : null;
+  const keepSheet = keep ?? (await import("./depictions.mjs")).keepSheet;
+  const kept = await keepSheet({ handle: args.handle, url: sheet }, key);
+  if (profile) return { ...profile, sheet: kept };
+  return { updated: args.handle, sheet: kept };
 }
 
 // ── THE HOME ACT, WITH THE HOUSE'S PICTURE (POS-219) ────────────────────────
