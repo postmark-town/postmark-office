@@ -61,8 +61,6 @@
 // may judge one arrival. creatures.mjs § writeReaction locks on (creature,
 // trigger, moment) inside its transaction, so the second finds the first's row.
 
-import { pathToFileURL } from "node:url";
-import { join } from "node:path";
 import {
   ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, publishedMarks, reactTo,
 } from "./creatures.mjs";
@@ -72,7 +70,7 @@ import { actsQuery, world2Enabled } from "./world2-acts.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { CLASS_MOVE, composeAnchor } from "./world-journal.mjs";
 import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing } from "./crossings.mjs";
-import { publishedState } from "./world-branches.mjs";
+import { importEngineAt, publishedState } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
 import { departureRecordOf } from "../world2/tools/live-reads.mjs";
 import { PUBLIC_ACTS, activeOf, ago, hourZ, viewBlock, whoBlock } from "./world-read-v2.mjs";
@@ -423,7 +421,7 @@ export function foldWalks(rows, walkMod) {
  * the reaction's row (happening_here, and their own happened).
  */
 export async function arrivalTick({ query = actsQuery, now = Date.now(), walkMod = null, judge = answerWithin } = {}) {
-  walkMod ??= await import(pathToFileURL(join((await import("./world.mjs")).WORLD_CLONE, "tools", "walk.mjs")));
+  walkMod ??= await importEngineAt((await import("./world.mjs")).WORLD_CLONE, "walk.mjs");
   if (!arrivals.booted) {
     const rows = await query(WALKS_BOOT_SQL, [Math.floor(currentCrossing(now)) - 1]);
     if (rows == null) return { ok: false, why: "the store is not switched on here" };
