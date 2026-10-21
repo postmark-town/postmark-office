@@ -169,6 +169,8 @@ export async function actOfRow(row, { query = actsQuery, centreOf = null, standp
  * (C4), or the answer goes out as it was. Never throws.
  */
 export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {}) {
+  // `deps.except` (POS-672): a creature already answering this act as the one it
+  // was aimed at (an approach's walk), so the others answer it and it does not twice
   const now = creaturesNow();
   if (!now || result == null || typeof result !== "object" || Array.isArray(result) || result.error) return result;
   // THE BOUND STARTS HERE (review-571 B1): the actor's standpoint, the marks'
@@ -214,12 +216,38 @@ async function byDeadline(work, deadline, clock, partial) {
  * is held, never unref'd: on node 22 an unref'd one let a test's event loop
  * end under a hung turn (CI 38770755044).
  */
-export function answerWithin(act, { living, law, around = aroundCreature, ask, write, env, only = null, clock = Date.now, deadline = null, partial = [] } = {}) {
+export function answerWithin(act, { living, law, around = aroundCreature, heardFor = creatureHeard, ask, write, env, only = null, except = null, aimed = null, jevMs = null,
+  clock = Date.now, deadline = null, partial = [] } = {}) {
   const until = deadline ?? clock() + ANSWER_WAIT_MS;
   const turns = outsideRetryKey(() =>
-    reactTo(act, { living, law, around, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), ...(only != null ? { only } : {}),
+    reactTo(act, { living, law, around, heardFor, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), ...(only != null ? { only } : {}),
+      ...(except != null ? { except } : {}), ...(aimed ? { aimed } : {}), ...(jevMs != null ? { jevMs } : {}),
       clock, deadline: until, partial }));
   return byDeadline(turns, until, clock, partial);
+}
+
+// ── what a creature could repeat (POS-672 D5) ───────────────────────────────
+
+/** How far back a creature's ear reaches for words to repeat, and how many of them. */
+export const HEARD_WINDOW_MS = 30 * 60_000;
+export const HEARD_WORDS = 5;
+
+/** The last HEARD_WORDS words of `said`, as plain text. */
+export const lastWords = (said, n = HEARD_WORDS) => String(said ?? "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).slice(-n).join(" ");
+
+/**
+ * The words a creature could repeat (D5, ruled 2026-10-20 22:37): the last few
+ * words of the newest public say (a call's words are one) heard at its point in
+ * the last HEARD_WINDOW_MS, through the shared ear that marks nobody present.
+ * A whisper is never in the ear, so it is never repeated. Null when nothing was.
+ */
+export async function creatureHeard(creature, act, { heardAt = null, nowMs = Date.now() } = {}) {
+  const hear = heardAt ?? (await import("./world.mjs")).heardAt;
+  const rows = await hear({ x: creature.x, y: creature.y }, { cap: 3 });
+  const fresh = (rows ?? []).filter((h) => Number.isFinite(h.at_ms) ? nowMs - h.at_ms <= HEARD_WINDOW_MS : true);
+  const newest = fresh.at(-1);
+  const words = newest ? lastWords(newest.said) : "";
+  return words || null;
 }
 
 // ── the creature's own world read (W9) ──────────────────────────────────────

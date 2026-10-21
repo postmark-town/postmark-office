@@ -72,7 +72,7 @@ const sentence = {
 };
 
 /** The act, written once on the hold lane; `stamp` is read before the plan when the plan needs it (the draw). */
-async function writeKinds(deps, key, actor, plan, { stamp = null, guard = null, words, also = [] }) {
+async function writeKinds(deps, key, actor, plan, { stamp = null, guard = null, words, also = [], instant = false }) {
   const { at, witnesses } = stamp ?? await deps.stamp(actor);
   const entry = {
     crossing: deps.crossing(), actor, action: plan.action, object: String(plan.object), at, witnesses,
@@ -81,7 +81,8 @@ async function writeKinds(deps, key, actor, plan, { stamp = null, guard = null, 
     effect: words,
   };
   const row = await deps.append(entry, { ...(guard ? { guard } : {}), ...(also.length ? { also } : {}) });
-  return { seq: row?.actId ?? row?.seq ?? null, effect: entry.effect };
+  // `instant` (POS-672): an offer's row is a creature's trigger, and the d20 reads its own instant
+  return { seq: row?.actId ?? row?.seq ?? null, effect: entry.effect, ...(instant && row?.written_at ? { written_at: row.written_at } : {}) };
 }
 
 /**
@@ -457,6 +458,37 @@ export async function callKinds(route, args, key, actor, deps) {
         const w = await writeKinds(deps, key, actor, plan, { words: `${actor} consumed 1 ${edge.kind}` });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
         return { did: "consume", kind: edge.kind, count: 1, ...w, holds: await shownIn(after, actor, attachments, view, deps) };
+      });
+    }
+    case "offer": {
+      // OFFER { kind, creature } (POS-672, call 2: "offer uses up what you are
+      // carrying … it absolutely does"; D3: one of a consumable kind in your
+      // hands). Consume's own rule for which kind, and the unit is used up the
+      // same way, toward the creature: `units:offer`, object the creature, which
+      // holds nothing. This row is the trigger the creature answers. The door
+      // (creature-verbs.mjs) has already judged the creature, its reach and the
+      // window; here only the hands are judged, so a refusal changes nothing.
+      const creature = String(args.creature ?? "");
+      if (!creature.startsWith("creature:")) throw bounce(422, "offer to which creature?", "creature: its id, creature:<kind>-<crossing>-<n>. Nothing was changed.");
+      return holdTurn(async () => {
+        const { units, attachments } = await deps.readRows();
+        const fold = foldUnits(units);
+        const edible = kindEdgesOf(fold, actor).filter((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"));
+        if (args.kind != null && !edible.some((e) => e.kind === String(args.kind))) {
+          const consumable = lineageOf(String(args.kind), view.extendsOf).includes("consumable");
+          const yours = edible.length ? `you hold ${edible.map((e) => e.kind).join(", ")} to offer` : "you hold nothing to offer";
+          throw bounce(consumable ? 409 : 422, consumable ? `no ${args.kind} in your hands` : `a ${args.kind} is not a consumable`,
+            `an offer is one of a consumable kind you carry (candy is); ${yours}. leave-mark { kind, count: 1, to: "${actor}" } makes one into your hands. Nothing was changed.`);
+        }
+        if (!edible.length) throw bounce(409, "you carry nothing to offer",
+          `an offer is one of a consumable kind you carry; leave-mark { kind, count: 1, to: "${actor}" } makes one into your hands (explain: "candy" lists the kinds). Nothing was changed.`);
+        const edge = selectKind(edible, args.kind ?? null, { where: "your hands", verb: "offer" });
+        const plan = { action: UNIT_ACTION.offer, object: creature, moves: [{ from: String(actor), to: null, kind: edge.kind, n: 1 }], edge: { giver: String(actor), receiver: null } };
+        const w = await writeKinds(deps, key, actor, plan, { words: `${actor} held out 1 ${edge.kind} to ${creature}, and it was used up`, instant: true });
+        const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
+        const rec = view.record(edge.kind);
+        return { did: "offer", kind: edge.kind, count: 1, ...w, holds: await shownIn(after, actor, attachments, view, deps),
+          offered: { kind: edge.kind, name: rec?.name ?? edge.kind.replace(/-/g, " "), ...(rec?.body ? { body: String(rec.body).split(/\n\s*\n/)[0].slice(0, 300) } : {}) } };
       });
     }
     case "thing-into-holder": return thingIntoHolder({ args, key, actor, deps, view });

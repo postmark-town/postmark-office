@@ -79,6 +79,7 @@ export const ACT_GROUPS = Object.freeze({
   make: ["leave-mark", "withdraw"],
   back: ["stake", "unstake"],
   carry: ["take", "give", "drop", "consume", "refill"],
+  creatures: ["watch", "approach", "shoo", "call", "offer", "whisper"], // a creature's afforded actions, shown when one is in sight (POS-672)
   self: ["note-to-self"],
 });
 

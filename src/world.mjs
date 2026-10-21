@@ -1348,7 +1348,7 @@ export function mistedPace(pace, factor, legacyKm) {
   return (pace ?? legacyKm) * factor;
 }
 
-export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household, writtenAt, declaredBy = null, note = null }) {
+export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household, writtenAt, declaredBy = null, note = null, approach = null }) {
   return {
     crossing, actor: who, action: "walk",
     object: targetMarkId ?? null,
@@ -1357,6 +1357,8 @@ export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, fro
       from, toward, pace, within: targetExtent ?? null, to: targetMarkId ?? null,
       declared_by: declaredBy ?? who,
       ...(note ? { note } : {}),
+      // an approach (POS-672 W1): the walk IS the afforded action's row, and names the creature it was toward
+      ...(approach ? { approach } : {}),
     },
     effect: "the walk is declared; the record receives it at the save",
     household,
@@ -1632,6 +1634,8 @@ export const earshotSnapshot = () => voices.earshotSnapshot();
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function worldSay(args = {}, key = null) { return perceived(() => sayAct(args, key)); }
+/** A call's words (POS-672 D4: public like a say, heard by the shared ear), spoken unperceived: the creature it was aimed at answers it, and no other (D7). */
+export async function sayForCall(args = {}, key = null) { return sayAct(args, key); }
 async function sayAct(args = {}, key = null) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   // A berth speaks from the quay (the arrival ruling, 2026-08-15): emissions
@@ -5503,7 +5507,14 @@ export function walkEntryReceipt(entry, { arrived, stop, eta, queued = true, why
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function walkViaOffice(worldClone, payload = {}, key = null) { return perceived(() => walkAct(worldClone, payload, key)); }
-async function walkAct(worldClone, payload = {}, key = null) {
+/**
+ * An APPROACH (POS-672, call 3): the walk itself, toward a creature, its row
+ * naming the creature. Unperceived here: the creature door (creature-verbs.mjs)
+ * runs it inside its own watch, has the creature it was aimed at answer it, and
+ * hands the walk to every other creature as the ordinary walk it is.
+ */
+export async function walkApproach(worldClone, payload = {}, key = null, creature) { return walkAct(worldClone, payload, key, { approach: String(creature) }); }
+async function walkAct(worldClone, payload = {}, key = null, { approach = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint, extra = {}) => {
     const e = new Error(defect); Object.assign(e, { code, defect, hint, ...extra }); return e;
@@ -5989,7 +6000,7 @@ async function walkAct(worldClone, payload = {}, key = null) {
       const entry = walkEntry({
         crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent,
         household: resolvedWorldHousehold(key),
-        writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null,
+        writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null, approach,
       });
       try {
         walkRow = walkFlipped ? await appendActFlipped(null, entry) : await appendJournal(null, entry);

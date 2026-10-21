@@ -73,6 +73,13 @@ export const ONE_LINERS = Object.freeze({
   refill: { says: "Make things by kind into a holder you made, at it or carrying it, when its class affords refill (the Halloween Candy Bowl).", fields: ["thing", "kind", "count"] },
   ride: { says: "Aboard the Post Office, name your next stop.", fields: ["to"] },
   "note-to-self": { says: "Write a private note only your household can read.", fields: ["body"] },
+  // A creature's afforded actions (POS-672): each names the creature, and its reaction is the reply
+  watch: { says: "Watch a creature in sight; its reaction is your reply.", fields: ["creature"] },
+  approach: { says: "Walk toward a creature in sight, stopping at half its ring; its reaction is your reply.", fields: ["creature"] },
+  shoo: { says: "Shoo a creature whose ring you stand in; its reaction is your reply.", fields: ["creature"] },
+  call: { says: "Call to a creature in sight, with words if you like (heard like a say); its reaction is your reply.", fields: ["creature", "words"] },
+  offer: { says: "Hold out one consumable you carry to a creature whose ring you stand in; it is used up, whatever it does.", fields: ["creature", "kind"] },
+  whisper: { says: "Whisper to a creature whose ring you stand in; only it hears your words.", fields: ["creature", "words"] },
 });
 
 /** The field names a one-liner's list mentions ("mark_id or to_x + to_y" names three; "body (≤150)" names body). */

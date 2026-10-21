@@ -317,3 +317,21 @@ test("C7: every statement class-read registers is its SQL, row for row, over eac
     } finally { sqlite.close(); }
   }
 });
+
+test("POS-672 W3: a creature's afforded actions are explained on its class, and never granted at a standpoint", () => {
+  const shape = layer("label");
+  shape.nodes.push(
+    klass("creature", { extends: "entity", body: "A creature comes out of the Mists.",
+      actions: [{ action: "watch", who: "anyone", from: "sight", effect: "you watch it; its reaction is your reply", residue: "the-town/creature" }] }),
+    klass("bat", { extends: "creature", body: "A bat of the Mists.",
+      actions: [{ action: "whisper", who: "anyone", from: "ring", effect: "you whisper to it; its reaction is your reply", residue: "the-town/bat" }] }));
+  const db = graphDb(shape);
+  // explain climbs the class: the bat's own action, and the creature's above it
+  assert.deepEqual(cr.explainClass(db, "bat").actions.map((a) => a.action), ["whisper"]);
+  assert.deepEqual(cr.explainClass(db, "creature").actions.map((a) => a.action), ["watch"]);
+  // a de-sited class with no `ambient` grants nothing to a caller anywhere: not in empty space, not in the works
+  for (const spineIds of [[], ["the-town/resident"], ["the-town/thing"]]) {
+    const acts = gatherActions(db, { spineIds }).entries.map((e) => e.action);
+    assert.ok(!acts.includes("watch") && !acts.includes("whisper"), `no grant at ${JSON.stringify(spineIds)}: ${acts.join(", ")}`);
+  }
+});
