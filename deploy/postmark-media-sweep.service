@@ -1,0 +1,36 @@
+[Unit]
+# THE MEDIA SWEEP (POS-737, Darko 2026-10-21 "737 agreed"). Once a day it reads
+# every place a media URL can hang (the world at the blessing and main, every
+# draft, the town tree, the store's current-state tables) and keeps the clock
+# on each ledger row: stamped the first day a file hangs nowhere, cleared when
+# it hangs again. A file unhung for 30 days is freed: its row is claimed, the
+# original and its -96/-256 copies are deleted from storage, and its bytes
+# leave the household's wall. The law is src/media-sweep.mjs.
+#
+# ══ DRY BY DEFAULT. ══ Without MEDIA_SWEEP_APPLY=1 in the office env, every run
+# keeps the clock and NAMES what it would free (the report below), and deletes
+# nothing. A source it cannot read refuses the whole run, and a run that finds
+# more than 50 files due frees none. THE FIRST LIVE RUN IS WRIGHT'S, by hand, on
+# Darko's go (DEPLOY.md § 080), and only then does MEDIA_SWEEP_APPLY=1 go in.
+#
+# Install (Wright, after review; 080 applied first):
+#   sudo mkdir -p /srv/postmark-media-sweep && sudo chown meepo /srv/postmark-media-sweep
+#   sudo cp deploy/postmark-media-sweep.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now postmark-media-sweep.timer
+Description=the media sweep: free media nothing hangs after a 30-day grace (dry until MEDIA_SWEEP_APPLY=1)
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=meepo
+WorkingDirectory=/srv/postmark-office
+# The office's own env: the store switch and URL as office_api, WORLD_CLONE,
+# TOWN_CLONE, the R2_* storage keys, and MEDIA_SWEEP_APPLY once it is live.
+EnvironmentFile=/etc/postmark-office.env
+Environment=MEDIA_SWEEP_STATE_DIR=/srv/postmark-media-sweep
+# Exit 0 ran (dry or live) · 1 refused (the report says why) · 2 usage · 3 storage
+# failed on a file (claimed, retried by the next run).
+ExecStart=/usr/bin/node tools/media-sweep.mjs --oauth-db /srv/postmark-office/oauth.db
+TimeoutStartSec=900
+Nice=10
+IOSchedulingClass=idle

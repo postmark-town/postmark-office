@@ -390,7 +390,7 @@ test("`formerly` sits in the template and an EMPTY one renders byte-equal to tod
   assert.equal(HOUSEHOLD_KEYS.indexOf("formerly"), HOUSEHOLD_KEYS.indexOf("declared_by") + 1,
     "formerly sits immediately after declared_by");
   // …and POS-219's `home_images` (migration 050) after that, by the same law.
-  // …and WLD-83's `likeness` (migration 080) after that.
+  // …and WLD-83's `likeness` (migration 081) after that.
   assert.deepEqual(HOUSEHOLD_KEYS.slice(-4), ["formerly", "provisional", "home_images", "likeness"],
     "the tail is the optional columns, in the order their migrations landed");
   const rows = rowsFromRegistry(JSON.parse(HOUSEHOLDS_RAW), JSON.parse(PINS_RAW));

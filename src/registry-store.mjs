@@ -47,8 +47,8 @@ import { registryFromRows, pinsFromRows, HOUSEHOLD_KEYS, PIN_KEYS } from "./regi
 // renderer drops each key at its own default (an empty array, a false), which
 // today is all 118 rows for both.
 //
-// `likeness` (080, WLD-83) is read through the row's own jsonb rather than by
-// name, so this read answers the same on a store that has not taken 080 yet: a
+// `likeness` (081, WLD-83) is read through the row's own jsonb rather than by
+// name, so this read answers the same on a store that has not taken 081 yet: a
 // missing column reads as NULL, "never answered", instead of failing every
 // registry read (sign-in among them) between a deploy and its migration.
 const HOUSEHOLDS_SQL = `
@@ -216,7 +216,7 @@ const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since
 // what it knew would reset every resident's picture to its `{}` default. The
 // column has ONE writer, `setHomeImage` below. Only the seed, which fills an
 // EMPTY table from the town's files, carries it in with the rest of the row.
-// `likeness` (080, WLD-83) is kept out for the same reason, and has one writer
+// `likeness` (081, WLD-83) is kept out for the same reason, and has one writer
 // of its own, `setHouseholdLikeness` below.
 const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
@@ -438,7 +438,7 @@ export async function setHomeImage({ handle, url }, env = process.env) {
 
 /**
  * The household's human's answer to the likeness question, written onto its
- * row (WLD-83, migration 080).
+ * row (WLD-83, migration 081).
  *
  * The ONE store writer of `likeness`; `src/likeness.mjs § setLikeness` is the
  * one act that calls it, from the signed-in form. It replaces the whole

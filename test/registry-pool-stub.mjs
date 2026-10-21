@@ -153,7 +153,7 @@ export function makePool(seed) {
         // upsert names eleven and its ON CONFLICT never sets the column, so an
         // existing row keeps its pictures, exactly as the statement does.
         row.home_images = params.length > 11 ? JSON.parse(params[11]) : (at >= 0 ? state.households[at].home_images ?? {} : {});
-        // `likeness` (080) rides only the seed's insert too, as its thirteenth column.
+        // `likeness` (081) rides only the seed's insert too, as its thirteenth column.
         row.likeness = params.length > 12 ? (params[12] == null ? null : JSON.parse(params[12])) : (at >= 0 ? state.households[at].likeness ?? null : null);
         if (at >= 0) state.households[at] = row; else state.households.push(row);
         return { rows: [] };
@@ -182,7 +182,7 @@ export function makePool(seed) {
         row.home_images = { ...(row.home_images ?? {}), [handle]: url };
         return { rows: [{ slug: row.slug }] };
       }
-      // THE LIKENESS ANSWER (WLD-83, 080): the whole answer, on the row whose
+      // THE LIKENESS ANSWER (WLD-83, 081): the whole answer, on the row whose
       // slug is named AND whose accounts hold the answering id — or on none.
       if (/^\s*UPDATE households\s+SET likeness = /.test(text)) {
         state.writes.households++;

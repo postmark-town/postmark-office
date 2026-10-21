@@ -188,6 +188,13 @@ test("§ 3 the picture doors ask it: the household act's profile with an image c
   const clone = editClone();
   CLEANUP.push(async () => rmSync(clone, { recursive: true, force: true, maxRetries: 5 }));
   const was = process.env.TOWN_PUSH; delete process.env.TOWN_PUSH;
+  // POS-738: a picture hangs only when the town's media ledger holds it, so the ledger holds this one.
+  const { useMediaLedger, ensureMediaTable } = await import("../src/media.mjs");
+  const { openOauthDb } = await import("../src/oauth.mjs");
+  const ledger = openOauthDb(":memory:");
+  ensureMediaTable(ledger);
+  ledger.prepare("INSERT INTO media (household, sha, ext, bytes, by_handle, created) VALUES (?, ?, ?, ?, ?, ?)").run("keemin", "a1".repeat(32), "png", 10, "wright", Date.now());
+  useMediaLedger(ledger);
   try {
     await withStore(async () => {
       const set = await householdApex({ do: "profile", args: { handle: "wright", image: FACE } }, key, { db: fixtureTown(), clone, schemas });
@@ -197,7 +204,7 @@ test("§ 3 the picture doors ask it: the household act's profile with an image c
       assert.equal(bio.code, undefined, JSON.stringify(bio).slice(0, 300));
       assert.equal("likeness_question" in bio.result, false, "an edit with no picture does not");
     });
-  } finally { if (was !== undefined) process.env.TOWN_PUSH = was; }
+  } finally { useMediaLedger(null); if (was !== undefined) process.env.TOWN_PUSH = was; }
 });
 
 // ── § 4 needs-you ───────────────────────────────────────────────────────────

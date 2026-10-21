@@ -35,7 +35,7 @@ import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arriv
 // and nothing in that graph reaches back to this door.
 import { REFUSALS } from "./ceremony.mjs";
 import { requestResidency } from "./residency.mjs";
-import { updateAddressBody, updateHomeAct, updateProfile, updateWindow } from "./edit.mjs";
+import { updateAddressBody, updateHomeAct, updateProfileAtDoor, updateWindow } from "./edit.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
 // POS-70: the act-field judgement, the aliases and the rename pointer — one
@@ -2141,7 +2141,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "address": result = await updateAddressBody(fields, key, db, clone, odb); break;
       case "home": result = await updateHomeAct(fields, key, db, clone, odb); break;
       case "profile":
-        result = await updateProfile(fields, key, db, clone, odb);
+        result = await updateProfileAtDoor(fields, key, db, clone, odb);
         // a picture just set asks the likeness question while it is unanswered (WLD-83)
         if (fields?.image !== undefined) result = await (await import("./likeness.mjs")).withLikenessQuestion(result, fields.handle);
         break;

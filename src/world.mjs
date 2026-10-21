@@ -29,10 +29,10 @@ import { nextSettlementAttemptAt } from "./settlements.mjs";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import {
   // draftDeltaForKey is reached through world2-guards' guardedDraftsForKey, which unions it with the record (POS-5 slice 1; the sqlite draftsForKey went with dynamic.db, POS-269)
-  blessedRef,
   draftBranch,
+  engineDirAt,
+  importEngineAt,
   mainRef,
-  materializeAtRef,
   publishedSkeleton,
   publishedState,
   readAtRef,
@@ -80,7 +80,7 @@ import { carriersFrom, carriersWithDisclosure, heardFromV2, inRect, movementStan
 import { arrivedNotice, doorstepTransport, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable
 import { findMarks } from "./world-find.mjs"; // find a mark by name from anywhere (2026-09-26)
 import { byBand, presenceEnabled, presentNear, near as presenceNear, everyone as presenceEveryone, PRESENCE_DIALS } from "./dynamic-presence.mjs"; // stage 2: residents revealed to each other
-import { MEDIA_BASE, mediaUrlOk } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks
+import { MEDIA_BASE, mediaUrlOk, mediaHeldRefusal } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks, and only what the ledger holds (POS-738)
 import { imageFormat, MEDIA_FORMATS } from "./edit.mjs"; // the bytes decide the type, never the filename (with_image, below)
 import { everyonePlaced, withFrames } from "./positions.mjs"; // where is everyone: walk records ∪ parcel households, one derivation — plus Stage D's frame overlay
 import { createPlacement, createPositionGrid, createPositionProjection, recordOfMovement } from "./position-projection.mjs"; // POS-264: the governing departure per resident, kept current by the walk door
@@ -128,15 +128,12 @@ export const __worldAsksForTest = () => _worldAsks;
 // look exactly like success while serving stale code, which is the failure this
 // whole change exists to end.
 function engineDir() {
-  try {
-    // At the BLESSED ref (postmark#2934): the engine that folds a settlement is
-    // the engine that settlement was blessed with — the site already runs the
-    // pinned package the same way ("the pin follows the blessing", POS-55).
-    return materializeAtRef(WORLD_CLONE, blessedRef(WORLD_CLONE), "tools");
-  } catch (e) {
-    console.error(`[world] engine materialise FAILED (${String(e?.message ?? e).slice(0, 120)}) — falling back to the working tree, which may be a draft branch`);
-    return WORLD_CLONE;
-  }
+  // At the BLESSED ref (postmark#2934): the engine that folds a settlement is
+  // the engine that settlement was blessed with — the site already runs the
+  // pinned package the same way ("the pin follows the blessing", POS-55). The
+  // doors read the same engine through the same call (world-branches.mjs §
+  // engineDirAt), which falls back to the tree loudly when it must.
+  return engineDirAt(WORLD_CLONE);
 }
 
 const engineImport = (file) => import(pathToFileURL(join(engineDir(), "tools", file)));
@@ -1179,7 +1176,7 @@ export async function mistsWallOn(worldClone, skeleton, ground, crossing) {
   const edges = Array.isArray(ground) ? [] : ground?.edges ?? [];
   if (!skeleton?.mists || (!points.length && !edges.length)) return null;
   let eng;
-  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return { unreadable: true }; }
+  try { eng = await importEngineAt(worldClone, "world-engine.mjs"); } catch { return { unreadable: true }; }
   if (typeof eng.mistsAt !== "function" || typeof eng.mistsHere !== "function") return { unreadable: true };
   if (edges.length && typeof eng.mistsHide !== "function") return { unreadable: true };
   const m = eng.mistsAt(crossing, skeleton.mists);
@@ -1297,13 +1294,14 @@ export async function mistsGroundCheck(worldClone, readSkeleton, ground, crossin
 
 // ── THE MISTS ON A ROAD (POS-468) ────────────────────────────────────────────
 // The world's engine owns the reading (tools/world-engine.mjs § mistsRoad); the
-// office only asks it, from the same clone it walks by, and a clone without it
-// answers null so the walk is untouched. `shelter` is the walker's (roadShelter,
+// office only asks it, at the newest blessing of the clone it walks by
+// (world-branches.mjs § engineDirAt), and a clone without it answers null so the
+// walk is untouched. `shelter` is the walker's (roadShelter,
 // below): an engine older than the ruling takes no fifth argument and ignores it.
 export async function mistsOnTheRoad(worldClone, skeleton, from, toward, crossing, { shelter = null } = {}) {
   if (!skeleton?.mists) return null;
   let eng;
-  try { eng = await import(pathToFileURL(join(worldClone, "tools", "world-engine.mjs"))); } catch { return null; }
+  try { eng = await importEngineAt(worldClone, "world-engine.mjs"); } catch { return null; }
   if (typeof eng.mistsRoad !== "function") return null;
   return eng.mistsRoad(from, toward, crossing, skeleton.mists, { shelter });
 }
@@ -1460,7 +1458,7 @@ export async function landAt(worldClone, { who, at, via = null, why, key = null,
   const point = { x: Number(at.x), y: Number(at.y) };
   if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) throw new Error("a landing needs a point");
   const exited = exit === true ? await exitWhatThisPointLeaves(worldClone, who, point, key) : [];
-  const { fractionalCrossing } = await import(pathToFileURL(join(worldClone, "tools", "walk.mjs")));
+  const { fractionalCrossing } = await importEngineAt(worldClone, "walk.mjs");
   const crossing = fractionalCrossing();
   const landedAt = new Date().toISOString();   // ONE clock read (POS-198), carried into the act and the projection
   const { at: stampAt, witnesses } = await witnessStampAt(who, point);
@@ -4494,6 +4492,16 @@ export const CANDY_IS_MADE = Object.freeze({
 });
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+// The picture a published mark carries today, or null — read only on the rare
+// path where an amend re-sends a picture the ledger does not hold (POS-738).
+// An unreadable world answers null, so the amend is judged like any new hang.
+function publishedImageOf(worldClone, id) {
+  try {
+    const mark = (publishedState(worldClone).state.marks ?? []).find((m) => m.id === id);
+    return typeof mark?.image === "string" ? mark.image : null;
+  } catch { return null; }
+}
+
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
@@ -4799,6 +4807,17 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   if (image !== undefined && !mediaUrlOk(image))
     throw bounce(422, "image must live on the town's media door",
       `a mark's image is one ${MEDIA_BASE}/… URL — upload the file first (POST /media, or the upload_media tool) and pass the url the office returns`);
+  // AND THE TOWN HOLDS IT (POS-738): the grammar above admits a URL nobody
+  // ever uploaded, and two marks hung one. One exception, and it is not a
+  // loosening: an amend that re-sends the picture its published mark ALREADY
+  // carries hangs nothing new. A set-down re-declares every field it carries
+  // (world-hold.mjs § AMEND_CARRIES), so without this a mark whose picture
+  // predates the check could never be carried and set down again.
+  if (image !== undefined) {
+    const refused = await mediaHeldRefusal(image);
+    if (refused && !(payload.amend === true && publishedImageOf(worldClone, `${by}/${slug}`) === image))
+      throw bounce(refused.code, refused.defect, refused.hint);
+  }
 
   // stamps: the inline stake (0 = personal draft). Judged BEFORE the write so a
   // malformed number never leaves a half-done act.
@@ -5723,7 +5742,7 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   const w = await world();
   const skeleton = w?._raw?.skeleton ?? null;
   const { parseWalkLedger, currentDeparture, positionAt, fractionalCrossing, extentForArrival, isWalkArrival, walkTargetFor, WALK_KM_PER_CROSSING } =
-    await import(pathToFileURL(join(worldClone, "tools", "walk.mjs")));
+    await importEngineAt(worldClone, "walk.mjs");
 
   // WHERE IN THE TARGET — issue #5 §1, RENAMED 2026-08-19 (founder-ruled, the
   // Seven zero-distance confusion): the field is `mode:`, the words are `rim`
@@ -5748,7 +5767,7 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   // v0; segmentCrossesWater / nearestCrossing / seaGated stay exported and tested in
   // the world repo, unused here until the gate returns.
   const { crossingsOnSegment } =
-    await import(pathToFileURL(join(worldClone, "tools", "water.mjs")));
+    await importEngineAt(worldClone, "water.mjs");
 
   // WHERE FROM — the derived position of your current departure, or home if you
   // have never walked. Deriving rather than storing is the whole design law, and
