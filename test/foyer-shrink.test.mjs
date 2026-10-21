@@ -1115,6 +1115,20 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  24984 -> 25070 (+86) · slim  22546 -> 22632 (+86)
   //
+  // ⚠ AND RE-CAPTURED AN EIGHTEENTH TIME, 2026-10-21 (lane plumb-creature-verbs,
+  // POS-672), because the PR moved the world pin to world main: 77f7918a (the kept
+  // branch pos672/train-pin: c315bd76 plus #264's three commits) -> b81aa6f7b
+  // (#264's merge, with the settlements and marks since 10-20). This PR changes no
+  // doorstep segment (the pin and two creature-tick cases only). The page was read
+  // off CI itself at the new pin (a one-commit diagnostic printed it, run
+  // 39598920026, then reverted), and diffed leaf by leaf against the seventeenth
+  // capture BEFORE this one: 1129 -> 1139 paths, 14 removed, 24 added, 168 changed,
+  // every one of them in `stances`, the world's own data at the pin: the count
+  // awaiting (64 -> 65), the five newest awaiting rows and their `on_your_ground`
+  // lists, and `ground` (73 -> 78 marks). Nothing else moved; `stakes` is unchanged.
+  //
+  //   full  25070 -> 25214 (+144) · slim  22632 -> 22776 (+144)
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
