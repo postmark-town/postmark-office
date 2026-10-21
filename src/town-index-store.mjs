@@ -648,7 +648,7 @@ export async function houseActs(q, household, { afterId = null, sinceIso = null,
   const { actsHaveProvenance } = await import("./act-provenance.mjs");
   const recorded = (await actsHaveProvenance(q)) ? ", hand, for_handle, route" : "";
   const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}
-      FROM acts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${n + 1}`, params)).rows;
+      FROM acts WHERE ${where.join(" AND ")} ORDER BY acts.id DESC LIMIT ${n + 1}`, params)).rows;
   const kept = rows.slice(0, n);
   // past the cut, the read goes on below the last id it kept (review of #678, item 4)
   return { hw, rows: kept, cut: rows.length > n, ...(rows.length > n ? { next_before: kept.at(-1)?.id ?? null } : {}) };
@@ -669,7 +669,7 @@ export async function actsIdSince(q, sinceIso) {
   let lo = BigInt(ends.lo), hi = BigInt(ends.hi) + 1n;
   while (lo < hi) {
     const mid = (lo + hi) / 2n;
-    const r = (await q.query("SELECT id::text AS id, at FROM acts WHERE id >= $1::bigint ORDER BY id LIMIT 1", [String(mid)])).rows[0];
+    const r = (await q.query("SELECT id::text AS id, at FROM acts WHERE id >= $1::bigint ORDER BY acts.id LIMIT 1", [String(mid)])).rows[0];
     if (!r || new Date(r.at).getTime() >= since) hi = mid;
     else lo = BigInt(r.id) + 1n;
   }
