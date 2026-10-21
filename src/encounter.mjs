@@ -102,7 +102,7 @@ export const NERVE_ROWS_SQL = `SELECT id::text AS id, actor, action, object, pay
   WHERE class = 'creature' AND at >= $2::timestamptz AND (
     (object = $1 AND action IN ('${NERVE_ACTION}', '${STEADY_ACTION}'))
     OR (actor = $1 AND action IN ('${STRIKE_ACTION}', '${STEADY_ACTION}', '${SHIELD_ACTION}')))
-  ORDER BY id`;
+  ORDER BY acts.id`;
 
 /** A resident's nerve as the store holds it, inside a transaction. */
 export async function nerveInStore(client, handle, { now = Date.now() } = {}) {
@@ -112,7 +112,7 @@ export async function nerveInStore(client, handle, { now = Date.now() } = {}) {
 
 /** The strikes on a creature in a window, from the store, oldest first. */
 export const STRIKES_SQL = `SELECT id::text AS id, actor, at, payload FROM acts
-  WHERE class = 'creature' AND object = $1 AND action = '${STRIKE_ACTION}' AND at >= $2::timestamptz ORDER BY id`;
+  WHERE class = 'creature' AND object = $1 AND action = '${STRIKE_ACTION}' AND at >= $2::timestamptz ORDER BY acts.id`; // the bigint, never the text alias
 
 /** Resolve left after `strikes` (each carries its own damage): never below 0. */
 export const resolveAfter = (resolveMax, strikes) =>

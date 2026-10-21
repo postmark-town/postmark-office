@@ -217,11 +217,13 @@ async function byDeadline(work, deadline, clock, partial) {
  * end under a hung turn (CI 38770755044).
  */
 export function answerWithin(act, { living, law, around = aroundCreature, heardFor = creatureHeard, ask, write, env, only = null, except = null, aimed = null, jevMs = null,
-  clock = Date.now, deadline = null, partial = [] } = {}) {
+  present = null, households = null, flee = null, writeCost = null, clock = Date.now, deadline = null, partial = [] } = {}) {
   const until = deadline ?? clock() + ANSWER_WAIT_MS;
+  // `present`, `households`, `flee`, `writeCost`: an encounter's seams (creatures.mjs § encounterOf), the office's own when absent
   const turns = outsideRetryKey(() =>
     reactTo(act, { living, law, around, heardFor, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), ...(only != null ? { only } : {}),
       ...(except != null ? { except } : {}), ...(aimed ? { aimed } : {}), ...(jevMs != null ? { jevMs } : {}),
+      ...(present ? { present } : {}), ...(households ? { households } : {}), ...(flee ? { flee } : {}), ...(writeCost ? { writeCost } : {}),
       clock, deadline: until, partial }));
   return byDeadline(turns, until, clock, partial);
 }

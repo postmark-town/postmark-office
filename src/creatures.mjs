@@ -329,8 +329,11 @@ const MOMENTS = Object.freeze([ARRIVAL, ENTRY]);
 export const triggerKey = (actId, moment = null) => (MOMENTS.includes(moment) ? `${actId}@${moment}` : String(actId));
 const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 
+// ORDER BY acts.id, the bigint, never the `id::text` the row answers with: ordered as
+// text, "10" comes before "2", the cursor then skips every id it passed (found by the
+// encounter's store drive, where a restarted office lost nine rows of one window)
 export const LIVING_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
-  WHERE class = '${CREATURE_CLASS}' AND id > $1::bigint ORDER BY id LIMIT $2`;
+  WHERE class = '${CREATURE_CLASS}' AND id > $1::bigint ORDER BY acts.id LIMIT $2`;
 // The first read of a process: every creature row young enough to belong to a
 // living creature, its memory, or a reaction to_you still owes a reader
 // (BOOT_SPAN_S: a reaction up to TO_YOU_REACH_MS old, from a creature that came
@@ -343,7 +346,7 @@ export const STAYING_SQL = `SELECT s.object FROM acts s
     AND NOT EXISTS (SELECT 1 FROM acts w WHERE w.class = '${CREATURE_CLASS}' AND w.action = '${WITHDRAW_ACTION}' AND w.object = s.object)`;
 export const LIVING_BOOT_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
   WHERE class = '${CREATURE_CLASS}' AND (at > now() - make_interval(secs => $1)
-    OR actor IN (${STAYING_SQL}) OR object IN (${STAYING_SQL})) ORDER BY id`;
+    OR actor IN (${STAYING_SQL}) OR object IN (${STAYING_SQL})) ORDER BY acts.id`;
 export const LIVING_TOP_SQL = `SELECT max(id)::text AS id FROM acts WHERE class = '${CREATURE_CLASS}'`;
 export const LIVING_BATCH = 2000;
 /** How long an ended creature stays in RAM (a retry of its last act still finds its answer). */
