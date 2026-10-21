@@ -150,17 +150,14 @@ export async function liveUnitDeps() {
       const s = await world.residentStandpoint(String(actor)).catch(() => null);
       return hold.armsLengthOrThrow({ thing: "units", to, here: s?.placed ? { x: s.x, y: s.y } : null, actor });
     },
-    // WHERE A HOLDER IS NOW (LOGOS v2, O2; review-610 B1): in someone's hands, set down, or where it was made
+    // WHERE A HOLDER IS NOW (LOGOS v2, O2; review-610 B1): in someone's hands, set down, or where it was made.
+    // The one answer (held.mjs § placeOf, POS-688): this was its own fourth copy of holder → set-down → canon.
     holderPlace: async (id, mark) => {
-      const rows = await guards.standsRowsFromStore(String(id)).catch(() => null);
-      if (!rows) return { holder: null, at: mark?.at ?? null, moved: false };
-      const holder = hold.liveHolder(rows.attachments ?? [], String(id));
-      if (holder) return { holder: String(holder), at: null, moved: false };
-      const drop = hold.latestDrop(rows.journal ?? [], String(id));
-      if (!drop) return { holder: null, at: mark?.at ?? null, moved: false };
-      const marks = await world.worldMarksAll().catch(() => []);
-      const at = journal.composeAnchor(drop.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
-      return at ? { holder: null, at, moved: true } : { holder: null, at: mark?.at ?? null, moved: false };
+      const [{ heldView }, { placeOf, HELD_BY }] = await Promise.all([import("./held-view.mjs"), import("./held.mjs")]);
+      const p = placeOf(String(id), await heldView(), mark);
+      if (p?.[HELD_BY] != null) return { holder: String(p[HELD_BY]), at: null, moved: false };
+      if (p?.source === "set-down") return { holder: null, at: p.at, moved: true };
+      return { holder: null, at: mark?.at ?? null, moved: false };
     },
     standpoint: async (actor) => { const s = await world.residentStandpoint(String(actor)).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
     householdOf: await (async () => { try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; } })(),
@@ -906,13 +903,13 @@ export async function writeThingHolding(deps, key, actor, attachments, change, {
 }
 
 /** The holding act for a thing changing hands, composed and not written: `{ entry, at }` (LOGOS v2, O2: one transaction may carry several). */
-export async function thingHoldingEntry(deps, key, actor, attachments, { did, thing, holder, previous, madeBy }, stamp = null) {
+export async function thingHoldingEntry(deps, key, actor, attachments, { did, thing, holder, previous, madeBy, owns = false }, stamp = null) {
   const prior = rowsFor(attachments, thing);
   const newest = prior.length ? Date.parse(prior[prior.length - 1].born_at) : NaN;
   const now = Date.now();
   const at = new Date(Number.isFinite(newest) && newest >= now ? newest + 1 : now).toISOString();
   const { at: anchor, witnesses } = stamp ?? await deps.stamp(actor);
-  const entry = holdingEntry({ did, thing, holder, previous_holder: previous, made_by: madeBy, policy: "cascade", declared_by: actor, at },
+  const entry = holdingEntry({ did, thing, holder, previous_holder: previous, made_by: madeBy, policy: "cascade", declared_by: actor, at, owns },
     { crossing: deps.crossing(), at: anchor, witnesses, cls: "holding", household: deps.household(key) });
   return { entry, at };
 }

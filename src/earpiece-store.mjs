@@ -98,10 +98,11 @@ export async function tapRows(client, event, since, until) {
   const anchors = [...new Set(voiceActs.map((a) => a.at_anchor).filter(Boolean))];
   const centres = new Map();
   if (anchors.length) {
-    const { rows } = await client.query("SELECT slug, geometry FROM marks WHERE slug = ANY($1)", [anchors]);
+    const { rows } = await client.query("SELECT slug, geometry, data FROM marks WHERE slug = ANY($1)", [anchors]);
+    const { placedCentreOfRow } = await import("./held.mjs");
     for (const r of rows) {
-      const g = typeof r.geometry === "string" ? JSON.parse(r.geometry) : r.geometry;
-      if (g?.at) centres.set(r.slug, { x: Number(g.at.x), y: Number(g.at.y) });
+      const c = placedCentreOfRow(r); // canon's centre, or where a held anchor last stood (POS-688, W4)
+      if (c) centres.set(r.slug, c);
     }
   }
   const frameActs = event.place_mark

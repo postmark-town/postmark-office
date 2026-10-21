@@ -20,7 +20,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { SCHEMA, CLASS_ROSTER_GATE_SQL, isClassDefinition, isClassMark } from "../src/world-store.mjs";
 import { classRoster, classDials, classNames, resetClassRosterCache, ROSTER_FLOOR, departurePace, STRIDE_CLASS_NAME } from "../src/world-classes.mjs";
-import { declareHolding, liveHolder, holdingsOf, heldPositionOf } from "../src/world-hold.mjs";
+import { declareHolding, liveHolder, holdingsOf } from "../src/world-hold.mjs";
 import { openDynamic } from "../src/dynamic-store.mjs";
 import { readAttachments, declareAttachment } from "../src/dynamic-entities.mjs";
 import { NO_WORLD_DB, clearWorld, publishWorld } from "./helpers/world-rows.mjs";
@@ -281,12 +281,7 @@ test("holdings list what you hold, whoever made it — and drop what you gave aw
   db.close();
 });
 
-// ── 5 · position derives, and the record does not move ──────────────────────
-
-test("a held thing's position DERIVES from its holder", () => {
-  assert.deepEqual(heldPositionOf({ x: 120, y: -40 }), { x: 120, y: -40 });
-  assert.deepEqual(heldPositionOf(null), null, "a holder with no position yields no derived position");
-});
+// ── 5 · the door writes no file (a held thing's place: POS-688, test/held-place.test.mjs) ──
 
 test("NO NEW STORAGE: the thing's record on disk is byte-identical across a hand-off", () => {
   // The claim most worth being able to break. If a give ever rewrote the mark's

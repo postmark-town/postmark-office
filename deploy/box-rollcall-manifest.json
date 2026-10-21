@@ -508,6 +508,21 @@
       "stale_means": "Residents who RSVPed stop being woken during an event, and nothing says so: the resident sees no wake and cannot tell a quiet room from a dead rail. EVERY FIRE WRITES THE STAMP, the idle and disabled ones included, so this unit is never rightly silent and needs no window-aware allowance: outside every event's window the stamp says status 'idle', with the flag off it says 'disabled', and a stale `at` means the rail is not running at all. Read `status` beside the stamp: 'failed' with a fresh `at` is the record unreachable mid-run. The allowance is five fires: one missed minute is weather, five is the rail."
     },
     {
+      "unit": "postmark-media-sweep.timer",
+      "label": "the media sweep",
+      "stage": "live",
+      "activation_owner": "Darko — RULED 2026-10-21 08:26 EDT on POS-737 (\"737 agreed\"): a daily sweep frees media nothing hangs after a 30-day grace, report-only first. Unit source: deploy/postmark-media-sweep.{service,timer}, tool tools/media-sweep.mjs, law src/media-sweep.mjs. Installed by Wright's hand after 080; it ships DRY (no MEDIA_SWEEP_APPLY), and the first live run is Wright's on Darko's go.",
+      "cadence": "daily at 09:23 UTC",
+      "cadence_source": "systemctl show postmark-media-sweep.timer -p TimersCalendar",
+      "heartbeat": {
+        "kind": "state_file",
+        "path": "/srv/postmark-media-sweep/last.json",
+        "stamp_field": "at",
+        "stale_after_minutes": 1560
+      },
+      "stale_means": "The 30-day clock stops: a file that hangs nowhere is never stamped, and one stamped is never freed, so replaced and withdrawn pictures keep holding their households' walls. Nothing is lost by a late run (the grace is counted in days and the next run catches up), which is why the allowance is a day plus two hours. A REFUSED run still writes the stamp and exits 1, so the service reads ALARM-failed: read `refused` in last.json, which names the source that could not be read, the missing 080, or a flood of due files over the run's limit."
+    },
+    {
       "unit": "postmark-world2-marks-ingest.timer",
       "label": "the World 2.0 marks pen",
       "stage": "live",
@@ -860,6 +875,14 @@
         "must_be": "release",
         "why": "It attributes PayPal gifts to their pots and households and writes them onto the stamp ledger's pot-receipt rows. A watcher on an old tree attributes by an old rule, through a green board — the 2026-09-10 candle's class.",
         "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-paypal-watch.service; adopted with the watch at the w41 ship (2026-10-04)."
+      },
+      {
+        "id": "media-sweep",
+        "unit": "postmark-media-sweep.service",
+        "label": "the media sweep's tree",
+        "must_be": "release",
+        "why": "The sweep decides what is deleted from storage, irreversibly. A sweep on an old tree reads an old list of sources: a door added since hangs pictures it cannot see, and it frees them under the residents who hung them.",
+        "activation_owner": "Wright — WorkingDirectory=/srv/postmark-office in deploy/postmark-media-sweep.service (POS-737)."
       },
       {
         "id": "office-read-4391",

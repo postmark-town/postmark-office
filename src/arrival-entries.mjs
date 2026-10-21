@@ -82,7 +82,7 @@ const CURRENT_SQL = `
    LIMIT 1`;
 const WALK_SQL = `SELECT id, at, crossing, actor, action, payload FROM acts WHERE id = $1::bigint`;
 // The enter an arrival already wrote, if any: the guard's own read, asked first on a re-run.
-const PRIOR_SQL = `SELECT id::text AS id FROM acts WHERE actor = $1 AND action = 'enter' AND payload->>'arrival_of' = $2 ORDER BY id LIMIT 1`;
+export const PRIOR_SQL = `SELECT id::text AS id FROM acts WHERE actor = $1 AND action = 'enter' AND payload->>'arrival_of' = $2 ORDER BY acts.id LIMIT 1`;
 // Who has a line on their standpoint: a pending row whose walk is still the
 // current departure, or a refusal (or an expiry) with no act of theirs since it:
 // "until their next act", Darko's G3, and no other bound.
