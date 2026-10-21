@@ -272,10 +272,35 @@ async function berthShip() {
   return berthQuay();
 }
 const TOWN_CLONE_FOR_MANIFEST = process.env.TOWN_CLONE ?? null;
-function berthAboard(slug) {
-  if (!TOWN_CLONE_FOR_MANIFEST) return false;
-  try { return existsSync(join(TOWN_CLONE_FOR_MANIFEST, "HARBOR", "berths", `${slug}.md`)); }
+function berthAboard(slug, townClone = TOWN_CLONE_FOR_MANIFEST) {
+  if (!townClone) return false;
+  try { return existsSync(join(townClone, "HARBOR", "berths", `${slug}.md`)); }
   catch { return false; }
+}
+
+/**
+ * WHERE A BERTH STANDS: the deck for a manifest berth, the quay stone for every
+ * other, read from the world's own marks. The say door's answer for a `berth-`
+ * speaker, and the co-sign's (POS-740): the co-sign sets the new resident down
+ * here, so it must ask BEFORE the declaration writes `HARBOR/berths/<slug>.md`,
+ * which would read as the deck afterwards. `mark` is the mark stood on, or null
+ * when the record has lost it and the Origin stands in.
+ */
+export async function berthPlace(slug, { townClone = TOWN_CLONE_FOR_MANIFEST } = {}) {
+  const aboard = berthAboard(slug, townClone);
+  const at = aboard ? await berthShip() : await berthQuay();
+  const markOf = async (id) => {
+    try { return (await world())?.marks?.some((m) => m.id === id && m?.at?.x === at.x && m?.at?.y === at.y) ? id : null; }
+    catch { return null; }
+  };
+  const mark = (await markOf(aboard ? SHIP_MARK_ID : QUAY_MARK_ID)) ?? (aboard ? await markOf(QUAY_MARK_ID) : null);
+  return { x: at.x, y: at.y, aboard: aboard && mark === SHIP_MARK_ID, mark };
+}
+
+/** A mark's place in the world, read from the record as the berth's is: `{ x, y, mark }`, or null. */
+export async function markPlace(id) {
+  const m = (await world())?.marks?.find((x) => x.id === id && Number.isFinite(x?.at?.x) && Number.isFinite(x?.at?.y));
+  return m ? { x: m.at.x, y: m.at.y, mark: m.id } : null;
 }
 
 // ── WHERE YOU LIVE IS YOUR PARCEL, AND THE ENGINE ALREADY SAID SO ───────────
@@ -742,7 +767,9 @@ async function standCoords(handle, w) {
     if (here.placed && DERIVED_SOURCES.has(here.source)) {
       return { x: here.x, y: here.y,
         from: here.source === "vehicle" ? here.narration
-          : here.moving ? `${here.narration} (${Math.round(here.remaining_m)} m to go)` : "where your walk arrived" };
+          : here.moving ? `${here.narration} (${Math.round(here.remaining_m)} m to go)`
+        // nobody walked here: the record's own note (POS-740, G5)
+        : here.note ?? "where your walk arrived" };
     }
   } catch { /* no ledger or no engine — home is the honest fallback */ }
   return homeCoords(handle, w);
@@ -875,11 +902,15 @@ export async function residentStandpoint(handle, w = null) {
   const p = here.position ?? null;
   const moving = Boolean(p && p.arrived === false);
   const narration = moving ? aboardOrRoad(handle, departures) : null;
+  // A SET-DOWN SAYS SO (POS-740): the governing record's own note, where it
+  // carries one ("set down where the berth stood"); no walk the door files has one.
+  const note = !moving && here.source === "walk" ? (departures.filter((d) => d?.handle === handle).at(-1)?.note ?? null) : null;
   return {
     handle, x: here.x, y: here.y, placed: true, source: here.source,
     moving, remaining_m: moving ? p.remainingM : 0,
     narration, aboard: Boolean(narration?.startsWith(`aboard ${VESSEL_HANDLE}`)),
     mark_id: here.mark_id ?? null,
+    ...(note ? { note } : {}),
   };
 }
 
@@ -1519,6 +1550,8 @@ const voices = createVoices({
       const q = aboard ? await berthShip() : await berthQuay();
       return { handle, placed: true, x: q.x, y: q.y, aboard, moving: false };
     }
+    // A berth that came ashore is not here: the co-sign set it down where it
+    // stood (POS-740), so `residentStandpoint` reads that record like any other.
     const here = await residentStandpoint(handle);
     if (here?.placed) return here;
     return { handle, placed: true, x: ORIGIN.x, y: ORIGIN.y, aboard: false, moving: false };
