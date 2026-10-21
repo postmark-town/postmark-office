@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, rmSync, readFileSync, readdirSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { editClone, fixtureKey, fixtureTown } from "./fixture.mjs";
 import { HOME_TITLE_MAX, updateAddressBody, updateHome, updateHomeImage, updateProfile, updateProfileAvatar, updateWindow } from "../src/edit.mjs";
 
@@ -116,13 +117,14 @@ test("update_profile heals the empty fence instead of wedging on it (the rei fou
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("update_profile_avatar stamps its field through the empty fence too", async () => {
+test("update_profile_avatar stamps its URL through the empty fence too", async () => {
   const clone = editClone();
   try {
     writeFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), "---\n---\n");
-    const r = await updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/jpeg" }, fixtureKey, db, clone);
-    assert.equal(r.avatar, "avatar.jpg");
-    assert.match(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), /avatar: "avatar\.jpg"/);
+    const { upload } = mediaDoor();
+    const r = await updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/jpeg" }, fixtureKey, db, clone, null, { upload });
+    assert.equal(r.avatar_url, mintedUrl(JPEG, "jpg"));
+    assert.equal(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), `---\navatar_url: "${mintedUrl(JPEG, "jpg")}"\n---\n`);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
@@ -151,36 +153,58 @@ test("update_profile names text caps and empty strings clear fields", () => {
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-// ── profile avatar: magic bytes, complete enclosure, fixed basename ─────────
+// ── profile avatar: magic bytes, complete enclosure, one picture ────────────
+//
+// WLD-83 (Darko 2026-10-19 18:24, "one picture, not two"): the byte door mints
+// through the media door and keeps the URL in `avatar_url`, the one picture key,
+// and clears `avatar:`. It no longer writes or removes files in the town repo.
 
-test("update_profile_avatar writes the detected image + field, removes fixed-name variants, and preserves profile-owned bytes", async () => {
+// The media door, recorded: what it was handed, and the URL it would mint.
+const mintedUrl = (bytes, ext) => `https://media.postmark.town/media/keemin/${createHash("sha256").update(bytes).digest("hex")}.${ext}`;
+function mediaDoor() {
+  const calls = [];
+  const upload = async (args, key, odb, { bytes }) => {
+    calls.push({ by: args.by, household: key.household, bytes });
+    const ext = bytes[0] === 0xff ? "jpg" : bytes[0] === 0x89 ? "png" : "webp";
+    return { url: mintedUrl(bytes, ext), already: false };
+  };
+  return { calls, upload };
+}
+const withAvatarKey = (clone, value) => {
+  const file = join(clone, "WHITE_PAGES", "wright", "PROFILE.md");
+  writeFileSync(file, readFileSync(file, "utf8").replace("---\n", `---\navatar: "${value}"\n`));
+};
+
+test("update_profile_avatar mints through the media door, keeps the URL as the one picture, clears avatar:, and leaves old files as history", async () => {
   const clone = editClone();
   try {
     const dir = join(clone, "WHITE_PAGES", "wright");
     writeFileSync(join(dir, "avatar.png"), PNG);
-    writeFileSync(join(dir, "avatar.webp"), WEBP);
-    execFileSync("git", ["-C", clone, "add", "WHITE_PAGES/wright/avatar.png", "WHITE_PAGES/wright/avatar.webp"]);
-    execFileSync("git", ["-C", clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "old avatar variants"]);
+    withAvatarKey(clone, "avatar.png");
+    execFileSync("git", ["-C", clone, "add", "-A"]);
+    execFileSync("git", ["-C", clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "an older file avatar"]);
 
     const before = read(clone, "WHITE_PAGES", "wright", "PROFILE.md");
     const body = before.slice(before.indexOf("\n---\n") + 5);
-    const r = await updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/png" }, fixtureKey, db, clone);
-    assert.equal(r.file, "WHITE_PAGES/wright/avatar.jpg");
-    assert.equal(r.avatar, "avatar.jpg");
+    const { calls, upload } = mediaDoor();
+    const r = await updateProfileAvatar({ handle: "wright", image: b64(JPEG), type: "image/png" }, fixtureKey, db, clone, null, { upload });
+    assert.deepEqual(calls.map((c) => [c.by, c.household]), [["wright", "keemin"]], "minted once, as the resident, on its household's wall");
+    assert.deepEqual(calls[0].bytes, JPEG, "the bytes the door checked are the bytes minted");
+    assert.equal(r.avatar_url, mintedUrl(JPEG, "jpg"));
+    assert.deepEqual(r.profile, { avatar_url: mintedUrl(JPEG, "jpg") });
     assert.equal(r.media_type, "image/jpeg", "the false caller type is ignored");
-    assert.deepEqual(readFileSync(join(dir, "avatar.jpg")), JPEG);
-    assert.equal(existsSync(join(dir, "avatar.png")), false);
-    assert.equal(existsSync(join(dir, "avatar.webp")), false);
+    assert.match(r.note, /one key now, avatar_url/);
+    assert.match(r.note, /read until 2026-11-22/);
     const after = read(clone, "WHITE_PAGES", "wright", "PROFILE.md");
-    assert.match(after, /avatar: "avatar\.jpg"/);
+    assert.ok(after.includes(`avatar_url: "${mintedUrl(JPEG, "jpg")}"`));
+    assert.doesNotMatch(after, /^avatar:/m, "the older key is cleared: one picture, one key");
     assert.match(after, /future_key: keep-me/);
     assert.ok(after.endsWith(body), "the PROFILE.md body is byte-identical");
+    assert.deepEqual(readFileSync(join(dir, "avatar.png")), PNG, "the older file stays as history");
+    assert.equal(existsSync(join(dir, "avatar.jpg")), false, "no new file is written into the repo");
     const changed = execFileSync("git", ["-C", clone, "show", "--name-status", "--format=", "HEAD"], { encoding: "utf8" });
-    assert.match(changed, /A\s+WHITE_PAGES\/wright\/avatar\.jpg/);
-    assert.match(changed, /D\s+WHITE_PAGES\/wright\/avatar\.png/);
-    assert.match(changed, /D\s+WHITE_PAGES\/wright\/avatar\.webp/);
-    assert.match(changed, /M\s+WHITE_PAGES\/wright\/PROFILE\.md/);
-    assert.match(lastLog(clone), /wright: profile avatar updated .*key household keemin/);
+    assert.equal(changed.trim(), "M\tWHITE_PAGES/wright/PROFILE.md", "the commit touches the profile alone");
+    assert.match(lastLog(clone), /wright: profile picture updated .*key household keemin/);
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
@@ -188,11 +212,31 @@ test("update_profile_avatar founds a minimal PROFILE.md skeleton when absent", a
   const clone = editClone();
   try {
     const key = { household: "keemin", handles: new Set(["newprofile"]) };
-    const r = await updateProfileAvatar({ handle: "newprofile", image: b64(PNG), type: "text/plain" }, key, db, clone);
+    const { upload } = mediaDoor();
+    const r = await updateProfileAvatar({ handle: "newprofile", image: b64(PNG), type: "text/plain" }, key, db, clone, null, { upload });
     assert.equal(r.founded, true);
     assert.equal(r.media_type, "image/png");
-    assert.equal(read(clone, "WHITE_PAGES", "newprofile", "PROFILE.md"), "---\navatar: \"avatar.png\"\n---\n");
-    assert.deepEqual(readFileSync(join(clone, "WHITE_PAGES", "newprofile", "avatar.png")), PNG);
+    assert.equal(read(clone, "WHITE_PAGES", "newprofile", "PROFILE.md"), `---\navatar_url: "${mintedUrl(PNG, "png")}"\n---\n`);
+    assert.equal(existsSync(join(clone, "WHITE_PAGES", "newprofile", "avatar.png")), false);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("update_profile with an image clears avatar: too: whichever door set the picture, the profile holds one key", () => {
+  const clone = editClone();
+  try {
+    withAvatarKey(clone, "avatar.png");
+    updateProfile({ handle: "wright", image: mintedUrl(PNG, "png") }, fixtureKey, db, clone);
+    const after = read(clone, "WHITE_PAGES", "wright", "PROFILE.md");
+    assert.match(after, /^avatar_url: /m);
+    assert.doesNotMatch(after, /^avatar:/m);
+    assert.match(after, /future_key: keep-me/);
+    updateProfile({ handle: "wright", bio: "a line" }, fixtureKey, db, clone);
+    assert.match(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), /^avatar_url: /m, "an edit with no picture leaves the picture alone");
+    withAvatarKey(clone, "avatar.png");
+    updateProfile({ handle: "wright", bio: "another line" }, fixtureKey, db, clone);
+    assert.match(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), /^avatar: /m, "nor touches the older key when no picture is sent");
+    updateProfile({ handle: "wright", image: "" }, fixtureKey, db, clone);
+    assert.doesNotMatch(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), /^avatar(_url)?:/m, "clearing the picture clears it whole");
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
@@ -229,14 +273,15 @@ test("update_profile_avatar bounces truncated JPEG, PNG, and WebP enclosures wit
       PNG.subarray(0, 12),
       truncatedWebp,
     ];
+    const { calls, upload } = mediaDoor();
     for (const bytes of cases) {
-      const e = (await bounceOfAsync(() => updateProfileAvatar({ handle: "wright", image: b64(bytes), type: "image/png" }, fixtureKey, db, clone)));
+      const e = (await bounceOfAsync(() => updateProfileAvatar({ handle: "wright", image: b64(bytes), type: "image/png" }, fixtureKey, db, clone, null, { upload })));
       assert.equal(e.code, 422);
       assert.equal(e.defect, "the file ends mid-stream");
       assert.equal(e.hint, "re-export it and try again");
     }
     assert.equal(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"), profile);
-    assert.equal(existsSync(join(clone, "WHITE_PAGES", "wright", "avatar.jpg")), false);
+    assert.equal(calls.length, 0, "a broken picture is never minted");
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 

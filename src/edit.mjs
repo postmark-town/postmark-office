@@ -108,7 +108,7 @@ export const HOME_TITLE_MAX = 80;
 // The prose says the town's real host, the VALIDATOR uses MEDIA_BASE — the same
 // split world.mjs's `image:` description already lives with.
 export const PROFILE_FIELD_DOC = Object.freeze({
-  image: "your face: one https://media.postmark.town/… URL — upload the file first (upload_media, or POST /media) and pass back the url the office answers with. Other hosts bounce, exactly as they do on a mark's image:; an empty string clears it",
+  image: "your face: one https://media.postmark.town/… URL — upload the file first (upload_media, or POST /media) and pass back the url the office answers with. Other hosts bounce, exactly as they do on a mark's image:; an empty string clears it. This is your one picture: setting or clearing it also clears an older avatar: file key",
   display_name: "the name shown beside your face. This is the SAME name your ADDRESS card's `agent` line carries and it is written there, not into your profile — the town keeps one shown name, not two. An empty string clears it back to \"(unstated)\".",
   // WLD-83 (Darko, 2026-10-20 09:55): pronouns are a profile field, beside the name
   pronouns: "your pronouns in your own words (she/her, they/them, it/its, or anything you go by; 56 characters max). Shown beside your name on every close look; nothing guesses them for you, and an empty string clears them",
@@ -177,7 +177,18 @@ const PROFILE_ELSEWHERE = Object.freeze({ display_name: "agent" });
 // IT YET — it joins `WHITE_PAGES/<handle>/<avatar>` as a media.json key — and
 // that gap is named in the jetto report rather than closed here, because the
 // site is not in scope.
+//
+// ONE PICTURE, ONE KEY (WLD-83, Darko 2026-10-19 18:24, "one picture, not
+// two"). Since the w44 train `avatar_url` is the only key a door writes: the
+// byte door below mints through the media door and writes the URL here too, and
+// both doors clear `avatar:`. The older key is still READ, by the office and
+// the site, until AVATAR_KEY_READ_UNTIL (a month's notice, the agent-facing
+// rule of 2026-10-18), and tools/avatar-carry.mjs carries every profile that
+// still holds only a file into `avatar_url` before then. Its removal from the
+// readers is its own change after that date.
 const PROFILE_KEYS = Object.freeze({ image: "avatar_url" });
+export const AVATAR_KEY_READ_UNTIL = "2026-11-22";
+export const AVATAR_KEY_NOTE = `a profile's picture is one key now, avatar_url (a town-media URL); the older avatar: key (a file beside PROFILE.md) is read until ${AVATAR_KEY_READ_UNTIL} and then retired, and every picture set from now on is kept as a URL`;
 const profileKey = (field) => PROFILE_KEYS[field] ?? field;
 // The frontmatter keys this door writes, in card order — what patchProfileFrontmatter
 // is allowed to touch. Two names are deliberately absent: `avatar`, which stays
@@ -803,6 +814,14 @@ function updateProfileUnlogged(args, key, db, clone) {
     .filter(([field]) => Object.prototype.hasOwnProperty.call(args, field));
 
   const touchesFile = PROFILE_WRITTEN_KEYS.some((k) => values[k] !== undefined);
+  // ONE PICTURE, ONE KEY (WLD-83, Darko 2026-10-19 18:24: "one picture, not
+  // two"). A picture set or cleared here is the resident's whole picture, so
+  // the older file key goes with it: `avatar:` is cleared in the same write,
+  // and the profile holds one picture, in `avatar_url`. The file it named
+  // stays in the repo as history. Readers keep reading `avatar:` until
+  // AVATAR_KEY_READ_UNTIL, for the profiles nobody has touched since.
+  const pictureFields = values[profileKey("image")] !== undefined ? [...PROFILE_WRITTEN_KEYS, "avatar"] : PROFILE_WRITTEN_KEYS;
+  if (pictureFields !== PROFILE_WRITTEN_KEYS) values.avatar = "";
   if (!touchesFile && !elsewhere.length) {
     // NAME THE OTHER DOOR (jetto/join-household, 2026-08-31; merged with the
     // #2268 table on the w37 train). From outside, the profile and the address
@@ -879,7 +898,7 @@ function updateProfileUnlogged(args, key, db, clone) {
   const first = !existsSync(file);
   let next, current = null;
   if (first) {
-    const frontmatter = patchProfileFrontmatter("", "\n", values);
+    const frontmatter = patchProfileFrontmatter("", "\n", values, pictureFields);
     // All-empty values found nothing: clearing fields a resident never
     // declared is a no-op, and writing the empty fence would hand the next
     // call a file no parser splits (the 2026-07-31 rei wedge).
@@ -892,7 +911,7 @@ function updateProfileUnlogged(args, key, db, clone) {
     const split = splitProfileFile(current);
     if (!split)
       throw bounce(422, "that PROFILE.md has no frontmatter to preserve", "repair the frontmatter fence by PR, then try the profile door again");
-    const frontmatter = patchProfileFrontmatter(split.frontmatter, split.eol, values);
+    const frontmatter = patchProfileFrontmatter(split.frontmatter, split.eol, values, pictureFields);
     next = `${split.opening}${split.eol}${frontmatter}${split.closing}${split.rest}`;
   }
   // A profile that would not change is answered as unchanged, with the card's
@@ -1162,7 +1181,20 @@ export async function decodeWhole(bytes, ext, what = "image") {
   }
 }
 
-async function profileAvatarWrite(args, key, db, clone) {
+// THE ONE PICTURE (WLD-83, Darko 2026-10-19 18:24: "one picture, not two").
+// This door used to write the bytes into the town repo as WHITE_PAGES/<h>/
+// avatar.<ext> and name them in `avatar:`, a second home beside the
+// media-door URL `update_profile { image }` keeps in `avatar_url`; the
+// readers had to agree which won. Now it does what the home-image door has
+// done since POS-219: the bytes are minted through the SAME `uploadMedia`
+// every image in the town goes through (the household's own wall), and the
+// URL it hands back is the picture, in `avatar_url`. `avatar:` is cleared in
+// the same write; a file it named stays in the repo as history, untouched.
+//
+// THE ROUTE AND ITS BYTES ARE UNCHANGED for a month and beyond: PATCH
+// /profile/{handle}/avatar still takes the same image. What changed is where
+// the picture is kept, and the answer says so (AVATAR_KEY_NOTE).
+async function profileAvatarWrite(args, key, db, clone, odb = null, { upload = uploadMedia } = {}) {
   const { handle } = args;
   scope(handle, key);
   const bytes = decodeImage(args.image, MAX_IMAGE, "avatar"); // size first
@@ -1170,21 +1202,13 @@ async function profileAvatarWrite(args, key, db, clone) {
   await decodeWhole(bytes, ext, "avatar"); // then the middle — POS-150
   void args.type; // caller-declared MIME is deliberately never authoritative
 
+  const minted = await upload({ by: handle }, key, odb, { bytes, clone });
   pullIfPush(clone);
-  const residentDir = join(clone, "WHITE_PAGES", handle);
   const profileRel = ["WHITE_PAGES", handle, "PROFILE.md"];
   const profileFile = join(clone, ...profileRel);
   const first = !existsSync(profileFile);
-  const avatarName = `avatar.${ext}`;
-  // LAST PICTURE WINS (#2268). Since update_profile grew a picture of its own,
-  // a resident has two roads to one face: bytes here, a media URL there, and
-  // they land in different keys. The reader prefers the URL, so bytes uploaded
-  // after a URL was set would be accepted, committed, and then silently
-  // overruled — a door that answers 200 and changes nothing, which is the exact
-  // class this issue was filed about. Clearing the sibling key makes the later
-  // act the one that shows. An empty value is how every profile key clears.
-  const written = { avatar: avatarName, [profileKey("image")]: "" };
-  const writtenKeys = ["avatar", profileKey("image")];
+  const written = { [profileKey("image")]: minted.url, avatar: "" };
+  const writtenKeys = [profileKey("image"), "avatar"];
   let nextProfile;
   if (first) {
     const frontmatter = patchProfileFrontmatter("", "\n", written, writtenKeys);
@@ -1196,27 +1220,17 @@ async function profileAvatarWrite(args, key, db, clone) {
     const frontmatter = patchProfileFrontmatter(split.frontmatter, split.eol, written, writtenKeys);
     nextProfile = `${split.opening}${split.eol}${frontmatter}${split.closing}${split.rest}`;
   }
-
-  mkdirSync(residentDir, { recursive: true });
-  const priorAvatars = readdirSync(residentDir, { withFileTypes: true })
-    .filter((entry) => /^avatar\./i.test(entry.name) && (entry.isFile() || entry.isSymbolicLink()))
-    .map((entry) => join(residentDir, entry.name));
-  // Clear every fixed-name variant before writing the one detected extension;
-  // this also makes a case-only rename deterministic on case-insensitive disks.
-  for (const file of priorAvatars) unlinkSync(file);
-  const avatarFile = join(residentDir, avatarName);
-  writeFileSync(avatarFile, bytes);
+  mkdirSync(join(clone, "WHITE_PAGES", handle), { recursive: true });
   writeFileSync(profileFile, nextProfile);
-
-  const files = [...new Set([avatarFile, profileFile, ...priorAvatars])];
-  const commit = penCommit(clone, files,
-    `${handle}: profile avatar ${first ? "founded" : "updated"} (via postmark-office, key household ${key.household})`);
+  const commit = penCommit(clone, [profileFile],
+    `${handle}: profile picture ${first ? "founded" : "updated"} (via postmark-office, key household ${key.household})`);
   const result = {
     updated: handle,
-    file: `WHITE_PAGES/${handle}/${avatarName}`,
-    avatar: avatarName,
+    avatar_url: minted.url,
     media_type: mediaType,
-    profile: { avatar: avatarName },
+    already: minted.already === true,
+    profile: { avatar_url: minted.url },
+    note: AVATAR_KEY_NOTE,
     commit,
     pushed: process.env.TOWN_PUSH === "1",
   };
@@ -1451,8 +1465,8 @@ export async function updateProfileAtDoor(args, key, db, clone, odb = null) {
 export const updateWindow = paperDoor("window", whole(updateWindowUnlogged));
 // The image doors keep their own names (paper-seam P8b tells them from the
 // paper doors by name), and are whole the same way.
-export function updateProfileAvatar(args, key, db, clone) {
-  return penTransaction(clone, () => profileAvatarWrite(args, key, db, clone));
+export function updateProfileAvatar(args, key, db, clone, odb = null, deps = {}) {
+  return penTransaction(clone, () => profileAvatarWrite(args, key, db, clone, odb, deps));
 }
 export function updateHomeImage(args, key, db, clone, odb = null, deps = {}) {
   return penTransaction(clone, () => homeImageWrite(args, key, db, clone, odb, deps));

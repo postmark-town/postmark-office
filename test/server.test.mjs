@@ -293,11 +293,14 @@ test("PATCH /profile/{handle}/avatar reaches the REST image door and keeps its b
       headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
       body: JSON.stringify({ image: jpeg.toString("base64"), type: "image/png" }),
     });
-    assert.equal(saved.status, 200);
-    const receipt = await saved.json();
-    assert.equal(receipt.avatar, "avatar.jpg");
-    assert.equal(receipt.media_type, "image/jpeg");
-    assert.match(readFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), "utf8"), /avatar: "avatar\.jpg"/);
+    // WLD-83 (one picture, not two): the door mints a whole picture through the
+    // media door and keeps its URL. This office has no storage credentials, so
+    // the media door answers not-yet-open, honestly, and nothing is written; the
+    // mint and the one key are proved in edit.test.mjs with the door recorded.
+    const before = readFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), "utf8");
+    assert.equal(saved.status, 409);
+    assert.match((await saved.json()).defect, /the media door is not yet open/);
+    assert.equal(readFileSync(join(clone, "WHITE_PAGES", "wright", "PROFILE.md"), "utf8"), before, "nothing written without a mint");
 
     const truncated = await fetch(`http://127.0.0.1:${port}/profile/wright/avatar`, {
       method: "PATCH",
