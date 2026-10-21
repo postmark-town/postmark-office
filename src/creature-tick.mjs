@@ -86,9 +86,9 @@ export const LOOKBACK_MS = 7 * 24 * 3600 * 1000;
 export const windowObject = (crossing) => `window-${crossing | 0}`;
 
 export const TICK_ROWS_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
-  WHERE class = '${CREATURE_CLASS}' AND action = ANY($1::text[]) AND at > $2::timestamptz ORDER BY id`;
+  WHERE class = '${CREATURE_CLASS}' AND action = ANY($1::text[]) AND at > $2::timestamptz ORDER BY acts.id`;
 export const PRIOR_ROW_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
-  WHERE class = '${CREATURE_CLASS}' AND action = $1 AND object = $2 ORDER BY id LIMIT 1`;
+  WHERE class = '${CREATURE_CLASS}' AND action = $1 AND object = $2 ORDER BY acts.id LIMIT 1`;
 
 const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
 const isoOf = (t) => (t instanceof Date ? t.toISOString() : typeof t === "number" ? new Date(t).toISOString() : String(t));

@@ -70,7 +70,13 @@ export const NO_GROUND_NEIGHBOURHOOD =
  * — a `whereIs` answer or a `publicResidents` row — because both spell it the
  * same way and a second spelling is how the two answers drifted apart.
  */
-export const isGroundlessDefault = (here) => here?.source === PORCH_SOURCE;
+export const isGroundlessDefault = (here) => here?.source === PORCH_SOURCE || here?.source === GROUNDLESS_SOURCE;
+// ⚑ BOTH SPELLINGS, ONE CLASS (POS-740 G1): the world PR that trues
+// `the-town/the-standing-porch` to the 09-17 ruling moves the engine's own
+// `porchOf` to the Origin, declared as `source: "origin"`. The office reads the
+// engine from the world clone at its blessed ref, so for as long as either
+// engine can answer, the class is keyed on both: the porch's old word and the
+// Origin's. Either way the reader gets this file's one answer, disclosure and all.
 
 /**
  * THE GROUNDLESS STANDPOINT, in `residentStandpoint`'s own vocabulary.

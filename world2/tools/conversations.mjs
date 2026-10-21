@@ -67,6 +67,8 @@
 // SOURCE would be invisible in every comparison until one of them moves. The
 // falsifier states this rather than reporting a green it did not earn.
 
+import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
+
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
             blob: "e1004a5257f6b84756f0a28e22ea3a4cd3baa321", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
@@ -402,8 +404,10 @@ export function sayActsAsEmissions(rows, { centreOf = null, earshotM, fadeMs } =
  * to `sayDials`'s caller, not here.)
  */
 export const ANCHOR_MARKS_SQL = "SELECT slug, status, geometry, data FROM marks";
+// canon's centre, or where a held anchor last stood (POS-688, W4: a say anchored on a thing
+// that is now in someone's hands still has a place)
 export function anchorCentres(markRows = []) {
-  return new Map(markRows.map((m) => [m.slug, m.geometry?.at ?? null]));
+  return new Map(markRows.map((m) => [m.slug, placedCentreOfRow(m)]));
 }
 
 /** The answer's line about the says it could not place, or null when it placed them all. */

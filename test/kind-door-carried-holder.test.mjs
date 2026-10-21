@@ -12,7 +12,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -38,7 +38,10 @@ const PART2_WORLD = Boolean(WORLD) && existsSync(join(WORLD, KEEPING, "mark/thin
 const notPart2 = PART2_WORLD ? false : "the world clone predates LOGOS v2 part 2 (no the-town/consumable): its law has nothing of part 2 to drive";
 const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
-const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL"];
+const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL", "TOWN_CLONE"];
+// NO STAMP LEDGER HERE, on purpose and the same on every machine: what a resident holds reads as unread,
+// so a drop's stake terms (POS-688 D4 step 3) answer the same way locally and on Actions
+const NO_TOWN = mkdtempSync(join(tmpdir(), "o2-no-town-"));
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 let pool;
 
@@ -88,7 +91,9 @@ export function sourceLabel() { return "home"; }
     { rec: { id: PEBBLE, by: "sbx-ana", slug: "a-pebble", kind: "sited", class: "thing", at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A pebble." },
     { rec: { id: BASKET, by: "sbx-ana", slug: "a-basket", kind: "sited", class: "halloween-candy-bag", at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A basket left by the path." },
     { rec: { id: ANA_DOOR_BOWL, by: "sbx-ana", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by ana's door." },
-    { rec: { id: CY_DOOR_BOWL, by: "sbx-cy", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by cy's door." }];
+    { rec: { id: CY_DOOR_BOWL, by: "sbx-cy", slug: "a-door-bowl", kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1010, y: 10 }, extent: { w: 2, h: 2 } }, body: "A carved pumpkin bowl by cy's door." },
+    // cy's home ground, the parcel her where-is names: a thing of hers set down here is free (POS-688 D4 step 3)
+    { rec: { id: "sbx-cy/home", by: "sbx-cy", slug: "home", kind: "parcel", at: { x: 1010, y: 10 }, extent: { w: 25, h: 25 } }, body: "cy's home ground." }];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
   // THE POUCH IS PUBLISHED BY THE WORLD'S OWN FOLD (QA fail 2): its file is written, read back through the
@@ -110,7 +115,7 @@ export function sourceLabel() { return "home"; }
   execFileSync("git", ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qm", "synthetic canon"]);
   const { default: pg } = await import("pg");
   pool = new pg.Pool({ connectionString: store.url("office_api") });
-  Object.assign(process.env, { WORLD_CLONE: repo, WORLD_SINGLE_LOG: "", WORLD_POOL: "0", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "hold", W2_GUARDS: "1" });
+  Object.assign(process.env, { WORLD_CLONE: repo, WORLD_SINGLE_LOG: "", WORLD_POOL: "0", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "hold", W2_GUARDS: "1", TOWN_CLONE: NO_TOWN });
   (await import("../src/world2-pen.mjs")).__setPoolForTest(pool);
   const snap = await import("../src/law-snapshot.mjs");
   resetLawSnapshot = snap.resetLawSnapshot;
@@ -126,6 +131,7 @@ after(async () => {
   resetLawSnapshot?.();
   if (!skip) (await import("../src/world2-pen.mjs")).__setPoolForTest(null);
   if (pool) await pool.end(); await store.stop();
+  rmSync(NO_TOWN, { recursive: true, force: true });
 });
 const KEY = { household: "sbx-cy", handles: new Set(["sbx-cy"]) };
 const KEY_DEE = { household: "sbx-dee", handles: new Set(["sbx-dee"]) };
@@ -288,7 +294,7 @@ test("F2 · B2 driven: withdrawing a holder (not a chest) that holds something i
   assert.equal(took.did, "take", "a portable thing in reach is taken (the refusal is the property's, not the reach's)");
 });
 
-test("F3 · a set-down holder is judged where it was set down: carried 1 km and set down, it is filled where it now stands", { skip }, async () => {
+test("F3 · a set-down holder is judged where it was set down: carried 1 km home and set down (her own ground, so free), it is filled where it now stands", { skip }, async () => {
   await seed();
   await carry(BAG);
   const dropped = await callHoldTool("world_hold", { thing: BAG }, KEY, { verb: "drop" });
@@ -439,6 +445,36 @@ test("holders · carrying a bag, a take of a basket at your feet lands: a second
   await carry(BAG);
   const took = await callHoldTool("world_hold", { thing: BASKET }, KEY, { verb: "take" });
   assert.deepEqual([took.did, took.holder], ["take", "sbx-cy"]);
+});
+
+// ── POS-688 D4 step 3 (Darko 2026-10-19 09:27): a drop off the maker's ground stakes 1✦ ──
+const holdActs = () => owner(async (c) => (await c.query("SELECT action, object FROM acts WHERE class = 'holding' ORDER BY id")).rows);
+
+test("D4 step 3 · THE DOOR: dee sets ana's pebble down on cy's ground (not ana's, so the commons): the terms name ✦1 and nothing is recorded; with accept: true the drop lands and the stake door is asked for the 1✦", { skip }, async () => {
+  await seed();
+  await carry(PEBBLE, "sbx-dee");
+  const before = await holdActs();
+  const terms = await callHoldTool("world_hold", { thing: PEBBLE }, KEY_DEE, { verb: "drop" });
+  assert.equal(terms.recorded, false, JSON.stringify(terms));
+  assert.equal(terms.stake, 1);
+  assert.match(terms.terms, /stakes ✦1 from you onto it/);
+  assert.match(terms.note, /^nothing was recorded. Call again with accept: true/);
+  assert.match(terms.stamps.to_confirm, /accept: true/);
+  assert.deepEqual(await holdActs(), before, "the terms wrote nothing");
+  const dropped = await callHoldTool("world_hold", { thing: PEBBLE, accept: true }, KEY_DEE, { verb: "drop" });
+  assert.equal(dropped.did, "drop", JSON.stringify(dropped));
+  assert.ok(dropped.staked || dropped.stake_bounce, "the stake door was asked after the drop: " + JSON.stringify(dropped));
+  if (dropped.stake_bounce) assert.match(dropped.stake_bounce.hint, /leaves the world at the next settlement unless one does: world { do: "stake"/);
+  assert.equal((await holdActs()).length, before.length + 1, "one drop, recorded once");
+});
+
+test("D4 step 3 · THE DOOR: dee sets cy's lamp down on cy's own ground: free, no terms and no stake", { skip }, async () => {
+  await seed();
+  await carry(LAMP, "sbx-dee");
+  const dropped = await callHoldTool("world_hold", { thing: LAMP }, KEY_DEE, { verb: "drop" });
+  assert.equal(dropped.did, "drop", JSON.stringify(dropped));
+  assert.equal(dropped.staked, undefined);
+  assert.equal(dropped.stake_bounce, undefined);
 });
 
 test("holders · a give of a bag to a resident who carries a bowl lands", { skip }, async () => {

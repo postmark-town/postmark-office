@@ -532,6 +532,9 @@ export function departureRecordOf(row) {
         // a landing says what set you down (WLD-63 row 68 B), so a reader can
         // tell a placement from a walk without a second record
         ...(row.action === "land" ? { landed: { via: p.via ?? null, why: p.why ?? null } } : {}),
+        // a set-down's own words (POS-740: "set down where the berth stood"),
+        // only where the record carries them; no walk the door files has one
+        ...(typeof p.note === "string" && p.note ? { note: p.note } : {}),
       },
     };
   }
