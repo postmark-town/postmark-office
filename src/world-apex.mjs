@@ -2150,6 +2150,16 @@ async function creaturesAt(at, nowMs) {
   } catch { return null; }
 }
 
+/** What you finished first and are owed at the settlement (encounter.mjs § pendingFor), or none. */
+async function pendingAt(handle, nowMs) {
+  if (!handle) return null;
+  try {
+    const [{ creaturesForRead }, { pendingFor }] = await Promise.all([import("./creatures-read.mjs"), import("./encounter.mjs")]);
+    const cur = await creaturesForRead({ nowMs });
+    return cur?.living ? pendingFor(cur.living, handle, nowMs) : null;
+  } catch { return null; }
+}
+
 /** Does the blessed creature law know an encounter's verbs? (The office's read of it; any fault is no.) */
 async function encountersLive() {
   try {
@@ -2935,8 +2945,9 @@ async function apexRead(args, key, ctx = {}) {
     const heldKinds = standing ? await (await import("./world-kinds.mjs")).kindsHeldBy(standing) : null;
     // an encounter near, or nerve spent this window: what you have left (encounter.mjs)
     const nerve = await nerveAt(standing, at, nowMs);
+    const pending = await pendingAt(standing, nowMs);
     const shaped = shapeV2({
-      nerve,
+      nerve, pending,
       heard,
       deep,
       marks,

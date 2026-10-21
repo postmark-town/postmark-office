@@ -17,7 +17,7 @@
 import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 
-import { FINISH_ACTION, LivingSet, loadCreatureLaw, reactTo } from "../src/creatures.mjs";
+import { FINISH_ACTION, LivingSet, loadCreatureLaw, reactTo, warmRosters, __resetRostersForTest } from "../src/creatures.mjs";
 import { NERVE_ACTION, STRIKES_SQL, foldNerve, nerveOf, windowAt, wornBy } from "../src/encounter.mjs";
 import { strikeGuard, worldEncounter } from "../src/encounter-verbs.mjs";
 import { answerWithin } from "../src/creatures-hook.mjs";
@@ -89,7 +89,12 @@ test("ON THE STORE · a party of three: strikes, a shield, a steady, one flees a
       const press = questions.press_on ? Object.fromEntries(Object.keys(questions.press_on.criteria).map((h) => [h, h === prefer ? 1 : 0])) : null;
       return { response: { answers: { reaction: { probabilities: Object.fromEntries(names.map((n) => [n, 1])) }, ...(press ? { press_on: { probabilities: press } } : {}) } } };
     };
-    const seams = { present, households: async () => lookup, flee: (h) => fled.push(h), ask, env: { TYPESAFE_API_KEY: "k" } };
+    // THE RING AS THE TICK KEEPS IT (eval round 1, F3): no presence is handed to the act; the tick's warmRosters
+    // read it, as the writer's tick does, so the shield and the house split land as they would on the box
+    __resetRostersForTest();
+    const warm = () => warmRosters(living, { now: Date.now(), present });
+    await warm();
+    const seams = { households: async () => lookup, flee: (h) => fled.push(h), ask, env: { TYPESAFE_API_KEY: "k" } };
     const d = {
       now: Date.now, clock: Date.now, env: { CREATURE_JUDGE: "jev" }, freeze: () => null,
       creatures: async () => ({ living, law: LAW }),
@@ -125,6 +130,7 @@ test("ON THE STORE · a party of three: strikes, a shield, a steady, one flees a
     assert.equal(c.creatures?.[0]?.pressed?.[0]?.on, "ren", "the shield moved the press onto ren");
     assert.equal(c.creatures[0].pressed[0].shielding, "mo");
     await wait(10_500); // the 10 s window: ren and mo each acted on it a moment ago
+    await warm();
     // D · ren strikes (resolve 2); E · mo strikes and takes the last of it: mo finishes it
     prefer = "ren";
     const dd = await worldEncounter({ act: "strike", creature: ID }, as("ren"), d);

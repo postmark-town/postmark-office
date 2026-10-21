@@ -25,11 +25,11 @@
 // FAIL CLOSED: no law read here, CREATURE_JUDGE=off, or a blessed law with no
 // ENCOUNTER_VERBS refuses every verb with its reason and shows none.
 
-import { capOf, creatureRow, dial, distanceM, judgeMode, recordFinish, ringHolds, ringRosterNow, askJev, JEV_TIMEOUT_MS } from "./creatures.mjs";
-import { AIM_ACTIONS, AIM_GUARD_SQL } from "./creature-verbs.mjs";
+import { capOf, creatureRow, dial, distanceM, judgeMode, recordFinish, ringHolds, ringRosterNow, askJev, JEV_TIMEOUT_MS, seesCreature } from "./creatures.mjs";
+import { AIM_ACTIONS, AIM_GUARD_SQL, SIGHT_M, windowLeftS } from "./creature-verbs.mjs";
 import {
   ENCOUNTER_VERBS, STRIKE_ACTION, STEADY_ACTION, SHIELD_ACTION, STRIKES_SQL, encounterDial, isFinishable, isStrikable,
-  nerveInStore, nerveOf, queueFlee, resolveAfter, resolveOf, strikesOn, windowAt, wornBy, hasResolve, isTempter,
+  nerveInStore, nerveOf, queueFlee, resolveAfter, resolveOf, strikesOn, windowAt, wornBy, hasResolve, isTempter, endingSaid,
 } from "./encounter.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { LINT_PER_TICK, TEMPTED_ACTION, jevLints, openTemptations, outcomeOf, outcomeRows, phaseOf, strikeDamage, talliesOf } from "./temptation.mjs";
@@ -63,6 +63,12 @@ export function encounterPairs({ here, actor, living, law, residents = [], now =
   if (!here || !living || !law?.kindMod?.ENCOUNTER_VERBS || judgeMode(env) === "off") return [];
   const mine = nerveOf(living, actor, now);
   const pairs = [];
+  // in sight but outside its ring: strike shows, with "approach first" (eval round 1, F9)
+  for (const c of living.living(now)) {
+    const kind = law.kindOf(c.kind);
+    if (!isStrikable(kind) || ringHolds(law, c, here) || !seesCreature(law, c, here, SIGHT_M)) continue;
+    if (mine >= encounterDial("strike_cost") && (!hasResolve(kind) || resolveOf(living, c, kind, now) > 0)) pairs.push({ verb: STRIKE_ACTION, object: c.id, approach_first: true });
+  }
   for (const c of finishableAround(here, { living, law, now })) {
     const kind = law.kindOf(c.kind);
     if (isStrikable(kind) && mine >= encounterDial("strike_cost") && (!hasResolve(kind) || resolveOf(living, c, kind, now) > 0)) pairs.push({ verb: STRIKE_ACTION, object: c.id });
@@ -80,8 +86,10 @@ export function encounterPairs({ here, actor, living, law, residents = [], now =
 /** The read's action entries for the encounter verbs in `pairs`, one per verb. */
 export function encounterEntries(pairs) {
   const out = [];
-  const strike = pairs.filter((p) => p.verb === STRIKE_ACTION).map((p) => p.object);
-  if (strike.length) out.push({ action: STRIKE_ACTION, channel: "creature", via: "in its ring", creatures: strike });
+  const strike = pairs.filter((p) => p.verb === STRIKE_ACTION && !p.approach_first).map((p) => p.object);
+  const far = pairs.filter((p) => p.verb === STRIKE_ACTION && p.approach_first).map((p) => p.object);
+  if (strike.length || far.length) out.push({ action: STRIKE_ACTION, channel: "creature", via: "in its ring", creatures: strike,
+    ...(far.length ? { approach_first: far, note: 'a strike is from inside its ring: world { do: "approach", args: { creature } } first' } : {}) });
   for (const verb of [STEADY_ACTION, SHIELD_ACTION]) {
     const on = pairs.filter((p) => p.verb === verb).map((p) => p.object);
     if (on.length) out.push({ action: verb, channel: "creature", via: "in the same ring", residents: on });
@@ -176,7 +184,11 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   if (!ringHolds(law, c, here)) throw bounce(409, dist <= ringOf(law, c) ? `${theOf(law, c)} is beyond the walls of the room you stand in, and a strike is from inside its ring`
     : `${theOf(law, c)} is ${Math.round(dist)} m off, and a strike is from inside its ring (${ringOf(law, c)} m)`,
     `approach it first: world { do: "approach", args: { creature: "${id}" } }. Nothing was done.`);
-  if (capOf(c, actor, { now })) throw bounce(429, `${theOf(law, c)} is still answering you`, `one reaction from a creature to you every ${dial("per_actor_ms") / 1000} s; try again shortly. Nothing was done.`);
+  if (capOf(c, actor, { now })) {
+    // say when (eval round 1: the window cost every player 2–6 refused calls)
+    const s = windowLeftS(c, actor, now);
+    throw bounce(429, `${theOf(law, c)} is still answering you`, `try again in ${s} s (one reaction from a creature to you every ${dial("per_actor_ms") / 1000} s). Nothing was done.`, { retry_after_s: s });
+  }
   const cost = encounterDial("strike_cost");
   // the RAM's word first (no write at all on a plain refusal); the guard's word is the record's
   const mine = nerveOf(living, actor, now);
@@ -207,7 +219,8 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
     ...(hasResolve(kind) ? { resolve: { left: resolveOf(living, c, kind, d.now()), of: kind.resolve, fills_at: new Date(w.ends).toISOString() } }
       : { tallies: { ...talliesOf(living, c, d.now()), ends_at: new Date(w.ends).toISOString() }, damage }),
     nerve: nerveSaid(left),
-    ...(finished?.by === actor ? { finished: true, note: `your strike wore ${theOf(law, c)} down: you finished it, and the settlement ends it` } : {}),
+    ...(finished?.by === actor ? { finished: true, note: `your strike wore ${theOf(law, c)} down: you finished it, and the settlement ends it`,
+      ...(endingSaid(c, d.now()) ? { ending: endingSaid(c, d.now()) } : {}) } : {}),
     ...(answer ? { reaction: answer } : { reaction: null, note: `${theOf(law, c)} did not answer in time; if it answers, its line stands in happening_here` }),
     ...(left === 0 ? { fled: "your nerve is gone: you flee, and stay out until the settlement" } : {}),
   };
@@ -264,7 +277,7 @@ async function aidAt({ d, key, verb, actor, target, here, cr }) {
   living.fold([{ id: String(row.actId), at: atIso, actor, action: verb, object: target, payload }], { advance: false });
 
   // A PUBLIC ACT: every finishable creature whose ring holds it answers it (and may press)
-  const act = { actor, verb, actId: String(row.actId), atIso, point: here, target };
+  const act = { actor, verb, actId: String(row.actId), atIso, point: here, target, targetAt: there };
   const answers = await d.answerRing(act, { ...cr, deadline: d.clock() + ENCOUNTER_WAIT_MS, jevMs: ENCOUNTER_JEV_MS });
   const left = nerveOf(living, actor, d.now());
   if (left === 0) d.flee(actor, { household: key?.household ?? null });

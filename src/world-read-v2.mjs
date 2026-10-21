@@ -440,6 +440,8 @@ export function shapeV2(p) {
     ...(p.stancesAwaiting ? { waiting_on_you: { stances: p.stancesAwaiting, read: 'household { read: "stances" }' } } : {}),
     // an encounter's nerve: what you have left this window, when it fills, and what it is (encounter.mjs § nerveRead)
     ...(p.nerve ? { nerve: p.nerve } : {}),
+    // what you finished first and are owed at the settlement (encounter.mjs § pendingFor; eval round 1, F8)
+    ...(p.pending?.length ? { owed_at_settlement: p.pending } : {}),
     ...(p.note != null ? { note: p.note } : {}),
     ...(p.frame ? { aboard: aboardBlock(p.frame, whole) } : {}),
     ...(sp.seat ? { seat: { ...sp.seat, ground: whole(sp.seat.ground) } } : {}),
