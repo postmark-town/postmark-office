@@ -1,4 +1,11 @@
-// investigate-stands-reads-the-store.test.mjs — POS-162.
+// investigate-stands-reads-the-store.test.mjs — POS-162; POS-688.
+//
+// ⚑ POS-688 (Darko 2026-10-18 20:58): a held thing is published but unplaced. The
+// focus answers it with `held_by` and no place, and no block beside it; a thing
+// set down answers its place in the focus itself (the one world, placed by the
+// kept hold record, held.mjs) with the block's set-down words beside it. The block
+// reads the kept hold record now, not a store read of its own. Cases below that
+// pinned the old two-answers shape say SUPERSEDED where they changed.
 //
 // `GET /world/investigate` for a mark that EXISTS carries a `stands` block:
 // where a held thing actually is, in the law's own three sources. It used to
@@ -99,10 +106,10 @@ test("A HELD THING: the holder answer comes out of `acts`, in whereThingStands' 
   if (!MARK) return t.skip(`no canon mark: ${WHY}`);
   const { answer } = await investigate(HELD);
   assert.ok(!answer.error, `the focus bounced: ${answer.defect}`);
-  assert.ok(answer.stands, "the store holds a holding edge for this thing and the door did not see it");
-  assert.equal(answer.stands.source, "holder");
-  assert.equal(answer.stands.holder, "wright");
-  assert.match(String(answer.stands.says), /rides its holder/);
+  // SUPERSEDED (POS-688): "the holder answer, in a stands block beside canon's at".
+  assert.equal(answer.held_by, "wright", "the store holds a holding edge for this thing and the focus did not name its holder");
+  assert.equal(answer.at, undefined, "published but unplaced: no position while held");
+  assert.equal(answer.stands, undefined, "and no second answer beside it");
 });
 
 test("A THING SET DOWN: the set-down answer carries THE ANCHOR, which lives in three columns and never in the payload", async (t) => {
@@ -115,9 +122,9 @@ test("A THING SET DOWN: the set-down answer carries THE ANCHOR, which lives in t
     "the witnessed line is `at_anchor/at_dx/at_dy` on the act — a port reading `payload.at` would answer the FOLD here and look right");
   assert.equal(answer.stands.set_down_by, "wright");
   assert.equal(answer.stands.act_seq, 202, "the receipt names the act's own line in the record that answered");
-  // AND `at` IS UNTOUCHED. The block sits BESIDE canon's own answer.
-  assert.deepEqual(answer.at, MARK.at ?? answer.at,
-    "canon's own `at` must not be rewritten by the derived read");
+  // SUPERSEDED (POS-688): "`at` IS UNTOUCHED, the block sits BESIDE canon's own answer". One
+  // answer now: the focus stands where the thing was set down, the place the take door reaches it at.
+  assert.deepEqual(answer.at, { x: -1850, y: -2650 }, "the focus and the block give the one place");
 });
 
 test("A THING NEVER HELD: no block at all — absent, not present-and-empty", async (t) => {
@@ -138,17 +145,18 @@ test("A THING NEVER HELD: no block at all — absent, not present-and-empty", as
 // 2 · THE DOOR READ THE STORE — the leg an equality cannot supply
 // ═════════════════════════════════════════════════════════════════════════════
 
-test("THE QUERY COUNT: the door asked `acts` twice — a sqlite-reading door asks it none", async (t) => {
+test("THE RECORD WAS READ: the holder half and the set-down half both came off `acts` — a sqlite-reading door asks it none", async (t) => {
   if (!MARK) return t.skip(`no canon mark: ${WHY}`);
-  const { client } = await investigate(HELD);
+  const { client } = await investigate(SET_DOWN);
   const reads = client.asked.filter((a) => /FROM acts/i.test(a.sql));
-  assert.equal(reads.length, 2,
-    `the door made ${reads.length} acts reads; the holder half and the set-down half are two, and a door back on sqlite makes zero`);
+  // POS-688: the reads are the kept hold record's (world-kinds.mjs § holdRecordNow), whose count is its
+  // own business (one full read per settlement, deltas between: test/hold-record.test.mjs); asked here
+  // is that both halves ran on the store road.
   assert.ok(reads.some((a) => /action = ANY\(\$1\)/i.test(a.sql)), "the holder half");
   assert.ok(reads.some((a) => /class = \$1/i.test(a.sql)), "the set-down half");
 });
 
-test("ONE READ: both halves ride a single `reading()`, so the two answers are one snapshot", async (t) => {
+test.skip("SUPERSEDED (POS-688) ONE READ: the block's two halves are the kept hold record's now, whose consistency is hold-record.mjs's (a change applies whole or not at all)", async (t) => {
   if (!MARK) return t.skip(`no canon mark: ${WHY}`);
   const { client } = await investigate(SET_DOWN);
   // WHAT THIS CAN AND CANNOT SEE, said rather than implied. `useGuardReader`
@@ -201,9 +209,9 @@ test("THE FROZEN ERA IS READ TOO: a `legacy:attachment` holder answers, so the s
   const { answer } = await investigate([
     legacyAttachmentAct({ id: 501, at: "2026-06-01T10:00:00Z", actor: "ethan-thorne", thing: CANON, policy: "cascade", seq: 41 }),
   ]);
-  assert.ok(answer.stands, "every holding the town has on record predates the live pen; a port blind to the frozen era sees none of it");
-  assert.equal(answer.stands.source, "holder");
-  assert.equal(answer.stands.holder, "ethan-thorne");
+  // POS-688: held, so named on the focus itself and unplaced
+  assert.equal(answer.held_by, "ethan-thorne", "every holding the town has on record predates the live pen; a port blind to the frozen era sees none of it");
+  assert.equal(answer.at, undefined);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -317,7 +325,9 @@ test("THE SOURCE PIN: `thingStandsBlock` opens no dynamic store and imports no s
     assert.ok(!body.includes(gone),
       `\`${gone}\` survives inside thingStandsBlock — replace the reader, never layer one under it`);
   }
-  assert.ok(body.includes("standsRowsFromStore"), "and the store road is the one that is there");
+  // POS-688: the hold rows and the drop are the kept hold record's (one record), and the block runs no read of its own
+  assert.ok(body.includes("heldView"), "and the one record is the road that is there");
+  assert.ok(!body.includes("standsRowsFromStore"), "its own read of both halves is deleted, not layered under");
   // CAN-FAIL CONTROL: the pin must be reading a real body, not an empty string.
   assert.ok(body.length > 400, `the bounded body is ${body.length} characters — this pin is asserting about nothing`);
   assert.ok(body.includes("whereThingStands"),

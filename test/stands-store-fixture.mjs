@@ -80,11 +80,19 @@ export function actsClient(acts = [], { claims = [] } = {}) {
       // the same order over rows whose born_at are distinct — and they are,
       // deliberately, so the fixture never decides a tie the real clause owns.
       if (/FROM acts WHERE action = ANY\(\$1\)/i.test(text)) {
-        const [actions, target] = params;
+        // each bound at the placeholder the TEXT names: the target, and the kept
+        // hold record's `afterId` (POS-688 reads the keeper here, whose delta
+        // asks `id > $n`; a fixture that took `params[1]` as the target read an
+        // act id as a thing and answered nobody)
+        const at = (re) => { const m = re.exec(text); return m ? params[Number(m[1]) - 1] : undefined; };
+        const actions = params[0];
+        const target = at(/payload->>'thing'\) = \$(\d+)/i);
+        const afterId = at(/AND id > \$(\d+)/i);
         const bornAt = (a) => (a.action === "legacy:attachment" ? a.payload.at : a.at.toISOString());
         return { rows: acts
           .filter((a) => actions.includes(a.action))
           .filter((a) => target == null || (a.payload?.payload?.target ?? a.payload?.thing) === target)
+          .filter((a) => afterId == null || Number(a.id) > Number(afterId))
           .sort((x, y) => Date.parse(bornAt(x)) - Date.parse(bornAt(y)) || x.id - y.id) };
       }
 

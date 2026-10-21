@@ -191,6 +191,24 @@ async function world() {
   return assembled;
 }
 
+// ── A HELD THING IS PUBLISHED BUT UNPLACED (POS-688, Darko 2026-10-18 20:58) ──
+//
+// The one world, placed by the hold record: a held thing keeps its mark and loses
+// its place (`held_by`, no `at`), a thing set down since the last printout stands
+// where it was set down, and everything else is canon's (held.mjs § placeOf, the
+// one answer). Laid over in `sightFor` (orient, the eyes, investigate, find), in
+// `worldMarkById` (the take door, the hold reads) and in the store twin, so every
+// reader of a thing's place asks one owner. A hold record that cannot be read is
+// no overlay: canon's record, as before.
+// `pool`: the store twin's own store (world2-serve.mjs), whose hold record is its answer's, never the office's.
+/** `carrying: N` on each holder's row of a presence block (POS-688 D5; held-view.mjs § withCarrying). */
+async function withCarryingNow(present) { return (await import("./held-view.mjs")).withCarrying(present); }
+
+export async function heldPlaced(w, { pool = null, markRows = null } = {}) {
+  const [{ heldView, heldViewFrom }, { unplaceHeld }] = await Promise.all([import("./held-view.mjs"), import("./held.mjs")]);
+  return unplaceHeld(w, await (pool ? heldViewFrom(pool, { markRows }) : heldView()));
+}
+
 // ── WHAT THIS STANDPOINT SEES INSIDE A DUNGEON (WLD-5, Darko 2026-10-13 20:31) ──
 //
 // The world tools' ONE function, `standpointSight` (postmark-world
@@ -204,6 +222,7 @@ async function world() {
 // first, standpoint-free answer, so no ledger is read for it, and a clone that
 // predates the function has no dungeon class to hide anything with.
 async function sightFor(w, handle, key = null) {
+  w = await heldPlaced(w); // POS-688: a held thing is unplaced in every resident read, before sight
   const { verbs } = await mods();
   if (typeof verbs.standpointSight !== "function" || verbs.standpointSight(w, {}) === w) return w;
   const who = String(handle ?? "").trim();
@@ -2018,7 +2037,7 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // presence's radius by activity, so v2 asks for every row, uncapped, and
   // without place words (its rows say distance, bearing and what they are
   // doing, never where). v1 asks exactly as it always did.
-  const present = await presentNear(at, {
+  const present = await withCarryingNow(await presentNear(at, {
     ...(crowd ? crowdPresence() : { place: (p) => placeWords(p) }),
     // ⚑ AVAILABLE IS PARKED (2026-09-10, the founder's word). `the-town/available`
     // was world#19, reverted off the record; the derived was voices.mjs's to
@@ -2045,7 +2064,7 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
     // with no roll gets the two-term union it always had.
     roll,
     ...(await keptPresence()), // POS-284: the kept positions, as GET /world/present reads them
-  });
+  }));
   const transport = await transportBlock(w, at, { crossing });
   // An entry queued on this walker's walk, or refused at its arrival, on their
   // own standpoint and nowhere else (WLD-5, Darko's G3). Absent otherwise.
@@ -2066,7 +2085,9 @@ function presenceTelling(present) {
   for (const { residents } of byBand(present.residents)) {
     for (const r of residents) {
       const state = r.aboard ? ", aboard the Post Office" : r.moving ? ", on the road" : "";
-      L.push(`  · ${r.distance_m} m ${r.bearing} — ${r.handle}${state}${r.place ? ` (${r.place})` : ""}`);
+      // a held thing is its holder's contents (POS-688 D5): how many, never which
+      const carrying = r.carrying ? `, carrying ${r.carrying} ${r.carrying === 1 ? "thing" : "things"}` : "";
+      L.push(`  · ${r.distance_m} m ${r.bearing} — ${r.handle}${state}${carrying}${r.place ? ` (${r.place})` : ""}`);
     }
   }
   if (present.capped) L.push(`  · …and ${present.count - present.shown} more within ${present.radius_m} m`);
@@ -2453,7 +2474,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // re-rendering the engine's prose to weave people through it would make the
   // office a second author of the world's voice.
   // v2 (POS-632) reads presence once, through orient's crowd; the eyes skip it.
-  const present = v2 ? null : await presentNear(at, {
+  const present = v2 ? null : await withCarryingNow(await presentNear(at, {
     place: (p) => placeWords(p),
     // (`available` was injected here too — parked; see worldOrient's note.)
     exclude: choice.handle ? [choice.handle] : [],
@@ -2461,7 +2482,7 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
     world: w,
     roll, // DEC-11 — see worldOrient
     ...(await keptPresence()), // POS-284 — see worldOrient
-  });
+  }));
   const section = presenceTelling(present);
   const telling = section ? `${engineTelling ?? ""}\n\n${section}` : engineTelling;
   const transport = await transportBlock(w, at, { crossing });
@@ -2569,7 +2590,7 @@ export async function worldPresent(args = {}, { roll = null } = {}) {
   if (!has) return presenceEveryone({ place, repo: WORLD_CLONE, world: w, roll: roll ?? [], projected, placed });
   const radiusM = Number.isFinite(Number(args.radius_m)) ? Math.max(1, Number(args.radius_m)) : undefined;
   const limit = Number.isFinite(Number(args.limit)) ? Math.max(1, Math.floor(Number(args.limit))) : undefined;
-  return presenceNear({ x, y, place, repo: WORLD_CLONE, world: w, roll: roll ?? [], projected, placed, ...(radiusM ? { radiusM } : {}), ...(limit ? { limit } : {}) });
+  return withCarryingNow(await presenceNear({ x, y, place, repo: WORLD_CLONE, world: w, roll: roll ?? [], projected, placed, ...(radiusM ? { radiusM } : {}), ...(limit ? { limit } : {}) }));
 }
 
 // ── a mark's image, as bytes (world_investigate with_image, 2026-08-23) ──────
@@ -2689,7 +2710,7 @@ export async function worldInvestigate(args = {}, key = null) {
   const w = await sightFor(await world(), chooseStandpoint(args, key).handle ?? null, key);
   const { verbs } = await mods();
   const depth = Number.isFinite(Number(args.depth)) ? Number(args.depth) : 1;
-  const r = verbs.investigate(String(args.mark), w, { depth });
+  const r = (await import("./held.mjs")).withHolder(verbs.investigate(String(args.mark), w, { depth }), w, args.mark); // POS-688: whose hands it is in
 
   // ── THE CANON RECEIPT (2026-09-07, #2526) ───────────────────────────────
   //
@@ -2822,91 +2843,80 @@ export async function worldFind(args = {}, key = null, { words } = {}) {
 }
 
 /**
- * WHERE A THING STANDS, when it is a thing anybody has ever held (lane-h).
+ * WHERE A THING STANDS, when it is a thing anybody has ever set down (lane-h;
+ * POS-688).
  *
- * ⚑ ADDITIVE, AND ABSENT IS THE DEFAULT. The block appears only for a mark the
- * holding record has an edge for — so every mark nobody has ever picked up
- * answers byte-for-byte what it answered before, and the one class of mark this
- * lane is about answers the question walk #12 asked and got the wrong number
- * to. A focus that grew a field on every mark in the town would be a different
- * and much larger change wearing this one's justification.
+ * ⚑ ADDITIVE, AND ABSENT IS THE DEFAULT. The block appears only for a thing the
+ * hold record has set down somewhere the fold does not have it, so every other
+ * mark answers byte-for-byte what it answered before.
  *
- * ⚑ `r.at` STAYS WHAT IT WAS. This block sits BESIDE the folded `at`, it does
- * not overwrite it — canon's own answer is a real fact ("where the world last
- * folded it") and quietly substituting a derived one for it would leave a
- * reader unable to tell the two apart, which is the whole complaint. The block
- * names its source; the reader chooses.
+ * ⚑ A HELD THING HAS NO BLOCK (POS-688, Darko 2026-10-18 20:58). It is
+ * published but unplaced: the focus itself carries `held_by` and no `at` (the
+ * one world, placed by the hold record: held.mjs), so there is no place to add
+ * beside it. This block used to say `{ where: <the holder's standpoint>, source:
+ * "holder" }` next to `focus.at`, which was the read giving two answers to one
+ * question, and the playground's 2026-10-18 finding.
  *
- * Never throws: a store that will not open yields no block, exactly as an
+ * ⚑ ONE RECORD. The hold rows and the drop are the kept hold record's
+ * (world-kinds.mjs § holdRecordNow), the same one every hold read answers from;
+ * this block used to run its own store read of both (`standsRowsFromStore`).
+ * The docket's set-down amends (POS-451) are the one thing it still asks for
+ * itself, because they are the docket's, not the hold record's.
+ *
+ * ⚑ THE SET-DOWN'S WORDS. A drop since the last printout prints at the next
+ * settlement (world2/tools/hold-through.mjs), and says so. A drop from before the
+ * first printout keeps the POS-138 words (`whereThingStands`), untouched: whose
+ * set-down it is, and whether canon follows (D2).
+ *
+ * Never throws: a record that cannot be read yields no block, exactly as an
  * unreadable receipt is absent rather than empty.
  */
 // Exported for `/world2/investigate` (POS-142): the twin hands it the world it
 // assembled from rows and the engine's answer, and the block is this one.
 export async function thingStandsBlock(id, w, r) {
   try {
-    // ⚑ IT READS THE STORE (POS-162, Everything Reads the Store). Both halves —
-    // who holds it and where it was set down — come from `acts`, in ONE read-only
-    // transaction, through `world2-guards.mjs § standsRowsFromStore`. There is no
-    // flag on it and no sqlite under it: the holding record lives in `acts`, the
-    // sqlite journal TRUNCATES at every drain, and a set-down older than the
-    // drain cursor was simply not there to be read.
-    //
-    // ⚑ AND DEC-4 IS NOW STRUCTURAL. This function was a live breach of it
-    // (found by the g3 reviewer, driven on a booted `--role read` worker):
-    // `GET /world/investigate` for a mark that EXISTS reached here, opened the
-    // dynamic store in WRITE mode, and re-created a dropped `emissions` table on
-    // a worker that is supposed to hold no writable handle at all. My own § 2.1
-    // sweep drove all 41 GET routes and saw nothing, because it drove this one
-    // with a mark that does not exist and got a 422 before the store was ever
-    // opened — a sweep whose inputs bounce early cannot see the code underneath
-    // them. The repair was `openDynamicReadOnly`; the store road holds no sqlite
-    // handle at all, and its transaction is `BEGIN READ ONLY`, which Postgres
-    // enforces.
-    //
-    // ⚑ AN UNREADABLE RECORD IS AN ABSENT BLOCK, unchanged. A register that is
-    // not configured answers `null` here, a register that will not answer throws
-    // into the catch below, and both land where `dyn == null` landed: no block on
-    // the card. `whereThingStands`' `unreadable` source is not reachable from
-    // this door and was not reachable before it either — the block is absent
-    // rather than present-and-empty, which is the same distinction one level up.
-    const [{ standsRowsFromStore }, hold] = await Promise.all([
-      import("./world2-guards.mjs"), import("./world-hold.mjs"),
+    const [{ heldView }, { placeOf, HELD_BY }, hold] = await Promise.all([
+      import("./held-view.mjs"), import("./held.mjs"), import("./world-hold.mjs"),
     ]);
-    const rows = await standsRowsFromStore(id);
-    if (!rows) return null; // the register was not asked — the same answer an absent store gave
-    const { attachments, journal, amends } = rows;
-    if (!attachments.some((a) => a.target === id)) return null; // never held — nothing new to say
-    const marks = w?.marks ?? [];
-    const centreOf = (mid) => marks.find((m) => m.id === mid)?.at ?? null;
+    const view = await heldView();
+    if (!view) return null; // the record was not read: the same answer an absent store gave
+    // canon as printed (the overlay may have placed `r`); the caller's answer when canon cannot be read here
+    const canon = (await canonMarkById(id).catch(() => null))?.mark ?? r ?? null;
+    const p = placeOf(id, view, canon);
+    if (!p || p[HELD_BY] != null) return null; // never set down, printed where it stands, or in someone's hands
+    const drop = view.drops.get(String(id)) ?? null;
+    const setter = drop?.actor == null ? null : String(drop.actor);
+    // a thing back where canon has it (a printed drop's twin, or an opposed take's return): nothing new to say
+    if (!p.before_printout && canon?.at && Number(canon.at.x) === p.at.x && Number(canon.at.y) === p.at.y) return null;
+    if (!p.before_printout)
+      return { where: p.at, source: "set-down", set_down_by: setter, act_seq: drop?.seq ?? null,
+        says: `${setter ?? "somebody"} set it down here, and it stands where they stood; the settlement prints it here` };
+    // THE POS-138 ERA, its words untouched: the one set-down, read from the one record
+    const { setDownAmendRows } = await import("./world2-guards.mjs");
     return await hold.whereThingStands(id, {
-      attachments, journal,
-      fold: r?.at ?? null,
-      centreOf,
+      attachments: [...view.last.values()].filter((a) => a.target === String(id)),
+      journal: drop ? [drop] : [],
+      fold: canon?.at ?? null,
+      centreOf: await markCentreOf().catch(() => (mid) => (w?.marks ?? []).find((m) => m.id === mid)?.at ?? null),
       // POS-138: whose house set it down decides whether the set-down is the
       // author's move or a stranger's, unaccepted — the town's household map,
       // never the handle alone. One read of the store's registry (POS-342).
       householdOf: await householdLookup(),
       // …and whether the author's house has answered a stranger's set-down
-      // (POS-138's stance arm). Read only here, where the thing has a holding
-      // history; an unreadable stance record is silence, never an answer.
+      // (POS-138's stance arm). An unreadable stance record is silence.
       stances: await (async () => {
         try { const { stanceRows } = await import("./world-stance.mjs"); return await stanceRows(); }
         catch { return []; }
       })(),
-      // …and whether an amend from the latest drop is on the docket (POS-451),
-      // read in the same snapshot: the re-site is promised over a filed amend,
-      // never over the drop.
-      amends: amends ?? null,
+      // …and whether an amend from the latest drop is on the docket (POS-451):
+      // the re-site is promised over a filed amend, never over the drop.
+      amends: await setDownAmendRows(id).catch(() => null),
       // …and, for an accepted stranger's set-down with no amend on the docket,
       // the escrow behind the mark (the stake read), which says what puts the
       // author's draft forward. Asked only in that branch.
       escrowOf: async (mid) => {
         const sr = await callWorldStakeTool("world_stake_read", { mark: mid });
         return Number.isFinite(Number(sr?.escrow)) ? Number(sr.escrow) : null;
-      },
-      standpointOf: async (h) => {
-        const s = await residentStandpoint(h, w).catch(() => null);
-        return s?.placed ? { x: s.x, y: s.y } : null;
       },
     });
   } catch { return null; }
@@ -3014,6 +3024,20 @@ export function qualifiedByDisclosure(receipt, disclosed = []) {
  * measure" rather than as a refusal.
  */
 export async function worldMarkById(id) {
+  const w = await heldPlaced(await world()); // POS-688: placed by the hold record, as every resident read is
+  const marks = w.marks ?? [];
+  return {
+    mark: marks.find((m) => m.id === String(id)) ?? null,
+    canon_marks: marks.length, // load-bearing: § canonMarkById below says why
+  };
+}
+
+/**
+ * ONE MARK AS CANON PRINTED IT, with no hold record laid over: for the pens that
+ * file an amend FROM the record (the author's set-down amend, POS-138), which must
+ * copy the mark's own lines, never the read's placement of it.
+ */
+export async function canonMarkById(id) {
   const w = await world();
   const marks = w.marks ?? [];
   return {
@@ -3046,9 +3070,15 @@ export async function worldMarksAll() { return (await world()).marks ?? []; }
 // § centreOf): the inverse every reader of an act's anchor needs. The save's
 // emission lines compose a voice act's anchor and offset back into x,y with it
 // (POS-269), so they read the same centres the stamp wrote against.
+//
+// AND WHERE A HELD ANCHOR LAST STOOD (POS-688, W4). A thing printed as held has no
+// `at`, and 1,682 acts on prod (2026-10-18) were anchored on 23 things in someone's
+// hands; their places compose against where each thing last stood, which the
+// settlement's write-through keeps in the store row (held.mjs § PLACED).
 export async function markCentreOf() {
   const byId = new Map(((await world()).marks ?? []).map((m) => [m.id, m.at ?? null]));
-  return (id) => byId.get(id) ?? null;
+  const placed = await (await import("./held-view.mjs")).placedNow();
+  return (id) => byId.get(id) ?? placed.get(id)?.at ?? null;
 }
 
 // THE WORLD READ'S HEADER (postmark#2934): which settlement this answer stands
@@ -3579,7 +3609,14 @@ export async function witnessStampAt(handle, here, known = null) {
     const centreOf = (id) => marks.find((m) => m.id === id)?.at ?? null;
     const chainAt = (p) => verbs.containmentChain(p, marks);
 
-    const at = anchorAt(here, { chain: chainAt(here), centreOf });
+    // NEVER A THING (POS-688, W4): a thing can be picked up, and a held thing has
+    // no place for the act to compose against, so the anchor is the innermost
+    // ground that is not a thing (the-town/the-not-ground: a thing is not ground).
+    const [{ groundChain }, { markClassOf }] = await Promise.all([import("./held.mjs"), import("./world-grants.mjs")]);
+    const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
+    const byId = new Map(marks.map((m) => [m.id, m]));
+    const groundAt = (p) => groundChain(chainAt(p), byId, thingOpts);
+    const at = anchorAt(here, { chain: groundAt(here), centreOf });
 
     // `presentNear` is null when the presence layer is switched off at this
     // office, and `{unavailable}` when it tripped. Both are "could not see",
@@ -3587,7 +3624,7 @@ export async function witnessStampAt(handle, here, known = null) {
     const seen = await presentNear(here, { exclude: [handle], repo: WORLD_CLONE, ...(await keptPresence()) });
     const witnesses = seen == null ? pinWitnesses({ unread: "presence-off" })
       : seen.unavailable ? pinWitnesses({ unread: seen.unavailable })
-      : pinWitnesses({ residents: seen.residents ?? [], centreOf, chainAt });
+      : pinWitnesses({ residents: seen.residents ?? [], centreOf, chainAt: groundAt }); // a witness is pinned to ground too, never a thing (W4)
     return { at, witnesses };
   } catch (e) {
     return unread(`witness-read-threw: ${plainReason(e, "files", "a witness stamp")}`); // the row is published: never the raw error (POS-657)
@@ -3697,6 +3734,26 @@ async function groundMinimumStake(clean, canon) {
   // solo grain cannot see a housemate's parcel. The act takes the safe read
   // (the mark stays a draft); `markStandsOnOwnGround` must not take it as "commons".
   return { ...commons, own, ...(houses ? {} : { registry_unread: true }) };
+}
+
+/**
+ * WHAT A DROP STAKES, BY THIS SAME RULE (POS-688 D4 step 3, Darko 2026-10-19
+ * 09:27): a held thing set down on commons ground stakes 1✦ from the dropper,
+ * the same as leave-mark's "elsewhere you stake 1✦". A set-down moves a
+ * published mark's place, so it is leave-mark's AMENDMENT verdict, asked of the
+ * thing as the drop will print it (at the dropper's spot, with its own extent):
+ * `groundMinimumStake`, `escrowBehindMark` and `putForwardVerdict`, never a
+ * second copy. Its maker's ground is free, and so is a thing whose stamps
+ * already cover the ground; anything else needs the ground's minimum staked.
+ * The thing keeps its maker, so the ground is judged for the maker, which is
+ * the answer the settlement gives too: it walks a mark's ground by its author.
+ */
+export async function dropStakeVerdict({ thing, by, at, extent = null }) {
+  const ground = await groundMinimumStake({ by, kind: "sited", at, extent: extent ?? { w: 1, h: 1 } }, canonForGuards());
+  const min = Number(ground?.min) || 0;
+  const escrowBehind = min >= 1 ? await escrowBehindMark(thing) : 0;
+  const verdict = putForwardVerdict({ amending: true, escrowBehind, groundMin: min });
+  return { min, ground: ground?.ground ?? null, escrow_behind: escrowBehind, need: verdict.put_forward ? 0 : min };
 }
 
 /**
