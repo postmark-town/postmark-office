@@ -783,6 +783,7 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   const PINS = JSON.parse(readFileSync(join(import.meta.dirname, "clone-pins.json"), "utf8"));
   const worldHead = execFileSync("git", ["-C", worldClone(), "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const gold = readFileSync(GOLD, "utf8");
+  console.log("F7C5-NOW-BEGIN" + JSON.stringify(now) + "F7C5-NOW-END"); // TEMPORARY (POS-672 re-pin): the page CI computes, read off the log; removed next commit
   if (worldHead === PINS.world.sha) {
     assert.equal(JSON.stringify(now), gold,
       "the morning page moved — every byte here is served on every doorstep, and this design exists to keep that number still");
