@@ -29,6 +29,7 @@ import assert from "node:assert/strict";
 
 import { localDevTarget } from "./helpers/dev-target.mjs";
 import { join } from "node:path";
+import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { PROD_DB, groundOf, groundTakenIn, mistsSafeBox, runRehearsal, renderReport, storeClients, targetFromFiles } from "../tools/dev-rehearsal.mjs";
@@ -84,6 +85,11 @@ test("one crossing, end to end, through the dev office's doors, the Mists at the
   const sandboxVerdict = async (sha) => ({ runs: 1, status: "completed", conclusion: "success", url: "(the local stand-in's verdict)", head_sha: sha });
   const r = await runRehearsal(target({ sandboxVerdict }), { log: (l) => lines.push(l) });
   const text = renderReport(r);
+  // ON FAILURE, THE REPORT GOES TO THE JOB TOO (POS-746): a test's own output lands only in its shard's
+  // artifact, which a rerun replaces, so a red step was lost once. CI's step summary is kept per attempt;
+  // locally the assertion below carries the report as before.
+  if (!r.green && process.env.GITHUB_STEP_SUMMARY)
+    try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### dev-rehearsal-local: not green\n\n~~~\n${text}\n~~~\n`); } catch { /* the assertion still says it */ }
   // the store's own database: w2_devsandbox_rehearsal, or on a pool tree t<pid>_<n>_w2_devsandbox_rehearsal (POS-479)
   assert.match(dev.store.database, /^(t\d+_\d+_)?w2_devsandbox_rehearsal$/);
   assert.match(lines[0], new RegExp(`^dev-rehearsal: target store ${dev.store.database} \\(the dev office's, from .*\\); not world2_dev$`));
