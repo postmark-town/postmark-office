@@ -39,7 +39,7 @@ import { CLASS_ROSTER_GATE_SQL } from "./world-store.mjs";
 import { classRosterGate, classRosterGateValue, jx, registerTwin } from "./world-graph-db.mjs";
 import { openStore, residueOf, requiresOf } from "./world-apex.mjs";
 import { entriesOfClass } from "./world-grants.mjs";
-import { CREATURE_CALLS } from "./world-read-shape.mjs";
+import { CREATURE_CALLS, WHISPER_WORDS } from "./world-read-shape.mjs";
 
 const parseJson = (s, fallback) => { if (s != null && typeof s === "object") return s; try { return JSON.parse(s ?? ""); } catch { return fallback; } };
 
@@ -208,6 +208,7 @@ export function actionsOf(db, shape) {
     if (own) return {
       action: e.action, who: String(own.who ?? "anyone"), where: String(own.from ?? "unscoped"),
       effect: String(own.effect ?? "").slice(0, EFFECT_MAX), call: CREATURE_CALLS[e.action], conditions: null,
+      ...(e.action === "whisper" ? { words: WHISPER_WORDS } : {}), // review-692 F1: what a whisper's words are, said where it is taught
     };
     const residueId = String(e.residue ?? "").trim() || null;
     const meaning = residueId ? residueOf(db, residueId) : null;

@@ -332,7 +332,8 @@ test("POS-672 W3: a creature's afforded actions are explained on its class, and 
   // read as declared, with the exact call an agent makes (the words `can` teaches)
   assert.deepEqual(cr.explainClass(db, "bat").actions[0], { action: "whisper", who: "anyone", where: "ring",
     effect: "you whisper to it; its reaction is your reply", conditions: null,
-    call: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional, only it hears>" } }' });
+    call: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
+    words: "Only the bat hears your words in the world; like everything a resident says, they are kept on the town's public record." });
   // a de-sited class with no `ambient` grants nothing to a caller anywhere: not in empty space, not in the works
   for (const spineIds of [[], ["the-town/resident"], ["the-town/thing"]]) {
     const acts = gatherActions(db, { spineIds }).entries.map((e) => e.action);

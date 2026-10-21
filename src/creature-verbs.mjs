@@ -39,6 +39,7 @@
 
 import { capOf, dial, distanceM, judgeMode } from "./creatures.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
+import { WHISPER_WORDS } from "./world-read-shape.mjs";
 
 /** The six verbs this door answers (the world's AFFORDED_VERBS, as ruled). */
 export const CREATURE_VERBS = Object.freeze(["watch", "approach", "shoo", "call", "offer", "whisper"]);
@@ -64,7 +65,7 @@ export const CREATURE_TOOLS = Object.freeze([{
     creature: { type: "string", description: "the creature, by its id as who, find: and investigate: give it (creature:<kind>-<crossing>-<n>)" },
     handle: { type: "string", description: "which of your residents acts, when your key holds several" },
     kind: { type: "string", description: "offer only: the consumable kind you hold out, one of it (with one kind in hand it may be left out)" },
-    words: { type: "string", description: `call or whisper only, at most ${WORDS_MAX} characters: a call's words are heard nearby like a say; a whisper's reach only the bat` },
+    words: { type: "string", description: `call or whisper only, at most ${WORDS_MAX} characters: a call's words are heard nearby like a say. A whisper's: ${WHISPER_WORDS}` },
   }, additionalProperties: false },
 }]);
 
@@ -172,15 +173,56 @@ export async function worldCreature(args = {}, key = null, deps = {}) {
     `the world's creature law at the blessed ref declares no afforded actions, so none can be aimed; they arrive with a settlement. Nothing was done.`);
 
   // WHICH CREATURE
-  const now = d.now();
+  const now0 = d.now();
   const here = await d.standpoint(actor);
   if (!here) throw bounce(422, `the world doesn't know where ${actor} stands yet`, "an afforded action is taken from where you stand: walk somewhere first. Nothing was done.");
   const raw = String(args.creature ?? "").trim();
   if (!raw) {
-    const near = living.living(now).filter((c) => distanceM(here, c) <= SIGHT_M).map((c) => c.id);
+    const near = living.living(now0).filter((c) => distanceM(here, c) <= SIGHT_M).map((c) => c.id);
     throw bounce(422, `${verb} which creature?`, near.length ? `creature: one of ${near.join(", ")}. Nothing was done.` : `no creature is in sight; world { find: "creature" } names the nearest. Nothing was done.`);
   }
   const id = raw.startsWith("creature:") ? raw : `creature:${raw}`;
+  // ONE AT A TIME, ATOMICALLY (D6; review-692 F3): every aim one resident takes at
+  // one creature is judged and written in turn, so two at once cannot both pass
+  // the window. In this office, a queue per (resident, creature) holds the second
+  // until the first's reaction is folded, and the window then refuses it; between
+  // two offices (a deploy's overlap), the trigger's own write takes an advisory
+  // lock on the pair and refuses an aim the record shows inside the window (aimGuard).
+  return aimTurn(`${actor}|${id}`, () => aimAt({ d, args, key, verb, actor, id, here, cr }));
+}
+
+const aims = new Map(); // "<resident>|<creature>" -> the tail of that pair's queue
+/** Run `fn` after every earlier aim by this resident at this creature has finished. */
+function aimTurn(pair, fn) {
+  const prev = aims.get(pair) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.catch(() => {});
+  aims.set(pair, tail);
+  tail.then(() => { if (aims.get(pair) === tail) aims.delete(pair); });
+  return next;
+}
+
+/** The record's half of D6, inside the trigger's own transaction: the pair's lock, then any aim or reaction inside the window. */
+export const AIM_GUARD_SQL = `SELECT 1 AS hit FROM (
+    SELECT actor, action, at FROM acts WHERE object = $2 ORDER BY id DESC LIMIT 50) mine
+  WHERE mine.actor = $1 AND mine.action = ANY($3::text[]) AND mine.at > now() - ($4::int * interval '1 millisecond')
+  UNION ALL SELECT 1 FROM (
+    SELECT action, at, payload FROM acts WHERE actor = $2 ORDER BY id DESC LIMIT 50) its
+  WHERE its.action = 'react' AND its.payload->>'to' = $1 AND its.at > now() - ($4::int * interval '1 millisecond')
+  LIMIT 1`;
+export const AIM_ACTIONS = Object.freeze(["watch", "shoo", "call", "whisper", "units:offer"]);
+export function aimGuard(actor, creature) {
+  return async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-aim:${actor}:${creature}`]);
+    const { rows } = await client.query(AIM_GUARD_SQL, [String(actor), String(creature), [...AIM_ACTIONS], dial("per_actor_ms")]);
+    if (rows.length) throw bounce(429, `${creature} is still answering you`,
+      `one reaction from a creature to you every ${dial("per_actor_ms") / 1000} s; try again shortly. Nothing was done.`);
+  };
+}
+
+async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
+  const { living, law } = cr;
+  const now = d.now();
   const c = living.byId.get(id);
   if (!c) throw bounce(404, `no creature ${id}`, `world { find: "creature" } names the living ones. Nothing was done.`);
   if (c.gone || !(c.fades_at > now))
@@ -202,7 +244,7 @@ export async function worldCreature(args = {}, key = null, deps = {}) {
   const hasWords = args.words != null && String(args.words).trim() !== "";
   if (hasWords && verb !== "call" && verb !== "whisper") throw bounce(422, `${verb} carries no words`, "words go with a call or a whisper. Nothing was done.");
   const words = hasWords ? String(args.words).replace(/\s+/g, " ").trim() : null;
-  if (words && words.length > WORDS_MAX) throw bounce(422, `${words.length} characters is more than a ${verb} carries`, `at most ${WORDS_MAX}. Nothing was done.`);
+  if (words && words.length > WORDS_MAX) throw bounce(422, `${words.length} characters is more than a ${verb} carries`, `at most ${WORDS_MAX}.${verb === "whisper" ? ` ${WHISPER_WORDS}` : ""} Nothing was done.`);
 
   // THE ACT'S OWN ROW: the trigger the creature answers (W1)
   let trigger = null;   // { actId, atIso }
@@ -210,7 +252,7 @@ export async function worldCreature(args = {}, key = null, deps = {}) {
   let othersRows = null; // an approach's walk, handed to every other creature
   let offered = null;
   if (verb === "offer") {
-    const r = await d.offer({ kind: args.kind ?? null, creature: id }, key, actor);
+    const r = await d.offer({ kind: args.kind ?? null, creature: id, guard: aimGuard(actor, id) }, key, actor);
     if (r?.error) return r;
     trigger = { actId: String(r.seq), atIso: isoOf(r.written_at) ?? new Date(d.now()).toISOString() };
     offered = r.offered ?? { kind: r.kind, name: r.kind };
@@ -241,9 +283,9 @@ export async function worldCreature(args = {}, key = null, deps = {}) {
       actor, action: verb, object: id, cls: "creature",
       payload: { kind: c.kind, ...(verb === "whisper" && words ? { words } : {}), ...(verb === "call" && words ? { said: true } : {}) },
       effect: `${actor} ${{ watch: "watched", shoo: "shooed", call: "called to", whisper: "whispered to" }[verb]} ${theOf(law, c)}`,
-    }, key);
+    }, key, { guard: aimGuard(actor, id) });
     trigger = { actId: String(row.actId), atIso: isoOf(row.written_at) ?? new Date(d.now()).toISOString() };
-    if (words) extra = { words };
+    if (words) extra = { words, ...(verb === "whisper" ? { words_note: WHISPER_WORDS } : {}) };
   }
 
   // THE REPLY IS THE REACTION (call 7): that creature alone, within AIMED_WAIT_MS
@@ -281,9 +323,9 @@ async function liveDeps(given) {
     offer: async (a, k, actor) => kinds.callKinds("offer", a, k, actor, await units.liveUnitDeps()),
     approach: async (a, k, creature) => act.captured(() => world.walkApproach(WORLD_CLONE, a, k, creature)),
     say: (a, k) => world.sayForCall(a, k),
-    write: async (entry, k) => {
+    write: async (entry, k, { guard = null } = {}) => {
       const { at, witnesses } = await world.witnessStamp(entry.actor);
-      return journal.appendActFlipped(null, { crossing: crossings.currentCrossing(), at, witnesses, household: branches.resolvedWorldHousehold(k), ...entry });
+      return journal.appendActFlipped(null, { crossing: crossings.currentCrossing(), at, witnesses, household: branches.resolvedWorldHousehold(k), ...entry }, guard ? { guard } : {});
     },
     answer: (a, deps) => hook.answerWithin(a, deps),
     others: (rows, except) => hook.creaturesAnswer(rows, {}, { except }).then((r) => r?.creatures ?? []),

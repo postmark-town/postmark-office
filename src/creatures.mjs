@@ -772,6 +772,14 @@ export function applyReaction(law, creature, kind, reaction, scores = {}) {
 export const lineOf = (law, reaction, actor, { offered = null, heard = null } = {}) =>
   law.kindMod.voiceLine(reaction, { actor, ...(offered ? { offered } : {}), ...(heard ? { heard } : {}) });
 
+/** D5: a creature repeats at most this many words, the last ones said. */
+export const HEARD_WORDS_MAX = 5;
+/** The last HEARD_WORDS_MAX words of `said`, as plain text, or null when there are none. */
+export const heardWords = (said) => {
+  const w = String(said ?? "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).slice(-HEARD_WORDS_MAX).join(" ");
+  return w || null;
+};
+
 /** The words a remembered or stored reaction's line was filled with (POS-672): what was offered, what was repeated. */
 export const lineWords = (r) => ({ offered: r?.offered?.name ?? r?.offered?.kind ?? null, heard: typeof r?.heard === "string" ? r.heard : null });
 
@@ -982,8 +990,9 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // asked, and the ear is bounded like the read; none heard is none to repeat
     const { clock, deadline } = deps;
     const readsHeard = kind.reactions.some((r) => /\bheard\.any\b/.test(String(r.src ?? "")));
-    const heard = act.heard ?? (readsHeard && deps.heardFor
-      ? await within(deps.heardFor(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null);
+    // "a few words" (D5): the world fills {heard} with whatever it is handed, so the cap is the office's, here, on every path
+    const heard = heardWords(act.heard ?? (readsHeard && deps.heardFor
+      ? await within(deps.heardFor(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null));
     const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor, heard });
     const allowed = allowedReactions(law, kind, scope);
     if (!allowed.length) return null;

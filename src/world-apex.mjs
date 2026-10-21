@@ -2949,6 +2949,48 @@ export function actCaught(e, done = {}) {
     { ...(e.choices ? { choices: e.choices } : {}), ...(e.walk ? { walk: e.walk } : {}) }), ...done };
 }
 
+/**
+ * A CREATURE'S AFFORDED ACTION AT THE APEX (POS-672): the envelope judged against
+ * its grammar (CREATURE_TOOLS, schema only) and the door's own fields, then the
+ * door, under the act's retry key like every world act (review-692 F2: a retried
+ * offer must not use up a second unit; the key rides the act's first row, the
+ * offer's `units:offer`, a call's own row past its say, an approach's walk).
+ * `kept` and `door` are the seams a test drives.
+ */
+export async function dispatchCreatureVerb(action, args, key, { kept = null, door = worldCreature } = {}) {
+  const envelope = parseEnvelope(args);
+  if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope)))
+    return bounce(422, "`args` must be an object", `the act's own fields ride inside it — world { do: "${action}", args: { creature: "…" } }`);
+  const declared = fullPropsFor("world_creature") ?? {};
+  const doorOwn = new Set(DOOR_FIELDS.world_creature ?? []);
+  const unknown = Object.keys(envelope ?? {}).filter((k) => !(k in declared) && !doorOwn.has(k));
+  if (unknown.length) return bounce(422, `world_creature does not take: ${unknown.join(", ")}`, `the fields it takes: ${[...Object.keys(declared), ...doorOwn].join(", ")}`);
+  const { do: _d, telling: _t, args: _e, read_shape: _s, ...rest } = args;
+  const fields = envelope && typeof envelope === "object" ? { ...rest, ...envelope } : { ...rest };
+  const done = { did: action, via: "in sight", from: "the-town/creature", dispatched_to: "world_creature" };
+  const nonce = fields.nonce ?? null;
+  if (nonce != null) {
+    const bad = nonceDefect(nonce);
+    if (bad) return bounce(422, bad.defect, bad.hint);
+    delete fields.nonce;
+  }
+  const run = () => door({ ...fields, act: action }, key);
+  try {
+    if (nonce == null) {
+      const result = await run();
+      return result?.error === "bounce" ? { ...result, ...done } : { ...done, result };
+    }
+    const keyed = await actUnderNonce({ action, nonce, kept: kept ?? await actsHaveNonce(), run,
+      actors: [...new Set([...(key?.handles ?? []), standingHandle(args, key)].filter(Boolean))] });
+    if (keyed.duplicate) return { ...done, result: keyed.duplicate };
+    const result = keyed.result;
+    return result?.error === "bounce" ? { ...result, ...done } : { ...done, result, ...(keyed.disclosure ?? {}) };
+  } catch (e) {
+    if (!e?.code) throw e;
+    return actCaught(e, done);
+  }
+}
+
 async function apexDo(args, key, ctx = {}) {
   const action = String(args.do ?? "").trim();
 
@@ -2979,22 +3021,7 @@ async function apexDo(args, key, ctx = {}) {
   // classes do, and the door judges sight, ring and the window itself.
   if (CREATURE_VERBS.includes(action)) {
     if (actor) return bounce(422, "a creature's afforded actions are a resident's", 'aim them as one of your residents (handle:), never as: "human". Nothing was done.');
-    const envelope = parseEnvelope(args);
-    if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope)))
-      return bounce(422, "`args` must be an object", `the act's own fields ride inside it — world { do: "${action}", args: { creature: "…" } }`);
-    const declared = fullPropsFor("world_creature") ?? {};
-    const unknown = Object.keys(envelope ?? {}).filter((k) => !(k in declared));
-    if (unknown.length) return bounce(422, `world_creature does not take: ${unknown.join(", ")}`, `the fields it takes: ${Object.keys(declared).join(", ")}`);
-    const { do: _d, telling: _t, args: _e, read_shape: _s, ...rest } = args;
-    const fields = envelope && typeof envelope === "object" ? { ...rest, ...envelope } : rest;
-    const done = { did: action, via: "in sight", from: "the-town/creature", dispatched_to: "world_creature" };
-    try {
-      const result = await worldCreature({ ...fields, act: action }, key);
-      return result?.error === "bounce" ? { ...result, ...done } : { ...done, result };
-    } catch (e) {
-      if (!e?.code) throw e;
-      return actCaught(e, done);
-    }
+    return dispatchCreatureVerb(action, args, key);
   }
 
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`

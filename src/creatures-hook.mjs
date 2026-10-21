@@ -64,7 +64,7 @@
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import {
-  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, reactTo,
+  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, reactTo,
 } from "./creatures.mjs";
 import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
@@ -228,12 +228,8 @@ export function answerWithin(act, { living, law, around = aroundCreature, heardF
 
 // ── what a creature could repeat (POS-672 D5) ───────────────────────────────
 
-/** How far back a creature's ear reaches for words to repeat, and how many of them. */
+/** How far back a creature's ear reaches for words to repeat (how many: creatures.mjs § HEARD_WORDS_MAX). */
 export const HEARD_WINDOW_MS = 30 * 60_000;
-export const HEARD_WORDS = 5;
-
-/** The last HEARD_WORDS words of `said`, as plain text. */
-export const lastWords = (said, n = HEARD_WORDS) => String(said ?? "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean).slice(-n).join(" ");
 
 /**
  * The words a creature could repeat (D5, ruled 2026-10-20 22:37): the last few
@@ -246,8 +242,7 @@ export async function creatureHeard(creature, act, { heardAt = null, nowMs = Dat
   const rows = await hear({ x: creature.x, y: creature.y }, { cap: 3 });
   const fresh = (rows ?? []).filter((h) => Number.isFinite(h.at_ms) ? nowMs - h.at_ms <= HEARD_WINDOW_MS : true);
   const newest = fresh.at(-1);
-  const words = newest ? lastWords(newest.said) : "";
-  return words || null;
+  return newest ? heardWords(newest.said) : null;
 }
 
 // ── the creature's own world read (W9) ──────────────────────────────────────

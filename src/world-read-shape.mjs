@@ -48,13 +48,13 @@ export function readShape(env = process.env) {
   return "v0";
 }
 
-// ── the one-liners (Darko-approved wording, 2026-10-09) ─────────────────────
-//
-// Every field named here is checked against the act's real schema by
-// test/world-read-shape.test.mjs. Two names differ from the issue's draft
-// because the schema says otherwise: walk's point is `to_x` + `to_y` (the
-// apex's own names, FIELD_ALIASES), not `to`; and exit takes an optional
-// `mark`, so it is not "no fields".
+/**
+ * WHAT A WHISPER'S WORDS ARE (POS-672 D4, ruled 2026-10-20 22:37, review-692 F1):
+ * heard in the world by the bat alone, and kept on the record, which is public.
+ * One sentence, said wherever a whisper is taught or answered.
+ */
+export const WHISPER_WORDS = "Only the bat hears your words in the world; like everything a resident says, they are kept on the town's public record.";
+
 /**
  * A creature's afforded actions, as the exact call (POS-672; Wright 2026-10-20:
  * "an agent learns the exact call"). `can`'s lines and explain's afforded
@@ -66,9 +66,16 @@ export const CREATURE_CALLS = Object.freeze({
   shoo: 'world { do: "shoo", args: { creature: "<its id>" } }',
   call: 'world { do: "call", args: { creature: "<its id>", words: "<optional, heard like a say>" } }',
   offer: 'world { do: "offer", args: { creature: "<its id>", kind: "<a consumable kind you carry>" } }',
-  whisper: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional, only it hears>" } }',
+  whisper: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
 });
 
+// ── the one-liners (Darko-approved wording, 2026-10-09) ─────────────────────
+//
+// Every field named here is checked against the act's real schema by
+// test/world-read-shape.test.mjs. Two names differ from the issue's draft
+// because the schema says otherwise: walk's point is `to_x` + `to_y` (the
+// apex's own names, FIELD_ALIASES), not `to`; and exit takes an optional
+// `mark`, so it is not "no fields".
 export const ONE_LINERS = Object.freeze({
   // the pace is the resident class's own dial, never this sentence's (#455 review, finding 5): see `oneLine`
   walk: { says: "Walk to a mark or a point, at about 5 km an hour.", fields: ["mark_id or to_x + to_y", "mode?", "enter_on_arrival?"] },
@@ -93,7 +100,7 @@ export const ONE_LINERS = Object.freeze({
   shoo: { says: `Shoo a creature whose ring you stand in, ${CREATURE_CALLS.shoo}; its reaction is your reply.`, fields: ["creature"] },
   call: { says: `Call to a creature in sight, ${CREATURE_CALLS.call}; its reaction is your reply.`, fields: ["creature", "words"] },
   offer: { says: `Hold out one consumable you carry to a creature whose ring you stand in, ${CREATURE_CALLS.offer}; it is used up, whatever it does.`, fields: ["creature", "kind"] },
-  whisper: { says: `Whisper to a creature whose ring you stand in, ${CREATURE_CALLS.whisper}; only it hears your words.`, fields: ["creature", "words"] },
+  whisper: { says: `Whisper to a creature whose ring you stand in, ${CREATURE_CALLS.whisper}. ${WHISPER_WORDS}`, fields: ["creature", "words"] },
 });
 
 /** The field names a one-liner's list mentions ("mark_id or to_x + to_y" names three; "body (≤150)" names body). */

@@ -484,7 +484,9 @@ export async function callKinds(route, args, key, actor, deps) {
           `an offer is one of a consumable kind you carry; leave-mark { kind, count: 1, to: "${actor}" } makes one into your hands (explain: "candy" lists the kinds). Nothing was changed.`);
         const edge = selectKind(edible, args.kind ?? null, { where: "your hands", verb: "offer" });
         const plan = { action: UNIT_ACTION.offer, object: creature, moves: [{ from: String(actor), to: null, kind: edge.kind, n: 1 }], edge: { giver: String(actor), receiver: null } };
-        const w = await writeKinds(deps, key, actor, plan, { words: `${actor} held out 1 ${edge.kind} to ${creature}, and it was used up`, instant: true });
+        // `guard`: the creature door's half of D6 in this write's own transaction (creature-verbs § aimGuard)
+        const w = await writeKinds(deps, key, actor, plan, { words: `${actor} held out 1 ${edge.kind} to ${creature}, and it was used up`, instant: true,
+          ...(typeof args.guard === "function" ? { guard: args.guard } : {}) });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
         const rec = view.record(edge.kind);
         return { did: "offer", kind: edge.kind, count: 1, ...w, holds: await shownIn(after, actor, attachments, view, deps),

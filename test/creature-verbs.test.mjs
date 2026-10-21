@@ -238,7 +238,7 @@ test("every verb, every kind: the reply is one of the kind's reactions for that 
 test("offer (call 2, D3): the hold lane uses one up toward the creature, its row is the trigger, and the line names what was held out", async () => {
   const d = door({ here: { x: 2010, y: 0 }, pick: { accept: 1 } });
   const r = await d.run({ act: "offer", creature: WOLF, kind: "hoard-coins" });
-  assert.deepEqual(d.calls.offer, [{ kind: "hoard-coins", creature: WOLF }]);
+  assert.deepEqual(d.calls.offer.map(({ guard, ...a }) => a), [{ kind: "hoard-coins", creature: WOLF }]);
   assert.equal(d.calls.write.length, 0, "the offer's row is the hold lane's units:offer, not a second row");
   assert.equal(d.calls.answer[0].act.actId, "901");
   assert.deepEqual(d.calls.answer[0].act.offered, { kind: "hoard-coins", name: "hoard coins", body: "Hard-sugar coins stamped with a ridge of red spikes." });
@@ -295,7 +295,7 @@ test("D5: the raven repeats a few words heard in public, filled by code; nothing
       write: async (rows) => ({ prior: false, rows: rows.map((r) => ({ id: "4", at: r.written_at, actor: r.actor, action: r.action, object: r.object, payload: r.payload })) }) });
   const [r] = await run("meet me by the old mill");
   assert.equal(r.reaction, "mimic");
-  assert.equal(r.line, 'The raven calls back in a voice not its own: "meet me by the old mill"');
+  assert.equal(r.line, 'The raven calls back in a voice not its own: "me by the old mill"', "the last five words");
   const living2 = THREE();
   const [none] = await reactTo({ actor: "kai", verb: "call", actId: "5", atIso: iso(NOW), point: { x: 1010, y: 0 } },
     { living: living2, law: LAW, aimed: living2.byId.get(RAVEN), env: ENV, now: NOW, clock: () => NOW, deadline: NOW + AIMED_WAIT_MS, around: async () => ({}),
@@ -351,4 +351,115 @@ test("D4: a call's words keep the say's own rule (a voice every 15 s); its refus
     (e) => e.code === 422 && /the call's words could not be spoken: you just spoke/.test(e.defect) && /try again in 2 s, or call without words/.test(e.hint));
   assert.equal(d.calls.write.length, 0, "no call row");
   assert.equal(d.calls.answer.length, 0, "no reaction");
+});
+
+// ── review-692: F1 (what a whisper's words are), F2 (a retried offer), F3 (two aims at once), the five-word cap ──
+
+test("F1: a whisper says plainly what its words are: only the bat hears them in the world, and they stay on the public record", async () => {
+  const { WHISPER_WORDS, ONE_LINERS, CREATURE_CALLS } = await import("../src/world-read-shape.mjs");
+  assert.equal(WHISPER_WORDS, "Only the bat hears your words in the world; like everything a resident says, they are kept on the town's public record.");
+  assert.ok(ONE_LINERS.whisper.says.includes(WHISPER_WORDS), "`can` teaches it");
+  assert.match(CREATURE_CALLS.whisper, /public record/);
+  const { CREATURE_TOOLS } = await import("../src/creature-verbs.mjs");
+  assert.ok(CREATURE_TOOLS[0].inputSchema.properties.words.description.includes(WHISPER_WORDS), "the grammar says it");
+  const d = door({ living: livingWith(spawnRow(BAT, "bat", { moods: { fear: 1 } })), here: { x: 10, y: 0 }, pick: { listen: 1 } });
+  const r = await d.run({ act: "whisper", creature: BAT, words: "hush" });
+  assert.equal(r.words_note, WHISPER_WORDS, "the answer says it");
+  await assert.rejects(door({ here: { x: 10, y: 0 } }).run({ act: "whisper", creature: BAT, words: "x".repeat(WORDS_MAX + 1) }),
+    (e) => e.hint.includes(WHISPER_WORDS), "and the refusal");
+  for (const f of ["world-read-shape.mjs", "creature-verbs.mjs", "class-read.mjs"])
+    assert.doesNotMatch(readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8"), /only it hears your words|reach only the bat/, `${f} never over-promises`);
+});
+
+test("F2: a retried offer under the same nonce answers the first act's receipt and uses up exactly one unit", async () => {
+  const { installActsPen, uninstallActsPen, RECORD_ON } = await import("./acts-pen-stub.mjs");
+  const { appendActFlipped } = await import("../src/world-journal.mjs");
+  const { dispatchCreatureVerb } = await import("../src/world-apex.mjs");
+  const saved = { WORLD2_PG: process.env.WORLD2_PG, WORLD2_PG_URL: process.env.WORLD2_PG_URL };
+  Object.assign(process.env, RECORD_ON);
+  const pen = installActsPen();
+  try {
+    let used = 0, clock = NOW;
+    const d = door({ here: { x: 2010, y: 0 }, pick: { accept: 1 } });
+    d.deps.now = () => clock; d.deps.clock = () => clock;
+    // the offer's own row through the real pen path, where the retry key rides the INSERT
+    d.deps.offer = async (a, k, actor) => {
+      used += 1;
+      const { currentCrossing } = await import("../src/crossings.mjs");
+      const r = await appendActFlipped(null, { crossing: currentCrossing(), actor, action: "units:offer", object: a.creature, cls: "holding",
+        payload: { units: true, kinds: true, moves: [{ from: actor, to: null, kind: "hoard-coins", n: 1 }] }, effect: "held out 1" });
+      return { did: "offer", kind: "hoard-coins", seq: String(r.actId), written_at: r.written_at, holds: {}, offered: { kind: "hoard-coins", name: "hoard coins" } };
+    };
+    const ask = { do: "offer", args: { creature: WOLF, kind: "hoard-coins", nonce: "n-1" } };
+    const go = (a) => dispatchCreatureVerb("offer", a, KEY, { kept: true, door: (f, k) => worldCreature(f, k, d.deps) });
+    const first = await go(ask);
+    assert.equal(first.result.did, "offer");
+    assert.match(first.idempotent, /same nonce/);
+    clock = NOW + 11_000; // past the window, so only the key can stop a second unit
+    const again = await go(ask);
+    assert.equal(again.result.duplicate, true, "the first act's receipt");
+    assert.equal(again.result.act.action, "units:offer");
+    assert.equal(used, 1, "exactly one unit used up");
+    assert.equal(pen.rows().filter((r) => r.action === "units:offer").length, 1);
+    clock = NOW + 22_000;
+    const other = await go({ ...ask, args: { ...ask.args, nonce: "n-2" } });
+    assert.equal(other.result.did, "offer", "another key is another offer");
+    assert.equal(used, 2);
+    const bad = await dispatchCreatureVerb("offer", { do: "offer", args: { creature: WOLF, nonce: "" } }, KEY, { kept: true, door: () => { throw new Error("never"); } });
+    assert.match(bad.defect, /nonce must be a non-empty string/);
+  } finally {
+    uninstallActsPen();
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+});
+
+test("F3: two watches at once against one creature: exactly one reaction, the other refused inside the window, nothing written for it", async () => {
+  const d = door({ pick: { still: 1 } });
+  const [a, b] = await Promise.allSettled([d.run({ act: "watch", creature: BAT }), d.run({ act: "watch", creature: BAT })]);
+  const ok = [a, b].filter((x) => x.status === "fulfilled"), refused = [a, b].filter((x) => x.status === "rejected");
+  assert.equal(ok.length, 1);
+  assert.equal(ok[0].value.reaction.id, BAT);
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0].reason.code, 429);
+  assert.equal(d.calls.write.length, 1, "one trigger row");
+  assert.equal(d.calls.answer.length, 1, "one reaction");
+  // a different creature is not held behind it
+  const c = door({ here: { x: 25, y: 0 }, living: livingWith(spawnRow(BAT, "bat"), spawnRow("creature:bat-270-2", "bat", { n: 2, x: 40 })), pick: { still: 1 } });
+  const both = await Promise.all([c.run({ act: "watch", creature: BAT }), c.run({ act: "watch", creature: "creature:bat-270-2" })]);
+  assert.deepEqual(both.map((x) => x.reaction.id), [BAT, "creature:bat-270-2"]);
+});
+
+test("F3, between two offices: the trigger's own write takes the pair's lock and refuses an aim the record shows inside the window", async () => {
+  const { aimGuard, AIM_ACTIONS } = await import("../src/creature-verbs.mjs");
+  const asked = [];
+  const client = (hit) => ({ query: async (sql, params) => { asked.push([sql.replace(/\s+/g, " ").trim().slice(0, 40), params]); return { rows: /SELECT 1 AS hit/.test(sql) && hit ? [{ hit: 1 }] : [] }; } });
+  await aimGuard("kai", BAT)(client(false));
+  assert.match(asked[0][0], /pg_advisory_xact_lock/);
+  assert.deepEqual(asked[0][1], ["creature-aim:kai:creature:bat-270-1"]);
+  assert.deepEqual(asked[1][1], ["kai", BAT, [...AIM_ACTIONS], 10_000]);
+  await assert.rejects(aimGuard("kai", BAT)(client(true)), (e) => e.code === 429 && /still answering you/.test(e.defect));
+  // and the door hands it to the write (and to the offer's)
+  const d = door({ pick: { still: 1 } });
+  const seen = [];
+  const write = d.deps.write;
+  d.deps.write = async (entry, k, opts) => { seen.push(typeof opts?.guard); return write(entry, k); };
+  await d.run({ act: "watch", creature: BAT });
+  assert.deepEqual(seen, ["function"]);
+  const o = door({ here: { x: 2010, y: 0 } });
+  await o.run({ act: "offer", creature: WOLF, kind: "hoard-coins" });
+  assert.equal(typeof o.calls.offer[0].guard, "function");
+});
+
+test("D5's cap is the office's: whatever the ear hands over, a creature repeats at most the last five words", async () => {
+  const { heardWords, HEARD_WORDS_MAX } = await import("../src/creatures.mjs");
+  assert.equal(HEARD_WORDS_MAX, 5);
+  assert.equal(heardWords("one two  three four five six seven eight nine ten eleven twelve"), "eight nine ten eleven twelve");
+  assert.equal(heardWords("   "), null);
+  const living = THREE();
+  const [r] = await reactTo({ actor: "kai", verb: "call", actId: "31", atIso: iso(NOW), point: { x: 1010, y: 0 } },
+    { living, law: LAW, aimed: living.byId.get(RAVEN), env: ENV, now: NOW, clock: () => NOW, deadline: NOW + AIMED_WAIT_MS, around: async () => ({}),
+      heardFor: async () => "one two three four five six seven eight nine ten eleven twelve",
+      ask: async () => ({ response: { answers: { reaction: { probabilities: { mimic: 1 } } } } }),
+      write: async (rows) => ({ prior: false, rows: rows.map((x) => ({ id: "32", at: x.written_at, actor: x.actor, action: x.action, object: x.object, payload: x.payload })) }) });
+  assert.equal(r.line, 'The raven calls back in a voice not its own: "eight nine ten eleven twelve"');
 });
