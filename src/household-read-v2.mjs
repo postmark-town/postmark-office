@@ -311,7 +311,8 @@ export const POSTS_KEY = 'new_responses: someone else acted last, and no act ans
 /** The acts a post's own author takes on it (household-posts.mjs § ACT_WORD): a post whose newest act is none of these was last answered by someone else. */
 export const AUTHOR_ACTS = Object.freeze(["post", "amend", "close"]);
 /** Each content block of the glance and the household read of its own name (round 4: the `more` line's promise). */
-export const GLANCE_BLOCK_READS = Object.freeze({ house: "house", waiting: "waiting", marks: "marks", posts: "posts", mail: "mail", stamps: "stamps" });
+export const GLANCE_BLOCK_READS = Object.freeze({ house: "house", waiting: "waiting", marks: "marks", posts: "posts", mail: "mail", stamps: "stamps",
+  correspondents: "correspondents", happened: "happened" });
 const FINISHED_DEFAULT = Object.freeze(["ended", "cancelled"]);
 
 /**
@@ -392,14 +393,14 @@ export function mailBlock({ unanswered = null, bounced = null, standing = null }
 
 /** The stamps block's key (eval rounds 1–3): about 100 characters, the four numbers reconciled in plain words; went joins it when the block carries a went count. */
 export const stampsKey = ({ went = false } = {}) =>
-  `yours: you can spend · residents_total: your residents' stamps, summed · staked: in stakes · earned_total: ever${went ? ' · went: read "stamps", view "went"' : ""}`;
+  `yours: you can spend · residents_total: your residents' stamps, summed · staked: in stakes · earned_total: ever${went ? ' · went_12h: household { read: "stamps", view: "went" }' : ""}`;
 
 /**
  * The house's stamps: the residents' own, added up (eval round 2: `spendable`
  * misled, as the house spends no pot), what is staked, what has been earned,
- * and today's quests when there are any.
+ * what went in the last 12 hours, and today's quests when there are any.
  */
-export function stampsBlock(details = [], { quests = [], you = null } = {}) {
+export function stampsBlock(details = [], { quests = [], went = null, you = null } = {}) {
   const known = details.filter((d) => d.tenses);
   const sum = (f) => known.reduce((n, d) => n + (Number(d.tenses[f]) || 0), 0);
   // eval round 3: the reader's own spendable balance, when the glance knows who is reading
@@ -409,9 +410,10 @@ export function stampsBlock(details = [], { quests = [], you = null } = {}) {
     residents_total: sum("liquid"),
     staked: sum("staked"),
     earned_total: sum("minted"),
+    ...(went != null ? { went_12h: went } : {}),
     ...(quests.length ? { quests } : {}),
     ...(known.length < details.length ? { unread: details.filter((d) => !d.tenses).map((d) => d.handle) } : {}),
-    key: stampsKey(),
+    key: stampsKey({ went: went != null }),
   };
 }
 
@@ -438,7 +440,7 @@ export const glanceMore = (cursor) => `${moreLine(cursor)} · a block with nothi
  * householdGlance), so this function is pure and the suite drives it directly.
  */
 export function glanceV2(parts, { nowMs = Date.now() } = {}) {
-  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, marks = null, posts = null, postFinished = null } = parts;
+  const { house, you = null, rows = [], gaps = {}, stances, tail = null, needs, mail, details, quests, standing, hw = null, closer = null, happened = null, went = null, marks = null, posts = null, postFinished = null } = parts;
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw });
   const steps = firstSteps(gaps);
   // after round 4: ONE source for the house's at-risk marks, needs-you's stakes rows, so waiting.marks_at_risk
@@ -460,7 +462,12 @@ export function glanceV2(parts, { nowMs = Date.now() } = {}) {
     ...(marksOf ? { marks: marksOf } : {}),
     ...(postsOf ? { posts: postsOf } : {}),
     mail: mailBlock({ ...mail, bounced: needs ? (needs.unplaced_bounces?.rows?.length ?? 0) : null }),
-    stamps: stampsBlock(details, { quests, you }),
+    stamps: stampsBlock(details, { quests, went: went ? went.length : null, you }),
+    // eval round 1: plainly letters, the window in the name (Darko 2026-10-20), with its key
+    // eval round 2: an empty block is left out (more says so), and happened carries its key
+    // round 4 (Darko 15:51): the 14 days are the default, named in the key, not the block's name
+    ...(closer?.length ? { correspondents: { rows: closerGlance(closer), key: CLOSER_KEY } } : {}),
+    ...(happened?.length ? { happened: { rows: happened.slice(0, HAPPENED_SHOWN).map((r) => happenedLine(r, { nowMs })), key: happenedKey(house.name) } } : {}),
     can: canBlock(standing?.tier, standing?.household),
     law: {
       tier: standing?.tier ?? null,
@@ -500,16 +507,163 @@ export function sinceV2(parts, sinceCursor, { nowMs = Date.now() } = {}) {
   const fresh = page.filter((r) => String(r.date ?? "") >= day);
   const shown = fresh.slice(0, SINCE_NEEDS).map(needRow);
   const letters = (parts.inbound ?? []).filter((l) => Date.parse(l.delivered_at ?? "") > c.ms);
+  const happened = parts.happened ?? [];
+  const went = (parts.went ?? []).filter((w) => Date.parse(w.at ?? "") > c.ms);
   const cursor = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: parts.hw ?? null });
-  const cut = fresh.length > shown.length || page.length < (Number(parts.stances?.stances_awaiting) || 0);
+  const cut = fresh.length > shown.length || page.length < (Number(parts.stances?.stances_awaiting) || 0) || Boolean(parts.happenedCut);
   const blind = Boolean(parts.stances?.unavailable) || parts.inbound == null;
   const out = {
     since: sinceIso,
     ...(shown.length ? { waiting: { new: shown, ...(fresh.length > shown.length ? { more: fresh.length - shown.length } : {}) } } : {}),
     ...(letters.length ? { mail: { new: letters.length } } : {}),
+    ...(went.length ? { stamps: { went: went.length } } : {}),
+    ...(happened.length ? { happened: happened.slice(0, HAPPENED_SHOWN).map((r) => happenedLine(r, { nowMs })), ...(happened.length > HAPPENED_SHOWN ? { happened_more: happened.length - HAPPENED_SHOWN } : {}) } : {}),
     complete: !cut && !blind,
     ...(blind ? { unavailable: [parts.stances?.unavailable, parts.inbound == null ? "the mail could not be read" : null].filter(Boolean) } : {}),
   };
-  if (!shown.length && !letters.length && !blind) out.nothing_new = true;
+  if (!shown.length && !letters.length && !went.length && !happened.length && !blind) out.nothing_new = true;
   return { ...out, cursor, more: moreLine(cursor), reading_law: READING_LAW_V2, read_shape: "v2" };
 }
+
+// ── closer, went, happened (POS-633 part 2): the typed deep reads ────────────
+//
+// Darko's 21:55 principle: the deep reads return typed rows any Hearth layout
+// can project (a desk, a paper, a graph). The glance says each in a few lines.
+
+/** The fortnight `closer` counts over (the design's "this fortnight"). */
+export const CLOSER_DAYS = 14;
+/** How many correspondents the glance names, how many happenings it lists. */
+export const CLOSER_SHOWN = 3;
+export const HAPPENED_SHOWN = 5;
+/** With no cursor, `went` and `happened` look back this far (G3's rolling 12 hours). */
+export const LOOKBACK_MS = 12 * 3_600_000;
+
+/**
+ * Pairs between the house and everyone outside it, from the letters
+ * (lettersAround's rows), each as the design's typed row. A letter counts once
+ * for every outside party on it, as the correspondents view counts it. D6: no
+ * `says` (a say has no addressee, so nothing records a say between two houses).
+ * `mints` maps a letter id to the stamps it minted the house, for
+ * stamps_between; `milestones` maps a correspondent to the rungs crossed.
+ */
+export function closerRows(letters, { mine, house = null, houseOf = () => null, mints = null, milestones = null } = {}) {
+  const ours = mine instanceof Set ? mine : new Set(mine ?? []);
+  // every member of the house, held or not: a housemate is never a correspondent
+  const home = house ? new Set(house) : ours;
+  const by = new Map();
+  for (const r of letters ?? []) {
+    let to = r.to_h ? [r.to_h] : [];
+    if (r.multi) { try { const l = JSON.parse(r.multi); if (Array.isArray(l?.toList) && l.toList.length) to = l.toList.filter(Boolean); } catch { /* the column's own recipient */ } }
+    const parties = [...new Set([r.from_h, ...to].filter(Boolean))];
+    if (!parties.some((h) => ours.has(h))) continue;
+    // a letter that never arrived (undelivered, bounced) is no correspondence (review of #679, item 6)
+    if (!r.delivered_at) continue;
+    const at = r.delivered_at;
+    for (const other of parties) {
+      if (home.has(other)) continue;
+      const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null };
+      cur.letters += 1;
+      cur.ids.push(r.id);
+      if (!cur.last_at || String(at) > String(cur.last_at)) cur.last_at = at;
+      by.set(other, cur);
+    }
+  }
+  return [...by.entries()]
+    .map(([h, d]) => ({
+      with: h, of: houseOf(h), letters: d.letters,
+      ...(milestones ? { milestones: milestones.get(h) ?? [] } : {}),
+      ...(mints ? { stamps_between: d.ids.reduce((n, id) => n + (mints.get(id) ?? 0), 0) } : {}),
+      last_at: d.last_at,
+    }))
+    .sort((a, b) => b.letters - a.letters || String(b.last_at ?? "").localeCompare(String(a.last_at ?? "")) || a.with.localeCompare(b.with));
+}
+
+// The ledger's lines, read by its own grammar (tools/stamp-mint.mjs; funding.mjs's copies).
+const MINT_RE = /^- (\d{4}-\d{2}-\d{2}) · MINT → (\S+) · (\d+) · for: (\S+) \((sent|received)\)$/;
+const OUT_RE = /^- (\d{4}-\d{2}-\d{2}) · (\S+) → (\S+) · (\d+)(?: · (.*))?$/;
+
+/** letter id → stamps minted to `mine` for it, from MINT lines. */
+export function mintsByLetter(lines, mine) {
+  const out = new Map();
+  for (const { canonical } of lines ?? []) {
+    const m = MINT_RE.exec(canonical ?? "");
+    if (m && mine.has(m[2])) out.set(m[4], (out.get(m[4]) ?? 0) + Number(m[3]));
+  }
+  return out;
+}
+
+/**
+ * The house's stamps that WENT, as dated ledger rows, newest first: every
+ * line whose giver is one of `mine` (a stake, a gift, a burn, a pot stake).
+ * A MINT is not one (stamps arriving), nor is an escrow coming home, nor a
+ * gift between two residents of the house: it never left the house.
+ */
+export function wentRows(lines, mine, { house = mine } = {}) {
+  const home = house instanceof Set ? house : new Set(house ?? []);
+  const out = [];
+  for (const { canonical, written_at } of lines ?? []) {
+    const m = OUT_RE.exec(canonical ?? "");
+    if (!m || !mine.has(m[2]) || home.has(m[3])) continue;
+    const note = m[5] ?? "";
+    const via = /(?:^| · )via: (\S+)/.exec(note)?.[1] ?? null;
+    const why = /(?:^| · )for: (\S+)/.exec(note)?.[1] ?? null;
+    out.push({ at: written_at ? new Date(written_at).toISOString() : null, date: m[1], from: m[2], to: m[3], stamps: Number(m[4]),
+      ...(why ? { for: why } : {}), ...(via ? { via } : {}) });
+  }
+  return out;
+}
+
+/**
+ * One act of the house as the design's typed event (D4): `hand` and `for`
+ * from what the record knows, the actor (a resident) or human-of-* (the
+ * house's human, acting for no one; or beside a seat, for the seat). A route
+ * the record never wrote is absent, never the word "unknown".
+ */
+export function happenedRow(a, { houseName = null } = {}) {
+  const actor = String(a.actor ?? "");
+  // Recorded from part 3 on (079): the row's own hand and for win. Before it,
+  // what the record already knows: human-of-* and payload.as_human (D4).
+  const recorded = a.hand != null;
+  const human = recorded ? a.hand === "human" : /^human-of-/.test(actor) || Boolean(a.as_human);
+  const forWhom = recorded ? (a.for_handle ?? null) : /^human-of-/.test(actor) ? null : actor;
+  // a row with no actor (before 079) says no "by" at all, never "by " and nothing
+  const by = byPhrase({ human, hand: recorded ? a.hand : actor, for: forWhom }, houseName);
+  return {
+    at: a.at ? new Date(a.at).toISOString() : null,
+    hand: human ? "human" : (recorded ? a.hand : actor),
+    for: forWhom,
+    ...(a.route ? { route: a.route } : {}),
+    verb: a.action ?? null,
+    object: a.object ?? null,
+    place: a.at_anchor ?? null,
+    ...(by ? { by } : {}),
+  };
+}
+
+/**
+ * How a read says who acted (H4, D2): "by rei", "by Starforge's human for rei",
+ * "by Starforge's human". The words before "by" are the caller's.
+ */
+export function byPhrase({ human, hand, for: forWhom }, houseName) {
+  if (!human) return hand || null;
+  return forWhom ? `${humanPhrase(houseName)} for ${forWhom}` : humanPhrase(houseName);
+}
+
+/** A happening in one line for the glance: "say · by rei · 2 h", "walk the-town/quay · by Starforge's human for rei · 5 h". */
+export function happenedLine(r, { nowMs = Date.now() } = {}) {
+  const what = [r.verb, r.object].filter(Boolean).join(" ");
+  const who = r.by ?? r.hand;
+  return [what, who ? `by ${who}` : null, r.at ? shortAgo(r.at, nowMs) : null].filter(Boolean).join(" · ");
+}
+
+/** The correspondents block's key (eval round 1: a reader took closer for a relationship score; these are letters). */
+export const CLOSER_KEY = 'letters both ways, last 14 days · more: read "correspondents"';
+
+/** happened's key (eval round 2: readers guessed at "for rei"): the three phrases, said once. */
+export const happenedKey = (houseName) => {
+  const h = humanPhrase(houseName);
+  return `by <resident> · by ${h} (acting themselves) · by ${h} for <resident> (at its wheel)`;
+};
+
+/** The glance's closer: the top correspondents this fortnight, letters counted. */
+export const closerGlance = (rows) => rows.slice(0, CLOSER_SHOWN).map((r) => ({ with: r.with, of: r.of, letters: r.letters }));

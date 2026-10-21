@@ -14,7 +14,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY, GLANCE_BLOCK_READS } from "../src/household-read-v2.mjs";
+import { glanceV2, sinceV2, needsBlock, needGroups, groupAct, unansweredOf, firstSteps, canBlock, memberLine, gapWord, humanPhrase, actFields, CAN_GROUPS, NEEDS_FIRST, questLines, stampsBlock,
+  closerRows, mintsByLetter, wentRows, happenedRow, happenedLine, closerGlance, dayBefore, CLOSER_SHOWN, ARRIVED_LINE, isNewHouse, marksBlock, postsBlock, MARKS_KEY, POSTS_KEY, GLANCE_BLOCK_READS } from "../src/household-read-v2.mjs";
 import { DOC_NAMES } from "../src/town-index.mjs";
 import { memberRow } from "../src/house-bundle.mjs";
 import { HOUSEHOLD_LINES, lineFields } from "../src/door-read-shape.mjs";
@@ -291,6 +292,221 @@ test("the door · v1 is untouched, a stranger shape is refused, a bad cursor is 
   assert.deepEqual(await householdApex({ read_shape: "v1" }, null, {}), await householdApex({}, null, {}));
 });
 
+// ── part 2: closer, went, happened ───────────────────────────────────────────
+
+const HOUSE9 = new Set(STARFORGE);
+
+test("closer · pairs with everyone outside the house, a multi-recipient letter counting for each party, never a housemate", () => {
+  const letters = [
+    { id: "l1", from_h: "wright", to_h: "damaris", date: "2026-10-18", delivered_at: "2026-10-19T00:06:00.000Z" },
+    { id: "l2", from_h: "damaris", to_h: "rei", date: "2026-10-19", delivered_at: "2026-10-19T12:06:00.000Z" },
+    { id: "l3", from_h: "wright", to_h: "rei", date: "2026-10-19", delivered_at: null }, // housemates: not closer
+    { id: "l4", from_h: "isabella-cognita", to_h: "kai", date: "2026-10-19", delivered_at: "2026-10-19T00:06:00.000Z", multi: JSON.stringify({ toList: ["kai", "mari"] }) },
+    { id: "l5", from_h: "zed", to_h: "kai", date: "2026-10-19" }, // nobody of ours
+  ];
+  const houseOf = (h) => ({ damaris: "Mayflower", "isabella-cognita": "Casa Cognita", kai: "Kai's House" })[h] ?? null;
+  const rows = closerRows(letters, { mine: HOUSE9, houseOf, mints: new Map([["l1", 1], ["l2", 1], ["l4", 1]]), milestones: new Map([["damaris", [{ by: "wright", rung: 1 }]]]) });
+  assert.deepEqual(rows.map((r) => [r.with, r.of, r.letters]), [["damaris", "Mayflower", 2], ["isabella-cognita", "Casa Cognita", 1], ["kai", "Kai's House", 1]]);
+  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "milestones", "stamps_between", "last_at"]);
+  assert.equal(rows[0].stamps_between, 2);
+  assert.equal(rows[0].last_at, "2026-10-19T12:06:00.000Z");
+  assert.ok(!rows.some((r) => "says" in r), "D6: no says");
+  assert.deepEqual(closerGlance(rows)[0], { with: "damaris", of: "Mayflower", letters: 2 });
+  assert.equal(closerGlance([...rows, ...rows]).length, CLOSER_SHOWN);
+  assert.equal(dayBefore(Date.parse("2026-10-20T02:00:00Z"), 14), "2026-10-06");
+});
+
+test("went and mints · read by the ledger's own grammar: a giver of ours is went, a MINT to ours is a mint", () => {
+  const lines = [
+    { canonical: "- 2026-10-19 · rei → stake:world-mark/damaris/the-spring · 1 · via: api", written_at: "2026-10-19T20:00:00Z" },
+    { canonical: "- 2026-10-15 · wright → BURN · 10 · for: correction:abc · by: wright", written_at: "2026-10-15T09:00:00Z" },
+    { canonical: "- 2026-10-19 · MINT → mari · 1 · for: augie-2026-10-19-to-mari-the-view (received)", written_at: "2026-10-19T20:00:00Z" },
+    { canonical: "- 2026-10-19 · stake:pot/the-lamp → rei · 3 · for: unstake · via: web", written_at: "2026-10-19T20:00:00Z" },
+    { canonical: "- 2026-10-19 · damaris → stake:world-mark/x/y · 1 · via: api", written_at: "2026-10-19T20:00:00Z" },
+  ];
+  assert.deepEqual(wentRows(lines, HOUSE9), [
+    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, via: "api" },
+    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, for: "correction:abc" },
+  ]);
+  assert.deepEqual([...mintsByLetter(lines, HOUSE9)], [["augie-2026-10-19-to-mari-the-view", 1]]);
+});
+
+test("happened · D4: hand and for from what the record knows; a route never recorded is absent, never the word unknown", () => {
+  const own = happenedRow({ at: "2026-10-19T20:00:00Z", actor: "rei", action: "say", object: null, at_anchor: "the-town/quay" }, { houseName: "Starforge" });
+  assert.deepEqual(own, { at: "2026-10-19T20:00:00.000Z", hand: "rei", for: "rei", verb: "say", object: null, place: "the-town/quay", by: "rei" });
+  const human = happenedRow({ at: "2026-10-19T20:00:00Z", actor: "human-of-starforge", action: "say" }, { houseName: "Starforge" });
+  assert.deepEqual([human.hand, human.for, human.by], ["human", null, "Starforge's human"]);
+  const seated = happenedRow({ at: "2026-10-19T20:00:00Z", actor: "rei", action: "walk", object: "the-town/quay", as_human: "human-of-starforge" }, { houseName: "Starforge" });
+  assert.deepEqual([seated.hand, seated.for, seated.by], ["human", "rei", "Starforge's human for rei"]);
+  for (const r of [own, human, seated]) {
+    assert.ok(!("route" in r), "no route was recorded");
+    assert.ok(!JSON.stringify(r).includes("unknown"));
+  }
+  assert.equal(happenedRow({ actor: "rei", action: "say", route: "mcp" }).route, "mcp", "a recorded route rides");
+  assert.equal(happenedLine(seated, { nowMs: Date.parse("2026-10-19T22:00:00Z") }), "walk the-town/quay · by Starforge's human for rei · 2 h");
+});
+
+// With every block and the eval's keys: Darko's 4K plus what round 1 asked for, at the fixture's widest.
+// Darko 2026-10-20 18:04 ("good with ur recs for 633"): 6,656, after round 4 added marks and posts and every block's
+// own read; measured on the compare fixture's Starforge (three waiting streams of 50, 6 and 5, each author's own words).
+// Darko 2026-10-21 08:26 ("633 6720 is good"): 6,720. The keeping call named once in the marks key and new_responses
+// put the full stack at 6,677 (the phrases' happened lines included), 21 over 6,656.
+const FULL_BUDGET = 6720;
+test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
+  const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
+  // the widest realistic waiting block: three streams, as Starforge had on 10-19 (the compare fixture's)
+  const stream = (by, over, n, body) => Array.from({ length: n }, (_, i) => ({ mark: `${by}/a-mark-of-theirs-${String(i).padStart(2, "0")}`, by, kind: "sited",
+    body: body.slice(0, 150), date: `2026-10-${String(19 - Math.floor(i / 4)).padStart(2, "0")}`, on_your_ground: [over] }));
+  const awaiting = [...stream("spark-the-builder", "wright/the-trueing-terrace", 50, BODY),
+    ...stream("binya-vernal", "rei/the-lanternseed-gardens", 6, "A paper lantern hung low over the garden path, its seed-shaped light swinging when anyone passes. Leave it lit for the evening walkers."),
+    ...stream("little-bird", "rei/the-lanternseed-gardens", 5, "Small footprints in the soft bed by the gate, and a note pinned to the fence: I was here at dawn, the beans are up.")];
+  p.stances = { stances_awaiting: awaiting.length, awaiting };
+  const closer = Array.from({ length: 12 }, (_, i) => ({ with: `isabella-cognita-${i}`, of: "Casa Cognita", letters: 30 - i, last_at: "2026-10-19" }));
+  // the compare fixture's happened (G:/Starstory/docs/2026-10-19/rail/POS-633/compare), so this asserts the size that file reports
+  const happened = Array.from({ length: 9 }, (_, i) => happenedRow({ at: new Date(NOW - i * 3_600_000).toISOString(), actor: i % 3 ? STARFORGE[i % STARFORGE.length] : "human-of-starforge",
+    action: "leave-mark", object: `${STARFORGE[i % STARFORGE.length]}/a-mark-with-a-long-slug-${i}` }, { houseName: "Starforge" }));
+  happened[1] = happenedRow({ at: new Date(NOW - 3_600_000).toISOString(), actor: "rei", hand: "human", for_handle: "rei", route: "site", action: "home", object: "rei/home" }, { houseName: "Starforge" });
+  const went = [{ at: new Date(NOW - 3_600_000).toISOString() }, { at: new Date(NOW - 7_200_000).toISOString() }];
+  const g = glanceV2({ ...p, closer, happened, went }, { nowMs: NOW });
+  t.diagnostic(`Starforge, every block: ${served(g)} characters (${Object.entries(g).map(([k, v]) => `${k} ${served(v)}`).join(", ")})`);
+  assert.ok(served(g) <= FULL_BUDGET, `Starforge's whole glance is ${served(g)} characters as served`);
+  assert.equal(g.correspondents.rows.length, 3, "plainly letters, the window in the name");
+  assert.match(g.correspondents.key, /^letters both ways, last 14 days/);
+  assert.match(g.stamps.key, /went_12h: household \{ read: "stamps", view: "went" \}/, "went names the exact call that lists it (eval round 2)");
+  assert.equal(g.happened.rows.length, 5);
+  assert.match(g.happened.key, /by Starforge's human for <resident> \(at its wheel\)/, "the three phrases, said once");
+  assert.equal(g.stamps.went_12h, 2, "went says its window and its unit");
+  for (const k of [g.correspondents.key, g.happened.key]) assert.ok(k.length <= 112, `a key of about 100 characters: ${k.length}`);
+  // eval round 3: the stamps key reconciles four numbers in plain words (Wright's brief, item 2) and still
+  // names went's exact call (round 2), so it alone runs longer; bounded here by name
+  const STAMPS_KEY_WITH_WENT = 168; // after round 4: "your residents' stamps, summed"
+  assert.ok(g.stamps.key.length <= STAMPS_KEY_WITH_WENT, `the stamps key with went: ${g.stamps.key.length}`);
+  // an empty block is left out
+  const quiet = glanceV2({ ...p, closer: [], happened: [], went: [] }, { nowMs: NOW });
+  assert.ok(!("correspondents" in quiet) && !("happened" in quiet));
+  assert.equal(quiet.stamps.went_12h, 0, "a zero is said; an empty list is left out");
+  assert.deepEqual(unexplained("household", g, 2), []);
+  const s = sinceV2({ stances: { stances_awaiting: 0, awaiting: [] }, inbound: [], happened, went }, encodeCursor({ crossing: 259, ms: NOW - 5_400_000, hw: "100" }), { nowMs: NOW });
+  assert.equal(s.happened.length, 5);
+  assert.equal(s.happened_more, 4);
+  assert.equal(s.stamps.went, 1, "only what went after the cursor");
+  assert.deepEqual(unexplained("household", s, 2), []);
+});
+
+// ── part 4: the recorded triple, said as the reads say it ────────────────────
+test("H4 phrases · a recorded hand and for win over the actor; a recorded route rides; one phrase function says them", async () => {
+  const { byPhrase } = await import("../src/household-read-v2.mjs");
+  const site = happenedRow({ at: "2026-10-20T08:00:00Z", actor: "rei", action: "home", hand: "human", for_handle: "rei", route: "site" }, { houseName: "Starforge" });
+  assert.deepEqual([site.hand, site.for, site.route, site.by], ["human", "rei", "site", "Starforge's human for rei"]);
+  const own = happenedRow({ at: "2026-10-20T08:00:00Z", actor: "rei", action: "say", hand: "rei", for_handle: "rei", route: "mcp" }, { houseName: "Starforge" });
+  assert.deepEqual([own.hand, own.for, own.route, own.by], ["rei", "rei", "mcp", "rei"]);
+  const humanOwn = happenedRow({ actor: "human-of-starforge", action: "say", hand: "human", for_handle: null, route: "site" }, { houseName: "Starforge" });
+  assert.deepEqual([humanOwn.hand, humanOwn.for, humanOwn.by], ["human", null, "Starforge's human"]);
+  const noDoor = happenedRow({ actor: "rei", action: "walk", hand: "rei", for_handle: "rei", route: null }, { houseName: "Starforge" });
+  assert.ok(!("route" in noDoor), "a NULL route is absent");
+  assert.equal(byPhrase({ human: true, for: "rei" }, "Mayflower"), "Mayflower's human for rei");
+  assert.equal(byPhrase({ human: false, hand: "damaris" }, "Mayflower"), "damaris");
+});
+
+// ── the review of #679 ───────────────────────────────────────────────────────
+test("needs.first at 101 waiting is the house's true oldest, never the oldest of the newest page", () => {
+  const page = Array.from({ length: 100 }, (_, i) => candidate(i)); // newest first, as the inbox orders it
+  // the inbox's last rows, read on their own: two already on the page, and the house's oldest, by another author
+  const oldest = { mark: "binya-vernal/the-very-oldest", by: "binya-vernal", kind: "sited", body: BODY, date: "2026-09-30", on_your_ground: ["rei/the-lanternseed-gardens"] };
+  const tail = [candidate(98), candidate(99), oldest];
+  const n = needsBlock({ stances: { stances_awaiting: 101, awaiting: page }, needs: null, tail });
+  assert.equal(n.count, 101);
+  // after round 4: the largest group first, then the oldest; the tail is still what brings the oldest in
+  assert.deepEqual(n.groups.map((r) => [r.by, r.count]), [["spark-the-builder", 100], ["binya-vernal", 1]], "the largest group first; the tail's rows on the page are not counted twice");
+  assert.equal(n.groups[1].sample, BODY);
+  // without the tail, the oldest is not there: that is why it is read
+  assert.deepEqual(needsBlock({ stances: { stances_awaiting: 101, awaiting: page } }).groups.map((r) => r.by), ["spark-the-builder"]);
+});
+
+test("went leaves out a gift between housemates; closer counts delivered letters only, never a housemate", () => {
+  const lines = [
+    { canonical: "- 2026-10-20 · rei → wright · 3 · for: gift", written_at: "2026-10-20T01:00:00Z" },
+    { canonical: "- 2026-10-20 · rei → mari · 2 · for: gift", written_at: "2026-10-20T01:00:00Z" },
+    { canonical: "- 2026-10-20 · rei → damaris · 1 · for: gift", written_at: "2026-10-20T01:00:00Z" },
+  ];
+  // the key holds rei and wright; mari is a housemate it does not hold
+  const held = new Set(["rei", "wright"]);
+  assert.deepEqual(wentRows(lines, held, { house: ["rei", "wright", "mari"] }).map((r) => r.to), ["damaris"]);
+  const letters = [
+    { id: "a", from_h: "damaris", to_h: "rei", date: "2026-10-19", delivered_at: "2026-10-19T12:00:00Z" },
+    { id: "b", from_h: "damaris", to_h: "rei", date: "2026-10-19", delivered_at: null },        // never arrived
+    { id: "c", from_h: "rei", to_h: "nobody", date: "2026-10-19", delivered_at: null },          // bounced
+    { id: "d", from_h: "rei", to_h: "mari", date: "2026-10-19", delivered_at: "2026-10-19T12:00:00Z" }, // a housemate
+  ];
+  assert.deepEqual(closerRows(letters, { mine: held, house: ["rei", "wright", "mari"] }).map((r) => [r.with, r.letters]), [["damaris", 1]]);
+});
+
+test("went's ledger read is bounded by seq: a binary search of point lookups finds the window, never a walk of the whole ledger", async () => {
+  const { stampLinesSince } = await import("../src/town-index-store.mjs");
+  const T0 = Date.parse("2026-10-01T00:00:00Z");
+  const at = (seq) => new Date(T0 + seq * 60_000).toISOString(); // one line a minute, in seq order
+  const asked = [];
+  const q = { query: async (sql, params = []) => {
+    asked.push([sql.replace(/\s+/g, " ").trim(), params]);
+    if (/max\(seq\)/.test(sql)) return { rows: [{ s: 23181 }] };
+    if (/WHERE seq = \$1/.test(sql)) return { rows: [{ written_at: at(params[0]) }] };
+    if (/WHERE seq >= \$1/.test(sql)) return { rows: Array.from({ length: 23181 - params[0] + 1 }, (_, i) => ({ seq: 23181 - i, canonical: "-", written_at: at(23181 - i) })) };
+    throw new Error(`unexpected: ${sql}`);
+  } };
+  const r = await stampLinesSince(q, at(23100));
+  const range = asked.find(([sql]) => /WHERE seq >= \$1/.test(sql));
+  assert.equal(range[1][0], 23100, "the range starts at the window's first seq");
+  assert.ok(asked.filter(([sql]) => /WHERE seq = \$1/.test(sql)).length <= 16, `point lookups: ${asked.length}`);
+  assert.equal(r.rows.length, 82);
+  assert.equal(r.rows[0].seq, 23181);
+});
+
+test("H4 phrases · a row with no actor says no \"by\" at all", () => {
+  const r = happenedRow({ at: "2026-10-20T08:00:00Z", actor: null, action: "legacy:seed", object: "x/y" }, { houseName: "Starforge" });
+  assert.ok(!("by" in r));
+  assert.equal(happenedLine(r, { nowMs: Date.parse("2026-10-20T10:00:00Z") }), "legacy:seed x/y · 2 h");
+});
+
+// Review of #678, item 1: a time window becomes an id window before the house's acts are read
+test("happened's acts read is bounded by id: a binary search of point lookups turns since into an id floor, and the cut says where next", async () => {
+  const { houseActs, actsIdSince } = await import("../src/town-index-store.mjs");
+  const T0 = Date.parse("2026-10-01T00:00:00Z");
+  const at = (id) => new Date(T0 + id * 60_000).toISOString(); // one act a minute, in id order
+  const TOP = 21364;
+  const asked = [];
+  const q = { query: async (sql, params = []) => {
+    const flat = sql.replace(/\s+/g, " ").trim();
+    asked.push([flat, params]);
+    if (/max\(id\)::text AS hw/.test(flat)) return { rows: [{ hw: String(TOP) }] };
+    if (/min\(id\)::text AS lo, max\(id\)::text AS hi/.test(flat)) return { rows: [{ lo: "1", hi: String(TOP) }] };
+    if (/WHERE id >= \$1::bigint ORDER BY id LIMIT 1/.test(flat)) return { rows: Number(params[0]) <= TOP ? [{ id: String(params[0]), at: at(Number(params[0])) }] : [] };
+    if (/FROM acts WHERE household = \$1/.test(flat)) {
+      const floor = /id >= \$2::bigint/.test(flat) ? Number(params[1]) : 1;
+      const below = /id < \$\d::bigint/.test(flat) ? Number(params[params.length - 1]) : TOP + 1;
+      const rows = [];
+      for (let id = Math.min(TOP, below - 1); id >= floor && rows.length < 501; id--) rows.push({ id: String(id), at: at(id), actor: "rei", action: "say" });
+      return { rows };
+    }
+    throw new Error(`unexpected: ${flat}`);
+  } };
+  assert.equal(await actsIdSince(q, at(21300)), "21300");
+  asked.length = 0;
+  const r = await houseActs(q, "hh:starforge", { sinceIso: at(21300) });
+  const read = asked.find(([sql]) => /FROM acts WHERE household/.test(sql));
+  assert.match(read[0], /household = \$1 AND id >= \$2::bigint AND at >= \$3::timestamptz/, "the house's index range, from the window's first id");
+  assert.equal(read[1][1], "21300");
+  assert.ok(asked.filter(([sql]) => /ORDER BY id LIMIT 1/.test(sql)).length <= 16, "about 15 point lookups");
+  assert.equal(r.rows.length, 65);
+  assert.equal(r.cut, false);
+  // a window past the store's cut: the answer says where the read goes on
+  const wide = await houseActs(q, "hh:starforge", { sinceIso: at(1) });
+  assert.equal(wide.rows.length, 500);
+  assert.equal(wide.cut, true);
+  assert.equal(wide.next_before, String(TOP - 499));
+  const next = await houseActs(q, "hh:starforge", { sinceIso: at(1), beforeId: wide.next_before });
+  assert.equal(next.rows[0].id, String(TOP - 500), "the next page starts below the last id kept");
+});
+
 // ── Darko's notes, 2026-10-20 ────────────────────────────────────────────────
 test("mail that can be acted on: unanswered_14d by the ledger, answered by thread or by any later letter to the sender", () => {
   const house = ["rei", "wright", "mari"];
@@ -326,6 +542,12 @@ test("eval round 2 · members run newest act first, with no act yet last", () =>
   const p = partsFor(["a", "b", "c"]);
   p.rows = [{ ...p.rows[0], last_active: "2026-10-18T00:00:00Z" }, { ...p.rows[1], last_active: null }, { ...p.rows[2], last_active: "2026-10-19T23:00:00Z" }];
   assert.deepEqual(glanceV2(p, { nowMs: NOW }).house.members.map((m) => m.split(" · ")[0]), ["c", "a", "b"]);
+});
+
+test("eval round 2 · the went view is valid where the key names it: in the household tool's view enum, and at the door", async () => {
+  const { HOUSEHOLD_TOOL } = await import("../src/household-apex.mjs");
+  assert.ok(HOUSEHOLD_TOOL.inputSchema.properties.view.enum.includes("went"));
+  assert.match(HOUSEHOLD_TOOL.inputSchema.properties.view.description, /for read: "stamps", went is where your house's stamps went/);
 });
 
 // After the loop (round 3's readers): the group act printed `by`, `over` and `limit` at the household

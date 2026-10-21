@@ -122,16 +122,18 @@ function firstDiff(a, b) {
 const CHANGED = {
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
-    "a house's members, a row each, paged; full: true is the whole house — household: <slug>"]],
+    "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
+    // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
+    ["your published MARKS and what stands behind each — the escrow on every one, which of them the next settlement would sweep (a commons mark holding ✦0) listed first with the stake that fixes it, and the settlement's time. Not the pot stake (do: \\\"stake\\\") and not your books (read: \\\"stamps\\\"); bare it is your whole house, handle: narrows to one resident", "your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident"],
+    [`"posts":"the house's posts: what it put up, and others' it takes part in"`,
+      `"posts":"the house's posts: what it put up, and others' it takes part in","closer":"who your house writes most, this fortnight","correspondents":"the same as closer","happened":"what your house did, newest first","waiting":"what waits on your word, grouped","marks":"your marks: by state, decided, at risk"`]],
 };
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
   "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
 // AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
-// read table names `waiting` and `marks` after `posts`, and nothing else in that answer moves.
-CHANGED["MCP household {}"].push(["others' it takes part in\"}",
-  "others' it takes part in\",\"waiting\":\"what waits on your word, grouped\",\"marks\":\"your marks: by state, decided, at risk\"}"]);
+// read table names `correspondents`, `waiting` and `marks` too (in the posts line's substitution above).
 // AND THE STANCE IS A COUNTED WORLD WRITE (review of #678, item 2): the budget's counted_verbs names it last, in the
 // two recorded answers that carry the budget, and nothing else in them moves.
 for (const label of ["MCP household {}", 'MCP household {"read":"standing","handle":"wright"}'])
