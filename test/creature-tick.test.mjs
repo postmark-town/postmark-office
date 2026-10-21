@@ -74,7 +74,7 @@ test("off by the launch dial, or with no key: nothing is seeded or spawned", asy
   assert.deepEqual([r.wrote, s.acts.length], [{ seed: 0, spawn: 0, reveal: 0, abandon: 0 }, 0], "the pin's dial is null");
   const k = await tickAt(s, startMs + MIN, { key: null });
   assert.deepEqual([k.wrote, s.acts.length], [{ seed: 0, spawn: 0, reveal: 0, abandon: 0 }, 0], "no key: no seed, even with the dial on");
-  assert.match(k.line, /no key \(nothing is written\)/);
+  assert.match(k.line, /no key \(no window is seeded\)/);
   const n = await tickAt(s, startMs + MIN, { query: async () => null });
   assert.match(n.line, /not switched on/);
 });
@@ -243,7 +243,7 @@ test("the clock starts only in a writer with a store, a port and the key, and no
   assert.equal(startCreatureTick({ port: 3000, env: { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://nowhere" }, log: { log: (l) => seen.push(l) },
     tick: async (o) => { seen.push(`key ${o.key}`); return { wrote: { seed: 0, spawn: 0, reveal: 0, abandon: 0 }, held: [], line: "" }; } }), true, "no key: it starts, and says so");
   stopCreatureTick();
-  assert.match(seen.join(" | "), /no CREATURE_SEED_KEY .*seeded, spawned or revealed \| key null/);
+  assert.match(seen.join(" | "), /no CREATURE_SEED_KEY .*no window's creatures are seeded, spawned or revealed \| key null/);
   assert.ok(CREATURE_TICK_MS <= 60_000, "a spawn is written within a minute of its own");
   assert.ok(LOOKBACK_MS >= 13 * 3600_000);
   assert.deepEqual([...TICK_ACTIONS].sort(), ["abandon", "reveal", "seed", "spawn", "withdraw"]);

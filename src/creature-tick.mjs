@@ -60,7 +60,7 @@
 //     with both fingerprints, and logs a fault once. The window is then closed:
 //     no more spawns and no reveal. It is not held for ever with a line every 30 s.
 //
-// Env: CREATURE_SEED_KEY (the box's master key; absent, nothing is written),
+// Env: CREATURE_SEED_KEY (the box's master key; absent, no window is seeded),
 // CREATURE_TICK=off (the operator's door).
 
 import { createHash, createHmac } from "node:crypto";
@@ -191,7 +191,7 @@ export async function creatureTick({
   inputsAt = (sha) => cachedInputsAt(sha), blessed = () => blessedSha(WORLD_CLONE),
 } = {}) {
   const wrote = { seed: 0, spawn: 0, reveal: 0, abandon: 0 }, held = [];
-  const said = () => `${key ? "" : "no key (nothing is written) · "}seed ${wrote.seed} · spawn ${wrote.spawn} · reveal ${wrote.reveal}${wrote.abandon ? ` · abandon ${wrote.abandon}` : ""}${held.length ? ` · held: ${held.join("; ")}` : ""}`;
+  const said = () => `${key ? "" : "no key (no window is seeded) · "}seed ${wrote.seed} · spawn ${wrote.spawn} · reveal ${wrote.reveal}${wrote.abandon ? ` · abandon ${wrote.abandon}` : ""}${held.length ? ` · held: ${held.join("; ")}` : ""}`;
   const got = await query(TICK_ROWS_SQL, [[...TICK_ACTIONS], new Date(now - LOOKBACK_MS).toISOString()]);
   if (got == null) return { wrote, held: ["the store is not switched on here"], line: "the store is not switched on here" };
   const rows = got.map(rowOf);
@@ -267,7 +267,7 @@ const timer = { handle: null, running: false, last: null };
 /**
  * Start the clock: the writer process only, pointed at a store, never on port 0
  * (a suite's office), and not when the operator says CREATURE_TICK=off. Without
- * the box's key it writes nothing, and says so once. One run now (the
+ * the box's key it seeds no window, and says so once. One run now (the
  * restart's catch-up), then every
  * CREATURE_TICK_MS, serial. Unref'd. Idempotent.
  */
@@ -275,7 +275,7 @@ export function startCreatureTick({ port, env = process.env, log = console, tick
   if (timer.handle) return false;
   if (String(env.CREATURE_TICK ?? "").toLowerCase() === "off") { log.log?.("[creatures] CREATURE_TICK=off: no creature is seeded, spawned or revealed until it is on"); return false; }
   if (!world2Enabled(env) || Number(port) === 0) return false;
-  if (!env.CREATURE_SEED_KEY) log.log?.("[creatures] no CREATURE_SEED_KEY in this office's env: no creature is seeded, spawned or revealed");
+  if (!env.CREATURE_SEED_KEY) log.log?.("[creatures] no CREATURE_SEED_KEY in this office's env: no window's creatures are seeded, spawned or revealed");
   const run = async () => {
     if (timer.running) return;
     timer.running = true;
