@@ -95,6 +95,7 @@ import { recordCarried, receiptLine, TICK_CAP } from "./mark-carried-backfill.mj
 import { recordAmendsCarried, amendsLine, TICK_CAP as AMENDS_CAP } from "./amend-carried.mjs";
 import { stockChests } from "./chest-stock.mjs";
 import { recoverOrphanDrops } from "../../src/drop-recovery.mjs";
+import { endCreatures } from "./creature-endings.mjs";
 import { currentCrossing } from "../../src/crossings.mjs";
 
 const NL = String.fromCharCode(10);
@@ -255,6 +256,14 @@ export const SOFT_STEP_RULES = Object.freeze({
     [/^not stocked — chests and candy are off at this office/, "ok switch-off"],
   ],
   drops: [[/ · \d+ failed \(/, "refused write-failed"], [/^restored \d+/, "ok"]],
+  // WLD-25: a failed ending fails again every tick, so it alarms; one waiting for
+  // what it carries to stand, a law without "ended" yet, or no creature staying is the design
+  endings: [
+    [/ · \d+ failed \(/, "refused write-failed"],
+    [/^ended \d+/, "ok"],
+    [/^none ended — the creature law cannot be read/, "refused prereq:law"],
+    [/^none ended — (no creature stays|no settlement has landed|the blessed law has no "ended" reason yet)/, "ok"],
+  ],
 });
 export function softStepStatus(text, step) {
   const line = String(text ?? "").split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith(`${step}: `));
@@ -316,6 +325,25 @@ export async function dropsRecoveredOnTick(client, { recover = recoverOrphanDrop
   }
 }
 
+/**
+ * A NAMED CREATURE'S ENDING (WLD-25, creature-endings.mjs): every creature that
+ * stays and was finished before the newest landed settlement's instant is
+ * ended, and what it carries goes to its first finisher, once. On every --apply
+ * tick, like the drops: it reads acts and the settlements table, never the
+ * carried rows. Non-fatal like its neighbours: an error is one named line and
+ * the next tick tries again. The law is the creatures' at the blessed ref of
+ * the tick's own world checkout.
+ */
+export async function endingsOnTick(client, repo, { end = endCreatures, loadLaw = null, now = Date.now } = {}) {
+  try {
+    const law = loadLaw ? await loadLaw() : await (await import("../../src/creatures.mjs")).loadCreatureLaw({ repo });
+    const r = await end(client, { law, now: now() });
+    return { verdict: "ok", line: r.line, result: r };
+  } catch (e) {
+    return { verdict: "error", line: `endings: NOT ended (non-fatal) — ${String(e?.message ?? e).slice(0, 200)}` };
+  }
+}
+
 /** The stock step, gated on the carried step that proves admission (finding 7). */
 export async function chestsAfterCarried(client, carried, { stock = stockedOnTick } = {}) {
   if (carried?.verdict !== "ok")
@@ -346,7 +374,7 @@ function render(plan, extra, { dbName, user, repo, mode }) {
 }
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop())) {
-  // `--soft-step <carried|amends|chests|drops>`: read a previous run's output on stdin and
+  // `--soft-step <carried|amends|chests|drops|endings>`: read a previous run's output on stdin and
   // print that step's keep status (softStepStatus). office-keep.sh's use; it
   // opens no checkout and no connection.
   if (flag("soft-step")) {
@@ -410,7 +438,7 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
     const text = render(plan, extra, { dbName: who.d, user: who.u, repo, mode });
     if (!json && !quiet) console.log(text);
 
-    let wrote = 0, verdict = "ok", carried = null, drops = null, amends = null;
+    let wrote = 0, verdict = "ok", carried = null, drops = null, amends = null, endings = null;
     if (quiet && !apply && !verify) console.log(text.split(NL)[1]);   // the census line, nothing else
     if (conflicts.length) {
       verdict = "CONFLICT";
@@ -482,11 +510,16 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).p
     if (apply) {
       drops = await dropsRecoveredOnTick(client);
       if (!json) console.log(drops.line);
+      // A NAMED CREATURE'S ENDING (WLD-25), on every --apply tick after the
+      // settlement rows: it reads the newest landed settlement, whether this
+      // tick wrote it or an earlier one did.
+      endings = await endingsOnTick(client, repo);
+      if (!json) console.log(endings.line);
     }
     receipt = { mode, verdict, db: who.d, user: who.u, repo, tags: derived.length, new: fresh.length, present: plan.filter((r) => r.state === "present").length,
       drift: drift.map((r) => r.number), conflict: conflicts.map((r) => r.number), extra, wrote, compared: plan.length,
       rows: plan.map((r) => ({ number: r.number, state: r.state, tag_sha: r.tag_sha, published_at: iso(r.published_at), window_id: r.window_id, blessed_at: iso(r.blessed_at) })),
-      ...(carried ? { carried: carried.line } : {}), ...(amends ? { amends: amends.line } : {}), ...(drops ? { drops: drops.line } : {}) };
+      ...(carried ? { carried: carried.line } : {}), ...(amends ? { amends: amends.line } : {}), ...(drops ? { drops: drops.line } : {}), ...(endings ? { endings: endings.line } : {}) };
   } finally {
     await client.end();
   }

@@ -57,6 +57,21 @@
 //   react     actor = the creature, object = the trigger act id, payload as `reactionPayload`
 //   withdraw  object = the creature id, actor the-town or the creature itself,
 //             payload { reason: "faded" | "fled" }; any other withdraw is ignored
+//
+// A NAMED CREATURE AND ITS ENDING (WLD-25, Darko 2026-10-20 22:47 and 22:56 EDT;
+// W1–W11 settled by Wright the same night, from the gap read). Some creatures are
+// not the Mists' passers-by: the world declares them, each in its own place, and
+// each STAYS until it is finished. Their rows, beside the ones above:
+//   spawn     as above, but `stays: true` in place of `fades_at`: it never fades
+//             (creature-tick.mjs writes it once ever, from the world's declaration)
+//   finish    actor = the creature, object = the creature id, payload { by, act, reaction? }:
+//             `by` finished it, with the act `act`. At most one per (creature, by). A
+//             finish changes nothing else: the creature stays, and others may still
+//             finish it, until the settlement (world2/tools/creature-endings.mjs)
+//   withdraw  reason `ended`, by the-town, at the settlement that ends it
+// The world's side of the contract (read at the blessed ref, so nothing here acts
+// until a blessing carries it): a reaction effect `{ do: "finish" }`, "ended" in
+// DESPAWN_REASONS, and creatureLaw's `named` declarations.
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -72,6 +87,14 @@ export const CREATURE_CLASS = "creature";
 export const REACT_ACTION = "react";
 export const SPAWN_ACTION = "spawn";
 export const WITHDRAW_ACTION = "withdraw";
+/** A named creature's finish (WLD-25): the one row any mechanic writes to say "finished by". */
+export const FINISH_ACTION = "finish";
+/** The kind grammar's effect that finishes (the world's parseEffects spells it `{ do: "finish" }`). */
+export const FINISH_EFFECT = "finish";
+/** The withdraw reason of a creature its settlement ended. */
+export const ENDED = "ended";
+/** Does this reaction finish its creature? Read from its parsed effects, so no export of the world's is needed. */
+export const finishes = (reaction) => Array.isArray(reaction?.effects) && reaction.effects.some((e) => e?.do === FINISH_EFFECT);
 
 // ── the world's law, at the blessed ref ─────────────────────────────────────
 
@@ -272,8 +295,15 @@ export const LIVING_SQL = `SELECT id::text AS id, at, actor, action, object, pay
 // living creature, its memory, or a reaction to_you still owes a reader
 // (BOOT_SPAN_S: a reaction up to TO_YOU_REACH_MS old, from a creature that came
 // out up to 12 h before it, plus an hour of slack).
+// A creature that STAYS (WLD-25) can be older than any span, so the boot read
+// also takes every row of a staying creature not yet withdrawn: its spawn, its
+// reactions, its finishes. That is one creature's own life, never all history.
+export const STAYING_SQL = `SELECT s.object FROM acts s
+  WHERE s.class = '${CREATURE_CLASS}' AND s.action = '${SPAWN_ACTION}' AND s.actor = 'the-town' AND s.payload->>'stays' = 'true'
+    AND NOT EXISTS (SELECT 1 FROM acts w WHERE w.class = '${CREATURE_CLASS}' AND w.action = '${WITHDRAW_ACTION}' AND w.object = s.object)`;
 export const LIVING_BOOT_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
-  WHERE class = '${CREATURE_CLASS}' AND at > now() - make_interval(secs => $1) ORDER BY id`;
+  WHERE class = '${CREATURE_CLASS}' AND (at > now() - make_interval(secs => $1)
+    OR actor IN (${STAYING_SQL}) OR object IN (${STAYING_SQL})) ORDER BY id`;
 export const LIVING_TOP_SQL = `SELECT max(id)::text AS id FROM acts WHERE class = '${CREATURE_CLASS}'`;
 export const LIVING_BATCH = 2000;
 /** How long an ended creature stays in RAM (a retry of its last act still finds its answer). */
@@ -331,6 +361,12 @@ export class LivingSet {
         if (r.actor === this.law?.creaturesMod?.TOWN && this.law.creaturesMod.isCreatureId?.(r.object) && !this.byId.has(r.object)) this.#spawn(r, p);
       }
       else if (r.action === REACT_ACTION) this.#react(r, p);
+      else if (r.action === FINISH_ACTION) {
+        // only the creature's own row, once per resident (the store's guard is writeFinishOnce)
+        const c = this.byId.get(r.actor);
+        if (c && r.object === c.id && typeof p.by === "string" && !c.finishes.some((f) => f.by === p.by))
+          c.finishes.push({ by: p.by, act: String(p.act ?? ""), at: msOf(r.at) });
+      }
       else if (r.action === WITHDRAW_ACTION) {
         // only the town (faded) or the creature itself (fled) withdraws it, and only for a ruled reason (R4)
         const c = this.byId.get(r.object);
@@ -343,10 +379,12 @@ export class LivingSet {
 
   #spawn(r, p) {
     // its minute and its fade are on every spawn the world's tick writes; a row
-    // without them is not one, so it is skipped, never given a guessed span (K6, R2)
+    // without them is not one, so it is skipped, never given a guessed span (K6, R2).
+    // A named creature says `stays: true` instead of a fade (WLD-25): it never fades.
     const spawnedAt = msOf(p.at);
-    const fadesAt = msOf(p.fades_at);
-    if (!Number.isFinite(spawnedAt) || !Number.isFinite(fadesAt)) {
+    const stays = p.stays === true;
+    const fadesAt = stays ? Infinity : msOf(p.fades_at);
+    if (!Number.isFinite(spawnedAt) || !(stays || Number.isFinite(fadesAt))) {
       const why = `a spawn without ${Number.isFinite(spawnedAt) ? "fades_at" : "at"} (act ${r.id})`;
       this.skipped.push({ id: r.object, why });
       console.error(`[creatures] skipped ${r.object}: ${why}`);
@@ -360,7 +398,9 @@ export class LivingSet {
     this.byId.set(r.object, {
       id: r.object, kind: p.kind, x: Number(p.x), y: Number(p.y),
       spawned_at: spawnedAt, fades_at: fadesAt, moods, flags, gone: null,
+      ...(stays ? { stays: true, carries: typeof p.carries === "string" ? p.carries : null } : {}),
       reactions: [], // { act, to, verb, reaction, roll, judged_by, distance_m, approaching, at }
+      finishes: [], // { by, act, at }: who finished it, first act first (WLD-25)
     });
   }
 
@@ -580,7 +620,7 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
       moods: Object.fromEntries(Object.keys(kind.moods ?? {}).map((m) => [m, mood(m)])),
       conditions: [...creature.flags],
       out_for: spanWords(now - creature.spawned_at),
-      fades_in: spanWords(creature.fades_at - now),
+      fades_in: creature.stays ? "never: it stays until it is finished" : spanWords(creature.fades_at - now),
       remembers: creature.reactions.slice(-MEMORY_SHOWN).map((r) => memoryLine(r, now)),
     },
     this_act: {
@@ -690,6 +730,12 @@ export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = 
   }
 }
 
+/** The judgment when a finishing reaction is on the menu (W4): all the odds on it, judged by code. */
+export const FINISH_WHY = "a finish is never left to chance";
+export function finishJudgment(allowed, finishing) {
+  return { probabilities: Object.fromEntries(allowed.map((r) => [r.name, r === finishing ? 1 : 0])), scores: {}, judged_by: "code", why: FINISH_WHY };
+}
+
 // ── the reaction: moods, effects, the line ──────────────────────────────────
 
 const clamp = (v, d) => Math.max(d.lo, Math.min(d.hi, v));
@@ -746,17 +792,46 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
   };
 }
 
-/** The reaction's acts row, and the fled withdraw beside it when the reaction flees. */
-export function reactionRows(creature, act, payload, { now = Date.now(), flees = false } = {}) {
+/** The reaction's acts row, and beside it the fled withdraw when the reaction
+ *  flees, or the finish when it finishes (WLD-25). */
+export function reactionRows(creature, act, payload, { now = Date.now(), flees = false, finishes: finished = false } = {}) {
   const writtenAt = new Date(now).toISOString();
   const at = { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y };
   const base = { crossing: currentCrossing(now), at, cls: CREATURE_CLASS, writtenAt };
   const react = normalizeRow({ ...base, actor: creature.id, action: REACT_ACTION, object: String(act.actId), payload,
     effect: `the ${creature.kind} answers ${act.actor}'s ${act.verb}` });
-  if (!flees) return [react];
-  const fled = normalizeRow({ ...base, actor: creature.id, action: WITHDRAW_ACTION, object: creature.id,
-    payload: { reason: "fled", after: String(act.actId) }, effect: `the ${creature.kind} goes back into the Mists` });
-  return [react, fled];
+  const out = [react];
+  if (finished) out.push(finishRow(creature, act, { now, reaction: payload?.reaction ?? null }));
+  if (flees) out.push(normalizeRow({ ...base, actor: creature.id, action: WITHDRAW_ACTION, object: creature.id,
+    payload: { reason: "fled", after: String(act.actId) }, effect: `the ${creature.kind} goes back into the Mists` }));
+  return out;
+}
+
+/**
+ * THE FINISH ROW (WLD-25): the one documented way a mechanic marks a named
+ * creature "finished by <resident>". `act` is the resident's own act that
+ * finished it ({ actor, actId }); the settlement's first finisher is the
+ * lowest such act id (record order), never the row's own write time.
+ */
+export function finishRow(creature, act, { now = Date.now(), reaction = null } = {}) {
+  return normalizeRow({
+    crossing: currentCrossing(now), at: { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y }, cls: CREATURE_CLASS,
+    writtenAt: new Date(now).toISOString(), actor: creature.id, action: FINISH_ACTION, object: creature.id,
+    payload: { by: act.actor, act: String(act.actId), ...(reaction ? { reaction } : {}) },
+    effect: `${act.actor} finishes the ${creature.kind}`,
+  });
+}
+
+export const PRIOR_FINISH_SQL = `SELECT id::text AS id FROM acts
+  WHERE class = '${CREATURE_CLASS}' AND actor = $1 AND action = '${FINISH_ACTION}' AND payload->>'by' = $2 LIMIT 1`;
+
+/** Inside a write's transaction: a finish row, unless this resident already finished this creature. Answers its id, or null. */
+async function writeFinishOnce(client, row, insertAct) {
+  const by = asPayload(row.payload).by;
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-finish:${row.actor}:${by}`]);
+  const { rows: before } = await client.query(PRIOR_FINISH_SQL, [row.actor, by]);
+  if (before.length) return null;
+  return insertAct(client, row);
 }
 
 export const PRIOR_REACTION_SQL = `SELECT id::text AS id, at, payload FROM acts
@@ -794,10 +869,34 @@ export async function writeReaction(rows, { officeWrite: ow = null, insertAct: i
     }
     const out = [];
     for (const r of rows) {
-      const id = await insertAct(client, r);
+      // a resident finishes a creature once: a second finish is answered, and not written again
+      const id = r.action === FINISH_ACTION ? await writeFinishOnce(client, r, insertAct) : await insertAct(client, r);
+      if (id == null) continue;
       out.push({ id: String(id), at: r.written_at, actor: r.actor, action: r.action, object: r.object, payload: r.payload });
     }
     return { prior: false, rows: out };
+  });
+}
+
+/**
+ * A FINISH FROM CODE (WLD-25): a mechanic that checks its own answer (not a
+ * kind file's reaction) marks the finish here, with the resident's act that
+ * earned it. The same row and the same once-per-resident guard as a reaction's
+ * finish. The act must be on the record, and the creature living and staying.
+ * Answers { written, id } or { written: false, why }.
+ */
+export async function recordFinish(creature, act, { now = Date.now(), officeWrite: ow = null, insertAct: ins = null } = {}) {
+  if (!creature?.stays || creature.gone) return { written: false, why: "only a living creature that stays can be finished" };
+  if (typeof act?.actor !== "string" || !/^\d+$/.test(String(act?.actId ?? ""))) return { written: false, why: "a finish names the resident and their act on the record" };
+  const pen = ow && ins ? null : await import("./world2-pen.mjs");
+  const officeWrite = ow ?? pen.officeWrite;
+  const insertAct = ins ?? pen.insertAct;
+  const row = finishRow(creature, act, { now });
+  return officeWrite(async (client) => {
+    const { rows: here } = await client.query(TRIGGER_SQL, [String(act.actId)]);
+    if (!here.length) return { written: false, why: NO_TRIGGER };
+    const id = await writeFinishOnce(client, row, insertAct);
+    return id == null ? { written: false, why: `${act.actor} has already finished it` } : { written: true, id: String(id) };
   });
 }
 
@@ -893,26 +992,32 @@ async function creatureTurn(creature, act, distance_m, deps) {
       return r ? answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, r, act.actor), reaction: r.name, roll: known.roll ?? t20(creature.id, act.actId, act.atIso), judged_by: known.judged_by }) : null;
     }
     if (creature.gone || creature.fades_at <= now) return null; // it fled while this act waited its turn
-    const cap = capOf(creature, act.actor, { now });
-    if (cap === "window") return null;
     // a declared walk closes on the creature when its toward-point is nearer than
     // where it was declared; an arrival when it landed nearer than it set out (C1)
     const approaching = act.approaching ?? approachingOf(act.from ?? act.point, act.toward, creature);
     const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor });
     const allowed = allowedReactions(law, kind, scope);
     if (!allowed.length) return null;
+    // AN EARNED FINISH IS TAKEN BY CODE (WLD-25 W4, Wright 2026-10-20): when a
+    // reaction that finishes is on the menu it is the answer, with no Choice and
+    // no die, so "the key drops every time" never rests on a sample. And the
+    // 10 s window (C2) never swallows it (W5): only an act that would not finish
+    // waits out the window.
+    const finishing = allowed.find(finishes) ?? null;
+    if (!finishing && capOf(creature, act.actor, { now }) === "window") return null;
 
     // the slice only when Jev will read it (W9: the read is the expensive part),
     // and the read inside its own wait (carry 4): a late read is the creature's
     // own state and the act alone, never a late answer
     const { clock, deadline } = deps;
-    const willAsk = allowed.length > 1 && mode === "jev";
+    const willAsk = !finishing && allowed.length > 1 && mode === "jev";
     const readFrom = clock();
     const around = willAsk ? await within(deps.around?.(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null;
     const readMs = clock() - readFrom;
     const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now }) : null;
-    const judgment = await judgmentFor({ kind, allowed, slice, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS,
-      ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })) });
+    const judgment = finishing ? finishJudgment(allowed, finishing)
+      : await judgmentFor({ kind, allowed, slice, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS,
+        ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })) });
     // WHERE THE SECOND WENT, said once per such turn (play row 51: every reaction fell to code with
     // why "timeout" and nothing said why). The operator's line, never the record: acts is published.
     if (judgment.why === "timeout" && willAsk)
@@ -923,7 +1028,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const reaction = allowed.find((r) => r.name === picked) ?? allowed[0];
     const after = applyReaction(law, creature, kind, reaction, judgment.scores);
     const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice });
-    const rows = reactionRows(creature, act, payload, { now, flees: after.flees });
+    const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) });
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
     const stored = asPayload(written.rows[0].payload);
