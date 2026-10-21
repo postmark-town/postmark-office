@@ -31,7 +31,7 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords } from "./creatures.mjs";
+import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords, publishedMarks } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -63,6 +63,11 @@ export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: g
       if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law }); }
       const r = await cache.living.refresh({ ...(query ? { query } : {}), now: nowMs });
       if (!r.ok && !cache.living.booted) cache.living = null;
+      // each creature's room, so its ring stops at the walls (world#268); a read without the marks keeps the circle
+      if (cache.living && !query && typeof law.ringRoomOf === "function") {
+        const pub = await publishedMarks();
+        if (pub) cache.living.warmRooms(pub.marks, pub.key);
+      }
       cache.at = nowMs;
     })().finally(() => { cache.inflight = null; });
     await cache.inflight;

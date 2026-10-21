@@ -2163,7 +2163,8 @@ async function nerveAt(handle, at, nowMs) {
   try {
     const [{ creaturesForRead }, { nerveRead }] = await Promise.all([import("./creatures-read.mjs"), import("./encounter.mjs")]);
     const cur = await creaturesForRead({ nowMs });
-    return cur?.living ? nerveRead(cur, handle, at, nowMs) : null;
+    const { ringHolds } = await import("./creatures.mjs");
+    return cur?.living ? nerveRead(cur, handle, at, nowMs, { holds: (c, p) => ringHolds(cur.law, c, p) }) : null;
   } catch { return null; }
 }
 
@@ -3041,7 +3042,9 @@ export async function dispatchCreatureVerb(action, args, key, { kept = null, doo
   if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope)))
     return bounce(422, "`args` must be an object", `the act's own fields ride inside it — world { do: "${action}", args: { creature: "…" } }`);
   const declared = fullPropsFor("world_creature") ?? {};
-  const doorOwn = new Set(DOOR_FIELDS.world_creature ?? []);
+  // steady's and shield's `resident` is taken here and named in no tool schema until the encounter is
+  // published (a schema is public text: Wright, 2026-10-21); the apex reaches this only once the law knows them
+  const doorOwn = new Set([...(DOOR_FIELDS.world_creature ?? []), ...(ENCOUNTER_VERBS.includes(action) ? ["resident"] : [])]);
   const unknown = Object.keys(envelope ?? {}).filter((k) => !(k in declared) && !doorOwn.has(k));
   if (unknown.length) return bounce(422, `world_creature does not take: ${unknown.join(", ")}`, `the fields it takes: ${[...Object.keys(declared), ...doorOwn].join(", ")}`);
   const { do: _d, telling: _t, args: _e, read_shape: _s, ...rest } = args;

@@ -232,8 +232,9 @@ export const fillsEase = (creature, kind, reaction, actor, householdKey, now = D
  * { residents: [{ handle, distance_m }] }), `lookup` households.mjs §
  * householdLookup's. A resident at 0 nerve is in the ring, spent.
  */
-export function ringRoster(present, { ring, lookup = null, living = null, now = Date.now() } = {}) {
-  const rows = (present?.residents ?? []).filter((r) => r?.handle && Number.isFinite(r.distance_m) && r.distance_m <= ring);
+export function ringRoster(present, { ring, lookup = null, living = null, now = Date.now(), holds = null } = {}) {
+  // `holds`: the creature's own ring (creatures.mjs § ringHolds, its room's walls included); else the circle
+  const rows = (present?.residents ?? []).filter((r) => r?.handle && Number.isFinite(r.distance_m) && (holds ? holds(r) : r.distance_m <= ring));
   return rows.sort((a, b) => a.distance_m - b.distance_m).map((r) => {
     let hh = null;
     try { hh = lookup?.(r.handle) ?? null; } catch { hh = null; }
@@ -358,14 +359,13 @@ export function queueFlee(handle, { household = null, exit = null } = {}) {
  * residents: the number, when it fills, and one plain line on what it is). Null
  * otherwise, so the glance stays lean when no encounter is near.
  */
-export function nerveRead({ living, law }, handle, at, now = Date.now()) {
+export function nerveRead({ living, law }, handle, at, now = Date.now(), { holds = null } = {}) {
   if (!living || !law?.kindOf || !handle) return null;
   const left = nerveOf(living, handle, now);
   const max = encounterDial("nerve_max");
-  const near = at && Number.isFinite(at.x) && Number.isFinite(at.y) && living.living(now).some((c) => {
-    const k = law.kindOf(c.kind);
-    return isFinishable(k) && Math.hypot(at.x - c.x, at.y - c.y) <= Number(k.ring_m);
-  });
+  // `holds(c, at)`: the creature's ring (creatures.mjs § ringHolds); else the circle
+  const inRing = holds ?? ((c, p) => Math.hypot(p.x - c.x, p.y - c.y) <= Number(law.kindOf(c.kind)?.ring_m));
+  const near = at && Number.isFinite(at.x) && Number.isFinite(at.y) && living.living(now).some((c) => isFinishable(law.kindOf(c.kind)) && inRing(c, at));
   if (left >= max && !near) return null;
   return { left, of: max, fills_at: new Date(windowAt(now).ends).toISOString(), note: NERVE_NOTE };
 }

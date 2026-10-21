@@ -64,7 +64,7 @@
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import {
-  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, reactTo,
+  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, publishedMarks, reactTo,
 } from "./creatures.mjs";
 import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
@@ -103,6 +103,11 @@ export async function refreshCreatures({ query = actsQuery, law: given = null, n
     state.living = new LivingSet({ law });
   }
   const r = await state.living.refresh({ query, now });
+  // each creature's room, so its ring stops at the walls (world#268): once per creature per published sha
+  if (r.ok && typeof law.ringRoomOf === "function" && query === actsQuery) {
+    const pub = await publishedMarks();
+    if (pub) state.living.warmRooms(pub.marks, pub.key);
+  }
   setCreaturesAwake(state.living.living(now).length > 0);
   return r;
 }

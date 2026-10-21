@@ -32,6 +32,7 @@ import {
   pressLanding, pressMenu, resolveOf, ringRoster, windowAt, wornBy,
 } from "../src/encounter.mjs";
 import { encounterEntries, encounterPairs, encounterTick, settleResolve, worldEncounter, __resetEncounterTickForTest } from "../src/encounter-verbs.mjs";
+import { whyNot } from "../src/creature-verbs.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
@@ -488,4 +489,96 @@ test("a Mists creature is untouched: an encounter's verb is not answered, and it
   await reactTo(act(), d);
   assert.equal(payloadOf(w.calls[0][0]).press, undefined);
   assert.equal(w.calls[0].length, 1, "the reaction alone");
+});
+
+// ── the ring stops at its room's walls (world#268) ─────────────────────────
+
+test("a ring stops at its room's walls: the world's own ringRoomOf and inCreatureRing, read at the blessed ref; outdoors the circle", async () => {
+  // the room: x from -20 to 20 (the wall at x = 20); the ring is 40 m, so x = 30 is in the circle and past the wall
+  const ROOM = { id: "a-room", at: { x: 0, y: 0 }, extent: { w: 40, h: 80 } };
+  const walls = {
+    ringRoomOf: (p, marks) => marks.find((m) => Math.abs(p.x - m.at.x) <= m.extent.w / 2 && Math.abs(p.y - m.at.y) <= m.extent.h / 2) ?? null,
+    inCreatureRing: (p, c, ring, room) => Math.hypot(p.x - c.x, p.y - c.y) <= ring && (!room || Math.abs(p.x - room.at.x) <= room.extent.w / 2),
+  };
+  const law = { ...lawWith(), ...walls };
+  const living = new LivingSet({ law }).fold([spawn()]);
+  const c = living.byId.get(ID);
+  assert.equal(living.inRing({ x: 30, y: 0 }).length, 1, "before its room is known: the circle");
+  assert.equal(living.warmRooms([ROOM], "sha-1"), 1);
+  assert.equal(c.room, ROOM);
+  assert.equal(living.warmRooms([ROOM], "sha-1"), 0, "once per creature per published sha");
+  assert.equal(living.inRing({ x: 30, y: 0 }).length, 0, "past the wall: not heard");
+  assert.equal(living.inRing({ x: 15, y: 0 }).length, 1);
+  // a strike from beyond the wall is refused, naming the wall; the matrix offers none there
+  const s = strikeDeps(living, { law, at: { x: 30, y: 0 } });
+  await assert.rejects(worldEncounter({ act: "strike", creature: ID }, KEY, s.d), (e) => e.code === 409 && /beyond the walls of the room/.test(e.defect));
+  assert.deepEqual(encounterPairs({ here: { x: 30, y: 0 }, actor: "kai", living, law, residents: [], now: NOW }), []);
+  // an afforded action "from its ring" says the wall too (creature-verbs.mjs § whyNot)
+  const shooLaw = { ...law, affordedOf: () => [{ action: "shoo", from: "ring" }] };
+  assert.match(whyNot("shoo", c, 30, { law: shooLaw, here: { x: 30, y: 0 } }), /beyond the walls of the room/);
+  assert.equal(whyNot("shoo", c, 15, { law: shooLaw, here: { x: 15, y: 0 } }), null);
+  // an act past the wall costs nothing and wakes nothing
+  const { w, d } = deps(living, { law });
+  assert.deepEqual(await reactTo(act({ point: { x: 30, y: 0 } }), { ...d, law }), []);
+  assert.equal(w.calls.length, 0);
+  // outdoors: no room, the circle
+  const out = new LivingSet({ law }).fold([spawn()]);
+  out.warmRooms([], "sha-1");
+  assert.equal(out.byId.get(ID).room, null);
+  assert.equal(out.inRing({ x: 30, y: 0 }).length, 1);
+});
+
+test("the law carries the walls when the blessed ref's portals.mjs has them, and is the circle when it does not", async () => {
+  const kindText = (path) => { if (path !== "WORLD/kinds/keeper.kind") throw new Error("no"); return KIND_TEXT; };
+  const withWalls = await loadCreatureLaw({ ref: "r", readText: kindText, importTool: (f) => (f === "portals.mjs"
+    ? Promise.resolve({ ringRoomOf: () => null, inCreatureRing: () => true }) : import(worldModuleUrl("tools", f))) });
+  assert.equal(typeof withWalls.ringRoomOf, "function");
+  assert.equal(typeof withWalls.inCreatureRing, "function");
+  const without = await loadCreatureLaw({ ref: "r", readText: kindText, importTool: (f) => (f === "portals.mjs"
+    ? Promise.reject(new Error("no such file")) : import(worldModuleUrl("tools", f))) });
+  assert.equal(without.unavailable, undefined, "the law still loads");
+  assert.equal(without.ringRoomOf, undefined);
+});
+
+test("\"ease: N mine only watch\": any other act of yours in its ring empties your own ease, even inside the 10 s window with no reaction", async () => {
+  const STILL = { ...KEEPER, ease: { target: 3, by: "mine", only: "watch" } };
+  const law = lawWith({ kinds: { keeper: STILL } });
+  const living = new LivingSet({ law }).fold([spawn()]);
+  const c = living.byId.get(ID);
+  const { costs, d } = deps(living, { law });
+  await reactTo(act({ verb: "watch", actId: "9401" }), { ...d, aimed: c });
+  assert.equal(easeScope(c, STILL, "kai", "solo:kai", NOW).mine, 1);
+  // a walk 3 s later: inside the window, no reaction, and it still breaks the stillness
+  assert.deepEqual(await reactTo(act({ verb: "walk", actId: "9402", atIso: iso(NOW + 3000) }), { ...d, now: NOW + 3000 }), []);
+  assert.ok(payloadOf(costs.calls[0][0]).ease_after, "the cost's row carries the emptied ease");
+  assert.equal(easeScope(c, STILL, "kai", "solo:kai", NOW + 3000).mine, 0);
+  // a fresh living set folds it back from the rows
+  const again = new LivingSet({ law }).fold([spawn()]).fold([...living.encounter.map((r) => ({ ...r, at: iso(r.at) })),
+    { id: nextId(), at: iso(NOW), actor: ID, action: "react", object: "9401", payload: { to: "kai", verb: "watch", reaction: "regard", ease_after: { window: windowAt(NOW).id, mine: { kai: { n: 1, first_at: NOW } }, households: {} } } }], { advance: false });
+  assert.equal(easeScope(again.byId.get(ID), STILL, "kai", "solo:kai", NOW + 3000).mine, 1, "the reaction's own ease, folded");
+});
+
+test("a condition reads the ring and the actor in it: residents, households, the actor's housemates, nerve and whether they struck", async () => {
+  let seen = null;
+  const base = lawWith();
+  const law = { ...base, kindMod: { ...base.kindMod, scopeOf: (s, a, actor, enc = {}) => { seen = enc; return base.kindMod.scopeOf(s, a, actor, enc); } } };
+  const living = new LivingSet({ law }).fold([spawn()]).fold([strikeRowOf("ana", 4)], { advance: false });
+  const { d } = deps(living, { law, present: presentOf([["ana", 10], ["bo", 12], ["kai", 14]]) });
+  await reactTo(act({ actor: "ana", point: { x: 10, y: 0 } }), d);
+  assert.deepEqual(seen.ring, { residents: 3, households: 2 });
+  assert.deepEqual(seen.actor, { housemates: 1, nerve: 8, struck: true });
+});
+
+test("steady's and shield's `resident` rides the apex's args, and no tool schema names it before the encounter is published", async () => {
+  const { CREATURE_TOOLS } = await import("../src/creature-verbs.mjs");
+  assert.equal(Object.hasOwn(CREATURE_TOOLS[0].inputSchema.properties, "resident"), false, "a schema is public text");
+  const { dispatchCreatureVerb } = await import("../src/world-apex.mjs");
+  const seen = [];
+  const door = async (fields) => { seen.push(fields); return { did: fields.act }; };
+  const ok = await dispatchCreatureVerb("steady", { do: "steady", args: { resident: "ren" } }, KEY, { door });
+  assert.equal(ok.result?.did, "steady");
+  assert.equal(seen[0].resident, "ren");
+  const no = await dispatchCreatureVerb("watch", { do: "watch", args: { creature: ID, resident: "ren" } }, KEY, { door });
+  assert.equal(no.code, 422, "an afforded action takes no resident");
+  assert.match(no.defect, /does not take: resident/);
 });

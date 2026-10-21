@@ -87,7 +87,7 @@ import { scopeSecret, sealedItem } from "./sealed.mjs";
 import { settlementAtOrBefore } from "./world-forecast.mjs";
 import {
   ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
-  easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, windowAt,
+  easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt,
 } from "./encounter.mjs";
 
 export const CREATURE_CLASS = "creature";
@@ -151,7 +151,12 @@ export async function loadCreatureLaw({ repo = WORLD_CLONE, ref = null, importTo
       return kinds.get(name).kind;
     };
     const afforded = await affordedAt({ repo, at, tool, kindMod, creaturesMod, lawRecords });
-    return { ref: at, kindMod, creaturesMod, kindOf, afforded, affordedOf: (kind) => afforded?.[kind] ?? [] };
+    // THE RING STOPS AT ITS ROOM'S WALLS (world#268, tools/portals.mjs at the same ref): a law
+    // without them answers none, and a ring is the plain circle it always was
+    const portals = await Promise.resolve().then(() => tool("portals.mjs")).catch(() => null);
+    const walls = typeof portals?.ringRoomOf === "function" && typeof portals?.inCreatureRing === "function"
+      ? { ringRoomOf: portals.ringRoomOf, inCreatureRing: portals.inCreatureRing } : {};
+    return { ref: at, kindMod, creaturesMod, kindOf, afforded, affordedOf: (kind) => afforded?.[kind] ?? [], ...walls };
   } catch (e) {
     faultLogged(`the creature law could not be loaded at ${at ?? "the blessed ref"}`, e);
     return { ref: at, unavailable: `the world's creature law cannot be read at ${at ?? "the blessed ref"}, so no creature reacts` };
@@ -279,6 +284,31 @@ export function judgeMode(env = process.env) {
 }
 
 // ── the d20 and the sampler (as built in the squirrel and the Spire) ─────────
+
+/**
+ * DOES A CREATURE'S RING HOLD `point`? Within its kind's ring_m and, indoors,
+ * inside the room it stands in (world#268's inCreatureRing; the room is the one
+ * LivingSet § warmRooms found). Outdoors, or before its room is known, or under a
+ * law without the walls, the plain circle. The office's one answer: who a creature
+ * hears, where an action "from its ring" may be taken, and who an encounter's ring holds.
+ */
+export function ringHolds(law, creature, point) {
+  const ring = Number(law?.kindOf?.(creature.kind)?.ring_m);
+  if (!(ring > 0) || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false;
+  if (creature.room && typeof law?.inCreatureRing === "function") return law.inCreatureRing(point, creature, ring, creature.room);
+  return distanceM(point, creature) <= ring;
+}
+
+/** The published world's marks and their key (its sha), for warmRooms; null when they cannot be read. */
+export async function publishedMarks({ repo = WORLD_CLONE } = {}) {
+  try {
+    const [{ worldStateRaw }, { publishedState }] = await Promise.all([import("./world.mjs"), import("./world-branches.mjs")]);
+    const w = await worldStateRaw();
+    let key = "?";
+    try { key = publishedState(repo).sha ?? "?"; } catch { /* an unreadable ref keys as "?" */ }
+    return Array.isArray(w?.marks) ? { marks: w.marks, key } : null;
+  } catch { return null; }
+}
 
 /** W5: 1 + sha256(creature · trigger act · trigger stamp) mod 20. */
 export function t20(creatureId, triggerActId, triggerAtIso) {
@@ -415,6 +445,9 @@ export class LivingSet {
       else if (encounterRowOf(r)) {
         // an encounter's row (encounter.mjs): kept once by id, whichever way it was folded
         if (!this.encounterIds.has(String(r.id))) { this.encounterIds.add(String(r.id)); this.encounter.push(encounterRowOf(r)); }
+        // an act's cost that broke a per-resident ease ("only <verb>") carries the ease it left, as a reaction does
+        const by = this.byId.get(r.actor);
+        if (by && r.action === NERVE_ACTION && p.ease_after && typeof p.ease_after.window === "string") by.ease = p.ease_after;
       }
       else if (r.action === FINISH_ACTION) {
         // only the creature's own row, once per resident (the store's guard is writeFinishOnce)
@@ -501,10 +534,7 @@ export class LivingSet {
     const out = [];
     for (const c of this.byId.values()) {
       if (c.gone || c.fades_at <= now || c.spawned_at > bornBy) continue;
-      const ring = Number(this.kindOf(c.kind)?.ring_m);
-      if (!(ring > 0)) continue;
-      const d = distanceM(point, c);
-      if (d <= ring) out.push({ creature: c, distance_m: d });
+      if (ringHolds(this.law, c, point)) out.push({ creature: c, distance_m: distanceM(point, c) });
     }
     return out.sort((a, b) => a.distance_m - b.distance_m).slice(0, most);
   }
@@ -530,6 +560,24 @@ export class LivingSet {
       }
     }
     return this;
+  }
+
+  /**
+   * THE ROOM EACH CREATURE HEARS INSIDE (world#268): asked of the world's own
+   * ringRoomOf over `marks` (the published world), once per creature per `key`
+   * (the published sha): a creature does not move, and its room changes only with
+   * the world. Null outdoors; a law without the walls leaves every ring a circle.
+   */
+  warmRooms(marks, key) {
+    if (typeof this.law?.ringRoomOf !== "function" || !Array.isArray(marks)) return 0;
+    let n = 0;
+    for (const c of this.byId.values()) {
+      if (c.gone || c.roomKey === key) continue;
+      try { c.room = this.law.ringRoomOf({ x: c.x, y: c.y }, marks) ?? null; } catch { c.room = null; }
+      c.roomKey = key;
+      n += 1;
+    }
+    return n;
   }
 
   /** Catch up with the store. A failed read leaves the set as it was (the next tick retries). */
@@ -1059,12 +1107,12 @@ export const PRIOR_TELL_SQL = `SELECT id::text AS id FROM acts
  * turned on them; `shield` names the shield that moved it, `split_of` the press a
  * household shared).
  */
-export function nerveRow(creature, act, { on, by, why, now = Date.now(), shield = null, shielded = null, split_of = null }) {
+export function nerveRow(creature, act, { on, by, why, now = Date.now(), shield = null, shielded = null, split_of = null, ease_after = null }) {
   return normalizeRow({
     crossing: currentCrossing(now), at: { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y }, cls: CREATURE_CLASS,
     writtenAt: new Date(now).toISOString(), actor: creature.id, action: NERVE_ACTION, object: String(on),
     payload: { by, why, act: String(act.actId), creature: creature.id, window: windowAt(now).id,
-      ...(shield ? { shield: String(shield), shielded: String(shielded) } : {}), ...(split_of ? { split_of } : {}) },
+      ...(shield ? { shield: String(shield), shielded: String(shielded) } : {}), ...(split_of ? { split_of } : {}), ...(ease_after ? { ease_after } : {}) },
     effect: why === "act" ? `${on} spends nerve near the ${creature.kind}` : `the ${creature.kind} presses ${on}${shield ? ` (shielding ${shielded})` : ""}`,
   });
 }
@@ -1323,7 +1371,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // told.asks: every fragment is told, it is asking, and this act did not answer (the one who forgets)
     const told = telling ? { now: !!telling.told?.word, answered: telling.answered, asks: !!telling.told?.asks && !telling.answered } : null;
     const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor, heard, told,
-      encounter: enc ? { ...(enc.resolve != null ? { resolve: enc.resolve } : {}), ease: enc.ease } : null });
+      encounter: enc ? { ...(enc.resolve != null ? { resolve: enc.resolve } : {}), ease: enc.ease, ring: enc.ring, actor: enc.actor } : null });
     const allowed = allowedReactions(law, kind, scope);
     if (!allowed.length) {
       // a right answer finishes it whether or not its kind has a line for it: the finish is code's (G7)
@@ -1372,7 +1420,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const after = applyReaction(law, creature, kind, reaction, judgment.scores);
     // THE PRESS and THE EASE (encounter.mjs): whom it turns on, and what its peaceful test made of this act
     const press = enc ? pressOf(creature, act, reaction, enc, judgment, { living, now }) : null;
-    const eased = enc && kind.ease ? applyEase(creature, kind, reaction.effects, act.actor, enc.household, now) : { ease: null, filled: false };
+    const eased = enc && kind.ease ? applyEase(creature, kind, [...(enc.breaksEase ? [EASE_BROKEN] : []), ...(reaction.effects ?? [])], act.actor, enc.household, now)
+      : { ease: null, filled: false };
     const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null };
     const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words,
       encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve } : null });
@@ -1408,19 +1457,31 @@ async function encounterOf(creature, kind, act, distance_m, deps) {
   const ring = Number(kind.ring_m);
   const present = await within((deps.present ?? presentAt)(creature, ring), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS));
   const lookup = await within((deps.households ?? householdsNow)(), AROUND_WAIT_MS);
-  let roster = ringRoster(present ?? { residents: [] }, { ring, lookup, living, now });
+  // who the ring holds: its walls too (world#268), where presence says where each stands
+  const holds = (r) => (r.at ? ringHolds(deps.law, creature, r.at) : r.distance_m <= ring);
+  const inside = ringHolds(deps.law, creature, act.point);
+  let roster = ringRoster(present ?? { residents: [] }, { ring, lookup, living, now, holds });
   // the actor stands where the act said, whatever presence read
-  if (distance_m <= ring && !roster.some((r) => r.handle === act.actor))
+  if (inside && !roster.some((r) => r.handle === act.actor))
     roster = [...roster, ...ringRoster({ residents: [{ handle: act.actor, distance_m }] }, { ring, lookup, living, now })].sort((a, b) => a.distance_m - b.distance_m);
   const household = roster.find((r) => r.handle === act.actor)?.household ?? `solo:${act.actor}`;
   // AN ACT MADE INSIDE THE RING COSTS (ruled 22:47): not a walk's entry or landing (D2: walking in is free),
   // not an encounter verb (its door charged it), and nothing from a resident already spent
-  const chargeable = !MOMENTS.includes(act.moment) && !ENCOUNTER_VERBS.includes(act.verb) && distance_m <= ring && nerveOf(living, act.actor, now) > 0;
+  const chargeable = !MOMENTS.includes(act.moment) && !ENCOUNTER_VERBS.includes(act.verb) && inside && nerveOf(living, act.actor, now) > 0;
+  // "ease: N mine only <verb>": any other act of yours charged in its ring empties your own ease, answered or not
+  const breaksEase = chargeable && !!kind.ease?.only && act.verb !== kind.ease.only && easeScope(creature, kind, act.actor, household, now).mine > 0;
   return {
-    roster, household,
+    roster, household, breaksEase,
     cost: chargeable ? [{ on: act.actor, by: -encounterDial("act_cost"), why: "act" }] : [],
     resolve: isStrikable(kind) ? resolveOf(living, creature, kind, now) : null,
-    ease: easeScope(creature, kind, act.actor, household, now),
+    ease: breaksEase ? { mine: 0, all: 0, first_m: 0 } : easeScope(creature, kind, act.actor, household, now),
+    // what a condition reads of its ring and the actor in it (ring.*, actor.*: D4, the creature knows the dyad)
+    ring: { residents: roster.length, households: new Set(roster.map((r) => r.household)).size },
+    actor: {
+      housemates: roster.filter((r) => r.household === household && r.handle !== act.actor).length,
+      nerve: nerveOf(living, act.actor, now),
+      struck: strikesOn(living, creature.id, now).some((r) => r.actor === act.actor),
+    },
   };
 }
 
@@ -1463,9 +1524,15 @@ export function pressOf(creature, act, reaction, enc, judgment, { living, now })
   };
 }
 
-/** An act with no reaction (inside the window, or nothing on the menu) still costs: the cost alone, then the spent flee. */
+/** The reset the only-rule applies (an ease effect, as a reaction's own `ease reset` reads). */
+const EASE_BROKEN = Object.freeze({ do: "ease", reset: true });
+
+/** An act with no reaction (inside the window, or nothing on the menu) still costs: the cost alone, then the spent flee.
+ *  An act that breaks a per-resident ease ("only <verb>") empties it here too, on the cost's own row. */
 async function chargeOnly(creature, act, enc, deps) {
-  const rows = enc.cost.map((n) => nerveRow(creature, act, { ...n, now: deps.now }));
+  const kind = deps.law.kindOf(creature.kind);
+  const broken = enc.breaksEase ? applyEase(creature, kind, [EASE_BROKEN], act.actor, enc.household, deps.now).ease : null;
+  const rows = enc.cost.map((n) => nerveRow(creature, act, { ...n, now: deps.now, ...(broken ? { ease_after: broken } : {}) }));
   const written = await (deps.writeCost ?? writeCost)(rows);
   deps.living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
   fleeTheSpent(written.rows, enc, deps, deps.now);

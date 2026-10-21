@@ -25,7 +25,7 @@
 // FAIL CLOSED: no law read here, CREATURE_JUDGE=off, or a blessed law with no
 // ENCOUNTER_VERBS refuses every verb with its reason and shows none.
 
-import { capOf, dial, distanceM, judgeMode, recordFinish } from "./creatures.mjs";
+import { capOf, dial, distanceM, judgeMode, recordFinish, ringHolds } from "./creatures.mjs";
 import { AIM_ACTIONS, AIM_GUARD_SQL } from "./creature-verbs.mjs";
 import {
   ENCOUNTER_VERBS, STRIKE_ACTION, STEADY_ACTION, SHIELD_ACTION, STRIKES_SQL, encounterDial, isFinishable, isStrikable,
@@ -46,7 +46,7 @@ const nerveSaid = (n) => ({ left: n, of: encounterDial("nerve_max") });
 /** The finishable creatures whose rings hold `point` now, nearest first. */
 function finishableAround(point, { living, law, now }) {
   return living.living(now)
-    .filter((c) => isFinishable(law.kindOf(c.kind)) && distanceM(point, c) <= ringOf(law, c))
+    .filter((c) => isFinishable(law.kindOf(c.kind)) && ringHolds(law, c, point))
     .sort((a, b) => distanceM(point, a) - distanceM(point, b));
 }
 
@@ -67,7 +67,7 @@ export function encounterPairs({ here, actor, living, law, residents = [], now =
     if (mine < encounterDial("act_cost")) continue;
     for (const r of residents) {
       const at = r?.at && Number.isFinite(r.at.x) ? r.at : null;
-      if (!at || r.handle === actor || distanceM(at, c) > ringOf(law, c) || nerveOf(living, r.handle, now) <= 0) continue;
+      if (!at || r.handle === actor || !ringHolds(law, c, at) || nerveOf(living, r.handle, now) <= 0) continue;
       for (const verb of [STEADY_ACTION, SHIELD_ACTION])
         if (!pairs.some((p) => p.verb === verb && p.object === r.handle)) pairs.push({ verb, object: r.handle });
     }
@@ -170,7 +170,8 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   const kind = law.kindOf(c.kind);
   if (!isStrikable(kind)) throw bounce(422, `${nameOf(law, c)} cannot be struck`, `only a creature that can be finished by force can be struck (investigate: "${id}" says what it takes). Nothing was done.`);
   const dist = distanceM(here, c);
-  if (!(dist <= ringOf(law, c))) throw bounce(409, `${theOf(law, c)} is ${Math.round(dist)} m off, and a strike is from inside its ring (${ringOf(law, c)} m)`,
+  if (!ringHolds(law, c, here)) throw bounce(409, dist <= ringOf(law, c) ? `${theOf(law, c)} is beyond the walls of the room you stand in, and a strike is from inside its ring`
+    : `${theOf(law, c)} is ${Math.round(dist)} m off, and a strike is from inside its ring (${ringOf(law, c)} m)`,
     `approach it first: world { do: "approach", args: { creature: "${id}" } }. Nothing was done.`);
   if (capOf(c, actor, { now })) throw bounce(429, `${theOf(law, c)} is still answering you`, `one reaction from a creature to you every ${dial("per_actor_ms") / 1000} s; try again shortly. Nothing was done.`);
   const cost = encounterDial("strike_cost");
@@ -235,7 +236,7 @@ async function aidAt({ d, key, verb, actor, target, here, cr }) {
   const now = d.now();
   const there = await d.standpoint(target);
   if (!there) throw bounce(422, `the world doesn't know where ${target} stands`, "Nothing was done.");
-  const shared = finishableAround(here, { living, law, now }).filter((c) => distanceM(there, c) <= ringOf(law, c));
+  const shared = finishableAround(here, { living, law, now }).filter((c) => ringHolds(law, c, there));
   if (!shared.length) throw bounce(409, `${target} is not in the same ring as you`,
     `${verb} is for a resident in the ring of the same creature that can be finished, beside you. Nothing was done.`);
   const c = shared[0];
