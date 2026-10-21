@@ -31,7 +31,7 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords } from "./creatures.mjs";
+import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -125,7 +125,7 @@ export function creaturesInWho({ living, law }, at, { nowMs = Date.now(), engine
     return {
       kind: "creature", id: c.id, name: kind?.name ?? c.kind, ...ringOf(kind),
       ...distanceOf(w.m), ...(w.bearing ? { bearing: w.bearing } : {}), ...(w.band ? { band: w.band } : {}),
-      doing: did?.sentence ?? "out of the Mists",
+      doing: did?.sentence ?? (c.stays ? "here" : "out of the Mists"),
       ...(newest ? { last: `answered ${newest.to}, ${ago(newest.at, nowMs)}` } : {}),
     };
   });
@@ -159,7 +159,8 @@ export function creatureHappening({ living, law }, at, { nowMs = Date.now(), eng
   heard.sort((a, b) => b.r.at - a.r.at);
   for (const { c, r, line } of heard.slice(0, EMISSIONS_SHOWN))
     rows.push({ what: line, kind: "creature", id: c.id, ago: ago(r.at, nowMs) });
-  const [nearest] = livingFrom(living, here, nowMs).filter(({ d }) => d <= dial("far_line_m"));
+  // a creature that stays (WLD-25) keeps its own place, not the Mists' edge: the far line names only the Mists' passers-by
+  const [nearest] = livingFrom(living, here, nowMs).filter(({ c, d }) => !c.stays && d <= dial("far_line_m"));
   if (nearest) {
     const w = wayTo(here, nearest.c, engine);
     const name = law.kindOf(nearest.c.kind)?.name ?? `a ${nearest.c.kind}`;
@@ -192,7 +193,7 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
       const w = here ? wayTo(here, c, engine) : null;
       return { id: c.id, kind: c.kind, name: law.kindOf(c.kind)?.name ?? c.kind, at: { x: Math.round(c.x), y: Math.round(c.y) },
         ...(d != null ? { distance_m: Math.round(d) } : {}), ...(w?.bearing ? { bearing: w.bearing } : {}),
-        fades_in: inWords(c.fades_at - nowMs), ...ringOf(law.kindOf(c.kind)) };
+        ...(c.stays ? { stays: true } : { fades_in: inWords(c.fades_at - nowMs) }), ...ringOf(law.kindOf(c.kind)) };
     });
   return hits.length ? hits : null;
 }
@@ -286,11 +287,13 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
   const now = c ? {
     at: { x: Math.round(c.x), y: Math.round(c.y) },
     ...(here ? { from_you: distanceOf(distanceM(here, c)) } : {}),
-    state: c.gone ? `gone back into the Mists (${c.gone})` : c.fades_at <= nowMs ? "faded" : "out of the Mists",
+    state: c.gone === ENDED ? "ended at its settlement" : c.gone ? `gone back into the Mists (${c.gone})`
+      : c.stays ? "here until it is finished" : c.fades_at <= nowMs ? "faded" : "out of the Mists",
     moods: Object.fromEntries(Object.entries(c.moods).map(([m, v]) => [m, kind?.moods?.[m] ? `${v} of ${kind.moods[m].hi}` : v])),
     conditions: [...c.flags],
     out_since: new Date(c.spawned_at).toISOString(),
-    fades_at: new Date(c.fades_at).toISOString(),
+    // a creature that stays has no fade (WLD-25); who has finished it waits for the settlement
+    ...(c.stays ? { stays: true, finished_by: c.finishes.map((f) => f.by) } : { fades_at: new Date(c.fades_at).toISOString() }),
     remembers: c.reactions.length,
     answered_by: "the record, as of now",
   } : { unavailable: "it is no longer held in this office's fold (it ended over an hour ago)" };

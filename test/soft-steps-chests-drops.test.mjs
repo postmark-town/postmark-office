@@ -139,11 +139,11 @@ test("drops: undecided (a guard's designed bounce) is ok; a write the store refu
 });
 
 test("every step: no line is notrun, a line nobody wrote a rule for is refused, and every reason is one the receipt keeps", () => {
-  for (const step of ["carried", "chests", "amends", "drops"]) {
+  for (const step of ["carried", "chests", "amends", "drops", "endings"]) {
     assert.equal(softStepStatus("0 rows written", step), "notrun", step);
     assert.equal(softStepStatus(`${step}: something new`, step), "refused write-failed", step);
   }
-  assert.deepEqual(Object.keys(SOFT_STEP_RULES), ["carried", "amends", "chests", "drops"]);
+  assert.deepEqual(Object.keys(SOFT_STEP_RULES), ["carried", "amends", "chests", "drops", "endings"]);
   const reasons = new Set(Object.values(SOFT_STEP_RULES).flat().map(([, w]) => w.split(" ")[1]).filter(Boolean));
   for (const r of [...reasons, "write-failed"]) assert.match(r, REASON_RE, r);
 });
@@ -151,7 +151,7 @@ test("every step: no line is notrun, a line nobody wrote a rule for is refused, 
 test("office-keep.sh records chests and drops as their own keep steps, from the run's own output", () => {
   const sh = readFileSync(join(OFFICE, "deploy", "office-keep.sh"), "utf8").replace(/\r\n/g, "\n");
   const lines = sh.split("\n");
-  for (const step of ["carried", "chests", "amends", "drops"]) {
+  for (const step of ["carried", "chests", "amends", "drops", "endings"]) {
     const want = `keep_step ${step} $(printf '%s\\n' "$settled" | node world2/tools/settlements-backfill.mjs --soft-step ${step} 2>/dev/null || echo notrun)`;
     assert.ok(lines.includes(want), `${step}: ${want}`);
     assert.ok(sh.indexOf(want) > sh.indexOf("keep_step settlements ok"), `${step} is read after the run that printed its line`);

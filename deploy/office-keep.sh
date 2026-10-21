@@ -383,6 +383,9 @@ keep_step chests $(printf '%s\n' "$settled" | node world2/tools/settlements-back
 keep_step amends $(printf '%s\n' "$settled" | node world2/tools/settlements-backfill.mjs --soft-step amends 2>/dev/null || echo notrun)
 # shellcheck disable=SC2046
 keep_step drops $(printf '%s\n' "$settled" | node world2/tools/settlements-backfill.mjs --soft-step drops 2>/dev/null || echo notrun)
+# a named creature's ending at the settlement (WLD-25): a failed ending fails every tick, so it alarms
+# shellcheck disable=SC2046
+keep_step endings $(printf '%s\n' "$settled" | node world2/tools/settlements-backfill.mjs --soft-step endings 2>/dev/null || echo notrun)
 
 # ── the positions snapshot, once per clearing (POS-302, 053) ─────────────────
 # The newest closed window's snapshot of each resident's governing departure,

@@ -181,11 +181,11 @@ export async function writeOnce(row, { officeWrite: ow = null, insertAct: ins = 
  * Answers { wrote: { seed, spawn, fade, reveal, abandon }, held: [why], line }.
  *
  * Seams a test drives: `query`, `write` (writeOnce's shape), `inputsAt(sha)`,
- * `blessed()` (the blessed sha).
+ * `blessed()` (the blessed sha), `hold` (holdTown's shape).
  */
 export async function creatureTick({
   now = Date.now(), key = process.env.CREATURE_SEED_KEY, query = actsQuery, write = writeOnce,
-  inputsAt = (sha) => cachedInputsAt(sha), blessed = () => blessedSha(WORLD_CLONE),
+  inputsAt = (sha) => cachedInputsAt(sha), blessed = () => blessedSha(WORLD_CLONE), hold = holdTown,
 } = {}) {
   const wrote = { seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, held = [];
   const said = () => `${key ? "" : "no key (fades only) · "}seed ${wrote.seed} · spawn ${wrote.spawn} · fade ${wrote.fade} · reveal ${wrote.reveal}${wrote.abandon ? ` · abandon ${wrote.abandon}` : ""}${held.length ? ` · held: ${held.join("; ")}` : ""}`;
@@ -261,7 +261,76 @@ export async function creatureTick({
       payload: { reason: "faded", fades_at: f.fades_at }, effect: `the ${c?.payload?.kind ?? "creature"} fades back into the Mists` }));
     if (!r.prior) wrote.fade += 1;
   }
+
+  // 4. the named creatures, with the seed key or without (WLD-25): each declaration spawns ONCE EVER
+  // at its own place, from its own crossing on, whatever the Mists' season, and
+  // stays until its settlement ends it. writeOnce's look is unbounded in time, so
+  // a creature spawned or ended weeks ago is never spawned again (one per declaration).
+  const named = await namedSpawns({ now, N, inputsAt, blessed, held });
+  for (const n of named) {
+    const r = await put(townRow({ action: SPAWN_ACTION, object: n.id, place: n, now,
+      payload: { kind: n.kind, crossing: N, x: n.x, y: n.y, at: new Date(now).toISOString(), stays: true,
+        ...(n.carries ? { carries: n.carries } : {}), ...(n.declared ? { declared: n.declared } : {}), moods: { ...n.moods }, flags: [] },
+      effect: `a ${n.kind} is found here` }));
+    if (!r.prior) wrote.spawn += 1;
+    if (n.carries) {
+      const h = await hold(n.carries, n.id, { query, now });
+      if (h.held) held.push(h.held);
+    }
+  }
   return { wrote, held, line: said() };
+}
+
+/**
+ * The named creatures the law at the blessed sha declares and whose crossing
+ * has come: [{ id, kind, x, y, carries, declared, moods }]. The world's side is
+ * `creatureLaw(...).named`, each { id, kind, x, y, carries?, from_crossing?,
+ * declared? }; a law without it declares none. A declaration this office cannot
+ * spawn (a bad id, no place, a kind the law has no start for) is a `held` line.
+ */
+export async function namedSpawns({ now, N = currentCrossing(now), inputsAt, blessed, held = [] }) {
+  let w;
+  try { w = await inputsAt(blessed()); } catch (e) { held.push(`the named creatures: the blessed world cannot be read (${errorSaid(e).slice(0, 120)})`); return []; }
+  const decl = Array.isArray(w?.law?.named) ? w.law.named : [];
+  const out = [];
+  for (const d of decl) {
+    const from = d.from_crossing ?? w.law.fromCrossing;
+    if (!w.creaturesMod.creaturesOn(N, from)) continue;
+    const bad = !w.creaturesMod.isCreatureId(d.id) ? "its id is not a creature's"
+      : !Number.isFinite(Number(d.x)) || !Number.isFinite(Number(d.y)) ? "it has no place"
+        : !w.starts?.[d.kind] ? `the law has no kind ${d.kind}` : null;
+    if (bad) { held.push(`the named creature ${d.id ?? "(no id)"}: ${bad}`); continue; }
+    out.push({ id: d.id, kind: d.kind, x: Number(d.x), y: Number(d.y), carries: typeof d.carries === "string" ? d.carries : null,
+      declared: d.declared ?? null, moods: w.starts[d.kind].moods ?? {} });
+  }
+  return out;
+}
+
+export const THING_STANDING_SQL = `SELECT 1 AS here FROM marks WHERE slug = $1 AND status = 'standing' LIMIT 1`;
+export const THING_HOLD_ROWS_SQL = `SELECT 1 AS here FROM acts WHERE class = 'holding' AND object = $1 LIMIT 1`;
+
+/**
+ * What a named creature carries waits, unseen, in the town's own hands until
+ * its ending gives it to the first finisher (WLD-25 D3, the lane's rec, awaiting
+ * Darko's word). Once: when the record holds no hold row for the thing at all,
+ * the town's `give` to itself is that first row, so the hold record and the
+ * thing's printed `held_by: the-town` agree. Answers { wrote } or { held }.
+ */
+export async function holdTown(thing, creatureId, { query = actsQuery, now = Date.now(), officeWrite: ow = null } = {}) {
+  const [standing] = (await query(THING_STANDING_SQL, [thing])) ?? [];
+  if (!standing) return { wrote: false, held: `the named creature ${creatureId}: what it carries, ${thing}, is not standing yet` };
+  const officeWrite = ow ?? (await import("./world2-pen.mjs")).officeWrite;
+  return officeWrite(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-tick:hold:${thing}`]);
+    const { rows: before } = await client.query(THING_HOLD_ROWS_SQL, [thing]);
+    if (before.length) return { wrote: false };
+    await client.query(
+      `INSERT INTO acts (at, crossing, actor, action, object, class, payload, effect)
+       VALUES (now(), $1, 'the-town', 'give', $2, 'holding', $3::jsonb, $4)`,
+      [currentCrossing(now), thing, JSON.stringify({ thing, holder: "the-town", policy: "cascade", previous_holder: null, carried_by: creatureId }),
+        `the town keeps ${thing} until it is won`]);
+    return { wrote: true };
+  });
 }
 
 // ── the timer ───────────────────────────────────────────────────────────────

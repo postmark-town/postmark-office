@@ -42,7 +42,10 @@ export const SOFT_STEPS = Object.freeze([
   // carried, chests, amends and drops: settlements-backfill's four soft steps,
   // in the order it runs them, recorded apart from it because each is
   // non-fatal by design (POS-612 and POS-627, review-612).
-  "settlements", "carried", "chests", "amends", "drops", "positions", "hhkeys", "hhkeys_log",
+  "settlements", "carried", "chests", "amends", "drops",
+  // a named creature's ending at the settlement (WLD-25), the same run's fifth soft step
+  "endings",
+  "positions", "hhkeys", "hhkeys_log",
   // the world graph snapshot (POS-268 5b moved it off the rehydrate; review-593 c)
   "world",
 ]);
