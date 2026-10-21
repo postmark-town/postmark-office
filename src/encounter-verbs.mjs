@@ -511,7 +511,10 @@ export async function worldSpeakFor(args = {}, key = null, deps = {}) {
   const text = String(args.text ?? "").replace(/\s+/g, " ").trim();
   const mod = law.temptsMod;
   if (typeof mod?.lintWhisper !== "function") throw bounce(409, "a live line is not law yet", "the blessed law has no whisper-lint. Nothing was said.");
-  const lint = mod.lintWhisper(text);
+  // the voices a live line may never claim: everyone in its ring, and each one's human (whisper-lint's `voices`)
+  const ring = await d.roster(c, { law, living, now: d.now() }).catch(() => []);
+  const voices = [...new Set((ring ?? []).flatMap((r) => [r.handle, r.human]).filter(Boolean))];
+  const lint = mod.lintWhisper(text, { voices });
   if (!lint.ok) return liveRefusal("whisper-lint", lint.why);
   const tempts = args.tempts && typeof args.tempts === "object" ? { ...args.tempts } : null;
   if (tempts) {
