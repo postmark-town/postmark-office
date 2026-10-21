@@ -31,7 +31,7 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords } from "./creatures.mjs";
+import { LivingSet, NEVER_FADES, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -187,7 +187,8 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
       const w = here ? wayTo(here, c, engine) : null;
       return { id: c.id, kind: c.kind, name: law.kindOf(c.kind)?.name ?? c.kind, at: { x: Math.round(c.x), y: Math.round(c.y) },
         ...(d != null ? { distance_m: Math.round(d) } : {}), ...(w?.bearing ? { bearing: w.bearing } : {}),
-        fades_in: inWords(c.fades_at - nowMs) };
+        // a Mists creature never fades (WLD-96): the compact read says so in one word
+        fades_in: Number.isFinite(c.fades_at) ? inWords(c.fades_at - nowMs) : "never" };
     });
   return hits.length ? hits : null;
 }
@@ -285,7 +286,8 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
     moods: Object.fromEntries(Object.entries(c.moods).map(([m, v]) => [m, kind?.moods?.[m] ? `${v} of ${kind.moods[m].hi}` : v])),
     conditions: [...c.flags],
     out_since: new Date(c.spawned_at).toISOString(),
-    fades_at: new Date(c.fades_at).toISOString(),
+    // a Mists creature never fades (WLD-96, creatures.mjs § NEVER_FADES)
+    ...(Number.isFinite(c.fades_at) ? { fades_at: new Date(c.fades_at).toISOString() } : { fades_at: null, fades_in: NEVER_FADES }),
     remembers: c.reactions.length,
     answered_by: "the record, as of now",
   } : { unavailable: "it is no longer held in this office's fold (it ended over an hour ago)" };

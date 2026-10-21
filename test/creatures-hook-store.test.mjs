@@ -132,3 +132,36 @@ test("ON THE STORE · an act door's own row wakes the wolf: one reaction row nam
     await s.stop();
   }
 });
+
+test("ON THE STORE · WLD-96: a process's first read takes a creature that gathers, however old, with its memory; one that fled or faded stays gone", async () => {
+  const s = await startStore({ db: "creatures_gather" });
+  const api = await s.connect("office_api");
+  try {
+    const q = async (t, p) => (await api.query(t, p)).rows;
+    const put = (daysAgo, actor, action, object, payload) => q(`INSERT INTO acts (at, crossing, actor, action, object, class, payload, effect)
+      VALUES (now() - make_interval(days => $1), $2, $3, $4, $5, 'creature', $6::jsonb, 'a creature row') RETURNING id::text AS id`,
+      [daysAgo, currentCrossing(), actor, action, object, JSON.stringify(payload)]);
+    const out = (daysAgo, id, extra = {}) => put(daysAgo, "the-town", "spawn", id,
+      { kind: "wolf", at: iso(Date.now() - daysAgo * 86400_000), x: 10, y: 0, ...extra });
+    // out three days, before the hotfix: its spawn names a fade long past, and it answered kai two days ago
+    await out(3, WOLF, { fades_at: iso(Date.now() - 3 * 86400_000 + 12 * 3600_000) });
+    await put(2, WOLF, "react", "4242", { to: "kai", verb: "walk", reaction: "stalk", moods_after: { fear: 2, curiosity: 1, hunger: 2 } });
+    // out four days with no fade; one that fled and one that faded, both long ago
+    await out(4, "creature:wolf-268-1");
+    await out(3, "creature:wolf-268-2");
+    await put(3, "creature:wolf-268-2", "withdraw", "creature:wolf-268-2", { reason: "fled" });
+    await out(5, "creature:wolf-267-1", { fades_at: iso(Date.now() - 5 * 86400_000 + 12 * 3600_000) });
+    await put(4, "the-town", "withdraw", "creature:wolf-267-1", { reason: "faded" });
+    const living = new LivingSet({ law: LAW });
+    const r = await living.refresh({ query: q });
+    assert.notEqual(r?.ok, false, r?.why);
+    assert.deepEqual(living.living(Date.now()).map((c) => c.id).sort(), ["creature:wolf-268-1", WOLF], "the two that gather, older than the boot span");
+    const wolf = living.byId.get(WOLF);
+    assert.deepEqual([wolf.reactions.length, wolf.moods.fear], [1, 2], "with what it remembers");
+    assert.equal(living.byId.has("creature:wolf-268-2"), false, "the one that fled is not read back");
+    assert.equal(living.byId.has("creature:wolf-267-1"), false, "nor the one that faded before the hotfix");
+  } finally {
+    await api.end();
+    await s.stop();
+  }
+});
