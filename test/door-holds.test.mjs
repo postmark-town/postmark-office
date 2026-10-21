@@ -32,8 +32,8 @@ const prop = (klass, name, dflt, tier, parent = null) => ({ number: 300, tag_sha
   key: parent ? `${klass}/${parent}/${name}` : `${klass}/${name}`, data: { class: klass, parent, name, tier, default: dflt, id: `the-town/${klass}-${name}` } });
 const ROWS = [
   cls("postmark-node"), cls("mark", { extends: "postmark-node" }), cls("sited", { extends: "mark" }),
-  cls("thing", { extends: "sited" }), cls("consumable", { extends: "thing" }), cls("candy", { extends: "consumable" }),
-  cls("pocket-comet", { extends: "candy" }), cls("entity", { extends: "postmark-node" }), cls("resident", { extends: "entity" }),
+  cls("thing", { extends: "sited" }), cls("consumable", { extends: "thing" }), cls("snack", { extends: "consumable" }),
+  cls("pocket-comet", { extends: "snack" }), cls("entity", { extends: "postmark-node" }), cls("resident", { extends: "entity" }),
   prop("postmark-node", "makers", false, "constitution"), prop("thing", "makers", true, "constitution"),
   prop("resident", "holder", true, "constitution"), prop("resident", "capacity", 24, "constitution", "holder"),
   prop("thing", "holder", false, "sovereign"), prop("thing", "capacity", 30, "sovereign", "holder"),
