@@ -1135,7 +1135,21 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  24984 -> 25070 (+86) · slim  22546 -> 22632 (+86)
   //
-  // ⚠ AND MOVED AN EIGHTEENTH TIME, 2026-10-20 (lane plumb-hhv2, POS-633 round 4;
+  // ⚠ AND RE-CAPTURED AN EIGHTEENTH TIME, 2026-10-21 (lane plumb-creature-verbs,
+  // POS-672), because the PR moved the world pin to world main: 77f7918a (the kept
+  // branch pos672/train-pin: c315bd76 plus #264's three commits) -> b81aa6f7b
+  // (#264's merge, with the settlements and marks since 10-20). This PR changes no
+  // doorstep segment (the pin and two creature-tick cases only). The page was read
+  // off CI itself at the new pin (a one-commit diagnostic printed it, run
+  // 39598920026, then reverted), and diffed leaf by leaf against the seventeenth
+  // capture BEFORE this one: 1129 -> 1139 paths, 14 removed, 24 added, 158 changed,
+  // every one of them in `stances`, the world's own data at the pin: the count
+  // awaiting (64 -> 65), the five newest awaiting rows and their `on_your_ground`
+  // lists, and `ground` (73 -> 78 marks). Nothing else moved; `stakes` is unchanged.
+  //
+  //   full  25070 -> 25214 (+144) · slim  22632 -> 22776 (+144)
+  //
+  // ⚠ AND MOVED A NINETEENTH TIME (POS-633 round 4, lane plumb-hhv2, built 2026-10-20 and merged over the eighteenth;
   // Wright's call A, "one record every reader reads", the 10-04 ruling). The
   // posts segment IS household { read: "posts" } (the bundle law), and that read
   // gained its bug half (household-posts.mjs § bugRows): one row per bug the
@@ -1149,9 +1163,9 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // those two paths and nothing else, since a pool tree's capture differs from a
   // CI-shaped clone's in the stances segment's world data.
   //
-  //   full  25070 -> 25124 (+54) · slim  22632 -> 22686 (+54)
+  //   full  25214 -> 25268 (+54) · slim  22776 -> 22830 (+54), on the eighteenth's page
   //
-  // ⚠ AND MOVED A NINETEENTH TIME, 2026-10-20 (the same lane; Darko 15:54: "handle
+  // ⚠ AND MOVED A TWENTIETH TIME (the same lane, 2026-10-20; Darko 15:54: "handle
   // all posts the same whatever's intersecting"). householdPosts reads every class
   // in POST_CLASSES through one generic pass, so the quests' half joins the events',
   // bugs' and idea posts', and the halves' unreadable lines come in class order with
@@ -1159,7 +1173,7 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // machine: `posts.unavailable.2` (the Think Tank's line -> the quests') and
   // `posts.unavailable.4` (added: the Think Tank's), on both skins, and nothing else.
   //
-  //   full  25124 -> 25180 (+56) · slim  22686 -> 22742 (+56)
+  //   full  25268 -> 25324 (+56) · slim  22830 -> 22886 (+56)
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

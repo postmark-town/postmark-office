@@ -126,7 +126,10 @@ const CHANGED = {
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
     ["your published MARKS and what stands behind each — the escrow on every one, which of them the next settlement would sweep (a commons mark holding ✦0) listed first with the stake that fixes it, and the settlement's time. Not the pot stake (do: \\\"stake\\\") and not your books (read: \\\"stamps\\\"); bare it is your whole house, handle: narrows to one resident", "your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident"],
     [`"posts":"the house's posts: what it put up, and others' it takes part in"`,
-      `"posts":"the house's posts: what it put up, and others' it takes part in","closer":"who your house writes most, this fortnight","correspondents":"the same as closer","happened":"what your house did, newest first","waiting":"what waits on your word, grouped","marks":"your marks: by state, decided, at risk"`]],
+      `"posts":"the house's posts: what it put up, and others' it takes part in","closer":"who your house writes most, this fortnight","correspondents":"the same as closer","happened":"what your house did, newest first","waiting":"what waits on your word, grouped","marks":"your marks: by state, decided, at risk"`],
+    // POS-672: a creature's afforded actions are world writes, charged on the same ledger as one verb
+    ['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
+  'MCP household {"read":"standing","handle":"wright"}': [['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
 };
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.

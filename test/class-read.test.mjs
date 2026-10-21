@@ -317,3 +317,98 @@ test("C7: every statement class-read registers is its SQL, row for row, over eac
     } finally { sqlite.close(); }
   }
 });
+
+// ── C8 · THE OPEN SLOTS: everything left to the maker (Darko 2026-10-20 11:22, WLD-83) ──
+// `properties` are what a class adds; `open` is every sovereign property it has,
+// its own and every one it inherits, by path; `open_from` names the class each
+// inherited one comes from. Until 10-20 open was the own sovereign names only.
+function openLayer() {
+  const t = layer("property");
+  const child = (cls, n) => { t.nodes.push(n); t.edges.push(describes(cls, n.id)); };
+  // mark's body and sited's at and extent are the maker's, as in the law
+  t.nodes.push(klass("sited", { extends: "mark", body: "A sited mark stands somewhere." }), klass("lamp", { extends: "sited", body: "A lamp is a sited thing." }));
+  child("the-town/mark", property("the-town/mark-body", "body", null, "A mark's one claim.", "sovereign"));
+  child("the-town/sited", property("the-town/sited-at", "at", null, "Where it stands.", "sovereign"));
+  child("the-town/sited", property("the-town/sited-extent", "extent", null, "How big it is.", "sovereign"));
+  child("the-town/lamp", property("the-town/lamp-portable", "portable", false, "Whether it can be carried.", "sovereign"));
+  // entity's default predicate slots: appearance, and the five under it
+  child("the-town/entity", property("the-town/entity-appearance", "appearance", null, "The glance.", "sovereign"));
+  for (const n of ["form", "wears", "sign", "voice", "manner"])
+    child("the-town/entity-appearance", property(`the-town/entity-appearance-${n}`, n, null, `the ${n}`, "sovereign"));
+  // candy says its own capacity, shadowing thing's by the same path
+  child("the-town/candy", property("the-town/candy-capacity", "capacity", 50, "A candy dish holds fifty.", "sovereign"));
+  // thing's holder is the maker's; the candy bowl LOCKS it at constitution (as halloween-candy-bowl does in the law)
+  child("the-town/thing", property("the-town/thing-holder", "holder", null, "Who may hold it.", "sovereign"));
+  t.nodes.push(klass("candy-bowl", { extends: "thing", body: "A bowl the town sets out." }));
+  child("the-town/candy-bowl", property("the-town/candy-bowl-holder", "holder", "the-town", "The town holds the bowl."));
+  // a label-rung dial locks a path the same way: the fixed lamp says portable: false inline
+  t.nodes.push(klass("fixed-lamp", { extends: "lamp", dials: { portable: false }, body: "A lamp bolted down." }),
+    klass("desk-lamp", { extends: "fixed-lamp", body: "A lamp on a desk." }));
+  return graphDb(t);
+}
+const FIVE = ["appearance.form", "appearance.wears", "appearance.sign", "appearance.voice", "appearance.manner"];
+
+test("C8a: explain resident lists appearance and its five as open, each from entity; its properties stay its own", () => {
+  const r = cr.explainClass(openLayer(), "resident");
+  assert.deepEqual(r.open, ["appearance", ...FIVE]);
+  for (const p of r.open) assert.equal(r.open_from[p], "entity", `${p} comes from entity`);
+  assert.equal(r.properties.some((p) => p.name === "appearance"), false, "properties are what resident adds");
+});
+
+test("C8b: explain entity lists them as its own: open, with no open_from for any", () => {
+  const e = cr.explainClass(openLayer(), "entity");
+  assert.deepEqual(e.open, ["appearance", ...FIVE]);
+  assert.deepEqual(e.open_from, {});
+  assert.match(e.deeper, /its properties are what it adds, and open is everything left to the maker/);
+});
+
+test("C8c: a sited class gains body from mark and at and extent from sited, beside its own portable", () => {
+  const l = cr.explainClass(openLayer(), "lamp");
+  assert.deepEqual(l.open, ["portable", "at", "extent", "body"]);
+  assert.deepEqual(l.open_from, { at: "sited", extent: "sited", body: "mark" });
+});
+
+test("C8d: an own property that shadows an inherited one by the same path shows once, as own", () => {
+  const c = cr.explainClass(openLayer(), "candy");
+  assert.equal(c.open.filter((p) => p === "capacity").length, 1);
+  assert.equal("capacity" in c.open_from, false, "candy's own capacity answers, not thing's");
+  assert.equal(c.open_from.body, "mark");
+});
+
+test("C8e: a nearer class that re-declares an inherited sovereign path at constitution locks it: not open, at any depth below", () => {
+  const db = openLayer();
+  const bowl = cr.explainClass(db, "candy-bowl");
+  assert.equal(bowl.open.includes("holder"), false, "the bowl's constitution holder answers, not thing's sovereign one");
+  assert.equal("holder" in bowl.open_from, false);
+  assert.deepEqual(bowl.open, ["capacity", "body"], "thing's capacity and mark's body stay open");
+  assert.equal(cr.explainClass(db, "thing").open.includes("holder"), true, "on thing itself holder is open");
+  assert.equal(cr.explainClass(db, "candy").open_from.holder, "thing", "a class that does not lock it inherits it open");
+  // the label rung locks too, from an ancestor as well as from the class itself
+  const fixed = cr.explainClass(db, "fixed-lamp");
+  assert.equal(fixed.open.includes("portable"), false, "fixed-lamp's inline dial locks lamp's sovereign portable");
+  assert.deepEqual(fixed.open_from, { at: "sited", extent: "sited", body: "mark" });
+  assert.equal(cr.explainClass(db, "desk-lamp").open.includes("portable"), false, "an ancestor's inline dial locks it below too");
+});
+
+test("POS-672 W3: a creature's afforded actions are explained on its class, and never granted at a standpoint", () => {
+  const shape = layer("label");
+  shape.nodes.push(
+    klass("creature", { extends: "entity", body: "A creature comes out of the Mists.",
+      actions: [{ action: "watch", who: "anyone", from: "sight", effect: "you watch it; its reaction is your reply", residue: "the-town/creature" }] }),
+    klass("bat", { extends: "creature", body: "A bat of the Mists.",
+      actions: [{ action: "whisper", who: "anyone", from: "ring", effect: "you whisper to it; its reaction is your reply", residue: "the-town/bat" }] }));
+  const db = graphDb(shape);
+  // explain climbs the class: the bat's own action, and the creature's above it
+  assert.deepEqual(cr.explainClass(db, "bat").actions.map((a) => a.action), ["whisper"]);
+  assert.deepEqual(cr.explainClass(db, "creature").actions.map((a) => a.action), ["watch"]);
+  // read as declared, with the exact call an agent makes (the words `can` teaches)
+  assert.deepEqual(cr.explainClass(db, "bat").actions[0], { action: "whisper", who: "anyone", where: "ring",
+    effect: "you whisper to it; its reaction is your reply", conditions: null,
+    call: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
+    words: "Only the bat hears your words in the world; like everything a resident says, they are kept on the town's public record." });
+  // a de-sited class with no `ambient` grants nothing to a caller anywhere: not in empty space, not in the works
+  for (const spineIds of [[], ["the-town/resident"], ["the-town/thing"]]) {
+    const acts = gatherActions(db, { spineIds }).entries.map((e) => e.action);
+    assert.ok(!acts.includes("watch") && !acts.includes("whisper"), `no grant at ${JSON.stringify(spineIds)}: ${acts.join(", ")}`);
+  }
+});

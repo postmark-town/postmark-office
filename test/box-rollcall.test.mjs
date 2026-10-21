@@ -87,6 +87,7 @@ import {
   unrowedTrees,
   parseDiscovery,
   serviceOf,
+  serviceRanAndFailed,
   pickEnv,
   readRelease,
   compareFileCopy,
@@ -605,6 +606,47 @@ test("FALSIFIER (e): a timer firing on time into a service that FAILS is ALARM-f
   assert.match(row.reason, /journalctl -u postmark-harbor-watch\.service/);
 });
 
+// ── A CONDITION SKIP IS NOT A FAILURE (POS-714 follow-up, 2026-10-21) ───────
+// The crossing save's late fallback skips through ExecCondition= when the
+// crossing is already saved, and systemd records Result=exec-condition with the
+// unit inactive. That read "last RAN and FAILED" after every crossing. A real
+// condition failure (exit 255, a signal) is Result=exit-code or signal with the
+// unit failed, and must still alarm.
+// THE CAN-FAIL FLIP: drop the exec-condition line from serviceRanAndFailed; the
+// skip reads ALARM-failed again.
+const SAVE = "postmark-crossing-save.timer";
+const saveSvc = (m, fields) => mutate(healthy(m), (s) => { Object.assign(s.services["postmark-crossing-save.service"], fields); });
+
+test("POS-714: the crossing save's ExecCondition skip (Result=exec-condition, inactive, exit 0) is not ALARM-failed", () => {
+  const m = manifest();
+  const row = rowFor(rollcall(m, saveSvc(m, { result: "exec-condition", active_state: "inactive", exec_main_status: "0" }), T0), SAVE);
+  assert.notEqual(row.verdict, ALARM_FAILED, row.reason);
+  assert.equal(row.verdict, rowFor(rollcall(m, healthy(m), T0), SAVE).verdict, "it reads exactly as a successful run does");
+  assert.doesNotMatch(row.reason, /FAILED/);
+});
+
+test("POS-714: a condition command that really failed still alarms (exit 255 or a signal: the unit ends failed)", () => {
+  const m = manifest();
+  for (const fields of [
+    { result: "exit-code", active_state: "failed", exec_main_status: "255" },
+    { result: "signal", active_state: "failed", exec_main_status: "9" },
+    { result: "exec-condition", active_state: "failed", exec_main_status: "0" },
+  ]) {
+    const row = rowFor(rollcall(m, saveSvc(m, fields), T0), SAVE);
+    assert.equal(row.verdict, ALARM_FAILED, `${JSON.stringify(fields)}: ${row.reason}`);
+    assert.match(row.reason, new RegExp(`result=${fields.result}`));
+  }
+});
+
+test("POS-714: serviceRanAndFailed, the one reading: success and a condition skip pass, everything else fails", () => {
+  assert.equal(serviceRanAndFailed({ result: "success", active_state: "inactive" }), false);
+  assert.equal(serviceRanAndFailed({ result: "", active_state: "inactive" }), false, "no record is the heartbeat's question, not this one");
+  assert.equal(serviceRanAndFailed({ result: "exec-condition", active_state: "inactive" }), false);
+  assert.equal(serviceRanAndFailed({ result: "exec-condition", active_state: "failed" }), true);
+  for (const r of ["exit-code", "signal", "core-dump", "timeout", "watchdog", "start-limit-hit"])
+    assert.equal(serviceRanAndFailed({ result: r, active_state: "failed" }), true, r);
+});
+
 test("POS-628: the law row's stamp is ok_at — a held pin (exit 0, a fresh `at`) three ticks running is ALARM-stale", () => {
   // From 2026-10-11 15:04Z the law pen held the clearing's pin at b0db90f on
   // every run, exited 0, and stamped `at`: the row read green for three days.
@@ -702,18 +744,18 @@ test("FALSIFIER (g): a PARKED row that the box has ENABLED is ALARM-unparked", (
   assert.match(row.reason, /recorded PARKED in the manifest but the box has it/);
 });
 
-test("FALSIFIER (g2): a PARKED read@ row alarms once its instance is ENABLED, and once it was started by hand and FAILED (#471 review)", () => {
-  // The read pool's rows are parked (POS-522). A worker someone starts by hand
-  // and that then dies is disabled AND failed, and until the #471 review that
-  // read PARKED: a quiet board over a rail that ran. Planted rather than read
-  // from the shipped read@ rows, so this keeps asserting after the pool is adopted.
-  const unit = "postmark-office-read@4399.service";
+test("FALSIFIER (g2): a PARKED template-instance row alarms once its instance is ENABLED, and once it was started by hand and FAILED (#471 review)", () => {
+  // Earned on the read pool's parked rows (POS-522; the pool was retired
+  // unadopted, POS-729). An instance someone starts by hand and that then dies
+  // is disabled AND failed, and until the #471 review that read PARKED: a quiet
+  // board over a rail that ran. Planted, so it asserts whatever the manifest carries.
+  const unit = "postmark-planted-pool@4399.service";
   const m = manifest();
   const planted = {
     ...m,
     units: [...m.units, {
       unit,
-      label: "a planted read worker",
+      label: "a planted pool instance",
       stage: "parked",
       activation_owner: "planted by test/box-rollcall.test.mjs — this row is not on the box",
       cadence: "always on, once adopted",
@@ -875,22 +917,22 @@ test("FALSIFIER (h2): a running INSTANCE of a template is discovered, and the te
     "postmark-ferry.timer                 enabled  enabled",
     "postmark-ferry.service               static   -",
     "postmark-office.service              enabled  enabled",
-    "postmark-office-read@.service        indirect enabled",
+    "postmark-planted-pool@.service       indirect enabled",
     "postmark-settlement-by-hand.service  static   -",
   ].join("\n");
   const live = [
     "postmark-ferry.service             loaded activating start   Postmark ferry crossing",
     "postmark-ferry.timer               loaded active     waiting Postmark ferry crossing",
-    "postmark-office-read@4391.service  loaded active     running Postmark office READ WORKER on port 4391",
-    "● postmark-office-read@4392.service loaded failed    failed  Postmark office READ WORKER on port 4392",
+    "postmark-planted-pool@4391.service loaded active     running a planted pool instance on port 4391",
+    "● postmark-planted-pool@4392.service loaded failed   failed  a planted pool instance on port 4392",
     "postmark-office.service            loaded active     running Postmark office",
   ].join("\n");
 
   assert.deepEqual(parseDiscovery(unitFiles, live), [
     "postmark-ferry.timer",
-    "postmark-office-read@4391.service",
-    "postmark-office-read@4392.service",
     "postmark-office.service",
+    "postmark-planted-pool@4391.service",
+    "postmark-planted-pool@4392.service",
   ]);
   // The control: the file listing alone, as discovery read the box before
   // POS-522, never names an instance, so no row could be asked for one.
@@ -899,10 +941,10 @@ test("FALSIFIER (h2): a running INSTANCE of a template is discovered, and the te
   // And through the judgment: a worker the box runs that no row names alarms.
   const m = manifest();
   const s = mutate(healthy(m), (x) => {
-    x.discovered.push("postmark-office-read@4399.service");
-    x.services["postmark-office-read@4399.service"] = { load_state: "loaded", active_state: "active", unit_file_state: "enabled" };
+    x.discovered.push("postmark-planted-pool@4399.service");
+    x.services["postmark-planted-pool@4399.service"] = { load_state: "loaded", active_state: "active", unit_file_state: "enabled" };
   });
-  assert.equal(rowFor(rollcall(m, s, T0), "postmark-office-read@4399.service").verdict, ALARM_UNMANIFESTED);
+  assert.equal(rowFor(rollcall(m, s, T0), "postmark-planted-pool@4399.service").verdict, ALARM_UNMANIFESTED);
 });
 
 // The unit files a box can run on its own: every timer, and every service with
@@ -943,8 +985,8 @@ function unfiledRows(m, files) {
 test("FALSIFIER (h3): every unit in deploy/ the box could run has a row, and every row's unit is in deploy/ or says where it lives (POS-522)", () => {
   // ALARM-unmanifested catches this on the box, the morning after an install.
   // This catches it on the PR that adds the unit: the read pool's template sat
-  // in deploy/ from 2026-09-08 with no row, and the dev office's row named a
-  // unit whose file nobody could read.
+  // in deploy/ from 2026-09-08 with no row (archived unadopted, POS-729), and
+  // the dev office's row named a unit whose file nobody could read.
   const m = manifest();
   const files = deployUnitFiles();
   assert.ok(files.length > 30, `read ${files.length} unit files from deploy/; the reader is wrong`);
@@ -2149,8 +2191,9 @@ test("FALSIFIER (t7): the deployed stamp is the YARDSTICK — an unreadable one 
   const row = rowFor(result, CANDLE_ROW);
   assert.equal(row.verdict, ALARM_TREE);
   assert.match(row.reason, /the deployed release stamp at \/srv\/postmark-office\/release\.json is unreadable/);
-  // EVERY checkout row, not just this one — the yardstick is shared.
-  const checkoutRows = m.trees.rows.filter((r) => r.kind !== "file_copy" && unitRowStage(m, r) !== "parked");
+  // EVERY checkout row, not just this one — the yardstick is shared. A parked or
+  // retired rail runs nothing, so it has no tree to judge (the two tests below).
+  const checkoutRows = m.trees.rows.filter((r) => r.kind !== "file_copy" && !["parked", "retired"].includes(unitRowStage(m, r)));
   for (const r of checkoutRows) assert.equal(rowFor(result, "tree:" + r.unit).verdict, ALARM_TREE);
 });
 
@@ -2209,6 +2252,18 @@ test("a PARKED rail's tree row is reported and alarms on nothing", () => {
   // to be wrong about; ALARM-unparked on the UNIT row is what catches adoption.
   const snap = repoint(healthy(m), m, parked.unit, LAB_TREE, undefined);
   assert.equal(rowFor(rollcall(m, snap, T0), "tree:" + parked.unit).verdict, PARKED);
+});
+
+test("a RETIRED rail's tree row is reported RETIRED and alarms on nothing (POS-729)", () => {
+  // The read pool's three tree rows have been governed by retired unit rows
+  // since POS-729. ALARM-unretired on the UNIT row is what catches a revival.
+  const m = manifest();
+  const retired = m.trees.rows.find((r) => r.kind !== "file_copy" && unitRowStage(m, r) === "retired");
+  assert.ok(retired, "no tree row is governed by a retired unit — the RETIRED path here is untested");
+  const snap = repoint(healthy(m), m, retired.unit, LAB_TREE, undefined);
+  const row = rowFor(rollcall(m, snap, T0), "tree:" + retired.unit);
+  assert.equal(row.verdict, RETIRED);
+  assert.match(row.reason, /is retired with postmark-office-read@439\d\.service — nothing is running this tree/);
 });
 
 // ── the manifest's own law for §2c ──────────────────────────────────────────

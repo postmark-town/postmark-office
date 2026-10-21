@@ -85,6 +85,9 @@ if (!(process.env.STUB_FAIL || "").split(",").includes("hhkeys")) console.log(JS
 
 const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
+  // POS-341: the arrival check is the office's owed-tolerant verify, the REAL
+  // tool, over the town's stub verify above (which records "verify" in the trail)
+  "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
   "deploy/registry-file.mjs": plain("registry", `
 import { writeFileSync } from "node:fs";
 writeFileSync(process.argv[2], "{}\\n");`),
@@ -124,7 +127,7 @@ const at = process.argv.indexOf("--soft-step");
 if (at !== -1) {
   const step = process.argv[at + 1];
   const line = readFileSync(0, "utf8").split("\\n").find((l) => l.startsWith(step + ": "));
-  const done = ["wrote", "stocked", "restored"].some((w) => line?.startsWith(step + ": " + w + " "));
+  const done = ["wrote", "stocked", "restored", "ended"].some((w) => line?.startsWith(step + ": " + w + " "));
   console.log(!line ? "notrun" : done ? "ok" : "refused write-failed");
   process.exit(0);
 }
@@ -135,6 +138,7 @@ console.log(process.env.STUB_CARRIED_FAIL ? "carried: NOT recorded (non-fatal) �
 console.log(process.env.STUB_CHESTS_FAIL ? "chests: NOT stocked (non-fatal) — stub" : "chests: stocked 0");
 console.log(process.env.STUB_AMENDS_FAIL ? "amends: NOT recorded (non-fatal) — stub" : "amends: wrote 0; the table holds 0");
 console.log(process.env.STUB_DROPS_FAIL ? "drops: NOT reconciled (non-fatal) — stub" : "drops: restored 0");
+console.log(process.env.STUB_ENDINGS_FAIL ? "endings: NOT ended (non-fatal) — stub" : "endings: ended 0 at S1, cutoff 2026-10-26T18:00:00.000Z");
 `,
   "world2/tools/position-snapshot.mjs": plain("positions", `console.log("positions: none owed");`),
   // The world step (POS-268 5b; review-593 a and c), in shell builtins only, since the run's PATH
@@ -279,7 +283,7 @@ const steps = (r) => Object.fromEntries(Object.entries(r.steps).map(([k, v]) => 
 const GREEN = {
   lock: "ok", pull: "ok", fetch: "ok", registry: "ok", settle: "ok", standing: "ok", gangway: "ok",
   mint: "ok", welcome: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
-  sync: "ok:switch-off", rollback: "ok:not-needed", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", positions: "ok",
+  sync: "ok:switch-off", rollback: "ok:not-needed", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok",
   hhkeys: "ok", hhkeys_log: "ok", world: "ok", publish: "ok",
 };
 const OWED = { STUB_APPEND: "mint row 3" };
@@ -329,7 +333,7 @@ const SOFT = [
   ["bugstage", { STUB_FAIL: "bugstage" }, { bugstage: "refused:exit:7" }],
   ["ballots", { STUB_FAIL: "ballots" }, { ballots: "refused:exit:7" }],
   // a failed run prints no soft-step lines, so carried and amends never ran
-  ["settlements", { STUB_FAIL: "settlements" }, { settlements: "refused:exit:7", carried: "notrun", chests: "notrun", amends: "notrun", drops: "notrun" }],
+  ["settlements", { STUB_FAIL: "settlements" }, { settlements: "refused:exit:7", carried: "notrun", chests: "notrun", amends: "notrun", drops: "notrun", endings: "notrun" }],
   // POS-612: each soft step's failure leaves the run's exit 0 and settlements ok,
   // and is recorded as its own step so the roll-call can alarm on it
   ["carried (non-fatal: settlements stays ok)", { STUB_CARRIED_FAIL: "1" }, { carried: "refused:write-failed" }],
@@ -337,6 +341,8 @@ const SOFT = [
   // POS-627: the same for the chest stock and the orphaned set-downs
   ["chests (non-fatal: settlements stays ok)", { STUB_CHESTS_FAIL: "1" }, { chests: "refused:write-failed" }],
   ["drops (non-fatal: settlements stays ok)", { STUB_DROPS_FAIL: "1" }, { drops: "refused:write-failed" }],
+  // WLD-25: a named creature's ending, the same
+  ["endings (non-fatal: settlements stays ok)", { STUB_ENDINGS_FAIL: "1" }, { endings: "refused:write-failed" }],
   ["positions", { STUB_FAIL: "positions" }, { positions: "refused:exit:7" }],
   ["hhkeys (the predicate left no JSON: the append succeeds, the step is refused)", { STUB_FAIL: "hhkeys" }, { hhkeys: "refused:unchecked" }],
 ];

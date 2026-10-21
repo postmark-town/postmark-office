@@ -488,12 +488,13 @@ function readUnit(name) {
 // roll-call, and listing all of them would double every row for no signal.
 //
 // ⚑ A TEMPLATE'S INSTANCES ARE NOT FILES (POS-522, postmark-office#354).
-// `list-unit-files` lists unit FILES, so the read pool's template is one line,
-// `postmark-office-read@.service`, however many instances run, and the instance
-// names that a row can watch (`postmark-office-read@4391.service`) never appear
-// there. Until 2026-10-09 a dead read worker raised no alarm in either
-// direction. So the units systemd has LOADED and live (`list-units`: active,
-// activating, failed) are read too, and every INSTANCE among them is in scope.
+// `list-unit-files` lists unit FILES, so a template is one line however many
+// instances run (the read pool's `postmark-office-read@.service`, archived
+// unadopted by POS-729), and the instance names that a row can watch
+// (`postmark-office-read@4391.service`) never appear there. Until 2026-10-09
+// a dead read worker raised no alarm in either direction. So the units systemd
+// has LOADED and live (`list-units`: active, activating, failed) are read too,
+// and every INSTANCE among them is in scope.
 // A non-instance service there is a timer's body mid-run, or an enabled service
 // the file listing already found, so it adds nothing but a flake. The template
 // line itself is never a unit: `systemctl show` on it answers for no process.
@@ -706,6 +707,23 @@ export function compareFileCopy(boxDir, releaseDir, matchRe, {
 
 function safeRealpath(p) {
   try { return realpathSync(p); } catch { return p; }
+}
+
+// A CONDITION SKIP IS NOT A FAILURE (POS-714 follow-up, 2026-10-21). The
+// crossing save's late fallback skips through ExecCondition= when the crossing
+// is already saved (crossing-save.mjs --unsaved exits 1), as designed, and
+// systemd records that as Result=exec-condition with the unit inactive. The
+// roll-call read every non-success Result as ALARM-failed, so it read "the
+// crossing save last RAN and FAILED" after every crossing. systemd's service.c
+// (v255, service_sigchld_event): a condition command exiting 1–254 is
+// SERVICE_SKIP_CONDITION, which ends the unit dead, never failed; 255, a signal
+// or a core dump stays a failure (Result=exit-code, signal or core-dump, the
+// unit failed). So exec-condition reads as not-failed only while the unit is
+// not in the failed state, and every other non-success Result still alarms.
+export function serviceRanAndFailed(svc) {
+  if (!svc || !svc.result || svc.result === "success") return false;
+  if (svc.result === "exec-condition" && svc.active_state !== "failed") return false;
+  return true;
 }
 
 /** The service unit that EXECS for a manifest row — a timer execs nothing. */
@@ -1143,7 +1161,7 @@ export function classifyRow(row, snapshot, now) {
   // that exits non-zero every time is the most cheerful-looking outage there is.
   const svcName = (u.triggers && u.triggers.trim()) || row.unit.replace(/\.timer$/, ".service");
   const svc = snapshot.services[svcName];
-  if (row.unit.endsWith(".timer") && svc && svc.result && svc.result !== "success") {
+  if (row.unit.endsWith(".timer") && svc && serviceRanAndFailed(svc)) {
     return {
       unit: row.unit,
       label,

@@ -214,7 +214,13 @@ REGISTRY_FILE="$SNAP/registry.json"
     # nothing to roll back unless this pass arms; restore() below overrides
     keep_step rollback ok not-needed
     LEDGER=WHITE_PAGES/stamp-ledger.md
-    if ! node tools/stamp-verify.mjs --registry "$REGISTRY_FILE"; then
+    # The arrival check reads "mints owed" and "settlement owed" as not red
+    # (POS-341, Darko 2026-10-20 15:38): they are exactly what this pass pays.
+    # A crossing whose ingest failed skips its store mint and leaves them for
+    # this tick, and a plain verify here would refuse the catch-up that pays them.
+    # Anything else the town verifier finds is still red, and every verify after
+    # a write below stays the plain one (tools/stamp-verify-owed.mjs).
+    if ! node /srv/postmark-office/tools/stamp-verify-owed.mjs --registry "$REGISTRY_FILE"; then
       echo "[office-keep] mint catch-up OFF — the ledger arrived red (stamp-verify above names the line), so this tick appended nothing; the catch-up resumes on the first tick that finds it green" >&2
       # exit 0 keeps the tick's flow as it was; the receipt says what it is: the mint REFUSED
       keep_step mint refused ledger-red
@@ -377,6 +383,9 @@ keep_step chests $(printf '%s\n' "$settled" | node world2/tools/settlements-back
 keep_step amends $(printf '%s\n' "$settled" | node world2/tools/settlements-backfill.mjs --soft-step amends 2>/dev/null || echo notrun)
 # shellcheck disable=SC2046
 keep_step drops $(printf '%s\n' "$settled" | node world2/tools/settlements-backfill.mjs --soft-step drops 2>/dev/null || echo notrun)
+# a named creature's ending at the settlement (WLD-25): a failed ending fails every tick, so it alarms
+# shellcheck disable=SC2046
+keep_step endings $(printf '%s\n' "$settled" | node world2/tools/settlements-backfill.mjs --soft-step endings 2>/dev/null || echo notrun)
 
 # ── the positions snapshot, once per clearing (POS-302, 053) ─────────────────
 # The newest closed window's snapshot of each resident's governing departure,

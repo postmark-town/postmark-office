@@ -370,7 +370,14 @@ export function treeTables(officeRoot = OFFICE) {
 // `town:` for the town clone's); `when` ("store" or "git": one side of the
 // STAMP_LINES switch); `phase` ("ferry" or "keep"); `run(ctx)`; `commit`, the
 // message the box commits what the job wrote with; `nonFatal`, where the box
-// carries on past a refusal (`|| echo`).
+// carries on past a refusal (`|| echo`); `onlyIf(ctx)`, where the box's own
+// `if` decides whether it runs.
+//
+// A FAILED INGEST SKIPS THE STORE MINT (POS-341, Darko 2026-10-20 15:38). On
+// the box, a crossing whose town-index ingest failed skips stamp-mint-run, and
+// its two verifies read "mints owed" as not red (tools/stamp-verify-owed.mjs):
+// the keep tick pays them. Here the ingest's refusal sets ctx.mintSkipped, and
+// the same three jobs follow it.
 //
 // ONLY THE STORE SIDE RUNS (#453 review F10). The preflight requires
 // STAMP_LINES=store, so on a green preflight every `when: "git"` job is skipped.
@@ -388,17 +395,25 @@ export const CROSSING = [
     run: (ctx) => townJob(ctx, "tools/ferry.mjs", ["--no-git", "--date", ctx.today]),
     commit: (ctx) => `ferry: crossing ${ctx.today} (dev rehearsal ${ctx.run})` },
   { phase: "ferry", name: "index-before-mint", box: "deploy/town-index-ingest.sh", when: "store", nonFatal: true,
-    run: (ctx) => ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]) },
-  { phase: "ferry", name: "mint", box: "world2/tools/stamp-mint-run.mjs", when: "store",
+    run: async (ctx) => {
+      const r = await ctx.ingest("world2/tools/town-index-ingest.mjs", ["--town-repo", ctx.t.townClone, "--sha", git(ctx.t.townClone, "rev-parse", "HEAD")]);
+      ctx.mintSkipped = r.code !== 0;
+      return r;
+    } },
+  { phase: "ferry", name: "mint", box: "world2/tools/stamp-mint-run.mjs", when: "store", onlyIf: (ctx) => !ctx.mintSkipped,
     run: (ctx) => officeJob(ctx, "world2/tools/stamp-mint-run.mjs", ["--append", "--key", ctx.stampKey, "--clone", ctx.t.townClone]) },
   { phase: "ferry", name: "mint", box: "town:tools/stamp-mint.mjs", when: "git",
     run: (ctx) => townJob(ctx, "tools/stamp-mint.mjs", ["--append", "--key", ctx.stampKey]) }, // committed after the verify, as the box does
-  { phase: "ferry", name: "verify", box: "town:tools/stamp-verify.mjs",
+  { phase: "ferry", name: "verify", box: "town:tools/stamp-verify.mjs", onlyIf: (ctx) => !ctx.mintSkipped,
     run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", []), commit: "mint: crossing pass" },
+  { phase: "ferry", name: "verify-owed", box: "tools/stamp-verify-owed.mjs", onlyIf: (ctx) => !!ctx.mintSkipped,
+    run: (ctx) => officeJob(ctx, "tools/stamp-verify-owed.mjs", [], { cwd: ctx.t.townClone }), commit: "mint: crossing pass" },
   { phase: "ferry", name: "ballot", box: "tools/ballot-pass-run.mjs",
     run: (ctx) => officeJob(ctx, "tools/ballot-pass-run.mjs", ["--key", ctx.stampKey]) },
-  { phase: "ferry", name: "verify-ballot", box: "town:tools/stamp-verify.mjs",
+  { phase: "ferry", name: "verify-ballot", box: "town:tools/stamp-verify.mjs", onlyIf: (ctx) => !ctx.mintSkipped,
     run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", []), commit: "ballot: crossing pass" },
+  { phase: "ferry", name: "verify-ballot-owed", box: "tools/stamp-verify-owed.mjs", onlyIf: (ctx) => !!ctx.mintSkipped,
+    run: (ctx) => officeJob(ctx, "tools/stamp-verify-owed.mjs", [], { cwd: ctx.t.townClone }), commit: "ballot: crossing pass" },
   { phase: "ferry", name: "lines-sync", box: "world2/tools/stamp-lines.mjs", when: "store",
     run: (ctx) => officeJob(ctx, "world2/tools/stamp-lines.mjs", ["--sync", "--clone", ctx.t.townClone]) },
   { phase: "ferry", name: "quests", box: "world2/tools/quest-snapshot-run.mjs", when: "store",
@@ -423,9 +438,10 @@ export const CROSSING = [
     run: (ctx) => officeJob(ctx, "tools/standing-drain.mjs", ["--apply", "--clone", ctx.t.townClone]) },
   { phase: "keep", name: "gangway-drain", box: "tools/gangway-drain.mjs", nonFatal: true,
     run: (ctx) => officeJob(ctx, "tools/gangway-drain.mjs", ["--apply", "--clone", ctx.t.townClone]) },
-  // the arrival check: the box skips the mint on a red arrival; here a red ledger is red
-  { phase: "keep", name: "arrival-verify", box: "town:tools/stamp-verify.mjs",
-    run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", ["--registry", ctx.registryFile]) },
+  // the arrival check: the box skips the mint on a red arrival (mints owed are
+  // what the mint pays, so they are not red here: POS-341); here a red ledger is red
+  { phase: "keep", name: "arrival-verify", box: "tools/stamp-verify-owed.mjs",
+    run: (ctx) => officeJob(ctx, "tools/stamp-verify-owed.mjs", ["--registry", ctx.registryFile], { cwd: ctx.t.townClone }) },
   { phase: "keep", name: "tick-mint", box: "world2/tools/stamp-mint-run.mjs", when: "store",
     run: (ctx) => officeJob(ctx, "world2/tools/stamp-mint-run.mjs", ["--append", "--key", ctx.stampKey, "--clone", ctx.t.townClone, "--message", "mint: tick catch-up pass"]) },
   { phase: "keep", name: "tick-mint", box: "town:tools/stamp-mint.mjs", when: "git",
@@ -630,6 +646,7 @@ export function plan() {
         const steps = [];
         for (const job of CROSSING) {
           if (job.when && job.when !== (ctx.storeMint ? "store" : "git")) continue;
+          if (job.onlyIf && !job.onlyIf(ctx)) continue;
           const r = await job.run(ctx);
           steps.push([job.name, r, job]);
           if (r.code !== 0 && !job.nonFatal) break; // the unit's `&&`: the first refusal stops the chain
