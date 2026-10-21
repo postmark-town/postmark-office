@@ -2739,3 +2739,30 @@ Three nullable columns on `acts`: `hand` (the resident, or `human` for the house
    sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM information_schema.columns WHERE table_name = 'acts' AND column_name IN ('hand','for_handle','route')"   # 3
    ```
 2. **A minute after the next act lands** (the office's probe re-asks within 60 s): `SELECT route, count(*) FROM acts WHERE id > <max id before the apply> GROUP BY 1` names `mcp` or `api` (and `site` for a browser's act), never anything else.
+
+## 080: media can be freed, and the daily sweep that frees it (POS-737, the w44 ship)
+
+Darko, 2026-10-21 08:26 EDT, "737 agreed": a daily office sweep deletes an upload no current surface references after a 30-day grace, with its `-96`/`-256` copies; the ledger row moves to a deleted state and its bytes leave the household's wall; report-only first; an operator takedown ships with it; the replay gap is accepted. 080 adds six nullable state columns to `office_media` (`unreferenced_since`, `deleted_at`, `deleted_cause`, `deleted_by`, `deleted_reason`, `purged_at`) and grants `office_api` UPDATE on it. A row is never deleted: it is the receipt. The w44 code runs the same before or after 080 (`media.mjs § mediaLedgerHasStates`: every row reads live, the sweep and the takedown refuse), so the order is free, but the sweep does nothing useful until 080 is on. The law and its sources are the header of `src/media-sweep.mjs`. Box steps, Wright's hand, never a lane's:
+
+1. **Apply 080,** away from the clearing (05:45:40 / 17:45:40Z) and the settlement (06:00 / 18:00Z). Same pipe as 079 above, with `080_media_freed.sql`. Proof:
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM information_schema.columns WHERE table_name = 'office_media' AND column_name IN ('unreferenced_since','deleted_at','deleted_cause','deleted_by','deleted_reason','purged_at')"   # 6
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT has_table_privilege('office_api', 'office_media', 'UPDATE')"   # t
+   ```
+2. **Install the timer, DRY** (no `MEDIA_SWEEP_APPLY` in `/etc/postmark-office.env`). The unit header carries the three commands; the roll-call row is `postmark-media-sweep.timer`, and its tree row `media-sweep`. Then one run by hand, to read before the timer's first fire:
+   ```sh
+   sudo systemctl start postmark-media-sweep.service; sudo cat /srv/postmark-media-sweep/last.json
+   ```
+   Read `sources` first: every source has a `found` and none an `error` (`world` and `town` are never 0 on the real town). `clock.stamped` on the first run is every file hanging nowhere today; nothing is due on a first run, because the 30 days count from the sweep's first sight of a file, never from before it.
+3. **Each day of the report-only week,** read `last.json`: `ledger.unhung`, `clock`, and `due` (`files`, `bytes` and each URL, its household and the day it was last seen hung). A URL in `due` that you can see hanging somewhere is a source the sweep does not read: stop, and file it before anything goes live.
+4. **The first live run is Wright's, on Darko's go,** by hand, so its report is read before the timer frees anything on its own:
+   ```sh
+   sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && MEDIA_SWEEP_STATE_DIR=/srv/postmark-media-sweep node tools/media-sweep.mjs --apply --oauth-db /srv/postmark-office/oauth.db'
+   ```
+   `freed` names every file and its bytes; `storage_failed` names any file storage refused, which stays claimed and is retried by the next run. A run that finds more than 50 files due frees none and says so (`--max-delete <n>` raises the limit, for a run whose list you have read). Then, and only then, `MEDIA_SWEEP_APPLY=1` goes into `/etc/postmark-office.env` and the timer frees on its own.
+5. **A takedown** (moderation: immediate, whatever hangs the file), dry first, then with `--apply`:
+   ```sh
+   sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && node tools/media-takedown.mjs --url <media url> --reason "<why>" --by <your handle> --oauth-db /srv/postmark-office/oauth.db'
+   ```
+   It prints the receipt (the objects, the uploader, the reason, who, when); the row keeps it, and the upload door refuses the same bytes in every household from then on.

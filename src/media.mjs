@@ -29,8 +29,12 @@
 // Storage is Cloudflare R2, written with a zero-dependency SigV4 PUT — the
 // office carries no SDK for one verb. Keys are content-addressed
 // (media/<household>/<sha256>.<ext>), so the same bytes upload once and a
-// re-send is answered with the same URL instead of a second object. Nothing
-// here deletes: media is append-only in v1, and the quota is the wall. Beside
+// re-send is answered with the same URL instead of a second object. Media was
+// append-only in v1. Since POS-737 (Darko 2026-10-21, "737 agreed") a file
+// nothing hangs any more is freed after a 30-day grace by the daily sweep
+// (media-sweep.mjs), and an operator can take one down at once
+// (tools/media-takedown.mjs). Nothing in THIS file decides a deletion: it keeps
+// the ledger's states (§ THE LEDGER'S STATES) and the one signed DELETE. Beside
 // each raster original the door puts two small copies at derivable names
 // (`-96`, `-256` — § the small copies, below); they are the town's, not the
 // household's, and the wall does not see them.
@@ -87,14 +91,64 @@ const sha256hex = (data) => createHash("sha256").update(data).digest("hex");
 const hmac = (key, data) => createHmac("sha256", key).update(data).digest();
 
 // The FILE's table, created on first use. A paper runs it on its file only
-// (paperwork.mjs § exec); the store's table is 032's.
+// (paperwork.mjs § exec); the store's table is 032's, and its states 080's.
+const fileStatesAdded = new WeakSet();
 export function ensureMediaTable(odb) {
-  asPaper(odb).exec(`
+  const paper = asPaper(odb);
+  paper.exec(`
     CREATE TABLE IF NOT EXISTS media (
       household TEXT NOT NULL, sha TEXT NOT NULL, ext TEXT NOT NULL,
       bytes INTEGER NOT NULL, by_handle TEXT NOT NULL, created INTEGER NOT NULL,
       PRIMARY KEY (household, sha))`);
+  // The states (POS-737) on the file too: the switched office mirrors every
+  // store write to it, and a mirrored UPDATE naming a column the file lacks is
+  // a MIRROR FAILED line on every sweep.
+  const file = paper?.file;
+  if (file && !paper.readOnly && !fileStatesAdded.has(file)) {
+    const have = new Set(file.prepare("PRAGMA table_info(media)").all().map((c) => c.name));
+    for (const [col, type] of MEDIA_STATE_FILE_COLUMNS) if (!have.has(col)) file.exec(`ALTER TABLE media ADD COLUMN ${col} ${type}`);
+    fileStatesAdded.add(file);
+  }
 }
+
+// ── THE LEDGER'S STATES (POS-737, migration 080) ────────────────────────────
+//
+// A row is LIVE until it is freed. Freeing is two steps, so a failure between
+// them is visible rather than silent:
+//
+//   unreferenced_since  the first sweep that found nothing hanging the file
+//                       (cleared again by any sweep or door that finds it hung)
+//   deleted_at          the row is CLAIMED for deletion: it is no longer held,
+//                       and its bytes leave the household's wall at once
+//   deleted_cause       'sweep' (unhung past the grace) or 'takedown' (an
+//                       operator, at once, with a reason)
+//   deleted_by, deleted_reason   who, and why: the receipt
+//   purged_at           storage answered the DELETE for the original and its
+//                       copies; a claimed row without it is retried next run
+//
+// AN OFFICE ON THIS CODE RUNS AGAINST A STORE WITHOUT 080, unchanged (079's
+// rule): every statement that names a state column asks `mediaLedgerHasStates`
+// first, and a store without them answers exactly as before: every row live,
+// nothing freed. Only the sweep and the takedown refuse to run there.
+export const MEDIA_STATE_FILE_COLUMNS = Object.freeze([
+  ["unreferenced_since", "INTEGER"], ["deleted_at", "INTEGER"], ["deleted_cause", "TEXT"],
+  ["deleted_by", "TEXT"], ["deleted_reason", "TEXT"], ["purged_at", "INTEGER"],
+]);
+const STATE_COLUMNS = MEDIA_STATE_FILE_COLUMNS.map(([c]) => c);
+const statesSeen = new WeakSet(); // a paper that has them keeps them; one that lacks them is asked again
+
+/** True when this ledger carries the states (the store has taken 080, or the file was given them). */
+export async function mediaLedgerHasStates(odb) {
+  const paper = asPaper(odb);
+  if (statesSeen.has(paper)) return true;
+  const cols = paper.onStore
+    ? (await paper.all("SELECT column_name AS name FROM information_schema.columns WHERE table_name = 'office_media'")).map((r) => r.name)
+    : (await paper.all("PRAGMA table_info(media)")).map((r) => r.name);
+  const has = STATE_COLUMNS.every((c) => cols.includes(c));
+  if (has) statesSeen.add(paper);
+  return has;
+}
+const LIVE = " AND deleted_at IS NULL";
 
 // ── the media door's own arithmetic, in one home ────────────────────────────
 //
@@ -198,6 +252,8 @@ export function mediaUrlParts(url) {
 }
 
 export const MEDIA_NOT_HELD_HINT = "upload it first (upload_media), then hang the URL it returns";
+/** The grace a file hangs nowhere before the sweep frees it (Darko 2026-10-21, "737 agreed"). */
+export const MEDIA_GRACE_DAYS = 30;
 
 /**
  * Null when the ledger holds the bytes `url` names; otherwise the refusal, as
@@ -213,10 +269,26 @@ export async function mediaHeldRefusal(url, { odb = LEDGER } = {}) {
     return { code: 409, defect: "the media ledger is not open",
       hint: "the office could not check that the town holds this file, so nothing was hung — try again in a moment; if it repeats, tell the office (a letter to wright works)" };
   ensureMediaTable(odb);
-  const row = await asPaper(odb).get("SELECT 1 AS held FROM media WHERE household = ? AND sha = ? AND ext = ?", p.household, p.sha, p.ext);
+  const paper = asPaper(odb);
+  const states = await mediaLedgerHasStates(paper);
+  // A HANG IS A REFERENCE (POS-737). The clock is cleared BEFORE the row is
+  // read, so the sweep's claim (which needs a clock older than the grace) can
+  // never take a file between this check and the act that hangs it; a claim
+  // that came first leaves a row this read sees as freed. A read worker holds
+  // no pen and never hangs anything, so it skips the touch.
+  if (states && !paper.readOnly)
+    await paper.run(`UPDATE media SET unreferenced_since = NULL WHERE household = ? AND sha = ? AND ext = ? AND unreferenced_since IS NOT NULL${LIVE}`,
+      p.household, p.sha, p.ext);
+  const row = await paper.get(`SELECT ${states ? "deleted_at, deleted_cause" : "NULL AS deleted_at"} FROM media WHERE household = ? AND sha = ? AND ext = ?`, p.household, p.sha, p.ext);
   if (!row)
     return { code: 422, defect: "the town holds no file at that URL",
       hint: `nothing was ever uploaded at ${u.slice(0, 140)} — ${MEDIA_NOT_HELD_HINT}` };
+  if (row.deleted_at != null)
+    return row.deleted_cause === "takedown"
+      ? { code: 422, defect: "the town took that file down",
+        hint: "a file the town's operators took down hangs nowhere; hang a different picture — if you think the takedown was a mistake, tell the office (a letter to wright works)" }
+      : { code: 422, defect: "the town no longer holds that file",
+        hint: `it hung nowhere for ${MEDIA_GRACE_DAYS} days and was freed — ${MEDIA_NOT_HELD_HINT}` };
   return null;
 }
 
@@ -298,7 +370,9 @@ export async function mediaQuota(odb, household) {
   const ceiling = QUOTA_PER_HOUSEHOLD;
   // Number(): the store's SUM over a bigint is a numeric, which node-postgres
   // hands back as a string (paperwork.mjs § NUMBERS).
-  const used = Number((await asPaper(odb).get("SELECT COALESCE(SUM(bytes), 0) AS u FROM media WHERE household = ?", household)).u);
+  // Freed rows have given their bytes back (POS-737): the wall counts live rows.
+  const live = (await mediaLedgerHasStates(odb)) ? LIVE : "";
+  const used = Number((await asPaper(odb).get(`SELECT COALESCE(SUM(bytes), 0) AS u FROM media WHERE household = ?${live}`, household)).u);
   return { ceiling, used, remaining: Math.max(0, ceiling - used) };
 }
 
@@ -309,8 +383,9 @@ export async function mediaQuota(odb, household) {
  */
 export async function mediaLedgerRows(odb, household) {
   ensureMediaTable(odb);
+  const live = (await mediaLedgerHasStates(odb)) ? LIVE : ""; // a freed file is no longer one the household holds (POS-737)
   return (await asPaper(odb)
-    .all("SELECT sha, ext, bytes, by_handle, created FROM media WHERE household = ? ORDER BY created DESC, sha ASC", household))
+    .all(`SELECT sha, ext, bytes, by_handle, created FROM media WHERE household = ?${live} ORDER BY created DESC, sha ASC`, household))
     .map((r) => ({
       url: mediaUrlFor(household, r.sha, r.ext),
       sha: r.sha,
@@ -740,6 +815,37 @@ export async function r2Put(objectKey, bytes, mediaType) {
       `storage answered ${resp.status} — try again in a moment; if it repeats, tell the office (a letter to wright works)`);
 }
 
+// ONE SIGNED DELETE (POS-737), the PUT's twin: the same SigV4, an empty
+// payload. Storage answers 204 for a key it held and for one it did not, so a
+// retried DELETE is harmless; anything else is a refusal the caller names.
+export async function r2Delete(objectKey) {
+  const host = `${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+  const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const day = amzDate.slice(0, 8);
+  const payloadHash = sha256hex("");
+  const uri = `/${BUCKET}/${objectKey}`;
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = ["DELETE", uri, "",
+    `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`,
+    signedHeaders, payloadHash].join("\n");
+  const scope = `${day}/auto/s3/aws4_request`;
+  const kSigning = hmac(hmac(hmac(hmac(`AWS4${process.env.R2_SECRET_ACCESS_KEY}`, day), "auto"), "s3"), "aws4_request");
+  const signature = createHmac("sha256", kSigning)
+    .update(["AWS4-HMAC-SHA256", amzDate, scope, sha256hex(canonicalRequest)].join("\n")).digest("hex");
+  const resp = await fetch(`https://${host}${uri}`, {
+    method: "DELETE",
+    headers: {
+      "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate,
+      authorization: `AWS4-HMAC-SHA256 Credential=${process.env.R2_ACCESS_KEY_ID}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    },
+  });
+  if (!resp.ok && resp.status !== 404) throw new Error(`storage answered ${resp.status} to DELETE ${objectKey}`);
+}
+
+/** Every object one ledger row put: the original, and its small copies when it is a raster. */
+export const mediaObjectKeysOf = ({ household, sha, ext }) =>
+  [mediaObjectKey(household, sha, ext), ...(THUMB_FORMATS.includes(ext) ? THUMB_SIZES.map((n) => thumbObjectKey(household, sha, ext, n)) : [])];
+
 // The handler both doors share. `put` is injectable so a test can prove
 // everything around the storage call without a bucket; `fetchImpl` and `lookup`
 // are injectable for the same reason, so the SSRF wall is provable offline.
@@ -810,11 +916,25 @@ export async function uploadMedia(args = {}, key = null, odb = null,
   const url = mediaUrlFor(household, sha, ext);
 
   const { ceiling, used } = await mediaQuota(odb, household);
+  const states = await mediaLedgerHasStates(odb);
+  // A TAKEN-DOWN FILE STAYS DOWN, in every household (POS-737): the bytes are
+  // what the operators took down, so the same bytes under another household's
+  // name are the same file.
+  if (states && await asPaper(odb).get("SELECT 1 AS down FROM media WHERE sha = ? AND deleted_cause = 'takedown'", sha))
+    throw bounce(403, "the town took this file down",
+      "a file the town's operators took down cannot be uploaded again, by any household — if you think the takedown was a mistake, tell the office (a letter to wright works)");
+  const had = await asPaper(odb).get(`SELECT ${states ? "deleted_at, purged_at" : "NULL AS deleted_at"} FROM media WHERE household = ? AND sha = ?`, household, sha);
   // Same bytes, same wall: answer with the URL that already exists. This sits
   // BEFORE the quota check on purpose — re-sending what you already hold can
   // never be refused for fullness.
-  if (await asPaper(odb).get("SELECT 1 FROM media WHERE household = ? AND sha = ?", household, sha))
+  if (had && had.deleted_at == null)
     return { url, bytes: bytes.length, type: mediaType, sha, already: true, via: source, ...(read_at ? { read_at } : {}), quota: { used, ceiling } };
+  // A FREED FILE COMES BACK as a fresh upload: the bytes are put again and its
+  // row lives again. Not while the sweep is between its claim and storage's
+  // answer, because then the sweep's DELETE could land after this PUT.
+  if (had && had.purged_at == null)
+    throw bounce(409, "the town is freeing this exact file right now",
+      "the daily sweep claimed it and storage has not answered yet — send it again after the next sweep");
   if (used + bytes.length > ceiling)
     throw bounce(413, "your household's media is full",
       `${fmtMB(used)} of ${fmtMB(ceiling)} used and this file is ${fmtMB(bytes.length)} — the wall is ${fmtMB(QUOTA_PER_HOUSEHOLD)} per household; the ceiling is a dial, and a genuine need is a letter to the founders`);
@@ -834,8 +954,12 @@ export async function uploadMedia(args = {}, key = null, odb = null,
       console.log(`[media] no small copies for ${household} ${sha.slice(0, 12)}.${ext}: ${e?.defect ?? e?.message ?? e}`);
     }
   }
-  await asPaper(odb).run("INSERT INTO media (household, sha, ext, bytes, by_handle, created) VALUES (?, ?, ?, ?, ?, ?)",
-    household, sha, ext, bytes.length, by, Date.now());
+  if (had)
+    await asPaper(odb).run(`UPDATE media SET ext = ?, bytes = ?, by_handle = ?, created = ?, ${STATE_COLUMNS.map((c) => `${c} = NULL`).join(", ")} WHERE household = ? AND sha = ?`,
+      ext, bytes.length, by, Date.now(), household, sha);
+  else
+    await asPaper(odb).run("INSERT INTO media (household, sha, ext, bytes, by_handle, created) VALUES (?, ?, ?, ?, ?, ?)",
+      household, sha, ext, bytes.length, by, Date.now());
   // ONE LINE SO A WALL BREACH LEAVES A TRACE. The ledger row is byte-accounting
   // and deliberately keeps no URL — but the SSRF wall carries a knowingly-open
   // rebinding gap, and a gap nothing records is one nobody can ever notice.
