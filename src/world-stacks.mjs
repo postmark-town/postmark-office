@@ -46,6 +46,7 @@ export const UNIT_ACTION = Object.freeze({
   give: "units:give",              // holder → resident or chest
   take: "units:take",              // chest → the taker
   consume: "units:consume",        // a held unit used up
+  offer: "units:offer",            // a held unit held out to a creature and used up, whatever it does (POS-672, call 2)
   drop: "units:drop",              // a held unit set down: it becomes a mark
   dropUndone: "units:drop-undone", // the set-down's mark could not be filed: the unit comes back
   takeBack: "units:take-back",     // a dropped unit's mark taken back into a holding

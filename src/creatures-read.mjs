@@ -31,7 +31,7 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf } from "./creatures.mjs";
+import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -153,7 +153,7 @@ export function creatureHappening({ living, law }, at, { nowMs = Date.now(), eng
     for (const r of c.reactions) {
       if (!(nowMs - r.at <= dial("emission_ms")) || r.at > nowMs) continue;
       const reaction = reactionOf(law, c, r.reaction);
-      if (reaction) heard.push({ c, r, line: lineOf(law, reaction, r.to) });
+      if (reaction) heard.push({ c, r, line: lineOf(law, reaction, r.to, lineWords(r)) });
     }
   }
   heard.sort((a, b) => b.r.at - a.r.at);
@@ -226,7 +226,7 @@ export function creatureToYou({ living, law }, handle, { sinceMs, nowMs = Date.n
     const mine = c.reactions.filter((r) => r.to === handle && r.at > sinceMs && r.at <= nowMs && reactionOf(law, c, r.reaction));
     if (!mine.length) continue;
     const r = mine.reduce((a, b) => (b.at >= a.at ? b : a));
-    events.push({ kind: "creature", creature: c.id, at: new Date(r.at).toISOString(), line: lineOf(law, reactionOf(law, c, r.reaction), r.to),
+    events.push({ kind: "creature", creature: c.id, at: new Date(r.at).toISOString(), line: lineOf(law, reactionOf(law, c, r.reaction), r.to, lineWords(r)),
       reaction: r.reaction, roll: r.roll, judged_by: r.judged_by, ...(r.act.endsWith("@arrival") ? { arrival: true } : {}),
       ...(mine.length > 1 ? { and_more: mine.length - 1, more: `and ${mine.length - 1} more` } : {}) });
   }
@@ -304,7 +304,7 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
       const p = typeof r.payload === "string" ? JSON.parse(r.payload) : (r.payload ?? {});
       const reaction = c ? reactionOf(law, c, p.reaction) : null;
       return { to: p.to, verb: p.verb, ...(p.moment ? { moment: p.moment } : {}), reaction: p.reaction,
-        ...(reaction ? { line: lineOf(law, reaction, p.to) } : {}), roll: p.roll, judged_by: p.judged_by, ...(p.why ? { why: p.why } : {}),
+        ...(reaction ? { line: lineOf(law, reaction, p.to, lineWords(p)) } : {}), roll: p.roll, judged_by: p.judged_by, ...(p.why ? { why: p.why } : {}),
         odds: p.allowed ?? null, at: new Date(msOf(r.at)).toISOString() };
     }),
     note: "the odds are the distribution the d20 sampled (C4: shown here, never in the actor's own answer)",

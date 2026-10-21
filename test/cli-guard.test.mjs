@@ -189,6 +189,8 @@ const ROSTER = {
   "tools/ballots-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: ballots-backfill.mjs --town <clone>" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/ship-guard.mjs": { args: [], code: 2, needle: "usage: node tools/ship-guard.mjs" },
+  // POS-341: the owed-tolerant verify refuses a directory with no town verifier before it runs anything.
+  "tools/stamp-verify-owed.mjs": { args: [], code: 2, needle: "stamp-verify-owed: no town at" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
   // The PayPal rail (POS-183 part 2): no PAYPAL_ENV, so it refuses before it reads
   // a credential, a clone, PayPal or the ledger.

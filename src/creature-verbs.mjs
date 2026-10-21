@@ -1,0 +1,342 @@
+// creature-verbs.mjs — a creature's afforded actions, the office half (POS-672).
+//
+// RULED (Darko 2026-10-16 17:47 and 18:06, POS-637's nine calls; the details
+// 2026-10-20 22:37, "recs good on POS-672, I like your whisper idea more than
+// the default rec"; LOGOS classes.md § A creature's afforded actions):
+//
+//   · Every creature has watch, approach and shoo; the wolf and the raven add
+//     call and offer; the bat adds whisper. The world declares them on the
+//     creature classes' marks, and this office reads them at the blessed ref
+//     (creatures.mjs § loadCreatureLaw's `afforded`). They are ADDITIONS: the
+//     ring and its ambient reactions stand (17:47).
+//   · THE REPLY IS THE REACTION (call 7). The act names one creature; only that
+//     creature answers it (D7), with a reaction its kind file allows for the
+//     verb, chosen as every reaction is (Jev over the menu, the public d20), and
+//     the act's answer waits up to AIMED_WAIT_MS for it (W2), code answering
+//     when Jev is slow or down.
+//   · FROM WHERE (D1): watch, approach and call from sight (within presence's
+//     radius, where `who` shows the creature); shoo, offer and whisper from
+//     inside its ring.
+//   · APPROACH (call 3, D2) is a walk toward it that stops at half its ring; the
+//     walk is its row, and every other creature perceives it as the walk it is.
+//   · OFFER (call 2, D3) uses up one of a consumable kind in your hands, whatever
+//     the creature does (world-kinds.mjs § offer, `units:offer`).
+//   · WORDS (D4, Wright's version, ruled): a call's words are public like a say,
+//     spoken through the say (heard by the shared ear, on the record). A
+//     whisper's words are on the record (its own row carries them) and never in
+//     the shared ear: no one nearby hears them, and only the bat's answer is
+//     judged on them.
+//   · ONE AT A TIME (D6): an afforded action aimed at a creature still answering
+//     you (C2's 10 s window) is refused before anything happens, so nothing is
+//     used up and nothing is written.
+//   · SHOWN WHEN USABLE (reads-and-affordances § Verbs show only when usable;
+//     W4): `creaturePairs` is the (verb, creature) matrix, and the bare read's
+//     `can` and investigate's `can` both project it, as the hold verbs do.
+//
+// FAIL CLOSED: no law read here, CREATURE_JUDGE=off, or a law that declares no
+// afforded actions (a blessing before the world half) refuses every verb with
+// its reason and shows none.
+
+import { capOf, dial, distanceM, judgeMode } from "./creatures.mjs";
+import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
+import { WHISPER_WORDS } from "./world-read-shape.mjs";
+
+/** The six verbs this door answers (the world's AFFORDED_VERBS, as ruled). */
+export const CREATURE_VERBS = Object.freeze(["watch", "approach", "shoo", "call", "offer", "whisper"]);
+/** W2: how long an aimed act's answer waits for its creature, and Jev's share of it. */
+export const AIMED_WAIT_MS = 3000;
+export const AIMED_JEV_MS = 2500;
+/** D4: a call's or a whisper's words, at most (a say's own bound is longer; this is a few words to a creature). */
+export const WORDS_MAX = 140;
+/** D1: "in sight" is presence's own radius, where `who` shows a creature. */
+export const SIGHT_M = PRESENCE_DIALS.near_radius_m;
+/** D2: an approach stops at this share of the creature's ring. */
+export const APPROACH_STOP = 0.5;
+
+/**
+ * THE GRAMMAR, AS A SCHEMA ONLY (the CROSSING_TOOLS precedent): the apex's cards
+ * and its envelope check read the fields from here, and there is no flat tool.
+ * The apex IS the MCP door (`world`) and the REST door (POST /world/apex).
+ */
+export const CREATURE_TOOLS = Object.freeze([{
+  name: "world_creature",
+  description: "A creature's afforded actions (watch, approach, shoo; the wolf and the raven call and offer; the bat whisper): aim one at a creature you can see, and its reaction is your reply.",
+  inputSchema: { type: "object", properties: {
+    creature: { type: "string", description: "the creature, by its id as who, find: and investigate: give it (creature:<kind>-<crossing>-<n>)" },
+    handle: { type: "string", description: "which of your residents acts, when your key holds several" },
+    kind: { type: "string", description: "offer only: the consumable kind you hold out, one of it (with one kind in hand it may be left out)" },
+    words: { type: "string", description: `call or whisper only, at most ${WORDS_MAX} characters: a call's words are heard nearby like a say. A whisper's: ${WHISPER_WORDS}` },
+  }, additionalProperties: false },
+}]);
+
+const bounce = (code, defect, hint, extra = {}) => {
+  const e = new Error(defect);
+  Object.assign(e, { code, defect, hint, ...extra });
+  return e;
+};
+
+const ringOf = (law, c) => Number(law?.kindOf?.(c.kind)?.ring_m) || 0;
+const nameOf = (law, c) => law?.kindOf?.(c.kind)?.name ?? `a ${c.kind}`;
+const theOf = (law, c) => nameOf(law, c).replace(/^an? /i, "the ");
+
+/**
+ * Why `verb` cannot be aimed at creature `c` from `d` metres, or null when it
+ * can. The one judgment both the door and the matrix read, so they cannot differ.
+ */
+export function whyNot(verb, c, d, { law, carryingConsumable = false } = {}) {
+  const a = (law?.affordedOf?.(c.kind) ?? []).find((x) => x.action === verb);
+  if (!a) return `${nameOf(law, c)} does not take ${verb}`;
+  const ring = ringOf(law, c);
+  if (a.from === "ring" && !(d <= ring))
+    return `${theOf(law, c)} is ${Math.round(d)} m off, and ${verb} is from inside its ring (${ring} m)`;
+  if (a.from !== "ring" && !(d <= SIGHT_M))
+    return `${theOf(law, c)} is ${Math.round(d)} m off, out of sight (${verb} is from within ${SIGHT_M} m)`;
+  if (verb === "approach" && d <= ring * APPROACH_STOP)
+    return `you are already within ${Math.round(ring * APPROACH_STOP)} m of ${theOf(law, c)}`;
+  if (verb === "offer" && !carryingConsumable) return "you carry nothing to offer";
+  return null;
+}
+
+/** What to do about a whyNot, in the door's hint. */
+function remedy(verb, c, law, actor) {
+  const a = (law?.affordedOf?.(c.kind) ?? []).find((x) => x.action === verb);
+  if (!a) {
+    const its = (law?.affordedOf?.(c.kind) ?? []).map((x) => x.action);
+    return `${theOf(law, c)}'s afforded actions are ${its.join(", ") || "none"} (explain: "${c.kind}"). Nothing was done.`;
+  }
+  if (verb === "offer") return `an offer is one of a consumable kind you carry: leave-mark { kind, count: 1, to: "${actor}" } makes one into your hands (explain: "candy" lists the kinds). Nothing was done.`;
+  if (a.from === "ring") return `approach it first: world { do: "approach", args: { creature: "${c.id}" } } walks you to half its ring. Nothing was done.`;
+  return `walk nearer, or find it: world { find: "${c.kind}" }. Nothing was done.`;
+}
+
+/**
+ * THE MATRIX (W4): every (verb, creature) pair you can aim right now, each one
+ * exactly what the door admits (the window aside: it is a moment, not a place).
+ * `here` is your standpoint; `living` and `law` the creatures as this process
+ * folds them; `carryingConsumable` whether your hands hold a consumable kind.
+ */
+export function creaturePairs({ here, living, law, carryingConsumable = false, now = Date.now(), env = process.env }) {
+  if (!here || !living || !law?.afforded || judgeMode(env) === "off") return [];
+  const pairs = [];
+  for (const c of living.living(now)) {
+    const d = distanceM(here, c);
+    if (!(d <= SIGHT_M)) continue;
+    for (const a of law.affordedOf(c.kind))
+      if (!whyNot(a.action, c, d, { law, carryingConsumable })) pairs.push({ verb: a.action, object: c.id });
+  }
+  return pairs;
+}
+
+/** The read's action entries for the creature verbs in `pairs`, one per verb (the bare `can` lists each verb once). */
+export function creatureEntries(pairs) {
+  const out = [];
+  for (const verb of CREATURE_VERBS) {
+    const on = pairs.filter((p) => p.verb === verb).map((p) => p.object);
+    if (!on.length) continue;
+    out.push({ action: verb, channel: "creature", via: "in sight", creatures: on });
+  }
+  return out;
+}
+
+/** Seconds until the window lets `actor` aim at `c` again, or 0. */
+export function windowLeftS(c, actor, now) {
+  const window = dial("per_actor_ms");
+  const last = c.reactions.filter((r) => r.to === actor).map((r) => r.instant ?? r.at).reduce((a, b) => Math.max(a, b), -Infinity);
+  return Number.isFinite(last) ? Math.max(1, Math.ceil((window - Math.abs(now - last)) / 1000)) : 0;
+}
+
+/**
+ * THE DOOR: world { do: "<verb>", args: { creature, handle?, kind? (offer), words? (call, whisper) } }.
+ * `deps` are the seams a test drives; the office's own are read lazily.
+ */
+export async function worldCreature(args = {}, key = null, deps = {}) {
+  const d = { ...(await liveDeps(deps)), ...deps };
+  const verb = String(args.act ?? "").trim();
+  if (!CREATURE_VERBS.includes(verb))
+    throw bounce(422, `"${verb}" is not a creature's afforded action`, `the afforded actions are ${CREATURE_VERBS.join(", ")}. Nothing was done.`);
+  const fz = d.freeze?.();
+  if (fz) return fz;
+
+  // WHO: the key's resident, named when it holds several (the walk door's rule)
+  const handles = [...(key?.handles ?? [])];
+  const named = String(args.handle ?? "").trim();
+  const actor = named || (handles.length === 1 ? handles[0] : "");
+  if (!actor) throw bounce(422, "which resident?", handles.length ? `pass handle: one of ${handles.join(", ")}` : "this key acts for no resident", { choices: handles });
+  if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+
+  // THE LAW, FAIL CLOSED
+  if (judgeMode(d.env) === "off") throw bounce(503, "the creatures are resting", "the office's creatures are switched off for now (CREATURE_JUDGE=off). Nothing was done.");
+  const cr = await d.creatures();
+  if (!cr?.living || !cr?.law || cr.law.unavailable) throw bounce(503, "the creatures cannot be read here", `${cr?.law?.unavailable ?? "the world's creature law is not read on this office"}. Nothing was done.`);
+  const { living, law } = cr;
+  if (!law.afforded) throw bounce(409, "the creatures' afforded actions are not law yet",
+    `the world's creature law at the blessed ref declares no afforded actions, so none can be aimed; they arrive with a settlement. Nothing was done.`);
+
+  // WHICH CREATURE
+  const now0 = d.now();
+  const here = await d.standpoint(actor);
+  if (!here) throw bounce(422, `the world doesn't know where ${actor} stands yet`, "an afforded action is taken from where you stand: walk somewhere first. Nothing was done.");
+  const raw = String(args.creature ?? "").trim();
+  if (!raw) {
+    const near = living.living(now0).filter((c) => distanceM(here, c) <= SIGHT_M).map((c) => c.id);
+    throw bounce(422, `${verb} which creature?`, near.length ? `creature: one of ${near.join(", ")}. Nothing was done.` : `no creature is in sight; world { find: "creature" } names the nearest. Nothing was done.`);
+  }
+  const id = raw.startsWith("creature:") ? raw : `creature:${raw}`;
+  // ONE AT A TIME, ATOMICALLY (D6; review-692 F3): every aim one resident takes at
+  // one creature is judged and written in turn, so two at once cannot both pass
+  // the window. In this office, a queue per (resident, creature) holds the second
+  // until the first's reaction is folded, and the window then refuses it; between
+  // two offices (a deploy's overlap), the trigger's own write takes an advisory
+  // lock on the pair and refuses an aim the record shows inside the window (aimGuard).
+  return aimTurn(`${actor}|${id}`, () => aimAt({ d, args, key, verb, actor, id, here, cr }));
+}
+
+const aims = new Map(); // "<resident>|<creature>" -> the tail of that pair's queue
+/** Run `fn` after every earlier aim by this resident at this creature has finished. */
+function aimTurn(pair, fn) {
+  const prev = aims.get(pair) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.catch(() => {});
+  aims.set(pair, tail);
+  tail.then(() => { if (aims.get(pair) === tail) aims.delete(pair); });
+  return next;
+}
+
+/** The record's half of D6, inside the trigger's own transaction: the pair's lock, then any aim or reaction inside the window. */
+export const AIM_GUARD_SQL = `SELECT 1 AS hit FROM (
+    SELECT actor, action, at FROM acts WHERE object = $2 ORDER BY id DESC LIMIT 50) mine
+  WHERE mine.actor = $1 AND mine.action = ANY($3::text[]) AND mine.at > now() - ($4::int * interval '1 millisecond')
+  UNION ALL SELECT 1 FROM (
+    SELECT action, at, payload FROM acts WHERE actor = $2 ORDER BY id DESC LIMIT 50) its
+  WHERE its.action = 'react' AND its.payload->>'to' = $1 AND its.at > now() - ($4::int * interval '1 millisecond')
+  LIMIT 1`;
+export const AIM_ACTIONS = Object.freeze(["watch", "shoo", "call", "whisper", "units:offer"]);
+export function aimGuard(actor, creature) {
+  return async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-aim:${actor}:${creature}`]);
+    const { rows } = await client.query(AIM_GUARD_SQL, [String(actor), String(creature), [...AIM_ACTIONS], dial("per_actor_ms")]);
+    if (rows.length) throw bounce(429, `${creature} is still answering you`,
+      `one reaction from a creature to you every ${dial("per_actor_ms") / 1000} s; try again shortly. Nothing was done.`);
+  };
+}
+
+async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
+  const { living, law } = cr;
+  const now = d.now();
+  const c = living.byId.get(id);
+  if (!c) throw bounce(404, `no creature ${id}`, `world { find: "creature" } names the living ones. Nothing was done.`);
+  if (c.gone || !(c.fades_at > now))
+    throw bounce(410, `${theOf(law, c)} is gone`, `${c.gone === "fled" ? "it fled back into the Mists" : "it faded back into the Mists"}; a creature never comes back. Nothing was done.`);
+
+  // FROM WHERE, AND WHAT YOU HOLD (D1, D3): the matrix's own judgment
+  const dist = distanceM(here, c);
+  const carryingConsumable = verb === "offer" ? await d.carryingConsumable(actor) : false;
+  const not = whyNot(verb, c, dist, { law, carryingConsumable });
+  if (not) throw bounce(not.includes("does not take") ? 422 : 409, not, remedy(verb, c, law, actor));
+
+  // ONE AT A TIME (D6): refused before anything is written or used up
+  if (capOf(c, actor, { now })) {
+    const s = windowLeftS(c, actor, now);
+    throw bounce(429, `${theOf(law, c)} is still answering you`, `try again in ${s} s (one reaction from a creature to you every ${dial("per_actor_ms") / 1000} s). Nothing was done.`, { retry_after_s: s });
+  }
+
+  // THE WORDS (D4)
+  const hasWords = args.words != null && String(args.words).trim() !== "";
+  if (hasWords && verb !== "call" && verb !== "whisper") throw bounce(422, `${verb} carries no words`, "words go with a call or a whisper. Nothing was done.");
+  const words = hasWords ? String(args.words).replace(/\s+/g, " ").trim() : null;
+  if (words && words.length > WORDS_MAX) throw bounce(422, `${words.length} characters is more than a ${verb} carries`, `at most ${WORDS_MAX}.${verb === "whisper" ? ` ${WHISPER_WORDS}` : ""} Nothing was done.`);
+
+  // THE ACT'S OWN ROW: the trigger the creature answers (W1)
+  let trigger = null;   // { actId, atIso }
+  let extra = {};
+  let othersRows = null; // an approach's walk, handed to every other creature
+  let offered = null;
+  if (verb === "offer") {
+    const r = await d.offer({ kind: args.kind ?? null, creature: id, guard: aimGuard(actor, id) }, key, actor);
+    if (r?.error) return r;
+    trigger = { actId: String(r.seq), atIso: isoOf(r.written_at) ?? new Date(d.now()).toISOString() };
+    offered = r.offered ?? { kind: r.kind, name: r.kind };
+    extra = { offered: r.kind, holds: r.holds };
+  } else if (verb === "approach") {
+    const ring = ringOf(law, c);
+    const u = { x: (here.x - c.x) / dist, y: (here.y - c.y) / dist };
+    const to = { x: c.x + u.x * ring * APPROACH_STOP, y: c.y + u.y * ring * APPROACH_STOP };
+    const { result, rows } = await d.approach({ handle: actor, x: Math.round(to.x * 10) / 10, y: Math.round(to.y * 10) / 10 }, key, id);
+    if (result?.error) return result;
+    const walk = [...rows].reverse().find((r) => r.action === "walk");
+    if (!walk?.id) throw bounce(500, "the approach's walk left no row to answer", "the walk was declared, but the creature has nothing on the record to answer; it will see you arrive. Look again.");
+    trigger = { actId: String(walk.id), atIso: isoOf(walk.written_at ?? walk.at) ?? new Date(d.now()).toISOString() };
+    othersRows = rows;
+    extra = { walk: result };
+  } else {
+    if (verb === "call" && words) {
+      // public like a say (D4): the say's own door speaks it, and the shared ear hears it
+      const said = await d.say({ handle: actor, text: words }, key);
+      if (said?.error) {
+        // the say's refusal in the call's own words: its rule binds (a voice every 15 s), its hint names the say's door
+        const wait = /try again in (\d+)\s*s/.exec(String(said.hint ?? ""))?.[1];
+        throw bounce(said.code ?? 422, `the call's words could not be spoken: ${said.defect ?? "the say refused them"}`,
+          `${wait ? `a call's words are a say, and a voice is heard once every 15 s: try again in ${wait} s, or call without words. ` : `${said.hint ?? ""} `}Nothing was done.`);
+      }
+    }
+    const row = await d.write({
+      actor, action: verb, object: id, cls: "creature",
+      payload: { kind: c.kind, ...(verb === "whisper" && words ? { words } : {}), ...(verb === "call" && words ? { said: true } : {}) },
+      effect: `${actor} ${{ watch: "watched", shoo: "shooed", call: "called to", whisper: "whispered to" }[verb]} ${theOf(law, c)}`,
+    }, key, { guard: aimGuard(actor, id) });
+    trigger = { actId: String(row.actId), atIso: isoOf(row.written_at) ?? new Date(d.now()).toISOString() };
+    if (words) extra = { words, ...(verb === "whisper" ? { words_note: WHISPER_WORDS } : {}) };
+  }
+
+  // THE REPLY IS THE REACTION (call 7): that creature alone, within AIMED_WAIT_MS
+  const act = { actor, verb, actId: trigger.actId, atIso: trigger.atIso, point: here, approaching: verb === "approach",
+    ...(offered ? { offered } : {}), ...(words ? { words } : {}) };
+  const [answer] = await d.answer(act, { ...cr, aimed: c, jevMs: AIMED_JEV_MS, deadline: d.clock() + AIMED_WAIT_MS });
+  // an approach is a walk: every other creature whose ring holds where you set out answers it as one
+  let others = [];
+  if (othersRows?.length) others = (await d.others(othersRows, id)) ?? [];
+  return {
+    did: verb, creature: id, kind: c.kind, ...extra,
+    ...(answer ? { reaction: answer } : { reaction: null, note: `${theOf(law, c)} did not answer in time; if it answers, its line stands in happening_here` }),
+    ...(others.length ? { creatures: others } : {}),
+  };
+}
+
+const isoOf = (t) => { const ms = t instanceof Date ? t.getTime() : Date.parse(t ?? ""); return Number.isFinite(ms) ? new Date(ms).toISOString() : null; };
+
+/** The office's own collaborators, imported lazily; a test hands in its own. */
+async function liveDeps(given) {
+  const need = ["creatures", "standpoint", "carryingConsumable", "offer", "approach", "say", "write", "answer", "others", "freeze"]
+    .filter((k) => !(k in given));
+  if (!need.length) return { now: Date.now, clock: Date.now, env: process.env };
+  const [hook, world, freeze, act, kinds, units, crossings, branches, journal] = await Promise.all([
+    import("./creatures-hook.mjs"), import("./world.mjs"), import("./freeze.mjs"), import("./act-watch.mjs"),
+    import("./world-kinds.mjs"), import("./world-units.mjs"), import("./crossings.mjs"), import("./world-branches.mjs"), import("./world-journal.mjs"),
+  ]);
+  const { WORLD_CLONE } = await import("./world-store.mjs");
+  return {
+    now: Date.now, clock: Date.now, env: process.env,
+    freeze: () => freeze.worldFreezeBounce(),
+    creatures: async () => hook.creaturesNow() ?? (await import("./creatures-read.mjs")).creaturesForRead(),
+    standpoint: async (h) => { const s = await world.residentStandpoint(h).catch(() => null); return s?.placed ? { x: Number(s.x), y: Number(s.y) } : null; },
+    carryingConsumable: async (h) => carryingConsumableNow(h, { kinds, units }),
+    offer: async (a, k, actor) => kinds.callKinds("offer", a, k, actor, await units.liveUnitDeps()),
+    approach: async (a, k, creature) => act.captured(() => world.walkApproach(WORLD_CLONE, a, k, creature)),
+    say: (a, k) => world.sayForCall(a, k),
+    write: async (entry, k, { guard = null } = {}) => {
+      const { at, witnesses } = await world.witnessStamp(entry.actor);
+      return journal.appendActFlipped(null, { crossing: crossings.currentCrossing(), at, witnesses, household: branches.resolvedWorldHousehold(k), ...entry }, guard ? { guard } : {});
+    },
+    answer: (a, deps) => hook.answerWithin(a, deps),
+    others: (rows, except) => hook.creaturesAnswer(rows, {}, { except }).then((r) => r?.creatures ?? []),
+  };
+}
+
+/** Whether `actor`'s hands hold a consumable kind (the offer's precondition, D3). */
+export async function carryingConsumableNow(actor, { kinds, units }) {
+  const [{ lawSnapshot }, { kindEdgesOf }, { lineageOf }] = await Promise.all([
+    import("./law-snapshot.mjs"), import("./world-stacks.mjs"), import("./world-grants.mjs")]);
+  const view = units.classViewOf(lawSnapshot());
+  const { fold } = await kinds.holdRecordNow();
+  return kindEdgesOf(fold, String(actor)).some((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"));
+}

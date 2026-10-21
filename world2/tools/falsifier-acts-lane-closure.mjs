@@ -137,6 +137,14 @@ const LANE_OF = Object.freeze({
   // appendActFlipped), the only record an appearance has, so there is no first
   // pen to close against. Canon at the act; the notary publishes it.
   describe: "lane",
+  // A CREATURE'S AFFORDED ACTIONS (POS-672, W1, 2026-10-20). Which lane, which
+  // table, which pen: watch, shoo, call and whisper write one row each into
+  // `acts` itself, class `creature` (creature-verbs.mjs through appendActFlipped),
+  // the only record they have, as the creature's own rows are (CLASS_LANE_OF
+  // below); a call's words ride the say's own lane (check 1). Offer is the hold
+  // lane's `units:offer`, as consume is. Approach IS a walk (check 3), its row
+  // naming the creature. Answered here because the census asked, as for `ride`.
+  watch: "lane", shoo: "lane", call: "lane", whisper: "lane", offer: "lane", approach: "lane",
 
   // ruled out, each with its reason
   "note-to-self": "none",
