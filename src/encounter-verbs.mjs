@@ -429,11 +429,11 @@ export async function encounterTick({ living, law }, { now = Date.now(), deps = 
   return out;
 }
 
-// ── the sweetness takes nothing ─────────────────────────────────────────────
+// ── it takes nothing ────────────────────────────────────────────────────────
 
 /**
- * A GIVE TO THE ONE WHO SPEAKS FOR A CREATURE THAT TEMPTS (settled: "the
- * sweetness takes nothing"): while it is out and the giver stands in its ring, a
+ * A GIVE TO THE ONE WHO SPEAKS FOR A CREATURE THAT TEMPTS (settled: "it takes
+ * nothing"): while it is out and the giver stands in its ring, a
  * give to its `who` is answered and counted (an obeyed temptation reads this
  * row), and nothing moves. Null when no such creature is here: the hold goes on
  * as it always does. `deps` are the seams a test drives.

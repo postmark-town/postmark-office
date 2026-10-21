@@ -1299,7 +1299,7 @@ export async function callHoldTool(name, args = {}, key = null, { verb = null } 
 async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
-  // THE SWEETNESS TAKES NOTHING (a creature that tempts; encounter-verbs.mjs § givenToATempter): a give to the one
+  // IT TAKES NOTHING (a creature that tempts; encounter-verbs.mjs § givenToATempter): a give to the one
   // who speaks for it, from inside its ring while it is out, is answered and counted, and nothing moves
   if (name === "world_hold" && args.to && verb !== "drop" && verb !== "take") {
     const taken = await (await import("./encounter-verbs.mjs")).givenToATempter(args, key, actor).catch(() => null);

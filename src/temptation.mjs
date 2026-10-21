@@ -27,7 +27,7 @@
 //     answering within ECHO_MS where houses count, else +1).
 //   · HELP: a steady or a shield after a temptation was aimed at that friend,
 //     persuasion +1; a shield across a house line, where houses count, +2.
-//   · THE SWEETNESS TAKES NOTHING: a give or a stake it asks for is answered and
+//   · IT TAKES NOTHING: a give or a stake it asks for is answered and
 //     counted, and nothing moves.
 //
 // PHASES: the menu's phases in order, advanced by whichever comes first: the larger

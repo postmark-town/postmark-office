@@ -38,7 +38,7 @@ ring_m: 40
 what: >
   A fixture for the temptation's tests.
 moods:
-  sweet: 0..3 = 1 | calm | warm | sugary | wild
+  mood: 0..3 = 1 | calm | stirred | eager | wild
 reaction notice "it notices": when true says It notices {actor}.
 `;
 const BASE = NO_WORLD ? null : await loadCreatureLaw({ ref: "the pinned clone", importTool: (f) => import(worldModuleUrl("tools", f)),
@@ -269,14 +269,14 @@ test("the tick resolves each open temptation once (the store's look, under its l
   assert.equal(await jevLints("x", { ask: async () => { throw new Error("down"); } }), null, "Jev away: not judged, asked again later");
 });
 
-// ── the sweetness takes nothing ────────────────────────────────────────────
+// ── it takes nothing ───────────────────────────────────────────────────────
 
 test("a give to the one who speaks for it, from inside its ring, is answered and counted, and nothing moves; elsewhere the hold goes on", async () => {
   const living = livingWith();
   const written = [];
   const deps = (at) => ({ now: () => NOW, creatures: async () => ({ living, law: living.law }), standpoint: async () => at,
     write: async (entry) => { written.push(entry); return { actId: "88" }; } });
-  const r = await givenToATempter({ to: WHO, kind: "a-sweet" }, { handles: new Set(["kai"]) }, "kai", deps({ x: 5, y: 0 }));
+  const r = await givenToATempter({ to: WHO, kind: "a-thing" }, { handles: new Set(["kai"]) }, "kai", deps({ x: 5, y: 0 }));
   assert.equal(r.counted, true);
   assert.deepEqual([written[0].action, written[0].object, written[0].payload.nothing_moves], ["give", ID, true]);
   // P1, narrowed (Wright 2026-10-21): anywhere but its ring, during its fight, a give to that resident is an ordinary give and transfers

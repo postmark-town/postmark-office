@@ -31,7 +31,7 @@ ring_m: 40
 what: >
   A fixture.
 moods:
-  sweet: 0..3 = 1 | calm | warm | sugary | wild
+  mood: 0..3 = 1 | calm | stirred | eager | wild
 reaction notice "it notices": when true says It notices {actor}.
 `;
 const BASE = NO_WORLD ? null : await loadCreatureLaw({ ref: "the pinned clone", importTool: (f) => import(worldModuleUrl("tools", f)), readText: () => KIND_TEXT });
@@ -105,7 +105,7 @@ test("ON THE STORE · three residents: one obeys, one declines, one answers plai
     assert.equal(c.tempts?.to, "mo");
 
     // ren obeys: a give to the one who speaks for it, which moves nothing
-    const given = await givenToATempter({ to: WHO, kind: "a-sweet" }, { handles: new Set(["ren"]) }, "ren",
+    const given = await givenToATempter({ to: WHO, kind: "a-thing" }, { handles: new Set(["ren"]) }, "ren",
       { now: Date.now, creatures: async () => ({ living, law: LAW }), standpoint: async (h) => WHERE[h],
         write: async (entry) => ({ actId: String(await insert(row(entry.actor, entry.action, entry.object, entry.payload))) }) });
     assert.equal(given.counted, true);
