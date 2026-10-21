@@ -523,7 +523,11 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     act: `household { do: "declare-stance-on", args: { on: "${c.mark}", stance: "welcomed" | "opposed" } }`,
   }));
   const setDowns = (stances.set_downs_awaiting ?? []).map((r) => ({
-    ...r, cause: `${r.set_down_by} set down ${r.thing}, which ${r.made_by} made — it waits on your house's word`,
+    ...r, cause: `${r.set_down_by} set down ${r.thing}, which is ${r.owner ?? r.made_by}'s — it is lent until your house says otherwise, and it waits on your house's word`,
+  }));
+  // A TAKE of your house's thing by someone outside it (POS-688): lent until your house says otherwise
+  const takes = (stances.awaiting_your_word ?? []).filter((r) => r.act === "take").map((r) => ({
+    ...r, cause: `${r.by} took ${r.thing}, which is ${r.owner}'s — it is lent until your house says otherwise, and it waits on your house's word`,
   }));
 
   const bounces = [];
@@ -576,7 +580,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // and `count` used to add the page's length, so Starforge read 20 while 61
   // waited. `count` is everything waiting; `shown` is the rows on this answer.
   const stancesTotal = Math.max(Number(stances.stances_awaiting) || 0, stanceRows.length);
-  const rest = setDowns.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length;
+  const rest = setDowns.length + takes.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length;
   const count = stancesTotal + rest;
   const shown = stanceRows.length + rest;
   return {
@@ -589,6 +593,8 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
       rows: stanceRows,
     },
     set_downs_awaiting: { rows: setDowns, ...(stances.set_downs_unavailable ? { unavailable: stances.set_downs_unavailable } : {}) },
+    // said only when a take waits (POS-688): the page keeps its shape for every house with nothing taken
+    ...(takes.length ? { takes_awaiting: { rows: takes } } : {}),
     unplaced_bounces: { rows: bounces },
     key_asks: { rows: keyAsks, ...(keyAsksUnavailable ? { unavailable: keyAsksUnavailable } : {}) },
     likeness_question: { rows: likeness.rows, ...(likeness.unavailable ? { unavailable: likeness.unavailable } : {}) },

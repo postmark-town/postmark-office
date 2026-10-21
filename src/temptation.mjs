@@ -127,7 +127,9 @@ export function phaseOf(living, creature, kind, menu, now = Date.now()) {
 
 /** Its open temptations (said, not yet resolved), oldest first. */
 export function openTemptations(living, creature, now = Date.now()) {
-  const rows = rowsOf(living, creature.id, now);
+  // this window's and the one before: a temptation said just before a settlement still waits out its 30 min after it
+  const from = windowAt(windowAt(now).start - 1).start;
+  const rows = (living?.encounter ?? []).filter((r) => r.at >= from && r.at <= now && (r.actor === creature.id || r.object === creature.id));
   const done = new Set(rows.filter((r) => r.action === TEMPTED_ACTION).map((r) => String(r.payload.tempt)));
   return rows.filter((r) => r.action === TEMPT_ACTION && r.actor === creature.id && !done.has(r.id)).sort(idCmp);
 }

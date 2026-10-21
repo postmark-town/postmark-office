@@ -29,15 +29,16 @@
 // Its table and its writer shipped in Stage 2 with a comment saying the verb
 // that calls them "lands with the vessel work." It did not. This is that verb.
 //
-// ── POSITION IS DERIVED, NEVER STORED ───────────────────────────────────────
+// ── A HELD THING HAS NO PLACE (POS-688, Darko 2026-10-18 20:58) ─────────────
 //
-// A held thing's world position is `holder's position + offset`, computed on
-// read — the same arithmetic world-frames.mjs already runs for passengers, and
-// the same discipline the-north-star.md states ("derived things are stored by
-// no one"). The alternative — rewriting the mark's `at:` on every hand-off —
-// would be a git commit per transfer AND would store a derived quantity. The
-// mark file of a thing is BYTE-IDENTICAL across any number of gives; a test
-// asserts exactly that, because it is the claim most worth being able to break.
+// SUPERSEDED: "A held thing's world position is `holder's position + offset`,
+// computed on read." A held thing is published but UNPLACED: it keeps its mark,
+// has no position while held, and shows as its holder's contents, exactly as a
+// thing in a chest does (held.mjs § placeOf, the one answer). The hand-off itself
+// still writes no file: the mark is BYTE-IDENTICAL across any number of gives at
+// the door, and a test asserts exactly that. The SETTLEMENT prints the held state
+// once per crossing (`held_by`, no `at`; a drop prints a fresh `at`:
+// world2/tools/hold-through.mjs).
 //
 // ── HELD vs SET DOWN, and the one judgement call in this file ────────────────
 //
@@ -67,6 +68,7 @@ import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read 
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { heldBy } from "./held.mjs"; // POS-688: a held thing is published but unplaced
 
 /** The thing class's own params, read from the record every time (never cached here). */
 export const thingDials = () => classDials("thing");
@@ -99,17 +101,6 @@ export function holdingsOf(rows, handle) {
   const targets = [...new Set(rows.map((r) => r.target))];
   return targets.filter((t) => liveHolder(rows, t) === handle);
 }
-
-/**
- * A held thing's position: its holder's, plus the offset it was taken at.
- *
- * v0 offset is zero — a carried thing is AT its holder, which is what "in your
- * hands" means and what every inventory read needs. The parameter exists
- * because the frame arithmetic is `carrier.at + offset` and writing it without
- * the term would make the next person re-derive why it is absent.
- */
-export const heldPositionOf = (holderAt, offset = { x: 0, y: 0 }) =>
-  holderAt ? { x: holderAt.x + offset.x, y: holderAt.y + offset.y } : null;
 
 /**
  * WHICH OF THE THREE FACES THIS CALL IS — the ONE derivation.
@@ -269,6 +260,7 @@ export const HOLD_TOOLS = [
       act: { type: "string", enum: ["consume", "refill"], description: "consume: use up ONE held consumable unit (name label: when you hold several), or name thing: to consume a set-down unit where it stands. refill: the creator of a candy label tops a chest up to its capacity with their own label (name chest:)" },
       chest: { type: "string", description: "with act: \"refill\" — the chest's id, <by>/<slug>" },
       handle: { type: "string", description: "which of YOUR residents acts (omit if your key holds one; a multi-resident key must name one)" },
+      accept: { type: "boolean", description: "a set-down on ground that is not the thing's maker's stakes ✦1 from you onto it (a commons mark stands only with a stamp behind it). Without accept: true that drop answers its terms and records nothing; with it, the thing is set down and the stamp staked. On the maker's own ground a drop is free and asks nothing" },
     }, additionalProperties: false } },
   { name: "world_holdings",
     description: "What you are carrying. Every thing whose live holding edge names one of your residents, with what each one is and who made it. A thing you made and gave away is not here; a thing someone gave you is, whoever authored it.",
@@ -631,12 +623,88 @@ export function refuseGiveOfUnheld({ thing, to, actor, holder }) {
       : `a give hands over what is in your hands, and ${holder} is holding this one. Nothing was recorded.`);
 }
 
+// ── A DROP ON THE COMMONS STAKES 1✦ (POS-688 D4 step 3, Darko 2026-10-19 09:27) ──
+//
+// A held thing set down stands where its dropper stood, and the settlement
+// judges that ground the way it judges any mark's: on its OWNER's ground it
+// stands free, and anywhere else it is a commons mark, which leaves the world
+// at the settlement with no stamp behind it. So a drop there stakes 1✦ from
+// the dropper onto the thing, unless stamps already stand behind it, through
+// leave-mark's own amendment verdict (`dropStakeVerdict`), purse
+// (`heldAtOffice`), terms (`markStakeBlock`) and stake (`world_stake`), never a
+// second copy of any of them. All of it is
+// asked BEFORE the drop is written: the terms first (nothing recorded until
+// accept: true), and an empty purse is refused with nothing recorded.
+export const DROP_STAKE = 1;
+
+/** The extent the drop will print: the thing's own, or where it last stood (the store keeps it), or 1×1. */
+async function dropExtentOf(thing) {
+  try {
+    const m = (await (await import("./world.mjs")).canonMarkById(String(thing)))?.mark ?? null;
+    if (m?.extent) return m.extent;
+  } catch { /* the store's copy below */ }
+  try { return (await (await import("./held-view.mjs")).placedNow()).get(String(thing))?.extent ?? null; } catch { return null; }
+}
+
+/**
+ * What a drop of `thing` by `actor` standing at `stood` asks: null (free, or no
+ * place to judge), `{ terms }` (an answer, nothing written), or `{ stake }`
+ * (accepted: stake that many after the drop). Throws the empty-purse refusal.
+ */
+export async function dropStakeTerms({ thing, actor, stood, accept = false, owner = null }, deps = {}) {
+  if (!stood) return null; // no standpoint: the drop's own path answers
+  const verdictOf = deps.verdict ?? (async (a) => (await import("./world.mjs")).dropStakeVerdict(a));
+  const purseOf = deps.held ?? (async (h) => (await import("./world-stake.mjs")).heldAtOffice(h));
+  const blockOf = deps.block ?? (async (a) => (await import("./world-stake.mjs")).markStakeBlock(a));
+  // the OWNER's ground (POS-688 D-O2, Darko 2026-10-19 17:14): whoever has the say over it; its maker until ownership moves
+  const maker = owner ?? String(thing).split("/")[0];
+  const rule = await verdictOf({ thing: String(thing), by: maker, at: { x: stood.x, y: stood.y }, extent: await (deps.extentOf ?? dropExtentOf)(thing) });
+  if (!(Number(rule?.need) >= DROP_STAKE)) return null; // the owner's own ground, or stamps already behind it: free
+  const purse = await purseOf(actor);
+  if (!purse?.unread && !(Number(purse?.liquid) >= DROP_STAKE))
+    throw bounce(422, `you hold 0 stamps, and setting ${thing} down here stakes ✦${DROP_STAKE}`,
+      `this is not ${maker}'s ground, so the thing would stand on the commons, and a commons mark stands only with a stamp behind it; without one it would leave the world at the next settlement. Set it down on ${maker}'s ground, where it is free, or keep holding it until you have a stamp (read_quests shows what pays). Nothing was recorded.`);
+  if (accept === true) return { stake: DROP_STAKE };
+  const confirm = `world { do: "drop", args: { thing: "${thing}", accept: true } }`;
+  return { terms: {
+    handle: actor, thing, recorded: false,
+    stake: DROP_STAKE,
+    terms: `setting ${thing} down here stakes ✦${DROP_STAKE} from you onto it. This is not ${maker}'s ground, and a thing set down anywhere but its owner's ground stands on the commons, where a mark stands only with a stamp behind it. The stamp stays yours, in escrow behind the thing; if you take it back, the thing leaves the world at the next settlement.`,
+    stamps: await blockOf({ handle: actor, stamps: DROP_STAKE,
+      to_confirm: `${confirm}: the same call with accept: true. Not calling is the no; nothing is written until you make it.` }),
+    note: `nothing was recorded. Call again with accept: true to set it down and stake ✦${DROP_STAKE}, or set it down on ${maker}'s ground, where it is free.`,
+  } };
+}
+
+/** The accepted stake, made after the drop stands (leave-mark's order: a stake that bounces never unwrites the act). */
+export async function stakeTheDrop({ thing, actor, key, n = DROP_STAKE }, deps = {}) {
+  const stake = deps.stake ?? (async (a, k) => (await import("./world-stake.mjs")).callWorldStakeTool("world_stake", a, k));
+  let r;
+  try { r = await stake({ mark: String(thing), stamps: n, handle: actor }, key); }
+  catch (e) { (await import("./fault-words.mjs")).faultLogged("a drop's stake did not land", e); r = { error: true, defect: "the stake did not land" }; }
+  if (r?.error) return { stake_bounce: { defect: r.defect ?? "the stake did not land",
+    hint: `${thing} is set down, but no stamp stands behind it yet, so it leaves the world at the next settlement unless one does: world { do: "stake", args: { mark: "${thing}", stamps: ${n} } }` } };
+  return { staked: r, ...(r?.stamps ? { stamps: r.stamps } : {}) };
+}
+
+/**
+ * A TAKE OF A THING IN SOMEONE ELSE'S HANDS (POS-688, W6). The faces are read off
+ * the live holder, so `take` of a held thing derives the face "drop", and the
+ * adjudicator's refusal said "you can only give or set down what you are holding":
+ * a take answered as a give. The caller said take, so the answer says take. PURE.
+ */
+export function refuseTakeOfHeld({ thing, verb, actor, holder }) {
+  if (verb !== "take" || holder == null || holder === actor) return;
+  throw bounce(403, `${holder} is holding ${thing}, not ${actor}`,
+    `${holder} is holding it: a thing in someone's hands changes hands only when they give it. Ask them. Nothing was recorded.`);
+}
+
 // ── WHERE A THING STANDS — CLAUSE 2's READ HALF, AND THE-ANCHOR'S FIRST ──────
 //
 // `the-town/the-anchor`: "a held thing rides its holder as a rider rides the
 // deck". That sentence has been law since 2026-08-09 and had NO IMPLEMENTATION
-// on either side of the seam: `heldPositionOf` above is exported, asserted on
-// in one test, and called by nothing; the world fold's `attaches` is predicated
+// on either side of the seam: a `heldPositionOf` was exported, asserted on in
+// one test, and called by nothing (deleted with POS-688); the world fold's `attaches` is predicated
 // children by `parent` and has never read the holding edge; and every surface a
 // resident can read a thing's place from — `world_investigate` above all —
 // answers the folded canon mark's `at`, held or not.
@@ -705,13 +773,12 @@ export async function whereThingStands(thingId, {
   const id = String(thingId);
   if (attachments == null) return { where: null, source: "unreadable", says: "the office could not read the holding record — this is not an answer about where it stands" };
 
+  // A HELD THING HAS NO PLACE (POS-688, Darko 2026-10-18 20:58): published but
+  // unplaced, it shows as its holder's contents. The branch that derived a place
+  // from the holder's standpoint is gone: it was the second answer to "where is
+  // it" (held.mjs § placeOf is the one). `standpointOf` is no longer asked.
   const holder = liveHolder(attachments, id);
-  if (holder) {
-    const at = typeof standpointOf === "function" ? await standpointOf(holder) : null;
-    return at
-      ? { where: at, source: "holder", holder, says: `${holder} is holding it, and a held thing rides its holder (the-town/the-anchor)` }
-      : { where: null, source: "holder", holder, says: `${holder} is holding it, and the record does not place ${holder} anywhere — so where it stands cannot be derived` };
-  }
+  if (holder) return { where: null, source: "holder", holder, says: `${holder} is holding it: a held thing has no place of its own, and shows as ${holder}'s contents` };
 
   const drop = journal == null ? null : latestDrop(journal, id);
   if (drop) {
@@ -1176,7 +1243,7 @@ export async function fileSetDownAmend({ did, stood, key, actId = null, deps = {
 export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null, writtenAt = null, extra = {}, deps = {} }) {
   try {
     let mark = deps.mark !== undefined ? deps.mark
-      : await (async () => { const { worldMarkById } = await import("./world.mjs"); return (await worldMarkById(String(thing))).mark; })();
+      : await (async () => { const { canonMarkById } = await import("./world.mjs"); return (await canonMarkById(String(thing))).mark; })(); // the record as printed: the amend copies its own lines (POS-688)
     // ── THE AUTHOR'S OWN DRAFT (postmark#3663, kogane) ─────────────────────
     //
     // An unpublished thing may be taken and dropped inside its author's house
@@ -1195,6 +1262,10 @@ export async function fileAuthorsAmend({ thing, stood, key, actor, actId = null,
         return { filed: false, put_forward_unpublished: true,
           why: `${thing} is put forward and not yet published, and re-siting a claim already on the docket waits on a ruling (postmark#3663)` };
     }
+    // PRINTED AS HELD (POS-688): canon has no place lines for it, and the settlement
+    // prints the set-down itself (world2/tools/hold-through.mjs), so no amend is owed.
+    if (heldBy(mark))
+      return { filed: false, printed_by_settlement: true, why: "the settlement prints where it was set down (a held thing's drop, POS-688): no amend is needed" };
     const built = setDownAmend({ thing, mark, stood, actor, actId, writtenAt });
     if (built.refused) return { filed: false, why: built.refused };
     const leave = deps.leave ?? (async (payload, k, opts) => {
@@ -1249,7 +1320,6 @@ export function draftRecordOf(live) {
 
 /** The stance payload's own word for which question it answers. */
 export const ANSWERS_SET_DOWN = "set-down";
-
 /**
  * The author's house's latest answer to one set-down, or null (silence). PURE.
  *
@@ -1273,25 +1343,28 @@ export function setDownAnswer({ stances = [], thing, dropSeq, madeBy, householdO
 }
 
 /**
- * THE RECEIPT'S SENTENCE, one per outcome — which of the two branches happened,
- * and whether canon will follow. The first clause is the one the receipt has
- * always carried; what follows it is now true of this drop.
+ * THE RECEIPT'S SENTENCE (POS-688). A set-down prints where it was set down at the
+ * next settlement (D2), whoever set it down, so the POS-138 amend and its
+ * outcomes (filed, draft, unaccepted) are gone from the receipt with the amend.
+ * What it says now is whose the thing is: set down by someone outside its
+ * owner's house, it is lent, and the owner's house may still ask for it back.
+ * `setDown` is `{ by, owner, whose }`; null says the first clause alone.
  */
 export function setDownNote(setDown) {
   const lead = "it stands where you stood when you set it down, and the act carries that place";
-  const a = setDown?.amend;
-  if (!a) return `${lead}.`;
-  if (a.filed && a.put_forward)
-    return `${lead}; the amend that re-sites the mark is filed${a.seq != null ? ` (act ${a.seq})` : ""}, and canon moves it here at the next crossing.`;
-  if (a.filed && a.draft)
-    return `${lead}; your private draft is re-sited here, and it publishes here when it is put forward.`;
-  if (a.filed)
-    return `${lead}; the amend that re-sites the mark is filed as ${setDown.made_by}'s private draft — no escrow behind it clears the ground it now stands on, so canon keeps it where it was folded until it is put forward.`;
-  if (a.put_forward_unpublished)
-    return `${lead}; it is put forward and not yet published, so it publishes where it was folded — re-siting a claim already on the docket waits on a ruling (postmark#3663).`;
+  if (!setDown) return `${lead}.`;
   if (setDown.whose === "another household's")
-    return `${lead} — but ${setDown.made_by} made it, and a set-down by another household moves nothing in canon on its own: it reads as set down by you, unaccepted, and canon stays where ${setDown.made_by} put it.`;
-  return `${lead}; no amend was filed (${a.why}), so canon keeps it where it was folded and the set-down is the read's answer until one is.`;
+    return `${lead}. It is ${setDown.owner}'s, lent to you: the settlement prints it here at the next crossing, and ${setDown.owner}'s house may still ask for it back.`;
+  return `${lead}; the settlement prints it here at the next crossing.`;
+}
+
+/** Who owns a thing now (POS-688): the kept record's fold, or its maker when the record cannot say. */
+async function ownerNow(thing) {
+  try {
+    const [{ holdRecordNow }, { ownershipOf }] = await Promise.all([import("./world-kinds.mjs"), import("./ownership.mjs")]);
+    const rec = await holdRecordNow();
+    return rec?.owners ? ownershipOf(rec.owners, thing).owner : String(thing).split("/")[0];
+  } catch { return String(thing).split("/")[0]; }
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
@@ -1455,6 +1528,7 @@ async function holdAct(name, args = {}, key = null, verb = null) {
       return await callKinds("thing-from-holder", { ...args, from: String(preHolder) }, key, actor, await liveUnitDeps());
     }
     refuseGiveOfUnheld({ thing: args.thing, to: args.to ?? null, actor, holder: preHolder });
+    refuseTakeOfHeld({ thing: args.thing, verb, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
     const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder, key });
     // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.
@@ -1472,15 +1546,22 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // dynamic.db, POS-269.)
     {
       const stood = await standpointOfActor(actor);
+      // a set-down off the OWNER's ground stakes 1✦: its terms, or its refusal, before anything is written (D4 step 3; D-O2)
+      const owner = face === "drop" ? await ownerNow(args.thing) : null;
+      const dropStake = face === "drop" ? await dropStakeTerms({ thing: args.thing, actor, stood, accept: args.accept === true, owner }) : null;
+      if (dropStake?.terms) return dropStake.terms;
       const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings });
       if (out?.did !== "drop") return out;
-      // AFTER the drop's COMMIT, never inside its transaction: the amend is the
-      // mark lane's own act on the mark lane's own pen, and holding the hold
-      // lane's sqlite lock across a second pen's round trip would be a lock
-      // this door has no business taking. The drop stands whatever the amend
-      // does; the receipt says which happened.
-      const setDown = await fileSetDownAmend({ did: out, stood, key, actId: out.seq ?? null });
-      return { ...out, stands_note: setDownNote(setDown), set_down: setDown };
+      const staked = dropStake?.stake ? await stakeTheDrop({ thing: args.thing, actor, key, n: dropStake.stake }) : null;
+      // NO AMEND (POS-688, E8): the settlement prints a set-down where it was made (D2),
+      // so the printout is the one writer of a held thing's place. The POS-138 amend
+      // at the door (`fileSetDownAmend`) was a second writer of the same place.
+      const house = sameHousehold(String(owner), String(actor), await (async () => {
+        try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; }
+      })());
+      const setDown = { by: String(actor), made_by: String(args.thing).split("/")[0], owner: String(owner),
+        at: stood ?? null, whose: house.same ? "your house's" : "another household's" };
+      return { ...out, ...(staked ?? {}), stands_note: setDownNote(setDown), set_down: setDown };
     }
   } finally { /* no handle is opened: the record is read through the guards */ }
 }
@@ -1507,6 +1588,8 @@ export function holdingEntry(did, { crossing, at, witnesses, cls, household }) {
       previous_holder: did.previous_holder ?? null,
       made_by: did.made_by,
       policy: did.policy,
+      // a take out of an open holder its owner put it in: the taker owns it (POS-688; ownership.mjs § takeOwns)
+      ...(did.owns === true ? { owns: true } : {}),
     },
     effect: did.did === "drop"
       ? "it stands on the ground where the holder set it down; the edge they authored is nullified"
