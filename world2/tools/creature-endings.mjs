@@ -35,8 +35,9 @@
 //   · the town's `withdraw` of the creature, reason `ended`, naming the finisher,
 //     their act, everyone who took part, what it carried and the settlement.
 //
-// AWAITING DARKO (WLD-25 D1–D6, built to the lane's recommendations, each one
-// constant here): D1 who "took part" (TOOK_PART), D2 over its whole life (the
+// SETTLED (WLD-25 D1–D6, by Wright under Darko's delegation, 2026-10-21; each one
+// constant here): D1 who "took part" (TOOK_PART: every act it answered, since
+// every act in an encounter's ring costs nerve), D2 over its whole life (the
 // reads have no lower bound), D4 the thing goes to full hands too (no capacity
 // check), D5 the words (NAMES_SHOWN and the lines below).
 //
@@ -53,19 +54,20 @@ export const ENDED = "ended";
 /** The anchor every creature row stands on (src/world-journal.mjs § WORLD_ANCHOR, not imported: that module opens the pens). */
 export const WORLD_ANCHOR = "the-town/let-there-be-light";
 
-/** A dial whose value waits on Darko's word: the lane's recommendation, and the call that rules it. */
-const pending = (value, call) => Object.freeze({ value, pending: call });
+/** A dial that is settled: its value, and the call that settled it. */
+const ruled = (value, call) => Object.freeze({ value, ruled: call });
 
 /**
  * D1, WHO TOOK PART (one function, so either answer is a one-line change):
  *   "aimed"     an act of theirs aimed at the creature (its object is the creature,
- *               or a walk toward it) that it answered: the lane's rec
- *   "answered"  any act of theirs it answered, aimed or only inside its ring: Wright's
+ *               or a walk toward it) that it answered
+ *   "answered"  any act of theirs it answered, aimed or only inside its ring: SETTLED
+ *               (every act in an encounter's ring costs nerve, so every one it answered took part)
  * Finishers always took part.
  */
-export const TOOK_PART = pending("aimed", "WLD-25 D1, awaiting Darko");
+export const TOOK_PART = ruled("answered", "WLD-25 D1, settled by Wright under Darko's delegation, 2026-10-21");
 /** D5: how many names the ending's line says before "and N more"; the row lists every one. */
-export const NAMES_SHOWN = pending(12, "WLD-25 D5, awaiting Darko");
+export const NAMES_SHOWN = ruled(12, "WLD-25 D5, settled by Wright under Darko's delegation, 2026-10-21");
 
 const isNum = (v) => /^[0-9]+$/.test(String(v ?? ""));
 const asObj = (v) => (typeof v === "string" ? (() => { try { return JSON.parse(v); } catch { return {}; } })() : (v ?? {}));
