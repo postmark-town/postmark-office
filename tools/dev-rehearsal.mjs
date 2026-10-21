@@ -174,8 +174,8 @@ export function storeGuard({ configuredUrl, urls, source }) {
 
 // ── small helpers ────────────────────────────────────────────────────────────
 
-const git = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }).trim();
-const gitQuiet = (repo, ...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+const git = (repo, ...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true }).trim();
+const gitQuiet = (repo, ...args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true });
 const tail = (s, n = 4) => String(s ?? "").trim().split("\n").filter(Boolean).slice(-n).join(" | ");
 /** A throw, named: its message and the frame it came from (a stack's tail is the caller's frames, not the cause). */
 const thrown = (e) => String(e?.stack ?? e).split("\n").filter(Boolean).slice(0, 2).map((l) => l.trim()).join(" ");
@@ -775,7 +775,7 @@ export function plan() {
         // carrying every tag would refuse the next rehearsal for the last one's row.
         const view = join(ctx.scratch, `bless-${ctx.blessed}`);
         // refs only (the backfill reads its tags), so no working tree (POS-652)
-        execFileSync("git", ["clone", "-q", "--no-checkout", "--no-tags", "--single-branch", "--branch", "main", ctx.worldBare, view]);
+        execFileSync("git", ["clone", "-q", "--no-checkout", "--no-tags", "--single-branch", "--branch", "main", ctx.worldBare, view], { windowsHide: true });
         git(view, "fetch", "-q", "origin", `refs/tags/${tag}:refs/tags/${tag}`);
         // The blessed commit into the dev world clone too (a tag, never main, never
         // pushed), so the dev office can read the settlement its store now names;
@@ -1310,16 +1310,16 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
         if (!t.worldClone || !existsSync(join(t.worldClone, ".git"))) return { setup: `no world clone at ${t.worldClone}` };
         ctx.worldBare = join(scratch, "world.git");
         // tags come along: the bless numbers the next settlement after the world's real ones
-        execFileSync("git", ["clone", "-q", "--bare", "--local", t.worldClone, ctx.worldBare]);
+        execFileSync("git", ["clone", "-q", "--bare", "--local", t.worldClone, ctx.worldBare], { windowsHide: true });
         const branch = gitQuiet(t.worldClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
         if (branch !== "main") git(ctx.worldBare, "update-ref", "refs/heads/main", git(t.worldClone, "rev-parse", "HEAD"));
         git(ctx.worldBare, "symbolic-ref", "HEAD", "refs/heads/main");
         ctx.worldView = join(scratch, "world-view");
         // settlement-auto.sh reads WORLD_CLONE for its origin URL only, as TOWN_CLONE below:
         // no working tree (POS-652; the sweep makes its own clone)
-        execFileSync("git", ["clone", "-q", "--no-checkout", ctx.worldBare, ctx.worldView]);
+        execFileSync("git", ["clone", "-q", "--no-checkout", ctx.worldBare, ctx.worldView], { windowsHide: true });
         ctx.townView = join(scratch, "town-view");
-        execFileSync("git", ["clone", "-q", "--local", "--no-checkout", t.townClone, ctx.townView]);
+        execFileSync("git", ["clone", "-q", "--local", "--no-checkout", t.townClone, ctx.townView], { windowsHide: true });
         const tb = gitQuiet(t.townClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
         if (tb !== "main") return { setup: `the dev town clone is on ${tb || "a detached HEAD"}, not main: the settlement pins origin/main` };
       }

@@ -26,7 +26,7 @@ import { tempDir } from "./temp-dir.mjs";
 import { standinClone } from "./clone-sparse.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
+const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }).trim();
 
 /** A port the OS says is free now. */
 export const freePort = () => new Promise((ok, no) => {
