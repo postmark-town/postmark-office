@@ -273,7 +273,7 @@ export function savedCreatureOf(id, repo = WORLD_CLONE) {
 }
 
 export const REACTIONS_SQL = `SELECT id::text AS id, at, object, payload FROM acts
-  WHERE actor = $1 AND action = 'react' ORDER BY id DESC LIMIT $2`;
+  WHERE actor = $1 AND action = 'react' ORDER BY acts.id DESC LIMIT $2`;
 export const REACTIONS_SHOWN = 10;
 
 /**

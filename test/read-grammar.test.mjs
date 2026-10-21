@@ -133,7 +133,7 @@ test("a gap longer than the scan is a glance of its NEWEST acts; the mark handed
   const rows = Array.from({ length: N }, (_, i) => ({ id: String(1001 + i), actor: `r${i}`, action: "walk", at: new Date(1e12 + i * 1000), at_anchor: "a/b", at_dx: 0, at_dy: 0 }));
   const query = async (sql, params) => {
     if (sql === LIVE_HW_SQL) return [{ hw: String(1000 + N) }];
-    if (sql === LIVE_AFTER_SQL) { const after = rows.filter((r) => Number(r.id) > Number(params[0])); return (/ORDER BY id DESC/.test(sql) ? after.reverse() : after).slice(0, params[2]); } // the store honours the SQL's own order
+    if (sql === LIVE_AFTER_SQL) { const after = rows.filter((r) => Number(r.id) > Number(params[0])); return (/ORDER BY acts\.id DESC/.test(sql) ? after.reverse() : after).slice(0, params[2]); } // the store honours the SQL's own order
     throw new Error("unexpected");
   };
   const got = await liveLines({ afterId: "1000", query, centreOf: () => ({ x: 0, y: 0 }), compose: () => ({ x: 0, y: 0 }) });

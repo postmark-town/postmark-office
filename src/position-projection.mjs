@@ -89,6 +89,7 @@ export function recordOfMovement(movement) {
     iso: movement.at, handle: movement.actor,
     from: asStored(movement.from), toward: asStored(movement.toward), at: asStored(movement.crossing),
     targetExtent: asStored(movement.within), targetMarkId: movement.toMark ?? null, pace: asStored(movement.pace),
+    ...(movement.note ? { note: movement.note } : {}),
     source: "store",
     ...(movement.landed ? { landed: movement.landed } : {}),   // WLD-63 row 68 B, as storedShapeOf carries it
   };
