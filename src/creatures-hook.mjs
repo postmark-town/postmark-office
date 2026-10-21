@@ -366,11 +366,11 @@ export async function warmViews(living, { key = viewKeyNow(), see = seeFrom, now
 
 // ── the arrival (C1) ────────────────────────────────────────────────────────
 
-const WALKS_SQL = `SELECT id::text AS id, at, crossing, actor, action, payload FROM acts
-  WHERE class = '${CLASS_MOVE}' AND id > $1::bigint ORDER BY id LIMIT $2`;
+export const WALKS_SQL = `SELECT id::text AS id, at, crossing, actor, action, payload FROM acts
+  WHERE class = '${CLASS_MOVE}' AND id > $1::bigint ORDER BY acts.id LIMIT $2`;
 // The first read of a process: the walks of the last two windows, by the crossing index.
-const WALKS_BOOT_SQL = `SELECT id::text AS id, at, crossing, actor, action, payload FROM acts
-  WHERE crossing >= $1 AND class = '${CLASS_MOVE}' ORDER BY id`;
+export const WALKS_BOOT_SQL = `SELECT id::text AS id, at, crossing, actor, action, payload FROM acts
+  WHERE crossing >= $1 AND class = '${CLASS_MOVE}' ORDER BY acts.id`;
 const WALKS_BATCH = 2000;
 /** An arrival this long past when a tick first could judge it (a restart's catch-up) is let go. */
 export const ARRIVAL_STALE_MS = 3600_000;
@@ -515,6 +515,8 @@ export function startCreatures({ port, env = process.env, log = console } = {}) 
       const r = await refreshCreatures();
       const a = r.ok ? await arrivalTick() : null;
       if (r.ok && state.living) await warmViews(state.living);
+      // presence at each finishable creature's point, and the household lookup, kept for the acts (eval round 1, F1–F3)
+      if (r.ok && state.living) await (await import("./creatures.mjs")).warmRosters(state.living).catch((e) => faultLogged("the encounter's rings could not be read", e));
       // an encounter's repair (encounter-verbs.mjs § encounterTick): a missed finish, a missed flee
       if (r.ok && state.living) await (await import("./encounter-verbs.mjs")).encounterTick({ living: state.living, law: state.living.law }).catch((e) => faultLogged("the encounter's tick tripped", e));
       state.last = { at: new Date().toISOString(), living: state.living?.living().length ?? 0, ...(r.ok ? {} : { why: r.why }), ...(a?.judged ? { arrivals: a } : {}) };

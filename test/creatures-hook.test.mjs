@@ -515,7 +515,7 @@ test("the walk cursor: after the boot, only walks past the cursor are read, by t
   assert.equal(arrivals.cursor, "500", "a quiet boot starts at the newest walk, never at 0");
   asked.length = 0;
   await arrivalTick({ query, now: NOW, walkMod: WALK, judge: async () => [] });
-  assert.match(asked[0][0], /WHERE class = 'move' AND id > \$1::bigint ORDER BY id LIMIT \$2/);
+  assert.match(asked[0][0], /WHERE class = 'move' AND id > \$1::bigint ORDER BY acts\.id LIMIT \$2/);
   assert.equal(asked[0][1][0], "500");
 });
 

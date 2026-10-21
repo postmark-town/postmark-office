@@ -706,6 +706,17 @@ export async function standsRowsFromStore(thingId) {
   });
 }
 
+/**
+ * The docket's set-down amends for ONE thing (POS-451), alone: the look-closer
+ * read's stands block reads the hold rows and the drop from the kept hold record
+ * now (POS-688: one record), and asks the docket only this. `null` when the
+ * register is not configured ("I could not look").
+ */
+export async function setDownAmendRows(thingId) {
+  if (!world2Enabled()) return null;
+  return reading(async (client) => port.pgSetDownAmends(client, { thing: String(thingId) }));
+}
+
 /** What the doors say about the read half, for the status surfaces. */
 export function guardStatus(env = process.env) {
   return { flipped: guardsFlipped(env), flag: "W2_GUARDS", source: guardsFlipped(env) ? "postgres" : "sqlite" };

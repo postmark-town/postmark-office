@@ -42,6 +42,7 @@
 // holding row (holdingRowOf) carries no time, so it is applied base-then-window.
 
 import { foldUnits, isUnitRow } from "./world-stacks.mjs";
+import { foldOwners, ownershipEvents } from "./ownership.mjs"; // POS-688: maker and owner, folded with the holds
 
 /** An act's id, from either reader's row: a holding row's `seq`, a live hold row's `act_id`; a frozen-era row has none (always base). */
 const idOf = (r) => { const v = r?.act_id ?? r?.seq ?? r?.id; const n = v == null ? NaN : Number(v); return Number.isFinite(n) ? n : -Infinity; };
@@ -63,21 +64,25 @@ export const attachmentOrder = (a, b) => {
  *   readAttachments({ afterId })    → hold rows (who holds what), in their order
  * `placesOf(drops)` turns `Map(thing → drop row)` into `Map(thing → {x, y})`.
  */
-export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHolding, readAttachments, placesOf = async () => new Map(), width = 500 } = {}) {
+export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHolding, readAttachments, placesOf = async () => new Map(), width = 500,
+  // THE OWNER'S WORDS (POS-688): stance acts answering a take or set-down, and the household map the fold reads
+  readWords = async () => [], houses = async () => (h) => h } = {}) {
   let state = null;
   let inflight = null;
   let rebuilds = 0, fullReads = 0;
 
   const compose = async (s) => {
     const fold = foldUnits(s.window.holding.filter(isUnitRow), s.baseFold);
+    const owners = foldOwners(ownershipEvents(s.window.holding, s.window.words ?? []), { houseOf: s.houseOf, state: s.baseOwners });
     const attachments = [...s.baseAtt.values(), ...s.window.attachments].sort(attachmentOrder);
     const drops = new Map(s.baseDrops);
     for (const r of s.window.holding) if (r.action === "drop" && r.object != null) drops.set(String(r.object), r);
-    return { top: s.top, epoch: s.epoch, cutoff: s.cutoff, fold, attachments, places: await placesOf(drops) };
+    return { top: s.top, epoch: s.epoch, cutoff: s.cutoff, fold, attachments, drops, places: await placesOf(drops), owners };
   };
   /** Fold rows into a base COPY: the kept base is never touched until the whole change has composed. */
-  const intoBase = (s, holding, attachments) => {
+  const intoBase = (s, holding, attachments, words = []) => {
     s.baseFold = foldUnits(holding.filter(isUnitRow), s.baseFold);
+    s.baseOwners = foldOwners(ownershipEvents(holding, words), { houseOf: s.houseOf, state: s.baseOwners });
     s.baseAtt = new Map(s.baseAtt);
     for (const r of [...[...s.baseAtt.values()], ...attachments].sort(attachmentOrder)) s.baseAtt.set(String(r.target), r);
     s.baseDrops = new Map(s.baseDrops);
@@ -90,23 +95,23 @@ export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHo
     if (!state || (epoch != null && state.epoch !== epoch)) {
       // THE SETTLEMENT'S FULL READ: the base re-built from the whole record
       fullReads += 1;
-      const [holding, attachments] = await Promise.all([readHolding({}), readAttachments({})]);
+      const [holding, attachments, words, houseOf] = await Promise.all([readHolding({}), readAttachments({}), readWords({}), houses()]);
       const high = Math.max(top ?? -Infinity, ...holding.map(idOf), ...attachments.map(idOf));
       const cutoff = Number.isFinite(high) ? high - width : -Infinity;
-      next = { top, epoch, cutoff, baseFold: null, baseAtt: new Map(), baseDrops: new Map(), window: { holding: [], attachments: [] } };
-      intoBase(next, holding.filter((r) => idOf(r) <= cutoff), attachments.filter((r) => idOf(r) <= cutoff));
-      next.window = { holding: holding.filter((r) => idOf(r) > cutoff), attachments: attachments.filter((r) => idOf(r) > cutoff) };
+      next = { top, epoch, cutoff, houseOf, baseFold: null, baseAtt: new Map(), baseDrops: new Map(), baseOwners: null, window: { holding: [], attachments: [], words: [] } };
+      intoBase(next, holding.filter((r) => idOf(r) <= cutoff), attachments.filter((r) => idOf(r) <= cutoff), words.filter((r) => idOf(r) <= cutoff));
+      next.window = { holding: holding.filter((r) => idOf(r) > cutoff), attachments: attachments.filter((r) => idOf(r) > cutoff), words: words.filter((r) => idOf(r) > cutoff) };
     } else {
       // THE DELTA: everything above the cutoff, re-read — late commits inside the window included
       const after = Number.isFinite(state.cutoff) ? state.cutoff : null;
-      const [holding, attachments] = await Promise.all([readHolding({ afterId: after }), readAttachments({ afterId: after })]);
-      next = { ...state, top, window: { holding, attachments } };
+      const [holding, attachments, words] = await Promise.all([readHolding({ afterId: after }), readAttachments({ afterId: after }), readWords({ afterId: after })]);
+      next = { ...state, top, window: { holding, attachments, words } };
       const high = Math.max(top ?? -Infinity, ...holding.map(idOf), ...attachments.map(idOf));
       if (Number.isFinite(high) && high - (Number.isFinite(next.cutoff) ? next.cutoff : -Infinity) > 2 * width) {
         const cut = high - width;
-        intoBase(next, holding.filter((r) => idOf(r) <= cut), attachments.filter((r) => idOf(r) <= cut));
+        intoBase(next, holding.filter((r) => idOf(r) <= cut), attachments.filter((r) => idOf(r) <= cut), words.filter((r) => idOf(r) <= cut));
         next.cutoff = cut;
-        next.window = { holding: holding.filter((r) => idOf(r) > cut), attachments: attachments.filter((r) => idOf(r) > cut) };
+        next.window = { holding: holding.filter((r) => idOf(r) > cut), attachments: attachments.filter((r) => idOf(r) > cut), words: words.filter((r) => idOf(r) > cut) };
       }
     }
     // WHOLE OR NOT AT ALL: the kept state, its top included, moves only once the record composed
@@ -139,3 +144,14 @@ export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHo
 // EXPLAIN in hold-record.test.mjs.
 export const HOLD_TOP_SQL = `SELECT GREATEST((SELECT max(id) FROM acts WHERE class = 'holding'),
                                      (SELECT max(id) FROM acts WHERE class = 'legacy'))::text AS top`;
+
+/** The keeper's high water: the hold acts', or a newer stance (an owner's word moves the record too, POS-688). */
+export const KEEPER_TOP_SQL = `SELECT GREATEST((SELECT max(id) FROM acts WHERE class = 'holding'),
+                                       (SELECT max(id) FROM acts WHERE class = 'legacy'),
+                                       (SELECT max(id) FROM acts WHERE class = 'stance'))::text AS top`;
+
+/** THE OWNER'S WORDS (POS-688): every stance answering a take or a set-down (`payload.act`), oldest first; `$1` the kept base's cutoff, or null. */
+export const OWNER_WORDS_SQL = `SELECT id, at, actor, object, payload FROM acts
+                                 WHERE class = 'stance' AND payload ? 'act' AND payload->>'answers' IN ('take', 'set-down')
+                                   AND ($1::bigint IS NULL OR id > $1::bigint)
+                                 ORDER BY id`;
