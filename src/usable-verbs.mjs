@@ -28,6 +28,12 @@ import { liveHolders, wholeLoadOf } from "./holder-tree.mjs";
 /** The verbs this calculus decides; every other act keeps its own grant. */
 export const HOLD_VERBS = Object.freeze(["take", "give", "drop", "consume", "refill"]);
 
+/** The creatures' afforded actions (POS-672): their pairs come from creature-verbs.mjs § creaturePairs,
+ *  one more column set of the same matrix, so `can` and investigate's `can` project them alike (W4). */
+export const CREATURE_VERBS = Object.freeze(["watch", "approach", "shoo", "call", "offer", "whisper"]);
+/** Every verb the matrix decides, in roster order. */
+export const CAN_VERBS = Object.freeze([...HOLD_VERBS, ...CREATURE_VERBS]);
+
 /** Is a thing portable? `thing/portable` is sovereign, default true (the lead's settlement, 2026-10-17). */
 export const portableOf = (mark, view) => portableMark(mark, (n, p) => view.property?.(n, p) ?? null);
 
@@ -137,10 +143,10 @@ export const viewMarkIds = ({ within = [], nearby = [] } = {}) =>
   [...new Set([...within, ...nearby].map((m) => (typeof m === "string" ? m : m?.id)).filter(Boolean).map(String))];
 
 /** The bare read's `can` for the hold verbs: each usable verb once, in roster order. */
-export const canVerbs = (pairs) => HOLD_VERBS.filter((v) => pairs.some((p) => p.verb === v));
+export const canVerbs = (pairs) => CAN_VERBS.filter((v) => pairs.some((p) => p.verb === v));
 
 /** Investigate's `can`: one object's column, the verbs you can do to it now. */
-export const canOn = (pairs, object) => HOLD_VERBS.filter((v) => pairs.some((p) => p.verb === v && p.object === String(object)));
+export const canOn = (pairs, object) => CAN_VERBS.filter((v) => pairs.some((p) => p.verb === v && p.object === String(object)));
 
 /** The verbs with no object in view (your own hands). */
 export const objectlessVerbs = (pairs) => HOLD_VERBS.filter((v) => pairs.some((p) => p.verb === v && p.object == null));

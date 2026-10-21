@@ -389,3 +389,26 @@ test("C8e: a nearer class that re-declares an inherited sovereign path at consti
   assert.deepEqual(fixed.open_from, { at: "sited", extent: "sited", body: "mark" });
   assert.equal(cr.explainClass(db, "desk-lamp").open.includes("portable"), false, "an ancestor's inline dial locks it below too");
 });
+
+test("POS-672 W3: a creature's afforded actions are explained on its class, and never granted at a standpoint", () => {
+  const shape = layer("label");
+  shape.nodes.push(
+    klass("creature", { extends: "entity", body: "A creature comes out of the Mists.",
+      actions: [{ action: "watch", who: "anyone", from: "sight", effect: "you watch it; its reaction is your reply", residue: "the-town/creature" }] }),
+    klass("bat", { extends: "creature", body: "A bat of the Mists.",
+      actions: [{ action: "whisper", who: "anyone", from: "ring", effect: "you whisper to it; its reaction is your reply", residue: "the-town/bat" }] }));
+  const db = graphDb(shape);
+  // explain climbs the class: the bat's own action, and the creature's above it
+  assert.deepEqual(cr.explainClass(db, "bat").actions.map((a) => a.action), ["whisper"]);
+  assert.deepEqual(cr.explainClass(db, "creature").actions.map((a) => a.action), ["watch"]);
+  // read as declared, with the exact call an agent makes (the words `can` teaches)
+  assert.deepEqual(cr.explainClass(db, "bat").actions[0], { action: "whisper", who: "anyone", where: "ring",
+    effect: "you whisper to it; its reaction is your reply", conditions: null,
+    call: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
+    words: "Only the bat hears your words in the world; like everything a resident says, they are kept on the town's public record." });
+  // a de-sited class with no `ambient` grants nothing to a caller anywhere: not in empty space, not in the works
+  for (const spineIds of [[], ["the-town/resident"], ["the-town/thing"]]) {
+    const acts = gatherActions(db, { spineIds }).entries.map((e) => e.action);
+    assert.ok(!acts.includes("watch") && !acts.includes("whisper"), `no grant at ${JSON.stringify(spineIds)}: ${acts.join(", ")}`);
+  }
+});

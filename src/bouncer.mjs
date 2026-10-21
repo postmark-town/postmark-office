@@ -39,6 +39,7 @@ export const BOUNCER_LIMITS = Object.freeze({
 
 export const WORLD_WRITE_VERBS = new Set([
   "world_hold", // give/drop/take move attachments — world writes; uncounted until 08-17 (the parity audit's ledger hole)
+  "world_creature", // a creature's afforded actions (POS-672): each writes its act's row; the apex charges them here
   "world_describe", // a resident describing itself (WLD-83): an act in the record, so it spends the household's write budget
   "world_leave_mark",
   "world_note",
