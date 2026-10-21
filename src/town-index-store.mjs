@@ -644,7 +644,10 @@ export async function houseActs(q, household, { afterId = null, sinceIso = null,
   if (sinceIso && !after) add("at >= $?::timestamptz", sinceIso);
   if (before) add("id < $?::bigint", before);
   if (who) add("actor = ANY($?::text[])", who);
-  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human
+  // 079's columns, when the store has them (POS-633 part 3): the recorded hand, for and route
+  const { actsHaveProvenance } = await import("./act-provenance.mjs");
+  const recorded = (await actsHaveProvenance(q)) ? ", hand, for_handle, route" : "";
+  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}
       FROM acts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${n + 1}`, params)).rows;
   const kept = rows.slice(0, n);
   // past the cut, the read goes on below the last id it kept (review of #678, item 4)

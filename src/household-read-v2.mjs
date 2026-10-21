@@ -621,24 +621,39 @@ export function wentRows(lines, mine, { house = mine } = {}) {
  */
 export function happenedRow(a, { houseName = null } = {}) {
   const actor = String(a.actor ?? "");
-  const human = /^human-of-/.test(actor);
-  const seated = !human && a.as_human;
+  // Recorded from part 3 on (079): the row's own hand and for win. Before it,
+  // what the record already knows: human-of-* and payload.as_human (D4).
+  const recorded = a.hand != null;
+  const human = recorded ? a.hand === "human" : /^human-of-/.test(actor) || Boolean(a.as_human);
+  const forWhom = recorded ? (a.for_handle ?? null) : /^human-of-/.test(actor) ? null : actor;
+  // a row with no actor (before 079) says no "by" at all, never "by " and nothing
+  const by = byPhrase({ human, hand: recorded ? a.hand : actor, for: forWhom }, houseName);
   return {
     at: a.at ? new Date(a.at).toISOString() : null,
-    hand: human || seated ? "human" : actor,
-    for: human ? null : actor,
+    hand: human ? "human" : (recorded ? a.hand : actor),
+    for: forWhom,
     ...(a.route ? { route: a.route } : {}),
     verb: a.action ?? null,
     object: a.object ?? null,
     place: a.at_anchor ?? null,
-    by: human ? humanPhrase(houseName) : seated ? `${humanPhrase(houseName)} for ${actor}` : actor,
+    ...(by ? { by } : {}),
   };
+}
+
+/**
+ * How a read says who acted (H4, D2): "by rei", "by Starforge's human for rei",
+ * "by Starforge's human". The words before "by" are the caller's.
+ */
+export function byPhrase({ human, hand, for: forWhom }, houseName) {
+  if (!human) return hand || null;
+  return forWhom ? `${humanPhrase(houseName)} for ${forWhom}` : humanPhrase(houseName);
 }
 
 /** A happening in one line for the glance: "say · by rei · 2 h", "walk the-town/quay · by Starforge's human for rei · 5 h". */
 export function happenedLine(r, { nowMs = Date.now() } = {}) {
   const what = [r.verb, r.object].filter(Boolean).join(" ");
-  return `${what} · by ${r.by ?? r.hand}${r.at ? ` · ${shortAgo(r.at, nowMs) ?? ""}` : ""}`.trim();
+  const who = r.by ?? r.hand;
+  return [what, who ? `by ${who}` : null, r.at ? shortAgo(r.at, nowMs) : null].filter(Boolean).join(" · ");
 }
 
 /** The correspondents block's key (eval round 1: a reader took closer for a relationship score; these are letters). */

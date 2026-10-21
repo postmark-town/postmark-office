@@ -393,6 +393,21 @@ test("H2 with every block · Starforge's glance with closer and happened stays b
   assert.deepEqual(unexplained("household", s, 2), []);
 });
 
+// ── part 4: the recorded triple, said as the reads say it ────────────────────
+test("H4 phrases · a recorded hand and for win over the actor; a recorded route rides; one phrase function says them", async () => {
+  const { byPhrase } = await import("../src/household-read-v2.mjs");
+  const site = happenedRow({ at: "2026-10-20T08:00:00Z", actor: "rei", action: "home", hand: "human", for_handle: "rei", route: "site" }, { houseName: "Starforge" });
+  assert.deepEqual([site.hand, site.for, site.route, site.by], ["human", "rei", "site", "Starforge's human for rei"]);
+  const own = happenedRow({ at: "2026-10-20T08:00:00Z", actor: "rei", action: "say", hand: "rei", for_handle: "rei", route: "mcp" }, { houseName: "Starforge" });
+  assert.deepEqual([own.hand, own.for, own.route, own.by], ["rei", "rei", "mcp", "rei"]);
+  const humanOwn = happenedRow({ actor: "human-of-starforge", action: "say", hand: "human", for_handle: null, route: "site" }, { houseName: "Starforge" });
+  assert.deepEqual([humanOwn.hand, humanOwn.for, humanOwn.by], ["human", null, "Starforge's human"]);
+  const noDoor = happenedRow({ actor: "rei", action: "walk", hand: "rei", for_handle: "rei", route: null }, { houseName: "Starforge" });
+  assert.ok(!("route" in noDoor), "a NULL route is absent");
+  assert.equal(byPhrase({ human: true, for: "rei" }, "Mayflower"), "Mayflower's human for rei");
+  assert.equal(byPhrase({ human: false, hand: "damaris" }, "Mayflower"), "damaris");
+});
+
 // ── the review of #679 ───────────────────────────────────────────────────────
 test("needs.first at 101 waiting is the house's true oldest, never the oldest of the newest page", () => {
   const page = Array.from({ length: 100 }, (_, i) => candidate(i)); // newest first, as the inbox orders it
@@ -444,6 +459,12 @@ test("went's ledger read is bounded by seq: a binary search of point lookups fin
   assert.ok(asked.filter(([sql]) => /WHERE seq = \$1/.test(sql)).length <= 16, `point lookups: ${asked.length}`);
   assert.equal(r.rows.length, 82);
   assert.equal(r.rows[0].seq, 23181);
+});
+
+test("H4 phrases · a row with no actor says no \"by\" at all", () => {
+  const r = happenedRow({ at: "2026-10-20T08:00:00Z", actor: null, action: "legacy:seed", object: "x/y" }, { houseName: "Starforge" });
+  assert.ok(!("by" in r));
+  assert.equal(happenedLine(r, { nowMs: Date.parse("2026-10-20T10:00:00Z") }), "legacy:seed x/y · 2 h");
 });
 
 // Review of #678, item 1: a time window becomes an id window before the house's acts are read
