@@ -22,7 +22,7 @@ import assert from "node:assert/strict";
 import { commitmentOf, scopeSecret, sealedItem, verifySealed } from "../src/sealed.mjs";
 import {
   FINISH_ACTION, LivingSet, PRIOR_TELL_SQL, TELL_ACTION, TRIGGER_SQL, UNSEAL_ACTION,
-  holdsInOrder, loadCreatureLaw, reactTo, tellingFor, wordsIn, writeReaction, reactionRows,
+  answers, loadCreatureLaw, reactTo, tellingFor, wordsIn, writeReaction, reactionRows,
 } from "../src/creatures.mjs";
 import { creatureTick, UNSEAL_DUE_SQL } from "../src/creature-tick.mjs";
 import { settlementAtOrBefore } from "../src/world-forecast.mjs";
@@ -49,12 +49,16 @@ nodeTest("a sealed item: its commitment says nothing of its value, the reveal op
   assert.throws(() => scopeSecret("", "s"), /no master key/);
 });
 
-nodeTest("the answer reads words in order, ignoring case and punctuation, with other words between", () => {
+nodeTest("the answer: the call's words ON THE LIST, in order, are exactly the fragments; words off the list are free", () => {
+  const want = ["amber", "brass", "cinder"];
   assert.deepEqual(wordsIn("Amber, then BRASS... and cinder!"), ["amber", "then", "brass", "and", "cinder"]);
-  assert.equal(holdsInOrder(wordsIn("amber, then brass and cinder"), ["amber", "brass", "cinder"]), true);
-  assert.equal(holdsInOrder(wordsIn("brass amber cinder"), ["amber", "brass", "cinder"]), false, "out of order");
-  assert.equal(holdsInOrder(wordsIn("amber brass"), ["amber", "brass", "cinder"]), false, "one missing");
-  assert.equal(holdsInOrder([], []), false);
+  assert.equal(answers("I remember: Amber, then BRASS... and cinder!", want, LIST), true);
+  assert.equal(answers("brass amber cinder", want, LIST), false, "out of order");
+  assert.equal(answers("amber brass", want, LIST), false, "one missing");
+  assert.equal(answers("amber brass cinder dusk", want, LIST), false, "one more word from the list");
+  // THE HOLE (review of #697, plumb-spire-creatures): reciting the public list n times holds every ordered triple
+  assert.equal(answers(Array.from({ length: 3 }, () => LIST.join(" ")).join(" "), want, LIST), false, "reciting the list answers nothing");
+  assert.equal(answers("", [], LIST), false);
 });
 
 // ── telling ─────────────────────────────────────────────────────────────────
@@ -202,4 +206,23 @@ test("once it has ended, the clock publishes its secret, and every tell's commit
   // only an ended creature that told is due
   assert.match(UNSEAL_DUE_SQL, /w\.payload->>'reason' = 'ended'/);
   assert.match(UNSEAL_DUE_SQL, /NOT EXISTS \(SELECT 1 FROM acts u WHERE u\.class = 'creature' AND u\.action = 'unseal'/);
+});
+
+test("the scope tells the kind what happened: told.now on a telling, told.answered on a right answer, told.asks when it asked and the call did not answer", async () => {
+  const seen = [];
+  const law = { ...LAW, kindMod: { ...LAW.kindMod, scopeOf: (state, act, actor) => { seen.push(act.told ?? null); return LAW.kindMod.scopeOf(state, act, actor); } } };
+  const living = new LivingSet({ law }).fold([spawn(), tellAt("kai", 1, T0), tellAt("kai", 2, T0 + 12 * H), tellAt("kai", 3, T0 + 24 * H)]);
+  const env = { CREATURE_SEED_KEY: MASTER, CREATURE_JUDGE: "code" };
+  const { write } = recordingWrite();
+  const at = T0 + 36 * H;
+  const wrong = await reactTo({ actor: "kai", verb: "call", actId: "9300", atIso: iso(at), point: { x: 5, y: 0 }, words: LIST.join(" ") },
+    { living, law, write, env, now: at, aimed: living.byId.get(ID) });
+  assert.deepEqual(seen.at(-1), { now: false, answered: false, asks: true }, "the one who forgets");
+  assert.equal(wrong[0].answered, undefined);
+  const right = [1, 2, 3].map((k) => word("kai", k)).join(", then ");
+  await reactTo({ actor: "kai", verb: "call", actId: "9301", atIso: iso(at + 60_000), point: { x: 5, y: 0 }, words: `I remember: ${right}` },
+    { living, law, write, env, now: at + 60_000, aimed: living.byId.get(ID) });
+  assert.deepEqual(seen.at(-1), { now: false, answered: true, asks: false });
+  await reactTo({ actor: "mo", verb: "walk", actId: "9302", atIso: iso(at), point: { x: 5, y: 0 } }, { living, law, write, env, now: at });
+  assert.deepEqual(seen.at(-1), { now: true, answered: false, asks: false });
 });

@@ -567,7 +567,7 @@ export function capOf(creature, actor, { now = Date.now() } = {}) {
 export function scopeFor(law, creature, { verb, distance_m, approaching, actor, heard = null, told = null }) {
   // `heard` (POS-672): the words the creature could repeat, read as heard.any by
   // a law that knows it (the raven's mimicry); an older law reads no such field.
-  // `told` (POS-712): { now, answered } for a creature that tells, read as told.now and told.answered
+  // `told` (POS-712): { now, answered, asks } for a creature that tells, read as told.now, told.answered and told.asks
   return law.kindMod.scopeOf({ moods: creature.moods, flags: creature.flags },
     { verb, distance_m: Math.round(distance_m), approaching: !!approaching, ...(heard ? { heard } : {}), ...(told ? { told } : {}) },
     { times: creature.reactions.filter((r) => r.to === actor).length });
@@ -924,18 +924,25 @@ export function finishRow(creature, act, { now = Date.now(), reaction = null } =
 // answers tells the same fragment again (a lost reply is not a lost visit); after
 // that window it is never shown again: remembering it is the test. Fragments
 // persist across windows (fork 1, 08:39). Once all n are told, the reply says it
-// asks for them, and a `call` whose words hold the n fragments in order finishes
-// the creature (recordFinish's row and guard). Its settlement's ending is followed
+// asks for them, and a `call` whose words on the list are exactly the n fragments,
+// in order, finishes the creature (recordFinish's row and guard). Words not on the
+// list may stand anywhere ("I remember: … then …"); every word that IS on the
+// list counts, so reciting the public list answers nothing (plumb-spire-creatures,
+// the hole found in review of #697). Its settlement's ending is followed
 // by the `unseal` row, which publishes the secret so every commitment is checked.
 
 /** The words of a phrase, as the answer check reads them: lower case, letters, digits, ' and - only. */
 export const wordsIn = (text) => String(text ?? "").toLowerCase().split(/[^a-z0-9'-]+/).filter(Boolean);
 
-/** Do `words` hold `expected` in order (other words may stand between)? */
-export function holdsInOrder(words, expected) {
-  let i = 0;
-  for (const w of words) if (i < expected.length && w === expected[i]) i += 1;
-  return expected.length > 0 && i === expected.length;
+/**
+ * Does `text` answer `expected`? Its words that are on the public `list`, in the
+ * order said, must be exactly `expected`: nothing missing, nothing more, nothing
+ * out of order. Words off the list are free.
+ */
+export function answers(text, expected, list) {
+  const on = new Set(list.map((w) => String(w).toLowerCase()));
+  const said = wordsIn(text).filter((w) => on.has(w));
+  return expected.length > 0 && said.length === expected.length && said.every((w, i) => w === expected[i]);
 }
 
 /** A telling kind's own numbers, or null: { of, list }. */
@@ -964,7 +971,7 @@ export function tellingFor({ kind, creature, act, master }) {
   const window = settlementAtOrBefore(new Date(act.atIso));
   const mine = creature.told?.get(act.actor) ?? [];
   const answered = mine.length >= t.of && typeof act.words === "string"
-    && holdsInOrder(wordsIn(act.words), Array.from({ length: t.of }, (_, i) => item(i + 1).value.toLowerCase()));
+    && answers(act.words, Array.from({ length: t.of }, (_, i) => item(i + 1).value.toLowerCase()), t.list);
   const here = mine.find((x) => x.window === window);
   if (here) return { told: { word: item(here.number).value, number: here.number, of: t.of }, tell: null, answered };
   if (mine.length < t.of) {
@@ -1196,7 +1203,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
       ? await within(deps.heardFor(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null));
     // A CREATURE THAT TELLS (POS-712): what this act is told, and whether its words answer
     const telling = tellingFor({ kind, creature, act, master: (deps.env ?? process.env).CREATURE_SEED_KEY });
-    const told = telling ? { now: !!telling.told?.word, answered: telling.answered } : null;
+    // told.asks: every fragment is told, it is asking, and this act did not answer (the one who forgets)
+    const told = telling ? { now: !!telling.told?.word, answered: telling.answered, asks: !!telling.told?.asks && !telling.answered } : null;
     const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor, heard, told });
     const allowed = allowedReactions(law, kind, scope);
     if (!allowed.length) {
