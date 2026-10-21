@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { marksCountsFor } from "./town-marks.mjs";
-import { updateAddressBody, updateAddressFields, updateHome, updateHomeImage, updateProfile, updateProfileAvatar, updateWindow } from "./edit.mjs";
+import { updateAddressBody, updateAddressFields, updateHome, updateHomeImage, updateProfileAtDoor, updateProfileAvatar, updateWindow } from "./edit.mjs";
 import { handleMcp, callTool, TOOLS as MCP_TOOLS, validateArgs, visitorBounces, VISITOR_BOUNCE } from "./mcp.mjs";
 // POS-70 box 1: every plain-API write route is judged by the act it performs,
 // against that act's own schema, in the apexes' own sentence (src/one-contract.mjs).
@@ -36,7 +36,7 @@ import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, min
 import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
-import { uploadMedia } from "./media.mjs";
+import { uploadMedia, useMediaLedger } from "./media.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { VISITOR_RULES, useRulesRecorder } from "./visitor-rules.mjs"; // POS-300
 import { standingBounce, standingOf, isSuspended, bounceSentence, STANDING_BOUNCE_CODE, STANDING_UNREADABLE } from "./standing.mjs";
@@ -199,6 +199,8 @@ try {
 // The berth's acknowledgement of the town's rules for visitors is written on
 // its own row in this paperwork (POS-300, visitor-rules.mjs).
 useRulesRecorder((slug) => acknowledgeVisitorRules(odb, slug));
+// The hanging doors check a media URL against this same paper (POS-738).
+useMediaLedger(odb);
 
 // ── AND THE SAME REFUSAL FOR THE DYNAMIC STORE (reviewer's repair 1, lap 4) ──
 //
@@ -2255,7 +2257,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if (!avatar && !homeImage && !m) return bounce(res, 404, "no such door", `edits: PATCH /${PATCH_PAPER_DOORS.join("|/")} /{handle}, or PATCH /profile/{handle}/avatar, or PATCH /home/{handle}/image`);
       if (!canWrite) return bounce(res, 409, "not-yet-open", "the office has no town clone configured; edit by PR meanwhile");
       const verb = avatar ? updateProfileAvatar : homeImage ? updateHomeImage
-        : { address: updateAddressBody, "address-fields": updateAddressFields, home: updateHome, profile: updateProfile, window: updateWindow }[m[1]];
+        : { address: updateAddressBody, "address-fields": updateAddressFields, home: updateHome, profile: updateProfileAtDoor, window: updateWindow }[m[1]];
       const handle = avatar ? avatar[1] : homeImage ? homeImage[1] : m[2];
       const cap = avatar ? 4_000_000 : homeImage ? 6_000_000 : m[1] === "window" ? 400_000 : undefined;
       readJsonBody(req, cap).then(async (raw) => {

@@ -160,6 +160,72 @@ export const THUMB_QUALITY = 84; // the site's own dial (postmark-site tools/lib
 export const thumbObjectKey = (household, sha, ext, size) => `media/${household}/${sha}-${size}.${ext}`;
 export const thumbUrlFor = (household, sha, ext, size) => `${MEDIA_BASE}/${thumbObjectKey(household, sha, ext, size)}`;
 
+// ── THE LEDGER HOLDS IT, OR IT DOES NOT HANG (POS-738) ───────────────────────
+//
+// `mediaUrlOk` reads a URL's grammar and host, and nothing else. So a mark
+// could hang a well-formed URL the town never held, and two did (S121, world
+// 0f4892f1): Alta's mooring names `/m/d849fa0eb84fc1399cb1.jpg`, a path this
+// door never minted, and Rook's flag names a right-shaped URL whose bytes were
+// never put. Both pictures 404. The allowlist's own promise, "a mark cannot
+// point the told world at an image the office never saw", needs the ledger
+// to keep it.
+//
+// So a door that HANGS a media URL (the mark's image, the profile picture, the
+// house picture, a bug's reveal candidates) asks this first: the URL must name
+// a row of the ledger, under its own household, sha and ext. Any household's
+// row will do, because hanging a neighbour's picture was always allowed. A
+// small copy's URL (`-96`, `-256`) is held when its original is held.
+//
+// THE LEDGER IS REGISTERED, NOT PASSED (`useMediaLedger`, called by the server
+// at boot beside the paper it opens). The mark door is reached from five
+// callers that carry no paper, and threading one through each is five chances
+// to forget. An office that registered no ledger REFUSES, in the upload door's
+// own words, rather than hanging a picture it could not check: a check that
+// passes when it cannot look is the check this issue found missing.
+//
+// Only a door judges. The drain's replay of a paper act (town-updates.mjs §
+// replayPaperAct) re-applies what a door already admitted, so it never asks.
+let LEDGER = null;
+/** The paper the hanging doors check against: the server's own, at boot. */
+export function useMediaLedger(paper) { LEDGER = paper ?? null; }
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** What a door-minted media URL names, or null: { household, sha, ext, size }. */
+export function mediaUrlParts(url) {
+  const m = new RegExp(`^${escapeRe(MEDIA_BASE)}/media/([A-Za-z0-9][A-Za-z0-9._-]*)/([0-9a-f]{64})(?:-(${THUMB_SIZES.join("|")}))?\\.([a-z0-9]+)$`)
+    .exec(String(url ?? "").trim());
+  return m ? { household: m[1], sha: m[2], ext: m[4], size: m[3] ? Number(m[3]) : null } : null;
+}
+
+export const MEDIA_NOT_HELD_HINT = "upload it first (upload_media), then hang the URL it returns";
+
+/**
+ * Null when the ledger holds the bytes `url` names; otherwise the refusal, as
+ * `{ code, defect, hint }`, for the calling door to throw in its own shape.
+ */
+export async function mediaHeldRefusal(url, { odb = LEDGER } = {}) {
+  const u = String(url ?? "").trim();
+  const p = mediaUrlParts(u);
+  if (!p)
+    return { code: 422, defect: "the town holds no file at that URL",
+      hint: `${u.slice(0, 140)} is not an address the media door mints (${MEDIA_BASE}/media/<household>/<sha256>.<ext>) — ${MEDIA_NOT_HELD_HINT}` };
+  if (!odb)
+    return { code: 409, defect: "the media ledger is not open",
+      hint: "the office could not check that the town holds this file, so nothing was hung — try again in a moment; if it repeats, tell the office (a letter to wright works)" };
+  ensureMediaTable(odb);
+  const row = await asPaper(odb).get("SELECT 1 AS held FROM media WHERE household = ? AND sha = ? AND ext = ?", p.household, p.sha, p.ext);
+  if (!row)
+    return { code: 422, defect: "the town holds no file at that URL",
+      hint: `nothing was ever uploaded at ${u.slice(0, 140)} — ${MEDIA_NOT_HELD_HINT}` };
+  return null;
+}
+
+/** `mediaHeldRefusal`, thrown in the media door's own bounce shape. */
+export async function assertMediaHeld(url, opts) {
+  const r = await mediaHeldRefusal(url, opts);
+  if (r) throw bounce(r.code, r.defect, r.hint);
+}
+
 // sharp is loaded on first use, not at module load: it is a native dependency
 // (libvips), and the office's front door must open even on a box whose binary
 // failed to land.
