@@ -47,7 +47,9 @@ if (!skip) {
   for (const f of readdirSync(join(WORLD, "tools")).filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs")))
     copyFileSync(join(WORLD, "tools", f), join(repo, "tools", f));
   const root = { id: "the-town/let-there-be-light", by: "the-town", slug: "let-there-be-light", kind: "sited", at: { x: 0, y: 0 }, extent: { w: 10000, h: 10000 } };
-  const bowl = { id: BOWL, by: "sbx-ana", slug: "the-bowl", kind: "sited", class: "halloween-candy-bowl", at: { x: 10, y: 10 }, extent: { w: 2, h: 2 } };
+  const bowl = { id: BOWL, by: "sbx-ana", slug: "the-bowl", kind: "sited", class: "halloween-candy-bowl", at: { x: 300, y: 300 }, extent: { w: 2, h: 2 } };
+  // 424 m from the Origin: since world#265 (POS-740) a resident the record places nowhere else stands
+  // at the Origin, so the bowl stands out of reach and the reach is still what answers below
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   put("WORLD/marks/sbx-ana/the-bowl/mark.md", markRecord(bowl, "A bowl of candy by the door."));
   put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, bowl] }));
@@ -76,7 +78,7 @@ const units = async () => { const c = await store.connect("world2_owner"); try {
 test("world_hold { kind, count, to: <the published bowl> } reaches the kind door: the bowl is read from the world and the law, and the reach answers", { skip }, async () => {
   await assert.rejects(callHoldTool("world_hold", { kind: "pocket-comet", count: 2, to: BOWL }, KEY), (e) => {
     assert.equal(e.code, 409, `${e.defect} — ${e.hint}`);
-    assert.match(e.defect, /the record does not place you anywhere/, "past the holder law, at the reach: the resident has walked nowhere");
+    assert.match(e.defect, /you are not standing where sbx-ana\/the-bowl stands/, "past the holder law, at the reach: the resident stands at the Origin, 424 m off");
     return true;
   });
   assert.equal(await units(), 0, "nothing written");
@@ -85,7 +87,7 @@ test("world_hold { kind, count, to: <the published bowl> } reaches the kind door
 test("world_hold { from: <a draft> } and { act: refill, thing: <a draft> } are the kind door's refusals: a draft holds nothing yet", { skip }, async () => {
   await assert.rejects(callHoldTool("world_hold", { from: "sbx-cy/a-draft-bowl" }, KEY), (e) => e.code === 404 && /a private draft holds nothing yet/.test(e.hint));
   await assert.rejects(callHoldTool("world_hold", { act: "refill", thing: "sbx-cy/a-draft-bowl", kind: "pocket-comet" }, KEY), (e) => e.code === 404);
-  await assert.rejects(callHoldTool("world_hold", { from: BOWL, kind: "no-such-kind" }, KEY), (e) => e.code === 409 && /does not place you anywhere/.test(e.defect));
+  await assert.rejects(callHoldTool("world_hold", { from: BOWL, kind: "no-such-kind" }, KEY), (e) => e.code === 409 && /you are not standing where sbx-ana\/the-bowl stands/.test(e.defect));
   assert.equal(await units(), 0);
 });
 

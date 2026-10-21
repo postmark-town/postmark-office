@@ -68,7 +68,8 @@ const lawWith = ({ encounter = true, kinds = { keeper: KEEPER, plain: PLAIN } } 
   ...BASE, kindOf: (name) => kinds[name] ?? null,
   kindMod: {
     ...BASE.kindMod,
-    ...(encounter ? { ENCOUNTER_VERBS: ["strike", "steady", "shield"], PRESS_ON } : {}),
+    // a law WITHOUT the encounter's verbs is made by taking them away: the pinned grammar (world#269) carries them
+    ...(encounter ? { ENCOUNTER_VERBS: ["strike", "steady", "shield"], PRESS_ON } : { ENCOUNTER_VERBS: undefined }),
     // {target}, as the grammar's voiceLine fills it (the pinned one knows actor, offered and heard)
     voiceLine: (r, words = {}) => BASE.kindMod.voiceLine({ ...r, says: r.says.replaceAll("{target}", String(words.target ?? words.actor)) }, words),
     scopeOf: (state, act, actor, enc = {}) => {

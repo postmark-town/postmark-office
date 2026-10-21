@@ -59,7 +59,8 @@ const STUB = NO_WORLD ? null : (() => {
 /** The law as the office holds it, with the stub kind and (when `ended`) "ended" among the despawn reasons. */
 const lawWith = ({ ended = true } = {}) => (NO_WORLD ? null : {
   ...BASE, kindOf: (name) => (name === "wolf" ? STUB : null),
-  creaturesMod: { ...BASE.creaturesMod, DESPAWN_REASONS: ended ? [...BASE.creaturesMod.DESPAWN_REASONS, "ended"] : [...BASE.creaturesMod.DESPAWN_REASONS] },
+  // the pinned law (world#266) already knows "ended": a law without it is made by taking it away
+  creaturesMod: { ...BASE.creaturesMod, DESPAWN_REASONS: ended ? [...new Set([...BASE.creaturesMod.DESPAWN_REASONS, "ended"])] : BASE.creaturesMod.DESPAWN_REASONS.filter((r) => r !== "ended") },
 });
 
 const NOW = Date.parse("2026-10-26T13:00:00Z");
