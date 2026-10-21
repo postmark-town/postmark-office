@@ -548,3 +548,123 @@ test("THE PAGE (POS-720): ten busy members at Starforge's scale serve under 8K",
   t.diagnostic(`served: ${n} characters`);
   assert.ok(n <= 8192, `the default page at Starforge's scale is ${n} characters as served`);
 });
+
+// ── the house's glance through the door (POS-633 PR-1) ──────────────────────
+test("THE GLANCE (POS-633): household { read_shape: \"v2\" } answers the house's glance through the store, every key explained", async () => {
+  const { unexplained } = await import("../src/read-grammar.mjs");
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const g = await householdApex({ read_shape: "v2", handle: "r000" }, key, { clone: scratch, asOf: AS_OF, odb: null });
+  assert.equal(g.read_shape, "v2", JSON.stringify(g).slice(0, 300));
+  assert.deepEqual([g.house.slug, g.house.name, g.house.human, g.house.you], [HOUSE, "Fixture", "Fixture's human", "r000"]);
+  assert.deepEqual(g.house.members.map((m) => m.split(" · ")[0]).sort(), ["r000", "r001"], "the members this key holds, ashore");
+  assert.match(g.house.members_key, /^newest act first/, "their order is said");
+  assert.ok(Number.isInteger(g.waiting.count));
+  assert.equal(g.mail.bounced, 1, "r000's bounce, from needs-you, rides with the mail");
+  assert.ok(Number.isInteger(g.stamps.residents_total) && g.stamps.residents_total >= 0, "the residents' stamps added up, a plain number");
+  assert.deepEqual(unexplained("household", g, 2), []);
+  assert.ok(JSON.stringify(g, null, 1).length <= 4096);
+  assert.doesNotMatch(JSON.stringify(g), /https?:\/\//);
+  const s = await householdApex({ read_shape: "v2", since: g.cursor }, key, { clone: scratch, asOf: AS_OF, odb: null });
+  assert.equal(s.read_shape, "v2");
+  assert.ok("complete" in s && typeof s.cursor === "string");
+  assert.deepEqual(unexplained("household", s, 2), []);
+});
+
+test("THE DEEP READS (POS-633 part 2): closer, happened and stamps' went answer typed rows for a key that holds the house", async () => {
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const ctxD = { clone: scratch, asOf: AS_OF, odb: null, strictFields: true };
+  const c = await householdApex({ read: "closer" }, key, ctxD);
+  assert.equal(c.read, "closer", JSON.stringify(c).slice(0, 300));
+  assert.ok(Array.isArray(c.rows));
+  assert.deepEqual(c.rows.map((r) => r.with), [], "the fixture's letters are between housemates: none are closer");
+  assert.match(c.says, /no addressee/);
+  const h = await householdApex({ read: "happened" }, key, ctxD);
+  assert.equal(h.read, "happened", JSON.stringify(h).slice(0, 300));
+  assert.ok(Array.isArray(h.rows) && typeof h.cursor === "string");
+  const h2 = await householdApex({ read: "happened", since: h.cursor }, key, ctxD);
+  assert.ok(Array.isArray(h2.rows) && h2.since, JSON.stringify(h2).slice(0, 300));
+  const w = await householdApex({ read: "stamps", args: { view: "went" } }, key, ctxD);
+  assert.deepEqual([w.read, w.view], ["stamps", "went"], JSON.stringify(w).slice(0, 300));
+  // an unknown view answers the books as before: old spellings stay working (review of #679, item 8)
+  const books = await householdApex({ read: "stamps", args: { view: "gone" } }, key, ctxD);
+  assert.equal(books.read, "stamps", JSON.stringify(books).slice(0, 300));
+  assert.ok(!("view" in books) && "estate" in books, "the books, not the went rows");
+  assert.equal((await householdApex({ read: "happened", since: "yesterday" }, key, ctxD)).code, 422);
+  assert.equal((await householdApex({ read: "closer" }, null, ctxD)).code, 401);
+  assert.equal((await householdApex({ read: "closer", since: "c1.1.1." }, key, ctxD)).code, 422, "closer takes no cursor");
+});
+
+// The deep reads on the store, every window held (review of #679): a cursor's id
+// bounds happened (an act before it is absent, one after is present); happened is
+// the key's residents and the house's own human, never a housemate the key does
+// not hold; closer counts delivered letters only, multi-recipient ones included,
+// never a housemate; went is bounded by the ledger's own seq and leaves out a
+// gift between housemates.
+test("THE DEEP READS ON THE STORE (POS-633 part 2): every window held", async () => {
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const ctxD = { clone: scratch, asOf: AS_OF, odb: null, strictFields: true };
+  const owner = await IX.store.connect("world2_owner");
+  const ago = (ms) => new Date(Date.now() - ms).toISOString();
+  const act = async (actor, at) => (await owner.query(
+    "INSERT INTO acts (at, actor, action, class, household, object) VALUES ($1, $2, 'say', 'voice', 'hh:fixture-house', null) RETURNING id::text AS id", [at, actor])).rows[0].id;
+  const hex = (n) => n.toString(16).padStart(64, "0");
+  try {
+    // happened: a cursor's id bounds it
+    const before = await act("r000", ago(3_600_000));
+    const h = await householdApex({ read: "happened" }, key, ctxD);
+    assert.ok(h.rows.some((r) => r.hand === "r000"), JSON.stringify(h).slice(0, 300));
+    const after = await act("r001", ago(1000));
+    const housemate = await act("r002", ago(900));
+    const human = await act("human-of-fixture-house", ago(800));
+    const h2 = await householdApex({ read: "happened", since: h.cursor }, key, ctxD);
+    const hands = h2.rows.map((r) => r.by);
+    assert.deepEqual(hands, ["Fixture's human", "r001"], `only after the cursor, the key's own and the house's human: ${JSON.stringify(h2.rows)}`);
+    assert.equal(h2.complete, true);
+    assert.ok(Number(after) > Number(before) && Number(housemate) > 0 && Number(human) > 0);
+
+    // closer: delivered letters only, a multi-recipient one counted, never a housemate
+    const letter = (id, from, to, json, delivered) => owner.query(
+      "INSERT INTO town_letters (id, from_h, to_h, date, json, delivered_at, digest) VALUES ($1, $2, $3, $4, $5, $6, 'd')",
+      [id, from, to, new Date().toISOString().slice(0, 10), json, delivered]);
+    await letter("ls-1", "r-stranger", "r000", JSON.stringify({ id: "ls-1" }), new Date().toISOString());
+    await letter("ls-2", "r-stranger", "r-other", JSON.stringify({ id: "ls-2", toList: ["r-other", "r001"] }), new Date().toISOString());
+    await letter("ls-3", "nobody", "r000", JSON.stringify({ id: "ls-3" }), null); // never arrived
+    await letter("ls-4", "r000", "r002", JSON.stringify({ id: "ls-4" }), new Date().toISOString()); // a housemate the key does not hold
+    const c = await householdApex({ read: "closer" }, key, ctxD);
+    assert.deepEqual(c.rows.map((r) => [r.with, r.letters]), [["r-stranger", 2], ["r-other", 1]], JSON.stringify(c.rows));
+
+    // went: the ledger's lines inside the window, a gift between housemates left out
+    const line = (seq, canonical, at) => owner.query("INSERT INTO stamp_lines (seq, canonical, sig, seal, written_at) VALUES ($1, $2, 'sig', $3, $4)", [seq, canonical, hex(seq), at]);
+    await line(1, "- 2026-10-18 · r000 → stake:world-mark/x/y · 1 · via: api", ago(2 * 86_400_000));
+    await line(2, "- 2026-10-20 · r001 → BURN · 2 · for: correction:z", ago(3_600_000));
+    await line(3, "- 2026-10-20 · r000 → r002 · 3 · for: gift", ago(1_800_000));
+    const w = await householdApex({ read: "stamps", args: { view: "went" } }, key, ctxD);
+    assert.deepEqual(w.rows.map((r) => [r.from, r.to, r.stamps]), [["r001", "BURN", 2]], JSON.stringify(w.rows));
+  } finally {
+    await owner.query("DELETE FROM town_letters WHERE id LIKE 'ls-%'").catch(() => {});
+    await owner.end();
+  }
+});
+
+// POS-633 round 4 (Darko 15:46): the glance's blocks are reads of their own names
+test("read: \"waiting\" and read: \"marks\" answer through the store: needs-you whole with every group; the house's marks by state", async () => {
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const ctx = { clone: scratch, asOf: AS_OF, odb: null };
+  const w = await householdApex({ read: "waiting" }, key, ctx);
+  assert.equal(w.read, "waiting", JSON.stringify(w).slice(0, 300));
+  assert.ok(Array.isArray(w.groups), "every group the glance draws, none cut");
+  assert.ok(Number.isInteger(w.count) && "stances_awaiting" in w && "stakes_at_risk" in w, "needs-you's own answer, whole");
+  const m = await householdApex({ read: "marks", args: { limit: 5 } }, key, ctx);
+  assert.equal(m.read, "marks", JSON.stringify(m).slice(0, 300));
+  for (const k of ["drafts", "pending", "standing"]) {
+    assert.ok(Number.isInteger(m[k].total) && Array.isArray(m[k].rows), `the ${k} list, paged`);
+    // review of #678, item 4: every list says its window and whether it is whole
+    assert.deepEqual([m[k].limit, m[k].offset, typeof m[k].complete], [5, 0, "boolean"]);
+    assert.equal("next_offset" in m[k], !m[k].complete);
+  }
+  assert.ok("decided" in m && Array.isArray(m.at_risk.rows));
+  const one = await householdApex({ read: "marks", args: { state: "standing" } }, key, ctx);
+  assert.deepEqual(["drafts", "pending", "standing"].filter((k) => k in one), ["standing"], "state: narrows to one list");
+  const bad = await householdApex({ read: "marks", args: { state: "retired" } }, key, ctx);
+  assert.match(bad.defect ?? "", /state/, "a state the read does not list is refused by name");
+});

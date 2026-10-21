@@ -83,6 +83,8 @@ import { WORLD_CLONE } from "./world-store.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import { scopeSecret, sealedItem } from "./sealed.mjs";
+import { settlementAtOrBefore } from "./world-forecast.mjs";
 import {
   ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
   easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, windowAt,
@@ -98,6 +100,10 @@ export const FINISH_ACTION = "finish";
 export const FINISH_EFFECT = "finish";
 /** The withdraw reason of a creature its settlement ended. */
 export const ENDED = "ended";
+/** A creature that tells (POS-712): one fragment told to a resident, its commitment on the record. */
+export const TELL_ACTION = "tell";
+/** The reveal of a telling creature's sealed secret, once it has ended (POS-712). */
+export const UNSEAL_ACTION = "unseal";
 /** Does this reaction finish its creature? Read from its parsed effects, so no export of the world's is needed. */
 export const finishes = (reaction) => Array.isArray(reaction?.effects) && reaction.effects.some((e) => e?.do === FINISH_EFFECT);
 
@@ -416,6 +422,15 @@ export class LivingSet {
         if (c && r.object === c.id && typeof p.by === "string" && !c.finishes.some((f) => f.by === p.by))
           c.finishes.push({ by: p.by, act: String(p.act ?? ""), at: msOf(r.at) });
       }
+      else if (r.action === TELL_ACTION) {
+        // what it has told whom (POS-712): the number and the window, never the word
+        const c = this.byId.get(r.actor);
+        const n = Number(p.number);
+        if (c && r.object === c.id && typeof p.to === "string" && Number.isInteger(n)) {
+          const mine = c.told.get(p.to) ?? [];
+          if (!mine.some((t) => t.number === n)) c.told.set(p.to, [...mine, { number: n, window: String(p.window ?? "") }].sort((a, b) => a.number - b.number));
+        }
+      }
       else if (r.action === WITHDRAW_ACTION) {
         // only the town (faded) or the creature itself (fled) withdraws it, and only for a ruled reason (R4)
         const c = this.byId.get(r.object);
@@ -450,6 +465,7 @@ export class LivingSet {
       ...(stays ? { stays: true, carries: typeof p.carries === "string" ? p.carries : null } : {}),
       reactions: [], // { act, to, verb, reaction, roll, judged_by, distance_m, approaching, at }
       finishes: [], // { by, act, at }: who finished it, first act first (WLD-25)
+      told: new Map(), // resident → [{ number, window }]: the fragments it has told them (POS-712)
     });
   }
 
@@ -569,13 +585,14 @@ export function capOf(creature, actor, { now = Date.now() } = {}) {
 // ── the menu and the scope ──────────────────────────────────────────────────
 
 /** The world's scope (S2): self (moods and set flags), the act, and actor.times. */
-export function scopeFor(law, creature, { verb, distance_m, approaching, actor, heard = null, encounter = null }) {
+export function scopeFor(law, creature, { verb, distance_m, approaching, actor, heard = null, told = null, encounter = null }) {
   // `heard` (POS-672): the words the creature could repeat, read as heard.any by
   // a law that knows it (the raven's mimicry); an older law reads no such field.
+  // `told` (POS-712): { now, answered, asks } for a creature that tells, read as told.now, told.answered and told.asks
   // `encounter` (a finishable kind): its window as the office counts it, { resolve, ease },
   // read as self.resolve and ease.* by a law that knows them; an older law takes three arguments
   return law.kindMod.scopeOf({ moods: creature.moods, flags: creature.flags },
-    { verb, distance_m: Math.round(distance_m), approaching: !!approaching, ...(heard ? { heard } : {}) },
+    { verb, distance_m: Math.round(distance_m), approaching: !!approaching, ...(heard ? { heard } : {}), ...(told ? { told } : {}) },
     { times: creature.reactions.filter((r) => r.to === actor).length },
     ...(encounter ? [encounter] : []));
 }
@@ -925,13 +942,14 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
 
 /** The reaction's acts row, and beside it the fled withdraw when the reaction
  *  flees, or the finish when it finishes (WLD-25). */
-export function reactionRows(creature, act, payload, { now = Date.now(), flees = false, finishes: finished = false, nerve = [] } = {}) {
+export function reactionRows(creature, act, payload, { now = Date.now(), flees = false, finishes: finished = false, tell = null, nerve = [] } = {}) {
   const writtenAt = new Date(now).toISOString();
   const at = { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y };
   const base = { crossing: currentCrossing(now), at, cls: CREATURE_CLASS, writtenAt };
   const react = normalizeRow({ ...base, actor: creature.id, action: REACT_ACTION, object: String(act.actId), payload,
     effect: `the ${creature.kind} answers ${act.actor}'s ${act.verb}` });
   const out = [react];
+  if (tell) out.push(tellRow(creature, tell, { now }));
   if (finished) out.push(finishRow(creature, act, { now, reaction: payload?.reaction ?? null }));
   // what the exchange cost in nerve (encounter.mjs): the act's own cost, and where the press landed
   for (const n of nerve) out.push(nerveRow(creature, act, { ...n, now }));
@@ -954,6 +972,86 @@ export function finishRow(creature, act, { now = Date.now(), reaction = null } =
     effect: `${act.actor} finishes the ${creature.kind}`,
   });
 }
+
+// ── a creature that tells (POS-712, lupi's shape B; WLD-25 Q3, 3a–3c) ─────────
+//
+// A finishable kind may tell fragments: `fragments: <n>` and a PUBLIC list
+// `fragment_words`. Each resident is told one fragment per visit (a settlement
+// window), the next of their own n, drawn from the list by the creature's sealed
+// secret (src/sealed.mjs; the box's CREATURE_SEED_KEY under its own label). The
+// word rides ONLY the resident's own reply; the record holds a `tell` row with its
+// commitment, never the word. Inside the window it was told, a later act it
+// answers tells the same fragment again (a lost reply is not a lost visit); after
+// that window it is never shown again: remembering it is the test. Fragments
+// persist across windows (fork 1, 08:39). Once all n are told, the reply says it
+// asks for them, and a `call` whose words on the list are exactly the n fragments,
+// in order, finishes the creature (recordFinish's row and guard). Words not on the
+// list may stand anywhere ("I remember: … then …"); every word that IS on the
+// list counts, so reciting the public list answers nothing (plumb-spire-creatures,
+// the hole found in review of #697). Its settlement's ending is followed
+// by the `unseal` row, which publishes the secret so every commitment is checked.
+
+/** The words of a phrase, as the answer check reads them: lower case, letters, digits, ' and - only. */
+export const wordsIn = (text) => String(text ?? "").toLowerCase().split(/[^a-z0-9'-]+/).filter(Boolean);
+
+/**
+ * Does `text` answer `expected`? Its words that are on the public `list`, in the
+ * order said, must be exactly `expected`: nothing missing, nothing more, nothing
+ * out of order. Words off the list are free.
+ */
+export function answers(text, expected, list) {
+  const on = new Set(list.map((w) => String(w).toLowerCase()));
+  const said = wordsIn(text).filter((w) => on.has(w));
+  return expected.length > 0 && said.length === expected.length && said.every((w, i) => w === expected[i]);
+}
+
+/** A telling kind's own numbers, or null: { of, list }. */
+export function tellingOf(kind) {
+  const of = Number(kind?.fragments);
+  const list = Array.isArray(kind?.fragment_words) ? kind.fragment_words.map(String) : [];
+  return Number.isInteger(of) && of > 0 && list.length ? { of, list } : null;
+}
+
+/** The digest of the public list a commitment was drawn from: a verifier reads the same list. */
+export const listDigest = (list) => createHash("sha256").update(list.join("\n")).digest("hex").slice(0, 16);
+
+/**
+ * What this act is told, and whether it answers: { told, tell, answered }.
+ *   told      the reply's `fragment`: { word, number, of }, { asks: of } once every one is told, or null
+ *   tell      the `tell` row's payload to write (a first telling in this window), or null
+ *   answered  true when the act's own words hold every fragment, in order
+ * Null when the kind does not tell, the creature does not stay, or the box's key
+ * is absent (a creature cannot tell what it cannot seal: fail closed).
+ */
+export function tellingFor({ kind, creature, act, master }) {
+  const t = tellingOf(kind);
+  if (!t || !creature?.stays || !master) return null;
+  const secret = scopeSecret(master, creature.id);
+  const item = (number) => sealedItem(secret, { scope: creature.id, subject: act.actor, number, list: t.list });
+  const window = settlementAtOrBefore(new Date(act.atIso));
+  const mine = creature.told?.get(act.actor) ?? [];
+  const answered = mine.length >= t.of && typeof act.words === "string"
+    && answers(act.words, Array.from({ length: t.of }, (_, i) => item(i + 1).value.toLowerCase()), t.list);
+  const here = mine.find((x) => x.window === window);
+  if (here) return { told: { word: item(here.number).value, number: here.number, of: t.of }, tell: null, answered };
+  if (mine.length < t.of) {
+    const number = mine.length + 1, it = item(number);
+    return { told: { word: it.value, number, of: t.of }, tell: { to: act.actor, number, window, commitment: it.commitment, list: listDigest(t.list) }, answered };
+  }
+  return { told: { asks: t.of }, tell: null, answered };
+}
+
+/** The `tell` row: what it told whom, as a commitment; the word is never on the record. */
+export function tellRow(creature, tell, { now = Date.now() } = {}) {
+  return normalizeRow({
+    crossing: currentCrossing(now), at: { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y }, cls: CREATURE_CLASS,
+    writtenAt: new Date(now).toISOString(), actor: creature.id, action: TELL_ACTION, object: creature.id,
+    payload: tell, effect: `the ${creature.kind} tells ${tell.to} something, for them alone`,
+  });
+}
+
+export const PRIOR_TELL_SQL = `SELECT id::text AS id FROM acts
+  WHERE class = '${CREATURE_CLASS}' AND actor = $1 AND action = '${TELL_ACTION}' AND payload->>'to' = $2 AND payload->>'number' = $3 LIMIT 1`;
 
 /**
  * A NERVE ROW (encounter.mjs): the creature's record of what an exchange cost one
@@ -1004,6 +1102,15 @@ export async function writeCost(rows, { officeWrite: ow = null, insertAct: ins =
 export const PRIOR_FINISH_SQL = `SELECT id::text AS id FROM acts
   WHERE class = '${CREATURE_CLASS}' AND actor = $1 AND action = '${FINISH_ACTION}' AND payload->>'by' = $2 LIMIT 1`;
 
+/** Inside a write's transaction: a tell row, unless this fragment was already told to this resident. Answers its id, or null. */
+async function writeTellOnce(client, row, insertAct) {
+  const { to, number } = asPayload(row.payload);
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-tell:${row.actor}:${to}`]);
+  const { rows: before } = await client.query(PRIOR_TELL_SQL, [row.actor, to, String(number)]);
+  if (before.length) return null;
+  return insertAct(client, row);
+}
+
 /** Inside a write's transaction: a finish row, unless this resident already finished this creature. Answers its id, or null. */
 async function writeFinishOnce(client, row, insertAct) {
   const by = asPayload(row.payload).by;
@@ -1050,6 +1157,7 @@ export async function writeReaction(rows, { officeWrite: ow = null, insertAct: i
     for (const r of rows) {
       // a resident finishes a creature once: a second finish is answered, and not written again
       const id = r.action === FINISH_ACTION ? await writeFinishOnce(client, r, insertAct)
+        : r.action === TELL_ACTION ? await writeTellOnce(client, r, insertAct)
         : isActCost(r) ? await writeActCostOnce(client, r, insertAct) : await insertAct(client, r);
       if (id == null) continue;
       out.push({ id: String(id), at: r.written_at, actor: r.actor, action: r.action, object: r.object, payload: r.payload });
@@ -1210,9 +1318,19 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // "a few words" (D5): the world fills {heard} with whatever it is handed, so the cap is the office's, here, on every path
     const heard = heardWords(act.heard ?? (readsHeard && deps.heardFor
       ? await within(deps.heardFor(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null));
-    const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor, heard,
+    // A CREATURE THAT TELLS (POS-712): what this act is told, and whether its words answer
+    const telling = tellingFor({ kind, creature, act, master: (deps.env ?? process.env).CREATURE_SEED_KEY });
+    // told.asks: every fragment is told, it is asking, and this act did not answer (the one who forgets)
+    const told = telling ? { now: !!telling.told?.word, answered: telling.answered, asks: !!telling.told?.asks && !telling.answered } : null;
+    const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor, heard, told,
       encounter: enc ? { ...(enc.resolve != null ? { resolve: enc.resolve } : {}), ease: enc.ease } : null });
     const allowed = allowedReactions(law, kind, scope);
+    if (!allowed.length) {
+      // a right answer finishes it whether or not its kind has a line for it: the finish is code's (G7)
+      if (telling?.answered) await (deps.finish ?? recordFinish)(creature, act, { now });
+      if (enc?.cost.length) await chargeOnly(creature, act, enc, deps);
+      return null;
+    }
     // AN EARNED FINISH IS TAKEN BY CODE (WLD-25 W4, Wright 2026-10-20): when a
     // reaction that finishes is on the menu it is the answer, with no Choice and
     // no die, so "it drops every time" (what a creature carries) never rests on a sample. And the
@@ -1259,7 +1377,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words,
       encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve } : null });
     const nerve = enc ? [...enc.cost, ...(press?.landed ?? []).map((l) => ({ ...l, why: "press" }))] : [];
-    const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) || eased.filled, nerve });
+    const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) || !!telling?.answered || eased.filled,
+      tell: telling?.tell ?? null, nerve });
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
     if (enc) fleeTheSpent(written.rows, enc, deps, now);
@@ -1269,6 +1388,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
     return {
       ...answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, shown, act.actor, lineWords(stored)), reaction: shown.name, roll: stored.roll ?? roll,
         judged_by: stored.judged_by ?? judgment.judged_by }),
+      // the fragment rides this reply alone: it is the actor's, and never on the record (POS-712)
+      ...(telling?.told ? { fragment: telling.told } : {}), ...(telling?.answered ? { answered: true } : {}),
       // a finishable creature's press, said beside its line: who paid what (encounter.mjs)
       ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}) })) } : {}),
     };

@@ -225,14 +225,15 @@ test("MCP: one statement reads the acts for a whole page", async (t) => {
 
 test("pickLastActive: the newest of the two sources wins, and its crossing is the clock's at that time", () => {
   const m = pickLastActive([
-    { handle: "a", at: "2026-07-03T10:00:00.000Z", src: "act" },
+    { handle: "a", at: "2026-07-03T10:00:00.000Z", src: "act", what: "walk" },
     { handle: "a", at: "2026-07-02T08:00:00Z", src: "letter" },
     { handle: "b", at: "2026-07-01T00:00:00.000Z", src: "act" },
     { handle: "b", at: "2026-07-05T20:00:00Z", src: "letter" },
     { handle: "c", at: "not a time", src: "letter" },
   ]);
-  assert.deepEqual(m.get("a"), { at: "2026-07-03T10:00:00.000Z", crossing: 42 });
-  assert.deepEqual(m.get("b"), { at: "2026-07-05T20:00:00.000Z", crossing: 47 });
+  // `what` names the act (POS-633's member line), or the source where a row names none
+  assert.deepEqual(m.get("a"), { at: "2026-07-03T10:00:00.000Z", crossing: 42, what: "walk" });
+  assert.deepEqual(m.get("b"), { at: "2026-07-05T20:00:00.000Z", crossing: 47, what: "letter" });
   assert.equal(m.has("c"), false);
 });
 

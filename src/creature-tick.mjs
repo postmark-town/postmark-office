@@ -70,7 +70,8 @@ import { WORLD_CLONE } from "./world-store.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { errorSaid, faultLogged } from "./fault-words.mjs";
-import { CREATURE_CLASS, SPAWN_ACTION, WITHDRAW_ACTION } from "./creatures.mjs";
+import { CREATURE_CLASS, SPAWN_ACTION, WITHDRAW_ACTION, TELL_ACTION, UNSEAL_ACTION } from "./creatures.mjs";
+import { scopeSecret } from "./sealed.mjs";
 
 export const CREATURE_TICK_MS = 30_000;
 export const SEED_ACTION = "seed";
@@ -187,8 +188,8 @@ export async function creatureTick({
   now = Date.now(), key = process.env.CREATURE_SEED_KEY, query = actsQuery, write = writeOnce,
   inputsAt = (sha) => cachedInputsAt(sha), blessed = () => blessedSha(WORLD_CLONE), hold = holdTown,
 } = {}) {
-  const wrote = { seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0 }, held = [];
-  const said = () => `${key ? "" : "no key (fades only) · "}seed ${wrote.seed} · spawn ${wrote.spawn} · fade ${wrote.fade} · reveal ${wrote.reveal}${wrote.abandon ? ` · abandon ${wrote.abandon}` : ""}${held.length ? ` · held: ${held.join("; ")}` : ""}`;
+  const wrote = { seed: 0, spawn: 0, fade: 0, reveal: 0, abandon: 0, unseal: 0 }, held = [];
+  const said = () => `${key ? "" : "no key (fades only) · "}seed ${wrote.seed} · spawn ${wrote.spawn} · fade ${wrote.fade} · reveal ${wrote.reveal}${wrote.abandon ? ` · abandon ${wrote.abandon}` : ""}${wrote.unseal ? ` · unseal ${wrote.unseal}` : ""}${held.length ? ` · held: ${held.join("; ")}` : ""}`;
   const got = await query(TICK_ROWS_SQL, [[...TICK_ACTIONS], new Date(now - LOOKBACK_MS).toISOString()]);
   if (got == null) return { wrote, held: ["the store is not switched on here"], line: "the store is not switched on here" };
   const rows = got.map(rowOf);
@@ -278,8 +279,24 @@ export async function creatureTick({
       if (h.held) held.push(h.held);
     }
   }
+
+  // 5. the unseal (POS-712): a creature that told fragments, once its settlement has
+  // ended it, publishes its sealed secret, so anyone checks every tell's commitment
+  // (src/sealed.mjs § verifySealed). The key's work: without it, held and said.
+  for (const { id } of (await query(UNSEAL_DUE_SQL, [])) ?? []) {
+    if (!key) { held.push(`${id}: its sealed secret waits for the key to be published`); continue; }
+    const r = await put(townRow({ action: UNSEAL_ACTION, object: id, now,
+      payload: { scope: id, secret: scopeSecret(key, id) }, effect: `the town opens what ${id} told, now that it has ended` }));
+    if (!r.prior) wrote.unseal += 1;
+  }
   return { wrote, held, line: said() };
 }
+
+/** The ended creatures that told fragments and whose secret is not yet published (POS-712). */
+export const UNSEAL_DUE_SQL = `SELECT DISTINCT t.actor AS id FROM acts t
+  WHERE t.class = '${CREATURE_CLASS}' AND t.action = '${TELL_ACTION}'
+    AND EXISTS (SELECT 1 FROM acts w WHERE w.class = '${CREATURE_CLASS}' AND w.action = '${WITHDRAW_ACTION}' AND w.object = t.actor AND w.payload->>'reason' = 'ended')
+    AND NOT EXISTS (SELECT 1 FROM acts u WHERE u.class = '${CREATURE_CLASS}' AND u.action = '${UNSEAL_ACTION}' AND u.object = t.actor)`;
 
 /**
  * The named creatures the law at the blessed sha declares and whose crossing

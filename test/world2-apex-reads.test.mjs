@@ -557,7 +557,8 @@ function activityPool({ fail = false, kinAt = () => new Date().toISOString() } =
     if (/FROM households\b/.test(t)) return { rows: [{ slug: "trueing-house", ord: 0, name: null, human: null, accounts: [], residents: ["wright", "rig-b"], since: null, member_of: null, declared_by: null, formerly: [], provisional: false, home_images: {} }] };
     if (/FROM household_pins\b|FROM registry_meta\b/.test(t)) return { rows: [] };
     if (/FROM town_roll r\s+JOIN projection_heads h ON h\.repo = 'town'/.test(t) && /ORDER BY r\.handle$/.test(t.trim())) return { rows: [{ handle: "wright" }, { handle: "rig-solo" }] };
-    if (/SELECT handle, at, src FROM/.test(t.replace(/\s+/g, " "))) {
+    // POS-633 part 1: the statement also names each newest act (`what`) for the household glance
+    if (/SELECT handle, at, src, what FROM/.test(t.replace(/\s+/g, " "))) {
       lastActive += 1;
       if (fail) throw new Error("the store would not answer");
       return { rows: [{ handle: "rig-b", at: kinAt(), src: "act" }] };
