@@ -22,6 +22,7 @@ import { UNIT_ACTION } from "../src/world-stacks.mjs";
 import { lawSnapshotFromRows } from "../src/law-classes.mjs";
 import { holdingOf, idList } from "../src/holding-law.mjs";
 import { enterViaOffice } from "../src/world-crossings.mjs";
+import { engineDirAt } from "../src/world-branches.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 
 // ── 2. ACCEPTS AND KEEPS AT THE GIVE AND TAKE DOORS ─────────────────────────
@@ -121,10 +122,14 @@ test("a holder without them is untouched: a box takes anything and gives it back
 
 // ── 1. THE ENTER DOOR HANDS THE PASSAGE WHAT THE DOOR HOLDS ─────────────────
 
+// The enter door runs the engine of the clone's newest blessing (world-branches.mjs §
+// engineDirAt), so that is the engine asked here: a pin whose tree carries the door
+// while its newest settlement predates it skips, saying so, rather than reddening.
 const CLONE = worldClone();
-const HAVE = !!CLONE && existsSync(join(CLONE, "tools", "portals.mjs"))
-  && readFileSync(join(CLONE, "tools", "portals.mjs"), "utf8").includes("export function requiresHolderOf");
-const SKIP = !HAVE && (CLONE ? `the world clone at ${CLONE} predates WLD-5 B (no requiresHolderOf)` : NO_WORLD);
+const ENGINE = CLONE ? engineDirAt(CLONE) : null;
+const HAVE = !!ENGINE && existsSync(join(ENGINE, "tools", "portals.mjs"))
+  && readFileSync(join(ENGINE, "tools", "portals.mjs"), "utf8").includes("export function requiresHolderOf");
+const SKIP = !HAVE && (CLONE ? `the newest blessing in the world clone at ${CLONE} predates WLD-5 B (no requiresHolderOf)` : NO_WORLD);
 
 const KEEP = "tw/the-keep";
 const GATE = "tw/inner-door";
@@ -144,7 +149,7 @@ const row = (who, mark) => `- 2026-10-21T12:00:00.000Z · ${who} · enters ${mar
 const inTheHall = (who) => [row(who, KEEP), row(who, "tw/hall")].join("\n") + "\n";
 
 async function officeWith({ who = "ann", holdings = null, holdingsThrow = null, world = null }) {
-  const thresholds = await import(pathToFileURL(join(CLONE, "tools", "enter-exit.mjs")).href);
+  const thresholds = await import(pathToFileURL(join(ENGINE, "tools", "enter-exit.mjs")).href);
   let text = inTheHall(who);
   const records = [], asked = [];
   return {
