@@ -53,6 +53,21 @@ test("THE GLANCE FIRST: the root is slot appearance on the resident itself, and 
   assert.equal(out.appearance.body, "A hooded figure in a grey shawl; the face is never seen.");
 });
 
+test("THE LIKENESS QUESTION (WLD-83, 18:24): setting the glance asks it while unanswered; a detail does not", async () => {
+  const ash = { handles: new Set(["sb-ash"]), household: "sb-house" };
+  const asked = [];
+  const nodes = new Map();
+  let next = 1;
+  const deps = { nodes: async () => nodes, write: async () => String(next++),
+    likenessQuestion: async (answer, handle) => { asked.push(handle); return { ...answer, likeness_question: { household: "sb-house" } }; } };
+  const root = await worldDescribe({ slot: "appearance", value: "a long coat", body: "A figure in a long coat." }, ash, deps);
+  assert.deepEqual(root.likeness_question, { household: "sb-house" });
+  assert.equal(root.described, "sb-ash/appearance", "the door's own answer is whole beside it");
+  const coat = await worldDescribe({ slot: "coat", value: "oilskin", body: "The coat is yellow oilskin." }, ash, deps);
+  assert.equal("likeness_question" in coat, false);
+  assert.deepEqual(asked, ["sb-ash"], "asked for the glance only");
+});
+
 test("A TREE OF REAL PREDICATES: a detail hangs under the root by default, or under another detail; its id is the path", async () => {
   const d = door();
   await d.describe({ slot: "appearance", value: "hooded", body: "A hooded figure." });

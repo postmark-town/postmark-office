@@ -144,6 +144,23 @@ function refuseIfClosed({ mark, id, law, actor, deps, verb }) {
   if (!same.same) throw bounce(403, `${id} is not open to other households`, `its open is false: only its maker's household may ${verb} it. Nothing was changed.`);
 }
 
+/** A holder that names what it takes in (`accepts`, WLD-5 B): anything else is refused at the
+ *  door, and a count of a kind is never one of the marks it names. */
+function refuseIfNotAccepted({ id, law, thing = null }) {
+  if (!Array.isArray(law?.accepts)) return;
+  if (thing != null && law.accepts.includes(String(thing))) return;
+  throw bounce(403, thing != null ? `${id} does not take ${thing}` : `${id} takes in only the marks it names`,
+    `its maker made it take in only these, by id: ${law.accepts.join(", ")}${thing != null ? "" : "; a count of a kind is none of them"}. Nothing was changed.`,
+    { accepts: [...law.accepts] });
+}
+
+/** A holder that keeps what goes in (`keeps`, WLD-5 B): nothing comes back out, by anyone. */
+function refuseIfKept({ id, law }) {
+  if (law?.keeps !== true) return;
+  throw bounce(403, `${id} keeps what it holds`,
+    "its maker made it keep what goes in: nothing is taken back out of it, by anyone, its maker included. Nothing was changed.");
+}
+
 const carryOf = (view) => holderLawOf({ holder: "resident", view }).capacity;
 
 /**
@@ -186,7 +203,7 @@ async function reachHolder(id, mark, actor, deps, { verb = "take" } = {}) {
  * candidates for a take that names no `from` — each with its owner and its
  * distance from where the actor stands.
  */
-async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = () => null) {
+async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = () => null, { view = null } = {}) {
   const here = await deps.standpoint(actor);
   const out = [];
   // the whole marks each holder holds, in ONE pass over the hold rows (the last row per thing decides)
@@ -206,6 +223,8 @@ async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = 
     if (!holds) continue;
     const mark = await deps.markById(holder).catch(() => null);
     if (!mark) continue;
+    // A HOLDER THAT KEEPS WHAT IT HOLDS is never a source (WLD-5 B): nothing comes back out of it
+    if (view && holderLawOf({ holder, mark, view }).keeps === true) continue;
     // CHEAP FIRST: a holder far past the reach is never asked (its own hands, or a set-down, are asked anyway)
     const d = here && mark.at ? Math.round(Math.hypot(Number(mark.at.x) - here.x, Number(mark.at.y) - here.y)) : null;
     const span = Math.max(Number(mark.extent?.w ?? 0), Number(mark.extent?.h ?? 0));
@@ -231,6 +250,7 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
   } else {
     ({ mark, law } = await holderOrThrow(deps, to, view));
     refuseIfClosed({ mark, id: to, law, actor, deps, verb: "make into" });
+    refuseIfNotAccepted({ id: to, law });
     await reachHolder(to, mark, actor, deps, { verb: "make" });
   }
   return holdTurn(async () => {
@@ -260,6 +280,7 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
   if (thing === to) throw bounce(422, "a holder cannot hold itself", "Nothing was changed.");
   const { mark: holderMark, law } = await holderOrThrow(deps, to, view);
   refuseIfClosed({ mark: holderMark, id: to, law, actor, deps, verb: "give into" });
+  refuseIfNotAccepted({ id: to, law, thing });
   const mark = await deps.markById(thing);
   if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a holder; a private draft changes no hands. Nothing was changed.");
   await reachHolder(to, holderMark, actor, deps, { verb: "give" });
@@ -304,6 +325,7 @@ export async function thingFromHolder({ args, key, actor, deps, view }) {
   const thing = String(args.thing), from = String(args.from);
   const { mark: holderMark, law } = await holderOrThrow(deps, from, view);
   refuseIfClosed({ mark: holderMark, id: from, law, actor, deps, verb: "take from" });
+  refuseIfKept({ id: from, law });
   const mark = await deps.markById(thing);
   await reachHolder(from, holderMark, actor, deps, { verb: "take" });
   return holdTurn(async () => {
@@ -354,6 +376,7 @@ export async function callKinds(route, args, key, actor, deps) {
       if (from != null) {
         const { mark, law } = await holderOrThrow(deps, from, view);
         refuseIfClosed({ mark, id: from, law, actor, deps, verb: "take from" });
+        refuseIfKept({ id: from, law });
         await reachHolder(from, mark, actor, deps, { verb: "take" });
       }
       return holdTurn(async () => {
@@ -361,9 +384,10 @@ export async function callKinds(route, args, key, actor, deps) {
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
         if (from == null) {
-          from = oneHolderOf(await holdersInReach(fold, attachments, actor, kind, deps, view.extendsOf), { kind, verb: "take" });
+          from = oneHolderOf(await holdersInReach(fold, attachments, actor, kind, deps, view.extendsOf, { view }), { kind, verb: "take" });
           const { mark, law } = await holderOrThrow(deps, from, view);
           refuseIfClosed({ mark, id: from, law, actor, deps, verb: "take from" });
+          refuseIfKept({ id: from, law });
         }
         const stamp = await deps.stamp(actor);
         const seed = drawSeed({ actor, from, crossing: deps.crossing(), at: stamp.at, ordinal: units.length });
@@ -424,6 +448,7 @@ export async function callKinds(route, args, key, actor, deps) {
       if (isHolderId(to)) {
         ({ mark, law } = await holderOrThrow(deps, to, view));
         refuseIfClosed({ mark, id: to, law, actor, deps, verb: "give into" });
+        refuseIfNotAccepted({ id: to, law });
         await reachHolder(to, mark, actor, deps, { verb: "give" });
       } else {
         law = holderLawOf({ holder: to, view });

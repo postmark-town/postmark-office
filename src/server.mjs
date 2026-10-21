@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { marksCountsFor } from "./town-marks.mjs";
-import { updateAddressBody, updateAddressFields, updateHome, updateHomeImage, updateProfileAtDoor, updateProfileAvatar, updateWindow } from "./edit.mjs";
+import { updateAddressBody, updateAddressFields, updateHome, updateHomeImage, updateProfileAct, updateProfileAvatar, updateWindow } from "./edit.mjs";
 import { handleMcp, callTool, TOOLS as MCP_TOOLS, validateArgs, visitorBounces, VISITOR_BOUNCE } from "./mcp.mjs";
 // POS-70 box 1: every plain-API write route is judged by the act it performs,
 // against that act's own schema, in the apexes' own sentence (src/one-contract.mjs).
@@ -1870,6 +1870,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           return j(res, 200, got.card);
         }).catch((e) => bounceFault(res, "the office tripped", e));
       }
+      // WLD-83: a resident's six-panel sheets, its anchor and the template
+      // (household { read: "sheet" }'s answer, for the site's appearance page),
+      // and Iris's list: consented households' residents with no sheet yet.
+      if ((m = /^\/residents\/([a-z0-9-]+)\/sheet$/.exec(path)) || path === "/likeness") {
+        const sheetFor = m?.[1];
+        return import("./depictions.mjs")
+          .then((d) => (sheetFor ? d.sheetRead({ handle: sheetFor }) : d.missingSheets()))
+          .then((body) => j(res, 200, body))
+          .catch((e) => (e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint) : bounceFault(res, "the office tripped", e)));
+      }
 
       // THE ROLE GATE'S ONE WORKING EXAMPLE, AND IT IS A DEMONSTRATION RATHER
       // THAN A PRODUCT DECISION. `/metrics/mail` was chosen because it is the
@@ -2261,7 +2271,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if (!avatar && !homeImage && !m) return bounce(res, 404, "no such door", `edits: PATCH /${PATCH_PAPER_DOORS.join("|/")} /{handle}, or PATCH /profile/{handle}/avatar, or PATCH /home/{handle}/image`);
       if (!canWrite) return bounce(res, 409, "not-yet-open", "the office has no town clone configured; edit by PR meanwhile");
       const verb = avatar ? updateProfileAvatar : homeImage ? updateHomeImage
-        : { address: updateAddressBody, "address-fields": updateAddressFields, home: updateHome, profile: updateProfileAtDoor, window: updateWindow }[m[1]];
+        : { address: updateAddressBody, "address-fields": updateAddressFields, home: updateHome, profile: updateProfileAct, window: updateWindow }[m[1]];
       const handle = avatar ? avatar[1] : homeImage ? homeImage[1] : m[2];
       const cap = avatar ? 4_000_000 : homeImage ? 6_000_000 : m[1] === "window" ? 400_000 : undefined;
       readJsonBody(req, cap).then(async (raw) => {
@@ -2293,7 +2303,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // 422 inside this try: without it the door would answer 200 with a
           // Promise in the body while the refusal became an unhandled
           // rejection somewhere behind the response.
-          const result = await verb({ ...payload, handle }, key, null, TOWN_CLONE, odb);
+          let result = await verb({ ...payload, handle }, key, null, TOWN_CLONE, odb);
+          // a picture just set asks the likeness question and hands the sheet's template (WLD-83)
+          if (avatar || (m?.[1] === "profile" && payload.image !== undefined))
+            result = await (await import("./depictions.mjs")).withPictureAsks(result, handle);
           return j(res, 200, withRenamed(result, renamed)); // 200: an edit is a pen commit, done now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);

@@ -118,9 +118,16 @@ test("the profile door residents reach checks the ledger; the drain's replay doo
   await assert.rejects(updateProfileAtDoor({ handle: "tester", image: NEVER_PUT }, KEY, null, "/no/clone"),
     (e) => e.code === 422 && e.defect === "the town holds no file at that URL");
   assert.equal(TOWN_DOORS.update_profile, updateProfile, "a replay re-applies what a door admitted, unjudged");
+  // WLD-83: the skins reach updateProfileAct (the sheet split), which judges through updateProfileAtDoor on both paths.
+  const { updateProfileAct } = await import("../src/edit.mjs");
+  await assert.rejects(updateProfileAct({ handle: "tester", image: NEVER_PUT }, KEY, null, "/no/clone"),
+    (e) => e.code === 422 && e.defect === "the town holds no file at that URL", "the act a skin calls judges the picture");
+  const act = readFileSync(new URL("../src/edit.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n").split("export async function updateProfileAct")[1].split("\n}\n")[0];
+  assert.equal((act.match(/updateProfileAtDoor\(/g) ?? []).length, 2, "both of its paths go through the judged door");
+  assert.doesNotMatch(act, /await updateProfile\(/);
   for (const f of ["household-apex.mjs", "mcp.mjs", "server.mjs"]) {
     const src = readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-    assert.match(src, /updateProfileAtDoor/, `${f} reaches the judged door`);
+    assert.match(src, /updateProfileAct|updateProfileAtDoor/, `${f} reaches the judged door`);
     assert.doesNotMatch(src, /profile: updateProfile\b|update_profile: updateProfile\b|await updateProfile\(/, `${f} never calls the unjudged one`);
   }
 });

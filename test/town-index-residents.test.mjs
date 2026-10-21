@@ -246,8 +246,11 @@ test("the house and needs-you answer through the store's index as they did over 
     await same("houseBundle", houseBundle({ household: "keemin" }, { ...base, ix }));
     // POS-717: `shown` is new beside `count`, and on this fixture every row is on
     // the page, so it equals the count; the rest is the record's answer.
-    const { shown, ...asRecorded } = await needsYou({ household: "keemin" }, { ...base, ix });
+    // WLD-83: `likeness_question` is new beside the twin's lists; this store
+    // holds no households, so the house has none, and the rest is the record's.
+    const { shown, likeness_question, ...asRecorded } = await needsYou({ household: "keemin" }, { ...base, ix });
     assert.equal(shown, asRecorded.count, "every row waiting is on this answer, so shown is the count");
+    assert.deepEqual(likeness_question, { rows: [] }, "a house the record does not hold is asked nothing");
     await same("needsYou", asRecorded);
     pen.__setPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
     await assert.rejects(houseBundle({ household: "keemin" }, { ...base, ix: store.storeIndexPooled(clone) }), { name: "TownIndexUnreachable" },

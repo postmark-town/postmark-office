@@ -158,6 +158,8 @@ export const STORE_SOURCES = Object.freeze([
   { table: "town_letters", why: "letters" },
   { table: "town_threads", why: "letter threads" },
   { table: "town_bulletin", why: "the bulletin" },
+  // WLD-83: every six-panel sheet made of a resident (the household's own, the town's seeds), kept whole
+  { table: "depictions", why: "the six-panel sheets (WLD-83)" },
 ]);
 
 /**
@@ -168,7 +170,7 @@ export const STORE_SOURCES = Object.freeze([
  */
 export const HANGING_DOORS = Object.freeze({
   "world.mjs": { door: "a mark's image (leave-mark, amend, post)", sources: ["world", "drafts", "store:marks"] },
-  "edit.mjs": { door: "the profile picture and the house picture", sources: ["town", "store:town_residents", "store:households", "store:town_homes"] },
+  "edit.mjs": { door: "the profile picture, the house picture and the resident's sheet", sources: ["town", "store:town_residents", "store:households", "store:town_homes", "store:depictions"] },
   "events-store.mjs": { door: "a bug reveal's candidates", sources: ["store:posts"] },
 });
 

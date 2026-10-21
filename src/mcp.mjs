@@ -35,7 +35,7 @@ const SEGMENT_GLOSS = Object.freeze({
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { requestResidency } from "./residency.mjs";
 import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION } from "./declare.mjs";
-import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfileAtDoor, updateWindow } from "./edit.mjs";
+import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
 import { uploadMedia } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
@@ -984,7 +984,7 @@ export async function callTool(name, args, ctx) {
     case "update_home": case "update_profile": case "update_window": {
       if (!canWrite) return notFound("not-yet-open", "the office has no town clone configured; edit by PR meanwhile");
       const verb = { update_address_body: updateAddressBody, update_address_fields: updateAddressFields,
-        update_home: updateHomeAct, update_profile: updateProfileAtDoor, update_window: updateWindow }[name];
+        update_home: updateHomeAct, update_profile: updateProfileAct, update_window: updateWindow }[name];
       try {
         // ── the town log rides the DOOR now (POS-44, the paper seam) ───────
         // This switch used to log here, and that was the whole defect: it is
@@ -997,7 +997,10 @@ export async function callTool(name, args, ctx) {
         // Passing `odb` is now the whole contribution: the door writes the row
         // beside its own pen commit, and the `logged` block below still rides
         // the answer exactly as it did — same shape, same field, one owner.
-        return await verb(args, key, db, clone, odb);
+        const done = await verb(args, key, db, clone, odb);
+        // a picture just set asks the likeness question and hands the sheet's template (WLD-83)
+        return name === "update_profile" && args?.image !== undefined
+          ? (await import("./depictions.mjs")).withPictureAsks(done, args.handle) : done;
       }
       catch (e) { if (e.code) return caughtBounce(e, { defect: e.defect, hint: e.hint }); throw e; }
     }

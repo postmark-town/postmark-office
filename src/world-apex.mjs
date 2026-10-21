@@ -285,6 +285,18 @@ async function dungeonLocksOf(who) {
   return Array.isArray(rows) ? rows : [];
 }
 
+/**
+ * WHAT A DOOR THAT ASKS HOLDS NOW (WLD-5 B): `{ <holder id>: [the ids it holds] }`
+ * for each holder named, from the hold record (the same read the give and take
+ * doors make). An unreadable record throws, and the enter door refuses with a 503
+ * rather than guess: a door is never opened on a record it could not read.
+ */
+async function doorHoldingsOf(holders) {
+  const [{ guardedAttachments }, { holdingsOf }] = await Promise.all([import("./world2-guards.mjs"), import("./world-hold.mjs")]);
+  const rows = await guardedAttachments();
+  return Object.fromEntries([...new Set((holders ?? []).map(String))].map((h) => [h, holdingsOf(rows ?? [], h)]));
+}
+
 /** A `jsonb` payload as the fold wants it — an object, whichever way the driver hands it over. */
 function actPayload(p) {
   if (p == null) return {};
@@ -517,6 +529,8 @@ export function crossingDeps() {
     // `arrival_of`: the arrival tick's enter names its walk act (arrival-entries.mjs), and the pen writes it once
     // WLD-5 A: the exit locks this walker's own exit acts hold, newest per dungeon (a throw is the door's 503)
     dungeonLocks: async (who) => dungeonLocksOf(who),
+    // WLD-5 B: what each door that asks for something holds now, from the record (a throw is the door's 503)
+    doorHoldings: async (holders) => doorHoldingsOf(holders),
     record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null, arrival_of = null, dungeon = null, locked_until = null, left_at = null, fled = null }) => {
       const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
       let out;

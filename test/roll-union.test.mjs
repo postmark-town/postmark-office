@@ -88,10 +88,11 @@ async function engineWhereIs(t) {
 //
 // What this file exists to prove is unchanged and still asserted below: the
 // three residents with no walk and no ground APPEAR. Where they appear is the
-// half that moved. The engine's own answer is asserted here too, in the same
-// test, so this can never go green by the correction having quietly become the
-// engine's opinion — the office overrides a porch it can still read.
-test("A4: through the door, the unplaced APPEAR, and they stand at the Origin (#2900) over an engine that still says porch", async (t) => {
+// half that moved. The engine's own answer is asserted here too: since
+// postmark-world#265 (POS-740) the law and the engine say the Origin as well, so
+// the office and the engine agree, and the office's correction is now a no-op
+// over an engine that agrees with it.
+test("A4: through the door, the unplaced APPEAR, and they stand at the Origin (#2900); the engine says so too (world#265)", async (t) => {
   const where = await engineWhereIs(t);
   if (!where) return;
   const rows = everyonePlaced({ world, departures, at: 135, where, roll: ROLL });
@@ -104,11 +105,11 @@ test("A4: through the door, the unplaced APPEAR, and they stand at the Origin (#
     assert.equal(byHandle[h].mark_id, null, "the Origin is the grid's corner, not a mark to borrow");
     assert.equal(byHandle[h].placeholder, true, "and the row says it is a default, not a place they chose");
   }
-  // THE ENGINE IS UNTOUCHED, and this is the line that proves the office is
-  // overriding rather than agreeing. the-town/the-standing-porch is still world
-  // law and the-town/the-quay is still a mark at (1390, 5665).
-  assert.equal(where.whereIs("adam-rhys", { world, departures, at: 135 }).source, "quay");
-  assert.equal(where.whereIs("adam-rhys", { world, departures, at: 135 }).mark_id, QUAY_ID);
+  // THE ENGINE AGREES (world#265, POS-740: the-town/the-standing-porch trued to the
+  // Origin): the quay is still a mark at (1390, 5665), and nobody is set down at it.
+  assert.equal(where.whereIs("adam-rhys", { world, departures, at: 135 }).source, "origin");
+  assert.equal(where.whereIs("adam-rhys", { world, departures, at: 135 }).mark_id ?? null, null);
+  assert.ok(world.marks.some((m) => m.id === QUAY_ID), "the quay stands; it is just no one's default any more");
   // the union did not disturb the rows that already worked
   assert.equal(byHandle["sol-of-garrison"].source, "parcel");
   assert.equal(byHandle["dylan"].source, "walk");

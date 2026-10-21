@@ -134,6 +134,7 @@ const ROSTER = {
   // POS-219: refuses with neither --dry-run nor --apply before it imports a door or reads anything
   "tools/home-picture-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/avatar-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
+  "tools/seed-sheets.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/media-thumbnails-backfill.mjs": { args: ["--from-record", NOWHERE], code: 2, needle: "no record at" },
   // POS-737: an unknown flag is a usage refusal before the paper or the store is opened
   "tools/media-sweep.mjs": { args: ["--nowhere"], code: 2, needle: "media-sweep: unknown --nowhere" },

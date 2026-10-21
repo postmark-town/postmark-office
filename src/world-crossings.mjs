@@ -119,6 +119,25 @@ async function locksInForce(who, w, verbs, judgedMs, deps) {
   return Object.keys(live).length ? live : null;
 }
 
+/**
+ * WHAT THE DOORS THAT ASK HOLD (WLD-5 B): the clone names, for each portal whose
+ * entry carries `requires`, the holder it looks in (`verbs.requiresHolderOf`);
+ * the office reads what those hold from the record (`deps.doorHoldings`) and
+ * hands it to the passage. Null when no door asks, or the clone predates them.
+ * An unreadable record is a 503: the passage itself would read it as holding
+ * nothing and keep the door shut, which is the safe answer, but not the true one.
+ */
+async function holdingsAsked(w, verbs, deps) {
+  if (typeof verbs.requiresHolderOf !== "function" || !deps.doorHoldings) return null;
+  const holders = [...new Set((w.marks ?? []).map((m) => verbs.requiresHolderOf(m)).filter(Boolean))];
+  if (!holders.length) return null;
+  try { return await deps.doorHoldings(holders); }
+  catch (e) {
+    throw bounce(503, "the office could not read what this door holds, so nothing was recorded",
+      `a door here opens only when it holds what it asks for, and that record could not be read just now (${plainReason(e, "record", "the hold record")}). Try again in a minute`);
+  }
+}
+
 // ── THE PORTAL LEG (Keemin-ruled 2026-09-19; postmark-town/postmark#2986) ────
 //
 // "every Post Office stop mark … acts as a Portal into the Post Office, which
@@ -427,9 +446,12 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
 
   // WLD-5 A: the exit locks in force, which the clone's passage asks before anything else
   const lockedOut = await locksInForce(who, w, verbs, judgedMs, deps);
+  // WLD-5 B: what the doors that ask hold now, which the clone's passage asks next
+  const holdings = await holdingsAsked(w, verbs, deps);
   const answer = verbs.enter(here, markId, { marks: w.marks ?? [], determined: w.determined ?? {} }, {
     occupancy, handle: who, at, iso, accepted: payload.accept === true,
     ...(lockedOut ? { lockedOut } : {}),
+    ...(holdings ? { holdings } : {}),
     // WLD-5: which way, when a portal's `into` is a list
     ...(payload.into !== undefined && payload.into !== null && payload.into !== "" ? { into: String(payload.into) } : {}),
   });
@@ -444,6 +466,12 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
       throw bounce(403, answer.error,
         "leaving a dungeon by exit closes it to you until the next settlement (06:00 or 18:00Z); walking out through a door costs nothing. Every way in is closed until then, its portals and its outline alike",
         { law: "the-town/dungeon (WLD-5)", dungeon: answer.dungeon, locked_until: answer.locked_until });
+    // A DOOR THAT ASKS (WLD-5 B): shut until it holds what it asks for. The sentence is the
+    // clone's (the door's own line, with the count); what it holds and lacks ride as a field.
+    if (answer.refused === "requires")
+      throw bounce(403, answer.error,
+        `this door opens for everyone once ${answer.requires?.in ?? "it"} holds every mark it asks for, and a mark goes in by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "${answer.requires?.in ?? "<the door>"}" } }. Nothing was recorded`,
+        { law: "the-town/thing-holder (WLD-5 B)", requires: answer.requires ?? null });
     if (answer.refused === "dungeon")
       throw bounce(403, answer.error,
         "a dungeon's rooms are reached one portal at a time: stand at a portal and enter it (to leave the whole dungeon, exit). Nothing was recorded",

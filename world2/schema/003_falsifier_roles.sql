@@ -79,6 +79,10 @@ lawful AS (
     -- trigger allows once per row and only on the settle columns; no DELETE.
     ('office_api',   'arrival_entries',        'INSERT'),
     ('office_api',   'arrival_entries',        'UPDATE'),
+    -- 082_depictions.sql (WLD-83). Every picture made of a resident, one row
+    -- each; INSERT only, because a depiction is kept, never changed or removed
+    -- (a newer one supersedes it).
+    ('office_api',   'depictions',             'INSERT'),
     -- 019_households.sql. The household registry as store-of-record: the two
     -- town JSON files become a rendering of these tables. `office_api` because
     -- it is the role the door that DECLARES a household already connects as

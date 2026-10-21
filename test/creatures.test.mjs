@@ -638,7 +638,7 @@ test("at the pin the law loads through the blessed-ref materializer; a kind the 
   const law = await loadCreatureLaw({ repo: worldClone(), ref: PIN });
   assert.equal(law.unavailable, undefined, law.unavailable);
   assert.equal(law.creaturesMod.TOWN, "the-town");
-  assert.deepEqual([...law.creaturesMod.DESPAWN_REASONS], ["faded", "fled"]);
+  assert.deepEqual([...law.creaturesMod.DESPAWN_REASONS], ["faded", "fled", "ended"], "world#266 adds a named creature's ending, written only by the-town");
   // the pin carries WLD-56 part 2's kinds (world#219): the ruled wolf parses, and a kind the ref lacks is no kind
   assert.equal(law.kindOf("wolf")?.ring_m, 80, "WORLD/kinds/wolf.kind at the pin, as ruled (D4)");
   assert.equal(law.kindOf("fox"), null);
