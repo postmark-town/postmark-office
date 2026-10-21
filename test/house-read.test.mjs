@@ -359,6 +359,29 @@ test("NEEDS-YOU (POS-717): count is everything waiting, shown is the rows on thi
   assert.match(n.stances_awaiting.more, /cursor: "c20"/);
 });
 
+// WLD-83 (D9): the likeness question waits on the house's human like a key ask
+// does, counted, with its cause and the link to hand over; the doorstep says so.
+test("NEEDS-YOU (WLD-83): the likeness question is a row of its own, counted, and the doorstep names it", async () => {
+  const { readers } = worldReaders();
+  const asked = [];
+  readers.likenessNeed = async (slug, handles) => {
+    asked.push([slug, [...handles]]);
+    return { rows: [{ household: slug, residents: ["r000"], cause: "r000 has a picture or an appearance, and your household's human has not said", link: "https://postmark.town/api/oauth/likeness?household=fixture", hand_it_over: "give this link to your human" }] };
+  };
+  const key = { household: "fixture", handles: new Set(["r000", "r001"]) };
+  const n = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual(asked, [[HOUSE, ["r000", "r001"]]], "asked once, for this house and its residents here");
+  assert.equal(n.likeness_question.rows.length, 1);
+  assert.match(n.likeness_question.rows[0].link, /\/oauth\/likeness\?household=/);
+  assert.equal(n.count, 3 + 1, "the question counts beside the stances, the bounces and the at-risk mark");
+  const { youPart } = await import("../src/doorstep-apex.mjs");
+  assert.ok(youPart({ needs: n }).some((i) => /likeness question/.test(JSON.stringify(i))), "the doorstep's YOU names it");
+  readers.likenessNeed = async () => ({ rows: [] });
+  const quiet = await needsYou({}, ctx({ readers, key }));
+  assert.deepEqual(quiet.likeness_question, { rows: [] });
+  assert.equal(youPart({ needs: quiet }).some((i) => /likeness question/.test(JSON.stringify(i))), false);
+});
+
 // ── the door ────────────────────────────────────────────────────────────────
 
 test("THE DOOR: both reads are on the household door's list, declare their field, and refuse an unknown one", async () => {

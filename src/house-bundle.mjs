@@ -553,6 +553,16 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     }
   }
 
+  // THE LIKENESS QUESTION (WLD-83, D9): the house's human has not said whether
+  // the town may use its residents' likeness, and a resident here has a picture
+  // or an appearance. Answered on a page after a GitHub sign-in, never by a key.
+  let likeness;
+  try {
+    likeness = readers.likenessNeed
+      ? await readers.likenessNeed(house.slug, mine)
+      : await (await import("./likeness.mjs")).likenessNeed(house.slug, mine, { clone });
+  } catch { likeness = { rows: [], unavailable: "the household record could not be read, so the likeness question cannot be checked: unknown, not none" }; }
+
   const atRisk = (stakes.rows ?? []).filter((r) => r.at_risk === true).map((r) => ({
     ...r, cause: `${r.mark} is a commons mark holding ✦0 — the next settlement (${stakes.next_settlement?.at ?? "its time unknown"}) sweeps it first`,
   }));
@@ -566,7 +576,7 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
   // and `count` used to add the page's length, so Starforge read 20 while 61
   // waited. `count` is everything waiting; `shown` is the rows on this answer.
   const stancesTotal = Math.max(Number(stances.stances_awaiting) || 0, stanceRows.length);
-  const rest = setDowns.length + bounces.length + keyAsks.length + atRisk.length + alerts.length;
+  const rest = setDowns.length + bounces.length + keyAsks.length + atRisk.length + alerts.length + likeness.rows.length;
   const count = stancesTotal + rest;
   const shown = stanceRows.length + rest;
   return {
@@ -581,11 +591,12 @@ export async function needsYou({ household = null } = {}, ctx = {}) {
     set_downs_awaiting: { rows: setDowns, ...(stances.set_downs_unavailable ? { unavailable: stances.set_downs_unavailable } : {}) },
     unplaced_bounces: { rows: bounces },
     key_asks: { rows: keyAsks, ...(keyAsksUnavailable ? { unavailable: keyAsksUnavailable } : {}) },
+    likeness_question: { rows: likeness.rows, ...(likeness.unavailable ? { unavailable: likeness.unavailable } : {}) },
     stakes_at_risk: { next_settlement: stakes.next_settlement ?? null, rows: atRisk,
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     alerts,
     ...(alerted.unread?.length ? { alerts_unread: alerted.unread } : {}),
-    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable
+    ...(count === 0 && !stances.unavailable && !stakes.unavailable && !alerted.unread?.length && !keyAsksUnavailable && !likeness.unavailable
       ? { note: "nothing waits on you — every list below was read and is empty. An ordinary state, not a quiet failure." } : {}),
   };
 }

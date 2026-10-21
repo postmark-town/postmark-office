@@ -898,6 +898,35 @@ async function handleOauthRoute(req, res, ctx) {
     return res.end();
   }
 
+  // ── the likeness question: a household's human answers yes or no (WLD-83) ──
+  // Same shape as the two co-signs above: park, GitHub, then a screen of its
+  // own at the callback. KEYED ON THE HOUSEHOLD'S SLUG, which is public, and
+  // that is safe here where it was not for a claim: nothing is granted to
+  // whoever holds the link. The sign-in is the proof, and the callback refuses
+  // any account the household's row does not bind. The answer is never taken
+  // from a key (D2, Darko 2026-10-19 18:59): a key cannot tell its human from
+  // an agent holding it, and a browser sign-in can.
+  if (req.method === "GET" && path === "/oauth/likeness") {
+    const slug = (url.searchParams.get("household") ?? "").trim().toLowerCase();
+    const { likenessRegistry } = await import("./likeness.mjs");
+    const reg = await likenessRegistry().catch(() => null);
+    if (!reg) return html(res, 503, page("The record is closed", "<p>The office can't read the town's household record just now, so it can't ask you anything. Nothing was changed; try again shortly.</p>"));
+    if (!slug || !reg.houses[slug])
+      return html(res, 404, page("No such household", "<p>This link doesn't name a household the town keeps. Ask your resident for a fresh one.</p>"));
+    if (!process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID)
+      return html(res, 503, page("Door not wired", "<p>GitHub sign-in isn't configured on this office yet.</p>"));
+    const pendingId = rand(24);
+    await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
+      kind: "likeness", slug, stage: "to-github",
+    }), now() + PENDING_TTL_S);
+    const gh = new URL(GH_AUTH);
+    gh.searchParams.set("client_id", process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID);
+    gh.searchParams.set("redirect_uri", `${PUBLIC_BASE}/oauth/github/callback`);
+    gh.searchParams.set("state", pendingId);
+    res.writeHead(302, { location: gh.toString(), "cache-control": "no-store" });
+    return res.end();
+  }
+
   // authorize: validate -> park the request -> send the human to GitHub
   if (req.method === "GET" && path === "/oauth/authorize") {
     const q = url.searchParams;
@@ -1047,6 +1076,43 @@ async function handleOauthRoute(req, res, ctx) {
         </form>`));
     }
 
+    // The likeness question's screen. THE ANCHOR CHECK RUNS FIRST, as the
+    // claim co-sign's does: an account the household's row does not bind is
+    // refused by name and never shown the buttons. The row's own `accounts`
+    // decide, the same test the store's write repeats at the button.
+    if (pending.kind === "likeness") {
+      const { likenessRegistry, accountBinds, LIKENESS_WORDS } = await import("./likeness.mjs");
+      const reg = await likenessRegistry().catch(() => null);
+      const rec = reg?.houses?.[pending.slug];
+      if (!rec) return html(res, 409, page("The record is closed", "<p>The office can't read this household's record just now. Nothing was changed; try the link again shortly.</p>"));
+      if (!accountBinds(rec, ghUser.id))
+        return html(res, 403, page("Not this household's account", `
+          <p>You signed in as <strong>@${esc(ghUser.login)}</strong>, and the town's record does not bind
+          the household <strong>${esc(rec.name ?? pending.slug)}</strong> to that account.</p>
+          <p>Only the household's own GitHub account can answer for it. Nothing was changed.</p>`));
+      const nonceL = rand(16);
+      await odb.run("UPDATE pending SET json = ? WHERE id = ?", JSON.stringify({
+        ...pending, stage: "consent", nonce: nonceL, gh_id: ghUser.id, gh_login: ghUser.login,
+      }), pendingId);
+      const residents = (rec.residents ?? []).map((h) => `<strong>${esc(h)}</strong>`).join(", ") || "(none yet)";
+      const standing = rec.likeness?.answer === "yes" ? "<strong>yes</strong>" : rec.likeness?.answer === "no" ? "<strong>no</strong>" : "not answered yet, which reads as <strong>no</strong>";
+      const when = rec.likeness?.at ? ` (${esc(rec.likeness.at.slice(0, 10))}, by @${esc(rec.likeness.by ?? "")})` : "";
+      return html(res, 200, page("Your residents' likeness", `
+        <p>You are signed in as <strong>@${esc(ghUser.login)}</strong>, for the household
+        <strong>${esc(rec.name ?? pending.slug)}</strong>: ${residents}.</p>
+        <p><strong>${esc(LIKENESS_WORDS.question)}</strong></p>
+        <p>${esc(LIKENESS_WORDS.promise)}</p>
+        <p>${esc(LIKENESS_WORDS.yes_means)} ${esc(LIKENESS_WORDS.take_down)}</p>
+        <p>${esc(LIKENESS_WORDS.no_means)}</p>
+        <p class="muted">${esc(LIKENESS_WORDS.talk_it_over)} Your answer now: ${standing}${when}.</p>
+        <form method="post" action="${PUBLIC_BASE}/oauth/consent">
+          <input type="hidden" name="pending_id" value="${pendingId}">
+          <input type="hidden" name="nonce" value="${nonceL}">
+          <button name="decision" value="yes">Yes, you may</button>
+          <button name="decision" value="no" style="margin-left:1em">No</button>
+        </form>`));
+    }
+
     const hh = await householdFor(db, ghUser.id, ghUser.login);
 
     const nonce = rand(16);
@@ -1099,6 +1165,29 @@ async function handleOauthRoute(req, res, ctx) {
     if (pending.stage !== "consent" || pending.nonce !== body.nonce)
       return html(res, 400, page("Out of order", "<p>This consent form is stale. Start over.</p>"));
     await odb.run("DELETE FROM pending WHERE id = ?", body.pending_id);
+
+    // ── the likeness answer: yes or no, onto the household's record ──────────
+    // RE-CHECKED AT THE BUTTON by the one writer: the store writes only the row
+    // with this slug that still binds the signed-in account (setHouseholdLikeness).
+    if (pending.kind === "likeness") {
+      if (body.decision !== "yes" && body.decision !== "no")
+        return html(res, 400, page("No answer given", "<p>Nothing was changed. Open the link again to answer yes or no.</p>"));
+      try {
+        const { setLikeness } = await import("./likeness.mjs");
+        const done = await setLikeness({ slug: pending.slug, answer: body.decision, ghId: pending.gh_id, ghLogin: pending.gh_login },
+          { clone: ctx.clone });
+        const said = done.likeness.answer === "yes"
+          ? "<p>Your answer is <strong>yes</strong>. The town may now use your residents' likeness, under the promise above, and anything made from it is welcomed unless you oppose it.</p>"
+          : "<p>Your answer is <strong>no</strong>. Nothing new will be made from your residents' likeness. Their own picture and appearance still show in town as before.</p>";
+        const kept = done.registry.rendered ? "It is on the town's public record now." : "It is kept, and reaches the town's public file at the next crossing.";
+        return html(res, 200, page("Answered", `${said}
+          <p class="muted">${kept} You can change it any time from the same link. Answered ${esc(done.likeness.at)} as @${esc(pending.gh_login)}.</p>`));
+      } catch (e) {
+        if (e?.code && e.code < 500)
+          return html(res, e.code, page("Not answered", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
+        return html(res, 502, page("Not answered", `<p>The office couldn't keep your answer. ${faultLogged("the likeness answer could not be kept", e)}</p><p>Nothing was changed.</p>`));
+      }
+    }
 
     // ── the claim co-sign's approval: the key the agent already holds ────────
     if (pending.kind === "claim-cosign") {

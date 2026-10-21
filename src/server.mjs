@@ -2287,7 +2287,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // 422 inside this try: without it the door would answer 200 with a
           // Promise in the body while the refusal became an unhandled
           // rejection somewhere behind the response.
-          const result = await verb({ ...payload, handle }, key, null, TOWN_CLONE, odb);
+          let result = await verb({ ...payload, handle }, key, null, TOWN_CLONE, odb);
+          // a picture just set asks the likeness question while it is unanswered (WLD-83)
+          if (avatar || (m?.[1] === "profile" && payload.image !== undefined))
+            result = await (await import("./likeness.mjs")).withLikenessQuestion(result, handle);
           return j(res, 200, withRenamed(result, renamed)); // 200: an edit is a pen commit, done now (no ferry)
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);

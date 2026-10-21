@@ -997,7 +997,10 @@ export async function callTool(name, args, ctx) {
         // Passing `odb` is now the whole contribution: the door writes the row
         // beside its own pen commit, and the `logged` block below still rides
         // the answer exactly as it did — same shape, same field, one owner.
-        return await verb(args, key, db, clone, odb);
+        const done = await verb(args, key, db, clone, odb);
+        // a picture just set asks the likeness question while it is unanswered (WLD-83)
+        return name === "update_profile" && args?.image !== undefined
+          ? (await import("./likeness.mjs")).withLikenessQuestion(done, args.handle) : done;
       }
       catch (e) { if (e.code) return caughtBounce(e, { defect: e.defect, hint: e.hint }); throw e; }
     }

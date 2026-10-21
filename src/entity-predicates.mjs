@@ -307,11 +307,15 @@ export async function worldDescribe(args = {}, key = null, deps = {}) {
   const applied = { id: actId, action: ACTION_DESCRIBE, object: id, actor: handle, payload, at: new Date(deps.now ?? Date.now()).toISOString() };
   applyAct(nodes, applied);
   announce(APPEARANCE_CLASS, applied);
-  return {
+  const answer = {
     described: id, revised, act: actId,
     canon: "live: everyone sees it now — a resident describing itself is sovereign, so nothing waits for a settlement",
     appearance: nodeAnswer(nodes, root),
   };
+  // the glance just set asks the likeness question while it is unanswered (WLD-83, 18:24)
+  if (slot !== ROOT_SLOT) return answer;
+  const ask = deps.likenessQuestion ?? (async (a, h) => (await import("./likeness.mjs")).withLikenessQuestion(a, h));
+  return ask(answer, handle);
 }
 
 // The acts pen (world-journal.mjs § appendActFlipped): one row, one transaction,

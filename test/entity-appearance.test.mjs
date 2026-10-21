@@ -53,6 +53,20 @@ test("THE GLANCE FIRST: the root is slot appearance on the resident itself, and 
   assert.equal(out.appearance.body, "A hooded figure in a grey shawl; the face is never seen.");
 });
 
+test("THE LIKENESS QUESTION (WLD-83, 18:24): setting the glance asks it while unanswered; a detail does not", async () => {
+  const asked = [];
+  const nodes = new Map();
+  let next = 1;
+  const deps = { nodes: async () => nodes, write: async () => String(next++),
+    likenessQuestion: async (answer, handle) => { asked.push(handle); return { ...answer, likeness_question: { household: "starforge" } }; } };
+  const root = await worldDescribe({ slot: "appearance", value: "hooded", body: "A hooded figure." }, jetto, deps);
+  assert.deepEqual(root.likeness_question, { household: "starforge" });
+  assert.equal(root.described, "jetto-of-starforge/appearance", "the door's own answer is whole beside it");
+  const hood = await worldDescribe({ slot: "hood", value: "grey wool", body: "The hood is grey wool." }, jetto, deps);
+  assert.equal("likeness_question" in hood, false);
+  assert.deepEqual(asked, ["jetto-of-starforge"], "asked for the glance only");
+});
+
 test("A TREE OF REAL PREDICATES: a detail hangs under the root by default, or under another detail; its id is the path", async () => {
   const d = door();
   await d.describe({ slot: "appearance", value: "hooded", body: "A hooded figure." });

@@ -2140,7 +2140,11 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       // path most real edits took.
       case "address": result = await updateAddressBody(fields, key, db, clone, odb); break;
       case "home": result = await updateHomeAct(fields, key, db, clone, odb); break;
-      case "profile": result = await updateProfile(fields, key, db, clone, odb); break;
+      case "profile":
+        result = await updateProfile(fields, key, db, clone, odb);
+        // a picture just set asks the likeness question while it is unanswered (WLD-83)
+        if (fields?.image !== undefined) result = await (await import("./likeness.mjs")).withLikenessQuestion(result, fields.handle);
+        break;
       case "window": result = await updateWindow(fields, key, db, clone, odb); break;
       // ── the stamps tenancy's writes ─────────────────────────────────────
       // Both wrap an existing implementation rather than growing a second one:
