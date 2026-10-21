@@ -267,7 +267,7 @@ export async function creatureTick({
   // at its own place, from its own crossing on, whatever the Mists' season, and
   // stays until its settlement ends it. writeOnce's look is unbounded in time, so
   // a creature spawned or ended weeks ago is never spawned again (one per declaration).
-  const named = await namedSpawns({ now, N, inputsAt, blessed, held });
+  const named = await namedSpawns({ now, N, inputsAt, blessed, held, query });
   for (const n of named) {
     const r = await put(townRow({ action: SPAWN_ACTION, object: n.id, place: n, now,
       payload: { kind: n.kind, crossing: N, x: n.x, y: n.y, at: new Date(now).toISOString(), stays: true,
@@ -305,7 +305,11 @@ export const UNSEAL_DUE_SQL = `SELECT DISTINCT t.actor AS id FROM acts t
  * declared? }; a law without it declares none. A declaration this office cannot
  * spawn (a bad id, no place, a kind the law has no start for) is a `held` line.
  */
-export async function namedSpawns({ now, N = currentCrossing(now), inputsAt, blessed, held = [] }) {
+/** Which of these named creatures have ended (their settlement's withdraw): a declaration's `after` waits on them all. */
+export const ENDED_OF_SQL = `SELECT DISTINCT object FROM acts WHERE class = '${CREATURE_CLASS}' AND action = '${WITHDRAW_ACTION}'
+  AND payload->>'reason' = 'ended' AND object = ANY($1::text[])`;
+
+export async function namedSpawns({ now, N = currentCrossing(now), inputsAt, blessed, held = [], query = null }) {
   let w;
   try { w = await inputsAt(blessed()); } catch (e) { held.push(`the named creatures: the blessed world cannot be read (${errorSaid(e).slice(0, 120)})`); return []; }
   const decl = Array.isArray(w?.law?.named) ? w.law.named : [];
@@ -317,6 +321,12 @@ export async function namedSpawns({ now, N = currentCrossing(now), inputsAt, ble
       : !Number.isFinite(Number(d.x)) || !Number.isFinite(Number(d.y)) ? "it has no place"
         : !w.starts?.[d.kind] ? `the law has no kind ${d.kind}` : null;
     if (bad) { held.push(`the named creature ${d.id ?? "(no id)"}: ${bad}`); continue; }
+    // AFTER (a creature that tempts, its fight's opening): it comes out only once every one it names has ended
+    if (Array.isArray(d.after) && d.after.length) {
+      let ended = null;
+      try { ended = query ? new Set(((await query(ENDED_OF_SQL, [d.after])) ?? []).map((r) => r.object)) : null; } catch { ended = null; }
+      if (!ended || !d.after.every((a) => ended.has(a))) continue;
+    }
     out.push({ id: d.id, kind: d.kind, x: Number(d.x), y: Number(d.y), carries: typeof d.carries === "string" ? d.carries : null,
       declared: d.declared ?? null, moods: w.starts[d.kind].moods ?? {} });
   }
