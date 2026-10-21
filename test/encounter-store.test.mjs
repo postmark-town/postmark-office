@@ -20,7 +20,6 @@ import assert from "node:assert/strict";
 import { FINISH_ACTION, LivingSet, loadCreatureLaw, reactTo, warmRosters, __resetRostersForTest } from "../src/creatures.mjs";
 import { NERVE_ACTION, STRIKES_SQL, foldNerve, nerveOf, windowAt, wornBy } from "../src/encounter.mjs";
 import { strikeGuard, worldEncounter } from "../src/encounter-verbs.mjs";
-import { answerWithin } from "../src/creatures-hook.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "../src/world-journal.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
@@ -72,9 +71,16 @@ test("ON THE STORE · a party of three: strikes, a shield, a steady, one flees a
   pen.__setPoolForTest(pool);
   try {
     const q = async (t, p) => (await api.query(t, p)).rows;
-    const now = Date.now();
+    // THE DRIVE'S CLOCK, INSIDE ONE SETTLEMENT WINDOW: nerve refills and resolve fills at 06:00/18:00Z, so a run that
+    // straddled one would refill mid-drive. Near a window's end the whole drive runs DRIVE_MARGIN_MS earlier, on the
+    // record's own instants (the pen writes `at` from them), and every turn and door is handed this clock.
+    const DRIVE_MARGIN_MS = 5 * 60_000;
+    const realStart = Date.now();
+    const base = Math.min(realStart, windowAt(realStart).ends - DRIVE_MARGIN_MS);
+    const clock = () => base + (Date.now() - realStart);
+    const now = clock();
     const row = (actor, action, object, payload, cls = "creature") => normalizeRow({ crossing: currentCrossing(now), actor, action, object, cls,
-      at: { anchor: WORLD_ANCHOR, dx: 0, dy: 0 }, payload, writtenAt: iso(Date.now()) });
+      at: { anchor: WORLD_ANCHOR, dx: 0, dy: 0 }, payload, writtenAt: iso(clock()) });
     // the creature, spawned by the town, and kai already shaken: 3 nerve left (a press from earlier this window)
     await pen.officeWrite((c) => pen.insertAct(c, row("the-town", "spawn", ID, { kind: "keeper", at: iso(now - 3600_000), stays: true, x: 0, y: 0 })));
     await pen.officeWrite((c) => pen.insertAct(c, row(ID, NERVE_ACTION, "kai", { by: -7, why: "press", act: "0", creature: ID, window: windowAt(now).id })));
@@ -92,11 +98,11 @@ test("ON THE STORE · a party of three: strikes, a shield, a steady, one flees a
     // THE RING AS THE TICK KEEPS IT (eval round 1, F3): no presence is handed to the act; the tick's warmRosters
     // read it, as the writer's tick does, so the shield and the house split land as they would on the box
     __resetRostersForTest();
-    const warm = () => warmRosters(living, { now: Date.now(), present });
+    const warm = () => warmRosters(living, { now: clock(), present });
     await warm();
     const seams = { households: async () => lookup, flee: (h) => fled.push(h), ask, env: { TYPESAFE_API_KEY: "k" } };
     const d = {
-      now: Date.now, clock: Date.now, env: { CREATURE_JUDGE: "jev" }, freeze: () => null,
+      now: clock, clock, env: { CREATURE_JUDGE: "jev" }, freeze: () => null,
       creatures: async () => ({ living, law: LAW }),
       standpoint: async (h) => WHERE[h] ?? null,
       // the door's write, as the pen makes it: its guard, then the act's row, in one transaction
@@ -105,10 +111,11 @@ test("ON THE STORE · a party of three: strikes, a shield, a steady, one flees a
         const actId = await pen.officeWrite(async (c) => { if (guard) await guard(c); return pen.insertAct(c, r); });
         return { actId: String(actId), written_at: r.written_at };
       },
-      answer: (a, deps) => answerWithin(a, { ...deps, ...seams }),
-      answerRing: (a, deps) => answerWithin(a, { ...deps, ...seams }),
+      // the creature's turn on the drive's clock (reactTo takes `now`; answerWithin would read the real one)
+      answer: (a, deps) => reactTo(a, { ...deps, ...seams, now: clock(), clock }),
+      answerRing: (a, deps) => reactTo(a, { ...deps, ...seams, now: clock(), clock }),
       strikes: async (id, since) => q(STRIKES_SQL, [id, since]),
-      finish: async (c, a) => (await import("../src/creatures.mjs")).recordFinish(c, a),
+      finish: async (c, a) => (await import("../src/creatures.mjs")).recordFinish(c, a, { now: clock() }),
       flee: (h) => fled.push(h),
     };
     const as = (h) => ({ handles: new Set([h]), household: HOMES[h] ?? null });
@@ -154,21 +161,21 @@ test("ON THE STORE · a party of three: strikes, a shield, a steady, one flees a
     const split = await q(`SELECT object, payload FROM acts WHERE action = '${NERVE_ACTION}' AND payload ? 'split_of'`);
     assert.ok(split.length >= 2, "a press shared by the hearth");
     const fresh = new LivingSet({ law: LAW });
-    const refreshed = await fresh.refresh({ query: q, now: Date.now() });
+    const refreshed = await fresh.refresh({ query: q, now: clock() });
     assert.equal(refreshed.ok, true, JSON.stringify(refreshed));
     for (const h of ["kai", "ren", "mo"]) {
       const rows = await q(`SELECT id::text AS id, actor, action, object, payload FROM acts WHERE class = 'creature' AND at >= $1 AND (object = $2 OR actor = $2)`, [iso(windowAt(now).start), h]);
-      assert.equal(foldNerve(rows, h), nerveOf(living, h, Date.now()), `${h}: the store's fold and the door's agree`);
-      assert.equal(nerveOf(fresh, h, Date.now()), nerveOf(living, h, Date.now()), `${h}: a restarted office folds the same nerve`);
+      assert.equal(foldNerve(rows, h), nerveOf(living, h, clock()), `${h}: the store's fold and the door's agree`);
+      assert.equal(nerveOf(fresh, h, clock()), nerveOf(living, h, clock()), `${h}: a restarted office folds the same nerve`);
     }
-    assert.equal(nerveOf(fresh, "kai", Date.now()), 0);
+    assert.equal(nerveOf(fresh, "kai", clock()), 0);
 
     // AN ACT'S COST, ONCE: mo says something in the ring; the retried act writes no second cost
     const said = await pen.officeWrite((cl) => pen.insertAct(cl, row("mo", "say", null, { text: "steady now" }, "voice")));
-    const sayAct = { actor: "mo", verb: "say", actId: String(said), atIso: iso(Date.now()), point: WHERE.mo };
+    const sayAct = { actor: "mo", verb: "say", actId: String(said), atIso: iso(clock()), point: WHERE.mo };
     await wait(10_500);
-    await reactTo(sayAct, { living, law: LAW, ...seams });
-    await reactTo(sayAct, { living, law: LAW, ...seams });
+    await reactTo(sayAct, { living, law: LAW, ...seams, now: clock(), clock });
+    await reactTo(sayAct, { living, law: LAW, ...seams, now: clock(), clock });
     const costs = await q(`SELECT id FROM acts WHERE action = '${NERVE_ACTION}' AND payload->>'why' = 'act' AND payload->>'act' = $1`, [String(said)]);
     assert.equal(costs.length, 1);
   } finally {
