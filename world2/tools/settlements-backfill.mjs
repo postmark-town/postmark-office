@@ -234,7 +234,16 @@ export async function carriedOnTick(client, repo) {
  *                    `restored N …` (undecided drops,
  *                     a guard's designed bounces, are
  *                     asked again: the design)         ok
- *   any step         `NOT recorded/stocked/reconciled`,
+ *   endings          `… · N failed (…)` (an ending the
+ *                     store would not take)            refused write-failed
+ *                    `ended N …` (one waiting for what
+ *                     it carries to stand: the design) ok
+ *                    `none ended — the creature law
+ *                     cannot be read`                  refused prereq:law
+ *                    `none ended — no creature stays`,
+ *                     no settlement yet, or no "ended"
+ *                     in the blessed law yet           ok (WLD-25)
+ *   any step         `NOT recorded/stocked/reconciled/ended`,
  *                    `REFUSED …`, or a line this does
  *                    not know                          refused write-failed
  *                    no `<step>:` line at all          notrun (it never ran)
