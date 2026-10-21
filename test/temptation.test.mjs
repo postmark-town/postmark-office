@@ -363,3 +363,13 @@ test("a reply line may name {ally}: the resident its temptation named in this ex
   assert.equal(answer.line, "It turns from kai to ren.");
   assert.equal(payloadOf(w.calls[0][0]).ally, "ren", "the reaction's row keeps whom it named, so the line re-renders");
 });
+
+test("on a steady or a shield, {ally} is the friend it was for, never the one a temptation named", async () => {
+  const kind = { ...TEMPTER, reactions: [reaction("stand", "act.verb == \"shield\"", "{actor} stood in front of {ally}.")] };
+  const law = { ...lawWith(), kindOf: (nm) => (nm === "tempter" ? kind : null) };
+  law.kindMod = { ...law.kindMod, voiceLine: (r, w = {}) => BASE.kindMod.voiceLine({ ...r, says: r.says.replaceAll("{ally}", String(w.ally ?? "someone")) }, w) };
+  const living = new LivingSet({ law }).fold([spawn()]).fold([actCost("mo", NOW - 60_000)], { advance: false });
+  const { d } = turnDeps(living, { law, present: present([["kai", 10], ["ren", 12], ["mo", 14]]) });
+  const [answer] = await reactTo(act({ verb: "shield", target: "ren" }), d);
+  assert.equal(answer.line, "kai stood in front of ren.");
+});

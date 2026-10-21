@@ -1482,9 +1482,10 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const eased = enc && kind.ease ? applyEase(creature, kind, [...(enc.breaksEase ? [EASE_BROKEN] : []), ...(reaction.effects ?? [])], act.actor, enc.household, now)
       : { ease: null, filled: false };
     const tempted = tm ? temptingRows(creature, act, tm, judgment, { living, now }) : { tempt: null, tallies: [] };
-    // {ally} (a creature that tempts): the other resident its temptation named in this exchange
+    // {ally} (a creature that tempts): on a steady or a shield, the friend it was for; else the other resident its temptation named
+    const allyOf = (act.verb === "steady" || act.verb === "shield") && act.target ? String(act.target) : tempted.tempt?.ally ?? null;
     const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null,
-      ally: String(reaction.says).includes("{ally}") ? tempted.tempt?.ally ?? null : null };
+      ally: String(reaction.says).includes("{ally}") ? allyOf : null };
     const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words,
       encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve } : null });
     const nerve = enc ? [...enc.cost, ...(press?.landed ?? []).map((l) => ({ ...l, why: "press" }))] : [];
