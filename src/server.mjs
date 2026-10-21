@@ -36,7 +36,7 @@ import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, min
 import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
-import { uploadMedia } from "./media.mjs";
+import { uploadMedia, useMediaLedger } from "./media.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { VISITOR_RULES, useRulesRecorder } from "./visitor-rules.mjs"; // POS-300
 import { standingBounce, standingOf, isSuspended, bounceSentence, STANDING_BOUNCE_CODE, STANDING_UNREADABLE } from "./standing.mjs";
@@ -199,6 +199,8 @@ try {
 // The berth's acknowledgement of the town's rules for visitors is written on
 // its own row in this paperwork (POS-300, visitor-rules.mjs).
 useRulesRecorder((slug) => acknowledgeVisitorRules(odb, slug));
+// The hanging doors check a media URL against this same paper (POS-738).
+useMediaLedger(odb);
 
 // ── AND THE SAME REFUSAL FOR THE DYNAMIC STORE (reviewer's repair 1, lap 4) ──
 //

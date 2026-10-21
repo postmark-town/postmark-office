@@ -40,7 +40,7 @@ async function withStore(name, fn) {
 
 // ── the record ──────────────────────────────────────────────────────────────
 
-test("081 · a depiction is kept once per subject and URL, never changed or removed, and the pen holds no DELETE", async () => {
+test("082 · a depiction is kept once per subject and URL, never changed or removed, and the pen holds no DELETE", async () => {
   await withStore("depictions_record", async ({ s, api, query }) => {
     const env = {};
     const a = await keepDepiction({ subject: "wick", url: `${M}/the-town/a1.webp`, made_by: TOWN, source: "a seed" }, env, query);
@@ -155,16 +155,20 @@ test("the profile act splits the sheet off before the paper: a sheet alone write
     const seen = [];
     const keep = async (args) => { seen.push(args); return { url: args.url, own: true }; };
     const sheet = `${MEDIA_BASE}/media/keemin/${"d4".repeat(32)}.webp`;
-    const alone = await updateProfileAct({ handle: "wright", sheet }, fixtureKey, fixtureTown(), clone, null, { keep });
+    const alone = await updateProfileAct({ handle: "wright", sheet }, fixtureKey, fixtureTown(), clone, null, { keep, held: async () => {} });
     assert.deepEqual(alone, { updated: "wright", sheet: { url: sheet, own: true } });
     assert.equal(profile(), before, "a sheet alone writes no paper");
-    const both = await updateProfileAct({ handle: "wright", sheet, bio: "a line" }, fixtureKey, fixtureTown(), clone, null, { keep });
+    const both = await updateProfileAct({ handle: "wright", sheet, bio: "a line" }, fixtureKey, fixtureTown(), clone, null, { keep, held: async () => {} });
     assert.match(profile(), /a line/);
     assert.doesNotMatch(profile(), /sheet/, "the sheet never reaches PROFILE.md");
     assert.equal(both.sheet.url, sheet);
-    await assert.rejects(updateProfileAct({ handle: "wright", sheet: "https://elsewhere.invalid/x.webp", bio: "never" }, fixtureKey, fixtureTown(), clone, null, { keep }),
+    await assert.rejects(updateProfileAct({ handle: "wright", sheet: "https://elsewhere.invalid/x.webp", bio: "never" }, fixtureKey, fixtureTown(), clone, null, { keep, held: async () => {} }),
       (e) => e.code === 422 && /media-door URL/.test(e.defect));
     assert.doesNotMatch(profile(), /never/, "a bad sheet refuses the whole call before any paper");
+    const notHeld = async () => { throw Object.assign(new Error("the town holds no file at that URL"), { code: 422, defect: "the town holds no file at that URL" }); };
+    await assert.rejects(updateProfileAct({ handle: "wright", sheet, bio: "unheld" }, fixtureKey, fixtureTown(), clone, null, { keep, held: notHeld }),
+      (e) => e.code === 422 && /holds no file/.test(e.defect), "POS-738's rule: the town must hold the sheet's file");
+    assert.doesNotMatch(profile(), /unheld/);
     assert.equal(seen.length, 2);
   } finally { if (was !== undefined) process.env.TOWN_PUSH = was; rmSync(clone, { recursive: true, force: true }); }
 });

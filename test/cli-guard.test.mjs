@@ -135,6 +135,10 @@ const ROSTER = {
   "tools/home-picture-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/seed-sheets.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/media-thumbnails-backfill.mjs": { args: ["--from-record", NOWHERE], code: 2, needle: "no record at" },
+  // POS-737: an unknown flag is a usage refusal before the paper or the store is opened
+  "tools/media-sweep.mjs": { args: ["--nowhere"], code: 2, needle: "media-sweep: unknown --nowhere" },
+  // POS-737: no --url is a usage refusal before the paper is opened
+  "tools/media-takedown.mjs": { args: [], code: 2, needle: "media-takedown: which file? --url" },
   // POS-722: with no telemetry dir it refuses by name before reading anything
   "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.

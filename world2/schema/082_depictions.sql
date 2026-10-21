@@ -1,4 +1,4 @@
--- 081 — depictions: EVERY PICTURE MADE OF A RESIDENT, ONE ROW EACH (WLD-83, w44)
+-- 082 — depictions: EVERY PICTURE MADE OF A RESIDENT, ONE ROW EACH (WLD-83, w44)
 --
 -- RULED (Darko, 2026-10-19, WLD-83):
 --   18:24  reference anchors come from the household: the six-panel sheet its
@@ -42,7 +42,7 @@
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/081_depictions.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/082_depictions.sql
 --
 -- ── HOW TO PROVE IT LANDED ──────────────────────────────────────────────────
 --

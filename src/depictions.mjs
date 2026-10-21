@@ -20,7 +20,7 @@
 //
 // ── ONE RECORD, ONE WRITER ──────────────────────────────────────────────────
 //
-//   the record   `depictions` (migration 081), append-only: subject, kind,
+//   the record   `depictions` (migration 082), append-only: subject, kind,
 //                url (a media-door URL), made_by, made_at, source.
 //   the writer   `keepDepiction` below. The profile act's `sheet` field calls it
 //                through `keepSheet` with the household as made_by (the image

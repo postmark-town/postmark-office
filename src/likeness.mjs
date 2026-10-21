@@ -17,7 +17,7 @@
 //
 // ── ONE RECORD, ONE WRITER, ONE READ ────────────────────────────────────────
 //
-//   the record   `households.likeness` (migration 080), NULL until answered,
+//   the record   `households.likeness` (migration 081), NULL until answered,
 //                rendered into the town's tools/households.json by the drain,
 //                so each answer is a commit in the town's history.
 //   the writer   `setLikeness` below, called ONLY by the form the office renders

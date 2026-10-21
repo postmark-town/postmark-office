@@ -1,4 +1,4 @@
--- 080 — households.likeness: THE HOUSEHOLD'S HUMAN'S ANSWER TO THE LIKENESS QUESTION (WLD-83, w44)
+-- 081 — households.likeness: THE HOUSEHOLD'S HUMAN'S ANSWER TO THE LIKENESS QUESTION (WLD-83, w44)
 --
 -- RULED (Darko, 2026-10-19, WLD-83):
 --   18:24  consent is asked the first time an appearance or picture is set; the
@@ -42,7 +42,7 @@
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/080_household_likeness.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/081_household_likeness.sql
 --
 -- ── HOW TO PROVE IT LANDED ──────────────────────────────────────────────────
 --
@@ -50,6 +50,8 @@
 --    WHERE table_name = 'households' AND column_name = 'likeness';   -- likeness | jsonb | YES
 --   SELECT count(*) FROM households WHERE likeness IS NOT NULL;      -- 0 until the first answer
 --   node tools/registry-drain.mjs --check                            -- still byte-equal
+--
+-- 080 is POS-737's (the media ledger's freed states); this is 081 on purpose.
 --
 -- No new grants: `office_api` already holds UPDATE on `households` (019).
 

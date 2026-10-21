@@ -16,7 +16,7 @@
 // guessed. Nothing is USED until the household says yes: the anchor read gates
 // it (src/depictions.mjs § anchorOf).
 //
-// Wright runs it on the box, after 081 lands, from a staging folder holding the
+// Wright runs it on the box, after 082 lands, from a staging folder holding the
 // files the manifest names: `--dry-run` first, then `--apply`. Running it twice
 // keeps nothing twice: the same bytes re-encode to the same object, and
 // (subject, url) is unique.

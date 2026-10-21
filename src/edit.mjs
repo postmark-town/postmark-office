@@ -53,7 +53,7 @@ import { paperDoor } from "./town-updates.mjs";
 // time both modules are evaluated. test/profile-act.test.mjs imports the two in
 // that dangerous order on purpose, so this condition has a falsifier and not
 // just a comment.
-import { MEDIA_BASE, mediaUrlOk, readHouseFile, uploadMedia } from "./media.mjs";
+import { MEDIA_BASE, mediaUrlOk, readHouseFile, uploadMedia, assertMediaHeld } from "./media.mjs";
 import { setHomePicture } from "./home-picture.mjs";
 
 const MAX_BODY = 50_000;     // a face, not an archive
@@ -1438,6 +1438,16 @@ export const updateAddressBody = paperDoor("address-body", whole(updateAddressBo
 export const updateAddressFields = paperDoor("address-fields", whole(updateAddressFieldsUnlogged));
 export const updateHome = paperDoor("home", whole(updateHomeUnlogged));
 export const updateProfile = paperDoor("profile", whole(updateProfileUnlogged));
+// THE PROFILE DOOR AS RESIDENTS REACH IT (POS-738): the picture must be one the
+// town holds. `updateProfile` itself stays unjudged, because the drain replays
+// admitted acts through it (town-bridge.mjs § TOWN_DOORS) and a replay must
+// never refuse what its door admitted. The three live skins (the household
+// apex, MCP and PATCH /profile) call this one.
+export async function updateProfileAtDoor(args, key, db, clone, odb = null) {
+  const picture = typeof args?.image === "string" ? args.image.trim() : "";
+  if (picture && mediaUrlOk(picture)) await assertMediaHeld(picture);
+  return updateProfile(args, key, db, clone, odb);
+}
 export const updateWindow = paperDoor("window", whole(updateWindowUnlogged));
 // The image doors keep their own names (paper-seam P8b tells them from the
 // paper doors by name), and are whole the same way.
@@ -1457,15 +1467,17 @@ export function updateHomeImage(args, key, db, clone, odb = null, deps = {}) {
 // replay never meets a sheet; a call with nothing but `sheet` writes no paper.
 // The URL is judged before any paper is written, so a bad sheet refuses the
 // whole call (updateHomeAct's order, for its reason).
-export async function updateProfileAct(args, key, db, clone, odb = null, { keep = null } = {}) {
-  if (!Object.prototype.hasOwnProperty.call(args ?? {}, "sheet")) return updateProfile(args, key, db, clone, odb);
+export async function updateProfileAct(args, key, db, clone, odb = null, { keep = null, held = assertMediaHeld } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(args ?? {}, "sheet")) return updateProfileAtDoor(args, key, db, clone, odb);
   const { sheet, ...paper } = args;
   scope(args.handle, key);
   if (typeof sheet !== "string" || !mediaUrlOk(sheet))
     throw bounce(422, "a sheet is a media-door URL",
       "upload the image first (upload_media) and pass the url it hands back as sheet; a sheet is never cleared, a newer one supersedes it. Nothing was written");
+  // POS-738's rule for the picture, for the sheet too: the town must hold the file it names
+  await held(sheet.trim());
   const writesPaper = Object.keys(paper).some((k) => k !== "handle" && k !== "nonce");
-  const profile = writesPaper ? await updateProfile(paper, key, db, clone, odb) : null;
+  const profile = writesPaper ? await updateProfileAtDoor(paper, key, db, clone, odb) : null;
   const keepSheet = keep ?? (await import("./depictions.mjs")).keepSheet;
   const kept = await keepSheet({ handle: args.handle, url: sheet }, key);
   if (profile) return { ...profile, sheet: kept };
@@ -1505,6 +1517,7 @@ export async function updateHomeAct(args, key, db, clone, odb = null, { keep = s
   if (!mediaUrlOk(image))
     throw bounce(422, "a house's picture is a media-door URL",
       "upload the image first (upload_media) and pass the url it hands back as image — nothing was written");
+  await assertMediaHeld(image); // and one the town holds (POS-738), before any paper is written
   const writesPaper = Object.keys(paper).some((k) => k !== "handle" && k !== "nonce");
   const home = writesPaper ? await updateHome(paper, key, db, clone, odb) : null;
   const picture = await keep({ handle: args.handle, url: image }, key, { clone });

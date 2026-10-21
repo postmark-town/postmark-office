@@ -149,7 +149,7 @@ export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 // every handle SORTED (`orderNested`'s tail), so the file's order never depends
 // on the (length, bytes) order jsonb hands the keys back in.
 //
-// `likeness` (migration 080, WLD-83) is the third: one object with a FIXED
+// `likeness` (migration 081, WLD-83) is the third: one object with a FIXED
 // shape (the one writer, src/likeness.mjs, builds it), so it gets a template in
 // the order a reader wants it, the answer first. NULL until answered, and a
 // NULL renders as no key at all (`isAbsent`), so nothing moves on the first
@@ -282,7 +282,7 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       provisional: rec?.provisional ?? false,
       // And `home_images` (050): no key folds to the column's own `{}`.
       home_images: rec?.home_images ?? {},
-      // And `likeness` (080): no key folds to NULL, the column's "never answered".
+      // And `likeness` (081): no key folds to NULL, the column's "never answered".
       likeness: rec?.likeness ?? null,
     });
   }
