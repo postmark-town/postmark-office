@@ -129,7 +129,7 @@ export async function embeddedScan({ handles, clone, urls }) {
  * `household:` argument and that absence is the design — no caller can name
  * someone else's media, so there is no gate to get wrong.
  */
-// Uploads rendered per read. The 20 MB/household quota bounds BYTES, never
+// Uploads rendered per read. The household's quota bounds BYTES, never
 // rows: a household of thumbnails can hold hundreds of files inside it. ✎ A
 // proposal.
 const MEDIA_PAGE = 25;
@@ -157,8 +157,8 @@ export async function mediaRead(key, { odb, clone, embedded = embeddedScan, limi
 
     const handles = [...(key?.handles ?? [])].filter(Boolean).sort();
     // The SAME arithmetic the upload door charges against — literally the same
-    // function, sized off the residents this key acts for.
-    const quota = await mediaQuota(odb, household, handles.length);
+    // function, one flat wall per household (POS-736).
+    const quota = await mediaQuota(odb, household);
     const rows = await mediaLedgerRows(odb, household);
     const mediaN = Math.min(Math.max(Number(limit) || MEDIA_PAGE, 1), 200);
     const mediaStart = Math.max(Number(offset) || 0, 0);

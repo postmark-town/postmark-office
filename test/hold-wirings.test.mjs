@@ -429,13 +429,13 @@ test("WIRING 3 — `world_investigate` itself carries the `stands` block, driven
   const after = await withActs(
     [holdingAct({ id: 1, at: "2026-09-07T21:53:00Z", actor: "wright", action: "take", thing: CANON, holder: "wright" })],
     () => worldInvestigate({ mark: CANON }));
-  assert.ok(after.stands, "the holding record knows this thing and the focus does not — walk #12's 536 m, back");
-  assert.equal(after.stands.source, "holder");
-  assert.equal(after.stands.holder, "wright");
-  assert.match(String(after.stands.says), /rides its holder/);
-  // AND `at` IS UNTOUCHED. The block sits BESIDE canon's own answer; quietly
-  // substituting one for the other is the complaint, not the repair.
-  assert.deepEqual(after.at, before.at, "canon's own `at` must not be rewritten by the derived read");
+  // SUPERSEDED (POS-688, Darko 2026-10-18 20:58): "the block sits BESIDE canon's own `at`". That was
+  // the read giving two answers to one question. A held thing is published but unplaced: the focus
+  // itself names its holder and gives no place, and there is no block beside it.
+  assert.equal(after.held_by, "wright", "the focus names its holder");
+  assert.equal(after.at, undefined, "and gives it no place while held");
+  assert.equal(after.stands, undefined, "with no second answer beside it");
+  assert.equal(after.body, before.body, "the same mark: its words did not move");
 });
 
 test("...and the three sources answer in the law's own order", async () => {
@@ -449,7 +449,7 @@ test("...and the three sources answer in the law's own order", async () => {
     standpointOf: async () => ({ x: 1, y: 2 }),
   });
   assert.equal(held.source, "holder", "a holder outranks a drop act and the fold both");
-  assert.deepEqual(held.where, { x: 1, y: 2 });
+  assert.equal(held.where, null, "and a held thing has no place (POS-688): not its holder's, not the fold's");
 
   const down = await hold.whereThingStands(NEAR, {
     attachments: [{ target: NEAR, entity: "wright", policy: "detach", born_at: "2026-09-07T02:00:00Z" }],
@@ -470,7 +470,7 @@ test("...and the three sources answer in the law's own order", async () => {
 // steady, because a port that changed what "I cannot read the record" sounds
 // like would have moved a promise the doors above depend on.
 
-test("POS-153 (a) — a thing held by ANOTHER resident is listed UNDER ITS HOLDER, from the record", async () => {
+test("POS-153 (a), POS-688 — a thing held by ANOTHER resident is NOT on the ground: it is its holder's contents", async () => {
   await withStore("pos153-a.db", async () => {
     // ethan holds the thing at wright's feet. `whereThingStands` answers
     // `holder`, and the row carries the door's own refusal rather than dropping
@@ -485,11 +485,9 @@ test("POS-153 (a) — a thing held by ANOTHER resident is listed UNDER ITS HOLDE
         // The edge query HAPPENED — asserted before anything about its answer.
         assert.ok(rec.asked.some((a) => /FROM acts WHERE action = ANY\(\$1\)/.test(a.sql)),
           "the ground read never asked the record for the holding edge");
-        const row = (answer.things ?? []).find((t) => t.thing === NEAR);
-        assert.ok(row, "a thing at the caller's feet is not in the ground read");
-        assert.equal(row.holder, "ethan-thorne", "the record says ethan holds it and the read must say so too");
-        assert.equal(row.takeable, false, "a held thing moves by its holder's own give");
-        assert.match(String(row.why), /holding it/);
+        // SUPERSEDED (POS-688): "listed UNDER ITS HOLDER". A held thing is published but unplaced: it
+        // is in ethan's hands, not at wright's feet, and `investigate` on ethan lists it.
+        assert.equal((answer.things ?? []).some((t) => t.thing === NEAR), false, "a thing in someone's hands is not on the ground");
       });
   });
 });

@@ -28,6 +28,7 @@ import { makePool, RECORD_ON } from "./registry-pool-stub.mjs";
 import { leadPicture, carryHomePictures } from "../tools/home-picture-carry.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { ensureTownJournal, readTownJournal } from "../src/town-journal.mjs";
+import { holdMedia } from "./helpers/media-ledger.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures", "registry-2026-09-22");
@@ -39,6 +40,7 @@ const MARIGOLD = "https://media.postmark.town/media/keeminlee/c218583a550b5487f7
 const MARGIN = "https://media.postmark.town/media/corwin/aa11.png";
 const LEVEL = "https://media.postmark.town/media/ellery/bb22.png";
 const key = (...handles) => ({ household: "keeminlee", handles: new Set(handles) });
+holdMedia(MARIGOLD); // the house act hangs only a picture the town holds (POS-738)
 
 const dirs = [];
 test.after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 5 }); });
@@ -184,6 +186,17 @@ test("the home act splits the picture off: image alone writes no paper; a bad UR
   e = null;
   try { await updateHomeAct({ handle: "mari", image: MARIGOLD }, key("rei"), null, "/no/clone", null, { keep }); } catch (x) { e = x; }
   assert.equal(e?.code, 403, "scope binds it like every edit verb");
+});
+
+test("POS-738 · the house act hangs only a picture the town holds: a right-shaped URL nobody uploaded refuses before any paper lands", async () => {
+  const kept = [];
+  const keep = async (args) => { kept.push(args); return { picture: args.url, household: "starforge" }; };
+  const NEVER = `https://media.postmark.town/media/keeminlee/${"e".repeat(64)}.jpg`;
+  let e = null;
+  try { await updateHomeAct({ handle: "mari", image: NEVER, body: "prose" }, key("mari"), null, "/no/clone", null, { keep }); } catch (x) { e = x; }
+  assert.deepEqual([e?.code, e?.defect], [422, "the town holds no file at that URL"]);
+  assert.match(e.hint, /upload it first \(upload_media\), then hang the URL it returns/);
+  assert.equal(kept.length, 0, "nothing was kept");
 });
 
 // POS-711: a picture with a nonce and no prose is a picture-only update. It was

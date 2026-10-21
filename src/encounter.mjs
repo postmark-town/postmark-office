@@ -297,6 +297,10 @@ export function pressMenu(on, { actor, roster, living, creatureId, now = Date.no
         .map((r) => r.handle);
     },
   };
+  // the loudest and the one alone rank the actor LAST when anyone else fits (eval round 1, F1: the one who just
+  // acted is always the newest, so "alone" was the actor every time, and Jev never had a choice)
+  const actorLast = (list) => (list.length > 1 ? [...list.filter((h) => h !== actor), ...list.filter((h) => h === actor)] : list);
+  for (const k of ["loudest", "alone"]) { const f = ranked[k]; ranked[k] = () => actorLast(f()); }
   const out = [];
   for (const who of on ?? []) {
     const h = (ranked[who]?.() ?? []).find((x) => !out.some((e) => e.handle === x));
@@ -376,6 +380,47 @@ export function nerveRead({ living, law }, handle, at, now = Date.now(), { holds
   return { left, of: max, fills_at: new Date(windowAt(now).ends).toISOString(), note: NERVE_NOTE };
 }
 
+/** The words for both roads (F9): force (strike, its cost and what it takes) and its own test (the ease). */
+export function roadsOf(kind, { nerve = null } = {}) {
+  const act = encounterDial("act_cost"), cost = encounterDial("strike_cost");
+  const force = hasResolve(kind) ? `strike it from inside its ring: ${cost} nerve a strike, and each takes ${kind.strike} of its ${kind.resolve} resolve`
+    : isTempter(kind) ? `strike it from inside its ring: ${cost} nerve a strike, and each is damage` : null;
+  const peace = kind.ease ? (kind.ease.by === "households"
+      ? `its own test, which ${kind.ease.target} households fill together, one point each`
+      : `its own test, which you fill yourself: ${kind.ease.target} points${kind.ease.only ? `, only by ${kind.ease.only}; any other act of yours near it empties them` : ""}`)
+    : isTempter(kind) ? "answer what it asks of you plainly, and refuse it" : "its own test, as it answers you";
+  return { ...(force ? { force } : {}), peace,
+    nerve: `every act you make inside its ring costs ${act} nerve${force ? `, a strike ${cost}` : ""}${nerve != null ? `; you have ${nerve}` : ""}. At 0 you flee until the settlement` };
+}
+
+/**
+ * WHAT A FINISH PAYS (F8): once it has been finished, { first, at, carries?, note }.
+ * The first to finish it by record order (the lowest act id) is who what it carries
+ * goes to, at the next settlement, and everyone it answered is named there.
+ */
+export function endingSaid(creature, now = Date.now()) {
+  const fs = (creature?.finishes ?? []).filter((f) => /^\d+$/.test(String(f.act)));
+  if (!fs.length || creature.gone) return null;
+  const first = fs.sort((a, b) => (BigInt(a.act) < BigInt(b.act) ? -1 : 1))[0];
+  const at = new Date(windowAt(now).ends).toISOString();
+  const what = creature.carries ? `what it carries (${creature.carries})` : "its ending";
+  return { first: first.by, at, ...(creature.carries ? { carries: creature.carries } : {}),
+    note: `At the settlement (${at.slice(11, 16)}Z), ${what} goes to ${first.by}, the first to finish it, and everyone it answered is named.` };
+}
+
+/**
+ * WHAT YOU ARE OWED AT THE SETTLEMENT (F8): each creature you finished first, still
+ * waiting for its settlement. [{ creature, at, carries?, note }] or [].
+ */
+export function pendingFor(living, handle, now = Date.now()) {
+  const out = [];
+  for (const c of living?.living?.(now) ?? []) {
+    const e = endingSaid(c, now);
+    if (e?.first === handle) out.push({ creature: c.id, at: e.at, ...(e.carries ? { carries: e.carries } : {}), note: e.note });
+  }
+  return out;
+}
+
 /**
  * A finishable creature's encounter, as investigate shows it (D3: the numbers,
  * so the puzzle is legible): its resolve this window and when it fills, its
@@ -386,7 +431,12 @@ export function encounterRead({ living }, creature, kind, { handle = null, house
   if (!isFinishable(kind)) return null;
   const w = windowAt(now);
   const ease = kind.ease ? easeScope(creature, kind, handle, household, now) : null;
+  const ending = endingSaid(creature, now);
   return {
+    // BOTH ROADS AND WHAT EACH COSTS (eval round 1, F9: force was invisible from the door)
+    roads: roadsOf(kind, { nerve: handle ? nerveOf(living, handle, now) : null }),
+    // A FINISH PAYS OUT AT THE SETTLEMENT (F8): who it goes to, and when
+    ...(ending ? { ending } : {}),
     ...(hasResolve(kind) ? { resolve: { left: resolveOf(living, creature, kind, now), of: kind.resolve, a_strike_takes: kind.strike, fills_at: new Date(w.ends).toISOString() } } : {}),
     ...(ease ? { ease: kind.ease.by === "households"
       ? { households: ease.all, of: kind.ease.target, note: "one point per household this window" }

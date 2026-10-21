@@ -69,12 +69,17 @@ test("ON THE STORE · three residents: one obeys, one declines, one answers plai
   pen.__setPoolForTest(pool);
   try {
     const q = async (t, p) => (await api.query(t, p)).rows;
+    // THE DRIVE'S CLOCK: its 31 minutes must fit inside one settlement window (the tallies are a window's), so
+    // near a window's end the whole drive runs an hour earlier, on the record's own instants (the pen writes `at` from them)
+    const realStart = Date.now();
+    const base = Math.min(realStart, windowAt(realStart).ends - 40 * 60_000);
+    const clock = () => base + (Date.now() - realStart);
     const row = (actor, action, object, payload, cls = "creature") => normalizeRow({ crossing: currentCrossing(), actor, action, object, cls,
-      at: { anchor: WORLD_ANCHOR, dx: 0, dy: 0 }, payload, writtenAt: iso(Date.now()) });
+      at: { anchor: WORLD_ANCHOR, dx: 0, dy: 0 }, payload, writtenAt: iso(clock()) });
     const insert = (r) => pen.officeWrite((c) => pen.insertAct(c, r));
-    await insert(row("the-town", "spawn", ID, { kind: "tempter", at: iso(Date.now() - 3600_000), stays: true, x: 0, y: 0 }));
+    await insert(row("the-town", "spawn", ID, { kind: "tempter", at: iso(clock() - 3600_000), stays: true, x: 0, y: 0 }));
     const living = new LivingSet({ law: LAW });
-    await living.refresh({ query: q, now: Date.now() });
+    await living.refresh({ query: q, now: clock() });
 
     let lean = {};
     const ask = async (state, questions) => ({ response: { answers: {
@@ -89,7 +94,7 @@ test("ON THE STORE · three residents: one obeys, one declines, one answers plai
     const say = async (who, text) => {
       const id = String(await insert(row(who, "say", null, { text }, "voice")));
       says.set(id, text);
-      return reactTo({ actor: who, verb: "say", actId: id, atIso: iso(Date.now()), point: WHERE[who] }, { ...seams, now: Date.now() });
+      return reactTo({ actor: who, verb: "say", actId: id, atIso: iso(clock()), point: WHERE[who] }, { ...seams, now: clock() });
     };
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -106,7 +111,7 @@ test("ON THE STORE · three residents: one obeys, one declines, one answers plai
 
     // ren obeys: a give to the one who speaks for it, which moves nothing
     const given = await givenToATempter({ to: WHO, kind: "a-thing" }, { handles: new Set(["ren"]) }, "ren",
-      { now: Date.now, creatures: async () => ({ living, law: LAW }), standpoint: async (h) => WHERE[h],
+      { now: clock, creatures: async () => ({ living, law: LAW }), standpoint: async (h) => WHERE[h],
         write: async (entry) => ({ actId: String(await insert(row(entry.actor, entry.action, entry.object, entry.payload))) }) });
     assert.equal(given.counted, true);
     await wait(10_500); // the 10 s window: each has just been answered
@@ -116,15 +121,15 @@ test("ON THE STORE · three residents: one obeys, one declines, one answers plai
     lean = { tempt: "none", answer: "plain" };
     // the phase is the window's clock's too, and this drive runs on the real clock: a short plain answer is +3 in the
     // first phase (its echo), +2 in the second
-    const first = phaseOf(living, living.byId.get(ID), TEMPTER, MENU, Date.now()).name === "hush";
+    const first = phaseOf(living, living.byId.get(ID), TEMPTER, MENU, clock()).name === "hush";
     const [m] = await say("mo", "That's a trick. I'm staying.");
     assert.deepEqual(m.counted, [first ? { for: "mo", persuasion: 3, why: "plain, and short" } : { for: "mo", persuasion: 2, why: "plain" }]);
     const plain = first ? 3 : 2;
 
     // 31 minutes on: the tick resolves all three, once
     __resetEncounterTickForTest();
-    await living.refresh({ query: q, now: Date.now() });
-    const later = Date.now() + 31 * 60_000;
+    await living.refresh({ query: q, now: clock() });
+    const later = clock() + 31 * 60_000;
     const d = { actsSince: (h, since) => q(ACTS_SINCE_SQL, [h, since]), outside: async () => false, gist: async () => false,
       roster: async () => [], writeTempted: (t, rows) => writeTempted(t, rows), jevLint: async () => true,
       strikes: async () => [], finish: async () => ({}), flee: async () => null, creatures: async () => null, standpoint: async () => null,
@@ -137,16 +142,16 @@ test("ON THE STORE · three residents: one obeys, one declines, one answers plai
 
     // the tallies: ren's obeying mended damage (never below 0); kai's and mo's declines and mo's plain answer, 5 persuasion
     const fresh = new LivingSet({ law: LAW });
-    await fresh.refresh({ query: q, now: Date.now() });
+    await fresh.refresh({ query: q, now: clock() });
     const creature = fresh.byId.get(ID);
-    assert.deepEqual(talliesOf(fresh, creature, Date.now()), { damage: 0, persuasion: 2 + plain });
-    assert.equal(phaseOf(fresh, creature, TEMPTER, MENU, Date.now()).name, "recall", "4 or 5 of 12: past a third, the next phase");
+    assert.deepEqual(talliesOf(fresh, creature, clock()), { damage: 0, persuasion: 2 + plain });
+    assert.equal(phaseOf(fresh, creature, TEMPTER, MENU, clock()).name, "recall", "4 or 5 of 12: past a third, the next phase");
     assert.equal((await q(`SELECT count(*)::int AS n FROM acts WHERE action = '${TEMPT_ACTION}'`))[0].n, 3);
     assert.equal((await q(`SELECT count(*)::int AS n FROM acts WHERE action = '${TALLY_ACTION}'`))[0].n, 4);
 
     // the settlement lands: the window's tallies end it by persuasion, naming everyone
-    const ends = windowAt(Date.now()).ends;
-    await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1, $1, $2, 'closed') ON CONFLICT (id) DO NOTHING", [iso(windowAt(Date.now()).start), iso(ends)]);
+    const ends = windowAt(clock()).ends;
+    await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1, $1, $2, 'closed') ON CONFLICT (id) DO NOTHING", [iso(windowAt(clock()).start), iso(ends)]);
     await owner.query("INSERT INTO settlements (number, tag_sha, published_at, window_id) VALUES (900, $1, $2, 1)", ["9".repeat(40), iso(ends + 60_000)]);
     const client = await s.connect("office_api");
     try {

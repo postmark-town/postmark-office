@@ -25,11 +25,11 @@ import { vesselServiceFrom } from "./world-movement.mjs";
 import { fractionalCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "../world2/tools/live-reads.mjs"; // the ferry's clock: the engine's epoch and cadence
 import { nextSettlement } from "./world-forecast.mjs"; // the ONE settlement clock, 06:00/18:00Z (WLD-5's exit lock reads it)
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { classNodeNameOf, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { importEngineAt } from "./world-branches.mjs"; // the doors' engine, at the newest blessing
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -50,10 +50,12 @@ const bounce = (code, defect, hint, extra = {}) => {
  *  The parser is aliased over to one name so the call sites stay single-named:
  *  a caller should not have to know which era of the module answered. */
 export async function crossingLaw(worldClone) {
-  const load = (name) => import(pathToFileURL(join(worldClone, "tools", name)));
+  // AT THE BLESSING (world-branches.mjs § engineDirAt): the doors adjudicate with
+  // the engine the newest blessing carries, never the clone's working tree.
+  const load = (name) => importEngineAt(worldClone, name);
   try {
     const law = await load("enter-exit.mjs").catch(() => load("thresholds.mjs"));
-    const verbs = await import(pathToFileURL(join(worldClone, "tools", "world-verbs.mjs")));
+    const verbs = await load("world-verbs.mjs");
     if (!law.occupancyAt || !verbs.enter) throw new Error("incomplete");
     const thresholds = law.parseEnterExitLedger
       ? law

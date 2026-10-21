@@ -29,7 +29,7 @@
 // in; the door (world-kinds.mjs) reads the record and writes the act.
 
 import { createHash } from "node:crypto";
-import { kindEdgesOf, totalOf, nearestCommonClass, UNIT_ACTION } from "./world-stacks.mjs";
+import { kindEdgesOf, totalOf, nearestCommonClass, plural, UNIT_ACTION } from "./world-stacks.mjs";
 import { lineageOf, markClassOf } from "./world-grants.mjs";
 import { holdingOf, makersOf, truth, whole } from "./holding-law.mjs";
 
@@ -221,7 +221,7 @@ export function refuseOverRoom({ n, room, name, capacity, holding, verb = "made"
 
 // ── THE BLUR ────────────────────────────────────────────────────────────────
 
-const plural = (word, n) => (n === 1 ? word : /[^aeiou]y$/.test(word) ? `${word.slice(0, -1)}ies` : `${word}s`);
+// the one plural is world-stacks.mjs § plural (POS-741, POS-743)
 
 /**
  * What a holding shows, at the nearest common class and a number: "18

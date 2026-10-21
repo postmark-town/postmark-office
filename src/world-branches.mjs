@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -528,6 +529,35 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
   writeFileSync(stamp, `${sha}\n${ref}\n`);
   return dir;
 }
+
+// THE ENGINE THE DOORS RUN, AT THE BLESSING. The walk door, the land pen and
+// the enter/exit law imported the world's engine straight out of the clone's
+// working tree, which the shared clone's fast-forward keeps at main, not at a
+// blessing; and a plain import is cached for the life of the process. So engine
+// code merged to main and never blessed went live at the next office restart,
+// and a blessing's engine waited for one. This hands back the `tools/` the
+// newest blessing carries, materialised by sha, so the door that imports from it
+// takes a new blessing on the next call and never runs unblessed code.
+// A directory that is not a git repository (a test's stub engine) has no ref to
+// read, and is its own engine. A clone whose blessing cannot be materialised
+// falls back to its tree, LOUDLY, once per clone, as world.mjs § engineDir does.
+const engineFallbackSaid = new Set();
+export function engineDirAt(repo) {
+  const root = String(repo);
+  if (!existsSync(join(root, ".git"))) return root;
+  try {
+    return materializeAtRef(root, blessedRef(root), "tools");
+  } catch (e) {
+    if (!engineFallbackSaid.has(root)) {
+      engineFallbackSaid.add(root);
+      console.error(`[world] engine at the blessing could not be materialised for ${root} (${String(e?.message ?? e).slice(0, 120)}) — falling back to its working tree, which may run unblessed code`);
+    }
+    return root;
+  }
+}
+
+/** Import one engine module from the newest blessing (engineDirAt). */
+export const importEngineAt = (repo, file) => import(pathToFileURL(join(engineDirAt(repo), "tools", file)).href);
 
 // IS THIS PATH IN THE TREE AT THIS REF? `true` / `false`, or `null` when the
 // ref itself cannot be resolved: a question this clone could not ask is not a
