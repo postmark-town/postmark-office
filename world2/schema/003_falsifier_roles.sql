@@ -161,6 +161,12 @@ lawful AS (
     -- ledger and the town log are append-only, and the drain cursor is the one
     -- row that is upserted.
     ('office_api',   'office_media',     'INSERT'),
+    -- 080_media_freed.sql (POS-737, Darko 2026-10-21 "737 agreed"): the media
+    -- ledger stops being append-only. The UPDATE writes a row's states (the
+    -- unhung clock, the claim, the purge, a takedown's receipt) and clears them
+    -- when a freed file is uploaded again. No DELETE: a freed row stays, as its
+    -- own receipt.
+    ('office_api',   'office_media',     'UPDATE'),
     ('office_api',   'office_town_journal', 'INSERT'),
     ('office_api',   'office_meta',      'INSERT'),
     ('office_api',   'office_meta',      'UPDATE'),

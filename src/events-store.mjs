@@ -756,7 +756,14 @@ export async function revealAtTown(fields, key, { now = Date.now(), env = proces
   if (!id) throw refuse(422, "which bug?", 'post: "<author>/<slug>" — town { read: "posts", args: { class: "bug" } } lists them', { field: "post" });
   if (fields.class !== undefined && fields.class !== BUG_CLASS)
     throw refuse(422, "a reveal is a bug's", 'only a bug post reveals a critter; send class "bug" or leave class off', { field: "class" });
-  const { mediaUrlOk } = await import("./media.mjs");
+  const { mediaUrlOk, mediaHeldRefusal } = await import("./media.mjs");
+  // Each candidate is a picture the town holds (POS-738), asked before the
+  // write. A malformed one is left to judgeReveal's own refusal.
+  for (const u of Array.isArray(fields?.candidates) ? fields.candidates : []) {
+    if (typeof u !== "string" || !mediaUrlOk(u.trim())) continue;
+    const held = await mediaHeldRefusal(u.trim());
+    if (held) throw refuse(held.code, held.defect, held.hint, { field: "candidates" });
+  }
   return write(async (client) => {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');

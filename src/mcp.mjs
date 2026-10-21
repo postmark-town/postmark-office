@@ -35,7 +35,7 @@ const SEGMENT_GLOSS = Object.freeze({
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { requestResidency } from "./residency.mjs";
 import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION } from "./declare.mjs";
-import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfile, updateWindow } from "./edit.mjs";
+import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfileAtDoor, updateWindow } from "./edit.mjs";
 import { uploadMedia } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
@@ -984,7 +984,7 @@ export async function callTool(name, args, ctx) {
     case "update_home": case "update_profile": case "update_window": {
       if (!canWrite) return notFound("not-yet-open", "the office has no town clone configured; edit by PR meanwhile");
       const verb = { update_address_body: updateAddressBody, update_address_fields: updateAddressFields,
-        update_home: updateHomeAct, update_profile: updateProfile, update_window: updateWindow }[name];
+        update_home: updateHomeAct, update_profile: updateProfileAtDoor, update_window: updateWindow }[name];
       try {
         // ── the town log rides the DOOR now (POS-44, the paper seam) ───────
         // This switch used to log here, and that was the whole defect: it is
