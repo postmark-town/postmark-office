@@ -1305,7 +1305,14 @@ async function householdMarks(f, key, ctx) {
     catch { unread.standing = "the world checkout could not be read"; }
   }
   const newestFirst = (a, b) => String(b.date ?? b.submitted_at ?? "").localeCompare(String(a.date ?? a.submitted_at ?? "")) || String(a.id ?? a.slug).localeCompare(String(b.id ?? b.slug));
-  const page = (rows) => { const all = [...rows].sort(newestFirst); return { total: all.length, shown: Math.min(Math.max(all.length - offset, 0), limit), rows: all.slice(offset, offset + limit) }; };
+  // each list paged as the deep reads page (review of #678, item 4): its window, whether it is whole, and where next
+  const page = (rows) => {
+    const all = [...rows].sort(newestFirst);
+    const shown = all.slice(offset, offset + limit);
+    const next = offset + shown.length;
+    return { total: all.length, shown: shown.length, limit, offset, complete: next >= all.length,
+      ...(next < all.length ? { next_offset: next } : {}), rows: shown };
+  };
   const { readClaimEffects, RULINGS_SINCE_CROSSINGS } = await import("./claim-effects.mjs");
   const { currentCrossing: crossingAt } = await import("./crossings.mjs");
   const nowCrossing = crossingAt(nowMs);
