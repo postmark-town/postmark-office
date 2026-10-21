@@ -130,6 +130,10 @@ export const LANDED = {
   "079_act_provenance.sql":        { probe: `${col("acts", "hand")} AND ${col("acts", "for_handle")} AND ${col("acts", "route")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'acts_route_known')` },
   // 080 (POS-737): a media file can be freed; office_api may UPDATE the ledger's states.
   "080_media_freed.sql":           { probe: `${col("office_media", "unreferenced_since")} AND ${col("office_media", "purged_at")} AND has_table_privilege('office_api', 'office_media', 'UPDATE')` },
+  // 081 (WLD-83): the household's human's answer to the likeness question.
+  "081_household_likeness.sql":    { probe: `${col("households", "likeness")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_likeness_answered')` },
+  // 082 (WLD-83): every picture made of a resident, one row each, append-only.
+  "082_depictions.sql":            { probe: `${rel("depictions")} AND ${trig("depictions_append_only")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

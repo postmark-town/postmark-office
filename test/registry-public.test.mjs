@@ -188,7 +188,8 @@ test("§ 5 over REST, public, on a real store: /households and a resident card c
   assert.equal(card.status, 200, cardText.slice(0, 200));
   assert.equal(leaks(cardText), false, "the resident card carries no private name");
   const hh = JSON.parse(cardText).household;
-  assert.deepEqual(hh, { key: "hh:lantern-row", slug: "lantern-row", residents: ["postmaster", "wick"] }, "the card's household block: the house, its members, no human key");
+  // `likeness` (WLD-83): the house's answer to the likeness question, never the human who gave it
+  assert.deepEqual(hh, { key: "hh:lantern-row", slug: "lantern-row", residents: ["postmaster", "wick"], likeness: "not given" }, "the card's household block: the house, its members, its likeness answer, no human key");
 });
 
 // ── § 6 the residency plan → the public join PR ─────────────────────────────

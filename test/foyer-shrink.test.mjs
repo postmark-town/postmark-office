@@ -500,6 +500,19 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   const profileFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
   assert.equal(profileFrozen?.fields.pronouns?.type, "string", "the frozen profile card carries pronouns");
   assert.equal(full.acts.find((a) => a.act === "profile")?.fields.pronouns?.type, "string", "and the live profile card takes it");
+
+  // ⚑ REGENERATED 2026-10-21 FOR WLD-83 (Darko 2026-10-19 18:24: the household
+  // submits its resident's six-panel reference sheet, and it is canon). What
+  // grew: the profile act's fields gained one optional field, `sheet`. ADDITIVE
+  // and proven so: the capture diff added exactly
+  // `/acts/4/fields/sheet/{type,description}` and removed or retyped none. It
+  // stays off the abridged index (household-apex.mjs § OFF_INDEX, pronouns' rule),
+  // so the connector's answer and the index twins do not move. PSA for the release notes: "update_profile takes sheet: your
+  // resident's six-panel reference sheet, as a media URL; setting your picture
+  // hands you the template to make one."
+  const sheetFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
+  assert.equal(sheetFrozen?.fields.sheet?.type, "string", "the frozen profile card carries sheet");
+  assert.equal(full.acts.find((a) => a.act === "profile")?.fields.sheet?.type, "string", "and the live profile card takes it");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async (t) => {

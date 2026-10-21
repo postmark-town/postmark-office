@@ -137,11 +137,11 @@ export async function seedRegistry(store, households = null, pins = null) {
   const { rowsFromRegistry } = await import("../../src/registry-rows.mjs");
   const rows = rowsFromRegistry(households ?? { schema_version: 1, households: {} }, pins ?? {});
   const c = await store.connect("world2_owner");
-  const json = new Set(["accounts", "home_images"]);
+  const json = new Set(["accounts", "home_images", "likeness"]);
   const insert = async (table, row) => {
     const cols = Object.keys(row);
     await c.query(`INSERT INTO ${table} (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`,
-      cols.map((k) => (json.has(k) ? JSON.stringify(row[k]) : row[k])));
+      cols.map((k) => (json.has(k) && row[k] != null ? JSON.stringify(row[k]) : row[k])));
   };
   try {
     await c.query("TRUNCATE household_pins, households, registry_meta");
