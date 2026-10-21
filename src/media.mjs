@@ -14,7 +14,9 @@
 //                         learns a file's weight."
 //   the-household-grain  "Media is a household's own: the quota walls by
 //                         resident count, the uploading hand rides every row,
-//                         and no other house writes on your wall."
+//                         and no other house writes on your wall." (Amended by
+//                         POS-736 to one wall per household; the world PR
+//                         carries the new words.)
 //
 // The lane a mark's `image:` field drinks from (the media ruling, 2026-08-15):
 // a resident uploads bytes HERE, gets back a https://media.postmark.town/…
@@ -34,9 +36,11 @@
 // household's, and the wall does not see them.
 //
 // The quota grain is the HOUSEHOLD — the credential grain, same as the
-// anti-sybil floor — sized per resident it holds (20 MB each by default), so
-// a one-resident household gets 20 MB and a three-resident founder household
-// gets 60. The ledger lives in the office's own paperwork (odb — oauth.db, or
+// anti-sybil floor — and since POS-736 (Darko 2026-10-20: "This definitely
+// should not be per resident"; "200 MB per household is fine") it is ONE flat
+// wall, 200 MB by default, the same for a house of one and a house of nine.
+// It was 20 MB per resident the calling key held, which gave a house of one a
+// tenth of what a big house got for the same act. The ledger lives in the office's own paperwork (odb — oauth.db, or
 // the store's office_media once the office is switched: paperwork.mjs, POS-271),
 // not the town repo: byte-accounting is machinery, NEVER record. (It read "not record"
 // until the marks were planted; "never" is the record's word and this line is
@@ -49,8 +53,8 @@
 //
 // Env (box: /etc/postmark-office.env): R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 // R2_SECRET_ACCESS_KEY, R2_BUCKET (default postmark-media), MEDIA_BASE
-// (default https://media.postmark.town), MEDIA_QUOTA_BYTES (default 20 MB,
-// per resident). Unconfigured ⇒ the door answers not-yet-open, honestly —
+// (default https://media.postmark.town), MEDIA_QUOTA_BYTES (default 200 MB,
+// per household, flat). Unconfigured ⇒ the door answers not-yet-open, honestly —
 // the office deploys ahead of the credentials without lying about it.
 
 import { createHash, createHmac } from "node:crypto";
@@ -65,7 +69,7 @@ const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, 
 
 const BUCKET = process.env.R2_BUCKET ?? "postmark-media";
 export const MEDIA_BASE = (process.env.MEDIA_BASE ?? "https://media.postmark.town").replace(/\/+$/, "");
-const QUOTA_PER_RESIDENT = Number(process.env.MEDIA_QUOTA_BYTES ?? 20 * 1024 * 1024);
+const QUOTA_PER_HOUSEHOLD = Number(process.env.MEDIA_QUOTA_BYTES ?? 200 * 1024 * 1024);
 
 export const mediaConfigured = () =>
   !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY);
@@ -218,19 +222,18 @@ export async function putThumbnails({ household, sha, ext, bytes, sizes = THUMB_
 }
 
 /**
- * The wall, measured. `residents` is the count of residents the CALLING KEY
- * acts for — the same grain the quota was sized in ("20 MB each"), and the same
- * number uploadMedia charges against, deliberately: a read that sized the
- * ceiling off the town's roster instead would quote a household a cap its own
- * key cannot spend.
+ * The wall, measured: one flat ceiling per household (POS-736). It takes no
+ * resident count. The wall used to be sized by the residents the calling key
+ * acted for, and the read and the write had to pass the same count to agree;
+ * a flat wall has nothing to disagree about.
  */
-export async function mediaQuota(odb, household, residents = 1) {
+export async function mediaQuota(odb, household) {
   ensureMediaTable(odb);
-  const ceiling = QUOTA_PER_RESIDENT * Math.max(1, residents);
+  const ceiling = QUOTA_PER_HOUSEHOLD;
   // Number(): the store's SUM over a bigint is a numeric, which node-postgres
   // hands back as a string (paperwork.mjs § NUMBERS).
   const used = Number((await asPaper(odb).get("SELECT COALESCE(SUM(bytes), 0) AS u FROM media WHERE household = ?", household)).u);
-  return { per_resident: QUOTA_PER_RESIDENT, ceiling, used, remaining: Math.max(0, ceiling - used) };
+  return { ceiling, used, remaining: Math.max(0, ceiling - used) };
 }
 
 /**
@@ -740,7 +743,7 @@ export async function uploadMedia(args = {}, key = null, odb = null,
   const objectKey = mediaObjectKey(household, sha, ext);
   const url = mediaUrlFor(household, sha, ext);
 
-  const { ceiling, used } = await mediaQuota(odb, household, handles.length);
+  const { ceiling, used } = await mediaQuota(odb, household);
   // Same bytes, same wall: answer with the URL that already exists. This sits
   // BEFORE the quota check on purpose — re-sending what you already hold can
   // never be refused for fullness.
@@ -748,7 +751,7 @@ export async function uploadMedia(args = {}, key = null, odb = null,
     return { url, bytes: bytes.length, type: mediaType, sha, already: true, via: source, ...(read_at ? { read_at } : {}), quota: { used, ceiling } };
   if (used + bytes.length > ceiling)
     throw bounce(413, "your household's media is full",
-      `${fmtMB(used)} of ${fmtMB(ceiling)} used and this file is ${fmtMB(bytes.length)} — the wall is ${fmtMB(QUOTA_PER_RESIDENT)} per resident; the ceiling is a dial, and a genuine need is a letter to the founders`);
+      `${fmtMB(used)} of ${fmtMB(ceiling)} used and this file is ${fmtMB(bytes.length)} — the wall is ${fmtMB(QUOTA_PER_HOUSEHOLD)} per household; the ceiling is a dial, and a genuine need is a letter to the founders`);
 
   await put(objectKey, bytes, mediaType);
   // THE SMALL COPIES, after the original is in storage and before the ledger
