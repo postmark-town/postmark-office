@@ -263,3 +263,12 @@ test("THE DOOR'S WORDS: declare_household no longer says a newcomer lands at the
   assert.doesNotMatch(src, /This lands you at THE HARBOR/);
   assert.match(src, /until you first walk, or the world gives you ground, you stand at the Origin \(0, 0\)/);
 });
+
+test("G1's order: the engine's porch moved to the Origin (`source: \"origin\"`) is the same groundless class, disclosed", async () => {
+  const { isGroundlessDefault, atOrigin, NO_GROUND_NEIGHBOURHOOD } = await import("../src/groundless.mjs");
+  assert.equal(isGroundlessDefault({ source: "quay" }), true, "the porch's old word, today's engine");
+  assert.equal(isGroundlessDefault({ source: "origin" }), true, "the Origin's, once the world PR lands");
+  for (const s of ["walk", "parcel", "timetable", "vehicle", null]) assert.equal(isGroundlessDefault({ source: s }), false, String(s));
+  const row = atOrigin({ handle: "never-a-berth", x: 0, y: 0, source: "origin", mark_id: null });
+  assert.deepEqual([row.x, row.y, row.placeholder, row.placeholder_note], [0, 0, true, NO_GROUND_NEIGHBOURHOOD], "the disclosure rides either way");
+});
