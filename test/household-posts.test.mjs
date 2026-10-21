@@ -32,7 +32,7 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { copyTownTools } from "./helpers/town-tools.mjs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -131,6 +131,20 @@ event("zed/elsewhere", "zed", "solo:zed", NOW + D, NOW + D + H);
 // and one that ended within the week
 event("mari/tomorrow", "mari", "hh:starforge", NOW + D, NOW + D + H);
 event("rei/last-week", "rei", "hh:starforge", NOW - 3 * D, NOW - 2 * D);
+// a bug Starforge reported, at its second stage (POS-633 round 4), and one nobody in the house touched
+const bug = (id, author, household, state, at) => {
+  posts.set(id, { id, class: "bug", title: `the ${id.split("/")[1]}`, body: "it broke", author, household,
+    place_mark: null, place_x: null, place_y: null, starts: null, ends: null, state, fields: {}, revised: 0, posted_act: nextAct, last_act: nextAct });
+  acts.push({ id: nextAct++, class: "bug", action: "post", object: id, at: iso(at) });
+};
+bug("rei/the-map-forgets", "rei", "hh:starforge", "confirmed", NOW - 4 * H);
+// a quest the town posted that a Starforge resident answered (Darko 15:54: every class through the one pass)
+posts.set("the-town/reach-out", { id: "the-town/reach-out", class: "quest", title: "Reach out", body: "write to five", author: "the-town", household: "the-town",
+  place_mark: null, place_x: null, place_y: null, starts: null, ends: null, state: "open", fields: {}, revised: 0, posted_act: nextAct, last_act: nextAct });
+acts.push({ id: nextAct++, class: "quest", action: "post", object: "the-town/reach-out", at: iso(NOW - D) });
+responses.push({ post: "the-town/reach-out", handle: "rei", household: "hh:starforge", kind: "join", state: "standing", fields: {}, act: nextAct });
+acts.push({ id: nextAct++, class: "quest", action: "join", object: "the-town/reach-out", at: iso(NOW - 6 * H) });
+bug("zed/not-ours", "zed", "solo:zed", "reported", NOW - 5 * H);
 rsvp("kogane/tea", "mari", "hh:starforge", NOW - 2 * H);
 rsvp("wright/office-hours", "kogane", "hh:shard-house", NOW - D);
 rsvp("zed/elsewhere", "zed", "solo:zed", NOW - D);
@@ -139,6 +153,11 @@ const ALSO = [
   [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 AND ends > \$2 ORDER BY starts, id$/i, (q, p) => {
     const rows = [...posts.values()].filter((r) => r.class === p[0] && Date.parse(r.ends) > Date.parse(p[1]))
       .sort((a, b) => Date.parse(a.starts) - Date.parse(b.starts) || a.id.localeCompare(b.id)).map((r) => ({ ...r, fields: { ...r.fields } }));
+    return { rows, rowCount: rows.length };
+  }],
+  // the classes with no window (bugs, idea posts): every row of the class, by id
+  [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
+    const rows = [...posts.values()].filter((r) => r.class === p[0]).sort((a, b) => a.id.localeCompare(b.id)).map((r) => ({ ...r, fields: { ...r.fields } }));
     return { rows, rowCount: rows.length };
   }],
   // WHOLE ROWS, whatever the SELECT named: the read must pick its columns itself
@@ -273,7 +292,8 @@ test("7 · each list is cut at the cap and says the true total", async () => {
     const a = await read("wright");
     const all = [...posts.values()].filter((p) => ["wright", "rei", "mari"].includes(p.author) && Date.parse(p.ends) > NOW - 7 * D).length;
     const ideas = 1; // rei/events-as-objects
-    assert.equal(a.put_up.total, all + ideas, "the total is every post the house put up in the window");
+    const bugs = 1; // rei/the-map-forgets (a bug has no window)
+    assert.equal(a.put_up.total, all + ideas + bugs, "the total is every post the house put up in the window");
     assert.equal(a.put_up.shown, POSTS_CAP);
     assert.equal(a.put_up.rows.length, POSTS_CAP);
     assert.ok(a.put_up.total > a.put_up.shown, "the cut is said, not silent");
@@ -287,6 +307,7 @@ test("8 · the order: open posts first (a span by its soonest start, then the re
   assert.deepEqual(a.put_up.rows.map((r) => r.id), [
     "mari/tomorrow",          // open, starts in a day (its last act is older than office hours')
     "wright/office-hours",    // open, starts in two
+    "rei/the-map-forgets",    // open, no span: by its newest act (a bug, reported four hours ago)
     "rei/events-as-objects",  // open, no span: by its newest act
     "rei/called-off",         // terminal: acted two days ago
     "rei/last-week",          // terminal: acted six days ago
@@ -313,7 +334,11 @@ test("a class the office cannot read is named, and its rows are left out rather 
   try {
     const a = await withNoWorld(() => householdPosts("wright", { now: NOW, townClone: TOWN, readers: REGISTRY }));
     assert.deepEqual(a.unavailable, [
+      // every post class in POST_CLASSES order (Darko 15:54: one generic pass), the idea posts quiet while closed,
+      // then the Think Tank's marks, which are world marks and not posts
       "the events could not be read from the office's record",
+      "the quests could not be read from the office's record",
+      "the bugs could not be read from the office's record",
       "the Think Tank could not be read from the world record",
     ]);
     assert.deepEqual([a.put_up.total, a.taking_part.total], [0, 0]);
@@ -324,4 +349,28 @@ test("a class the office cannot read is named, and its rows are left out rather 
     Object.assign(process.env, RECORD_ON);
     pen = await penWith();
   }
+});
+
+// POS-633 round 4 (Wright, 2026-10-20): the bugs are the posts table's, read like the idea posts
+test("a bug the house reported is put up, its state is its stage; another house's bug is not the house's", async () => {
+  const a = await read("wright");
+  const mine = row(a.put_up, "rei/the-map-forgets");
+  assert.ok(mine, "the bug rei reported is the house's");
+  assert.deepEqual([mine.class, mine.role, mine.state, mine.responses], ["bug", "author", "confirmed", 0]);
+  assert.equal(row(a.put_up, "zed/not-ours"), null);
+  assert.equal(row(a.taking_part, "zed/not-ours"), null);
+});
+
+// Darko 2026-10-20 15:54: "handle all posts the same whatever's intersecting"
+test("every post class goes through the one generic pass: a quest the house answered is taken part in, and the class list is POST_CLASSES", async () => {
+  const a = await read("wright");
+  const q = row(a.taking_part, "the-town/reach-out");
+  assert.ok(q, "the quest rei answered is the house's to take part in");
+  assert.deepEqual([q.class, q.role, q.state, q.responses], ["quest", "participant", "open", 1]);
+  // the one pass reads what the post machine declares: a class added there is read here with no change
+  const { POST_CLASSES } = await import("../src/town-posts.mjs");
+  const src = readFileSync(new URL("../src/household-posts.mjs", import.meta.url), "utf8");
+  assert.match(src, /Object\.keys\(\(await import\("\.\/town-posts\.mjs"\)\)\.POST_CLASSES\)/);
+  assert.doesNotMatch(src, /tableRows\((EVENT|IDEA|BUG|QUEST)_CLASS/, "no class has a half of its own");
+  assert.deepEqual(Object.keys(POST_CLASSES).sort(), ["bug", "event", "idea", "quest"]);
 });

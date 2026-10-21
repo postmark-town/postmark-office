@@ -52,6 +52,7 @@ import { TUTORIAL } from "./read-grammar.mjs"; // POS-632: the tutorial is the s
 import { doorShape } from "./door-read-shape.mjs"; // POS-486: the town and household reads' shapes, likewise
 import { HOUSEHOLD_TOOL, householdApex, householdDispatchToolFor } from "./household-apex.mjs";
 import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex.mjs";
+import { worldWriteCost } from "./bouncer.mjs"; // a stance list is charged one world write a mark (review of #678)
 import { DOORSTEP_TOOL, doorstepApex } from "./doorstep-apex.mjs"; // POS-632 PR-6: the apex of apexes
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
 import { TOWN_POST_TOOLS, EVENT_POST_PROPERTIES, QUEST_POST_PROPERTIES, BUG_POST_PROPERTIES, callTownPostTool, townPostEvent, ideaPrecheck } from "./town-post.mjs"; // the post machine, POS-288 (quests: POS-294; bugs: Posts phase 2)
@@ -1245,7 +1246,7 @@ export function handleMcp(req, res, ctx) {
             : named === "town" && write
               ? (townDispatchToolFor(message?.params?.arguments?.do) ?? named)
               : named;
-        const limited = ctx.rateLimit({ verb, write });
+        const limited = ctx.rateLimit({ verb, write, cost: write ? worldWriteCost(verb, message?.params?.arguments) : 1 });
         if (limited) return ctx.rateResponse(res, limited);
       }
     }

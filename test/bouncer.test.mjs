@@ -10,6 +10,7 @@ import {
   keyIdForToken,
   townDayWindow,
   worldWriteVerbForRest,
+  WORLD_WRITE_VERBS,
 } from "../src/bouncer.mjs";
 
 const quiet = () => {};
@@ -201,4 +202,21 @@ test("a bulk read's cost: cards by the page's limit, doorsteps by the handles, a
   assert.equal(bulkCost("/letters", p("digests=1")), 1, "the default 50");
   assert.equal(bulkCost("/letters", p("full=1&limit=200")), 1, "a full page is one read, as it always was");
   assert.equal(bulkCost("/bulletin", p("full=1")), 1);
+});
+
+// Review of #678, item 2: a stance list writes one act a mark, and is charged so.
+test("a stance is a world write, and a list of them is charged its length, whole or not at all", async () => {
+  const { worldWriteCost } = await import("../src/bouncer.mjs");
+  assert.ok(WORLD_WRITE_VERBS.has("world_declare_stance"));
+  assert.equal(worldWriteCost("world_declare_stance", { do: "declare-stance-on", args: { on: ["a/x", "a/y", "a/z"], stance: "welcomed" } }), 3);
+  assert.equal(worldWriteCost("world_declare_stance", { on: "a/x", stance: "neutral" }), 1);
+  assert.equal(worldWriteCost("world_walk", { args: { on: ["a", "b"] } }), 1, "only the stance's list is counted by length");
+  let t = Date.parse("2026-10-21T10:15:00Z");
+  const b = new Bouncer({ now: () => t, limits: { household: { worldWritesPerHour: 5 } }, log: quiet });
+  assert.equal(b.checkHouseholdWorldWrite({ household: "hh:x", verb: "world_declare_stance", cost: 3 }), null);
+  const over = b.checkHouseholdWorldWrite({ household: "hh:x", verb: "world_declare_stance", cost: 3 });
+  assert.ok(over, "3 more would pass 5: refused whole");
+  assert.match(JSON.stringify(over), /this call writes 3/);
+  assert.equal(b.checkHouseholdWorldWrite({ household: "hh:x", verb: "world_declare_stance", cost: 2 }), null, "2 more fit exactly");
+  assert.ok(b.checkHouseholdWorldWrite({ household: "hh:x", verb: "world_declare_stance" }), "and the hour is spent");
 });

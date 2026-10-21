@@ -364,8 +364,13 @@
     },
     "on": {
      "description": "string",
+     "items": {
+      "type": "string"
+     },
      "required": "boolean",
-     "type": "string"
+     "type": [
+      "string"
+     ]
     },
     "stance": {
      "description": "string",
