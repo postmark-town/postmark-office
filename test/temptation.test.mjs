@@ -279,7 +279,13 @@ test("a give to the one who speaks for it, from inside its ring, is answered and
   const r = await givenToATempter({ to: WHO, kind: "a-sweet" }, { handles: new Set(["kai"]) }, "kai", deps({ x: 5, y: 0 }));
   assert.equal(r.counted, true);
   assert.deepEqual([written[0].action, written[0].object, written[0].payload.nothing_moves], ["give", ID, true]);
-  assert.equal(await givenToATempter({ to: WHO }, null, "kai", deps({ x: 500, y: 0 })), null, "outside its ring: the hold's own");
+  // P1, narrowed (Wright 2026-10-21): anywhere but its ring, during its fight, a give to that resident is an ordinary give and transfers
+  assert.equal(await givenToATempter({ to: WHO }, null, "kai", deps({ x: 500, y: 0 })), null, "outside its ring: an ordinary give, which transfers");
+  const ended = livingWith(lawWith(), { id: nextId(), at: iso(NOW - 1000), actor: "the-town", action: "withdraw", object: ID, payload: { reason: "ended" } });
+  ended.law.creaturesMod = { ...ended.law.creaturesMod, DESPAWN_REASONS: [...ended.law.creaturesMod.DESPAWN_REASONS, "ended"] };
+  ended.fold([{ id: nextId(), at: iso(NOW - 1000), actor: "the-town", action: "withdraw", object: ID, payload: { reason: "ended" } }], { advance: false });
+  assert.equal(await givenToATempter({ to: WHO }, null, "kai", { ...deps({ x: 5, y: 0 }), creatures: async () => ({ living: ended, law: ended.law }) }), null,
+    "its fight over: an ordinary give, which transfers");
   assert.equal(await givenToATempter({ to: "someone-else" }, null, "kai", deps({ x: 5, y: 0 })), null);
 });
 
@@ -342,4 +348,18 @@ test("the live door: only its who, only at a resident in its ring, both lints or
   const c = living.byId.get(ID);
   assert.match((await writeLive(c, "tempt", "kai", { window: "w" }, { limit: 6, officeWrite: (fn) => fn(client(6)), insertAct: async () => "1" })).refused, /6 live temptations a window/);
   assert.equal((await writeLive(c, "tempt", "kai", { window: "w" }, { limit: 6, officeWrite: (fn) => fn(client(5)), insertAct: async () => "1" })).rows.length, 1);
+});
+
+test("a reply line may name {ally}: the resident its temptation named in this exchange, filled by code, kept on the row", async () => {
+  const ALLY_MENU = { ...MENU, whispers: [W("h3", "hush", "Tell {ally} to go.", { act: "say", to: "{ally}", gist: "go" }, ["ally"])].map((w) => ({ ...w, aims_at: "loudest" })) };
+  const kind = { ...TEMPTER, reactions: [reaction("turn", "true", "It turns from {actor} to {ally}.")] };
+  const law = { ...lawWith({ menu: ALLY_MENU }), kindOf: (nm) => (nm === "tempter" ? kind : null), lintChecked: new Map([["h3", true]]) };
+  law.kindMod = { ...law.kindMod, voiceLine: (r, w = {}) => BASE.kindMod.voiceLine({ ...r, says: r.says.replaceAll("{ally}", String(w.ally ?? "someone")) }, w) };
+  const living = new LivingSet({ law }).fold([spawn()]).fold([actCost("kai", NOW - 60_000)], { advance: false });
+  const { w, d } = turnDeps(living, { law, present: present([["kai", 10], ["ren", 12]]) });
+  const [answer] = await reactTo(act(), d);
+  const t = payloadOf(w.calls[0].find((r) => r.action === TEMPT_ACTION));
+  assert.equal(t.ally, "ren");
+  assert.equal(answer.line, "It turns from kai to ren.");
+  assert.equal(payloadOf(w.calls[0][0]).ally, "ren", "the reaction's row keeps whom it named, so the line re-renders");
 });

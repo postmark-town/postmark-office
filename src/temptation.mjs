@@ -202,14 +202,14 @@ export function temptationsFor({ menu, phase, target, roster, fill }) {
     if (tempts.to === "{ally}") tempts.to = slots.ally;
     else if (tempts.to === "{mate}") tempts.to = slots.mate;
     if (tempts.to == null && tempts.act === "say") continue;
-    out.push({ id: w.id, says: fill(w.text, slots), tempts, cues: w.seen_through });
+    out.push({ id: w.id, says: fill(w.text, slots), tempts, cues: w.seen_through, ...(slots.ally ? { ally: slots.ally } : {}) });
   }
   return out;
 }
 
 /** The tempt row's payload. */
 export function temptPayload({ whisper, phase, target, now = Date.now(), live = false }) {
-  return { whisper: whisper.id, phase: phase.name, to: target.handle, says: whisper.says, tempts: whisper.tempts,
+  return { whisper: whisper.id, phase: phase.name, to: target.handle, says: whisper.says, tempts: whisper.tempts, ...(whisper.ally ? { ally: whisper.ally } : {}),
     until: new Date(now + temptDial("obey_ms")).toISOString(), window: windowAt(now).id, ...(live ? { live: true } : {}) };
 }
 

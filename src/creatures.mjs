@@ -540,7 +540,7 @@ export class LivingSet {
     c.reactions.push({ act: key, to: p.to, verb: p.verb, reaction: p.reaction, roll: p.roll, judged_by: p.judged_by,
       distance_m: p.distance_m, approaching: !!p.approaching, at, instant: Number.isFinite(instant) ? instant : at,
       ...(p.offered ? { offered: p.offered } : {}), ...(typeof p.heard === "string" ? { heard: p.heard } : {}),
-      ...(typeof p.press?.on === "string" ? { target: p.press.on } : {}) });
+      ...(typeof p.press?.on === "string" ? { target: p.press.on } : {}), ...(typeof p.ally === "string" ? { ally: p.ally } : {}) });
   }
 
   living(now = Date.now()) {
@@ -973,8 +973,8 @@ export function applyReaction(law, creature, kind, reaction, scores = {}) {
 }
 
 /** The line (S3): the world's voiceLine, the kind's template with the actor named. Never model prose. */
-export const lineOf = (law, reaction, actor, { offered = null, heard = null, target = null } = {}) =>
-  law.kindMod.voiceLine(reaction, { actor, ...(offered ? { offered } : {}), ...(heard ? { heard } : {}), ...(target ? { target } : {}) });
+export const lineOf = (law, reaction, actor, { offered = null, heard = null, target = null, ally = null } = {}) =>
+  law.kindMod.voiceLine(reaction, { actor, ...(offered ? { offered } : {}), ...(heard ? { heard } : {}), ...(target ? { target } : {}), ...(ally ? { ally } : {}) });
 
 /** D5: a creature repeats at most this many words, the last ones said. */
 export const HEARD_WORDS_MAX = 5;
@@ -987,7 +987,9 @@ export const heardWords = (said) => {
 /** The words a remembered or stored reaction's line was filled with (POS-672): what was offered, what was repeated. */
 export const lineWords = (r) => ({ offered: r?.offered?.name ?? r?.offered?.kind ?? null, heard: typeof r?.heard === "string" ? r.heard : null,
   // whom a finishable creature's press landed on (encounter.mjs): the line's {target}
-  target: typeof r?.target === "string" ? r.target : typeof r?.press?.on === "string" ? r.press.on : null });
+  target: typeof r?.target === "string" ? r.target : typeof r?.press?.on === "string" ? r.press.on : null,
+  // whom a creature that tempts named beside the target (the line's {ally})
+  ally: typeof r?.ally === "string" ? r.ally : null });
 
 /** The odds over `allowed`, summing to 1, unrounded: what the d20 samples and the row stores. */
 export function normalized(allowed, probabilities) {
@@ -1011,6 +1013,7 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
     // the words its line was filled with (POS-672): the kind offered, the words repeated (said in public, so public)
     ...(words.offered ? { offered: words.offered } : {}),
     ...(words.heard ? { heard: words.heard } : {}),
+    ...(words.ally ? { ally: words.ally } : {}),
     roll,
     judged_by: judgment.judged_by,
     ...(judgment.why ? { why: judgment.why } : {}),
@@ -1478,11 +1481,13 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const press = enc ? pressOf(creature, act, reaction, enc, judgment, { living, now }) : null;
     const eased = enc && kind.ease ? applyEase(creature, kind, [...(enc.breaksEase ? [EASE_BROKEN] : []), ...(reaction.effects ?? [])], act.actor, enc.household, now)
       : { ease: null, filled: false };
-    const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null };
+    const tempted = tm ? temptingRows(creature, act, tm, judgment, { living, now }) : { tempt: null, tallies: [] };
+    // {ally} (a creature that tempts): the other resident its temptation named in this exchange
+    const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null,
+      ally: String(reaction.says).includes("{ally}") ? tempted.tempt?.ally ?? null : null };
     const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words,
       encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve } : null });
     const nerve = enc ? [...enc.cost, ...(press?.landed ?? []).map((l) => ({ ...l, why: "press" }))] : [];
-    const tempted = tm ? temptingRows(creature, act, tm, judgment, { living, now }) : { tempt: null, tallies: [] };
     const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) || !!telling?.answered || eased.filled,
       tell: telling?.tell ?? null, nerve, tempt: tempted.tempt, tallies: tempted.tallies });
     const written = await (deps.write ?? writeReaction)(rows);
