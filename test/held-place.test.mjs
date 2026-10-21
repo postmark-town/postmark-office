@@ -138,9 +138,38 @@ test("6. THE PRINTOUT (W1 a): held printed unplaced with where it last stood; a 
   assert.equal(back.prints[0].data[PLACED], undefined);
   // the first clearing that prints (no earlier cutoff): held things only
   assert.deepEqual(holdPrintout({ attachments, drops, rows, from: null }).prints.map((p) => p.slug).sort(), [CONE].sort());
-  // an author's amend after the drop: their word stands
-  const amended = rows.map((r) => (r.slug === "sb-ash/a-tin-box" ? { ...r, locked_window: 259 } : r));
+  // an author's amend after the drop: their word stands (act ids, one clock: the amend's act is later than the drop's)
+  const amended = rows.map((r) => (r.slug === "sb-ash/a-tin-box" ? { ...r, data: { ...r.data, _act_id: "705" } } : r));
   assert.equal(holdPrintout({ attachments, drops, rows: amended, from: 600 }).prints.some((p) => p.slug === "sb-ash/a-tin-box"), false);
+  assert.match(holdPrintout({ attachments, drops, rows: amended, from: 600 }).notes.join("\n"), /sb-ash\/a-tin-box: amended by act 705, after its set-down \(act 700\): the author's word stands/);
+});
+
+// POS-688 acceptance F1 (Wright, 2026-10-21): the amend rule compared a WINDOW with a CROSSING. On prod the two share
+// numbers but not hours: window W opens 05:45Z and clears at 17:45Z, while crossing W runs 12:00Z–24:00Z. A thing
+// locked at W's clearing (locked_window W), then taken and dropped before midnight (the drop's crossing W.6), read as
+// amended past its drop, "amended in window W, after its set-down in W", and was held back at every clearing after.
+test("6b. F1: a drop after a lock at the clearing, before the crossing ends, prints; only an amend by a later act holds it back", () => {
+  const CROSSING_263 = Date.UTC(2026, 9, 21, 12);   // crossing 263 runs 12:00Z–24:00Z on 10-21 (prod's clock)
+  const crossingAt = (ms) => 263 + (ms - CROSSING_263) / (12 * 3600_000);
+  const clearing = Date.UTC(2026, 9, 21, 17, 45);   // window 263 clears at 17:45Z
+  const dropAt = Date.UTC(2026, 9, 21, 20, 0);      // the drop, before midnight: crossing 263.67
+  assert.ok(Math.floor(crossingAt(dropAt)) === 263 && crossingAt(clearing) < crossingAt(dropAt));
+  const KEY = "sb-ash/a-brass-key";
+  const row = { id: "u-key", slug: KEY, kind: "thing", owner: "sb-ash", household: "hh", body: "b",
+    locked_window: 263, // locked at window 263's clearing
+    geometry: { at: { x: 196, y: -356 }, extent: { w: 1, h: 1 } }, data: { date: "2026-10-21", _act_id: "21400" } };
+  const attachments = [take(KEY, "sb-ash", 21410), drop(KEY, "sb-ash", 21420)];
+  const drops = new Map([[KEY, { seq: 21420, actor: "sb-ash", crossing: crossingAt(dropAt), at: { anchor: null, dx: 230, dy: -350 } }]]);
+  const out = holdPrintout({ attachments, drops, rows: [row], from: 21000 });
+  assert.deepEqual(out.prints.map((p) => [p.slug, p.geometry?.at]), [[KEY, { x: 230, y: -350 }]], `it prints where it was set down: ${out.notes.join(" | ")}`);
+  assert.doesNotMatch(out.notes.join("\n"), /author's word stands/);
+  // and the rule still holds an author's real amend after the drop
+  const amended = holdPrintout({ attachments, drops, rows: [{ ...row, data: { ...row.data, _act_id: "21430" } }], from: 21000 });
+  assert.equal(amended.prints.length, 0);
+  assert.match(amended.notes.join("\n"), /amended by act 21430, after its set-down \(act 21420\)/);
+  // a row from before the act-id era has had no amend since (an amend writes one): the drop prints
+  const legacy = holdPrintout({ attachments, drops, rows: [{ ...row, data: { date: "2026-08-01" } }], from: 21000 });
+  assert.equal(legacy.prints.length, 1);
 });
 
 test("7. a thing is a thing by its class chain", () => {

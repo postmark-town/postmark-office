@@ -321,6 +321,9 @@ test("WELCOMED IS FINAL: Keith's house gives the stool to Ana to keep; then it i
   assert.equal(ownershipOf(ownersNow(p), STOOL).owner, "ana");
   const again = await speak("opposed", "keith", KEITH);
   assert.equal(again.refused, true, "the owner is ana now: keith's word is no owner's word");
+  // POS-688 acceptance F3: the refusal says who owns it now, not "a mark is never its own ground"
+  assert.match(again.defect, /is ana's now$/);
+  assert.match(again.hint, /ana's house answers for it from here/);
 });
 
 test("A TAKE IS ANSWERED THE SAME WAY: Ana holds Keith's stool, and Keith's house's opposed names the take", async () => {

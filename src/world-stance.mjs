@@ -1436,6 +1436,9 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
       return await answerWord({ on, stance, by, key, own, dbPath, witnessStamp, crossing });
   }
 
+  // given away (welcomed, a give, the open bowl): the maker is told who owns it now (POS-688 acceptance F3)
+  if (target.by === by && own?.owner && own.owner !== by)
+    throw bounce(422, `${on} is ${own.owner}'s now`, `you made it, and its owner has the say: ${own.owner}'s house answers for it from here (the maker is fixed; the owner is not)`);
   if (target.by === by) throw bounce(422, "a mark is never its own ground",
     "you do not consent to your own declaration — a stance is the word of the ground it landed on"
     + (own?.unreadable ? ` (whether someone outside your house holds it or set it down, which is the one thing its owner's house answers here, could not be checked: the holding record did not answer)` : ""));

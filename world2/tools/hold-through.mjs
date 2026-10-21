@@ -61,8 +61,12 @@
 //   · a thing that frames marks filed inside it (their numbers are written against
 //     its centre: unplacing it would move them; the sweep holds the same back);
 //   · a drop whose place cannot be composed, or a thing with no extent to print;
-//   · a drop the standing row has been amended past (its window is later than the
-//     drop's): the author's word stands.
+//   · a drop the standing row has been amended past: the author's word stands. ONE
+//     clock, act ids (POS-688 acceptance F1, Wright 2026-10-21): the row's own act
+//     (`data._act_id`, the author's last leave-mark, which a hold printout keeps) is
+//     later than the drop's. The window and the crossing were two clocks: window W
+//     clears at 17:45Z while crossing W runs to 24:00Z, so a thing locked at the
+//     clearing and dropped before midnight read as amended past its drop, forever.
 //
 // PURE planners (`holdPrintout`, `returnPlan`), plus the one function that reads
 // and writes (`writeHoldThrough`), which the clearing job calls inside its
@@ -86,7 +90,8 @@ export const STANDING_ROWS_SQL = `SELECT id::text, slug, kind, owner, household,
 const asObj = (v) => (typeof v === "string" ? JSON.parse(v) : v);
 const point = (p) => (p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)) ? { x: Number(p.x), y: Number(p.y) } : null);
 const sameAt = (a, b) => !!a && !!b && Number(a.x) === Number(b.x) && Number(a.y) === Number(b.y);
-const windowOf = (row) => (row?.crossing == null || !Number.isFinite(Number(row.crossing)) ? null : Math.floor(Number(row.crossing)));
+/** An act id as a BigInt, or null: the one clock a drop and an amend are ordered by. */
+const actOrder = (v) => (v != null && /^\d+$/.test(String(v)) ? BigInt(String(v)) : null);
 const isMarkId = (v) => typeof v === "string" && v.includes("/");
 
 /**
@@ -130,9 +135,11 @@ export function holdPrintout({ attachments = [], drops = new Map(), rows = [], f
     const at = drop ? composeAnchor(drop.at ?? {}, centreOf) : null;
     if (!at) { notes.push(`${slug}: its set-down could not be placed (the drop's witnessed line does not compose)`); continue; }
     if (!heldBy(row.data) && sameAt(row.geometry?.at, at)) continue; // canon has it there already
-    const dropWindow = windowOf(drop);
-    if (!heldBy(row.data) && dropWindow != null && Number(row.locked_window) >= dropWindow) {
-      notes.push(`${slug}: amended in window ${row.locked_window}, after its set-down in ${dropWindow}: the author's word stands`);
+    // an amend the author made after the drop: act ids, one clock. A row with no `_act_id` was written before
+    // the act-id era and has not been amended since (an amend writes one), so nothing supersedes the drop.
+    const amendAct = actOrder(row.data?._act_id), dropAct = actOrder(drop?.seq ?? actIdOf(hold));
+    if (!heldBy(row.data) && amendAct != null && dropAct != null && amendAct > dropAct) {
+      notes.push(`${slug}: amended by act ${amendAct}, after its set-down (act ${dropAct}): the author's word stands`);
       continue;
     }
     const extent = row.geometry?.extent ?? placed?.extent ?? null;
