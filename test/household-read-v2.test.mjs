@@ -349,7 +349,9 @@ test("happened · D4: hand and for from what the record knows; a route never rec
 // With every block and the eval's keys: Darko's 4K plus what round 1 asked for, at the fixture's widest.
 // Darko 2026-10-20 18:04 ("good with ur recs for 633"): 6,656, after round 4 added marks and posts and every block's
 // own read; measured on the compare fixture's Starforge (three waiting streams of 50, 6 and 5, each author's own words).
-const FULL_BUDGET = 6656;
+// Darko 2026-10-21 08:26 ("633 6720 is good"): 6,720. The keeping call named once in the marks key and new_responses
+// put the full stack at 6,677 (the phrases' happened lines included), 21 over 6,656.
+const FULL_BUDGET = 6720;
 test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
   const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
   // the widest realistic waiting block: three streams, as Starforge had on 10-19 (the compare fixture's)
