@@ -1122,7 +1122,7 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // doorstep segment (the pin and two creature-tick cases only). The page was read
   // off CI itself at the new pin (a one-commit diagnostic printed it, run
   // 39598920026, then reverted), and diffed leaf by leaf against the seventeenth
-  // capture BEFORE this one: 1129 -> 1139 paths, 14 removed, 24 added, 168 changed,
+  // capture BEFORE this one: 1129 -> 1139 paths, 14 removed, 24 added, 158 changed,
   // every one of them in `stances`, the world's own data at the pin: the count
   // awaiting (64 -> 65), the five newest awaiting rows and their `on_your_ground`
   // lists, and `ground` (73 -> 78 marks). Nothing else moved; `stakes` is unchanged.
