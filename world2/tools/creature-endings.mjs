@@ -92,6 +92,53 @@ export const ANSWERED_SQL = `SELECT t.id::text AS act_id, t.actor, t.object, t.p
   JOIN acts t ON t.id = CASE WHEN r.object ~ '^[0-9]+$' THEN r.object::bigint END
   WHERE r.class = '${CREATURE}' AND r.action = 'react' AND r.actor = $1 AND t.at < $2
   ORDER BY t.id`;
+/**
+ * A CREATURE THAT TEMPTS ends by its two tallies over the window the settlement
+ * closed (src/temptation.mjs): its strikes' damage and its tally rows, in [$2, $3).
+ */
+export const TALLY_ROWS_SQL = `SELECT action, actor, object, payload FROM acts
+  WHERE class = '${CREATURE}' AND at >= $2::timestamptz AND at < $3::timestamptz
+    AND ((action = 'strike' AND object = $1) OR (action = 'tally' AND actor = $1))`;
+
+/** Its tallies from those rows: { damage, persuasion }, damage never below 0. */
+export function talliesFrom(rows = []) {
+  let damage = 0, persuasion = 0;
+  for (const r of rows) {
+    const p = asObj(r.payload), by = Number(p.by), dmg = Number(p.damage);
+    if (r.action === "strike" && Number.isFinite(dmg)) damage += dmg;
+    else if (r.action === "tally" && Number.isFinite(by)) { if (p.road === "damage") damage += by; else if (p.road === "persuasion") persuasion += by; }
+  }
+  return { damage: Math.max(0, damage), persuasion: Math.max(0, persuasion) };
+}
+
+/** The road its tallies pick: the larger, a tie to persuasion (settled); null when both are 0 (it stays, and the window rolls). */
+export function roadFrom({ damage, persuasion }) {
+  if (!(damage > 0) && !(persuasion > 0)) return null;
+  return persuasion >= damage ? "persuasion" : "damage";
+}
+
+/**
+ * A tempting creature's ending at this settlement, or null while both tallies
+ * are 0. Everyone it answered took part (D1), and everyone a tally names. The
+ * line is its menu's ending for the road, then who took part.
+ */
+export function planTallyEnding({ spawn, rows, answered, settlement, cutoff, menu = null }) {
+  const t = talliesFrom(rows);
+  const road = roadFrom(t);
+  if (!road) return null;
+  const p = asObj(spawn.payload);
+  const id = spawn.object, kind = String(p.kind ?? CREATURE);
+  const tallied = rows.map((r) => (r.action === "strike" ? r.actor : r.object)).filter(resident);
+  const took = [...new Set([...tookPart(id, answered, [], { mode: "answered" }), ...tallied])];
+  const ending = menu?.endings?.[road] ?? null;
+  const names = namesSaid(took);
+  return {
+    id, kind, x: Number(p.x), y: Number(p.y), road, damage: t.damage, persuasion: t.persuasion, took_part: took, carries: null,
+    finisher: null, act: null, settlement: Number(settlement), cutoff,
+    line: `${ending?.text ?? `The ${kind}'s fight is over: ${road} won it.`}${names ? ` ${names} took part.` : ""}`,
+  };
+}
+
 /** Is the thing it carries a standing mark? */
 export const THING_STANDING_SQL = `SELECT 1 AS here FROM marks WHERE slug = $1 AND status = 'standing' LIMIT 1`;
 /** The thing's latest hold row: who holds it now, for the give's `previous_holder`. */
@@ -182,6 +229,25 @@ export async function endCreatures(client, { law, now = Date.now(), mode = TOOK_
   const cutoff = settlementAtOrBefore(new Date(s.published_at));
   const ended = [], waits = [], failed = [];
   for (const spawn of staying) {
+    const kindName0 = asObj(spawn.payload).kind;
+    let kindFile0 = null;
+    try { kindFile0 = law.kindOf?.(kindName0) ?? null; } catch { kindFile0 = null; }
+    // A CREATURE THAT TEMPTS: its tallies over the window this settlement closed pick its road
+    if (typeof kindFile0?.tempts === "string") {
+      const from = settlementAtOrBefore(new Date(Date.parse(cutoff) - 1));
+      const { rows } = await client.query(TALLY_ROWS_SQL, [spawn.object, from, cutoff]);
+      const { rows: answered } = await client.query(ANSWERED_SQL, [spawn.object, cutoff]);
+      let menu = null;
+      try { menu = law.menuOf?.(kindName0) ?? null; } catch { menu = null; }
+      const plan = planTallyEnding({ spawn, rows, answered, settlement: s.number, cutoff, menu });
+      if (!plan) continue;
+      try {
+        const r = await writeEnding(client, plan, { now });
+        if (r.wrote) ended.push(plan);
+        else if (r.why) waits.push(`${plan.id}: ${r.why}`);
+      } catch (e) { failed.push(`${plan.id}: ${String(e?.message ?? e).slice(0, 160)}`); }
+      continue;
+    }
     const { rows: finishers } = await client.query(FINISHES_SQL, [spawn.object, cutoff]);
     if (!finishers.length) continue;
     const { rows: answered } = await client.query(ANSWERED_SQL, [spawn.object, cutoff]);
@@ -200,7 +266,7 @@ export async function endCreatures(client, { law, now = Date.now(), mode = TOOK_
   }
   // a wait is the design (it is tried again next tick); a failure fails again every tick, so it is its own segment and alarms
   const line = say([
-    `ended ${ended.length}${ended.length ? ` (${ended.map((p) => `${p.id} → ${p.finisher}`).join(", ")})` : ""} at S${s.number}, cutoff ${cutoff}`,
+    `ended ${ended.length}${ended.length ? ` (${ended.map((p) => `${p.id} → ${p.road ?? p.finisher}`).join(", ")})` : ""} at S${s.number}, cutoff ${cutoff}`,
     ...(waits.length ? [`${waits.length} waiting (${waits.join("; ")})`] : []),
     ...(failed.length ? [`${failed.length} failed (${failed.join("; ")})`] : []),
   ].join(" · "));
@@ -230,7 +296,7 @@ export async function writeEnding(client, plan, { now = Date.now() } = {}) {
       `INSERT INTO acts (at, crossing, actor, action, object, at_anchor, at_dx, at_dy, class, payload, effect)
        VALUES (now(), $1, '${TOWN}', 'withdraw', $2, $3, $4, $5, '${CREATURE}', $6::jsonb, $7)`,
       [crossing, plan.id, Number.isFinite(plan.x) ? WORLD_ANCHOR : null, Number.isFinite(plan.x) ? plan.x : null, Number.isFinite(plan.y) ? plan.y : null,
-        JSON.stringify({ reason: ENDED, finished_by: plan.finisher, act: plan.act, took_part: plan.took_part,
+        JSON.stringify({ reason: ENDED, ...(plan.road ? { road: plan.road, damage: plan.damage, persuasion: plan.persuasion } : { finished_by: plan.finisher, act: plan.act }), took_part: plan.took_part,
           ...(plan.carries ? { carried: plan.carries } : {}), settlement: plan.settlement, cutoff: plan.cutoff }), plan.line]);
     await client.query("COMMIT");
     return { wrote: true };

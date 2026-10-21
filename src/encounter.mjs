@@ -72,7 +72,11 @@ const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t
 const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
 export const isFinishable = (kind) => kind?.finishable === true;
-export const isStrikable = (kind) => isFinishable(kind) && Number(kind.resolve) > 0 && Number(kind.strike) > 0;
+export const isStrikable = (kind) => isFinishable(kind) && ((Number(kind.resolve) > 0 && Number(kind.strike) > 0) || isTempter(kind));
+/** A creature that tempts (temptation.mjs): struck for damage, never worn down. */
+export const isTempter = (kind) => isFinishable(kind) && typeof kind?.tempts === "string" && !!kind?.who;
+/** A creature with a resolve to wear down. */
+export const hasResolve = (kind) => isFinishable(kind) && Number(kind.resolve) > 0 && Number(kind.strike) > 0;
 
 // ── nerve: a fold of the record ─────────────────────────────────────────────
 
@@ -138,8 +142,10 @@ export function wornBy(resolveMax, strikes) {
 export const ENCOUNTER_KEEP_MS = 25 * 3600_000;
 
 /** A row the living set keeps for the encounter, or null. */
+/** The actions of a creature that tempts (temptation.mjs), kept beside the encounter's own. */
+const TEMPTING_ACTIONS = ["tempt", "tempted", "tally", "line"];
 export function encounterRowOf(r) {
-  if (![NERVE_ACTION, STRIKE_ACTION, STEADY_ACTION, SHIELD_ACTION].includes(r.action)) return null;
+  if (![NERVE_ACTION, STRIKE_ACTION, STEADY_ACTION, SHIELD_ACTION, ...TEMPTING_ACTIONS].includes(r.action)) return null;
   return { id: String(r.id), at: msOf(r.at ?? r.written_at), actor: r.actor, action: r.action, object: r.object, payload: asPayload(r.payload) };
 }
 
@@ -153,8 +159,8 @@ export const nerveOf = (living, handle, now = Date.now()) => foldNerve(inWindow(
 export const strikesOn = (living, creatureId, now = Date.now()) =>
   inWindow(living.encounter ?? [], now).filter((r) => r.action === STRIKE_ACTION && r.object === creatureId);
 
-/** Resolve left this window. */
-export const resolveOf = (living, creature, kind, now = Date.now()) => resolveAfter(kind.resolve, strikesOn(living, creature.id, now));
+/** Resolve left this window (a creature with none, one that tempts, reads null). */
+export const resolveOf = (living, creature, kind, now = Date.now()) => (hasResolve(kind) ? resolveAfter(kind.resolve, strikesOn(living, creature.id, now)) : null);
 
 /**
  * The live shield on `handle`: the newest shield this window aimed at them that
@@ -381,7 +387,7 @@ export function encounterRead({ living }, creature, kind, { handle = null, house
   const w = windowAt(now);
   const ease = kind.ease ? easeScope(creature, kind, handle, household, now) : null;
   return {
-    ...(isStrikable(kind) ? { resolve: { left: resolveOf(living, creature, kind, now), of: kind.resolve, a_strike_takes: kind.strike, fills_at: new Date(w.ends).toISOString() } } : {}),
+    ...(hasResolve(kind) ? { resolve: { left: resolveOf(living, creature, kind, now), of: kind.resolve, a_strike_takes: kind.strike, fills_at: new Date(w.ends).toISOString() } } : {}),
     ...(ease ? { ease: kind.ease.by === "households"
       ? { households: ease.all, of: kind.ease.target, note: "one point per household this window" }
       : { yours: ease.mine, of: kind.ease.target, note: "each resident fills their own this window" } } : {}),

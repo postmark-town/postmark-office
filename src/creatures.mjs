@@ -89,6 +89,11 @@ import {
   ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
   easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt,
 } from "./encounter.mjs";
+import {
+  ANSWER_OPTIONS, TALLY_ACTION, TEMPT_ACTION, isTempting, openTemptations, phaseOf, plainHouses, plainScore, helpScore,
+  temptPayload, temptTarget, temptationsFor, talliesOf,
+} from "./temptation.mjs";
+import { liveShieldOn } from "./encounter.mjs";
 
 export const CREATURE_CLASS = "creature";
 export const REACT_ACTION = "react";
@@ -156,7 +161,25 @@ export async function loadCreatureLaw({ repo = WORLD_CLONE, ref = null, importTo
     const portals = await Promise.resolve().then(() => tool("portals.mjs")).catch(() => null);
     const walls = typeof portals?.ringRoomOf === "function" && typeof portals?.inCreatureRing === "function"
       ? { ringRoomOf: portals.ringRoomOf, inCreatureRing: portals.inCreatureRing } : {};
-    return { ref: at, kindMod, creaturesMod, kindOf, afforded, affordedOf: (kind) => afforded?.[kind] ?? [], ...walls };
+    // A CREATURE THAT TEMPTS (world tools/creature-tempts.mjs): its menu beside its kind file, read whole
+    // and linted at this ref, or null (it never tempts: fail closed)
+    const temptsMod = await Promise.resolve().then(() => tool("creature-tempts.mjs")).catch(() => null);
+    const menus = new Map(); // kind name → { menu, at }
+    const menuOf = (name) => {
+      const kind = kindOf(name);
+      if (!kind?.tempts || typeof temptsMod?.parseMenu !== "function") return null;
+      const had = menus.get(name);
+      if (!had || (had.menu === null && clock() - had.at >= LAW_RETRY_MS)) {
+        let menu = null;
+        try { menu = temptsMod.parseMenu(read(`WORLD/kinds/${kind.tempts}`), { source: `WORLD/kinds/${kind.tempts} at ${at}`, who: kind.who }); }
+        catch (e) { faultLogged(`the menu of the creature kind "${name}" could not be read at ${at}`, e); }
+        menus.set(name, { menu, at: clock() });
+      }
+      return menus.get(name).menu;
+    };
+    return { ref: at, kindMod, creaturesMod, kindOf, afforded, affordedOf: (kind) => afforded?.[kind] ?? [], ...walls,
+      // lintChecked: Jev's word on each menu temptation at this ref (temptation.mjs § jevLints), filled by the tick
+      ...(typeof temptsMod?.parseMenu === "function" ? { temptsMod, menuOf, lintChecked: new Map() } : {}) };
   } catch (e) {
     faultLogged(`the creature law could not be loaded at ${at ?? "the blessed ref"}`, e);
     return { ref: at, unavailable: `the world's creature law cannot be read at ${at ?? "the blessed ref"}, so no creature reacts` };
@@ -517,7 +540,7 @@ export class LivingSet {
     c.reactions.push({ act: key, to: p.to, verb: p.verb, reaction: p.reaction, roll: p.roll, judged_by: p.judged_by,
       distance_m: p.distance_m, approaching: !!p.approaching, at, instant: Number.isFinite(instant) ? instant : at,
       ...(p.offered ? { offered: p.offered } : {}), ...(typeof p.heard === "string" ? { heard: p.heard } : {}),
-      ...(typeof p.press?.on === "string" ? { target: p.press.on } : {}) });
+      ...(typeof p.press?.on === "string" ? { target: p.press.on } : {}), ...(typeof p.ally === "string" ? { ally: p.ally } : {}) });
   }
 
   living(now = Date.now()) {
@@ -689,6 +712,10 @@ export const SLICE_FIELDS = Object.freeze([
   "creature.resolve", "creature.ease",
   "ring", "ring[]", "ring[].name", "ring[].household", "ring[].human", "ring[].m", "ring[].nerve",
   "this_act.target",
+  // a creature that tempts (temptation.mjs): its phase, the temptation open to the actor (its words and its cues),
+  // the true public lines a plain answer may correct it with, and the words of this say
+  "tempting", "tempting.phase", "tempting.open", "tempting.open.says", "tempting.open.cues", "tempting.open.cues[]",
+  "tempting.true_lines", "tempting.true_lines[]", "tempting.said", "tempting.target",
   "this_act", "this_act.by", "this_act.verb", "this_act.arrived", "this_act.entered", "this_act.distance_m", "this_act.approaching", "this_act.their_last_acts", "this_act.their_last_acts[]",
   "this_act.offered", "this_act.offered.kind", "this_act.offered.name", "this_act.offered.body", "this_act.words",
   "residents", "residents[]", "residents[].kind", "residents[].name", "residents[].m", "residents[].bearing", "residents[].approaching", "residents[].last",
@@ -746,7 +773,7 @@ export function memoryLine(r, now = Date.now()) {
  * between allowed reactions and nothing else: the Choice's options are the
  * kind's own sentences, and code renders the line.
  */
-export function buildSlice(creature, kind, act, around = {}, { now = Date.now(), encounter = null } = {}) {
+export function buildSlice(creature, kind, act, around = {}, { now = Date.now(), encounter = null, tempting = null } = {}) {
   const mood = (m) => `${creature.moods[m]} of ${kind.moods[m].hi}`;
   const residents = (around.who?.active ?? [])
     .filter((r) => r.handle !== act.actor && metresOf(r) != null)
@@ -788,6 +815,13 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now(),
       ...(act.words ? { words: cut(act.words, cap("said_chars")) } : {}),
       ...(act.target ? { target: String(act.target) } : {}), // steady or shield: whom it was for
     },
+    ...(tempting ? { tempting: {
+      phase: tempting.phase.name,
+      ...(tempting.target ? { target: tempting.target.handle } : {}),
+      ...(tempting.open ? { open: { says: String(tempting.open.payload.says ?? ""), cues: (tempting.open.cues ?? []).map(String) } } : {}),
+      ...(tempting.open ? { true_lines: (tempting.menu.quotes ?? []).map(String) } : {}),
+      ...(tempting.text != null ? { said: cut(tempting.text, 280) } : {}),
+    } } : {}),
     // D4: everyone in a finishable creature's ring, nearest first, with their household and its human
     ...(encounter?.roster ? { ring: encounter.roster.slice(0, cap("residents") * 2).map((r) => ({
       name: r.handle, household: r.slug ?? "a household of one", human: r.human, m: Math.round(r.distance_m), nerve: r.nerve,
@@ -870,7 +904,7 @@ export async function askJev(state, questions, { env = process.env, timeoutMs = 
  * when the mode, the menu and the time left allow; code otherwise, and on any fault.
  * Never throws.
  */
-export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = JEV_TIMEOUT_MS, jevMs = null, press = null, askOne = false }) {
+export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = JEV_TIMEOUT_MS, jevMs = null, press = null, askOne = false, extra = null }) {
   const code = (why) => ({ probabilities: codeDistribution(allowed), scores: {}, judged_by: "code", why });
   // `askOne`: one reaction, but a choice of whom it presses, which is still Jev's (encounter.mjs)
   if (allowed.length === 1 && !askOne) return code("only one reaction is possible");
@@ -878,7 +912,7 @@ export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = 
   if (!(budgetMs >= JEV_MIN_MS)) return code("timeout");
   try {
     // `jevMs`: an aimed act's longer wait (POS-672 W2); the ambient answer keeps JEV_TIMEOUT_MS
-    const j = await ask(slice, questionsFor(kind, allowed, press), { timeoutMs: Math.min(jevMs ?? JEV_TIMEOUT_MS, budgetMs) });
+    const j = await ask(slice, { ...questionsFor(kind, allowed, press), ...(extra ?? {}) }, { timeoutMs: Math.min(jevMs ?? JEV_TIMEOUT_MS, budgetMs) });
     const a = j.response?.answers ?? {};
     const probs = a.reaction?.probabilities;
     const names = new Set(allowed.map((r) => r.name));
@@ -897,7 +931,15 @@ export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = 
     const pressOdds = press?.length > 1 && pp && typeof pp === "object"
       && press.every((e) => { const v = odd(pp[e.handle]); return Number.isFinite(v) && v >= 0; }) && press.some((e) => odd(pp[e.handle]) > 0)
       ? Object.fromEntries(press.map((e) => [e.handle, odd(pp[e.handle])])) : null;
-    return { probabilities, scores, judged_by: "jev", why: null, latency_ms: j.latency_ms ?? null, tokens: j.tokens ?? null, ...(pressOdds ? { press: pressOdds } : {}) };
+    // the extra questions (a creature that tempts): each one's odds over its own options, or left out when unreadable
+    const extras = {};
+    for (const [name, q] of Object.entries(extra ?? {})) {
+      const ep = a[name]?.probabilities, keys = Object.keys(q.criteria ?? {});
+      if (!ep || typeof ep !== "object" || keys.some((k) => { const v = odd(ep[k]); return !Number.isFinite(v) || v < 0; }) || !keys.some((k) => odd(ep[k]) > 0)) continue;
+      extras[name] = Object.fromEntries(keys.map((k) => [k, odd(ep[k])]));
+    }
+    return { probabilities, scores, judged_by: "jev", why: null, latency_ms: j.latency_ms ?? null, tokens: j.tokens ?? null, ...(pressOdds ? { press: pressOdds } : {}),
+      ...(Object.keys(extras).length ? { extra: extras } : {}) };
   } catch (e) {
     return code(e?.why ?? "fault");
   }
@@ -931,8 +973,8 @@ export function applyReaction(law, creature, kind, reaction, scores = {}) {
 }
 
 /** The line (S3): the world's voiceLine, the kind's template with the actor named. Never model prose. */
-export const lineOf = (law, reaction, actor, { offered = null, heard = null, target = null } = {}) =>
-  law.kindMod.voiceLine(reaction, { actor, ...(offered ? { offered } : {}), ...(heard ? { heard } : {}), ...(target ? { target } : {}) });
+export const lineOf = (law, reaction, actor, { offered = null, heard = null, target = null, ally = null } = {}) =>
+  law.kindMod.voiceLine(reaction, { actor, ...(offered ? { offered } : {}), ...(heard ? { heard } : {}), ...(target ? { target } : {}), ...(ally ? { ally } : {}) });
 
 /** D5: a creature repeats at most this many words, the last ones said. */
 export const HEARD_WORDS_MAX = 5;
@@ -945,7 +987,9 @@ export const heardWords = (said) => {
 /** The words a remembered or stored reaction's line was filled with (POS-672): what was offered, what was repeated. */
 export const lineWords = (r) => ({ offered: r?.offered?.name ?? r?.offered?.kind ?? null, heard: typeof r?.heard === "string" ? r.heard : null,
   // whom a finishable creature's press landed on (encounter.mjs): the line's {target}
-  target: typeof r?.target === "string" ? r.target : typeof r?.press?.on === "string" ? r.press.on : null });
+  target: typeof r?.target === "string" ? r.target : typeof r?.press?.on === "string" ? r.press.on : null,
+  // whom a creature that tempts named beside the target (the line's {ally})
+  ally: typeof r?.ally === "string" ? r.ally : null });
 
 /** The odds over `allowed`, summing to 1, unrounded: what the d20 samples and the row stores. */
 export function normalized(allowed, probabilities) {
@@ -969,6 +1013,7 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
     // the words its line was filled with (POS-672): the kind offered, the words repeated (said in public, so public)
     ...(words.offered ? { offered: words.offered } : {}),
     ...(words.heard ? { heard: words.heard } : {}),
+    ...(words.ally ? { ally: words.ally } : {}),
     roll,
     judged_by: judgment.judged_by,
     ...(judgment.why ? { why: judgment.why } : {}),
@@ -990,7 +1035,7 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
 
 /** The reaction's acts row, and beside it the fled withdraw when the reaction
  *  flees, or the finish when it finishes (WLD-25). */
-export function reactionRows(creature, act, payload, { now = Date.now(), flees = false, finishes: finished = false, tell = null, nerve = [] } = {}) {
+export function reactionRows(creature, act, payload, { now = Date.now(), flees = false, finishes: finished = false, tell = null, nerve = [], tempt = null, tallies = [] } = {}) {
   const writtenAt = new Date(now).toISOString();
   const at = { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y };
   const base = { crossing: currentCrossing(now), at, cls: CREATURE_CLASS, writtenAt };
@@ -1001,6 +1046,9 @@ export function reactionRows(creature, act, payload, { now = Date.now(), flees =
   if (finished) out.push(finishRow(creature, act, { now, reaction: payload?.reaction ?? null }));
   // what the exchange cost in nerve (encounter.mjs): the act's own cost, and where the press landed
   for (const n of nerve) out.push(nerveRow(creature, act, { ...n, now }));
+  // a creature that tempts (temptation.mjs): the temptation this reaction carries, and what the exchange tallied
+  if (tempt) out.push(creatureRow(creature, TEMPT_ACTION, tempt.to, tempt, `the ${creature.kind} tempts ${tempt.to}`, now));
+  for (const t of tallies) out.push(creatureRow(creature, TALLY_ACTION, t.on, t.payload, `${t.on}: ${t.payload.why}`, now));
   if (flees) out.push(normalizeRow({ ...base, actor: creature.id, action: WITHDRAW_ACTION, object: creature.id,
     payload: { reason: "fled", after: String(act.actId) }, effect: `the ${creature.kind} goes back into the Mists` }));
   return out;
@@ -1114,6 +1162,14 @@ export function nerveRow(creature, act, { on, by, why, now = Date.now(), shield 
     payload: { by, why, act: String(act.actId), creature: creature.id, window: windowAt(now).id,
       ...(shield ? { shield: String(shield), shielded: String(shielded) } : {}), ...(split_of ? { split_of } : {}), ...(ease_after ? { ease_after } : {}) },
     effect: why === "act" ? `${on} spends nerve near the ${creature.kind}` : `the ${creature.kind} presses ${on}${shield ? ` (shielding ${shielded})` : ""}`,
+  });
+}
+
+/** A row the creature writes about one resident (temptation.mjs): a tempt, a tempted, a tally. */
+export function creatureRow(creature, action, object, payload, effect, now = Date.now()) {
+  return normalizeRow({
+    crossing: currentCrossing(now), at: { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y }, cls: CREATURE_CLASS,
+    writtenAt: new Date(now).toISOString(), actor: creature.id, action, object: String(object), payload, effect,
   });
 }
 
@@ -1395,20 +1451,23 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // full menu resolves to, for Jev's second question; the picked reaction's own `on` narrows it
     const pressing = enc && allowed.some((r) => r.effects?.some((e) => e?.do === "press"));
     const pressAll = pressing ? pressMenu(law.kindMod.PRESS_ON ?? PRESS_ON_ALL, { actor: act.actor, roster: enc.roster, living, creatureId: creature.id, now }) : [];
+    // A CREATURE THAT TEMPTS (temptation.mjs): its phase, whom a temptation would be aimed at and which it could
+    // say, and for a say while one is open to the actor, Jev's word on the answer: questions in the same request
+    const tm = enc && isTempting(kind) ? await temptingTurn(creature, kind, act, enc, deps) : null;
 
     // the slice only when Jev will read it (W9: the read is the expensive part),
     // and the read inside its own wait (carry 4): a late read is the creature's
     // own state and the act alone, never a late answer
-    const willAsk = !finishing && (allowed.length > 1 || pressAll.length > 1) && mode === "jev";
+    const willAsk = !finishing && (allowed.length > 1 || pressAll.length > 1 || !!tm?.extra) && mode === "jev";
     const readFrom = clock();
     const around = willAsk ? await within(deps.around?.(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null;
     const readMs = clock() - readFrom;
-    const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now, encounter: enc }) : null;
+    const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now, encounter: enc, tempting: tm }) : null;
     const judgment = finishing ? finishJudgment(allowed, finishing)
       : await judgmentFor({ kind, allowed, slice, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS, jevMs: deps.jevMs,
-        ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })), press: pressAll.length > 1 ? pressAll : null,
-        // one reaction but a choice of whom to press: Jev is still asked (its press question alone decides anything)
-        ...(allowed.length === 1 && pressAll.length > 1 ? { askOne: true } : {}) });
+        ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })), press: pressAll.length > 1 ? pressAll : null, extra: tm?.extra ?? null,
+        // one reaction but a choice of whom to press or what to tempt with: Jev is still asked (those questions decide something)
+        ...(allowed.length === 1 && (pressAll.length > 1 || tm?.extra) ? { askOne: true } : {}) });
     // WHERE THE SECOND WENT, said once per such turn (play row 51: every reaction fell to code with
     // why "timeout" and nothing said why). The operator's line, never the record: acts is published.
     if (judgment.why === "timeout" && willAsk)
@@ -1422,12 +1481,16 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const press = enc ? pressOf(creature, act, reaction, enc, judgment, { living, now }) : null;
     const eased = enc && kind.ease ? applyEase(creature, kind, [...(enc.breaksEase ? [EASE_BROKEN] : []), ...(reaction.effects ?? [])], act.actor, enc.household, now)
       : { ease: null, filled: false };
-    const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null };
+    const tempted = tm ? temptingRows(creature, act, tm, judgment, { living, now }) : { tempt: null, tallies: [] };
+    // {ally} (a creature that tempts): on a steady or a shield, the friend it was for; else the other resident its temptation named
+    const allyOf = (act.verb === "steady" || act.verb === "shield") && act.target ? String(act.target) : tempted.tempt?.ally ?? null;
+    const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null,
+      ally: String(reaction.says).includes("{ally}") ? allyOf : null };
     const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words,
       encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve } : null });
     const nerve = enc ? [...enc.cost, ...(press?.landed ?? []).map((l) => ({ ...l, why: "press" }))] : [];
     const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) || !!telling?.answered || eased.filled,
-      tell: telling?.tell ?? null, nerve });
+      tell: telling?.tell ?? null, nerve, tempt: tempted.tempt, tallies: tempted.tallies });
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
     if (enc) fleeTheSpent(written.rows, enc, deps, now);
@@ -1441,11 +1504,86 @@ async function creatureTurn(creature, act, distance_m, deps) {
       ...(telling?.told ? { fragment: telling.told } : {}), ...(telling?.answered ? { answered: true } : {}),
       // a finishable creature's press, said beside its line: who paid what (encounter.mjs)
       ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}) })) } : {}),
+      // a creature that tempts: what it whispered, and to whom; what your answer counted for (temptation.mjs)
+      ...(tempted.tempt ? { tempts: { to: tempted.tempt.to, says: tempted.tempt.says, until: tempted.tempt.until } } : {}),
+      ...(tempted.tallies.length ? { counted: tempted.tallies.map((t) => ({ for: t.on, [t.payload.road]: t.payload.by, why: t.payload.why })) } : {}),
     };
   } catch (e) {
     faultLogged(`a creature's turn tripped (${creature?.id})`, e);
     return null;
   }
+}
+
+/**
+ * THE TEMPTING HALF OF A TURN (temptation.mjs), before Jev is asked: its menu and
+ * phase, whom a temptation would be aimed at and the ones it could say, the
+ * temptation open to the actor and, for their say, its words; and the questions
+ * those make for Jev (`extra`). Null without a menu (it never tempts: fail closed).
+ */
+async function temptingTurn(creature, kind, act, enc, deps) {
+  const { living, law, now } = deps;
+  const menu = law.menuOf?.(creature.kind) ?? null;
+  if (!menu) return null;
+  const phase = phaseOf(living, creature, kind, menu, now);
+  if (!phase) return null;
+  const target = temptTarget({ living, creature, menu, phase, roster: enc.roster, actor: act.actor, now, liveShieldOn: (h) => liveShieldOn(living, h, now) });
+  const fill = law.temptsMod?.fillWhisper ?? ((t) => t);
+  // only what Jev's lint has passed is ever said (whisper-lint's second check; fail closed until it has)
+  const candidates = target ? temptationsFor({ menu, phase, target, roster: enc.roster, fill }).filter((w) => law.lintChecked?.get(w.id) === true) : [];
+  const open = act.verb === "say" ? openTemptations(living, creature, now).find((t) => t.object === act.actor) ?? null : null;
+  if (open) open.cues = menu.whispers.find((w) => w.id === open.payload.whisper)?.seen_through ?? [];
+  const text = open ? await within((deps.sayText ?? sayTextOf)(act), AROUND_WAIT_MS) : null;
+  const extra = {};
+  if (candidates.length)
+    extra.tempt_with = { type: "choice", instructions: `If the creature whispers a temptation to ${target.handle} with this answer, which one, or none? (\`tempting.phase\` is how far the fight has come.)`,
+      criteria: { ...Object.fromEntries(candidates.map((c) => [c.id, c.says])), none: "Nothing: it lets the moment pass without tempting anyone." } };
+  if (open && typeof text === "string")
+    extra.answer = { type: "choice", instructions: "Read `tempting.said` against `tempting.open` (the temptation it answers, and the cues of seeing through it) and `tempting.true_lines`. What is this answer?",
+      criteria: { ...ANSWER_OPTIONS } };
+  return { menu, phase, target, candidates, open, text: typeof text === "string" ? text : null, extra: Object.keys(extra).length ? extra : null,
+    houseOf: (h) => enc.roster.find((r) => r.handle === h)?.household ?? `solo:${h}` };
+}
+
+/** A say's own words, from its row (class voice: payload.text). */
+async function sayTextOf(act) {
+  const rows = await actsQuery(`SELECT payload->>'text' AS text FROM acts WHERE id = $1::bigint`, [String(act.actId)]);
+  return rows?.[0]?.text ?? null;
+}
+
+/**
+ * THE TEMPTING HALF, after Jev: the temptation this reaction carries (its own die
+ * samples Jev's odds over the ones it could say and none; code's are even over
+ * them) and the tallies the exchange moved: a plain answer to a temptation open to
+ * the actor, a steady or a shield given to a tempted friend.
+ */
+function temptingRows(creature, act, tm, judgment, { living, now }) {
+  const tallies = [];
+  const base = { act: String(act.actId), window: windowAt(now).id, phase: tm.phase.name };
+  let tempt = null;
+  if (tm.target && tm.candidates.length) {
+    const jo = judgment.extra?.tempt_with ?? null;
+    const keys = [...tm.candidates.map((c) => c.id), ...(jo ? ["none"] : [])];
+    const total = jo ? keys.reduce((s, k) => s + (jo[k] ?? 0), 0) : 0;
+    const odds = Object.fromEntries(keys.map((k) => [k, total > 0 ? (jo[k] ?? 0) / total : 1 / keys.length]));
+    const roll = t20(creature.id, act.actId, `${act.atIso}·tempt`);
+    const { picked } = sampleWith(roll, odds);
+    const w = tm.candidates.find((c) => c.id === picked) ?? null;
+    if (w) tempt = { ...temptPayload({ whisper: w, phase: tm.phase, target: tm.target, now }), odds, roll, judged_by: total > 0 ? "jev" : "code" };
+  }
+  if (tm.open && tm.text != null) {
+    const jo = judgment.extra?.answer ?? null;
+    const verdict = jo ? Object.entries(jo).sort((a, b) => b[1] - a[1])[0][0] : null;
+    const houses = plainHouses(living, creature, now, tm.houseOf);
+    houses.add(tm.houseOf(act.actor));
+    const words = String(tm.text).trim().split(/\s+/).filter(Boolean).length;
+    const score = verdict ? plainScore({ verdict, echo: tm.phase.echo, words, houses: houses.size }) : null;
+    if (score) tallies.push({ on: act.actor, payload: { road: "persuasion", by: score.by, why: score.why, tempt: tm.open.id, ...base } });
+  }
+  if ((act.verb === "steady" || act.verb === "shield") && act.target) {
+    const h = helpScore({ living, creature, verb: act.verb, actor: act.actor, target: act.target, echo: tm.phase.echo, houseOf: tm.houseOf, now });
+    if (h) tallies.push({ on: act.actor, payload: { road: "persuasion", by: h.by, why: h.why, ...base } });
+  }
+  return { tempt, tallies };
 }
 
 /** Every entry a press may resolve to, when the blessed law does not list them (it always does once it knows a press). */
@@ -1483,6 +1621,13 @@ async function encounterOf(creature, kind, act, distance_m, deps) {
       struck: strikesOn(living, creature.id, now).some((r) => r.actor === act.actor),
     },
   };
+}
+
+/** Who stands in a creature's ring now (its walls too), as an encounter reads it: the resolver's split of an obeyed cost. */
+export async function ringRosterNow(creature, { law, living, now = Date.now(), present = presentAt, households = householdsNow } = {}) {
+  const ring = Number(law.kindOf(creature.kind)?.ring_m);
+  const [p, lookup] = await Promise.all([present(creature, ring), households()]);
+  return ringRoster(p ?? { residents: [] }, { ring, lookup, living, now, holds: (r) => (r.at ? ringHolds(law, creature, r.at) : r.distance_m <= ring) });
 }
 
 /** Presence's own read at the creature's point, out to its ring. */

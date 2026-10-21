@@ -115,7 +115,7 @@ import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.m
 import { termsId, termsOnce } from "./terms-seen.mjs"; // POS-697 G5a: the law you were shown, named on a repeat act
 import { onlyUsable, canOn, viewMarkIds, CREATURE_VERBS } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 import { worldCreature, creatureEntries, CREATURE_TOOLS } from "./creature-verbs.mjs"; // a creature's afforded actions (POS-672)
-import { worldEncounter, encounterEntries } from "./encounter-verbs.mjs"; // an encounter's verbs: strike, steady, shield
+import { worldEncounter, encounterEntries, worldSpeakFor, SPEAK_FOR } from "./encounter-verbs.mjs"; // an encounter's verbs: strike, steady, shield; the live door
 import { ENCOUNTER_VERBS } from "./encounter.mjs";
 // The walk's pace, the resident class's own dial (WLD-29): read off the record
 // like every other departure's, never a constant here (decision 008b).
@@ -825,6 +825,8 @@ const DISPATCH = {
   // AN ENCOUNTER'S VERBS (encounter-verbs.mjs): strike, aimed at a creature that can be finished; steady and
   // shield, aimed at a resident in the same ring. The same tool and the same ledger verb as the afforded actions.
   ...Object.fromEntries(ENCOUNTER_VERBS.map((v) => [v, { tool: "world_creature", run: (args, key) => worldEncounter({ ...args, act: v }, key) }])),
+  // THE LIVE DOOR (a creature that tempts): its `who` speaks into its ring, a line or a temptation, through both lints
+  [SPEAK_FOR]: { tool: "world_creature", run: (args, key) => worldSpeakFor(args, key) },
   // ── the crossings ─────────────────────────────────────────────────────────
   //
   // ⚠ THE OLD COMMENT HERE WAS FALSE, AND SAID SO CONFIDENTLY. It read:
@@ -3044,7 +3046,8 @@ export async function dispatchCreatureVerb(action, args, key, { kept = null, doo
   const declared = fullPropsFor("world_creature") ?? {};
   // steady's and shield's `resident` is taken here and named in no tool schema until the encounter is
   // published (a schema is public text: Wright, 2026-10-21); the apex reaches this only once the law knows them
-  const doorOwn = new Set([...(DOOR_FIELDS.world_creature ?? []), ...(ENCOUNTER_VERBS.includes(action) ? ["resident"] : [])]);
+  const doorOwn = new Set([...(DOOR_FIELDS.world_creature ?? []), ...(ENCOUNTER_VERBS.includes(action) ? ["resident"] : []),
+    ...(action === SPEAK_FOR ? ["resident", "text", "tempts"] : [])]);
   const unknown = Object.keys(envelope ?? {}).filter((k) => !(k in declared) && !doorOwn.has(k));
   if (unknown.length) return bounce(422, `world_creature does not take: ${unknown.join(", ")}`, `the fields it takes: ${[...Object.keys(declared), ...doorOwn].join(", ")}`);
   const { do: _d, telling: _t, args: _e, read_shape: _s, ...rest } = args;
@@ -3104,10 +3107,11 @@ async function apexDo(args, key, ctx = {}) {
   // AN ENCOUNTER'S VERBS are the encounter door's only once the blessed law knows them: until then
   // each answers exactly as before (strike is the closed arena's word; steady and shield no place's),
   // so nothing changes on deploy and nothing is said of what is coming
-  if (CREATURE_VERBS.includes(action) || (ENCOUNTER_VERBS.includes(action) && await encountersLive())) {
+  if (CREATURE_VERBS.includes(action) || ((ENCOUNTER_VERBS.includes(action) || action === SPEAK_FOR) && await encountersLive())) {
     if (actor) return bounce(422, "a creature's afforded actions are a resident's", 'aim them as one of your residents (handle:), never as: "human". Nothing was done.');
     // an encounter's verbs (strike, steady, shield) go to their own door, through the same envelope and retry key
-    return dispatchCreatureVerb(action, args, key, ENCOUNTER_VERBS.includes(action) ? { door: worldEncounter } : {});
+    return dispatchCreatureVerb(action, args, key, ENCOUNTER_VERBS.includes(action) ? { door: worldEncounter }
+      : action === SPEAK_FOR ? { door: (f, k) => worldSpeakFor(f, k) } : {});
   }
 
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`

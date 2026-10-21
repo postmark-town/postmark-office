@@ -1973,6 +1973,13 @@ test("THE ARENA IS CLOSED: do: strike and do: loot answer \"the arena is closed\
         assert.match(r.hint, /the arena is closed while it is rebuilt/);
         assert.equal(r.action, verb);
       }
+      // an encounter's verbs and its live door reach their doors only once the blessed law knows them: here it
+      // does not, so steady and speak-for are no place's, and nothing of them is said (WLD-25)
+      for (const verb of ["steady", "speak-for"]) {
+        const r = await worldApex({ do: verb, args: { resident: "x", creature: "y", text: "z" } }, KEY_ALPHA);
+        assert.equal(r.error, "bounce", `${verb}: ${JSON.stringify(r).slice(0, 200)}`);
+        assert.notEqual(r.dispatched_to, "world_creature", `${verb} reached the encounter's door before its law`);
+      }
     });
   } finally {
     if (was === undefined) delete process.env.WORLD_DYNAMIC_DB; else process.env.WORLD_DYNAMIC_DB = was;
