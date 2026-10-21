@@ -104,6 +104,18 @@ test("the world source reads the blessing and main but never STATE/log; drafts a
   assert.deepEqual(r.sources.map((s) => [s.name, s.found]), [["world", 1], ["drafts", 2], ["town", 1]]);
 });
 
+test("an extra clone the operator names keeps every file any of its branches names, and an unreadable one refuses", async () => {
+  const extra = repo({ "README.md": "nothing yet" }, { branches: { "work/one": { "a.md": `picture: ${LOOSE}` } } });
+  const r = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [], extraClones: [extra] });
+  assert.equal(r.ok, true, JSON.stringify(r.sources));
+  assert.ok(r.keys.has(`eve/${sha("e")}.jpg`), "a picture named only on an unpublished branch is kept");
+  const db = FIVE();
+  await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], extraClones: [extra], now: NOW });
+  assert.equal(row(db, "eve", sha("e")).unreferenced_since, null, "so its clock never starts");
+  const bad = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [], extraClones: [join(tmpdir(), "no-such-extra-xyz")] });
+  assert.equal(bad.ok, false);
+});
+
 test("FAIL CLOSED: a source that cannot be read, a store with no pool, and a world with no pictures at all each make the set untrustworthy", async () => {
   const t = town();
   const missing = await referenceSet({ worldClone: join(tmpdir(), "no-such-world-xyz"), townClone: t, pool: null, storeSources: [] });

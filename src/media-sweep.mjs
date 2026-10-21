@@ -26,6 +26,10 @@
 //   town      the town clone's tree at HEAD and origin/main: letters,
 //             PROFILE.md, WINDOW, HOME, households.json, MEEPS, everything.
 //             `git grep` on the commit, so a sparse checkout cannot hide a file
+//   extra     any further clone the operator names (MEDIA_SWEEP_EXTRA_CLONES),
+//             every branch it holds: work that hangs a picture before it is
+//             published anywhere the sources above read. A source that only
+//             keeps files, never frees them.
 //   store     the store's current-state tables (STORE_SOURCES), each row read
 //             as text: standing marks, posts, responses, the households'
 //             home_images and the town index's homes, residents, letters,
@@ -204,7 +208,7 @@ export async function storeKeys(pool, { table, where = null }) {
  * The union of every source, or the sources that failed. `ok` is false when
  * any one failed; the keys are then not to be trusted for a deletion.
  */
-export async function referenceSet({ worldClone, townClone, pool, storeSources = STORE_SOURCES }) {
+export async function referenceSet({ worldClone, townClone, pool, storeSources = STORE_SOURCES, extraClones = [] }) {
   const keys = new Set();
   const sources = [];
   const take = async (name, expectSome, fn) => {
@@ -230,6 +234,11 @@ export async function referenceSet({ worldClone, townClone, pool, storeSources =
     const refs = townRefs(townClone);
     return { found: gitKeys(townClone, refs), refs };
   }));
+  for (const clone of extraClones)
+    await take(`extra:${clone}`, false, () => {
+      const refs = [...new Set([...refsLike(clone, "refs/heads/"), ...refsLike(clone, "refs/remotes/")])].filter((r) => !r.endsWith("/HEAD"));
+      return { found: gitKeys(clone, refs), refs: refs.length };
+    });
   for (const src of storeSources)
     await take(`store:${src.table}`, false, pool && (async () => ({ found: await storeKeys(pool, src) })));
   return { keys, sources, ok: sources.every((s) => !s.error) };
@@ -283,7 +292,7 @@ export async function deleteObjects(row, del = r2Delete) {
  */
 export async function runSweep({
   odb, worldClone, townClone, pool, apply = false, now = Date.now(), graceMs = GRACE_MS,
-  maxDelete = MAX_DELETE_DEFAULT, del = r2Delete, storeSources,
+  maxDelete = MAX_DELETE_DEFAULT, del = r2Delete, storeSources, extraClones = [],
 }) {
   const paper = asPaper(odb);
   const report = { at: new Date(now).toISOString(), mode: apply ? "apply" : "dry", grace_days: graceMs / DAY_MS };
@@ -291,7 +300,7 @@ export async function runSweep({
   if (!(await mediaLedgerHasStates(paper))) {
     return { ...report, refused: "the ledger has no states: the store has not taken 080_media_freed.sql, so nothing can be freed or recorded" };
   }
-  const refs = await referenceSet({ worldClone, townClone, pool, storeSources });
+  const refs = await referenceSet({ worldClone, townClone, pool, storeSources, extraClones });
   report.sources = refs.sources;
   if (!refs.ok) {
     return { ...report, refused: `a source could not be read (${refs.sources.filter((s) => s.error).map((s) => s.name).join(", ")}), so nothing was written: "could not look" is never "not hung"` };

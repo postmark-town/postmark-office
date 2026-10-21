@@ -14,6 +14,10 @@
 //                         or print only)
 //   --max-delete <n>      a live run that finds more files due than this frees none (default 50)
 //
+// MEDIA_SWEEP_EXTRA_CLONES (comma-separated paths): further clones whose every
+// branch keeps the files it names, for work not yet published where the
+// world and town clones can see it.
+//
 // Env (the office's own, /etc/postmark-office.env): WORLD_CLONE, TOWN_CLONE,
 // OFFICE_PAPERWORK_STORE, WORLD2_PG, WORLD2_PG_URL, and the R2_* storage keys for
 // a live run.
@@ -75,6 +79,7 @@ async function main() {
     report = await runSweep({
       odb, pool, apply, maxDelete,
       worldClone: process.env.WORLD_CLONE || null, townClone: process.env.TOWN_CLONE || null,
+      extraClones: String(process.env.MEDIA_SWEEP_EXTRA_CLONES ?? "").split(",").map((p) => p.trim()).filter(Boolean),
     });
   } finally {
     await own?.end().catch(() => {});
