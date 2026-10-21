@@ -65,7 +65,7 @@ before(() => {
       return { rows: [{ action: "say", at: new Date(Date.now() - 4 * 60000), at_anchor: KOGANE_PARCEL, at_dx: 0, at_dy: 0 },
         { action: "note-to-self", at: new Date(Date.now() - 5 * 60000), at_anchor: KOGANE_PARCEL, at_dx: 0, at_dy: 0 }] };
     if (/FROM acts WHERE id > \$1::bigint AND action = ANY/.test(text)) return { rows: LIVE.rows.filter((r) => Number(r.id) > Number(params[0])) };
-    if (/FROM acts WHERE action = ANY\(\$1::text\[\]\) ORDER BY id DESC/.test(text)) return { rows: [...LIVE.rows].reverse() };
+    if (/FROM acts WHERE action = ANY\(\$1::text\[\]\) ORDER BY acts\.id DESC/.test(text)) return { rows: [...LIVE.rows].reverse() };
     // The apex asks the store whose household each ground is (POS-350). This
     // record holds no registry, so every handle is its own household.
     if (/^SELECT handle, household FROM identities/.test(text)) return { rows: [] };
