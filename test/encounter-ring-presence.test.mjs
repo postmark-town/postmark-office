@@ -10,8 +10,8 @@
 // encounter a stubbed `present`, so none of them read presence at all.
 //
 // Here nothing is stubbed between the walk ledger and the ring: a fixture world
-// with a dungeon and a hall inside it, four residents standing at one point in the
-// hall and a fifth inside the ring's radius but beyond the hall's wall, the
+// with a dungeon and a room inside it, four residents standing at one point in the
+// room and a fifth inside the ring's radius but beyond the room's wall, the
 // positions kept (WORLD_POSITIONS=1, WORLD_PRESENCE=1), the creature's room found
 // by LivingSet § warmRooms over the published marks, the tick's warmRosters with
 // its own presence read, and the act's turn reading what the tick kept.
@@ -35,15 +35,15 @@ const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
 
 const scratch = scratchDir("encounter-ring");
 const FRAME = "the-town/let-there-be-light";
-const KEEP = "keep/keep", HALL = "keep/hall";
+const FORT = "fort/fort", ROOM = "fort/room";
 const MARKS = [
   { id: FRAME, by: "the-town", kind: "sited", tier: "constitution", at: { x: 0, y: 0 }, extent: { w: 100000, h: 100000 }, body: "let there be light" },
-  { id: KEEP, by: "keep", kind: "sited", class: "dungeon", at: { x: 100, y: 0 }, extent: { w: 400, h: 400 }, body: "a keep" },
-  { id: HALL, by: "keep", kind: "sited", at: { x: 100, y: 0 }, extent: { w: 60, h: 60 }, body: "a hall" }, // its walls at x = 70 and 130
+  { id: FORT, by: "fort", kind: "sited", class: "dungeon", at: { x: 100, y: 0 }, extent: { w: 400, h: 400 }, body: "a fort" },
+  { id: ROOM, by: "fort", kind: "sited", at: { x: 100, y: 0 }, extent: { w: 60, h: 60 }, body: "a room" }, // its walls at x = 70 and 130
 ];
 process.env.WORLD_STORE_DB = NO_WORLD_DB;
 
-// standing since a crossing in the past: four at the hall's middle, one 35 m east (inside 40 m, beyond the wall)
+// standing since a crossing in the past: four at the room's middle, one 35 m east (inside 40 m, beyond the wall)
 const N = 200;
 const B = crossingStart(N);
 const stand = (actor, x, i) => ({ at: new Date(B).toISOString(), actor, from: { x, y: 0 }, toward: { x, y: 0 }, crossing: N, line_no: i + 1 });
@@ -66,7 +66,7 @@ const PRESS_ON = ["actor", "striker", "shielder", "loudest", "alone"];
 // ash and bram share a hearth; gale, heron and oak each live alone
 const HOMES = { ash: "hearth", bram: "hearth" };
 const lookup = (h) => (HOMES[h] ? { key: "house:hearth", slug: "hearth" } : { key: `solo:${h}`, slug: null });
-const ID = "creature:keeper-hall";
+const ID = "creature:keeper-den";
 const payloadOf = (r) => (typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload);
 
 let creatures, law;
@@ -86,7 +86,7 @@ before(async () => {
       scopeOf: (s, a, actor, enc = {}) => { const sc = base.kindMod.scopeOf(s, a, actor); if (enc.resolve != null) sc.self.resolve = enc.resolve; return sc; } } };
 });
 
-test("the ring is presence's own: four at one point in the hall are the ring, the one beyond its wall is not, and the press reads them", async () => {
+test("the ring is presence's own: four at one point in the room are the ring, the one beyond its wall is not, and the press reads them", async () => {
   process.env.WORLD_POSITIONS = "1";
   process.env.WORLD_PRESENCE = "1";
   try {
@@ -101,7 +101,7 @@ test("the ring is presence's own: four at one point in the hall are the ring, th
     const pub = await creatures.publishedMarks({ repo });
     assert.ok(pub?.marks?.length, "the published marks are read");
     living.warmRooms(pub.marks, pub.key);
-    assert.equal(living.living(now)[0].room?.id, HALL, "it stands in the hall");
+    assert.equal(living.living(now)[0].room?.id, ROOM, "it stands in the room");
 
     // the tick: presence at the creature's point, by presence's own read (no seam)
     creatures.__resetRostersForTest();
@@ -116,10 +116,10 @@ test("the ring is presence's own: four at one point in the hall are the ring, th
       return calls[0];
     };
 
-    // ash speaks: the ring is the four in the hall, never oak beyond the wall, and the press on ash splits with bram
+    // ash speaks: the ring is the four in the room, never oak beyond the wall, and the press on ash splits with bram
     const said = await turn("say", "ash");
     const react = said.find((r) => r.action === "react");
-    assert.deepEqual([...payloadOf(react).ring].sort(), ["ash", "bram", "gale", "heron"], "the four standing in the hall, and not oak");
+    assert.deepEqual([...payloadOf(react).ring].sort(), ["ash", "bram", "gale", "heron"], "the four standing in the room, and not oak");
     const pressed = said.filter((r) => r.action === NERVE_ACTION && payloadOf(r).why === "press")
       .map((r) => [r.object, payloadOf(r).by, payloadOf(r).split_of ?? null]);
     assert.deepEqual(pressed.sort(), [["ash", -1, 2], ["bram", -1, 2]], "the press of 2 on ash is split with her housemate");
