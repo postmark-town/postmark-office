@@ -340,3 +340,12 @@ nodeTest("the doors: each verb is the apex's, dispatched to world_creature befor
   assert.equal(odd.error, "bounce");
   assert.match(odd.defect, /does not take: shout/);
 });
+
+test("D4: a call's words keep the say's own rule (a voice every 15 s); its refusal is said as the call's, and nothing is written", async () => {
+  const d = door({ here: { x: 1010, y: 0 } });
+  d.deps.say = async (a) => { d.calls.say.push(a); return { error: "bounce", code: 422, defect: "you just spoke", hint: "a voice every 15 seconds — try again in 2s (listening is free: call with no arguments)" }; };
+  await assert.rejects(d.run({ act: "call", creature: RAVEN, words: "again" }),
+    (e) => e.code === 422 && /the call's words could not be spoken: you just spoke/.test(e.defect) && /try again in 2 s, or call without words/.test(e.hint));
+  assert.equal(d.calls.write.length, 0, "no call row");
+  assert.equal(d.calls.answer.length, 0, "no reaction");
+});

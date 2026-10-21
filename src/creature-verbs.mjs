@@ -230,7 +230,12 @@ export async function worldCreature(args = {}, key = null, deps = {}) {
     if (verb === "call" && words) {
       // public like a say (D4): the say's own door speaks it, and the shared ear hears it
       const said = await d.say({ handle: actor, text: words }, key);
-      if (said?.error) return said;
+      if (said?.error) {
+        // the say's refusal in the call's own words: its rule binds (a voice every 15 s), its hint names the say's door
+        const wait = /try again in (\d+)\s*s/.exec(String(said.hint ?? ""))?.[1];
+        throw bounce(said.code ?? 422, `the call's words could not be spoken: ${said.defect ?? "the say refused them"}`,
+          `${wait ? `a call's words are a say, and a voice is heard once every 15 s: try again in ${wait} s, or call without words. ` : `${said.hint ?? ""} `}Nothing was done.`);
+      }
     }
     const row = await d.write({
       actor, action: verb, object: id, cls: "creature",
