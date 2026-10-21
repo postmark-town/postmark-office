@@ -1311,7 +1311,7 @@ async function householdMarks(f, key, ctx) {
     const shown = all.slice(offset, offset + limit);
     const next = offset + shown.length;
     return { total: all.length, shown: shown.length, limit, offset, complete: next >= all.length,
-      ...(next < all.length ? { next_offset: next } : {}), rows: shown };
+      ...(next < all.length ? { next_offset: next, more_note: `${all.length - next} further — call again with offset: ${next}` } : {}), rows: shown };
   };
   const { readClaimEffects, RULINGS_SINCE_CROSSINGS } = await import("./claim-effects.mjs");
   const { currentCrossing: crossingAt } = await import("./crossings.mjs");
