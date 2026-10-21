@@ -444,3 +444,24 @@ test("B2 · [source pin, not a run] the withdraw-only-when-empty guard and the f
   assert.match(hold, /!\(await import\("\.\/kind-holding\.mjs"\)\)\.portableMark\(m, classProperty\)/, "the fixed-thing refusal reads thing/portable");
   assert.doesNotMatch(hold, /markClassOf\(m\) === "chest" && m\.portable === false/);
 });
+
+test("offer { kind, creature } (POS-672, call 2, D3): one of a consumable kind from your hands, used up toward the creature as units:offer; refusals change nothing", async () => {
+  const w = world();
+  const WOLF = "creature:wolf-270-1";
+  w.seed([{ from: null, to: "sbx-cy", kind: "pocket-comet", n: 2 }, { from: null, to: "sbx-cy", kind: "toaster", n: 1 }]);
+  const before = w.acts.length;
+  await assert.rejects(go(w, "offer", { kind: "toaster", creature: WOLF }), (e) => e.code === 422 && /not a consumable/.test(e.defect));
+  await assert.rejects(go(w, "offer", { kind: "carbon-ghost", creature: WOLF }), (e) => e.code === 409 && /no carbon-ghost in your hands/.test(e.defect));
+  await assert.rejects(go(w, "offer", { kind: "pocket-comet" }), /offer to which creature\?/);
+  assert.equal(w.acts.length, before, "a refused offer writes nothing and uses nothing up");
+  const r = await go(w, "offer", { creature: WOLF });
+  assert.deepEqual([r.did, r.kind, r.count, r.offered.kind, r.offered.name], ["offer", "pocket-comet", 1, "pocket-comet", "pocket comet"],
+    "one consumable kind in hand: it may be omitted, as consume's");
+  const row = w.acts.at(-1);
+  assert.deepEqual([row.action, row.object, row.class], [UNIT_ACTION.offer, WOLF, "holding"], "its row is the creature's trigger");
+  assert.deepEqual(row.payload.moves, [{ from: "sbx-cy", to: null, kind: "pocket-comet", n: 1 }], "used up: from your hands to nobody (a creature holds nothing)");
+  assert.ok(r.seq != null, "the act's id rides the answer: the trigger the creature door hands its creature");
+  assert.deepEqual(kindEdgesOf(w.fold(), "sbx-cy"), [{ kind: "pocket-comet", count: 1 }, { kind: "toaster", count: 1 }]);
+  const empty = world();
+  await assert.rejects(go(empty, "offer", { creature: WOLF }), (e) => e.code === 409 && /carry nothing to offer/.test(e.defect) && /leave-mark/.test(e.hint));
+});

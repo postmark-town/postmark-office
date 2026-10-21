@@ -87,6 +87,7 @@ import {
   unrowedTrees,
   parseDiscovery,
   serviceOf,
+  serviceRanAndFailed,
   pickEnv,
   readRelease,
   compareFileCopy,
@@ -603,6 +604,47 @@ test("FALSIFIER (e): a timer firing on time into a service that FAILS is ALARM-f
   assert.equal(row.verdict, ALARM_FAILED);
   assert.match(row.reason, /result=exit-code/);
   assert.match(row.reason, /journalctl -u postmark-harbor-watch\.service/);
+});
+
+// ── A CONDITION SKIP IS NOT A FAILURE (POS-714 follow-up, 2026-10-21) ───────
+// The crossing save's late fallback skips through ExecCondition= when the
+// crossing is already saved, and systemd records Result=exec-condition with the
+// unit inactive. That read "last RAN and FAILED" after every crossing. A real
+// condition failure (exit 255, a signal) is Result=exit-code or signal with the
+// unit failed, and must still alarm.
+// THE CAN-FAIL FLIP: drop the exec-condition line from serviceRanAndFailed; the
+// skip reads ALARM-failed again.
+const SAVE = "postmark-crossing-save.timer";
+const saveSvc = (m, fields) => mutate(healthy(m), (s) => { Object.assign(s.services["postmark-crossing-save.service"], fields); });
+
+test("POS-714: the crossing save's ExecCondition skip (Result=exec-condition, inactive, exit 0) is not ALARM-failed", () => {
+  const m = manifest();
+  const row = rowFor(rollcall(m, saveSvc(m, { result: "exec-condition", active_state: "inactive", exec_main_status: "0" }), T0), SAVE);
+  assert.notEqual(row.verdict, ALARM_FAILED, row.reason);
+  assert.equal(row.verdict, rowFor(rollcall(m, healthy(m), T0), SAVE).verdict, "it reads exactly as a successful run does");
+  assert.doesNotMatch(row.reason, /FAILED/);
+});
+
+test("POS-714: a condition command that really failed still alarms (exit 255 or a signal: the unit ends failed)", () => {
+  const m = manifest();
+  for (const fields of [
+    { result: "exit-code", active_state: "failed", exec_main_status: "255" },
+    { result: "signal", active_state: "failed", exec_main_status: "9" },
+    { result: "exec-condition", active_state: "failed", exec_main_status: "0" },
+  ]) {
+    const row = rowFor(rollcall(m, saveSvc(m, fields), T0), SAVE);
+    assert.equal(row.verdict, ALARM_FAILED, `${JSON.stringify(fields)}: ${row.reason}`);
+    assert.match(row.reason, new RegExp(`result=${fields.result}`));
+  }
+});
+
+test("POS-714: serviceRanAndFailed, the one reading: success and a condition skip pass, everything else fails", () => {
+  assert.equal(serviceRanAndFailed({ result: "success", active_state: "inactive" }), false);
+  assert.equal(serviceRanAndFailed({ result: "", active_state: "inactive" }), false, "no record is the heartbeat's question, not this one");
+  assert.equal(serviceRanAndFailed({ result: "exec-condition", active_state: "inactive" }), false);
+  assert.equal(serviceRanAndFailed({ result: "exec-condition", active_state: "failed" }), true);
+  for (const r of ["exit-code", "signal", "core-dump", "timeout", "watchdog", "start-limit-hit"])
+    assert.equal(serviceRanAndFailed({ result: r, active_state: "failed" }), true, r);
 });
 
 test("POS-628: the law row's stamp is ok_at — a held pin (exit 0, a fresh `at`) three ticks running is ALARM-stale", () => {

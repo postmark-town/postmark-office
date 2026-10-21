@@ -795,3 +795,13 @@ test("parity with the world's fold: a spawn only from the town for a creature's 
     payload: { to: "kai", reaction: "watch", moods_after: { fear: 2 } } }], { advance: false });
   assert.deepEqual(living.byId.get("creature:wolf-270-1").moods, { fear: 2 });
 });
+
+test("`only` (POS-672 W7): an act for one creature is answered by it alone, even where other rings hold its point", async () => {
+  const living = livingWith(spawnRow("creature:wolf-270-1"), spawnRow("creature:wolf-270-2", { n: 2, x: 10, y: 0 }));
+  const { calls, write } = recordingWrite();
+  const deps = { living, around: async () => ({}), ask: jevAnswer({ stalk: 1 }), write, env: ENV, now: T0 };
+  assert.equal((await reactTo(act(), deps)).length, 2, "an ordinary act: every ring that holds it");
+  const out = await reactTo(act({ actId: "9020", actor: "ash" }), { ...deps, only: "creature:wolf-270-2" });
+  assert.deepEqual(out.map((a) => a.id), ["creature:wolf-270-2"]);
+  assert.equal(calls.length, 3);
+});

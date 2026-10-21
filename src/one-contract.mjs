@@ -102,6 +102,7 @@ export const DOOR_FIELDS = Object.freeze({
   world_exit: NONCE,
   world_ride: NONCE,
   world_declare_stance: NONCE,
+  world_creature: NONCE, // a creature's afforded actions (POS-672, review-692 F2): a retried offer uses up one unit
 });
 
 /** One `renamed` row — the same shape for a field, a read and a segment. */
