@@ -76,7 +76,7 @@ test("the anchor rule: given → the household's own newest, else the town's; no
     "another household's sheet is never this resident's anchor");
 });
 
-test("the sheet read: every sheet displays to anyone; the anchor waits on the yes and says why", async () => {
+test("the sheet read: the household's own sheets always show; the town's wait on the yes, as does the anchor, and it says why", async () => {
   await withStore("depictions_read", async ({ query }) => {
     const env = {};
     await keepDepiction({ subject: "wick", url: `${M}/the-town/seed.webp`, made_by: TOWN, source: "a seed" }, env, query);
@@ -84,7 +84,9 @@ test("the sheet read: every sheet displays to anyone; the anchor waits on the ye
 
     const blind = await sheetRead({ handle: "wick" }, { env, query, registry: registry() });
     assert.equal(blind.likeness, "not given");
-    assert.deepEqual(blind.sheets.map((r) => [r.url, r.own]), [[`${M}/the-town/seed.webp`, false]], "display is never gated");
+    assert.deepEqual(blind.sheets, [], "the town's seed is made media: unshown until the yes (18:26, 18:30)");
+    assert.equal(blind.held_until_yes, 1);
+    assert.match(blind.held_why, /unused and unshown until its human says yes/);
     assert.equal(blind.anchor, null);
     assert.match(blind.anchor_why, /has not said yes to the likeness question/);
     assert.match(blind.anchor_why, /oauth\/likeness\?household=lantern-row/);
@@ -94,10 +96,14 @@ test("the sheet read: every sheet displays to anyone; the anchor waits on the ye
 
     const said = await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": yes }) });
     assert.equal(said.anchor, `${M}/the-town/seed.webp`, "a yes makes the seed the anchor");
+    assert.deepEqual(said.sheets.map((r) => [r.url, r.own]), [[`${M}/the-town/seed.webp`, false]], "and shows it");
+    assert.equal("held_until_yes" in said, false);
     await keepDepiction({ subject: "wick", url: `${M}/lantern-row/own.webp`, made_by: "lantern-row" }, env, query);
     assert.equal((await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": yes }) })).anchor,
       `${M}/lantern-row/own.webp`, "the household's own is canon over the town's");
-    assert.equal((await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": no }) })).anchor, null, "a no takes it back");
+    const refused = await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": no }) });
+    assert.equal(refused.anchor, null, "a no takes it back");
+    assert.deepEqual(refused.sheets.map((r) => r.url), [`${M}/lantern-row/own.webp`], "the household's own sheet still shows on a no (D1); the town's does not");
 
     const none = await sheetRead({ handle: "fennel" }, { env, query, registry: registry({ "moss-cottage": yes }) });
     assert.deepEqual([none.anchor, none.sheets], [null, []]);

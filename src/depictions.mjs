@@ -41,10 +41,14 @@
 //
 // ── THE ANCHOR, AND THE ONE GATE ────────────────────────────────────────────
 //
-// Display is never gated (D1): every sheet of a resident is listed for anyone.
-// The ANCHOR is what a maker attaches to make new media, so it is the one place
-// the likeness answer gates: given, it is the resident's household's own newest
-// sheet, else the town's newest; not given, it is null and the answer says why.
+// A household's OWN sheet is its own display, like its picture, and shows to
+// anyone whatever the answer (D1: a no stops made media, never display). A
+// sheet the TOWN made (a seed, Iris's) is made media of the resident's likeness,
+// so it is "unused until the human says yes" (18:26, 18:30): it is neither shown
+// nor handed to a maker before a yes, and the read says how many are held.
+// The ANCHOR is what a maker attaches to make new media: given, it is the
+// household's own newest sheet, else the town's newest; not given, it is null
+// and the answer says why.
 
 import { actsQuery } from "./world2-acts.mjs";
 import { likenessRegistry, likenessOfHouse, likenessLink, withLikenessQuestion } from "./likeness.mjs";
@@ -115,8 +119,9 @@ const shape = (r, household) => ({
 });
 
 /**
- * `household { read: "sheet", handle }`: one resident's sheets (display, for
- * anyone), the anchor (the gate), the likeness answer, and the template.
+ * One resident's sheets (GET /residents/{h}/sheet): its household's own, shown
+ * always; the town's, shown once the likeness is given; the anchor (the gate),
+ * the likeness answer, and the template.
  */
 export async function sheetRead({ handle } = {}, { env = process.env, query = actsQuery, registry = null } = {}) {
   const h = String(handle ?? "").trim();
@@ -128,12 +133,15 @@ export async function sheetRead({ handle } = {}, { env = process.env, query = ac
   const likeness = household ? likenessOfHouse(reg.houses[household]) : "not given";
   const given = likeness === "given";
   const anchor = anchorOf(rows, { household, given });
+  const shown = rows.filter((r) => given || r.made_by === household);
+  const held = rows.length - shown.length;
   return {
     read: "sheet", handle: h, household: household ?? null, likeness,
-    sheets: rows.map((r) => shape(r, household)),
+    sheets: shown.map((r) => shape(r, household)),
+    ...(held ? { held_until_yes: held, held_why: `the town holds ${held} sheet${held === 1 ? "" : "s"} of this resident, made before its household answered: unused and unshown until its human says yes` } : {}),
     anchor,
     ...(anchor ? {} : { anchor_why: !given
-      ? `no anchor: ${household ? `${household}'s human has not said yes to the likeness question` : "this resident stands in no household"}, so no new picture or video may be made from this likeness (its own picture and sheets still show)${household ? ` — the question: ${likenessLink(household)}` : ""}`
+      ? `no anchor: ${household ? `${household}'s human has not said yes to the likeness question` : "this resident stands in no household"}, so no new picture or video may be made from this likeness (its own picture and its household's own sheets still show)${household ? ` — the question: ${likenessLink(household)}` : ""}`
       : "no anchor: there is no sheet yet — the household can make one from the template below" }),
     template: SHEET_TEMPLATE,
     style_plate: await stylePlate(env, query),
