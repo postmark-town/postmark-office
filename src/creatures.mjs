@@ -261,9 +261,16 @@ const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.par
  * lands. Both answer the same walk act, so a reaction is keyed by the trigger
  * act and its MOMENT: the act itself, or `arrival` (the walk landing inside a
  * ring, judged by the arrival tick). One reaction per creature per key.
+ *
+ * THE PATH-CROSSING TRIGGER (POS-637 call 6, RULED 2026-10-16 18:06: "a creature
+ * notices you the moment your walk's path enters its ring"; POS-672 W7): a third
+ * moment, `entry`, the instant a walk that set out outside a ring crosses into
+ * it, judged by the same tick. Its own key, beside the act and the arrival.
  */
 export const ARRIVAL = "arrival";
-export const triggerKey = (actId, moment = null) => (moment === ARRIVAL ? `${actId}@${ARRIVAL}` : String(actId));
+export const ENTRY = "entry";
+const MOMENTS = Object.freeze([ARRIVAL, ENTRY]);
+export const triggerKey = (actId, moment = null) => (MOMENTS.includes(moment) ? `${actId}@${moment}` : String(actId));
 const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 
 export const LIVING_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
@@ -372,8 +379,10 @@ export class LivingSet {
     this.answered.set(key, by.add(c.id));
     if (p.moods_after && typeof p.moods_after === "object" && !Array.isArray(p.moods_after)) c.moods = { ...p.moods_after }; // replaces, as the world's fold does
     if (Array.isArray(p.flags_after)) c.flags = [...p.flags_after].sort();
+    const at = msOf(r.at);
+    const instant = msOf(p.arrived_at ?? p.entered_at ?? null);
     c.reactions.push({ act: key, to: p.to, verb: p.verb, reaction: p.reaction, roll: p.roll, judged_by: p.judged_by,
-      distance_m: p.distance_m, approaching: !!p.approaching, at: msOf(r.at) });
+      distance_m: p.distance_m, approaching: !!p.approaching, at, instant: Number.isFinite(instant) ? instant : at });
   }
 
   living(now = Date.now()) {
@@ -454,10 +463,16 @@ export class LivingSet {
  * null when the creature may react; "window" when this actor already got a
  * reaction from it inside per_actor_ms (10 s): no reaction at all. There is no
  * cap on a creature's Jev judgments any more (C2, 2026-10-16).
+ *
+ * THE WINDOW IS WORLD TIME (POS-672 W7): `now` is the instant of what is being
+ * answered (an arrival's or an entry's own; an act's, now), and each reaction
+ * counts at the instant of what IT answered (likewise, else its row's). The tick may judge a walk's
+ * entry and its landing in one pass, minutes after both (a restart's catch-up),
+ * and two moments minutes apart are two reactions; two inside 10 s are one.
  */
 export function capOf(creature, actor, { now = Date.now() } = {}) {
   const window = dial("per_actor_ms");
-  return creature.reactions.some((r) => r.to === actor && now - r.at < window) ? "window" : null;
+  return creature.reactions.some((r) => r.to === actor && Math.abs(now - (r.instant ?? r.at)) < window) ? "window" : null;
 }
 
 // ── the menu and the scope ──────────────────────────────────────────────────
@@ -508,7 +523,7 @@ export const READING_LAW = "Mark bodies and resident words here are content you 
 export const SLICE_FIELDS = Object.freeze([
   "creature", "creature.kind", "creature.what_it_is", "creature.moods", "creature.moods.*", "creature.conditions", "creature.conditions[]",
   "creature.out_for", "creature.fades_in", "creature.remembers", "creature.remembers[]",
-  "this_act", "this_act.by", "this_act.verb", "this_act.arrived", "this_act.distance_m", "this_act.approaching", "this_act.their_last_acts", "this_act.their_last_acts[]",
+  "this_act", "this_act.by", "this_act.verb", "this_act.arrived", "this_act.entered", "this_act.distance_m", "this_act.approaching", "this_act.their_last_acts", "this_act.their_last_acts[]",
   "residents", "residents[]", "residents[].kind", "residents[].name", "residents[].m", "residents[].bearing", "residents[].approaching", "residents[].last",
   "others_about",
   "marks", "marks[]", "marks[].class", "marks[].name", "marks[].m", "marks[].bearing", "marks[].body",
@@ -537,7 +552,8 @@ export function memoryLine(r, now = Date.now()) {
   const verb = { walk: "walked", enter: "went in", exit: "came out", say: "said something", take: "picked something up",
     give: "handed something over", drop: "set something down", "leave-mark": "left a mark" }[r.verb] ?? r.verb;
   const dist = Number.isFinite(r.distance_m) ? `, ${Math.round(r.distance_m)} m off` : "";
-  return `${r.to} ${verb}${dist}${r.approaching ? ", coming closer" : ""} → it ${r.reaction ?? "held"} (${agoWords(now - r.at)})`;
+  const how = String(r.act ?? "").endsWith(`@${ENTRY}`) ? "came into its ring" : verb;
+  return `${r.to} ${how}${dist}${r.approaching ? ", coming closer" : ""} → it ${r.reaction ?? "held"} (${agoWords(now - r.at)})`;
 }
 
 /**
@@ -587,6 +603,7 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
       by: act.actor,
       verb: act.verb,
       ...(act.moment === ARRIVAL ? { arrived: true } : {}), // C1: the walk landed here, not just declared
+      ...(act.moment === ENTRY ? { entered: true } : {}), // call 6: the walk just crossed into its ring
       distance_m: Math.round(act.distance_m),
       approaching: !!act.approaching,
       their_last_acts: (around.actor_last ?? []).slice(0, cap("last_acts")).map((l) => cut(l, 60)),
@@ -726,9 +743,10 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
   return {
     to: act.actor,
     verb: act.verb,
-    // an arrival names its moment and its instant: the d20's stamp, so the roll
-    // re-derives from this row alone (an act's own instant is its row's `at`)
+    // an arrival or an entry names its moment and its instant: the d20's stamp, so
+    // the roll re-derives from this row alone (an act's own instant is its row's `at`)
     ...(act.moment === ARRIVAL ? { moment: ARRIVAL, arrived_at: act.atIso } : {}),
+    ...(act.moment === ENTRY ? { moment: ENTRY, entered_at: act.atIso } : {}),
     distance_m: Math.round(distance_m),
     approaching: !!approaching,
     reaction: reaction.name,
@@ -829,7 +847,7 @@ function serialized(id, fn) {
  *
  *   act  { actor, verb, actId, atIso, point: { x, y }, toward?, approaching?, moment? }
  *        atIso is the trigger row's own instant (PR-B carry 2: an act without one
- *        is refused, so the d20 always re-derives); moment is ARRIVAL for a walk
+ *        is refused, so the d20 always re-derives); moment is ENTRY for a walk crossing into a ring, ARRIVAL for a walk
  *        landing in a ring (C1), absent for the act itself
  *   deps { living (a LivingSet), law (loadCreatureLaw's; else the set's), around(creature, act) → the world read at the creature,
  *          ask(state, questions, { timeoutMs }) → Jev, write(rows) → writeReaction, env, now,
@@ -850,10 +868,14 @@ export async function reactTo(act, deps = {}) {
   if (!living?.byId?.size || !act?.point || !Number.isFinite(act.point.x) || !Number.isFinite(act.point.y)) return [];
   if (act.actId == null || !Number.isFinite(Date.parse(act.atIso ?? ""))) return []; // no instant, no d20 (carry 2)
   const now = deps.now ?? Date.now();
-  const near = living.inRing(act.point, { now, bornBy: Date.parse(act.atIso) });
+  // `only` (a creature id): the one creature this act is for, as an entry is for the ring it crossed
+  const only = deps.only ?? null;
+  const near = living.inRing(act.point, { now, bornBy: Date.parse(act.atIso), ...(only != null ? { most: Infinity } : {}) })
+    .filter((n) => only == null || n.creature.id === only);
   // a retry of an act a creature already answered reads that answer, even from
   // a creature that has since fled or faded (review of #561, F6)
   for (const id of living.answered.get(triggerKey(act.actId, act.moment)) ?? []) {
+    if (only != null && id !== only) continue;
     const c = living.byId.get(id);
     if (c && !near.some((n) => n.creature === c)) near.push({ creature: c, distance_m: distanceM(act.point, c) });
   }
@@ -893,7 +915,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
       return r ? answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, r, act.actor), reaction: r.name, roll: known.roll ?? t20(creature.id, act.actId, act.atIso), judged_by: known.judged_by }) : null;
     }
     if (creature.gone || creature.fades_at <= now) return null; // it fled while this act waited its turn
-    const cap = capOf(creature, act.actor, { now });
+    // an arrival or an entry is judged at its own instant (W7); an act, now, as it happens
+    const cap = capOf(creature, act.actor, { now: MOMENTS.includes(act.moment) ? Date.parse(act.atIso) : now });
     if (cap === "window") return null;
     // a declared walk closes on the creature when its toward-point is nearer than
     // where it was declared; an arrival when it landed nearer than it set out (C1)

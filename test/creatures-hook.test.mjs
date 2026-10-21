@@ -20,11 +20,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { LivingSet, loadCreatureLaw, ANSWER_WAIT_MS, AROUND_WAIT_MS, JEV_TIMEOUT_MS, TURN_WAIT_MS } from "../src/creatures.mjs";
+import { LivingSet, loadCreatureLaw, distanceM, ANSWER_WAIT_MS, AROUND_WAIT_MS, JEV_TIMEOUT_MS, TURN_WAIT_MS } from "../src/creatures.mjs";
 import { perceived, noteActWritten, setCreaturesAwake, creaturesAwake, insideWatchedAct } from "../src/act-watch.mjs";
 import {
   __setCreaturesForTest, __resetArrivalsForTest, actOfRow, aroundCreature, arrivalTick, arrivals, creaturesAnswer, foldWalks, landingOf,
-  ARRIVAL_STALE_MS, VIEWS_PER_TICK, VIEW_RETRY_MS, seeFrom, views, warmViews, __resetViewsForTest,
+  ARRIVAL_STALE_MS, ENTRY_INSIDE_M, entryOf, VIEWS_PER_TICK, VIEW_RETRY_MS, seeFrom, views, warmViews, __resetViewsForTest,
 } from "../src/creatures-hook.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -436,8 +436,9 @@ test("C1: a walk that lands inside a ring is judged at its landing instant, as a
   const judge = async (act) => { judged.push(act); return [{ id: WOLF }]; };
   const r = await arrivalTick({ query, now: NOW, walkMod: WALK, judge });
   assert.equal(r.landed, 2);
-  assert.equal(judged.length, 1, "only the landing inside a ring is judged");
-  const [a] = judged;
+  assert.deepEqual(judged.map((x) => x.moment), ["entry", "arrival"], "the walk crossed into the ring on its way (call 6), then landed in it");
+  assert.equal(judged.filter((x) => x.moment === "arrival").length, 1, "only the landing inside a ring is judged as an arrival");
+  const a = judged.find((x) => x.moment === "arrival");
   assert.equal(a.moment, "arrival");
   assert.equal(a.actId, "101");
   assert.equal(a.verb, "walk");
@@ -457,8 +458,8 @@ test("C1: the real judge writes the arrival's row with its moment and its instan
   const { answerWithin } = await import("../src/creatures-hook.mjs");
   const r = await arrivalTick({ query, now: NOW, walkMod: WALK,
     judge: (act, cur) => answerWithin(act, { ...cur, around: quiet, ask: jev({ watch: 1 }), write, env: ENV }) });
-  assert.equal(r.answered, 1);
-  const p = calls[0][0].payload;
+  assert.equal(r.answered, 2, "its entry on the way (call 6) and its landing, minutes apart in world time");
+  const p = calls.map((c) => c[0].payload).find((x) => (typeof x === "string" ? JSON.parse(x) : x).moment === "arrival");
   const payload = typeof p === "string" ? JSON.parse(p) : p;
   assert.equal(payload.moment, "arrival");
   assert.equal(payload.to, "kai");
@@ -516,4 +517,101 @@ test("the walk cursor: after the boot, only walks past the cursor are read, by t
   await arrivalTick({ query, now: NOW, walkMod: WALK, judge: async () => [] });
   assert.match(asked[0][0], /WHERE class = 'move' AND id > \$1::bigint ORDER BY id LIMIT \$2/);
   assert.equal(asked[0][1][0], "500");
+});
+
+// ── call 6: the path-crossing trigger (POS-672 W7) ──────────────────────────
+
+test("entryOf: the one line-against-circle test — where and when a path first crosses into a ring; none from inside, none on a miss", () => {
+  const a = { from: { x: 300, y: 0 }, at: { x: -300, y: 0 }, startMs: 0, dueMs: 600_000 };
+  const wolf = { x: 0, y: 0 };
+  const e = entryOf(a, wolf, 80);
+  assert.ok(Math.abs(e.point.x - (80 - ENTRY_INSIDE_M)) < 1e-6 && e.point.y === 0, "it crosses in at the ring's near edge");
+  assert.ok(Math.abs(e.ms - ((300 - 80) / 600) * 600_000) < 20, "at that point's instant on the walk's own clock");
+  assert.ok(distanceM(e.point, wolf) <= 80, "the ring holds the entry's point");
+  assert.equal(entryOf({ ...a, from: { x: 50, y: 0 } }, wolf, 80), null, "set out inside the ring: the declaration was the moment");
+  assert.equal(entryOf({ ...a, from: { x: 79.995, y: 0 } }, wolf, 80), null, "inside the ring by a hair is inside: no entry from the margin the point is judged in");
+  assert.equal(entryOf({ ...a, from: { x: 300, y: 100 }, at: { x: -300, y: 100 } }, wolf, 80), null, "a path that passes it by");
+  assert.equal(entryOf({ ...a, at: { x: 200, y: 0 } }, wolf, 80), null, "a path that stops short of the ring");
+  assert.equal(entryOf({ ...a, at: { x: 300, y: 0 } }, wolf, 80), null, "a stop goes nowhere");
+  const grazes = entryOf({ ...a, from: { x: 300, y: 79 }, at: { x: -300, y: 79 } }, wolf, 80);
+  assert.ok(grazes && distanceM(grazes.point, wolf) <= 80, "a path that only grazes the ring still crosses into it");
+});
+
+test("call 6: a walk whose path crosses a ring it neither set out in nor lands in is judged at the crossing, by that creature alone, as `entry`", async () => {
+  __resetArrivalsForTest();
+  const RAVEN = "creature:wolf-270-2";
+  __setCreaturesForTest(livingWith(spawnRow(WOLF, { x: 0, y: 40, at: NOW - 3 * 3600_000 }),
+    spawnRow(RAVEN, { n: 2, x: 10, y: 60, at: NOW - 3 * 3600_000 })));
+  const t = NOW - 300_000; // 600 m takes 7.2 min: on its way, past both rings by now
+  const rows = [walkRow(601, { from: { x: 400, y: 0 }, toward: { x: -200, y: 0 }, ms: t })];
+  const judged = [];
+  const judge = async (act, cur) => { judged.push({ act, only: cur.only }); return [{ id: cur.only }]; };
+  const r = await arrivalTick({ query: async (sql) => (/crossing >= \$1/.test(sql) ? rows : []), now: NOW, walkMod: WALK, judge });
+  assert.equal(r.landed, 0, "it has not landed");
+  assert.deepEqual(judged.map((j) => j.only).sort(), [WOLF, RAVEN].sort(), "each ring it crossed, once, by its own creature");
+  for (const { act } of judged) {
+    assert.equal(act.moment, "entry");
+    assert.equal(act.actId, "601");
+    assert.equal(act.verb, "walk");
+    assert.equal(act.approaching, true, "crossing in is coming closer");
+    assert.ok(Date.parse(act.atIso) > t && Date.parse(act.atIso) < NOW, "the crossing's own instant, not the tick's");
+  }
+  judged.length = 0;
+  await arrivalTick({ query: async () => [], now: NOW + 10_000, walkMod: WALK, judge });
+  assert.deepEqual(judged, [], "a crossing is judged once");
+  __setCreaturesForTest(null);
+});
+
+test("call 6: not before the path gets there; never by a creature that came out after; a walk that set out inside has only its declaration", async () => {
+  __resetArrivalsForTest();
+  const judged = [];
+  const judge = async (act, cur) => { judged.push(`${act.actId}:${cur.only}`); return []; };
+  __setCreaturesForTest(livingWith(spawnRow(WOLF, { x: 0, y: 0, at: NOW - 120_000 })));
+  const rows = [
+    walkRow(701, { actor: "a", from: { x: 3000, y: 0 }, toward: { x: -3000, y: 0 }, ms: NOW - 60_000 }), // still kilometres off
+    walkRow(702, { actor: "b", from: { x: 600, y: 0 }, toward: { x: -3000, y: 0 }, ms: NOW - 600_000 }), // crossed ~6 min ago, before the wolf
+    walkRow(703, { actor: "c", from: { x: 50, y: 0 }, toward: { x: -3000, y: 0 }, ms: NOW - 60_000 }),   // set out inside the ring
+    walkRow(704, { actor: "d", from: { x: 200, y: 0 }, toward: { x: -3000, y: 0 }, ms: NOW - 120_000 }), // 120 m in ~1.4 min: crossed ~0.6 min ago
+  ];
+  await arrivalTick({ query: async (sql) => (/crossing >= \$1/.test(sql) ? rows : []), now: NOW, walkMod: WALK, judge });
+  assert.deepEqual(judged, [`704:${WOLF}`]);
+  judged.length = 0;
+  await arrivalTick({ query: async () => [], now: NOW + 3 * 3600_000, walkMod: WALK, judge });
+  assert.ok(!judged.some((j) => j.startsWith("701:")), "a crossing found past ARRIVAL_STALE_MS (a long restart) is let go");
+  __setCreaturesForTest(null);
+});
+
+test("call 6: the real judge writes the entry's own row, beside the arrival's — one walk, two moments, each its own key", async () => {
+  __resetArrivalsForTest();
+  __setCreaturesForTest(livingWith(spawnRow(WOLF, { x: 0, y: 0, at: NOW - 3 * 3600_000 })));
+  const { calls, write } = recordingWrite();
+  const t = NOW - 600_000; // 280 m: crosses in at 80 m off, lands 20 m off, ~2.4 min apart
+  const query = async (sql) => (/crossing >= \$1/.test(sql) ? [walkRow(801, { from: { x: 300, y: 0 }, toward: { x: 20, y: 0 }, ms: t })] : []);
+  const { answerWithin } = await import("../src/creatures-hook.mjs");
+  let clock = t + 200_000; // the tick that sees the crossing, before the landing
+  const judge = (act, cur) => answerWithin(act, { ...cur, around: quiet, ask: jev({ watch: 1 }), write, env: ENV });
+  const r1 = await arrivalTick({ query, now: clock, walkMod: WALK, judge });
+  assert.equal(r1.entered, 1);
+  const r2 = await arrivalTick({ query: async () => [], now: NOW, walkMod: WALK, judge });
+  assert.equal(r2.landed, 1);
+  const payloads = calls.map((c) => (typeof c[0].payload === "string" ? JSON.parse(c[0].payload) : c[0].payload));
+  assert.deepEqual(payloads.map((p) => p.moment), ["entry", "arrival"]);
+  assert.ok(Date.parse(payloads[0].entered_at) < Date.parse(payloads[1].arrived_at));
+  assert.deepEqual(calls.map((c) => c[0].object), ["801", "801"], "both answer the walk act");
+  __setCreaturesForTest(null);
+});
+
+test("call 6 and C2: an entry and a landing inside 10 s of world time are one reaction; the window reads the moments' own instants", async () => {
+  __resetArrivalsForTest();
+  __setCreaturesForTest(livingWith(spawnRow(WOLF, { x: 0, y: 0, at: NOW - 3 * 3600_000 })));
+  const { calls, write } = recordingWrite();
+  const t = NOW - 600_000; // 90 m → 75 m: crosses in at 80 m, lands 15 m on (about 11 s), 3.6 s after the crossing
+  const query = async (sql) => (/crossing >= \$1/.test(sql) ? [walkRow(901, { from: { x: 90, y: 0 }, toward: { x: 75, y: 0 }, ms: t })] : []);
+  const { answerWithin } = await import("../src/creatures-hook.mjs");
+  const r = await arrivalTick({ query, now: NOW, walkMod: WALK,
+    judge: (act, cur) => answerWithin(act, { ...cur, around: quiet, ask: jev({ watch: 1 }), write, env: ENV }) });
+  assert.equal(r.entered, 1);
+  assert.equal(r.landed, 1);
+  assert.deepEqual(calls.map((c) => JSON.parse(c[0].payload).moment), ["entry"], "the landing 3.6 s later is inside the window");
+  __setCreaturesForTest(null);
 });
