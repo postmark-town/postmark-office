@@ -66,7 +66,7 @@ export function appearanceIdOf(value) {
 }
 
 export const FOLD_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
-  WHERE class = '${APPEARANCE_CLASS}' AND id > $1::bigint ORDER BY id LIMIT 5000`;
+  WHERE class = '${APPEARANCE_CLASS}' AND id > $1::bigint ORDER BY acts.id LIMIT 5000`;
 // ACTS COMMIT OUT OF ORDER (review of #661). The pen keeps three connections, so
 // act 41 can commit after act 42 was read, and `id > cursor` alone would never
 // see it. Every catch-up therefore re-reads the acts behind the cursor that
@@ -79,7 +79,7 @@ export const OVERLAP_SECONDS = 120;
 export const OVERLAP_IDS = 10000;
 export const OVERLAP_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
   WHERE class = '${APPEARANCE_CLASS}' AND id <= $1::bigint AND id > $1::bigint - ${OVERLAP_IDS} AND inserted_at > now() - make_interval(secs => ${OVERLAP_SECONDS})
-  ORDER BY id LIMIT 5000`;
+  ORDER BY acts.id LIMIT 5000`;
 
 const fold = { cursor: 0n, nodes: new Map(), at: 0, inflight: null };
 

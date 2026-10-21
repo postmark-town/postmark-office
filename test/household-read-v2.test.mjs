@@ -479,7 +479,7 @@ test("happened's acts read is bounded by id: a binary search of point lookups tu
     asked.push([flat, params]);
     if (/max\(id\)::text AS hw/.test(flat)) return { rows: [{ hw: String(TOP) }] };
     if (/min\(id\)::text AS lo, max\(id\)::text AS hi/.test(flat)) return { rows: [{ lo: "1", hi: String(TOP) }] };
-    if (/WHERE id >= \$1::bigint ORDER BY id LIMIT 1/.test(flat)) return { rows: Number(params[0]) <= TOP ? [{ id: String(params[0]), at: at(Number(params[0])) }] : [] };
+    if (/WHERE id >= \$1::bigint ORDER BY acts\.id LIMIT 1/.test(flat)) return { rows: Number(params[0]) <= TOP ? [{ id: String(params[0]), at: at(Number(params[0])) }] : [] };
     if (/FROM acts WHERE household = \$1/.test(flat)) {
       const floor = /id >= \$2::bigint/.test(flat) ? Number(params[1]) : 1;
       const below = /id < \$\d::bigint/.test(flat) ? Number(params[params.length - 1]) : TOP + 1;
@@ -495,7 +495,7 @@ test("happened's acts read is bounded by id: a binary search of point lookups tu
   const read = asked.find(([sql]) => /FROM acts WHERE household/.test(sql));
   assert.match(read[0], /household = \$1 AND id >= \$2::bigint AND at >= \$3::timestamptz/, "the house's index range, from the window's first id");
   assert.equal(read[1][1], "21300");
-  assert.ok(asked.filter(([sql]) => /ORDER BY id LIMIT 1/.test(sql)).length <= 16, "about 15 point lookups");
+  assert.ok(asked.filter(([sql]) => /ORDER BY acts\.id LIMIT 1/.test(sql)).length <= 16, "about 15 point lookups");
   assert.equal(r.rows.length, 65);
   assert.equal(r.cut, false);
   // a window past the store's cut: the answer says where the read goes on
