@@ -21,19 +21,7 @@ import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
 const PIN = JSON.parse(readFileSync(new URL("./clone-pins.json", import.meta.url), "utf8")).world.sha;
 const KEY = "a test master key, never the box's";
-const RAW = NO_WORLD ? null : await windowInputsAt(PIN, { repo: worldClone() });
-// THE CASES FIX THEIR OWN DIALS (POS-672, the pin moving past WLD-56's tease and
-// ramp): the law at the pin moves with rulings (one a window in rotation from
-// 10-17, the ramp from 10-21), and these cases test the clock, not the law's
-// numbers, so they run on the numbers they were written for (D2, 10-15: a wolf
-// 2, a raven 4, a bat 3), no rotation, the launch dial off. The pin's law is
-// still read whole (the first case); the world's own suite tests its numbers.
-const FIXED = { counts: { bat: 3, raven: 4, wolf: 2 } };
-const fixed = (w) => {
-  const { rotation: _r, ...dials } = { ...w.law.dials, ...FIXED };
-  return { ...w, law: { ...w.law, fromCrossing: null, dials }, inputs: { ...w.inputs, fromCrossing: null, dials } };
-};
-const W = NO_WORLD ? null : fixed(RAW);
+const W = NO_WORLD ? null : await windowInputsAt(PIN, { repo: worldClone() });
 /** The pin's law with the launch dial turned on from `from` (the pin's own dial is null: off). */
 const on = (from = 270, w = W) => ({ ...w, law: { ...w.law, fromCrossing: from }, inputs: { ...w.inputs, fromCrossing: from } });
 const N = 271;
@@ -69,9 +57,8 @@ async function runThrough(s, from, to, step = 10 * MIN, over = {}) {
 
 test("the window's inputs are the world's, read at a sha: the ruled law, the kinds' start states, the Mists and the marks", () => {
   assert.equal(W.sha, PIN);
-  assert.deepEqual(Object.keys(RAW.law.dials.counts).sort(), ["bat", "raven", "wolf"], "the pin's law, read whole: the three kinds");
-  assert.ok(RAW.law.fromCrossing === null || Number.isInteger(RAW.law.fromCrossing), "its launch dial, off or a crossing");
-  assert.deepEqual(W.law.dials.counts, { bat: 3, raven: 4, wolf: 2 }, "the cases' own numbers");
+  assert.deepEqual(W.law.dials.counts, { bat: 3, raven: 4, wolf: 2 });
+  assert.equal(W.law.fromCrossing, null, "the pin's launch dial is off");
   assert.deepEqual(W.starts.wolf, { moods: { fear: 1, curiosity: 1, hunger: 2 }, flags: [] });
   assert.deepEqual(W.starts.raven.moods, { fear: 1, curiosity: 2, hunger: 1 });
   assert.ok(W.inputs.mists?.clear || W.inputs.mists?.schedule, "the skeleton's Mists");

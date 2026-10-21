@@ -122,7 +122,10 @@ function firstDiff(a, b) {
 const CHANGED = {
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
-    "a house's members, a row each, paged; full: true is the whole house — household: <slug>"]],
+    "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
+    // POS-672: a creature's afforded actions are world writes, charged on the same ledger as one verb
+    ['"counted_verbs":["world_hold","world_leave_mark"', '"counted_verbs":["world_hold","world_creature","world_leave_mark"']],
+  'MCP household {"read":"standing","handle":"wright"}': [['"counted_verbs":["world_hold","world_leave_mark"', '"counted_verbs":["world_hold","world_creature","world_leave_mark"']],
 };
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',

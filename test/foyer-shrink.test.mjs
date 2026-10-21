@@ -1077,23 +1077,6 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //      The tenth note's rule stands: a PR that moves the pin re-captures here.
   // The golden's bytes are unchanged (full 24984, slim 22546).
   //
-  // ⚠ AND RE-CAPTURED A SEVENTEENTH TIME, 2026-10-21 (lane plumb-creature-verbs,
-  // POS-672), because the PR moved the world pin (daef8487 → db9425f3, the
-  // creatures' afforded actions, which the office reads at the pin), and the
-  // tenth note's rule says a pin move re-captures here. Diffed leaf by leaf
-  // BEFORE the capture, on the pool tree's sparse clones at the pins (world
-  // db9425f3, town 5efee017): 1117 → 1129 paths. EVERY changed, added and
-  // removed path is the world's own data, none the office's code (the same
-  // capture on main's code at that world is byte-identical):
-  //   1. `stances` (both skins): the count awaiting 61 → 64, the five rows now
-  //      the world's newest marks over your ground, and the ground list
-  //      `stances.ground` grown by one mark (72 → 73 rows) and re-sorted.
-  //   2. `stakes.rows.N.kind` (rows 1, 3, 4, 6, 7, 14, 23) in W2's kind rung
-  //      (`thing`, `predicate`, `portal-ground`), and `stakes.rows.N.class`
-  //      ("home") on rows 4, 6, 7 and 14: the world's records, migrated.
-  //
-  //   full  24984 -> 25070 (+86) · slim  22546 -> 22632 (+86)
-  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,

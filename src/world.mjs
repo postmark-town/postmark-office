@@ -5507,13 +5507,6 @@ export function walkEntryReceipt(entry, { arrived, stop, eta, queued = true, why
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function walkViaOffice(worldClone, payload = {}, key = null) { return perceived(() => walkAct(worldClone, payload, key)); }
-/**
- * An APPROACH (POS-672, call 3): the walk itself, toward a creature, its row
- * naming the creature. Unperceived here: the creature door (creature-verbs.mjs)
- * runs it inside its own watch, has the creature it was aimed at answer it, and
- * hands the walk to every other creature as the ordinary walk it is.
- */
-export async function walkApproach(worldClone, payload = {}, key = null, creature) { return walkAct(worldClone, payload, key, { approach: String(creature) }); }
 async function walkAct(worldClone, payload = {}, key = null, { approach = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint, extra = {}) => {
@@ -6188,6 +6181,13 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
  * carry none. `walk` is the engine's walk.mjs (currentDeparture and the
  * constant), passed in so this stays pure.
  */
+/**
+ * An APPROACH (POS-672, call 3): the walk itself, toward a creature, its row
+ * naming the creature. Unperceived here: the creature door (creature-verbs.mjs)
+ * runs it inside its own watch, has the creature it was aimed at answer it, and
+ * hands the walk to every other creature as the ordinary walk it is.
+ */
+export async function walkApproach(worldClone, payload = {}, key = null, creature) { return walkAct(worldClone, payload, key, { approach: String(creature) }); }
 export function walkerPaces(rows, departures = [], walk = {}) {
   if (!Array.isArray(rows) || typeof walk.currentDeparture !== "function") return rows;
   return rows.map((r) => {
