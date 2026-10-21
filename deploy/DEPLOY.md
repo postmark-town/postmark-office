@@ -2754,7 +2754,7 @@ Darko, 2026-10-21 08:26 EDT, "737 agreed": a daily office sweep deletes an uploa
    ```sh
    sudo systemctl start postmark-media-sweep.service; sudo cat /srv/postmark-media-sweep/last.json
    ```
-   Read `sources` first: every source has a `found` and none an `error` (`world` and `town` are never 0 on the real town). `clock.stamped` on the first run is every file hanging nowhere today; nothing is due on a first run, because the 30 days count from the sweep's first sight of a file, never from before it.
+   Read `sources` first: every source has a `found` and none an `error` (`world` and `town` are never 0 on the real town). A clone on the box that holds work not yet published (marks that already hang uploaded pictures) is named in `MEDIA_SWEEP_EXTRA_CLONES` (comma-separated paths) in the office env, so its pictures' clocks never start; every branch it holds is read. `clock.stamped` on the first run is every file hanging nowhere today; nothing is due on a first run, because the 30 days count from the sweep's first sight of a file, never from before it.
 3. **Each day of the report-only week,** read `last.json`: `ledger.unhung`, `clock`, and `due` (`files`, `bytes` and each URL, its household and the day it was last seen hung). A URL in `due` that you can see hanging somewhere is a source the sweep does not read: stop, and file it before anything goes live.
 4. **The first live run is Wright's, on Darko's go,** by hand, so its report is read before the timer frees anything on its own:
    ```sh
