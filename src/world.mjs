@@ -80,7 +80,7 @@ import { carriersFrom, carriersWithDisclosure, heardFromV2, inRect, movementStan
 import { arrivedNotice, doorstepTransport, rideStateFrom, stopAnnotationFor, stopUnderfoot, transportAt } from "./world-ride.mjs"; // #2986 § 11: the derived visibility of a vehicle, off the same timetable
 import { findMarks } from "./world-find.mjs"; // find a mark by name from anywhere (2026-09-26)
 import { byBand, presenceEnabled, presentNear, near as presenceNear, everyone as presenceEveryone, PRESENCE_DIALS } from "./dynamic-presence.mjs"; // stage 2: residents revealed to each other
-import { MEDIA_BASE, mediaUrlOk } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks
+import { MEDIA_BASE, mediaUrlOk, mediaHeldRefusal } from "./media.mjs"; // the mark door's image allowlist: only the town's own media hangs on marks, and only what the ledger holds (POS-738)
 import { imageFormat, MEDIA_FORMATS } from "./edit.mjs"; // the bytes decide the type, never the filename (with_image, below)
 import { everyonePlaced, withFrames } from "./positions.mjs"; // where is everyone: walk records ∪ parcel households, one derivation — plus Stage D's frame overlay
 import { createPlacement, createPositionGrid, createPositionProjection, recordOfMovement } from "./position-projection.mjs"; // POS-264: the governing departure per resident, kept current by the walk door
@@ -4492,6 +4492,16 @@ export const CANDY_IS_MADE = Object.freeze({
 });
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+// The picture a published mark carries today, or null — read only on the rare
+// path where an amend re-sends a picture the ledger does not hold (POS-738).
+// An unreadable world answers null, so the amend is judged like any new hang.
+function publishedImageOf(worldClone, id) {
+  try {
+    const mark = (publishedState(worldClone).state.marks ?? []).find((m) => m.id === id);
+    return typeof mark?.image === "string" ? mark.image : null;
+  } catch { return null; }
+}
+
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
@@ -4797,6 +4807,17 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   if (image !== undefined && !mediaUrlOk(image))
     throw bounce(422, "image must live on the town's media door",
       `a mark's image is one ${MEDIA_BASE}/… URL — upload the file first (POST /media, or the upload_media tool) and pass the url the office returns`);
+  // AND THE TOWN HOLDS IT (POS-738): the grammar above admits a URL nobody
+  // ever uploaded, and two marks hung one. One exception, and it is not a
+  // loosening: an amend that re-sends the picture its published mark ALREADY
+  // carries hangs nothing new. A set-down re-declares every field it carries
+  // (world-hold.mjs § AMEND_CARRIES), so without this a mark whose picture
+  // predates the check could never be carried and set down again.
+  if (image !== undefined) {
+    const refused = await mediaHeldRefusal(image);
+    if (refused && !(payload.amend === true && publishedImageOf(worldClone, `${by}/${slug}`) === image))
+      throw bounce(refused.code, refused.defect, refused.hint);
+  }
 
   // stamps: the inline stake (0 = personal draft). Judged BEFORE the write so a
   // malformed number never leaves a half-done act.

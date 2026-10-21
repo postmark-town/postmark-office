@@ -68,6 +68,7 @@ const ALLOWED = {
   "law-snapshot.mjs": [1, `${OWN}: a status field`],
   "leave-exec.mjs": [1, "the push error a receipt discloses (the 409's sketchbook-checkout error is FAULT_LOGGED since POS-617)"],
   "media.mjs": [1, "a 502 quoting the fetch of the resident's own URL (Wright's G4: it stays)"],
+  "media-sweep.mjs": [5, `${OPERATOR} (the sweep's and the takedown's reports on the box: a source's or storage's refusal, named for the operator who reads last.json)`],
   "oauth.mjs": [1, `${OWN}: SignInUnreadable's why, which goes to the log`],
   "paperwork.mjs": [1, `${OWN}: a status field`],
   "read-workers.mjs": [1, `${OWN}: a worker's exit cause, read by the pool`],
