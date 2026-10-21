@@ -37,7 +37,7 @@
 // afforded actions (a blessing before the world half) refuses every verb with
 // its reason and shows none.
 
-import { capOf, dial, distanceM, judgeMode, ringHolds } from "./creatures.mjs";
+import { capOf, dial, distanceM, judgeMode, ringHolds, seesCreature } from "./creatures.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { WHISPER_WORDS } from "./world-read-shape.mjs";
 
@@ -91,8 +91,9 @@ export function whyNot(verb, c, d, { law, carryingConsumable = false, here = nul
   if (a.from === "ring" && !(here ? ringHolds(law, c, here) : d <= ring))
     return d <= ring ? `${theOf(law, c)} is beyond the walls of the room you stand in, and ${verb} is from inside its ring`
       : `${theOf(law, c)} is ${Math.round(d)} m off, and ${verb} is from inside its ring (${ring} m)`;
-  if (a.from !== "ring" && !(d <= SIGHT_M))
-    return `${theOf(law, c)} is ${Math.round(d)} m off, out of sight (${verb} is from within ${SIGHT_M} m)`;
+  if (a.from !== "ring" && !(here ? seesCreature(law, c, here, SIGHT_M) : d <= SIGHT_M))
+    return d <= SIGHT_M ? `${theOf(law, c)} is beyond the walls of the room you stand in, out of sight (${verb} is from where you can see it)`
+      : `${theOf(law, c)} is ${Math.round(d)} m off, out of sight (${verb} is from within ${SIGHT_M} m)`;
   if (verb === "approach" && d <= ring * APPROACH_STOP)
     return `you are already within ${Math.round(ring * APPROACH_STOP)} m of ${theOf(law, c)}`;
   if (verb === "offer" && !carryingConsumable) return "you carry nothing to offer";
@@ -122,7 +123,7 @@ export function creaturePairs({ here, living, law, carryingConsumable = false, n
   const pairs = [];
   for (const c of living.living(now)) {
     const d = distanceM(here, c);
-    if (!(d <= SIGHT_M)) continue;
+    if (!seesCreature(law, c, here, SIGHT_M)) continue; // its sight ends at its room's walls (F4)
     for (const a of law.affordedOf(c.kind))
       if (!whyNot(a.action, c, d, { law, carryingConsumable, here })) pairs.push({ verb: a.action, object: c.id });
   }
@@ -180,7 +181,7 @@ export async function worldCreature(args = {}, key = null, deps = {}) {
   if (!here) throw bounce(422, `the world doesn't know where ${actor} stands yet`, "an afforded action is taken from where you stand: walk somewhere first. Nothing was done.");
   const raw = String(args.creature ?? "").trim();
   if (!raw) {
-    const near = living.living(now0).filter((c) => distanceM(here, c) <= SIGHT_M).map((c) => c.id);
+    const near = living.living(now0).filter((c) => seesCreature(cr.law, c, here, SIGHT_M)).map((c) => c.id);
     throw bounce(422, `${verb} which creature?`, near.length ? `creature: one of ${near.join(", ")}. Nothing was done.` : `no creature is in sight; world { find: "creature" } names the nearest. Nothing was done.`);
   }
   const id = raw.startsWith("creature:") ? raw : `creature:${raw}`;

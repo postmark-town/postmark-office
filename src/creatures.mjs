@@ -93,6 +93,7 @@ import {
   ANSWER_OPTIONS, TALLY_ACTION, TEMPT_ACTION, isTempting, openTemptations, phaseOf, plainHouses, plainScore, helpScore,
   temptPayload, temptTarget, temptationsFor, talliesOf,
 } from "./temptation.mjs";
+import { endingSaid } from "./encounter.mjs";
 import { liveShieldOn } from "./encounter.mjs";
 
 export const CREATURE_CLASS = "creature";
@@ -320,6 +321,17 @@ export function ringHolds(law, creature, point) {
   if (!(ring > 0) || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false;
   if (creature.room && typeof law?.inCreatureRing === "function") return law.inCreatureRing(point, creature, ring, creature.room);
   return distanceM(point, creature) <= ring;
+}
+
+/**
+ * CAN `point` SEE A CREATURE? Within `radius` and, when it stands in a room, inside
+ * that room (eval round 1, F4: a creature was called from 175 m away, outside the
+ * walls it stands within). Its sight ends at its room's walls, as its ring does.
+ */
+export function seesCreature(law, creature, point, radius) {
+  if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false;
+  if (creature.room && typeof law?.inCreatureRing === "function") return law.inCreatureRing(point, creature, radius, creature.room);
+  return distanceM(point, creature) <= radius;
 }
 
 /** The published world's marks and their key (its sha), for warmRooms; null when they cannot be read. */
@@ -1027,6 +1039,8 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
     ...(encounter?.press ? { press: encounter.press } : {}),
     ...(encounter?.ease_after ? { ease_after: encounter.ease_after } : {}),
     ...(encounter?.resolve != null ? { resolve: encounter.resolve } : {}),
+    // who the ring held as the creature answered (eval round 1, F3: the record says whom the press could have found)
+    ...(Array.isArray(encounter?.ring) ? { ring: encounter.ring } : {}),
     ...(judgment.latency_ms != null ? { latency_ms: judgment.latency_ms } : {}),
     ...(judgment.tokens != null ? { tokens: judgment.tokens } : {}),
     ...(sliceText ? { slice_chars: sliceText.length, slice_sha256: createHash("sha256").update(sliceText).digest("hex") } : {}),
@@ -1487,7 +1501,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null,
       ally: String(reaction.says).includes("{ally}") ? allyOf : null };
     const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words,
-      encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve } : null });
+      encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve, ring: enc.roster.map((r) => r.handle) } : null });
     const nerve = enc ? [...enc.cost, ...(press?.landed ?? []).map((l) => ({ ...l, why: "press" }))] : [];
     const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) || !!telling?.answered || eased.filled,
       tell: telling?.tell ?? null, nerve, tempt: tempted.tempt, tallies: tempted.tallies });
@@ -1507,6 +1521,11 @@ async function creatureTurn(creature, act, distance_m, deps) {
       // a creature that tempts: what it whispered, and to whom; what your answer counted for (temptation.mjs)
       ...(tempted.tempt ? { tempts: { to: tempted.tempt.to, says: tempted.tempt.says, until: tempted.tempt.until } } : {}),
       ...(tempted.tallies.length ? { counted: tempted.tallies.map((t) => ({ for: t.on, [t.payload.road]: t.payload.by, why: t.payload.why })) } : {}),
+      // its ease after this act, as a strike carries resolve (eval round 1, F10), and why it did not move when it did not
+      ...(enc && kind.ease ? { ease: easeSaid(creature, kind, act.actor, enc, now) } : {}),
+      // a finish pays out at the settlement: to whom, and when (F8)
+      ...(written.rows.some((r) => r.action === FINISH_ACTION && asPayload(r.payload).by === act.actor) && endingSaid(creature, now)
+        ? { finished: true, ending: endingSaid(creature, now) } : {}),
     };
   } catch (e) {
     faultLogged(`a creature's turn tripped (${creature?.id})`, e);
@@ -1586,6 +1605,16 @@ function temptingRows(creature, act, tm, judgment, { living, now }) {
   return { tempt, tallies };
 }
 
+/** The ease after an act, for its reply (F10): yours (or the households'), of its target, and a word when it did not move. */
+function easeSaid(creature, kind, actor, enc, now) {
+  const after = easeScope(creature, kind, actor, enc.household, now);
+  const key = kind.ease.by === "households" ? "households" : "yours";
+  const before = kind.ease.by === "households" ? enc.ease.all : enc.ease.mine;
+  const now_ = kind.ease.by === "households" ? after.all : after.mine;
+  return { [key]: now_, of: kind.ease.target,
+    ...(now_ === before ? { note: enc.breaksEase ? `this act emptied it: only ${kind.ease.only} fills it` : "this act did not move it" } : {}) };
+}
+
 /** Every entry a press may resolve to, when the blessed law does not list them (it always does once it knows a press). */
 const PRESS_ON_ALL = Object.freeze(["actor", "striker", "shielder", "loudest", "alone"]);
 
@@ -1593,7 +1622,9 @@ const PRESS_ON_ALL = Object.freeze(["actor", "striker", "shielder", "loudest", "
 async function encounterOf(creature, kind, act, distance_m, deps) {
   const { living, now, clock, deadline } = deps;
   const ring = Number(kind.ring_m);
-  const present = await within((deps.present ?? presentAt)(creature, ring), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS));
+  // presence as the tick kept it (F3); the live read only when none is kept, inside the act's wait
+  const present = (deps.present ? null : keptPresent(creature, now))
+    ?? await within((deps.present ?? presentAt)(creature, ring), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS));
   const lookup = await within((deps.households ?? householdsNow)(), AROUND_WAIT_MS);
   // who the ring holds: its walls too (world#268), where presence says where each stands
   const holds = (r) => (r.at ? ringHolds(deps.law, creature, r.at) : r.distance_m <= ring);
@@ -1602,6 +1633,10 @@ async function encounterOf(creature, kind, act, distance_m, deps) {
   // the actor stands where the act said, whatever presence read
   if (inside && !roster.some((r) => r.handle === act.actor))
     roster = [...roster, ...ringRoster({ residents: [{ handle: act.actor, distance_m }] }, { ring, lookup, living, now })].sort((a, b) => a.distance_m - b.distance_m);
+  // and a steady's or a shield's friend, whom its door found in the same ring (F3: a kept roster may predate them)
+  if (act.target && act.targetAt && !roster.some((r) => r.handle === act.target) && ringHolds(deps.law, creature, act.targetAt))
+    roster = [...roster, ...ringRoster({ residents: [{ handle: String(act.target), distance_m: distanceM(act.targetAt, creature) }] }, { ring, lookup, living, now })]
+      .sort((a, b) => a.distance_m - b.distance_m);
   const household = roster.find((r) => r.handle === act.actor)?.household ?? `solo:${act.actor}`;
   // AN ACT MADE INSIDE THE RING COSTS (ruled 22:47): not a walk's entry or landing (D2: walking in is free),
   // not an encounter verb (its door charged it), and nothing from a resident already spent
@@ -1635,15 +1670,60 @@ async function presentAt(creature, ring) {
   const { presentNear } = await import("./dynamic-presence.mjs");
   return presentNear({ x: creature.x, y: creature.y }, { radiusM: ring, limit: Infinity });
 }
-const householdsCache = { at: 0, lookup: null };
-/** The household lookup, read at most every REFRESH_MS (it reads the registry from the store). */
-async function householdsNow() {
-  if (!householdsCache.lookup || Date.now() - householdsCache.at >= REFRESH_MS) {
-    const { householdLookup } = await import("./households.mjs");
-    householdsCache.lookup = await householdLookup().catch(() => null);
-    householdsCache.at = Date.now();
+
+/**
+ * WHO STANDS IN A RING, READ BY THE TICK (eval round 1, F1 and F3). Presence's
+ * read is the expensive part of an encounter's turn: inside the act's 250 ms it
+ * timed out, the ring read as the actor alone, and so the press always landed on
+ * the actor, a shield never moved one and housemates never split one. So, as a
+ * creature's view is (creatures-hook.mjs § warmViews), the tick reads presence at
+ * every living finishable creature's point each REFRESH_MS, and the act reads what
+ * it kept (never older than ROSTER_KEEP_MS), the live read only when none is kept.
+ */
+export const ROSTER_KEEP_MS = 3 * REFRESH_MS;
+const rosters = new Map(); // creature id → { at, present }
+export function __resetRostersForTest() { rosters.clear(); }
+/** The tick's part: presence at each living finishable creature's point, kept. Answers how many were read. */
+export async function warmRosters(living, { law = living?.law, now = Date.now(), present = presentAt } = {}) {
+  if (!living || !law?.kindOf) return 0;
+  let n = 0;
+  const alive = new Set();
+  for (const c of living.living(now)) {
+    const kind = law.kindOf(c.kind);
+    if (!isFinishable(kind)) continue;
+    alive.add(c.id);
+    const p = await Promise.resolve(present(c, Number(kind.ring_m))).catch(() => null);
+    if (p && !p.unavailable) { rosters.set(c.id, { at: now, present: p }); n += 1; }
   }
-  return householdsCache.lookup;
+  for (const id of rosters.keys()) if (!alive.has(id)) rosters.delete(id);
+  // and the household lookup, so the first act after a start never reads everyone as a household of one (F2)
+  await householdsNow({ now }).catch(() => null);
+  return n;
+}
+/** What the tick kept for this creature, if it is fresh. */
+const keptPresent = (creature, now) => { const k = rosters.get(creature.id); return k && now - k.at <= ROSTER_KEEP_MS ? k.present : null; };
+const householdsCache = { at: 0, lookup: null, reading: null };
+export function __resetHouseholdsForTest() { Object.assign(householdsCache, { at: 0, lookup: null, reading: null }); }
+/**
+ * The household lookup, read at most every REFRESH_MS (it reads the registry from
+ * the store). A read that answers null (the store not ready, the registry not read)
+ * is NEVER kept (eval round 1, F2: the first seconds after a start read every
+ * resident as a household of one, which split housemates apart): the last good
+ * lookup answers while a fresh one is read, and with none yet, the read itself.
+ * `read` is the seam a test drives.
+ */
+export async function householdsNow({ read = null, now = Date.now() } = {}) {
+  const fresh = householdsCache.lookup && now - householdsCache.at < REFRESH_MS;
+  if (fresh) return householdsCache.lookup;
+  householdsCache.reading ??= (async () => {
+    try {
+      const lookup = await (read ?? (async () => (await import("./households.mjs")).householdLookup()))().catch(() => null);
+      if (lookup) Object.assign(householdsCache, { lookup, at: Date.now() });
+      return lookup;
+    } finally { householdsCache.reading = null; }
+  })();
+  // a stale good lookup answers now; the fresh one lands for the next act
+  return householdsCache.lookup ?? await householdsCache.reading;
 }
 
 /**

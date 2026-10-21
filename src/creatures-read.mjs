@@ -31,7 +31,7 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords, publishedMarks } from "./creatures.mjs";
+import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords, publishedMarks, seesCreature } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -123,7 +123,8 @@ const ringOf = (kind) => (Number(kind?.ring_m) > 0 ? { ring_m: Number(kind.ring_
 export function creaturesInWho({ living, law }, at, { nowMs = Date.now(), engine = null, radiusM = PRESENCE_DIALS.near_radius_m } = {}) {
   const here = point(at);
   if (!here || !living || !lawReady(law)) return [];
-  return livingFrom(living, here, nowMs).filter(({ d }) => d <= radiusM).map(({ c }) => {
+  // a creature in a room is seen only from inside that room (eval round 1, F4)
+  return livingFrom(living, here, nowMs).filter(({ c, d }) => d <= radiusM && (!c.room || seesCreature(law, c, here, radiusM))).map(({ c }) => {
     const kind = law.kindOf(c.kind);
     const w = wayTo(here, c, engine);
     const newest = c.reactions.at(-1) ?? null;
@@ -190,6 +191,8 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
   const here = point(at);
   const every = words === "creature" || words === "creatures";
   const hits = (here ? livingFrom(living, here, nowMs) : livingNow(living, nowMs).map((c) => ({ c, d: null })))
+    // a creature in a room is found only from inside it: a find never shows one through its walls (F4)
+    .filter(({ c }) => !c.room || (here && seesCreature(law, c, here, Infinity)))
     .filter(({ c }) => {
       if (every) return true;
       const name = String(law.kindOf(c.kind)?.name ?? "").toLowerCase();
