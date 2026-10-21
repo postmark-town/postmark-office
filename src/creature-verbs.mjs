@@ -66,6 +66,8 @@ export const CREATURE_TOOLS = Object.freeze([{
     handle: { type: "string", description: "which of your residents acts, when your key holds several" },
     kind: { type: "string", description: "offer only: the consumable kind you hold out, one of it (with one kind in hand it may be left out)" },
     words: { type: "string", description: `call or whisper only, at most ${WORDS_MAX} characters: a call's words are heard nearby like a say. A whisper's: ${WHISPER_WORDS}` },
+    // an encounter's two verbs aimed at a resident (encounter-verbs.mjs); `can` lists them only where they are usable
+    resident: { type: "string", description: "steady or shield only: the resident in the same ring as you" },
   }, additionalProperties: false },
 }]);
 

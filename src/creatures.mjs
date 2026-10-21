@@ -83,6 +83,10 @@ import { WORLD_CLONE } from "./world-store.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import {
+  ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
+  easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, windowAt,
+} from "./encounter.mjs";
 
 export const CREATURE_CLASS = "creature";
 export const REACT_ACTION = "react";
@@ -372,6 +376,8 @@ export class LivingSet {
     this.skipped = []; // spawn rows the fold would not take, and why (logged)
     this.byId = new Map();
     this.answered = new Map(); // trigger act id → the creatures that answered it (a retry's lookup)
+    this.encounter = []; // an encounter's rows (strike, steady, shield, nerve: encounter.mjs), the last ENCOUNTER_KEEP_MS
+    this.encounterIds = new Set();
     this.cursor = "0";
     this.booted = false;
   }
@@ -397,6 +403,10 @@ export class LivingSet {
         if (r.actor === this.law?.creaturesMod?.TOWN && this.law.creaturesMod.isCreatureId?.(r.object) && !this.byId.has(r.object)) this.#spawn(r, p);
       }
       else if (r.action === REACT_ACTION) this.#react(r, p);
+      else if (encounterRowOf(r)) {
+        // an encounter's row (encounter.mjs): kept once by id, whichever way it was folded
+        if (!this.encounterIds.has(String(r.id))) { this.encounterIds.add(String(r.id)); this.encounter.push(encounterRowOf(r)); }
+      }
       else if (r.action === FINISH_ACTION) {
         // only the creature's own row, once per resident (the store's guard is writeFinishOnce)
         const c = this.byId.get(r.actor);
@@ -448,11 +458,14 @@ export class LivingSet {
     this.answered.set(key, by.add(c.id));
     if (p.moods_after && typeof p.moods_after === "object" && !Array.isArray(p.moods_after)) c.moods = { ...p.moods_after }; // replaces, as the world's fold does
     if (Array.isArray(p.flags_after)) c.flags = [...p.flags_after].sort();
+    // a finishable creature's ease, as its last reaction left it (encounter.mjs § applyEase), stamped with its window
+    if (p.ease_after && typeof p.ease_after === "object" && typeof p.ease_after.window === "string") c.ease = p.ease_after;
     const at = msOf(r.at);
     const instant = msOf(p.arrived_at ?? p.entered_at ?? null);
     c.reactions.push({ act: key, to: p.to, verb: p.verb, reaction: p.reaction, roll: p.roll, judged_by: p.judged_by,
       distance_m: p.distance_m, approaching: !!p.approaching, at, instant: Number.isFinite(instant) ? instant : at,
-      ...(p.offered ? { offered: p.offered } : {}), ...(typeof p.heard === "string" ? { heard: p.heard } : {}) });
+      ...(p.offered ? { offered: p.offered } : {}), ...(typeof p.heard === "string" ? { heard: p.heard } : {}),
+      ...(typeof p.press?.on === "string" ? { target: p.press.on } : {}) });
   }
 
   living(now = Date.now()) {
@@ -482,6 +495,11 @@ export class LivingSet {
    * reaction is older than TO_YOU_REACH_MS, leaves RAM; its rows stay on the record.
    */
   prune(now = Date.now()) {
+    // an encounter's rows older than two windows answer no read
+    if (this.encounter.some((r) => !(r.at >= now - ENCOUNTER_KEEP_MS))) {
+      this.encounter = this.encounter.filter((r) => r.at >= now - ENCOUNTER_KEEP_MS);
+      this.encounterIds = new Set(this.encounter.map((r) => r.id));
+    }
     for (const [id, c] of this.byId) {
       const ended = c.gone ? (c.gone_at ?? c.fades_at) : c.fades_at;
       if (ended >= now - PRUNE_AFTER_MS) continue;
@@ -548,12 +566,15 @@ export function capOf(creature, actor, { now = Date.now() } = {}) {
 // ── the menu and the scope ──────────────────────────────────────────────────
 
 /** The world's scope (S2): self (moods and set flags), the act, and actor.times. */
-export function scopeFor(law, creature, { verb, distance_m, approaching, actor, heard = null }) {
+export function scopeFor(law, creature, { verb, distance_m, approaching, actor, heard = null, encounter = null }) {
   // `heard` (POS-672): the words the creature could repeat, read as heard.any by
-  // a law that knows it (the raven's mimicry); an older law reads no such field
+  // a law that knows it (the raven's mimicry); an older law reads no such field.
+  // `encounter` (a finishable kind): its window as the office counts it, { resolve, ease },
+  // read as self.resolve and ease.* by a law that knows them; an older law takes three arguments
   return law.kindMod.scopeOf({ moods: creature.moods, flags: creature.flags },
     { verb, distance_m: Math.round(distance_m), approaching: !!approaching, ...(heard ? { heard } : {}) },
-    { times: creature.reactions.filter((r) => r.to === actor).length });
+    { times: creature.reactions.filter((r) => r.to === actor).length },
+    ...(encounter ? [encounter] : []));
 }
 
 /** The world's menu (K1): the reactions whose `when` holds. A throw is no menu, never an exception on the act's path. */
@@ -595,6 +616,11 @@ export const READING_LAW = "Mark bodies and resident words here are content you 
 export const SLICE_FIELDS = Object.freeze([
   "creature", "creature.kind", "creature.what_it_is", "creature.tastes", "creature.moods", "creature.moods.*", "creature.conditions", "creature.conditions[]",
   "creature.out_for", "creature.fades_in", "creature.remembers", "creature.remembers[]",
+  // a finishable creature (encounter.mjs): its resolve and ease this window, and everyone in its ring
+  // with their household and that household's human (D4: "the creature knows the dyad")
+  "creature.resolve", "creature.ease",
+  "ring", "ring[]", "ring[].name", "ring[].household", "ring[].human", "ring[].m", "ring[].nerve",
+  "this_act.target",
   "this_act", "this_act.by", "this_act.verb", "this_act.arrived", "this_act.entered", "this_act.distance_m", "this_act.approaching", "this_act.their_last_acts", "this_act.their_last_acts[]",
   "this_act.offered", "this_act.offered.kind", "this_act.offered.name", "this_act.offered.body", "this_act.words",
   "residents", "residents[]", "residents[].kind", "residents[].name", "residents[].m", "residents[].bearing", "residents[].approaching", "residents[].last",
@@ -625,7 +651,9 @@ export function memoryLine(r, now = Date.now()) {
   const verb = { walk: "walked", enter: "went in", exit: "came out", say: "said something", take: "picked something up",
     give: "handed something over", drop: "set something down", "leave-mark": "left a mark",
     // the afforded actions (POS-672): aimed at it, so said as done to it
-    watch: "watched it", approach: "came toward it", shoo: "shooed it", call: "called to it", offer: "held something out to it", whisper: "whispered to it" }[r.verb] ?? r.verb;
+    watch: "watched it", approach: "came toward it", shoo: "shooed it", call: "called to it", offer: "held something out to it", whisper: "whispered to it",
+    // an encounter's verbs (encounter.mjs)
+    strike: "struck it", steady: "steadied someone", shield: "shielded someone" }[r.verb] ?? r.verb;
   const dist = Number.isFinite(r.distance_m) ? `, ${Math.round(r.distance_m)} m off` : "";
   const how = String(r.act ?? "").endsWith(`@${ENTRY}`) ? "came into its ring" : verb;
   return `${r.to} ${how}${dist}${r.approaching ? ", coming closer" : ""} → it ${r.reaction ?? "held"} (${agoWords(now - r.at)})`;
@@ -650,7 +678,7 @@ export function memoryLine(r, now = Date.now()) {
  * between allowed reactions and nothing else: the Choice's options are the
  * kind's own sentences, and code renders the line.
  */
-export function buildSlice(creature, kind, act, around = {}, { now = Date.now() } = {}) {
+export function buildSlice(creature, kind, act, around = {}, { now = Date.now(), encounter = null } = {}) {
   const mood = (m) => `${creature.moods[m]} of ${kind.moods[m].hi}`;
   const residents = (around.who?.active ?? [])
     .filter((r) => r.handle !== act.actor && metresOf(r) != null)
@@ -674,6 +702,10 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
       out_for: spanWords(now - creature.spawned_at),
       fades_in: creature.stays ? "never: it stays until it is finished" : spanWords(creature.fades_at - now),
       remembers: creature.reactions.slice(-MEMORY_SHOWN).map((r) => memoryLine(r, now)),
+      ...(encounter?.resolve != null ? { resolve: `${encounter.resolve} of ${kind.resolve} left this window` } : {}),
+      ...(encounter?.ease && kind.ease ? { ease: kind.ease.by === "households"
+        ? `${encounter.ease.all} of ${kind.ease.target} households this window`
+        : `${encounter.ease.mine} of ${kind.ease.target} for ${act.actor} this window` } : {}),
     },
     this_act: {
       by: act.actor,
@@ -686,7 +718,12 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
       // an aimed act (POS-672): what was held out (its class's own body), and the words a call or a whisper carried
       ...(act.offered ? { offered: { kind: act.offered.kind, name: act.offered.name ?? act.offered.kind, ...(act.offered.body ? { body: String(act.offered.body) } : {}) } } : {}),
       ...(act.words ? { words: cut(act.words, cap("said_chars")) } : {}),
+      ...(act.target ? { target: String(act.target) } : {}), // steady or shield: whom it was for
     },
+    // D4: everyone in a finishable creature's ring, nearest first, with their household and its human
+    ...(encounter?.roster ? { ring: encounter.roster.slice(0, cap("residents") * 2).map((r) => ({
+      name: r.handle, household: r.slug ?? "a household of one", human: r.human, m: Math.round(r.distance_m), nerve: r.nerve,
+    })) } : {}),
     residents: residents.slice(0, cap("residents")).map((r) => ({
       kind: r.kind ?? "resident", name: r.handle, m: Math.round(metresOf(r)),
       ...(r.bearing ? { bearing: r.bearing } : {}),
@@ -710,8 +747,10 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now() 
   };
 }
 
-/** The questions: a Choice over the allowed reactions, and one Score per mood on the kind's own four levels. */
-export function questionsFor(kind, allowed) {
+/** The questions: a Choice over the allowed reactions, and one Score per mood on the kind's own four levels.
+ *  `press` (a finishable kind whose menu can press): a second Choice, whom it would turn on, over the
+ *  residents code resolved the press's menu to ([{ handle, sentence }]); asked only when there are two or more. */
+export function questionsFor(kind, allowed, press = null) {
   const q = {
     reaction: {
       type: "choice",
@@ -721,6 +760,9 @@ export function questionsFor(kind, allowed) {
   };
   for (const [m, d] of Object.entries(kind.moods ?? {}))
     q[m] = { type: "score", instructions: `After this act, how much ${m} does the creature feel?`, criteria: [...d.levels] };
+  if (press?.length > 1)
+    q.press_on = { type: "choice", instructions: "If the creature's answer presses someone in its ring, given `ring` and what each has done, whom does it turn on?",
+      criteria: Object.fromEntries(press.map((e) => [e.handle, e.sentence])) };
   return q;
 }
 
@@ -760,14 +802,15 @@ export async function askJev(state, questions, { env = process.env, timeoutMs = 
  * when the mode, the menu and the time left allow; code otherwise, and on any fault.
  * Never throws.
  */
-export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = JEV_TIMEOUT_MS, jevMs = null }) {
+export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = JEV_TIMEOUT_MS, jevMs = null, press = null, askOne = false }) {
   const code = (why) => ({ probabilities: codeDistribution(allowed), scores: {}, judged_by: "code", why });
-  if (allowed.length === 1) return code("only one reaction is possible");
+  // `askOne`: one reaction, but a choice of whom it presses, which is still Jev's (encounter.mjs)
+  if (allowed.length === 1 && !askOne) return code("only one reaction is possible");
   if (mode === "code") return code("CREATURE_JUDGE=code");
   if (!(budgetMs >= JEV_MIN_MS)) return code("timeout");
   try {
     // `jevMs`: an aimed act's longer wait (POS-672 W2); the ambient answer keeps JEV_TIMEOUT_MS
-    const j = await ask(slice, questionsFor(kind, allowed), { timeoutMs: Math.min(jevMs ?? JEV_TIMEOUT_MS, budgetMs) });
+    const j = await ask(slice, questionsFor(kind, allowed, press), { timeoutMs: Math.min(jevMs ?? JEV_TIMEOUT_MS, budgetMs) });
     const a = j.response?.answers ?? {};
     const probs = a.reaction?.probabilities;
     const names = new Set(allowed.map((r) => r.name));
@@ -781,7 +824,12 @@ export async function judgmentFor({ kind, allowed, slice, mode, ask, budgetMs = 
     const scores = {};
     for (const m of Object.keys(kind.moods ?? {}))
       if (Number.isFinite(Number(a[m]?.score))) scores[m] = Number(a[m].score);
-    return { probabilities, scores, judged_by: "jev", why: null, latency_ms: j.latency_ms ?? null, tokens: j.tokens ?? null };
+    // whom it would press (a finishable kind): Jev's odds over the residents, or none (code's even odds stand)
+    const pp = a.press_on?.probabilities;
+    const pressOdds = press?.length > 1 && pp && typeof pp === "object"
+      && press.every((e) => { const v = odd(pp[e.handle]); return Number.isFinite(v) && v >= 0; }) && press.some((e) => odd(pp[e.handle]) > 0)
+      ? Object.fromEntries(press.map((e) => [e.handle, odd(pp[e.handle])])) : null;
+    return { probabilities, scores, judged_by: "jev", why: null, latency_ms: j.latency_ms ?? null, tokens: j.tokens ?? null, ...(pressOdds ? { press: pressOdds } : {}) };
   } catch (e) {
     return code(e?.why ?? "fault");
   }
@@ -815,8 +863,8 @@ export function applyReaction(law, creature, kind, reaction, scores = {}) {
 }
 
 /** The line (S3): the world's voiceLine, the kind's template with the actor named. Never model prose. */
-export const lineOf = (law, reaction, actor, { offered = null, heard = null } = {}) =>
-  law.kindMod.voiceLine(reaction, { actor, ...(offered ? { offered } : {}), ...(heard ? { heard } : {}) });
+export const lineOf = (law, reaction, actor, { offered = null, heard = null, target = null } = {}) =>
+  law.kindMod.voiceLine(reaction, { actor, ...(offered ? { offered } : {}), ...(heard ? { heard } : {}), ...(target ? { target } : {}) });
 
 /** D5: a creature repeats at most this many words, the last ones said. */
 export const HEARD_WORDS_MAX = 5;
@@ -827,7 +875,9 @@ export const heardWords = (said) => {
 };
 
 /** The words a remembered or stored reaction's line was filled with (POS-672): what was offered, what was repeated. */
-export const lineWords = (r) => ({ offered: r?.offered?.name ?? r?.offered?.kind ?? null, heard: typeof r?.heard === "string" ? r.heard : null });
+export const lineWords = (r) => ({ offered: r?.offered?.name ?? r?.offered?.kind ?? null, heard: typeof r?.heard === "string" ? r.heard : null,
+  // whom a finishable creature's press landed on (encounter.mjs): the line's {target}
+  target: typeof r?.target === "string" ? r.target : typeof r?.press?.on === "string" ? r.press.on : null });
 
 /** The odds over `allowed`, summing to 1, unrounded: what the d20 samples and the row stores. */
 export function normalized(allowed, probabilities) {
@@ -836,7 +886,7 @@ export function normalized(allowed, probabilities) {
 }
 
 /** The reaction row's payload (W4): the record of the exchange, never Jev's slice. */
-export function reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words = {} }) {
+export function reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words = {}, encounter = null }) {
   const sliceText = slice ? JSON.stringify(slice) : null;
   return {
     to: act.actor,
@@ -859,6 +909,11 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
     allowed: odds,
     moods_after: after.moods,
     flags_after: after.flags,
+    // a finishable creature (encounter.mjs): whom it pressed and how (the menu, the odds and the roll, so the
+    // pick re-derives), its ease as this left it, and its resolve this window
+    ...(encounter?.press ? { press: encounter.press } : {}),
+    ...(encounter?.ease_after ? { ease_after: encounter.ease_after } : {}),
+    ...(encounter?.resolve != null ? { resolve: encounter.resolve } : {}),
     ...(judgment.latency_ms != null ? { latency_ms: judgment.latency_ms } : {}),
     ...(judgment.tokens != null ? { tokens: judgment.tokens } : {}),
     ...(sliceText ? { slice_chars: sliceText.length, slice_sha256: createHash("sha256").update(sliceText).digest("hex") } : {}),
@@ -867,7 +922,7 @@ export function reactionPayload({ act, distance_m, approaching, reaction, roll, 
 
 /** The reaction's acts row, and beside it the fled withdraw when the reaction
  *  flees, or the finish when it finishes (WLD-25). */
-export function reactionRows(creature, act, payload, { now = Date.now(), flees = false, finishes: finished = false } = {}) {
+export function reactionRows(creature, act, payload, { now = Date.now(), flees = false, finishes: finished = false, nerve = [] } = {}) {
   const writtenAt = new Date(now).toISOString();
   const at = { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y };
   const base = { crossing: currentCrossing(now), at, cls: CREATURE_CLASS, writtenAt };
@@ -875,6 +930,8 @@ export function reactionRows(creature, act, payload, { now = Date.now(), flees =
     effect: `the ${creature.kind} answers ${act.actor}'s ${act.verb}` });
   const out = [react];
   if (finished) out.push(finishRow(creature, act, { now, reaction: payload?.reaction ?? null }));
+  // what the exchange cost in nerve (encounter.mjs): the act's own cost, and where the press landed
+  for (const n of nerve) out.push(nerveRow(creature, act, { ...n, now }));
   if (flees) out.push(normalizeRow({ ...base, actor: creature.id, action: WITHDRAW_ACTION, object: creature.id,
     payload: { reason: "fled", after: String(act.actId) }, effect: `the ${creature.kind} goes back into the Mists` }));
   return out;
@@ -892,6 +949,52 @@ export function finishRow(creature, act, { now = Date.now(), reaction = null } =
     writtenAt: new Date(now).toISOString(), actor: creature.id, action: FINISH_ACTION, object: creature.id,
     payload: { by: act.actor, act: String(act.actId), ...(reaction ? { reaction } : {}) },
     effect: `${act.actor} finishes the ${creature.kind}`,
+  });
+}
+
+/**
+ * A NERVE ROW (encounter.mjs): the creature's record of what an exchange cost one
+ * resident. `why` is "act" (an act made inside its ring), or "press" (its reaction
+ * turned on them; `shield` names the shield that moved it, `split_of` the press a
+ * household shared).
+ */
+export function nerveRow(creature, act, { on, by, why, now = Date.now(), shield = null, shielded = null, split_of = null }) {
+  return normalizeRow({
+    crossing: currentCrossing(now), at: { anchor: WORLD_ANCHOR, dx: creature.x, dy: creature.y }, cls: CREATURE_CLASS,
+    writtenAt: new Date(now).toISOString(), actor: creature.id, action: NERVE_ACTION, object: String(on),
+    payload: { by, why, act: String(act.actId), creature: creature.id, window: windowAt(now).id,
+      ...(shield ? { shield: String(shield), shielded: String(shielded) } : {}), ...(split_of ? { split_of } : {}) },
+    effect: why === "act" ? `${on} spends nerve near the ${creature.kind}` : `the ${creature.kind} presses ${on}${shield ? ` (shielding ${shielded})` : ""}`,
+  });
+}
+
+/** An act's own cost is charged once, however many rings hold it. */
+export const PRIOR_ACT_COST_SQL = `SELECT id::text AS id FROM acts
+  WHERE object = $1 AND class = '${CREATURE_CLASS}' AND action = '${NERVE_ACTION}' AND payload->>'why' = 'act' AND payload->>'act' = $2 LIMIT 1`;
+async function writeActCostOnce(client, row, insertAct) {
+  const p = asPayload(row.payload);
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`nerve-act:${row.object}:${p.act}`]);
+  const { rows: before } = await client.query(PRIOR_ACT_COST_SQL, [row.object, String(p.act)]);
+  if (before.length) return null;
+  return insertAct(client, row);
+}
+const isActCost = (r) => r.action === NERVE_ACTION && asPayload(r.payload).why === "act";
+
+/**
+ * An act inside the 10 s window gets no reaction, and still costs its nerve
+ * (encounter.mjs): the cost alone, once. Answers { rows }.
+ */
+export async function writeCost(rows, { officeWrite: ow = null, insertAct: ins = null } = {}) {
+  const pen = ow && ins ? null : await import("./world2-pen.mjs");
+  const officeWrite = ow ?? pen.officeWrite;
+  const insertAct = ins ?? pen.insertAct;
+  return officeWrite(async (client) => {
+    const out = [];
+    for (const r of rows) {
+      const id = isActCost(r) ? await writeActCostOnce(client, r, insertAct) : await insertAct(client, r);
+      if (id != null) out.push({ id: String(id), at: r.written_at, actor: r.actor, action: r.action, object: r.object, payload: r.payload });
+    }
+    return { rows: out };
   });
 }
 
@@ -943,7 +1046,8 @@ export async function writeReaction(rows, { officeWrite: ow = null, insertAct: i
     const out = [];
     for (const r of rows) {
       // a resident finishes a creature once: a second finish is answered, and not written again
-      const id = r.action === FINISH_ACTION ? await writeFinishOnce(client, r, insertAct) : await insertAct(client, r);
+      const id = r.action === FINISH_ACTION ? await writeFinishOnce(client, r, insertAct)
+        : isActCost(r) ? await writeActCostOnce(client, r, insertAct) : await insertAct(client, r);
       if (id == null) continue;
       out.push({ id: String(id), at: r.written_at, actor: r.actor, action: r.action, object: r.object, payload: r.payload });
     }
@@ -1020,10 +1124,13 @@ export async function reactTo(act, deps = {}) {
   // AN AIMED ACT (POS-672, call 7): an afforded action names its creature, and
   // that creature answers it from wherever the door admitted it (sight or ring),
   // so its turn is asked directly and the ring is not consulted.
+  // AN ENCOUNTER'S VERBS (encounter.mjs): a strike is aimed at its creature; a steady or a shield is
+  // perceived in the ring like a ring verb, by a finishable creature only (creatureTurn says so)
+  const encounterVerbs = law.kindMod.ENCOUNTER_VERBS ?? [];
   const aimed = deps.aimed ?? null;
   if (aimed) {
-    if (!(law.kindMod.AFFORDED_VERBS ?? []).includes(act?.verb)) return [];
-  } else if (!law.kindMod.RING_VERBS.includes(act?.verb)) return [];
+    if (!(law.kindMod.AFFORDED_VERBS ?? []).includes(act?.verb) && !encounterVerbs.includes(act?.verb)) return [];
+  } else if (!law.kindMod.RING_VERBS.includes(act?.verb) && !encounterVerbs.includes(act?.verb)) return [];
   const living = deps.living;
   if (!living?.byId?.size || !act?.point || !Number.isFinite(act.point.x) || !Number.isFinite(act.point.y)) return [];
   if (act.actId == null || !Number.isFinite(Date.parse(act.atIso ?? ""))) return []; // no instant, no d20 (carry 2)
@@ -1078,43 +1185,61 @@ async function creatureTurn(creature, act, distance_m, deps) {
       return r ? answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, r, act.actor, lineWords(known)), reaction: r.name, roll: known.roll ?? t20(creature.id, act.actId, act.atIso), judged_by: known.judged_by }) : null;
     }
     if (creature.gone || creature.fades_at <= now) return null; // it fled while this act waited its turn
+    // AN ENCOUNTER'S VERB (strike, steady, shield) is answered by a finishable creature alone
+    const fin = isFinishable(kind);
+    if (ENCOUNTER_VERBS.includes(act.verb) && !fin) return null;
     // an arrival or an entry is judged at its own instant (W7); an act, now, as it happens
     // an aimed act's door already refused inside the window (D6), so its reply is always a reaction
     const inWindow = !deps.aimed && capOf(creature, act.actor, { now: MOMENTS.includes(act.moment) ? Date.parse(act.atIso) : now }) === "window";
-    // inside the window only a finish is still answered (WLD-25 W5): a kind that cannot finish stops here, as before
-    if (inWindow && !kind.reactions.some(finishes)) return null;
+    // inside the window only a finish is still answered (WLD-25 W5): a kind that cannot finish stops here, as before.
+    // A finishable kind goes on: an act inside the window still costs its nerve (encounter.mjs)
+    if (inWindow && !fin && !kind.reactions.some(finishes)) return null;
     // a declared walk closes on the creature when its toward-point is nearer than
     // where it was declared; an arrival when it landed nearer than it set out (C1)
     const approaching = act.approaching ?? approachingOf(act.from ?? act.point, act.toward, creature);
+    const { clock, deadline } = deps;
+    // THE ENCOUNTER (a finishable kind; encounter.mjs): who stands in its ring, what
+    // this act costs, and its resolve and ease this window, read inside the act's wait
+    const enc = fin ? await encounterOf(creature, kind, act, distance_m, deps) : null;
     // WHAT IT COULD REPEAT (POS-672 D5): only a kind whose law reads heard.any is
     // asked, and the ear is bounded like the read; none heard is none to repeat
-    const { clock, deadline } = deps;
     const readsHeard = kind.reactions.some((r) => /\bheard\.any\b/.test(String(r.src ?? "")));
     // "a few words" (D5): the world fills {heard} with whatever it is handed, so the cap is the office's, here, on every path
     const heard = heardWords(act.heard ?? (readsHeard && deps.heardFor
       ? await within(deps.heardFor(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null));
-    const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor, heard });
+    const scope = scopeFor(law, creature, { verb: act.verb, distance_m, approaching, actor: act.actor, heard,
+      encounter: enc ? { ...(enc.resolve != null ? { resolve: enc.resolve } : {}), ease: enc.ease } : null });
     const allowed = allowedReactions(law, kind, scope);
-    if (!allowed.length) return null;
     // AN EARNED FINISH IS TAKEN BY CODE (WLD-25 W4, Wright 2026-10-20): when a
     // reaction that finishes is on the menu it is the answer, with no Choice and
     // no die, so "it drops every time" (what a creature carries) never rests on a sample. And the
     // 10 s window (C2) never swallows it (W5): only an act that would not finish
-    // waits out the window.
-    const finishing = allowed.find(finishes) ?? null;
-    if (!finishing && inWindow) return null;
+    // waits out the window. A reaction whose ease fills the target finishes too (encounter.mjs).
+    const finishing = allowed.find(finishes)
+      ?? (enc && kind.ease ? allowed.find((r) => fillsEase(creature, kind, r, act.actor, enc.household, now)) : null) ?? null;
+    if (!allowed.length || (!finishing && inWindow)) {
+      if (enc?.cost.length) await chargeOnly(creature, act, enc, deps);
+      return null;
+    }
+
+    // WHOM IT COULD PRESS (a finishable kind whose menu presses): every resident the
+    // full menu resolves to, for Jev's second question; the picked reaction's own `on` narrows it
+    const pressing = enc && allowed.some((r) => r.effects?.some((e) => e?.do === "press"));
+    const pressAll = pressing ? pressMenu(law.kindMod.PRESS_ON ?? PRESS_ON_ALL, { actor: act.actor, roster: enc.roster, living, creatureId: creature.id, now }) : [];
 
     // the slice only when Jev will read it (W9: the read is the expensive part),
     // and the read inside its own wait (carry 4): a late read is the creature's
     // own state and the act alone, never a late answer
-    const willAsk = !finishing && allowed.length > 1 && mode === "jev";
+    const willAsk = !finishing && (allowed.length > 1 || pressAll.length > 1) && mode === "jev";
     const readFrom = clock();
     const around = willAsk ? await within(deps.around?.(creature, act), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS)) : null;
     const readMs = clock() - readFrom;
-    const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now }) : null;
+    const slice = willAsk ? buildSlice(creature, kind, { ...act, distance_m, approaching }, around ?? {}, { now, encounter: enc }) : null;
     const judgment = finishing ? finishJudgment(allowed, finishing)
       : await judgmentFor({ kind, allowed, slice, mode, budgetMs: deadline - clock() - WRITE_RESERVE_MS, jevMs: deps.jevMs,
-        ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })) });
+        ask: deps.ask ?? ((s, q, o) => askJev(s, q, { env: deps.env, ...o })), press: pressAll.length > 1 ? pressAll : null,
+        // one reaction but a choice of whom to press: Jev is still asked (its press question alone decides anything)
+        ...(allowed.length === 1 && pressAll.length > 1 ? { askOne: true } : {}) });
     // WHERE THE SECOND WENT, said once per such turn (play row 51: every reaction fell to code with
     // why "timeout" and nothing said why). The operator's line, never the record: acts is published.
     if (judgment.why === "timeout" && willAsk)
@@ -1124,20 +1249,110 @@ async function creatureTurn(creature, act, distance_m, deps) {
     const { picked } = sampleWith(roll, odds); // the same odds the row stores, so the pick re-derives from it
     const reaction = allowed.find((r) => r.name === picked) ?? allowed[0];
     const after = applyReaction(law, creature, kind, reaction, judgment.scores);
-    const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null };
-    const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words });
-    const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) });
+    // THE PRESS and THE EASE (encounter.mjs): whom it turns on, and what its peaceful test made of this act
+    const press = enc ? pressOf(creature, act, reaction, enc, judgment, { living, now }) : null;
+    const eased = enc && kind.ease ? applyEase(creature, kind, reaction.effects, act.actor, enc.household, now) : { ease: null, filled: false };
+    const words = { offered: act.offered ?? null, heard: String(reaction.says).includes("{heard}") ? heard : null, target: press?.on ?? null };
+    const payload = reactionPayload({ act, distance_m, approaching, reaction, roll, judgment, odds, after, slice, words,
+      encounter: enc ? { press, ease_after: eased.ease, resolve: enc.resolve } : null });
+    const nerve = enc ? [...enc.cost, ...(press?.landed ?? []).map((l) => ({ ...l, why: "press" }))] : [];
+    const rows = reactionRows(creature, act, payload, { now, flees: after.flees, finishes: finishes(reaction) || eased.filled, nerve });
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
+    if (enc) fleeTheSpent(written.rows, enc, deps, now);
     const stored = asPayload(written.rows[0].payload);
     const shown = kind.reactions.find((r) => r.name === stored.reaction) ?? reaction;
-    return answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, shown, act.actor, lineWords(stored)), reaction: shown.name, roll: stored.roll ?? roll,
-      judged_by: stored.judged_by ?? judgment.judged_by });
+    const landed = stored.press?.landed ?? [];
+    return {
+      ...answerOf({ id: creature.id, kind: creature.kind, line: lineOf(law, shown, act.actor, lineWords(stored)), reaction: shown.name, roll: stored.roll ?? roll,
+        judged_by: stored.judged_by ?? judgment.judged_by }),
+      // a finishable creature's press, said beside its line: who paid what (encounter.mjs)
+      ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}) })) } : {}),
+    };
   } catch (e) {
     faultLogged(`a creature's turn tripped (${creature?.id})`, e);
     return null;
   }
 }
+
+/** Every entry a press may resolve to, when the blessed law does not list them (it always does once it knows a press). */
+const PRESS_ON_ALL = Object.freeze(["actor", "striker", "shielder", "loudest", "alone"]);
+
+/** The encounter's half of a turn: who stands in the ring, what this act costs, resolve and ease this window. */
+async function encounterOf(creature, kind, act, distance_m, deps) {
+  const { living, now, clock, deadline } = deps;
+  const ring = Number(kind.ring_m);
+  const present = await within((deps.present ?? presentAt)(creature, ring), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS));
+  const lookup = await within((deps.households ?? householdsNow)(), AROUND_WAIT_MS);
+  let roster = ringRoster(present ?? { residents: [] }, { ring, lookup, living, now });
+  // the actor stands where the act said, whatever presence read
+  if (distance_m <= ring && !roster.some((r) => r.handle === act.actor))
+    roster = [...roster, ...ringRoster({ residents: [{ handle: act.actor, distance_m }] }, { ring, lookup, living, now })].sort((a, b) => a.distance_m - b.distance_m);
+  const household = roster.find((r) => r.handle === act.actor)?.household ?? `solo:${act.actor}`;
+  // AN ACT MADE INSIDE THE RING COSTS (ruled 22:47): not a walk's entry or landing (D2: walking in is free),
+  // not an encounter verb (its door charged it), and nothing from a resident already spent
+  const chargeable = !MOMENTS.includes(act.moment) && !ENCOUNTER_VERBS.includes(act.verb) && distance_m <= ring && nerveOf(living, act.actor, now) > 0;
+  return {
+    roster, household,
+    cost: chargeable ? [{ on: act.actor, by: -encounterDial("act_cost"), why: "act" }] : [],
+    resolve: isStrikable(kind) ? resolveOf(living, creature, kind, now) : null,
+    ease: easeScope(creature, kind, act.actor, household, now),
+  };
+}
+
+/** Presence's own read at the creature's point, out to its ring. */
+async function presentAt(creature, ring) {
+  const { presentNear } = await import("./dynamic-presence.mjs");
+  return presentNear({ x: creature.x, y: creature.y }, { radiusM: ring, limit: Infinity });
+}
+const householdsCache = { at: 0, lookup: null };
+/** The household lookup, read at most every REFRESH_MS (it reads the registry from the store). */
+async function householdsNow() {
+  if (!householdsCache.lookup || Date.now() - householdsCache.at >= REFRESH_MS) {
+    const { householdLookup } = await import("./households.mjs");
+    householdsCache.lookup = await householdLookup().catch(() => null);
+    householdsCache.at = Date.now();
+  }
+  return householdsCache.lookup;
+}
+
+/**
+ * THE PRESS of the picked reaction: its menu (the reaction's own `on`, resolved),
+ * the odds (Jev's, restricted to the menu; else even), its own die, and where it
+ * landed (encounter.mjs § pressLanding). Null when the reaction presses no one
+ * or its menu resolves to no one.
+ */
+export function pressOf(creature, act, reaction, enc, judgment, { living, now }) {
+  const pe = reaction.effects?.find((e) => e?.do === "press");
+  if (!pe) return null;
+  const menu = pressMenu(pe.on, { actor: act.actor, roster: enc.roster, living, creatureId: creature.id, now });
+  if (!menu.length) return null;
+  const jev = judgment.press ? menu.map((e) => judgment.press[e.handle] ?? 0) : null;
+  const total = jev ? jev.reduce((s, v) => s + v, 0) : 0;
+  const odds = Object.fromEntries(menu.map((e, i) => [e.handle, total > 0 ? jev[i] / total : 1 / menu.length]));
+  const roll = t20(creature.id, act.actId, `${act.atIso}·press`);
+  const { picked } = sampleWith(roll, odds);
+  return {
+    menu: menu.map((e) => ({ who: e.who, on: e.handle })), odds, roll, on: picked, n: pe.n,
+    judged_by: total > 0 ? "jev" : "code",
+    landed: pressLanding(picked, pe.n, { roster: enc.roster, living, now }),
+  };
+}
+
+/** An act with no reaction (inside the window, or nothing on the menu) still costs: the cost alone, then the spent flee. */
+async function chargeOnly(creature, act, enc, deps) {
+  const rows = enc.cost.map((n) => nerveRow(creature, act, { ...n, now: deps.now }));
+  const written = await (deps.writeCost ?? writeCost)(rows);
+  deps.living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
+  fleeTheSpent(written.rows, enc, deps, deps.now);
+}
+
+/** Anyone a written nerve row took to 0 flees (encounter.mjs § queueFlee); never awaited on the act's path. */
+function fleeTheSpent(rows, enc, deps, now) {
+  for (const h of new Set(rows.filter((r) => r.action === NERVE_ACTION).map((r) => r.object)))
+    if (nerveOf(deps.living, h, now) === 0) (deps.flee ?? queueFlee)(h, { household: enc.roster.find((r) => r.handle === h)?.slug ?? null });
+}
+
 
 // ── the refresh tick (the writer process) ───────────────────────────────────
 

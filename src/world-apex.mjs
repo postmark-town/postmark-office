@@ -115,6 +115,8 @@ import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.m
 import { termsId, termsOnce } from "./terms-seen.mjs"; // POS-697 G5a: the law you were shown, named on a repeat act
 import { onlyUsable, canOn, viewMarkIds, CREATURE_VERBS } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
 import { worldCreature, creatureEntries, CREATURE_TOOLS } from "./creature-verbs.mjs"; // a creature's afforded actions (POS-672)
+import { worldEncounter, encounterEntries } from "./encounter-verbs.mjs"; // an encounter's verbs: strike, steady, shield
+import { ENCOUNTER_VERBS } from "./encounter.mjs";
 // The walk's pace, the resident class's own dial (WLD-29): read off the record
 // like every other departure's, never a constant here (decision 008b).
 import { departurePace } from "./world-classes.mjs";
@@ -515,11 +517,11 @@ export function crossingDeps() {
     // `arrival_of`: the arrival tick's enter names its walk act (arrival-entries.mjs), and the pen writes it once
     // WLD-5 A: the exit locks this walker's own exit acts hold, newest per dungeon (a throw is the door's 503)
     dungeonLocks: async (who) => dungeonLocksOf(who),
-    record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null, arrival_of = null, dungeon = null, locked_until = null, left_at = null }) => {
+    record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null, arrival_of = null, dungeon = null, locked_until = null, left_at = null, fled = null }) => {
       const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
       let out;
       try {
-        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary, mark, via, set_down_at, arrived, ...(arrival_of ? { arrival_of } : {}), ...(dungeon && locked_until ? { dungeon, locked_until, left_at } : {}) }),
+        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary, mark, via, set_down_at, arrived, ...(arrival_of ? { arrival_of } : {}), ...(dungeon && locked_until ? { dungeon, locked_until, left_at } : {}), ...(fled ? { fled } : {}) }),
           { ...process.env, WORLD_CLONE });
       } catch (e) {
         if (lockTimedOut(e)) { const err = new Error(LOCK_BUSY.defect); Object.assign(err, LOCK_BUSY); throw err; }
@@ -820,6 +822,9 @@ const DISPATCH = {
   // calculus (creature-verbs.mjs judges sight, ring and the window). Charged on
   // the household world-write ledger as one verb, world_creature.
   ...Object.fromEntries(CREATURE_VERBS.map((v) => [v, { tool: "world_creature", run: (args, key) => worldCreature({ ...args, act: v }, key) }])),
+  // AN ENCOUNTER'S VERBS (encounter-verbs.mjs): strike, aimed at a creature that can be finished; steady and
+  // shield, aimed at a resident in the same ring. The same tool and the same ledger verb as the afforded actions.
+  ...Object.fromEntries(ENCOUNTER_VERBS.map((v) => [v, { tool: "world_creature", run: (args, key) => worldEncounter({ ...args, act: v }, key) }])),
   // ── the crossings ─────────────────────────────────────────────────────────
   //
   // ⚠ THE OLD COMMENT HERE WAS FALSE, AND SAID SO CONFIDENTLY. It read:
@@ -1957,18 +1962,20 @@ async function usableHere(args, key, oriented, nearby = []) {
     const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
       residents: oriented.present?.residents ?? [] });
     // the creatures in sight are objects of the same matrix (POS-672 W4); unread, they add nothing
-    return [...pairs, ...(await creaturePairsHere(who, here))];
+    return [...pairs, ...(await creaturePairsHere(who, here, oriented.present?.residents ?? []))];
   } catch { return null; }
 }
 
-/** The creature columns of the matrix at a standpoint (creature-verbs.mjs § creaturePairs), or none. */
-async function creaturePairsHere(who, here) {
+/** The creature columns of the matrix at a standpoint (creature-verbs.mjs § creaturePairs; encounter-verbs.mjs §
+ *  encounterPairs, the residents near you being steady's and shield's objects), or none. */
+async function creaturePairsHere(who, here, residents = []) {
   try {
-    const [{ creaturesForRead }, { creaturePairs, carryingConsumableNow }, kinds, units] = await Promise.all([
-      import("./creatures-read.mjs"), import("./creature-verbs.mjs"), import("./world-kinds.mjs"), import("./world-units.mjs")]);
+    const [{ creaturesForRead }, { creaturePairs, carryingConsumableNow }, { encounterPairs }, kinds, units] = await Promise.all([
+      import("./creatures-read.mjs"), import("./creature-verbs.mjs"), import("./encounter-verbs.mjs"), import("./world-kinds.mjs"), import("./world-units.mjs")]);
     const cr = await creaturesForRead();
-    if (!cr?.law?.afforded) return [];
-    return creaturePairs({ here, living: cr.living, law: cr.law, carryingConsumable: await carryingConsumableNow(who, { kinds, units }) });
+    if (!cr?.law || cr.law.unavailable) return [];
+    const afforded = cr.law.afforded ? creaturePairs({ here, living: cr.living, law: cr.law, carryingConsumable: await carryingConsumableNow(who, { kinds, units }) }) : [];
+    return [...afforded, ...encounterPairs({ here, actor: who, living: cr.living, law: cr.law, residents })];
   } catch { return []; }
 }
 
@@ -1999,6 +2006,7 @@ async function investigateOn(args, oriented, usable = null) {
     const seen = await investigateCreature(kind.id, {
       creatures,
       from: oriented?.standpoint ?? null,
+      handle: args.handle ?? null, // whose ease "yours" reads, at a finishable creature
       rows: (id, n) => actsQuery(REACTIONS_SQL, [id, n]),
       saved: (id) => savedCreatureOf(id),
     });
@@ -2137,6 +2145,16 @@ async function creaturesAt(at, nowMs) {
     const who = creaturesInWho(cur, at, { nowMs, engine });
     const happening = creatureHappening(cur, at, { nowMs, engine });
     return who.length || happening.length ? { who, happening } : null;
+  } catch { return null; }
+}
+
+/** Your nerve in the glance (encounter.mjs § nerveRead), or null when no encounter is near and it is full. */
+async function nerveAt(handle, at, nowMs) {
+  if (!handle) return null;
+  try {
+    const [{ creaturesForRead }, { nerveRead }] = await Promise.all([import("./creatures-read.mjs"), import("./encounter.mjs")]);
+    const cur = await creaturesForRead({ nowMs });
+    return cur?.living ? nerveRead(cur, handle, at, nowMs) : null;
   } catch { return null; }
 }
 
@@ -2703,7 +2721,7 @@ async function apexRead(args, key, ctx = {}) {
   const usable = await usableHere(args, key, oriented, nearby);
   if (usable) actions = onlyUsable(actions, usable);
   // a creature in sight lends its afforded actions (POS-672): each verb once, the creatures it reaches named
-  if (usable) actions = [...actions, ...creatureEntries(usable)];
+  if (usable) actions = [...actions, ...creatureEntries(usable), ...encounterEntries(usable)];
 
   // ── Stage ② · whose grant opened each door ────────────────────────────────
   //
@@ -2903,7 +2921,10 @@ async function apexRead(args, key, ctx = {}) {
     // what your own hands hold by kind, beside the whole things (QA fail 5); unread, the kinds are left out
     const standing = oriented.standpoint?.stance === "embodied" ? standingHandle(args, key) : null;
     const heldKinds = standing ? await (await import("./world-kinds.mjs")).kindsHeldBy(standing) : null;
+    // an encounter near, or nerve spent this window: what you have left (encounter.mjs)
+    const nerve = await nerveAt(standing, at, nowMs);
     const shaped = shapeV2({
+      nerve,
       heard,
       deep,
       marks,
@@ -3068,9 +3089,10 @@ async function apexDo(args, key, ctx = {}) {
   // A CREATURE'S AFFORDED ACTION (POS-672) goes to its own door before the grant
   // calculus: no ground or class at a standpoint grants it, the creature's
   // classes do, and the door judges sight, ring and the window itself.
-  if (CREATURE_VERBS.includes(action)) {
+  if (CREATURE_VERBS.includes(action) || ENCOUNTER_VERBS.includes(action)) {
     if (actor) return bounce(422, "a creature's afforded actions are a resident's", 'aim them as one of your residents (handle:), never as: "human". Nothing was done.');
-    return dispatchCreatureVerb(action, args, key);
+    // an encounter's verbs (strike, steady, shield) go to their own door, through the same envelope and retry key
+    return dispatchCreatureVerb(action, args, key, ENCOUNTER_VERBS.includes(action) ? { door: worldEncounter } : {});
   }
 
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`

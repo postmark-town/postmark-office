@@ -438,6 +438,8 @@ export function shapeV2(p) {
     // both numbers for your hands (POS-679 D): "7 of 24 slots · 21 things in all"; the carry cap is judged on the slots
     ...(p.heldKinds?.hands ? { hands: p.heldKinds.hands } : {}),
     ...(p.stancesAwaiting ? { waiting_on_you: { stances: p.stancesAwaiting, read: 'household { read: "stances" }' } } : {}),
+    // an encounter's nerve: what you have left this window, when it fills, and what it is (encounter.mjs § nerveRead)
+    ...(p.nerve ? { nerve: p.nerve } : {}),
     ...(p.note != null ? { note: p.note } : {}),
     ...(p.frame ? { aboard: aboardBlock(p.frame, whole) } : {}),
     ...(sp.seat ? { seat: { ...sp.seat, ground: whole(sp.seat.ground) } } : {}),

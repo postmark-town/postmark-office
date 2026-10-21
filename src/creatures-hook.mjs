@@ -510,6 +510,8 @@ export function startCreatures({ port, env = process.env, log = console } = {}) 
       const r = await refreshCreatures();
       const a = r.ok ? await arrivalTick() : null;
       if (r.ok && state.living) await warmViews(state.living);
+      // an encounter's repair (encounter-verbs.mjs § encounterTick): a missed finish, a missed flee
+      if (r.ok && state.living) await (await import("./encounter-verbs.mjs")).encounterTick({ living: state.living, law: state.living.law }).catch((e) => faultLogged("the encounter's tick tripped", e));
       state.last = { at: new Date().toISOString(), living: state.living?.living().length ?? 0, ...(r.ok ? {} : { why: r.why }), ...(a?.judged ? { arrivals: a } : {}) };
       if (a?.judged) log.log?.(`[creatures] arrivals: ${a.landed} landed · ${a.judged} judged · ${a.answered} answered`);
     } catch (e) {
