@@ -6,7 +6,26 @@
 # head and origin/main, oldest first, check the seal out and ingest it with
 # --snapshot (the law: a snapshot per clearing); then ingest origin/main itself as
 # the delta. The tool never moves a checkout, so this script does, in a clone
-# that belongs to this unit alone.
+# that belongs to this script alone.
+#
+# ── TWO CALLERS, ONE RUN AT A TIME (POS-341) ─────────────────────────────────
+# The timer's unit (postmark-town-index.service) runs this every 15 minutes, and
+# in store mode the ferry runs it too, between the crossing and the mint
+# (deploy/postmark-ferry.service). The pen's advisory lock serialises the two in
+# the store, but only inside the tool: the checkout below happens before it, and
+# readTown reads the WORKING TREE. A second run checking out another sha under a
+# first run's derivation would ingest one commit's files under another's sha. So
+# every run holds $WORLD2_STATE_DIR/.town-index.lock from before its first git
+# step to its exit, and a run that cannot have it within 300 s exits 2 and
+# writes no state (the state file belongs to the run that holds the lock).
+#
+# ── THE PASSWORD UNDER THE FERRY (POS-341) ──────────────────────────────────
+# The timer's unit hands in the whole credential file (EnvironmentFile=). The
+# ferry must never have that file: it also carries the owner's password. So the
+# ferry's unit loads ONE systemd credential, postmark-law-ingester-password
+# (LoadCredential=, from /etc/credstore/), and this reads it from
+# $CREDENTIALS_DIRECTORY when the environment has no PG_LAW_INGESTER_PASSWORD.
+# The environment still wins, so the timer's path is unchanged.
 #
 # ── ITS OWN CLONE, WITH HISTORY ──────────────────────────────────────────────
 # $WORLD2_LAB/ingest-clones/town-index, a full clone. Not world2-refresh-clone's
@@ -47,6 +66,26 @@ URL="https://github.com/postmark-town/postmark.git"
 if [ -z "${STAMP_LINES:-}" ] && [ -r /etc/postmark-office.env ]; then
   STAMP_LINES="$(sed -n 's/^STAMP_LINES=//p' /etc/postmark-office.env | tail -n 1 | tr -d "\"'")"
   export STAMP_LINES
+fi
+
+LOCK="$WORLD2_STATE_DIR/.town-index.lock"
+if ! { mkdir -p "$WORLD2_STATE_DIR" && exec 9>>"$LOCK"; } 2>/dev/null; then
+  echo "[town-index] cannot open $LOCK (is $WORLD2_STATE_DIR writable here?)" >&2
+  exit 2
+fi
+flock -w 300 9
+rc=$?
+if [ "$rc" -eq 1 ]; then
+  echo "[town-index] another run held $LOCK for 300 s; this run did nothing" >&2
+  exit 2
+elif [ "$rc" -ne 0 ]; then
+  echo "[town-index] could not take $LOCK (flock exit $rc); this run did nothing" >&2
+  exit 2
+fi
+
+CRED="${CREDENTIALS_DIRECTORY:-}/postmark-law-ingester-password"
+if [ -z "${PG_LAW_INGESTER_PASSWORD:-}" ] && [ -n "${CREDENTIALS_DIRECTORY:-}" ] && [ -r "$CRED" ]; then
+  PG_LAW_INGESTER_PASSWORD="$(tr -d '\r\n' < "$CRED")"   # not exported: w2_pgenv hands it on as PGPASSWORD
 fi
 
 if ! w2_pgenv law_ingester PG_LAW_INGESTER_PASSWORD; then

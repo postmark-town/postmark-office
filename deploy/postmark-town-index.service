@@ -5,7 +5,7 @@
 # carries the shape. PARKED until its migration (033) is applied and the seed
 # has been run by hand (the script's header).
 Description=The town index — office.db's tables in the store (town repo -> town_*)
-Documentation=file:///srv/world2-lab/ops/town-index-ingest.sh
+Documentation=file:///srv/postmark-office/deploy/town-index-ingest.sh
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -17,7 +17,14 @@ EnvironmentFile=/etc/postmark-world2-dev.env
 # Exit 0 ingested · 1 the pen refused or failed (the reason is in
 # /srv/world2-lab/state/town-index.json) · 2 the lane could not run · 3 no head
 # yet (seed by hand).
-ExecStart=/bin/bash /srv/world2-lab/ops/town-index-ingest.sh
+# ONE COPY OF THE SCRIPT (POS-341, Darko 2026-10-20 15:38). This runs the
+# deployed release's deploy/town-index-ingest.sh, the same file the ferry runs
+# in store mode, not the hand copy in /srv/world2-lab/ops/ it ran until then:
+# two copies could drift, and the run lock only serialises the two callers when
+# both copies take it. The release sources its own deploy/world2-lib.sh beside
+# it. A deploy rsyncs by write-and-rename (no --inplace), so a run that is
+# reading the script when a tag lands keeps reading the file it opened.
+ExecStart=/bin/bash /srv/postmark-office/deploy/town-index-ingest.sh
 TimeoutStartSec=600
 Nice=10
 

@@ -79,7 +79,17 @@ if (process.env.STUB_VERIFY_HANG === String(n)) {
   await new Promise((r) => setTimeout(r, 8000));
 }
 const bad = readFileSync("${LEDGER}", "utf8").split("\\n").findIndex((l) => l.includes("RED"));
-if (bad !== -1) { console.log("✗ stamp-ledger verification FAILED:\\n  - line " + (bad + 1) + ": RED"); process.exit(1); }
+// POS-341: STUB_OWED_UNTIL names the row that pays this crossing's mints; until
+// the ledger holds it, the town's own "behind the mail" sentence is printed, in
+// the town's own words and on stderr, as tools/stamp-verify.mjs prints it
+const owed = process.env.STUB_OWED_UNTIL && !readFileSync("${LEDGER}", "utf8").includes(process.env.STUB_OWED_UNTIL);
+if (bad !== -1 || owed) {
+  const problems = [];
+  if (bad !== -1) problems.push("line " + (bad + 1) + ": RED");
+  if (owed) problems.push("ledger is 1 line(s) behind the derivation — mints owed, run the mint pass (not a tamper)");
+  console.error("✗ stamp-ledger verification FAILED:\\n" + problems.map((p) => "  - " + p).join("\\n"));
+  process.exit(1);
+}
 console.log("✓ stamp-ledger verified");
 `,
   "tools/stamp-mint.mjs": `
@@ -126,6 +136,8 @@ process.exit(Number(process.env.STUB_SEAL_VERIFY_EXIT || 0));
 // ── the office's side, stubbed where the tick and the ferry call it ─────────
 const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
+  // POS-341: the real tool, run against the town's stub verifier above
+  "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
   "deploy/settle-pass.mjs": `
 import { appendFileSync } from "node:fs";
 if (process.env.STUB_CALLS) appendFileSync(process.env.STUB_CALLS, "settle\\n");
@@ -216,7 +228,7 @@ if (process.env.STUB_QUESTS) writeFileSync(join(clone, "TOWN_BULLETIN/quests.md"
 `,
   // the store's catch-up of lines a shell committed, and the ferry's ingest: no-ops here
   "world2/tools/stamp-lines.mjs": `process.exit(0);\n`,
-  "deploy/town-index-ingest.sh": `exit 0\n`,
+  "deploy/town-index-ingest.sh": 'echo "[town-index] stub" >&2; exit "${STUB_INGEST_EXIT:-0}"\n',
   "world2/tools/settlements-backfill.mjs": `console.log("0 rows written");\n`,
   "src/hydrate.mjs": `
 import { writeFileSync } from "node:fs";
@@ -566,6 +578,72 @@ test("ferry · STAMP_LINES=store: a crossing stopped after the runner keeps its 
   assert.equal(status(fx), "", `the stopped crossing left the clone clean: ${r.stderr}`);
   assert.equal(ledgerAt(fx), "row 1\nmint row 2\n", "the runner committed its verified row in its own transaction");
 });
+
+// ── POS-341: A FAILED INGEST SKIPS THE STORE MINT (Darko 2026-10-20 15:38) ──
+// The ferry names the skip, never runs the runner, and finishes the crossing:
+// the ledger is then behind the mail by this crossing's mints, which the town's
+// verifier reads as red, so after a skip both verifies read "mints owed" as not
+// red (tools/stamp-verify-owed.mjs), and nothing else. The keep tick pays them:
+// its arrival check is the same owed-tolerant verify, its mint the catch-up.
+// THE CAN-FAIL FLIPS: run the runner after a failed ingest (the mint commit
+// appears and "mint-run --append" is in the trail), or verify after a skip with
+// the plain town verify (the crossing goes red at the line after the skip), or
+// put the plain verify back at the tick's arrival (the catch-up stays OFF).
+const SKIP_MINT = /\[ferry\] the town-index ingest failed: the store mint is skipped this crossing, and the keep tick pays what is owed/;
+
+test("ferry · STAMP_LINES=store: a failed ingest skips the store mint, names it, and the crossing completes", { skip }, () => {
+  const fx = fixture(["row 1"]);
+  const r = run(fx, ["-c", ferryScript(fx)], {
+    ...STORE, STUB_INGEST_EXIT: "1", STUB_FERRY_DELIVER: "letter-1", STUB_OWED_UNTIL: "mint row 2", STUB_APPEND: "mint row 2",
+    STUB_QUESTS: "quests moved", STUB_SEAL: "resealed",
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, SKIP_MINT, "the skip is named on one line");
+  assert.doesNotMatch(r.stderr, /a gate refused/, "no red moved one line down");
+  assert.ok(!calls(fx).includes("mint-run --append"), `the runner never ran: ${calls(fx).join(", ")}`);
+  assert.deepEqual(calls(fx).filter((c) => ["verify", "ballot", "quests-run", "seal", "seal-verify"].includes(c)),
+    ["verify", "ballot", "verify", "quests-run", "seal", "seal-verify"], "every pass after the mint still ran");
+  assert.match(r.stdout, /behind the mail and nothing else/, "the verifies read the owed mints as not red");
+  assert.equal(ledgerAt(fx), "row 1\n", "nothing minted: the ledger is behind by this crossing's mints");
+  assert.equal(status(fx), "");
+  assert.equal(head(fx), originHead(fx), "everything pushed");
+  assert.deepEqual(fx.g("-C", fx.town, "log", "--format=%s", "-3").trim().split("\n"),
+    ["seal: re-seal at the crossing", "quests: crossing leaderboard", "ferry: crossing"], "no mint commit, and the rest landed");
+});
+
+test("ferry · STAMP_LINES=store: after a skipped mint a real red still stops the crossing", { skip }, () => {
+  const fx = fixture(["row 1"]);
+  const r = run(fx, ["-c", ferryScript(fx)], {
+    ...STORE, STUB_INGEST_EXIT: "1", STUB_OWED_UNTIL: "mint row 2", STUB_BALLOT: "ballot row 3 RED",
+  });
+  assert.notEqual(r.status, 0, "owed is not red; a bad line is");
+  assert.match(r.stderr, SKIP_MINT);
+  assert.match(r.stderr, /line 2: RED/, "the town's own words");
+  assert.match(r.stderr, /\[ferry\] a gate refused \(exit 1\)/);
+  assert.equal(status(fx), "", "the ballot's row and receipt are gone");
+  assert.equal(ledgerAt(fx), "row 1\n");
+});
+
+test("ferry · STAMP_LINES=store: an ingest that succeeds still mints, with the plain verify", { skip }, () => {
+  const fx = fixture(["row 1"]);
+  const r = run(fx, ["-c", ferryScript(fx)], { ...STORE, STUB_OWED_UNTIL: "mint row 2", STUB_APPEND: "mint row 2" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, SKIP_MINT);
+  assert.doesNotMatch(r.stdout, /behind the mail and nothing else/, "no owed tolerance on a crossing that minted");
+  assert.ok(calls(fx).includes("mint-run --append"));
+  assert.equal(ledgerAt(fx), "row 1\nmint row 2\n");
+});
+
+for (const [label, extra] of [["the switch off", {}], ["STAMP_LINES=store", STORE]]) {
+  test(`tick · ${label}: a ledger that arrives with only mints owed is caught up, not refused (the ferry's skip relies on it)`, { skip }, () => {
+    const fx = fixture(["row 1"]);
+    const r = run(fx, [tickScript(fx)], { ...extra, STUB_OWED_UNTIL: "mint row 2", STUB_APPEND: "mint row 2" });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /mint catch-up OFF/, "owed is what the catch-up pays");
+    assert.match(fx.g("-C", fx.origin, "show", `main:${LEDGER}`), /mint row 2\n$/, "the owed mint reached origin");
+    assert.equal(status(fx), "");
+  });
+}
 
 test("the switch off is the town's --append: the unset tick and crossing never call the runner", { skip }, () => {
   const tick = fixture(["row 1"]);
