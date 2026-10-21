@@ -112,7 +112,8 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 // `hand-to-human`, so no resident could open these doors on any day they stood.
 import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.mjs";
 import { termsId, termsOnce } from "./terms-seen.mjs"; // POS-697 G5a: the law you were shown, named on a repeat act
-import { onlyUsable, canOn, viewMarkIds } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
+import { onlyUsable, canOn, viewMarkIds, CREATURE_VERBS } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
+import { worldCreature, creatureEntries, CREATURE_TOOLS } from "./creature-verbs.mjs"; // a creature's afforded actions (POS-672)
 // The stride a placement is stamped with — read off the record like every other
 // departure's, never a constant here (decision 008b).
 import { departurePace } from "./world-classes.mjs";
@@ -782,6 +783,12 @@ const DISPATCH = {
   // chest up. Same tool, same queue; the face rides as `act`.
   consume: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", { ...args, act: "consume" }, key) },
   refill: { tool: "world_hold", run: (args, key) => callHoldTool("world_hold", { ...args, act: "refill" }, key) },
+  // A CREATURE'S AFFORDED ACTIONS (POS-672): each names a creature, and its
+  // reaction is the reply. No class at a standpoint grants them: the creature's
+  // classes declare them, and apexDo hands them to their door before the grant
+  // calculus (creature-verbs.mjs judges sight, ring and the window). Charged on
+  // the household world-write ledger as one verb, world_creature.
+  ...Object.fromEntries(CREATURE_VERBS.map((v) => [v, { tool: "world_creature", run: (args, key) => worldCreature({ ...args, act: v }, key) }])),
   // ── the crossings ─────────────────────────────────────────────────────────
   //
   // ⚠ THE OLD COMMENT HERE WAS FALSE, AND SAID SO CONFIDENTLY. It read:
@@ -1034,7 +1041,7 @@ function flatSchemas() {
   // fields an act takes must still come from the act's own schema — the seam-4
   // discipline — and inventing a second grammar here for two verbs would be
   // exactly the drift that seam exists to close.
-  for (const tool of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...RIDE_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS]) {
+  for (const tool of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...RIDE_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS, ...CREATURE_TOOLS]) {
     _flatSchemas.set(tool.name, actionFields(tool?.inputSchema?.properties, tool?.inputSchema?.required));
   }
   return _flatSchemas;
@@ -1047,7 +1054,7 @@ let _fullProps = null;
 function fullPropsFor(toolName) {
   if (!_fullProps) {
     _fullProps = new Map();
-    for (const t of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...RIDE_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS]) _fullProps.set(t.name, t?.inputSchema?.properties ?? {});
+    for (const t of [...WORLD_TOOLS, ...WORLD_STAKE_TOOLS, ...CROSSING_TOOLS, ...RIDE_TOOLS, ...STANCE_TOOLS, ...ARENA_TOOLS, ...CREATURE_TOOLS]) _fullProps.set(t.name, t?.inputSchema?.properties ?? {});
   }
   return _fullProps.get(toolName) ?? null;
 }
@@ -1907,10 +1914,24 @@ async function usableHere(args, key, oriented, nearby = []) {
   if (!who || sp?.stance !== "embodied" || !Number.isFinite(Number(sp?.x)) || !Number.isFinite(Number(sp?.y))) return null;
   try {
     const { usableAt } = await import("./world-kinds.mjs");
+    const here = { x: Number(sp.x), y: Number(sp.y) };
     // the spine as well as the eyes: a bowl you stand on is in `within`, never in `nearby` (QA fail 4)
-    return await usableAt({ actor: who, here: { x: Number(sp.x), y: Number(sp.y) }, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
+    const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
       residents: oriented.present?.residents ?? [] });
+    // the creatures in sight are objects of the same matrix (POS-672 W4); unread, they add nothing
+    return [...pairs, ...(await creaturePairsHere(who, here))];
   } catch { return null; }
+}
+
+/** The creature columns of the matrix at a standpoint (creature-verbs.mjs § creaturePairs), or none. */
+async function creaturePairsHere(who, here) {
+  try {
+    const [{ creaturesForRead }, { creaturePairs, carryingConsumableNow }, kinds, units] = await Promise.all([
+      import("./creatures-read.mjs"), import("./creature-verbs.mjs"), import("./world-kinds.mjs"), import("./world-units.mjs")]);
+    const cr = await creaturesForRead();
+    if (!cr?.law?.afforded) return [];
+    return creaturePairs({ here, living: cr.living, law: cr.law, carryingConsumable: await carryingConsumableNow(who, { kinds, units }) });
+  } catch { return []; }
 }
 
 async function investigateOn(args, oriented, usable = null) {
@@ -1928,7 +1949,9 @@ async function investigateOn(args, oriented, usable = null) {
       saved: (id) => savedCreatureOf(id),
     });
     // its class is its kind (`wolf`), off the fold that answered; one no longer held there points nowhere
-    return pointed(seen, creatures?.living?.byId?.get(kind.id)?.kind ?? null);
+    // its column of the matrix (POS-672 W4): the afforded actions you can aim at it now
+    const withCan = usable && seen && !seen.error ? { ...seen, can: canOn(usable, kind.id) } : seen;
+    return pointed(withCan, creatures?.living?.byId?.get(kind.id)?.kind ?? null);
   }
   // the town's roll says who is a resident; when it cannot be read, nobody is
   // called unknown for it (the standpoint read then says what it can)
@@ -2620,6 +2643,8 @@ async function apexRead(args, key, ctx = {}) {
   // reason. Where the matrix cannot be read, nothing is trimmed.
   const usable = await usableHere(args, key, oriented, nearby);
   if (usable) actions = onlyUsable(actions, usable);
+  // a creature in sight lends its afforded actions (POS-672): each verb once, the creatures it reaches named
+  if (usable) actions = [...actions, ...creatureEntries(usable)];
 
   // ── Stage ② · whose grant opened each door ────────────────────────────────
   //
@@ -2917,6 +2942,48 @@ export function actCaught(e, done = {}) {
     { ...(e.choices ? { choices: e.choices } : {}), ...(e.walk ? { walk: e.walk } : {}) }), ...done };
 }
 
+/**
+ * A CREATURE'S AFFORDED ACTION AT THE APEX (POS-672): the envelope judged against
+ * its grammar (CREATURE_TOOLS, schema only) and the door's own fields, then the
+ * door, under the act's retry key like every world act (review-692 F2: a retried
+ * offer must not use up a second unit; the key rides the act's first row, the
+ * offer's `units:offer`, a call's own row past its say, an approach's walk).
+ * `kept` and `door` are the seams a test drives.
+ */
+export async function dispatchCreatureVerb(action, args, key, { kept = null, door = worldCreature } = {}) {
+  const envelope = parseEnvelope(args);
+  if (envelope != null && (typeof envelope !== "object" || Array.isArray(envelope)))
+    return bounce(422, "`args` must be an object", `the act's own fields ride inside it — world { do: "${action}", args: { creature: "…" } }`);
+  const declared = fullPropsFor("world_creature") ?? {};
+  const doorOwn = new Set(DOOR_FIELDS.world_creature ?? []);
+  const unknown = Object.keys(envelope ?? {}).filter((k) => !(k in declared) && !doorOwn.has(k));
+  if (unknown.length) return bounce(422, `world_creature does not take: ${unknown.join(", ")}`, `the fields it takes: ${[...Object.keys(declared), ...doorOwn].join(", ")}`);
+  const { do: _d, telling: _t, args: _e, read_shape: _s, ...rest } = args;
+  const fields = envelope && typeof envelope === "object" ? { ...rest, ...envelope } : { ...rest };
+  const done = { did: action, via: "in sight", from: "the-town/creature", dispatched_to: "world_creature" };
+  const nonce = fields.nonce ?? null;
+  if (nonce != null) {
+    const bad = nonceDefect(nonce);
+    if (bad) return bounce(422, bad.defect, bad.hint);
+    delete fields.nonce;
+  }
+  const run = () => door({ ...fields, act: action }, key);
+  try {
+    if (nonce == null) {
+      const result = await run();
+      return result?.error === "bounce" ? { ...result, ...done } : { ...done, result };
+    }
+    const keyed = await actUnderNonce({ action, nonce, kept: kept ?? await actsHaveNonce(), run,
+      actors: [...new Set([...(key?.handles ?? []), standingHandle(args, key)].filter(Boolean))] });
+    if (keyed.duplicate) return { ...done, result: keyed.duplicate };
+    const result = keyed.result;
+    return result?.error === "bounce" ? { ...result, ...done } : { ...done, result, ...(keyed.disclosure ?? {}) };
+  } catch (e) {
+    if (!e?.code) throw e;
+    return actCaught(e, done);
+  }
+}
+
 async function apexDo(args, key, ctx = {}) {
   const action = String(args.do ?? "").trim();
 
@@ -2940,6 +3007,14 @@ async function apexDo(args, key, ctx = {}) {
     return bounce(422, `"${action}" is not a thing a place affords — the apex verb carries no mail`,
       `A letter costs nothing and reaches anyway, from anywhere, to anyone: that is the town's oldest kindness and the apex does not repeal it. The mail's own doors serve you — ${MAIL_DOORS}.`,
       { mail_is_global: true });
+  }
+
+  // A CREATURE'S AFFORDED ACTION (POS-672) goes to its own door before the grant
+  // calculus: no ground or class at a standpoint grants it, the creature's
+  // classes do, and the door judges sight, ring and the window itself.
+  if (CREATURE_VERBS.includes(action)) {
+    if (actor) return bounce(422, "a creature's afforded actions are a resident's", 'aim them as one of your residents (handle:), never as: "human". Nothing was done.');
+    return dispatchCreatureVerb(action, args, key);
   }
 
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`

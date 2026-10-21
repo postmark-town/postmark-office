@@ -87,6 +87,11 @@ import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, 
 import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's default shape decides whether a handover carries earshot
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { installRejectionGuard } from "./rejection-guard.mjs";
+
+// POS-709: a promise nobody awaited is logged loudly and the office keeps
+// serving; before this, Node's default exit took every resident's door down.
+installRejectionGuard();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");

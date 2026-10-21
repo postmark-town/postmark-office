@@ -1361,6 +1361,24 @@ repo-shipped code with the pen's write authority, so `tools/` and
 pen's token deliberately lacks the `workflow` scope, so it cannot alter the
 town clock even if compromised.
 
+**The drain's own worktree (POS-723, 2026-10-20).** The town drain lands a
+crossing's letters and paper acts as one commit, written in a git worktree of
+the town clone that only the drain uses:
+`/srv/postmark-office/town-clone/.git/drain-worktree` (or `TOWN_DRAIN_WORKTREE`).
+The office's server commits live paper edits into the clone itself, so the
+batch never writes there; the clone fast-forwards to what landed. The first
+crossing after the deploy creates the worktree (one checkout of the town:
+about 453 MB of files, measured 2026-10-20, with 38 GB free), and every
+crossing after resets it. No box step is needed. A worktree broken
+mid-making (a SIGKILL or power loss leaves it "locked: initializing", or an
+index.lock) is cleared and made again by the drain itself, once
+("clearing its entry and making it again" on the operator's line). If it
+still will not come up, every mail and paper row is held with "the drain's
+worktree would not come up to the town's tip". Then, as meepo, clear it the
+way the drain does, and let the next crossing make it:
+`git -C /srv/postmark-office/town-clone worktree remove -f -f /srv/postmark-office/town-clone/.git/drain-worktree && git -C /srv/postmark-office/town-clone worktree prune`.
+Removing the directory alone is not enough: a locked entry outlives it.
+
 ### Cutover checklist (run once, supervised)
 
 1. Pre-flight: parity audit PASSED 2026-07-08 (twin carries folder letters,
@@ -1379,6 +1397,250 @@ town clock even if compromised.
    ledger commits / `WHITE_PAGES/mail-ledger.md` fresh lines).
 6. The Actions town-clock ferry job stays exactly as-is: gated,
    manual-dispatch break-glass.
+
+### The crossing save runs when the ferry finishes (POS-714, Darko 2026-10-20 08:58)
+
+The save used to fire on its own clock at :02 and wait `flock -w 300` for
+town.lock. On 2026-10-20 00:00Z the ferry held the lock 7 min 13 s, and the
+save gave up 14 s before it came free (rerun by hand at 01:01Z). Now
+`postmark-ferry.service` starts `postmark-crossing-save.service` when it
+finishes (`OnSuccess=` and `OnFailure=`: the save reads the store, so a ferry
+that refused still leaves a crossing to save). The save's timer moves to :30 as
+the late fallback, and the service's `ExecCondition=` (`crossing-save.mjs
+--unsaved`) skips the run when the crossing just left is already saved
+COMPLETE. Any doubt in that check means "run", so a broken save still fails
+loudly rather than skipping. The box runs systemd 255, and `OnSuccess=` needs 249.
+
+**Install (Wright's hand, away from a crossing: not 23:50–00:40 or 11:50–12:40 UTC).**
+From the deployed release tree, after the release carrying this change is live
+(the ExecCondition calls `crossing-save.mjs --unsaved`, which older trees do
+not have):
+```sh
+sudo cp /etc/systemd/system/postmark-ferry.service /etc/systemd/system/postmark-crossing-save.service \
+        /etc/systemd/system/postmark-crossing-save.timer /var/backups/   # the rollback copies
+sudo cp /srv/postmark-office/deploy/postmark-ferry.service \
+        /srv/postmark-office/deploy/postmark-crossing-save.service \
+        /srv/postmark-office/deploy/postmark-crossing-save.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart postmark-crossing-save.timer
+```
+Nothing is started by hand: the next crossing is the first chained run.
+
+**Prove it (read-only):**
+```sh
+systemctl show postmark-ferry.service -p OnSuccess -p OnFailure
+#   OnSuccess=postmark-crossing-save.service
+#   OnFailure=postmark-crossing-save.service
+systemctl show postmark-crossing-save.timer -p TimersCalendar      # … OnCalendar=*-*-* 00,12:30:00 UTC …
+sudo -u meepo node /srv/postmark-office/tools/crossing-save.mjs --unsaved --world /srv/postmark-office/world-clone; echo "exit $?"
+#   between crossings: "crossing N is already saved COMPLETE …", exit 1 (the fallback would skip)
+```
+After the next crossing: `journalctl -u postmark-crossing-save.service --since -1h`
+shows a run starting within seconds of the ferry's `Finished`/`Failed` line, and
+`crossing N  …  COMPLETE`. At :30 it shows the condition skipping (`… already
+saved COMPLETE`). `systemctl show postmark-crossing-save.service -p Result` reads
+`success`.
+
+**Rollback:** copy the three files back from `/var/backups/`, `daemon-reload`,
+`systemctl restart postmark-crossing-save.timer`. The save is idempotent, so a
+crossing saved by either shape reads the same.
+
+### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
+
+This is the prod order for `STAMP_LINES=store`. The dev rehearsal's steps 6–8
+above are dev's, against `/etc/postmark-office-dev.env`.
+
+**Why the sandbox comes first.** With the switch set, the ferry runs
+`deploy/town-index-ingest.sh` between the crossing and the mint, inside its own
+sandbox (`ProtectSystem=strict`, as meepo). Until POS-341's sandbox change, the
+ingest could do nothing there. It could not read `PG_LAW_INGESTER_PASSWORD`,
+which lives only in the root-0600 `/etc/postmark-world2-dev.env` beside the
+owner's password, and both its clone and its state directory were read-only.
+It is the only writer of `town_mail_lines`, so the mint decided on the
+deliveries before the crossing and the town's stamp-verify refused: every
+delivering crossing went red (the box sitting of 2026-10-20, gap 1).
+
+Now the unit grants exactly what the ingest writes
+(`/srv/world2-lab/ingest-clones/town-index` and `/srv/world2-lab/state`, each
+`-`-prefixed so a missing one cannot stop a crossing) and loads ONE systemd
+credential, `postmark-law-ingester-password`. That credential is a root-0600 file
+in `/etc/credstore/` holding the password alone. systemd reads it as root and
+hands the unit a copy under `$CREDENTIALS_DIRECTORY`. The script reads it there
+when its environment has no password, so the timer's own path is unchanged. The
+credential is loaded by ID, never by path: an absolute path that is missing
+fails the whole unit at every crossing, while a missing ID is skipped and the
+ingest refuses by name. The script also holds `/srv/world2-lab/state/.town-index.lock`
+for its whole run, because the timer and the ferry now share one clone and the
+tool reads its working tree.
+
+**One copy of the script** (Darko, 2026-10-20 15:38). The timer's unit,
+`postmark-town-index.service`, runs `/srv/postmark-office/deploy/town-index-ingest.sh`,
+the deployed release's copy and the same file the ferry runs. It no longer runs
+the hand copy in `/srv/world2-lab/ops/`. It keeps its own `EnvironmentFile=`
+for the password. The roll-call's `world2-ops-scripts` row no longer compares
+`town-index-ingest.sh` (its `retired_copies` says why), so the old ops copy can
+stay on the box, execed by nothing, until it is retired by hand.
+
+**A failed ingest skips the store mint** (Darko, 2026-10-20 15:38). In store
+mode, a crossing whose ingest failed prints `[ferry] the town-index ingest
+failed: the store mint is skipped this crossing, and the keep tick pays what is
+owed`, does not run `stamp-mint-run`, and carries on: the ballot, quest and
+seal passes still run. The ledger is then behind the mail by that crossing's
+mints, and the town's `stamp-verify` calls that red ("mints owed, run the mint
+pass (not a tamper)"). So after a skip, the crossing's two verifies are
+`tools/stamp-verify-owed.mjs`: the town's own verifier and all its checks, with
+only its two "not a tamper" sentences (mints owed, settlement owed) read as not
+red. A real problem still stops the crossing. The keep tick's ARRIVAL check is
+the same owed-tolerant verify (`deploy/office-keep.sh`), because a plain one
+refuses the catch-up that pays owed mints. Every verify after a write stays the
+plain one. A stake ballot the town's verifier refuses for the owed mints is held
+by the ballot pass, with no receipt, until the next crossing. The tick's store
+mint pays once the timer's ingest has read the crossing. While the ingest keeps
+failing, nothing pays, and `town-index.json` and the journal say why.
+
+The tick's arrival change is live from the deploy itself (it is in the
+release's `office-keep.sh`), with the switch on or off: a ledger that arrives
+with only mints owed (for example after a by-hand crossing) is caught up by the
+next tick instead of reading "mint catch-up OFF".
+
+**Where it runs.** On the box, from the deployed release that carries this
+change. Keep away from the crossings and the save (23:50–00:40 and 11:50–12:40
+UTC), from 17:00–18:00 UTC, and from the ingest timer's :05, :20, :35 and :50.
+Every step is Wright's hand. Nothing here prints the password: no `cat`, no
+`echo`, no `set -x`.
+
+**Step 1: the release carries the change.**
+```sh
+grep -c '^LoadCredential=postmark-law-ingester-password$' /srv/postmark-office/deploy/postmark-ferry.service   # expect: 1
+grep -c 'CREDENTIALS_DIRECTORY' /srv/postmark-office/deploy/town-index-ingest.sh                             # expect: 3 or more
+grep -c 'stamp-verify-owed.mjs' /srv/postmark-office/deploy/postmark-ferry.service /srv/postmark-office/deploy/office-keep.sh   # expect: 2 or more, and 1
+grep -c '^ExecStart=/bin/bash /srv/postmark-office/deploy/town-index-ingest.sh$' /srv/postmark-office/deploy/postmark-town-index.service   # expect: 1
+```
+
+**Step 2: the credential file**, root 0600, the password alone. It is read with
+the same `sed` that `world2-lib.sh § w2_secret` uses and never passes through
+the terminal:
+```sh
+sudo install -d -o root -g root -m 0700 /etc/credstore
+sudo bash -c 'umask 077; sed -n "s/^PG_LAW_INGESTER_PASSWORD=//p" /etc/postmark-world2-dev.env | head -n 1 | tr -d "\r\n" \
+  | install -o root -g root -m 0600 /dev/stdin /etc/credstore/postmark-law-ingester-password'
+sudo stat -c '%U:%G %a %s %n' /etc/credstore /etc/credstore/postmark-law-ingester-password
+#   expect: root:root 700 … /etc/credstore   and   root:root 600 48 /etc/credstore/postmark-law-ingester-password
+sudo bash -c 'cmp -s <(sed -n "s/^PG_LAW_INGESTER_PASSWORD=//p" /etc/postmark-world2-dev.env | head -n 1 | tr -d "\r\n") \
+  /etc/credstore/postmark-law-ingester-password && echo SAME || echo DIFFERENT'                                # expect: SAME
+```
+Go/no-go: go on `SAME` with a size of 48 (the passwords' length, world2-lib.sh's
+note). A size of 0 means the key was not found: stop. When the password is
+rotated, this file is rotated with it, by the same two lines.
+
+**Step 3: install the timer's unit**, so it runs the release's script (one
+copy). Between two ingest runs, with no restart: the timer fires the new unit
+at its next :05, :20, :35 or :50.
+```sh
+systemctl is-active postmark-town-index.service                              # expect: inactive
+systemctl show postmark-town-index.service -p DropInPaths --value            # read it; any drop-in stays as it is
+sudo cp -p /etc/systemd/system/postmark-town-index.service /var/backups/postmark-town-index.service.pre-pos341
+sudo install -o root -g root -m 0644 /srv/postmark-office/deploy/postmark-town-index.service /etc/systemd/system/postmark-town-index.service
+sudo cmp /srv/postmark-office/deploy/postmark-town-index.service /etc/systemd/system/postmark-town-index.service && echo SAME
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/postmark-town-index.service  # expect: no output
+systemctl show postmark-town-index.service -p ExecStart --no-pager | grep -o 'path=[^ ;]*'    # expect: path=/bin/bash
+systemctl show postmark-town-index.service -p ExecStart --no-pager | grep -o '/srv/[^ ;]*ingest\.sh'   # expect: /srv/postmark-office/deploy/town-index-ingest.sh
+```
+The proof is the next timer run: `journalctl -u postmark-town-index.service --since -20min`
+shows `[town-index] …` lines, and `town-index.json` reads `"status":"ok"` with
+that run's `at`. Then `sudo ls -la /srv/world2-lab/state/.town-index.lock`
+exists: both callers now take the lock. The old `/srv/world2-lab/ops/town-index-ingest.sh`
+stays where it is. Nothing execs it, the roll-call no longer compares it, and
+retiring it is a separate hand step.
+
+**Step 4: the proving read, the ingest under the ferry's own sandbox.** This is
+the ingest the timer runs every 15 minutes, with the properties the ferry's unit
+gives it, so it writes only what a timer run would. With the switch still off
+it behaves exactly as it does today.
+```sh
+systemctl is-active postmark-ferry.service postmark-town-index.service      # expect: inactive inactive
+sudo systemd-run --uid=meepo --pipe --wait --collect \
+  -p EnvironmentFile=/etc/postmark-office.env -p WorkingDirectory=/srv/postmark-office \
+  -p NoNewPrivileges=yes -p ProtectSystem=strict -p PrivateTmp=yes \
+  -p ReadWritePaths=/srv/postmark-office \
+  -p ReadWritePaths=-/srv/world2-lab/ingest-clones/town-index \
+  -p ReadWritePaths=-/srv/world2-lab/state \
+  -p LoadCredential=postmark-law-ingester-password \
+  /bin/bash /srv/postmark-office/deploy/town-index-ingest.sh
+#   expect: "[town-index] …" lines, then "Finished with result: success"
+cat /srv/world2-lab/state/town-index.json      # no secret in it: the tool's summary line
+#   expect: "at" this minute, "status":"ok", "sha" the town's origin/main
+```
+Go/no-go: go only on `success` and `ok`. `cannot-run` with "PG_LAW_INGESTER_PASSWORD
+unreadable" means step 2 is wrong. A git or state error naming a read-only
+path means the unit's `ReadWritePaths=` is missing a path: stop and report the
+path.
+
+**Step 5: install the ferry's unit**, exactly as the box sitting's gap 2 did it: back
+up the unit and its drop-in, install as root:root 0644, keep the `.d` drop-in,
+daemon-reload, no restart.
+```sh
+systemctl is-active postmark-ferry.service                                   # expect: inactive
+sudo cp -p  /etc/systemd/system/postmark-ferry.service   /var/backups/postmark-ferry.service.pre-pos341
+sudo cp -rp /etc/systemd/system/postmark-ferry.service.d /var/backups/postmark-ferry.service.d.pre-pos341
+sudo install -o root -g root -m 0644 /srv/postmark-office/deploy/postmark-ferry.service /etc/systemd/system/postmark-ferry.service
+sudo cmp /srv/postmark-office/deploy/postmark-ferry.service /etc/systemd/system/postmark-ferry.service && echo SAME
+ls -la /etc/systemd/system/postmark-ferry.service.d/                        # expect: pos714-chain.conf, still there
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/postmark-ferry.service       # expect: no output
+systemctl show postmark-ferry.service -p ReadWritePaths -p LoadCredential -p ProtectSystem -p NeedDaemonReload --no-pager
+#   expect: ReadWritePaths= lists /srv/postmark-office, -/srv/world2-lab/ingest-clones/town-index and -/srv/world2-lab/state
+#           LoadCredential= names postmark-law-ingester-password   ProtectSystem=strict   NeedDaemonReload=no
+```
+With the switch off, the new lines change nothing a crossing does: the ingest
+branch is not taken.
+
+**Step 6: the chain and its proofs, if not already done** (the box sitting's
+gap 1, steps 1.1–1.4). Between a :07/:22/:37/:52 keep tick and the next:
+```sh
+systemctl is-active postmark-ferry.service postmark-office-keep.service      # expect: inactive inactive
+sudo -u meepo git -C /srv/postmark-office/town-clone status -sb | head -3   # expect: "## main...origin/main", nothing else
+sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office.env -p WorkingDirectory=/srv/postmark-office --pipe --wait \
+  /usr/bin/flock -w 300 /srv/postmark-office/town.lock \
+  node world2/tools/stamp-lines.mjs --sync --clone /srv/postmark-office/town-clone
+sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office.env -p WorkingDirectory=/srv/postmark-office --pipe --wait \
+  node world2/tools/stamp-lines.mjs --verify --clone /srv/postmark-office/town-clone     # expect: green
+cd /srv/postmark-office && node --env-file=<(sudo cat /etc/postmark-office.env) world2/tools/stamp-mint-parity.mjs --clone /srv/postmark-office/town-clone
+#   expect: "ledger : store N, file N" … PARITY (exit 0). A DIFFERENCE stops here: report it, reconcile nothing.
+```
+
+**Step 7: the switch.** Darko's go, after steps 1–6 are green on the day.
+```sh
+sudo cp -p /etc/postmark-office.env /var/backups/postmark-office.env.pre-stamp-lines-$(date -u +%Y%m%dT%H%MZ)
+sudoedit /etc/postmark-office.env                                  # add one line: STAMP_LINES=store
+sudo grep -c '^STAMP_LINES=store$' /etc/postmark-office.env        # expect: 1
+sudo systemctl restart postmark-office.service                     # so the doors agree with the passes
+journalctl -u postmark-office.service -n 20 --no-pager | grep listening
+```
+Then the proving reads: the next keep tick
+(`journalctl -u postmark-office-keep.service --since -20min | grep -E 'decided from the store|up to date'`),
+the next ingest (`town-index.json` reads `"status":"ok"`), and the next crossing
+(`journalctl -u postmark-ferry.service --since <the crossing> | grep -E '\[town-index\]|decided from the store'`,
+with no "the store mint is skipped this crossing" line, and the unit ending `Deactivated successfully`).
+
+**Rollback.** The switch: delete the `STAMP_LINES=store` line (or restore the
+backup) and restart the office if it was restarted with it. The ferry, keep
+tick and ingest read the line at their next run. The unit:
+`sudo install -o root -g root -m 0644 /var/backups/postmark-ferry.service.pre-pos341 /etc/systemd/system/postmark-ferry.service && sudo systemctl daemon-reload`.
+The timer's unit:
+`sudo install -o root -g root -m 0644 /var/backups/postmark-town-index.service.pre-pos341 /etc/systemd/system/postmark-town-index.service && sudo systemctl daemon-reload`
+(it runs the ops copy again, which has no run lock, so the ferry's ingest and the
+timer's are no longer serialised: roll back the switch with it). The credential
+file is inert without the unit; leave it, or remove it by hand.
+
+**A failed ingest in store mode,** as it reads in the journal: the ingest's
+own `[town-index] …` line, then `[ferry] the town-index ingest failed: the
+store mint is skipped this crossing, and the keep tick pays what is owed`, then
+`[stamp-verify-owed] behind the mail and nothing else …` twice, and the unit
+ends `Deactivated successfully`. The next keep tick whose store holds the
+crossing logs `decided from the store`. If the ingest keeps failing, read
+`town-index.json`'s `detail` first: nothing can pay the mints until it runs.
 
 ## The one-hand rule (2026-08-20, after the stranded-crossings incident)
 

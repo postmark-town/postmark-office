@@ -527,6 +527,9 @@ export function departureRecordOf(row) {
         targetMarkId: p.to ?? null,
         pace: p.pace ?? null,
         line: null,
+        // a set-down's own words (POS-740: "set down where the berth stood"),
+        // only where the record carries them; no walk the door files has one
+        ...(typeof p.note === "string" && p.note ? { note: p.note } : {}),
       },
     };
   }

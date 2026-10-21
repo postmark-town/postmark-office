@@ -5,6 +5,17 @@ Description=Postmark ferry — the town's own tools/ferry.mjs, run at the publis
 # town-clock ferry job stays gated as break-glass; the PC-side original
 # (G:/Starstory/tools/commons-ferry.mjs) is retired break-glass.
 After=network.target
+# THE CROSSING SAVE RUNS WHEN THE FERRY FINISHES (POS-714, Darko 2026-10-20
+# 08:58: "a much better design"). It used to fire on its own clock two minutes
+# behind the crossing and wait 300 s for town.lock; on 2026-10-20 00:00Z the
+# ferry held the lock 7 min 13 s and the save gave up 14 s before it came free.
+# Chained, the save starts after this unit's flock has exited, success or
+# failure alike: the save reads the store, not anything the ferry wrote, so a
+# ferry that refused still leaves a crossing to save. Its own timer stays as a
+# late fallback that skips a crossing already saved
+# (deploy/postmark-crossing-save.service § ExecCondition).
+OnSuccess=postmark-crossing-save.service
+OnFailure=postmark-crossing-save.service
 
 [Service]
 Type=oneshot
@@ -48,12 +59,28 @@ WorkingDirectory=/srv/postmark-office
 # snapshot rides the same switch (POS-341 part 4): set, world2/tools/
 # quest-snapshot-run.mjs folds the leaderboard on the store's key base; unset,
 # the town's own --snapshot runs, as before. The ingest is the office
-# tree's own deploy/town-index-ingest.sh, the script the timer's unit runs from
-# its installed copy: it keeps its own clone and the law pen's credentials, and
-# its advisory lock serialises it with the timer's run. A failed ingest stops
-# nothing: the store's deliveries are a prefix of the mail, so the mint only
-# owes more, and the keep tick (or the next crossing) pays it. The runner verifies the
-# appended ledger before it commits (only a green verify commits, as before).
+# tree's own deploy/town-index-ingest.sh, the same file the timer's unit runs
+# (postmark-town-index.service, one copy since POS-341): it keeps its own clone, and its lock file serialises it
+# with the timer's run (the script's header). It runs in THIS unit's sandbox,
+# so the unit grants exactly what it writes and the one password it needs (the
+# sandbox lines at the foot of this file).
+# A FAILED INGEST SKIPS THE STORE MINT (Darko 2026-10-20 15:38, POS-341). With
+# the ingest failed, the store's deliveries are a prefix of the mail, and a mint
+# decided on them is refused by the town's own verify inside the runner. So the
+# chain names the skip on one line, does not run stamp-mint-run, and goes on:
+# the ballot, quest and seal passes still run this crossing. The ledger is then
+# behind the mail by this crossing's mints, which the town's stamp-verify reads
+# as red ("mints owed, run the mint pass (not a tamper)"), so after a skip the
+# chain's two verifies are tools/stamp-verify-owed.mjs: the same verifier, the
+# same checks, with only its two "not a tamper" sentences read as not red. A
+# real problem still stops the chain. A stake ballot whose line the town's
+# verifier refuses for the owed mints is HELD by the ballot pass (no receipt;
+# the next crossing reads it again). The keep tick pays the mints: its arrival
+# check is the same owed-tolerant verify, and its store mint decides once the
+# timer's ingest (every 15 minutes) has read this crossing. While the ingest
+# keeps failing, nothing can pay them, and the town-index state file and the
+# journal say why. The runner verifies the appended ledger before it commits
+# (only a green verify commits, as before).
 # Then the ballot pass (gold plan postmark-ballot), the OFFICE'S since POS-349
 # (ballots are posts): tools/ballot-pass-run.mjs reads the mailed ballots in
 # the office inbox and judges each from the office's record, the ballot post
@@ -87,9 +114,10 @@ WorkingDirectory=/srv/postmark-office
 #     CHECKS that the lock is held and refuses if it is not, so running it
 #     outside a unit like this one fails loudly instead of racing the pen.
 #
-# Flag-off (TOWN_SINGLE_LOG unset, which is the state on the box today) this is
-# a no-op that prints one line saying so and exits 0 — the crossing is
-# byte-identical to what it was. A refusal exits 1 and holds the rest of the
+# Flag-on (TOWN_SINGLE_LOG=1, set in /etc/postmark-office.env on the box, read
+# 2026-10-20) it drains. Flag-off it is a no-op that prints one line saying so
+# and exits 0, and the crossing is byte-identical to what it was before the
+# drain existed. A refusal exits 1 and holds the rest of the
 # chain on purpose: the office not understanding its own log is not a condition
 # to deliver mail on top of.
 #
@@ -116,24 +144,29 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
       git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES; \
       echo "[ferry] a gate refused (exit $rc): the town clone is back at its last commit, and the refused step re-runs at the next crossing" >&2; }; }; \
   trap undo EXIT; trap "exit 143" TERM; trap "exit 130" INT; trap "exit 129" HUP; \
+  owed_ok=0; \
+  verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else node tools/stamp-verify.mjs; fi; }; \
   git -C "$TOWN_CLONE" reset --hard -q HEAD && \
   git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES && \
   /usr/bin/node /srv/postmark-office/tools/town-drain-run.mjs && \
   git -C "$TOWN_CLONE" push -q && \
   cd "$TOWN_CLONE" && node tools/ferry.mjs && \
   if [ "$STAMP_LINES" = store ]; then \
-    { /bin/bash /srv/postmark-office/deploy/town-index-ingest.sh || \
-        echo "[ferry] the town-index ingest did not run: the mint decides from the store as it stands, and the keep tick mints what this crossing delivered" >&2; } && \
-    node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem --clone "$TOWN_CLONE"; \
+    if /bin/bash /srv/postmark-office/deploy/town-index-ingest.sh; then \
+      node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem --clone "$TOWN_CLONE"; \
+    else \
+      owed_ok=1; \
+      echo "[ferry] the town-index ingest failed: the store mint is skipped this crossing, and the keep tick pays what is owed" >&2; \
+    fi; \
   else \
     node tools/stamp-mint.mjs --append --key /srv/postmark-office/stamp-key.pem; \
   fi && \
-  node tools/stamp-verify.mjs && \
+  verify && \
   { git diff --quiet -- WHITE_PAGES/stamp-ledger.md || { \
       git add WHITE_PAGES/stamp-ledger.md && \
       git commit -qm "mint: crossing pass" && git push -q; }; } && \
   /usr/bin/node /srv/postmark-office/tools/ballot-pass-run.mjs --key /srv/postmark-office/stamp-key.pem && \
-  node tools/stamp-verify.mjs && \
+  verify && \
   { git add -A -- WHITE_PAGES && { git diff --quiet --cached || { \
       git commit -qm "ballot: crossing pass" && git push -q; }; }; } && \
   { [ "$STAMP_LINES" != store ] || node /srv/postmark-office/world2/tools/stamp-lines.mjs --sync --clone "$TOWN_CLONE"; } && \
@@ -154,3 +187,23 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/srv/postmark-office
 PrivateTmp=yes
+# THE INGEST'S SANDBOX (POS-341, Darko 2026-10-20 14:53). In store mode the
+# chain runs deploy/town-index-ingest.sh, and under ProtectSystem=strict it can
+# write only what is named here. It writes two places outside the office tree:
+# its own town clone (fetch, checkout, clean) and the state directory (its
+# town-index.json, written by tmp-and-rename, so the directory and not the
+# file, and its .town-index.lock). Its mktemp goes to PrivateTmp above; HOME is
+# only read (git needs no write there for a fetch of the public town). The "-"
+# makes a missing path ignored rather than a unit that cannot start: without
+# them the ingest refuses by name and the crossing still runs.
+ReadWritePaths=-/srv/world2-lab/ingest-clones/town-index
+ReadWritePaths=-/srv/world2-lab/state
+# The law pen's password, and nothing else from /etc/postmark-world2-dev.env
+# (that file also carries the owner's password and is never handed to the
+# ferry). A credential ID with no path is looked up in /etc/credstore/, and a
+# missing one is skipped, where an absolute path that is missing fails the
+# whole unit, every crossing (systemd 255, exec-credential.c: missing_ok). The
+# file is root 0600 and holds the password alone (DEPLOY.md § POS-341); systemd
+# reads it as root and hands meepo a copy under $CREDENTIALS_DIRECTORY, readable
+# by this unit only. The script reads it there when the environment has none.
+LoadCredential=postmark-law-ingester-password

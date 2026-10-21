@@ -48,6 +48,13 @@
 //  14. (POS-649) a paid stage is re-credited as its own act, under the same
 //      author check; a founder may be the new credit (Darko 2026-10-15 19:02).
 //      GitHub is a local stub here (GITHUB_API_URL), the letters a stub table.
+//  16. (POS-713, a hotfix, Darko 2026-10-20 08:58) every rung is recorded, in
+//      order: a jump is refused at every rung, naming the first unrecorded
+//      stage and both ways forward; `{ post, skip, reason }` records one rung
+//      as skipped, its own act, crediting no one; the read shows it as a
+//      history row; a skipped stage is never re-credited; a bug already past a
+//      gap before the rule moves on from where it stands, never back-filled.
+//      The tests above walk their bugs with skipThrough, since a jump bounces.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -239,6 +246,15 @@ async function refusedWith(p, code, re) {
 const BUG = { class: "bug", title: "The door sticks", body: "The front door of the post office does not open on the second try." };
 const ID = "errant/the-door-sticks";
 
+// POS-713: an advance moves one rung, and a rung no one earned is skipped on the record.
+const LADDER = ["reported", "confirmed", "reproduced", "diagnosed", "briefed", "fixed", "shipped"];
+/** Skip every rung after where `id` stands, through `stage`, one skip act each (wright's hand). */
+async function skipThrough(id, stage, reason = "no one earned it in this test") {
+  const at = (await postsAtOffice({ class: "bug", post: id }, { now: NOW, roll: ROLL })).post.state;
+  for (const s of LADDER.slice(LADDER.indexOf(at) + 1, LADDER.indexOf(stage) + 1))
+    await advanceAtTown({ post: id, skip: s, reason }, WRIGHT, { now: NOW, roll: ROLL });
+}
+
 // ── 1 ───────────────────────────────────────────────────────────────────────
 
 test("1 · a resident posts a bug as themselves; a non-hand's advance is refused by name and writes nothing; a hand's advance to confirmed credits the reporter", async () => {
@@ -350,28 +366,36 @@ test("4 · the reporter amends until confirmed and the hands after; only the cha
 test("5 · the advance's law: forward only, a skip pays nothing, credit from reproduced on, size at fixed, grade at briefed", async () => {
   const { pen, posts } = setup();
   await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
-  await refusedWith(advanceAtTown({ post: ID, to: "reproduced" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /reproduced names whom it credits/);
-  await refusedWith(advanceAtTown({ post: ID, to: "fixed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /fixed needs a size/);
-  await refusedWith(advanceAtTown({ post: ID, to: "briefed", credit: "finn", size: "M" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /size is fixed's/);
-  await refusedWith(advanceAtTown({ post: ID, to: "briefed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /briefed needs a grade/);
-  await refusedWith(advanceAtTown({ post: ID, to: "shipped", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /shipped pays nothing and credits no one/);
   await refusedWith(advanceAtTown({ post: ID, to: "reported" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /not a stage a bug advances to/);
   await refusedWith(advanceAtTown({ post: ID, to: "wontfix" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /not a stage a bug advances to/);
 
-  // a jump: reported → diagnosed pays diagnosed only, and says what it skipped
+  // a jump is refused (POS-713): it names the first unrecorded rung and both ways forward, and writes nothing
+  const n0 = pen.rows().length;
+  await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+    /^"errant\/the-door-sticks" stands reported, and confirmed is not recorded yet record or skip confirmed first: \{ post, to: "confirmed", … \} when someone earned it, or \{ post, skip: "confirmed", reason \} when no one did \(a skip credits no one and pays nothing\)$/);
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL }), 409, /stands reported, and confirmed is not recorded yet/);
+  assert.equal(pen.rows().length, n0, "a refused jump wrote an act");
+  // the rungs no one earned are skipped on the record, one per call; each rung's own law is judged one rung below it
+  await skipThrough(ID, "confirmed");
+  await refusedWith(advanceAtTown({ post: ID, to: "reproduced" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /reproduced names whom it credits/);
+  await skipThrough(ID, "reproduced");
   const jump = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(jump.stamps, 5);
-  assert.match(jump.receipt, /skipped confirmed, reproduced, and a skipped stage pays nothing/);
+  assert.doesNotMatch(jump.receipt, /skipped/);
   await refusedWith(advanceAtTown({ post: ID, to: "reproduced", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 409, /already stands diagnosed/);
   await refusedWith(advanceAtTown({ post: ID, to: "not-a-bug" }, WRIGHT, { now: NOW, roll: ROLL }), 409, /leaves as not-a-bug only from reported or confirmed/);
+  await refusedWith(advanceAtTown({ post: ID, to: "briefed", credit: "finn", size: "M" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /size is fixed's/);
+  await refusedWith(advanceAtTown({ post: ID, to: "briefed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /briefed needs a grade/);
 
   const brief = await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "heavy", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(brief.stamps, 5, "a heavy revision pays 5");
+  await refusedWith(advanceAtTown({ post: ID, to: "fixed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /fixed needs a size/);
   const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: "Hinge Nibbler", link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(fix.stamps, 25);
   const { links, ...rest } = posts.get(ID).fields;
   assert.deepEqual(rest, { grade: "heavy", size: "M", critter: "Hinge Nibbler", named_by: "finn" });
   assert.deepEqual(Object.keys(links), ["diagnosed", "briefed", "fixed"], "each earned stage keeps its link");
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /shipped pays nothing and credits no one/);
   const ship = await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(ship.stamps, 0);
   assert.match(ship.receipt, /shipped pays nothing/);
@@ -426,6 +450,7 @@ test("6 · the posts read answers class bug with its finished states; the rebuil
   await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
   await amendAtTown({ post: ID, steps: "Twice." }, WRIGHT, { now: NOW, roll: ROLL });
   const FIXED_BY_FINN = pull("finn");
+  await skipThrough(ID, "briefed");
   await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "S", critter: "Stickle", link: FIXED_BY_FINN }, WRIGHT, { now: NOW, roll: ROLL });
 
   const r = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
@@ -440,7 +465,7 @@ test("6 · the posts read answers class bug with its finished states; the rebuil
 
   const out = await dryRun(pen);
   assert.equal(out.equal, true, out.drift.join("\n"));
-  assert.deepEqual([out.counts.bug_acts, out.counts.bugs], [5, 2]);
+  assert.deepEqual([out.counts.bug_acts, out.counts.bugs], [8, 2], "two posts, the amend, confirmed, three skips and fixed");
   // and the equality can fail: a row the acts do not derive is drift
   const acts = pen.rows().filter((a) => a.class === "bug").map((a) => ({ ...a, payload: JSON.parse(a.payload) }));
   const drifted = compareRebuild({ posts: [{ id: "errant/ghost", class: "bug", title: "", body: "", author: "errant", state: "reported", fields: {}, revised: 0, posted_act: 1, last_act: 1 }], responses: [] }, acts);
@@ -471,6 +496,7 @@ test("7 · for and credit name a resident in the office's residents index, or ar
 /** Walk the door-sticks bug up to briefed, crediting finn; returns nothing. */
 async function toBriefed() {
   await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  await skipThrough(ID, "reproduced");
   await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "light", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
 }
@@ -497,12 +523,17 @@ test("8 · critter on any stage but fixed is refused by name", async () => {
   const before = pen.rows().length;
   const WHY = /critter is fixed's: the resident who fixes a bug names it .*only an advance to fixed takes critter/;
   await refusedWith(advanceAtTown({ post: ID, to: "confirmed", critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
-  for (const [to, more] of [["reproduced", {}], ["diagnosed", {}], ["briefed", { grade: "light" }]])
-    await refusedWith(advanceAtTown({ post: ID, to, credit: "finn", critter: "Nib", ...more }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
   await refusedWith(advanceAtTown({ post: ID, to: "not-a-bug", critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
   await refusedWith(advanceAtTown({ post: "finn/the-door-sticks-again", to: "duplicate", of: ID, critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
   assert.equal(pen.rows().length, before);
-  await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
+  // each later rung refuses a critter from the rung below it (POS-713: an advance moves one rung), and then records without one
+  await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  for (const [to, more] of [["reproduced", {}], ["diagnosed", { link: comment("finn") }], ["briefed", { grade: "light", link: comment("finn") }]]) {
+    const n = pen.rows().length;
+    await refusedWith(advanceAtTown({ post: ID, to, credit: "finn", critter: "Nib", ...more }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
+    assert.equal(pen.rows().length, n);
+    await advanceAtTown({ post: ID, to, credit: "finn", ...more }, WRIGHT, { now: NOW, roll: ROLL });
+  }
   await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "S", critter: "Nib", link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   await refusedWith(advanceAtTown({ post: ID, to: "shipped", critter: "Nib" }, WRIGHT, { now: NOW, roll: ROLL }), 422, WHY);
   assert.equal(posts.get(ID).state, "fixed");
@@ -645,6 +676,7 @@ test("10 · an advance may carry link, kept per stage in fields.links; the posts
   assert.deepEqual([CAUSE, BRIEF, PR], ["https://github.com/postmark-town/postmark/issues/3500#issuecomment-111",
     "https://github.com/postmark-town/postmark/issues/3500#issuecomment-222", "https://github.com/postmark-town/postmark-office/pull/410"]);
   const TAG = "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w42";
+  await skipThrough(ID, "reproduced");
   const d = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: `  ${CAUSE}  ` }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(d.link, CAUSE);
   assert.match(d.receipt, new RegExp(`; diagnosed points at ${CAUSE.replace(/[.#/]/g, "\$&")}$`));
@@ -694,6 +726,7 @@ async function throughFixed() {
   await amendAtTown({ post: id, steps: "Twice." }, WRIGHT, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: id, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: id, to: "reproduced", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL });
+  await skipThrough(id, "briefed", "the fix came straight from the steps");
   await advanceAtTown({ post: id, to: "fixed", credit: "errant", size: "M", critter: "Hinge Nibbler", link: FIX_PR }, WRIGHT, { now: NOW, roll: ROLL });
   return id;
 }
@@ -714,8 +747,10 @@ test("11 · the bug read carries history: the post and each advance, in order, w
     { stage: "reported", hand: "wright", credit: "ada", link: null, stamps_paid: null },
     { stage: "confirmed", hand: "wright", credit: "ada", link: null, stamps_paid: 2 },
     { stage: "reproduced", hand: "wright", credit: "finn", link: null, stamps_paid: null },
+    { stage: "diagnosed", skipped: true, reason: "the fix came straight from the steps", hand: "wright", credit: null, link: null, stamps_paid: null },
+    { stage: "briefed", skipped: true, reason: "the fix came straight from the steps", hand: "wright", credit: null, link: null, stamps_paid: null },
     { stage: "fixed", hand: "wright", credit: "errant", link: FIX_PR, stamps_paid: 25 },
-  ], "four stage rows (the amend moves no stage), the reproduced line not yet written");
+  ], "six stage rows (the amend moves no stage; POS-713: the two skips are rows, crediting no one), the reproduced line not yet written");
   for (const r of one.history) assert.equal(new Date(r.at).toISOString(), r.at, "at is an ISO instant");
 
   // the list carries the same history on every row
@@ -736,7 +771,7 @@ test("11 · a store with no stamp chain, or no stamp_lines at all, still answers
     assert.equal(r.unavailable, NO_CHAIN);
     const h = r.posts.find((p) => p.id === id).history;
     assert.deepEqual(h.map((x) => [x.stage, x.credit, x.stamps_paid]),
-      [["reported", "ada", null], ["confirmed", "ada", null], ["reproduced", "finn", null], ["fixed", "errant", null]]);
+      [["reported", "ada", null], ["confirmed", "ada", null], ["reproduced", "finn", null], ["diagnosed", null, null], ["briefed", null, null], ["fixed", "errant", null]]);
   }
 });
 
@@ -817,7 +852,12 @@ test("12 · the bug read walks the jar's order across a page cut: open by the fu
   const at = { now: NOW, roll: ROLL };
   const post = async (title, house) => { await postAtTown({ class: "bug", title, body: `${title}, as it happened.` }, house, at); };
   const idOf = async (title) => (await postsAtOffice({ class: "bug", limit: 200 }, at)).posts.find((p) => p.title === title).id;
-  const go = async (title, to, extra = {}) => advanceAtTown({ post: await idOf(title), to, ...extra }, WRIGHT, at);
+  // POS-713: the rungs below a stage are skipped on the record first; a side exit leaves from where it stands
+  const go = async (title, to, extra = {}) => {
+    const id = await idOf(title);
+    if (LADDER.includes(to)) await skipThrough(id, LADDER[LADDER.indexOf(to) - 1]);
+    return advanceAtTown({ post: id, to, ...extra }, WRIGHT, at);
+  };
   // oldest act first, so each later act is newer
   await post("Reported, older", ERRANT);
   await post("Confirmed", FINN); await go("Confirmed", "confirmed");
@@ -842,11 +882,16 @@ const WORLD_208 = pull("wright", { repo: "postmark-world", n: 208 });   // wrigh
 const KINO_PLAN = letter("kinofire-2026-10-12-to-wright-the-sweep-plan", "kinofire");
 const KINO = { household: "house-of-many-doors", handles: new Set(["kinofire"]) };
 
-/** Kino's bug, confirmed, ready for the earned stages; `pen` and `posts` for the "writes nothing" checks. */
-async function kinoBug() {
+/**
+ * Kino's bug, confirmed and standing at `stands` (the rungs after confirmed
+ * skipped, POS-713), so the stage under test is one rung on; `pen` and
+ * `posts` for the "writes nothing" checks.
+ */
+async function kinoBug(stands = "reproduced") {
   const t = setup();
   await postAtTown({ class: "bug", title: "False sweep warning", body: "The sweep warns about a mark that is fine." }, KINO, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: KINO_BUG, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  await skipThrough(KINO_BUG, stands);
   return t;
 }
 /** Refused with `code` and `re`, and nothing written: no act, the post unchanged. */
@@ -861,7 +906,7 @@ const adv = (fields) => advanceAtTown({ post: KINO_BUG, ...fields }, WRIGHT, { n
 const esc = (s) => s.replace(/[.#/?()]/g, "\\$&");
 
 test("13 · #3757's exact case: briefed, credit wright, linking world#208 (a founder's PR) is refused, and teaches what earns briefed", async () => {
-  const t = await kinoBug();
+  const t = await kinoBug("diagnosed");
   await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link: WORLD_208 }), 422,
     /^https:\/\/github\.com\/postmark-town\/postmark-world\/pull\/208 is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns briefed briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it — the founders' own builds are paid at fixed/);
 });
@@ -885,6 +930,7 @@ test("13 · a comment or issue link is on the bug's own issue when the bug names
   const t = setup();
   await postAtTown({ class: "bug", title: "False sweep warning", body: "The sweep warns about a mark that is fine.", issue: "https://github.com/postmark-town/postmark/issues/3500" }, KINO, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: KINO_BUG, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  await skipThrough(KINO_BUG, "reproduced");
   const elsewhere = comment("kinofire", { issue: 3499 });
   await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: elsewhere }), 422,
     new RegExp(`^${esc(elsewhere)} is on postmark#3499, and "kinofire/false-sweep-warning" is postmark#3500 diagnosed is earned by the cause: .* — link the work on this bug's own issue, https://github\\.com/postmark-town/postmark/issues/3500$`));
@@ -894,7 +940,7 @@ test("13 · a comment or issue link is on the bug's own issue when the bug names
 });
 
 test("13 · briefed with Kino's letter: credit kinofire (or a housemate) passes; credit wright, or another household, is refused; no such letter is refused", async () => {
-  const t = await kinoBug();
+  const t = await kinoBug("diagnosed");
   const brief = { to: "briefed", grade: "light" };
   await refusedNothing(t, adv({ ...brief, credit: "wright", link: KINO_PLAN }), 422,
     /^only a founder's own letter earns wright a stage, and letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire briefed is earned by the brief/);
@@ -906,7 +952,7 @@ test("13 · briefed with Kino's letter: credit kinofire (or a housemate) passes;
   assert.deepEqual([ok.stage, ok.credit, ok.stamps, ok.link], ["briefed", "kinofire", 10, KINO_PLAN]);
   assert.equal(t.posts.get(KINO_BUG).fields.links.briefed, KINO_PLAN);
   // a resident of the sender's household stands in the sender's house
-  await kinoBug();
+  await kinoBug("diagnosed");
   assert.equal((await adv({ ...brief, credit: "wayward-archivist", link: KINO_PLAN })).credit, "wayward-archivist");
 });
 
@@ -923,7 +969,7 @@ test("13 · diagnosed: a comment by another household is refused; the right hous
 });
 
 test("13 · fixed: an issue-comment link is refused; a founder's PR crediting a resident is refused (a housemate too); a resident's PR crediting their own household passes", async () => {
-  const t = await kinoBug();
+  const t = await kinoBug("briefed");
   const fix = { to: "fixed", size: "S", critter: "Sweepling" };
   await refusedNothing(t, adv({ ...fix, credit: "kinofire", link: comment("kinofire") }), 422,
     /^fixed is earned by a pull request, and this link is an issue comment fixed is earned by the fix: link its pull request; its author is who's credited/);
@@ -938,12 +984,16 @@ test("13 · fixed: an issue-comment link is refused; a founder's PR crediting a 
   const ok = await adv({ ...fix, credit: "wayward-archivist", link: pull("kinofire") });
   assert.deepEqual([ok.credit, ok.stamps], ["wayward-archivist", 10]);
   // a founder's own PR crediting a founder passes (Darko 10-07: fixed on our own builds is ours)
-  await kinoBug();
+  await kinoBug("briefed");
   assert.equal((await adv({ ...fix, credit: "wright", link: pull("wright") })).credit, "wright");
 });
 
 test("13 · a missing link is refused for each of diagnosed, briefed and fixed, saying what earns the stage", async () => {
   const t = await kinoBug();
+  // a link the office cannot read as any kind is refused too
+  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: "https://github.com/postmark-town/postmark/discussions/7" }), 422,
+    /^diagnosed's link is not one the office can read/);
+  // each from the rung below it (POS-713), which is then skipped to reach the next
   for (const [fields, earned] of [
     [{ to: "diagnosed", credit: "kinofire" }, /^diagnosed needs a link to the work that earned it diagnosed is earned by the cause/],
     [{ to: "briefed", credit: "kinofire", grade: "light" }, /^briefed needs a link to the work that earned it briefed is earned by the brief/],
@@ -951,11 +1001,10 @@ test("13 · a missing link is refused for each of diagnosed, briefed and fixed, 
   ]) {
     await refusedNothing(t, adv(fields), 422, earned);
     await refusedNothing(t, adv({ ...fields, link: "   " }), 422, earned);
+    await skipThrough(KINO_BUG, fields.to);
   }
-  // a link the office cannot read as any kind is refused too
-  await refusedNothing(t, adv({ to: "diagnosed", credit: "kinofire", link: "https://github.com/postmark-town/postmark/discussions/7" }), 422,
-    /^diagnosed's link is not one the office can read/);
   // the stages the hotfix leaves alone still take no link
+  await kinoBug("confirmed");
   assert.equal((await adv({ to: "reproduced", credit: "finn" })).credit, "finn");
 });
 
@@ -992,7 +1041,7 @@ const BUGCATCHER = { household: "starforge", handles: new Set(["bugcatcher"]) };
 
 /** Kino's bug with briefed credited to wright (wright's own comment, which the advance's law passes) and paid 10 on the chain. */
 async function paidToWright() {
-  const t = await kinoBug();
+  const t = await kinoBug("diagnosed");
   resetChainMemo();
   const own = comment("wright");
   await adv({ to: "briefed", grade: "light", credit: "wright", link: own });
@@ -1100,7 +1149,7 @@ test("14 · the recredit's own law: wright and keemin only, a note, recredit tru
 test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recredit's new credit, by a founder's own work only; and it names someone other than the stage's credit", async () => {
   // a resident's paid stage, re-credited to each founder by that founder's own comment
   for (const founder of ["wright", "keemin"]) {
-    const b = await kinoBug();
+    const b = await kinoBug("diagnosed");
     resetChainMemo();
     await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
     b.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
@@ -1111,7 +1160,7 @@ test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recre
     assert.deepEqual([act.action, JSON.parse(act.payload).credit, JSON.parse(act.payload).was], ["recredit", founder, "kinofire"]);
   }
   // the author check still holds for a founder: a resident's letter or comment, or a founder's PR at briefed
-  const t = await kinoBug();
+  const t = await kinoBug("diagnosed");
   resetChainMemo();
   await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
   t.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
@@ -1122,7 +1171,7 @@ test("14 · (Darko 2026-10-15 19:02, \"sure whatever\") a founder may be a recre
   const w = await paidToWright();
   await refusedNothing(w, rc({ credit: "wright", link: comment("wright") }), 422, /^briefed on "kinofire\/false-sweep-warning" already credits wright a recredit names someone else/);
   // a resident's stage, re-credited to the same resident
-  const k = await kinoBug();
+  const k = await kinoBug("diagnosed");
   resetChainMemo();
   await adv({ to: "briefed", grade: "light", credit: "kinofire", link: KINO_PLAN });
   k.ledger.lines = [stageLine("kinofire", 10, KINO_BUG, "briefed")];
@@ -1192,4 +1241,147 @@ test("15 · (review-3842-578 nit) an idea award's label is never a bug stage's c
   for (const label of ["diagnosed-recredit", "briefed-recredit", "fixed-recredit"])
     assert.throws(() => judgeAward({ to: "finn", stamps: 5, label }, new Set(["finn"])), (e) => e.code === 422 && /is a bug stage's correction, and an award's label is never one/.test(e.defect), label);
   assert.equal(judgeAward({ to: "finn", stamps: 5, label: "confirmed-recredit" }, new Set(["finn"])).label, "confirmed-recredit", "only the three corrected stages are reserved");
+});
+
+// ── 16 · every rung is recorded, in order: the skip (POS-713, Darko 2026-10-20 08:58) ──
+//
+// "having an explicit skipped step is going to help us not only … be methodical
+// about this, but also have provenance on … what actually was skipped." On
+// 10-19 a bug reached shipped without ever standing fixed. An advance now moves
+// one rung; a rung no one earned is `{ post, skip, reason }`, its own act.
+
+const SKIPPED = (stage, reason = "no one earned it in this test") => ({ stage, skipped: true, reason, hand: "wright", credit: null, link: null, stamps_paid: null });
+
+test("16 · a jump is refused at every rung, naming the first unrecorded stage and both ways forward, and writes nothing", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  // every main-line stage two or more rungs on, from every rung a bug stands on
+  for (let at = 0; at < LADDER.length - 2; at++) {
+    if (at > 0) await skipThrough(ID, LADDER[at]);
+    const gap = LADDER[at + 1];
+    for (const to of LADDER.slice(at + 2)) {
+      const n = pen.rows().length;
+      await refusedWith(advanceAtTown({ post: ID, to, credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+        new RegExp(`^"errant/the-door-sticks" stands ${LADDER[at]}, and ${gap} is not recorded yet record or skip ${gap} first: \\{ post, to: "${gap}", … \\} when someone earned it, or \\{ post, skip: "${gap}", reason \\} when no one did`));
+      // a skip can't jump either: one stage per call, in order
+      if (to === "shipped") await refusedWith(advanceAtTown({ post: ID, skip: to, reason: "x" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /^shipped is not skipped/);
+      else await refusedWith(advanceAtTown({ post: ID, skip: to, reason: "x" }, WRIGHT, { now: NOW, roll: ROLL }), 409, new RegExp(`stands ${LADDER[at]}, and ${gap} is not recorded yet`));
+      assert.equal(pen.rows().length, n, `a refused jump to ${to} wrote an act`);
+      assert.equal(posts.get(ID).state, LADDER[at]);
+    }
+  }
+  // #3965's shape exactly: briefed, then shipped without fixed
+  assert.equal(posts.get(ID).state, "briefed");
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+    /stands briefed, and fixed is not recorded yet record or skip fixed first/);
+});
+
+test("16 · skip, then advance: the skip is its own act, moves the post one rung, credits no one, and the next advance passes", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  const s = await advanceAtTown({ post: ID, skip: "reproduced", reason: "  the steps were in the report  " }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.deepEqual([s.stage, s.skipped, s.reason, s.stamps, s.hand, s.credit], ["reproduced", true, "the steps were in the report", 0, "wright", undefined]);
+  assert.equal(s.receipt, 'skipped: errant/the-door-sticks confirmed → reproduced by wright\'s hand, because the steps were in the report; a skipped stage credits no one and pays nothing, and the bug\'s history keeps it as skipped. Next: diagnosed');
+  const act = pen.rows().at(-1);
+  assert.deepEqual([act.class, act.action, act.actor, act.object], ["bug", "skip", "wright", ID]);
+  assert.deepEqual(JSON.parse(act.payload), { post: ID, from: "confirmed", to: "reproduced", skipped: true, reason: "the steps were in the report", hand: "wright" });
+  assert.equal(posts.get(ID).state, "reproduced");
+  assert.equal(posts.get(ID).fields.links, undefined, "a skip carries no link");
+  const d = await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.deepEqual([d.stage, d.stamps], ["diagnosed", 5]);
+  // the bug catcher is a hand too
+  await advanceAtTown({ post: ID, skip: "briefed", reason: "the fix was obvious from the cause" }, { household: "starforge", handles: new Set(["bugcatcher"]) }, { now: NOW, roll: ROLL });
+  assert.equal(posts.get(ID).state, "briefed");
+  // the rebuild folds the skips into exactly the rows the pen wrote
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+  const acts = pen.rows().filter((a) => a.class === "bug").map((a) => ({ ...a, payload: JSON.parse(a.payload) }));
+  assert.equal(foldPostActs(acts).posts.get(ID).state, "briefed", "the acts alone derive the skipped stage");
+});
+
+test("16 · the bug read shows each skip as a history row, skipped with its reason and no credit; the Hall counts no one for it", async () => {
+  const { ledger } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  await skipThrough(ID, "reproduced", "reported by the founders' own probe");
+  await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
+  ledger.lines = [stageLine("finn", 5, ID, "diagnosed")];
+  const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual(one.history.map(({ at, link, ...r }) => r), [
+    { stage: "reported", hand: null, credit: "errant", stamps_paid: null },
+    { ...(({ link: _, ...r }) => r)(SKIPPED("confirmed", "reported by the founders' own probe")) },
+    { ...(({ link: _, ...r }) => r)(SKIPPED("reproduced", "reported by the founders' own probe")) },
+    { stage: "diagnosed", hand: "wright", credit: "finn", stamps_paid: 5 },
+  ]);
+  const { catchers } = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.deepEqual(catchers, [{ handle: "finn", stamps: 5, bugs: 1 }, { handle: "errant", stamps: 0, bugs: 1 }]);
+});
+
+test("16 · the skip's own law: a reason, one stage, the next one, no credit, link or ladder fields, never shipped or reported, a hand's; each refusal writes nothing", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  const n = pen.rows().length;
+  const skip = (fields, key = WRIGHT) => advanceAtTown({ post: ID, ...fields }, key, { now: NOW, roll: ROLL });
+  await refusedWith(skip({ skip: "confirmed" }), 422, /^a skip says why reason: why no one earned confirmed/);
+  await refusedWith(skip({ skip: "confirmed", reason: "   " }), 422, /^a skip says why/);
+  await refusedWith(skip({ skip: "confirmed", reason: "x".repeat(601) }), 422, /^a skip's reason is at most 600 characters this one is 601/);
+  await refusedWith(skip({ skip: "  " , reason: "r" }), 422, /^skip which stage\?/);
+  for (const [k, v] of [["to", "confirmed"], ["credit", "finn"], ["link", "https://github.com/postmark-town/postmark/issues/1"], ["size", "S"], ["grade", "light"], ["critter", "Nib"], ["of", "x/y"], ["recredit", true], ["note", "n"]])
+    await refusedWith(skip({ skip: "confirmed", reason: "r", [k]: v }), 422, new RegExp(`^a skip takes no ${k} a skip records that no one earned the stage`));
+  await refusedWith(skip({ skip: "reported", reason: "r" }), 422, /^"reported" is not a stage a bug skips/);
+  await refusedWith(skip({ skip: "not-a-bug", reason: "r" }), 422, /^"not-a-bug" is not a stage a bug skips .*duplicate and not-a-bug are ways out, advanced to/);
+  await refusedWith(skip({ skip: "wontfix", reason: "r" }), 422, /^"wontfix" is not a stage a bug skips/);
+  await refusedWith(skip({ skip: "shipped", reason: "r" }), 422, /^shipped is not skipped shipped is the finish: advance to it/);
+  await refusedWith(skip({ skip: "confirmed", reason: "r" }, FINN), 403, /only the town's hands skip a bug's stage/);
+  await refusedWith(skip({ to: "confirmed", reason: "r" }), 422, /^reason is a skip's/);
+  assert.equal(pen.rows().length, n, "a refused skip wrote an act");
+  assert.equal(posts.get(ID).state, "reported");
+  // behind where it stands, and on a finished bug
+  await skip({ skip: "confirmed", reason: "r" });
+  await refusedWith(skip({ skip: "confirmed", reason: "r" }), 409, /^"errant\/the-door-sticks" already stands confirmed a skip records the next stage, reproduced, and nothing behind it/);
+  await skip({ to: "not-a-bug" });
+  await refusedWith(skip({ skip: "reproduced", reason: "r" }), 409, /is finished \(not-a-bug\)/);
+  // stamps is refused before anything, as on every bug act
+  await refusedWith(skip({ skip: "reproduced", reason: "r", stamps: 1 }), 422, /a bug takes no stake/);
+});
+
+test("16 · skip and reason are the bug's alone: an idea or an event refuses them by name", async () => {
+  setup();
+  const IDEAS = { ...process.env, IDEA_POSTS: "1" };   // the idea class, open
+  await refusedWith(advanceAtTown({ post: "errant/a-lantern", class: "idea", skip: "building", reason: "r" }, WRIGHT, { now: NOW, roll: ROLL, env: IDEAS }), 422, /^skip is a bug's/);
+  await refusedWith(advanceAtTown({ post: "errant/a-lantern", class: "idea", to: "building", reason: "r" }, WRIGHT, { now: NOW, roll: ROLL, env: IDEAS }), 422, /^reason is a bug's/);
+  await refusedWith(advanceAtTown({ post: "errant/a-dance", class: "event", skip: "underway", reason: "r" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /^skip is a bug's/);
+});
+
+test("16 · a skipped stage is never re-credited: it paid no one", async () => {
+  const t = await kinoBug("diagnosed");
+  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "diagnosed", recredit: true, credit: "kinofire", link: KINO_PLAN, note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+    /never passed diagnosed diagnosed was skipped, and a skipped stage paid no one: there is nothing to re-credit/);
+});
+
+test("16 · grandfathered: a bug already past a gap before the rule advances on from where it stands, and its history is not back-filled", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  // the old door's jump, reported → diagnosed in one act, as the store holds it for 27 shipped bugs on 2026-10-20
+  const cause = comment("finn");
+  const legacy = { post: ID, from: "reported", to: "diagnosed", credit: "finn", fields: { links: { diagnosed: cause } }, hand: "wright" };
+  const act = pen.seedAct({ class: "bug", action: "advance", actor: "wright", object: ID, payload: JSON.stringify(legacy), at: new Date(NOW).toISOString() });
+  posts.set(ID, { ...posts.get(ID), state: "diagnosed", fields: { links: { diagnosed: cause } }, last_act: act });
+  const b = await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "light", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.deepEqual([b.stage, b.stamps], ["briefed", 10], "the old gapped bug moves one rung on");
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL }), 409, /stands briefed, and fixed is not recorded yet/);
+  const history = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post.history;
+  assert.ok(!history.some((h) => h.skipped), "a gap from before the rule was back-filled with a guessed skip");
+  assert.deepEqual(history.map((h) => h.stage).filter((s) => s === "confirmed" || s === "reproduced"), [], "the old gap stays a gap");
+});
+
+test("16 · the advance card teaches the skip, and the door's validator takes { post, skip, reason }", async () => {
+  const { TOWN_POST_TOOLS } = await import("../src/town-post.mjs");
+  const { validateArgs } = await import("../src/validate-args.mjs");
+  const card = TOWN_POST_TOOLS.find((t) => t.name === "town_advance");
+  assert.match(card.description, /Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, \{ post, skip: "<stage>", reason \}, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first\./);
+  assert.doesNotMatch(card.description, /may jump forward/);
+  assert.equal(validateArgs(card, { post: ID, skip: "confirmed", reason: "r" }), null);
+  assert.match(card.inputSchema.properties.skip.description, /confirmed, reproduced, diagnosed, briefed, fixed/);
+  assert.match(card.inputSchema.properties.reason.description, /with skip only, and required there/);
 });

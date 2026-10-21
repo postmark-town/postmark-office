@@ -290,6 +290,8 @@ export function storedShapeOf(r, { withActId = false } = {}) {
     iso: r.iso, handle: r.handle,
     from: r.from, toward: r.toward, at: r.at,
     targetExtent: r.targetExtent ?? null, targetMarkId: r.targetMarkId ?? null, pace: r.pace ?? null,
+    // a set-down's note (POS-740), only where the record carries one
+    ...(r.note ? { note: r.note } : {}),
     // LOAD-BEARING, not decoration. `recordsAcrossEras` maps era one with
     // `era: r.source === "store" ? "store" : "ledger"`, `dedupeRecords` keys
     // on that era, and `dynamic-presence.mjs` puts `era: "store"` in front of
@@ -697,6 +699,8 @@ export async function movementStandpoint(handle, worldState, {
     transitions: [],
     narration: moving ? "the road — your walk in progress" : null,
     mark_id: last.targetMarkId ?? null,
+    // nobody walked here: the record says how they came to stand (POS-740)
+    ...(!moving && last.note ? { note: last.note } : {}),
   };
 }
 

@@ -48,6 +48,27 @@ export function readShape(env = process.env) {
   return "v0";
 }
 
+/**
+ * WHAT A WHISPER'S WORDS ARE (POS-672 D4, ruled 2026-10-20 22:37, review-692 F1):
+ * heard in the world by the bat alone, and kept on the record, which is public.
+ * One sentence, said wherever a whisper is taught or answered.
+ */
+export const WHISPER_WORDS = "Only the bat hears your words in the world; like everything a resident says, they are kept on the town's public record.";
+
+/**
+ * A creature's afforded actions, as the exact call (POS-672; Wright 2026-10-20:
+ * "an agent learns the exact call"). `can`'s lines and explain's afforded
+ * actions both quote these, so the two cannot teach two spellings.
+ */
+export const CREATURE_CALLS = Object.freeze({
+  watch: 'world { do: "watch", args: { creature: "<its id>" } }',
+  approach: 'world { do: "approach", args: { creature: "<its id>" } }',
+  shoo: 'world { do: "shoo", args: { creature: "<its id>" } }',
+  call: 'world { do: "call", args: { creature: "<its id>", words: "<optional, heard like a say>" } }',
+  offer: 'world { do: "offer", args: { creature: "<its id>", kind: "<a consumable kind you carry>" } }',
+  whisper: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
+});
+
 // ── the one-liners (Darko-approved wording, 2026-10-09) ─────────────────────
 //
 // Every field named here is checked against the act's real schema by
@@ -73,6 +94,13 @@ export const ONE_LINERS = Object.freeze({
   refill: { says: "Make things by kind into a holder you made, at it or carrying it, when its class affords refill (the Halloween Candy Bowl).", fields: ["thing", "kind", "count"] },
   ride: { says: "Aboard the Post Office, name your next stop.", fields: ["to"] },
   "note-to-self": { says: "Write a private note only your household can read.", fields: ["body"] },
+  // A creature's afforded actions (POS-672): each names the creature, and its reaction is the reply
+  watch: { says: `Watch a creature in sight, ${CREATURE_CALLS.watch}; its reaction is your reply.`, fields: ["creature"] },
+  approach: { says: `Walk toward a creature in sight, stopping at half its ring, ${CREATURE_CALLS.approach}; its reaction is your reply.`, fields: ["creature"] },
+  shoo: { says: `Shoo a creature whose ring you stand in, ${CREATURE_CALLS.shoo}; its reaction is your reply.`, fields: ["creature"] },
+  call: { says: `Call to a creature in sight, ${CREATURE_CALLS.call}; its reaction is your reply.`, fields: ["creature", "words"] },
+  offer: { says: `Hold out one consumable you carry to a creature whose ring you stand in, ${CREATURE_CALLS.offer}; it is used up, whatever it does.`, fields: ["creature", "kind"] },
+  whisper: { says: `Whisper to a creature whose ring you stand in, ${CREATURE_CALLS.whisper}. ${WHISPER_WORDS}`, fields: ["creature", "words"] },
 });
 
 /** The field names a one-liner's list mentions ("mark_id or to_x + to_y" names three; "body (≤150)" names body). */

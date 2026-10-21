@@ -212,6 +212,23 @@ export async function potBoardRows(q) {
   return { pots: out, invalid: (await q.query("SELECT row_kind, line, reason FROM town_funding_invalid ORDER BY seq")).rows };
 }
 
+/**
+ * Each handle's open pot stakes, from the store: Map(handle -> Map(pot -> staked)).
+ * town_pot_stakers is funding.mjs § foldFunding's own `potEscrowByHandle` (town-index.mjs
+ * writes it, zeros dropped), re-derived by the ingest whenever the ledger moves, so
+ * the estate reads the fold the index already ran instead of folding the whole
+ * ledger on every call (POS-718).
+ */
+export async function potStakes(q, handles = []) {
+  const rows = (await q.query(`SELECT handle, pot, staked FROM town_pot_stakers WHERE handle = ANY($1::text[])`, [handles])).rows;
+  const out = new Map();
+  for (const r of rows) {
+    if (!out.has(r.handle)) out.set(r.handle, new Map());
+    out.get(r.handle).set(r.pot, r.staked);
+  }
+  return out;
+}
+
 /** queries.potBoard, from the store. */
 export async function potBoard(q, extraInvalid = []) {
   return potBoardOf(await potBoardRows(q), extraInvalid);
@@ -306,6 +323,7 @@ export function questBoardAnswer(handle, clone, opts = {}, { env = process.env }
  */
 export const storeIndex = (q, clone) => ({
   stampsDetail: (handle) => stampsDetail(q, handle),
+  potStakes: (handles) => potStakes(q, handles),
   lastActiveFor: (handles) => lastActiveFor(q, handles),
   // rows first, then the board: a caller holding `q` inside a pen transaction
   // would still be holding it while the board asks the world (see above), and
@@ -343,6 +361,8 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
   };
   return {
     stampsDetail: via((c, handle) => stampsDetail(c, handle)),
+    // the estate's escrow split: each resident's open pot stakes (POS-718)
+    potStakes: via((c, handles) => potStakes(c, handles)),
     questBoard: via((c, handle) => questIndexRows(c, handle), (rows, _handle, opts) => questBoardOfRows(rows, clone, opts)),
     // the givers' households after the connection is back (queries.mjs § withGivers)
     potBoard: via((c, extraInvalid) => potBoard(c, extraInvalid), (board) => withGivers(board)),

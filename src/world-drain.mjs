@@ -652,6 +652,9 @@ export async function archiveToR2({ repo, stateDir, run = null } = {}) {
       encoding: "utf8",
       env: { ...process.env, WORLD_CLONE: repo },
       stdio: ["ignore", "pipe", "pipe"],
+      // A line per uploaded STATE file (8,413 of them at S119): a cold manifest
+      // prints them all, so not Node's 1 MiB default (POS-710's sweep).
+      maxBuffer: 64 * 1024 * 1024,
     });
     return { output: String(out).trim().split("\n").at(-1) ?? "" };
   });

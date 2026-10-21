@@ -29,6 +29,17 @@
 //     replaces an arrival's entry (Darko's G4 on WLD-5). The reaction's row
 //     names the walk act and the moment, so a creature answers a walk at most
 //     once when it is declared and once when it lands.
+//   · THE PATH-CROSSING TRIGGER (POS-637 call 6, RULED 2026-10-16 18:06: "a
+//     creature notices you the moment your walk's path enters its ring";
+//     POS-672 W7, settled by Wright). The same tick asks, for every walk still
+//     on its way or landing now, the one line-against-circle question per
+//     living creature: where does the path first cross into its ring? A walk
+//     that set out inside the ring has no entry (its declaration was the
+//     moment). At that instant it is judged for that creature alone, as
+//     moment `entry`: its own key beside the act and the arrival, so a walk
+//     that crosses a ring and lands in it is seen at both, and the 10 s window
+//     (C2) still makes two moments inside 10 s one reaction. A creature that came
+//     out after the crossing, or a crossing past ARRIVAL_STALE_MS, is let go.
 //   · THE CREATURE'S OWN WORLD READ (W9, Darko 21:32). `aroundCreature` asks
 //     the resident read's own doors at the creature's point, as a spectator
 //     (nobody's body, nobody's note): presence and who acted (who), the field
@@ -53,7 +64,7 @@
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import {
-  ANSWER_WAIT_MS, ARRIVAL, LivingSet, REFRESH_MS, creatureLaw, reactTo,
+  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, reactTo,
 } from "./creatures.mjs";
 import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
@@ -158,6 +169,8 @@ export async function actOfRow(row, { query = actsQuery, centreOf = null, standp
  * (C4), or the answer goes out as it was. Never throws.
  */
 export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {}) {
+  // `deps.except` (POS-672): a creature already answering this act as the one it
+  // was aimed at (an approach's walk), so the others answer it and it does not twice
   const now = creaturesNow();
   if (!now || result == null || typeof result !== "object" || Array.isArray(result) || result.error) return result;
   // THE BOUND STARTS HERE (review-571 B1): the actor's standpoint, the marks'
@@ -203,11 +216,33 @@ async function byDeadline(work, deadline, clock, partial) {
  * is held, never unref'd: on node 22 an unref'd one let a test's event loop
  * end under a hung turn (CI 38770755044).
  */
-export function answerWithin(act, { living, law, around = aroundCreature, ask, write, env, clock = Date.now, deadline = null, partial = [] } = {}) {
+export function answerWithin(act, { living, law, around = aroundCreature, heardFor = creatureHeard, ask, write, env, only = null, except = null, aimed = null, jevMs = null,
+  clock = Date.now, deadline = null, partial = [] } = {}) {
   const until = deadline ?? clock() + ANSWER_WAIT_MS;
   const turns = outsideRetryKey(() =>
-    reactTo(act, { living, law, around, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), clock, deadline: until, partial }));
+    reactTo(act, { living, law, around, heardFor, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), ...(only != null ? { only } : {}),
+      ...(except != null ? { except } : {}), ...(aimed ? { aimed } : {}), ...(jevMs != null ? { jevMs } : {}),
+      clock, deadline: until, partial }));
   return byDeadline(turns, until, clock, partial);
+}
+
+// ── what a creature could repeat (POS-672 D5) ───────────────────────────────
+
+/** How far back a creature's ear reaches for words to repeat (how many: creatures.mjs § HEARD_WORDS_MAX). */
+export const HEARD_WINDOW_MS = 30 * 60_000;
+
+/**
+ * The words a creature could repeat (D5, ruled 2026-10-20 22:37): the last few
+ * words of the newest public say (a call's words are one) heard at its point in
+ * the last HEARD_WINDOW_MS, through the shared ear that marks nobody present.
+ * A whisper is never in the ear, so it is never repeated. Null when nothing was.
+ */
+export async function creatureHeard(creature, act, { heardAt = null, nowMs = Date.now() } = {}) {
+  const hear = heardAt ?? (await import("./world.mjs")).heardAt;
+  const rows = await hear({ x: creature.x, y: creature.y }, { cap: 3 });
+  const fresh = (rows ?? []).filter((h) => Number.isFinite(h.at_ms) ? nowMs - h.at_ms <= HEARD_WINDOW_MS : true);
+  const newest = fresh.at(-1);
+  return newest ? heardWords(newest.said) : null;
 }
 
 // ── the creature's own world read (W9) ──────────────────────────────────────
@@ -335,7 +370,8 @@ const WALKS_BATCH = 2000;
 /** An arrival this long past when a tick first could judge it (a restart's catch-up) is let go. */
 export const ARRIVAL_STALE_MS = 3600_000;
 
-/** Every walker's newest walk, until it lands: walk act id → { actor, from, at (landing point), dueMs }. */
+/** Every walker's newest walk, until it lands: actor → { walk, actor, from, at (landing point), startMs, dueMs, seen }.
+ *  `seen` holds the creatures whose ring this walk has entered or can never enter (call 6). */
 export const arrivals = { byActor: new Map(), cursor: "0", booted: false };
 export function __resetArrivalsForTest() { Object.assign(arrivals, { byActor: new Map(), cursor: "0", booted: false }); }
 
@@ -353,8 +389,9 @@ export function landingOf(row, walkMod) {
   if (!at0 || !(at0.legM > 0)) return null;
   const paceM = rec.pace > 0 ? rec.pace * 1000 : walkMod.WALK_M_PER_CROSSING;
   const landed = walkMod.positionAt(rec, Number(rec.at) + 1e6);
+  const startMs = Math.round(CROSSING_EPOCH_UTC + Number(rec.at) * CROSSING_MS);
   const dueMs = Math.round(CROSSING_EPOCH_UTC + (Number(rec.at) + at0.remainingM / paceM) * CROSSING_MS);
-  return { from: pointOf(rec.from), at: pointOf(landed), dueMs };
+  return { from: pointOf(rec.from), at: pointOf(landed), startMs, dueMs };
 }
 
 /** Fold walk rows: each walker's newest walk replaces any earlier one still on its way. */
@@ -365,7 +402,7 @@ export function foldWalks(rows, walkMod) {
     if (r.action !== "walk") continue;
     const land = landingOf(r, walkMod);
     if (!land) { arrivals.byActor.delete(r.actor); continue; } // a stop replaces the walk before it too
-    arrivals.byActor.set(r.actor, { walk: String(r.id), actor: r.actor, ...land });
+    arrivals.byActor.set(r.actor, { walk: String(r.id), actor: r.actor, ...land, seen: new Set() });
   }
 }
 
@@ -394,8 +431,23 @@ export async function arrivalTick({ query = actsQuery, now = Date.now(), walkMod
       if (rows.length < WALKS_BATCH) break;
     }
   }
-  const out = { landed: 0, judged: 0, answered: 0 };
+  const out = { landed: 0, judged: 0, answered: 0, entered: 0 };
   const cur = creaturesNow();
+  // call 6 first: a path crosses into a ring before it lands
+  if (cur) for (const a of arrivals.byActor.values()) {
+    for (const c of cur.living.living(now)) {
+      if (a.seen.has(c.id)) continue;
+      const e = entryOf(a, c, Number(cur.law.kindOf(c.kind)?.ring_m));
+      if (e === null) { a.seen.add(c.id); continue; } // this path never crosses into its ring: a creature does not move
+      if (e.ms > now) continue; // not there yet
+      a.seen.add(c.id);
+      if (now - e.ms > ARRIVAL_STALE_MS || c.spawned_at > e.ms) continue;
+      out.entered += 1;
+      const answers = await judge({ actor: a.actor, verb: "walk", actId: a.walk, atIso: new Date(e.ms).toISOString(),
+        point: e.point, from: a.from, toward: a.at, approaching: true, moment: ENTRY }, { ...cur, only: c.id });
+      out.answered += answers.length;
+    }
+  }
   for (const [actor, a] of arrivals.byActor) {
     if (a.dueMs > now) continue;
     arrivals.byActor.delete(actor);
@@ -408,6 +460,31 @@ export async function arrivalTick({ query = actsQuery, now = Date.now(), walkMod
     out.answered += answers.length;
   }
   return { ok: true, ...out };
+}
+
+/** An entry is judged this far inside the ring's edge, so the ring holds its point however the metres round. */
+export const ENTRY_INSIDE_M = 0.01;
+
+/**
+ * Call 6's one line-against-circle test: where and when a walk's straight path
+ * from `from` to its landing `at` (at its own pace, from startMs to dueMs)
+ * first crosses into a circle of `ring` metres round the creature. Null when it
+ * never does, or when it set out inside the ring (its declaration was the moment).
+ */
+export function entryOf(a, creature, ring) {
+  if (!(ring > ENTRY_INSIDE_M) || !a?.from || !a?.at) return null;
+  if (distanceM(a.from, creature) <= ring) return null;
+  const r = ring - ENTRY_INSIDE_M;
+  const dx = a.at.x - a.from.x, dy = a.at.y - a.from.y;
+  const fx = a.from.x - creature.x, fy = a.from.y - creature.y;
+  const A = dx * dx + dy * dy;
+  if (A === 0) return null;
+  const B = 2 * (fx * dx + fy * dy), C = fx * fx + fy * fy - r * r;
+  const disc = B * B - 4 * A * C;
+  if (disc < 0) return null;
+  const t = (-B - Math.sqrt(disc)) / (2 * A); // the nearer root: where the path goes in
+  if (!(t >= 0 && t <= 1)) return null;
+  return { ms: Math.round(a.startMs + t * (a.dueMs - a.startMs)), point: { x: a.from.x + t * dx, y: a.from.y + t * dy } };
 }
 
 // ── the tick ────────────────────────────────────────────────────────────────

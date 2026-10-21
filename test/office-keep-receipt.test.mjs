@@ -85,6 +85,9 @@ if (!(process.env.STUB_FAIL || "").split(",").includes("hhkeys")) console.log(JS
 
 const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
+  // POS-341: the arrival check is the office's owed-tolerant verify, the REAL
+  // tool, over the town's stub verify above (which records "verify" in the trail)
+  "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
   "deploy/registry-file.mjs": plain("registry", `
 import { writeFileSync } from "node:fs";
 writeFileSync(process.argv[2], "{}\\n");`),

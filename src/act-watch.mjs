@@ -74,5 +74,20 @@ export async function perceived(run) {
   }
 }
 
+/**
+ * Run one act implementation inside a watch, and hand back what it wrote
+ * WITHOUT asking the creatures (POS-672): the creature door runs an approach's
+ * walk or an offer this way, has the creature it was aimed at answer, and then
+ * hands the rows to the others itself (creatures-hook § creaturesAnswer with
+ * `except`). Always a fresh scope, awake or not: the door needs the act's id.
+ */
+export async function captured(run) {
+  if (watch.getStore()) return { result: await run(), rows: [] };
+  const s = { rows: [], closed: false };
+  const result = await watch.run(s, run);
+  s.closed = true;
+  return { result, rows: s.rows };
+}
+
 /** Whether this code runs inside a watched act (tests: a creature's write must not). */
 export const insideWatchedAct = () => !!watch.getStore();

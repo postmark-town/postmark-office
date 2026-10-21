@@ -27,7 +27,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { penCommit, penTransaction } from "./write.mjs";
+import { inPenBatch, penCommit, penTransaction } from "./write.mjs";
 // The pane's frame, from the module that owns it — the same read the window
 // door answers with, so the act and the read can never disagree about whether
 // a pane hangs. (src/panes.mjs § THE FRAME AND THE WORDS.)
@@ -236,8 +236,10 @@ function selfContainedOnly(html) {
       `it may only CALL the town's own surfaces (postmark.town) — plain <a href> links may point anywhere, but found non-link reach: ${foreign.slice(0, 3).join(" ")}${foreign.length > 3 ? " …" : ""}`);
 }
 
+// Skipped inside the drain's pen batch, which pulled once when it opened
+// (write.mjs § THE PEN BATCH, POS-723).
 const pullIfPush = (clone) => {
-  if (process.env.TOWN_PUSH === "1") execFileSync("git", ["-C", clone, "pull", "--rebase", "-q"], { encoding: "utf8" });
+  if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) execFileSync("git", ["-C", clone, "pull", "--rebase", "-q"], { encoding: "utf8" });
 };
 
 // The last commit that touched one town path, or null. Garnish discipline: a
@@ -1448,6 +1450,22 @@ export function updateHomeImage(args, key, db, clone, odb = null, deps = {}) {
 // nothing but `image` writes no paper at all. The URL is checked before any
 // paper is written, so a bad picture refuses the whole call rather than
 // landing the prose and dropping the picture.
+//
+// THE PAPER IS AWAITED (POS-709). With a town log the paper door is async, and
+// this line used to take its promise without awaiting it: a paper bounce (a
+// picture and a nonce with no prose is "nothing to write") became a rejection
+// nobody held and took the whole office down, six times on 2026-10-19, and a
+// paper that landed was spread as a Promise, so its receipt never reached the
+// answer. Awaited, the bounce answers its resident before any picture is kept.
+//
+// THE NONCE IS NOT PAPER (POS-711). It is the paper door's retry key, so it
+// rides to the door only when there is paper to write. A picture with a nonce
+// and nothing else is a picture-only update, and it keeps the picture: it was
+// refused "nothing to write" after w43.9 (and crashed the office before it),
+// while the refusal's own hint names a lone field as a whole update. The
+// picture is kept by value, so its retry is safe without the key, and the
+// answer says so rather than echoing a key nothing remembers.
+const PICTURE_NONCE_NOTE = "a house's picture is kept by value, not by a nonce: sending this same call again keeps the same picture and changes nothing, so the nonce was not needed and nothing remembers it";
 export async function updateHomeAct(args, key, db, clone, odb = null, { keep = setHomePicture } = {}) {
   if (!Object.prototype.hasOwnProperty.call(args ?? {}, "image")) return updateHome(args, key, db, clone, odb);
   const { image, ...paper } = args;
@@ -1455,8 +1473,10 @@ export async function updateHomeAct(args, key, db, clone, odb = null, { keep = s
   if (!mediaUrlOk(image))
     throw bounce(422, "a house's picture is a media-door URL",
       "upload the image first (upload_media) and pass the url it hands back as image — nothing was written");
-  const writesPaper = Object.keys(paper).some((k) => k !== "handle");
-  const home = writesPaper ? updateHome(paper, key, db, clone, odb) : null;
+  const writesPaper = Object.keys(paper).some((k) => k !== "handle" && k !== "nonce");
+  const home = writesPaper ? await updateHome(paper, key, db, clone, odb) : null;
   const picture = await keep({ handle: args.handle, url: image }, key, { clone });
-  return home ? { ...home, picture } : { updated: args.handle, picture };
+  if (home) return { ...home, picture };
+  const nonce = Object.prototype.hasOwnProperty.call(paper, "nonce") ? { nonce: paper.nonce, nonce_note: PICTURE_NONCE_NOTE } : {};
+  return { updated: args.handle, picture, ...nonce };
 }

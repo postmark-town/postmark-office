@@ -68,7 +68,7 @@ const ALLOWED = {
   "law-snapshot.mjs": [1, `${OWN}: a status field`],
   "leave-exec.mjs": [1, "the push error a receipt discloses (the 409's sketchbook-checkout error is FAULT_LOGGED since POS-617)"],
   "media.mjs": [1, "a 502 quoting the fetch of the resident's own URL (Wright's G4: it stays)"],
-  "oauth.mjs": [1, `${OWN}: SignInUnreadable's why, which goes to the log`],
+  "oauth.mjs": [2, `${OWN}: SignInUnreadable's why, and the co-sign's unread berth place (POS-740), both of which go to the log`],
   "paperwork.mjs": [1, `${OWN}: a status field`],
   "read-workers.mjs": [1, `${OWN}: a worker's exit cause, read by the pool`],
   "registry-store.mjs": [1, `${OWN}: a classifier`],
@@ -80,12 +80,13 @@ const ALLOWED = {
   "store-pool.mjs": [2, `${OWN}: classifiers`],
   "store-txn-watch.mjs": [1, `${OWN}: a status row`],
   "store-writedown.mjs": [1, `${OPERATOR} (the write-down pass's report)`],
-  "town-bridge.mjs": [2, `${OPERATOR} (the bridge pass's report)`],
+  "town-bridge.mjs": [4, `${OPERATOR} (the bridge pass's report, the drain worktree's refusal, and the clone's refused fast-forward, POS-723)`],
   "town-drain.mjs": [1, `${OPERATOR} (the drain's stalled rows)`],
   "town-lock.mjs": [2, `${OWN}: plumbing (stderr onto the error; the busy test)`],
   "town-posts.mjs": [1, `${OWN}: a refusal's \`cause\` field, never sent`],
   "usdc-witness.mjs": [2, `${OWN}: the RPC's own error, rethrown inside baseRpc, and the last one onto "all RPCs failed" (Base unreachable answers BASE_BLIND and logs the RPC's words since POS-617)`],
   "walk-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
+  "set-down.mjs": [3, `${OPERATOR} (POS-740: a set-down's why, logged by the co-sign and printed by tools/set-down-ashore.mjs; the co-sign's page says only that the place did not record)`],
   "world-apex.mjs": [1, `${OWN}: HouseholdsUnreadable's message (its code is foreign, so it is classified)`],
   "world-branches.mjs": [2, `${OWN}: plumbing; a thrown Error with no code, which the last-resort catch logs`],
   "world-drain.mjs": [1, `${OPERATOR} (the drain's archive report)`],
@@ -102,6 +103,7 @@ const ALLOWED = {
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
   "world2-pen.mjs": [2, `${OWN}: status fields`],
+  "write.mjs": [1, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723)`],
 };
 
 const walk = (d) => readdirSync(d).flatMap((n) => {

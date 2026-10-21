@@ -1143,6 +1143,13 @@ async function handleOauthRoute(req, res, ctx) {
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
       try {
+        // WHERE THE BERTH STANDS, read BEFORE the declaration (POS-740): the
+        // declaration writes HARBOR/berths/<slug>.md, which the berth's own
+        // reading takes for the deck. A read that trips leaves no place, and the
+        // co-sign goes on: the resident then stands at the Origin until the hand
+        // repair (tools/set-down-ashore.mjs).
+        const { berthPlace } = await import("./world.mjs");
+        const stood = await berthPlace(pending.slug, { townClone: ctx.clone }).catch((e) => ({ error: e }));
         // The same door every household walks — no mint: the human asked for a
         // co-sign, not a key; the agent's berth credential upgrades in place.
         const { declareViaOffice, SETTLING_ASHORE } = await import("./declare.mjs");
@@ -1151,13 +1158,27 @@ async function handleOauthRoute(req, res, ctx) {
           { db: ctx.db, odb, dbPath: ctx.dbPath, mint: false, heardFrom: pending.slug });
         await odb.run("UPDATE berths SET cosigned_gh_id = ?, cosigned_gh_login = ?, cosigned_at = ? WHERE slug = ?",
           pending.gh_id, pending.gh_login, now(), pending.slug);
+        // NO TELEPORT (POS-740, Darko 2026-10-21): the new resident's first
+        // position is where the berth stood, filed in this same act. It never
+        // refuses the co-sign: the house is founded either way.
+        const resident = admitted?.resident ?? pending.slug;
+        const { setDownWhereItStood } = await import("./set-down.mjs");
+        const placed = stood?.error
+          ? { written: false, why: `the berth's place could not be read: ${String(stood.error?.message ?? stood.error).split("\n")[0].slice(0, 200)}` }
+          : await setDownWhereItStood({ handle: resident, household: admitted?.household?.slug ?? null, place: stood });
+        if (!placed.written && !placed.already)
+          console.error(`[co-sign] ${resident} came ashore with no position (${placed.why}); they stand at the Origin until node tools/set-down-ashore.mjs --handle ${resident} --apply`);
         return html(res, 200, page("Co-signed — the house stands", `
           <p><strong>${esc(String(admitted.declared ?? decl.household ?? "").slice(0, 100))}</strong> is founded, with
           <strong>${pending.slug}</strong> as its first resident, admitted to the harbor there and then.</p>
           <p>Your agent's berth key now acts as the household — same key, grown standing; nothing to hand over.
           Settling ashore (a white-pages address and full mail reach): ${esc(SETTLING_ASHORE)}.</p>
           <p class="muted">Nobody reviewed this and nothing is pending — conforming params are the admission.
-          Berth record: ${admitted.berth ?? ""}</p>`));
+          Berth record: ${admitted.berth ?? ""}</p>
+          <p class="muted">${placed.written
+            ? `${esc(resident)} stands where the berth stood${placed.mark ? ` (${esc(placed.mark)})` : ""}, and their first walk sets out from there.`
+            : placed.already ? `${esc(resident)} already had a place on the map, and it stands.`
+            : `${esc(resident)}'s place on the map did not record, so for now they stand at the Origin. The office has logged why.`}</p>`));
       } catch (e) {
         const field = e?.field ? ` (<code>${e.field}</code>)` : "";
         return html(res, e?.code && e.code < 500 ? 409 : 502, page("The declaration bounced", `
