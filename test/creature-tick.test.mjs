@@ -3,8 +3,11 @@
 // RULED (Darko, 2026-10-15 12:09 EDT, D1–D6): creatures out a window at seeded
 // minutes, each lasting 12 h from its own minute. RE-RULED 2026-10-17 13:58 EDT
 // (world 9acaff9b, WLD-56 on LOGOS v2 part 2): ONE creature a window from
-// crossing 259, the kinds in turn (bat, raven, wolf), each kind's count 1. The
-// first case pins that law at the clone's sha. The mechanism cases (a window's
+// crossing 259, the kinds in turn (bat, raven, wolf), each kind's count 1.
+// RE-RULED 2026-10-19 20:05 EDT (WLD-84, the ramp, world #258): from the 10-21
+// settlement every kind every window, 2 bats, 3 ravens and 1 wolf, the rotation
+// written null. The first case pins that law at the clone's sha (world main
+// b81aa6f7b since POS-672's re-pin). The mechanism cases (a window's
 // order, what is hidden, a key rotated mid-window) need several spawns in one
 // window, so they run the pin's law with every kind out at once and no rotation
 // (`many`): the old 10-15 counts, under a rotation written null, which the
@@ -69,13 +72,14 @@ async function runThrough(s, from, to, step = 10 * MIN, over = {}) {
 
 test("the window's inputs are the world's, read at a sha: the ruled law, the kinds' start states, the Mists and the marks", () => {
   assert.equal(W.sha, PIN);
-  assert.deepEqual(W.law.dials.counts, { bat: 1, raven: 1, wolf: 1 }, "one of each kind a window (Darko, 10-17 13:58)");
-  assert.deepEqual(W.law.dials.rotation, ["bat", "raven", "wolf"], "the kinds in turn");
+  assert.deepEqual(W.law.dials.counts, { bat: 2, raven: 3, wolf: 1 }, "every kind every window: 2 bats, 3 ravens, 1 wolf (Darko, 10-19 20:05, WLD-84)");
+  assert.equal(W.law.dials.rotation, undefined, "no rotation: the ramp writes it null");
   assert.equal(W.law.fromCrossing, 259, "from crossing 259");
-  // the pin's own law, through the world's scheduler: one creature a window, bat first at 259, then raven, then wolf
-  for (const [M, kind] of [[259, "bat"], [260, "raven"], [261, "wolf"], [262, "bat"]]) {
+  // the pin's own law, through the world's scheduler: every window brings all six
+  for (const M of [259, 262, 271]) {
     const sched = W.creaturesMod.scheduleFor(M, W.creaturesMod.secretFor(KEY, M), W.inputs);
-    assert.deepEqual(sched.spawns.map((x) => x.kind), [kind], `window ${M} brings one ${kind}`);
+    const n = (k) => sched.spawns.filter((x) => x.kind === k).length;
+    assert.deepEqual([n("bat"), n("raven"), n("wolf")], [2, 3, 1], `window ${M} brings 2 bats, 3 ravens and a wolf`);
   }
   assert.deepEqual(W.starts.wolf, { moods: { fear: 1, curiosity: 1, hunger: 2 }, flags: [] });
   assert.deepEqual(W.starts.raven.moods, { fear: 1, curiosity: 2, hunger: 1 });
@@ -84,12 +88,12 @@ test("the window's inputs are the world's, read at a sha: the ruled law, the kin
   assert.equal(W.inputs.world_sha, PIN);
 });
 
-test("the pin's own law through the tick: one creature in the window, of the kind whose turn it is", async () => {
+test("the pin's own law through the tick: every kind in the window, at its count (the ramp, WLD-84)", async () => {
   const s = store();
   await runThrough(s, startMs, endMs - 1, 10 * MIN, { inputsAt: async () => W });
   const spawns = s.acts.filter((a) => a.action === "spawn");
-  const turn = W.law.dials.rotation[(N - W.law.fromCrossing) % W.law.dials.rotation.length];
-  assert.deepEqual(spawns.map((a) => a.payload.kind), [turn], `window ${N}: one ${turn}`);
+  const n = (k) => spawns.filter((a) => a.payload.kind === k).length;
+  assert.deepEqual([n("bat"), n("raven"), n("wolf")], [2, 3, 1], `window ${N}: 2 bats, 3 ravens and a wolf`);
 });
 
 test("off by the launch dial, or with no key: nothing is seeded or spawned", async () => {
