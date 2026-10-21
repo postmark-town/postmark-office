@@ -1665,10 +1665,15 @@ export async function ringRosterNow(creature, { law, living, now = Date.now(), p
   return ringRoster(p ?? { residents: [] }, { ring, lookup, living, now, holds: (r) => (r.at ? ringHolds(law, creature, r.at) : r.distance_m <= ring) });
 }
 
-/** Presence's own read at the creature's point, out to its ring. */
+/**
+ * Presence's read at the creature's point, out to its ring, as the doors read it
+ * (world.mjs § presentAround: the kept positions and the fold). Eval round 2: this
+ * called presence bare, and presence answers only from the kept positions, so every
+ * read came back unavailable and every ring held only the actor, however many
+ * stood beside them.
+ */
 async function presentAt(creature, ring) {
-  const { presentNear } = await import("./dynamic-presence.mjs");
-  return presentNear({ x: creature.x, y: creature.y }, { radiusM: ring, limit: Infinity });
+  return (await import("./world.mjs")).presentAround({ x: creature.x, y: creature.y }, ring);
 }
 
 /**

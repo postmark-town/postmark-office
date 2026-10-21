@@ -770,6 +770,16 @@ async function keptPresence() {
   return projected ? { projected, placed: placedAt("presence", projected.epoch) } : {};
 }
 
+/**
+ * Everyone within `radiusM` of a point, uncapped, read as the doors read
+ * presence: the kept positions (keptPresence) and the fold. A creature's ring
+ * reads this (creatures.mjs § presentAt); presence handed neither has nothing to
+ * answer from (POS-269).
+ */
+export async function presentAround(at, radiusM) {
+  return presentNear(at, { radiusM, limit: Infinity, repo: WORLD_CLONE, world: await foldForPresence(), ...(await keptPresence()) });
+}
+
 // Where a bare call stands you: your BODY first — the walk ledger's derived
 // position (presence lives in the walk ledger, the invariant recorded
 // 2026-07-30) — and your ground only when you have never walked. This is what
