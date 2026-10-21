@@ -262,7 +262,7 @@ export async function creatureTick({
     if (!r.prior) wrote.fade += 1;
   }
 
-  // 4. the named creatures, key or none (WLD-25): each declaration spawns ONCE EVER
+  // 4. the named creatures, with the seed key or without (WLD-25): each declaration spawns ONCE EVER
   // at its own place, from its own crossing on, whatever the Mists' season, and
   // stays until its settlement ends it. writeOnce's look is unbounded in time, so
   // a creature spawned or ended weeks ago is never spawned again (one per declaration).

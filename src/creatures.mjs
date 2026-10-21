@@ -1000,7 +1000,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     if (!allowed.length) return null;
     // AN EARNED FINISH IS TAKEN BY CODE (WLD-25 W4, Wright 2026-10-20): when a
     // reaction that finishes is on the menu it is the answer, with no Choice and
-    // no die, so "the key drops every time" never rests on a sample. And the
+    // no die, so "it drops every time" (what a creature carries) never rests on a sample. And the
     // 10 s window (C2) never swallows it (W5): only an act that would not finish
     // waits out the window.
     const finishing = allowed.find(finishes) ?? null;

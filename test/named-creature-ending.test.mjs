@@ -64,7 +64,7 @@ const lawWith = ({ ended = true } = {}) => (NO_WORLD ? null : {
 
 const NOW = Date.parse("2026-10-26T13:00:00Z");
 const iso = (ms) => new Date(ms).toISOString();
-const ID = "creature:wolf-hall";
+const ID = "creature:wolf-den";
 let n = 100;
 const staySpawn = (id = ID, { x = 0, y = 0, at = NOW - 3 * 24 * 3600_000, carries = "the-town/a-thing" } = {}) =>
   ({ id: String(++n), at: iso(at), actor: "the-town", action: "spawn", object: id, payload: { kind: "wolf", at: iso(at), stays: true, x, y, carries } });
@@ -226,7 +226,7 @@ test("a finish from code needs a staying, living creature and an act on the reco
 
 test("the tick spawns each declaration once ever, at its own place, from its crossing on, and puts what it carries in the town's hands", async () => {
   const W = { creaturesMod: BASE.creaturesMod, starts: { wolf: { moods: { fear: 1 } } },
-    law: { fromCrossing: null, dials: {}, kinds: [], named: [{ id: ID, kind: "wolf", x: 3900, y: -5500, carries: "the-town/a-thing", from_crossing: 272, declared: "the-town/a-declaration" }] } };
+    law: { fromCrossing: null, dials: {}, kinds: [], named: [{ id: ID, kind: "wolf", x: 100, y: 200, carries: "the-town/a-thing", from_crossing: 300, declared: "the-town/a-declaration" }] } };
   const acts = [];
   let id = 0;
   const query = async () => [];
@@ -240,19 +240,19 @@ test("the tick spawns each declaration once ever, at its own place, from its cro
   const held = [];
   const hold = async (thing, creature) => { held.push([thing, creature]); return { wrote: true }; };
   const crossingAt = (N) => Date.parse("2026-10-21T00:00:00Z") + (N - 262) * 12 * 3600_000 + 60_000;
-  const before = await creatureTick({ now: crossingAt(271), key: null, query, write, hold, inputsAt: async () => W, blessed: () => "sha" });
+  const before = await creatureTick({ now: crossingAt(299), key: null, query, write, hold, inputsAt: async () => W, blessed: () => "sha" });
   assert.equal(before.wrote.spawn, 0, "dark before its crossing");
-  await creatureTick({ now: crossingAt(272), key: null, query, write, hold, inputsAt: async () => W, blessed: () => "sha" });
-  await creatureTick({ now: crossingAt(273), key: null, query, write, hold, inputsAt: async () => W, blessed: () => "sha" });
+  await creatureTick({ now: crossingAt(300), key: null, query, write, hold, inputsAt: async () => W, blessed: () => "sha" });
+  await creatureTick({ now: crossingAt(301), key: null, query, write, hold, inputsAt: async () => W, blessed: () => "sha" });
   const spawns = acts.filter((a) => a.action === "spawn");
   assert.equal(spawns.length, 1, "once ever");
-  assert.deepEqual({ ...spawns[0].payload, at: null }, { kind: "wolf", crossing: 272, x: 3900, y: -5500, at: null, stays: true,
+  assert.deepEqual({ ...spawns[0].payload, at: null }, { kind: "wolf", crossing: 300, x: 100, y: 200, at: null, stays: true,
     carries: "the-town/a-thing", declared: "the-town/a-declaration", moods: { fear: 1 }, flags: [] });
   assert.deepEqual(held[0], ["the-town/a-thing", ID]);
   // a bad declaration is said, never spawned
   const bad = [];
-  assert.deepEqual(await namedSpawns({ now: crossingAt(272), N: 272, held: bad, blessed: () => "sha",
-    inputsAt: async () => ({ ...W, law: { ...W.law, named: [{ id: "wolf-hall", kind: "wolf", x: 1, y: 1, from_crossing: 1 }] } }) }), []);
+  assert.deepEqual(await namedSpawns({ now: crossingAt(300), N: 300, held: bad, blessed: () => "sha",
+    inputsAt: async () => ({ ...W, law: { ...W.law, named: [{ id: "wolf-den", kind: "wolf", x: 1, y: 1, from_crossing: 1 }] } }) }), []);
   assert.match(bad[0], /its id is not a creature's/);
 });
 
@@ -324,7 +324,7 @@ function endingStore({ spawns = [staySpawn()], finishes: fins = [{ by: "kai", ac
 test("the ending: the town gives what it carried to the first finisher and withdraws the creature, ended, in one transaction", async () => {
   const s = endingStore({ answered: [{ act_id: "11", actor: "bo", object: ID, approach: null }] });
   const r = await endCreatures(s.client, { law: lawWith(), now: NOW });
-  assert.match(r.line, /^endings: ended 1 \(creature:wolf-hall → kai\) at S130, cutoff 2026-10-26T18:00:00\.000Z$/);
+  assert.match(r.line, /^endings: ended 1 \(creature:wolf-den → kai\) at S130, cutoff 2026-10-26T18:00:00\.000Z$/);
   assert.equal(softStepStatus(r.line, "endings"), "ok");
   assert.deepEqual(s.writes.map(([q]) => q.trim().split(/\s+/).slice(0, 1)[0]), ["BEGIN", "INSERT", "INSERT", "COMMIT"]);
   const [, give] = s.writes[1], [, end] = s.writes[2];
@@ -356,7 +356,7 @@ test("once: an ending already written is not written again; a thing not standing
   const waits = endingStore({ standing: false });
   const w = await endCreatures(waits.client, { law: lawWith(), now: NOW });
   assert.deepEqual(waits.writes.map(([q]) => q), ["BEGIN", "ROLLBACK"]);
-  assert.match(w.line, /1 waiting \(creature:wolf-hall: what it carries, the-town\/a-thing, is not standing, so it waits\)/);
+  assert.match(w.line, /1 waiting \(creature:wolf-den: what it carries, the-town\/a-thing, is not standing, so it waits\)/);
   assert.equal(softStepStatus(w.line, "endings"), "ok");
   const failed = endingStore({ failInsert: true });
   const f = await endCreatures(failed.client, { law: lawWith(), now: NOW });
