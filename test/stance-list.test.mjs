@@ -197,3 +197,32 @@ test("by: and over: narrow the inbox to one waiting group, and its ids go straig
   assert.equal(none.stances_awaiting, 0);
   assert.deepEqual(none.ids, []);
 });
+
+// Review of #678, item 2: the list reads once, and a retried list is safe.
+test("a retried list writes nothing again: each mark already holding this word answers already declared", async () => {
+  const first = await speak({ on: THREE, stance: "welcomed" });
+  assert.equal(first.landed, 3);
+  const again = await speak({ on: THREE, stance: "welcomed" });
+  assert.equal(again.landed, 0);
+  assert.equal(again.already_declared, 3);
+  assert.match(again.already_note, /nothing was written again/);
+  for (const r of again.results) assert.ok(r.already_declared?.seq, `${r.on} names the word already standing`);
+  assert.equal(acts().length, 3, "the retry wrote no act");
+  // a different word is a new word, and the single door keeps its own behaviour: a repeat supersedes
+  const changed = await speak({ on: THREE, stance: "opposed" });
+  assert.equal(changed.landed, 3);
+  const single = await speak({ on: THREE[0], stance: "opposed" });
+  assert.equal(single.superseded.stance, "opposed", "the single door writes a repeat, as it always has");
+  assert.equal(acts().length, 7);
+});
+
+test("the list's reads are taken once, not once per mark", async () => {
+  const reads = () => pen.asked().filter((q) => !/^(INSERT|BEGIN|COMMIT|ROLLBACK)|set_config|pg_advisory/i.test(q)).length;
+  await speak({ on: THREE[0], stance: "neutral" });
+  const one = reads();
+  freshPen();
+  await speak({ on: THREE, stance: "neutral" });
+  const three = reads();
+  assert.ok(one > 0, "a single call reads the record");
+  assert.ok(three < 3 * one, `three marks read the record ${three} times; one mark read it ${one} times`);
+});

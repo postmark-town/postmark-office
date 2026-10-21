@@ -656,7 +656,12 @@ test("read: \"waiting\" and read: \"marks\" answer through the store: needs-you 
   assert.ok(Number.isInteger(w.count) && "stances_awaiting" in w && "stakes_at_risk" in w, "needs-you's own answer, whole");
   const m = await householdApex({ read: "marks", args: { limit: 5 } }, key, ctx);
   assert.equal(m.read, "marks", JSON.stringify(m).slice(0, 300));
-  for (const k of ["drafts", "pending", "standing"]) assert.ok(Number.isInteger(m[k].total) && Array.isArray(m[k].rows), `the ${k} list, paged`);
+  for (const k of ["drafts", "pending", "standing"]) {
+    assert.ok(Number.isInteger(m[k].total) && Array.isArray(m[k].rows), `the ${k} list, paged`);
+    // review of #678, item 4: every list says its window and whether it is whole
+    assert.deepEqual([m[k].limit, m[k].offset, typeof m[k].complete], [5, 0, "boolean"]);
+    assert.equal("next_offset" in m[k], !m[k].complete);
+  }
   assert.ok("decided" in m && Array.isArray(m.at_risk.rows));
   const one = await householdApex({ read: "marks", args: { state: "standing" } }, key, ctx);
   assert.deepEqual(["drafts", "pending", "standing"].filter((k) => k in one), ["standing"], "state: narrows to one list");

@@ -45,7 +45,21 @@ export const WORLD_WRITE_VERBS = new Set([
   "world_stake",
   "world_unstake",
   "world_walk",
+  // the consent door (review of #678, item 2): a stance is an act in the record, and a list of them is that many,
+  // charged by worldWriteCost below. Uncounted before the list form; counted from here, one per mark
+  "world_declare_stance",
 ]);
+
+/**
+ * How many world writes one call stands for (review of #678): a stance with a list `on` writes one act a mark,
+ * so it is charged the list's length, against the same hourly budget. Every other call is one.
+ * `args` is the act's own fields (`{ on, … }`) or the apex envelope that carries them (`{ do, args: { on } }`).
+ */
+export const worldWriteCost = (verb, args) => {
+  if (verb !== "world_declare_stance") return 1;
+  const on = (args && typeof args.args === "object" && args.args !== null ? args.args : args)?.on;
+  return Array.isArray(on) ? Math.max(1, on.length) : 1;
+};
 
 const mergeLimits = (limits = {}) => ({
   key: { ...BOUNCER_LIMITS.key, ...limits.key },
@@ -320,24 +334,26 @@ export class Bouncer {
     };
   }
 
-  checkHouseholdWorldWrite({ household, verb }) {
+  checkHouseholdWorldWrite({ household, verb, cost = 1 }) {
     if (!WORLD_WRITE_VERBS.has(verb)) return null;
+    const n = Math.max(1, Math.floor(Number(cost) || 1));
 
     const { now, state, cap, resetAtMs, resetsAt } = this.#worldWriteWindow(household);
 
-    if (state.count >= cap) {
+    // a call that writes n acts needs room for all n, or it is refused whole and writes none
+    if (state.count + n > cap) {
       this.households.set(household, state);
       const retryAfterS = Math.max(1, Math.ceil((resetAtMs - now) / 1000));
       return this.#throttle(
         "household",
         verb,
         household,
-        `the household world-write cap is ${cap} per hour; count is ${state.count}; resets at ${resetsAt} (the top of the UTC hour).`,
+        `the household world-write cap is ${cap} per hour; count is ${state.count}${n > 1 ? `, and this call writes ${n}` : ""}; resets at ${resetsAt} (the top of the UTC hour).`,
         retryAfterS
       );
     }
 
-    state.count += 1;
+    state.count += n;
     this.households.set(household, state);
     return null;
   }
