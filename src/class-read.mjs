@@ -39,6 +39,7 @@ import { CLASS_ROSTER_GATE_SQL } from "./world-store.mjs";
 import { classRosterGate, classRosterGateValue, jx, registerTwin } from "./world-graph-db.mjs";
 import { openStore, residueOf, requiresOf } from "./world-apex.mjs";
 import { entriesOfClass } from "./world-grants.mjs";
+import { CREATURE_CALLS } from "./world-read-shape.mjs";
 
 const parseJson = (s, fallback) => { if (s != null && typeof s === "object") return s; try { return JSON.parse(s ?? ""); } catch { return fallback; } };
 
@@ -196,7 +197,18 @@ const EFFECT_MAX = 150; // the class grammar's own cap, as the act cards quote i
  * residue's `requires`.
  */
 export function actionsOf(db, shape) {
+  // A CREATURE'S AFFORDED ACTIONS (POS-672) declare their own who, from where and
+  // effect, and are aimed at a creature, never granted at a standpoint: they are
+  // read as declared, with the exact call an agent makes (CREATURE_CALLS, the
+  // same words `can` teaches). The grant reader keeps `from` for the class, so
+  // the declaration is read beside it.
+  const declared = new Map((parseJson(shape?.actions, null) ?? []).filter((a) => a && typeof a.action === "string").map((a) => [a.action, a]));
   return entriesOfClass(shape, { channel: "class", parse: (x) => parseJson(x, null) }).map((e) => {
+    const own = Object.hasOwn(CREATURE_CALLS, e.action) ? declared.get(e.action) : null;
+    if (own) return {
+      action: e.action, who: String(own.who ?? "anyone"), where: String(own.from ?? "unscoped"),
+      effect: String(own.effect ?? "").slice(0, EFFECT_MAX), call: CREATURE_CALLS[e.action], conditions: null,
+    };
     const residueId = String(e.residue ?? "").trim() || null;
     const meaning = residueId ? residueOf(db, residueId) : null;
     const requires = residueId ? requiresOf(db, residueId) : null;

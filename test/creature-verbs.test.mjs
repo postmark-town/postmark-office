@@ -136,6 +136,9 @@ test("W4: `can` lists each creature verb once; investigate's `can` is one creatu
   assert.deepEqual(Object.keys(canBlock(entries, { names: true }).creatures ?? []).length ? canBlock(entries, { names: true }).creatures : null,
     ["watch", "approach", "shoo", "call", "offer"], "the read groups them as `creatures`");
   assert.deepEqual(ACT_GROUPS.creatures, [...CREATURE_VERBS]);
+  // each line teaches the exact call (Wright 2026-10-20: an agent learns it from `can` itself)
+  const lines = canBlock(entries).creatures;
+  for (const v of Object.keys(lines)) assert.ok(lines[v].includes(`world { do: "${v}", args: { creature: "<its id>"`), `${v}: ${lines[v]}`);
   // nothing carried: no offer; within half its ring: no approach
   const close = creaturePairs({ here: { x: 1010, y: 0 }, living, law: LAW, carryingConsumable: false, now: NOW, env: ENV });
   assert.deepEqual(canOn(close, RAVEN), ["watch", "shoo", "call"]);

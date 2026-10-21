@@ -55,6 +55,20 @@ export function readShape(env = process.env) {
 // because the schema says otherwise: walk's point is `to_x` + `to_y` (the
 // apex's own names, FIELD_ALIASES), not `to`; and exit takes an optional
 // `mark`, so it is not "no fields".
+/**
+ * A creature's afforded actions, as the exact call (POS-672; Wright 2026-10-20:
+ * "an agent learns the exact call"). `can`'s lines and explain's afforded
+ * actions both quote these, so the two cannot teach two spellings.
+ */
+export const CREATURE_CALLS = Object.freeze({
+  watch: 'world { do: "watch", args: { creature: "<its id>" } }',
+  approach: 'world { do: "approach", args: { creature: "<its id>" } }',
+  shoo: 'world { do: "shoo", args: { creature: "<its id>" } }',
+  call: 'world { do: "call", args: { creature: "<its id>", words: "<optional, heard like a say>" } }',
+  offer: 'world { do: "offer", args: { creature: "<its id>", kind: "<a consumable kind you carry>" } }',
+  whisper: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional, only it hears>" } }',
+});
+
 export const ONE_LINERS = Object.freeze({
   // the pace is the resident class's own dial, never this sentence's (#455 review, finding 5): see `oneLine`
   walk: { says: "Walk to a mark or a point, at about 5 km an hour.", fields: ["mark_id or to_x + to_y", "mode?", "enter_on_arrival?"] },
@@ -74,12 +88,12 @@ export const ONE_LINERS = Object.freeze({
   ride: { says: "Aboard the Post Office, name your next stop.", fields: ["to"] },
   "note-to-self": { says: "Write a private note only your household can read.", fields: ["body"] },
   // A creature's afforded actions (POS-672): each names the creature, and its reaction is the reply
-  watch: { says: "Watch a creature in sight; its reaction is your reply.", fields: ["creature"] },
-  approach: { says: "Walk toward a creature in sight, stopping at half its ring; its reaction is your reply.", fields: ["creature"] },
-  shoo: { says: "Shoo a creature whose ring you stand in; its reaction is your reply.", fields: ["creature"] },
-  call: { says: "Call to a creature in sight, with words if you like (heard like a say); its reaction is your reply.", fields: ["creature", "words"] },
-  offer: { says: "Hold out one consumable you carry to a creature whose ring you stand in; it is used up, whatever it does.", fields: ["creature", "kind"] },
-  whisper: { says: "Whisper to a creature whose ring you stand in; only it hears your words.", fields: ["creature", "words"] },
+  watch: { says: `Watch a creature in sight, ${CREATURE_CALLS.watch}; its reaction is your reply.`, fields: ["creature"] },
+  approach: { says: `Walk toward a creature in sight, stopping at half its ring, ${CREATURE_CALLS.approach}; its reaction is your reply.`, fields: ["creature"] },
+  shoo: { says: `Shoo a creature whose ring you stand in, ${CREATURE_CALLS.shoo}; its reaction is your reply.`, fields: ["creature"] },
+  call: { says: `Call to a creature in sight, ${CREATURE_CALLS.call}; its reaction is your reply.`, fields: ["creature", "words"] },
+  offer: { says: `Hold out one consumable you carry to a creature whose ring you stand in, ${CREATURE_CALLS.offer}; it is used up, whatever it does.`, fields: ["creature", "kind"] },
+  whisper: { says: `Whisper to a creature whose ring you stand in, ${CREATURE_CALLS.whisper}; only it hears your words.`, fields: ["creature", "words"] },
 });
 
 /** The field names a one-liner's list mentions ("mark_id or to_x + to_y" names three; "body (≤150)" names body). */
