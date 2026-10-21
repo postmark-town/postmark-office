@@ -106,7 +106,7 @@ const LANE_OF = Object.freeze({
   // mirror — a beat still reaches `acts` the journalled way. Named
   // 2026-09-02, the first census run against an apex that dispatches them
   // (the C1 flip night); until then check 0 had never been asked.
-  strike: "journal", cast: "journal", guard: "journal", lift: "journal", loot: "journal",
+  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal", // strike: the encounter's now (below)
   // THE VEHICLE'S ACT (#2986, 2026-09-19). Which lane: journal. Which table:
   // `journal`, class `ride`. Which pen: `appendJournal`, which carries the
   // World 2.0 mirror into `acts` itself — the same path enter/exit take, so
@@ -145,6 +145,12 @@ const LANE_OF = Object.freeze({
   // lane's `units:offer`, as consume is. Approach IS a walk (check 3), its row
   // naming the creature. Answered here because the census asked, as for `ride`.
   watch: "lane", shoo: "lane", call: "lane", whisper: "lane", offer: "lane", approach: "lane",
+  // AN ENCOUNTER'S VERBS (WLD-25, 2026-10-21; src/encounter-verbs.mjs). Which lane, which table, which
+  // pen: strike, steady and shield each write one row into `acts` itself, class `creature`, through
+  // appendActFlipped (the door's own guard inside the transaction), the only record they have, as the
+  // afforded actions' rows are. `strike` was the closed arena's beat (journal, above); the apex hands it
+  // to the encounter's door once the blessed law knows encounters, and the arena's refusal before that.
+  steady: "lane", shield: "lane",
 
   // ruled out, each with its reason
   "note-to-self": "none",

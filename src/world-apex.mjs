@@ -2148,6 +2148,15 @@ async function creaturesAt(at, nowMs) {
   } catch { return null; }
 }
 
+/** Does the blessed creature law know an encounter's verbs? (The office's read of it; any fault is no.) */
+async function encountersLive() {
+  try {
+    const { creaturesForRead } = await import("./creatures-read.mjs");
+    const cur = await creaturesForRead();
+    return Array.isArray(cur?.law?.kindMod?.ENCOUNTER_VERBS) && !cur.law.unavailable;
+  } catch { return false; }
+}
+
 /** Your nerve in the glance (encounter.mjs § nerveRead), or null when no encounter is near and it is full. */
 async function nerveAt(handle, at, nowMs) {
   if (!handle) return null;
@@ -3089,7 +3098,10 @@ async function apexDo(args, key, ctx = {}) {
   // A CREATURE'S AFFORDED ACTION (POS-672) goes to its own door before the grant
   // calculus: no ground or class at a standpoint grants it, the creature's
   // classes do, and the door judges sight, ring and the window itself.
-  if (CREATURE_VERBS.includes(action) || ENCOUNTER_VERBS.includes(action)) {
+  // AN ENCOUNTER'S VERBS are the encounter door's only once the blessed law knows them: until then
+  // each answers exactly as before (strike is the closed arena's word; steady and shield no place's),
+  // so nothing changes on deploy and nothing is said of what is coming
+  if (CREATURE_VERBS.includes(action) || (ENCOUNTER_VERBS.includes(action) && await encountersLive())) {
     if (actor) return bounce(422, "a creature's afforded actions are a resident's", 'aim them as one of your residents (handle:), never as: "human". Nothing was done.');
     // an encounter's verbs (strike, steady, shield) go to their own door, through the same envelope and retry key
     return dispatchCreatureVerb(action, args, key, ENCOUNTER_VERBS.includes(action) ? { door: worldEncounter } : {});
