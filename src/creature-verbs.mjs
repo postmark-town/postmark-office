@@ -37,7 +37,7 @@
 // afforded actions (a blessing before the world half) refuses every verb with
 // its reason and shows none.
 
-import { capOf, dial, distanceM, judgeMode } from "./creatures.mjs";
+import { capOf, dial, distanceM, judgeMode, ringHolds } from "./creatures.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { WHISPER_WORDS } from "./world-read-shape.mjs";
 
@@ -83,12 +83,14 @@ const theOf = (law, c) => nameOf(law, c).replace(/^an? /i, "the ");
  * Why `verb` cannot be aimed at creature `c` from `d` metres, or null when it
  * can. The one judgment both the door and the matrix read, so they cannot differ.
  */
-export function whyNot(verb, c, d, { law, carryingConsumable = false } = {}) {
+export function whyNot(verb, c, d, { law, carryingConsumable = false, here = null } = {}) {
   const a = (law?.affordedOf?.(c.kind) ?? []).find((x) => x.action === verb);
   if (!a) return `${nameOf(law, c)} does not take ${verb}`;
   const ring = ringOf(law, c);
-  if (a.from === "ring" && !(d <= ring))
-    return `${theOf(law, c)} is ${Math.round(d)} m off, and ${verb} is from inside its ring (${ring} m)`;
+  // `here`: where you stand, so the ring's walls are read too (creatures.mjs § ringHolds, world#268)
+  if (a.from === "ring" && !(here ? ringHolds(law, c, here) : d <= ring))
+    return d <= ring ? `${theOf(law, c)} is beyond the walls of the room you stand in, and ${verb} is from inside its ring`
+      : `${theOf(law, c)} is ${Math.round(d)} m off, and ${verb} is from inside its ring (${ring} m)`;
   if (a.from !== "ring" && !(d <= SIGHT_M))
     return `${theOf(law, c)} is ${Math.round(d)} m off, out of sight (${verb} is from within ${SIGHT_M} m)`;
   if (verb === "approach" && d <= ring * APPROACH_STOP)
@@ -122,7 +124,7 @@ export function creaturePairs({ here, living, law, carryingConsumable = false, n
     const d = distanceM(here, c);
     if (!(d <= SIGHT_M)) continue;
     for (const a of law.affordedOf(c.kind))
-      if (!whyNot(a.action, c, d, { law, carryingConsumable })) pairs.push({ verb: a.action, object: c.id });
+      if (!whyNot(a.action, c, d, { law, carryingConsumable, here })) pairs.push({ verb: a.action, object: c.id });
   }
   return pairs;
 }
@@ -231,7 +233,7 @@ async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
   // FROM WHERE, AND WHAT YOU HOLD (D1, D3): the matrix's own judgment
   const dist = distanceM(here, c);
   const carryingConsumable = verb === "offer" ? await d.carryingConsumable(actor) : false;
-  const not = whyNot(verb, c, dist, { law, carryingConsumable });
+  const not = whyNot(verb, c, dist, { law, carryingConsumable, here });
   if (not) throw bounce(not.includes("does not take") ? 422 : 409, not, remedy(verb, c, law, actor));
 
   // ONE AT A TIME (D6): refused before anything is written or used up

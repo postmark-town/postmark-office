@@ -103,6 +103,27 @@ test("CONFIRMED, THE EXIT ACT CARRIES THE LOCK: the dungeon, the settlement afte
   assert.match(a.note, /You can't come back into the Spire until the next settlement \(18:00Z\)\.$/);
 });
 
+test("FLED AT 0 NERVE (an encounter): the office's own exit carries the lock and says it fled; within no dungeon, nothing is written", { skip: SKIP }, async () => {
+  const o = await officeWith({ standing: { x: 880, y: 1000 }, ledger: inTheVestibule(), acts: [ENTERED_BY_THE_DOORS], nowIso: "2026-10-19T17:12:30.000Z" });
+  const a = await exitViaOffice(CLONE, { handle: "ann", confirm: true }, key("ann"), { ...o.deps, flee: true });
+  assert.equal(o.records.length, 1);
+  assert.equal(o.records[0].fled, "nerve");
+  assert.equal(o.records[0].locked_until, "2026-10-19T18:00:00.000Z", "the exit lock keeps them out until the settlement");
+  assert.match(o.records[0].summary, /^flees .*, with no nerve left/);
+  assert.equal(a.fled, "nerve");
+  assert.match(a.note, /^you fled the whole of .* with no nerve left/);
+  // a resident's own exit never says it fled: `flee` is the office's dep, never a field a caller can pass
+  const own = await officeWith({ standing: { x: 880, y: 1000 }, ledger: inTheVestibule(), acts: [ENTERED_BY_THE_DOORS], nowIso: "2026-10-19T17:12:30.000Z" });
+  await exitViaOffice(CLONE, { confirm: true, flee: true }, key("ann"), own.deps);
+  assert.equal(own.records[0].fled, undefined);
+  for (const ledger of ["", onTheGrounds()]) {
+    const out = await officeWith({ standing: { x: 1000, y: 1000 }, ledger, nowIso: "2026-10-19T17:12:30.000Z" });
+    const r = await exitViaOffice(CLONE, { handle: "ann", confirm: true }, key("ann"), { ...out.deps, flee: true });
+    assert.equal(r.fled, false);
+    assert.equal(out.records.length, 0, "no dungeon, no lock to flee through: spent, not fled (D5)");
+  }
+});
+
 test("THE WINDOW IS THE WINDOW: an exit at 17:59:59Z locks until 18:00Z, and one at 18:00:01Z until 06:00Z", { skip: SKIP }, async () => {
   for (const [nowIso, until] of [["2026-10-19T17:59:59.000Z", "2026-10-19T18:00:00.000Z"], ["2026-10-19T18:00:01.000Z", "2026-10-20T06:00:00.000Z"]]) {
     const o = await officeWith({ standing: { x: 880, y: 1000 }, ledger: inTheVestibule(), acts: [ENTERED_BY_THE_DOORS], nowIso });

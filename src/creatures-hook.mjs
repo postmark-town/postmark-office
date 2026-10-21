@@ -64,7 +64,7 @@
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import {
-  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, reactTo,
+  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, publishedMarks, reactTo,
 } from "./creatures.mjs";
 import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
@@ -103,6 +103,11 @@ export async function refreshCreatures({ query = actsQuery, law: given = null, n
     state.living = new LivingSet({ law });
   }
   const r = await state.living.refresh({ query, now });
+  // each creature's room, so its ring stops at the walls (world#268): once per creature per published sha
+  if (r.ok && typeof law.ringRoomOf === "function" && query === actsQuery) {
+    const pub = await publishedMarks();
+    if (pub) state.living.warmRooms(pub.marks, pub.key);
+  }
   setCreaturesAwake(state.living.living(now).length > 0);
   return r;
 }
@@ -217,11 +222,13 @@ async function byDeadline(work, deadline, clock, partial) {
  * end under a hung turn (CI 38770755044).
  */
 export function answerWithin(act, { living, law, around = aroundCreature, heardFor = creatureHeard, ask, write, env, only = null, except = null, aimed = null, jevMs = null,
-  clock = Date.now, deadline = null, partial = [] } = {}) {
+  present = null, households = null, flee = null, writeCost = null, clock = Date.now, deadline = null, partial = [] } = {}) {
   const until = deadline ?? clock() + ANSWER_WAIT_MS;
+  // `present`, `households`, `flee`, `writeCost`: an encounter's seams (creatures.mjs § encounterOf), the office's own when absent
   const turns = outsideRetryKey(() =>
     reactTo(act, { living, law, around, heardFor, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), ...(only != null ? { only } : {}),
       ...(except != null ? { except } : {}), ...(aimed ? { aimed } : {}), ...(jevMs != null ? { jevMs } : {}),
+      ...(present ? { present } : {}), ...(households ? { households } : {}), ...(flee ? { flee } : {}), ...(writeCost ? { writeCost } : {}),
       clock, deadline: until, partial }));
   return byDeadline(turns, until, clock, partial);
 }
@@ -510,6 +517,8 @@ export function startCreatures({ port, env = process.env, log = console } = {}) 
       const r = await refreshCreatures();
       const a = r.ok ? await arrivalTick() : null;
       if (r.ok && state.living) await warmViews(state.living);
+      // an encounter's repair (encounter-verbs.mjs § encounterTick): a missed finish, a missed flee
+      if (r.ok && state.living) await (await import("./encounter-verbs.mjs")).encounterTick({ living: state.living, law: state.living.law }).catch((e) => faultLogged("the encounter's tick tripped", e));
       state.last = { at: new Date().toISOString(), living: state.living?.living().length ?? 0, ...(r.ok ? {} : { why: r.why }), ...(a?.judged ? { arrivals: a } : {}) };
       if (a?.judged) log.log?.(`[creatures] arrivals: ${a.landed} landed · ${a.judged} judged · ${a.answered} answered`);
     } catch (e) {

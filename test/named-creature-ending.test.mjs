@@ -31,7 +31,7 @@ import { creatureTick, namedSpawns } from "../src/creature-tick.mjs";
 import { settlementAtOrBefore } from "../src/world-forecast.mjs";
 import {
   FINISHES_SQL, ANSWERED_SQL, NEWEST_SETTLEMENT_SQL, PRIOR_WITHDRAW_SQL, STAYING_SPAWNS_SQL, THING_HOLDER_SQL, THING_STANDING_SQL,
-  TOOK_PART, endCreatures, endingLine, firstFinisher, namesSaid, planEnding, tookPart,
+  NAMES_SHOWN, TOOK_PART, endCreatures, endingLine, firstFinisher, namesSaid, planEnding, tookPart,
 } from "../world2/tools/creature-endings.mjs";
 import { endingsOnTick, softStepStatus } from "../world2/tools/settlements-backfill.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
@@ -258,7 +258,7 @@ test("the tick spawns each declaration once ever, at its own place, from its cro
 
 // ── the ending ──────────────────────────────────────────────────────────────
 
-nodeTest("took part (D1, one function): aimed acts by default, any answered act on the other reading; finishers always", () => {
+nodeTest("took part (D1, settled 2026-10-21): every act it answered, aimed or only in its ring; aimed acts on the other reading; finishers always", () => {
   const answered = [
     { act_id: "10", actor: "lu", object: "some/mark", approach: null },  // in its ring, not aimed
     { act_id: "11", actor: "bo", object: ID, approach: null },           // aimed
@@ -267,10 +267,12 @@ nodeTest("took part (D1, one function): aimed acts by default, any answered act 
     { act_id: "14", actor: "the-town", object: ID, approach: null },
   ];
   const finishers = [{ by: "kai", act_id: "20", act_actor: "kai" }];
-  assert.equal(TOOK_PART.value, "aimed");
-  assert.ok(TOOK_PART.pending, "awaiting Darko");
-  assert.deepEqual(tookPart(ID, answered, finishers), ["bo", "ze", "kai"]);
-  assert.deepEqual(tookPart(ID, answered, finishers, { mode: "answered" }), ["lu", "bo", "ze", "kai"]);
+  assert.equal(TOOK_PART.value, "answered");
+  assert.match(TOOK_PART.ruled, /settled by Wright/);
+  assert.equal(NAMES_SHOWN.value, 12);
+  assert.match(NAMES_SHOWN.ruled, /settled by Wright/);
+  assert.deepEqual(tookPart(ID, answered, finishers), ["lu", "bo", "ze", "kai"], "lu acted only in its ring, and it answered: lu took part");
+  assert.deepEqual(tookPart(ID, answered, finishers, { mode: "aimed" }), ["bo", "ze", "kai"]);
 });
 
 nodeTest("the first finisher is the lowest act id, by record order, never the order the finish rows were written", () => {

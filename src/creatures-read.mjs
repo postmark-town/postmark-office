@@ -31,10 +31,11 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords } from "./creatures.mjs";
+import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords, publishedMarks } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
+import { encounterRead } from "./encounter.mjs"; // a finishable creature's numbers on investigate (D3)
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WORLD_CLONE } from "./world-store.mjs";
@@ -62,6 +63,11 @@ export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: g
       if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law }); }
       const r = await cache.living.refresh({ ...(query ? { query } : {}), now: nowMs });
       if (!r.ok && !cache.living.booted) cache.living = null;
+      // each creature's room, so its ring stops at the walls (world#268); a read without the marks keeps the circle
+      if (cache.living && !query && typeof law.ringRoomOf === "function") {
+        const pub = await publishedMarks();
+        if (pub) cache.living.warmRooms(pub.marks, pub.key);
+      }
       cache.at = nowMs;
     })().finally(() => { cache.inflight = null; });
     await cache.inflight;
@@ -270,7 +276,7 @@ export const REACTIONS_SHOWN = 10;
  *   rows(id, n)           its newest reaction rows (REACTIONS_SQL), or null when the record cannot be read
  *   saved(id)             { crossing, row } from the newest crossing save, or null
  */
-export async function investigateCreature(id, { creatures, from = null, nowMs = Date.now(), rows = async () => null, saved = () => null } = {}) {
+export async function investigateCreature(id, { creatures, from = null, handle = null, nowMs = Date.now(), rows = async () => null, saved = () => null } = {}) {
   const { living, law } = creatures ?? {};
   if (!living || !lawReady(law))
     return { kind: "creature", id, unavailable: "the creatures' law cannot be read at this office's blessed ref, so no creature can be looked at" };
@@ -295,6 +301,8 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
     // a creature that stays has no fade (WLD-25); who has finished it waits for the settlement
     ...(c.stays ? { stays: true, finished_by: c.finishes.map((f) => f.by) } : { fades_at: new Date(c.fades_at).toISOString() }),
     remembers: c.reactions.length,
+    // a finishable creature (encounter.mjs, D3): its resolve and ease this window, in numbers
+    ...(encounterRead({ living }, c, kind, { handle, now: nowMs }) ? { encounter: encounterRead({ living }, c, kind, { handle, now: nowMs }) } : {}),
     answered_by: "the record, as of now",
   } : { unavailable: "it is no longer held in this office's fold (it ended over an hour ago)" };
   const got = await Promise.resolve(rows(id, REACTIONS_SHOWN)).catch(() => null);
@@ -305,6 +313,8 @@ export async function investigateCreature(id, { creatures, from = null, nowMs = 
       const reaction = c ? reactionOf(law, c, p.reaction) : null;
       return { to: p.to, verb: p.verb, ...(p.moment ? { moment: p.moment } : {}), reaction: p.reaction,
         ...(reaction ? { line: lineOf(law, reaction, p.to, lineWords(p)) } : {}), roll: p.roll, judged_by: p.judged_by, ...(p.why ? { why: p.why } : {}),
+        // whom a finishable creature pressed, and what each paid (encounter.mjs)
+        ...(Array.isArray(p.press?.landed) && p.press.landed.length ? { pressed: p.press.landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}) })) } : {}),
         odds: p.allowed ?? null, at: new Date(msOf(r.at)).toISOString() };
     }),
     note: "the odds are the distribution the d20 sampled (C4: shown here, never in the actor's own answer)",
