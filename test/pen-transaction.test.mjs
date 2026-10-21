@@ -247,7 +247,10 @@ const DOORS = [
   ["profile", () => updateProfile],
   ["profile with a display name (two files, one commit)", () => updateProfile],
   ["window", () => updateWindow],
-  ["profile avatar", () => updateProfileAvatar],
+  // WLD-83 (one picture): the avatar door mints through the media door, as the
+  // home image door does, so it runs with a stub mint (no bucket, no ledger).
+  ["profile avatar", () => (args, k, db, clone) =>
+    updateProfileAvatar(args, k, db, clone, null, { upload: async () => ({ url: "https://media.postmark.town/media/keemin/1a2b.png" }) })],
   // POS-219: the home image door writes no page; its clone write is the
   // registry file the drain renders after the store keeps the picture. So it
   // runs with the record on (the pool stub) and a stub mint (no bucket), and
