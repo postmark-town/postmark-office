@@ -1377,8 +1377,8 @@ async function answerSetDown({ repo, on, stance, by, key, target, sd, dbPath, wi
  * folds with. Unreadable refuses: a word recorded with no version could never
  * be reopened by an amendment, which is the ruling's whole point (Q5).
  */
-async function versionToRecord(on, deps = {}) {
-  const read = await readVersions([on], { query: deps.versionsQuery });
+async function versionToRecord(on, deps = {}, readAlready = null) {
+  const read = readAlready ?? await readVersions([on], { query: deps.versionsQuery });
   if (read.unreachable) throw bounce(503, "the mark's version could not be read",
     `${read.unreachable} — every word is recorded with the version of the mark it was spoken on, so the door refuses rather than record one it cannot name; nothing was written`);
   return { version: read.versions.get(on)?.current?.id ?? null, versions: read.versions };
@@ -1462,7 +1462,7 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
   };
 }
 
-export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null, setDownDeps = {}, townDeps = {} } = {}) {
+export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null, setDownDeps = {}, townDeps = {}, shared = null } = {}) {
   // THE WORLD-FREEZE GATE (the engine cutover, 2026-08-24). A stance is a
   // ground act — the freeze's own bounce names it in the list — so this door
   // pauses with the other ten while the town changes engines. It is FIRST,
@@ -1513,7 +1513,8 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
       `got ${JSON.stringify(args.stance ?? null)} — welcomed confers your ground's standing on it, opposed is your veto, and a declared neutral clears "awaiting your word" without welcoming. All are revisable forever; silence leaves the mark awaiting.`);
 
   // ── THE GROUND'S HOLDER SPEAKS ───────────────────────────────────────────
-  const geom = await stanceGeometry(repo);
+  // `shared` is the list's reads, taken once for every id (§ declareStanceList); a single call reads its own
+  const geom = shared ? shared.geom : await stanceGeometry(repo);
   if (!geom) throw bounce(503, "the world's own geometry could not be read",
     "overlap is the engine's answer and this door will not substitute its own — try again once the world store is readable");
   const overlaps = (a, b) => geom.overlapArea(geom.rect(a), geom.rect(b)) > 0;
@@ -1523,7 +1524,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   // look", and answering `no mark "<on>"` to the second would teach a resident
   // their neighbour's sketch does not exist. The world-geometry refusal three
   // lines up is the same shape and the same wording.
-  const world = await worldForStances(repo, { dbPath });
+  const world = shared ? shared.world : await worldForStances(repo, { dbPath });
   if (world.unreachable) throw bounce(503, "the stance candidate list could not be read", world.unreachable);
   const all = world.marks;
   const target = all.find((m) => m.id === on);
@@ -1576,9 +1577,18 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
 
   // THE VERSION IT IS SPOKEN ON (POS-361, Q5), asked before anything is
   // written, so an unreadable version refuses with nothing behind it.
-  const { version, versions } = await versionToRecord(on, townDeps);
+  const { version, versions } = await versionToRecord(on, townDeps, shared?.versions ?? null);
 
-  const stamp = witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } };
+  // A RETRIED LIST IS SAFE (review of #678, item 2): in a list, a mark whose standing word from this speaker is
+  // already this word on this version is answered "already declared" and never written again. The single door
+  // keeps its own behaviour (a repeat is a new row that supersedes the last).
+  if (shared) {
+    const standing = standingStances(shared.rows, { by, versions }).find((s) => s.on === on) ?? null;
+    if (standing && standing.stance === stance)
+      return { on, stance, by, already_declared: { at: standing.at, seq: standing.seq }, on_your_ground: ground.map((g) => g.id), version };
+  }
+
+  const stamp = shared?.stamp ?? (witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } });
 
   {
     // THE SUPERSEDED COURTESY READS THE WHOLE RECORD, NOT ONE STORE.
@@ -1599,7 +1609,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
     //
     // `stanceRows` is the one derivation every tier reads from; this now shares
     // it rather than keeping a fourth opinion about what has been said.
-    const prior = standingStances(await stanceRows({ dbPath, worldClone: repo }), { by, versions }).find((s) => s.on === on) ?? null;
+    const prior = standingStances(shared ? shared.rows : await stanceRows({ dbPath, worldClone: repo }), { by, versions }).find((s) => s.on === on) ?? null;
     const entry = {
       crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
       action: ACTION_STANCE, object: on, cls: CLASS_STANCE,
@@ -1677,6 +1687,29 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
 // not repeat it a hundred times.
 const LIST_SHARED = ["by", "stance", "log", "crossing", "note"];
 
+/**
+ * The reads a list shares, taken once. A read that fails is left to each id's call to read and refuse on its own,
+ * exactly as a single call would, so nothing here decides anything.
+ */
+async function listReads(repo, args, key, ids, { dbPath = null, witnessStamp = null, townDeps = {} } = {}) {
+  try {
+    const handles = [...(key?.handles ?? [])];
+    const by = args.by ?? args.handle ?? (handles.length === 1 ? handles[0] : undefined);
+    const [geom, world, rows, versions] = await Promise.all([
+      stanceGeometry(repo),
+      worldForStances(repo, { dbPath }),
+      stanceRows({ dbPath, worldClone: repo }),
+      readVersions(ids, { query: townDeps.versionsQuery }),
+    ]);
+    let householdOf;
+    try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
+    const stamp = witnessStamp && by && key?.handles?.has(by) ? await witnessStamp(by) : undefined;
+    return { geom, world, rows, versions, householdOf, ...(stamp ? { stamp } : {}) };
+  } catch {
+    return null;
+  }
+}
+
 async function declareStanceList(repo, args, key, opts) {
   const ids = args.on;
   if (ids.length === 0) throw bounce(422, "which marks?",
@@ -1693,14 +1726,22 @@ async function declareStanceList(repo, args, key, opts) {
     seen.add(k);
   }
 
+  // THE LIST'S READS, ONCE (review of #678, item 2): the world, its geometry, the stance record, every id's
+  // version, the speaker's witness stamp and the household lookup the set-down arm asks, read before the first
+  // id and handed to each id's call. Each id is still judged by the single door on its own; only the reading is
+  // shared. The town's word (as: "town") reads its own, as it always has.
+  const shared = args.as ? null : await listReads(repo, args, key, ids.map((id) => id.trim()), opts);
+  const each = shared ? { ...opts, shared, setDownDeps: { householdOf: shared.householdOf, ...(opts.setDownDeps ?? {}) } } : opts;
+
   const results = [];
   let fault = null;
   for (const raw of ids) {
     const on = raw.trim();
     if (fault) { results.push({ on, not_tried: true }); continue; }
     try {
-      const r = await declareStanceViaOffice(repo, { ...args, on }, key, opts);
+      const r = await declareStanceViaOffice(repo, { ...args, on }, key, each);
       if (r?.error) results.push({ on, refused: { code: r.code, defect: r.defect, hint: r.hint } });
+      else if (r?.already_declared) results.push({ on, already_declared: r.already_declared });
       else results.push({ on, landed: true, ...r, on });
     } catch (e) {
       if (isHttpStatus(e?.code)) {
@@ -1713,19 +1754,21 @@ async function declareStanceList(repo, args, key, opts) {
   }
 
   const landed = results.filter((r) => r.landed);
-  const shared = {};
+  const common = {};
   for (const k of LIST_SHARED) {
     if (landed.length && landed.every((r) => k in r && JSON.stringify(r[k]) === JSON.stringify(landed[0][k]))) {
-      shared[k] = landed[0][k];
+      common[k] = landed[0][k];
       for (const r of landed) delete r[k];
     }
   }
   const refused = results.filter((r) => r.refused).length;
   const notTried = results.filter((r) => r.not_tried).length;
+  const already = results.filter((r) => r.already_declared).length;
   return {
     marks: ids.length, landed: landed.length, refused,
+    ...(already ? { already_declared: already, already_note: "already your standing word on this version of the mark: nothing was written again (a retried list is safe)" } : {}),
     ...(notTried ? { not_tried: notTried } : {}),
-    ...shared,
+    ...common,
     results,
   };
 }

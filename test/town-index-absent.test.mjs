@@ -134,6 +134,10 @@ CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap
   "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
 // AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
 // read table names `correspondents`, `waiting` and `marks` too (in the posts line's substitution above).
+// AND THE STANCE IS A COUNTED WORLD WRITE (review of #678, item 2): the budget's counted_verbs names it last, in the
+// two recorded answers that carry the budget, and nothing else in them moves.
+for (const label of ["MCP household {}", 'MCP household {"read":"standing","handle":"wright"}'])
+  (CHANGED[label] ??= []).push([`"world_unstake","world_walk"]`, `"world_unstake","world_walk","world_declare_stance"]`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };

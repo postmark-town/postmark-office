@@ -467,6 +467,46 @@ test("H4 phrases · a row with no actor says no \"by\" at all", () => {
   assert.equal(happenedLine(r, { nowMs: Date.parse("2026-10-20T10:00:00Z") }), "legacy:seed x/y · 2 h");
 });
 
+// Review of #678, item 1: a time window becomes an id window before the house's acts are read
+test("happened's acts read is bounded by id: a binary search of point lookups turns since into an id floor, and the cut says where next", async () => {
+  const { houseActs, actsIdSince } = await import("../src/town-index-store.mjs");
+  const T0 = Date.parse("2026-10-01T00:00:00Z");
+  const at = (id) => new Date(T0 + id * 60_000).toISOString(); // one act a minute, in id order
+  const TOP = 21364;
+  const asked = [];
+  const q = { query: async (sql, params = []) => {
+    const flat = sql.replace(/\s+/g, " ").trim();
+    asked.push([flat, params]);
+    if (/max\(id\)::text AS hw/.test(flat)) return { rows: [{ hw: String(TOP) }] };
+    if (/min\(id\)::text AS lo, max\(id\)::text AS hi/.test(flat)) return { rows: [{ lo: "1", hi: String(TOP) }] };
+    if (/WHERE id >= \$1::bigint ORDER BY id LIMIT 1/.test(flat)) return { rows: Number(params[0]) <= TOP ? [{ id: String(params[0]), at: at(Number(params[0])) }] : [] };
+    if (/FROM acts WHERE household = \$1/.test(flat)) {
+      const floor = /id >= \$2::bigint/.test(flat) ? Number(params[1]) : 1;
+      const below = /id < \$\d::bigint/.test(flat) ? Number(params[params.length - 1]) : TOP + 1;
+      const rows = [];
+      for (let id = Math.min(TOP, below - 1); id >= floor && rows.length < 501; id--) rows.push({ id: String(id), at: at(id), actor: "rei", action: "say" });
+      return { rows };
+    }
+    throw new Error(`unexpected: ${flat}`);
+  } };
+  assert.equal(await actsIdSince(q, at(21300)), "21300");
+  asked.length = 0;
+  const r = await houseActs(q, "hh:starforge", { sinceIso: at(21300) });
+  const read = asked.find(([sql]) => /FROM acts WHERE household/.test(sql));
+  assert.match(read[0], /household = \$1 AND id >= \$2::bigint AND at >= \$3::timestamptz/, "the house's index range, from the window's first id");
+  assert.equal(read[1][1], "21300");
+  assert.ok(asked.filter(([sql]) => /ORDER BY id LIMIT 1/.test(sql)).length <= 16, "about 15 point lookups");
+  assert.equal(r.rows.length, 65);
+  assert.equal(r.cut, false);
+  // a window past the store's cut: the answer says where the read goes on
+  const wide = await houseActs(q, "hh:starforge", { sinceIso: at(1) });
+  assert.equal(wide.rows.length, 500);
+  assert.equal(wide.cut, true);
+  assert.equal(wide.next_before, String(TOP - 499));
+  const next = await houseActs(q, "hh:starforge", { sinceIso: at(1), beforeId: wide.next_before });
+  assert.equal(next.rows[0].id, String(TOP - 500), "the next page starts below the last id kept");
+});
+
 // ── Darko's notes, 2026-10-20 ────────────────────────────────────────────────
 test("mail that can be acted on: unanswered_14d by the ledger, answered by thread or by any later letter to the sender", () => {
   const house = ["rei", "wright", "mari"];

@@ -615,6 +615,8 @@ export async function psaFold(q, opts = {}) {
 
 /** How many rows a deep read takes from the store at most, whatever the window. */
 export const DEEP_ROWS = 500;
+/** How far back read: "closer" scans for letters to several (no index reaches a letter's toList), whatever `days` asks. */
+export const MULTI_DAYS = 14;
 
 /**
  * The house's own acts, newest first: every act the record files under the
@@ -622,20 +624,56 @@ export const DEEP_ROWS = 500;
  * cursor's high-water mark) when one is given, else since `sinceIso`. Also
  * answers the store's act high-water mark, for the next cursor.
  */
-export async function houseActs(q, household, { afterId = null, sinceIso = null, limit = DEEP_ROWS, actors = null } = {}) {
+export async function houseActs(q, household, { afterId = null, sinceIso = null, beforeId = null, limit = DEEP_ROWS, actors = null } = {}) {
   const n = Math.min(Math.max(Number(limit) || DEEP_ROWS, 1), DEEP_ROWS);
   const hw = (await q.query("SELECT max(id)::text AS hw FROM acts")).rows[0]?.hw ?? null;
-  const after = afterId != null && /^\d+$/.test(String(afterId)) ? String(afterId) : null;
+  const id = (v) => (v != null && /^\d+$/.test(String(v)) ? String(v) : null);
+  // A TIME WINDOW BECOMES AN ID WINDOW FIRST (review of #678, item 1): acts are indexed (household, id) and not by
+  // `at`, so `at >= since` alone walked the house's whole history. The window's first id is found by point lookups
+  // on the primary key (actsIdSince), and the read is an index range from there; `at >= since` still filters it.
+  const after = id(afterId);
+  const from = after ? null : sinceIso ? await actsIdSince(q, sinceIso) : null;
+  const before = id(beforeId);
   // `actors`: the residents the key holds and the house's own human hand (review of #679, item 7)
   const who = Array.isArray(actors) ? actors.map(String) : null;
-  const params = [household, after ?? sinceIso ?? new Date(0).toISOString(), ...(who ? [who] : [])];
+  const params = [household];
+  const where = ["household = $1"];
+  const add = (sql, v) => { params.push(v); where.push(sql.replace("$?", `$${params.length}`)); };
+  if (after) add("id > $?::bigint", after);
+  if (from) add("id >= $?::bigint", from);
+  if (sinceIso && !after) add("at >= $?::timestamptz", sinceIso);
+  if (before) add("id < $?::bigint", before);
+  if (who) add("actor = ANY($?::text[])", who);
   // 079's columns, when the store has them (POS-633 part 3): the recorded hand, for and route
   const { actsHaveProvenance } = await import("./act-provenance.mjs");
   const recorded = (await actsHaveProvenance(q)) ? ", hand, for_handle, route" : "";
   const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}
-      FROM acts WHERE household = $1 AND ${after ? "id > $2::bigint" : "at >= $2::timestamptz"}${who ? " AND actor = ANY($3::text[])" : ""}
-      ORDER BY id DESC LIMIT ${n + 1}`, params)).rows;
-  return { hw, rows: rows.slice(0, n), cut: rows.length > n };
+      FROM acts WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ${n + 1}`, params)).rows;
+  const kept = rows.slice(0, n);
+  // past the cut, the read goes on below the last id it kept (review of #678, item 4)
+  return { hw, rows: kept, cut: rows.length > n, ...(rows.length > n ? { next_before: kept.at(-1)?.id ?? null } : {}) };
+}
+
+/**
+ * The first act id at or after `sinceIso`, by a binary search of point lookups on the primary key (about 15 for
+ * 21,000 acts), the way stampLinesSince finds its first seq. Acts are appended in time, so their `at` rises with
+ * their id; the few that arrive late (a pen that files a crossing's act after the fact) can sit a little out of
+ * order, and the caller filters `at >= since` again over the range, so the bound only narrows the read. Null when
+ * the record holds no act.
+ */
+export async function actsIdSince(q, sinceIso) {
+  const since = Date.parse(sinceIso);
+  if (!Number.isFinite(since)) return null;
+  const ends = (await q.query("SELECT min(id)::text AS lo, max(id)::text AS hi FROM acts")).rows[0];
+  if (!ends?.lo) return null;
+  let lo = BigInt(ends.lo), hi = BigInt(ends.hi) + 1n;
+  while (lo < hi) {
+    const mid = (lo + hi) / 2n;
+    const r = (await q.query("SELECT id::text AS id, at FROM acts WHERE id >= $1::bigint ORDER BY id LIMIT 1", [String(mid)])).rows[0];
+    if (!r || new Date(r.at).getTime() >= since) hi = mid;
+    else lo = BigInt(r.id) + 1n;
+  }
+  return String(lo);
 }
 
 /**
@@ -649,15 +687,16 @@ export async function houseActs(q, household, { afterId = null, sinceIso = null,
  * json; an index on `date` would be a migration, named here and not added.
  * read: "closer" asks for it; the glance does not.
  */
-export async function lettersAround(q, handles, sinceDay, { multi = false } = {}) {
+export async function lettersAround(q, handles, sinceDay, { multi = false, multiSinceDay = sinceDay } = {}) {
   const cols = `id, from_h, to_h, date, delivered_at, CASE WHEN strpos(json, '"toList"') > 0 THEN json ELSE NULL END AS multi`;
   const list = [...handles];
   const byIndex = (await q.query(`SELECT ${cols} FROM town_letters WHERE from_h = ANY($1::text[]) AND date >= $2 AND delivered_at IS NOT NULL
     UNION SELECT ${cols} FROM town_letters WHERE to_h = ANY($1::text[]) AND date >= $2 AND delivered_at IS NOT NULL`, [list, sinceDay])).rows;
   if (!multi) return byIndex;
   const seen = new Set(byIndex.map((r) => r.id));
+  // the scan's window is its own (review of #678, item 3): read: "closer" caps it at MULTI_DAYS whatever `days` asks
   const many = (await q.query(`SELECT ${cols} FROM town_letters
-     WHERE date >= $1 AND delivered_at IS NOT NULL AND strpos(json, '"toList"') > 0`, [sinceDay])).rows;
+     WHERE date >= $1 AND delivered_at IS NOT NULL AND strpos(json, '"toList"') > 0`, [multiSinceDay > sinceDay ? multiSinceDay : sinceDay])).rows;
   return [...byIndex, ...many.filter((r) => !seen.has(r.id))];
 }
 
@@ -668,7 +707,7 @@ export async function lettersAround(q, handles, sinceDay, { multi = false } = {}
  * lookups on the primary key (about 15 for 23,000 lines), and the read is the
  * seq range from there. Never a walk of the whole ledger.
  */
-export async function stampLinesSince(q, sinceIso, { limit = 5000 } = {}) {
+export async function stampLinesSince(q, sinceIso, { limit = 5000, beforeSeq = null } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 5000, 20000));
   const top = Number((await q.query("SELECT max(seq) AS s FROM stamp_lines")).rows[0]?.s ?? 0);
   if (!top) return { rows: [], cut: false };
@@ -684,9 +723,12 @@ export async function stampLinesSince(q, sinceIso, { limit = 5000 } = {}) {
     const t = await at(mid);
     if (t == null || t >= since) hi = mid; else lo = mid + 1;
   }
-  const rows = (await q.query(`SELECT seq, canonical, written_at FROM stamp_lines WHERE seq >= $1 ORDER BY seq DESC LIMIT ${cap + 1}`, [lo])).rows
+  // past the cut, the read goes on below the last seq it kept (review of #678, item 4)
+  const below = beforeSeq != null && /^\d+$/.test(String(beforeSeq)) ? Number(beforeSeq) : null;
+  const rows = (await q.query(`SELECT seq, canonical, written_at FROM stamp_lines WHERE seq >= $1${below ? " AND seq < $2" : ""} ORDER BY seq DESC LIMIT ${cap + 1}`, below ? [lo, below] : [lo])).rows
     .filter((r) => new Date(r.written_at).getTime() >= since);
-  return { rows: rows.slice(0, cap), cut: rows.length > cap };
+  const kept = rows.slice(0, cap);
+  return { rows: kept, cut: rows.length > cap, ...(rows.length > cap ? { next_before: String(kept.at(-1)?.seq ?? "") } : {}) };
 }
 
 /**
