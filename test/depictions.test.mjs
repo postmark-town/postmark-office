@@ -219,3 +219,18 @@ test("the seed: re-encoded to WebP, minted on the town's own wall, kept as the t
   assert.deepEqual(out.refused.map((r) => [r.subject, r.code]), [["nobody", 404]], "a handle the record does not hold is refused, never guessed");
   assert.ok((await toWebp(png)).length < 1.5 * 1024 * 1024);
 });
+
+// ── the media sweep keeps what a depiction names (POS-737) ──────────────────
+
+test("the media sweep reads depictions as a source: a kept sheet's file is referenced, so it is never freed under it", async () => {
+  const { storeKeys, STORE_SOURCES, HANGING_DOORS } = await import("../src/media-sweep.mjs");
+  const { MEDIA_BASE } = await import("../src/media.mjs");
+  assert.ok(STORE_SOURCES.some((s) => s.table === "depictions"));
+  assert.ok(HANGING_DOORS["edit.mjs"].sources.includes("store:depictions"), "the sheet's door names the source it hangs into");
+  await withStore("depictions_sweep", async ({ api, query }) => {
+    const sha = "e5".repeat(32);
+    await keepDepiction({ subject: "wick", url: `${MEDIA_BASE}/media/the-town/${sha}.webp`, made_by: TOWN }, {}, query);
+    const keys = await storeKeys(api, { table: "depictions" });
+    assert.ok(keys.has(`the-town/${sha}.webp`), "the sweep sees the sheet's file");
+  });
+});
