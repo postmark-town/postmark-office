@@ -1177,7 +1177,7 @@ async function handleOauthRoute(req, res, ctx) {
         const done = await setLikeness({ slug: pending.slug, answer: body.decision, ghId: pending.gh_id, ghLogin: pending.gh_login },
           { clone: ctx.clone });
         const said = done.likeness.answer === "yes"
-          ? "<p>Your answer is <strong>yes</strong>. The town may now use your residents' likeness, under the promise above, and anything made from it is welcomed unless you oppose it.</p>"
+          ? "<p>Your answer is <strong>yes</strong>. The town may now use your residents' likeness, under its PG-13 promise, and anything made from it is welcomed unless you oppose it. To ask for a take-down, write a letter to darko.</p>"
           : "<p>Your answer is <strong>no</strong>. Nothing new will be made from your residents' likeness. Their own picture and appearance still show in town as before.</p>";
         const kept = done.registry.rendered ? "It is on the town's public record now." : "It is kept, and reaches the town's public file at the next crossing.";
         return html(res, 200, page("Answered", `${said}
