@@ -227,6 +227,8 @@ test("obeyed, declined or lapsed, read from the record: the act it asked for wit
   assert.equal(await outcomeOf(t({ act: "leave" }, NOW - 5 * 60_000), { ...base, acts: [] }), null, "still open");
   assert.deepEqual(await outcomeOf(t({ act: "leave" }), { ...base, acts: [{ ...A(NERVE_ACTION, "kai", { why: "act", creature: ID }), actor: ID }] }), { outcome: "declined" });
   assert.deepEqual(await outcomeOf(t({ act: "leave" }), { ...base, acts: [] }), { outcome: "lapsed" });
+  // the act that drew it was written with it (a lower id, the same instant): it is neither an answer nor a decline
+  assert.deepEqual(await outcomeOf({ ...t({ act: "leave" }), id: "9000" }, { ...base, acts: [{ ...A(NERVE_ACTION, "kai", { why: "act", creature: ID }, NOW - 40 * 60_000), id: "8999", actor: ID }] }), { outcome: "lapsed" });
   assert.equal((await outcomeOf(t({ act: "strike", target: WHO }), { ...base, acts: [A("strike", ID, {}, NOW - 5 * 60_000)] })).outcome, "lapsed", "a strike after its 30 min obeys nothing");
 });
 

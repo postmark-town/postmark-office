@@ -274,7 +274,9 @@ export function strikeDamage({ living, creature, echo, actor, houseOf, now = Dat
 export async function outcomeOf(tempt, { creature, acts, outside, gist, now = Date.now() }) {
   const t = tempt.payload.tempts ?? {};
   const until = Date.parse(tempt.payload.until);
-  const inTime = acts.filter((a) => a.at <= until && a.at >= tempt.at);
+  // after it was said: the act that drew it (written with it) is neither an answer nor a decline
+  const after = (a) => (/^\d+$/.test(String(a.id ?? "")) && /^\d+$/.test(String(tempt.id)) ? BigInt(a.id) > BigInt(tempt.id) : a.at > tempt.at);
+  const inTime = acts.filter((a) => a.at <= until && after(a));
   let obeyed = null;
   if (t.act === "strike") obeyed = inTime.find((a) => a.action === STRIKE_ACTION && a.object === creature.id);
   else if (t.act === "give" || t.act === "stake")
