@@ -29,8 +29,8 @@
 // tests drive it with a synthetic one.
 
 import {
-  UNIT_ACTION, foldUnits, edgesOf, totalOf, exitedMarks, unitCount, candyLabels, labelOfCreator, labelRecord,
-  capacityOf, portableOf, welcomeOf, holdingDisplay, refuseOverCarry, takenRefusal,
+  UNIT_ACTION, foldUnits, edgesOf, kindEdgesOf, totalOf, exitedMarks, unitCount, candyLabels, labelOfCreator, labelRecord,
+  capacityOf, portableOf, welcomeOf, holdingDisplay, refuseOverCarry, stolenClassRefusal,
   planGive, planTake, planConsume, planRefill, refillerLabel, droppedUnitMark, isDroppedUnitMark, returnsAtExit, isChestId, isUnitRow,
   withdrawnMarks, ancestry, selectLabel, stockedChests,
 } from "./world-stacks.mjs";
@@ -126,6 +126,8 @@ export function classViewOf(snap) {
     property: (name, prop) => snapProperty(snap, name, prop),
     labels: () => candyLabels(rec("candy")),
     readable: Boolean(snap?.classes?.size),
+    // is any class taken by the town's own act right now (WLD-7)? While none is, nothing below refuses
+    stolenAny: () => [...(snap?.classes?.keys() ?? [])].some((n) => dialsOf(n).stolen === true),
   };
 }
 
@@ -253,14 +255,62 @@ const chestBlock = async (after, chest, view, attachments, deps) =>
 
 const classOfLabelIn = (view) => (label) => (labelRecord(view.labels(), label) ? "candy" : null);
 
-/** The holding's top class, for the taken-class hook. */
-function topClassOf(fold, holder, view, label = null) {
-  const labels = view.labels();
-  const edges = edgesOf(fold, holder).filter((e) => label == null || e.label === label);
-  const comps = edges.map((e) => ({ class: labelRecord(labels, e.label) ? "candy" : null, label: e.label, count: e.count }));
-  return holdingDisplay(comps, view.extendsOf).class;
+// ── A CLASS TAKEN BY THE TOWN'S OWN ACT, ASKED OF THE TURN'S OWN LAW (WLD-7) ──
+//
+// `view` is the class layer as it stood when the call came in, and a call can
+// wait (behind other holds in the queue, on its reach lookups) while a new law
+// snapshot is published. So the question is asked INSIDE the hold turn, of the
+// snapshot published at that moment, after the turn's own refusals and before
+// its first write: that read is the linearisation point. A publication before it
+// governs the act; one after it finds the act already admitted. One question for
+// every door (world-stacks.mjs § stolenClassRefusal); Jetto's refit, 58b633b8.
+const classesNow = (deps) => {
+  const now = deps.classes();
+  if (!now.readable) throw bounce(503, "the class layer could not be read, so the office cannot tell one class from another",
+    "what a thing or a unit is, is read from the class tree; nothing was recorded — try again when the law is loaded");
+  return now;
+};
+/** Refuse when `klassOf(the law now)` is of a class taken by the town's own act. `klassOf` answers a class, null (a plain thing) or undefined (cannot be told). */
+export const refuseIfStolenNow = (deps, klassOf) => { const now = classesNow(deps); const r = stolenClassRefusal(klassOf(now), now); if (r) throw r; };
+/** What canon says a thing is: its class, null when read and unclassed, undefined when not read. */
+export const markClassFor = (mark) => (mark && typeof mark === "object" ? (markClassOf(mark) ?? null) : undefined);
+/** A counted unit is judged by its OWN label: registered candy, or not known. */
+const labelClassIn = (view) => (label) => (labelRecord(view.labels(), label) ? "candy" : undefined);
+
+/**
+ * WHAT A WHOLE THING CARRIES, for the same question (WLD-7): a holder moved whole
+ * moves everything in it, so a bag of a taken class's units is refused as those
+ * units are. Read once: the kinds and labels it holds, and each whole thing in it
+ * (its class and, in turn, what it carries), to `HELD_DEPTH`. Answers a function
+ * of the law of the moment: `(now) => [class | null | undefined]`, the thing's own
+ * class first.
+ */
+const HELD_DEPTH = 8;
+export async function carriedClasses({ thing, mark, fold, attachments, markById }) {
+  const kinds = [], labels = [], marks = [];
+  const seen = new Set([String(thing)]);
+  const walk = async (holder, depth) => {
+    if (depth > HELD_DEPTH) return;
+    for (const e of kindEdgesOf(fold, holder)) kinds.push(e.kind);
+    for (const e of edgesOf(fold, holder)) if (e.label != null) labels.push(e.label);
+    for (const t of holdingsOf(attachments, holder)) {
+      if (seen.has(String(t))) continue;
+      seen.add(String(t));
+      const m = await Promise.resolve(markById(t)).catch(() => null);
+      marks.push(markClassFor(m));
+      await walk(t, depth + 1);
+    }
+  };
+  await walk(String(thing), 0);
+  return (now) => [markClassFor(mark), ...kinds, ...marks, ...labels.map((l) => labelClassIn(now)(l))];
 }
-const refuseIfTaken = (klass, view) => { const r = takenRefusal(klass, view.record, view.extendsOf); if (r) throw r; };
+/** The one question (world-stacks.mjs § stolenClassRefusal), for a door that reads the law itself. */
+export const stolenQuestion = (klass, now) => stolenClassRefusal(klass, now);
+/** Refuse when any of `klassesOf(the law now)` is of a taken class: the first one found answers. */
+export const refuseIfAnyStolenNow = (deps, klassesOf) => {
+  const now = classesNow(deps);
+  for (const k of klassesOf(now)) { const r = stolenClassRefusal(k, now); if (r) throw r; }
+};
 
 // THE CARRY is the resident's own capacity (LOGOS v2: "On `resident`: `holder:
 // true` and `capacity: 24`, both constitution and locked", ruled 16:03–16:05),
@@ -359,7 +409,7 @@ export async function callUnits(route, args, key, actor, deps) {
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
         const plan = planTake({ fold, actor, from, label: args.label ?? null, n });
-        refuseIfTaken(topClassOf(fold, from, view), view);
+        refuseIfStolenNow(deps, (now) => labelClassIn(now)(plan.label));
         refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: thingsCarried(attachments, actor), adding: n, cap });
         const w = await writeUnits(deps, key, actor, plan);
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
@@ -379,7 +429,7 @@ export async function callUnits(route, args, key, actor, deps) {
         // the chest's one capacity is shared by its counted units and the whole things in it, each holder 1 and all it holds
         const capacityOfTo = chestCap == null ? null : chestCap - wholeLoadIn(attachments, fold, to);
         const plan = planGive({ fold, actor, to, label: args.label ?? null, n, capacityOfTo });
-        refuseIfTaken(topClassOf(fold, actor, view, plan.label), view);
+        refuseIfStolenNow(deps, (now) => labelClassIn(now)(plan.label));
         if (!isChestId(to)) refuseOverCarry({ who: to, units: totalOf(fold, to) + inFlight, things: thingsCarried(attachments, to), adding: n, cap });
         const above = isChestId(to) ? await refuseOverRoomAbove({ deps, view, fold, attachments, holder: to, n, nothing: "Nothing was recorded." }) : [];
         // INTO A CHEST, the room is judged again under the chest's own lock inside
@@ -394,8 +444,10 @@ export async function callUnits(route, args, key, actor, deps) {
       return holdTurn(async () => {
         const { units } = await deps.readRows();
         const fold = foldUnits(units);
-        const plan = planConsume({ fold, actor, label: args.label ?? null, classOfLabel: classOfLabelIn(view), extendsOf: view.extendsOf });
-        refuseIfTaken(topClassOf(fold, actor, view, plan.label), view);
+        // the selection first (what you hold, which label), then the taken question, THEN whether it is consumable
+        const edge = selectLabel(edgesOf(fold, actor), args.label ?? null, { where: "your hands", verb: "consume" });
+        refuseIfStolenNow(deps, (now) => labelClassIn(now)(edge.label));
+        const plan = planConsume({ fold, actor, label: edge.label, classOfLabel: classOfLabelIn(view), extendsOf: view.extendsOf });
         const w = await writeUnits(deps, key, actor, { ...plan, payload: { label: plan.label, returns: [], returns_note: plan.returns_note } });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
         return { did: "consume", units: true, label: plan.label, count: 1, returns: [], returns_note: plan.returns_note, ...w, holds: holdsBlock(after, actor, view) };
@@ -415,7 +467,7 @@ export async function callUnits(route, args, key, actor, deps) {
         // refill fills the room left by EVERYTHING in the chest — units of every label and whole things
         const plan = planRefill({ fold, actor, chest, capacity: capacity - wholeLoadIn(attachments, fold, chest), labels: view.labels(), maker });
         if (plan.noop) return { did: "refill", units: true, noop: true, note: plan.note, chest: await chestBlock(fold, chest, view, attachments, deps) };
-        refuseIfTaken(topClassOf(fold, chest, view) ?? "candy", view);
+        refuseIfStolenNow(deps, (now) => labelClassIn(now)(plan.label));
         const above = await refuseOverRoomAbove({ deps, view, fold, attachments, holder: chest, n: plan.moves[0].n, nothing: "Nothing was recorded." });
         const w = await writeUnits(deps, key, actor, { ...plan, payload: { label: plan.label, capacity } },
           { guard: chestRoomGuard({ chest, capacity, adding: plan.moves[0].n, above }) });
@@ -436,7 +488,7 @@ export async function callUnits(route, args, key, actor, deps) {
         const { units } = await deps.readRows();
         const fold = foldUnits(units);
         const edge = selectLabel(edgesOf(fold, actor), args.label ?? null, { where: "your hands", verb: "set down" });
-        refuseIfTaken(topClassOf(fold, actor, view, edge.label), view);
+        refuseIfStolenNow(deps, (now) => labelClassIn(now)(edge.label));
         const moves = [{ from: actor, to: null, label: edge.label, n: 1 }];
         // the set-downs' sequence lock, shared: the tick's cursor never passes a drop still being written (drop-recovery.mjs)
         const w = await writeUnits(deps, key, actor, { action: UNIT_ACTION.drop, object: actor, moves, payload: { label: edge.label, at: stood } }, { guard: dropSequenceGuard });
@@ -570,7 +622,6 @@ async function markExit(route, args, key, actor, deps, view, cap) {
     if (!ancestry(klass, view.extendsOf).includes("consumable"))
       throw bounce(422, `${label} is not a consumable`, "Nothing was recorded.");
   }
-  refuseIfTaken(String(markClassOf(mark)), view);
   await deps.reachTake(id, actor);
   const by = String(mark.by ?? id.split("/")[0]);
   const slug = id.slice(id.indexOf("/") + 1);
@@ -590,6 +641,8 @@ async function markExit(route, args, key, actor, deps, view, cap) {
     const inFlight = route === "take-back" ? await inFlightFor(actor, deps) : 0; // BEFORE the rows: see inFlightFor
     const { units, attachments } = await deps.readRows();
     if (exitedMarks(units).has(id)) return { already: true, units };
+    // before the carry slot and before any stake is returned: a set-down unit of a taken class stays a mark
+    refuseIfStolenNow(deps, (now) => labelClassIn(now)(label) ?? markClassFor(mark));
     const fold = foldUnits(units);
     if (route === "take-back")
       refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: thingsCarried(attachments, actor), adding: 1, cap });
@@ -848,12 +901,12 @@ async function thingIntoChest(args, key, actor, deps, view) {
   const { capacity } = await chestOrThrow(deps, chestId, view);
   const mark = await deps.markById(thing);
   if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a chest; a private draft changes no hands. Nothing was recorded.");
-  refuseIfTaken(String(markClassOf(mark) ?? "thing"), view);
   await deps.reachTake(chestId, actor);
   return holdTurn(async () => {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== actor) throw bounce(409, `you are not holding ${thing} — ${holder ?? "nobody"} is`, "a thing goes into a chest from your hands. Nothing was recorded.");
+    refuseIfAnyStolenNow(deps, await carriedClasses({ thing, mark, fold: foldUnits(units), attachments, markById: deps.markById }));
     // NO CHEST INSIDE ITSELF, however deep, and no loop followed: the hold lane's one check (holder-tree.mjs)
     refuseNesting({ rows: attachments, thing, into: chestId, noun: "chest", nothing: "Nothing was recorded." });
     const fold = foldUnits(units);
@@ -880,13 +933,13 @@ async function thingFromChest(args, key, actor, deps, view, cap) {
     if (!same.same) throw bounce(403, `${chestId} is closed to other households`, "its welcome is closed: only its maker's household takes from it. Nothing was recorded.");
   }
   const mark = await deps.markById(thing);
-  refuseIfTaken(String(markClassOf(mark) ?? "thing"), view);
   await deps.reachTake(chestId, actor);
   return holdTurn(async () => {
     const inFlight = await inFlightFor(actor, deps); // BEFORE the rows: see inFlightFor
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== chestId) throw bounce(409, `${chestId} is not holding ${thing}`, holder ? `${holder} is. Nothing was recorded.` : "it stands on the ground. Nothing was recorded.");
+    refuseIfAnyStolenNow(deps, await carriedClasses({ thing, mark, fold: foldUnits(units), attachments, markById: deps.markById }));
     refuseOverCarry({ who: actor, units: totalOf(foldUnits(units), actor) + inFlight, things: thingsCarried(attachments, actor), adding: 1, cap });
     await refuseSecondHolder({ who: actor, actor, adding: [thing], held: holdingsOf(attachments, actor), markById: deps.markById, view, nothing: "Nothing was recorded." });
     const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: actor, previous: chestId, madeBy: String(mark?.by ?? thing.split("/")[0]) });

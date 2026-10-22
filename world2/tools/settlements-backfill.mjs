@@ -263,6 +263,8 @@ export const SOFT_STEP_RULES = Object.freeze({
     [/^not stocked this tick — the carried step did not settle/, "refused prereq:carried"],
     // the doors ship dark (src/chests-candy.mjs): a switch, not a failure, so the roll-call stays quiet
     [/^not stocked — chests and candy are off at this office/, "ok switch-off"],
+    // a class taken by the town's own act (WLD-7): the first stock waits for its return, by design
+    [/^not stocked — a class is taken by the town's own act/, "ok switch-off"],
   ],
   drops: [[/ · \d+ failed \(/, "refused write-failed"], [/^restored \d+/, "ok"]],
   // WLD-25: a failed ending fails again every tick, so it alarms; one waiting for

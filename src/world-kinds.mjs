@@ -24,7 +24,7 @@ import { foldUnits, kindEdgesOf, totalOf, unitCount, refuseOverCarry, UNIT_ACTIO
 import { holdingsOf, sameHousehold, holdTurn, liveHolder } from "./world-hold.mjs";
 import { liveHolders, weightOf, refuseNesting } from "./holder-tree.mjs"; // the walks, cycle-safe; counts confer up
 import { chestRoomGuard } from "./chest-lock.mjs";
-import { inFlightFor, writeThingHolding, thingHoldingEntry, wholeLoadIn, heldLoadOf, refuseOverRoomAbove } from "./world-units.mjs";
+import { inFlightFor, writeThingHolding, thingHoldingEntry, wholeLoadIn, heldLoadOf, refuseOverRoomAbove, refuseIfStolenNow, refuseIfAnyStolenNow, carriedClasses } from "./world-units.mjs";
 import { markClassOf, lineageOf } from "./world-grants.mjs";
 import { standsWithin, EARSHOT_M } from "./reach.mjs";
 import {
@@ -242,6 +242,8 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
     const room = roomIn({ capacity: law.capacity, fold, holder: to, things, inFlight });
     refuseOverRoom({ n, room, name: law.resident ? to : `the ${law.className ?? "holder"} ${to}`, capacity: law.capacity, holding: totalOf(fold, to) + things + inFlight });
     const above = law.resident ? [] : await refuseOverRoomAbove({ deps, view, fold, attachments, holder: to, n, nothing: "Nothing was made." });
+    // MAKING A KIND OF A CLASS TAKEN BY THE TOWN'S OWN ACT REFUSES TOO (WLD-7; Darko 2026-10-17, ruling (2)): the refill with it
+    refuseIfStolenNow(deps, () => kind);
     const plan = planMake({ actor, kind, n, to, via });
     const w = await writeKinds(deps, key, actor, plan, {
       guard: law.resident ? null : chestRoomGuard({ chest: to, capacity: law.capacity, adding: n, above }),
@@ -267,6 +269,7 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== String(actor)) throw bounce(409, `you are not holding ${thing}: ${holder ?? "nobody"} is`, "a thing goes into a holder from your hands. Nothing was changed.");
+    refuseIfAnyStolenNow(deps, await carriedClasses({ thing, mark, fold: foldUnits(units), attachments, markById: deps.markById }));
     refuseNesting({ rows: attachments, thing, into: to }); // however deep, and a loop already in the rows is refused, never followed
     const fold = foldUnits(units);
     // COUNTS CONFER UP (Darko 2026-10-17 23:29): the thing takes 1 and everything it holds, here and in every holder above
@@ -294,6 +297,7 @@ export async function thingFromHolder({ args, key, actor, deps, view }) {
     const { units, attachments } = await deps.readRows();
     const holder = liveHolder(attachments, thing);
     if (holder !== from) throw bounce(409, `${from} is not holding ${thing}`, holder ? `${holder} is. Nothing was changed.` : "it stands on the ground. Nothing was changed.");
+    refuseIfAnyStolenNow(deps, await carriedClasses({ thing, mark, fold: foldUnits(units), attachments, markById: deps.markById }));
     refuseOverCarry({ who: actor, units: totalOf(foldUnits(units), actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: 1, cap: carryOf(view) });
     await refuseSecondHolder({ who: actor, actor, adding: [thing], held: holdingsOf(attachments, actor), markById: deps.markById, view });
     const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: String(actor), previous: from, madeBy: ownerOf(mark, thing) });
@@ -352,6 +356,10 @@ export async function callKinds(route, args, key, actor, deps) {
         const inside = [];
         for (const t of holdingsOf(attachments, from)) inside.push({ thing: t, class: markClassOf(await deps.markById(t).catch(() => null)) ?? "thing" });
         const plan = { ...planTakeKinds({ fold, actor, from, kind, n, seed, things: inside, extendsOf: view.extendsOf }), seed };
+        // what the draw moves, each kind and each whole thing with all it carries, of the law of this moment (WLD-7)
+        const drawn = [];
+        for (const t of plan.things ?? []) drawn.push(await carriedClasses({ thing: t, mark: await deps.markById(t).catch(() => null), fold, attachments, markById: deps.markById }));
+        refuseIfAnyStolenNow(deps, (now) => [...plan.moves.filter((m) => m.n > 0).map((m) => m.kind), ...drawn.flatMap((f) => f(now))]);
         try {
           refuseOverCarry({ who: actor, units: totalOf(fold, actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: n, cap });
         } catch (e) {
@@ -415,6 +423,7 @@ export async function callKinds(route, args, key, actor, deps) {
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
         const plan = planGiveKinds({ fold, actor, to, kind: args.kind ?? null, n });
+        refuseIfStolenNow(deps, () => plan.moves[0].kind);
         if (law.resident) refuseOverCarry({ who: to, units: totalOf(fold, to) + inFlight, things: holdingsOf(attachments, to).length, adding: n, cap });
         let above = [];
         if (!law.resident) {
@@ -454,6 +463,7 @@ export async function callKinds(route, args, key, actor, deps) {
             held || !consumable ? `consume uses up what is made to be used up (a consumable, as candy is); ${yours}. Nothing was changed.` : `${yours}. Nothing was changed.`);
         }
         const edge = selectKind(edible, args.kind ?? null, { where: "your hands", verb: "consume" });
+        refuseIfStolenNow(deps, () => edge.kind);
         const plan = { action: UNIT_ACTION.consume, object: String(actor), moves: [{ from: String(actor), to: null, kind: edge.kind, n: 1 }], edge: { giver: String(actor), receiver: null } };
         const w = await writeKinds(deps, key, actor, plan, { words: `${actor} consumed 1 ${edge.kind}` });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
@@ -483,6 +493,7 @@ export async function callKinds(route, args, key, actor, deps) {
         if (!edible.length) throw bounce(409, "you carry nothing to offer",
           `an offer is one of a consumable kind you carry; leave-mark { kind, count: 1, to: "${actor}" } makes one into your hands (explain: "candy" lists the kinds). Nothing was changed.`);
         const edge = selectKind(edible, args.kind ?? null, { where: "your hands", verb: "offer" });
+        refuseIfStolenNow(deps, () => edge.kind);
         const plan = { action: UNIT_ACTION.offer, object: creature, moves: [{ from: String(actor), to: null, kind: edge.kind, n: 1 }], edge: { giver: String(actor), receiver: null } };
         // `guard`: the creature door's half of D6 in this write's own transaction (creature-verbs § aimGuard)
         const w = await writeKinds(deps, key, actor, plan, { words: `${actor} held out 1 ${edge.kind} to ${creature}, and it was used up`, instant: true,
