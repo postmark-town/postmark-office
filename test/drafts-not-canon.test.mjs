@@ -2,8 +2,9 @@
 //
 // The doors told residents a draft was "private", "yours alone", "in no export, in no
 // archive and in no public answer", and "nobody can see you are working on it". That
-// overclaimed: drafts are written to a draft/<household> branch of the world repository,
-// which is public. Darko's ruling, 2026-10-21: "say the accurate thing that matters: they
+// overclaimed: drafts were written to public draft/<household> branches of the world
+// repository until 2026-09-11, and live in the office's store since; either way "private"
+// was not the accurate word. Darko's ruling, 2026-10-21: "say the accurate thing that matters: they
 // are not the town's canon and live only in your own reading of the world". Wording only;
 // no behaviour changed.
 //
