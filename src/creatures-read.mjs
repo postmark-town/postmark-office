@@ -161,7 +161,7 @@ const fight0 = (law, c) => law.fightOf?.(c.kind) ?? null;
 /** What each part of a fight in set pieces asks, in plain words (the law in the season's notes says it whole). */
 export function fightRoads(fight, { nerve = null } = {}) {
   const parts = {
-    feint: "when it hurls something at you, your next act near it answers: dodge, walk or leave and you lose nerve; anything else and you hold, which raises its sanity",
+    feint: "when it hurls something at you, your next act near it answers: dodge, walk or leave and you lose nerve; a strike does neither; anything else and you hold, which raises its sanity",
     disguise: "it may not be what it seems",
     unbreakable: `strikes cannot wear it down; persuade it in your household's own words, once each settlement, at a cost of ${fight?.pieces?.find((p) => p.piece === "unbreakable")?.persuade?.nerve ?? "much"} nerve`,
   };

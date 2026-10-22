@@ -120,11 +120,11 @@ export function hurlAnswered(living, creature, handle, act, now = Date.now()) {
 }
 
 /**
- * A STRIKE UNDER A FEINT (WLD-25/m, Darko's call): "holds" reads it as any other act
- * (the ruled text, as built), "neither" lets it answer nothing, so the feint stays
- * open for the next act (Wright's rec: no nerve lost, no sanity). One line.
+ * A STRIKE UNDER A FEINT: RULED "neither" (WLD-25/m, Darko 2026-10-22 15:48 EDT). A strike
+ * answers nothing (no nerve lost, no sanity), and the feint stays open for the next act.
+ * "holds" (read it as any other act) is the other value, kept as a one-line switch.
  */
-export const STRIKE_UNDER_FEINT = "holds";
+export const STRIKE_UNDER_FEINT = "neither";
 
 /**
  * WHAT AN ACT MAKES OF A FEINT AIMED AT ITS ACTOR: { outcome, sanity?, nerve? }, or

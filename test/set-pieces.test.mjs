@@ -180,10 +180,10 @@ test("the target's next act in the ring answers it: dodge, walk or exit flinch (
   assert.deepEqual(answerOf("exit", FIGHT.pieces[0]), { outcome: "flinched", nerve: 3 });
   assert.deepEqual(answerOf("say", FIGHT.pieces[0]), { outcome: "held", sanity: 2 });
   assert.deepEqual(answerOf("watch", FIGHT.pieces[0]), { outcome: "held", sanity: 3 });
-  // a strike under a feint: "holds" as built; "neither" (WLD-25/m, Darko's call) answers nothing, so it stays open
-  assert.equal(STRIKE_UNDER_FEINT, "holds");
-  assert.deepEqual(answerOf("strike", FIGHT.pieces[0]), { outcome: "held", sanity: 2 });
-  assert.equal(answerOf("strike", FIGHT.pieces[0], undefined, { strike: "neither" }), null);
+  // a strike under a feint: RULED "neither" (WLD-25/m, 15:48): it answers nothing, so the feint stays open
+  assert.equal(STRIKE_UNDER_FEINT, "neither");
+  assert.equal(answerOf("strike", FIGHT.pieces[0]), null);
+  assert.deepEqual(answerOf("strike", FIGHT.pieces[0], undefined, { strike: "holds" }), { outcome: "held", sanity: 2 }, "the other value");
   const run = async (verb, extra = {}) => {
     const h = hurl("kai");
     const living = livingWith(lawWith(), h);
@@ -203,6 +203,10 @@ test("the target's next act in the ring answers it: dodge, walk or exit flinch (
   assert.deepEqual(rowsOf(said.w, SANITY_ACTION).map((r) => payloadOf(r).by), [2]);
   const watched = await run("watch", { aimed: true });
   assert.deepEqual(rowsOf(watched.w, SANITY_ACTION).map((r) => payloadOf(r).by), [3], "watch holds more");
+  const struck = await run("strike", { aimed: true });
+  assert.equal(rowsOf(struck.w, HURLED_ACTION).length, 0, "a strike answers nothing (RULED neither)");
+  assert.equal(rowsOf(struck.w, SANITY_ACTION).length + rowsOf(struck.w, NERVE_ACTION).filter((r) => payloadOf(r).why === "flinched").length, 0);
+  assert.equal(openHurls(struck.living, struck.living.byId.get(ID), NOW).filter((h) => h.object === "kai").length, 1, "and the feint stays open");
   // an act written before the feint was aimed is not its answer
   const early = livingWith(lawWith());
   const before = act({ actId: "1" });
