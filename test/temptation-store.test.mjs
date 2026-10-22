@@ -19,7 +19,7 @@ import { TEMPT_ACTION, TEMPTED_ACTION, TALLY_ACTION, phaseOf, talliesOf } from "
 import { encounterTick, givenToATempter, writeTempted, ACTS_SINCE_SQL, __resetEncounterTickForTest } from "../src/encounter-verbs.mjs";
 import { endCreatures } from "../world2/tools/creature-endings.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "../src/world-journal.mjs";
-import { currentCrossing } from "../src/crossings.mjs";
+import { currentCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "../src/crossings.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -59,6 +59,31 @@ const WHERE = { kai: { x: 10, y: 0 }, ren: { x: 0, y: 12 }, mo: { x: -14, y: 0 }
 const present = async () => ({ residents: Object.entries(WHERE).map(([handle, p]) => ({ handle, distance_m: Math.hypot(p.x, p.y) })) });
 const lookup = (h) => ({ key: `solo:${h}`, slug: null });
 
+/** How long the drive runs on its own clock: the tick resolves 31 minutes on, plus the drive's own waits and margin. */
+const DRIVE_MS = 40 * 60_000;
+/**
+ * The drive's clock: the real one, held so the whole drive (to the tick 31 minutes on) stays inside the real
+ * clock's settlement window AND its crossing. The pen refuses a row stamped with a crossing that has not opened
+ * ("a row for crossing 266 may not enter the record while the open window is 265"), so a drive begun in the
+ * last half hour before 00:00Z or 12:00Z wrote its tick's rows into the next crossing and every one was refused. Pure.
+ */
+function driveClockNow(realStart) {
+  const nextCrossing = CROSSING_EPOCH_UTC + (currentCrossing(realStart) + 1) * CROSSING_MS;
+  return Math.min(realStart, windowAt(realStart).ends - DRIVE_MS, nextCrossing - DRIVE_MS);
+}
+
+nodeTest("the drive's clock keeps the whole drive inside the real clock's crossing and window, at any hour", () => {
+  // ⚑ THE FLIP: drop the nextCrossing bound from driveClockNow → the half hour before each crossing reds
+  for (let m = 0; m < 24 * 60; m += 5) {
+    const real = Date.UTC(2026, 9, 22, 0, 0) + m * 60_000;
+    const base = driveClockNow(real), end = base + 31 * 60_000 + 2 * 60_000;
+    const at = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}Z`;
+    assert.ok(base <= real, `never ahead of the real clock (${at})`);
+    assert.equal(currentCrossing(end), currentCrossing(real), `the tick's rows stay in the open crossing (${at})`);
+    assert.equal(windowAt(end).id, windowAt(real).id, `the tallies stay in the real clock's window (${at})`);
+  }
+});
+
 test("ON THE STORE · three residents: one obeys, one declines, one answers plainly; a phase advances; the settlement ends it by persuasion", async () => {
   const s = await startStore({ db: "temptation_drive" });
   const api = await s.connect("office_api");
@@ -69,10 +94,11 @@ test("ON THE STORE · three residents: one obeys, one declines, one answers plai
   pen.__setPoolForTest(pool);
   try {
     const q = async (t, p) => (await api.query(t, p)).rows;
-    // THE DRIVE'S CLOCK: its 31 minutes must fit inside one settlement window (the tallies are a window's), so
-    // near a window's end the whole drive runs an hour earlier, on the record's own instants (the pen writes `at` from them)
+    // THE DRIVE'S CLOCK: its 31 minutes must fit inside one settlement window (the tallies are a window's) and one
+    // crossing (the pen refuses a row for a crossing not yet open), so near either end the whole drive runs earlier,
+    // on the record's own instants (the pen writes `at` from them): driveClockNow
     const realStart = Date.now();
-    const base = Math.min(realStart, windowAt(realStart).ends - 40 * 60_000);
+    const base = driveClockNow(realStart);
     const clock = () => base + (Date.now() - realStart);
     const row = (actor, action, object, payload, cls = "creature") => normalizeRow({ crossing: currentCrossing(), actor, action, object, cls,
       at: { anchor: WORLD_ANCHOR, dx: 0, dy: 0 }, payload, writtenAt: iso(clock()) });
