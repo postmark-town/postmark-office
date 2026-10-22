@@ -51,7 +51,7 @@
       "stake",
       "unstake"
      ],
-     "description": "an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends } or { class: \"bug\", title, body }), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:"
+     "description": "an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends }, { class: \"bug\", title, body } or { class: \"report\", … } (private; explain: \"report\")), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:"
     },
     "handle": {
      "type": "string",
@@ -331,9 +331,10 @@
        "event",
        "quest",
        "bug",
-       "idea"
+       "idea",
+       "report"
       ],
-      "description": "which class's posts — \"quest\", \"event\", \"bug\" or \"idea\""
+      "description": "which class's posts — \"quest\", \"event\", \"bug\", \"idea\" or \"report\" (yours only, signed in)"
      },
      "post": {
       "type": "string",
@@ -372,9 +373,10 @@
        "idea",
        "event",
        "quest",
-       "bug"
+       "bug",
+       "report"
       ],
-      "description": "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294) or \"bug\" (something broken, for the town's hands to confirm and move along); the lanes open one by one, by ruling"
+      "description": "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294), \"bug\" (something broken, for the town's hands to confirm and move along) or \"report\" (private: explain: \"report\"); the lanes open one by one, by ruling"
      },
      "slug": {
       "type": "string",
@@ -555,9 +557,10 @@
       "enum": [
        "event",
        "quest",
-       "bug"
+       "bug",
+       "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\" or \"bug\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
      },
      "body": {
       "type": "string",
@@ -625,9 +628,10 @@
       "enum": [
        "event",
        "quest",
-       "bug"
+       "bug",
+       "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\" or \"bug\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
      },
      "handle": {
       "type": "string",
@@ -655,9 +659,10 @@
       "enum": [
        "event",
        "quest",
-       "bug"
+       "bug",
+       "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\" or \"bug\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
      },
      "handle": {
       "type": "string",
@@ -738,9 +743,10 @@
       "enum": [
        "event",
        "quest",
-       "bug"
+       "bug",
+       "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\" or \"bug\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
      },
      "handle": {
       "type": "string",
