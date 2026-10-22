@@ -318,7 +318,8 @@ export function refuseOverCarry({ who, units, things, adding, cap }) {
 // ── A CLASS TAKEN BY THE TOWN'S OWN ACT (WLD-7) ─────────────────────────────
 //
 // The town can take a class away for a while: its record says `dials.stolen:
-// true` (the boolean, nothing else; a record saying `taken: true` is not read
+// true`, in its frontmatter or as its own `stolen` property node (the class view
+// reads both, property first: law-classes § dialsOf) (the boolean, nothing else; a record saying `taken: true` is not read
 // as stolen, and there is no alias), with a sentence in `dials.clue`. While it
 // says so, every act that moves, makes or uses up a thing or a unit OF that
 // class, or of a class extending it, refuses with that sentence (423), and

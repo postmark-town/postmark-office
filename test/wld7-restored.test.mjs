@@ -79,3 +79,39 @@ test("a failed read keeps what stood for the same 30 s: one retry a window, neve
   assert.equal(asked, 2, "once the keep is out, the next act asks again");
   __setRestoredForTest(null);
 });
+
+// THE DIAL AS A PROPERTY NODE (LOGOS v2, property first): the law snapshot reads a class's own
+// top-level `stolen` property over its frontmatter dials (law-classes § dialsOf), so the run and
+// the list of taken classes read it the same way, or a restore would never lift a property-node dial.
+test("the dial written as the class's own property node: the run reads it, and the taken list finds it", async () => {
+  const at = (n, at, { prop, dials } = {}) => ({ number: n, blessed_at: at, data: { dials: dials ?? {} }, ...(prop === undefined ? {} : { prop: { class: "trinket", parent: null, name: "stolen", default: prop } }) });
+  assert.equal(stolenSinceOf([at(131, "2026-10-27T06:30:00Z", { prop: true }), at(130, "2026-10-26T18:30:00Z", { prop: "true" }), at(129, "x", { prop: false })]), "2026-10-26T18:30:00Z",
+    "a property node's true (or its bare word) is the dial on");
+  assert.equal(stolenSinceOf([at(131, "y", { prop: false, dials: { stolen: true } })]), null, "the property outranks the frontmatter, as the snapshot reads it");
+  assert.equal(stolenSinceOf([at(131, "z", { dials: { stolen: true } })]), "z", "with no property node, the frontmatter dial");
+  assert.match(CLASS_RUN_SQL, /p\.kind = 'property' AND p\.key = \$1 \|\| '\/stolen'/);
+
+  const snap = await import("../src/law-snapshot.mjs");
+  const SHA2 = "f".repeat(40);
+  const rows = [cls("thing"), cls("trinket", { extends: "thing" }),
+    { number: 300, tag_sha: SHA2, newest: 300, kind: "property", key: "trinket/stolen", data: { class: "trinket", parent: null, name: "stolen", tier: "sovereign", default: true, id: "the-town/trinket-stolen" } }];
+  await snap.reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === snap.LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : rows }) });
+  try {
+    __setRestoredForTest(null);
+    const asked = [];
+    const t0 = Date.parse("2026-10-27T07:00:00Z");
+    restoredClass("trinket", { now: t0, query: async (sql, params) => { asked.push(sql === CLASS_RUN_SQL ? `run ${params[0]}` : "restores"); return { rows: [] }; } });
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(asked, ["restores", "run trinket"], "the law's taken classes include one whose dial is a property node");
+  } finally { snap.resetLawSnapshot(); __setRestoredForTest(null); }
+});
+
+test("the class view reads a property-node dial the same way: taken, and lifted by a restore", () => {
+  const snap = lawSnapshotFromRows([cls("thing"), cls("trinket", { extends: "thing", dials: { clue: "frontmatter's clue" } }), cls("glass-bead", { extends: "trinket" }),
+    { number: 300, tag_sha: SHA, newest: 300, kind: "property", key: "trinket/stolen", data: { class: "trinket", parent: null, name: "stolen", tier: "sovereign", default: "true", id: "the-town/trinket-stolen" } }]);
+  const view = classViewOf(snap, { restored: () => false });
+  assert.equal(view.stolenAny(), true);
+  assert.equal(view.dials("trinket").clue, "frontmatter's clue", "the frontmatter's other dials still stand");
+  assert.ok(stolenClassRefusal("glass-bead", view), "a subclass of a taken class is refused");
+  assert.equal(stolenClassRefusal("glass-bead", classViewOf(snap, { restored: () => true })), null, "restored: answered as on any day");
+});

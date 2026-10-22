@@ -43,7 +43,7 @@ import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's ow
 import { markClassOf } from "./world-grants.mjs";
 import { restoredClass } from "./restored-classes.mjs"; // a taken class given back by the town's own act (WLD-25/j)
 import { holdingOf } from "./holding-law.mjs"; // holder, capacity, open: read from the class tree (LOGOS v2, O1)
-import { snapProperty } from "./law-classes.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { snapProperty, dialsOf as lawDialsOf } from "./law-classes.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1); a class's dials, property first
 import { chestsCandyOn, chestsCandyOffError } from "./chests-candy.mjs"; // WLD-27 ships dark until LOGOS v2's doors replace it
 
 // ── SLOTS HELD FOR AN ACT STILL IN FLIGHT (Bevel's review, finding 3) ───────
@@ -115,11 +115,9 @@ export function unitRouteOf(args = {}, { thingMark = null } = {}) {
 /** The class layer the unit door reads, from one law snapshot. */
 export function classViewOf(snap, { restored = restoredClass } = {}) {
   const rec = (name) => (snap?.classes?.get(String(name)) ?? null);
-  const dialsOf = (name) => {
-    const d = rec(name)?.dials;
-    const v = typeof d === "string" ? (() => { try { return JSON.parse(d); } catch { return null; } })() : d;
-    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
-  };
+  // the law snapshot's one reading of a class's dials (law-classes § dialsOf): its own top-level
+  // property nodes first (LOGOS v2), then its frontmatter, so `stolen` reads the same either way it is written
+  const dialsOf = (name) => (snap?.classes ? lawDialsOf(snap, name) : {});
   return {
     record: (name) => { const r = rec(name); return r ? { ...r, dials: dialsOf(name) } : null; },
     extendsOf: (name) => (rec(name)?.extends ? String(rec(name).extends) : null),

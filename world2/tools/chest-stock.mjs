@@ -37,7 +37,7 @@
 // standing chests from `marks` (data->>'class' = 'chest'); the unit acts from
 // `acts`. It writes nothing but the stock acts, and never a ledger line.
 
-import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "../../src/law-classes.mjs";
+import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows, dialsOf as lawDialsOf } from "../../src/law-classes.mjs";
 import { UNIT_ACTION, foldUnits, stockedChests, candyLabels, planChestStock, chestDials } from "../../src/world-stacks.mjs";
 import { stolenRefusal } from "../../src/world-stacks.mjs"; // a class taken by the town's own act (WLD-7)
 import { readRestored } from "../../src/restored-classes.mjs"; // ...and given back by its own act (WLD-25/j)
@@ -114,7 +114,8 @@ export async function planFromStore(client) {
   // taken, and the next tick after the return stocks it, once, by the same plan and nonce.
   // Asked of the law at the pin, the law the plan reads.
   const stockedClass = [...law.classes.entries()].find(([, r]) => r === candy)?.[0] ?? null;
-  const recOf = (n) => { const r = law.classes.get(String(n)) ?? null; if (!r) return null; const d = typeof r.dials === "string" ? (() => { try { return JSON.parse(r.dials); } catch { return {}; } })() : r.dials; return { ...r, dials: d ?? {} }; };
+  // its dials as the law snapshot reads them: the class's own property nodes first (LOGOS v2), then its frontmatter
+  const recOf = (n) => { const r = law.classes.get(String(n)) ?? null; return r ? { ...r, dials: lawDialsOf(law, n) } : null; };
   const upOf = (n) => (law.classes.get(String(n))?.extends ? String(law.classes.get(String(n)).extends) : null);
   let taken = stockedClass ? stolenRefusal(stockedClass, recOf, upOf) : null;
   // ...unless the town has given it back by its own act since the dial went on (WLD-25/j)

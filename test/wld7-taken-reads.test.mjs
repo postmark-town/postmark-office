@@ -70,20 +70,23 @@ test("the switch's other arm, \"hide\": no take of a thing of it, no consume of 
 });
 
 /** A store for the chest tick: the law at the pin (the class it stocks taken, or not), one admitted chest of cy's, cy's label. */
-function stockStore({ taken, restoredAt = null }) {
+function stockStore({ taken, restoredAt = null, asProperty = false }) {
   const labelled = { class: "candy", extends: "consumable", labels: [{ label: "test-beads", name: "Test Beads", creator: "cy" }], dials: {} };
-  if (taken) labelled.dials = { stolen: true, clue: "a synthetic clue" }; // the class the chest stocks, taken
+  if (taken && !asProperty) labelled.dials = { stolen: true, clue: "a synthetic clue" }; // the class the chest stocks, taken
+  // ...or taken by its own top-level property node (LOGOS v2, property first), which the snapshot reads over the frontmatter
+  const prop = taken && asProperty ? { class: labelled.class, parent: null, name: "stolen", tier: "sovereign", default: true, id: "the-town/candy-stolen" } : null;
   const law = [
     { number: 120, tag_sha: SHA, newest: 120, kind: "class", key: labelled.class, data: labelled },
     { number: 120, tag_sha: SHA, newest: 120, kind: "class", key: "consumable", data: { class: "consumable", extends: "thing", dials: {} } },
     { number: 120, tag_sha: SHA, newest: 120, kind: "class", key: "chest", data: { class: "chest", extends: "thing", dials: { first_stock: 30, capacity: 30 } } },
+    ...(prop ? [{ number: 120, tag_sha: SHA, newest: 120, kind: "property", key: `${labelled.class}/stolen`, data: prop }] : []),
   ];
   const writes = [];
   const client = { query: async (sql, params = []) => {
     const q = String(sql);
     // the restore read (restored-classes.mjs): the town's restore acts, and the class's run of laws
     if (q === RESTORE_ROWS_SQL) return { rows: restoredAt ? [{ id: "9", action: "restore", actor: "the-town", object: labelled.class, at: restoredAt }] : [] };
-    if (q === CLASS_RUN_SQL) return { rows: [{ number: 120, blessed_at: "2026-10-26T06:30:00Z", data: labelled }] };
+    if (q === CLASS_RUN_SQL) return { rows: [{ number: 120, blessed_at: "2026-10-26T06:30:00Z", data: labelled, prop }] };
     if (/law_projection|LAW_AT|kind = 'class'/i.test(q) || /FROM settlements/i.test(q) && /law/i.test(q)) return { rows: law };
     if (/INSERT INTO acts/i.test(q)) { writes.push(params); return { rows: [{ id: 1 }] }; }
     return { rows: [] };
@@ -108,4 +111,12 @@ test("given back by the town's own act since the dial went on, the class it stoc
   assert.equal((await stockChests(back.client, { crossing: 267 })).waits, undefined);
   const before = stockStore({ taken: true, restoredAt: "2026-10-25T18:00:00Z" });
   assert.equal((await stockChests(before.client, { crossing: 267 })).waits, true, "a restore from before the dial went on lifts nothing");
+});
+
+test("the dial written as the class's own property node: the chest tick waits on it, and a restore lifts it, the same as the frontmatter dial", async () => {
+  const t = stockStore({ taken: true, asProperty: true });
+  assert.equal((await stockChests(t.client, { crossing: 265 })).waits, true);
+  assert.deepEqual(t.writes, []);
+  const back = stockStore({ taken: true, asProperty: true, restoredAt: "2026-10-27T18:31:00Z" });
+  assert.equal((await stockChests(back.client, { crossing: 267 })).waits, undefined, "given back: stocked again");
 });
