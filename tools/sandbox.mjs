@@ -111,8 +111,8 @@ const GH_BASE = 2_050_000_000;
 
 // ── small helpers ────────────────────────────────────────────────────────────
 
-const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 }).trim();
-const gitQuiet = (repo, ...a) => spawnSync("git", ["-C", repo, ...a], { encoding: "utf8" });
+const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true }).trim();
+const gitQuiet = (repo, ...a) => spawnSync("git", ["-C", repo, ...a], { encoding: "utf8", windowsHide: true });
 const say = (s) => process.stdout.write(`${s}\n`);
 const ms = (t0) => `${Math.round((Date.now() - t0) / 100) / 10} s`;
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
@@ -150,7 +150,7 @@ function pathWithSh(env) {
   const probe = spawnSync("sh", ["-c", "true"], { env, windowsHide: true });
   if (probe.status === 0) return env;
   try {
-    const exec = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim(); // …/mingw64/libexec/git-core
+    const exec = execFileSync("git", ["--exec-path"], { encoding: "utf8", windowsHide: true }).trim(); // …/mingw64/libexec/git-core
     const usrBin = resolve(exec, "..", "..", "..", "usr", "bin");
     if (existsSync(join(usrBin, "sh.exe"))) {
       const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
@@ -401,7 +401,7 @@ async function ports(...wanted) {
 async function writeGraph(store, world, scratch) {
   const rows = join(scratch, "world-rows.json");
   execFileSync(process.execPath, [join(OFFICE, "src", "world-hydrate.mjs"), "--world", world, "--no-db", "--rows-out", rows, "--no-gexf", "--no-lints"],
-    { stdio: "ignore", cwd: OFFICE, env: cleanEnv() });
+    { stdio: "ignore", cwd: OFFICE, env: cleanEnv(), windowsHide: true });
   const { graphSnapshotFromTables, writeGraphSnapshot } = await importFrom(join(OFFICE, "world2", "tools", "graph-ingest.mjs"));
   const c = await store.connect("law_ingester");
   try { await writeGraphSnapshot(c, graphSnapshotFromTables(JSON.parse(readFileSync(rows, "utf8")))); } finally { await c.end(); }
@@ -831,7 +831,7 @@ function commandLineOf(pid) {
     if (process.platform === "linux") return readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
     if (process.platform === "win32")
       return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: "utf8", windowsHide: true }).trim();
-    return execFileSync("ps", ["-o", "command=", "-p", String(Number(pid))], { encoding: "utf8" }).trim();
+    return execFileSync("ps", ["-o", "command=", "-p", String(Number(pid))], { encoding: "utf8", windowsHide: true }).trim();
   } catch { return ""; }
 }
 
@@ -961,7 +961,7 @@ async function main(argv = process.argv.slice(2)) {
         const args = [join(env.WORLD_CLONE, "tools", "world-poc.mjs"), ...argv];
         const crossing = flag("--crossing");
         if (!crossing) args.push("--crossing", String(await crossingNow(env.TOWN_CLONE)));
-        const r = spawnSync(process.execPath, args, { cwd: env.WORLD_CLONE, stdio: "inherit", env: { ...cleanEnv(), SANDBOX_FENCE: "1", NODE_OPTIONS: `--import=${pathToFileURL(FENCE).href}` } });
+        const r = spawnSync(process.execPath, args, { cwd: env.WORLD_CLONE, stdio: "inherit", windowsHide: true, env: { ...cleanEnv(), SANDBOX_FENCE: "1", NODE_OPTIONS: `--import=${pathToFileURL(FENCE).href}` } });
         return r.status ?? 1;
       }
       case "mcp-config": {
