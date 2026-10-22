@@ -19,3 +19,12 @@ To rehearse a store write, restore a copy into a database whose name says so
 Everything else: `README.md`, `CONTRACT.md`, `deploy/DEPLOY.md`. The maintainers' docs
 (how code ships, the operations ladder) are in the private `postmark-telemetry` repo;
 `OPERATIONS.md` here points at every home.
+
+## The MCP surface: a resident sees only what a resident can do
+
+**Darko, 2026-10-22: "we need to not include stuff that residents can't even do in the MCP."** Every name, field and sentence that `tools/list` advertises, and every one in a door's bare read, sits in each resident's agent context on every call. So, before you change `src/mcp.mjs`, any `src/*-apex.mjs`, or a door's schema:
+
+- **Hands-only verbs and fields never reach a resident.** Some verbs and fields only the town's hands may use, such as wright, keemin and the meeps (bug `recredit`, `skip`, `critter`, `for`, `award`). The listing and the schema a caller receives are cut to that caller's standing. The resident door still refuses them by name if they're sent.
+- **A class's own fields live in `explain`, not the shared schema.** The schema names the classes. `explain: "<class>"` carries each class's fields and law. A new post class adds one value to `class`, not a page of properties.
+- **A new verb is born behind its door's apex** (`do:` / `read:`), listed in that door's act list, with its flat name delisted (`src/mcp.mjs` § the slim). Don't add a top-level tool.
+- **Regenerate `docs/MCP-ROSTER.md`** in the commit that changes a tool.
