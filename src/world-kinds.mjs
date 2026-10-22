@@ -145,13 +145,15 @@ function refuseIfClosed({ mark, id, law, actor, deps, verb }) {
 }
 
 /** A holder that names what it takes in (`accepts`, WLD-5 B): anything else is refused at the
- *  door, and a count of a kind is never one of the marks it names. */
+ *  door, and a count of a kind is never one of the marks it names. THE REFUSAL NAMES NOTHING IT
+ *  TAKES (Wright 2026-10-22, from Darko's WLD-25/l): which thing fits is a holder's own puzzle,
+ *  and a refusal that listed the right one would answer it. The list stays in its law, where
+ *  anyone who reads it can find it. */
 function refuseIfNotAccepted({ id, law, thing = null }) {
   if (!Array.isArray(law?.accepts)) return;
   if (thing != null && law.accepts.includes(String(thing))) return;
-  throw bounce(403, thing != null ? `${id} does not take ${thing}` : `${id} takes in only the marks it names`,
-    `its maker made it take in only these, by id: ${law.accepts.join(", ")}${thing != null ? "" : "; a count of a kind is none of them"}. Nothing was changed.`,
-    { accepts: [...law.accepts] });
+  throw bounce(403, `${id} does not take that`,
+    `it takes in only what its maker named in its law${thing != null ? "" : ", and a count of a kind is never one of those"}; this is not one of them. Nothing was changed.`);
 }
 
 /** A holder that keeps what goes in (`keeps`, WLD-5 B): nothing comes back out, by anyone. */

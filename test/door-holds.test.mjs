@@ -92,11 +92,12 @@ test("ACCEPTS: a give of a mark it names goes in; anything else, and any count o
   assert.deepEqual([g.did, g.edge], ["give", { giver: "tw-bo", receiver: DOOR }]);
   const no = rig({ things: [held("tw-bo", OTHER)] });
   await assert.rejects(go(no, "thing-into-holder", { thing: OTHER, to: DOOR }),
-    (e) => e.code === 403 && e.defect === `${DOOR} does not take ${OTHER}` && e.accepts.join() === [A, B].join());
+    (e) => e.code === 403 && e.defect === `${DOOR} does not take that` && !("accepts" in e) && ![A, B].some((id) => `${e.defect} ${e.hint}`.includes(id)),
+    "the refusal names nothing it takes (WLD-25/l): which fits is the holder's own puzzle");
   const units = rig();
   units.seed([{ from: null, to: "tw-bo", kind: "pocket-comet", n: 2 }]);
-  await assert.rejects(go(units, "give", { kind: "pocket-comet", count: 1, to: DOOR }), (e) => e.code === 403 && /takes in only the marks it names/.test(e.defect));
-  await assert.rejects(go(rig(), "make", { kind: "pocket-comet", count: 1, to: DOOR }, "tw-ana"), (e) => e.code === 403 && /takes in only the marks it names/.test(e.defect));
+  await assert.rejects(go(units, "give", { kind: "pocket-comet", count: 1, to: DOOR }), (e) => e.code === 403 && /does not take that/.test(e.defect) && /a count of a kind is never one of those/.test(e.hint));
+  await assert.rejects(go(rig(), "make", { kind: "pocket-comet", count: 1, to: DOOR }, "tw-ana"), (e) => e.code === 403 && /does not take that/.test(e.defect));
   assert.equal(no.acts.length + units.acts.length - 1, 0, "nothing written by a refusal (the seed is the one act)");
 });
 
