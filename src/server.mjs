@@ -85,7 +85,6 @@ import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any offi
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
 import { withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
-import { CHALLENGE_PATH, serveChallenge } from "./openai-apps-challenge.mjs"; // POS-749: the ChatGPT app directory's domain check
 import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: read-only workers behind nginx
 import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot } from "./read-workers.mjs"; // POS-266: reads on the other cores
 import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's default shape decides whether a handover carries earshot
@@ -986,10 +985,6 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       .catch((e) => bounceFault(res, "the heard tally tripped", e));
     return;
   }
-
-  // OpenAI's domain check (POS-749): keyless, the bare token or a 404, answered
-  // here on the writer (src/openai-apps-challenge.mjs; nginx sends the one path).
-  if (path === CHALLENGE_PATH && (req.method === "GET" || req.method === "HEAD")) return serveChallenge(req, res);
 
   // OAuth + discovery routes are unauthenticated by nature (the dance IS the
   // authentication) — they come before the bearer gate.
