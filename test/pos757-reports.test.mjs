@@ -104,6 +104,31 @@ test("FALSIFIER: filing and moving a report writes no act and no post, so no pub
   assert.equal(await count("SELECT count(*) AS n FROM reports"), 1);
 });
 
+test("FALSIFIER: a report never reaches the public readers of the record — the STATE/log journal, the notary's archive, /ops/activity", { skip }, async () => {
+  await fresh();
+  const { stateLogFromStore } = await import("../src/state-log-from-store.mjs");
+  const { readActs } = await import("../world2/tools/snapshot-export.mjs");
+  const { ACTS_BY_DAY_SQL } = await import("../tools/ops-activity.mjs");
+  const { currentCrossing } = await import("../src/crossings.mjs");
+  const BODY = "a private grievance the town must never print";
+  const { result: { filed } } = await file({ about: "beta", body: BODY, asks: "adjudication" });
+  await move({ post: filed, to: "heard", note: "heard, privately" });
+  const leaks = (what, rows) => {
+    const text = JSON.stringify(rows);
+    for (const needle of [filed, BODY, "heard, privately", "adjudication"])
+      assert.ok(!text.includes(needle), `${what} carried "${needle}"`);
+  };
+  const crossing = currentCrossing();
+  const reader = await store.connect("snapshot_reader");
+  try {
+    leaks("the STATE/log journal (stateLogFromStore)", (await stateLogFromStore(reader, { window: crossing })).lines);
+    leaks("the notary's archive (snapshot-export readActs)", await readActs(reader, { after: null, upto: crossing + 1 }));
+  } finally { await reader.end(); }
+  const counted = await asRole("office_api", ACTS_BY_DAY_SQL);
+  leaks("/ops/activity (ACTS_BY_DAY_SQL)", counted);
+  assert.ok(!counted.some((r) => r.actor === "alpha"), "the dashboard counted the filer's report as an act");
+});
+
 test("the table is office_api's alone: the notary's and the clearing's roles cannot read it, and an undeclared session reads none of it", { skip }, async () => {
   await fresh();
   await file({ about: "beta", body: "One more." });
