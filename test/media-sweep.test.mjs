@@ -97,7 +97,7 @@ test("the world source reads the blessing and main but never STATE/log; drafts a
   const w = world(), t = town();
   assert.deepEqual([...gitKeys(w, ["refs/heads/main"], { exclude: sweep.WORLD_HISTORY })], [rowKey({ household: "alta", sha: sha("a"), ext: "png" })]);
   assert.equal(gitKeys(w, ["refs/heads/main"]).has(`dane/${sha("d")}.png`), true, "precondition: the history does name OLD");
-  const r = await referenceSet({ worldClone: w, townClone: t, pool: null, storeSources: [] });
+  const r = await referenceSet({ worldClone: w, townClone: t, pool: null, storeSources: [], officeFiles: [] });
   assert.equal(r.ok, true, JSON.stringify(r.sources));
   assert.deepEqual([...r.keys].sort(), [`alta/${sha("a")}.png`, `bree/${sha("b")}.png`, `cole/${sha("c")}.png`]);
   // a draft branch carries main's marks beside its own: alta's and bree's
@@ -277,4 +277,19 @@ test("every office door that hangs a media URL is named, and so is the source th
   const names = new Set(["world", "drafts", "town", ...sweep.STORE_SOURCES.map((s) => `store:${s.table}`)]);
   for (const [file, { sources }] of Object.entries(sweep.HANGING_DOORS))
     for (const s of sources) assert.ok(names.has(s), `${file} names ${s}, which is not a source the sweep reads`);
+});
+
+test("WLD-83: the office's own likeness gallery is a source, so a picture it hangs is never freed", async () => {
+  const { writeFileSync: wf, mkdtempSync: md } = await import("node:fs");
+  const file = join(md(join(tmpdir(), "gallery-src-")), "likeness-gallery.json");
+  wf(file, JSON.stringify({ household: "starforge", entries: [{ handle: "rei", url: LOOSE }] }));
+  const r = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [], officeFiles: [file] });
+  assert.equal(r.ok, true, JSON.stringify(r.sources));
+  assert.ok(r.keys.has(`eve/${sha("e")}.jpg`), "the gallery's picture is referenced");
+  assert.ok(r.sources.some((s) => s.name === "office:likeness-gallery.json" && s.found === 1));
+  const db = FIVE();
+  await runSweep({ odb: db, worldClone: world(), townClone: town(), storeSources: [], officeFiles: [file], now: NOW });
+  assert.equal(row(db, "eve", sha("e")).unreferenced_since, null, "so its clock never starts");
+  const shipped = await referenceSet({ worldClone: world(), townClone: town(), pool: null, storeSources: [] });
+  assert.ok(shipped.sources.some((s) => s.name === "office:likeness-gallery.json"), "the shipped gallery is read by default");
 });

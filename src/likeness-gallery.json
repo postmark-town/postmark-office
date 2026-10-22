@@ -1,12 +1,15 @@
 {
-  "about": "WLD-83 (Darko 2026-10-22 15:41): the likeness form shows by example what the town makes from a resident's picture and appearance. Only Darko's own household may appear (Rei, Wright and the meeps): nobody else has consented to being an example. A url is a media-door URL, filled once Darko has approved the image and it is uploaded; an entry with no url is not shown. src/likeness-pages.mjs § galleryFor keeps only the household below, and only while its likeness answer is yes.",
+  "about": "WLD-83 (Darko 2026-10-22 15:41): the likeness form shows by example what the town makes from a resident's picture and appearance. Only Darko's own household may appear (Rei, Wright and the meeps): nobody else has consented to being an example. A url is a media-door URL, filled once Darko has approved the image and it is uploaded (Darko approved this set 2026-10-22 16:02); an entry with no url is not shown. src/likeness-pages.mjs § galleryFor keeps only the household below, and only while its likeness answer is yes. The media sweep (src/media-sweep.mjs § referenceSet) reads this file as a source, so the pictures it names are never freed.",
   "household": "starforge",
   "entries": [
-    { "handle": "rei", "who": "Rei", "kind": "a six-panel reference sheet", "url": null },
-    { "handle": "wright", "who": "Wright", "kind": "a six-panel reference sheet", "url": null },
-    { "handle": "rei", "who": "Rei", "kind": "a painted portrait", "url": null },
-    { "handle": "wright", "who": "Wright", "kind": "a painted portrait", "url": null },
-    { "handle": "rei", "who": "Rei", "kind": "a scene from an episode", "url": null },
-    { "handle": "registrar", "who": "The Registrar", "kind": "a scene from an episode", "url": null }
+    { "handle": "rei", "who": "Rei", "kind": "a six-panel reference sheet", "url": "https://media.postmark.town/media/keeminlee/a691bce62eaa632bb6d597041807300729992c252a3ea6157e13897ded1afdf6.webp" },
+    { "handle": "wright", "who": "Wright", "kind": "a six-panel reference sheet", "url": "https://media.postmark.town/media/keeminlee/166b73eff02da7f1b4646059a566ec03515ef05c329430444baaefb14b45ed7d.webp" },
+    { "handle": "rei", "who": "Rei", "kind": "a crayon portrait", "url": "https://media.postmark.town/media/keeminlee/6ef7917dab208fd7ac4a17434ea6b3d358631b15d1f15542fe4448a2894ccf6e.webp" },
+    { "handle": "wright", "who": "Wright", "kind": "a crayon portrait", "url": "https://media.postmark.town/media/keeminlee/272a5d0dac9ed04affa47daa33176a4caee8f8e5fa2e8c25fe76e468d84643d0.webp" },
+    { "handle": "postmaster", "who": "Ferry, the Postmaster", "kind": "a crayon portrait", "url": "https://media.postmark.town/media/keeminlee/c8366b8d54b4618c113734a68b48ae5ee2adaf731e930c998964990a56148c17.webp" },
+    { "handle": "rei", "who": "Rei", "kind": "a painted portrait", "url": "https://media.postmark.town/media/keeminlee/a6f2306b8383cd19da2b8f246682e1585b09d44d532689ee460cf3e2e7c81921.webp" },
+    { "handle": "wright", "who": "Wright", "kind": "a painted portrait", "url": "https://media.postmark.town/media/keeminlee/8b67ae7a8806622bbbdbf1d1bc14ab94beef0ffd45c8174dc5f47c5fd52910d9.webp" },
+    { "handle": "rei", "who": "Rei", "kind": "a scene from an episode", "url": "https://media.postmark.town/media/keeminlee/9c8ecd225567cf90b630fccb341bdf0fdbe349409baa1b4cea52198af98f7a12.webp" },
+    { "handle": "registrar", "who": "The Registrar", "kind": "a scene from an episode", "url": "https://media.postmark.town/media/keeminlee/5053b9981aaf8ca5b0ef8f662f5bd451d5593d9b58929ea887c19503950d289f.webp" }
   ]
 }
