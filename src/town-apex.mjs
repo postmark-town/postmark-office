@@ -30,7 +30,7 @@
 
 import { actionFields, apexEnabled } from "./world-apex.mjs";
 import { standingBounce } from "./standing.mjs";
-import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
+import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { judgeActFields, withRenamed, withRefused } from "./one-contract.mjs"; // POS-70: one field judgement for every door; POS-427: refused beside did
 import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own validator, now at the read branch too
 import { ideaPostsOn, IDEA_HANDS, AWARD_HANDS, IDEA_STAGES } from "./ideas.mjs"; // POS-290: the idea class, behind IDEA_POSTS
@@ -493,6 +493,8 @@ async function townApexAnswer(args, key, ctx) {
   if (harborGated(key, spec.tool)) {
     return bounce(HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
   }
+  // A bare berth walks and says (POS-739): every town act is refused by name.
+  if (visitorGated(key, spec.tool)) return visitorBounceFor(act);
 
   const { do: _d2, read: _r2, args: envelope, handle: actor, ...rest } = args;
   // On an act a top-level `handle` names the actor, as `args.handle` does

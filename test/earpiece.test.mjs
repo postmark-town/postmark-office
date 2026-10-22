@@ -225,7 +225,8 @@ test("the envelope's fields are exactly the schema's; a private letter and anoth
   assert.deepEqual(Object.keys(e).sort(), [...ENVELOPE_FIELDS].sort(), "no field beyond the schema's");
   assert.deepEqual(Object.keys(e.event).sort(), ["ends_in_s", "id", "phase", "title"]);
   assert.deepEqual(Object.keys(e.place).sort(), ["mark", "name", "x", "y"]);
-  assert.deepEqual(e.said, [{ who: "bo", at: iso(T0 + 30_000), text: "hello, hall" }]);
+  // every heard say carries its speaker's standing (POS-739)
+  assert.deepEqual(e.said, [{ who: "bo", standing: "resident", at: iso(T0 + 30_000), text: "hello, hall" }]);
   assert.deepEqual(e.walked_in, ["cy"]);
   assert.deepEqual(e.walked_out, ["di"]);
   assert.equal(e.event.phase, "doors-open");

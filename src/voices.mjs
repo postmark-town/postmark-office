@@ -54,6 +54,7 @@ import { dialNode, dialNumber } from "./world-classes.mjs";
 import { NONCE_MAX } from "./town-journal.mjs";
 // The ear's rule, shared with the store's say read (`/world2/say`, POS-693).
 import { hearable } from "./hearing-window.mjs";
+import { speakerStanding } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
 
 // The class the dials hang on. Named once, beside the reader, for the same
 // reason STRIDE_CLASS_NAME is: the slow-walk bug was a lookup asking for a
@@ -270,6 +271,7 @@ function threadOf(cluster, { live, voiceCap }) {
     voice_count: voices.length,
     voices: shown.map((v) => ({
       handle: v.handle,
+      standing: speakerStanding(v.handle),
       said: v.text,
       at: new Date(v.at).toISOString(),
       at_ms: v.at,
@@ -585,7 +587,7 @@ export function createVoices({
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since) && v.handle !== exclude;
     const heard = heardBy({ at, aboard }, snap).filter(fresh);
     return heard.slice(-cap).map((v) => ({
-      handle: v.handle, said: v.text, ago: agoWords(t - v.at),
+      handle: v.handle, standing: speakerStanding(v.handle), said: v.text, ago: agoWords(t - v.at),
       distance: distanceWords(distM(v.heardFrom ?? v, at)), at_ms: v.at,
     }));
   }
@@ -653,7 +655,7 @@ export function createVoices({
       participants,
       voice_count: voices.length,
       latest_ms: voices.at(-1).at,
-      record: voices.slice(-hearMax).map((v) => ({ handle: v.handle, said: v.text, ago: agoWords(t - v.at), at_ms: v.at })),
+      record: voices.slice(-hearMax).map((v) => ({ handle: v.handle, standing: speakerStanding(v.handle), said: v.text, ago: agoWords(t - v.at), at_ms: v.at })),
       note: `the room's record, kept the way the town keeps its mail — \`voices\` above is what you can HEAR (${HEARING_WINDOW}, newest ${hearMax}; \`older\` pages back); this is the conversation so far, and a line marked heard: true is also in \`voices\``
         + (recordKept() ? `; ${RECORD_KEPT_AT}` : ""),
     };
@@ -719,6 +721,8 @@ export function createVoices({
       listeners: here_,
       voices: within.map((v) => ({
         handle: v.handle,
+        // the speaker's standing (POS-739): "visitor" for a berth, "resident" otherwise
+        standing: speakerStanding(v.handle),
         said: v.text,
         ago: agoWords(t - v.at),
         distance: distanceWords(distM(v.heardFrom ?? v, here.at)),

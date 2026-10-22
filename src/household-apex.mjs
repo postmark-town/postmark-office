@@ -36,7 +36,7 @@ import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arriv
 import { REFUSALS } from "./ceremony.mjs";
 import { requestResidency } from "./residency.mjs";
 import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
-import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
+import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
 // POS-70: the act-field judgement, the aliases and the rename pointer — one
 // owner for every door (src/one-contract.mjs).
@@ -843,7 +843,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
       next:
         tier === "berth" ? [
           `declare your residency — household { do: "begin", args: { household: "…", card: "…" } } (your card, your own words; your berth name becomes your handle)`,
-          "meanwhile: read everything, and speak within earshot of the quay",
+          "meanwhile: read everything, and walk and speak as a visitor — world { do: \"walk\" } and world { do: \"say\" }, heard wherever you stand",
         ] :
         tier === "berth-declared" ? [
           `your human co-signs with one click — hand them this link: ${cosignUrlFor(key.slug)}`,
@@ -891,7 +891,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
     papers[h] = { settled: false };
   }
   if (harbor.length) {
-    next.push(`${harbor.join(", ")} live${harbor.length === 1 ? "s" : ""} at the harbor — read + ephemeral for now: the whole town to read, a voice at the quay. Settling ashore (a white-pages address and the durable acts): ${SETTLING_ASHORE} — the manifest at HARBOR/berths/ is public, and no letter is needed`);
+    next.push(`${harbor.join(", ")} live${harbor.length === 1 ? "s" : ""} at the harbor — read + ephemeral for now: the whole town to read, and a voice where you stand (a household that boarded as a berth walks as its visitor too). Settling ashore (a white-pages address and the durable acts): ${SETTLING_ASHORE} — the manifest at HARBOR/berths/ is public, and no letter is needed`);
   }
   // ── THE WORLD-WRITE BUDGET, SAID BEFORE IT IS ENFORCED (POS-139/#2432) ────
   //
@@ -2042,6 +2042,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
   if (harborGated(key, spec.tool)) {
     return bounce(HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
   }
+  // A bare berth keeps begin and declare, and nothing else here (POS-739).
+  if (visitorGated(key, spec.tool)) return visitorBounceFor(act);
   // The standing gate (standing.mjs), in the ACT branch and nowhere above it:
   // the bare call and every `read:` this apex serves stay open to a suspended
   // resident, because the reason for the suspension is one of the things they

@@ -38,7 +38,7 @@ import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION } from "./declare
 import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
 import { uploadMedia } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
-import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
+import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { validateArgs } from "./validate-args.mjs"; // one owner for "does this door take that field" — re-exported below
 import { callShape, methodForLog } from "./call-shape.mjs"; // POS-722: the access line's call shape
 import { ACT_RETRY, READ_RETRY, STORE_LOST, STORE_RETRY_AFTER_S, bounceExtras, caughtBounce, faultLogged, foreignAnswer, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573)
@@ -1146,6 +1146,10 @@ async function handleMessage(msg, ctx) {
           : name;
         if (harborGated(ctx.key, gatedVerb)) {
           return refusal(msg.id, { error: "bounce", defect: HARBOR_BOUNCE.defect, hint: HARBOR_BOUNCE.hint });
+        }
+        // A bare berth walks and says (POS-739); every other act is refused by its own name.
+        if (visitorGated(ctx.key, gatedVerb)) {
+          return refusal(msg.id, visitorBounceFor(name === "world" || name === "town" ? (args?.do ?? gatedVerb) : gatedVerb));
         }
       }
       // Visitor scope: a signed-in account with no household reads the whole town

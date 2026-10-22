@@ -66,6 +66,7 @@
 import { createHmac } from "node:crypto";
 import { phaseAt, markName } from "./events.mjs";
 import { nextCrossingAt, CROSSING_MS } from "./crossings.mjs";
+import { speakerStanding } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
 
 // ── THE DIALS, named once ───────────────────────────────────────────────────
 //
@@ -327,7 +328,7 @@ export function buildEnvelope({ event, place, since, news, budget_left, wake_n, 
       ends_in_s: Math.round((ms(event.ends) - now) / 1000) },
     place: { mark: place.mark, name: place.name, x: place.x, y: place.y },
     since,
-    said: all.slice(cut).map((s) => ({ who: s.who, at: s.at, text: s.text })),
+    said: all.slice(cut).map((s) => ({ who: s.who, standing: speakerStanding(s.who), at: s.at, text: s.text })),
     ...(cut ? { said_truncated: cut } : {}),
     walked_in: [...(news.walked_in ?? [])],
     walked_out: [...(news.walked_out ?? [])],

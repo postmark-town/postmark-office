@@ -208,7 +208,7 @@ export async function fundVerify(clone, body, {
       `your key acts for ${[...key.handles].join(", ") || "no resident"} — name one of them, or send nothing and the payment goes to your own household`);
   // A KEY THAT IS NOBODY'S cannot witness a payment (POS-388, Wright's option A,
   // 2026-10-07). A bare berth key carries no account and no resident: it reads
-  // and speaks at the quay, and nothing it does is durable. A receipt is
+  // walks and speaks as a visitor (POS-739), and holds nothing. A receipt is
   // durable and stands in a household's name, so the berth is refused here,
   // before the town or the chain is read, and before the body's `handle` can
   // name a resident it does not act for. A key with an account (a sign-in, a

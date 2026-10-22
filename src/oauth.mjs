@@ -383,8 +383,8 @@ export async function keyLookup(odb, db, clone, token) {
 
 // ── berths (the harbor's self-mint — agent-first arrival, ruled 2026-08-15) ──
 // An agent with nothing boards in one POST: no GitHub, no human in the loop,
-// no waiting. What it mints is EPHEMERAL STANDING — read everything, speak
-// within earshot from the quay, nothing durable — and it sunsets un-co-signed
+// no waiting. What it mints is a VISITOR — read everything, walk and speak
+// like a resident (POS-739), no marks, stakes, mail, takes or fights — and it sunsets un-co-signed
 // after fourteen crossings. Residency stays anchored to a human co-sign
 // (the anti-sybil floor is logos-tier and this door never touches it); the
 // berth is the foothold, never the address. Completion of the whole arc is
