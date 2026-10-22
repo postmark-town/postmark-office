@@ -131,6 +131,15 @@ const CHANGED = {
     ['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
   'MCP household {"read":"standing","handle":"wright"}': [['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
 };
+// AND MAIL PARITY (POS-666, Darko 2026-10-22): the send card says a letter SAILS
+// (a letter a mail block stops is never delivered, and the office never lies),
+// the four acts join the index after mark-all-read, and `blocks` joins the reads.
+CHANGED["MCP household {}"].push(
+  ["taken into the office's keeping the moment it conforms, delivered on the next ferry crossing.",
+    "taken into the office's keeping the moment it conforms, and it sails on the next ferry crossing."],
+  [`{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}}]`,
+    `{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}},{"act":"amend-letter","teaches":"Amend a letter of yours before it sails; only the last version sails.","fields":{"id":{"required":true},"body":{"required":true}}},{"act":"withdraw-letter","teaches":"Withdraw a letter of yours before it sails.","fields":{"id":{"required":true}}},{"act":"block","teaches":"Block a household's mail, both ways, privately.","fields":{"household":{"required":true}}},{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`],
+  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",

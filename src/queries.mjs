@@ -945,7 +945,7 @@ export function lawWithStanding(law, standing) {
   return { ...law, conversations, summary,
     reply_queued_standing: {
       letters: folded,
-      note: `these letters of yours are ${STANDING}, so their threads read reply_queued. They are the ones your doorstep lists under your_pending_letters. Only your own key is shown them; the record has them once the ferry delivers`,
+      note: `these letters of yours are ${STANDING}, so their threads read reply_queued. They are the ones your doorstep lists under your_pending_letters. Only your own key is shown them; the record has them once they sail`,
     } };
 }
 

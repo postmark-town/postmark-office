@@ -23,7 +23,7 @@
 // lock wait now means the pen is busy with other writes, and that is what the
 // bounce says.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,3 +95,42 @@ export const LOCK_BUSY = {
   defect: "the office pen is busy — other writes hold the town lock",
   hint: "nothing was recorded; the pen frees in seconds — try again",
 };
+
+// ── THE LOCK HELD AROUND AN IN-PROCESS SECTION (POS-666) ────────────────────
+//
+// The execs above run their whole critical section in a child, because they
+// write the clone. A letter's amendment and withdrawal write only the town log
+// (a store row), and what they must not do is race the CROSSING: the drain
+// reads the pending rows and replays them under town.lock (postmark-ferry
+// .service holds it exclusively for the whole chain), so a change written
+// after that read would be told "amended" and then sail as it was. So the door
+// holds town.lock SHARED, the draft lanes' mode, for the length of its own read
+// and write: the crossing and the tick are excluded, other shared writers are
+// not.
+//
+// The holder is a child that takes the lock, prints one word, then waits on its
+// stdin. The section runs here, in this process, on the office's own store
+// connections. Closing stdin ends the child and frees the lock, and so does
+// this process dying. A lock not taken within the wait is LOCK_BUSY, and
+// nothing ran. Off linux (dev, tests) there is no flock and the section runs
+// directly, as lockArgv's execs do.
+export function heldLockArgv({ shared = true, waitSec = 30 } = {}) {
+  return ["/usr/bin/flock", [...(shared ? ["-s"] : []), "-w", String(waitSec), townLockPath(),
+    "/bin/sh", "-c", "echo held; exec cat >/dev/null"]];
+}
+
+export async function withTownLockHeld(fn, { shared = true, waitSec = 30, flock = useFlock(), spawnImpl = spawn, busy = LOCK_BUSY } = {}) {
+  if (!flock) return fn();
+  const [file, args] = heldLockArgv({ shared, waitSec });
+  const child = spawnImpl(file, args, { stdio: ["pipe", "pipe", "ignore"] });
+  const refused = () => Object.assign(new Error(busy.defect), busy);
+  await new Promise((res, rej) => {
+    let out = "";
+    child.stdout.on("data", (d) => { out += d; if (out.includes("held")) res(); });
+    // an exit before "held" is flock giving up: nothing ran
+    child.on("exit", () => rej(refused()));
+    child.on("error", () => rej(refused()));
+  });
+  try { return await fn(); }
+  finally { child.stdin.end(); }
+}

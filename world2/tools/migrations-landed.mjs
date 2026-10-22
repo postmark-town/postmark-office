@@ -134,6 +134,8 @@ export const LANDED = {
   "081_household_likeness.sql":    { probe: `${col("households", "likeness")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_likeness_answered')` },
   // 082 (WLD-83): every picture made of a resident, one row each, append-only.
   "082_depictions.sql":            { probe: `${rel("depictions")} AND ${trig("depictions_append_only")}` },
+  // 083 (POS-666): a household's block on another household's mail, and the crossing's one question.
+  "083_mail_blocks.sql":           { probe: `${rel("mail_blocks")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mail_block_stands' AND prosecdef)` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
