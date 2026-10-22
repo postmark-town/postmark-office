@@ -74,6 +74,7 @@
 // A sudden flood of due files is a broken source until a person reads it.
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { asPaper } from "./paperwork.mjs";
 import { blessed, freshestMainRef } from "./world-branches.mjs";
@@ -147,6 +148,9 @@ export const WORLD_HISTORY = Object.freeze(["STATE/log"]);
 
 // ── the store sources ───────────────────────────────────────────────────────
 
+/** The office's own file that hangs media (WLD-83's likeness gallery). */
+export const OFFICE_GALLERY = new URL("./likeness-gallery.json", import.meta.url);
+
 /** The store's current-state tables a media URL can hang in, read whole as text. */
 export const STORE_SOURCES = Object.freeze([
   { table: "marks", where: "status = 'standing'", why: "standing marks (a retired mark's picture is the accepted replay gap)" },
@@ -210,7 +214,7 @@ export async function storeKeys(pool, { table, where = null }) {
  * The union of every source, or the sources that failed. `ok` is false when
  * any one failed; the keys are then not to be trusted for a deletion.
  */
-export async function referenceSet({ worldClone, townClone, pool, storeSources = STORE_SOURCES, extraClones = [] }) {
+export async function referenceSet({ worldClone, townClone, pool, storeSources = STORE_SOURCES, extraClones = [], officeFiles = [OFFICE_GALLERY] }) {
   const keys = new Set();
   const sources = [];
   const take = async (name, expectSome, fn) => {
@@ -236,6 +240,10 @@ export async function referenceSet({ worldClone, townClone, pool, storeSources =
     const refs = townRefs(townClone);
     return { found: gitKeys(townClone, refs), refs };
   }));
+  // WLD-83: the office's own likeness gallery (src/likeness-gallery.json) hangs
+  // pictures no town or store source names; they are kept like any hung picture.
+  for (const file of officeFiles)
+    await take(`office:${String(file).split(/[\\/]/).pop()}`, false, () => ({ found: keysIn(readFileSync(file, "utf8")) }));
   for (const clone of extraClones)
     await take(`extra:${clone}`, false, () => {
       const refs = [...new Set([...refsLike(clone, "refs/heads/"), ...refsLike(clone, "refs/remotes/")])].filter((r) => !r.endsWith("/HEAD"));
@@ -294,7 +302,7 @@ export async function deleteObjects(row, del = r2Delete) {
  */
 export async function runSweep({
   odb, worldClone, townClone, pool, apply = false, now = Date.now(), graceMs = GRACE_MS,
-  maxDelete = MAX_DELETE_DEFAULT, del = r2Delete, storeSources, extraClones = [],
+  maxDelete = MAX_DELETE_DEFAULT, del = r2Delete, storeSources, extraClones = [], officeFiles = undefined,
 }) {
   const paper = asPaper(odb);
   const report = { at: new Date(now).toISOString(), mode: apply ? "apply" : "dry", grace_days: graceMs / DAY_MS };
@@ -302,7 +310,7 @@ export async function runSweep({
   if (!(await mediaLedgerHasStates(paper))) {
     return { ...report, refused: "the ledger has no states: the store has not taken 080_media_freed.sql, so nothing can be freed or recorded" };
   }
-  const refs = await referenceSet({ worldClone, townClone, pool, storeSources, extraClones });
+  const refs = await referenceSet({ worldClone, townClone, pool, storeSources, extraClones, officeFiles });
   report.sources = refs.sources;
   if (!refs.ok) {
     return { ...report, refused: `a source could not be read (${refs.sources.filter((s) => s.error).map((s) => s.name).join(", ")}), so nothing was written: "could not look" is never "not hung"` };

@@ -89,7 +89,7 @@ export function holderLawOf({ holder, mark = null, view }) {
   const thing = className != null && lineageOf(className, view.extendsOf).includes("thing");
   if (!thing) return { resident: false, holder: false, capacity: null, open: null, className };
   const h = holdingOf({ mark, className, classProperty: propertyOf(view) });
-  return { resident: false, holder: h.holder === true, capacity: h.capacity, open: h.open !== false, accepts: h.accepts, keeps: h.keeps, className,
+  return { resident: false, holder: h.holder === true, capacity: h.capacity, open: h.open !== false, accepts: h.accepts, keeps: h.keeps, accepts_shown: h.accepts_shown, className,
     // an own capacity outside its class's bounds is refused, never clamped (holding-law § holdingOf, O1 review-606)
     ...(h.capacity_refused ? { capacity_refused: h.capacity_refused } : {}) };
 }
