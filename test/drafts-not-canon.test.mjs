@@ -39,6 +39,8 @@ const RETIRED = [
   /invisible to everyone else/i,
   /nobody else can ask this question about you/i,
   /makes it public/i,
+  // the train takes main (w43.20): one more the hotfix's sweep missed
+  /draft only your household sees/i,
 ];
 
 /** The lines of a source a resident can be told: comment lines dropped (the reasoning there names the old wording on purpose). */
