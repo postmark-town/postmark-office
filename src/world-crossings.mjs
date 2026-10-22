@@ -145,12 +145,16 @@ export async function holdingsAsked(w, verbs, deps) {
   }
 }
 
-/** How a door that asks is opened, said to the walker it refused. One holder
+/** How a door that asks is opened, said to the walker it refused. A door not shown names
+ *  nothing it asks for and no holder. One holder
  *  reads as it always has; a list names its holders; a door that counts at a
  *  settlement says what is put in now counts from the next one. */
 export function requiresHint(req) {
   const list = Array.isArray(req?.in);
   const when = req?.at === "settlement" ? ", counted from what each settlement prints, so a mark put in now counts from the next settlement" : "";
+  // NOT SHOWN (the door's maker set `shown: false`): the hint names nothing it asks for and no holder
+  if (req?.shown === false)
+    return `this door opens for everyone once what it asks for is in place${when}. What that is stands in the door's own law, for anyone who reads it there. Nothing was recorded`;
   if (!list)
     return `this door opens for everyone once ${req?.in ?? "it"} holds every mark it asks for${when}, and a mark goes in by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "${req?.in ?? "<the door>"}" } }. Nothing was recorded`;
   return `this door opens for everyone once its holders (${req.in.join(", ")}) between them hold every mark it asks for${when}. A mark goes into one of them by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "<one of them>" } }. Nothing was recorded`;

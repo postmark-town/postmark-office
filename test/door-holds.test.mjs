@@ -343,3 +343,23 @@ test("TWO PUT IN: the door stays sealed, settlement after settlement", { skip: S
     assert.equal(o.records.length, 0);
   }
 });
+
+test("NOT SHOWN, AT THE ENTER DOOR: the door's line and the count, and no id of a mark or a holder anywhere in the answer", { skip: SKIP_G }, async () => {
+  const hidden = (printedPairs) => lockMarks(printedPairs).map((m) => (m.id === GATE
+    ? { ...m, entry: { ...m.entry, requires: { ...m.entry.requires, shown: false, says: "The doors hold fast. At the last settlement, {held} of {asks} were in place." } } } : m));
+  const o = await officeWith({ holdings: ALL_LIVE, world: { marks: hidden([[ASKS3[0], LOCK[0]], [ASKS3[1], LOCK[1]]]) } });
+  await assert.rejects(enterViaOffice(CLONE, { mark: GATE }, KEY("ann"), o.deps), (e) => {
+    assert.equal(e.code, 403);
+    assert.equal(e.defect, "The doors hold fast. At the last settlement, 2 of 3 were in place. Nothing was recorded.");
+    assert.deepEqual(e.requires, { shown: false, held: 2, asks: 3, at: "settlement" });
+    const said = JSON.stringify({ defect: e.defect, hint: e.hint, ...e });
+    for (const id of [...ASKS3, ...LOCK]) assert.ok(!said.includes(id), `${id} appears nowhere in the answer`);
+    return true;
+  });
+  assert.equal(o.records.length, 0);
+});
+
+test("THE HINT, NOT SHOWN: names nothing it asks for and no holder", () => {
+  const h = requiresHint({ shown: false, held: 2, asks: 3, at: "settlement" });
+  assert.equal(h, "this door opens for everyone once what it asks for is in place, counted from what each settlement prints, so a mark put in now counts from the next settlement. What that is stands in the door's own law, for anyone who reads it there. Nothing was recorded");
+});
