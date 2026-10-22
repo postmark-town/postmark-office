@@ -81,8 +81,13 @@ export function holdingOf({ mark = null, className, classProperty, legacy = {} }
   const accepts = idList(own("accepts", a) ?? a?.value);
   const k = read("keeps");
   const keeps = truth(own("keeps", k) ?? k?.value) === true;
+  // WHETHER ITS REFUSAL SHOWS WHAT IT TAKES (Wright 2026-10-22, from Darko's WLD-25/l):
+  // `accepts_shown`, sovereign, default true. A holder whose maker sets it false is its own
+  // small puzzle: its refusal names nothing it takes (its law still lists them)
+  const as = read("accepts_shown");
+  const acceptsShown = truth(own("accepts_shown", as) ?? as?.value) !== false;
   return {
-    holder, capacity, min, max, open, accepts, keeps,
+    holder, capacity, min, max, open, accepts, keeps, accepts_shown: acceptsShown,
     ...(outside ? { capacity_refused: `a capacity of ${asked} is outside ${min ?? "…"}..${max ?? "…"}, the bounds its class sets` } : {}),
     capacity_said_by: ownCap !== undefined ? "the mark" : c ? c.from : legacy.capacity !== undefined ? "the older dial" : null,
     from: { holder: h?.from ?? null, capacity: c?.from ?? null, open: o?.from ?? null },

@@ -126,16 +126,38 @@ async function locksInForce(who, w, verbs, judgedMs, deps) {
  * hands it to the passage. Null when no door asks, or the clone predates them.
  * An unreadable record is a 503: the passage itself would read it as holding
  * nothing and keep the door shut, which is the safe answer, but not the true one.
+ * A clone that knows `requiresHoldersOf` names every holder a door lists, and
+ * none for a door that counts at a settlement: that one reads the world as the
+ * settlement printed it (`held_by` on `w.marks`, canon's, never the live
+ * overlay), so the office asks the record nothing for it.
  */
-async function holdingsAsked(w, verbs, deps) {
-  if (typeof verbs.requiresHolderOf !== "function" || !deps.doorHoldings) return null;
-  const holders = [...new Set((w.marks ?? []).map((m) => verbs.requiresHolderOf(m)).filter(Boolean))];
+export async function holdingsAsked(w, verbs, deps) {
+  if (!deps.doorHoldings) return null;
+  const each = typeof verbs.requiresHoldersOf === "function" ? (m) => verbs.requiresHoldersOf(m) ?? []
+    : typeof verbs.requiresHolderOf === "function" ? (m) => [verbs.requiresHolderOf(m)] : null;
+  if (!each) return null;
+  const holders = [...new Set((w.marks ?? []).flatMap(each).filter((h) => typeof h === "string" && h))];
   if (!holders.length) return null;
   try { return await deps.doorHoldings(holders); }
   catch (e) {
     throw bounce(503, "the office could not read what this door holds, so nothing was recorded",
       `a door here opens only when it holds what it asks for, and that record could not be read just now (${plainReason(e, "record", "the hold record")}). Try again in a minute`);
   }
+}
+
+/** How a door that asks is opened, said to the walker it refused. A door not shown names
+ *  nothing it asks for and no holder. One holder
+ *  reads as it always has; a list names its holders; a door that counts at a
+ *  settlement says what is put in now counts from the next one. */
+export function requiresHint(req) {
+  const list = Array.isArray(req?.in);
+  const when = req?.at === "settlement" ? ", counted from what each settlement prints, so a mark put in now counts from the next settlement" : "";
+  // NOT SHOWN (the door's maker set `shown: false`): the hint names nothing it asks for and no holder
+  if (req?.shown === false)
+    return `this door opens for everyone once what it asks for is in place${when}. What that is stands in the door's own law, for anyone who reads it there. Nothing was recorded`;
+  if (!list)
+    return `this door opens for everyone once ${req?.in ?? "it"} holds every mark it asks for${when}, and a mark goes in by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "${req?.in ?? "<the door>"}" } }. Nothing was recorded`;
+  return `this door opens for everyone once its holders (${req.in.join(", ")}) between them hold every mark it asks for${when}. A mark goes into one of them by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "<one of them>" } }. Nothing was recorded`;
 }
 
 // ── THE PORTAL LEG (Keemin-ruled 2026-09-19; postmark-town/postmark#2986) ────
@@ -469,9 +491,7 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
     // A DOOR THAT ASKS (WLD-5 B): shut until it holds what it asks for. The sentence is the
     // clone's (the door's own line, with the count); what it holds and lacks ride as a field.
     if (answer.refused === "requires")
-      throw bounce(403, answer.error,
-        `this door opens for everyone once ${answer.requires?.in ?? "it"} holds every mark it asks for, and a mark goes in by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "${answer.requires?.in ?? "<the door>"}" } }. Nothing was recorded`,
-        { law: "the-town/thing-holder (WLD-5 B)", requires: answer.requires ?? null });
+      throw bounce(403, answer.error, requiresHint(answer.requires), { law: "the-town/thing-holder (WLD-5 B)", requires: answer.requires ?? null });
     if (answer.refused === "dungeon")
       throw bounce(403, answer.error,
         "a dungeon's rooms are reached one portal at a time: stand at a portal and enter it (to leave the whole dungeon, exit). Nothing was recorded",

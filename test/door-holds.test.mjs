@@ -5,7 +5,10 @@
 //   1. the enter door hands the clone's passage what each door that asks holds
 //      now (`holdings`, from the hold record), and an unreadable record is a 503;
 //   2. the give and take doors keep the holder's `accepts` (by id, what it takes
-//      in) and `keeps` (nothing comes back out), read from the law like `open`.
+//      in) and `keeps` (nothing comes back out), read from the law like `open`;
+//   3. a lock of several holders counted at a settlement: the give door puts a
+//      mark in its own holder only, and the enter door asks the record nothing
+//      for such a door, whose passage reads the printed `held_by`.
 // The passage and its words are the clone's (postmark-world tools/portals.mjs §
 // unmetRequires, tested there); part 1 leans on the REAL clone and skips, saying
 // why, on one that predates the door.
@@ -21,7 +24,7 @@ import { classViewOf } from "../src/world-units.mjs";
 import { UNIT_ACTION } from "../src/world-stacks.mjs";
 import { lawSnapshotFromRows } from "../src/law-classes.mjs";
 import { holdingOf, idList } from "../src/holding-law.mjs";
-import { enterViaOffice } from "../src/world-crossings.mjs";
+import { enterViaOffice, holdingsAsked, requiresHint } from "../src/world-crossings.mjs";
 import { engineDirAt } from "../src/world-branches.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
 
@@ -41,14 +44,16 @@ const ROWS = [
   prop("thing", "min", 1, "constitution", "capacity"), prop("thing", "max", 120, "constitution", "capacity"),
   prop("thing", "open", true, "sovereign", "holder"), prop("thing", "portable", true, "sovereign"),
 ];
-const LAW = lawSnapshotFromRows([...ROWS, prop("thing", "accepts", null, "sovereign", "holder"), prop("thing", "keeps", false, "sovereign", "holder")]);
+const LAW = lawSnapshotFromRows([...ROWS, prop("thing", "accepts", null, "sovereign", "holder"), prop("thing", "keeps", false, "sovereign", "holder"),
+  prop("thing", "accepts_shown", true, "sovereign", "holder")]);
 const OLD_LAW = lawSnapshotFromRows(ROWS);   // a law that predates the two properties
 
-const DOOR = "tw-ana/the-inner-door", BOX = "tw-ana/a-box";
+const DOOR = "tw-ana/the-inner-door", BOX = "tw-ana/a-box", QUIET = "tw-ana/a-quiet-holder";
 const A = "tw-ana/token-a", B = "tw-ana/token-b", OTHER = "tw-ana/a-pebble";
 const MARKS = {
   [DOOR]: { id: DOOR, by: "tw-ana", kind: "thing", holder: true, capacity: 3, portable: false, accepts: [A, B], keeps: true, at: { x: 5, y: 6 } },
   [BOX]: { id: BOX, by: "tw-ana", kind: "thing", holder: true, capacity: 5, at: { x: 5, y: 6 } },
+  [QUIET]: { id: QUIET, by: "tw-ana", kind: "thing", holder: true, capacity: 1, portable: false, accepts: [A], keeps: true, accepts_shown: false, at: { x: 5, y: 6 } },
   [A]: { id: A, by: "tw-ana", kind: "thing", at: { x: 5, y: 6 } },
   [B]: { id: B, by: "tw-ana", kind: "thing", at: { x: 5, y: 6 } },
   [OTHER]: { id: OTHER, by: "tw-ana", kind: "thing", at: { x: 5, y: 6 } },
@@ -98,6 +103,27 @@ test("ACCEPTS: a give of a mark it names goes in; anything else, and any count o
   await assert.rejects(go(units, "give", { kind: "pocket-comet", count: 1, to: DOOR }), (e) => e.code === 403 && /takes in only the marks it names/.test(e.defect));
   await assert.rejects(go(rig(), "make", { kind: "pocket-comet", count: 1, to: DOOR }, "tw-ana"), (e) => e.code === 403 && /takes in only the marks it names/.test(e.defect));
   assert.equal(no.acts.length + units.acts.length - 1, 0, "nothing written by a refusal (the seed is the one act)");
+});
+
+test("ACCEPTS_SHOWN: a holder whose maker set it false refuses plainly, naming nothing it takes; every other holder still names them", async () => {
+  const read = (mark, snap = LAW) => holdingOf({ mark, className: "thing", classProperty: (n, p) => classViewOf(snap).property(n, p) });
+  assert.deepEqual([read(MARKS[QUIET]).accepts_shown, read(MARKS[DOOR]).accepts_shown, read(MARKS[DOOR], OLD_LAW).accepts_shown], [false, true, true],
+    "default shown, and shown under a law that predates it");
+  const no = rig({ things: [held("tw-bo", OTHER)] });
+  await assert.rejects(go(no, "thing-into-holder", { thing: OTHER, to: QUIET }), (e) => {
+    assert.equal(e.code, 403);
+    assert.equal(e.defect, `${QUIET} does not take that`);
+    assert.equal(e.accepts, undefined, "no list of what it takes");
+    assert.ok(!JSON.stringify(e).includes(A), "the id it takes appears nowhere in the answer");
+    return true;
+  });
+  const units = rig();
+  units.seed([{ from: null, to: "tw-bo", kind: "pocket-comet", n: 2 }]);
+  await assert.rejects(go(units, "give", { kind: "pocket-comet", count: 1, to: QUIET }),
+    (e) => e.code === 403 && e.defect === `${QUIET} does not take that` && e.accepts === undefined && /a count of a kind is never one of those/.test(e.hint ?? e.message));
+  const ok = rig({ things: [held("tw-bo", A)] });
+  assert.equal((await go(ok, "thing-into-holder", { thing: A, to: QUIET })).did, "give", "what it names still goes in");
+  assert.equal(no.acts.length + units.acts.length - 1, 0, "nothing written by a refusal");
 });
 
 test("KEEPS: nothing is taken back out, by anyone, its maker included, by name or by draw", async () => {
@@ -207,4 +233,133 @@ test("NO DOOR ASKS: the record is never asked", { skip: SKIP }, async () => {
   await enterViaOffice(CLONE, { mark: GATE }, KEY("ann"), o.deps);
   assert.deepEqual(o.asked, []);
   assert.equal(o.records.length, 1);
+});
+
+// ── 3. A LOCK OF SEVERAL HOLDERS, COUNTED AT A SETTLEMENT ───────────────────
+//
+// Three holders, each naming the one mark it takes (`accepts`), keeping it
+// (`keeps`) and not saying which (`accepts_shown: false`); a door whose
+// `requires` lists all three as `in` and counts `at: "settlement"`. A mark goes
+// in by the give door, and the door reads the world as the last settlement
+// printed it (`held_by`), so the office asks the record nothing for it.
+
+const H = ["tw-ana/holder-1", "tw-ana/holder-2", "tw-ana/holder-3"];
+const T = ["tw-ana/mark-1", "tw-ana/mark-2", "tw-ana/mark-3"];
+for (const [i, id] of H.entries())
+  MARKS[id] = { id, by: "tw-ana", kind: "thing", holder: true, capacity: 1, portable: false, accepts: [T[i]], keeps: true, accepts_shown: false, at: { x: 5, y: 6 } };
+for (const id of T) MARKS[id] = { id, by: "tw-ana", kind: "thing", at: { x: 5, y: 6 } };
+
+test("THE LOCK, AT THE GIVE DOOR: its holder puts a mark in its own holder; the wrong holder and a non-holder are refused", async () => {
+  const r = rig({ things: [held("tw-bo", T[0])] });
+  // the wrong holder: refused plainly, naming nothing it takes, and nothing written
+  await assert.rejects(go(r, "thing-into-holder", { thing: T[0], to: H[1] }), (e) => {
+    assert.equal(e.code, 403);
+    assert.equal(e.defect, `${H[1]} does not take that`);
+    assert.equal(e.accepts, undefined);
+    assert.ok(!JSON.stringify(e).includes(T[1]), "never names the mark it does take");
+    return true;
+  });
+  // a resident who does not hold the mark cannot put it anywhere
+  await assert.rejects(go(r, "thing-into-holder", { thing: T[0], to: H[0] }, "tw-cy"), (e) => e.code === 409 && e.defect === `you are not holding ${T[0]}: tw-bo is`);
+  assert.equal(r.acts.length, 0, "nothing written by either refusal");
+  // its holder, into its own holder: the record names who put it in, and it stays
+  const g = await go(r, "thing-into-holder", { thing: T[0], to: H[0] });
+  assert.deepEqual([g.did, g.edge], ["give", { giver: "tw-bo", receiver: H[0] }]);
+  const after = rig({ things: [held(H[0], T[0])] });
+  await assert.rejects(go(after, "thing-from-holder", { thing: T[0], from: H[0] }, "tw-bo"), (e) => e.code === 403 && e.defect === `${H[0]} keeps what it holds`);
+});
+
+test("THE OFFICE ASKS: every holder a live list door names, none for a door that counts at a settlement, one from an older clone", async () => {
+  const live = { id: "d/live", entry: { requires: { holds: T, in: H } } };
+  const settled = { id: "d/settled", entry: { requires: { holds: T, in: H, at: "settlement" } } };
+  const single = { id: "d/one", entry: { requires: { holds: [T[0]], in: "d/box" } } };
+  const w = { marks: [live, settled, single, { id: "d/plain" }] };
+  const newer = { requiresHoldersOf: (m) => !m.entry?.requires ? null : m.entry.requires.at ? [] : [].concat(m.entry.requires.in) };
+  const asked = [];
+  const deps = { doorHoldings: async (h) => { asked.push(h); return {}; } };
+  await holdingsAsked(w, newer, deps);
+  assert.deepEqual(asked, [[...H, "d/box"]], "the list's holders and the one; the settlement door's none");
+  asked.length = 0;
+  await holdingsAsked(w, { requiresHolderOf: (m) => (m.id === "d/one" ? "d/box" : null) }, deps);
+  assert.deepEqual(asked, [["d/box"]], "an older clone: the one holder it names");
+  asked.length = 0;
+  assert.equal(await holdingsAsked({ marks: [settled] }, newer, deps), null);
+  assert.deepEqual(asked, [], "a settlement door alone: the record is never asked");
+});
+
+test("THE HINT: one holder reads as before; a list names its holders; a settlement door says when a mark counts", () => {
+  assert.equal(requiresHint({ in: GATE }),
+    `this door opens for everyone once ${GATE} holds every mark it asks for, and a mark goes in by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "${GATE}" } }. Nothing was recorded`);
+  assert.equal(requiresHint({ in: H, at: "settlement" }),
+    `this door opens for everyone once its holders (${H.join(", ")}) between them hold every mark it asks for, counted from what each settlement prints, so a mark put in now counts from the next settlement. A mark goes into one of them by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "<one of them>" } }. Nothing was recorded`);
+});
+
+// Through the clone's passage: skips, saying why, until the engine at the clone's
+// newest blessing carries the list and the settlement count (requiresHoldersOf).
+const HAVE_G = !!ENGINE && existsSync(join(ENGINE, "tools", "portals.mjs"))
+  && readFileSync(join(ENGINE, "tools", "portals.mjs"), "utf8").includes("export function requiresHoldersOf");
+const SKIP_G = !HAVE_G && (CLONE ? `the engine at ${ENGINE} predates a door of several holders counted at a settlement (no requiresHoldersOf)` : NO_WORLD);
+
+const LOCK = ["tw/holder-1", "tw/holder-2", "tw/holder-3"];
+const ASKS3 = [...ASKS, "tw/token-c"];
+/** The world as a settlement printed it: each [mark, holder] pair carries `held_by`. */
+const lockMarks = (printed = []) => {
+  const by = new Map(printed);
+  return [
+    ...marks().map((m) => m.id === GATE
+      ? { ...m, entry: { word: "neutral", into: "tw/inner-room", requires: { holds: ASKS3, in: LOCK, at: "settlement" } } }
+      : m),
+    { id: "tw/token-c", kind: "thing", by: "the-town", body: "A token." },
+    ...LOCK.map((id, i) => ({ id, kind: "thing", by: "tw", holder: true, capacity: 1, at: { x: 990 + i, y: 1000 }, extent: { w: 1, h: 1 }, body: "A holder." })),
+  ].map((m) => by.has(m.id) ? { ...m, held_by: by.get(m.id) } : m);
+};
+const ALL_LIVE = Object.fromEntries(LOCK.map((h, i) => [h, [ASKS3[i]]]));
+
+test("THREE PUT IN: open at the next settlement and not before; the live record never opens it", { skip: SKIP_G }, async () => {
+  // all three are in their holders now, but the last settlement printed two: shut, and the record is never asked
+  const before = await officeWith({ holdings: ALL_LIVE, world: { marks: lockMarks([[ASKS3[0], LOCK[0]], [ASKS3[1], LOCK[1]]]) } });
+  await assert.rejects(enterViaOffice(CLONE, { mark: GATE }, KEY("ann"), before.deps), (e) => {
+    assert.equal(e.code, 403);
+    assert.deepEqual(e.requires, { in: LOCK, holds: ASKS3, held: ASKS, missing: ["tw/token-c"], at: "settlement" });
+    assert.match(e.defect, /at the last settlement they held 2; what is put in now counts from the next settlement\. Nothing was recorded\.$/);
+    assert.match(e.hint, /counted from what each settlement prints/);
+    return true;
+  });
+  assert.deepEqual(before.asked, [], "a door counted at a settlement asks the record nothing");
+  assert.equal(before.records.length, 0);
+  // the next settlement prints the third: open, for the next walker too
+  for (const who of ["ann", "bob"]) {
+    const after = await officeWith({ who, world: { marks: lockMarks(LOCK.map((h, i) => [ASKS3[i], h])) } });
+    const a = await enterViaOffice(CLONE, { mark: GATE }, KEY(who), after.deps);
+    assert.ok(a.entered?.includes("tw/inner-room") || a.within?.includes("tw/inner-room"), `${who} is through`);
+    assert.equal(after.records.length, 1);
+  }
+});
+
+test("TWO PUT IN: the door stays sealed, settlement after settlement", { skip: SKIP_G }, async () => {
+  for (const printed of [[], [[ASKS3[0], LOCK[0]]], [[ASKS3[0], LOCK[0]], [ASKS3[2], LOCK[2]]]]) {
+    const o = await officeWith({ holdings: ALL_LIVE, world: { marks: lockMarks(printed) } });
+    await assert.rejects(enterViaOffice(CLONE, { mark: GATE }, KEY("ann"), o.deps), (e) => e.code === 403 && e.requires?.held?.length === printed.length);
+    assert.equal(o.records.length, 0);
+  }
+});
+
+test("NOT SHOWN, AT THE ENTER DOOR: the door's line and the count, and no id of a mark or a holder anywhere in the answer", { skip: SKIP_G }, async () => {
+  const hidden = (printedPairs) => lockMarks(printedPairs).map((m) => (m.id === GATE
+    ? { ...m, entry: { ...m.entry, requires: { ...m.entry.requires, shown: false, says: "The doors hold fast. At the last settlement, {held} of {asks} were in place." } } } : m));
+  const o = await officeWith({ holdings: ALL_LIVE, world: { marks: hidden([[ASKS3[0], LOCK[0]], [ASKS3[1], LOCK[1]]]) } });
+  await assert.rejects(enterViaOffice(CLONE, { mark: GATE }, KEY("ann"), o.deps), (e) => {
+    assert.equal(e.code, 403);
+    assert.equal(e.defect, "The doors hold fast. At the last settlement, 2 of 3 were in place. Nothing was recorded.");
+    assert.deepEqual(e.requires, { shown: false, held: 2, asks: 3, at: "settlement" });
+    const said = JSON.stringify({ defect: e.defect, hint: e.hint, ...e });
+    for (const id of [...ASKS3, ...LOCK]) assert.ok(!said.includes(id), `${id} appears nowhere in the answer`);
+    return true;
+  });
+  assert.equal(o.records.length, 0);
+});
+
+test("THE HINT, NOT SHOWN: names nothing it asks for and no holder", () => {
+  const h = requiresHint({ shown: false, held: 2, asks: 3, at: "settlement" });
+  assert.equal(h, "this door opens for everyone once what it asks for is in place, counted from what each settlement prints, so a mark put in now counts from the next settlement. What that is stands in the door's own law, for anyone who reads it there. Nothing was recorded");
 });
