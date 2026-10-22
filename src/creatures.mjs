@@ -52,18 +52,21 @@
 // `unavailable` and nothing reacts: FAIL CLOSED, never the working tree.
 //
 // THE ROWS IT FOLDS (class `creature`; WLD-56 W4, F3, F6):
-//   spawn     actor the-town, object = the creature id, payload { kind, at, x, y, fades_at, moods, flags };
-//             `at` (its minute) and `fades_at` are both required: a spawn without them is skipped
+//   spawn     actor the-town, object = the creature id, payload { kind, at, x, y, moods, flags };
+//             `at` (its minute) is required: a spawn without it is skipped. A spawn written
+//             before WLD-96 also carries `fades_at`, which is no longer read (§ NEVER_FADES)
 //   react     actor = the creature, object = the trigger act id, payload as `reactionPayload`
 //   withdraw  object = the creature id, actor the-town or the creature itself,
-//             payload { reason: "faded" | "fled" }; any other withdraw is ignored
+//             payload { reason: "faded" | "fled" | … }, a reason in the world's DESPAWN_REASONS;
+//             any other withdraw is ignored
 //
 // A NAMED CREATURE AND ITS ENDING (WLD-25, Darko 2026-10-20 22:47 and 22:56 EDT;
 // W1–W11 settled by Wright the same night, from the gap read). Some creatures are
 // not the Mists' passers-by: the world declares them, each in its own place, and
 // each STAYS until it is finished. Their rows, beside the ones above:
-//   spawn     as above, but `stays: true` in place of `fades_at`: it never fades
-//             (creature-tick.mjs writes it once ever, from the world's declaration)
+//   spawn     as above, with `stays: true`: it keeps its own place (and, like every
+//             creature since WLD-96, never fades). creature-tick.mjs writes it once
+//             ever, from the world's declaration
 //   finish    actor = the creature, object = the creature id, payload { by, act, reaction? }:
 //             `by` finished it, with the act `act`. At most one per (creature, by). A
 //             finish changes nothing else: the creature stays, and others may still
@@ -409,15 +412,16 @@ export const LIVING_SQL = `SELECT id::text AS id, at, actor, action, object, pay
 // living creature, its memory, or a reaction to_you still owes a reader
 // (BOOT_SPAN_S: a reaction up to TO_YOU_REACH_MS old, from a creature that came
 // out up to 12 h before it, plus an hour of slack).
-// A creature that STAYS (WLD-25) can be older than any span, so the boot read
-// also takes every row of a staying creature not yet withdrawn: its spawn, its
-// reactions, its finishes. That is one creature's own life, never all history.
-export const STAYING_SQL = `SELECT s.object FROM acts s
-  WHERE s.class = '${CREATURE_CLASS}' AND s.action = '${SPAWN_ACTION}' AND s.actor = 'the-town' AND s.payload->>'stays' = 'true'
+// A creature that GATHERS (WLD-96) or STAYS (WLD-25) can be older than any span,
+// so the boot read also takes every row of a creature spawned and not yet
+// withdrawn: its spawn, its reactions, its finishes. That is one creature's own
+// life, never all history.
+export const GATHERED_SQL = `SELECT s.object FROM acts s
+  WHERE s.class = '${CREATURE_CLASS}' AND s.action = '${SPAWN_ACTION}' AND s.actor = 'the-town'
     AND NOT EXISTS (SELECT 1 FROM acts w WHERE w.class = '${CREATURE_CLASS}' AND w.action = '${WITHDRAW_ACTION}' AND w.object = s.object)`;
 export const LIVING_BOOT_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
   WHERE class = '${CREATURE_CLASS}' AND (at > now() - make_interval(secs => $1)
-    OR actor IN (${STAYING_SQL}) OR object IN (${STAYING_SQL})) ORDER BY acts.id`;
+    OR actor IN (${GATHERED_SQL}) OR object IN (${GATHERED_SQL})) ORDER BY acts.id`;
 export const LIVING_TOP_SQL = `SELECT max(id)::text AS id FROM acts WHERE class = '${CREATURE_CLASS}'`;
 export const LIVING_BATCH = 2000;
 /** How long an ended creature stays in RAM (a retry of its last act still finds its answer). */
@@ -439,8 +443,20 @@ export const TO_YOU_REACH_MS = 25 * 3600_000;
 export const BOOT_SPAN_S = (TO_YOU_REACH_MS + 13 * 3600_000) / 1000;
 
 /**
+ * THE MISTS CREATURES GATHER (WLD-96; RULED, Darko 2026-10-21 19:39 and 19:41
+ * EDT). A creature out of the Mists no longer fades at 12 h: it stays where it
+ * came out, so they gather. Flee still ends one (its own withdraw, `fled`); the
+ * rest go back at the season's end, on his word then, by the town's withdraw.
+ * A spawn's `fades_at`, written before this, is no longer read, so a creature
+ * already out when this deployed gathers too, and the tick writes no `faded`.
+ * In RAM its fade instant is Infinity: every "is it out" check reads as before.
+ * A read that would say when it fades says this instead.
+ */
+export const NEVER_FADES = "never: it stays out until something frightens it back into the Mists";
+
+/**
  * The creatures this process knows, folded from their rows. A creature is
- * living while it has no withdraw and its fade instant has not come.
+ * living while it has no withdraw (a Mists creature never fades: § NEVER_FADES).
  * `law` is `loadCreatureLaw`'s answer: its kinds, its town and its despawn reasons.
  */
 export class LivingSet {
@@ -510,14 +526,15 @@ export class LivingSet {
   }
 
   #spawn(r, p) {
-    // its minute and its fade are on every spawn the world's tick writes; a row
-    // without them is not one, so it is skipped, never given a guessed span (K6, R2).
-    // A named creature says `stays: true` instead of a fade (WLD-25): it never fades.
+    // its minute is on every spawn the world's tick writes; a row without it is
+    // not one, so it is skipped, never given a guessed minute (K6, R2). It never
+    // fades, whatever `fades_at` an older spawn carries (WLD-96, § NEVER_FADES).
+    // A named creature says `stays: true` (WLD-25): it keeps its own place.
     const spawnedAt = msOf(p.at);
     const stays = p.stays === true;
-    const fadesAt = stays ? Infinity : msOf(p.fades_at);
-    if (!Number.isFinite(spawnedAt) || !(stays || Number.isFinite(fadesAt))) {
-      const why = `a spawn without ${Number.isFinite(spawnedAt) ? "fades_at" : "at"} (act ${r.id})`;
+    const fadesAt = Infinity;
+    if (!Number.isFinite(spawnedAt)) {
+      const why = `a spawn without at (act ${r.id})`;
       this.skipped.push({ id: r.object, why });
       console.error(`[creatures] skipped ${r.object}: ${why}`);
       return;
@@ -575,8 +592,9 @@ export class LivingSet {
   }
 
   /**
-   * A creature gone or faded more than PRUNE_AFTER_MS ago, whose newest
-   * reaction is older than TO_YOU_REACH_MS, leaves RAM; its rows stay on the record.
+   * A creature gone more than PRUNE_AFTER_MS ago (a Mists creature never fades:
+   * § NEVER_FADES), whose newest reaction is older than TO_YOU_REACH_MS, leaves
+   * RAM; its rows stay on the record.
    */
   prune(now = Date.now()) {
     // an encounter's rows older than two windows answer no read
@@ -807,7 +825,7 @@ export function buildSlice(creature, kind, act, around = {}, { now = Date.now(),
       moods: Object.fromEntries(Object.keys(kind.moods ?? {}).map((m) => [m, mood(m)])),
       conditions: [...creature.flags],
       out_for: spanWords(now - creature.spawned_at),
-      fades_in: creature.stays ? "never: it stays until it is finished" : spanWords(creature.fades_at - now),
+      fades_in: creature.stays ? "never: it stays until it is finished" : Number.isFinite(creature.fades_at) ? spanWords(creature.fades_at - now) : NEVER_FADES,
       remembers: creature.reactions.slice(-MEMORY_SHOWN).map((r) => memoryLine(r, now)),
       ...(encounter?.resolve != null ? { resolve: `${encounter.resolve} of ${kind.resolve} left this window` } : {}),
       ...(encounter?.ease && kind.ease ? { ease: kind.ease.by === "households"
