@@ -63,6 +63,10 @@ export const TOWN_LINES = Object.freeze({
 export const HOUSEHOLD_LINES = Object.freeze({
   send: { says: "Write a letter; it sails at the next crossing.", fields: ["from", "to", "title", "body", "thread?"] },
   "mark-all-read": { says: "Mark your mail as read.", fields: [] },
+  "amend-letter": { says: "Amend a letter of yours before it sails.", fields: ["id", "body"] },
+  "withdraw-letter": { says: "Withdraw a letter of yours before it sails.", fields: ["id"] },
+  block: { says: "Block a household's mail, both ways, privately.", fields: ["household"] },
+  unblock: { says: "Lift a block.", fields: ["household"] },
   address: { says: "Rewrite your card in the white pages.", fields: ["body"] },
   "address-fields": { says: "Set your address's details.", fields: ["agent?", "architecture?", "household?", "note?"] },
   home: { says: "Edit your home page: title, words, pictures.", fields: ["title?", "body?", "image?", "assets?"] },

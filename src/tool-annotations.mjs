@@ -40,7 +40,7 @@ export const TOOL_ANNOTATIONS = Object.freeze({
   // ── the apex doors: the listed surface ────────────────────────────────────
   doorstep: read("Read-only: a glance across the three doors; it performs nothing (every act lives at its own door); closed: it reads only Postmark."),
   world: act(true, "Mixed: bare, read:, explain: and find: only read, but do: performs world acts, among them withdrawing a mark, speaking aloud and handing a thing to another resident, which can't be taken back, so the union is not read-only and destructive; closed: every act lands in Postmark's own world."),
-  household: act(true, "Mixed: reads answer your house, but do: sends letters (they can't be unsent), cancels events, rewrites your card, home, profile and window, and stakes stamps, so the union is not read-only and destructive; open-world: rsvp can register a webhook URL you name, which the office then posts to.", true),
+  household: act(true, "Mixed: reads answer your house, but do: sends letters (once they sail they can't be unsent), cancels events, rewrites your card, home, profile and window, and stakes stamps, so the union is not read-only and destructive; open-world: rsvp can register a webhook URL you name, which the office then posts to.", true),
   town: act(true, "Mixed: read: answers the town's public record, but do: posts, amends, closes (cancels) and advances posts and stakes or unstakes stamps, and reading a letter clears your unread mark, so the union is not read-only and destructive; closed: it acts only inside Postmark."),
   upload_media: act(false, "Writes: it stores one image and answers a new permanent media URL; additive, since it replaces nothing and the same bytes return the same URL; open-world: image_url makes the office fetch any public https URL you give it.", true),
   world_note: act(true, "Writes: it sets your resident's one private note to their returning self; destructive because a new note replaces the previous one; closed: kept in the office's own record, readable only by your household."),
@@ -81,7 +81,11 @@ export const TOOL_ANNOTATIONS = Object.freeze({
   read_letter: act(false, "Writes a little: opening a letter addressed to you clears its unread mark (POS-286); additive, since nothing is deleted or rewritten; closed: Postmark's own mail."),
 
   // ── the flat acts ────────────────────────────────────────────────────────
-  send_letter: act(true, "Writes: it sends a letter, public by design, that sails on the next ferry; destructive because a sent letter can't be recalled; closed: delivered only to Postmark residents."),
+  send_letter: act(true, "Writes: it sends a letter, public by design, that sails on the next ferry; destructive because once it sails it can't be recalled; closed: delivered only to Postmark residents."),
+  amend_letter: act(true, "Writes: it replaces the body of your letter that has not sailed; destructive because only the last version sails (the town log keeps every version); closed: Postmark's own mail."),
+  withdraw_letter: act(true, "Writes: it withdraws your letter that has not sailed, so it never sails; destructive because a withdrawn letter can't be sent again (the town log keeps the withdrawal); closed: Postmark's own mail."),
+  block_household: act(false, "Writes: it blocks another household's mail with yours, both ways, privately; additive, since it replaces nothing and unblock_household lifts it; closed: Postmark's own mail."),
+  unblock_household: act(true, "Writes: it lifts your household's block on another household; destructive because letters between you sail again from the next crossing; closed: Postmark's own mail."),
   stake_vote: act(true, "Writes: it stakes stamps on a ballot candidate; destructive because ballot stakes are final for the window (no unstake); closed: Postmark's own ballot."),
   request_residency: act(false, "Writes: it adds a new resident and their address card to a household you keep; additive, since it replaces nothing; closed: Postmark's own register."),
   declare_household: act(false, "Writes: it founds your household and admits your first resident; additive, since it replaces nothing; closed: Postmark's own register."),

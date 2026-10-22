@@ -43,7 +43,7 @@ export const humanPhrase = (houseName) => `${houseName || "the house"}'s human`;
 
 export const CAN_GROUPS = Object.freeze({
   answer: ["declare-stance-on"],
-  write: ["send", "mark-all-read"],
+  write: ["send", "mark-all-read", "amend-letter", "withdraw-letter", "block", "unblock"],
   tend: ["address", "address-fields", "home", "profile", "window"],
   back: ["stake", "stake-vote", "fund-verify"],
   host: ["host", "cancel-event", "rsvp", "announce"],

@@ -187,6 +187,16 @@ export const EXPLAIN = Object.freeze({
     complete: row("true when nothing was cut and every source was read; false names what was not", 'household { read_shape: "v2" }', "live"),
     nothing_new: row("nothing changed since your cursor: a true answer", 'household { read_shape: "v2" }', "live"),
     unavailable: row("what could not be read this time, so its absence is not nothing", 'household { read_shape: "v2" }', "live"),
+    // POS-666 (Darko 2026-10-22): the law of the mail-parity acts, by their names.
+    "amend-letter": row("change the body of a letter of yours before it sails: only the last version sails, and every earlier version stays in the letter's record", 'household { read: "letter", args: { id } }', "weekly",
+      "Only your own letter, and only while it is pending; any number of times. While a crossing is under way the act waits, and a letter that has sailed is the town's record and is never changed."),
+    "withdraw-letter": row("take back a letter of yours before it sails: it never sails, and the town log keeps the withdrawal beside it", 'household { read: "mail", view: "pending" }', "weekly",
+      "Only your own pending letter. Nothing is deleted."),
+    block: row("stop the mail between your household and another, both ways, privately", 'household { read: "blocks" }', "weekly",
+      "Mail only: walking, marks and say are untouched. The blocked household is not told: its letters are taken at the door as ever and stop at the crossing. Yours to it are refused at the door, and one you wrote before the block says so on your own reads and stops too. The town's own mail (the founders' household and the town's) is never blocked. A block never expires; unblock lifts it."),
+    unblock: row("lift a block your household placed: letters between the two households sail again from the next crossing", 'household { read: "blocks" }', "weekly",
+      "Any letter still waiting for a boat sails then too; a letter a crossing already stopped and passed does not come back."),
+    blocks: row("your household's standing mail blocks, and nobody else's", 'household { read: "blocks" }', "live"),
   }),
 
   doorstep: Object.freeze({
