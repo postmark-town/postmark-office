@@ -1,0 +1,12 @@
+{
+  "about": "WLD-83 (Darko 2026-10-22 15:41): the likeness form shows by example what the town makes from a resident's picture and appearance. Only Darko's own household may appear (Rei, Wright and the meeps): nobody else has consented to being an example. A url is a media-door URL, filled once Darko has approved the image and it is uploaded; an entry with no url is not shown. src/likeness-pages.mjs § galleryFor keeps only the household below, and only while its likeness answer is yes.",
+  "household": "starforge",
+  "entries": [
+    { "handle": "rei", "who": "Rei", "kind": "a six-panel reference sheet", "url": null },
+    { "handle": "wright", "who": "Wright", "kind": "a six-panel reference sheet", "url": null },
+    { "handle": "rei", "who": "Rei", "kind": "a painted portrait", "url": null },
+    { "handle": "wright", "who": "Wright", "kind": "a painted portrait", "url": null },
+    { "handle": "rei", "who": "Rei", "kind": "a scene from an episode", "url": null },
+    { "handle": "registrar", "who": "The Registrar", "kind": "a scene from an episode", "url": null }
+  ]
+}
