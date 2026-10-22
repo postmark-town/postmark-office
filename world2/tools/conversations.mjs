@@ -68,7 +68,7 @@
 // falsifier states this rather than reporting a green it did not earn.
 
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
-import { speakerStanding } from "../../src/speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
@@ -212,7 +212,7 @@ export function threadOf(cluster, { live, voiceCap }) {
     voice_count: voices.length,
     voices: shown.map((v) => ({
       handle: v.handle,
-      standing: speakerStanding(v.handle),
+      standing: standingOf(v.handle),
       said: v.text,
       at: new Date(v.at).toISOString(),
       at_ms: v.at,
