@@ -81,6 +81,7 @@ import {
   markRows, // POS-632: marks shown with their whole bodies (Darko 22:33)
   placeMarksAt, // POS-632: the marks place words name, as rows (v2 you.near; PR-4 every place line)
   engineDescend, // WLD-83 P10: the engine's one descent, for an appearance tree
+  isOutsiderLens, OUTSIDER_LENS, // WLD-26: the outsider lens, one switch on the owner rule
 } from "./world.mjs";
 // v2.2 §B — the frame block and the three-shelf delta. Both compose the one
 // standpoint derivation; neither derives a position of its own.
@@ -2122,6 +2123,8 @@ export function focusArgs(args = {}) {
   // the read's crossing rides too, when it was asked: a focused house's light is
   // the read's own crossing's (WLD-29), never today's painted onto a past read
   return { mark, ...(args.with_image === true ? { with_image: true } : {}), ...(args.crossing != null ? { crossing: args.crossing } : {}),
+    // WLD-26: the outsider lens looks closer as a stranger would; omitted when not asked
+    ...(isOutsiderLens(args.lens) ? { lens: OUTSIDER_LENS } : {}),
     // WLD-83 P10: depth past 1 descends (world-verbs.mjs § descend); 1 is the look it always was
     ...(Number.isFinite(Number(args.depth)) && Number(args.depth) > 1 ? { depth: Number(args.depth) } : {}) };
 }
@@ -2138,7 +2141,8 @@ export function findFocusArgs(args = {}) {
   return { q,
     ...(args.find_offset != null && args.find_offset !== "" ? { offset: args.find_offset } : {}),
     ...(args.find_limit != null && args.find_limit !== "" ? { limit: args.find_limit } : {}),
-    ...(args.handle ? { handle: args.handle } : {}) };
+    ...(args.handle ? { handle: args.handle } : {}),
+    ...(isOutsiderLens(args.lens) ? { lens: OUTSIDER_LENS } : {}) };
 }
 
 /** The focus's own paging words, so its more_note names what to send HERE. */
@@ -4081,6 +4085,18 @@ export async function worldApex(args = {}, key = null, ctx = {}) {
   return withRefused(await worldApexAnswer(args, key, ctx));
 }
 
+/** The outsider lens's one refusal (WLD-26), or null: the lens rides the bare
+ *  read, its focuses and the v2 blocks read whole (BLOCK_READS); with do:, or
+ *  with read: of an action, it is refused. Exported and pure so the decision is
+ *  falsifiable without a world. */
+export function lensRefusal(args = {}) {
+  if (args.lens == null || args.lens === "") return null;
+  const doing = args.do != null && args.do !== "", reading = args.read != null && args.read !== "";
+  if (!doing && !(reading && !Object.hasOwn(BLOCK_READS, String(args.read)))) return null;
+  return bounce(422, `lens: rides the bare read — ${doing ? "an act is always your own" : "a read: of an action is your own act's shadow"}`,
+    `call twice: world { lens: "${OUTSIDER_LENS}" } to see as a stranger, and world { ${doing ? `do: "${args.do}"` : `read: "${args.read}"`}, … } without it`);
+}
+
 async function worldApexAnswer(args, key, ctx) {
   if (!apexEnabled()) return bounce(404, "the apex verb is not switched on at this office", "the operator runs it behind WORLD_APEX=1; the flat world_* verbs answer meanwhile");
   // POS-632: explain: answers from the read grammar's one table, before anything
@@ -4139,6 +4155,17 @@ async function worldApexAnswer(args, key, ctx) {
     return bounce(422, "find_offset and find_limit page a find: — there is no find: on this call",
       "world { find: \"snug\", find_offset: 10 } — the offset is the previous answer's found.next_offset");
   }
+  // WLD-26: the outsider lens is a way of LOOKING. It rides the bare read, its
+  // focuses and the v2 blocks read whole (read: "view", "who" …, which are the bare
+  // read's own parts, BLOCK_READS); an act is always your own, and an action's
+  // read: is your own act's shadow.
+  const blockRead = reading && Object.hasOwn(BLOCK_READS, String(args.read));
+  const lensBounce = lensRefusal(args);
+  if (lensBounce) return lensBounce;
+  if (blockRead && isOutsiderLens(args.lens)) {
+    const block = await apexReadAction(args, key, ctx);
+    return block && !block.error ? { ...block, lens: OUTSIDER_LENS } : block;
+  }
   if (reading) return apexReadAction(args, key, ctx);
   if (doing) {
     // POS-697 G5a: a v2 caller is shown each body of law whole once, then by
@@ -4193,7 +4220,9 @@ async function worldApexAnswer(args, key, ctx) {
     args = { ...args, since: Number(args.since) };
     sinceRenamed = [renamedRow("field", "since (a crossing number)", 'since: "<cursor>" (the cursor from your last reply)', CURSOR_RENAMES_UNTIL)];
   }
-  const answer = await apexRead(args, key, ctx);
+  let answer = await apexRead(args, key, ctx);
+  // WLD-26: an outsider read says so, in its own words (explain: "lens")
+  if (isOutsiderLens(args.lens) && answer && !answer.error) answer = { ...answer, lens: OUTSIDER_LENS };
   return sinceRenamed && answer && !answer.error ? { ...answer, renamed: sinceRenamed } : answer;
 }
 
@@ -4224,6 +4253,8 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     find_limit: { type: "number", description: "with find:, how many hits (default 10, at most 50)" },
     with_image: { type: "boolean", description: "with mark:, also bring that mark's picture back as image bytes if it has one and it fits under the inline cap. The url rides in the answer either way; this only decides whether the office spends the bytes." },
     handle: { type: "string", description: "which of YOUR residents acts (omit if your key holds one; a multi-resident key must name one)" },
+    // WLD-26 (ruled in Sitting B, 2026-10-19 17:48): the outsider lens.
+    lens: { type: "string", enum: ["outsider"], description: "lens: \"outsider\" reads the world as a stranger sees it, as if your household owned nothing: a closed place you have not entered shows only its own mark, even when what is inside is yours, and the reach and the telling follow. Read-only; it rides the bare read and its mark:, find: and investigate: focuses, never do: or read:. Omit it for your own sight." },
     // `as:`/`beside:` joined the schema 2026-08-28. The actor seam (apexDo →
     // resolveHumanActor) had read them since 08-23 — but this schema is the
     // door's CLOSED whitelist, and a field the whitelist does not name bounces
