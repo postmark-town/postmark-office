@@ -42,23 +42,28 @@ const HERE = { x: 0, y: 0 };
 const mk = (id, over = {}) => ({ id, by: id.split("/")[0], kind: "thing", at: { x: 1, y: 1 }, extent: { w: 2, h: 2 }, ...over });
 const make = (to, n, kind) => ({ class: "holding", action: UNIT_ACTION.make, payload: { moves: [{ from: null, to, kind, n }] } });
 const BEAD = mk("cy/a-bead", { kind: "glass-bead" }), BOWL = mk("ana/a-bowl", { kind: "bowl" });
-const pairsOf = (view, units = []) => usablePairs({ actor: "cy", here: HERE, view, householdOf: (h) => ({ key: h, house: h }),
-  fold: foldUnits(units), attachments: [], marks: [BEAD, BOWL], residents: [] });
+const pairsOf = (view, units = [], takenInCan = undefined) => usablePairs({ actor: "cy", here: HERE, view, householdOf: (h) => ({ key: h, house: h }),
+  fold: foldUnits(units), attachments: [], marks: [BEAD, BOWL], residents: [], ...(takenInCan ? { takenInCan } : {}) });
 
-test("can, while a class is taken: no take of a thing of it, no consume of only it, no take from a holder holding only it; the rest as on any day", () => {
-  assert.equal(TAKEN_IN_CAN.value, "hide");
+test("can, while a class is taken (WLD-7/b, ruled \"Show and refuse\"): the verbs stay listed as on any day; the door refuses them with the clue", () => {
+  assert.equal(TAKEN_IN_CAN.value, "show");
   const units = [make("cy", 2, "glass-bead"), make("ana/a-bowl", 3, "glass-bead")];
   const ordinary = pairsOf(ORDINARY, units);
+  assert.deepEqual(pairsOf(TAKEN, units), ordinary, "the same matrix while taken");
   assert.deepEqual(canOn(ordinary, BEAD.id), ["take"]);
   assert.ok(canVerbs(ordinary).includes("consume"));
   assert.ok(canOn(ordinary, BOWL.id).includes("take"));
-  const taken = pairsOf(TAKEN, units);
+});
+
+test("the switch's other arm, \"hide\": no take of a thing of it, no consume of only it, no take from a holder holding only it; the rest as on any day", () => {
+  const units = [make("cy", 2, "glass-bead"), make("ana/a-bowl", 3, "glass-bead")];
+  const taken = pairsOf(TAKEN, units, "hide");
   assert.deepEqual(canOn(taken, BEAD.id), [], "a thing of the taken class is not offered");
   assert.equal(canVerbs(taken).includes("consume"), false, "only taken consumables in hand: no consume");
   assert.equal(canOn(taken, BOWL.id).includes("take"), false, "a bowl of only taken units offers no take");
   assert.equal(canOn(taken, BOWL.id).includes("give"), false, "and nothing of yours to give into it but taken units");
   // a biscuit in hand: consume and give come back, the bead stays hidden
-  const mixed = pairsOf(TAKEN, [...units, make("cy", 1, "biscuit")]);
+  const mixed = pairsOf(TAKEN, [...units, make("cy", 1, "biscuit")], "hide");
   assert.ok(canVerbs(mixed).includes("consume"));
   assert.ok(canOn(mixed, BOWL.id).includes("give"));
   assert.deepEqual(canOn(mixed, BEAD.id), []);

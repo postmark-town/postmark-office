@@ -38,14 +38,13 @@ export const CAN_VERBS = Object.freeze([...HOLD_VERBS, ...CREATURE_VERBS]);
 export const portableOf = (mark, view) => portableMark(mark, (n, p) => view.property?.(n, p) ?? null);
 
 /**
- * A CLASS TAKEN BY THE TOWN'S OWN ACT, IN `can` (WLD-7, G4; Wright 2026-10-21, the
- * lane's rec): "verbs show only when usable", so while a class is taken no verb is
- * offered on a thing of it, on a unit of it in your hands, or on a holder only for
- * what of it it holds. The doors refuse the same acts with the class's clue. ONE
- * SWITCH: "hide" (the default) or "show" (offered, and refused by the door with the
- * clue: the moment of discovery). Which one is world design, Darko's.
+ * A CLASS TAKEN BY THE TOWN'S OWN ACT, IN `can` (WLD-7/b, RULED 2026-10-21 19:07 EDT:
+ * "Show and refuse"). While a class is taken, `can` keeps listing the verbs on things
+ * and units of it, and trying one is refused by its door with the class's clue: the
+ * moment of discovery. ONE SWITCH: "show" (ruled) or "hide" (no verb offered on a thing
+ * of it, a unit of it in your hands, or a holder only for what of it it holds).
  */
-export const TAKEN_IN_CAN = Object.freeze({ value: "hide", pending: "WLD-7 G4, Darko's (world design)" });
+export const TAKEN_IN_CAN = Object.freeze({ value: "show", ruled: "WLD-7/b, 2026-10-21 19:07 EDT" });
 
 /**
  * Every (verb, object) pair you can do right now — each one exactly what its
@@ -67,7 +66,7 @@ export const TAKEN_IN_CAN = Object.freeze({ value: "hide", pending: "WLD-7 G4, D
  *   consume  a consumable kind in your hands
  *   refill   a holder whose class affords it, its maker you, within reach, with room
  */
-export function usablePairs({ actor, here, marks = [], residents = [], fold, attachments = [], view, householdOf = null, pointWithinMark = null, places = null }) {
+export function usablePairs({ actor, here, marks = [], residents = [], fold, attachments = [], view, householdOf = null, pointWithinMark = null, places = null, takenInCan = TAKEN_IN_CAN.value }) {
   const me = String(actor);
   // THE HOLD ROWS, READ ONCE: the last row per thing decides who holds it (liveHolder's rule)
   const last = new Map();
@@ -88,7 +87,7 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
   const cap = holderLawOf({ holder: "resident", view }).capacity;
   const slots = (who) => (Number.isInteger(cap) ? cap - load(who) : Infinity);
   // a class taken by the town's own act hides what is of it (TAKEN_IN_CAN); on every other day nothing is
-  const hiding = TAKEN_IN_CAN.value === "hide" && !!view.stolenAny?.();
+  const hiding = takenInCan === "hide" && !!view.stolenAny?.();
   const taken = (klass) => hiding && klass !== undefined && stolenClassRefusal(klass, view) != null;
   const freeKinds = (holder) => kindEdgesOf(fold, holder).filter((e) => !taken(e.kind));
   const classOfId = (id) => { const x = byId.get(String(id)); return x ? markClassOf(x) ?? null : undefined; };
