@@ -297,7 +297,7 @@ export const UNSEAL_DUE_SQL = `SELECT DISTINCT t.actor AS id FROM acts t
 /**
  * The named creatures the law at the blessed sha declares and whose crossing
  * has come: [{ id, kind, x, y, carries, declared, moods }]. The world's side is
- * `creatureLaw(...).named`, each { id, kind, x, y, carries?, from_crossing?,
+ * `creatureLaw(...).named`, each { id, kind, x, y, carries?, from_crossing?, after?, after_door?,
  * declared? }; a law without it declares none. A declaration this office cannot
  * spawn (a bad id, no place, a kind the law has no start for) is a `held` line.
  */
@@ -322,6 +322,16 @@ export async function namedSpawns({ now, N = currentCrossing(now), inputsAt, ble
       let ended = null;
       try { ended = query ? new Set(((await query(ENDED_OF_SQL, [d.after])) ?? []).map((r) => r.object)) : null; } catch { ended = null; }
       if (!ended || !d.after.every((a) => ended.has(a))) continue;
+    }
+    // AFTER A DOOR (`after_door`, WLD-25/k): it comes out at the first settlement whose blessed
+    // world shows its door open, the door's own `requires` read from the printed `held_by` by the
+    // world's afterDoorOpen, so the door and the creature open together. Fail closed: an engine
+    // that cannot ask holds it, saying why; a shut door is no line, only a wait.
+    if (d.after_door != null) {
+      if (typeof w.creaturesMod.afterDoorOpen !== "function") { held.push(`the named creature ${d.id}: it waits on the door ${d.after_door}, and the engine at this blessing cannot read a door`); continue; }
+      let door;
+      try { door = w.creaturesMod.afterDoorOpen(d, w.inputs?.marks ?? []); } catch (e) { door = { open: false, why: `its door could not be read (${errorSaid(e).slice(0, 120)})` }; }
+      if (!door?.open) { if (!door?.shut) held.push(`the named creature ${d.id}: ${door?.why ?? "its door cannot be read"}`); continue; }
     }
     out.push({ id: d.id, kind: d.kind, x: Number(d.x), y: Number(d.y), carries: typeof d.carries === "string" ? d.carries : null,
       declared: d.declared ?? null, moods: w.starts[d.kind].moods ?? {} });
