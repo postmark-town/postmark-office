@@ -78,10 +78,27 @@ test("the lens is a way of looking: with do: or read: it is refused, naming the 
     assert.equal(acted.code, 422);
     assert.match(acted.defect, /lens: rides the bare read — an act is always your own/);
     const read = await worldApex({ read: "walk", lens: "outsider" }, key("mason"));
-    assert.match(read.defect, /lens: rides the bare read — a read: is your own act's shadow/);
+    assert.match(read.defect, /lens: rides the bare read — a read: of an action is your own act's shadow/);
   } finally {
     if (before === undefined) delete process.env.WORLD_APEX; else process.env.WORLD_APEX = before;
   }
+});
+
+test("the v2 blocks read whole are the bare read's own parts: the lens rides them", async () => {
+  const { lensRefusal } = await import("../src/world-apex.mjs");
+  const { BLOCK_READS } = await import("../src/world-read-v2.mjs");
+  // ⚑ THE FLIP: refuse every read: under the lens again (drop the BLOCK_READS exemption) → this reds
+  for (const block of Object.keys(BLOCK_READS)) assert.equal(lensRefusal({ read: block, lens: "outsider" }), null, `read: "${block}" takes the lens`);
+  assert.equal(lensRefusal({ read: "walk", lens: "outsider" }).code, 422, "an action's shadow does not");
+  assert.equal(lensRefusal({ do: "say", lens: "outsider" }).code, 422, "nor an act");
+  assert.equal(lensRefusal({ read: "walk" }), null, "no lens, no refusal");
+});
+
+test("explain: \"lens\" says only sight and reach change, and what is yours stays yours", async () => {
+  const { explainAnswer } = await import("../src/read-grammar.mjs");
+  const e = explainAnswer("world", "lens");
+  assert.match(e.detail, /Only sight and reach change/);
+  assert.match(e.detail, /your note, your stances, your holdings and what happened to you/);
 });
 
 test("the read names itself: the door's schema declares lens (one word, outsider), and explain: \"lens\" answers", async () => {

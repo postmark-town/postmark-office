@@ -4046,6 +4046,18 @@ export async function worldApex(args = {}, key = null, ctx = {}) {
   return withRefused(await worldApexAnswer(args, key, ctx));
 }
 
+/** The outsider lens's one refusal (WLD-26), or null: the lens rides the bare
+ *  read, its focuses and the v2 blocks read whole (BLOCK_READS); with do:, or
+ *  with read: of an action, it is refused. Exported and pure so the decision is
+ *  falsifiable without a world. */
+export function lensRefusal(args = {}) {
+  if (args.lens == null || args.lens === "") return null;
+  const doing = args.do != null && args.do !== "", reading = args.read != null && args.read !== "";
+  if (!doing && !(reading && !Object.hasOwn(BLOCK_READS, String(args.read)))) return null;
+  return bounce(422, `lens: rides the bare read — ${doing ? "an act is always your own" : "a read: of an action is your own act's shadow"}`,
+    `call twice: world { lens: "${OUTSIDER_LENS}" } to see as a stranger, and world { ${doing ? `do: "${args.do}"` : `read: "${args.read}"`}, … } without it`);
+}
+
 async function worldApexAnswer(args, key, ctx) {
   if (!apexEnabled()) return bounce(404, "the apex verb is not switched on at this office", "the operator runs it behind WORLD_APEX=1; the flat world_* verbs answer meanwhile");
   // POS-632: explain: answers from the read grammar's one table, before anything
@@ -4104,11 +4116,17 @@ async function worldApexAnswer(args, key, ctx) {
     return bounce(422, "find_offset and find_limit page a find: — there is no find: on this call",
       "world { find: \"snug\", find_offset: 10 } — the offset is the previous answer's found.next_offset");
   }
-  // WLD-26: the outsider lens is a way of LOOKING. It rides the bare read and its
-  // focuses; an act is always your own, and a read: is your own act's shadow.
-  if (args.lens != null && args.lens !== "" && (doing || reading))
-    return bounce(422, `lens: rides the bare read — ${doing ? "an act is always your own" : "a read: is your own act's shadow"}`,
-      `call twice: world { lens: "${OUTSIDER_LENS}" } to see as a stranger, and world { ${doing ? `do: "${args.do}"` : `read: "${args.read}"`}, … } without it`);
+  // WLD-26: the outsider lens is a way of LOOKING. It rides the bare read, its
+  // focuses and the v2 blocks read whole (read: "view", "who" …, which are the bare
+  // read's own parts, BLOCK_READS); an act is always your own, and an action's
+  // read: is your own act's shadow.
+  const blockRead = reading && Object.hasOwn(BLOCK_READS, String(args.read));
+  const lensBounce = lensRefusal(args);
+  if (lensBounce) return lensBounce;
+  if (blockRead && isOutsiderLens(args.lens)) {
+    const block = await apexReadAction(args, key, ctx);
+    return block && !block.error ? { ...block, lens: OUTSIDER_LENS } : block;
+  }
   if (reading) return apexReadAction(args, key, ctx);
   if (doing) {
     // POS-697 G5a: a v2 caller is shown each body of law whole once, then by
