@@ -321,12 +321,14 @@ export function refuseOverCarry({ who, units, things, adding, cap }) {
 // nothing it made is orphaned. No class says so today, so this refuses nothing.
 // Built from Jetto's refit (58b633b8).
 
-export function stolenRefusal(klass, classRecord, extendsOf) {
+export function stolenRefusal(klass, classRecord, extendsOf, { restored = () => false } = {}) {
   if (!klass) return null;
   for (const c of ancestry(klass, extendsOf)) {
     const rec = classRecord(c);
     const d = rec?.dials && typeof rec.dials === "object" ? rec.dials : {};
-    if (d.stolen === true) {
+    // GIVEN BACK IN THE RECORD (WLD-25/j): the town's own restore act since the dial went
+    // on lifts it, though the dial still stands (restored-classes.mjs)
+    if (d.stolen === true && !restored(c)) {
       const clue = typeof d.clue === "string" && d.clue.trim() ? d.clue.trim() : `the ${c} has been stolen.`;
       return bounce(423, clue, `the ${c} has been stolen; nothing moves until it is returned. Nothing was recorded.`, { stolen: c });
     }
@@ -347,11 +349,13 @@ export function stolenRefusal(klass, classRecord, extendsOf) {
  *                     its ordinary day's answer
  *   no law loaded     inert (a process's cold start: nothing can be known stolen,
  *                     and a published snapshot is never replaced by none)
+ *   given back        a taken class the town has restored by its own act since the
+ *                     dial went on is not refused (view.restored; restored-classes.mjs)
  */
 export function stolenClassRefusal(klass, view) {
   if (!view?.readable || !view.stolenAny?.()) return null;
   if (klass === undefined) return null;
-  return stolenRefusal(klass === null ? "thing" : klass, view.record, view.extendsOf);
+  return stolenRefusal(klass === null ? "thing" : klass, view.record, view.extendsOf, { restored: view.restored ?? (() => false) });
 }
 
 // ── THE MOVES, ADJUDICATED ──────────────────────────────────────────────────

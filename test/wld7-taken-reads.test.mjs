@@ -19,6 +19,7 @@ import { foldUnits, UNIT_ACTION } from "../src/world-stacks.mjs";
 import { lawSnapshotFromRows } from "../src/law-classes.mjs";
 import { stockChests } from "../world2/tools/chest-stock.mjs";
 import { softStepStatus } from "../world2/tools/settlements-backfill.mjs";
+import { RESTORE_ROWS_SQL, CLASS_RUN_SQL } from "../src/restored-classes.mjs";
 
 const SHA = "d".repeat(40);
 const cls = (key, data = {}) => ({ number: 300, tag_sha: SHA, newest: 300, kind: "class", key, data: { class: key, ...data } });
@@ -64,7 +65,7 @@ test("can, while a class is taken: no take of a thing of it, no consume of only 
 });
 
 /** A store for the chest tick: the law at the pin (the class it stocks taken, or not), one admitted chest of cy's, cy's label. */
-function stockStore({ taken }) {
+function stockStore({ taken, restoredAt = null }) {
   const labelled = { class: "candy", extends: "consumable", labels: [{ label: "test-beads", name: "Test Beads", creator: "cy" }], dials: {} };
   if (taken) labelled.dials = { stolen: true, clue: "a synthetic clue" }; // the class the chest stocks, taken
   const law = [
@@ -75,6 +76,9 @@ function stockStore({ taken }) {
   const writes = [];
   const client = { query: async (sql, params = []) => {
     const q = String(sql);
+    // the restore read (restored-classes.mjs): the town's restore acts, and the class's run of laws
+    if (q === RESTORE_ROWS_SQL) return { rows: restoredAt ? [{ id: "9", action: "restore", actor: "the-town", object: labelled.class, at: restoredAt }] : [] };
+    if (q === CLASS_RUN_SQL) return { rows: [{ number: 120, blessed_at: "2026-10-26T06:30:00Z", data: labelled }] };
     if (/law_projection|LAW_AT|kind = 'class'/i.test(q) || /FROM settlements/i.test(q) && /law/i.test(q)) return { rows: law };
     if (/INSERT INTO acts/i.test(q)) { writes.push(params); return { rows: [{ id: 1 }] }; }
     return { rows: [] };
@@ -92,4 +96,11 @@ test("the chest tick's first stock waits while the class it stocks is taken: not
   const o = stockStore({ taken: false });
   const back = await stockChests(o.client, { crossing: 266 });
   assert.equal(back.waits, undefined, "returned: the stock's own plan, whatever it finds");
+});
+
+test("given back by the town's own act since the dial went on, the class it stocks is stocked again though the dial still stands (WLD-25/j)", async () => {
+  const back = stockStore({ taken: true, restoredAt: "2026-10-27T18:31:00Z" });
+  assert.equal((await stockChests(back.client, { crossing: 267 })).waits, undefined);
+  const before = stockStore({ taken: true, restoredAt: "2026-10-25T18:00:00Z" });
+  assert.equal((await stockChests(before.client, { crossing: 267 })).waits, true, "a restore from before the dial went on lifts nothing");
 });

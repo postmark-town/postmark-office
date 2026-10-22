@@ -41,6 +41,7 @@ import { chestRoomGuard } from "./chest-lock.mjs";
 import { dropUndoGuard, undoNonce, dropSequenceGuard } from "./drop-recovery.mjs";
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { markClassOf } from "./world-grants.mjs";
+import { restoredClass } from "./restored-classes.mjs"; // a taken class given back by the town's own act (WLD-25/j)
 import { holdingOf } from "./holding-law.mjs"; // holder, capacity, open: read from the class tree (LOGOS v2, O1)
 import { snapProperty } from "./law-classes.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { chestsCandyOn, chestsCandyOffError } from "./chests-candy.mjs"; // WLD-27 ships dark until LOGOS v2's doors replace it
@@ -112,7 +113,7 @@ export function unitRouteOf(args = {}, { thingMark = null } = {}) {
 }
 
 /** The class layer the unit door reads, from one law snapshot. */
-export function classViewOf(snap) {
+export function classViewOf(snap, { restored = restoredClass } = {}) {
   const rec = (name) => (snap?.classes?.get(String(name)) ?? null);
   const dialsOf = (name) => {
     const d = rec(name)?.dials;
@@ -128,6 +129,8 @@ export function classViewOf(snap) {
     readable: Boolean(snap?.classes?.size),
     // is any class taken by the town's own act right now (WLD-7)? While none is, nothing below refuses
     stolenAny: () => [...(snap?.classes?.keys() ?? [])].some((n) => dialsOf(n).stolen === true),
+    // ...and given back by the town's own act since (WLD-25/j): the kept read, never a query here
+    restored: (name) => restored(String(name)),
   };
 }
 
