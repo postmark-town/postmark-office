@@ -134,6 +134,8 @@ export const LANDED = {
   "081_household_likeness.sql":    { probe: `${col("households", "likeness")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_likeness_answered')` },
   // 082 (WLD-83): every picture made of a resident, one row each, append-only.
   "082_depictions.sql":            { probe: `${rel("depictions")} AND ${trig("depictions_append_only")}` },
+  // 084 (POS-757): the private report post, its row policies, and office_api its only reader.
+  "084_reports.sql":               { probe: `${rel("reports")} AND EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reports' AND policyname = 'reports_move') AND NOT has_table_privilege('snapshot_reader', 'reports', 'SELECT')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
