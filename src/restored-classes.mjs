@@ -1,7 +1,8 @@
 // restored-classes.mjs — a class the town has taken, and since given back by its own act (WLD-7, WLD-25/j).
 //
-// A class is taken while its record says `dials.stolen: true` (world-stacks.mjs §
-// stolenRefusal). It can also be given back IN THE RECORD, before the world's dial is
+// A class is taken while its record says `dials.stolen: true`, or its own top-level
+// `stolen` property node does (LOGOS v2, property first: law-classes § dialsOf, the one
+// reading every reader here shares; world-stacks.mjs § stolenRefusal). It can also be given back IN THE RECORD, before the world's dial is
 // removed: the town's own `restore` act on the class (an ending that gives a class
 // back, written at the settlement it ends on; plumb-combat's engine). From that act
 // on, the class works again, though the dial still stands. So the question is the
@@ -20,6 +21,8 @@
 // process keeps its own, as each keeps its own law snapshot.
 
 import { lawSnapshot } from "./law-snapshot.mjs";
+import { dialsOf as lawDialsOf } from "./law-classes.mjs"; // the one reading of a class's dials: its own property nodes first
+import { propertyValue } from "./world-grants.mjs";
 
 export const RESTORE_ACTION = "restore";
 const TOWN = "the-town";
@@ -28,9 +31,12 @@ export const KEEP_MS = 30_000;
 /** The town's restore acts, oldest first. */
 export const RESTORE_ROWS_SQL = `SELECT id::text AS id, at, actor, action, object FROM acts
   WHERE action = '${RESTORE_ACTION}' AND actor = '${TOWN}' ORDER BY acts.id`;
-/** One class's record at every ingested settlement, newest first: its dials, and when each was blessed. */
-export const CLASS_RUN_SQL = `SELECT s.number, s.blessed_at, s.published_at, l.data FROM settlements s
+/** One class's record at every ingested settlement, newest first: its dials, its own top-level
+ *  `stolen` property node when it has one (LOGOS v2, property first: `prop`), and when each was
+ *  blessed. */
+export const CLASS_RUN_SQL = `SELECT s.number, s.blessed_at, s.published_at, l.data, p.data AS prop FROM settlements s
   JOIN law_projection l ON l.law_sha = s.tag_sha AND l.kind = 'class' AND l.key = $1
+  LEFT JOIN law_projection p ON p.law_sha = s.tag_sha AND p.kind = 'property' AND p.key = $1 || '/stolen'
   ORDER BY s.number DESC`;
 
 const dialsOf = (data) => {
@@ -49,11 +55,19 @@ export function restoredSince(record, klass, since) {
     && Number.isFinite(Date.parse(isoOf(r.at))) && Date.parse(isoOf(r.at)) >= from);
 }
 
+/** One settlement's word on the dial, as the law snapshot reads it (law-classes § dialsOf): the
+ *  class's own `stolen` property node first, then its frontmatter dials. */
+const stolenAt = (r) => {
+  const prop = typeof r?.prop === "string" ? (() => { try { return JSON.parse(r.prop); } catch { return null; } })() : r?.prop;
+  if (prop && prop.parent == null && prop.default !== undefined) return propertyValue(prop.default) === true;
+  return dialsOf(r?.data).stolen === true;
+};
+
 /** PURE. When the dial went on: the bless of the earliest settlement in the newest unbroken run that says stolen; null when the newest does not. */
 export function stolenSinceOf(rowsNewestFirst) {
   let since = null;
   for (const r of rowsNewestFirst ?? []) {
-    if (dialsOf(r.data).stolen !== true) break;
+    if (!stolenAt(r)) break;
     since = isoOf(r.blessed_at ?? r.published_at);
   }
   return since;
@@ -86,7 +100,7 @@ const state = { byClass: new Map(), at: 0, inflight: null, failed: false };
 function stolenInLaw() {
   const snap = lawSnapshot();
   const names = [];
-  for (const [name, rec] of snap?.classes ?? []) if (dialsOf(rec).stolen === true) names.push(String(name));
+  for (const name of snap?.classes?.keys() ?? []) if (lawDialsOf(snap, name).stolen === true) names.push(String(name));
   return names;
 }
 
