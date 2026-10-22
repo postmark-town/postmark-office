@@ -45,8 +45,8 @@ import { windowAt } from "./encounter.mjs";
 
 /** The six verbs this door answers (the world's AFFORDED_VERBS, as ruled). */
 export const CREATURE_VERBS = Object.freeze(["watch", "approach", "shoo", "call", "offer", "whisper"]);
-/** A fight in set pieces' own two (set-pieces.mjs): dodge, while a fireball is aimed at you, and persuade, in
- *  its empowered piece. The apex hands them here only once the blessed law knows them (world-apex.mjs § fightsLive). */
+/** A fight in set pieces' own two (set-pieces.mjs): dodge, while a feint is aimed at you, and persuade, in
+ *  its unbreakable piece. The apex hands them here only once the blessed law knows them (world-apex.mjs § fightsLive). */
 export const FIGHT_VERBS = Object.freeze([DODGE_ACTION, PERSUADE_ACTION]);
 /** A persuade's words, at most (a few sentences: the household's own). */
 export const PERSUADE_MAX = 280;
@@ -93,14 +93,14 @@ const theOf = (law, c) => nameOf(law, c).replace(/^an? /i, "the ");
 export function whyNot(verb, c, d, { law, carryingConsumable = false, here = null, living = null, actor = null, household = null, now = Date.now() } = {}) {
   const a = (law?.affordedOf?.(c.kind) ?? []).find((x) => x.action === verb);
   if (!a) return `${nameOf(law, c)} does not take ${verb}`;
-  // a fight in set pieces (set-pieces.mjs): a dodge only from a fireball aimed at you; a persuade only in its
-  // empowered piece, once per household each settlement
+  // a fight in set pieces (set-pieces.mjs): a dodge only from a feint aimed at you; a persuade only in its
+  // unbreakable piece, once per household each settlement
   if (FIGHT_VERBS.includes(verb)) {
     const fight = isSetPiece(law?.kindOf?.(c.kind)) ? law.fightOf?.(c.kind) ?? null : null;
     if (!fight) return `${theOf(law, c)}'s fight cannot be read here`;
     if (verb === DODGE_ACTION && !openHurls(living, c, now).some((h) => h.object === actor && now <= Date.parse(h.payload.until)))
       return `nothing ${theOf(law, c)} threw is aimed at you to dodge`;
-    if (verb === PERSUADE_ACTION && pieceOf(c, fight, now).piece !== "empowered") return `${theOf(law, c)} cannot be persuaded now`;
+    if (verb === PERSUADE_ACTION && pieceOf(c, fight, now).piece !== "unbreakable") return `${theOf(law, c)} cannot be persuaded now`;
     if (verb === PERSUADE_ACTION && household && persuadedThisWindow(living, c, household, now))
       return `your household has persuaded ${theOf(law, c)} this settlement; once each, until ${new Date(windowAt(now).ends).toISOString().slice(11, 16)}Z`;
   }

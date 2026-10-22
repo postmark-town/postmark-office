@@ -7,7 +7,7 @@
 // The unit file (test/set-pieces.test.mjs) drives every rule with its writes stubbed.
 // Here the store is Postgres, and two offices are played by two living sets, one of
 // them stale (it never folded the other's rows), so each guard is the record's:
-//   · a fireball is answered once (the turn's answer and the tick's lapse race)
+//   · a feint is answered once (the turn's answer and the tick's lapse race)
 //   · a set piece begins once, and a disguise is broken once
 //   · a household persuades once each settlement
 //   · at a settlement where its sanity is full, the town withdraws it, ended, and
@@ -43,12 +43,12 @@ reaction notice "it notices": when true says It notices {actor}.
 const BASE = NO_WORLD ? null : await loadCreatureLaw({ ref: "the pinned clone", importTool: (f) => import(worldModuleUrl("tools", f)), readText: () => KIND_TEXT });
 const FIGHTER = NO_WORLD ? null : { ...BASE.kindOf("fighter"), finishable: true, resolve: 40, strike: 2, fight: "fighter.fight.json", ending: "It is itself again. {names} were there." };
 const FIGHT = {
-  sanity_max: 12, order: ["fireballs", "disguise", "empowered"], restores: "snack",
+  sanity_max: 12, order: ["feint", "disguise", "unbreakable"], restores: "snack",
   pieces: [
-    { piece: "fireballs", looks: "It glows.", fireball: "a ball of sparks", aims_at: "loudest", flinch_nerve: 3, held: 2, held_by: { watch: 3 },
+    { piece: "feint", looks: "It glows.", throws: "a ball of sparks", aims_at: "loudest", flinch_nerve: 3, held: 2, held_by: { watch: 3 },
       answer_min: 30, ends: { hit_points_at: 0.5, sanity_at: 0.5, after_h: 4 } },
     { piece: "disguise", looks: "It looks ordinary.", surrender: "You won. Go home now.", admits: "Fine. You saw me." },
-    { piece: "empowered", looks: "It blazes.", persuade: { low: 3, high: 8, nerve: 8, story: ["wait like everyone else"] } },
+    { piece: "unbreakable", looks: "It blazes.", persuade: { low: 3, high: 8, nerve: 8, story: ["wait like everyone else"] } },
   ],
 };
 const LAW = NO_WORLD ? null : {
@@ -59,7 +59,7 @@ const ID = "creature:fighter-top";
 const iso = (ms) => new Date(ms).toISOString();
 const ROSTER = ["kai", "ren", "ana"].map((handle) => ({ handle, distance_m: 10, household: handle === "ana" ? "house:hearth" : `solo:${handle}`, slug: null, human: `human-of-${handle}`, nerve: 10 }));
 
-test("ON THE STORE · a fireball answered once, a set piece begun once, a disguise broken once, a persuade once per household, and the ending with its restore, once", async () => {
+test("ON THE STORE · a feint answered once, a set piece begun once, a disguise broken once, a persuade once per household, and the ending with its restore, once", async () => {
   const s = await startStore({ db: "set_pieces_drive" });
   const api = await s.connect("office_api");
   const { default: pg } = await import("pg");
@@ -80,8 +80,8 @@ test("ON THE STORE · a fireball answered once, a set piece begun once, a disgui
     const living = await fresh();
     const c = living.byId.get(ID);
 
-    // A · A FIREBALL IS ANSWERED ONCE. One aimed at ren 40 min ago: the tick lapses it, and a second tick (another office) does not
-    const hurlId = String(await put(row(ID, HURL_ACTION, "ren", { piece: "fireballs", fireball: "a ball of sparks", says: "x", until: iso(now - 10 * 60_000), window: w.id }, "creature", now - 40 * 60_000)));
+    // A · A FEINT IS ANSWERED ONCE. One aimed at ren 40 min ago: the tick lapses it, and a second tick (another office) does not
+    const hurlId = String(await put(row(ID, HURL_ACTION, "ren", { piece: "feint", throws: "a ball of sparks", says: "x", until: iso(now - 10 * 60_000), window: w.id }, "creature", now - 40 * 60_000)));
     const stale = await fresh();
     await living.refresh({ query: q, now });
     __resetEncounterTickForTest();
@@ -92,7 +92,7 @@ test("ON THE STORE · a fireball answered once, a set piece begun once, a disgui
     await tick(stale);
     const hurled = await q(`SELECT payload FROM acts WHERE action = '${HURLED_ACTION}' AND payload->>'hurl' = $1`, [hurlId]);
     assert.deepEqual(hurled.map((r) => r.payload.outcome), ["lapsed"], "lapsed once, though two ticks saw it open");
-    // and an answer racing the lapse: a reaction carrying its own answer to the same fireball writes neither the answer nor what rode on it
+    // and an answer racing the lapse: a reaction carrying its own answer to the same feint writes neither the answer nor what rode on it
     const said = String(await put(row("ren", "say", null, { text: "hm" }, "voice")));
     const act = { actor: "ren", verb: "say", actId: said, atIso: iso(now) };
     const late = reactionRows(c, act, { reaction: "notice", to: "ren", verb: "say" }, { now });
@@ -115,12 +115,12 @@ test("ON THE STORE · a fireball answered once, a set piece begun once, a disgui
     const looks = [await fresh(), await fresh()];
     const u1 = await unmaskFight(looks[0].byId.get(ID), FIGHTER, FIGHT, { by: "ana", verb: "investigate", living: looks[0], now, roster: ROSTER });
     const u2 = await unmaskFight(looks[1].byId.get(ID), FIGHTER, FIGHT, { by: "kai", verb: "strike", living: looks[1], now, roster: ROSTER });
-    assert.equal(u1.piece, "empowered");
+    assert.equal(u1.piece, "unbreakable");
     assert.equal(u2, null);
     assert.deepEqual((await q(`SELECT object FROM acts WHERE action = '${UNMASKED_ACTION}'`)).map((r) => r.object), ["ana"], "the first breaker is the one on the record");
     assert.equal((await q(`SELECT 1 FROM acts WHERE action = '${PHASE_ACTION}'`)).length, 2);
     const after = await fresh();
-    assert.equal(pieceOf(after.byId.get(ID), FIGHT, now).piece, "empowered", "a restarted office folds the same set piece");
+    assert.equal(pieceOf(after.byId.get(ID), FIGHT, now).piece, "unbreakable", "a restarted office folds the same set piece");
 
     // D · ONCE PER HOUSEHOLD EACH SETTLEMENT, in the persuade's own transaction
     const persuade = (actor, household) => pen.officeWrite(async (cl) => {

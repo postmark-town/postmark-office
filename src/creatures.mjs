@@ -99,7 +99,7 @@ import {
 import { endingSaid } from "./encounter.mjs";
 import {
   BARS_NOTE, FLINCH_VERBS, HURLED_ACTION, HURL_ACTION, LINE_ACTION, PERSUADE_ACTION, PHASE_ACTION, PRIOR_HURLED_SQL, PRIOR_PHASE_SQL, PRIOR_UNMASKED_SQL, SANITY_ACTION, UNMASKED_ACTION,
-  answerOf as fireballAnswer, barsOf, earlierPersuades, fireballTarget, hurlAnswered, hurlSaid, isDisguised, isSetPiece, nextPiece, persuadeQuestion, persuadeScore, pieceOf, repeats, sanityOf, writeOnce,
+  answerOf as feintAnswer, barsOf, earlierPersuades, feintTarget, hurlAnswered, hurlSaid, isDisguised, isSetPiece, nextPiece, persuadeQuestion, persuadeScore, pieceOf, repeats, sanityOf, writeOnce,
 } from "./set-pieces.mjs";
 import { liveShieldOn } from "./encounter.mjs";
 
@@ -1306,7 +1306,7 @@ export const NO_TRIGGER = "its trigger act is not on the record";
  * lock on (creature, trigger, moment) before it asks, so the second waits for
  * the first and then finds its row: one reaction, never two.
  */
-/** A fireball's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
+/** A feint's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
 async function writeHurledOnce(client, row, insertAct) {
   const p = asPayload(row.payload);
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-hurled:${p.hurl}`]);
@@ -1329,7 +1329,7 @@ export async function writeReaction(rows, { officeWrite: ow = null, insertAct: i
       if (!here.length) throw Object.assign(new Error(NO_TRIGGER), { why: NO_TRIGGER });
     }
     const out = [];
-    const answeredBefore = new Set(); // a fireball the tick already answered (lapsed): its answer here, and what rode on it, is not written
+    const answeredBefore = new Set(); // a feint the tick already answered (lapsed): its answer here, and what rode on it, is not written
     for (const r of rows) {
       const p = asPayload(r.payload);
       if (p.hurl != null && answeredBefore.has(String(p.hurl))) continue;
@@ -1492,7 +1492,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     // THE ENCOUNTER (a finishable kind; encounter.mjs): who stands in its ring, what
     // this act costs, and its resolve and ease this window, read inside the act's wait
     const enc = fin ? await encounterOf(creature, kind, act, distance_m, deps) : null;
-    // A FIGHT IN SET PIECES (set-pieces.mjs): its set piece, the fireball this act answers, a persuade's cost and score.
+    // A FIGHT IN SET PIECES (set-pieces.mjs): its set piece, the feint this act answers, a persuade's cost and score.
     // A fight that cannot be read at this ref runs nothing (fail closed)
     const fight = isSetPiece(kind) ? law.fightOf?.(creature.kind) ?? null : null;
     if (isSetPiece(kind) && !fight) return null;
@@ -1597,7 +1597,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
       ...(tempted.tallies.length ? { counted: tempted.tallies.map((t) => ({ for: t.on, [t.payload.road]: t.payload.by, why: t.payload.why })) } : {}),
       // its ease after this act, as a strike carries resolve (eval round 1, F10), and why it did not move when it did not
       ...(enc && kind.ease ? { ease: easeSaid(creature, kind, act.actor, enc, now) } : {}),
-      // a fight in set pieces: what this act made of a fireball, what a persuade counted for, a fireball this reaction
+      // a fight in set pieces: what this act made of a feint, what a persuade counted for, a feint this reaction
       // carries, and both bars after it (withheld while it is disguised)
       ...fought.said,
       ...(fight && !isDisguised(creature, fight, now) ? { bars: { ...barsOf(living, creature, kind, fight, now), note: BARS_NOTE } } : {}),
@@ -1686,7 +1686,7 @@ function temptingRows(creature, act, tm, judgment, { living, now }) {
 
 /**
  * THE FIGHT'S HALF OF A TURN (set-pieces.mjs), before Jev is asked: its set
- * piece, the fireball this act answers (and what it made of it: the rows go with
+ * piece, the feint this act answers (and what it made of it: the rows go with
  * the turn's own, or alone when nothing reacts), a persuade's cost and Jev's
  * question for its score, and what the kind's conditions read (fight.*).
  */
@@ -1694,19 +1694,19 @@ function fightTurn(creature, kind, fight, act, enc, { living, law, now }) {
   const p = pieceOf(creature, fight, now);
   const w = windowAt(now).id;
   const early = [];
-  // A FIREBALL AIMED AT THE ACTOR is answered by their next act in its ring (a walk's landing is the walk it already was)
+  // A FEINT AIMED AT THE ACTOR is answered by their next act in its ring (a walk's landing is the walk it already was)
   const hurl = !MOMENTS.includes(act.moment) && ringHolds(law, creature, act.point) ? hurlAnswered(living, creature, act.actor, act, now) : null;
   const def = hurl ? fight.pieces.find((x) => x.piece === hurl.payload.piece) ?? p.def : null;
-  const answer = hurl && def?.flinch_nerve ? fireballAnswer(act.verb, def, law.fightMod?.FLINCH_VERBS ?? FLINCH_VERBS) : null;
+  const answer = hurl && def?.flinch_nerve ? feintAnswer(act.verb, def, law.fightMod?.FLINCH_VERBS ?? FLINCH_VERBS) : null;
   if (answer) {
     early.push(creatureRow(creature, HURLED_ACTION, act.actor, { hurl: hurl.id, outcome: answer.outcome, by: String(act.actId), window: w },
-      `${act.actor} ${answer.outcome === "flinched" ? "flinches from" : "holds under"} the ${creature.kind}'s fireball`, now));
+      `${act.actor} ${answer.outcome === "flinched" ? "flinches from" : "holds under"} the ${creature.kind}'s feint`, now));
     if (answer.nerve) early.push(nerveRow(creature, act, { on: act.actor, by: -answer.nerve, why: "flinched", now, hurl: hurl.id }));
     if (answer.sanity) early.push(creatureRow(creature, SANITY_ACTION, act.actor, { by: answer.sanity, why: "held", act: String(act.actId), hurl: hurl.id, window: w },
       `${act.actor} holds, and the ${creature.kind} steadies`, now));
   }
-  // A PERSUADE (the empowered piece's peaceful act): its own nerve, once per household per settlement (the door's count)
-  const persuading = act.verb === PERSUADE_ACTION && p.piece === "empowered" && !!p.def.persuade;
+  // A PERSUADE (the unbreakable piece's peaceful act): its own nerve, once per household per settlement (the door's count)
+  const persuading = act.verb === PERSUADE_ACTION && p.piece === "unbreakable" && !!p.def.persuade;
   const earlier = persuading ? earlierPersuades(living, creature, act, now) : [];
   const repeated = persuading && repeats(act.words, earlier);
   return {
@@ -1721,26 +1721,26 @@ function fightTurn(creature, kind, fight, act, enc, { living, law, now }) {
 
 /**
  * THE FIGHT'S HALF, after Jev: a persuade's score (Jev's, clamped by code; the
- * low end for a repeat or no word), and the fireball this reaction carries in
- * the fireballs piece, aimed by the piece's rule. Answers { rows, said }.
+ * low end for a repeat or no word), and the feint this reaction carries in
+ * the feint piece, aimed by the piece's rule. Answers { rows, said }.
  */
 function fightRows(creature, kind, fight, act, ft, enc, judgment, { living, law, now }) {
   const w = windowAt(now).id;
   const rows = [...ft.early];
   const said = {};
-  if (ft.answer) said.fireball = { outcome: ft.answer.outcome, ...(ft.answer.nerve ? { nerve: -ft.answer.nerve } : {}), ...(ft.answer.sanity ? { sanity: ft.answer.sanity } : {}) };
+  if (ft.answer) said.feint = { outcome: ft.answer.outcome, ...(ft.answer.nerve ? { nerve: -ft.answer.nerve } : {}), ...(ft.answer.sanity ? { sanity: ft.answer.sanity } : {}) };
   if (ft.persuading) {
     const by = persuadeScore(judgment.extra?.persuade_score ?? null, ft.piece.def, { repeated: ft.repeated });
     rows.push(creatureRow(creature, SANITY_ACTION, act.actor, { by, why: "persuade", act: String(act.actId), window: w, ...(ft.repeated ? { repeated: true } : {}) },
       `${act.actor} persuades the ${creature.kind}`, now));
     said.persuaded = { sanity: by, ...(ft.repeated ? { note: "it repeats what was said to it before this settlement, so it counts the least" } : {}) };
   }
-  if (ft.piece.piece === "fireballs") {
-    const target = fireballTarget({ living, creature, def: ft.piece.def, roster: enc.roster, actor: act.actor, now });
+  if (ft.piece.piece === "feint") {
+    const target = feintTarget({ living, creature, def: ft.piece.def, roster: enc.roster, actor: act.actor, now });
     if (target) {
       const name = law.kindOf(creature.kind)?.name ?? creature.kind;
-      const says = hurlSaid(name, ft.piece.def.fireball, target.handle);
-      rows.push(creatureRow(creature, HURL_ACTION, target.handle, { piece: "fireballs", fireball: ft.piece.def.fireball, says,
+      const says = hurlSaid(name, ft.piece.def.throws, target.handle);
+      rows.push(creatureRow(creature, HURL_ACTION, target.handle, { piece: "feint", throws: ft.piece.def.throws, says,
         until: new Date(now + ft.piece.def.answer_min * 60_000).toISOString(), window: w }, says, now));
       said.hurls = { at: target.handle, says };
     }
@@ -1943,7 +1943,7 @@ async function chargeOnly(creature, act, enc, deps, answered = []) {
   const kind = deps.law.kindOf(creature.kind);
   const broken = enc.breaksEase ? applyEase(creature, kind, [EASE_BROKEN], act.actor, enc.household, deps.now).ease : null;
   const rows = enc.cost.map((n) => nerveRow(creature, act, { ...n, now: deps.now, ...(broken ? { ease_after: broken } : {}) }));
-  // a fireball this act answered (set-pieces.mjs), answered once though no reaction rides with it
+  // a feint this act answered (set-pieces.mjs), answered once though no reaction rides with it
   if (answered.length) {
     const hurl = asPayload(answered[0].payload).hurl;
     const got = await (deps.writeOnce ?? writeOnce)(answered, { lock: `creature-hurled:${hurl}`, prior: { sql: PRIOR_HURLED_SQL, params: [creature.id, String(hurl)] } });

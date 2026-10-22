@@ -161,9 +161,9 @@ const fight0 = (law, c) => law.fightOf?.(c.kind) ?? null;
 /** What each part of a fight in set pieces asks, in plain words (the law in the season's notes says it whole). */
 export function fightRoads(fight, { nerve = null } = {}) {
   const parts = {
-    fireballs: "when it hurls something at you, your next act near it answers: dodge, walk or leave and you lose nerve; anything else and you hold, which raises its sanity",
+    feint: "when it hurls something at you, your next act near it answers: dodge, walk or leave and you lose nerve; anything else and you hold, which raises its sanity",
     disguise: "it may not be what it seems",
-    empowered: `strikes cannot wear it down; persuade it in your household's own words, once each settlement, at a cost of ${fight?.pieces?.find((p) => p.piece === "empowered")?.persuade?.nerve ?? "much"} nerve`,
+    unbreakable: `strikes cannot wear it down; persuade it in your household's own words, once each settlement, at a cost of ${fight?.pieces?.find((p) => p.piece === "unbreakable")?.persuade?.nerve ?? "much"} nerve`,
   };
   return { parts: (fight?.order ?? []).map((p) => parts[p]).filter(Boolean),
     ends: "when its sanity is full at a settlement, its fight ends there, and everyone who took part is named",
@@ -272,7 +272,7 @@ export function creatureToYou({ living, law }, handle, { sinceMs, nowMs = Date.n
       reaction: r.reaction, roll: r.roll, judged_by: r.judged_by, ...(r.act.endsWith("@arrival") ? { arrival: true } : {}),
       ...(mine.length > 1 ? { and_more: mine.length - 1, more: `and ${mine.length - 1} more` } : {}) });
   }
-  // a fireball aimed at you (set-pieces.mjs): the office's own true words, and until when your next act answers it
+  // a feint aimed at you (set-pieces.mjs): the office's own true words, and until when your next act answers it
   for (const r of living.encounter ?? [])
     if (r.action === HURL_ACTION && r.object === handle && r.at > sinceMs && r.at <= nowMs)
       events.push({ kind: "creature", creature: r.actor, at: new Date(r.at).toISOString(), hurls: String(r.payload?.says ?? ""), until: r.payload?.until ?? null });

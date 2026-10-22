@@ -196,7 +196,7 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   if (mine < cost) throw bounce(409, `a strike takes ${cost} nerve; you have ${mine}`, "steady from a friend in the ring gives nerve; the settlement fills it. Nothing was done.", { nerve: nerveSaid(mine) });
   if (hasResolve(kind) && resolveOf(living, c, kind, now) <= 0) throw bounce(409, `${theOf(law, c)} is already worn down`, "its resolve is spent for this window: the settlement ends it, or fills it again. Nothing was done.");
 
-  // A FIGHT IN SET PIECES (set-pieces.mjs): a strike wears nothing in the empowered piece, and breaks a disguise
+  // A FIGHT IN SET PIECES (set-pieces.mjs): a strike wears nothing in the unbreakable piece, and breaks a disguise
   const fight = isSetPiece(kind) ? law.fightOf?.(c.kind) ?? null : null;
   if (isSetPiece(kind) && !fight) throw bounce(409, `${theOf(law, c)}'s fight cannot be read here`, "its fight file is not law at this office's blessed ref, so nothing about it can be done yet. Nothing was done.");
   const piece = fight ? pieceOf(c, fight, now) : null;
@@ -207,7 +207,7 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   const menu = tempter ? law.menuOf?.(c.kind) ?? null : null;
   const phase = menu ? phaseOf(living, c, kind, menu, now) : null;
   const houseOf = tempter ? await (d.houseOf ?? houseOfNow)() : null;
-  const damage = tempter ? strikeDamage({ living, creature: c, echo: phase?.echo ?? null, actor, houseOf, now }) : piece?.piece === "empowered" ? 0 : kind.strike;
+  const damage = tempter ? strikeDamage({ living, creature: c, echo: phase?.echo ?? null, actor, houseOf, now }) : piece?.piece === "unbreakable" ? 0 : kind.strike;
   const payload = { kind: c.kind, cost, damage, window: w.id, ...(phase ? { phase: phase.name } : {}) };
   const row = await d.write({ actor, action: STRIKE_ACTION, object: id, cls: "creature", payload, effect: `${actor} strikes ${theOf(law, c)}` },
     key, { guard: strikeGuard(actor, id, { cost, resolveMax: hasResolve(kind) ? kind.resolve : null, now }) });
@@ -215,7 +215,7 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   living.fold([{ id: String(row.actId), at: atIso, actor, action: STRIKE_ACTION, object: id, payload }], { advance: false });
 
   const ringNow = () => (d.roster ? d.roster(c, { law, living, now }).catch(() => []) : Promise.resolve([]));
-  // A FIGHT IN SET PIECES: this strike breaks a disguise, or brings the fireballs to their end; never fatal to the strike
+  // A FIGHT IN SET PIECES: this strike breaks a disguise, or brings the feints to their end; never fatal to the strike
   const moved = fight ? await (piece.piece === "disguise"
     ? unmaskFight(c, kind, fight, { by: actor, verb: STRIKE_ACTION, act: String(row.actId), living, now: d.now(), roster: await ringNow(), write: d.writeOnce ?? null })
     : advanceFight(c, kind, fight, { living, now: d.now(), roster: await ringNow(), write: d.writeOnce ?? null }))
@@ -443,8 +443,8 @@ export async function encounterTick({ living, law }, { now = Date.now(), deps = 
     }
   }
 
-  // A FIGHT IN SET PIECES (set-pieces.mjs): a fireball no act answered in time lapses, once; and the
-  // fight moves on when its clock says so (the fireballs' hours into a window)
+  // A FIGHT IN SET PIECES (set-pieces.mjs): a feint no act answered in time lapses, once; and the
+  // fight moves on when its clock says so (the feint's hours into a window)
   for (const c of living.living(now)) {
     const kind = law.kindOf(c.kind);
     if (!isSetPiece(kind)) continue;
@@ -453,10 +453,10 @@ export async function encounterTick({ living, law }, { now = Date.now(), deps = 
     for (const h of openHurls(living, c, now)) {
       if (now <= Date.parse(h.payload.until)) continue;
       try {
-        const row = creatureRow(c, HURLED_ACTION, h.object, { hurl: h.id, outcome: "lapsed", window: windowAt(now).id }, `the ${c.kind}'s fireball at ${h.object} lapses`, now);
+        const row = creatureRow(c, HURLED_ACTION, h.object, { hurl: h.id, outcome: "lapsed", window: windowAt(now).id }, `the ${c.kind}'s feint at ${h.object} lapses`, now);
         const written = await (d.writeOnce ?? writeOnce)([row], { lock: `creature-hurled:${h.id}`, prior: { sql: PRIOR_HURLED_SQL, params: [c.id, String(h.id)] } });
         if (written?.rows?.length) { living.fold(written.rows, { advance: false }); out.lapsed = (out.lapsed ?? 0) + 1; }
-      } catch (e) { faultLogged(`a fireball could not lapse (${h.id})`, e); }
+      } catch (e) { faultLogged(`a feint could not lapse (${h.id})`, e); }
     }
     const moved = await advanceFight(c, kind, fight, { living, now, roster: await d.roster(c, { law, living, now }).catch(() => []), write: d.writeOnce ?? null })
       .catch((e) => { faultLogged(`a fight's next set piece could not be written (${c.id})`, e); return null; });
