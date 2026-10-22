@@ -322,7 +322,20 @@ export const REACTIONS_SHOWN = 10;
  *   rows(id, n)           its newest reaction rows (REACTIONS_SQL), or null when the record cannot be read
  *   saved(id)             { crossing, row } from the newest crossing save, or null
  */
-export async function investigateCreature(id, { creatures, from = null, handle = null, nowMs = Date.now(), rows = async () => null, saved = () => null, unmask = null } = {}) {
+/**
+ * WHO A LOOK MAY BREAK A DISGUISE AS (set-pieces.mjs): the resident the reader's key
+ * holds, named or its only one, and nobody else. A look with no key, or naming a
+ * resident the key does not hold, reads the disguise as it is and writes nothing:
+ * the record never names a breaker who did not look (review of office#735).
+ */
+export function lookerOf(args = {}, key = null) {
+  const handles = [...(key?.handles ?? [])];
+  const named = String(args?.handle ?? "").trim();
+  const who = named || (handles.length === 1 ? handles[0] : "");
+  return who && key?.handles?.has?.(who) ? who : null;
+}
+
+export async function investigateCreature(id, { creatures, from = null, handle = null, looker = null, nowMs = Date.now(), rows = async () => null, saved = () => null, unmask = null } = {}) {
   const { living, law } = creatures ?? {};
   if (!living || !lawReady(law))
     return { kind: "creature", id, unavailable: "the creatures' law cannot be read at this office's blessed ref, so no creature can be looked at" };
@@ -337,11 +350,12 @@ export async function investigateCreature(id, { creatures, from = null, handle =
   const kind = c ? law.kindOf(c.kind) : null;
   const here = point(from);
   // A DISGUISE IS BROKEN BY A LOOK FROM INSIDE ITS RING (set-pieces.mjs): the first investigate by a resident
-  // standing there breaks it for everyone, and this look already sees it as it is
+  // standing there breaks it for everyone, and this look already sees it as it is. `looker` is the key's own
+  // resident (lookerOf), never a handle a caller only named, and `from` is where that resident stands
   const disguised = c && isSetPiece(kind) && !!law.fightOf?.(c.kind) && pieceOf(c, law.fightOf(c.kind), nowMs).piece === "disguise";
   let sawThrough = false;
-  if (disguised && unmask && handle && here && seesCreature(law, c, here, Number(kind.ring_m)))
-    sawThrough = !!(await Promise.resolve(unmask(c, handle)).catch(() => null));
+  if (disguised && unmask && looker && here && seesCreature(law, c, here, Number(kind.ring_m)))
+    sawThrough = !!(await Promise.resolve(unmask(c, looker)).catch(() => null));
   const fought = c ? fightRead({ living, law }, c, kind, nowMs) : null;
   const now = c ? {
     at: { x: Math.round(c.x), y: Math.round(c.y) },

@@ -28,7 +28,7 @@ import {
 } from "../src/set-pieces.mjs";
 import { encounterTick, settleResolve, worldEncounter, __resetEncounterTickForTest } from "../src/encounter-verbs.mjs";
 import { whyNot, persuadeGuard, PERSUADED_SQL } from "../src/creature-verbs.mjs";
-import { creaturesInWho, creatureToYou, investigateCreature } from "../src/creatures-read.mjs";
+import { creaturesInWho, creatureToYou, investigateCreature, lookerOf } from "../src/creatures-read.mjs";
 import { planFightEnding, fightSanity } from "../world2/tools/creature-endings.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -243,7 +243,7 @@ test("while disguised the office withholds both bars, its part and its moods, an
   assert.deepEqual(far.presence.now.fight, { looks: "It looks entirely ordinary." });
   assert.equal(far.presence.now.moods, undefined, "its moods would say what it hides");
   let broke = null;
-  const near = await investigateCreature(ID, { creatures: cur, from: { x: 10, y: 0 }, handle: "kai", nowMs: NOW,
+  const near = await investigateCreature(ID, { creatures: cur, from: { x: 10, y: 0 }, handle: "kai", looker: "kai", nowMs: NOW,
     unmask: async (c, by) => { broke = by; living.fold([row(ID, UNMASKED_ACTION, by, { verb: "investigate" }, NOW), phase(2, NOW)], { advance: false }); return { piece: "unbreakable" }; } });
   assert.equal(broke, "kai");
   assert.equal(near.presence.now.fight.part, "unbreakable", "this look already sees it as it is");
@@ -276,6 +276,26 @@ test("a strike breaks the disguise; in the unbreakable piece a strike wears noth
   // and force never ends it, however its hit points stand: only its sanity does
   const many = Array.from({ length: 30 }, (_, i) => ({ id: String(100 + i), actor: "kai", at: iso(NOW), payload: { damage: 2 } }));
   assert.equal(await settleResolve(unbreakable.byId.get(ID), FIGHTER, { d: { strikes: async () => many, finish: async () => { throw new Error("never"); } }, now: NOW }), null);
+});
+
+test("a look breaks a disguise only as the key's own resident: a key for one naming another, or no key at all, breaks nothing and writes nothing", async () => {
+  const kai = { handles: new Set(["kai"]) };
+  assert.equal(lookerOf({}, kai), "kai", "the key's only resident");
+  assert.equal(lookerOf({ handle: "kai" }, kai), "kai");
+  assert.equal(lookerOf({ handle: "ren" }, kai), null, "a key for kai naming ren");
+  assert.equal(lookerOf({ handle: "ren" }, null), null, "no key");
+  assert.equal(lookerOf({}, { handles: new Set(["kai", "ren"]) }), null, "a key for two, naming neither");
+  // and at investigate: a named handle alone is never a breaker
+  const living = livingWith(lawWith(), phase(1, NOW - 30 * 60_000));
+  const cur = { living, law: living.law };
+  let asked = 0;
+  const never = async () => { asked += 1; return null; };
+  for (const looker of [lookerOf({ handle: "ren" }, kai), lookerOf({ handle: "ren" }, null)]) {
+    const seen = await investigateCreature(ID, { creatures: cur, from: { x: 10, y: 0 }, handle: "ren", looker, nowMs: NOW, unmask: never });
+    assert.deepEqual(seen.presence.now.fight, { looks: "It looks entirely ordinary." }, "it reads the disguise as it is");
+  }
+  assert.equal(asked, 0, "no write was even asked for");
+  assert.equal(pieceOf(living.byId.get(ID), FIGHT, NOW).piece, "disguise", "nothing was broken");
 });
 
 // ── persuade ───────────────────────────────────────────────────────────────

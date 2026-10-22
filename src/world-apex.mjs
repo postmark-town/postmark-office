@@ -2014,20 +2014,25 @@ async function investigateOn(args, oriented, usable = null, key = null) {
   }
   if (kind.kind === "creature") {
     // POS-637 PR-C: the creature as of now, its newest reactions with their odds, and the crossing save's row
-    const { creaturesForRead, investigateCreature, savedCreatureOf, REACTIONS_SQL } = await import("./creatures-read.mjs");
+    const { creaturesForRead, investigateCreature, savedCreatureOf, lookerOf, REACTIONS_SQL } = await import("./creatures-read.mjs");
     const { actsQuery } = await import("./world2-acts.mjs");
     const creatures = await creaturesForRead();
     const seen = await investigateCreature(kind.id, {
       creatures,
       from: oriented?.standpoint ?? null,
-      handle: args.handle ?? standingHandle(args, key), // whose ease "yours" reads, at a finishable creature; who sees through a disguise
+      handle: args.handle ?? null, // whose ease "yours" reads, at a finishable creature
+      // who may break a disguise by looking: the key's own resident, standing in its ring (never a handle only named)
+      looker: lookerOf(args, key),
       rows: (id, n) => actsQuery(REACTIONS_SQL, [id, n]),
       saved: (id) => savedCreatureOf(id),
       // a look from inside its ring breaks a disguise (set-pieces.mjs): written by the creatures' own pen
       unmask: async (c, by) => {
-        const { unmaskFight, ringRosterNow } = await import("./creatures.mjs");
+        const { unmaskFight, ringRosterNow, ringHolds } = await import("./creatures.mjs");
         const law = creatures.law, kindFile = law.kindOf(c.kind), fight = law.fightOf?.(c.kind) ?? null;
         if (!fight) return null;
+        // where the looker stands, read again: the look breaks it only from inside its ring
+        const there = await residentStandpoint(by).catch(() => null);
+        if (!there?.placed || !ringHolds(law, c, { x: Number(there.x), y: Number(there.y) })) return null;
         const roster = await ringRosterNow(c, { law, living: creatures.living }).catch(() => []);
         return unmaskFight(c, kindFile, fight, { by, verb: "investigate", living: creatures.living, roster });
       },
