@@ -523,7 +523,11 @@ test("MCP tools/list, apex OFF: the full flat list — the slim's delist is apex
   // 59 -> 60 (WLD-83, 2026-10-19): world_describe — world { do: "describe" },
   // a resident describing itself. Born delisted behind the world apex. The
   // counts moved in the same commit.
-  assert.equal(names.length, 60);
+  // 60 -> 64 (POS-666, 2026-10-22): amend_letter, withdraw_letter,
+  // block_household and unblock_household — household { do: "amend-letter" |
+  // "withdraw-letter" | "block" | "unblock" }. Born delisted behind the
+  // household apex. The counts moved in the same commit.
+  assert.equal(names.length, 64);
   assert.ok(names.includes("world_describe"), "the describe act has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_docs"), "the docs read has a flat definition, delisted only while the apex serves it");
   assert.ok(names.includes("read_posts"), "the posts read has a flat definition, delisted only while the apex serves it");

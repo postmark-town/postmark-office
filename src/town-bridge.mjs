@@ -153,6 +153,8 @@ import { currentKeysOf, judgeHouseKey } from "./house-key.mjs";
 import { planFirstIdeaSweep, writeFirstIdeaSweep } from "./first-idea-sweep.mjs";
 import { replayPaperAct } from "./town-updates.mjs";
 import { replayLetter } from "./town-mail.mjs";
+import { foldLetters } from "./letter-fold.mjs"; // POS-666: a letter's amendments and withdrawal, folded as its sender reads them
+import { stoppedLetters } from "./mail-blocks.mjs"; // POS-666: the blocks that stand when the boat sails
 import { recipientsProbe } from "./ashore.mjs"; // the recipient check's wrap, the door's own (POS-444)
 import { townLockPath, useFlock } from "./town-lock.mjs";
 
@@ -395,6 +397,9 @@ export async function runTownDrain(odb, {
   // same reason as `planLines`: its refusal and its throw are branches a
   // falsifier must reach through this function, not only through the writer
   storeJudge = undefined,
+  // POS-666: which pending letters a mail block stops, injectable so a
+  // falsifier reaches the stop and the hold without a store
+  stopsFor = stoppedLetters,
 } = {}) {
   const t0 = Date.now();
   const done = (r) => { const out = { ...r, took_ms: Date.now() - t0 }; log?.(drainLine(out)); return out; };
@@ -717,6 +722,33 @@ export async function runTownDrain(odb, {
     return { bounced: e?.defect ?? String(e?.message ?? e), code: e?.code ?? null };
   };
 
+  // ── A LETTER'S LATER WORDS, AND THE BLOCKS (POS-666) ─────────────────────
+  //
+  // The pending letters are folded exactly as their senders read them
+  // (letter-fold.mjs): a letter sails with its last amendment's body, a
+  // withdrawn letter does not sail, and the amendment and withdrawal rows
+  // themselves write nothing. Then the blocks that stand NOW are asked once for
+  // the letters that would sail: a letter between two households that stand
+  // blocked is STOPPED, which is the silent drop Darko ruled. It never becomes
+  // a file, so the batch's commit (the town's public history) never names it;
+  // this report, which stays on the box, does. Its row stays in the log.
+  //
+  // A store that cannot answer the question HOLDS every letter (the cursor
+  // stays, as for a push that cannot land): sailing a letter a block may stand
+  // against would be the one wrong this cannot take back. A store that has
+  // not taken 083 answers that no block stands, because none can have been placed.
+  const folded = foldLetters(rows);
+  const foldOf = new Map(folded.letters.map((l) => [l.row.seq, l]));
+  const wordOf = new Map(folded.words.map((w) => [w.row.seq, w]));
+  let stopped = new Set(), stopsRefused = null;
+  try {
+    stopped = await stopsFor(folded.letters.filter((l) => !l.withdrawn)
+      .map((l) => ({ seq: l.row.seq, from: l.row.handle, to: l.args?.to ?? null })));
+  } catch {
+    stopsRefused = "the office's record could not say which households stand blocked, so no letter sailed on this crossing; every one is held for the next";
+    log(`drain: ${stopsRefused}`);
+  }
+
   // ── THE PEN BATCH (POS-723, Darko 2026-10-20 08:58) ──────────────────────
   //
   // ONE COMMIT AND ONE PUSH FOR THE CROSSING'S MAIL AND PAPER, not one per
@@ -783,16 +815,29 @@ export async function runTownDrain(odb, {
         continue;
       }
       if (row.cls !== "letter") continue;
-      const file = row.payload?.file ?? null;
       const id = row.payload?.id ?? null;
+      // a later word (POS-666) writes nothing of its own: its letter carries it
+      const word = wordOf.get(row.seq);
+      if (word) {
+        letters.push({ seq: row.seq, act: row.act, id,
+          ...(word.letter != null ? { of: word.letter } : { passed: "its letter was not pending from the same sender, or was already withdrawn" }) });
+        continue;
+      }
+      const file = row.payload?.file ?? null;
       // the resume check — see § idempotence in this file's header (the
       // worktree stands at the town's tip, the clone at most behind it)
       if (file && (existsSync(join(clone, file)) || (wt && existsSync(join(wt, file))))) {
         letters.push({ seq: row.seq, id, file, already: true });
         continue;
       }
-      letters.push(replay({ seq: row.seq, id, file }, row,
-        () => replayLetter(row, { doors, db: letterDb, clone: wt })));
+      const l = foldOf.get(row.seq);
+      if (l?.withdrawn) { letters.push({ seq: row.seq, id, file, withdrawn: l.withdrawn.seq }); continue; }
+      if (stopsRefused) { held += 1; letters.push({ seq: row.seq, id, file, held: stopsRefused, code: 503 }); continue; }
+      if (stopped.has(row.seq)) { letters.push({ seq: row.seq, id, file, stopped: true }); continue; }
+      // the letter as it now stands: its last amendment's body, its own identity
+      const standing = l && l.versions.length > 1 ? { ...row, payload: { ...row.payload, args: l.args } } : row;
+      letters.push(replay({ seq: row.seq, id, file, ...(l && l.versions.length > 1 ? { version: l.versions.length } : {}) }, standing,
+        () => replayLetter(standing, { doors, db: letterDb, clone: wt })));
     }
   } finally { if (batch) closePenBatch(batch); }
 

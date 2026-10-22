@@ -281,8 +281,15 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 // to the unabridged 24K and trips 8,448 at once, which is the one regression it
 // exists to catch. It is not a budget for prose; the lasting fix (names in the
 // bare index, the lines through explain:) is filed under the grammar work.
-const REST_CEILING = 24_576;
-const SLIM_CEILING = 8_448;
+// POS-666 (2026-10-22, lane plumb-mail; raised on the recommendation sent to
+// Wright as G7, PENDING HIS WORD): the four mail-parity acts (amend-letter,
+// withdraw-letter, block, unblock) and the `blocks` read, which the ruling puts
+// in the door's own act list. Measured: REST bare 26,336 B (was 24,522, 54 B of
+// headroom), connector bare 8,834 B (was 8,298). REST_CEILING to 28,672 (+4 KiB,
+// about 9% over the measure), SLIM_CEILING to 8,960 (+512). Both still sit far
+// below the unabridged answer, so losing the abridgement still trips them at once.
+const REST_CEILING = 28_672;
+const SLIM_CEILING = 8_960;
 
 test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
   const { shapeOf } = await import("../tools/capture-household-golden.mjs");
@@ -513,6 +520,18 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   const sheetFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
   assert.equal(sheetFrozen?.fields.sheet?.type, "string", "the frozen profile card carries sheet");
   assert.equal(full.acts.find((a) => a.act === "profile")?.fields.sheet?.type, "string", "and the live profile card takes it");
+
+  // ⚑ REGENERATED 2026-10-22 FOR POS-666 (Darko 17:12–17:19: mail parity with
+  // git-era letters, and a household's block on another's mail). What grew:
+  // four act cards at the end of `acts` — amend-letter, withdraw-letter, block,
+  // unblock. ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/17`, `/acts/18` and `/acts/19` (block and unblock share one shape)
+  // and removed or retyped none. PSA for the release notes: "household does
+  // amend-letter and withdraw-letter on a letter of yours before it sails, and
+  // block and unblock another household's mail, privately; read: \"blocks\"
+  // lists your house's own."
+  for (const act of ["amend-letter", "withdraw-letter", "block", "unblock"])
+    assert.ok(full.acts.find((a) => a.act === act)?.fields, `the live REST answer carries ${act}'s card`);
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async (t) => {
@@ -611,7 +630,7 @@ test("F7 · an unknown read bounces naming BOTH namespaces — the reads and the
   assert.match(r.hint, /reads back its own full card/);
 });
 
-test("F7b · the FIFTEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
+test("F7b · the NINETEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
   // ⚠ THE ROUND ASKED FOR A DISJOINTNESS GUARD. It fired on the live door:
   // `address`, `home` and `window` have been both an act and a read since long
   // before this branch, because a read here IS that act's shadow. At the world
@@ -642,7 +661,11 @@ test("F7b · the FIFTEEN acts that own their name answer their card; the THREE t
   // ⚑ FOURTEEN → FIFTEEN, 2026-09-28 (POS-286): `mark-all-read` joined as a
   // BARE act; what it clears is counted on the doorstep's `unread` block, not
   // at a household read of its name.
-  assert.equal(bare.length, 15);
+  //
+  // ⚑ FIFTEEN → NINETEEN, 2026-10-22 (POS-666): `amend-letter`, `withdraw-letter`,
+  // `block` and `unblock` joined as BARE acts. The read beside them is
+  // `blocks`, a different name, so none shadows a household read.
+  assert.equal(bare.length, 19);
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);

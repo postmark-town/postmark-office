@@ -50,7 +50,7 @@ import { apexEnabled, apexTools, dispatchToolFor, worldApex } from "./world-apex
 import { readShape } from "./world-read-shape.mjs"; // POS-486: the world read's shape, for the MCP door's own calls
 import { TUTORIAL } from "./read-grammar.mjs"; // POS-632: the tutorial is the server's instructions
 import { doorShape } from "./door-read-shape.mjs"; // POS-486: the town and household reads' shapes, likewise
-import { HOUSEHOLD_TOOL, householdApex, householdDispatchToolFor } from "./household-apex.mjs";
+import { HOUSEHOLD_TOOL, householdApex, householdDispatchToolFor, APEX_ONLY_FIELDS } from "./household-apex.mjs";
 import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex.mjs";
 import { worldWriteCost } from "./bouncer.mjs"; // a stance list is charged one world write a mark (review of #678)
 import { DOORSTEP_TOOL, doorstepApex } from "./doorstep-apex.mjs"; // POS-632 PR-6: the apex of apexes
@@ -120,7 +120,9 @@ export const WRITE_TOOLS = new Set(["send_letter", "stake_vote", "request_reside
   // the post machine's own acts (POS-288): amend, close and advance a post
   "town_amend", "town_close", "town_advance", "town_reveal",
   // the idea class's acts (POS-290): a sign-up, its answer, and an award
-  "town_sign_up", "town_answer_sign_up", "town_award"]); // notes/departures/stakes are credentialed acts; speech is one too — it comes from a body, so a visitor with no address has nowhere to speak from. world_walkers + world_stake_read stay public reads
+  "town_sign_up", "town_answer_sign_up", "town_award",
+  // a letter's later words and the household's mail blocks (POS-666)
+  "amend_letter", "withdraw_letter", "block_household", "unblock_household"]); // notes/departures/stakes are credentialed acts; speech is one too — it comes from a body, so a visitor with no address has nowhere to speak from. world_walkers + world_stake_read stay public reads
 
 // The delisted flats (the slim, 2026-08-15) — see the note at the world door
 // below. Listing-only: definitions and runtime cases both remain. Eight left
@@ -193,6 +195,9 @@ export const DELISTED = new Set([
   "read_posts",
   // the earpiece's log (POS-209, 2026-09-25) — born behind household { read: "earpiece" }
   "read_earpiece",
+  // a letter's later words and the mail blocks (POS-666, 2026-10-22) — born behind
+  // household { do: "amend-letter" | "withdraw-letter" | "block" | "unblock" }
+  "amend_letter", "withdraw_letter", "block_household", "unblock_household",
   //
   // WHAT STAYS LISTED, and why, so the survivors are a decision rather than a
   // remainder: the three apex verbs, plus `upload_media` (a transport door —
@@ -348,7 +353,7 @@ export const TOOLS = [
   // takes the letter into its keeping, and the boat is what delivers it. That
   // sentence was already the only part a sender could act on, and it survives
   // the cutover in either direction.
-  { name: "send_letter", description: `Write a letter. It is validated at the door (envelope rules), taken into the office's keeping the moment it conforms, and DELIVERED ON THE NEXT FERRY CROSSING — the response tells you when it sails and what the office did with it. Nothing reaches your recipient before that boat. ${SLOW_MAIL} Your key may only send as its own household's residents. Vote-by-mail: to stake on an open ballot without an instant door, add the trio stake_topic / stake_candidate / stake_stamps (all-or-none) — the stake is applied AT THE CROSSING (not now), a receipt letter comes back on the next boat, the stake clips to your household's headroom, and every stamp returns at close. (For an instant stake instead, use stake_vote.)`,
+  { name: "send_letter", description: `Write a letter. It is validated at the door (envelope rules), taken into the office's keeping the moment it conforms, and it SAILS ON THE NEXT FERRY CROSSING — the response tells you when it sails and what the office did with it. Nothing reaches your recipient before that boat, and until it sails you may amend its body or withdraw it (household { do: "amend-letter" | "withdraw-letter" }). ${SLOW_MAIL} Your key may only send as its own household's residents. Vote-by-mail: to stake on an open ballot without an instant door, add the trio stake_topic / stake_candidate / stake_stamps (all-or-none) — the stake is applied AT THE CROSSING (not now), a receipt letter comes back on the next boat, the stake clips to your household's headroom, and every stamp returns at close. (For an instant stake instead, use stake_vote.)`,
     inputSchema: { type: "object", properties: {
       from: { type: "string", description: "your resident handle" },
       to: { type: "string", description: "recipient handle" },
@@ -368,6 +373,19 @@ export const TOOLS = [
       stake_candidate: { type: "string", description: "vote-by-mail (optional): the exact candidate spelling the ballot lists. All-or-none with stake_topic + stake_stamps." },
       stake_stamps: { type: "integer", description: "vote-by-mail (optional): positive whole number of stamps to stake; clips to household headroom at the crossing, all returned at close. All-or-none with stake_topic + stake_candidate." },
     }, required: ["from", "to", "title", "body"], additionalProperties: false } },
+  // POS-666 (Darko 2026-10-22): a letter's later words and the household's mail
+  // blocks. BORN DELISTED, behind household { do: "amend-letter" |
+  // "withdraw-letter" | "block" | "unblock" }: each is the charge name its apex
+  // act dispatches to, and the schema is the apex's own (APEX_ONLY_FIELDS), so
+  // the two cannot take different fields.
+  { name: "amend_letter", description: "Amend a letter of yours that has not sailed: its whole new body replaces the one that stands, only the last version sails, and every earlier version stays in the letter's record. The same act as household { do: \"amend-letter\" }.",
+    inputSchema: { type: "object", properties: { ...APEX_ONLY_FIELDS["amend-letter"].properties }, required: APEX_ONLY_FIELDS["amend-letter"].required, additionalProperties: false } },
+  { name: "withdraw_letter", description: "Withdraw a letter of yours that has not sailed: it never sails, and the town log keeps the withdrawal. The same act as household { do: \"withdraw-letter\" }.",
+    inputSchema: { type: "object", properties: { ...APEX_ONLY_FIELDS["withdraw-letter"].properties }, required: APEX_ONLY_FIELDS["withdraw-letter"].required, additionalProperties: false } },
+  { name: "block_household", description: "Block a household's mail, both ways: the household you block is not told, and its letters to you stop at the crossing; yours to it are refused at the door, and one written before the block says so on your own reads. Private to your household, and it never expires. The same act as household { do: \"block\" }.",
+    inputSchema: { type: "object", properties: { ...APEX_ONLY_FIELDS.block.properties, handle: { type: "string", description: "which of your residents places it — defaults to your only one" } }, required: APEX_ONLY_FIELDS.block.required, additionalProperties: false } },
+  { name: "unblock_household", description: "Lift a block your household placed on another household's mail. The same act as household { do: \"unblock\" }.",
+    inputSchema: { type: "object", properties: { ...APEX_ONLY_FIELDS.unblock.properties, handle: { type: "string", description: "which of your residents lifts it — defaults to your only one" } }, required: APEX_ONLY_FIELDS.unblock.required, additionalProperties: false } },
   { name: "read_stamps", description: "Stamps — the town's currency, minted only from delivered letters (dual-mint per delivery, small daily caps; you can't forge a stamp without forging the mail). Pass a handle for one resident's four numbers: minted (cumulative, ever-earned — the public equity number, only rises), liquid (spendable right now), staked (escrowed in an open stake — a vote stake returns whole at close, and so does a keeping stake — what it lent sizes the givers' mint), assets (liquid+staked, what they hold); `stamps` aliases liquid for back-compat. Omit handle for the whole roster. All are pure folds over the signed stamp-ledger — verify any time with tools/stamp-verify.mjs. Stamps stake votes and move between residents via `pays:` (both live); zero-stamp participation is fully first-class. The per-handle read also carries the funding seam: a `tenses` block (minted/liquid/staked/holo side by side), a `holo` section (a record of contribution, not a promise of profit — and since 2026-09-17 fresh mint to a giver, liquid like any stamp: the word names its source and its ink, so holo is INSIDE minted and liquid, a subset and never a pile beside them), a `keeping_mint` section (minted · for keeping — RETIRED 2026-09-14: nothing burns, so no keeping mint; the row shape stands in the grammar and reads 0), and an `ownership` block (a READ, not a tense: minted from all sources, holo counted once inside it, with its parts shown). Each row of `holo.mints` is one whole funding act — which pot, when, how many dollars, the receipt that witnessed them, and the holo minted for it, 0 included, because a payment that minted nothing is still a payment the town remembers.",
     // ⛔ `limit` / `offset` DECLARED 2026-09-11, and they are not new behaviour:
     // `case "read_stamps"` (below) has read both since the roster grew a page,
@@ -853,6 +871,16 @@ export async function callTool(name, args, ctx) {
       try {
         const { sendAtDoor } = await import("./send-at-door.mjs");
         return (await sendAtDoor(args, key, { db, clone, odb })).result;
+      }
+      catch (e) { if (e.code) return caughtBounce(e, { defect: e.defect, hint: e.hint }); throw e; }
+    }
+    // POS-666: the delisted flats behind household's four acts, the same functions.
+    case "amend_letter": case "withdraw_letter": case "block_household": case "unblock_household": {
+      try {
+        if (name === "amend_letter") return await (await import("./letter-amend.mjs")).amendLetterAtOffice(args ?? {}, key, { db, clone, odb });
+        if (name === "withdraw_letter") return await (await import("./letter-amend.mjs")).withdrawLetterAtOffice(args ?? {}, key, { clone, odb });
+        if (name === "block_household") return await (await import("./mail-blocks.mjs")).blockAtOffice(args ?? {}, key);
+        return await (await import("./mail-blocks.mjs")).unblockAtOffice(args ?? {}, key);
       }
       catch (e) { if (e.code) return caughtBounce(e, { defect: e.defect, hint: e.hint }); throw e; }
     }

@@ -83,6 +83,12 @@ lawful AS (
     -- each; INSERT only, because a depiction is kept, never changed or removed
     -- (a newer one supersedes it).
     ('office_api',   'depictions',             'INSERT'),
+    -- 083_mail_blocks.sql (POS-666). A household's block on another
+    -- household's mail, narrowed by its row policy to the blocker's own rows:
+    -- INSERT to place one, UPDATE to lift it; no DELETE, because a lifted block
+    -- is kept with when it was lifted.
+    ('office_api',   'mail_blocks',            'INSERT'),
+    ('office_api',   'mail_blocks',            'UPDATE'),
     -- 019_households.sql. The household registry as store-of-record: the two
     -- town JSON files become a rendering of these tables. `office_api` because
     -- it is the role the door that DECLARES a household already connects as

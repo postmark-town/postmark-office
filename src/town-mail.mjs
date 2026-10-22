@@ -74,9 +74,11 @@ import { appendTownJournal, pendingRows, townLogEnabled, NONCE_MAX, rowSpendingN
 import { LADDER_NOTE, TENSE } from "./paper-fresh.mjs"; // the three words, borrowed rather than re-coined
 import { nextCrossing, outboxRelPath, validateLetter, threadNoteFor } from "./write.mjs";
 import { nextCrossingForReceipt } from "./crossings.mjs"; // #2922: the boat's number, minutes and sentence beside `expected_crossing`
+import { SEND_ACT, standingLetters } from "./letter-fold.mjs"; // POS-666: amend and withdraw, folded once
 
-/** The one act this class carries, and the door that performs it. */
-export const MAIL_ACT = "send-letter";
+/** The send act, and the door that performs it. A letter's later words, its
+ *  amendments and its withdrawal, are acts of the same class (letter-fold.mjs). */
+export const MAIL_ACT = SEND_ACT;
 export const MAIL_DOOR = "send_letter";
 
 /** What a caller is told about a letter that is written but has not sailed. */
@@ -123,8 +125,13 @@ export async function hotLetters(odb, key, { handle = null } = {}) {
   if (!odb || !townLogEnabled()) return [];
   const mine = new Set([...(key?.handles ?? [])].filter(Boolean));
   if (handle && !mine.has(handle)) return [];
-  return (await pendingRows(odb)).filter((r) => r.cls === "letter" && r.handle && mine.has(r.handle)
-    && (!handle || r.handle === handle));
+  // FOLDED (POS-666): a letter's amendments and withdrawal are rows of their
+  // own, and the sender reads the letter as it now stands: the last body, and
+  // nothing that was withdrawn (letter-fold.mjs § standingLetters, the same
+  // fold the crossing takes). The scope is still the sender's: a later word is
+  // a row by the letter's own sender, so filtering first loses none.
+  return standingLetters((await pendingRows(odb)).filter((r) => r.cls === "letter" && r.handle && mine.has(r.handle)
+    && (!handle || r.handle === handle)));
 }
 
 /**
@@ -154,6 +161,10 @@ export async function hotLetters(odb, key, { handle = null } = {}) {
 export async function hotMailBlock(odb, key, { handle = null } = {}) {
   const rows = await hotLetters(odb, key, { handle });
   if (!rows.length) return null;
+  // A LETTER YOUR OWN BLOCK STOPS SAYS SO (POS-666 G2): the blocker is told,
+  // never dropped in silence. Only this key's own blocks are read.
+  const { blockedByMe, YOUR_LETTER_STOPPED } = await import("./mail-blocks.mjs");
+  const stops = await blockedByMe(key, rows.map((r) => r.payload?.args?.to));
   return {
     standing: rows.map((r) => ({
       handle: r.handle,
@@ -172,9 +183,16 @@ export async function hotMailBlock(odb, key, { handle = null } = {}) {
       letter_id: r.payload?.id ?? null,
       file: r.payload?.file ?? null,
       written_at: r.writtenAt, seq: r.seq,
+      // POS-666: present only on a letter its sender has amended, each
+      // amendment by its seq and time; the bodies are the letter's own read.
+      ...(r.amended ? { amended: r.amended } : {}),
+      ...(stops.has(r.payload?.args?.to) ? { stopped: YOUR_LETTER_STOPPED } : {}),
     })),
     settles_at: SETTLES_AT,
-    note: `${STANDING}. Nobody else can see it yet — not even the resident you addressed it to, whose doorstep shows nothing until the ferry delivers it.`,
+    // "while it stands", never "until the ferry delivers it": a letter a mail
+    // block stops at the crossing is never delivered, and nothing its sender
+    // reads may say it will be (POS-666, the office never lies).
+    note: `${STANDING}. Nobody else can see it yet — not even the resident you addressed it to, whose doorstep shows nothing of it while it stands. Until it sails you may amend its body or withdraw it: household { do: "amend-letter" | "withdraw-letter", args: { id } }.`,
   };
 }
 
