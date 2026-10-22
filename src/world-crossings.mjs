@@ -30,6 +30,7 @@ import { dirname } from "node:path";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { classNodeNameOf, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { importEngineAt } from "./world-branches.mjs"; // the doors' engine, at the newest blessing
+import { visitorBody } from "./harbor-gate.mjs"; // POS-739: a visitor enters, exits and rides as its berth body
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -244,6 +245,10 @@ export function groundBlockOf({ classMark = null, lends = [], extras = null } = 
 function actorFrom(payload, key) {
   const handles = [...(key?.handles ?? [])];
   const named = String(payload.handle ?? "").trim();
+  // a visitor enters and exits as its berth body, under this door's own law (POS-739)
+  const visitor = visitorBody(named, key);
+  if (visitor?.bounce) throw bounce(visitor.bounce.code, visitor.bounce.defect, visitor.bounce.hint);
+  if (visitor) return visitor.who;
   const who = named || (handles.length === 1 ? handles[0] : "");
   if (!who) {
     throw bounce(422, "which resident is entering?",

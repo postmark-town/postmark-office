@@ -1200,3 +1200,37 @@ test("orient's derived set names the source the vehicle standpoint answers — a
   assert.ok(answered, "vehicleStandpoint answers source: \"vehicle\"");
   assert.ok(named.includes("vehicle"), `DERIVED_SOURCES names ${JSON.stringify(named)} — "vehicle" is missing, so orient would answer a rider aboard with their house`);
 });
+
+// ── A VISITOR ENTERS, RIDES AND EXITS (POS-739; Darko 2026-10-22 18:12, "Enter, exit and ride") ──
+//
+// A berth key carries no resident. It moves as its berth body, `berth-<slug>`,
+// through each door's own law: boarding takes the vessel's terms (accept), the
+// ride is declared aboard, and the exit sets it down at the stop it came in by.
+const VISITOR = { berth: true, slug: "wanderer", household: null, handles: new Set(), cosigned: false, rulesRead: true };
+
+test("FALSIFIER, POS-739: a visitor boards, rides and exits as its berth body, under each door's own law", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const o = await officeWith();
+  await enterViaOffice(CLONE, { mark: WHARF, accept: true }, VISITOR, o.deps);
+  assert.ok(o.within("berth-wanderer").length, "the visitor did not board");
+  const r = await rideViaOffice(CLONE, { to: PANDO }, VISITOR, o.deps);
+  assert.equal(r.ride.to, PANDO);
+  o.setClock(Date.parse(r.ride.arrives_at) - 60_000);
+  const out = await exitViaOffice(CLONE, { mark: SHIP }, VISITOR, o.deps);
+  assert.equal(out.set_down.at, WHARF);
+  assert.deepEqual(o.within("berth-wanderer"), []);
+  assert.deepEqual([...new Set(o.journal.map((j) => j.actor))], ["berth-wanderer"], "an act stood as someone other than the visitor's body");
+  // and the door's own law still holds: boarding without the terms is not boarding
+  const o2 = await officeWith();
+  const asked = await enterViaOffice(CLONE, { mark: WHARF }, VISITOR, o2.deps).catch((e) => e);
+  assert.deepEqual(o2.within("berth-wanderer"), [], "a visitor boarded without taking the vessel's terms");
+  assert.ok(asked, "the door answered nothing");
+});
+
+test("a visitor's key enters as no resident, and a household at the harbor boards only as its berth", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const o = await officeWith();
+  await assert.rejects(() => enterViaOffice(CLONE, { mark: WHARF, handle: "rider", accept: true }, VISITOR, o.deps), (e) => e.code === 403);
+  const harbor = { household: "newhuman", handles: new Set(["newcomer"]), harbor: true, berth: "wanderer", slug: "wanderer" };
+  await assert.rejects(() => enterViaOffice(CLONE, { mark: WHARF, handle: "newcomer", accept: true }, harbor, o.deps), (e) => e.code === 403 && /harbor/.test(e.defect));
+  await enterViaOffice(CLONE, { mark: WHARF, accept: true }, harbor, o.deps);
+  assert.ok(o.within("berth-wanderer").length, "the harbor household did not board as its berth");
+});

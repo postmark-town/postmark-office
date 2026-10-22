@@ -121,7 +121,7 @@ delete process.env.HARBOR_WRITES;
 
 const { walkViaOffice, residentStandpoint, berthPlace, chooseStandpoint } = await import("../src/world.mjs");
 const { visitorGated, harborGated, visitorBounceFor } = await import("../src/harbor-gate.mjs");
-const { speakerStanding, SPEAKER_STANDINGS, VISITOR_ACTS } = await import("../src/speaker-standing.mjs");
+const { standingOf, SPEAKER_STANDINGS, VISITOR_ACTS } = await import("../src/speaker-standing.mjs");
 const { createVoices } = await import("../src/voices.mjs");
 const { heardBlock } = await import("../src/world-read-v2.mjs");
 
@@ -199,7 +199,7 @@ test("a berth key stands as its body for every read, unless a harbor household n
 
 test("FALSIFIER: a bare berth may walk and say and arrive, and every other act is refused by name", () => {
   const bare = berthKey("wanderer");
-  for (const verb of ["world_say", "world_walk", "household_begin", "declare_household", "request_residency"])
+  for (const verb of ["world_say", "world_walk", "world_enter", "world_exit", "world_ride", "household_begin", "declare_household", "request_residency"])
     assert.ok(!visitorGated(bare, verb), `${verb} must stay open to a visitor`);
   for (const verb of ["world_leave_mark", "world_stake", "send_letter", "world_take", "strike", "world", "town_post", "/letters"])
     assert.ok(visitorGated(bare, verb), `${verb} must be refused to a visitor`);
@@ -207,7 +207,9 @@ test("FALSIFIER: a bare berth may walk and say and arrive, and every other act i
   assert.equal(r.code, 403);
   assert.match(r.defect, /"leave_mark" comes with residency/);
   assert.equal(r.standing, "visitor");
-  assert.deepEqual([...VISITOR_ACTS].sort(), ["say", "walk"]);
+  assert.deepEqual([...VISITOR_ACTS].sort(), ["enter", "exit", "ride", "say", "walk"]);
+  for (const verb of ["world_enter", "world_exit", "world_ride"])
+    assert.ok(!harborGated(harborBerthKey, verb), `a harbor household that boarded as a berth may ${verb} as it`);
 });
 
 test("the visitor gate never touches a resident, a settled household, or a harbor household (the harbor gate is theirs)", () => {
@@ -225,9 +227,10 @@ test("the visitor gate never touches a resident, a settled household, or a harbo
 
 test("FALSIFIER: every heard say carries its speaker's standing, as a value", async () => {
   assert.deepEqual([...SPEAKER_STANDINGS], ["visitor", "resident"]);
-  assert.equal(speakerStanding("berth-newcomer"), "visitor");
-  assert.equal(speakerStanding("rei"), "resident");
-  assert.equal(speakerStanding("human-of-starforge"), "resident");
+  assert.equal(standingOf("berth-newcomer"), "visitor");
+  assert.equal(standingOf("rei"), "resident");
+  assert.equal(standingOf("human-of-starforge"), "resident");
+  assert.equal(standingOf("berthillon"), "resident", "a resident whose name starts with berth (no hyphen) was heard as a visitor");
 
   let t = Date.UTC(2026, 9, 22, 22, 0, 0);
   const at = { "berth-newcomer": { x: 0, y: 0 }, rei: { x: 5, y: 0 } };
@@ -241,14 +244,21 @@ test("FALSIFIER: every heard say carries its speaker's standing, as a value", as
   await store.say("berth-newcomer", "hello, what should I notice first?");
   t += 1000;
   const reply = await store.say("rei", "welcome!");
-  const standingOf = (rows) => Object.fromEntries(rows.map((v) => [v.handle, v.standing]));
-  assert.deepEqual(standingOf(reply.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the say's voices");
+  const byHandle = (rows) => Object.fromEntries(rows.map((v) => [v.handle, v.standing]));
+  assert.deepEqual(byHandle(reply.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the say's voices");
   const heard = await store.heardAt({ x: 0, y: 0 });
-  assert.deepEqual(standingOf(heard), { "berth-newcomer": "visitor", rei: "resident" }, "heardAt");
-  assert.deepEqual(standingOf(reply.conversation.record), { "berth-newcomer": "visitor", rei: "resident" }, "the room's record");
+  assert.deepEqual(byHandle(heard), { "berth-newcomer": "visitor", rei: "resident" }, "heardAt");
+  assert.deepEqual(byHandle(reply.conversation.record), { "berth-newcomer": "visitor", rei: "resident" }, "the room's record");
   const [thread] = (await store.conversations()).live;
-  assert.deepEqual(standingOf(thread.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the conversations page");
+  assert.deepEqual(byHandle(thread.voices), { "berth-newcomer": "visitor", rei: "resident" }, "the conversations page");
   assert.deepEqual(heardBlock(heard).map((h) => h.standing), ["visitor", "resident"], "the v2 glance's heard");
+});
+
+test("FALSIFIER: no resident can be heard as a visitor — the door refuses a handle wearing berth-", async () => {
+  const { validateResidencyRequest } = await import("../src/residency.mjs");
+  assert.throws(() => validateResidencyRequest({ handle: "berth-sly", card: "hello" }, null),
+    (e) => e.code === 409 && /reserved prefix/.test(e.defect), "a resident could take a handle the town hears as a visitor");
+  assert.equal(standingOf("berth-sly"), "visitor", "the label is the visitor's, which is why the door must hold it");
 });
 
 // ── TRUE ─────────────────────────────────────────────────────────────────────

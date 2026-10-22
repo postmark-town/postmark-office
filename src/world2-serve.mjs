@@ -111,7 +111,7 @@ import { stopDepartures } from "./world-movement.mjs";
 // WLD-29: a shown house's porch light, from the office's shared activity answer
 import { readHouseholdActivity, litOf, lightsUnknownWhy } from "./household-activity.mjs";
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
-import { speakerStanding } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
 
 const state = { pool: null };
 
@@ -1195,7 +1195,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     const since = Number.isFinite(win?.since) ? win.since : null;
     // each voice carries its speaker's standing (POS-739): "visitor" for a berth, "resident" otherwise
     const emissions = live.emissionsOfClass(rows).filter((e) => hearable(Date.parse(e.born_at), at.ms, since))
-      .map((e) => ({ ...e, standing: speakerStanding(e.source) }));
+      .map((e) => ({ ...e, standing: standingOf(e.source) }));
     const fellBack = talk.sayDialsDisclosure(dials);
     const body = {
       what: `the voices still hearable at this instant: everything said ${HEARING_WINDOW} (POS-226), the same window the live ear hears. A query, never a delete`,

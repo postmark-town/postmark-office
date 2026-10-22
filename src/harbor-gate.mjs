@@ -36,7 +36,7 @@
 // The settlement clause is the declaration door's (declare.mjs § SETTLING_ASHORE,
 // POS-70 row 38) — this gate names it, never a copy of it.
 import { SETTLING_ASHORE } from "./declare.mjs";
-import { VISITOR_REFUSED } from "./speaker-standing.mjs";
+import { VISITOR_REFUSED, berthHandleOf } from "./speaker-standing.mjs";
 
 export const harborWritesOpen = () => process.env.HARBOR_WRITES === "1";
 
@@ -44,14 +44,32 @@ export const HARBOR_ALLOWED = new Set([
   "world_say", "request_residency", "declare_household", "household_begin",
 ]);
 
+// A visitor's body moves: walk, enter, exit and ride (POS-739; Darko 18:12, "Enter, exit and ride").
+export const VISITOR_MOVES = new Set(["world_walk", "world_enter", "world_exit", "world_ride"]);
+
 export const harborGated = (key, verb) =>
   key?.harbor === true && !harborWritesOpen() && !HARBOR_ALLOWED.has(verb)
-  && !(verb === "world_walk" && Boolean(key.berth));
+  && !(VISITOR_MOVES.has(verb) && Boolean(key.berth));
 
-// What a bare berth may do: walk and say, and the arrival lane.
+// What a bare berth may do: say and move, and the arrival lane.
 export const VISITOR_ALLOWED = new Set([
-  "world_say", "world_walk", "request_residency", "declare_household", "household_begin",
+  "world_say", ...VISITOR_MOVES, "request_residency", "declare_household", "household_begin",
 ]);
+
+/**
+ * The body a moving act stands as (walk, enter, exit, ride), for a key that
+ * boarded as a berth: `{ who }`, its visitor body, when it names none or names
+ * that one; `{ bounce }` when a household still at the harbor names one of
+ * its own residents, whose durable acts wait for settlement; null for every
+ * other key, which resolves its resident as it always has.
+ */
+export function visitorBody(named, key) {
+  const body = berthHandleOf(key);
+  if (!body) return null;
+  if (!named || named === body) return { who: body };
+  if (key.harbor === true && !harborWritesOpen()) return { bounce: HARBOR_BOUNCE };
+  return null;
+}
 
 /** A bare berth (a visitor: no household, no residents) asking for any other write. */
 export const visitorGated = (key, verb) =>
