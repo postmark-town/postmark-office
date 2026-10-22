@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
-import { challengeToken, CHALLENGE_PATH } from "../src/openai-apps-challenge.mjs";
+import { challengeToken, CHALLENGE_PATH, TOKEN_MAX } from "../src/openai-apps-challenge.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 let child, tmp, BASE, ix, TOKEN_FILE;
@@ -74,6 +74,32 @@ test("over HTTP: 404 while unset, then the bare token as text/plain once the fil
   const head = await fetch(`${BASE}${CHALLENGE_PATH}`, { method: "HEAD" });
   assert.equal(head.status, 200);
   assert.equal(head.headers.get("content-length"), String(token.length));
+});
+
+// The review of office#724: this door answers anyone, so only a token may ever leave it.
+test("only a token is served: a file past 512 bytes, or with whitespace inside, is refused as if unset", () => {
+  const files = {};
+  const read = (p) => files[p];
+  const env = { OPENAI_APPS_CHALLENGE_FILE: "/f" };
+  files["/f"] = "a".repeat(TOKEN_MAX);
+  assert.equal(challengeToken(env, read), "a".repeat(TOKEN_MAX), "a token at the cap is served");
+  files["/f"] = "a".repeat(TOKEN_MAX + 1);
+  assert.equal(challengeToken(env, read), null, "one byte past the cap is not a token");
+  files["/f"] = "OPENAI_APPS_CHALLENGE_FILE=/etc/x\nSTAMP_LINES=store\n";
+  assert.equal(challengeToken(env, read), null, "an env file has whitespace inside it, so it is not a token");
+  files["/f"] = "two words";
+  assert.equal(challengeToken(env, read), null, "one space inside is enough");
+  assert.equal(challengeToken({ OPENAI_APPS_CHALLENGE: "env value with spaces" }, read), null, "the env value is held to the same rule");
+  assert.equal(challengeToken({ OPENAI_APPS_CHALLENGE: "x".repeat(TOKEN_MAX + 1) }, read), null, "and to the same cap");
+});
+
+test("over HTTP: an env-file-shaped file is never published; the door answers 404", async () => {
+  const secretish = `PEN_TOKEN=ghp_not_a_real_secret_0123456789\nSTAMP_LINES=store\n${"#".repeat(600)}\n`;
+  writeFileSync(TOKEN_FILE, secretish);
+  const r = await fetch(`${BASE}${CHALLENGE_PATH}`);
+  const body = await r.text();
+  assert.equal(r.status, 404);
+  assert.ok(!body.includes("PEN_TOKEN") && !body.includes("ghp_"), "nothing of the file reaches the answer");
 });
 
 test("nginx sends the exact path to the office, as it sends the oauth discovery", () => {

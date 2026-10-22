@@ -18,21 +18,45 @@
 //                                             with no restart
 // The env value wins when both are set. Unset, empty or unreadable: 404, the same as
 // any door the office doesn't have.
+//
+// ONLY A TOKEN IS EVER SERVED (the review of office#724). This door answers anyone,
+// so a wrong path in OPENAI_APPS_CHALLENGE_FILE (the env file itself, say) must never
+// publish that file. A token is one short word: at most TOKEN_MAX bytes are read, a
+// longer file is refused unread past the cap, and anything with whitespace inside it
+// after trimming is not a token. Either way the door answers 404, as if unset.
 
-import { readFileSync } from "node:fs";
+import { openSync, readSync, closeSync } from "node:fs";
 
 export const CHALLENGE_PATH = "/.well-known/openai-apps-challenge";
+export const TOKEN_MAX = 512;
 
-/** The token to serve, or null when none is configured. Whitespace around it is never part of it. */
-export function challengeToken(env = process.env, read = (p) => readFileSync(p, "utf8")) {
+/** At most TOKEN_MAX + 1 bytes of a file: one byte past the cap is enough to know it is too long. */
+function readCapped(path) {
+  const fd = openSync(path, "r");
+  try {
+    const buf = Buffer.alloc(TOKEN_MAX + 1);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return buf.subarray(0, n).toString("utf8");
+  } finally { closeSync(fd); }
+}
+
+/** A trimmed value that can only be a token: non-empty, within the cap, no whitespace inside. */
+function asToken(raw) {
+  const t = String(raw ?? "").trim();
+  if (!t || Buffer.byteLength(t) > TOKEN_MAX || /\s/.test(t)) return null;
+  return t;
+}
+
+/** The token to serve, or null when none is configured (or what is configured is not a token). */
+export function challengeToken(env = process.env, read = readCapped) {
   const direct = String(env.OPENAI_APPS_CHALLENGE ?? "").trim();
-  if (direct) return direct;
+  if (direct) return asToken(direct);
   const file = String(env.OPENAI_APPS_CHALLENGE_FILE ?? "").trim();
   if (!file) return null;
-  try {
-    const t = read(file).trim();
-    return t || null;
-  } catch { return null; }
+  let raw;
+  try { raw = read(file); } catch { return null; }
+  if (Buffer.byteLength(String(raw ?? "")) > TOKEN_MAX) return null;
+  return asToken(raw);
 }
 
 /** Answer GET or HEAD on CHALLENGE_PATH: the bare token, or a 404 while none is set. */
