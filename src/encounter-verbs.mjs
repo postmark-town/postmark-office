@@ -25,7 +25,8 @@
 // FAIL CLOSED: no law read here, CREATURE_JUDGE=off, or a blessed law with no
 // ENCOUNTER_VERBS refuses every verb with its reason and shows none.
 
-import { capOf, creatureRow, dial, distanceM, judgeMode, recordFinish, ringHolds, ringRosterNow, askJev, JEV_TIMEOUT_MS, seesCreature } from "./creatures.mjs";
+import { capOf, creatureRow, dial, distanceM, judgeMode, recordFinish, ringHolds, ringRosterNow, askJev, JEV_TIMEOUT_MS, seesCreature, advanceFight, unmaskFight } from "./creatures.mjs";
+import { BARS_NOTE, GLANCES, HURLED_ACTION, PRIOR_HURLED_SQL, barsOf, isDisguised, isSetPiece, openHurls, pieceOf, writeOnce } from "./set-pieces.mjs";
 import { AIM_ACTIONS, AIM_GUARD_SQL, SIGHT_M, windowLeftS } from "./creature-verbs.mjs";
 import {
   ENCOUNTER_VERBS, STRIKE_ACTION, STEADY_ACTION, SHIELD_ACTION, STRIKES_SQL, encounterDial, isFinishable, isStrikable,
@@ -195,19 +196,30 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   if (mine < cost) throw bounce(409, `a strike takes ${cost} nerve; you have ${mine}`, "steady from a friend in the ring gives nerve; the settlement fills it. Nothing was done.", { nerve: nerveSaid(mine) });
   if (hasResolve(kind) && resolveOf(living, c, kind, now) <= 0) throw bounce(409, `${theOf(law, c)} is already worn down`, "its resolve is spent for this window: the settlement ends it, or fills it again. Nothing was done.");
 
+  // A FIGHT IN SET PIECES (set-pieces.mjs): a strike wears nothing in the empowered piece, and breaks a disguise
+  const fight = isSetPiece(kind) ? law.fightOf?.(c.kind) ?? null : null;
+  if (isSetPiece(kind) && !fight) throw bounce(409, `${theOf(law, c)}'s fight cannot be read here`, "its fight file is not law at this office's blessed ref, so nothing about it can be done yet. Nothing was done.");
+  const piece = fight ? pieceOf(c, fight, now) : null;
+
   const w = windowAt(now);
   // A CREATURE THAT TEMPTS (temptation.mjs): a strike is damage, +2, or +3 where houses count and three have struck within the hour
   const tempter = isTempter(kind);
   const menu = tempter ? law.menuOf?.(c.kind) ?? null : null;
   const phase = menu ? phaseOf(living, c, kind, menu, now) : null;
   const houseOf = tempter ? await (d.houseOf ?? houseOfNow)() : null;
-  const damage = tempter ? strikeDamage({ living, creature: c, echo: phase?.echo ?? null, actor, houseOf, now }) : kind.strike;
+  const damage = tempter ? strikeDamage({ living, creature: c, echo: phase?.echo ?? null, actor, houseOf, now }) : piece?.piece === "empowered" ? 0 : kind.strike;
   const payload = { kind: c.kind, cost, damage, window: w.id, ...(phase ? { phase: phase.name } : {}) };
   const row = await d.write({ actor, action: STRIKE_ACTION, object: id, cls: "creature", payload, effect: `${actor} strikes ${theOf(law, c)}` },
     key, { guard: strikeGuard(actor, id, { cost, resolveMax: hasResolve(kind) ? kind.resolve : null, now }) });
   const atIso = isoOf(row.written_at) ?? new Date(now).toISOString();
   living.fold([{ id: String(row.actId), at: atIso, actor, action: STRIKE_ACTION, object: id, payload }], { advance: false });
 
+  const ringNow = () => (d.roster ? d.roster(c, { law, living, now }).catch(() => []) : Promise.resolve([]));
+  // A FIGHT IN SET PIECES: this strike breaks a disguise, or brings the fireballs to their end; never fatal to the strike
+  const moved = fight ? await (piece.piece === "disguise"
+    ? unmaskFight(c, kind, fight, { by: actor, verb: STRIKE_ACTION, act: String(row.actId), living, now: d.now(), roster: await ringNow(), write: d.writeOnce ?? null })
+    : advanceFight(c, kind, fight, { living, now: d.now(), roster: await ringNow(), write: d.writeOnce ?? null }))
+    .catch((e) => { faultLogged(`a fight's next set piece could not be written (${id})`, e); return null; }) : null;
   // WORN DOWN: the strike that took the last of its resolve finishes it (from the record, so a repeat writes nothing twice)
   const finished = await settleResolve(c, kind, { d, now });
   const act = { actor, verb: STRIKE_ACTION, actId: String(row.actId), atIso, point: here };
@@ -216,7 +228,9 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   if (left === 0) d.flee(actor, { household: key?.household ?? null });
   return {
     did: STRIKE_ACTION, creature: id, kind: c.kind,
-    ...(hasResolve(kind) ? { resolve: { left: resolveOf(living, c, kind, d.now()), of: kind.resolve, fills_at: new Date(w.ends).toISOString() } }
+    ...(fight ? { ...(isDisguised(c, fight, d.now()) ? {} : { bars: { ...barsOf(living, c, kind, fight, d.now()), note: BARS_NOTE } }), ...(damage === 0 ? { glances: GLANCES } : {}),
+        ...(moved?.piece && piece.piece === "disguise" ? { saw_through: `your strike broke its disguise: everyone in its ring sees it as it is` } : {}) }
+      : hasResolve(kind) ? { resolve: { left: resolveOf(living, c, kind, d.now()), of: kind.resolve, fills_at: new Date(w.ends).toISOString() } }
       : { tallies: { ...talliesOf(living, c, d.now()), ends_at: new Date(w.ends).toISOString() }, damage }),
     nerve: nerveSaid(left),
     ...(finished?.by === actor ? { finished: true, note: `your strike wore ${theOf(law, c)} down: you finished it, and the settlement ends it`,
@@ -234,7 +248,8 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
  * { by, actId } once worn down, else null.
  */
 export async function settleResolve(creature, kind, { d, now = Date.now() }) {
-  if (!hasResolve(kind)) return null;
+  // a fight in set pieces has no ending by force: only its sanity ends it (set-pieces.mjs)
+  if (!hasResolve(kind) || isSetPiece(kind)) return null;
   const strikes = await d.strikes(creature.id, new Date(windowAt(now).start).toISOString());
   const worn = wornBy(kind.resolve, strikes ?? []);
   if (!worn) return null;
@@ -426,6 +441,26 @@ export async function encounterTick({ living, law }, { now = Date.now(), deps = 
         }
       } catch (e) { faultLogged(`a temptation could not be resolved (${t.id})`, e); }
     }
+  }
+
+  // A FIGHT IN SET PIECES (set-pieces.mjs): a fireball no act answered in time lapses, once; and the
+  // fight moves on when its clock says so (the fireballs' hours into a window)
+  for (const c of living.living(now)) {
+    const kind = law.kindOf(c.kind);
+    if (!isSetPiece(kind)) continue;
+    const fight = law.fightOf?.(c.kind) ?? null;
+    if (!fight) continue;
+    for (const h of openHurls(living, c, now)) {
+      if (now <= Date.parse(h.payload.until)) continue;
+      try {
+        const row = creatureRow(c, HURLED_ACTION, h.object, { hurl: h.id, outcome: "lapsed", window: windowAt(now).id }, `the ${c.kind}'s fireball at ${h.object} lapses`, now);
+        const written = await (d.writeOnce ?? writeOnce)([row], { lock: `creature-hurled:${h.id}`, prior: { sql: PRIOR_HURLED_SQL, params: [c.id, String(h.id)] } });
+        if (written?.rows?.length) { living.fold(written.rows, { advance: false }); out.lapsed = (out.lapsed ?? 0) + 1; }
+      } catch (e) { faultLogged(`a fireball could not lapse (${h.id})`, e); }
+    }
+    const moved = await advanceFight(c, kind, fight, { living, now, roster: await d.roster(c, { law, living, now }).catch(() => []), write: d.writeOnce ?? null })
+      .catch((e) => { faultLogged(`a fight's next set piece could not be written (${c.id})`, e); return null; });
+    if (moved) out.moved = (out.moved ?? 0) + 1;
   }
 
   const win = windowAt(now).id;

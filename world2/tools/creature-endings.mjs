@@ -51,6 +51,8 @@ import { currentCrossing } from "../../src/crossings.mjs";
 export const CREATURE = "creature";
 export const TOWN = "the-town";
 export const ENDED = "ended";
+/** The town's act that turns a class back on at a fight's ending (a fight in set pieces' restore step). */
+export const RESTORE = "restore";
 /** The anchor every creature row stands on (src/world-journal.mjs § WORLD_ANCHOR, not imported: that module opens the pens). */
 export const WORLD_ANCHOR = "the-town/let-there-be-light";
 
@@ -136,6 +138,57 @@ export function planTallyEnding({ spawn, rows, answered, settlement, cutoff, men
     id, kind, x: Number(p.x), y: Number(p.y), road, damage: t.damage, persuasion: t.persuasion, took_part: took, carries: null,
     finisher: null, act: null, settlement: Number(settlement), cutoff,
     line: `${ending?.text ?? `The ${kind}'s fight is over: ${road} won it.`}${names ? ` ${names} took part.` : ""}`,
+  };
+}
+
+/**
+ * A FIGHT IN SET PIECES ends by its sanity (src/set-pieces.mjs): the set pieces it
+ * reached (every phase row before the cutoff, $3) and its sanity rows over the
+ * window the settlement closed, [$2, $3).
+ */
+export const FIGHT_ROWS_SQL = `SELECT id::text AS id, at, action, object, payload FROM acts
+  WHERE class = '${CREATURE}' AND actor = $1 AND at < $3::timestamptz
+    AND (action = 'phase' OR (action = 'sanity' AND at >= $2::timestamptz))
+  ORDER BY acts.id`;
+
+/**
+ * Its sanity at the settlement and whether that ends it: { full, sanity, of }.
+ * Only in its last set piece, counted from when that piece began when it began in
+ * this window (sanity is 0 there), and never above the most.
+ */
+export function fightSanity(rows = [], fight, { from }) {
+  const phases = rows.filter((r) => r.action === "phase");
+  const top = phases.reduce((a, b) => (Number(asObj(b.payload).index) >= Number(asObj(a?.payload ?? { index: -1 }).index) ? b : a), null);
+  const index = top ? Number(asObj(top.payload).index) : 0;
+  const last = index >= fight.pieces.length - 1;
+  const entry = top && Date.parse(top.at instanceof Date ? top.at.toISOString() : top.at) >= Date.parse(from) ? top : null;
+  let sum = 0;
+  for (const r of rows) if (r.action === "sanity" && (!entry || idCmp(r.id, entry.id) > 0)) sum += Number(asObj(r.payload).by) || 0;
+  const sanity = Math.max(0, Math.min(fight.sanity_max, sum));
+  return { full: last && sanity >= fight.sanity_max, sanity, of: fight.sanity_max };
+}
+
+/**
+ * A fight's ending at this settlement, or null while its sanity is not full in
+ * its last set piece. Everyone it answered took part (D1), and everyone a sanity
+ * row names. Its kind's own ending line, or the town's plain words; and the class
+ * its fight file says the ending turns back on.
+ */
+export function planFightEnding({ spawn, rows, answered, settlement, cutoff, from, fight, kindFile = null }) {
+  const f = fightSanity(rows, fight, { from });
+  if (!f.full) return null;
+  const p = asObj(spawn.payload);
+  const id = spawn.object, kind = String(p.kind ?? CREATURE);
+  const raised = rows.filter((r) => r.action === "sanity").map((r) => r.object).filter(resident);
+  const took = [...new Set([...tookPart(id, answered, [], { mode: "answered" }), ...raised])];
+  const names = namesSaid(took);
+  const line = typeof kindFile?.ending === "string" && kindFile.ending.trim()
+    ? kindFile.ending.replaceAll("{names}", () => names || "no one").replaceAll("{finisher}", () => took[0] ?? "no one").replaceAll("{carried}", () => "nothing")
+    : `The ${kind}'s fight is over: its sanity is whole again.${names ? ` ${names} took part.` : ""}`;
+  return {
+    id, kind, x: Number(p.x), y: Number(p.y), sanity: f.sanity, of: f.of, took_part: took, carries: null,
+    finisher: null, act: null, settlement: Number(settlement), cutoff, line,
+    ...(fight.restores ? { restores: fight.restores } : {}),
   };
 }
 
@@ -232,6 +285,23 @@ export async function endCreatures(client, { law, now = Date.now(), mode = TOOK_
     const kindName0 = asObj(spawn.payload).kind;
     let kindFile0 = null;
     try { kindFile0 = law.kindOf?.(kindName0) ?? null; } catch { kindFile0 = null; }
+    // A FIGHT IN SET PIECES: its sanity full in its last set piece, over the window this settlement closed, ends it
+    if (typeof kindFile0?.fight === "string") {
+      let fight = null;
+      try { fight = law.fightOf?.(kindName0) ?? null; } catch { fight = null; }
+      if (!fight) { waits.push(`${spawn.object}: its fight file cannot be read at the blessed ref, so nothing ends it`); continue; }
+      const from = settlementAtOrBefore(new Date(Date.parse(cutoff) - 1));
+      const { rows } = await client.query(FIGHT_ROWS_SQL, [spawn.object, from, cutoff]);
+      const { rows: answered } = await client.query(ANSWERED_SQL, [spawn.object, cutoff]);
+      const plan = planFightEnding({ spawn, rows, answered, settlement: s.number, cutoff, from, fight, kindFile: kindFile0 });
+      if (!plan) continue;
+      try {
+        const r = await writeEnding(client, plan, { now });
+        if (r.wrote) ended.push(plan);
+        else if (r.why) waits.push(`${plan.id}: ${r.why}`);
+      } catch (e) { failed.push(`${plan.id}: ${String(e?.message ?? e).slice(0, 160)}`); }
+      continue;
+    }
     // A CREATURE THAT TEMPTS: its tallies over the window this settlement closed pick its road
     if (typeof kindFile0?.tempts === "string") {
       const from = settlementAtOrBefore(new Date(Date.parse(cutoff) - 1));
@@ -296,8 +366,14 @@ export async function writeEnding(client, plan, { now = Date.now() } = {}) {
       `INSERT INTO acts (at, crossing, actor, action, object, at_anchor, at_dx, at_dy, class, payload, effect)
        VALUES (now(), $1, '${TOWN}', 'withdraw', $2, $3, $4, $5, '${CREATURE}', $6::jsonb, $7)`,
       [crossing, plan.id, Number.isFinite(plan.x) ? WORLD_ANCHOR : null, Number.isFinite(plan.x) ? plan.x : null, Number.isFinite(plan.y) ? plan.y : null,
-        JSON.stringify({ reason: ENDED, ...(plan.road ? { road: plan.road, damage: plan.damage, persuasion: plan.persuasion } : { finished_by: plan.finisher, act: plan.act }), took_part: plan.took_part,
+        JSON.stringify({ reason: ENDED, ...(plan.road ? { road: plan.road, damage: plan.damage, persuasion: plan.persuasion }
+          : plan.sanity != null ? { sanity: plan.sanity, of: plan.of, ...(plan.restores ? { restores: plan.restores } : {}) } : { finished_by: plan.finisher, act: plan.act }), took_part: plan.took_part,
           ...(plan.carries ? { carried: plan.carries } : {}), settlement: plan.settlement, cutoff: plan.cutoff }), plan.line]);
+    // THE CLASS ITS FIGHT TURNS BACK ON (a fight in set pieces' restore step): the town's own act, in the same transaction
+    if (plan.restores) await client.query(
+      `INSERT INTO acts (at, crossing, actor, action, object, class, payload, effect)
+       VALUES (now(), $1, '${TOWN}', '${RESTORE}', $2, '${CREATURE}', $3::jsonb, $4)`,
+      [crossing, plan.restores, JSON.stringify({ class: plan.restores, by: plan.id, settlement: plan.settlement, cutoff: plan.cutoff }), `the ${plan.restores} class is restored`]);
     await client.query("COMMIT");
     return { wrote: true };
   } catch (e) {

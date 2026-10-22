@@ -35,7 +35,8 @@ import { ENDED, LivingSet, NEVER_FADES, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
-import { encounterRead } from "./encounter.mjs"; // a finishable creature's numbers on investigate (D3)
+import { encounterRead, nerveOf } from "./encounter.mjs"; // a finishable creature's numbers on investigate (D3)
+import { BARS_NOTE, HURL_ACTION, barsOf, isSetPiece, pieceOf } from "./set-pieces.mjs";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WORLD_CLONE } from "./world-store.mjs";
@@ -133,9 +134,40 @@ export function creaturesInWho({ living, law }, at, { nowMs = Date.now(), engine
       kind: "creature", id: c.id, name: kind?.name ?? c.kind, ...ringOf(kind),
       ...distanceOf(w.m), ...(w.bearing ? { bearing: w.bearing } : {}), ...(w.band ? { band: w.band } : {}),
       doing: did?.sentence ?? (c.stays ? "here" : "out of the Mists"),
+      // a fight in set pieces: how it looks, and its bars unless it is disguised (set-pieces.mjs)
+      ...(fightRead({ living, law }, c, kind, nowMs) ?? {}),
       ...(newest ? { last: `answered ${newest.to}, ${ago(newest.at, nowMs)}` } : {}),
     };
   });
+}
+
+/**
+ * A FIGHT IN SET PIECES, AS THE OFFICE SHOWS IT (set-pieces.mjs): how it looks
+ * now, and, unless it is disguised, its set piece and both bars with their plain
+ * line. While disguised the office withholds the bars and the piece and says only
+ * how it looks: what it says is true, and it need not say everything. Null for
+ * any other creature, or a fight that cannot be read.
+ */
+export function fightRead({ living, law }, c, kind, now = Date.now()) {
+  if (!isSetPiece(kind)) return null;
+  const fight = law.fightOf?.(c.kind) ?? null;
+  if (!fight) return null;
+  const p = pieceOf(c, fight, now);
+  if (p.piece === "disguise") return { looks: p.def.looks };
+  return { looks: p.def.looks, part: p.piece, bars: { ...barsOf(living, c, kind, fight, now), note: BARS_NOTE } };
+}
+
+const fight0 = (law, c) => law.fightOf?.(c.kind) ?? null;
+/** What each part of a fight in set pieces asks, in plain words (the law in the season's notes says it whole). */
+export function fightRoads(fight, { nerve = null } = {}) {
+  const parts = {
+    fireballs: "when it hurls something at you, your next act near it answers: dodge, walk or leave and you lose nerve; anything else and you hold, which raises its sanity",
+    disguise: "it may not be what it seems",
+    empowered: `strikes cannot wear it down; persuade it in your household's own words, once each settlement, at a cost of ${fight?.pieces?.find((p) => p.piece === "empowered")?.persuade?.nerve ?? "much"} nerve`,
+  };
+  return { parts: (fight?.order ?? []).map((p) => parts[p]).filter(Boolean),
+    ends: "when its sanity is full at a settlement, its fight ends there, and everyone who took part is named",
+    ...(nerve != null ? { your_nerve: nerve } : {}) };
 }
 
 // ── happening_here (C3, C6) ─────────────────────────────────────────────────
@@ -240,6 +272,10 @@ export function creatureToYou({ living, law }, handle, { sinceMs, nowMs = Date.n
       reaction: r.reaction, roll: r.roll, judged_by: r.judged_by, ...(r.act.endsWith("@arrival") ? { arrival: true } : {}),
       ...(mine.length > 1 ? { and_more: mine.length - 1, more: `and ${mine.length - 1} more` } : {}) });
   }
+  // a fireball aimed at you (set-pieces.mjs): the office's own true words, and until when your next act answers it
+  for (const r of living.encounter ?? [])
+    if (r.action === HURL_ACTION && r.object === handle && r.at > sinceMs && r.at <= nowMs)
+      events.push({ kind: "creature", creature: r.actor, at: new Date(r.at).toISOString(), hurls: String(r.payload?.says ?? ""), until: r.payload?.until ?? null });
   // a temptation aimed at you by a creature that tempts (temptation.mjs): its words, and until when it waits on you
   for (const r of living.encounter ?? [])
     if ((r.action === "tempt" || r.action === "line") && r.object === handle && r.at > sinceMs && r.at <= nowMs)
@@ -286,7 +322,7 @@ export const REACTIONS_SHOWN = 10;
  *   rows(id, n)           its newest reaction rows (REACTIONS_SQL), or null when the record cannot be read
  *   saved(id)             { crossing, row } from the newest crossing save, or null
  */
-export async function investigateCreature(id, { creatures, from = null, handle = null, nowMs = Date.now(), rows = async () => null, saved = () => null } = {}) {
+export async function investigateCreature(id, { creatures, from = null, handle = null, nowMs = Date.now(), rows = async () => null, saved = () => null, unmask = null } = {}) {
   const { living, law } = creatures ?? {};
   if (!living || !lawReady(law))
     return { kind: "creature", id, unavailable: "the creatures' law cannot be read at this office's blessed ref, so no creature can be looked at" };
@@ -300,21 +336,32 @@ export async function investigateCreature(id, { creatures, from = null, handle =
     return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };
   const kind = c ? law.kindOf(c.kind) : null;
   const here = point(from);
+  // A DISGUISE IS BROKEN BY A LOOK FROM INSIDE ITS RING (set-pieces.mjs): the first investigate by a resident
+  // standing there breaks it for everyone, and this look already sees it as it is
+  const disguised = c && isSetPiece(kind) && !!law.fightOf?.(c.kind) && pieceOf(c, law.fightOf(c.kind), nowMs).piece === "disguise";
+  let sawThrough = false;
+  if (disguised && unmask && handle && here && seesCreature(law, c, here, Number(kind.ring_m)))
+    sawThrough = !!(await Promise.resolve(unmask(c, handle)).catch(() => null));
+  const fought = c ? fightRead({ living, law }, c, kind, nowMs) : null;
   const now = c ? {
     at: { x: Math.round(c.x), y: Math.round(c.y) },
     ...(here ? { from_you: distanceOf(distanceM(here, c)) } : {}),
     state: c.gone === ENDED ? "ended at its settlement" : c.gone ? `gone back into the Mists (${c.gone})`
-      : c.stays ? "here until it is finished" : c.fades_at <= nowMs ? "faded" : "out of the Mists",
-    moods: Object.fromEntries(Object.entries(c.moods).map(([m, v]) => [m, kind?.moods?.[m] ? `${v} of ${kind.moods[m].hi}` : v])),
-    conditions: [...c.flags],
+      : c.stays ? (isSetPiece(kind) ? "here until its fight ends" : "here until it is finished") : c.fades_at <= nowMs ? "faded" : "out of the Mists",
+    // withheld while it is disguised (its moods would say what it hides); never anything untrue
+    ...(fought && !fought.bars ? {} : { moods: Object.fromEntries(Object.entries(c.moods).map(([m, v]) => [m, kind?.moods?.[m] ? `${v} of ${kind.moods[m].hi}` : v])),
+      conditions: [...c.flags] }),
     out_since: new Date(c.spawned_at).toISOString(),
     // a creature that stays has no fade (WLD-25); who has finished it waits for the settlement.
     // A Mists creature never fades either (WLD-96, creatures.mjs § NEVER_FADES)
     ...(c.stays ? { stays: true, finished_by: c.finishes.map((f) => f.by) }
       : Number.isFinite(c.fades_at) ? { fades_at: new Date(c.fades_at).toISOString() } : { fades_at: null, fades_in: NEVER_FADES }),
     remembers: c.reactions.length,
-    // a finishable creature (encounter.mjs, D3): its resolve and ease this window, in numbers
-    ...(encounterRead({ living }, c, kind, { handle, now: nowMs }) ? { encounter: encounterRead({ living }, c, kind, { handle, now: nowMs }) } : {}),
+    // a finishable creature (encounter.mjs, D3): its resolve and ease this window, in numbers; a fight in set
+    // pieces shows its own (how it looks, its part and its bars, the bars withheld while it is disguised)
+    ...(fought ? { fight: { ...fought, ...(sawThrough ? { saw_through: "your look broke its disguise: everyone in its ring sees it as it is" } : {}),
+      ...(fought.bars ? { roads: fightRoads(fight0(law, c), { nerve: handle ? nerveOf(living, handle, nowMs) : null }) } : {}) } }
+      : encounterRead({ living }, c, kind, { handle, now: nowMs }) ? { encounter: encounterRead({ living }, c, kind, { handle, now: nowMs }) } : {}),
     answered_by: "the record, as of now",
   } : { unavailable: "it is no longer held in this office's fold (it ended over an hour ago)" };
   const got = await Promise.resolve(rows(id, REACTIONS_SHOWN)).catch(() => null);

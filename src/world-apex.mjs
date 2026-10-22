@@ -114,7 +114,7 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.mjs";
 import { termsId, termsOnce } from "./terms-seen.mjs"; // POS-697 G5a: the law you were shown, named on a repeat act
 import { onlyUsable, canOn, viewMarkIds, CREATURE_VERBS } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
-import { worldCreature, creatureEntries, CREATURE_TOOLS } from "./creature-verbs.mjs"; // a creature's afforded actions (POS-672)
+import { worldCreature, creatureEntries, CREATURE_TOOLS, FIGHT_VERBS } from "./creature-verbs.mjs"; // a creature's afforded actions (POS-672)
 import { worldEncounter, encounterEntries, worldSpeakFor, SPEAK_FOR } from "./encounter-verbs.mjs"; // an encounter's verbs: strike, steady, shield; the live door
 import { ENCOUNTER_VERBS } from "./encounter.mjs";
 // The walk's pace, the resident class's own dial (WLD-29): read off the record
@@ -839,6 +839,8 @@ const DISPATCH = {
   // AN ENCOUNTER'S VERBS (encounter-verbs.mjs): strike, aimed at a creature that can be finished; steady and
   // shield, aimed at a resident in the same ring. The same tool and the same ledger verb as the afforded actions.
   ...Object.fromEntries(ENCOUNTER_VERBS.map((v) => [v, { tool: "world_creature", run: (args, key) => worldEncounter({ ...args, act: v }, key) }])),
+  // A FIGHT IN SET PIECES' OWN TWO (set-pieces.mjs): dodge and persuade, aimed at a creature like the afforded actions
+  ...Object.fromEntries(FIGHT_VERBS.map((v) => [v, { tool: "world_creature", run: (args, key) => worldCreature({ ...args, act: v }, key) }])),
   // THE LIVE DOOR (a creature that tempts): its `who` speaks into its ring, a line or a temptation, through both lints
   [SPEAK_FOR]: { tool: "world_creature", run: (args, key) => worldSpeakFor(args, key) },
   // ── the crossings ─────────────────────────────────────────────────────────
@@ -1983,12 +1985,15 @@ async function creaturePairsHere(who, here, residents = []) {
       import("./creatures-read.mjs"), import("./creature-verbs.mjs"), import("./encounter-verbs.mjs"), import("./world-kinds.mjs"), import("./world-units.mjs")]);
     const cr = await creaturesForRead();
     if (!cr?.law || cr.law.unavailable) return [];
-    const afforded = cr.law.afforded ? creaturePairs({ here, living: cr.living, law: cr.law, carryingConsumable: await carryingConsumableNow(who, { kinds, units }) }) : [];
+    // a persuade's household (once each per settlement), as the door reads it
+    const lookup = await (await import("./creatures.mjs")).householdsNow().catch(() => null);
+    const afforded = cr.law.afforded ? creaturePairs({ here, living: cr.living, law: cr.law, carryingConsumable: await carryingConsumableNow(who, { kinds, units }),
+      actor: who, household: lookup?.(who)?.key ?? `solo:${who}` }) : [];
     return [...afforded, ...encounterPairs({ here, actor: who, living: cr.living, law: cr.law, residents })];
   } catch { return []; }
 }
 
-async function investigateOn(args, oriented, usable = null) {
+async function investigateOn(args, oriented, usable = null, key = null) {
   if (args.investigate == null || String(args.investigate).trim() === "") return null;
   const kind = entityKindOf(args.investigate);
   // WLD-83 P10: a look at an appearance reads to `depth` under one cap on bodies,
@@ -2015,9 +2020,17 @@ async function investigateOn(args, oriented, usable = null) {
     const seen = await investigateCreature(kind.id, {
       creatures,
       from: oriented?.standpoint ?? null,
-      handle: args.handle ?? null, // whose ease "yours" reads, at a finishable creature
+      handle: args.handle ?? standingHandle(args, key), // whose ease "yours" reads, at a finishable creature; who sees through a disguise
       rows: (id, n) => actsQuery(REACTIONS_SQL, [id, n]),
       saved: (id) => savedCreatureOf(id),
+      // a look from inside its ring breaks a disguise (set-pieces.mjs): written by the creatures' own pen
+      unmask: async (c, by) => {
+        const { unmaskFight, ringRosterNow } = await import("./creatures.mjs");
+        const law = creatures.law, kindFile = law.kindOf(c.kind), fight = law.fightOf?.(c.kind) ?? null;
+        if (!fight) return null;
+        const roster = await ringRosterNow(c, { law, living: creatures.living }).catch(() => []);
+        return unmaskFight(c, kindFile, fight, { by, verb: "investigate", living: creatures.living, roster });
+      },
     });
     // its class is its kind (`wolf`), off the fold that answered; one no longer held there points nowhere
     // its column of the matrix (POS-672 W4): the afforded actions you can aim at it now
@@ -2168,6 +2181,15 @@ async function pendingAt(handle, nowMs) {
 }
 
 /** Does the blessed creature law know an encounter's verbs? (The office's read of it; any fault is no.) */
+/** Does the blessed law know a fight in set pieces' own verbs? Until it does, dodge and persuade answer as before. */
+async function fightsLive() {
+  try {
+    const { creaturesForRead } = await import("./creatures-read.mjs");
+    const cur = await creaturesForRead();
+    return !cur?.law?.unavailable && FIGHT_VERBS.every((v) => (cur?.law?.kindMod?.AFFORDED_VERBS ?? []).includes(v));
+  } catch { return false; }
+}
+
 async function encountersLive() {
   try {
     const { creaturesForRead } = await import("./creatures-read.mjs");
@@ -2589,7 +2611,7 @@ async function closeLooks(args, key, oriented, usable) {
   // answers, with a `renamed` row, until train/2026-w42.
   const found = await findOn(args, key);
   // ── THE ENTITY READ (POS-632 PR-4; Sitting E) ───────────────────────────────
-  const investigated = await investigateOn(args, oriented, usable);
+  const investigated = await investigateOn(args, oriented, usable, key);
   // THE CLOSE LOOK CARRIES THE MATRIX'S COLUMN (LOGOS v2, O2; 12:01): `can`, the verbs you
   // can do to this mark now, and for a holder what it holds, sharpened to kinds, never units (15:46).
   if (focus && !focus.error && focusArgs(args)) {
@@ -3125,7 +3147,8 @@ async function apexDo(args, key, ctx = {}) {
   // AN ENCOUNTER'S VERBS are the encounter door's only once the blessed law knows them: until then
   // each answers exactly as before (strike is the closed arena's word; steady and shield no place's),
   // so nothing changes on deploy and nothing is said of what is coming
-  if (CREATURE_VERBS.includes(action) || ((ENCOUNTER_VERBS.includes(action) || action === SPEAK_FOR) && await encountersLive())) {
+  if (CREATURE_VERBS.includes(action) || ((ENCOUNTER_VERBS.includes(action) || action === SPEAK_FOR) && await encountersLive())
+    || (FIGHT_VERBS.includes(action) && await fightsLive())) {
     if (actor) return bounce(422, "a creature's afforded actions are a resident's", 'aim them as one of your residents (handle:), never as: "human". Nothing was done.');
     // an encounter's verbs (strike, steady, shield) go to their own door, through the same envelope and retry key
     return dispatchCreatureVerb(action, args, key, ENCOUNTER_VERBS.includes(action) ? { door: worldEncounter }

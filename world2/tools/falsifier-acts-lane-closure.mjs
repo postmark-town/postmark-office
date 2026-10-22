@@ -153,6 +153,9 @@ const LANE_OF = Object.freeze({
   steady: "lane", shield: "lane",
   // the live door (a creature that tempts): one creature-class row, a line or a temptation, through the pen
   "speak-for": "lane",
+  // a fight in set pieces (src/set-pieces.mjs): dodge and persuade, aimed at a creature, one creature-class row each
+  // through the afforded actions' own pen, the only record they have
+  dodge: "lane", persuade: "lane",
 
   // ruled out, each with its reason
   "note-to-self": "none",
