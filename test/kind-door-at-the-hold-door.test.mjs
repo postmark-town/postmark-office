@@ -85,13 +85,13 @@ test("world_hold { kind, count, to: <the published bowl> } reaches the kind door
 });
 
 test("world_hold { from: <a draft> } and { act: refill, thing: <a draft> } are the kind door's refusals: a draft holds nothing yet", { skip }, async () => {
-  await assert.rejects(callHoldTool("world_hold", { from: "sbx-cy/a-draft-bowl" }, KEY), (e) => e.code === 404 && /a private draft holds nothing yet/.test(e.hint));
+  await assert.rejects(callHoldTool("world_hold", { from: "sbx-cy/a-draft-bowl" }, KEY), (e) => e.code === 404 && /a draft holds nothing yet/.test(e.hint));
   await assert.rejects(callHoldTool("world_hold", { act: "refill", thing: "sbx-cy/a-draft-bowl", kind: "pocket-comet" }, KEY), (e) => e.code === 404);
   await assert.rejects(callHoldTool("world_hold", { from: BOWL, kind: "no-such-kind" }, KEY), (e) => e.code === 409 && /you are not standing where sbx-ana\/the-bowl stands/.test(e.defect));
   assert.equal(await units(), 0);
 });
 
 test("world_hold { from, label } still reaches #499's door (dark under #608), never the kind door", { skip }, async () => {
-  await assert.rejects(callHoldTool("world_hold", { from: BOWL, label: "test-comets" }, KEY), (e) => !/private draft holds nothing yet|holds nothing$/.test(String(e.hint ?? "")) && /chest/.test(`${e.defect} ${e.hint}`));
+  await assert.rejects(callHoldTool("world_hold", { from: BOWL, label: "test-comets" }, KEY), (e) => !/draft holds nothing yet|holds nothing$/.test(String(e.hint ?? "")) && /chest/.test(`${e.defect} ${e.hint}`));
   assert.equal(await units(), 0);
 });

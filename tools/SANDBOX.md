@@ -36,7 +36,7 @@ Act as a seeded resident with `as <handle> <tool> '<json>'`. The calls are the s
 
 Walk, take, give, drop, enter, exit and say are live: they happen at once. A new mark has to be settled first:
 
-1. Leave it with `"stamps": 0` on your own ground. That puts it forward. Without `stamps` it stays a private draft, and you can put it forward later with `{"do":"stake","args":{"mark":"sb-dov/a-shed","stamps":0}}`.
+1. Leave it with `"stamps": 0` on your own ground. That puts it forward. Without `stamps` it stays a draft (not the town's canon), and you can put it forward later with `{"do":"stake","args":{"mark":"sb-dov/a-shed","stamps":0}}`.
 2. Run a crossing (below).
 3. It now stands in the world, and you can enter it with `{"do":"enter","args":{"mark":"sb-dov/a-shed"}}`.
 

@@ -136,7 +136,7 @@ test("7 · open: another household's holder that is not open refuses at the door
 
 test("a holder must be published and must hold: a draft and a plain thing refuse, nothing made", async () => {
   const w = world();
-  await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: "sbx-cy/a-draft" }), (e) => e.code === 404 && /private draft holds nothing yet/.test(e.hint));
+  await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: "sbx-cy/a-draft" }), (e) => e.code === 404 && /a draft holds nothing yet/.test(e.hint));
   await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: "sbx-ana/a-lamp" }), (e) => /holds nothing/.test(e.defect));
   assert.equal(w.acts.length, 0);
 });

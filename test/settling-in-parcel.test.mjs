@@ -91,7 +91,7 @@ test("a LOCKED parcel claim — ruled, waiting for a settlement to write it — 
 test("a private DRAFT parcel is told the stake act that puts it forward, by its own slug", async () => {
   const rows = await paperGapRows("mari", ctx({ parcelClaim: async () => ({ slug: "mari/marigold-house-parcel", status: "draft", window_id: null }) }));
   const t = worldGap(rows).text;
-  assert.match(t, /still a private draft/);
+  assert.match(t, /still a draft, not the town's canon/);
   assert.match(t, /world \{ do: "stake", args: \{ mark: "mari\/marigold-house-parcel"/);
 });
 
@@ -122,7 +122,7 @@ test("the sentence is pure over (handle, claim): the four shapes, pinned", () =>
   assert.match(walkTheWorldText("x", null), /Claim your ground/);
   assert.match(walkTheWorldText("x", { slug: "x/p", status: "pending", window_id: 7 }), /on the docket at candle 7/);
   assert.match(walkTheWorldText("x", { slug: "x/p", status: "locked", window_id: 8 }), /locked at candle 8/);
-  assert.match(walkTheWorldText("x", { slug: "x/p", status: "draft" }), /private draft/);
+  assert.match(walkTheWorldText("x", { slug: "x/p", status: "draft" }), /still a draft, not the town's canon/);
   // a claim in a state this line does not speak for (refused, retired) reads as no claim
   assert.match(walkTheWorldText("x", { slug: "x/p", status: "refused" }), /Claim your ground/);
 });

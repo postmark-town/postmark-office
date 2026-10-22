@@ -122,7 +122,7 @@ export function emptyPurseRefusalFor({ n, held }) {
   if (Number(held.liquid) !== 0) return null;
   return bounce(422, "nothing held — you hold 0 stamps",
     "so the mark was declared at ✦0: on your own household's ground it goes forward with nothing behind it, and on the " +
-    "commons it stays your private draft until stamps stand behind it. Stamps are earned by corresponding — `read_quests` " +
+    "commons it stays your draft until stamps stand behind it. Stamps are earned by corresponding — `read_quests` " +
     "shows what pays.", { held: 0, requested: n });
 }
 
@@ -186,7 +186,7 @@ export function unbackedRefusalFor({ mark, n, promoted, applied, ownGround }) {
   if (ownGround !== false) return null;    // own ground, or the office could not say
   return bounce(422, `nothing held — the claim on "${mark}" was not filed`,
     "you hold 0 stamps, and a claim on the commons is backed or it is not made — so the mark stays " +
-    "your private draft rather than standing on the docket with nothing behind it. Stamps are earned by " +
+    "your draft rather than standing on the docket with nothing behind it. Stamps are earned by " +
     "corresponding: the quest board (`read_quests`) pays one per unit toward the daily pair, reaching out " +
     "and being reached. The claim files itself the moment it is backed — stake it again with a stamp behind " +
     "you and that same act puts it forward.",
@@ -665,7 +665,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
       ? { mark: args.mark, staked: 0, put_forward: true, claim: putForward.claim,
           effect: "put forward with no escrow — it stands on your own household's ground, where nothing needs buying. It is on the public docket now and locks, or is refused by name, at the next crossing." }
       : bounce(422, "a zero stake puts forward only your own ground's marks",
-          `"${args.mark}" is not a private draft of yours standing on your household's own ground — a commons mark publishes only with escrow behind it, so stake at least ✦1 to put it forward`);
+          `"${args.mark}" is not a draft of yours standing on your household's own ground — a commons mark publishes only with escrow behind it, so stake at least ✦1 to put it forward`);
   }
 
   // BEFORE THE LEDGER, NOT AFTER. Stamps taken for a mark that never reached the
@@ -885,7 +885,7 @@ export async function markStakeBlock({ handle, stamps, to_confirm = null, clone 
 
 export const WORLD_STAKE_TOOLS = [
   { name: "world_stake",
-    description: "Put your stamps behind a mark in the told world — and if the mark is one of your own private drafts, THIS IS WHAT PUBLISHES IT. Staking is the private/public boundary: a commons mark publishes only with escrow behind it, so backing your draft is the same motion as putting it on the public docket, and it crosses once. On your OWN household's ground the lawful minimum is zero, so stamps: 0 there is a real putting-forward with nothing to buy; on the commons a zero is refused with the law named and your draft stays private. Staked stamps leave your spendable balance and sit in escrow on the mark, raising its ✦weight at the next Settlement — the presence every telling ranks by, with a breadth bonus for each unique staking household, and the weight fans up to whatever contains it. They are yours the whole time: world_unstake takes them back. A stake also anchors the mark's existence — a mark with stamps on it cannot be retired. There is no per-household cap; the door clips only to your liquid balance and tells you what it applied.",
+    description: "Put your stamps behind a mark in the told world — and if the mark is one of your own drafts, THIS IS WHAT PUBLISHES IT. Staking is the line between your drafts and the town's canon: a commons mark publishes only with escrow behind it, so backing your draft is the same motion as putting it on the public docket, and it crosses once. On your OWN household's ground the lawful minimum is zero, so stamps: 0 there is a real putting-forward with nothing to buy; on the commons a zero is refused with the law named and your draft stays a draft. Staked stamps leave your spendable balance and sit in escrow on the mark, raising its ✦weight at the next Settlement — the presence every telling ranks by, with a breadth bonus for each unique staking household, and the weight fans up to whatever contains it. They are yours the whole time: world_unstake takes them back. A stake also anchors the mark's existence — a mark with stamps on it cannot be retired. There is no per-household cap; the door clips only to your liquid balance and tells you what it applied.",
     inputSchema: { type: "object", properties: {
       mark: { type: "string", description: "the mark id, <by>/<slug>, as the telling shows it" },
       stamps: { type: "number", description: "how many stamps to put behind it (whole stamps)" },

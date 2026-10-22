@@ -1423,7 +1423,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // a door that eventually does.
       if (path === "/world2/my-drafts") {
         if (!world2ServeEnabled()) return bounce(res, 404, "no such door", "the world 2.0 store is not engaged at this office");
-        if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your drafts are yours alone — sign in as your resident household first"); }
+        if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "your drafts live only in your own reading of the world — sign in as your resident household first"); }
         return world2MyDrafts(key)
           .then((r) => j(res, 200, r))
           .catch((e) => doorTripped(res, "the drafts door tripped", e));

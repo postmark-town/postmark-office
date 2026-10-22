@@ -508,7 +508,7 @@ export function receiptFrom(records = {}) {
   if (row?.status === "draft" || sketchbook) {
     return {
       ...base, status: "draft",
-      says: "draft — this stands in your own compose space, on no docket and in no public answer. Staking it is what puts it forward (a commons mark publishes only with escrow behind it).",
+      says: "draft — this is not the town's canon: it stands on no docket and lives only in your own reading of the world. Staking it is what puts it forward (a commons mark publishes only with escrow behind it).",
     };
   }
 
