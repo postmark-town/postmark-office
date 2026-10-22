@@ -232,7 +232,7 @@ test("10. W6: a take of a thing in someone else's hands answers as a take", () =
 test("11. ONE OWNER: every reader of a thing's place reads the one answer, and the copies are deleted (source pins)", () => {
   const read = (f) => readFileSync(join(ROOT, f), "utf8");
   const world = read("src/world.mjs"), hold = read("src/world-hold.mjs"), units = read("src/world-units.mjs"), apex = read("src/world-apex.mjs");
-  assert.match(world, /async function sightFor\(w, handle, key = null\) \{\n  w = await heldPlaced\(w\);/, "orient, the eyes, investigate and find read the placed world");
+  assert.match(world, /async function sightFor\(w, handle, key = null, \{ lens = null \} = \{\}\) \{\n  w = await heldPlaced\(w\);/, "orient, the eyes, investigate and find read the placed world");
   assert.match(world, /export async function worldMarkById\(id\) \{\n  const w = await heldPlaced\(await world\(\)\);/, "the take door and the hold reads read the placed world");
   const block = world.slice(world.indexOf("export async function thingStandsBlock"), world.indexOf("export async function thingStandsBlock") + 3000);
   assert.doesNotMatch(block, /standsRowsFromStore/, "the stands block runs no store read of its own");

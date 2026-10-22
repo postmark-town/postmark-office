@@ -59,6 +59,23 @@ const ID = "creature:fighter-top";
 const iso = (ms) => new Date(ms).toISOString();
 const ROSTER = ["kai", "ren", "ana"].map((handle) => ({ handle, distance_m: 10, household: handle === "ana" ? "house:hearth" : `solo:${handle}`, slug: null, human: `human-of-${handle}`, nerve: 10 }));
 
+/** The drive's clock: the real one, held inside its settlement window and before the feint's own clock ends it. Pure. */
+function feintClockNow(realStart, fight) {
+  const w = windowAt(realStart);
+  return Math.min(realStart, w.ends - 10 * 60_000, w.start + fight.pieces[0].ends.after_h * 3600_000 - 10 * 60_000);
+}
+
+test("the drive's clock never lands past the feint's own clock, at any hour of a window", () => {
+  // ⚑ THE FLIP: drop the after_h bound from feintClockNow → every hour past the fourth reds
+  for (let h = 0; h < 24; h += 0.25) {
+    const real = Date.UTC(2026, 9, 22, 0, 0) + h * 3600_000;
+    const now = feintClockNow(real, FIGHT), w = windowAt(now);
+    assert.ok(now <= real, `never ahead of the real clock (${h} h)`);
+    assert.equal(w.id, windowAt(real).id, `inside the real clock's window (${h} h)`);
+    assert.ok(now - w.start < FIGHT.pieces[0].ends.after_h * 3600_000, `before the feint's clock ends it (${h} h UTC: ${((now - w.start) / 3600_000).toFixed(2)} h into the window)`);
+  }
+});
+
 test("ON THE STORE · a feint answered once, a set piece begun once, a disguise broken once, a persuade once per household, and the ending with its restore, once", async () => {
   const s = await startStore({ db: "set_pieces_drive" });
   const api = await s.connect("office_api");
@@ -68,9 +85,13 @@ test("ON THE STORE · a feint answered once, a set piece begun once, a disguise 
   pen.__setPoolForTest(pool);
   try {
     const q = async (t, p) => (await api.query(t, p)).rows;
-    // the drive's clock, inside one settlement window, its rows written on the window's own instants
+    // the drive's clock, inside one settlement window, its rows written on the window's own instants,
+    // and BEFORE the feint's own clock ends it (its ends.after_h): run later in a window, the
+    // encounter tick in A rightly moved the fight on "by the clock", so B found it already in its
+    // disguise and its first look answered null (reading 'piece') — red for the last 8 hours of
+    // every 12-hour window, green for the first 4, whatever the code did
     const realStart = Date.now();
-    const now = Math.min(realStart, windowAt(realStart).ends - 10 * 60_000);
+    const now = feintClockNow(realStart, FIGHT);
     const w = windowAt(now);
     const row = (actor, action, object, payload, cls = "creature", at = now) => normalizeRow({ crossing: currentCrossing(at), actor, action, object, cls,
       at: { anchor: WORLD_ANCHOR, dx: 0, dy: 0 }, payload, writtenAt: iso(at) });
