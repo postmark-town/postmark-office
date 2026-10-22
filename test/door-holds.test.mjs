@@ -41,14 +41,16 @@ const ROWS = [
   prop("thing", "min", 1, "constitution", "capacity"), prop("thing", "max", 120, "constitution", "capacity"),
   prop("thing", "open", true, "sovereign", "holder"), prop("thing", "portable", true, "sovereign"),
 ];
-const LAW = lawSnapshotFromRows([...ROWS, prop("thing", "accepts", null, "sovereign", "holder"), prop("thing", "keeps", false, "sovereign", "holder")]);
+const LAW = lawSnapshotFromRows([...ROWS, prop("thing", "accepts", null, "sovereign", "holder"), prop("thing", "keeps", false, "sovereign", "holder"),
+  prop("thing", "accepts_shown", true, "sovereign", "holder")]);
 const OLD_LAW = lawSnapshotFromRows(ROWS);   // a law that predates the two properties
 
-const DOOR = "tw-ana/the-inner-door", BOX = "tw-ana/a-box";
+const DOOR = "tw-ana/the-inner-door", BOX = "tw-ana/a-box", QUIET = "tw-ana/a-quiet-holder";
 const A = "tw-ana/token-a", B = "tw-ana/token-b", OTHER = "tw-ana/a-pebble";
 const MARKS = {
   [DOOR]: { id: DOOR, by: "tw-ana", kind: "thing", holder: true, capacity: 3, portable: false, accepts: [A, B], keeps: true, at: { x: 5, y: 6 } },
   [BOX]: { id: BOX, by: "tw-ana", kind: "thing", holder: true, capacity: 5, at: { x: 5, y: 6 } },
+  [QUIET]: { id: QUIET, by: "tw-ana", kind: "thing", holder: true, capacity: 1, portable: false, accepts: [A], keeps: true, accepts_shown: false, at: { x: 5, y: 6 } },
   [A]: { id: A, by: "tw-ana", kind: "thing", at: { x: 5, y: 6 } },
   [B]: { id: B, by: "tw-ana", kind: "thing", at: { x: 5, y: 6 } },
   [OTHER]: { id: OTHER, by: "tw-ana", kind: "thing", at: { x: 5, y: 6 } },
@@ -92,13 +94,33 @@ test("ACCEPTS: a give of a mark it names goes in; anything else, and any count o
   assert.deepEqual([g.did, g.edge], ["give", { giver: "tw-bo", receiver: DOOR }]);
   const no = rig({ things: [held("tw-bo", OTHER)] });
   await assert.rejects(go(no, "thing-into-holder", { thing: OTHER, to: DOOR }),
-    (e) => e.code === 403 && e.defect === `${DOOR} does not take that` && !("accepts" in e) && ![A, B].some((id) => `${e.defect} ${e.hint}`.includes(id)),
-    "the refusal names nothing it takes (WLD-25/l): which fits is the holder's own puzzle");
+    (e) => e.code === 403 && e.defect === `${DOOR} does not take ${OTHER}` && e.accepts.join() === [A, B].join());
   const units = rig();
   units.seed([{ from: null, to: "tw-bo", kind: "pocket-comet", n: 2 }]);
-  await assert.rejects(go(units, "give", { kind: "pocket-comet", count: 1, to: DOOR }), (e) => e.code === 403 && /does not take that/.test(e.defect) && /a count of a kind is never one of those/.test(e.hint));
-  await assert.rejects(go(rig(), "make", { kind: "pocket-comet", count: 1, to: DOOR }, "tw-ana"), (e) => e.code === 403 && /does not take that/.test(e.defect));
+  await assert.rejects(go(units, "give", { kind: "pocket-comet", count: 1, to: DOOR }), (e) => e.code === 403 && /takes in only the marks it names/.test(e.defect));
+  await assert.rejects(go(rig(), "make", { kind: "pocket-comet", count: 1, to: DOOR }, "tw-ana"), (e) => e.code === 403 && /takes in only the marks it names/.test(e.defect));
   assert.equal(no.acts.length + units.acts.length - 1, 0, "nothing written by a refusal (the seed is the one act)");
+});
+
+test("ACCEPTS_SHOWN: a holder whose maker set it false refuses plainly, naming nothing it takes; every other holder still names them", async () => {
+  const read = (mark, snap = LAW) => holdingOf({ mark, className: "thing", classProperty: (n, p) => classViewOf(snap).property(n, p) });
+  assert.deepEqual([read(MARKS[QUIET]).accepts_shown, read(MARKS[DOOR]).accepts_shown, read(MARKS[DOOR], OLD_LAW).accepts_shown], [false, true, true],
+    "default shown, and shown under a law that predates it");
+  const no = rig({ things: [held("tw-bo", OTHER)] });
+  await assert.rejects(go(no, "thing-into-holder", { thing: OTHER, to: QUIET }), (e) => {
+    assert.equal(e.code, 403);
+    assert.equal(e.defect, `${QUIET} does not take that`);
+    assert.equal(e.accepts, undefined, "no list of what it takes");
+    assert.ok(!JSON.stringify(e).includes(A), "the id it takes appears nowhere in the answer");
+    return true;
+  });
+  const units = rig();
+  units.seed([{ from: null, to: "tw-bo", kind: "pocket-comet", n: 2 }]);
+  await assert.rejects(go(units, "give", { kind: "pocket-comet", count: 1, to: QUIET }),
+    (e) => e.code === 403 && e.defect === `${QUIET} does not take that` && e.accepts === undefined && /a count of a kind is never one of those/.test(e.hint ?? e.message));
+  const ok = rig({ things: [held("tw-bo", A)] });
+  assert.equal((await go(ok, "thing-into-holder", { thing: A, to: QUIET })).did, "give", "what it names still goes in");
+  assert.equal(no.acts.length + units.acts.length - 1, 0, "nothing written by a refusal");
 });
 
 test("KEEPS: nothing is taken back out, by anyone, its maker included, by name or by draw", async () => {
