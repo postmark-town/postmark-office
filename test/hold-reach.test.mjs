@@ -256,7 +256,7 @@ test("REPAIR 1 — an author may NOT give their own private draft OUT of the hou
   assert.equal(e.code, 409);
   assert.match(e.defect, /ethan-thorne is not of wright's household/);
   assert.match(e.defect, /does not stand on the world/, "the refusal must name the draft, not only the household");
-  assert.match(e.hint, /stays inside the house that made it/);
+  assert.match(e.hint, /a draft is not the town's canon until it publishes/);
 });
 
 test("…and not inside earshot either — the distance is not what makes it wrong", async () => {
