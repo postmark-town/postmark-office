@@ -53,6 +53,13 @@ test("the table names only tools that exist, and the hints agree with each other
     // A tool the office challenges for sign-in because it writes can't call itself read-only.
     if (WRITE_TOOLS.has(name)) assert.equal(r.readOnlyHint, false, `${name} is a WRITE_TOOLS member declared read-only`);
   }
+  // The other direction (the review of #723): every tool the table calls a write is
+  // in WRITE_TOOLS, so the sign-in gate and the hints can't drift apart unseen. The
+  // only exceptions are the three apex doors (writeShaped reads their do:) and
+  // read_letter (a read that clears an unread mark, not an act).
+  const writesOutsideTheGate = Object.entries(TOOL_ANNOTATIONS)
+    .filter(([name, r]) => !r.readOnlyHint && !WRITE_TOOLS.has(name)).map(([name]) => name).sort();
+  assert.deepEqual(writesOutsideTheGate, ["household", "read_letter", "town", "world"], "a write the table names is missing from WRITE_TOOLS");
   // The apex doors carry do: acts, so each declares the honest union.
   for (const door of ["world", "household", "town"]) {
     assert.equal(TOOL_ANNOTATIONS[door].readOnlyHint, false, `${door} performs do: acts`);
