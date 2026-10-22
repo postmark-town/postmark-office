@@ -192,9 +192,9 @@ async function engine() {
 export async function world2MyDrafts(key) {
   const { household, drafts, disclosure } = await readDraftClaims(key);
   return {
-    what: "your household's private compose space — every draft you hold, and nobody else can ask this question about you",
+    what: "your household's drafts — every draft you hold. They are not the town's canon, and they live only in your own reading of the world",
     household, ...(disclosure ? { household_disclosure: disclosure } : {}), count: drafts.length, drafts,
-    privacy: "these are not the town's canon: they stand on no docket and live only in your own reading of the world. Submitting one is the act that makes it public, and it crosses once.",
+    privacy: "these are not the town's canon: they stand on no docket and live only in your own reading of the world. Submitting one is the act that makes it the town's canon, and it crosses once.",
   };
 }
 

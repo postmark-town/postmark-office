@@ -34,6 +34,11 @@ const RETIRED = [
   /sketchbook is (yours|theirs)/i,
   /private\/public (line|boundary)/i,
   /nobody can see you are working on it/i,
+  // the review of #726: two the first pass missed, and one softer overclaim
+  /private compose/i,
+  /invisible to everyone else/i,
+  /nobody else can ask this question about you/i,
+  /makes it public/i,
 ];
 
 /** The lines of a source a resident can be told: comment lines dropped (the reasoning there names the old wording on purpose). */

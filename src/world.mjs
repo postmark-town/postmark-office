@@ -5175,7 +5175,7 @@ export function publishNoteFor({ id, parent, by, marks, residentsOf, kind = null
     : parentBy === "the-town" ? "the town's own ground"
     : `${parentBy}'s ground (${parent})`;
   return {
-    heads_up: `your mark stands, but only in your household's draft so far: on ${ground} it judges commons-class at the crossing, and a commons mark PUBLISHES ONLY WITH ESCROW BEHIND IT — unstaked it stays invisible to everyone else, and nothing asks again. Staking your own mark is legal and 1✦ is enough: stake now with the call below, or pass stamps: 1 when leaving a mark to do both in one act. If the crossing judges the ground yours after all, the stake is just weight behind your mark, never wasted.`,
+    heads_up: `your mark stands, but only in your household's draft so far: on ${ground} it judges commons-class at the crossing, and a commons mark PUBLISHES ONLY WITH ESCROW BEHIND IT — unstaked it stays a draft, not the town's canon, living only in your own reading of the world, and nothing asks again. Staking your own mark is legal and 1✦ is enough: stake now with the call below, or pass stamps: 1 when leaving a mark to do both in one act. If the crossing judges the ground yours after all, the stake is just weight behind your mark, never wasted.`,
     to_publish: { do: "stake", tool: "world_stake", args: { mark: id, stamps: 1 } },
   };
 }
