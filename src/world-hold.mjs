@@ -1531,10 +1531,11 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     refuseTakeOfHeld({ thing: args.thing, verb, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
     const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder, key });
+    // The thing's own mark, read once; null when canon does not hold it or could not be read.
+    let m = null;
+    try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark ?? null; } catch { m = null; }
     // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.
     if (face === "take") {
-      let m = null;
-      try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { m = null; }
       // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
       if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
         throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
@@ -1544,13 +1545,33 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // so there is one pen: the holding act, awaited. (The unflipped pen, which
     // wrote dynamic.db's edge and mirrored the act fire-and-forget, went with
     // dynamic.db, POS-269.)
+    // A CLASS TAKEN BY THE TOWN'S OWN ACT (WLD-7): a thing of it, or carrying anything
+    // of it, is not given, taken or set down until it is returned. What it is and what
+    // it carries are read here; whether that class is taken is asked inside the hold
+    // turn, of the law published at that moment (declareHoldingFlipped § classGuard).
+    // What it carries is read only while some class is taken: on every other day it
+    // costs nothing.
+    const units = await import("./world-units.mjs");
+    const { lawSnapshot } = await import("./law-snapshot.mjs");
+    let carried = () => [units.markClassFor(m)];
+    if (units.classViewOf(lawSnapshot()).stolenAny()) {
+      const deps = await units.liveUnitDeps();
+      const { units: unitRows, attachments } = await deps.readRows();
+      const { foldUnits } = await import("./world-stacks.mjs");
+      carried = await units.carriedClasses({ thing: String(args.thing), mark: m, fold: foldUnits(unitRows), attachments, markById: deps.markById });
+    }
+    const classGuard = () => {
+      const now = units.classViewOf(lawSnapshot());
+      for (const k of carried(now)) { const refused = (units.stolenQuestion)(k, now); if (refused) return refused; }
+      return null;
+    };
     {
       const stood = await standpointOfActor(actor);
       // a set-down off the OWNER's ground stakes 1✦: its terms, or its refusal, before anything is written (D4 step 3; D-O2)
       const owner = face === "drop" ? await ownerNow(args.thing) : null;
       const dropStake = face === "drop" ? await dropStakeTerms({ thing: args.thing, actor, stood, accept: args.accept === true, owner }) : null;
       if (dropStake?.terms) return dropStake.terms;
-      const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings });
+      const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings, classGuard });
       if (out?.did !== "drop") return out;
       const staked = dropStake?.stake ? await stakeTheDrop({ thing: args.thing, actor, key, n: dropStake.stake }) : null;
       // NO AMEND (POS-688, E8): the settlement prints a set-down where it was made (D2),
@@ -1622,7 +1643,7 @@ export function holdingEntry(did, { crossing, at, witnesses, cls, household }) {
 // off the hold lane this refuses as the door does. `deps` exist so the
 // ordering can be proven with no world db and no Postgres; the door injects the
 // real ones.
-export async function declareHoldingFlipped({ db, thing, to = null, actor, dials = {}, key = null, deps = {}, reached = null, stood = null, carry = null }) {
+export async function declareHoldingFlipped({ db, thing, to = null, actor, dials = {}, key = null, deps = {}, reached = null, stood = null, carry = null, classGuard = null }) {
   // THE QUEUE IS ONE THREAD'S. `holdingQueue` serializes the holder check
   // against the commit only among the holds THIS thread runs; a hold written
   // from a read worker would run beside the main thread's with no lock between
@@ -1670,6 +1691,11 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     // (`carry: null`) for a caller that measures no load.
     if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows, thing: String(thing), actor });
     const { at, witnesses } = await witnessStamp(did.declared_by);
+    // A CLASS TAKEN BY THE TOWN'S OWN ACT (WLD-7): the door's own question, handed in so
+    // this function still runs on a hand-built store. Asked after every refusal above and
+    // with no await between it and the append: this read is the linearisation point.
+    const refused = classGuard ? classGuard(did) : null;
+    if (refused) throw refused;
     const row = await appendActFlipped(db, holdingEntry(did, { crossing: currentCrossing(), at, witnesses, cls: CLASS_HOLDING, household: resolvedWorldHousehold(key) }));
     // Which store is the RECORD for this act — said in the answer, as the stance
     // door says it (the journal row behind it is the reverse-mirror copy).
