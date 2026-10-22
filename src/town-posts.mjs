@@ -94,6 +94,8 @@ import { postHistoryVia, NO_CHAIN } from "./post-history.mjs";
 import { ideaExtrasVia } from "./idea-store.mjs";
 import { ideasTank } from "./world-classes.mjs";
 
+import { REPORT_CLASS, REPORT_IS_PRIVATE } from "./reports.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = () => process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
 
@@ -110,6 +112,9 @@ export const questRegistryAtOffice = (townClone = TOWN_CLONE()) => readQuestRegi
 
 function judgePostsClass(fields) {
   const c = String(fields?.class ?? "").trim();
+  // A REPORT IS PRIVATE (POS-757): never in POST_CLASSES, so never on this
+  // public, keyless read; the filer's household reads its own with its key.
+  if (c === REPORT_CLASS) throw REPORT_IS_PRIVATE();
   if (!c) throw refuse(422, "which class?", `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
   if (!Object.hasOwn(POST_CLASSES, c)) throw refuse(422, `"${c}" is not a post class`, `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
   return c;

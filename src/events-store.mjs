@@ -48,6 +48,7 @@ import {
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
+import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -378,6 +379,8 @@ function bodyOf(fields) {
  * path, which answers its own "no event", exactly as it did before they joined.
  */
 async function classOf(fields, id, env) {
+  // a report's id says its class (POS-757): report/<hex>, never a public row
+  if (String(fields.class ?? "").trim() === REPORT_CLASS || REPORT_ID_RE.test(id)) return REPORT_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
   const { ideaRow } = await ideaPen();
@@ -398,6 +401,7 @@ export async function postAtTown(fields, key, { now = Date.now(), env = process.
 export async function amendAtTown(fields, key, { now = Date.now(), env = process.env } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
+  if (cls === REPORT_CLASS) throw REPORT_NO_AMEND();
   if (cls === QUEST_CLASS) throw QUEST_NO_AMEND();
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
@@ -409,6 +413,7 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
 export async function closeAtTown(fields, key, { now = Date.now(), env = process.env } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
+  if (cls === REPORT_CLASS) throw REPORT_NO_CLOSE();
   if (cls === QUEST_CLASS) return closeQuest(fields, key, id, { now, env });
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
   if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
@@ -427,6 +432,7 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
 export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
+  if (cls === REPORT_CLASS) return (await import("./report-store.mjs")).advanceReport(fields, key, id, { now, env });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
