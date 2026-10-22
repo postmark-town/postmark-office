@@ -194,7 +194,7 @@ export async function world2MyDrafts(key) {
   return {
     what: "your household's private compose space — every draft you hold, and nobody else can ask this question about you",
     household, ...(disclosure ? { household_disclosure: disclosure } : {}), count: drafts.length, drafts,
-    privacy: "these stand on no docket, in no export, in no archive, and in no public answer. Submitting one is the act that makes it public, and it crosses once.",
+    privacy: "these are not the town's canon: they stand on no docket and live only in your own reading of the world. Submitting one is the act that makes it public, and it crosses once.",
   };
 }
 

@@ -129,7 +129,7 @@ async function shownIn(fold, holder, attachments, view, deps, { sharp = false } 
 /** A published holder, or the refusal: a draft holds nothing yet; a mark that does not hold, says so. */
 async function holderOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a private draft holds nothing yet. Nothing was changed.");
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a draft holds nothing yet. Nothing was changed.");
   const law = holderLawOf({ holder: id, mark, view });
   if (!law.holder) throw bounce(422, `${id} holds nothing`, `it is ${law.className ? `a ${law.className}` : "a mark of no thing class"} whose holder is false; a holder is a thing its maker made with holder: true. Nothing was changed.`);
   if (law.capacity_refused) throw bounce(422, `${id}'s own capacity is refused`, `${law.capacity_refused}; until its maker sets one within them, nothing goes in or comes out by count. Nothing was changed.`);
@@ -261,7 +261,7 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
   const { mark: holderMark, law } = await holderOrThrow(deps, to, view);
   refuseIfClosed({ mark: holderMark, id: to, law, actor, deps, verb: "give into" });
   const mark = await deps.markById(thing);
-  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a holder; a private draft changes no hands. Nothing was changed.");
+  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a holder; a draft changes no hands. Nothing was changed.");
   await reachHolder(to, holderMark, actor, deps, { verb: "give" });
   return holdTurn(async () => {
     const { units, attachments } = await deps.readRows();
@@ -599,7 +599,7 @@ export async function investigateMark(id, usable = null) {
   ]);
   const mark = (await world.worldMarkById(String(id))).mark;
   const can = usable ? { can: canOn(usable, id) } : {};
-  if (!mark) return { mark: String(id), stands: false, note: "no mark by that id stands on the world (a private draft is its household's alone)", ...can };
+  if (!mark) return { mark: String(id), stands: false, note: "no mark by that id stands on the world (a draft is not the town's canon; it lives only in its own household's reading of the world)", ...can };
   const view = classViewOf(lawSnapshot());
   const law = holderLawOf({ holder: String(id), mark, view });
   const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...can };

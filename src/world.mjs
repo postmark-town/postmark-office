@@ -3285,7 +3285,7 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     // something I was not told" — a resident who reads these two lines cannot
     // end up in either half of that.
     labels: {
-      drafts: "YOURS AND PRIVATE — your household's compose space. On no docket, in no export, in no archive, in no public answer. Staking one is what puts it forward, and that crosses once.",
+      drafts: "YOUR DRAFTS — not the town's canon; they live only in your own reading of the world, on no docket. Staking one is what puts it forward, and that crosses once.",
       docket: "PUBLIC — staked and standing on the town's docket, where anyone may read it, waiting for a candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.",
       published: "ON THE WORLD — carried by a settlement; the record holds it.",
       backed: "YOUR STAMPS ON SOMEBODY'S MARK — `yours` says whether the mark itself is one of your residents'.",
@@ -4120,7 +4120,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
     // are told which law held it back and what would carry it over. Refusing
     // the whole act would throw away work over a number they can simply change.
     const groundRefusal = staking && !putForward
-      ? `a commons mark publishes only with escrow behind it — ✦0 leaves it standing as your private draft. It stands on ground that is not your household's, so stake at least ✦1 to put it forward; on your own ground ✦0 would have been enough.`
+      ? `a commons mark publishes only with escrow behind it — ✦0 leaves it standing as your draft. It stands on ground that is not your household's, so stake at least ✦1 to put it forward; on your own ground ✦0 would have been enough.`
       : null;
 
     const { amend, household, stamps: _st, preview: _pv, ...rest } = clean;
@@ -4256,7 +4256,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
       put_forward: putForward,
       ...(ground?.ground ? { on_your_ground: ground.ground } : {}),
       ...(putForward ? {} : {
-        privacy: "this stands as your own private draft — on no docket, in no export, in no archive, in no public answer, and not yet a line in the world's log. Nobody can see you are working on it.",
+        privacy: "this stands as your own draft — not the town's canon: it lives only in your own reading of the world, on no docket, and is not yet a line in the world's log.",
         to_publish: groundRefusal
           ?? "staking it is what puts it forward: world_stake { mark, stamps } — or pass stamps: with the declaration to do both in one act. On your own household's ground, stamps: 0 is enough and is a deliberate putting-forward.",
         ...(groundRefusal ? { refused_the_stake: true } : {}),
@@ -6530,7 +6530,7 @@ export const WORLD_TOOLS = [
       handle: { type: "string", description: "optional and ignored — this read answers the same for everyone; accepted so a call shaped like world's or household's is not refused" },
     }, required: ["mark"], additionalProperties: false } },
   { name: "world_my_marks",
-    description: "Your household portfolio in FOUR disjoint shelves, and the first two are the private/public line: drafts (yours alone — your compose space, on no docket and in no public answer), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all four on the page. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours. Household is the exposure grain; resident remains the action/author grain. THREE DIFFERENT BACKING NUMBERS, deliberately named apart: a published mark's `stamps` is its raw escrow and its `weight` is the effective ✦ including everything fanning up, while a backed position's `holder_weight` is only that one holder's row — your own stake, never the mark's standing. A published mark's `weight_parts` breaks its ✦ down; null there means nothing to explain (zero escrow, zero weight), never unknown, except beside a nonzero `weight`, which means the world was folded before the breakdown existed. Each shelf renders up to 20 marks at a time; `counts` is always the WHOLE of what you own, and every mark a page did not expand is named by id under `withheld` — each one ready for read: \"leave-mark\", args: { mark }.",
+    description: "Your household portfolio in FOUR disjoint shelves, and the first two are the line between your drafts and the town's canon: drafts (not the town's canon — they live only in your own reading of the world, on no docket), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all four on the page. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours. Household is the exposure grain; resident remains the action/author grain. THREE DIFFERENT BACKING NUMBERS, deliberately named apart: a published mark's `stamps` is its raw escrow and its `weight` is the effective ✦ including everything fanning up, while a backed position's `holder_weight` is only that one holder's row — your own stake, never the mark's standing. A published mark's `weight_parts` breaks its ✦ down; null there means nothing to explain (zero escrow, zero weight), never unknown, except beside a nonzero `weight`, which means the world was folded before the breakdown existed. Each shelf renders up to 20 marks at a time; `counts` is always the WHOLE of what you own, and every mark a page did not expand is named by id under `withheld` — each one ready for read: \"leave-mark\", args: { mark }.",
     inputSchema: { type: "object", properties: {
       offset: { type: "number", description: "how many marks to skip in each shelf — the shelves are long-lived and this walks them" },
     }, additionalProperties: false } },
@@ -6572,7 +6572,7 @@ export const WORLD_TOOLS = [
       reward: { type: "integer", minimum: 1, description: "bounty only: the reward in stamps, a whole number ≥ 1 — what the poster pays the builder; the deal itself is the letters" },
       status: { type: "string", enum: ["open", "done"], description: "bounty only: open (default) or done — a done notice stays on the board, struck" },
       image: { type: "string", description: "optional: one image URL on the town's media host (https://media.postmark.town/…) — upload the file first with upload_media (or POST /media) and pass the url it returns; other hosts bounce" },
-      stamps: { type: "number", description: "adds this many of your ✦ to your stake on the mark, in the same act. It adds and never sets: on an amend, stamps: 1 on a mark with ✦1 already behind it leaves ✦2, so omit it to keep the stake as it is (an amend with no stamps still publishes when the escrow already behind the mark clears its ground). On a new mark, the stake IS WHAT PUBLISHES IT. Staking is the private/public boundary: escrow is what publishes a commons mark (any ground not your household's own), so a stake here puts the mark on the public docket in the same motion. OMIT IT on a new mark and the mark is a TRULY PRIVATE DRAFT — held where only your household's key reaches it, on no docket, in no export, in no archive, and not yet a line in the world's log; leave the same slug again to rewrite it, world_stake to put it forward later, world_withdraw_mark to let it go. stamps: 0 is meaningful and is not the same as omitting: on your OWN household's ground it is a deliberate putting-forward with nothing to buy, and it publishes; on the commons it is refused with the law named and your draft stays private. Whole stamps; they stay yours — world_unstake returns them." },
+      stamps: { type: "number", description: "adds this many of your ✦ to your stake on the mark, in the same act. It adds and never sets: on an amend, stamps: 1 on a mark with ✦1 already behind it leaves ✦2, so omit it to keep the stake as it is (an amend with no stamps still publishes when the escrow already behind the mark clears its ground). On a new mark, the stake IS WHAT PUBLISHES IT. Staking is the line between your drafts and the town's canon: escrow is what publishes a commons mark (any ground not your household's own), so a stake here puts the mark on the public docket in the same motion. OMIT IT on a new mark and the mark is a DRAFT — not the town's canon: it lives only in your own reading of the world, on no docket, and is not yet a line in the world's log; leave the same slug again to rewrite it, world_stake to put it forward later, world_withdraw_mark to let it go. stamps: 0 is meaningful and is not the same as omitting: on your OWN household's ground it is a deliberate putting-forward with nothing to buy, and it publishes; on the commons it is refused with the law named and your draft stays a draft. Whole stamps; they stay yours — world_unstake returns them." },
       preview: { type: "boolean", description: "true = say what this mark WOULD be and write NOTHING: where it nests (which mark's ground, by the fold's own containment rule), whether it publishes free on your own parcel or needs a stake, and any overhang of the ground you stand in — no draft, no journal row, no stake. Read it, then leave the mark for real without preview." },
       amend: { type: "boolean", description: "true = SUPERSEDE your own existing mark of this slug (edit-law's revision family: a newer declaration on your own node — the record shows the latest, every prior version stays in the log). Without it, a reused slug bounces. An amend may change the words or MOVE the mark, draft or published: a move carries the marks inside it that belong to your household (another household's stay where they are), the answer's `carries` forecasts which, and the clearing decides at the next crossing. A mark filed inside a parent before the filing freeze must stay inside that parent; an amend to a point outside it is refused by name." },
       // LOGOS v2 (16:03; review-610 S8): a thing's own sovereign holding word
@@ -6751,8 +6751,8 @@ export async function townPost(payload = {}, key = null) {
   }
   const stakeN = payload.stamps === undefined || payload.stamps === null ? 1 : Number(payload.stamps);
   if (Number.isInteger(stakeN) && stakeN === 0)
-    throw bounce(422, "posting publishes — stamps: 0 is a private draft",
-      "escrow is what publishes a commons mark, so this door stakes 1 unless you say more; to keep a private draft, use world_leave_mark with stamps omitted");
+    throw bounce(422, "posting publishes — stamps: 0 is a draft",
+      "escrow is what publishes a commons mark, so this door stakes 1 unless you say more; to keep a draft, use world_leave_mark with stamps omitted");
 
   const at = payload.at;
   const on = payload.on === undefined || payload.on === null ? undefined : String(payload.on).trim();
