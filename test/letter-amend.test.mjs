@@ -27,10 +27,10 @@ import { tempDir } from "./helpers/temp-dir.mjs";
 import { hotLetters, hotMailBlock, sendLetterAsRow } from "../src/town-mail.mjs";
 import { readTownJournal } from "../src/town-journal.mjs";
 import {
-  amendLetterAtOffice, withdrawLetterAtOffice, pendingLetterRead, CROSSING_UNDER_WAY,
+  amendLetterAtOffice, withdrawLetterAtOffice, pendingLetterRead, TOWN_BUSY,
 } from "../src/letter-amend.mjs";
 import { foldLetters, standingLetters, AMEND_ACT, WITHDRAW_ACT, SEND_ACT } from "../src/letter-fold.mjs";
-import { heldLockArgv, withTownLockHeld, LOCK_BUSY } from "../src/town-lock.mjs";
+import { heldLockArgv, withTownLockHeld, LOCK_BUSY, LOCK_UNLOCKABLE, LOCK_HELD_TOO_LONG } from "../src/town-lock.mjs";
 
 delete process.env.TOWN_PUSH;
 
@@ -101,7 +101,7 @@ test("amend: only the last version stands for the sender, the receipt says only 
     assert.equal(r2.version, 3);
     assert.match(r2.note, /^only this version sails/);
     // flip: the `held(async () => …)` wrapper in letter-amend.mjs § amendLetterAtOffice
-    assert.deepEqual(lockLog, [CROSSING_UNDER_WAY.defect, CROSSING_UNDER_WAY.defect], "each amendment is judged and written under the town lock");
+    assert.deepEqual(lockLog, [TOWN_BUSY.defect, TOWN_BUSY.defect], "each amendment is judged and written under the town lock");
 
     const standing = await hotLetters(o, fixtureKey);
     assert.equal(standing.length, 1, "one letter, not three");
@@ -185,7 +185,7 @@ test("a crossing holding the lock past the wait refuses the act in its own words
     const sent = await sendLetterAsRow({ ...letter, title: "the boat is loading" }, fixtureKey, db, null, o);
     const busy = async (_fn, opts) => { throw Object.assign(new Error(opts.busy.defect), opts.busy); };
     await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "now" }, fixtureKey, { db, odb: o, lock: busy }),
-      (e) => e.code === 503 && e.defect === "a crossing is under way, and nothing was changed" && /sailed as written/.test(e.hint));
+      (e) => e.code === 503 && /^the town lock is held — by a crossing, the keep tick or another whole-town write/.test(e.defect) && /sailed as written/.test(e.hint));
     await assert.rejects(() => withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock: busy }), { code: 503 });
     assert.equal((await rowsOf(o)).length, 1);
   });
@@ -220,8 +220,82 @@ test("withTownLockHeld: shared flock on town.lock, the section runs only after t
   assert.equal(fake.last.stdin.ended, true, "the lock is let go when the section ends");
 
   ran = false;
-  await assert.rejects(() => withTownLockHeld(async () => { ran = true; }, { flock: true, spawnImpl: fake(false), busy: CROSSING_UNDER_WAY }),
-    (e) => e.code === 503 && e.defect === CROSSING_UNDER_WAY.defect);
+  await assert.rejects(() => withTownLockHeld(async () => { ran = true; }, { flock: true, spawnImpl: fake(false), busy: TOWN_BUSY }),
+    (e) => e.code === 503 && e.defect === TOWN_BUSY.defect);
   assert.equal(ran, false, "a lock not taken runs nothing");
   await assert.rejects(() => withTownLockHeld(async () => {}, { flock: true, spawnImpl: fake(false) }), (e) => e.defect === LOCK_BUSY.defect);
+});
+
+// ── the review of #742 ──────────────────────────────────────────────────────
+
+const fakeHolder = (behaviour) => () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stdin = { ended: false, end() { this.ended = true; } };
+  setImmediate(() => behaviour(child));
+  fakeHolder.last = child;
+  return child;
+};
+
+test("the hold is BOUNDED: a section that hangs is aborted, the lock let go and the caller refused, well inside the ferry's 300 s wait", async () => {
+  const [, args] = heldLockArgv();
+  // flip: the `exec timeout ${holdSec + 30} cat` backstop in town-lock.mjs § heldLockArgv
+  assert.match(args.at(-1), /exec timeout 90 cat/, "the holder lets go by itself at 90 s, whatever the office is doing");
+  let signal = null;
+  const t0 = Date.now();
+  // flip: the setTimeout bound in town-lock.mjs § withTownLockHeld
+  await assert.rejects(() => withTownLockHeld(({ signal: s }) => { signal = s; return new Promise(() => {}); },
+    { flock: true, holdSec: 0.05, spawnImpl: fakeHolder((c) => c.stdout.emit("data", "held\n")) }),
+    (e) => e.code === 503 && e.defect === LOCK_HELD_TOO_LONG.defect);
+  assert.ok(Date.now() - t0 < 5_000);
+  assert.equal(fakeHolder.last.stdin.ended, true, "the lock is let go");
+  assert.equal(signal.aborted, true, "and the section is told, so it writes nothing after");
+});
+
+test("a bound that let go before the write writes nothing: amend checks its signal before it appends", async () => {
+  const o = odb();
+  await flagOn(async () => {
+    const sent = await sendLetterAsRow({ ...letter, title: "too slow" }, fixtureKey, db, null, o);
+    const ac = new AbortController(); ac.abort();
+    const late = async (fn) => fn({ signal: ac.signal });
+    // flip: the `stillHeld(signal)` line before `later(l, AMEND_ACT, …)` in letter-amend.mjs
+    await assert.rejects(() => amendLetterAtOffice({ id: sent.letter_id, body: "late" }, fixtureKey, { db, odb: o, lock: late }), { code: 503 });
+    await assert.rejects(() => withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock: late }), { code: 503 });
+    assert.equal((await rowsOf(o)).length, 1, "only the send row");
+  });
+});
+
+test("the refusals say which thing happened: a wait that ran out is busy, a lock never taken is the office's own failure", async () => {
+  // flip: `code === 1 ? busy : unlockable` in town-lock.mjs § withTownLockHeld
+  await assert.rejects(() => withTownLockHeld(async () => {}, { flock: true, busy: TOWN_BUSY, spawnImpl: fakeHolder((c) => c.emit("exit", 1)) }),
+    (e) => e.defect === TOWN_BUSY.defect);
+  await assert.rejects(() => withTownLockHeld(async () => {}, { flock: true, busy: TOWN_BUSY, spawnImpl: fakeHolder((c) => c.emit("exit", 66)) }),
+    (e) => e.defect === LOCK_UNLOCKABLE.defect && !/crossing/.test(e.defect + e.hint));
+  await assert.rejects(() => withTownLockHeld(async () => {}, { flock: true, busy: TOWN_BUSY, spawnImpl: fakeHolder((c) => c.emit("error", new Error("ENOENT"))) }),
+    (e) => e.defect === LOCK_UNLOCKABLE.defect);
+});
+
+test("ONE LATER WORD AT A TIME, PER LETTER: two amends at once get versions 2 and 3, and the one that says it sails is the one that does", async () => {
+  const o = odb();
+  await flagOn(async () => {
+    const sent = await sendLetterAsRow({ ...letter, title: "at once" }, fixtureKey, db, null, o);
+    // a lock that lets both callers in together, as shared mode does
+    const shared = async (fn) => { await new Promise((r) => setImmediate(r)); return fn({}); };
+    // and a store that answers on a later turn between the judging and the write, as a real one does
+    const slowStore = async () => { await new Promise((r) => setImmediate(r)); return null; };
+    // flip: the `oneAtATime(slotOf(key, fields), …)` wrapper in letter-amend.mjs § amendLetterAtOffice
+    const [a, b] = await Promise.all([
+      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nFirst." }, fixtureKey, { db, odb: o, lock: shared, blockedRefusal: slowStore }),
+      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nSecond." }, fixtureKey, { db, odb: o, lock: shared, blockedRefusal: slowStore }),
+    ]);
+    assert.deepEqual([a.version, b.version], [2, 3], "each receipt names its own version");
+    assert.equal((await hotLetters(o, fixtureKey))[0].payload.args.body, "Limen —\n\nSecond.", "and the last receipt's body is the one that stands");
+    const [c, d] = await Promise.allSettled([
+      amendLetterAtOffice({ id: sent.letter_id, body: "Limen —\n\nThird." }, fixtureKey, { db, odb: o, lock: shared, blockedRefusal: slowStore }),
+      withdrawLetterAtOffice({ id: sent.letter_id }, fixtureKey, { odb: o, lock: shared }),
+    ]);
+    assert.equal(c.value.version, 4);
+    assert.equal(d.value.withdrawn, true, "the withdrawal follows the amendment, never beside it");
+    assert.deepEqual(await hotLetters(o, fixtureKey), []);
+  });
 });

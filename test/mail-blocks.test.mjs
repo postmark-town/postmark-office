@@ -201,3 +201,51 @@ test("G2 · a letter the blocker wrote before the block says so on its own reads
       (e) => e.code === 403 && e.defect === "you have blocked this household; unblock to write");
   });
 });
+
+// ── the review of #742 ──────────────────────────────────────────────────────
+
+test("block and unblock are written under the town lock, held shared like amend-letter; a held lock writes nothing", { skip }, async () => {
+  await fresh();
+  const seen = [];
+  const lock = async (fn, opts) => { seen.push(opts?.busy?.defect ?? null); return fn({}); };
+  await blockAtOffice({ household: "yonder" }, hearth, { lock });
+  await unblockAtOffice({ household: "yonder" }, hearth, { lock });
+  // flip: the `(await lockFor(lock))(…)` wrapper in mail-blocks.mjs § blockAtOffice
+  assert.equal(seen.length, 2, "each act took the lock");
+  assert.match(seen[0], /^the town lock is held/, "and its busy words name no single cause");
+  const busy = async (_fn, opts) => { throw Object.assign(new Error(opts.busy.defect), opts.busy); };
+  await assert.rejects(() => blockAtOffice({ household: "yonder" }, hearth, { lock: busy }), { code: 503 });
+  assert.equal((await asOwner("SELECT count(*)::int AS n FROM mail_blocks WHERE lifted_at IS NULL")).at(0).n, 0, "nothing was written");
+  const ac = new AbortController(); ac.abort();
+  await assert.rejects(() => blockAtOffice({ household: "yonder" }, hearth, { lock: async (fn) => fn({ signal: ac.signal }) }), { code: 503 });
+  assert.equal((await asOwner("SELECT count(*)::int AS n FROM mail_blocks WHERE lifted_at IS NULL")).at(0).n, 0, "nor after the bound let go");
+});
+
+test("two blocks of one pair at once both answer: one places it, the other is told it was already placed, never a raw store error", { skip }, async () => {
+  await fresh();
+  // both callers enter the store together, as the shared lock admits them
+  let arrived = 0, open;
+  const gate = new Promise((r) => { open = r; });
+  const together = async (fn) => { arrived += 1; if (arrived === 2) open(); await gate; return fn({}); };
+  // flip: the `if (isDuplicate(e))` answer in mail-blocks.mjs § blockAtOffice
+  const [a, b] = await Promise.all([
+    blockAtOffice({ household: "yonder" }, hearth, { lock: together }),
+    blockAtOffice({ household: "yonder" }, hearth, { lock: together }),
+  ]);
+  assert.deepEqual([a.already, b.already].sort(), [false, true]);
+  assert.equal((await asOwner("SELECT count(*)::int AS n FROM mail_blocks")).at(0).n, 1);
+});
+
+test("the unblock note is true whether or not a crossing held its cursor, and the flat block names who is told", { skip }, async () => {
+  await fresh();
+  await blockAtOffice({ household: "yonder" }, hearth);
+  const r = await unblockAtOffice({ household: "yonder" }, hearth);
+  // flip: put back "Letters the crossings stopped while it stood stay stopped"
+  assert.doesNotMatch(r.note, /stay stopped/);
+  assert.match(r.note, /still waiting for a boat/);
+  assert.match(r.note, /already stopped and passed does not come back/);
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const d = TOOLS.find((t) => t.name === "block_household").description;
+  assert.doesNotMatch(d, /nobody is told/);
+  assert.match(d, /yours to it are refused at the door/);
+});

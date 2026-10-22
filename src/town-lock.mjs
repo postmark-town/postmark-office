@@ -110,27 +110,70 @@ export const LOCK_BUSY = {
 //
 // The holder is a child that takes the lock, prints one word, then waits on its
 // stdin. The section runs here, in this process, on the office's own store
-// connections. Closing stdin ends the child and frees the lock, and so does
-// this process dying. A lock not taken within the wait is LOCK_BUSY, and
-// nothing ran. Off linux (dev, tests) there is no flock and the section runs
-// directly, as lockArgv's execs do.
-export function heldLockArgv({ shared = true, waitSec = 30 } = {}) {
+// connections, and is handed an AbortSignal. Closing stdin ends the child and
+// frees the lock, and so does this process dying.
+//
+// ── BOUNDED, SO A HUNG SECTION NEVER FAILS A CROSSING (review of #742) ──────
+//
+// The ferry waits `flock -w 300` for town.lock. A section that hung on a store
+// call would hold the lock shared past that wait and the crossing would fail.
+// So the hold is bounded twice: at `holdSec` (60 s) this process aborts the
+// section's signal, lets the lock go and refuses; and the child itself lets go
+// at `holdSec + 30` (coreutils `timeout`), whatever this process is doing.
+// Both sit well under 300 s. A section must check its signal before it writes
+// (`signal.aborted`), so nothing it writes lands after the lock is let go.
+//
+// ── THE REFUSALS SAY WHICH THING HAPPENED ───────────────────────────────────
+//
+// flock exits 1 when the wait runs out: something holds town.lock (a crossing,
+// the keep tick, or an exclusive write such as a walk or a stake), and the
+// caller's `busy` words say so. Any other exit, or a child that will not start,
+// is the office failing to take the lock at all (`unlockable`), never a
+// crossing. A section that outran its bound is `slow`. In all three, nothing the
+// section had not yet written was written. Off linux (dev, tests) there is no
+// flock and the section runs directly, as lockArgv's execs do, with the bound.
+export const HOLD_SEC = 60;
+
+export const LOCK_UNLOCKABLE = {
+  code: 503,
+  defect: "the office could not take the town lock, and nothing was changed",
+  hint: "this is the office's fault, not your act's — try again in a few minutes",
+};
+
+export const LOCK_HELD_TOO_LONG = {
+  code: 503,
+  defect: "the office could not finish this in time and let go of the town lock",
+  hint: "nothing is written after the lock is let go; read back what stands before you try again",
+};
+
+export function heldLockArgv({ shared = true, waitSec = 30, holdSec = HOLD_SEC } = {}) {
   return ["/usr/bin/flock", [...(shared ? ["-s"] : []), "-w", String(waitSec), townLockPath(),
-    "/bin/sh", "-c", "echo held; exec cat >/dev/null"]];
+    "/bin/sh", "-c", `echo held; exec timeout ${holdSec + 30} cat >/dev/null`]];
 }
 
-export async function withTownLockHeld(fn, { shared = true, waitSec = 30, flock = useFlock(), spawnImpl = spawn, busy = LOCK_BUSY } = {}) {
-  if (!flock) return fn();
-  const [file, args] = heldLockArgv({ shared, waitSec });
+export async function withTownLockHeld(fn, {
+  shared = true, waitSec = 30, holdSec = HOLD_SEC, flock = useFlock(), spawnImpl = spawn,
+  busy = LOCK_BUSY, unlockable = LOCK_UNLOCKABLE, slow = LOCK_HELD_TOO_LONG,
+} = {}) {
+  const refusal = (r) => Object.assign(new Error(r.defect), r);
+  const ac = new AbortController();
+  const bounded = (release) => new Promise((res, rej) => {
+    const t = setTimeout(() => { ac.abort(); release(); rej(refusal(slow)); }, holdSec * 1000);
+    Promise.resolve().then(() => fn({ signal: ac.signal })).then(
+      (v) => { clearTimeout(t); res(v); },
+      (e) => { clearTimeout(t); rej(e); });
+  });
+  if (!flock) return bounded(() => {});
+  const [file, args] = heldLockArgv({ shared, waitSec, holdSec });
   const child = spawnImpl(file, args, { stdio: ["pipe", "pipe", "ignore"] });
-  const refused = () => Object.assign(new Error(busy.defect), busy);
   await new Promise((res, rej) => {
     let out = "";
     child.stdout.on("data", (d) => { out += d; if (out.includes("held")) res(); });
-    // an exit before "held" is flock giving up: nothing ran
-    child.on("exit", () => rej(refused()));
-    child.on("error", () => rej(refused()));
+    // an exit before "held": 1 is flock's wait running out; anything else is the lock not taken at all
+    child.on("exit", (code) => rej(refusal(code === 1 ? busy : unlockable)));
+    child.on("error", () => rej(refusal(unlockable)));
   });
-  try { return await fn(); }
-  finally { child.stdin.end(); }
+  const release = () => { try { child.stdin.end(); } catch { /* already gone */ } };
+  try { return await bounded(release); }
+  finally { release(); }
 }

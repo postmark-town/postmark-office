@@ -99,8 +99,32 @@ const blockRow = (r) => ({
   ...(r.lifted_at ? { lifted_at: new Date(r.lifted_at).toISOString(), lifted_by: r.lifted_by } : {}),
 });
 
+// ── UNDER THE TOWN LOCK, HELD SHARED (review of #742) ───────────────────────
+//
+// A block or a lift changes what the crossing does with letters it has already
+// read, and what the blocker's own reads say about them. Placed mid-crossing, a
+// block would mark the blocker's letter `stopped` while that boat sails it. So
+// both acts take town.lock shared, as amend-letter does (town-lock.mjs §
+// withTownLockHeld): a crossing under way makes them wait, and the hold is
+// bounded. Nothing is written once the bound has let go of the lock.
+const TOWN_BUSY_BLOCK = {
+  code: 503,
+  defect: "the town lock is held — by a crossing, the keep tick or another whole-town write — and nothing was changed",
+  hint: "try again in a few minutes",
+};
+const lockFor = async (lock) => lock ?? (await import("./town-lock.mjs")).withTownLockHeld;
+const stillHeld = (signal) => {
+  if (signal?.aborted) throw refuse(503, "the office could not finish this in time and let go of the town lock", "nothing was written; read your blocks before you try again");
+};
+
+/** A second block of a pair that raced the first: the standing index refused it (23505). */
+const isDuplicate = (e) => e?.code === "23505";
+
+const standingOf = (c, mineKeys, theirKeys) => c.query(
+  "SELECT * FROM mail_blocks WHERE household = ANY($1) AND blocked = ANY($2) AND lifted_at IS NULL LIMIT 1", [mineKeys, theirKeys]);
+
 /** household { do: "block", args: { household } } */
-export async function blockAtOffice(fields, key, { env = process.env, now = Date.now() } = {}) {
+export async function blockAtOffice(fields, key, { env = process.env, now = Date.now(), lock = null } = {}) {
   const actor = actorOf(fields, key);
   let sides;
   try { sides = await officeRead((c) => sidesOf(c, fields, key), { env, by: "blockAtOffice" }); }
@@ -109,28 +133,41 @@ export async function blockAtOffice(fields, key, { env = process.env, now = Date
   if (isTownHouse(theirs) || isTownHouse(mine)) throw Object.assign(new Error(TOWN_MAIL_REFUSAL.defect), TOWN_MAIL_REFUSAL);
   if (mineKeys.includes(theirs) || theirKeys.includes(mine))
     throw refuse(422, "that is your own household", "a block stands between two households; mail inside a house is the house's own");
+  const already = async () => officeWrite(async (c) => {
+    const { rows } = await standingOf(c, mineKeys, theirKeys);
+    return rows[0] ? { blocked: theirs, already: true, block: blockRow(rows[0]), note: BLOCKS_NOTE } : null;
+  }, { env, household: mine });
   try {
-    return await officeWrite(async (c) => {
-      const { rows: standing } = await c.query(
-        "SELECT * FROM mail_blocks WHERE household = ANY($1) AND blocked = ANY($2) AND lifted_at IS NULL LIMIT 1", [mineKeys, theirKeys]);
-      if (standing[0]) return { blocked: theirs, already: true, block: blockRow(standing[0]), note: BLOCKS_NOTE };
-      const { rows } = await c.query(
-        `INSERT INTO mail_blocks (household, blocked, placed_at, placed_by) VALUES ($1, $2, $3, $4) RETURNING *`,
-        [mine, theirs, new Date(now).toISOString(), actor]);
-      return { blocked: theirs, already: false, block: blockRow(rows[0]), note: BLOCKS_NOTE };
-    }, { env, household: mine });
+    return await (await lockFor(lock))(async ({ signal } = {}) => {
+      try {
+        return await officeWrite(async (c) => {
+          const { rows: standing } = await standingOf(c, mineKeys, theirKeys);
+          if (standing[0]) return { blocked: theirs, already: true, block: blockRow(standing[0]), note: BLOCKS_NOTE };
+          stillHeld(signal);
+          const { rows } = await c.query(
+            `INSERT INTO mail_blocks (household, blocked, placed_at, placed_by) VALUES ($1, $2, $3, $4) RETURNING *`,
+            [mine, theirs, new Date(now).toISOString(), actor]);
+          return { blocked: theirs, already: false, block: blockRow(rows[0]), note: BLOCKS_NOTE };
+        }, { env, household: mine });
+      } catch (e) {
+        // two blocks of one pair at once: the other one stands, and this one is that block
+        if (isDuplicate(e)) { const a = await already(); if (a) return a; }
+        throw e;
+      }
+    }, { busy: TOWN_BUSY_BLOCK });
   } catch (e) { if (notYetLanded(e)) throw STORE_NOT_READY(); throw e; }
 }
 
 /** household { do: "unblock", args: { household } } */
-export async function unblockAtOffice(fields, key, { env = process.env, now = Date.now() } = {}) {
+export async function unblockAtOffice(fields, key, { env = process.env, now = Date.now(), lock = null } = {}) {
   const actor = actorOf(fields, key);
   let sides;
   try { sides = await officeRead((c) => sidesOf(c, fields, key), { env, by: "unblockAtOffice" }); }
   catch (e) { if (notYetLanded(e)) throw STORE_NOT_READY(); throw e; }
   const { mine, theirs, mineKeys, theirKeys } = sides;
   try {
-    return await officeWrite(async (c) => {
+    return await (await lockFor(lock))(async ({ signal } = {}) => officeWrite(async (c) => {
+      stillHeld(signal);
       const { rows } = await c.query(
         `UPDATE mail_blocks SET lifted_at = $3, lifted_by = $4
           WHERE household = ANY($1) AND blocked = ANY($2) AND lifted_at IS NULL RETURNING *`,
@@ -139,10 +176,15 @@ export async function unblockAtOffice(fields, key, { env = process.env, now = Da
         throw refuse(404, `your household has no block on "${String(fields?.household ?? "").trim()}"`,
           'your blocks: household { read: "blocks" }');
       return { unblocked: theirs, block: blockRow(rows[0]),
-        note: "lifted: letters between your two households sail again from the next crossing. Letters the crossings stopped while it stood stay stopped" };
-    }, { env, household: mine });
+        note: UNBLOCK_NOTE };
+    }, { env, household: mine }), { busy: TOWN_BUSY_BLOCK });
   } catch (e) { if (notYetLanded(e)) throw STORE_NOT_READY(); throw e; }
 }
+
+// TRUE WHETHER OR NOT A CROSSING HELD ITS CURSOR (review of #742): a letter a
+// crossing stopped and passed is gone, and one it stopped while its cursor was
+// held for another row is still pending, so it sails at the next crossing now.
+export const UNBLOCK_NOTE = "lifted: letters between your two households sail from the next crossing, among them any of yours or theirs still waiting for a boat. A letter a crossing already stopped and passed does not come back";
 
 /** household { read: "blocks" } — your own household's standing blocks, and nobody else's. */
 export async function blocksAtOffice(key, { env = process.env } = {}) {
