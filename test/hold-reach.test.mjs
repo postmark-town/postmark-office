@@ -117,7 +117,7 @@ test("WALK #10 item 4 — a private draft cannot be given to a neighbour", async
   assert.ok(e, "a thing the record does not carry must not change hands");
   assert.equal(e.code, 409);
   assert.match(e.defect, /does not stand on the world/);
-  assert.match(e.hint, /private draft/);
+  assert.match(e.hint, /a draft is not the town's canon/);
   assert.match(e.hint, /nobody outside wright's household/);
   // The stake call was the OWNER's next step, handed to a stranger; it went
   // with kogane's 2026-10-14 bug post. The stranger's next step is the name.
@@ -256,7 +256,7 @@ test("REPAIR 1 — an author may NOT give their own private draft OUT of the hou
   assert.equal(e.code, 409);
   assert.match(e.defect, /ethan-thorne is not of wright's household/);
   assert.match(e.defect, /does not stand on the world/, "the refusal must name the draft, not only the household");
-  assert.match(e.hint, /stays inside the house that made it/);
+  assert.match(e.hint, /a draft is not the town's canon until it publishes/);
 });
 
 test("…and not inside earshot either — the distance is not what makes it wrong", async () => {

@@ -123,7 +123,7 @@ test("a resident's sketchbook is THEIRS — withheld from everyone else, and wit
   const theirs = await marksRead("errant", { repo, key: STRANGER, docketFor: docketWith([]), draftsFor: draftsWith(rows) });
   assert.equal(theirs.counts.drafts_mine, null, "null, not 0 — an empty list would be a claim about their drafts");
   assert.equal(theirs.drafts_mine, null);
-  assert.match(theirs.drafts_withheld, /in no public answer/);
+  assert.match(theirs.drafts_withheld, /lives only in its own household's reading of the world/);
   assert.equal(theirs.drafts_unreadable, undefined, "withheld and unreadable are different words for different states");
 
   // And an anonymous caller is a stranger too.

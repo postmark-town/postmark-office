@@ -771,7 +771,7 @@ export function walkTheWorldText(handle, claim = null) {
     return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and your parcel claim "${claim.slug}" is ${where}. Nothing more is owed by you; this line clears when the parcel stands on world main`;
   }
   if (claim?.slug && status === "draft")
-    return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and your parcel "${claim.slug}" is still a private draft. Put it forward with a stake — world { do: "stake", args: { mark: "${claim.slug}", stamps: … } } — and it goes onto the docket (the stake door's own card says what ✦0 does on your own ground)`;
+    return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and your parcel "${claim.slug}" is still a draft, not the town's canon. Put it forward with a stake — world { do: "stake", args: { mark: "${claim.slug}", stamps: … } } — and it goes onto the docket (the stake door's own card says what ✦0 does on your own ground)`;
   return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and no published parcel stands in your household's name. Claim your ground: world { do: "leave-mark", args: { slug: "…", kind: "parcel", at: { x, y }, body: "…" } } (the town sets the 25×25 extent), then put it forward with a stake. A sited house mark alone does not site you`;
 }
 

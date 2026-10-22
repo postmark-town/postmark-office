@@ -324,7 +324,7 @@ export async function refuseOverRoomAbove({ deps, view, fold, attachments, holde
 
 async function chestOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is a published mark; a private draft holds nothing yet. Nothing was recorded.");
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is a published mark; a draft holds nothing yet. Nothing was recorded.");
   if (markClassOf(mark) !== "chest") throw bounce(422, `${id} is not a chest`, `it is ${markClassOf(mark) ? `a ${markClassOf(mark)}` : "an unclassed mark"}; units go into chests and residents' hands. Nothing was recorded.`);
   return { mark, capacity: capacityOf(mark, chestDialsFor(view, mark)) };
 }
@@ -483,7 +483,7 @@ export async function callUnits(route, args, key, actor, deps) {
         filed: { id: filed.id ?? `${payload.by}/${payload.slug}`, put_forward: filed.put_forward ?? null, ...(filed.to_publish ? { to_publish: filed.to_publish } : {}) },
         stands_note: filed.put_forward === true
           ? "it is a sited mark at the next crossing, staked with your one stamp; until then it is on no public map"
-          : "it is filed as your private draft (no stamp stood behind it), so it is on no public map until it is staked and crosses" };
+          : "it is filed as your draft (no stamp stood behind it), so it is on no public map until it is staked and crosses" };
     }
     case "take-back":
     case "consume-in-place":
@@ -844,7 +844,7 @@ async function thingIntoChest(args, key, actor, deps, view) {
   if (thing === chestId) throw bounce(422, "a chest cannot hold itself", "Nothing was recorded.");
   const { capacity } = await chestOrThrow(deps, chestId, view);
   const mark = await deps.markById(thing);
-  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a chest; a private draft changes no hands. Nothing was recorded.");
+  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a chest; a draft changes no hands. Nothing was recorded.");
   refuseIfTaken(String(markClassOf(mark) ?? "thing"), view);
   await deps.reachTake(chestId, actor);
   return holdTurn(async () => {

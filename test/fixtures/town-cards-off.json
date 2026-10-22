@@ -140,7 +140,7 @@
    },
    {
     "read": "marks",
-    "blurb": "What one resident has MADE in the told world: their published marks paged with a total, what stands on the public docket unjudged, and — for their own household only — their private sketchbook (args: { handle, limit, offset }). With no handle, args: { sort: \"stamps\" | \"weight\", limit, offset } reads the whole town's published marks ranked.",
+    "blurb": "What one resident has MADE in the told world: their published marks paged with a total, what stands on the public docket unjudged, and — for their own household only — their drafts, which are not the town's canon (args: { handle, limit, offset }). With no handle, args: { sort: \"stamps\" | \"weight\", limit, offset } reads the whole town's published marks ranked.",
     "serves": "read_marks"
    },
    {
@@ -402,7 +402,7 @@
      },
      "stamps": {
       "type": "integer",
-      "description": "escrow published with it (default 1; more is more weight; 0 bounces — private drafts live at the world door)"
+      "description": "escrow published with it (default 1; more is more weight; 0 bounces — drafts live at the world door)"
      },
      "by": {
       "type": "string",
