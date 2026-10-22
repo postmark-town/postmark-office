@@ -150,6 +150,15 @@ test("ON THE STORE · a feint answered once, a set piece begun once, a disguise 
     assert.ok(end.payload.took_part.includes("ana") && end.payload.took_part.includes("kai"));
     const restored = await q(`SELECT actor, object, payload FROM acts WHERE action = 'restore'`);
     assert.deepEqual(restored.map((r) => [r.actor, r.object, r.payload.by]), [["the-town", "snack", ID]]);
+    // THE ONE READ OF A RESTORED CLASS (src/restored-classes.mjs, WLD-7, office#734) sees this row: its object is the
+    // class's key as the law keys it. Until that module is on this branch's base the check says so, never passes silently
+    const rc = await import("../src/restored-classes.mjs").catch(() => null);
+    if (!rc) console.log("# set-pieces-store: src/restored-classes.mjs is not on this base yet (office#734); its read of the restore row is checked once it is");
+    else {
+      const record = (await api.query(rc.RESTORE_ROWS_SQL)).rows;
+      assert.equal(rc.restoredSince(record, "snack", iso(w.start)), true, "the class the fight names is restored since the window began");
+      assert.equal(rc.restoredSince(record, "candy", iso(w.start)), false, "and no other");
+    }
   } finally {
     pen.__setPoolForTest(null);
     await pool.end().catch(() => {});

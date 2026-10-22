@@ -120,12 +120,21 @@ export function hurlAnswered(living, creature, handle, act, now = Date.now()) {
 }
 
 /**
- * WHAT AN ACT MAKES OF A FEINT AIMED AT ITS ACTOR: { outcome, sanity?, nerve? }.
- * A flinch costs the piece's nerve; a hold adds the piece's sanity (the act's own
- * number when the piece names one).
+ * A STRIKE UNDER A FEINT (WLD-25/m, Darko's call): "holds" reads it as any other act
+ * (the ruled text, as built), "neither" lets it answer nothing, so the feint stays
+ * open for the next act (Wright's rec: no nerve lost, no sanity). One line.
  */
-export function answerOf(verb, def, flinchVerbs = FLINCH_VERBS) {
+export const STRIKE_UNDER_FEINT = "holds";
+
+/**
+ * WHAT AN ACT MAKES OF A FEINT AIMED AT ITS ACTOR: { outcome, sanity?, nerve? }, or
+ * null when the act answers nothing (a strike, under "neither"). A flinch costs the
+ * piece's nerve; a hold adds the piece's sanity (the act's own number when the piece
+ * names one).
+ */
+export function answerOf(verb, def, flinchVerbs = FLINCH_VERBS, { strike = STRIKE_UNDER_FEINT } = {}) {
   if (flinchVerbs.includes(verb)) return { outcome: "flinched", nerve: def.flinch_nerve };
+  if (verb === STRIKE_ACTION && strike === "neither") return null;
   return { outcome: "held", sanity: def.held_by?.[verb] ?? def.held };
 }
 

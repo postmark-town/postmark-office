@@ -24,7 +24,7 @@ import { LivingSet, loadCreatureLaw, reactTo, advanceFight, unmaskFight } from "
 import { NERVE_ACTION, nerveOf, windowAt } from "../src/encounter.mjs";
 import {
   PHASE_ACTION, HURL_ACTION, HURLED_ACTION, SANITY_ACTION, UNMASKED_ACTION, PERSUADE_ACTION, LINE_ACTION, GLANCES,
-  pieceOf, sanityOf, barsOf, nextPiece, openHurls, answerOf, persuadeScore, repeats, persuadedThisWindow,
+  pieceOf, sanityOf, barsOf, nextPiece, openHurls, answerOf, STRIKE_UNDER_FEINT, persuadeScore, repeats, persuadedThisWindow,
 } from "../src/set-pieces.mjs";
 import { encounterTick, settleResolve, worldEncounter, __resetEncounterTickForTest } from "../src/encounter-verbs.mjs";
 import { whyNot, persuadeGuard, PERSUADED_SQL } from "../src/creature-verbs.mjs";
@@ -180,6 +180,10 @@ test("the target's next act in the ring answers it: dodge, walk or exit flinch (
   assert.deepEqual(answerOf("exit", FIGHT.pieces[0]), { outcome: "flinched", nerve: 3 });
   assert.deepEqual(answerOf("say", FIGHT.pieces[0]), { outcome: "held", sanity: 2 });
   assert.deepEqual(answerOf("watch", FIGHT.pieces[0]), { outcome: "held", sanity: 3 });
+  // a strike under a feint: "holds" as built; "neither" (WLD-25/m, Darko's call) answers nothing, so it stays open
+  assert.equal(STRIKE_UNDER_FEINT, "holds");
+  assert.deepEqual(answerOf("strike", FIGHT.pieces[0]), { outcome: "held", sanity: 2 });
+  assert.equal(answerOf("strike", FIGHT.pieces[0], undefined, { strike: "neither" }), null);
   const run = async (verb, extra = {}) => {
     const h = hurl("kai");
     const living = livingWith(lawWith(), h);
