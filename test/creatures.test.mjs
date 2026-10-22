@@ -117,15 +117,16 @@ nodeTest("the sampler walks the distribution most likely first, as the prototype
 
 // ── the living set (W3) ─────────────────────────────────────────────────────
 
-test("a creature is living from its spawn until it fades or flees, and the ring answers nearest first", () => {
+test("a creature is living from its spawn until it flees, and the ring answers nearest first", () => {
   const living = livingWith(spawnRow("creature:wolf-270-1", { n: 1, x: 0 }), spawnRow("creature:wolf-270-2", { n: 2, x: 60 }),
     spawnRow("creature:wolf-270-3", { n: 3, x: 5000 }));
   const near = living.inRing({ x: 40, y: 0 }, { now: T0 });
   assert.deepEqual(near.map((n) => n.creature.id), ["creature:wolf-270-2", "creature:wolf-270-1"]);
   assert.equal(living.inRing({ x: 40, y: 0 }, { now: T0, most: 1 }).length, 1);
   assert.equal(living.inRing({ x: 2000, y: 0 }, { now: T0 }).length, 0);
-  // the span ends it: 12 h from its spawn
-  assert.equal(living.inRing({ x: 0, y: 0 }, { now: T0 + 12 * 3600_000 }).length, 0);
+  // no span ends it (WLD-96): past the 12 h its spawn names, and days on, it is still out
+  assert.equal(living.inRing({ x: 0, y: 0 }, { now: T0 + 12 * 3600_000 }).length, 2);
+  assert.equal(living.inRing({ x: 0, y: 0 }, { now: T0 + 72 * 3600_000 }).length, 2);
   // a fled withdraw ends it at once
   living.fold([{ id: "4", at: new Date(T0).toISOString(), actor: "creature:wolf-270-1", action: "withdraw", object: "creature:wolf-270-1", payload: { reason: "fled" } }]);
   assert.equal(living.byId.get("creature:wolf-270-1").gone, "fled");
@@ -591,13 +592,13 @@ test("an ended creature leaves RAM an hour after it ended and once its newest re
   assert.ok(living.byId.has("creature:wolf-270-1"), "inside the hour, a retry can still find it");
   living.prune(T0 + PRUNE_AFTER_MS + 1);
   assert.ok(living.byId.has("creature:wolf-270-1"), "past the hour, to_you still owes kai its flee (review-574 C1)");
-  // 13 h on, the fled one leaves; the other, still living at 11 h 59 m … (it came out at T0 − 1 h)
+  // 25 h on, the fled one leaves; the other never fades (WLD-96), so it stays
   living.prune(T0 + 11 * 3600_000 - 60_000 + PRUNE_AFTER_MS);
   assert.ok(living.byId.has("creature:wolf-270-2"));
   living.prune(T0 + TO_YOU_REACH_MS + 1);
   assert.ok(!living.byId.has("creature:wolf-270-1"));
-  assert.ok(!living.byId.has("creature:wolf-270-2"), "faded at T0 + 11 h, its reaction 13 h old: it leaves too");
-  assert.equal(living.answered.has("9001"), false, "the pruned leave the retry index with them");
+  assert.ok(living.byId.has("creature:wolf-270-2"), "past the 12 h its spawn names, a Mists creature is still out: it is never pruned while living");
+  assert.deepEqual([...living.answered.get("9001")], ["creature:wolf-270-2"], "the pruned leave the retry index with them; the living keep theirs");
 });
 
 test("review-588 F2: a creature not yet seen leaves its marks out; one seen as empty says none", () => {
@@ -638,7 +639,7 @@ test("at the pin the law loads through the blessed-ref materializer; a kind the 
   const law = await loadCreatureLaw({ repo: worldClone(), ref: PIN });
   assert.equal(law.unavailable, undefined, law.unavailable);
   assert.equal(law.creaturesMod.TOWN, "the-town");
-  assert.deepEqual([...law.creaturesMod.DESPAWN_REASONS], ["faded", "fled"]);
+  assert.deepEqual([...law.creaturesMod.DESPAWN_REASONS], ["faded", "fled", "ended"], "world#266 adds a named creature's ending, written only by the-town");
   // the pin carries WLD-56 part 2's kinds (world#219): the ruled wolf parses, and a kind the ref lacks is no kind
   assert.equal(law.kindOf("wolf")?.ring_m, 80, "WORLD/kinds/wolf.kind at the pin, as ruled (D4)");
   assert.equal(law.kindOf("fox"), null);
@@ -649,7 +650,7 @@ test("at the pin the law loads through the blessed-ref materializer; a kind the 
   assert.deepEqual(await reactTo(act(), { living, ask: () => { throw new Error("asked"); }, env: ENV, now: T0 }), [], "a creature of a kind the ref lacks has no ring");
 });
 
-test("R2 and K6: a spawn is born at its own minute, and one without its minute or its fade is skipped", () => {
+test("R2 and K6: a spawn is born at its own minute, and one without its minute is skipped; one without a fade is taken and never fades (WLD-96)", () => {
   const late = spawnRow("creature:wolf-270-1", { at: T0 - 3600_000 });
   late.at = new Date(T0 - 3600_000 + 20_000).toISOString(); // written 20 s late
   const living = livingWith(late);
@@ -657,8 +658,10 @@ test("R2 and K6: a spawn is born at its own minute, and one without its minute o
   const noMinute = spawnRow("creature:wolf-270-2", { n: 2 }); delete noMinute.payload.at;
   const noFade = spawnRow("creature:wolf-270-3", { n: 3 }); delete noFade.payload.fades_at;
   const set = livingWith(noMinute, noFade);
-  assert.equal(set.byId.size, 0);
-  assert.deepEqual(set.skipped.map((s) => s.why.split(" (")[0]), ["a spawn without at", "a spawn without fades_at"]);
+  assert.deepEqual([...set.byId.keys()], ["creature:wolf-270-3"]);
+  assert.deepEqual(set.skipped.map((s) => s.why.split(" (")[0]), ["a spawn without at"]);
+  assert.equal(set.byId.get("creature:wolf-270-3").fades_at, Infinity);
+  assert.equal(living.byId.get("creature:wolf-270-1").fades_at, Infinity, "an older spawn's fades_at is not read");
 });
 
 test("R4: only the town or the creature itself withdraws it, and only as faded or fled", () => {

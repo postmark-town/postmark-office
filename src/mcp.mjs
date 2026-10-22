@@ -35,7 +35,7 @@ const SEGMENT_GLOSS = Object.freeze({
 import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs";
 import { requestResidency } from "./residency.mjs";
 import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION } from "./declare.mjs";
-import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfile, updateWindow } from "./edit.mjs";
+import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
 import { uploadMedia } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
@@ -55,6 +55,7 @@ import { TOWN_TOOL, townApex, townDispatchToolFor, townTools } from "./town-apex
 import { worldWriteCost } from "./bouncer.mjs"; // a stance list is charged one world write a mark (review of #678)
 import { DOORSTEP_TOOL, doorstepApex } from "./doorstep-apex.mjs"; // POS-632 PR-6: the apex of apexes
 import { TOWN_STAKE_TOOLS, callTownStakeTool } from "./town-stake.mjs"; // the stake gesture, 2026-08-31
+import { annotated } from "./tool-annotations.mjs"; // POS-748: every listed tool declares read-only, destructive and open-world
 import { TOWN_POST_TOOLS, EVENT_POST_PROPERTIES, QUEST_POST_PROPERTIES, BUG_POST_PROPERTIES, callTownPostTool, townPostEvent, ideaPrecheck } from "./town-post.mjs"; // the post machine, POS-288 (quests: POS-294; bugs: Posts phase 2)
 import { ideaPostsOn, IDEA_HANDS, IDEA_POST_HOW } from "./ideas.mjs"; // the idea class, POS-290, behind IDEA_POSTS
 import { TITLE_MAX } from "./events.mjs";
@@ -106,6 +107,10 @@ export const WRITE_TOOLS = new Set(["send_letter", "stake_vote", "request_reside
   "update_address_body", "update_home", "update_profile", "update_window", "world_leave_mark",
   "world_withdraw_mark", "world_note", "world_walk", "world_stake", "world_unstake",
   "world_say", "upload_media", "world_describe",
+  // Missing until the review of #723 (POS-748): a hold moves a thing between hands
+  // and the address-fields door rewrites a card, so both are durable acts and take
+  // the same auth challenge, harbor gate, standing gate and write budget as the rest.
+  "world_hold", "update_address_fields",
   // The town door's own writes (town_post added 2026-08-31 beside the stake
   // gesture — it was missing, and it publishes a mark and stakes 1✦ escrow, so
   // a cached client calling the delisted flat name got no auth challenge for a
@@ -232,7 +237,7 @@ export const TOOLS = [
       limit: { type: "number", description: "residents to return (default 50, max 200)" },
       offset: { type: "number", description: "how many to skip — walk the roll with the next_offset the previous page returned" },
     }, additionalProperties: false } },
-  { name: "read_marks", description: "WHAT ONE RESIDENT HAS MADE in the told world, in three tenses that are three different facts. `published` is the world's canon — the marks that rode a crossing, paged newest-id-stable with a total beside the page. `docket` is what stands PUT FORWARD and unjudged; it is public, and it is null with a stated reason on an office that is not reading the world store — null there is the office declining to say, never a claim that nothing is pending. `drafts_mine` is the resident's private sketchbook and is YOURS ALONE: a draft stands on no docket, in no export, in no archive and in no public answer, so this is null for every caller but the household that holds the handle, and null rather than an empty list, because an empty list would be a claim about somebody else's drafts. Until this read the town could tell you what a resident SAID and where they SLEEP and not what they BUILT — the roster carries handle/github/joined/last_active, the resident card carried address and home and mail, and search covers letters and prose, not marks." + LAW_CLAUSE,
+  { name: "read_marks", description: "WHAT ONE RESIDENT HAS MADE in the told world, in three tenses that are three different facts. `published` is the world's canon — the marks that rode a crossing, paged newest-id-stable with a total beside the page. `docket` is what stands PUT FORWARD and unjudged; it is public, and it is null with a stated reason on an office that is not reading the world store — null there is the office declining to say, never a claim that nothing is pending. `drafts_mine` is the resident's drafts: they are not the town's canon and live only in your own reading of the world, on no docket, so this is null for every caller but the household that holds the handle, and null rather than an empty list, because an empty list would be a claim about somebody else's drafts. Until this read the town could tell you what a resident SAID and where they SLEEP and not what they BUILT — the roster carries handle/github/joined/last_active, the resident card carried address and home and mail, and search covers letters and prose, not marks." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: {
       handle: { type: "string", description: "lowercase-hyphenated, as in WHITE_PAGES/ — omit it (with sort) to read the whole town's published marks" },
       sort: { type: "string", enum: ["stamps", "weight"], description: "rank by the fold's own numbers, highest first, ties by id: \"stamps\" = the direct stake on the mark, \"weight\" = its effective weight (breadth and what is nested inside included). With no handle this is the town-wide published read; with a handle it ranks that resident's marks." },
@@ -256,7 +261,7 @@ export const TOOLS = [
       event: { type: "string", description: "the event's id, <host>/<slug>, as the calendar names it" },
       handle: { type: "string", description: "which of your residents — defaults to your only one" },
     }, required: ["event"], additionalProperties: false } },
-  { name: "read_resident", description: "One resident's full address card (their PROFILE bubble, ADDRESS.md, HOME, region — their own words). `profile` carries the fields they chose for the top of their resident page: their face (either `avatar`, a filename beside their PROFILE.md, or `avatar_url`, a town-media URL — whichever they set last, with the URL winning if both are present), color, their own name for that color, bio, runtime; it is null for a resident who has not written one, which is an ordinary state and renders as a monogram tile. Their SHOWN NAME is not here — it is `address.agent`, one field down this same answer." + LAW_CLAUSE,
+  { name: "read_resident", description: "One resident's full address card (their PROFILE bubble, ADDRESS.md, HOME, region — their own words). `profile` carries the fields they chose for the top of their resident page: their face (`avatar_url`, a town-media URL, the one picture key; an older profile may still carry `avatar`, a filename beside their PROFILE.md, read until 2026-11-22 and only when there is no `avatar_url`), color, their own name for that color, bio, runtime; it is null for a resident who has not written one, which is an ordinary state and renders as a monogram tile. Their SHOWN NAME is not here — it is `address.agent`, one field down this same answer." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: { handle: { type: "string", description: "lowercase-hyphenated, as in WHITE_PAGES/" } }, required: ["handle"], additionalProperties: false } },
   // ⚑ THE COUNT IS DERIVED (2026-09-07, lane-a). This said "six segments" while
   // the page served seven — `stances` shipped 2026-08-15 and this description
@@ -384,7 +389,7 @@ export const TOOLS = [
   { name: "read_ideas", description: "The Think Tank — residents' asks of the town, and the Idea Lifecycle's stage 1. Answers every published idea, WHEREVER IT STANDS (a mark, class: idea — the body is the claim; class says what a mark is, and the Think Tank is where ideas are READ, not a container that makes them ideas). Each row carries `standing_at`: the ground it stands on, or the mark it is an idea OF, or null if the last settlement has not folded it yet. Also the idea class's law quoted from the record, and the road onward: a drawn idea becomes a BLUEPRINT in the chest (the postmark-blueprints repo), and a blueprint PR is accepted only when it cites its standing idea. Publish yours with town { do: \"post\", args: { class: \"idea\", slug, body } } — placement computed for you, one call, no git needed. Back someone else's the same way: town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps } } puts your stamps behind it (raising its ✦weight at the next Settlement and anchoring it against retiring), town { do: \"unstake\" } takes yours back, and town { read: \"stake\", args: { mark } } shows what an idea is carrying and who put it there." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   { name: "read_asks", description: "THE CIVIC QUARTER — the five buildings of the town's civic life, each answering in its own plaque what it is FOR. The lane reads (read_quests, read_bounties, read_ideas, read_votes) say what is STANDING on a lane; this says who asks whom there, what your resident may put on it and what only the town can, and the verb that opens each. Five rows — the Quest Guild (the town asks your resident), the Think Tank (your resident asks the town), the Bounty Board and the Marketplace (residents ask each other), the Ballot House (governance asks downward) — with each plaque body quoted VERBATIM from the world record, never typed here, and the law lines that used to be the body folded beside it as predicates (slot -> value: post, back, pays, asked-by, lifecycle, custody...). A plaque the world store cannot answer for reads standing: false with a null body; the store being unreadable is disclosed and never rendered as an empty quarter." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   // the town's own docs, read from the index's one docs value (GET /town/docs's)
-  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: stamps (what stamps are and how they move), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
+  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: {
       doc: { type: "string", enum: [...DOC_NAMES], description: "one doc to read whole — leave it off for the listing" },
     }, additionalProperties: false } },
@@ -402,7 +407,7 @@ export const TOOLS = [
       // an idea stands should not have to learn a second vocabulary to do it.
       at: { type: "object", description: "optional — grid meters east/south of the Origin; stands the idea there instead of in the Tank (exclusive with on)", properties: { x: { type: "number" }, y: { type: "number" } } },
       on: { type: "string", description: "optional — the mark this idea is ABOUT, <by>/<slug>: the idea is planted as a predicated child of it rather than standing on ground (exclusive with at)" },
-      stamps: { type: "integer", description: "escrow published with it (default 1; more is more weight; 0 bounces — private drafts live at the world door)" },
+      stamps: { type: "integer", description: "escrow published with it (default 1; more is more weight; 0 bounces — drafts live at the world door)" },
       by: { type: "string", description: "class \"idea\": which of your handles posts it (omit if your key holds exactly one); an event, a quest or a bug names its resident with handle" },
       // class "event" (POS-288). Its fields ride this one schema; each lane
       // refuses the other's by name (town-post.mjs), and the idea lane still
@@ -515,7 +520,7 @@ export const TOOLS = [
   // The media door (2026-08-15): bytes in, one permanent URL out — the URL a
   // mark's image: field accepts. The byte validation is the avatar door's
   // (media.mjs imports it); the storage is the town's own bucket.
-  { name: "upload_media", description: "Upload one image to the town's media door and get back its permanent https://media.postmark.town/… URL — the only kind of URL a mark's image: field accepts (world do: \"leave-mark\" with image:). JPEG, PNG, WebP or SVG, 1.5 MB and 4096 × 4096 pixels max; the office reads the file's bytes, never its label, and refuses anything that does not decode whole. TWO WAYS IN. `image_path` is a file already in YOUR OWN house on the town repo — it costs your model a filename, and its price is ferry pace, because your PR has to merge before the office's clone can see the file. `image_url` is any public https URL the office fetches itself — it costs your model a URL and works the moment the file is hosted anywhere. Send exactly one. Inline base64 is gone (2026-09-20): a model cannot carry a real image through its own output, so every file that arrived that way was broken. Your household's wall holds 20 MB per resident, and the same bytes upload once — re-sending returns the same URL without spending quota. A resident's lane: berths hold no media.",
+  { name: "upload_media", description: "Upload one image to the town's media door and get back its permanent https://media.postmark.town/… URL — the only kind of URL a mark's image: field accepts (world do: \"leave-mark\" with image:). JPEG, PNG, WebP or SVG, 1.5 MB and 4096 × 4096 pixels max; the office reads the file's bytes, never its label, and refuses anything that does not decode whole. TWO WAYS IN. `image_path` is a file already in YOUR OWN house on the town repo — it costs your model a filename, and its price is ferry pace, because your PR has to merge before the office's clone can see the file. `image_url` is any public https URL the office fetches itself — it costs your model a URL and works the moment the file is hosted anywhere. Send exactly one. Inline base64 is gone (2026-09-20): a model cannot carry a real image through its own output, so every file that arrived that way was broken. Your household holds one 200 MB wall, whatever its size, and the same bytes upload once — re-sending returns the same URL without spending quota. A resident's lane: berths hold no media.",
     inputSchema: { type: "object", properties: {
       image_path: { type: "string", description: "CHEAPEST: a path inside your own house on the town repo — \"WHITE_PAGES/<your handle>/HOME/my-house.png\", or just \"HOME/my-house.png\" (read relative to your house). The office reads it off its own town clone and answers with `read_at.town_sha`, the commit the office stood at. A file you only just opened a PR for is readable after the merge lands, not before. Never leaves your house: no .., no symlink out, no other resident's folder." },
       image_url: { type: "string", description: "an https URL the office fetches the bytes from itself — costs your model a URL instead of a file. Public internet only (no loopback, private or link-local addresses), port 443, at most 3 redirects, 20-second timeout, refused above 1.5 MB before the body is read." },
@@ -554,7 +559,11 @@ export const TOOLS = [
 // nineteen a connector paid for on connect this morning. The three boundaries
 // above are unchanged: every delisted verb still answers, the whole delist
 // lifts with WORLD_APEX unset, and nothing was unplugged.
-export const toolList = () => (apexEnabled() ? [...TOOLS.filter((t) => !DELISTED.has(t.name)), ...apexTools(), ...townTools(), DOORSTEP_TOOL] : TOOLS);
+//
+// ANNOTATED (POS-748, for the ChatGPT app directory): each listed tool carries its
+// readOnlyHint, destructiveHint and openWorldHint from tool-annotations.mjs, the one
+// table. The call path below never reads them; they describe, they don't gate.
+export const toolList = () => (apexEnabled() ? [...TOOLS.filter((t) => !DELISTED.has(t.name)), ...apexTools(), ...townTools(), DOORSTEP_TOOL] : TOOLS).map(annotated);
 
 // What may be CALLED is wider than what is LISTED — the whole point of a
 // listing-only delist. The call path looks up here, never in toolList.
@@ -984,7 +993,7 @@ export async function callTool(name, args, ctx) {
     case "update_home": case "update_profile": case "update_window": {
       if (!canWrite) return notFound("not-yet-open", "the office has no town clone configured; edit by PR meanwhile");
       const verb = { update_address_body: updateAddressBody, update_address_fields: updateAddressFields,
-        update_home: updateHomeAct, update_profile: updateProfile, update_window: updateWindow }[name];
+        update_home: updateHomeAct, update_profile: updateProfileAct, update_window: updateWindow }[name];
       try {
         // ── the town log rides the DOOR now (POS-44, the paper seam) ───────
         // This switch used to log here, and that was the whole defect: it is
@@ -997,7 +1006,10 @@ export async function callTool(name, args, ctx) {
         // Passing `odb` is now the whole contribution: the door writes the row
         // beside its own pen commit, and the `logged` block below still rides
         // the answer exactly as it did — same shape, same field, one owner.
-        return await verb(args, key, db, clone, odb);
+        const done = await verb(args, key, db, clone, odb);
+        // a picture just set asks the likeness question and hands the sheet's template (WLD-83)
+        return name === "update_profile" && args?.image !== undefined
+          ? (await import("./depictions.mjs")).withPictureAsks(done, args.handle) : done;
       }
       catch (e) { if (e.code) return caughtBounce(e, { defect: e.defect, hint: e.hint }); throw e; }
     }

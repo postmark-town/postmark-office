@@ -500,6 +500,19 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   const profileFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
   assert.equal(profileFrozen?.fields.pronouns?.type, "string", "the frozen profile card carries pronouns");
   assert.equal(full.acts.find((a) => a.act === "profile")?.fields.pronouns?.type, "string", "and the live profile card takes it");
+
+  // ⚑ REGENERATED 2026-10-21 FOR WLD-83 (Darko 2026-10-19 18:24: the household
+  // submits its resident's six-panel reference sheet, and it is canon). What
+  // grew: the profile act's fields gained one optional field, `sheet`. ADDITIVE
+  // and proven so: the capture diff added exactly
+  // `/acts/4/fields/sheet/{type,description}` and removed or retyped none. It
+  // stays off the abridged index (household-apex.mjs § OFF_INDEX, pronouns' rule),
+  // so the connector's answer and the index twins do not move. PSA for the release notes: "update_profile takes sheet: your
+  // resident's six-panel reference sheet, as a media URL; setting your picture
+  // hands you the template to make one."
+  const sheetFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
+  assert.equal(sheetFrozen?.fields.sheet?.type, "string", "the frozen profile card carries sheet");
+  assert.equal(full.acts.find((a) => a.act === "profile")?.fields.sheet?.type, "string", "and the live profile card takes it");
 });
 
 test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async (t) => {
@@ -1174,6 +1187,19 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // `posts.unavailable.4` (added: the Think Tank's), on both skins, and nothing else.
   //
   //   full  25268 -> 25324 (+56) · slim  22830 -> 22886 (+56)
+  //
+  // ⚠ AND RE-CAPTURED A TWENTY-FIRST TIME, 2026-10-22 (lane plumb-heist-publish), because
+  // the PR moved the world pin, d17e4cab4 -> 7f5f61c81 (the commit settlement/S123 blesses:
+  // #277, #280, #279, the S123 sweep with 64 published, #281). This PR changes no doorstep
+  // segment (the pin and this golden only). Captured with tools/capture-doorstep-golden.mjs
+  // on a CI-shaped clone (HEAD and origin/main at the pin, every tag merged into it and none
+  // newer), where F7c5 reproduced CI's red first, then diffed leaf by leaf against the
+  // twentieth capture BEFORE replacing it: 1143 -> 1129 paths, 24 removed, 10 added, 210
+  // changed, every one of them in `stances`, the world's own data at the pin (the count
+  // awaiting 65 -> 63, the five newest awaiting rows and their lists, and `ground`). Nothing
+  // else moved; `stakes` and `posts` are unchanged.
+  //
+  //   full  25324 -> 25086 (-238) · slim  22886 -> 22648 (-238)
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

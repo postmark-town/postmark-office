@@ -186,12 +186,15 @@ export function bulletinRows(town) {
  * the site's (vendor/tools/lib/town.mjs says fix upstream, never here), so the
  * office reads these itself, in the reader's own `{ body, path }` shape.
  * STAMPS.md is the town's stamps explainer, and `household { read: "stamps" }`
- * points here for it.
+ * points here for it. FIRST-DAY.md is "The first-day 360", a newcomer's walk
+ * round the town by Julian and Vex of little-bird's house (CORE-8), and
+ * PROMISES.md is their "The town's seven promises, in plain words", LOGOS's
+ * seven promises reworded plainly (CORE-8).
  */
-export const OFFICE_DOCS = Object.freeze(["STAMPS.md"]);
+export const OFFICE_DOCS = Object.freeze(["STAMPS.md", "FIRST-DAY.md", "PROMISES.md"]);
 
 /** The names `town { read: "docs" }` takes as `doc:`, each a key of the docs value lowercased. */
-export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps"]);
+export const DOC_NAMES = Object.freeze(["readme", "joining", "town-rules", "mail", "contributing", "stamps", "first-day", "promises"]);
 
 /**
  * `town { read: "docs" }`'s answer, shaped from the ONE docs value that GET
@@ -477,7 +480,7 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
     })],
     // THE TOWN'S DOCS (POS-351): README / JOINING / TOWN-RULES / MAIL /
     // CONTRIBUTING, as the vendored reader keeps them, plus OFFICE_DOCS
-    // (STAMPS), so the site's docs.json comes through the office (GET
+    // (STAMPS, FIRST-DAY, PROMISES), so the site's docs.json comes through the office (GET
     // /town/docs) and never from a checkout.
     ["docs", townDocsValue(town, TOWN)],
   ];

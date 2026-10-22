@@ -242,7 +242,13 @@ export function nearestCommonClass(names, extendsOf) {
   return first.find((c) => rest.every((chain) => chain.includes(c))) ?? null;
 }
 
-const plural = (word, n) => (n === 1 ? word : /[^aeiou]y$/.test(word) ? `${word.slice(0, -1)}ies` : `${word}s`);
+/**
+ * A kind's name for a count, the one plural the hold lane speaks (POS-741, POS-743).
+ * One stays as it is; a name that already ends in s is already its plural
+ * ("hoard-coins", "lanternchews"), so it is left alone, never "hoard-coinss";
+ * a consonant and y becomes ies ("candy" → "candies"); anything else takes an s.
+ */
+export const plural = (word, n) => (n === 1 || /s$/i.test(word) ? word : /[^aeiou]y$/.test(word) ? `${word.slice(0, -1)}ies` : `${word}s`);
 
 /**
  * WHAT A HOLDING SHOWS — its labelled components kept whole, plus the nearest

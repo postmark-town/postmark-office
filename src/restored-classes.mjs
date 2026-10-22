@@ -80,7 +80,7 @@ export async function readRestored({ classes = [], query = defaultQuery } = {}) 
   return out;
 }
 
-const state = { byClass: new Map(), at: 0, inflight: null, lastError: null };
+const state = { byClass: new Map(), at: 0, inflight: null, failed: false };
 
 /** Every class the published law says is stolen. */
 function stolenInLaw() {
@@ -90,16 +90,19 @@ function stolenInLaw() {
   return names;
 }
 
-/** Refresh in the background; a failure leaves what stood. */
-export function refreshRestored({ query = defaultQuery, now = Date.now() } = {}) {
+/** Refresh in the background. A failure leaves what stood and keeps it for the same
+ *  KEEP_MS a good read is kept, so a store that is down is asked once a window, never
+ *  once per act (Wright's review of #734). */
+export function refreshRestored({ query = defaultQuery, now = Date.now(), classes = null } = {}) {
   if (state.inflight) return state.inflight;
   state.inflight = (async () => {
     try {
-      state.byClass = await readRestored({ classes: stolenInLaw(), query });
+      state.byClass = await readRestored({ classes: classes ?? stolenInLaw(), query });
       state.at = now;
-      state.lastError = null;
-    } catch (e) {
-      state.lastError = String(e?.message ?? e).slice(0, 160);
+      state.failed = false;
+    } catch {
+      state.failed = true;   // no text kept: nothing here says it (error-text census)
+      state.at = now;
     } finally {
       state.inflight = null;
     }
@@ -108,8 +111,8 @@ export function refreshRestored({ query = defaultQuery, now = Date.now() } = {})
 }
 
 /** SYNCHRONOUS. Is this taken class restored, as this process last read? */
-export function restoredClass(klass, { now = Date.now() } = {}) {
-  if (now - state.at >= KEEP_MS) refreshRestored({ now }).catch(() => {});
+export function restoredClass(klass, { now = Date.now(), query = defaultQuery, classes = null } = {}) {
+  if (now - state.at >= KEEP_MS) refreshRestored({ now, query, classes }).catch(() => {});
   return state.byClass.get(String(klass))?.restored === true;
 }
 

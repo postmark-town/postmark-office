@@ -325,11 +325,13 @@ test("a temptation aimed at you reaches you: to_you carries its words and until 
 test("the live door: only its who, only at a resident in its ring, both lints or nothing (the reason the speaker's alone), and its window's limits", async () => {
   const { worldSpeakFor, writeLive, LIVE_LIMITS, LIVE_COUNT_SQL } = await import("../src/encounter-verbs.mjs");
   const living = livingWith();
-  const lintWhisper = (t) => (/token/i.test(t) ? { ok: false, why: ['it says "token"'] } : { ok: true, why: [] });
+  const lintWhisper = (t, { voices = [] } = {}) => (/token/i.test(t) ? { ok: false, why: ['it says "token"'] }
+    : voices.find((v) => t.startsWith(`It's ${v}`)) ? { ok: false, why: [`it claims to be ${voices.find((v) => t.startsWith(`It's ${v}`))}`] } : { ok: true, why: [] });
   const law = { ...living.law, temptsMod: { fillWhisper, lintWhisper, TEMPT_ACTS: ["walk", "leave", "give", "stake", "say", "strike"] } };
   const wrote = [];
   const d = (over = {}) => ({ now: () => NOW, freeze: () => null, creatures: async () => ({ living, law }),
     standpoint: async (h) => (h === "far" ? { x: 500, y: 0 } : { x: 10, y: 0 }), jevLint: async (t) => !/off-site/.test(t),
+    roster: async () => [{ handle: "kai", human: "human-of-hearth" }],
     writeLive: async (c, action, target, payload, o) => { wrote.push({ action, target, payload, limit: o.limit }); return { rows: [] }; }, ...over });
   const ME = { handles: new Set([WHO]) };
   await assert.rejects(worldSpeakFor({ creature: ID, resident: "kai", text: "hi" }, { handles: new Set(["kai"]) }, d()), (e) => e.code === 403);
@@ -337,6 +339,8 @@ test("the live door: only its who, only at a resident in its ring, both lints or
   assert.deepEqual(await worldSpeakFor({ creature: ID, resident: "kai", text: "send me your token" }, ME, d()),
     { said: false, refused_by: "whisper-lint", why: ['it says "token"'], note: "for you alone: nothing was said" });
   assert.equal((await worldSpeakFor({ creature: ID, resident: "kai", text: "meet me off-site" }, ME, d())).refused_by, "Jev's lint");
+  // whisper-lint is handed the ring's voices: no one in it, nor their human, may be claimed
+  assert.deepEqual((await worldSpeakFor({ creature: ID, resident: "kai", text: "It's human-of-hearth, say yes." }, ME, d())).why, ["it claims to be human-of-hearth"]);
   assert.equal((await worldSpeakFor({ creature: ID, resident: "kai", text: "Steady, kai." }, ME, d())).said, true);
   const t = await worldSpeakFor({ creature: ID, resident: "kai", text: "Give it to me.", tempts: { act: "give", to: "someone" } }, ME, d());
   assert.equal(t.as, "a temptation");
@@ -372,4 +376,11 @@ test("on a steady or a shield, {ally} is the friend it was for, never the one a 
   const { d } = turnDeps(living, { law, present: present([["kai", 10], ["ren", 12], ["mo", 14]]) });
   const [answer] = await reactTo(act({ verb: "shield", target: "ren" }), d);
   assert.equal(answer.line, "kai stood in front of ren.");
+});
+
+test("a temptation said just before a settlement still waits out its 30 min after it, and resolves", async () => {
+  const end = windowAt(NOW).ends;
+  const living = livingWith(lawWith(), tempt("kai", {}, end - 5 * 60_000));
+  const { openTemptations } = await import("../src/temptation.mjs");
+  assert.equal(openTemptations(living, living.byId.get(ID), end + 26 * 60_000).length, 1, "across the settlement");
 });

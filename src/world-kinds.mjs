@@ -129,7 +129,7 @@ async function shownIn(fold, holder, attachments, view, deps, { sharp = false } 
 /** A published holder, or the refusal: a draft holds nothing yet; a mark that does not hold, says so. */
 async function holderOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a private draft holds nothing yet. Nothing was changed.");
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a draft holds nothing yet. Nothing was changed.");
   const law = holderLawOf({ holder: id, mark, view });
   if (!law.holder) throw bounce(422, `${id} holds nothing`, `it is ${law.className ? `a ${law.className}` : "a mark of no thing class"} whose holder is false; a holder is a thing its maker made with holder: true. Nothing was changed.`);
   if (law.capacity_refused) throw bounce(422, `${id}'s own capacity is refused`, `${law.capacity_refused}; until its maker sets one within them, nothing goes in or comes out by count. Nothing was changed.`);
@@ -142,6 +142,23 @@ function refuseIfClosed({ mark, id, law, actor, deps, verb }) {
   if (law.open !== false) return;
   const same = sameHousehold(ownerOf(mark, id), actor, deps.householdOf);
   if (!same.same) throw bounce(403, `${id} is not open to other households`, `its open is false: only its maker's household may ${verb} it. Nothing was changed.`);
+}
+
+/** A holder that names what it takes in (`accepts`, WLD-5 B): anything else is refused at the
+ *  door, and a count of a kind is never one of the marks it names. */
+function refuseIfNotAccepted({ id, law, thing = null }) {
+  if (!Array.isArray(law?.accepts)) return;
+  if (thing != null && law.accepts.includes(String(thing))) return;
+  throw bounce(403, thing != null ? `${id} does not take ${thing}` : `${id} takes in only the marks it names`,
+    `its maker made it take in only these, by id: ${law.accepts.join(", ")}${thing != null ? "" : "; a count of a kind is none of them"}. Nothing was changed.`,
+    { accepts: [...law.accepts] });
+}
+
+/** A holder that keeps what goes in (`keeps`, WLD-5 B): nothing comes back out, by anyone. */
+function refuseIfKept({ id, law }) {
+  if (law?.keeps !== true) return;
+  throw bounce(403, `${id} keeps what it holds`,
+    "its maker made it keep what goes in: nothing is taken back out of it, by anyone, its maker included. Nothing was changed.");
 }
 
 const carryOf = (view) => holderLawOf({ holder: "resident", view }).capacity;
@@ -186,7 +203,7 @@ async function reachHolder(id, mark, actor, deps, { verb = "take" } = {}) {
  * candidates for a take that names no `from` — each with its owner and its
  * distance from where the actor stands.
  */
-async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = () => null) {
+async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = () => null, { view = null } = {}) {
   const here = await deps.standpoint(actor);
   const out = [];
   // the whole marks each holder holds, in ONE pass over the hold rows (the last row per thing decides)
@@ -206,6 +223,8 @@ async function holdersInReach(fold, attachments, actor, kind, deps, extendsOf = 
     if (!holds) continue;
     const mark = await deps.markById(holder).catch(() => null);
     if (!mark) continue;
+    // A HOLDER THAT KEEPS WHAT IT HOLDS is never a source (WLD-5 B): nothing comes back out of it
+    if (view && holderLawOf({ holder, mark, view }).keeps === true) continue;
     // CHEAP FIRST: a holder far past the reach is never asked (its own hands, or a set-down, are asked anyway)
     const d = here && mark.at ? Math.round(Math.hypot(Number(mark.at.x) - here.x, Number(mark.at.y) - here.y)) : null;
     const span = Math.max(Number(mark.extent?.w ?? 0), Number(mark.extent?.h ?? 0));
@@ -231,6 +250,7 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
   } else {
     ({ mark, law } = await holderOrThrow(deps, to, view));
     refuseIfClosed({ mark, id: to, law, actor, deps, verb: "make into" });
+    refuseIfNotAccepted({ id: to, law });
     await reachHolder(to, mark, actor, deps, { verb: "make" });
   }
   return holdTurn(async () => {
@@ -262,8 +282,9 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
   if (thing === to) throw bounce(422, "a holder cannot hold itself", "Nothing was changed.");
   const { mark: holderMark, law } = await holderOrThrow(deps, to, view);
   refuseIfClosed({ mark: holderMark, id: to, law, actor, deps, verb: "give into" });
+  refuseIfNotAccepted({ id: to, law, thing });
   const mark = await deps.markById(thing);
-  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a holder; a private draft changes no hands. Nothing was changed.");
+  if (!mark) throw bounce(409, `${thing} does not stand on the world`, "only a published thing goes into a holder; a draft changes no hands. Nothing was changed.");
   await reachHolder(to, holderMark, actor, deps, { verb: "give" });
   return holdTurn(async () => {
     const { units, attachments } = await deps.readRows();
@@ -285,11 +306,29 @@ async function thingIntoHolder({ args, key, actor, deps, view }) {
   });
 }
 
+/**
+ * Does this take out of `from` pass ownership (POS-688)? The holder open, and the
+ * thing put in it by its owner's house: the kept record's fold says who put it in.
+ * False when the record or the household map cannot say: a take is a borrow
+ * unless the record proves the bowl.
+ */
+async function takeOwnsNow(thing, from, actor, law) {
+  try {
+    const [{ ownershipOf, takeOwns }, { householdLookup }] = await Promise.all([import("./ownership.mjs"), import("./households.mjs")]);
+    const rec = await holdRecordNow();
+    const st = rec?.owners?.get(String(thing));
+    if (!st) return false;
+    const look = await householdLookup().catch(() => null);
+    return takeOwns({ ...ownershipOf(rec.owners, thing), putIn: st.putIn }, { from, actor, open: law?.open, houseOf: (h) => look?.(h)?.key ?? `solo:${h}` });
+  } catch { return false; }
+}
+
 /** A WHOLE MARK OUT OF A HOLDER: `take { thing, from: <holder> }`, or naming a thing a holder holds: reach, open, the carry. */
 export async function thingFromHolder({ args, key, actor, deps, view }) {
   const thing = String(args.thing), from = String(args.from);
   const { mark: holderMark, law } = await holderOrThrow(deps, from, view);
   refuseIfClosed({ mark: holderMark, id: from, law, actor, deps, verb: "take from" });
+  refuseIfKept({ id: from, law });
   const mark = await deps.markById(thing);
   await reachHolder(from, holderMark, actor, deps, { verb: "take" });
   return holdTurn(async () => {
@@ -300,7 +339,8 @@ export async function thingFromHolder({ args, key, actor, deps, view }) {
     refuseIfAnyStolenNow(deps, await carriedClasses({ thing, mark, fold: foldUnits(units), attachments, markById: deps.markById }));
     refuseOverCarry({ who: actor, units: totalOf(foldUnits(units), actor) + inFlight, things: holdingsOf(attachments, actor).length, adding: 1, cap: carryOf(view) });
     await refuseSecondHolder({ who: actor, actor, adding: [thing], held: holdingsOf(attachments, actor), markById: deps.markById, view });
-    const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: String(actor), previous: from, madeBy: ownerOf(mark, thing) });
+    const owns = await takeOwnsNow(thing, from, actor, law);
+    const w = await writeThingHolding(deps, key, actor, attachments, { did: "take", thing, holder: String(actor), previous: from, madeBy: ownerOf(mark, thing), owns });
     return { did: "take", thing, from, holder: String(actor), ...w, edge: { giver: from, receiver: String(actor) } };
   });
 }
@@ -340,6 +380,7 @@ export async function callKinds(route, args, key, actor, deps) {
       if (from != null) {
         const { mark, law } = await holderOrThrow(deps, from, view);
         refuseIfClosed({ mark, id: from, law, actor, deps, verb: "take from" });
+        refuseIfKept({ id: from, law });
         await reachHolder(from, mark, actor, deps, { verb: "take" });
       }
       return holdTurn(async () => {
@@ -347,9 +388,10 @@ export async function callKinds(route, args, key, actor, deps) {
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
         if (from == null) {
-          from = oneHolderOf(await holdersInReach(fold, attachments, actor, kind, deps, view.extendsOf), { kind, verb: "take" });
+          from = oneHolderOf(await holdersInReach(fold, attachments, actor, kind, deps, view.extendsOf, { view }), { kind, verb: "take" });
           const { mark, law } = await holderOrThrow(deps, from, view);
           refuseIfClosed({ mark, id: from, law, actor, deps, verb: "take from" });
+          refuseIfKept({ id: from, law });
         }
         const stamp = await deps.stamp(actor);
         const seed = drawSeed({ actor, from, crossing: deps.crossing(), at: stamp.at, ordinal: units.length });
@@ -393,7 +435,8 @@ export async function callKinds(route, args, key, actor, deps) {
         let rows = attachments;
         for (const t of plan.things) {
           const m = await deps.markById(t).catch(() => null);
-          const { entry, at } = await thingHoldingEntry(deps, key, actor, rows, { did: "take", thing: t, holder: String(actor), previous: from, madeBy: ownerOf(m, t) }, stamp);
+          const owns = await takeOwnsNow(t, from, actor, (await holderOrThrow(deps, from, view).catch(() => null))?.law ?? null);
+          const { entry, at } = await thingHoldingEntry(deps, key, actor, rows, { did: "take", thing: t, holder: String(actor), previous: from, madeBy: ownerOf(m, t), owns }, stamp);
           also.push(entry);
           rows = [...rows, { entity: String(actor), target: t, policy: "cascade", born_at: at }];
         }
@@ -413,6 +456,7 @@ export async function callKinds(route, args, key, actor, deps) {
       if (isHolderId(to)) {
         ({ mark, law } = await holderOrThrow(deps, to, view));
         refuseIfClosed({ mark, id: to, law, actor, deps, verb: "give into" });
+        refuseIfNotAccepted({ id: to, law });
         await reachHolder(to, mark, actor, deps, { verb: "give" });
       } else {
         law = holderLawOf({ holder: to, view });
@@ -547,19 +591,27 @@ async function keeper() {
   const [guards, { actsQuery }, journal, world, { holdRecordKeeper, HOLD_TOP_SQL }] = await Promise.all([
     import("./world2-guards.mjs"), import("./world2-acts.mjs"), import("./world-journal.mjs"), import("./world.mjs"), import("./hold-record.mjs"),
   ]);
+  const { OWNER_WORDS_SQL, KEEPER_TOP_SQL } = await import("./hold-record.mjs");
   _keeper = holdRecordKeeper({
-    readTop: async () => (await actsQuery(HOLD_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
+    readTop: async () => (await actsQuery(KEEPER_TOP_SQL, []).catch(() => null))?.[0]?.top ?? null,
     // the settlement window the office counts by: one full read per settlement (hold-record § ONE FULL READ PER SETTLEMENT)
     readEpoch: async () => { try { return (await import("./crossings.mjs")).currentCrossing(); } catch { return null; } },
     readHolding: ({ afterId = null } = {}) => guards.storeHoldingRows(afterId != null ? { afterId } : {}),
     readAttachments: ({ afterId = null } = {}) => guards.storeAttachmentRows(afterId != null ? { afterId } : {}),
+    // the owner's words (POS-688), and the household map they are folded by
+    readWords: async ({ afterId = null } = {}) => (await actsQuery(OWNER_WORDS_SQL, [afterId == null ? null : Number(afterId)]).catch(() => null)) ?? [],
+    houses: async () => {
+      const look = await (await import("./households.mjs")).householdLookup().catch(() => null);
+      return (h) => look?.(h)?.key ?? `solo:${h}`;
+    },
     // where each set-down thing stands now: its latest drop act's witnessed line, by the anchor it names
     placesOf: async (drops) => {
       const places = new Map();
       if (!drops.size) return places;
-      const marks = await world.worldMarksAll().catch(() => []);
+      // the one centre reader: canon's, or where a held anchor last stood (POS-688, W4)
+      const centreOf = await world.markCentreOf().catch(() => () => null);
       for (const [id, r] of drops) {
-        const at = journal.composeAnchor(r.at ?? {}, (mid) => marks.find((m) => m.id === mid)?.at ?? null);
+        const at = journal.composeAnchor(r.at ?? {}, centreOf);
         if (at) places.set(id, at);
       }
       return places;
@@ -583,7 +635,7 @@ export async function investigateMark(id, usable = null) {
   ]);
   const mark = (await world.worldMarkById(String(id))).mark;
   const can = usable ? { can: canOn(usable, id) } : {};
-  if (!mark) return { mark: String(id), stands: false, note: "no mark by that id stands on the world (a private draft is its household's alone)", ...can };
+  if (!mark) return { mark: String(id), stands: false, note: "no mark by that id stands on the world (a draft is not the town's canon; it lives only in its own household's reading of the world)", ...can };
   const view = classViewOf(lawSnapshot());
   const law = holderLawOf({ holder: String(id), mark, view });
   const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...can };

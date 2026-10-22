@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { restoredSince, stolenSinceOf, readRestored, restoredClass, __setRestoredForTest, RESTORE_ROWS_SQL, CLASS_RUN_SQL } from "../src/restored-classes.mjs";
+import { restoredSince, stolenSinceOf, readRestored, restoredClass, KEEP_MS, __setRestoredForTest, RESTORE_ROWS_SQL, CLASS_RUN_SQL } from "../src/restored-classes.mjs";
 import { classViewOf } from "../src/world-units.mjs";
 import { stolenClassRefusal } from "../src/world-stacks.mjs";
 import { lawSnapshotFromRows } from "../src/law-classes.mjs";
@@ -60,5 +60,22 @@ test("the one question: the dial on and not restored refuses; restored, the same
   assert.equal(stolenClassRefusal("glass-bead", classViewOf(SNAP)), null);
   __setRestoredForTest({ trinket: { since: "2026-10-26T06:30:00Z", restored: false } });
   assert.equal(stolenClassRefusal("glass-bead", classViewOf(SNAP))?.code, 423);
+  __setRestoredForTest(null);
+});
+
+test("a failed read keeps what stood for the same 30 s: one retry a window, never one per act", async () => {
+  __setRestoredForTest(null);
+  let asked = 0;
+  const failing = async () => { asked += 1; throw new Error("ECONNREFUSED"); };
+  const t0 = Date.parse("2026-10-26T07:00:00Z");
+  const ask = (t) => restoredClass("trinket", { now: t, query: failing, classes: ["trinket"] });
+  const settle = () => new Promise((r) => setImmediate(r));
+  assert.equal(ask(t0), false, "before any read, nothing is restored (fail closed)");
+  await settle();
+  assert.equal(asked, 1, "the first act starts one read, which fails");
+  for (const t of [t0 + 1, t0 + 1000, t0 + KEEP_MS - 1]) { assert.equal(ask(t), false); await settle(); }
+  assert.equal(asked, 1, "within the keep after a failure, no act asks again");
+  ask(t0 + KEEP_MS); await settle();
+  assert.equal(asked, 2, "once the keep is out, the next act asks again");
   __setRestoredForTest(null);
 });

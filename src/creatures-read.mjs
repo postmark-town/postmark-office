@@ -31,7 +31,7 @@
 // Every function below takes its creatures, law and engine as arguments, so
 // the shapes are testable on fixtures; `creaturesForRead` is the office's own.
 
-import { ENDED, LivingSet, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords, publishedMarks } from "./creatures.mjs";
+import { ENDED, LivingSet, NEVER_FADES, REFRESH_MS, TO_YOU_REACH_MS, creatureLaw, dial, distanceM, lineOf, lineWords, publishedMarks, seesCreature } from "./creatures.mjs";
 import { ago, distanceOf, inWords } from "./world-read-v2.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { faultLogged } from "./fault-words.mjs";
@@ -123,7 +123,8 @@ const ringOf = (kind) => (Number(kind?.ring_m) > 0 ? { ring_m: Number(kind.ring_
 export function creaturesInWho({ living, law }, at, { nowMs = Date.now(), engine = null, radiusM = PRESENCE_DIALS.near_radius_m } = {}) {
   const here = point(at);
   if (!here || !living || !lawReady(law)) return [];
-  return livingFrom(living, here, nowMs).filter(({ d }) => d <= radiusM).map(({ c }) => {
+  // a creature in a room is seen only from inside that room (eval round 1, F4)
+  return livingFrom(living, here, nowMs).filter(({ c, d }) => d <= radiusM && (!c.room || seesCreature(law, c, here, radiusM))).map(({ c }) => {
     const kind = law.kindOf(c.kind);
     const w = wayTo(here, c, engine);
     const newest = c.reactions.at(-1) ?? null;
@@ -190,6 +191,8 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
   const here = point(at);
   const every = words === "creature" || words === "creatures";
   const hits = (here ? livingFrom(living, here, nowMs) : livingNow(living, nowMs).map((c) => ({ c, d: null })))
+    // a creature in a room is found only from inside it: a find never shows one through its walls (F4)
+    .filter(({ c }) => !c.room || (here && seesCreature(law, c, here, Infinity)))
     .filter(({ c }) => {
       if (every) return true;
       const name = String(law.kindOf(c.kind)?.name ?? "").toLowerCase();
@@ -199,7 +202,8 @@ export function findCreatures({ living, law }, q, at, { nowMs = Date.now(), engi
       const w = here ? wayTo(here, c, engine) : null;
       return { id: c.id, kind: c.kind, name: law.kindOf(c.kind)?.name ?? c.kind, at: { x: Math.round(c.x), y: Math.round(c.y) },
         ...(d != null ? { distance_m: Math.round(d) } : {}), ...(w?.bearing ? { bearing: w.bearing } : {}),
-        ...(c.stays ? { stays: true } : { fades_in: inWords(c.fades_at - nowMs) }), ...ringOf(law.kindOf(c.kind)) };
+        // a Mists creature never fades (WLD-96): the compact read says so in one word
+        ...(c.stays ? { stays: true } : { fades_in: Number.isFinite(c.fades_at) ? inWords(c.fades_at - nowMs) : "never" }), ...ringOf(law.kindOf(c.kind)) };
     });
   return hits.length ? hits : null;
 }
@@ -270,7 +274,7 @@ export function savedCreatureOf(id, repo = WORLD_CLONE) {
 }
 
 export const REACTIONS_SQL = `SELECT id::text AS id, at, object, payload FROM acts
-  WHERE actor = $1 AND action = 'react' ORDER BY id DESC LIMIT $2`;
+  WHERE actor = $1 AND action = 'react' ORDER BY acts.id DESC LIMIT $2`;
 export const REACTIONS_SHOWN = 10;
 
 /**
@@ -304,8 +308,10 @@ export async function investigateCreature(id, { creatures, from = null, handle =
     moods: Object.fromEntries(Object.entries(c.moods).map(([m, v]) => [m, kind?.moods?.[m] ? `${v} of ${kind.moods[m].hi}` : v])),
     conditions: [...c.flags],
     out_since: new Date(c.spawned_at).toISOString(),
-    // a creature that stays has no fade (WLD-25); who has finished it waits for the settlement
-    ...(c.stays ? { stays: true, finished_by: c.finishes.map((f) => f.by) } : { fades_at: new Date(c.fades_at).toISOString() }),
+    // a creature that stays has no fade (WLD-25); who has finished it waits for the settlement.
+    // A Mists creature never fades either (WLD-96, creatures.mjs § NEVER_FADES)
+    ...(c.stays ? { stays: true, finished_by: c.finishes.map((f) => f.by) }
+      : Number.isFinite(c.fades_at) ? { fades_at: new Date(c.fades_at).toISOString() } : { fades_at: null, fades_in: NEVER_FADES }),
     remembers: c.reactions.length,
     // a finishable creature (encounter.mjs, D3): its resolve and ease this window, in numbers
     ...(encounterRead({ living }, c, kind, { handle, now: nowMs }) ? { encounter: encounterRead({ living }, c, kind, { handle, now: nowMs }) } : {}),

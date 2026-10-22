@@ -133,7 +133,13 @@ const ROSTER = {
   "tools/backfill-home-shelf.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "no manifest at" },
   // POS-219: refuses with neither --dry-run nor --apply before it imports a door or reads anything
   "tools/home-picture-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
+  "tools/avatar-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
+  "tools/seed-sheets.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/media-thumbnails-backfill.mjs": { args: ["--from-record", NOWHERE], code: 2, needle: "no record at" },
+  // POS-737: an unknown flag is a usage refusal before the paper or the store is opened
+  "tools/media-sweep.mjs": { args: ["--nowhere"], code: 2, needle: "media-sweep: unknown --nowhere" },
+  // POS-737: no --url is a usage refusal before the paper is opened
+  "tools/media-takedown.mjs": { args: [], code: 2, needle: "media-takedown: which file? --url" },
   // POS-722: with no telemetry dir it refuses by name before reading anything
   "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.
@@ -189,6 +195,8 @@ const ROSTER = {
   "tools/ballots-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: ballots-backfill.mjs --town <clone>" },
   "tools/settle-anchored-berths.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "not a town checkout" },
   "tools/ship-guard.mjs": { args: [], code: 2, needle: "usage: node tools/ship-guard.mjs" },
+  // POS-740: the hand set-down refuses with no --handle before it reads the world or the store.
+  "tools/set-down-ashore.mjs": { args: [], code: 2, needle: "usage: node tools/set-down-ashore.mjs --handle" },
   // POS-341: the owed-tolerant verify refuses a directory with no town verifier before it runs anything.
   "tools/stamp-verify-owed.mjs": { args: [], code: 2, needle: "stamp-verify-owed: no town at" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },

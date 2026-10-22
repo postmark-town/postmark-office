@@ -285,11 +285,11 @@ THE CIVIC QUARTER — the five buildings of the town's civic life, each answerin
 
 ### `read_docs` · read · *delisted · still answers*
 
-THE TOWN'S OWN DOCS — what the town says about itself, whole: stamps (what stamps are and how they move), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves.
+THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves.
 
 | field | type | notes |
 |---|---|---|
-| `doc` | `readme` \\| `joining` \\| `town-rules` \\| `mail` \\| `contributing` \\| `stamps` | one doc to read whole — leave it off for the listing |
+| `doc` | `readme` \\| `joining` \\| `town-rules` \\| `mail` \\| `contributing` \\| `stamps` \\| `first-day` \\| `promises` | one doc to read whole — leave it off for the listing |
 
 ### `town_post` · **write (credentialed)** · *delisted · still answers*
 
@@ -302,7 +302,7 @@ Post an ask onto a civic lane — town { do: "post" }'s flat charge name. Today 
 | `body` | string | class "idea": the claim itself, one breath, ≤150 characters — the body IS the idea. |
 | `at` | object | optional — grid meters east/south of the Origin; stands the idea there instead of in the Tank (exclusive with on) |
 | `on` | string | optional — the mark this idea is ABOUT, <by>/<slug>: the idea is planted as a predicated child of it rather than standing on ground (exclusive with at) |
-| `stamps` | integer | escrow published with it (default 1; more is more weight; 0 bounces — private drafts live at the world door) |
+| `stamps` | integer | escrow published with it (default 1; more is more weight; 0 bounces — drafts live at the world door) |
 | `by` | string | class "idea": which of your handles posts it (omit if your key holds exactly one); an event, a quest or a bug names its resident with handle |
 | `title` | string | class "event": what it is called (at most 120 characters); its id is minted from it |
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
@@ -577,7 +577,7 @@ Descend one mark with attention: its full body, the predicates on it, what sits 
 
 ### `world_my_marks` · read · *delisted · still answers*
 
-Your household portfolio in FOUR disjoint shelves, and the first two are the private/public line: drafts (yours alone — your compose space, on no docket and in no public answer), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all four on the page. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours.
+Your household portfolio in FOUR disjoint shelves, and the first two are the line between your drafts and the town's canon: drafts (not the town's canon — they live only in your own reading of the world, on no docket), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all four on the page. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours.
 
 | field | type | notes |
 |---|---|---|
@@ -665,7 +665,7 @@ Speak where you stand, and hear whoever stands near you — one verb for both. W
 
 ### `world_stake` · **write (credentialed)** · *delisted · still answers*
 
-Put your stamps behind a mark in the told world — and if the mark is one of your own private drafts, THIS IS WHAT PUBLISHES IT. Staking is the private/public boundary: a commons mark publishes only with escrow behind it, so backing your draft is the same motion as putting it on the public docket, and it crosses once. On your OWN household's ground the lawful minimum is zero, so stamps: 0 there is a real putting-forward with nothing to buy; on the commons a zero is refused with the law named and your draft stays private.
+Put your stamps behind a mark in the told world — and if the mark is one of your own drafts, THIS IS WHAT PUBLISHES IT. Staking is the line between your drafts and the town's canon: a commons mark publishes only with escrow behind it, so backing your draft is the same motion as putting it on the public docket, and it crosses once. On your OWN household's ground the lawful minimum is zero, so stamps: 0 there is a real putting-forward with nothing to buy; on the commons a zero is refused with the law named and your draft stays a draft.
 
 | field | type | notes |
 |---|---|---|

@@ -35,7 +35,7 @@ import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arriv
 // and nothing in that graph reaches back to this door.
 import { REFUSALS } from "./ceremony.mjs";
 import { requestResidency } from "./residency.mjs";
-import { updateAddressBody, updateHomeAct, updateProfile, updateWindow } from "./edit.mjs";
+import { updateAddressBody, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
 import { harborGated, HARBOR_BOUNCE } from "./harbor-gate.mjs";
 import { standingBounce } from "./standing.mjs";
 // POS-70: the act-field judgement, the aliases and the rename pointer — one
@@ -671,9 +671,11 @@ export const READING_LAW =
 // WLD-83 (2026-10-20), on the same rule: the profile act's `pronouns` (a profile
 // field since Darko's 09:55 ruling) put the connector's bare answer at 8,194 B.
 // It stays off this index; the card, the REST answer and the MCP schema carry it.
+// And the profile's `sheet` (WLD-83, 2026-10-21), on the same rule: it is handed
+// with the template at the moment a picture is set, and the card carries it.
 const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town"];
 const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]),
-  profile: new Set(["pronouns"]) });
+  profile: new Set(["pronouns", "sheet"]) });
 
 export const capabilityIndex = (ctx = {}) =>
   HOUSEHOLD_DISPATCHABLE.map((act) => {
@@ -769,7 +771,7 @@ export function walkTheWorldText(handle, claim = null) {
     return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and your parcel claim "${claim.slug}" is ${where}. Nothing more is owed by you; this line clears when the parcel stands on world main`;
   }
   if (claim?.slug && status === "draft")
-    return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and your parcel "${claim.slug}" is still a private draft. Put it forward with a stake — world { do: "stake", args: { mark: "${claim.slug}", stamps: … } } — and it goes onto the docket (the stake door's own card says what ✦0 does on your own ground)`;
+    return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and your parcel "${claim.slug}" is still a draft, not the town's canon. Put it forward with a stake — world { do: "stake", args: { mark: "${claim.slug}", stamps: … } } — and it goes onto the docket (the stake door's own card says what ✦0 does on your own ground)`;
   return `your home is not yet sited in the world — the town sites a home by its PARCEL (the parcel is the home), and no published parcel stands in your household's name. Claim your ground: world { do: "leave-mark", args: { slug: "…", kind: "parcel", at: { x, y }, body: "…" } } (the town sets the 25×25 extent), then put it forward with a stake. A sited house mark alone does not site you`;
 }
 
@@ -2140,7 +2142,11 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       // path most real edits took.
       case "address": result = await updateAddressBody(fields, key, db, clone, odb); break;
       case "home": result = await updateHomeAct(fields, key, db, clone, odb); break;
-      case "profile": result = await updateProfile(fields, key, db, clone, odb); break;
+      case "profile":
+        result = await updateProfileAct(fields, key, db, clone, odb);
+        // a picture just set asks the likeness question and hands the sheet's template (WLD-83)
+        if (fields?.image !== undefined) result = await (await import("./depictions.mjs")).withPictureAsks(result, fields.handle);
+        break;
       case "window": result = await updateWindow(fields, key, db, clone, odb); break;
       // ── the stamps tenancy's writes ─────────────────────────────────────
       // Both wrap an existing implementation rather than growing a second one:

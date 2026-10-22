@@ -26,6 +26,8 @@ import { bootOnFreePort } from "./spawn-office.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs";
 import { rejectionLine } from "../src/rejection-guard.mjs";
+import { holdMedia, seedMediaRows } from "./helpers/media-ledger.mjs";
+import { DatabaseSync } from "node:sqlite";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
@@ -45,8 +47,10 @@ function townClone() {
   return dir;
 }
 
-// A media-door URL, so the picture passes its own check and the call reaches the paper door.
+// A media-door URL the ledger holds (POS-738), so the picture passes its own
+// checks and the call reaches the paper door.
 const PICTURE = "https://media.postmark.town/media/wright/c218583a550b5487f700fbf374eb49d1505591c5c7d620dfbae208943af579d3.png";
+holdMedia(PICTURE);
 
 test("POS-709 · an empty home update with a picture answers 422 on both skins, and the office answers the next request", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "pm-pos709-srv-"));
@@ -58,6 +62,7 @@ test("POS-709 · an empty home update with a picture answers 422 on both skins, 
     STORES.push(store);
     const odbPath = join(tmp, "oauth.db");
     openOauthDb(odbPath).close();
+    { const d = new DatabaseSync(odbPath); seedMediaRows(d, PICTURE); d.close(); } // the spawned office's own ledger holds it
     const KEY = "pos709key";
     let PORT;
     ({ child, port: PORT } = await bootOnFreePort((port) => {

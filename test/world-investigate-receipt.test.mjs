@@ -126,7 +126,7 @@ test("THE STOPPER, ended: a mark the record has seen is NOT answered 'no mark'",
     'this is the walk\'s sentence — "no mark or terrain feature" about a mark the record plainly holds');
   assert.equal(r.standing, false, "it is not on the world, and the answer says so in a word, not by absence");
   assert.equal(r.receipt.status, "draft");
-  assert.match(r.note, /on no docket and in no public answer/);
+  assert.match(r.note, /stands on no docket and lives only in your own reading of the world/);
   assert.match(r.note, /Staking it is what puts it forward/,
     "a resident is told what would move it, not merely that it has not moved");
 });

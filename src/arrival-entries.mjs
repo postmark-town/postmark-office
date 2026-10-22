@@ -34,9 +34,8 @@
 // the write and the settle re-runs safely: the pen answers with the first
 // enter's act, and the row is settled as entered.
 
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { actsQuery, world2Enabled } from "./world2-acts.mjs";
+import { importEngineAt } from "./world-branches.mjs"; // the engine at the newest blessing
 import { errorSaid, faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { DEPARTURE_ACTIONS, departureRecordOf, fractionalCrossing } from "../world2/tools/live-reads.mjs";
 
@@ -83,7 +82,7 @@ const CURRENT_SQL = `
    LIMIT 1`;
 const WALK_SQL = `SELECT id, at, crossing, actor, action, payload FROM acts WHERE id = $1::bigint`;
 // The enter an arrival already wrote, if any: the guard's own read, asked first on a re-run.
-const PRIOR_SQL = `SELECT id::text AS id FROM acts WHERE actor = $1 AND action = 'enter' AND payload->>'arrival_of' = $2 ORDER BY id LIMIT 1`;
+export const PRIOR_SQL = `SELECT id::text AS id FROM acts WHERE actor = $1 AND action = 'enter' AND payload->>'arrival_of' = $2 ORDER BY acts.id LIMIT 1`;
 // Who has a line on their standpoint: a pending row whose walk is still the
 // current departure, or a refusal (or an expiry) with no act of theirs since it:
 // "until their next act", Darko's G3, and no other bound.
@@ -299,7 +298,7 @@ export async function arrivalOf(row, { query = actsQuery, now = Date.now(), walk
   const [act] = (await query(WALK_SQL, [String(row.walk)])) ?? [];
   const rec = act ? departureRecordOf(act)?.record : null;
   if (!rec) return { arrived: false, target: null, why: "the walk act could not be read back" };
-  const walk = walkMod ?? await import(pathToFileURL(join((await import("./world.mjs")).WORLD_CLONE, "tools", "walk.mjs")));
+  const walk = walkMod ?? await importEngineAt((await import("./world.mjs")).WORLD_CLONE, "walk.mjs");
   const pos = walk.positionAt(rec, fractionalCrossing(now));
   return { arrived: pos?.arrived === true, target: { x: rec.toward.x, y: rec.toward.y }, position: pos };
 }

@@ -144,7 +144,7 @@ test("WITHDRAWN, nothing left standing — its own sentence, not 'no mark'", () 
 test("DRAFT: private, and the receipt says what would put it forward", () => {
   const r = receiptFrom({ id: ID, canon: null, settlement: S59, claims: [claim({ status: "draft", window_id: 174 })] });
   assert.equal(r.status, "draft");
-  assert.match(r.says, /on no docket and in no public answer/);
+  assert.match(r.says, /not the town's canon: it stands on no docket and lives only in your own reading of the world/);
   assert.match(r.says, /Staking it is what puts it forward/);
 });
 

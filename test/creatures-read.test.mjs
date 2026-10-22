@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { LivingSet, loadCreatureLaw, REFRESH_MS, TO_YOU_REACH_MS, BOOT_SPAN_S, LIVING_BOOT_SQL } from "../src/creatures.mjs";
+import { LivingSet, loadCreatureLaw, NEVER_FADES, REFRESH_MS, TO_YOU_REACH_MS, BOOT_SPAN_S, LIVING_BOOT_SQL } from "../src/creatures.mjs";
 import {
   EMISSIONS_SHOWN, creatureHappening, creatureToYou, creaturesForRead, creaturesInWho, findCreatures, investigateCreature,
   savedCreatureOf, __resetCreaturesReadForTest, TO_YOU_FOLD,
@@ -66,10 +66,34 @@ test("who: a living creature within presence's radius, nearest first, in the eng
   assert.equal(rows[1].last, undefined);
 });
 
-test("who: a creature that fled, faded, or has not come out yet is not in sight", () => {
+test("who: a creature that fled, or has not come out yet, is not in sight; one out past its old 12 h is (WLD-96)", () => {
   const cur = fold(spawn("creature:wolf-270-1", { x: 10 }), withdraw("creature:wolf-270-1"),
     spawn("creature:wolf-270-2", { x: 20, at: NOW - 13 * 3600_000 }), spawn("creature:wolf-270-3", { x: 30, at: NOW + 60_000 }));
-  assert.deepEqual(creaturesInWho(cur, { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE }), []);
+  assert.deepEqual(creaturesInWho(cur, { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE }).map((r) => r.id), ["creature:wolf-270-2"]);
+});
+
+// ── WLD-96: the Mists creatures gather ──────────────────────────────────────
+
+test("WLD-96: a Mists creature out past 12 h is still living, in who, on the far line and in find; a flee still ends it", () => {
+  const OLD = "creature:wolf-270-1", BARE = "creature:wolf-271-1";
+  // one out before the hotfix (its spawn names a fade 12 h on) and one spawned after it (no fade)
+  const old = spawn(OLD, { x: 0, y: 120, at: NOW - 13 * 3600_000 });
+  const bare = spawn(BARE, { x: 0, y: 3000, at: NOW - 30 * 3600_000 }); delete bare.payload.fades_at;
+  for (const later of [NOW, NOW + 3 * 24 * 3600_000]) {
+    const cur = fold(old, bare);
+    assert.deepEqual(cur.living.living(later).map((c) => c.id).sort(), [OLD, BARE], "both are living");
+    assert.deepEqual(creaturesInWho(cur, { x: 0, y: 0 }, { nowMs: later, engine: ENGINE }).map((r) => r.id), [OLD], "who, within presence's radius");
+    const far = creatureHappening(cur, { x: 0, y: 2000 }, { nowMs: later, engine: ENGINE });
+    assert.deepEqual(far.map((r) => r.id), [BARE], "the far line names the nearest");
+    assert.match(far[0].what, /^a grey wolf is out at the Mists' edge, 1 km/);
+    const hits = findCreatures(cur, "wolf", { x: 0, y: 0 }, { nowMs: later, engine: ENGINE });
+    assert.deepEqual(hits.map((h) => [h.id, h.fades_in]), [[OLD, "never"], [BARE, "never"]], "find, nearest first, and it never fades");
+  }
+  // a flee still ends it: gone from every read at once
+  const fled = fold(old, bare, withdraw(OLD, NOW - 60_000));
+  assert.deepEqual(fled.living.living(NOW).map((c) => c.id), [BARE]);
+  assert.deepEqual(creaturesInWho(fled, { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE }), []);
+  assert.deepEqual(findCreatures(fled, "wolf", { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE }).map((h) => h.id), [BARE]);
 });
 
 nodeTest("who: creatures join active by distance; the cap holds and the overflow is counted; no creature, the block is untouched", () => {
@@ -151,7 +175,7 @@ test("find: a kind, its name or \"creature\" names the living creatures, nearest
   }
   const [h] = findCreatures(cur, "wolf", { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE });
   assert.deepEqual(h, { id: "creature:wolf-270-2", kind: "wolf", name: "a grey wolf", at: { x: 0, y: -700 }, distance_m: 700,
-    bearing: ENGINE.quantizeBearing(ENGINE.bearingDeg(0, -700)), fades_in: "11h 00m", ring_m: 80 });
+    bearing: ENGINE.quantizeBearing(ENGINE.bearingDeg(0, -700)), fades_in: "never", ring_m: 80 });
   // WLD-82 part 1 of 2: every row the page reads carries its kind's ring, the number inRing judges by
   // ⚑ THE FLIP: drop `...ringOf(…)` from findCreatures' row → this reds
   assert.ok(findCreatures(cur, "creature", { x: 0, y: 0 }, { nowMs: NOW, engine: ENGINE }).every((r) => r.ring_m === 80), "ring_m on every find row");
@@ -233,10 +257,10 @@ test("to_you: a creature's answer to you rides your own happened, the arrival na
   assert.doesNotMatch(toYou({ sinceCrossing: 270, nowCrossing: 272 }).note, /creature/, "no creatures read, the sentence it always was");
 });
 
-test("C1 (review-574): the reaction an 11 h-old arrival drew from a wolf that FADED is still read, after every prune, and the shelf is whole", () => {
+test("C1 (review-574): the reaction an 11 h-old arrival drew from a wolf out past its old 12 h is still read, after every prune, and the shelf is whole", () => {
   const W = "creature:wolf-270-1";
-  // out 12 h ago, it answered kai's arrival 11 h ago, and faded at its 12 h (now); 1.5 h later (an hour past its
-  // end, so A's prune would have dropped it) the reaction is 12.5 h old, and the walker reading since 12.9 h ago gets it
+  // out 12 h ago, it answered kai's arrival 11 h ago; it never fades (WLD-96), so 1.5 h later the
+  // reaction is 12.5 h old, and the walker reading since 12.9 h ago gets it
   const later = NOW + 1.5 * 3600_000;
   const cur = fold(spawn(W, { at: NOW - 12 * 3600_000 }), react(W, { to: "kai", at: NOW - 11 * 3600_000, moment: "arrival", trigger: 601 }));
   cur.living.prune(later);
@@ -244,9 +268,9 @@ test("C1 (review-574): the reaction an 11 h-old arrival drew from a wolf that FA
   assert.deepEqual(got.events.map((e) => [e.creature, e.arrival]), [[W, true]]);
   assert.equal(got.readable, true);
   assert.equal(toYou({ creatureEffects: got, sinceCrossing: 270, nowCrossing: 272 }).complete, true);
-  // past its 13 h the reaction leaves RAM, and a since that old is said incomplete, never whole
+  // a living creature is never pruned, so it keeps what it remembers
   cur.living.prune(NOW - 11 * 3600_000 + TO_YOU_REACH_MS + 1);
-  assert.equal(cur.living.byId.size, 0);
+  assert.equal(cur.living.byId.size, 1);
 });
 
 test("C1 (review-574): the reaction from a wolf that FLED 3 h ago is still read", () => {
@@ -309,6 +333,7 @@ test("investigate: the creature as of now, its newest reactions with their odds 
   assert.deepEqual(r.presence.now.at, { x: 30, y: 40 });
   assert.deepEqual(r.presence.now.from_you, { m: 50 });
   assert.equal(r.presence.now.state, "out of the Mists");
+  assert.deepEqual([r.presence.now.fades_at, r.presence.now.fades_in], [null, NEVER_FADES], "a Mists creature never fades (WLD-96)");
   assert.deepEqual(r.presence.now.moods, { fear: "1 of 3" });
   assert.equal(r.presence.now.answered_by, "the record, as of now");
   assert.equal(r.presence.last_crossing.answered_by, "the crossing save, as of crossing 271");

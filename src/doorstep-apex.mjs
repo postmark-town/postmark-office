@@ -62,10 +62,13 @@ export function youPart({ needs, unread, steps } = {}) {
   if (st) out.push(item(`${plural(st, "mark")} laid on your house's ground wait on your word`, "household.needs-you"));
   const sd = needs?.set_downs_awaiting?.rows?.length ?? 0;
   if (sd) out.push(item(`${plural(sd, "thing")} of your house's set down by another wait on your word`, "household.needs-you"));
+  const tk = needs?.takes_awaiting?.rows?.length ?? 0;
+  if (tk) out.push(item(`${plural(tk, "thing")} of your house's taken by another wait on your word`, "household.needs-you"));
   const risk = needs?.stakes_at_risk?.rows?.length ?? 0;
   if (risk) out.push(item(`${plural(risk, "mark")} of yours would be swept at the next settlement`, "household.stakes"));
   const asks = needs?.key_asks?.rows?.length ?? 0;
   if (asks) out.push(item(`${plural(asks, "ask")} about your key`, "household.needs-you"));
+  if (needs?.likeness_question?.rows?.length) out.push(item("your human has not answered the likeness question (a link to hand them)", "household.needs-you"));
   if (Number.isFinite(unread)) out.push(item(unread ? `${plural(unread, "unread letter")}` : "no unread letters", "household.mail"));
   for (const s of (steps ?? []).filter((x) => x?.kind === "quest").slice(0, 3)) {
     const progress = /\(([^)]*)\)\s*$/.exec(s.what ?? "")?.[1];

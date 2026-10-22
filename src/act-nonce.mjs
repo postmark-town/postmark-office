@@ -101,7 +101,7 @@ export function worldDuplicateReceipt(row, nonce, { raced = false } = {}) {
 /** What a world act says when it was handed a key it could not keep. */
 export const WORLD_NONCE_NOT_KEPT = {
   store: "this office's record keeps no nonce on an act (migration 027 is not on its store), so a nonce cannot be remembered and this receipt is NOT idempotent by it.",
-  unwritten: "this act wrote no row to the acts record (an unstaked mark, for one, is a private draft, and a private draft never reaches it), so there was nowhere to keep the nonce and this receipt is NOT idempotent by it.",
+  unwritten: "this act wrote no row to the acts record (an unstaked mark, for one, is a draft, and a draft never reaches it), so there was nowhere to keep the nonce and this receipt is NOT idempotent by it.",
 };
 
 export const WORLD_NONCE_IDEMPOTENT = "retry this exact call with the same nonce and you will get this act's receipt back rather than a second act";

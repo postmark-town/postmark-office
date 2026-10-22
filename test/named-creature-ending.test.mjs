@@ -23,7 +23,7 @@ import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  ENDED, FINISH_ACTION, FINISH_WHY, LIVING_BOOT_SQL, STAYING_SQL, LivingSet, PRIOR_FINISH_SQL, TRIGGER_SQL,
+  ENDED, FINISH_ACTION, FINISH_WHY, GATHERED_SQL, LIVING_BOOT_SQL, LivingSet, PRIOR_FINISH_SQL, TRIGGER_SQL,
   finishes, loadCreatureLaw, reactTo, reactionRows, recordFinish, writeReaction, buildSlice,
 } from "../src/creatures.mjs";
 import { findCreatures, investigateCreature, creatureHappening } from "../src/creatures-read.mjs";
@@ -59,7 +59,8 @@ const STUB = NO_WORLD ? null : (() => {
 /** The law as the office holds it, with the stub kind and (when `ended`) "ended" among the despawn reasons. */
 const lawWith = ({ ended = true } = {}) => (NO_WORLD ? null : {
   ...BASE, kindOf: (name) => (name === "wolf" ? STUB : null),
-  creaturesMod: { ...BASE.creaturesMod, DESPAWN_REASONS: ended ? [...BASE.creaturesMod.DESPAWN_REASONS, "ended"] : [...BASE.creaturesMod.DESPAWN_REASONS] },
+  // the pinned law (world#266) already knows "ended": a law without it is made by taking it away
+  creaturesMod: { ...BASE.creaturesMod, DESPAWN_REASONS: ended ? [...new Set([...BASE.creaturesMod.DESPAWN_REASONS, "ended"])] : BASE.creaturesMod.DESPAWN_REASONS.filter((r) => r !== "ended") },
 });
 
 const NOW = Date.parse("2026-10-26T13:00:00Z");
@@ -95,9 +96,10 @@ test("a spawn with stays: true and no fades_at is taken, lives past any span, an
   assert.deepEqual(living.living(NOW + 30 * 24 * 3600_000).map((x) => x.id), [ID], "a month on, still here");
   living.prune(NOW + 30 * 24 * 3600_000);
   assert.ok(living.byId.has(ID));
-  // and a Mists spawn without fades_at is still skipped, as before
+  // and a Mists spawn without fades_at is taken too, and never fades (WLD-96); it is not one that stays
   const mists = new LivingSet({ law: lawWith() }).fold([{ ...staySpawn("creature:wolf-270-1"), payload: { kind: "wolf", at: iso(NOW), x: 0, y: 0 } }]);
-  assert.equal(mists.byId.size, 0);
+  const m = mists.byId.get("creature:wolf-270-1");
+  assert.deepEqual([m.fades_at, m.stays], [Infinity, undefined]);
 });
 
 test("finishes fold once per resident; an ended withdraw is honoured only when the law knows the reason", () => {
@@ -109,12 +111,12 @@ test("finishes fold once per resident; an ended withdraw is honoured only when t
   assert.equal(new LivingSet({ law: lawWith() }).fold([...rows, ended]).byId.get(ID).gone, ENDED);
 });
 
-nodeTest("the boot read also takes every row of a staying creature not yet withdrawn, however old", () => {
+nodeTest("the boot read also takes every row of a staying creature not yet withdrawn, however old (and since WLD-96, every gathered one)", () => {
   assert.match(LIVING_BOOT_SQL, /OR actor IN \(/);
   assert.match(LIVING_BOOT_SQL, /OR object IN \(/);
-  assert.ok(LIVING_BOOT_SQL.includes(STAYING_SQL));
-  assert.match(STAYING_SQL, /payload->>'stays' = 'true'/);
-  assert.match(STAYING_SQL, /NOT EXISTS \(SELECT 1 FROM acts w WHERE w\.class = 'creature' AND w\.action = 'withdraw'/);
+  assert.ok(LIVING_BOOT_SQL.includes(GATHERED_SQL));
+  assert.doesNotMatch(GATHERED_SQL, /stays/, "every creature not yet withdrawn, one that stays among them");
+  assert.match(GATHERED_SQL, /NOT EXISTS \(SELECT 1 FROM acts w WHERE w\.class = 'creature' AND w\.action = 'withdraw'/);
 });
 
 test("the slice and the reads say it stays instead of naming a fade", () => {

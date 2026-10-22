@@ -95,7 +95,7 @@ import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 // The CANDLE'S OWN escrow reader, not a second one — § THE DOCKET ROW says why.
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
-import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt } from "./world.mjs";
+import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, heldPlaced } from "./world.mjs";
 import { hearable } from "./hearing-window.mjs";
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
@@ -194,9 +194,9 @@ async function engine() {
 export async function world2MyDrafts(key) {
   const { household, drafts, disclosure } = await readDraftClaims(key);
   return {
-    what: "your household's private compose space — every draft you hold, and nobody else can ask this question about you",
+    what: "your household's drafts — every draft you hold. They are not the town's canon, and they live only in your own reading of the world",
     household, ...(disclosure ? { household_disclosure: disclosure } : {}), count: drafts.length, drafts,
-    privacy: "these stand on no docket, in no export, in no archive, and in no public answer. Submitting one is the act that makes it public, and it crosses once.",
+    privacy: "these are not the town's canon: they stand on no docket and live only in your own reading of the world. Submitting one is the act that makes it the town's canon, and it crosses once.",
   };
 }
 
@@ -939,8 +939,9 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
         hint: `${faultLogged("the world engine cannot be read at this office (investigate)", e)} investigate is the engine's judgment about a mark and its neighbourhood; this door refuses rather than composing one of its own.` } };
     }
 
-    const world = eng.build.assembleWorld({ worldState, skeleton });
-    const r = eng.verbs.investigate(String(mark), world, { depth });
+    // placed by the hold record, as the office door is (POS-688: a held thing is unplaced)
+    const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows });
+    const r = (await import("./held.mjs")).withHolder(eng.verbs.investigate(String(mark), world, { depth }), world, mark); // POS-688: whose hands it is in
 
     // THE RECEIPT FROM ROWS (POS-142 S3 item 4). 1.0's own pure `receiptFrom`,
     // handed the store's records: the docket's rows for this slug, whether the
@@ -965,7 +966,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     }
 
     // WHERE THE THING STANDS: 1.0's own block, not a second composition. It
-    // already reads the store for both halves (POS-162), and the twin hands it
+    // reads the kept hold record (POS-688; POS-162 before it), and the twin hands it
     // the world assembled from rows, so the holder answer beside the engine's
     // judgment is the same function's on both doors (POS-142 S3 item 5).
     const stands = await thingStandsBlock(String(mark), world, r);
@@ -1408,7 +1409,8 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
       `${faultLogged("the world engine cannot be read at this office (orient)", e)} \`within\` is a containment chain and \`nearby\` a field of view; both are the engine's judgment. This door refuses rather than inventing a spine — a resident told they are somewhere they are not is worse than a resident told nothing.`);
   }
 
-  const world = eng.build.assembleWorld({ worldState, skeleton });
+  // placed by the hold record, as the office door is (POS-688: a held thing is unplaced)
+  const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows });
   const state = { x: near.x, y: near.y };
   const oriented = eng.verbs.orient(state, world, { crossing: n });
   const seen = eng.verbs.openYourEyes(state, world, { crossing: n });

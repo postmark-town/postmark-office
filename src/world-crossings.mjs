@@ -25,11 +25,11 @@ import { vesselServiceFrom } from "./world-movement.mjs";
 import { fractionalCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "../world2/tools/live-reads.mjs"; // the ferry's clock: the engine's epoch and cadence
 import { nextSettlement } from "./world-forecast.mjs"; // the ONE settlement clock, 06:00/18:00Z (WLD-5's exit lock reads it)
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 import { classNodeNameOf, kindFieldOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { importEngineAt } from "./world-branches.mjs"; // the doors' engine, at the newest blessing
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -50,10 +50,12 @@ const bounce = (code, defect, hint, extra = {}) => {
  *  The parser is aliased over to one name so the call sites stay single-named:
  *  a caller should not have to know which era of the module answered. */
 export async function crossingLaw(worldClone) {
-  const load = (name) => import(pathToFileURL(join(worldClone, "tools", name)));
+  // AT THE BLESSING (world-branches.mjs § engineDirAt): the doors adjudicate with
+  // the engine the newest blessing carries, never the clone's working tree.
+  const load = (name) => importEngineAt(worldClone, name);
   try {
     const law = await load("enter-exit.mjs").catch(() => load("thresholds.mjs"));
-    const verbs = await import(pathToFileURL(join(worldClone, "tools", "world-verbs.mjs")));
+    const verbs = await load("world-verbs.mjs");
     if (!law.occupancyAt || !verbs.enter) throw new Error("incomplete");
     const thresholds = law.parseEnterExitLedger
       ? law
@@ -115,6 +117,25 @@ async function locksInForce(who, w, verbs, judgedMs, deps) {
     if (!live[r.dungeon] || Date.parse(live[r.dungeon].until) < until) live[r.dungeon] = { until: new Date(until).toISOString(), left_at: r.left_at ?? null };
   }
   return Object.keys(live).length ? live : null;
+}
+
+/**
+ * WHAT THE DOORS THAT ASK HOLD (WLD-5 B): the clone names, for each portal whose
+ * entry carries `requires`, the holder it looks in (`verbs.requiresHolderOf`);
+ * the office reads what those hold from the record (`deps.doorHoldings`) and
+ * hands it to the passage. Null when no door asks, or the clone predates them.
+ * An unreadable record is a 503: the passage itself would read it as holding
+ * nothing and keep the door shut, which is the safe answer, but not the true one.
+ */
+async function holdingsAsked(w, verbs, deps) {
+  if (typeof verbs.requiresHolderOf !== "function" || !deps.doorHoldings) return null;
+  const holders = [...new Set((w.marks ?? []).map((m) => verbs.requiresHolderOf(m)).filter(Boolean))];
+  if (!holders.length) return null;
+  try { return await deps.doorHoldings(holders); }
+  catch (e) {
+    throw bounce(503, "the office could not read what this door holds, so nothing was recorded",
+      `a door here opens only when it holds what it asks for, and that record could not be read just now (${plainReason(e, "record", "the hold record")}). Try again in a minute`);
+  }
 }
 
 // ── THE PORTAL LEG (Keemin-ruled 2026-09-19; postmark-town/postmark#2986) ────
@@ -425,9 +446,12 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
 
   // WLD-5 A: the exit locks in force, which the clone's passage asks before anything else
   const lockedOut = await locksInForce(who, w, verbs, judgedMs, deps);
+  // WLD-5 B: what the doors that ask hold now, which the clone's passage asks next
+  const holdings = await holdingsAsked(w, verbs, deps);
   const answer = verbs.enter(here, markId, { marks: w.marks ?? [], determined: w.determined ?? {} }, {
     occupancy, handle: who, at, iso, accepted: payload.accept === true,
     ...(lockedOut ? { lockedOut } : {}),
+    ...(holdings ? { holdings } : {}),
     // WLD-5: which way, when a portal's `into` is a list
     ...(payload.into !== undefined && payload.into !== null && payload.into !== "" ? { into: String(payload.into) } : {}),
   });
@@ -442,6 +466,12 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
       throw bounce(403, answer.error,
         "leaving a dungeon by exit closes it to you until the next settlement (06:00 or 18:00Z); walking out through a door costs nothing. Every way in is closed until then, its portals and its outline alike",
         { law: "the-town/dungeon (WLD-5)", dungeon: answer.dungeon, locked_until: answer.locked_until });
+    // A DOOR THAT ASKS (WLD-5 B): shut until it holds what it asks for. The sentence is the
+    // clone's (the door's own line, with the count); what it holds and lacks ride as a field.
+    if (answer.refused === "requires")
+      throw bounce(403, answer.error,
+        `this door opens for everyone once ${answer.requires?.in ?? "it"} holds every mark it asks for, and a mark goes in by an ordinary give: world { do: "give", args: { thing: "<its id>", to: "${answer.requires?.in ?? "<the door>"}" } }. Nothing was recorded`,
+        { law: "the-town/thing-holder (WLD-5 B)", requires: answer.requires ?? null });
     if (answer.refused === "dungeon")
       throw bounce(403, answer.error,
         "a dungeon's rooms are reached one portal at a time: stand at a portal and enter it (to leave the whole dungeon, exit). Nothing was recorded",

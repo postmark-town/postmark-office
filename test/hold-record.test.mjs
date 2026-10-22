@@ -171,3 +171,21 @@ test("round 3 · the legacy half of the high-water read: a frozen-era act above 
     assert.equal((await c.query(HOLD_TOP_SQL)).rows[0].top, l.id, "the legacy act is the high water; the say after it is not a hold act");
   } finally { await c.end(); }
 });
+
+test("POS-688 · the owners fold with the record, across the base and its window: a take borrows, the owner's welcomed (a word) gives it", async () => {
+  const rec = record();
+  const words = [];
+  const take = (id, actor) => ({ seq: id, class: "holding", action: "take", actor, object: "berthillon/a-cone", payload: { thing: "berthillon/a-cone", holder: actor } });
+  rec.commit(take(1, "sb-ash"));
+  for (let i = 2; i <= 12; i++) rec.commit(make(i, "x/bowl", 1));
+  const readWords = async ({ afterId = null } = {}) => words.filter((w) => afterId == null || w.id > afterId);
+  const k = holdRecordKeeper({ ...rec.readers, readWords, width: 5 });
+  const a = await k.now();
+  assert.ok(a.cutoff >= 1, "the take is in the base");
+  assert.equal(a.owners.get("berthillon/a-cone").owner, "berthillon", "borrowed");
+  assert.equal(a.owners.get("berthillon/a-cone").outing.acts.length, 1);
+  words.push({ id: 13, actor: "berthillon", object: "berthillon/a-cone", payload: { stance: "welcomed", answers: "take", act: { act_id: "1", by: "sb-ash" } } });
+  rec.commit(make(14, "x/bowl", 1));
+  const b = await k.now();
+  assert.equal(b.owners.get("berthillon/a-cone").owner, "sb-ash", "the word in the window reaches the take in the base");
+});
