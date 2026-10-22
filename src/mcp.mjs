@@ -107,6 +107,10 @@ export const WRITE_TOOLS = new Set(["send_letter", "stake_vote", "request_reside
   "update_address_body", "update_home", "update_profile", "update_window", "world_leave_mark",
   "world_withdraw_mark", "world_note", "world_walk", "world_stake", "world_unstake",
   "world_say", "upload_media", "world_describe",
+  // Missing until the review of #723 (POS-748): a hold moves a thing between hands
+  // and the address-fields door rewrites a card, so both are durable acts and take
+  // the same auth challenge, harbor gate, standing gate and write budget as the rest.
+  "world_hold", "update_address_fields",
   // The town door's own writes (town_post added 2026-08-31 beside the stake
   // gesture — it was missing, and it publishes a mark and stakes 1✦ escrow, so
   // a cached client calling the delisted flat name got no auth challenge for a
