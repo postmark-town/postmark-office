@@ -127,6 +127,11 @@ lawful AS (
     -- rows; no DELETE, because a registration is replaced, never removed.
     ('office_api',   'household_harnesses', 'INSERT'),
     ('office_api',   'household_harnesses', 'UPDATE'),
+    -- 084_reports.sql (POS-757), the private report post. Narrowed by its row
+    -- policies: the filing household INSERTs its own; only the town's hands
+    -- UPDATE (a move, with its note); no DELETE, because a report is kept.
+    ('office_api',   'reports',          'INSERT'),
+    ('office_api',   'reports',          'UPDATE'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.

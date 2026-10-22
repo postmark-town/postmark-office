@@ -136,6 +136,8 @@ export const LANDED = {
   "082_depictions.sql":            { probe: `${rel("depictions")} AND ${trig("depictions_append_only")}` },
   // 083 (POS-666): a household's block on another household's mail, and the crossing's one question.
   "083_mail_blocks.sql":           { probe: `${rel("mail_blocks")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mail_block_stands' AND prosecdef)` },
+  // 084 (POS-757): the private report post, its row policies, and office_api its only reader.
+  "084_reports.sql":               { probe: `${rel("reports")} AND EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reports' AND policyname = 'reports_move') AND NOT has_table_privilege('snapshot_reader', 'reports', 'SELECT')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
