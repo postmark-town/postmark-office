@@ -351,7 +351,10 @@ test("happened · D4: hand and for from what the record knows; a route never rec
 // own read; measured on the compare fixture's Starforge (three waiting streams of 50, 6 and 5, each author's own words).
 // Darko 2026-10-21 08:26 ("633 6720 is good"): 6,720. The keeping call named once in the marks key and new_responses
 // put the full stack at 6,677 (the phrases' happened lines included), 21 over 6,656.
-const FULL_BUDGET = 6720;
+// POS-666 (2026-10-22, lane plumb-mail; raised on the recommendation sent to Wright as G8, PENDING DARKO'S WORD):
+// the four mail-parity acts join can.write (amend-letter { id, body } · withdraw-letter { id } · block { household }
+// · unblock { household }) and put the full stack at 6,784, 64 over 6,720.
+const FULL_BUDGET = 6848;
 test("H2 with every block · Starforge's glance with closer and happened stays bounded, every key explained", (t) => {
   const p = partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] } });
   // the widest realistic waiting block: three streams, as Starforge had on 10-19 (the compare fixture's)

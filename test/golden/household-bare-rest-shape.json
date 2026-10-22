@@ -506,6 +506,58 @@
     }
    },
    "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "string",
+   "fields": {
+    "body": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "id": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "seq": {
+     "description": "string",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "string",
+   "fields": {
+    "id": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "seq": {
+     "description": "string",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "string",
+   "fields": {
+    "household": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
   }
  ],
  "credential": {

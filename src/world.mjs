@@ -226,7 +226,16 @@ export async function heldPlaced(w, { pool = null, markRows = null } = {}) {
 // A world with no dungeon comes back as the SAME object from the function's
 // first, standpoint-free answer, so no ledger is read for it, and a clone that
 // predates the function has no dungeon class to hide anything with.
-async function sightFor(w, handle, key = null) {
+//
+// THE OUTSIDER LENS (WLD-26, ruled in Sitting B, 2026-10-19 17:48): `lens:
+// "outsider"` reads the world as if the reading household owned nothing, so an
+// author can see what a stranger sees. It is ONE switch on the one owner rule
+// below (`keep`, "a household's own marks are always its own to see"): with the
+// lens the rule is off, and sight, the reach built from it and what is told are
+// a stranger's. Read-only: nothing is written, and no act reads it.
+export const OUTSIDER_LENS = "outsider";
+export const isOutsiderLens = (lens) => String(lens ?? "").trim() === OUTSIDER_LENS;
+async function sightFor(w, handle, key = null, { lens = null } = {}) {
   w = await heldPlaced(w); // POS-688: a held thing is unplaced in every resident read, before sight
   const { verbs } = await mods();
   if (typeof verbs.standpointSight !== "function" || verbs.standpointSight(w, {}) === w) return w;
@@ -238,20 +247,20 @@ async function sightFor(w, handle, key = null) {
     const law = await crossingLaw(WORLD_CLONE).catch(() => null);
     stack = law?.thresholds ? await occupiedNowBy(who, law.thresholds, crossingDeps()).catch(() => []) : [];
   }
-  return sightedWorld(w, { verbs, handle: who, stack, key });
+  return sightedWorld(w, { verbs, handle: who, stack, key, lens });
 }
 
 /** The pure half of sightFor, so a test can hand it the clone's verbs: the
  *  standpoint's stack becomes the occupancy the one function reads, and the
- *  key's own residents keep their marks. */
-export function sightedWorld(w, { verbs, handle = null, stack = [], key = null } = {}) {
+ *  key's own residents keep their marks, unless the read is the outsider lens. */
+export function sightedWorld(w, { verbs, handle = null, stack = [], key = null, lens = null } = {}) {
   if (typeof verbs?.standpointSight !== "function") return w;
   const who = String(handle ?? "").trim();
   const own = new Set([...(key?.handles ?? []), ...(who ? [who] : [])]);
   return verbs.standpointSight(w, {
     occupancy: who ? new Map([[who, [...stack]]]) : null,
     handle: who || null,
-    keep: (m) => own.has(m.by),
+    keep: isOutsiderLens(lens) ? null : (m) => own.has(m.by),
   });
 }
 
@@ -2115,7 +2124,7 @@ export async function worldAir(oriented) {
 export async function worldOrient(args = {}, key = null, { roll = [], crowd = false } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce; // a multi-resident key must name a handle
-  const w = await sightFor(await world(), choice.handle, key);
+  const w = await sightFor(await world(), choice.handle, key, { lens: args.lens });
   const { verbs } = await mods();
   const at = choice.coords ?? await standCoords(choice.handle, w);
   const crossing = crossingOf(args);
@@ -2547,7 +2556,7 @@ export async function worldLights(raw = null) {
 export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, budget = null, entered: given = undefined, lights = true } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return choice.bounce;
-  const w = await sightFor(await world(), choice.handle, key);
+  const w = await sightFor(await world(), choice.handle, key, { lens: args.lens });
   const { verbs } = await mods();
   const at = choice.coords ?? await standCoords(choice.handle, w);
   const crossing = crossingOf(args);
@@ -2821,7 +2830,7 @@ async function porchLightOn(id, w, args) {
 
 export async function worldInvestigate(args = {}, key = null) {
   if (!args.mark) return { error: "bounce", defect: "which mark?", hint: "pass mark: '<by>/<slug>' (ids in /world/state; the telling's [id] tags)" };
-  const w = await sightFor(await world(), chooseStandpoint(args, key).handle ?? null, key);
+  const w = await sightFor(await world(), chooseStandpoint(args, key).handle ?? null, key, { lens: args.lens });
   const { verbs } = await mods();
   const depth = Number.isFinite(Number(args.depth)) ? Number(args.depth) : 1;
   const r = (await import("./held.mjs")).withHolder(verbs.investigate(String(args.mark), w, { depth }), w, args.mark); // POS-688: whose hands it is in
@@ -2942,7 +2951,7 @@ export async function worldFind(args = {}, key = null, { words } = {}) {
     hint: "name the mark you are looking for: world { find: \"snug\" } — a name, a slug or an id (GET /world/find?q=snug over plain HTTP)" };
   const choice = chooseStandpoint({ handle: args.handle }, key);
   if (choice.bounce) return choice.bounce;
-  const w = await sightFor(await world(), choice.handle, key);
+  const w = await sightFor(await world(), choice.handle, key, { lens: args.lens });
   const at = choice.handle ? await standCoords(choice.handle, w) : null;
   let service = null;
   try {
