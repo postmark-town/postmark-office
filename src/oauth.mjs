@@ -1081,12 +1081,13 @@ async function handleOauthRoute(req, res, ctx) {
     // refused by name and never shown the buttons. The row's own `accounts`
     // decide, the same test the store's write repeats at the button.
     if (pending.kind === "likeness") {
-      const { likenessRegistry, accountBinds, LIKENESS_WORDS } = await import("./likeness.mjs");
+      const { likenessRegistry, accountBinds } = await import("./likeness.mjs");
       const reg = await likenessRegistry().catch(() => null);
       const rec = reg?.houses?.[pending.slug];
       if (!rec) return html(res, 409, page("The record is closed", "<p>The office can't read this household's record just now. Nothing was changed; try the link again shortly.</p>"));
+      const pages = await import("./likeness-pages.mjs");
       if (!accountBinds(rec, ghUser.id))
-        return html(res, 403, page("Not this household's account", `
+        return html(res, 403, pages.plainPage("Not this household's account", `
           <p>You signed in as <strong>@${esc(ghUser.login)}</strong>, and the town's record does not bind
           the household <strong>${esc(rec.name ?? pending.slug)}</strong> to that account.</p>
           <p>Only the household's own GitHub account can answer for it. Nothing was changed.</p>`));
@@ -1094,23 +1095,13 @@ async function handleOauthRoute(req, res, ctx) {
       await odb.run("UPDATE pending SET json = ? WHERE id = ?", JSON.stringify({
         ...pending, stage: "consent", nonce: nonceL, gh_id: ghUser.id, gh_login: ghUser.login,
       }), pendingId);
-      const residents = (rec.residents ?? []).map((h) => `<strong>${esc(h)}</strong>`).join(", ") || "(none yet)";
-      const standing = rec.likeness?.answer === "yes" ? "<strong>yes</strong>" : rec.likeness?.answer === "no" ? "<strong>no</strong>" : "not answered yet, which reads as <strong>no</strong>";
-      const when = rec.likeness?.at ? ` (${esc(rec.likeness.at.slice(0, 10))}, by @${esc(rec.likeness.by ?? "")})` : "";
-      return html(res, 200, page("Your residents' likeness", `
-        <p>You are signed in as <strong>@${esc(ghUser.login)}</strong>, for the household
-        <strong>${esc(rec.name ?? pending.slug)}</strong>: ${residents}.</p>
-        <p><strong>${esc(LIKENESS_WORDS.question)}</strong></p>
-        <p>${esc(LIKENESS_WORDS.promise)}</p>
-        <p>${esc(LIKENESS_WORDS.yes_means)} ${esc(LIKENESS_WORDS.take_down)}</p>
-        <p>${esc(LIKENESS_WORDS.no_means)}</p>
-        <p class="muted">${esc(LIKENESS_WORDS.talk_it_over)} Your answer now: ${standing}${when}.</p>
-        <form method="post" action="${PUBLIC_BASE}/oauth/consent">
-          <input type="hidden" name="pending_id" value="${pendingId}">
-          <input type="hidden" name="nonce" value="${nonceL}">
-          <button name="decision" value="yes">Yes, you may</button>
-          <button name="decision" value="no" style="margin-left:1em">No</button>
-        </form>`));
+      // The question, in the town's look, with the gallery of what likeness
+      // means made from Darko's own household only (likeness-pages.mjs, WLD-83 10-22).
+      return html(res, 200, pages.questionPage({
+        login: ghUser.login, houseName: rec.name ?? pending.slug, residents: rec.residents ?? [],
+        answer: rec.likeness?.answer ?? null, at: rec.likeness?.at ?? null, by: rec.likeness?.by ?? null,
+        gallery: pages.galleryFor(reg.houses), action: `${PUBLIC_BASE}/oauth/consent`, pendingId, nonce: nonceL,
+      }));
     }
 
     const hh = await householdFor(db, ghUser.id, ghUser.login);
@@ -1176,12 +1167,10 @@ async function handleOauthRoute(req, res, ctx) {
         const { setLikeness } = await import("./likeness.mjs");
         const done = await setLikeness({ slug: pending.slug, answer: body.decision, ghId: pending.gh_id, ghLogin: pending.gh_login },
           { clone: ctx.clone });
-        const said = done.likeness.answer === "yes"
-          ? "<p>Your answer is <strong>yes</strong>. The town may now use your residents' likeness, under its PG-13 promise, and anything made from it is welcomed unless you oppose it. To ask for a take-down, write a letter to darko.</p>"
-          : "<p>Your answer is <strong>no</strong>. Nothing new will be made from your residents' likeness. Their own picture and appearance still show in town as before.</p>";
-        const kept = done.registry.rendered ? "It is on the town's public record now." : "It is kept, and reaches the town's public file at the next crossing.";
-        return html(res, 200, page("Answered", `${said}
-          <p class="muted">${kept} You can change it any time from the same link. Answered ${esc(done.likeness.at)} as @${esc(pending.gh_login)}.</p>`));
+        // a yes is thanked in Darko's words (10-22); a no stays plain and kind
+        const { answeredPage } = await import("./likeness-pages.mjs");
+        return html(res, 200, answeredPage({ answer: done.likeness.answer, rendered: done.registry.rendered,
+          at: done.likeness.at, login: pending.gh_login }));
       } catch (e) {
         if (e?.code && e.code < 500)
           return html(res, e.code, page("Not answered", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
