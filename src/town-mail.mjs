@@ -161,6 +161,10 @@ export async function hotLetters(odb, key, { handle = null } = {}) {
 export async function hotMailBlock(odb, key, { handle = null } = {}) {
   const rows = await hotLetters(odb, key, { handle });
   if (!rows.length) return null;
+  // A LETTER YOUR OWN BLOCK STOPS SAYS SO (POS-666 G2): the blocker is told,
+  // never dropped in silence. Only this key's own blocks are read.
+  const { blockedByMe, YOUR_LETTER_STOPPED } = await import("./mail-blocks.mjs");
+  const stops = await blockedByMe(key, rows.map((r) => r.payload?.args?.to));
   return {
     standing: rows.map((r) => ({
       handle: r.handle,
@@ -182,6 +186,7 @@ export async function hotMailBlock(odb, key, { handle = null } = {}) {
       // POS-666: present only on a letter its sender has amended, each
       // amendment by its seq and time; the bodies are the letter's own read.
       ...(r.amended ? { amended: r.amended } : {}),
+      ...(stops.has(r.payload?.args?.to) ? { stopped: YOUR_LETTER_STOPPED } : {}),
     })),
     settles_at: SETTLES_AT,
     // "while it stands", never "until the ferry delivers it": a letter a mail

@@ -47,7 +47,7 @@ import { refuse } from "./events.mjs";
 export const TOWN_HOUSES = Object.freeze(["hh:starforge", "hh:the-town"]);
 export const isTownHouse = (key) => TOWN_HOUSES.includes(key);
 
-export const BLOCKS_NOTE = "private to your household: the household you blocked is not told, its letters to you and yours to it stop at the crossing, and walking, marks and say are untouched. Lift a block any time with household { do: \"unblock\", args: { household } }; it never expires";
+export const BLOCKS_NOTE = "private to your household: the household you blocked is not told and its letters to you stop at the crossing; yours to it are refused at the door, and walking, marks and say are untouched. Lift a block any time with household { do: \"unblock\", args: { household } }; it never expires";
 
 export const TOWN_MAIL_REFUSAL = {
   code: 403,
@@ -158,6 +158,58 @@ export async function blocksAtOffice(key, { env = process.env } = {}) {
       return { household: null, blocks: null, count: null, note: BLOCKS_NOTE, unavailable: "blocks are not open on this office's record, so this read cannot say which stand" };
     throw e;
   }
+}
+
+// ── THE BLOCKER IS TOLD (G2, Darko 2026-10-22 17:53: "Told at the door") ──────
+//
+// The silent drop is the BLOCKED sender's. The household that placed the block
+// knows it stands, so its own letters to the household it blocked are refused
+// at the send door (and at amend-letter, when the block came after the send),
+// and a letter of its own that a later block now stops says so on its own
+// reads. Only the key's OWN blocks are read (the row policy's blocker side), so
+// nothing here can tell a blocked household anything.
+
+export const YOU_BLOCKED = "you have blocked this household; unblock to write";
+export const YOU_BLOCKED_HINT = (slug) =>
+  `household { do: "unblock", args: { household: "${slug}" } } lifts it; your blocks: household { read: "blocks" }`;
+export const YOUR_LETTER_STOPPED =
+  "you have blocked this household, so this letter will not sail while the block stands: the crossing stops it. Unblock to let it sail, or withdraw it";
+
+/**
+ * Which of `tos` (recipient handles) are in a household this key's own house
+ * has blocked. A store that cannot be read, or holds no blocks, answers none:
+ * the crossing still stops such a letter, so this only decides whether the
+ * blocker is TOLD, never whether mail stops.
+ */
+export async function blockedByMe(key, tos, { env = process.env } = {}) {
+  const out = new Set();
+  const wanted = [...new Set((tos ?? []).filter((t) => typeof t === "string" && t))];
+  if (!wanted.length || !key?.handles?.size) return out;
+  try {
+    const sides = await officeRead(async (c) => {
+      const mine = (await keyHouseholdOf(c, key)).household;
+      if (!mine?.startsWith("hh:")) return null;
+      const theirs = [];
+      for (const to of wanted) {
+        const k = await householdKeyFor(c, to);
+        theirs.push({ to, keys: await sessionKeysVia(c, k) });
+      }
+      return { mine, theirs };
+    }, { env, by: "blockedByMe" });
+    if (!sides) return out;
+    const blocked = await officeWrite(async (c) => (await c.query(
+      "SELECT blocked FROM mail_blocks WHERE lifted_at IS NULL")).rows.map((r) => r.blocked), { env, household: sides.mine });
+    for (const { to, keys } of sides.theirs) if (keys.some((k) => blocked.includes(k))) out.add(to);
+  } catch { /* unread is not blocked: the crossing is the stop */ }
+  return out;
+}
+
+/** The send door's refusal for a letter the blocker writes to the household it blocked, or null. */
+export async function youBlockedRefusal(key, to, opts = {}) {
+  if (!(await blockedByMe(key, [to], opts)).has(to)) return null;
+  let slug = null;
+  try { slug = await officeRead(async (c) => (await houseOfVia(c, to)).slug, { env: opts.env ?? process.env, by: "youBlockedRefusal" }); } catch { slug = null; }
+  return refuse(403, YOU_BLOCKED, YOU_BLOCKED_HINT(slug ?? to));
 }
 
 /**

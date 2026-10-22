@@ -154,3 +154,50 @@ test("the household door lists the four acts and the read, and dispatches block 
   const u = await householdApex({ do: "unblock", args: { household: "yonder" } }, hearth, {});
   assert.equal(u.result.unblocked, "hh:yonder");
 });
+
+// ── G2 (Darko 2026-10-22 17:53, "Told at the door") ─────────────────────────
+// The silent drop is the BLOCKED sender's. The household that placed the block
+// is told: its letter to the household it blocked is refused at the send door
+// (and at amend-letter when the block came after the send), and a letter of its
+// own that a later block stops says so on its own reads.
+
+const { DatabaseSync } = await import("node:sqlite");
+const flagOn = async (fn) => { process.env.TOWN_SINGLE_LOG = "1"; try { return await fn(); } finally { delete process.env.TOWN_SINGLE_LOG; } };
+const letterRow = async (o, from, to, slug) => (await import("../src/town-journal.mjs")).appendTownJournal(o, {
+  cls: "letter", act: "send-letter", household: "x", handle: from,
+  payload: { args: { from, to, title: slug, thread: "new", body: "a letter" }, id: `${from}-2026-10-22-to-${to}-${slug}`, file: `WHITE_PAGES/${from}/outbox/${slug}.md` },
+});
+const odb = () => { const d = new DatabaseSync(":memory:"); d.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"); return d; };
+
+test("G2 · the blocker's letter to the household it blocked is refused at the send door, in plain words; the blocked side is told nothing", { skip }, async () => {
+  await fresh();
+  await blockAtOffice({ household: "yonder" }, hearth);
+  const { sendAtDoor } = await import("../src/send-at-door.mjs");
+  // flip: `if (blocked) throw blocked;` in send-at-door.mjs § sendAtDoor
+  await assert.rejects(() => sendAtDoor({ from: "alpha", to: "beta", title: "hello", body: "hi" }, hearth, { db: null, clone: null, odb: null }),
+    (e) => e.code === 403 && e.defect === "you have blocked this household; unblock to write" && /unblock", args: \{ household: "yonder" \}/.test(e.hint));
+  const { youBlockedRefusal } = await import("../src/mail-blocks.mjs");
+  assert.equal(await youBlockedRefusal(yonder, "alpha"), null, "the blocked house's send door says nothing of the block");
+  await unblockAtOffice({ household: "yonder" }, hearth);
+  assert.equal(await youBlockedRefusal(hearth, "beta"), null, "lifted: the door takes the letter again");
+});
+
+test("G2 · a letter the blocker wrote before the block says so on its own reads, and amend-letter refuses it; the blocked sender's own reads say nothing", { skip }, async () => {
+  await fresh();
+  const o = odb();
+  await flagOn(async () => {
+    await letterRow(o, "alpha", "beta", "before-the-block");
+    await letterRow(o, "beta", "alpha", "from-the-other-side");
+    await blockAtOffice({ household: "yonder" }, hearth);
+    const { hotMailBlock } = await import("../src/town-mail.mjs");
+    const mine = await hotMailBlock(o, hearth);
+    // flip: the `stops.has(…) ? { stopped: … }` line in town-mail.mjs § hotMailBlock
+    assert.match(mine.standing[0].stopped ?? "", /^you have blocked this household, so this letter will not sail/);
+    const theirs = await hotMailBlock(o, yonder);
+    assert.equal("stopped" in theirs.standing[0], false, "the blocked sender is not told");
+    const { amendLetterAtOffice, pendingLetterRead } = await import("../src/letter-amend.mjs");
+    assert.match((await pendingLetterRead(o, hearth, "alpha-2026-10-22-to-beta-before-the-block")).stopped, /will not sail/);
+    await assert.rejects(() => amendLetterAtOffice({ id: "alpha-2026-10-22-to-beta-before-the-block", body: "changed" }, hearth, { odb: o, lock: async (fn) => fn() }),
+      (e) => e.code === 403 && e.defect === "you have blocked this household; unblock to write");
+  });
+});

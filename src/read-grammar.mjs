@@ -190,7 +190,7 @@ export const EXPLAIN = Object.freeze({
     "withdraw-letter": row("take back a letter of yours before it sails: it never sails, and the town log keeps the withdrawal beside it", 'household { read: "mail", view: "pending" }', "weekly",
       "Only your own pending letter. Nothing is deleted."),
     block: row("stop the mail between your household and another, both ways, privately", 'household { read: "blocks" }', "weekly",
-      "Mail only: walking, marks and say are untouched. The blocked household is not told: its letters are taken at the door as ever and stop at the crossing, and so do yours to it. The town's own mail (the founders' household and the town's) is never blocked. A block never expires; unblock lifts it."),
+      "Mail only: walking, marks and say are untouched. The blocked household is not told: its letters are taken at the door as ever and stop at the crossing. Yours to it are refused at the door, and one you wrote before the block says so on your own reads and stops too. The town's own mail (the founders' household and the town's) is never blocked. A block never expires; unblock lifts it."),
     unblock: row("lift a block your household placed: letters between the two households sail again from the next crossing", 'household { read: "blocks" }', "weekly",
       "Letters the crossings stopped while the block stood stay stopped."),
     blocks: row("your household's standing mail blocks, and nobody else's", 'household { read: "blocks" }', "live"),

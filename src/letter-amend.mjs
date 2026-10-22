@@ -99,7 +99,7 @@ const later = (l, act, payload, key, odb) => appendTownJournal(odb, {
  * letter's accepted identity), so a body the crossing would refuse is refused
  * here, now. A body equal to the one that stands writes nothing.
  */
-export async function amendLetterAtOffice(fields, key, { db, clone, odb, lock, now = Date.now() } = {}) {
+export async function amendLetterAtOffice(fields, key, { db, clone, odb, lock, blockedRefusal = null, now = Date.now() } = {}) {
   if (!odb || !townLogEnabled()) throw NO_TENSE();
   if (typeof fields?.body !== "string" || !fields.body.trim())
     throw refuse(422, "what does it say now?", "pass body: the letter's whole new body; it replaces the one that stands");
@@ -107,6 +107,9 @@ export async function amendLetterAtOffice(fields, key, { db, clone, odb, lock, n
   return held(async () => {
     const l = await judgeTarget(odb, key, fields, clone);
     const id = l.row.payload?.id ?? null;
+    // a block your house placed after the send (POS-666 G2): told, never amended into a letter that cannot sail
+    const blocked = await (blockedRefusal ?? (await import("./mail-blocks.mjs")).youBlockedRefusal)(key, l.args.to);
+    if (blocked) throw blocked;
     if (fields.body === l.args.body)
       return { letter_id: id, amended: false, version: l.versions.length,
         note: "this is already the body that stands, so nothing was written" };
@@ -151,11 +154,14 @@ export async function pendingLetterRead(odb, key, id) {
   const [l] = await ownPendingLetter(odb, key, { id });
   if (!l) return null;
   const a = l.args;
+  const { blockedByMe, YOUR_LETTER_STOPPED } = await import("./mail-blocks.mjs");
+  const stopped = !l.withdrawn && (await blockedByMe(key, [a.to])).has(a.to);
   return {
     id, from: l.row.handle, to: a.to ?? null, title: a.title ?? null, thread: a.thread || "new", body: a.body ?? null,
     standing: l.withdrawn ? null : STANDING,
     ...(l.withdrawn ? { withdrawn: { seq: l.withdrawn.seq, at: l.withdrawn.writtenAt }, note: "withdrawn: it will not sail" } : {}),
     written_at: l.row.writtenAt, seq: l.row.seq,
+    ...(stopped ? { stopped: YOUR_LETTER_STOPPED } : {}),
     versions: l.versions,
   };
 }
