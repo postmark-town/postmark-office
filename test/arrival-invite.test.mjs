@@ -61,6 +61,8 @@ const REGISTRY = () => ({ schema_version: 1, note: "invented for POS-576", house
   // resident of rookery-row AND the slug of another house.
   "rookery-row": { name: "Rookery Row", accounts: [{ login: "rr-gh", id: 9104 }], residents: ["moth"], since: "2026-08-04", declared_by: "fixture" },
   moth: { name: "Moth's House", accounts: [{ login: "mh-gh", id: 9105 }], residents: ["mothling"], since: "2026-08-05", declared_by: "fixture" },
+  // THE FOUNDERS' HOUSE (POS-576/e): its real slug, because the rule names it.
+  starforge: { name: "Starforge", accounts: [{ login: "sf-gh", id: 9106 }], residents: ["wright"], since: "2026-07-01", declared_by: "fixture" },
 } });
 const PINS = () => ({
   wick: { login: LANTERN.login, id: LANTERN.id, pinned: "2026-08-01" },
@@ -69,6 +71,7 @@ const PINS = () => ({
   "town-pen": { login: "town-gh", id: 9100, pinned: "2026-07-01" },
   moth: { login: "rr-gh", id: 9104, pinned: "2026-08-04" },
   mothling: { login: "mh-gh", id: 9105, pinned: "2026-08-05" },
+  wright: { login: "sf-gh", id: 9106, pinned: "2026-07-01" },
 });
 const OWN = { slug: "new-hearth", handle: "kindling" };
 const dirs = [];
@@ -122,6 +125,20 @@ test("I3 · refused by name, crediting nobody: your own household, the town's ow
   // about to found under another spelling) is still its own.
   assert.deepEqual(judgeInvite({ invited_by: "wick" }, { registry: REGISTRY(), own: { slug: "lantern-row", handle: "x" }, isMeep }),
     { refused: "own", named: "wick" });
+});
+
+test("I3c · THE FOUNDERS NEVER EARN (POS-576/e): ?invite=wright resolves into starforge and is refused with its own reason, logged like a miss", async () => {
+  const judged = judge("wright");
+  assert.deepEqual(judged, { refused: "founders", named: "wright", by: "starforge" });
+  assert.deepEqual(judge("hh:starforge"), { refused: "founders", named: "hh:starforge", by: "starforge" });
+  assert.equal(inviteReceipt(judged),
+    "Not recorded: \"wright\" names the founders' household, which never earns invitation stamps, so this invitation pays neither side. Your join is unaffected.");
+  const logs = [];
+  const writes = [];
+  const out = await recordInvite({ slug: "new-hearth", judged, at: AT, write: async (w) => { writes.push(w); return { slug: "new-hearth" }; }, log: (l) => logs.push(l) });
+  assert.deepEqual(out, { kept: false, why: "founders" });
+  assert.deepEqual(writes, [], "nothing is written");
+  assert.deepEqual(logs, ["[arrival-invite] new-hearth: not kept (by starforge, named wright, at 2026-10-22T12:00:00.000Z) — the founders never earn invitation stamps (POS-576/e)"]);
 });
 
 test("I3b · the meep law is the town's own: read from its ledger through its own stamp-mint tool (the instrument declare-exec asks)", async () => {
@@ -284,7 +301,7 @@ function townClone({ law = true } = {}) {
       "- 2026-07-25 · rules: stamps-v3 · meeps: ember-lamp · friendship: 5:5,10:10",
     ]));
   }
-  for (const h of ["wick", "ember-lamp", "quill", "town-pen", "moth", "mothling"]) {
+  for (const h of ["wick", "ember-lamp", "quill", "town-pen", "moth", "mothling", "wright"]) {
     mkdirSync(join(dir, "WHITE_PAGES", h), { recursive: true });
     writeFileSync(join(dir, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n\n# ${h}\n`);
   }
@@ -363,6 +380,24 @@ test("I8d · the meep law on the real road: the sealed ledger's meep is refused;
   assert.equal(blind.error, undefined, JSON.stringify(blind.error));
   assert.match(blind.invite, /^Not recorded: "wick" could not be judged: the town's meep law is unreadable/);
   assert.equal((await rowOf("dusk-house")).invited_by, null, "an unread law credits nobody, and the join still landed");
+});
+
+test("I8e · THE FOUNDERS ON THE REAL ROAD (POS-576/e): ?invite=wright lands the join, writes no credit, names the reason, and logs by and named", async () => {
+  const r = spawnSync(process.execPath, [join(ROOT, "src", "declare-exec.mjs"), JSON.stringify({
+    args: { handle: "foundling-guest", household: "Guest Of The Founders", card: "Wright sent me.", invited_by: "wright" },
+    key: { ghId: 5164, ghLogin: "guest-gh", handles: [] } })], {
+    encoding: "utf8",
+    env: { ...process.env, ...IX.env, TOWN_CLONE: clone, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid",
+      STAMP_KEY, STAMP_ENGINE_DIR: join(TOWN_CLONE, "tools") },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim().split("\n").at(-1));
+  assert.equal(out.error, undefined, JSON.stringify(out.error));
+  assert.equal(out.settled, true, "the invitee settles as anyone does");
+  assert.match(out.invite, /^Not recorded: "wright" names the founders' household, which never earns invitation stamps/);
+  assert.equal((await rowOf("guest-of-the-founders")).invited_by, null, "no credit, so nothing to pay either side");
+  assert.equal("invited_by" in housesIn(out.commit)["guest-of-the-founders"], false);
+  assert.match(r.stderr, /guest-of-the-founders: not kept \(by starforge, named wright, at [^)]+\) — the founders never earn invitation stamps/);
 });
 
 test("I8b · a refused invite lands the join with no credit and says why; no invite, no line", async () => {
@@ -454,6 +489,24 @@ test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS REAL INVITES ONL
   const printed = printInvites(plan);
   assert.match(printed, /h10 "?.*REAL: the inviter's 10 is owed, quill-hall's paid invite 11 in 2026-10 \(ET\), OVER the 10-a-month cap: not owed/s);
   assert.match(printed, /first letter 2026-10-10T12:00:00\.000Z · first home none · REAL: the inviter's 10 is owed, quill-hall's paid invite 1 in 2026-10 \(ET\)\n/);
+});
+
+test("I9e · the read shows a founders' row as REFUSED (founders): no place in the cap, nothing owed to either side", async () => {
+  const { planInvites, printInvites, currentSlugOf } = await import("../tools/invites.mjs");
+  const now = new Date("2026-10-20T00:00:00.000Z");
+  const rows = [
+    { slug: "by-hand", residents: ["bh"], invited_by: { by: "starforge", named: "wright", at: "2026-10-02T12:00:00.000Z" } },
+    { slug: "ordinary", residents: ["or"], invited_by: { by: "quill-hall", named: "quill", at: "2026-10-03T12:00:00.000Z" } },
+  ];
+  const letters = new Map([["by-hand", "2026-10-04T00:00:00.000Z"], ["ordinary", "2026-10-05T00:00:00.000Z"]]);
+  const plan = planInvites(rows, { letters, current: currentSlugOf([{ slug: "starforge", formerly: [] }]) }, { now });
+  const founders = plan.find((p) => p.household === "by-hand");
+  assert.equal(founders.refused, "founders");
+  assert.equal(founders.paid, null, "never a place in the cap, even with a letter in time");
+  assert.equal(plan.find((p) => p.household === "ordinary").paid.nth, 1, "the founders' row did not take place 1");
+  const printed = printInvites(plan);
+  assert.match(printed, /REFUSED \(founders\): starforge never earns invitation stamps \(POS-576\/e\)\. Nothing is owed to either side/);
+  assert.doesNotMatch(printed.split("by-hand")[1].split("ordinary")[0], /owed, |due/, "no mint line for it");
 });
 
 test("I9b · the read, run as Wright runs it, on the real store: it lists the households I8a and I8c invited and nothing it didn't", () => {

@@ -55,6 +55,14 @@ import { isReservedHandle } from "./residency.mjs";
 export const INVITE_MAX = 64;
 /** The town's own house: its stamps are the town's, never a referral's. */
 export const TOWN_HOUSE = "the-town";
+/**
+ * THE FOUNDERS NEVER EARN (POS-576/e, Darko 2026-10-22 22:07): the founders'
+ * household and the town's own. An invitation that resolves into either is
+ * refused with its own reason and pays neither side: the invitee joins and
+ * settles as anyone does, on the ordinary bundle. (the-town is also the town's
+ * own name, refused as such before it is ever resolved.)
+ */
+export const FOUNDERS = Object.freeze(["starforge", TOWN_HOUSE]);
 
 export const INVITE_GROUP = Object.freeze({
   "x-group": "invite",
@@ -109,6 +117,7 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
   if (!owner) return refuse("unknown");
   if (owner === own.slug) return refuse("own");
   if (owner === TOWN_HOUSE) return refuse("town");
+  if (FOUNDERS.includes(owner)) return { refused: "founders", named, by: owner };
   return { by: owner, named };
 }
 
@@ -117,6 +126,11 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
  * throws, answers what happened. `write` is the store's one writer.
  */
 export async function recordInvite({ slug, judged, at = new Date(), write = setHouseholdInvitedBy, env = process.env, log = console.error } = {}) {
+  // A founders' invite is a miss with its own reason, logged like the others (POS-576/e): nothing is written.
+  if (judged?.refused === "founders") {
+    log(`[arrival-invite] ${slug}: not kept (by ${judged.by}, named ${judged.named}, at ${at instanceof Date ? at.toISOString() : at}) — the founders never earn invitation stamps (POS-576/e)`);
+    return { kept: false, why: "founders" };
+  }
   if (!judged?.by) return { kept: false };
   const invitedBy = { by: judged.by, named: judged.named, at: at instanceof Date ? at.toISOString() : at };
   try {
@@ -138,6 +152,7 @@ const REFUSED = Object.freeze({
   meep: "names a meep, and meeps can't be credited for invitations",
   unknown: "names nobody the town knows: give a resident's handle, or hh:<slug> for a household",
   law: "could not be judged: the town's meep law is unreadable right now, so no invitation is credited",
+  founders: "names the founders' household, which never earns invitation stamps, so this invitation pays neither side",
 });
 
 /** The one sentence the declaration's answer carries about the invite, or null. */

@@ -40,10 +40,15 @@
 //     invites in the month the 10 falls due (the month of `real.at`, on
 //     Darko's clock, US-Eastern), so the cap of 10 paid a month is read off.
 //     An invite that never became real takes no place in the cap.
+//   · REFUSED (founders): an invite whose inviter is the founders' household or
+//     the town (POS-576/e) pays neither side and takes no place in the cap.
+//     The declaration never writes one; a row that names one anyway (by hand,
+//     or written before the rule) is shown so, and never minted.
 
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { actsQuery } from "../src/world2-acts.mjs";
+import { FOUNDERS } from "../src/arrival-invite.mjs";
 
 const SWEEP_HOURS_UTC = [6, 18];
 export const REAL_WITHIN_MS = 30 * 864e5;
@@ -105,6 +110,7 @@ export function planInvites(rows, { ashore = new Map(), rolled = new Set(), lett
       : (r.residents ?? []).some((h) => rolled.has(h)) ? { yes: true, at: null, by: "an address in the town's roll" }
         : { yes: false };
     const inviter = current(r.invited_by.by);
+    const founders = FOUNDERS.includes(inviter);
     return {
       window: windowOf(r.at),
       household: r.slug,
@@ -117,11 +123,12 @@ export function planInvites(rows, { ashore = new Map(), rolled = new Set(), lett
       settled,
       real: realOf({ at: r.at, letter: letters.get(r.slug) ?? null, home: homes.get(r.slug) ?? null, now }),
       paid: null,
+      ...(founders ? { refused: "founders" } : {}),
     };
   });
   // THE CAP COUNTS REAL INVITES ONLY, in the month each 10 falls due (US-Eastern)
   const placed = new Map();
-  for (const p of [...all].filter((x) => x.real.status === "real").sort((a, b) => a.real.at.localeCompare(b.real.at) || a.household.localeCompare(b.household))) {
+  for (const p of [...all].filter((x) => x.real.status === "real" && !x.refused).sort((a, b) => a.real.at.localeCompare(b.real.at) || a.household.localeCompare(b.household))) {
     const month = monthET(p.real.at);
     const k = `${p.invited_by}|${month}`;
     placed.set(k, (placed.get(k) ?? 0) + 1);
@@ -139,6 +146,10 @@ export function printInvites(plan) {
     const named = p.named && p.named !== p.invited_by && p.named !== `hh:${p.invited_by}` ? ` (named ${p.named})` : "";
     const was = p.invited_by_was ? ` (credited as ${p.invited_by_was}, renamed since)` : "";
     lines.push(`  ${p.household}${p.name ? ` "${p.name}"` : ""} · invited by ${p.invited_by}${was}${named} · at ${p.at}`);
+    if (p.refused === "founders") {
+      lines.push(`      REFUSED (founders): ${p.invited_by} never earns invitation stamps (POS-576/e). Nothing is owed to either side; the invitee has the ordinary bundle.`);
+      continue;
+    }
     lines.push(p.settled.yes
       ? `      SETTLED${p.settled.at ? ` ${p.settled.at}` : ""} (${p.settled.by}): the invitee's 10 is due`
       : `      NOT SETTLED (no ashore record, no address in the roll): the invitee's 10 waits`);
