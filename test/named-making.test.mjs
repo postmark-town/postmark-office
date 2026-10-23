@@ -322,13 +322,18 @@ test("#759 review C · a holder's room: making a named thing past its capacity i
   assert.equal(o.holdRows().filter((x) => x.entity === bag).length, 2);
 });
 
-test("#759 review A · the made names fail closed: an unread hold record is a refusal, never 'no such name'; where no hold record is kept, nothing was made", async () => {
-  const { madeNamesRead, madeNamesUnread } = await import("../src/named-making.mjs");
-  const map = new Map([["a/b", { id: "a/b" }]]);
-  assert.deepEqual(await madeNamesRead({ edgeOn: () => false, readRecord: async () => { throw new Error("never asked"); } }), { made: new Map() });
-  assert.equal((await madeNamesRead({ edgeOn: () => true, readRecord: async () => ({ made: map }) })).made, map);
-  assert.match((await madeNamesRead({ edgeOn: () => true, readRecord: async () => { throw new Error("connection refused"); } })).unread, /connection refused/);
-  assert.match((await madeNamesRead({ edgeOn: () => true, readRecord: async () => ({ fold: null }) })).unread, /without its made record/);
+test("#759 review A · the made names fail closed: an unread record is a refusal, never 'no such name'; where no hold record is kept, nothing was made", async () => {
+  const { madeNamesRead, madeNamesUnread, MADE_NAMES_SQL, madeNamesParams } = await import("../src/named-making.mjs");
+  const never = async () => { throw new Error("never asked"); };
+  assert.deepEqual(await madeNamesRead({ ids: ["a/b"], edgeOn: () => false, query: never }), { made: new Map() });
+  assert.deepEqual(await madeNamesRead({ ids: [], edgeOn: () => true, query: never }), { made: new Map() }, "no name, no read");
+  let asked = null;
+  const r = await madeNamesRead({ ids: ["a/b", "a/b", null], edgeOn: () => true, query: async (sql, params) => { asked = [sql, params];
+    return [{ id: 7, action: "make", object: "a/b", payload: { thing: "a/b", made: { id: "a/b", kind: "thing" } } }]; } });
+  assert.deepEqual([...r.made.keys()], ["a/b"]);
+  assert.deepEqual(asked, [MADE_NAMES_SQL, madeNamesParams(["a/b"])]);
+  assert.match((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => { throw new Error("connection refused"); } })).unread, /connection refused/);
+  assert.match((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => null })).unread, /not pointed at the record/);
   const u = madeNamesUnread("the record could not be reached");
   assert.equal(u.code, 503);
   assert.match(u.hint, /nothing was written/);

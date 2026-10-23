@@ -142,13 +142,23 @@ export function setDownNotYet(id) {
  * name was made in hand refuses then, never guesses "no" (a ground mark under
  * a made name would hide the held thing, canon winning the overlay).
  */
-export async function madeNamesRead({ edgeOn, readRecord, reasonOf = (e) => String(e?.message ?? e) }) {
-  if (!edgeOn()) return { made: new Map() };
+export async function madeNamesRead({ ids, edgeOn, query, reasonOf = (e) => String(e?.message ?? e) }) {
+  const want = [...new Set([...(ids ?? [])].filter((x) => x != null).map(String))];
+  if (!want.length || !edgeOn()) return { made: new Map() };
   try {
-    const r = await readRecord();
-    return r?.made instanceof Map ? { made: r.made } : { unread: "the hold record answered without its made record" };
+    const rows = await query(MADE_NAMES_SQL, madeNamesParams(want));
+    if (!Array.isArray(rows)) return { unread: "this office is not pointed at the record" };
+    return { made: foldMade(rows.map((r) => ({ seq: r.id, action: r.action, object: r.object, payload: r.payload }))) };
   } catch (e) { return { unread: reasonOf(e) }; }
 }
+
+/**
+ * THE ONE READ the made names are asked by, at a door that writes: the hold
+ * lane's makes naming these ids, oldest first. Narrow on purpose (an index
+ * step on class, then the ids), and in the shape every reader of `acts` uses.
+ */
+export const MADE_NAMES_SQL = "SELECT id, action, object, payload FROM acts WHERE class = $1 AND action = ANY($2) AND object = ANY($3) ORDER BY id";
+export const madeNamesParams = (ids) => ["holding", [MAKE_FACE], ids];
 
 /** The refusal when the made names could not be read: nothing written, try again. */
 export function madeNamesUnread(unread) {
