@@ -19,11 +19,13 @@
 // restored: a taken class stays taken until the record is read (fail closed). Each
 // process keeps its own, as each keeps its own law snapshot.
 //
-// DROPPED WITH THE LAW IT WAS READ FROM (POS-680). Which classes are taken, and since
-// when, is the law's answer, so a new law drops the keep at once (onLawPublish): the
-// kept read is cleared, a fresh one is asked straight away, and a read that was under
-// way against the old law is thrown away rather than kept. Until the new read lands,
-// nothing is restored (fail closed, as before the first read).
+// STALE WITH THE LAW IT WAS READ FROM (POS-680; Wright's review of #761). Which classes
+// are taken, and since when, is the law's answer, so a new law marks the keep stale at
+// once (onLawPublish) and asks again straight away; a read that was under way against
+// the old law is thrown away rather than kept. The old keep goes on answering until a
+// new read LANDS, and is replaced only then: a store that is down after a publish must
+// not turn every restored class back into a taken one for KEEP_MS per try. /release
+// says when the keep is stale (`restoredStanding`).
 
 import { lawSnapshot, onLawPublish } from "./law-snapshot.mjs";
 
@@ -86,7 +88,7 @@ export async function readRestored({ classes = [], query = defaultQuery } = {}) 
   return out;
 }
 
-const state = { byClass: new Map(), at: 0, inflight: null, failed: false, law: 0 };
+const state = { byClass: new Map(), at: 0, inflight: null, failed: false, law: 0, stale: false };
 
 /** Every class the published law says is stolen. */
 function stolenInLaw() {
@@ -109,6 +111,7 @@ export function refreshRestored({ query = defaultQuery, now = Date.now(), classe
       state.byClass = byClass;
       state.at = now;
       state.failed = false;
+      state.stale = false;
     } catch {
       if (law !== state.law) return;
       state.failed = true;   // no text kept: nothing here says it (error-text census)
@@ -122,15 +125,19 @@ export function refreshRestored({ query = defaultQuery, now = Date.now(), classe
   return state.inflight;
 }
 
-/** A new law is in force: drop the keep and ask again now (§ DROPPED WITH THE LAW). */
-export function dropRestoredKeep({ query = defaultQuery } = {}) {
+/** A new law is in force: the keep is stale and is asked again now; it answers until a new read lands (§ STALE WITH THE LAW). */
+export function staleRestoredKeep({ query = defaultQuery } = {}) {
   state.law += 1;
-  state.byClass = new Map();
+  state.stale = true;
   state.at = 0;
-  state.failed = false;
   if (!state.inflight) refreshRestored({ query }).catch(() => {});
 }
-onLawPublish(() => dropRestoredKeep());
+onLawPublish(() => staleRestoredKeep());
+
+/** For the health line: whether the keep was read against the law in force, when, and whether the last read failed. */
+export function restoredStanding() {
+  return { stale: state.stale, read_at: state.at ? new Date(state.at).toISOString() : null, last_read_failed: state.failed };
+}
 
 /** SYNCHRONOUS. Is this taken class restored, as this process last read? */
 export function restoredClass(klass, { now = Date.now(), query = defaultQuery, classes = null } = {}) {
@@ -143,4 +150,5 @@ export function __setRestoredForTest(entries = null, at = Date.now()) {
   state.byClass = new Map(Object.entries(entries ?? {}));
   state.at = entries == null ? 0 : at;
   state.inflight = null;
+  state.stale = false;
 }

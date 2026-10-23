@@ -14,17 +14,19 @@
 //      the new law (the law snapshot and the world graph snapshot alike);
 //   2. a refresh let go and finishing late never publishes over a newer law;
 //   3. every publish, from any path, is heard by the same listeners;
-//   4. the kept read of restored classes is dropped with the law it was read from;
+//   4. the kept read of restored classes is marked stale with the law it was read
+//      from, answers until a new read lands, and is replaced only then;
 //   5. THE DOORS: after an ingest, within one tick, a take of a second holder
 //      obeys the new holders dial, and a taken class's take, give and consume
 //      refuse, then land again once the law gives it back. The doors are the
 //      kind door (`callKinds`) with every collaborator injected, reading the
 //      class layer the way the office does: `classViewOf(lawSnapshot())`.
 //
-// THE FLIPS (each reds the named cases): no deadline on the law refresh (1, 5a,
+// THE FLIPS (each reds the named cases; a refresh keeping the store's own text
+// reds 6): no deadline on the law refresh (1, 5a,
 // 5b); no deadline on the graph refresh (1g); a late refresh publishes anyway
-// (2); only the timer's own publish is announced (3); the restored keep kept
-// across a publish (4).
+// (2); only the timer's own publish is announced (3); the restored keep never
+// marked stale, or dropped before a new read lands (4).
 
 process.env.LAW_REFRESH_DEADLINE_MS = "150";
 process.env.WORLD_GRAPH_REFRESH_DEADLINE_MS = "150";
@@ -219,18 +221,31 @@ test("3g · a graph publish from any path is heard", async () => {
 
 // ── 4 · the restored keep goes with its law ─────────────────────────────────
 
-test("4 · the kept read of restored classes is dropped on a law publish", async (t) => {
+test("4 · a law publish marks the restored keep stale; with the store down the old keep still answers; once the store answers the new keep lands", async (t) => {
   const db = await storeFor(t);
   if (!db) return;
   t.after(() => restored.__setRestoredForTest(null));
   await bless(db, 1, lawRows({ trinket: { stolen: true, clue: CLUE } }));
   restored.__setRestoredForTest({ trinket: { since: "2026-10-26T06:30:00.000Z", restored: true } });
   assert.equal(restored.restoredClass("trinket"), true, "kept: the town gave the trinket back");
-  // the next law turns the dial off and on again; what was kept was read against the old one
+  assert.equal(restored.restoredStanding().stale, false);
+
+  // a new law is published while the store cannot be read (this file engages none: the re-read fails)
   await bless(db, 2, lawRows({ trinket: { stolen: true, clue: CLUE } }));
   await law.reloadLawSnapshot({ query: db.query });
-  assert.equal(restored.restoredClass("trinket", { query: async () => ({ rows: [] }) }), false,
-    "a new law drops the keep: nothing is restored until it is read against the new law (fail closed)");
+  await until(() => restored.restoredStanding().last_read_failed);
+  assert.equal(restored.restoredStanding().last_read_failed, true, "the re-read after the publish failed");
+  assert.equal(restored.restoredClass("trinket"), true, "the store is down: the old keep still answers, the class is not taken back");
+  assert.equal(restored.restoredStanding().stale, true, "and the health line says the keep is stale");
+
+  // the store answers again, a keep later: the new read lands, against the new law (the dial went on again at S2; no restore since)
+  const S2_BLESSED = "2026-10-28T06:30:00.000Z";
+  const answers = async (sql) => (sql === restored.RESTORE_ROWS_SQL
+    ? { rows: [{ id: "1", action: "restore", actor: "the-town", object: "trinket", at: "2026-10-27T18:31:00.000Z" }] }
+    : { rows: [{ number: 2, blessed_at: S2_BLESSED, data: { dials: { stolen: true } } }, { number: 1, blessed_at: "2026-10-26T06:30:00.000Z", data: { dials: {} } }] });
+  restored.restoredClass("trinket", { now: Date.now() + restored.KEEP_MS, query: answers });
+  assert.ok(await until(() => restored.restoredStanding().stale === false), "the new keep landed");
+  assert.equal(restored.restoredClass("trinket"), false, "read against the new law: the restore was before the dial went on again, so the class is taken");
 });
 
 // ── 5 · THE DOORS ──────────────────────────────────────────────────────────
@@ -311,4 +326,24 @@ test("5b · a taken class: after the ingest the next take, give and consume of i
   await go(w, "give", { to: BOWL, kind: "glass-bead", count: 2 });
   await go(w, "consume", { kind: "glass-bead" });
   assert.deepEqual(kindEdgesOf(w.fold(), ME), [{ kind: "glass-bead", count: 2 }], "4 + 1 taken − 2 given − 1 eaten");
+});
+
+// ── 6 · what a refresh's error shows on GET /release ────────────────────────
+
+test("6 · a refresh's error reaches GET /release in the office's own words: the store's text, role and host go to the log only", async () => {
+  // what a cancelled statement and a refused connection say, with the names a store's text can carry
+  const pgError = (message, code) => Object.assign(new Error(message), { code });
+  const raw = [pgError("canceling statement due to statement timeout", "57014"),
+    pgError('permission denied for relation law_projection (role "office_api" at 127.0.0.1:5432)', "42501"),
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), { code: "ECONNREFUSED" })];
+  for (const e of raw) {
+    law.resetLawSnapshot(); graph.resetWorldGraph();
+    const fail = async () => { throw e; };
+    await law.reloadLawSnapshot({ query: fail });
+    await graph.reloadWorldGraph({ query: fail });
+    const release = JSON.stringify({ law: law.lawForRelease(), world_graph: graph.worldGraphForRelease() });
+    assert.match(release, /the record did not answer/, `the release names no reason: ${release}`);
+    for (const said of [/canceling statement/i, /permission denied/i, /\brelation\b/i, /office_api/, /127\.0\.0\.1/, /ECONNREFUSED/])
+      assert.doesNotMatch(release, said, `GET /release would carry the store's own text (${said}): ${release}`);
+  }
 });

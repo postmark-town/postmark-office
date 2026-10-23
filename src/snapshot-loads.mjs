@@ -21,6 +21,8 @@
 // A connection that dies without an answer is the one thing neither rule
 // ends; the cap bounds it at MAX_LOADS, and /release names it.
 
+import { causeKind, errorSaid, PLAIN_REASONS } from "./fault-words.mjs";
+
 /** Refreshes (law and graph together) allowed to run at once, counting ones let go that have not finished. */
 export const MAX_LOADS = Number(process.env.REFRESH_MAX_LOADS ?? 2);
 /** The server-side limit on each statement a refresh sends (ms): a little above the 3 s deadline. */
@@ -36,6 +38,25 @@ export function startLoad() {
 }
 /** Give the slot back when the refresh has finished, however it finished. */
 export function endLoad() { loads.running = Math.max(0, loads.running - 1); }
+
+// ── A REFRESH'S ERROR, IN PLAIN WORDS (POS-663's rule; Wright's review of #761) ──
+// The refreshers' standing rides GET /release, a keyless page. A store's own
+// text can name a role, a host or a relation, so what a refresh keeps is the
+// plain reason (fault-words.mjs § PLAIN_REASONS), and the raw error goes to
+// the log, once per change of what it said (a store that is down is asked
+// every tick, and the log is not a second outage).
+const lastSaid = new Map();
+/** The plain reason a refresh failed, its raw error logged beside `what` when it changed. */
+export function plainRefreshError(e, what) {
+  if (e?.own_words === true) return String(e.message);
+  const said = errorSaid(e);
+  const reason = PLAIN_REASONS[causeKind(e) ?? "record"];
+  if (lastSaid.get(what) !== said) {
+    lastSaid.set(what, said);
+    console.error(`[office] ${what} could not be read (${reason}): ${said}`);
+  }
+  return reason;
+}
 
 /** For the health line: how many refreshes run now, the cap, and how many ticks were skipped at it. */
 export const loadsStanding = () => ({ running: loads.running, max: MAX_LOADS, skipped_at_cap: loads.skipped });

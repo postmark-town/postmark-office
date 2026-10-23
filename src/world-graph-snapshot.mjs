@@ -36,7 +36,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
 import { graphFromTables, EDGE_TYPES } from "./world-store.mjs";
-import { startLoad, endLoad, loadsStanding, timedSession, servePool, MAX_LOADS } from "./snapshot-loads.mjs";
+import { startLoad, endLoad, loadsStanding, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
 
 /** The newest snapshot's key. Newest by settlement, then by build. */
 export const PIN_SQL = `
@@ -93,6 +93,23 @@ function publish(tables, pin, key, source, n = state.started) {
   state.publishedAt = new Date().toISOString();
   const standing = worldGraphStanding();
   for (const fn of listeners) { try { fn(standing); } catch { /* a listener that throws does not stop the publish */ } }
+}
+
+/**
+ * The standing as GET /release (a keyless page) shows it: the graph's pin and
+ * disclosure, the load at import's time and outcome, and the refresher. Never
+ * the role or the connection it read with, and never a fixture's path.
+ */
+export function worldGraphForRelease() {
+  const { refused, loaded_at_import: atImport, ...rest } = worldGraphStanding();
+  const REFUSED = "WORLD_GRAPH_ROWS is set, and refused outside node --test";
+  return {
+    ...rest,
+    ...(rest.disclosed && state.rowsRefused ? { disclosed: rest.disclosed.split(state.rowsRefused).join(REFUSED) } : {}),
+    ...(refused ? { refused: REFUSED } : {}),
+    ...(atImport ? { loaded_at_import: { ms: atImport.ms, published: atImport.published } } : {}),
+    refresh: worldGraphRefreshStanding(),
+  };
 }
 
 /** The refresher's own state, for the health line (law-snapshot.mjs § lawRefreshStanding, the same fields). */
@@ -224,7 +241,7 @@ export function reloadWorldGraph({ query = defaultQuery, force = false, deadline
       if (newest()) state.checkedAt = new Date().toISOString();
       return { changed: true, standing: worldGraphStanding() };
     } catch (e) {
-      if (newest()) state.lastError = String(e?.message ?? e).slice(0, 160);
+      if (newest()) state.lastError = plainRefreshError(e, "the world graph refresh"); // plain words: the standing rides a keyless page
       return { changed: false, standing: worldGraphStanding() };
     } finally {
       await session?.end();
@@ -328,7 +345,7 @@ async function loadAtImport(url) {
     await client.connect();
     await reloadWorldGraph({ query: (sql, params) => client.query(sql, params), deadlineMs: null }); // its own 2 s per query govern
   } catch (e) {
-    state.lastError = `the load at import failed: ${String(e?.message ?? e).slice(0, 140)}`;
+    state.lastError = `the load at import failed: ${plainRefreshError(e, "the world graph's load at import")}`;
   } finally {
     try { await client?.end(); } catch { /* the connection is already gone */ }
   }
