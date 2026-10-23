@@ -28,11 +28,11 @@ const LIST_CAP = 25;
  * amend's declaration; `marks` the published fold's marks; `filedParentOf(id)`
  * the frozen filing's parent id or null. Returns null when nothing moves.
  */
-export function carryForecast({ id, prior, next, marks, filedParentOf = () => null }) {
+export function carryForecast({ id, prior, next, marks, law = [], filedParentOf = () => null }) {
   const move = moveOf(prior, next);
   if (!move) return null;
   const byId = new Map(marks.map((m) => [m.id, m]));
-  const lineage = extendsFromMarks(marks);
+  const lineage = extendsFromMarks([...marks, ...(law ?? [])]); // the classes are the law's since WLD-116 (a world in the old shape has them among its marks)
   // Up one step both ways, mixed, as the clearing walks it (carry.mjs § up one step).
   const geoUp = (m) => byId.get(m)?.placementParent ?? null;
   const under = (start) => {

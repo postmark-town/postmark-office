@@ -123,12 +123,12 @@ import { ENCOUNTER_VERBS } from "./encounter.mjs";
 import { departurePace } from "./world-classes.mjs";
 import { EARSHOT_M } from "./voices.mjs"; // postmark#3592: the description names both distances
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
-import { AMBIENT_REACH_SQL, CLASS_MARK_GATE_SQL, WORKS_PATH_SQL } from "./world-store.mjs";
+import { AMBIENT_REACH_SQL, CLASS_MARK_GATE_SQL, declaresSql } from "./world-store.mjs";
 // POS-270 lane W 2(a): the questions below are answered from the store's graph
 // snapshot once it has loaded. Each SQL statement has a TWIN registered beside
 // it, a function over the snapshot's rows, held equal to the SQL by
 // test/world-graph-db.test.mjs. `openStore` hands out that handle.
-import { byId, classMarkGate, graphDb, jtypeTrue, jx, registerTwin, worksValue, NO_WORLD } from "./world-graph-db.mjs";
+import { byId, classMarkGate, declaresValue, graphDb, jtypeTrue, jx, registerTwin, NO_WORLD } from "./world-graph-db.mjs";
 import { worldGraphSnapshot, worldGraphStanding } from "./world-graph-snapshot.mjs";
 import { actorRoster, resolveHumanActor } from "./human-actor.mjs";
 // The hand an embodied act is recorded under. Imported rather than derived here:
@@ -1370,6 +1370,8 @@ registerTwin(CLASS_BY_NAME, (g, namesJson) => {
   return g.nodes.filter((n) => classMarkGate(n) && names.has(jx(n.p, "class"))).map(gateRow);
 });
 
+// (WLD-116: a LAW node declares outright; `declaresSql()` is world-store's one answer, the
+// law-node arm first and the works clause below as the old shape's compatibility read.)
 // ⚠ THE DECLARATION TEST ASKS THE WORKS CLAUSE, NOT THE `declares` STAMP, and
 // the difference bit within the hour. `declares` is a convenience the hydrator
 // emits; `worksClause()` is what `CLASS_ROSTER_GATE_SQL` and the world's own
@@ -1381,13 +1383,13 @@ registerTwin(CLASS_BY_NAME, (g, namesJson) => {
 // the office asks it.
 const INSTANCE_ROWS = `SELECT id, by,
          json_extract(props, '$.class') AS class,
-         ${WORKS_PATH_SQL}              AS declares,
+         ${declaresSql()}              AS declares,
          subkind
        FROM nodes WHERE id IN (SELECT value FROM json_each(?))`;
 // `id IN (…)` is answered off the primary-key index, so the rows come in id order.
 const nodesIn = (g, idsJson) => [...new Set(JSON.parse(idsJson ?? "[]"))].map((id) => g.byId.get(id)).filter(Boolean).sort(byId);
 registerTwin(INSTANCE_ROWS, (g, idsJson) => nodesIn(g, idsJson)
-  .map((n) => ({ id: n.id, by: n.by, class: jx(n.p, "class"), declares: worksValue(n.p), subkind: n.subkind })));
+  .map((n) => ({ id: n.id, by: n.by, class: jx(n.p, "class"), declares: declaresValue(n), subkind: n.subkind })));
 
 /**
  * The classes a caller is standing in or within reach of, and which mark each

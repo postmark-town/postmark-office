@@ -73,13 +73,13 @@ export function gexfPath(view = "full") {
 // The four node kinds the store holds, plus `unknown` for the placeholder end of
 // a dangling edge. Colour lives on the page, not here — a payload that shipped
 // hex codes would make the office the owner of the town's palette.
-export const NODE_KINDS = ["mark", "class", "code", "doctrine", "unknown"];
+export const NODE_KINDS = ["mark", "law", "class", "code", "doctrine", "unknown"]; // `law` (WLD-116): a class or a property of one, filed in a foundry; never a mark
 
 // The convergence layer of §2.11: class → affordance → implementing code must be
 // traversable. These are the kinds that traversal runs over, and the page's
 // convergence chip selects exactly this set. Named here so the office and the
 // page cannot drift into two different ideas of what "convergence" means.
-export const CONVERGENCE_KINDS = ["class", "code", "doctrine"];
+export const CONVERGENCE_KINDS = ["law", "class", "code", "doctrine"]; // (a class is a law node since WLD-116; `class` stays for the retired mechanic stand-ins)
 
 // ── the snapshot ─────────────────────────────────────────────────────────────
 // The payload is built from the world graph snapshot (POS-270) and cached on the

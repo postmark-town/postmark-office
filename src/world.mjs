@@ -177,7 +177,16 @@ async function world() {
   const { build } = await mods();
   const worldState = selected.state;
   const skeleton = publishedSkeleton(WORLD_CLONE).skeleton;
-  const assembled = build.assembleWorld({ worldState, skeleton });
+  // THE LAW (WLD-116): classes are law nodes, never marks, so the fold's marks carry none and the
+  // blessing publishes them beside the state (WORLD/law-state.json). They ride on the state as a
+  // NON-ENUMERABLE `law` (the bytes /world/state serves are untouched; the world's own
+  // assembleWorld reads `worldState.law` too) and on the assembled world as `law`, for every
+  // reader that asks a class: the walk's pace, the carriers' mobility, the dials page, a ground's
+  // rules. A world in the old shape has [] here and its classes among its marks, as before.
+  const law = selected.law ?? [];
+  Object.defineProperty(worldState, "law", { value: law, enumerable: false, configurable: true });
+  const assembled = build.assembleWorld({ worldState, skeleton, law });
+  if (assembled.law == null) assembled.law = law; // an engine older than the law tree does not carry it
   // THE HOUSEHOLD MAP THE PUBLISHED WORLD WAS FOLDED WITH (POS-368, 2026-10-05).
   // A resident with no parcel of their own is at home on their household's
   // parcel, and the engine's homeOf finds it through `world.households`. The
@@ -192,7 +201,7 @@ async function world() {
   // receipt stamps the answer with the sha it was folded from, and reading it
   // back out of `publishedState` would be a second `git show` of a 1 MiB
   // world-state.json on every focus. It is already in hand here; carry it.
-  assembled._raw = { worldState, skeleton, ref: selected.ref, sha: selected.sha, blessed: selected.blessed ?? null };
+  assembled._raw = { worldState, skeleton, ref: selected.ref, sha: selected.sha, blessed: selected.blessed ?? null, lawState: selected.lawState ?? null };
   _worlds.set(selected.ref, { sha: selected.sha, world: assembled });
   _places.clear(); // place words are a fold over these marks — a new world, new names
   return assembled;
@@ -2446,7 +2455,8 @@ async function groundMarkIds(w) {
 export async function markRows(ids = [], w = null) {
   w ??= await world();
   let byId = _byIds.get(w);
-  if (!byId) _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m])));
+  // (a class is a law node since WLD-116 and is asked for by id all the same: the law rides in the one lookup)
+  if (!byId) _byIds.set(w, byId = new Map([...(w?.marks ?? []), ...(w?.law ?? [])].map((m) => [m.id, m])));
   const out = [];
   let made = null; // a thing made in hand is not in canon; the overlay names it (POS-766/d), asked only on a miss
   for (const id of ids) {
@@ -2481,7 +2491,8 @@ export const crowdPresence = () => ({ limit: Infinity });
 export async function markRecords(ids = [], w = null) {
   w ??= await world();   // cached by ref+sha; the apex has no world of its own in hand
   let byId = _byIds.get(w);
-  if (!byId) _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m])));
+  // (a class is a law node since WLD-116 and is asked for by id all the same: the law rides in the one lookup)
+  if (!byId) _byIds.set(w, byId = new Map([...(w?.marks ?? []), ...(w?.law ?? [])].map((m) => [m.id, m])));
   const out = {};
   // NO CLASS RIDES HERE BY NAME (WLD-29, the pointer model: Wright, AUTHORITY
   // 2026-10-13T19:16:02.257Z). `the-town/resident` used to be added to every
@@ -2596,7 +2607,8 @@ export function dialsPageOf(w, { classDialsOf = null, isClass = undefined, law =
   const answer = {
     settlement: b?.n == null ? null : `S${b.n}`,
     sha,
-    dials: dialsDigestOf(w?.marks ?? [], { classDialsOf, ...(isClass ? { isClass } : {}) }),
+    // (the classes are the law's since WLD-116: a world in the old shape has them among its marks, the new one beside them)
+    dials: dialsDigestOf([...(w?.marks ?? []), ...(w?.law ?? [])], { classDialsOf, ...(isClass ? { isClass } : {}) }),
     means: DIALS_MEANS,
     ...(sha ? {} : { note: "this office's world stands on no blessed settlement, so these dials are its published fold's and are not kept between reads" }),
     ...(skew === "behind" ? { class_layer: `the classes' dials are read from ${layerAt}, not yet this settlement's` } : {}),
@@ -3308,6 +3320,22 @@ export async function worldCanon() {
   };
 }
 export async function worldSkeletonRaw() { return (await world())._raw.skeleton; }
+
+// GET /world/law — WORLD/law-state.json at the blessing /world/state stands on (WLD-116): the
+// law nodes (the classes and their properties) and the foundries they stand in. A class is a law
+// node, never a mark, so `/world/state` carries none; the page that cannot read the tree reads
+// them here, beside it, from the same blessed ref. A blessing in the old shape has no such file
+// and its classes are in /world/state's marks: the answer is then an empty law, which the page
+// reads as "classes known only from the record's own marks", exactly the fallback it already has.
+let _lawServed = null; // { key, doc } — the newest blessing's only
+export async function worldLawStateRaw() {
+  const w = await world();
+  const key = `${w._raw.ref}@${w._raw.sha}`;
+  if (_lawServed?.key === key) return _lawServed.doc;
+  const doc = w._raw.lawState ?? { law: "no law tree at this blessing: its classes stand among /world/state's marks", foundries: [], count: 0, nodes: [] };
+  _lawServed = { key, doc };
+  return doc;
+}
 // B1: the signed-in draft overlay's journal half comes from `claims` + the
 // withdraw acts under W2_GUARDS=1; the SKETCHBOOK half is unchanged either way
 // (world2-guards.mjs § GUARD 2 — dropping it would vanish a resident's pre-flag
@@ -3715,9 +3743,11 @@ async function draftWrite(worldClone, exec, payload, household, subject) {
 
 /** Published canon as the guards want it, plus the ids the replay needs to tell an addition from a modification. */
 function canonForGuards() {
-  const state = publishedState(WORLD_CLONE).state ?? {};
+  const published = publishedState(WORLD_CLONE);
+  const state = published.state ?? {};
   const marks = state.marks ?? [];
-  return { marks, byId: new Map(marks.map((m) => [m.id, m])), ids: new Set(marks.map((m) => m.id)) };
+  // `law`: the classes are law nodes since WLD-116, and the carry forecast reads their lineage ([] in the old shape)
+  return { marks, law: published.law ?? [], byId: new Map(marks.map((m) => [m.id, m])), ids: new Set(marks.map((m) => m.id)) };
 }
 
 /**
@@ -4160,7 +4190,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
       const frozen = idOfMarkFileFrom(frozenFilingAt(WORLD_CLONE, String(mainRef(WORLD_CLONE))));
       const filedOf = new Map([...frozen].map(([file, mid]) => [mid, file]));
       carries = carryForecast({
-        id, prior: priorLive ?? priorCanon, next: clean, marks: canon.marks,
+        id, prior: priorLive ?? priorCanon, next: clean, marks: canon.marks, law: canon.law,
         filedParentOf: (mid) => (filedOf.has(mid) ? declaredParentIdOf(filedOf.get(mid), frozen) : null),
       });
 

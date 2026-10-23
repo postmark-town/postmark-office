@@ -57,6 +57,7 @@ import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
 import { blessed, draftRefForKey, refExists } from "./world-branches.mjs";
 import { nextSettlementAttemptAt } from "./settlements.mjs";
 import { plainReason } from "./fault-words.mjs";
+import { LAW_NODE_KIND } from "./world-law-shape.mjs"; // WLD-116: a class is a law node
 
 // ── flags ────────────────────────────────────────────────────────────────────
 // Read from the environment on every call rather than latched at import: a test
@@ -193,7 +194,8 @@ function lineageIn(graph) {
     const ext = new Map();
     graph.forEachNode?.((id, a) => {
       const p = a?.props ?? {};
-      if (a?.kind === "mark" && p.declares && p.class != null && !ext.has(String(p.class))) ext.set(String(p.class), p.extends ?? null);
+      // a declaration is a LAW node in the new shape (WLD-116) and a mark standing in the works in the old
+      if ((a?.kind === "mark" || a?.kind === LAW_NODE_KIND) && p.declares && p.class != null && !ext.has(String(p.class))) ext.set(String(p.class), p.extends ?? null);
     });
     f = (n) => { const e = ext.get(String(n)); return e == null ? null : String(e); };
     LINEAGE.set(graph, f);

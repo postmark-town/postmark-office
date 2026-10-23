@@ -303,8 +303,9 @@ async function serviceFor(worldClone, worldState, deps = {}) {
 /** The class mark a named class resolves to, out of the fold. The fold carries
  *  class marks and their bodies; it drops `actions:`, which is why the roster is
  *  a dep (the store owns it) and the body is not. */
+// (WLD-116: a class is a LAW node, held beside the fold's marks as `law`; a world in the old shape still has it among its marks, so both are read, the law first)
 const classMarkIn = (worldState, className) =>
-  (worldState?.marks ?? []).find((m) => kindFieldOf(m) === "class" && String(classNodeNameOf(m) ?? "") === String(className ?? "")) ?? null;
+  [...(worldState?.law ?? []), ...(worldState?.marks ?? [])].find((m) => kindFieldOf(m) === "class" && String(classNodeNameOf(m) ?? "") === String(className ?? "")) ?? null;
 
 /**
  * The `ground` block for a target, or null — assembled from the class mark's own
