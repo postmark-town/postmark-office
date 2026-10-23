@@ -19,7 +19,9 @@
 //   · visits     page views whose link carried a listed `from=` tag, per tag
 //                (GET requests answered 2xx/3xx, llms.txt and join/agent.md
 //                included; the office's /api/ calls and static assets are not);
-//   · settled    households whose declaration landed a tag, per tag (086);
+//   · settled    households whose declaration landed a tag, per tag (086); a
+//                cell under 3 prints "<3", folded by the store itself, so a
+//                small source cannot single out a household;
 //   · agents     keyless berths minted, per town each claimed to sail from
 //                (chartered towns named, every other claim summed in other,
 //                exactly as GET /berth counts them);
@@ -107,7 +109,8 @@ export function report({ visits = {}, referrers = {}, settled = [], agents = [] 
 }
 
 const line = (label, counts) => {
-  const parts = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`);
+  const size = (n) => (typeof n === "number" ? n : 0); // a folded "<3" sorts below every counted cell
+  const parts = Object.entries(counts).sort((a, b) => size(b[1]) - size(a[1]) || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`);
   return `  ${label.padEnd(10)}${parts.length ? parts.join(" · ") : "none"}`;
 };
 export function printReport(rows, { log = true } = {}) {

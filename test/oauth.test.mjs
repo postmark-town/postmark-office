@@ -325,6 +325,42 @@ test("POS-770 · the visitor pass carries the kept ?from tag, and an approve par
   assert.deepEqual(await parkedFor(770003), [], "a deny parks nothing");
 });
 
+// WHAT THE GRANT DOES NEVER DEPENDS ON `from` (Wright's G1 conditions): a submit
+// carrying a malformed or hostile `from` grants exactly as one carrying none,
+// down to a working token, and parks nothing. The form has no JavaScript of its
+// own beyond filling the one input, so with JS off it is the form without it.
+test("POS-770 · a consent submit with a bad `from` grants exactly as one without it, and parks nothing", async () => {
+  const grantWith = async (identity, extra) => {
+    ghIdentity = identity;
+    const clientId = await registerClient();
+    const verifier = randomBytes(32).toString("base64url");
+    const authorize = new URL(`${BASE}/oauth/authorize`);
+    for (const [k, v] of Object.entries({ response_type: "code", client_id: clientId, redirect_uri: REDIRECT, state: "st",
+      code_challenge: s256(verifier), code_challenge_method: "S256" })) authorize.searchParams.set(k, v);
+    const r1 = await fetch(authorize, { redirect: "manual" });
+    const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+    const html = await (await fetch(r2.headers.get("location"))).text();
+    const form = { pending_id: /name="pending_id" value="([^"]+)"/.exec(html)[1], nonce: /name="nonce" value="([^"]+)"/.exec(html)[1], decision: "approve", ...extra };
+    const r = await fetch(`${BASE}/oauth/consent`, { method: "POST", redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(form) });
+    const back = new URL(r.headers.get("location"));
+    const tok = await fetch(`${BASE}/oauth/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", code: back.searchParams.get("code"), client_id: clientId, redirect_uri: REDIRECT, code_verifier: verifier }) });
+    const grant = await tok.json();
+    const town = await fetch(`${BASE}/town`, { headers: { authorization: `Bearer ${grant.access_token}` } });
+    return { consent: r.status, state: back.searchParams.get("state"), hasCode: Boolean(back.searchParams.get("code")), token: tok.status, read: town.status };
+  };
+  const plain = await grantWith({ id: 770010, login: "no-tag" }, {});
+  assert.deepEqual(plain, { consent: 302, state: "st", hasCode: true, token: 200, read: 200 });
+  for (const [i, bad] of ["", "hn", "REDDIT2", "\"><script>alert(1)</script>", "x".repeat(5000)].entries()) {
+    const ghId = 770011 + i;
+    assert.deepEqual(await grantWith({ id: ghId, login: `bad-tag-${i}` }, { from: bad }), plain, `from=${JSON.stringify(bad.slice(0, 20))} grants exactly as no from`);
+    const owner = await STORES[0].store.connect("world2_owner");
+    try { assert.equal((await owner.query("SELECT 1 FROM arrival_source_pending WHERE gh_id = $1", [ghId])).rows.length, 0, "and parks nothing"); }
+    finally { await owner.end(); }
+  }
+});
+
 test("authorize without PKCE is refused", async () => {
   const clientId = await registerClient();
   const authorize = new URL(`${BASE}/oauth/authorize`);

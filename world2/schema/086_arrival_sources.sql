@@ -19,9 +19,13 @@
 --                           30 days; a newer park replaces an older one
 --   arrival_sources         household → tag, landed once at its declaration
 --
--- The tag's own grammar is checked here (a short slug); WHICH tags is the
--- office's list, checked before any park, so the list grows by a PR and never
--- by a migration (Wright's G3).
+-- NO TAG CHECK HERE (Wright's G3, 2026-10-23): the office's list
+-- (src/arrival-source.mjs § FROM_TAGS) is the one gate, checked before any
+-- park, so the list grows by a PR and never by a migration.
+--
+-- SMALL CELLS ARE FOLDED AT THE SOURCE (Wright's G4): arrival_sources_daily
+-- answers a day × tag cell under 3 as a NULL count, which the read prints
+-- "<3", so a small source cannot single out a household.
 --
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
 --
@@ -35,12 +39,12 @@
 BEGIN;
 CREATE TABLE IF NOT EXISTS arrival_source_pending (
   gh_id      bigint PRIMARY KEY,                -- the GitHub id of the human who clicked
-  tag        text NOT NULL CHECK (tag ~ '^[a-z0-9]{1,24}$'),
+  tag        text NOT NULL,
   parked_at  timestamptz NOT NULL
 );
 CREATE TABLE IF NOT EXISTS arrival_sources (
   household    text PRIMARY KEY,                -- the house the declaration founded
-  tag          text NOT NULL CHECK (tag ~ '^[a-z0-9]{1,24}$'),
+  tag          text NOT NULL,
   recorded_at  timestamptz NOT NULL
 );
 ALTER TABLE arrival_source_pending ENABLE ROW LEVEL SECURITY;
@@ -69,14 +73,16 @@ BEGIN
   RETURN kept > 0;
 END $$;
 
--- Counts only: per day on Darko's clock (US-Eastern) and per tag.
+-- Counts only: per day on Darko's clock (US-Eastern) and per tag, a cell
+-- under 3 answered as NULL (folded: "<3").
 CREATE OR REPLACE FUNCTION arrival_sources_daily(since timestamptz)
   RETURNS TABLE (day date, tag text, n bigint)
   LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT (recorded_at AT TIME ZONE 'America/New_York')::date AS day, tag, count(*)::bigint AS n
-      FROM public.arrival_sources
-     WHERE recorded_at >= since
-     GROUP BY 1, 2
+    SELECT day, tag, CASE WHEN n >= 3 THEN n END AS n
+      FROM (SELECT (recorded_at AT TIME ZONE 'America/New_York')::date AS day, tag, count(*)::bigint AS n
+              FROM public.arrival_sources
+             WHERE recorded_at >= since
+             GROUP BY 1, 2) cells
      ORDER BY 1, 2
 $$;
 

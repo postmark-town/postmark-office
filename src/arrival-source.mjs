@@ -74,9 +74,16 @@ export async function landSource({ ghId, household, at = new Date(), query = act
   }
 }
 
-/** Counts per day (US-Eastern) and tag since an instant; null when the office is not pointed at the record. */
+/** The word a folded cell is printed as: the store answers a day × tag cell under 3 with no count. */
+export const SMALL_CELL = "<3";
+
+/**
+ * Counts per day (US-Eastern) and tag since an instant; a cell under 3 is
+ * SMALL_CELL, folded by the store itself. null when the office is not pointed
+ * at the record.
+ */
 export async function dailySources({ since, query = actsQuery, env = process.env } = {}) {
   const rows = await query("SELECT day::text AS day, tag, n::int AS n FROM arrival_sources_daily($1)", [since], env);
   if (rows === null) return null;
-  return rows.map((r) => ({ day: String(r.day).slice(0, 10), tag: r.tag, n: Number(r.n) }));
+  return rows.map((r) => ({ day: String(r.day).slice(0, 10), tag: r.tag, n: r.n == null ? SMALL_CELL : Number(r.n) }));
 }

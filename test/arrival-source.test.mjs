@@ -24,8 +24,9 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import vm from "node:vm";
+import { createHash } from "node:crypto";
 
-import { FROM_TAGS, FROM_KEY, FROM_TTL_MS, fromTag, fromCarrier, parkSource, landSource, dailySources } from "../src/arrival-source.mjs";
+import { FROM_TAGS, FROM_KEY, FROM_TTL_MS, SMALL_CELL, fromTag, fromCarrier, parkSource, landSource, dailySources } from "../src/arrival-source.mjs";
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { REGISTRY_PATH, PINS_PATH, serializeRegistry, serializePins } from "../src/residency.mjs";
@@ -44,6 +45,16 @@ test("A1 · the tag: the issue's fourteen, any case; anything else is nothing", 
   assert.equal(fromTag("Reddit"), "reddit");
   for (const bad of [null, "", "hn", "reddit2", "<b>", "ignore-the-rules"]) assert.equal(fromTag(bad), null, String(bad));
   assert.equal(FROM_KEY, "pm.from", "the site's keep (site src/lib/join-source.mjs)");
+});
+
+// THE TWO LISTS MATCH (Wright's G3): the office's const is the gate, and the site
+// keeps a mirror (postmark-site src/lib/join-source.mjs). Neither repo's CI checks
+// out the other, so each pins the list's digest to the SAME constant: the site's
+// test/join-source.test.mjs asserts this very number. A tag added on one side
+// reds that side until the digest, and so the other list, moves with it.
+const FROM_TAGS_DIGEST = "0ddea6f74eb32801";
+test("A1b · the list's digest is the one the site's mirror pins (postmark-site test/join-source.test.mjs)", () => {
+  assert.equal(createHash("sha256").update(FROM_TAGS.join(",")).digest("hex").slice(0, 16), FROM_TAGS_DIGEST);
 });
 
 // ── A2 the carrier ──────────────────────────────────────────────────────────
@@ -72,6 +83,12 @@ test("A2 · the consent page's carrier: a hidden input, filled only from a liste
   assert.equal(carried({ tag: "reddit", at: now - FROM_TTL_MS - 1 }, now), "", "older than 30 days");
   assert.equal(carried({ tag: "reddit", at: now + 60_000 }, now), "", "kept in the future");
   assert.doesNotMatch(html, /setItem|removeItem/, "the carrier never writes the keep");
+  // THE SCRIPT READS ONLY pm.from AND NEVER TOUCHES THE GRANT (Wright's G1 conditions)
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
+  assert.equal(script.match(/getItem\(/g).length, 1);
+  assert.match(script, /localStorage\.getItem\("pm\.from"\)/);
+  assert.doesNotMatch(script, /fetch|XMLHttpRequest|submit|pending_id|nonce|decision|cookie|location/, "nothing but the one input");
+  assert.ok(script.length < 400, "a few lines");
 });
 
 // ── A3 086 on a real store ──────────────────────────────────────────────────
@@ -96,7 +113,17 @@ test("A3 · 086: a park lands once as the house's came_from, the counts come onl
   assert.deepEqual(await landSource({ ghId: 8803, household: "late-house", at }), { kept: false }, "a park older than 30 days is swept, never landed");
   assert.deepEqual(await landSource({ ghId: 9999, household: "no-park", at }), { kept: false });
   assert.deepEqual(await asOwner("SELECT household, tag FROM arrival_sources ORDER BY household"), [{ household: "fern-house", tag: "reddit" }]);
-  assert.deepEqual(await dailySources({ since: "2026-10-01T00:00:00Z" }), [{ day: "2026-10-22", tag: "reddit", n: 1 }], "per day on Darko's clock");
+  assert.deepEqual(await dailySources({ since: "2026-10-01T00:00:00Z" }), [{ day: "2026-10-22", tag: "reddit", n: SMALL_CELL }],
+    "per day on Darko's clock, and a cell under 3 is folded by the store itself (Wright's G4)");
+  for (const [i, h] of ["ash-house", "birch-house", "cedar-house"].entries()) {
+    await parkSource({ ghId: 8810 + i, tag: "bsky", at });
+    await landSource({ ghId: 8810 + i, household: h, at });
+  }
+  assert.deepEqual(await dailySources({ since: "2026-10-01T00:00:00Z" }), [
+    { day: "2026-10-22", tag: "bsky", n: 3 }, { day: "2026-10-22", tag: "reddit", n: SMALL_CELL },
+  ], "three or more is counted");
+  assert.deepEqual(await asOwner("SELECT n FROM arrival_sources_daily($1) WHERE tag = 'reddit'", ["2026-10-01T00:00:00Z"]), [{ n: null }],
+    "the fold is the store's, not the caller's");
   const c = await IX.store.connect("office_api");
   try {
     for (const table of ["arrival_sources", "arrival_source_pending"])
@@ -201,11 +228,11 @@ test("A5 · the read: tagged page views and off-site referrers per day on Darko'
   assert.deepEqual(agents.sort((a, b) => (a.day + a.town).localeCompare(b.day + b.town)), [
     { day: "2026-10-22", town: "1f3d9", n: 2 }, { day: "2026-10-22", town: "other", n: 1 }, { day: "2026-10-23", town: "none", n: 3 },
   ], "chartered towns named, any other claim in other");
-  const rows = report({ ...folded, settled: [{ day: "2026-10-22", tag: "reddit", n: 1 }], agents });
+  const rows = report({ ...folded, settled: [{ day: "2026-10-22", tag: "reddit", n: "<3" }, { day: "2026-10-22", tag: "bsky", n: 4 }], agents });
   assert.deepEqual(rows.map((r) => r.day), ["2026-10-23", "2026-10-22"], "newest first");
-  assert.deepEqual(rows[1].settled, { reddit: 1 });
+  assert.deepEqual(rows[1].settled, { reddit: "<3", bsky: 4 });
   const printed = printReport(rows);
-  assert.match(printed, /2026-10-22 \(ET\)\n  visits    reddit 2\n  settled   reddit 1\n  agents    1f3d9 2 · other 1\n  referrers www\.reddit\.com 1/);
+  assert.match(printed, /2026-10-22 \(ET\)\n  visits    reddit 2\n  settled   bsky 4 · reddit <3\n  agents    1f3d9 2 · other 1\n  referrers www\.reddit\.com 1/);
   assert.doesNotMatch(printed, /192\.0\.2|Mozilla|curl|\/join\//, "no address, agent string or path is printed");
 });
 
@@ -223,7 +250,7 @@ test("A5b · the read, run as the operator runs it, on the real store with a log
   const today = rows.find((x) => x.day === day);
   assert.deepEqual(today.visits, { mongoose: 1 });
   assert.deepEqual(today.referrers, { "example.org": 1 });
-  assert.equal(today.settled.mongoose, 1, "A4's Lamp House landed today, counted through arrival_sources_daily");
+  assert.equal(today.settled.mongoose, "<3", "A4's Lamp House landed today: one household, folded by the store");
   const bad = spawnSync(process.execPath, [join(ROOT, "tools", "arrivals.mjs"), "--days", "0"], { encoding: "utf8", env: { ...process.env, WORLD2_PG_URL: "" } });
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /--days takes a whole number of days/);
