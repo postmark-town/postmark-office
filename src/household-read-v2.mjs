@@ -47,7 +47,7 @@ export const CAN_GROUPS = Object.freeze({
   tend: ["address", "address-fields", "home", "profile", "window"],
   back: ["stake", "stake-vote", "fund-verify"],
   host: ["host", "cancel-event", "rsvp", "announce"],
-  house: ["add-resident", "declare", "begin"],
+  house: ["add-resident", "declare", "begin", "buy-parcel-room"],
 });
 
 /**

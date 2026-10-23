@@ -5236,6 +5236,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   await discloseYourGround(result, clean);             // before the publish note, which strips _ground_min
   const verdictSeen = result?._verdict ?? null;        // postmark#3593: the note is redone below if the stake bounces
   await disclosePublishing(result, by);
+  await discloseParcelRoom(result, by, clean);                // POS-762: a claim past its household's parcel room, said at once
 
   // THE INLINE STAKE (founder-ruled 2026-08-19, same sitting as the publish
   // note): stamps: N stakes the new mark in the same act — mark and escrow
@@ -5588,6 +5589,36 @@ async function discloseYourGround(result, clean) {
     });
     if (note) Object.assign(result, note);
   } catch { /* a courtesy: never fail the act it rides on */ }
+}
+
+// PARCELS FROM 11-01 (POS-762): parcel-room.mjs § parcelRoomNoteOf's I/O half.
+// A parcel claim past its household's room is written (R11), and the answer
+// says at once, in the world fold's own sentence, that the crossing will oppose
+// it. What the household holds is its standing parcels and its residents' open
+// parcel claims, this one aside: the set the clearing will count. A courtesy:
+// it reads, never refuses, and never fails the act it rides on.
+const PARCELS_HELD_SQL = `
+  SELECT slug FROM marks WHERE kind = 'parcel' AND status = 'standing' AND owner = ANY($1)
+  UNION
+  SELECT slug FROM claims WHERE class = 'parcel' AND status IN ('draft', 'pending', 'held_review') AND claimant = ANY($1)`;
+async function discloseParcelRoom(result, by, clean = null) {
+  try {
+    if ((result?.kind ?? clean?.kind) !== "parcel" || !result?.id || result.amended || clean?.amend === true) return;
+    const houses = await householdLookup();
+    const house = houses?.(by);
+    if (!house?.residents?.length) return;
+    const { actsQuery } = await import("./world2-acts.mjs");
+    const rows = await actsQuery(PARCELS_HELD_SQL, [house.residents]);
+    if (rows === null) return;
+    const held = new Set(rows.map((r) => r.slug).filter((s) => s && s !== result.id)).size;
+    const { houseFactsNow, parcelRoomNoteOf } = await import("./parcel-room.mjs");
+    const facts = await houseFactsNow({ townClone: process.env.TOWN_CLONE ?? join(HERE, "..", "town-clone") });
+    if (facts === null) return;
+    const note = parcelRoomNoteOf({ kind: "parcel", held, fact: facts[house.key], engine: await foldConstants(), by });
+    if (note) result.parcel_room = note;
+  } catch (e) {
+    console.error(`[world] the parcel-room note tripped (${String(e?.message ?? e).slice(0, 160)}) — the claim stands`);
+  }
 }
 
 // The I/O half: a courtesy that must never fail the write it rides on.
