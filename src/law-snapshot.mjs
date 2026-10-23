@@ -46,6 +46,16 @@
 // announcement to its read workers, and every kept read that is derived from
 // the law (restored-classes.mjs), so nothing derived outlives the law it was
 // read from.
+//
+// ── AN ACT ASKS FIRST (POS-680 part 2) ───────────────────────────────────────
+// The timer is how a READ learns the law moved; an ACT does not wait for it.
+// `freshLaw()` asks the pin (two index lookups) and, when it moved, loads the
+// new law before it answers, so the act stands on the law the store has at
+// that moment. When the store says it moved and the new law could not be
+// loaded in time, `behind` says so, and the act refuses rather than judge
+// under law the store has replaced (act-law.mjs). A refresh let go keeps
+// running, so loads still running are capped (MAX_LOADS): a store that is slow
+// is never asked for the whole law once per act.
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
 
@@ -76,7 +86,11 @@ const fresh = () => ({
   publishedAt: null,   // when the law in force was published (ISO)
   abandoned: 0,        // refreshes let go at the deadline, this process
   unhear: null,        // the refresher's own listener, removed by a reset
+  loading: 0,          // refreshes still running, let go or not (MAX_LOADS caps them)
+  seenPinned: null,    // the settlement whose law the store last said is the newest ingested
 });
+/** Refreshes allowed to run at once, counting ones let go that have not finished. */
+export const MAX_LOADS = 2;
 const state = fresh();
 const listeners = new Set();
 
@@ -107,7 +121,29 @@ function publish(next, key, n) {
  */
 export function lawRefreshStanding() {
   return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
-    in_flight: Boolean(state.inflight), deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError };
+    in_flight: Boolean(state.inflight), loading: state.loading, deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError,
+    ...(lawBehind() ? { behind: lawBehind() } : {}) };
+}
+
+/**
+ * Null when this process acts on the newest law the store has ingested (as far
+ * as the store last said), else the sentence: the store's law moved and this
+ * process has not loaded it.
+ */
+export function lawBehind() {
+  const seen = state.seenPinned == null ? null : Number(state.seenPinned);
+  const have = state.snap?.pin?.settlement == null ? null : Number(state.snap.pin.settlement);
+  if (seen == null || seen === have) return null;
+  return `the store's law is S${seen}'s, and this office has not loaded it yet (it acts on ${have == null ? "no law" : `S${have}'s`})`;
+}
+
+/**
+ * The law as the store has it NOW, for an act: asks the pin, loads a moved law,
+ * and answers `{ snap, behind }` (§ AN ACT ASKS FIRST). Never throws.
+ */
+export async function freshLaw({ query, deadlineMs } = {}) {
+  await reloadLawSnapshot({ ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
+  return { snap: state.snap, behind: lawBehind() };
 }
 
 /**
@@ -145,7 +181,12 @@ async function defaultQuery(sql, params) {
  */
 export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlineMs = LAW_REFRESH_DEADLINE_MS } = {}) {
   if (state.inflight) return state.inflight;
+  if (state.loading >= MAX_LOADS) {
+    state.lastError = `${state.loading} law refreshes are still running; no new one starts until one finishes`;
+    return Promise.resolve({ changed: false, busy: true, standing: lawStanding() });
+  }
   const n = ++state.started;
+  state.loading += 1;
   const newest = () => n === state.started; // only the newest refresh speaks for the health line
   let live = null;
   const work = (async () => {
@@ -153,6 +194,7 @@ export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlin
     try {
       const pin = (await query(PIN_SQL)).rows[0] ?? {};
       const key = `${pin.newest ?? "-"}/${pin.pinned ?? "-"}`;
+      if (newest() || n > state.publishedBy) state.seenPinned = pin.pinned ?? null;
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: lawStanding() };
@@ -170,6 +212,7 @@ export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlin
       if (newest()) state.lastError = String(e?.message ?? e).slice(0, 160);
       return { changed: false, standing: lawStanding() };
     } finally {
+      state.loading -= 1;
       if (state.inflight === live) state.inflight = null;
     }
   })();
@@ -212,5 +255,5 @@ export function resetLawSnapshot() {
   if (state.timer) clearInterval(state.timer);
   state.unhear?.();
   // the count goes on, and every refresh from before the reset is late: none publishes into it
-  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1 });
+  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1, loading: state.loading });
 }

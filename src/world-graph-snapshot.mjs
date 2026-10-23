@@ -29,6 +29,8 @@
 // the next tick asks again), never kept until a restart; one that was let go
 // and then finishes still publishes, unless a later one already has. And every
 // publish, from any path, is heard by the same listeners (`onWorldGraphPublish`).
+// An act asks first (`freshGraph()`, part 2), and loads still running are
+// capped, as law-snapshot.mjs § AN ACT ASKS FIRST says for the law.
 
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
@@ -67,7 +69,9 @@ export async function graphTablesAt(query, { tag_sha, office_sha }) {
 export const WORLD_GRAPH_REFRESH_DEADLINE_MS = Number(process.env.WORLD_GRAPH_REFRESH_DEADLINE_MS ?? 3_000);
 
 const fresh = () => ({ snap: null, key: null, inflight: null, lastError: null, timer: null, rowsRefused: null, atImport: null,
-  started: 0, publishedBy: 0, checkedAt: null, publishedAt: null, abandoned: 0, unhear: null });
+  started: 0, publishedBy: 0, checkedAt: null, publishedAt: null, abandoned: 0, unhear: null, loading: 0, seenKey: null });
+/** Refreshes allowed to run at once, counting ones let go that have not finished. */
+export const MAX_LOADS = 2;
 const state = fresh();
 const listeners = new Set();
 
@@ -94,7 +98,20 @@ function publish(tables, pin, key, source, n = state.started) {
 /** The refresher's own state, for the health line (law-snapshot.mjs § lawRefreshStanding, the same fields). */
 export function worldGraphRefreshStanding() {
   return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
-    in_flight: Boolean(state.inflight), deadline_ms: WORLD_GRAPH_REFRESH_DEADLINE_MS, error: state.lastError };
+    in_flight: Boolean(state.inflight), loading: state.loading, deadline_ms: WORLD_GRAPH_REFRESH_DEADLINE_MS, error: state.lastError,
+    ...(worldGraphBehind() ? { behind: worldGraphBehind() } : {}) };
+}
+
+/** Null when this process holds the newest graph the store last named, else the sentence. */
+export function worldGraphBehind() {
+  if (state.seenKey == null || state.seenKey === state.key) return null;
+  return `the store's newest world graph is ${String(state.seenKey).slice(0, 12)}, and this office has not loaded it yet`;
+}
+
+/** The world graph as the store has it NOW, for an act: asks the pin, loads a moved graph, answers `{ snap, behind }`. Never throws. */
+export async function freshGraph({ query, deadlineMs } = {}) {
+  await reloadWorldGraph({ ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
+  return { snap: state.snap, behind: worldGraphBehind() };
 }
 
 // ── THE TEST FIXTURE SEAM (POS-270 lane W 3a, Keemin-ruled 2026-09-30) ──────
@@ -192,7 +209,12 @@ export function __setDefaultQueryForTest(fn) {
 export function reloadWorldGraph({ query = defaultQuery, force = false, deadlineMs = WORLD_GRAPH_REFRESH_DEADLINE_MS } = {}) {
   if (query === defaultQuery && loadRowsFixture()) return Promise.resolve({ changed: false, standing: worldGraphStanding() });
   if (state.inflight) return state.inflight;
+  if (state.loading >= MAX_LOADS) {
+    state.lastError = `${state.loading} world graph refreshes are still running; no new one starts until one finishes`;
+    return Promise.resolve({ changed: false, busy: true, standing: worldGraphStanding() });
+  }
   const n = ++state.started;
+  state.loading += 1;
   const newest = () => n === state.started; // only the newest refresh speaks for the health line
   let live = null;
   const work = (async () => {
@@ -201,6 +223,7 @@ export function reloadWorldGraph({ query = defaultQuery, force = false, deadline
       const pin = (await query(PIN_SQL)).rows[0] ?? null;
       if (!pin) { if (newest()) state.lastError = "the store holds no world graph snapshot yet"; return { changed: false, standing: worldGraphStanding() }; }
       const key = `${pin.tag_sha}/${pin.office_sha}`;
+      if (newest() || n > state.publishedBy) state.seenKey = key;
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: worldGraphStanding() };
@@ -216,6 +239,7 @@ export function reloadWorldGraph({ query = defaultQuery, force = false, deadline
       if (newest()) state.lastError = String(e?.message ?? e).slice(0, 160);
       return { changed: false, standing: worldGraphStanding() };
     } finally {
+      state.loading -= 1;
       if (state.inflight === live) state.inflight = null;
     }
   })();
@@ -272,7 +296,7 @@ export function resetWorldGraph() {
   if (state.timer) clearInterval(state.timer);
   state.unhear?.();
   // the count goes on, and every refresh from before the reset is late: none publishes into it
-  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1 });
+  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1, loading: state.loading });
 }
 
 // ── THE LOAD AT IMPORT (POS-270 lane W 3b, Keemin-ruled 2026-09-30) ──────────

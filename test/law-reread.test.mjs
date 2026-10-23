@@ -87,13 +87,22 @@ async function bless(db, n, rows) {
 
 /**
  * The store as the refresher asks it, with a stall that can be armed: the
- * next statement the refresher sends never answers (a hung connection), and
- * stays hung for the rest of the test. `hung` says it has been reached.
+ * next statement the refresher sends does not answer (a hung connection).
+ * `hung` says it has been reached. A hung statement ends, with the error a
+ * dropped connection gives, when the next stall is armed or the test ends:
+ * loads still running are capped (MAX_LOADS), and a connection that hangs
+ * for good holds its slot for good.
  */
-function stallable(db) {
-  const s = { armed: false, hung: false };
+function stallable(db, t) {
+  const s = { armed: false, hung: false, ends: [] };
+  const endAll = () => { for (const end of s.ends.splice(0)) end(); };
+  t.after(endAll);
+  s.arm = () => { endAll(); s.armed = true; };
   s.query = (sql, params) => {
-    if (s.armed) { s.armed = false; s.hung = true; return new Promise(() => {}); }
+    if (s.armed) {
+      s.armed = false; s.hung = true;
+      return new Promise((_, reject) => s.ends.push(() => reject(new Error("Connection terminated unexpectedly"))));
+    }
     return db.query(sql, params);
   };
   return s;
@@ -108,11 +117,11 @@ test("1 · a law refresh that hangs is let go at its deadline, and the next tick
   const db = await storeFor(t);
   if (!db) return;
   await bless(db, 1, lawRows({ holders: 1 }));
-  const store = stallable(db);
+  const store = stallable(db, t);
   law.startLawRefresher({ intervalMs: TICK, query: store.query });
   assert.ok(await until(() => law.lawSnapshot()?.pin.settlement === 1), "the first law loads");
 
-  store.armed = true;
+  store.arm();
   assert.ok(await until(() => store.hung), "a tick reached the stall");
   await bless(db, 2, lawRows({ holders: null }));
   assert.ok(await until(() => law.lawSnapshot()?.pin.settlement === 2),
@@ -123,16 +132,17 @@ test("1 · a law refresh that hangs is let go at its deadline, and the next tick
   assert.ok(r.checked_at && r.published_at, "the health line says when the store was asked and when the law was published");
 });
 
-test("1g · a world graph refresh that hangs is let go at its deadline, and the next tick loads the new graph", async () => {
+test("1g · a world graph refresh that hangs is let go at its deadline, and the next tick loads the new graph", async (t) => {
   // the graph's tables, as graph-ingest writes them, at one key per settlement
   const pinOf = (n) => ({ tag_sha: shaOf(n), office_sha: "o".repeat(40), settlement: n });
   let newest = 1;
   const rows = { meta: [{ key: "as_of_world", value: "x" }], nodes: [], edges: [], events: [], geometryVersions: [], lintFindings: [] };
   const answer = async (sql) => (sql === graph.PIN_SQL ? { rows: [pinOf(newest)] }
     : { rows: rows[Object.entries(graph.GRAPH_SQLS).find(([, v]) => v === sql)?.[0]] ?? [] });
-  const store = { armed: false, hung: false };
+  const store = { armed: false, hung: false, ends: [] };
+  t.after(() => store.ends.forEach((end) => end()));
   const query = (sql, params) => {
-    if (store.armed) { store.armed = false; store.hung = true; return new Promise(() => {}); }
+    if (store.armed) { store.armed = false; store.hung = true; return new Promise((_, reject) => store.ends.push(() => reject(new Error("Connection terminated unexpectedly")))); }
     return answer(sql, params);
   };
   graph.startWorldGraphRefresher({ intervalMs: TICK, query });
@@ -255,7 +265,7 @@ const refusedTaken = (e) => e.code === 423 && e.defect === CLUE && e.stolen === 
 
 /** Bless `rows` as settlement `n` while the refresher is stalled on a hung statement, then wait one tick and a deadline. */
 async function blessThroughAStall(db, store, n, rows) {
-  store.armed = true;
+  store.arm();
   assert.ok(await until(() => store.hung), "a tick reached the stall");
   store.hung = false;
   await bless(db, n, rows);
@@ -266,7 +276,7 @@ test("5a · after an ingest, within one tick, the take of a second holder obeys 
   const db = await storeFor(t);
   if (!db) return;
   await bless(db, 1, lawRows({ holders: 1 }));
-  const store = stallable(db);
+  const store = stallable(db, t);
   law.startLawRefresher({ intervalMs: TICK, query: store.query });
   assert.ok(await until(() => law.lawSnapshot()?.pin.settlement === 1));
   // I carry a satchel; the bowl holds another
@@ -283,7 +293,7 @@ test("5b · a taken class: after the ingest the next take, give and consume of i
   const db = await storeFor(t);
   if (!db) return;
   await bless(db, 1, lawRows());
-  const store = stallable(db);
+  const store = stallable(db, t);
   law.startLawRefresher({ intervalMs: TICK, query: store.query });
   assert.ok(await until(() => law.lawSnapshot()?.pin.settlement === 1));
   const w = world();
