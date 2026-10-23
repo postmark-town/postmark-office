@@ -138,6 +138,8 @@ export const LANDED = {
   "083_mail_blocks.sql":           { probe: `${rel("mail_blocks")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mail_block_stands' AND prosecdef)` },
   // 084 (POS-757): the private report post, its row policies, and office_api its only reader.
   "084_reports.sql":               { probe: `${rel("reports")} AND EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reports' AND policyname = 'reports_move') AND NOT has_table_privilege('snapshot_reader', 'reports', 'SELECT')` },
+  // 086 (POS-770): where a household came from, privately: two tables and their three definer functions.
+  "086_arrival_sources.sql":       { probe: `${rel("arrival_sources")} AND ${rel("arrival_source_pending")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_source_land' AND prosecdef)` },
   // 085 (POS-576): who invited a household, a public credit on its row.
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
 };

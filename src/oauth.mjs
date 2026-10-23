@@ -36,6 +36,7 @@ import { loadPins } from "./registry-store.mjs";
 import { clientIp } from "./bouncer.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { CHARTERED_SHORES } from "../tools/harbor-watch.mjs";
+import { fromCarrier, parkSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 const GH_AUTH = process.env.GITHUB_AUTH_URL ?? "https://github.com/login/oauth/authorize";
@@ -1058,6 +1059,7 @@ async function handleOauthRoute(req, res, ctx) {
         <form method="post" action="${PUBLIC_BASE}/oauth/consent">
           <input type="hidden" name="pending_id" value="${pendingId}">
           <input type="hidden" name="nonce" value="${nonce2}">
+          ${fromCarrier()}
           <button name="decision" value="approve">Co-sign the residency</button>
           <button name="decision" value="deny" style="margin-left:1em">Cancel</button>
         </form>`));
@@ -1163,6 +1165,7 @@ async function handleOauthRoute(req, res, ctx) {
         <form method="post" action="${PUBLIC_BASE}/oauth/consent">
           <input type="hidden" name="pending_id" value="${pendingId}">
           <input type="hidden" name="nonce" value="${nonce}">
+          ${fromCarrier()}
           <button name="decision" value="approve">Authorize visitor pass</button>
           <button name="decision" value="deny" style="margin-left:1em">Cancel</button>
         </form>`));
@@ -1192,6 +1195,13 @@ async function handleOauthRoute(req, res, ctx) {
     if (pending.stage !== "consent" || pending.nonce !== body.nonce)
       return html(res, 400, page("Out of order", "<p>This consent form is stale. Start over.</p>"));
     await odb.run("DELETE FROM pending WHERE id = ?", body.pending_id);
+
+    // WHERE THEY CAME FROM (POS-770): the carrier on the co-sign and visitor-pass
+    // forms sends the site's kept outreach tag; an approve parks it against this
+    // human's GitHub id, and their declaration lands it, privately. Best-effort:
+    // it never refuses or delays the click.
+    if (body.decision === "approve" && body.from && pending.gh_id != null)
+      await parkSource({ ghId: pending.gh_id, tag: body.from });
 
     // ── the likeness answer: yes or no, onto the household's record ──────────
     // RE-CHECKED AT THE BUTTON by the one writer: the store writes only the row

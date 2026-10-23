@@ -159,6 +159,8 @@ const ROSTER = {
   // POS-576: Wright's read of invited households. A bad --since refuses before
   // any store is asked; NO_PG on top, so a regression that reached for a
   // connection fails on it.
+  // POS-770: the arrivals read. A bad --days refuses before any log or store is read.
+  "tools/arrivals.mjs": { args: ["--days", "0"], env: NO_PG, code: 2, needle: "--days takes a whole number of days" },
   "tools/invites.mjs": { args: ["--since", "not-a-date"], env: NO_PG, code: 2, needle: "--since takes an ISO instant" },
   "tools/hydrate-equivalence.mjs": { args: ["--a", NOWHERE, "--b", `${NOWHERE}-b`], code: 2, needle: "not a world checkout:" },
   "tools/ledger-freeze.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
