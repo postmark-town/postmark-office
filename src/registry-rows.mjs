@@ -103,7 +103,7 @@ import { publicRegistry } from "./registry-public.mjs";
 // exactly as a NULL `name` does — see the two narrow predicates below.
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness",
+  "provisional", "home_images", "likeness", "invited_by",
 ]);
 export const PIN_KEYS = Object.freeze([
   "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
@@ -155,7 +155,13 @@ export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 // NULL renders as no key at all (`isAbsent`), so nothing moves on the first
 // crossing after the column lands.
 export const LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "words"]);
-const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS });
+//
+// `invited_by` (migration 085, POS-576) is the fourth: one object with a FIXED
+// shape (the declaration builds it, src/arrival-invite.mjs), the inviting house
+// first. NULL when nobody invited, and a NULL renders as no key at all, so
+// nothing moves on the first crossing after the column lands.
+export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at"]);
+const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS });
 
 // A pin's column names are the file's key names except one: `id` is a reserved
 // enough word in SQL company that the column is `gh_id`, and this is the single
@@ -284,6 +290,8 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       home_images: rec?.home_images ?? {},
       // And `likeness` (081): no key folds to NULL, the column's "never answered".
       likeness: rec?.likeness ?? null,
+      // And `invited_by` (085): no key folds to NULL, "nobody invited".
+      invited_by: rec?.invited_by ?? null,
     });
   }
 

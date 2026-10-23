@@ -493,6 +493,22 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.equal(heardShapes[0].fields.from_town?.type, "string", "the frozen arrival shape carries from_town");
   assert.equal(beginLive.fields.from_town?.type, "string", "and the live begin card takes it");
 
+  // ⚑ REGENERATED 2026-10-22 FOR POS-576 (Darko 20:40, the invitation link),
+  // named here for the same reason. What grew: declare's and begin's shared
+  // shape gained one optional field, `invited_by`, who invited the household,
+  // printed on its row in the town's tools/households.json as a public credit.
+  // ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/0/fields/invited_by/{type,description,maxLength}` and removed or
+  // retyped none. It stays off the abridged index (household-apex.mjs §
+  // OFF_INDEX, F5d). PSA for the release notes: "declare_household (and begin)
+  // take an optional invited_by: the resident or household that invited you,
+  // credited publicly on your household's record."
+  //
+  // The witness: that shared shape carries invited_by, in the frozen copy and
+  // on the live door.
+  assert.equal(heardShapes[0].fields.invited_by?.type, "string", "the frozen arrival shape carries invited_by");
+  assert.equal(beginLive.fields.invited_by?.type, "string", "and the live begin card takes it");
+
   // ⚑ REGENERATED 2026-10-20 FOR WLD-83 (Darko 09:55: pronouns are a profile
   // field, beside the name). What grew: the profile act's fields gained one
   // optional field, `pronouns`. ADDITIVE and proven so: the capture diff added
@@ -553,17 +569,17 @@ test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the c
 // stay off the ABRIDGED index; the ceiling stays (raising it is Keemin's call).
 // Measured on the POS-292 head with them off: connector bare 8,180 B, so the
 // headroom under SLIM_CEILING is 12 B; REST bare 21,668 B under 24,576.
-// POS-570: begin asks the same two fields, on the same rule.
-test("F5d · POS-292 + POS-570 + POS-574: the abridged index leaves declare's and begin's heard fields and from_town off, and both cards still carry them", async () => {
+// POS-570: begin asks the same two fields, on the same rule. POS-576: invited_by too.
+test("F5d · POS-292 + POS-570 + POS-574 + POS-576: the abridged index leaves declare's and begin's heard fields, from_town and invited_by off, and both cards still carry them", async () => {
   const slim = await householdApex({}, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
   for (const act of ["declare", "begin"]) {
     const entry = slim.acts.find((a) => a.act === act);
     assert.ok(entry, `${act} is on the index`);
-    for (const f of ["heard", "heard_note", "from_town"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
+    for (const f of ["heard", "heard_note", "from_town", "invited_by"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
     assert.ok("household" in entry.fields, `the rest of ${act}'s fields are still listed`);
     const card = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     const fields = card.card?.fields ?? card.fields ?? {};
-    for (const f of ["heard", "heard_note", "from_town"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
+    for (const f of ["heard", "heard_note", "from_town", "invited_by"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
   }
 });
 

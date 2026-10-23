@@ -137,7 +137,7 @@ export async function seedRegistry(store, households = null, pins = null) {
   const { rowsFromRegistry } = await import("../../src/registry-rows.mjs");
   const rows = rowsFromRegistry(households ?? { schema_version: 1, households: {} }, pins ?? {});
   const c = await store.connect("world2_owner");
-  const json = new Set(["accounts", "home_images", "likeness"]);
+  const json = new Set(["accounts", "home_images", "likeness", "invited_by"]);
   const insert = async (table, row) => {
     const cols = Object.keys(row);
     await c.query(`INSERT INTO ${table} (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`,

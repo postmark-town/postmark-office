@@ -31,6 +31,8 @@ import { gangwayState } from "./residency.mjs";
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
 import { planHouseKey, appendHouseKey, registryWith } from "./house-key.mjs";
 import { heardAnswer, recordHeard, heardReceipt } from "./arrival-heard.mjs";
+import { judgeInvite, recordInvite, inviteReceipt } from "./arrival-invite.mjs";
+import { meepLawAtOffice } from "./fund-holder.mjs";
 import { recordAshore } from "./ashore.mjs";
 import { faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
@@ -159,6 +161,16 @@ async function main() {
       { date: plan.date, registry: registryWith(plan.registry, plan.slug, [decl.handle]) });
     if (keyed?.refusal) return refusal(keyed.refusal.code, keyed.refusal.field, keyed.refusal.defect, `${keyed.detail} — ${keyed.refusal.hint}`);
 
+    // WHO INVITED THEM (POS-576), judged against the registers read under this
+    // lock. A bad name records nothing and refuses nothing (arrival-invite.mjs).
+    let isMeep = () => false;
+    if (args?.invited_by != null) {
+      try { isMeep = await meepLawAtOffice(CLONE); }
+      catch (e) { console.error(`[arrival-invite] the meep law could not be read — ${String(e?.message ?? e).slice(0, 200)}`); }
+    }
+    const invite = judgeInvite(args, { registry, own: { slug: plan.slug, handle: decl.handle }, isMeep });
+    let invited = null;
+
     const { drain, paths: drainedPaths } = collectingDrain({ clone: CLONE });
     let registryOutcome = { rendered: true };
     try {
@@ -172,6 +184,10 @@ async function main() {
         declaredBy: plan.registry.households[plan.slug].declared_by,
         drain: NO_DRAIN,
       });
+      // THE CREDIT, BEFORE THE DRAIN (POS-576): written onto the row the mint
+      // just made, so joinHousehold's drain prints it into tools/households.json
+      // in this act's one commit. Best-effort: recordInvite never throws.
+      invited = await recordInvite({ slug: plan.slug, judged: invite });
       const joined = await joinHousehold({
         slug: plan.slug,
         handle: decl.handle,
@@ -222,9 +238,11 @@ async function main() {
     // door planned against a gangway it read before the lock, and this one re-read
     // it after the pull. declareHousehold prefers this field over its own plan.
     const heardLine = heardReceipt(heardGiven, heard);
+    const inviteLine = inviteReceipt(invite, invited);
     return { slug: plan.slug, handle: decl.handle, commit, settled: plan.settled, gangway: plan.gangway, registry: registryOutcome, files: plan.files.map((f) => f.path),
       ...(ashore ? { ashore: ashore.recorded } : {}),
-      ...(heardLine ? { heard_about: heardLine } : {}) };
+      ...(heardLine ? { heard_about: heardLine } : {}),
+      ...(inviteLine ? { invite: inviteLine } : {}) };
   }));
 }
 

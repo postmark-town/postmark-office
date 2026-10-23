@@ -51,9 +51,11 @@ import { registryFromRows, pinsFromRows, HOUSEHOLD_KEYS, PIN_KEYS } from "./regi
 // name, so this read answers the same on a store that has not taken 081 yet: a
 // missing column reads as NULL, "never answered", instead of failing every
 // registry read (sign-in among them) between a deploy and its migration.
+// `invited_by` (085, POS-576) is read the same way, for the same reason.
 const HOUSEHOLDS_SQL = `
   SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly,
-         provisional, home_images, to_jsonb(households) -> 'likeness' AS likeness
+         provisional, home_images, to_jsonb(households) -> 'likeness' AS likeness,
+         to_jsonb(households) -> 'invited_by' AS invited_by
     FROM households
    ORDER BY ord`;
 
@@ -217,8 +219,9 @@ const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since
 // column has ONE writer, `setHomeImage` below. Only the seed, which fills an
 // EMPTY table from the town's files, carries it in with the rest of the row.
 // `likeness` (081, WLD-83) is kept out for the same reason, and has one writer
-// of its own, `setHouseholdLikeness` below.
-const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness"];
+// of its own, `setHouseholdLikeness` below. `invited_by` (085, POS-576) too:
+// its one writer is `setHouseholdInvitedBy`, at the declaration.
+const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
@@ -238,7 +241,7 @@ const valuesOf = (row, cols) => cols.map((c) => {
   if (c === "accounts") return JSON.stringify(row[c] ?? []);
   if (c === "provisional") return row[c] === true;
   if (c === "home_images") return JSON.stringify(row[c] ?? {});
-  if (c === "likeness") return row[c] == null ? null : JSON.stringify(row[c]);
+  if (c === "likeness" || c === "invited_by") return row[c] == null ? null : JSON.stringify(row[c]);
   return row[c] ?? null;
 });
 
@@ -460,6 +463,30 @@ export async function setHouseholdLikeness({ slug, likeness }, env = process.env
         AND accounts @> jsonb_build_array(jsonb_build_object('id', ($3)::bigint))
   RETURNING slug`,
     [slug, JSON.stringify(likeness), likeness?.gh_id], env);
+  if (r === null) return null;
+  return { slug: r.length ? r[0].slug : null };
+}
+
+/**
+ * Who invited this household (POS-576, migration 085): the public credit,
+ * written onto its row by the declaration that founds it.
+ *
+ * The ONE store writer of `invited_by`; `src/declare-exec.mjs` calls it once,
+ * under the town flock, after the house is minted and before the drain prints
+ * it. ONLY WHILE NULL: a credit records the arrival and is never rewritten, so
+ * a second write (a retried declaration) changes nothing.
+ *
+ * Returns `{ slug }` of the row written, `null` when the office is not pointed
+ * at the record, or `{ slug: null }` when no row was written.
+ */
+export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.env) {
+  const r = await actsQuery(
+    `UPDATE households
+        SET invited_by = $2::jsonb
+      WHERE slug = $1
+        AND invited_by IS NULL
+  RETURNING slug`,
+    [slug, JSON.stringify(invitedBy)], env);
   if (r === null) return null;
   return { slug: r.length ? r[0].slug : null };
 }

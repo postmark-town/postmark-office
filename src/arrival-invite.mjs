@@ -1,0 +1,121 @@
+// arrival-invite.mjs — "who invited you?" (POS-576), a public credit.
+//
+// Ruled by Darko, 2026-10-11 09:53 (the referral quest) and 2026-10-22 20:40
+// (the invitation link, `postmark.town/join/?invite=<handle>`). The join
+// carries one optional field, `invited_by`: the handle of the resident or
+// household that brought this one here. It is PUBLIC, unlike "where did you
+// hear" (arrival-heard.mjs), and the form says so: the credit is printed on
+// the new household's row in the town's tools/households.json.
+//
+// ── IT NEVER REFUSES A JOIN ─────────────────────────────────────────────────
+//
+// A bad invite records nothing and the join goes through unchanged; the
+// answer says why in one sentence. Refused by name:
+//   · your own household (the house this join founds, or its first handle);
+//   · a meep (the town's own meep law, read from its stamp ledger);
+//   · the town's own house and names (the-town, office, postmaster, ferry);
+//   · a name the town does not know.
+// Naming a resident credits their HOUSEHOLD, because a household is what
+// joins and what is paid.
+//
+// ── THE WRITE ───────────────────────────────────────────────────────────────
+//
+// `declare` and the berth co-sign both reach `src/declare-exec.mjs`, which
+// judges the invite against the registers it re-read under the town flock and
+// calls `recordInvite` after the house's row is minted and BEFORE the drain,
+// so the credit lands in the same commit as the household. `begin` parks the
+// field with the declaration (household-apex.mjs § doBegin); it is public, so
+// it rides the parked row like `from_town` does.
+//
+// ── THE PAYING IS NOT HERE ──────────────────────────────────────────────────
+//
+// 10 stamps to the invited household at settle, 10 to the inviter when the
+// new household is real (its first letter or a home within 30 days), at most
+// 10 paid invitations per inviting household a month. This weekend Wright
+// mints by hand at each settlement, from `tools/invites.mjs`; nothing here
+// mints.
+
+import { setHouseholdInvitedBy } from "./registry-store.mjs";
+import { isReservedHandle } from "./residency.mjs";
+
+export const INVITE_MAX = 64;
+/** The town's own house: its stamps are the town's, never a referral's. */
+export const TOWN_HOUSE = "the-town";
+
+export const INVITE_GROUP = Object.freeze({
+  "x-group": "invite",
+  "x-group-title": "Who invited you",
+  "x-group-hint": "Optional, and public: the name you give here is printed on your household's record as the one who brought you.",
+});
+export const INVITE_FIELDS = Object.freeze({
+  invited_by: { type: "string", title: "Who invited you?", ...INVITE_GROUP, "x-multiline": false, maxLength: INVITE_MAX, examples: ["wright"],
+    description: "Optional: the handle of the resident or household that invited you (an invitation link fills it in). This is a public credit: it shows on your household's record. When your household settles you get 10 stamps instead of 5, and they get 10 when you write your first letter or set your home within 30 days. Your own household, a meep or a name the town doesn't know records nothing, and your join goes through either way." },
+});
+export const INVITE_FIELD_NAMES = Object.freeze(Object.keys(INVITE_FIELDS));
+
+/** The name a join carries, normalised (trimmed, one leading @ dropped, lowercased), or null. */
+export function inviteNamed(args = {}) {
+  const raw = args?.invited_by;
+  if (raw == null) return null;
+  const named = String(raw).trim().replace(/^@/, "").toLowerCase();
+  return named ? [...named].slice(0, INVITE_MAX).join("") : null;
+}
+
+/**
+ * Whose house the invite credits, judged against the registers. `registry` is
+ * `{ households: { <slug>: { residents } } }`; `own` is the founding house's
+ * `{ slug, handle }`; `isMeep(handle)` is the town's meep law.
+ *
+ * Answers `{ by, named }` to credit, `{ refused, named }` to record nothing,
+ * or null when no invite was given.
+ */
+export function judgeInvite(args, { registry, own = {}, isMeep = () => false } = {}) {
+  const named = inviteNamed(args);
+  if (!named) return null;
+  const refuse = (refused) => ({ refused, named });
+  if (named === own.slug || named === own.handle) return refuse("own");
+  if (named === TOWN_HOUSE || isReservedHandle(named)) return refuse("town");
+  if (isMeep(named)) return refuse("meep");
+  const houses = registry?.households ?? {};
+  const owner = Object.hasOwn(houses, named) ? named
+    : Object.keys(houses).find((slug) => (houses[slug]?.residents ?? []).map(String).includes(named)) ?? null;
+  if (!owner) return refuse("unknown");
+  if (owner === own.slug) return refuse("own");
+  if (owner === TOWN_HOUSE) return refuse("town");
+  return { by: owner, named };
+}
+
+/**
+ * Keep the credit on the new house's row. Best-effort by contract: never
+ * throws, answers what happened. `write` is the store's one writer.
+ */
+export async function recordInvite({ slug, judged, at = new Date(), write = setHouseholdInvitedBy, env = process.env, log = console.error } = {}) {
+  if (!judged?.by) return { kept: false };
+  const invitedBy = { by: judged.by, named: judged.named, at: at instanceof Date ? at.toISOString() : at };
+  try {
+    const r = await write({ slug, invitedBy }, env);
+    if (r === null) {
+      log(`[arrival-invite] ${slug}: not kept — the office is not pointed at the record`);
+      return { kept: false, why: "no record" };
+    }
+    return { kept: r.slug === slug, ...(r.slug === slug ? { invited_by: invitedBy } : {}) };
+  } catch (e) {
+    log(`[arrival-invite] ${slug}: not kept — ${String(e?.message ?? e).slice(0, 200)}`);
+    return { kept: false, why: "the store refused" };
+  }
+}
+
+const REFUSED = Object.freeze({
+  own: "names your own household",
+  town: "names the town's own house, which is not credited for invitations",
+  meep: "names a meep, and meeps can't be credited for invitations",
+  unknown: "names nobody the town knows: give a resident's handle or a household's name",
+});
+
+/** The one sentence the declaration's answer carries about the invite, or null. */
+export function inviteReceipt(judged, outcome) {
+  if (!judged) return null;
+  if (judged.refused) return `Not recorded: "${judged.named}" ${REFUSED[judged.refused]}. Your join is unaffected.`;
+  if (!outcome?.kept) return `Not recorded this time: "${judged.named}" could not be written to your household's record. Your join is unaffected.`;
+  return `Recorded publicly: invited by ${judged.by}${judged.named === judged.by ? "" : ` (${judged.named})`}.`;
+}
