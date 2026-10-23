@@ -44,6 +44,11 @@
      "required": "boolean",
      "type": "string"
     },
+    "invited_by": {
+     "description": "string",
+     "maxLength": "number",
+     "type": "string"
+    },
     "note": {
      "description": "string",
      "type": "string"

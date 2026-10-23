@@ -74,7 +74,7 @@ const AT = () => new Date("2026-10-21T12:00:00.000Z");
 // ── § 1 the record ──────────────────────────────────────────────────────────
 
 test("§ 1 likeness is the tail column; unanswered renders no key, answered renders in template order", () => {
-  assert.equal(HOUSEHOLD_KEYS.at(-1), "likeness", "the newest optional column joins the tail");
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-2), ["likeness", "invited_by"], "an optional column joins the tail; 085's invited_by (POS-576) came after it");
   const rows = seed();
   assert.ok(rows.households.every((r) => r.likeness === null), "no key folds to NULL: never answered");
   assert.equal(renderRegistry(rows).households.includes("likeness"), false, "an unanswered registry prints exactly as before");

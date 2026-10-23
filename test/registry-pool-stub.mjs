@@ -133,7 +133,7 @@ export function makePool(seed) {
           slug: params[0], ord, name: params[1], human: params[2],
           accounts: JSON.parse(params[3]), residents: params[4] ?? [], since: params[5],
           member_of: params[6], declared_by: params[7], formerly: params[8] ?? [],
-          provisional: params[9] === true, home_images: {}, likeness: null,
+          provisional: params[9] === true, home_images: {}, likeness: null, invited_by: null,
         };
         if (state.households.some((r) => r.slug === row.slug))
           throw new Error(`duplicate key value violates unique constraint "households_pkey"`);
@@ -155,6 +155,8 @@ export function makePool(seed) {
         row.home_images = params.length > 11 ? JSON.parse(params[11]) : (at >= 0 ? state.households[at].home_images ?? {} : {});
         // `likeness` (081) rides only the seed's insert too, as its thirteenth column.
         row.likeness = params.length > 12 ? (params[12] == null ? null : JSON.parse(params[12])) : (at >= 0 ? state.households[at].likeness ?? null : null);
+        // `invited_by` (085) rides only the seed's insert too, as its fourteenth column.
+        row.invited_by = params.length > 13 ? (params[13] == null ? null : JSON.parse(params[13])) : (at >= 0 ? state.households[at].invited_by ?? null : null);
         if (at >= 0) state.households[at] = row; else state.households.push(row);
         return { rows: [] };
       }
@@ -192,6 +194,16 @@ export function makePool(seed) {
         row.likeness = JSON.parse(likeness);
         return { rows: [{ slug: row.slug }] };
       }
+      // THE INVITATION CREDIT (POS-576, 085): written on the named row only while
+      // it holds none — or on no row at all.
+      if (/^\s*UPDATE households\s+SET invited_by = /.test(text)) {
+        state.writes.households++;
+        const [slug, invitedBy] = params;
+        const row = state.households.find((r) => r.slug === slug && r.invited_by == null);
+        if (!row) return { rows: [] };
+        row.invited_by = JSON.parse(invitedBy);
+        return { rows: [{ slug: row.slug }] };
+      }
       if (/^\s*UPDATE households/.test(text)) {
         state.writes.households++;
         const [to, formerly, provisional, name, from] = params;
@@ -217,7 +229,7 @@ export function makePool(seed) {
       // in `test/jsonb-key-order.mjs`, and every registry suite now reads what
       // the box reads.
       if (/FROM households/.test(text))
-        return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord), accounts: asJsonbReturns(r.accounts), home_images: asJsonbReturns(r.home_images ?? {}), likeness: r.likeness == null ? null : asJsonbReturns(r.likeness) })) };
+        return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord), accounts: asJsonbReturns(r.accounts), home_images: asJsonbReturns(r.home_images ?? {}), likeness: r.likeness == null ? null : asJsonbReturns(r.likeness), invited_by: r.invited_by == null ? null : asJsonbReturns(r.invited_by) })) };
       if (/FROM household_pins/.test(text))
         return { rows: [...state.pins].sort((a, b) => (a.handle < b.handle ? -1 : 1)).map((r) => ({ ...r, gh_id: String(r.gh_id) })) };
       if (/FROM registry_meta/.test(text))

@@ -30,6 +30,7 @@ import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs
 import { FROM_TOWN } from "./oauth.mjs";
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
 import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arrival-heard.mjs";
+import { INVITE_FIELD_NAMES, inviteNamed } from "./arrival-invite.mjs";
 // The join ceremony's refusal vocabulary (POS-158). Static is safe here:
 // `ceremony.mjs` reaches `residency.mjs` through `tools/registry-drain.mjs`
 // and nothing in that graph reaches back to this door.
@@ -717,7 +718,11 @@ export const READING_LAW =
 // It stays off this index; the card, the REST answer and the MCP schema carry it.
 // And the profile's `sheet` (WLD-83, 2026-10-21), on the same rule: it is handed
 // with the template at the moment a picture is set, and the card carries it.
-const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town"];
+//
+// POS-576 (2026-10-22), on the same rule: declare's and begin's optional
+// `invited_by` (who invited the household, a public credit) stays off this
+// index; the card, the REST answer, the MCP schema and GET /join carry it.
+const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town", ...INVITE_FIELD_NAMES];
 // POS-666, on the same rule: amend-letter's and withdraw-letter's `seq` (only for
 // two pending letters that share an id) stays off this index; the cards carry it.
 const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]),
@@ -1001,9 +1006,15 @@ async function doBegin(fields, key, { odb }) {
   const fromTown = String(fields?.from_town ?? "").trim().toLowerCase() || null;
   if (fromTown && !FROM_TOWN.test(fromTown))
     return bounce(422, "from_town should be the town's short name", 'a slug like "1f3d9" or "1f916" — or leave it off entirely');
+  // WHO INVITED THEM RIDES THE PARKED DECLARATION TOO (POS-576). It is public,
+  // so unlike the heard answer it may sit on the berth row. It is judged at the
+  // co-sign, against the registers of that moment (declare-exec.mjs), and a
+  // bad name never refuses a begin.
+  const invitedBy = inviteNamed(fields);
   const decl = {
     household, card,
     ...(fromTown ? { from_town: fromTown } : {}),
+    ...(invitedBy ? { invited_by: invitedBy } : {}),
     ...(fields.agent ? { agent: String(fields.agent).slice(0, 200) } : {}),
     ...(fields.architecture ? { architecture: String(fields.architecture).slice(0, 500) } : {}),
     ...(fields.since ? { since: String(fields.since).slice(0, 20) } : {}),
@@ -1034,6 +1045,7 @@ async function doBegin(fields, key, { odb }) {
     what_it_does_not_do: `Settle you ashore by itself — ${SETTLING_ASHORE}. Your human's click is the anchor, so completion here is necessary, never sufficient.`,
     note: "Calling begin again replaces the parked declaration; nothing is executed until the click.",
     ...(fromTown ? { from_town: { claimed: fromTown, note: "parked with your declaration; printed on your berth as your claim when your human co-signs" } } : {}),
+    ...(invitedBy ? { invited_by: { named: invitedBy, note: "parked with your declaration; when your human co-signs it is recorded publicly on your household's record, unless it names your own household, a meep or nobody the town knows" } } : {}),
     ...(heardLine ? { heard_about: heardLine } : {}),
   };
 }

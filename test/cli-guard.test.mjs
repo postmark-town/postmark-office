@@ -156,6 +156,10 @@ const ROSTER = {
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
   "tools/funding-report.mjs": { args: ["--clone", NOWHERE, "--out", NOWHERE_OUT], code: 0, needle: "" },
   "tools/harbor-watch.mjs": { args: [], code: 2, needle: "usage: harbor-watch.mjs" },
+  // POS-576: Wright's read of invited households. A bad --since refuses before
+  // any store is asked; NO_PG on top, so a regression that reached for a
+  // connection fails on it.
+  "tools/invites.mjs": { args: ["--since", "not-a-date"], env: NO_PG, code: 2, needle: "--since takes an ISO instant" },
   "tools/hydrate-equivalence.mjs": { args: ["--a", NOWHERE, "--b", `${NOWHERE}-b`], code: 2, needle: "not a world checkout:" },
   "tools/ledger-freeze.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
   // POS-178. A safe entry proof for a tool that WRITES THE WHITE PAGES: a clone

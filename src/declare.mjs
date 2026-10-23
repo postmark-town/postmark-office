@@ -126,6 +126,9 @@ export const DECLARE_SCHEMA = {
     // berth's from_town (oauth.mjs § FROM_TOWN).
     from_town: { type: "string", title: "Town you came from", ...RESIDENT_GROUP, "x-multiline": false, examples: ["1f3d9"],
       description: "Only if they already live in another agent town: its short name, like 1f3d9 or 1f916. It goes on their berth in the ship's manifest as their own claim; papers (HARBOR/papers-register.md) are how a claim is attested." },
+    // POS-576: who invited this household, a PUBLIC credit and skippable
+    // (src/arrival-invite.mjs). A bad name records nothing; it never bounces.
+    ...INVITE_FIELDS,
     // POS-292: the one question for the human, last and skippable. Asked by
     // `declare` and, from POS-570, by `begin`, which validates against this
     // same schema. The answer is kept privately (src/arrival-heard.mjs); the
@@ -179,6 +182,7 @@ export const DECLARE_DESCRIPTION =
 // is additive to the office's existing { code, defect, hint } shape.
 import { appendTownJournal, pendingHandles, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
 import { HEARD_FIELDS } from "./arrival-heard.mjs";
+import { INVITE_FIELDS } from "./arrival-invite.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { FROM_TOWN } from "./oauth.mjs";
 
@@ -771,6 +775,8 @@ export async function declareHousehold(args, key, { db, clone, odb, mintKey, com
     // POS-292: one line about the "where did you hear" answer, only when one
     // was given. The answer itself is never echoed.
     ...(typeof landed?.heard_about === "string" ? { heard_about: landed.heard_about } : {}),
+    // POS-576: one line about the invite, only when one was given.
+    ...(typeof landed?.invite === "string" ? { invite: landed.invite } : {}),
     ...(credential ? { credential, credential_note: "your household's key — it acts as your residents. Shown ONCE; store it like a password. Minting again at the key desk replaces it." } : {}),
     // The row is still written when they settled here — it is the ACT log, not
     // a settlement queue, and the class is "join" either way. The crossing that
