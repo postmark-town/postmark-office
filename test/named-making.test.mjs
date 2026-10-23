@@ -21,7 +21,8 @@ import { viewOf, unplaceHeld, heldMadeMarks, HELD_BY } from "../src/held.mjs";
 import { foldOwners, ownershipEvents, takeOwns } from "../src/ownership.mjs";
 import { holdRecordKeeper } from "../src/hold-record.mjs";
 import {
-  isNamedForm, namedFormRefusal, madeRecordOf, foldMade, setDownNotYet, madeIdTaken, MAKE_FACE, CONSUME_FACE,
+  isNamedForm, namedFormRefusal, madeRecordOf, foldMade, madeIdTaken, MAKE_FACE, CONSUME_FACE, SET_DOWN_FACE,
+  setDownNotByMaker, setDownHolding, setDownCandy, setDownDraftOf, setDownWords, SET_DOWN_EXTENT,
 } from "../src/named-making.mjs";
 
 const SHA = "e".repeat(40);
@@ -227,7 +228,7 @@ test("consume { kind } draws pot luck over the counted and the named alike: with
 // ── THE RECORD THE READERS SHARE ────────────────────────────────────────────
 
 test("the store's reader: a make is a hold row (held), a consume ends it (detach); the frozen faces are unchanged", () => {
-  assert.deepEqual(ATTACHMENT_ACTIONS, ["legacy:attachment", "give", "drop", "take", "make", "consume"]);
+  assert.deepEqual(ATTACHMENT_ACTIONS, ["legacy:attachment", "give", "drop", "take", "make", "consume", "set-down"]);
   const at = "2026-10-23T05:00:00.000Z";
   const m = attachmentRowOf({ id: 7, at, actor: LB, action: "make", payload: { thing: `${LB}/t`, holder: `${LB}/bag`, policy: "cascade", made: { id: `${LB}/t` } } });
   assert.deepEqual([m.era, m.row.entity, m.row.target, m.row.policy], ["live", `${LB}/bag`, `${LB}/t`, "cascade"]);
@@ -288,26 +289,71 @@ test("ownership: a make into an open holder is its maker's put-in, so a draw fro
   assert.equal(takeOwns(owners.get(t), { from: bag, actor: FIVE, open: true, houseOf: (h) => `hh:${h}` }), true);
 });
 
-test("the words: the set-down waits for part 2, and a taken name says it is taken for good", () => {
-  const s = setDownNotYet(`${LB}/x`);
-  assert.equal(s.code, 501);
-  assert.match(s.hint, /give it to a resident or into a holder.*consume \{ thing: "little-bird\/x" \}.*Nothing was changed\./);
+test("the words: a taken name says it is taken for good, and the record is the made mark whole", () => {
   assert.match(madeIdTaken(`${LB}/x`).hint, /keeps its name forever, eaten or not/);
   assert.deepEqual(madeRecordOf({ by: LB, slug: "bag", kind: "thing", body: " A bag. ", holderFields: { holder: true, capacity: 10 } }),
     { id: `${LB}/bag`, by: LB, slug: "bag", kind: "thing", body: "A bag.", holder: true, capacity: 10 });
 });
 
-test("the can-matrix teaches only what works: a thing made in hand is never offered a set-down (part 2), and a consumable one offers consume", async () => {
+test("the can-matrix teaches only what works: its maker is offered a set-down of a thing made in hand (never of a candy, never to another), and a consumable one offers consume", async () => {
   const { usablePairs } = await import("../src/usable-verbs.mjs");
   const id = `${LB}/sweet`, plain = `${LB}/pebble`;
   const made = new Map([[id, { id, by: LB, kind: "pocket-comet", body: "a sweet" }], [plain, { id: plain, by: LB, kind: "thing", body: "a pebble" }]]);
   const attachments = [{ entity: LB, target: id, policy: "cascade", born_at: "2026-10-23T05:00:00Z" }, { entity: LB, target: plain, policy: "cascade", born_at: "2026-10-23T05:00:01Z" }];
   const marks = [...made.values()].map((m) => ({ ...m, [HELD_BY]: LB }));
   const verbs = (over = {}) => usablePairs({ actor: LB, here: { x: 0, y: 0 }, marks, fold: foldUnits([]), attachments, view: VIEW, made, ...over }).map((p) => p.verb);
-  assert.equal(verbs().includes("drop"), false, "nothing in hand can be set down yet");
+  assert.equal(verbs().includes("drop"), true, "the maker's own pebble is set down (part 2)");
+  const sweetOnly = { made: new Map([[id, made.get(id)]]), attachments: attachments.slice(0, 1), marks: marks.slice(0, 1) };
+  assert.equal(verbs(sweetOnly).includes("drop"), false, "a candy made in hand is never set down");
+  const another = new Map([[plain, { ...made.get(plain), by: FIVE }]]);
+  assert.equal(verbs({ made: another, attachments: attachments.slice(1), marks: marks.slice(1) }).includes("drop"), false, "another's thing in your hands is its maker's house's to set down");
   assert.equal(verbs().includes("consume"), true, "the made sweet is eaten by consume");
   assert.equal(verbs({ made: new Map([[plain, made.get(plain)]]), attachments: attachments.slice(1), marks: marks.slice(1) }).includes("consume"), false, "a made pebble is not eaten");
   assert.equal(verbs({ made: null }).includes("drop"), true, "without the made record, a held thing offers its set-down as before");
+});
+
+// ── PART 2 OF 2: SETTING ONE DOWN (POS-766/e; P2-a..e) ──────────────────────
+
+test("part 2 · the made record lets a set-down thing go: from its set-down act it is its maker's draft, not a thing made in hand", () => {
+  const rows = [
+    { seq: 1, action: MAKE_FACE, object: `${LB}/a`, payload: { thing: `${LB}/a`, made: { id: `${LB}/a`, kind: "thing" } } },
+    { seq: 2, action: MAKE_FACE, object: `${LB}/b`, payload: { thing: `${LB}/b`, made: { id: `${LB}/b`, kind: "thing" } } },
+    { seq: 3, action: SET_DOWN_FACE, object: `${LB}/a`, payload: { thing: `${LB}/a`, policy: "detach" } },
+  ];
+  assert.deepEqual([...foldMade(rows).keys()], [`${LB}/b`]);
+  assert.deepEqual([...foldMade(rows.slice(2), foldMade(rows.slice(0, 2))).keys()], [`${LB}/b`], "a set-down in the window lets go of a make in the base");
+  assert.deepEqual(ATTACHMENT_ACTIONS.slice(-1), [SET_DOWN_FACE]);
+  const at = "2026-10-23T06:00:00.000Z";
+  const row = attachmentRowOf({ id: 9, at, actor: LB, action: SET_DOWN_FACE, payload: { thing: `${LB}/a`, holder: null, policy: "detach" } });
+  assert.deepEqual([row.row.entity, row.row.policy], [LB, "detach"], "the holding ends, with no place on the hold row");
+});
+
+test("part 2 · the leave door's narrow read asks for set-downs too, so a set-down name is its draft's, and the draft rules apply", async () => {
+  const { madeNamesRead, madeNamesParams } = await import("../src/named-making.mjs");
+  assert.deepEqual(madeNamesParams(["a/b"])[1], [MAKE_FACE, SET_DOWN_FACE]);
+  const rows = [{ id: 1, action: MAKE_FACE, object: "a/b", payload: { thing: "a/b", made: { id: "a/b", kind: "thing" } } }, { id: 2, action: SET_DOWN_FACE, object: "a/b", payload: { thing: "a/b" } }];
+  const r = await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async (sql, params) => rows.filter((x) => params[1].includes(x.action)) });
+  assert.equal(r.made.has("a/b"), false);
+});
+
+test("part 2 · the draft a set-down files: the made mark whole, by its maker, where the dropper stands, 1×1; put forward free on the maker's ground, left for the stake on the commons", () => {
+  const made = madeRecordOf({ by: LB, slug: "lantern", kind: "thing", body: "A paper lantern.", holderFields: { holder: true, capacity: 4 }, household: "hh:lb", date: "2026-10-23" });
+  const free = setDownDraftOf(made, { at: { x: 12, y: -3, extra: 1 }, free: true });
+  assert.deepEqual(free, { slug: "lantern", kind: "thing", body: "A paper lantern.", holder: true, capacity: 4, by: LB, at: { x: 12, y: -3 }, extent: { w: 1, h: 1 }, stamps: 0 });
+  const commons = setDownDraftOf(made, { at: { x: 12, y: -3 }, free: false });
+  assert.equal("stamps" in commons, false, "on the commons it is left a draft, and the dropper's stamp is staked behind it after");
+  assert.deepEqual(SET_DOWN_EXTENT, { w: 1, h: 1 });
+  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, stake: "staked" }), /with your stamp behind it: it publishes at the next settlement/);
+  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, stake: "free" }), /on its own ground, free/);
+  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, stake: "bounced" }), /but the stamp did not land/);
+});
+
+test("part 2 · the refusals say what can be done instead", () => {
+  const a = setDownNotByMaker(`${LB}/x`, LB);
+  assert.equal(a.code, 403);
+  assert.match(a.hint, /Give it back to its maker's house to set down, or keep, give or eat it/);
+  assert.match(setDownHolding(`${LB}/bag`, 2).defect, /holds 2 things, and a holder is set down empty/);
+  assert.ok(setDownCandy(`${LB}/c`, "pocket-comet").hint.includes(`eat it (consume { thing: "${LB}/c" }), give it, or give it into a bowl`));
 });
 
 test("#759 review C · a holder's room: making a named thing past its capacity is refused whole, nothing made", async () => {
@@ -338,4 +384,21 @@ test("#759 review A · the made names fail closed: an unread record is a refusal
   const u = madeNamesUnread("the record could not be reached");
   assert.equal(u.code, 503);
   assert.match(u.hint, /nothing was written/);
+});
+
+test("#760 review 2 · a strand (set-down failed AND its draft not withdrawn) is said twice: one ESCALATION line, and the strands file the ops door reads", async () => {
+  const { recordStrand, readStrands } = await import("../src/set-down-strands.mjs");
+  const { mkdtempSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const file = join(mkdtempSync(join(tmpdir(), "strands-")), "set-down-strands.json");
+  const lines = [];
+  assert.deepEqual(readStrands({ file }), { strands: [], last_strand_at: null });
+  recordStrand({ thing: `${LB}/a`, maker: LB, actor: LB, why: "the record did not answer", undo: "the withdraw door refused" }, { file, now: new Date("2026-10-23T07:00:00Z"), log: (l) => lines.push(l) });
+  recordStrand({ thing: `${LB}/b`, maker: LB, actor: LB, why: "x", undo: "y" }, { file, now: new Date("2026-10-23T07:05:00Z"), log: (l) => lines.push(l) });
+  const r = readStrands({ file });
+  assert.deepEqual(r.strands.map((s) => s.thing), [`${LB}/b`, `${LB}/a`], "newest first");
+  assert.equal(r.last_strand_at, "2026-10-23T07:05:00.000Z");
+  assert.match(lines[0], /^\[office\] ESCALATION set-down stranded: little-bird\/a .* both in hand and a draft/);
+  assert.match(lines[0], /Recorded in /);
 });

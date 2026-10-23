@@ -105,9 +105,11 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
     return Number.isFinite(Number(r.x)) ? withinArmsLength(here, { x: Number(r.x), y: Number(r.y) }).stands
       : Number.isFinite(Number(r.distance_m)) && Number(r.distance_m) <= EARSHOT_M;
   };
-  // a thing made in hand (POS-766, `made`: the hold record's made marks) is not set down until part 2 lands, and is eaten by its own consume
+  // a thing made in hand (POS-766, `made`: the hold record's made marks) is set down by its maker's house only, and a
+  // candy never (POS-766/e; the door's own refusals, world-hold § setDownMade); it is eaten by its own consume
   const madeIn = (t) => made?.has?.(String(t)) === true;
-  if (carriedThings.some((t) => movable(t) && !madeIn(t))) add("drop", null);
+  const madeSetsDown = (t) => { const m = made.get(String(t)); return String(m?.by) === me && !lineageOf(String(m?.kind ?? "thing"), view.extendsOf).includes("candy"); };
+  if (carriedThings.some((t) => movable(t) && (!madeIn(t) || madeSetsDown(t)))) add("drop", null);
   // consume: a consumable kind in your own hands (10:30's roster), counted or made in hand
   const edibleMade = carriedThings.some((t) => madeIn(t) && !taken(String(made.get(String(t))?.kind)) && lineageOf(String(made.get(String(t))?.kind ?? "thing"), view.extendsOf).includes("consumable"));
   if (edibleMade || freeKinds(me).some((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"))) add("consume", null);
