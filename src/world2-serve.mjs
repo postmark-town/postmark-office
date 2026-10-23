@@ -668,7 +668,20 @@ export const SAY_READ_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_
  * decides whether these doors exist at all, and every caller in `src/` passes
  * no pool and gets the real one.
  */
-export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt } = {}) {
+// THE LAW BEFORE THE HEIGHT DIALS (WLD-97). Since postmark-world#295 the engine
+// reads every height from the skeleton (region anchors, the river's fall) and
+// refuses a skeleton without them, with code HEIGHTS_UNREAD. The engine here is
+// the blessed one, but the skeleton is the law projection at the window's pin,
+// so a pin older than the dials (or one lagging the bless) meets an engine that
+// cannot stand in it. That is the law's age, said as a 503, never a 5xx thrown
+// out of the engine. Any other failure still throws: it is not this.
+export function heightsUnreadBounce(e, lawSha) {
+  if (e?.code !== "HEIGHTS_UNREAD") return null;
+  return { defect: `the law at ${String(lawSha ?? "").slice(0, 8)} predates the height dials`,
+    hint: `the world engine reads every height from the skeleton's elevation dials, and the law this window is pinned to carries none (${e.message}). It answers again once the window's law pin carries them.` };
+}
+
+export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, eng: injectedEngine = null } = {}) {
   if (!world2ServeEnabled()) return null;
   const p = injected ?? await pool();
 
@@ -934,14 +947,20 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       hint: "the world is assembled around its terrain before any mark is judged; a skeleton-less projection cannot be assembled at all." } };
 
     let eng;
-    try { eng = await engine(); }
+    try { eng = injectedEngine ?? await engine(); }
     catch (e) {
       return { code: 503, body: { error: "bounce", defect: "the world engine cannot be read at this office",
         hint: `${faultLogged("the world engine cannot be read at this office (investigate)", e)} investigate is the engine's judgment about a mark and its neighbourhood; this door refuses rather than composing one of its own.` } };
     }
 
     // placed by the hold record, as the office door is (POS-688: a held thing is unplaced)
-    const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows });
+    let world;
+    try { world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows }); }
+    catch (e) {
+      const h = heightsUnreadBounce(e, pin.law_sha);   // WLD-97: a law pin older than the height dials
+      if (!h) throw e;
+      return { code: 503, body: { error: "bounce", ...h } };
+    }
     const r = (await import("./held.mjs")).withHolder(eng.verbs.investigate(String(mark), world, { depth }), world, mark); // POS-688: whose hands it is in
 
     // THE RECEIPT FROM ROWS (POS-142 S3 item 4). 1.0's own pure `receiptFrom`,
@@ -1370,7 +1389,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
 // Exported as a function, not only as a route: the equality falsifier compares
 // ANSWERS, and making it go through HTTP would put a server between the two
 // derivations it is trying to hold to each other.
-export async function world2Apex(searchParams, { p: injected = null } = {}) {
+export async function world2Apex(searchParams, { p: injected = null, eng: injectedEngine = null } = {}) {
   const bounce = (code, defect, hint) => ({ error: { code, body: { error: "bounce", defect, hint } } });
   const p = injected ?? await pool();
 
@@ -1406,14 +1425,20 @@ export async function world2Apex(searchParams, { p: injected = null } = {}) {
 
   // ── the engine, or an honest refusal ─────────────────────────────────────
   let eng;
-  try { eng = await engine(); }
+  try { eng = injectedEngine ?? await engine(); }
   catch (e) {
     return bounce(503, "the world engine cannot be read at this office",
       `${faultLogged("the world engine cannot be read at this office (orient)", e)} \`within\` is a containment chain and \`nearby\` a field of view; both are the engine's judgment. This door refuses rather than inventing a spine — a resident told they are somewhere they are not is worse than a resident told nothing.`);
   }
 
   // placed by the hold record, as the office door is (POS-688: a held thing is unplaced)
-  const world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows });
+  let world;
+  try { world = await heldPlaced(eng.build.assembleWorld({ worldState, skeleton }), { pool: p, markRows }); }
+  catch (e) {
+    const h = heightsUnreadBounce(e, pin.law_sha);   // WLD-97: a law pin older than the height dials
+    if (!h) throw e;
+    return bounce(503, h.defect, h.hint);
+  }
   const state = { x: near.x, y: near.y };
   const oriented = eng.verbs.orient(state, world, { crossing: n });
   const seen = eng.verbs.openYourEyes(state, world, { crossing: n });

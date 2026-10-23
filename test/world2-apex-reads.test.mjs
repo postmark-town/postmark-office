@@ -405,13 +405,17 @@ test.before(async () => {
   try {
     const clone = process.env.WORLD_CLONE;
     if (!clone) throw new Error("WORLD_CLONE is unset");
-    const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const { pathToFileURL } = await import("node:url");
     const branches = await import("../src/world-branches.mjs");
-    const doc = JSON.parse(readFileSync(join(clone, "WORLD", "skeleton.json"), "utf8"));
+    const { execFileSync } = await import("node:child_process");
+    // the skeleton at the SAME ref as the engine (WLD-97 review): the engine reads
+    // its heights from the skeleton, so a working tree a commit away from the
+    // engine's ref is a different world (and, past postmark-world#295, a refusal)
+    const ref = branches.freshestMainRef(clone);
+    const doc = JSON.parse(execFileSync("git", ["-C", clone, "show", `${ref}:WORLD/skeleton.json`], { encoding: "utf8", maxBuffer: 64 << 20 }));
     RECORDS_SKELETON = Object.entries(doc).map(([key, data]) => ({ kind: "skeleton", key, path: "WORLD/skeleton.json", data }));
-    const dir = branches.materializeAtRef(clone, branches.freshestMainRef(clone), "tools");
+    const dir = branches.materializeAtRef(clone, ref, "tools");
     const at = (f) => import(pathToFileURL(join(dir, "tools", f)).href);
     const [verbs, build] = await Promise.all([at("world-verbs.mjs"), at("world-build.mjs")]);
     RECORDS_ENGINE = { verbs, build };
@@ -667,4 +671,40 @@ test("THE REAL DISPATCHER, INJECTED STORES: store A and store B each read their 
     await serve.world2Serve("/world2/apex", AT(), { p: A });
     assert.equal(A.lastActive(), 1, "store A's own answer is shared within its TTL");
   });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE LAW BEFORE THE HEIGHT DIALS (WLD-97). Since postmark-world#295 the engine
+// refuses a skeleton without its height dials, with code HEIGHTS_UNREAD. The doors
+// read the skeleton at the window's law pin, which can predate the dials; that is
+// a 503 naming the law, never a 5xx out of the engine. The engine here is the
+// pinned clone's (older than #295), so its refusal is stood in by an engine whose
+// assembly refuses exactly as #295's does; the doors are the real ones.
+const heightsRefused = () => ({
+  ...RECORDS_ENGINE,
+  build: { ...RECORDS_ENGINE.build, assembleWorld: () => { throw Object.assign(new Error("skeleton.elevation.regions must give every region an anchor.at_m and a band_m of two numbers, low first (missing: the-town-centre)"), { code: "HEIGHTS_UNREAD" }); } },
+});
+
+test("HEIGHTS UNREAD · /world2/apex: a law pin older than the height dials is a 503 that names the law", async (t) => {
+  if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
+  const r = await RECORDS_DOOR(new URLSearchParams({ x: "4000", y: "4000", crossing: "1" }), { p: recordsPool(), eng: heightsRefused() });
+  assert.equal(r.error?.code, 503);
+  assert.equal(r.error.body.defect, `the law at ${REC_LAW_SHA.slice(0, 8)} predates the height dials`);
+  assert.match(r.error.body.hint, /missing: the-town-centre/);
+});
+
+test("HEIGHTS UNREAD · /world2/investigate: the same law, the same 503", async (t) => {
+  if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
+  const { world2Serve } = await import("../src/world2-serve.mjs");
+  const r = await world2Serve("/world2/investigate", new URLSearchParams({ mark: "wright/the-trueing-house-parcel" }), { p: recordsPool(), eng: heightsRefused() });
+  assert.equal(r.code, 503);
+  assert.equal(r.body.defect, `the law at ${REC_LAW_SHA.slice(0, 8)} predates the height dials`);
+});
+
+test("HEIGHTS UNREAD is the only refusal turned into a 503: any other failure in the engine still throws", async (t) => {
+  if (!RECORDS_ENGINE) return t.skip(`no world engine: ${RECORDS_WHY}`);
+  const broken = { ...RECORDS_ENGINE, build: { ...RECORDS_ENGINE.build, assembleWorld: () => { throw new TypeError("something else"); } } };
+  await assert.rejects(RECORDS_DOOR(new URLSearchParams({ x: "4000", y: "4000", crossing: "1" }), { p: recordsPool(), eng: broken }), /something else/);
+  const { heightsUnreadBounce } = await import("../src/world2-serve.mjs");
+  assert.equal(heightsUnreadBounce(new Error("x"), REC_LAW_SHA), null);
 });
