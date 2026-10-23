@@ -92,6 +92,7 @@ test("I1 · the name is trimmed, loses one leading @ and its case; a blank or ab
   assert.ok("invited_by" in DECLARE_SCHEMA.properties, "the declaration takes it");
   assert.equal(DECLARE_SCHEMA.required.includes("invited_by"), false, "and it is optional");
   assert.match(INVITE_FIELDS.invited_by.description, /public credit/, "the form says it is public");
+  assert.match(INVITE_FIELDS.invited_by.description, /the founders' household \(it never earns invitation stamps\)/, "and names the founders (POS-576/e)");
 });
 
 test("I2 · a resident's handle credits their HOUSEHOLD, and a household's own slug credits it", () => {
@@ -112,13 +113,13 @@ test("I2b · THE COLLISION (B1): a bare name is a resident's handle first; hh:<s
 test("I3 · refused by name, crediting nobody: your own household, the town's own, a meep, a name the town does not know", () => {
   assert.deepEqual(judge("new-hearth"), { refused: "own", named: "new-hearth" }, "the house this join founds");
   assert.deepEqual(judge("kindling"), { refused: "own", named: "kindling" }, "its own first resident");
-  assert.deepEqual(judge(TOWN_HOUSE), { refused: "town", named: TOWN_HOUSE });
-  assert.deepEqual(judge("town-pen"), { refused: "town", named: "town-pen" }, "a resident of the town's own house");
+  assert.deepEqual(judge(TOWN_HOUSE), { refused: "founders", named: TOWN_HOUSE, house: TOWN_HOUSE }, "the town is a founders' house: one word");
+  assert.deepEqual(judge("town-pen"), { refused: "founders", named: "town-pen", house: TOWN_HOUSE }, "a resident of the town's own house");
   for (const reserved of ["postmaster", "office", "ferry"]) assert.equal(judge(reserved).refused, "town", reserved);
   assert.deepEqual(judge("ember-lamp"), { refused: "meep", named: "ember-lamp" }, "a meep, though its house is real");
   assert.deepEqual(judge("nobody-here"), { refused: "unknown", named: "nobody-here" });
   assert.deepEqual(judge("hh:new-hearth"), { refused: "own", named: "hh:new-hearth" }, "your own house, by its house key");
-  assert.deepEqual(judge("hh:the-town"), { refused: "town", named: "hh:the-town" });
+  assert.deepEqual(judge("hh:the-town"), { refused: "founders", named: "hh:the-town", house: TOWN_HOUSE });
   for (const law of [undefined, null]) assert.deepEqual(judge("wick", { isMeep: law }), { refused: "law", named: "wick" },
     "THE LAW FAILS CLOSED: unread, nothing is credited");
   // A house already holding the founding slug (a join that names the house it is
@@ -129,8 +130,11 @@ test("I3 · refused by name, crediting nobody: your own household, the town's ow
 
 test("I3c · THE FOUNDERS NEVER EARN (POS-576/e): ?invite=wright resolves into starforge and is refused with its own reason, logged like a miss", async () => {
   const judged = judge("wright");
-  assert.deepEqual(judged, { refused: "founders", named: "wright", by: "starforge" });
-  assert.deepEqual(judge("hh:starforge"), { refused: "founders", named: "hh:starforge", by: "starforge" });
+  assert.deepEqual(judged, { refused: "founders", named: "wright", house: "starforge" });
+  assert.deepEqual(judge("hh:starforge"), { refused: "founders", named: "hh:starforge", house: "starforge" });
+  // NEVER A `by` (the follow-up review of #751): `by` is what a credit pays, so a refusal must not carry one
+  for (const n of ["wright", "hh:starforge", "the-town", "hh:the-town", "town-pen"]) assert.equal("by" in judge(n), false, n);
+  for (const n of ["wright", "the-town"]) assert.match(inviteReceipt(judge(n)), /names the founders' household/, n);
   assert.equal(inviteReceipt(judged),
     "Not recorded: \"wright\" names the founders' household, which never earns invitation stamps, so this invitation pays neither side. Your join is unaffected.");
   const logs = [];
@@ -251,6 +255,7 @@ test("I7 · begin parks the named inviter with the declaration (the co-sign runs
   assert.ok(!r.error, JSON.stringify(r).slice(0, 300));
   assert.equal(r.result.invited_by.named, "wick", "the answer says what was parked");
   assert.match(r.result.invited_by.note, /publicly/);
+  assert.match(r.result.invited_by.note, /the founders' household \(it never earns invitation stamps\)/, "begin's parked note names the founders (POS-576/e)");
   const parked = JSON.parse(odb.prepare("SELECT card FROM berths WHERE slug = 'lantern-guest'").get().card);
   assert.equal(parked.invited_by, "wick", "it rides the parked declaration, which the co-sign runs");
   const none = await householdApex({ do: "begin", args: { household: "The Guest Room", card: "Again." } }, key, { odb });

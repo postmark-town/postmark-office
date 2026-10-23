@@ -59,8 +59,13 @@ export const TOWN_HOUSE = "the-town";
  * THE FOUNDERS NEVER EARN (POS-576/e, Darko 2026-10-22 22:07): the founders'
  * household and the town's own. An invitation that resolves into either is
  * refused with its own reason and pays neither side: the invitee joins and
- * settles as anyone does, on the ordinary bundle. (the-town is also the town's
- * own name, refused as such before it is ever resolved.)
+ * settles as anyone does, on the ordinary bundle. the-town and hh:the-town
+ * read "founders" too, so the receipt and the read say one word for it.
+ *
+ * A FOUNDERS' REFUSAL CARRIES `house`, NEVER `by` (the follow-up review of
+ * #751): `by` is the field a credit pays, so a caller that read judged.by
+ * without checking `refused` could pay the founders. The house it resolved
+ * into rides as `house`, for the log.
  */
 export const FOUNDERS = Object.freeze(["starforge", TOWN_HOUSE]);
 
@@ -71,7 +76,7 @@ export const INVITE_GROUP = Object.freeze({
 });
 export const INVITE_FIELDS = Object.freeze({
   invited_by: { type: "string", title: "Who invited you?", ...INVITE_GROUP, "x-multiline": false, maxLength: INVITE_MAX, examples: ["wright"],
-    description: "Optional: the handle of the resident who invited you, or hh:<slug> for a household (an invitation link fills it in). This is a public credit: it shows on your household's record. When your household settles you get 10 stamps instead of 5, and they get 10 when you write your first letter or claim your home parcel within 30 days. Your own household, a meep or a name the town doesn't know records nothing, and your join goes through either way." },
+    description: "Optional: the handle of the resident who invited you, or hh:<slug> for a household (an invitation link fills it in). This is a public credit: it shows on your household's record. When your household settles you get 10 stamps instead of 5, and they get 10 when you write your first letter or claim your home parcel within 30 days. Your own household, the founders' household (it never earns invitation stamps), a meep or a name the town doesn't know records nothing, and your join goes through either way." },
 });
 export const INVITE_FIELD_NAMES = Object.freeze(Object.keys(INVITE_FIELDS));
 
@@ -101,7 +106,9 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
   const refuse = (refused) => ({ refused, named });
   const house = named.startsWith(HOUSE_PREFIX) ? named.slice(HOUSE_PREFIX.length) : null;
   if (named === own.handle || named === own.slug || (house != null && house === own.slug)) return refuse("own");
-  if (named === TOWN_HOUSE || house === TOWN_HOUSE || isReservedHandle(named)) return refuse("town");
+  const founders = (h) => ({ refused: "founders", named, house: h });
+  if (named === TOWN_HOUSE || (house != null && FOUNDERS.includes(house))) return founders(house ?? named);
+  if (isReservedHandle(named)) return refuse("town");
   if (typeof isMeep !== "function") return refuse("law");
   const houses = registry?.households ?? {};
   const residentOf = (h) => Object.keys(houses).find((slug) => (houses[slug]?.residents ?? []).map(String).includes(h)) ?? null;
@@ -116,8 +123,7 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
   }
   if (!owner) return refuse("unknown");
   if (owner === own.slug) return refuse("own");
-  if (owner === TOWN_HOUSE) return refuse("town");
-  if (FOUNDERS.includes(owner)) return { refused: "founders", named, by: owner };
+  if (FOUNDERS.includes(owner)) return founders(owner);
   return { by: owner, named };
 }
 
@@ -128,7 +134,7 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
 export async function recordInvite({ slug, judged, at = new Date(), write = setHouseholdInvitedBy, env = process.env, log = console.error } = {}) {
   // A founders' invite is a miss with its own reason, logged like the others (POS-576/e): nothing is written.
   if (judged?.refused === "founders") {
-    log(`[arrival-invite] ${slug}: not kept (by ${judged.by}, named ${judged.named}, at ${at instanceof Date ? at.toISOString() : at}) — the founders never earn invitation stamps (POS-576/e)`);
+    log(`[arrival-invite] ${slug}: not kept (by ${judged.house}, named ${judged.named}, at ${at instanceof Date ? at.toISOString() : at}) — the founders never earn invitation stamps (POS-576/e)`);
     return { kept: false, why: "founders" };
   }
   if (!judged?.by) return { kept: false };
