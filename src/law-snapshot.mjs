@@ -38,7 +38,10 @@
 // cleared, its callers get `{ changed: false, abandoned: true }`, and the next
 // tick starts a fresh one. A refresh that was let go and then finishes still
 // publishes, unless a refresh that started after it has already published, so
-// a store that is slow rather than stuck costs nothing.
+// a store that is slow rather than stuck costs nothing. What was let go is
+// ended by the store itself (a statement_timeout scoped to the refresh's own
+// transaction), and at most MAX_LOADS refreshes run at once, law and graph
+// together (snapshot-loads.mjs), so a store that hangs never takes the pool.
 //
 // ── ONE EVENT FOR EVERY PUBLISH (POS-680) ────────────────────────────────────
 // Whatever publishes a law (the timer, a read worker's announcement, a test, a
@@ -48,6 +51,7 @@
 // read from.
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
+import { startLoad, endLoad, loadsStanding, timedSession, servePool, MAX_LOADS } from "./snapshot-loads.mjs";
 
 // The pair that says "the law to serve has moved". Both halves matter: a new
 // settlement whose law is not ingested moves `newest` (the disclosure changes),
@@ -107,7 +111,7 @@ function publish(next, key, n) {
  */
 export function lawRefreshStanding() {
   return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
-    in_flight: Boolean(state.inflight), deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError };
+    in_flight: Boolean(state.inflight), deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding() };
 }
 
 /**
@@ -127,10 +131,11 @@ export function lawStanding() {
   };
 }
 
+// The store, by default: a refresh handed no `query` reads in its own timed
+// session on the serve pool (snapshot-loads.mjs § timedSession). This function
+// is that default's name; a refresh never calls it statement by statement.
 async function defaultQuery(sql, params) {
-  const { world2ServeEnabled, world2Pool } = await import("./world2-serve.mjs");
-  if (!world2ServeEnabled()) throw new Error("the world 2.0 store is not engaged at this office (WORLD2_PG/WORLD2_PG_URL)");
-  return (await world2Pool()).query(sql, params);
+  return (await servePool()).query(sql, params);
 }
 
 /**
@@ -145,19 +150,26 @@ async function defaultQuery(sql, params) {
  */
 export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlineMs = LAW_REFRESH_DEADLINE_MS } = {}) {
   if (state.inflight) return state.inflight;
+  if (!startLoad()) {
+    state.lastError = `${MAX_LOADS} store refreshes are still running (the cap); this one was skipped and the next tick asks again`;
+    return Promise.resolve({ changed: false, busy: true, standing: lawStanding() });
+  }
   const n = ++state.started;
   const newest = () => n === state.started; // only the newest refresh speaks for the health line
   let live = null;
   const work = (async () => {
     await null; // the body runs after `inflight` is set, even when `query` throws at once
+    let session = null;
     try {
-      const pin = (await query(PIN_SQL)).rows[0] ?? {};
+      if (query === defaultQuery) session = await timedSession(await servePool());
+      const ask = session ? session.query : query;
+      const pin = (await ask(PIN_SQL)).rows[0] ?? {};
       const key = `${pin.newest ?? "-"}/${pin.pinned ?? "-"}`;
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: lawStanding() };
       }
-      const next = lawSnapshotFromRows((await query(LAW_AT_BLESSING_SQL)).rows);
+      const next = lawSnapshotFromRows((await ask(LAW_AT_BLESSING_SQL)).rows);
       // A refresh let go at its deadline publishes only if nothing that started
       // after it has published since. A store with no ingested blessing
       // publishes nothing and leaves whatever stood (null on a fresh process:
@@ -170,6 +182,8 @@ export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlin
       if (newest()) state.lastError = String(e?.message ?? e).slice(0, 160);
       return { changed: false, standing: lawStanding() };
     } finally {
+      await session?.end();
+      endLoad();
       if (state.inflight === live) state.inflight = null;
     }
   })();
