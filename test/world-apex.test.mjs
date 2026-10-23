@@ -1568,7 +1568,11 @@ test("a resident is never shown the visitors' gate: the say lands, with or witho
   assert.ok(!second.error || second.defect === "you just spoke", JSON.stringify(second).slice(0, 300));
 });
 
-test("berth: nothing durable — a mark refuses a berth at the dispatch, terms still shown", async () => {
+// A VISITOR WALKS AND SAYS (POS-739, Darko 2026-10-22 17:53): a berth's
+// leave-mark is refused by its own name before anything is computed, with the
+// visitor's sentence. It used to reach the dispatch and be refused there with
+// the terms; the terms bound nothing a visitor could take.
+test("berth: a visitor walks and says — a mark is refused by name, before the dispatch", async () => {
   on();
   // The base fixture grants only say; stand leave-mark up ambient so the
   // refusal under test is the HOUSEHOLD gate at the dispatch, not the
@@ -1583,8 +1587,9 @@ test("berth: nothing durable — a mark refuses a berth at the dispatch, terms s
   await withStore(path, async () => {
     const r = await worldApex({ do: "leave-mark", args: { slug: "berth-mark", kind: "sited", at: { x: 1, y: 1 } } }, BERTH_KEY);
     assert.equal(r.error, "bounce", "a berth must never write the durable world");
-    assert.ok(r.terms, "even the refusal shows the law");
-    assert.equal(r.did, "leave-mark", "the refusal is the dispatch's, not the door's");
+    assert.equal(r.code, 403);
+    assert.match(r.defect, /^a visitor walks and says; "leave-mark" comes with residency/, "the refusal names the act and the visitor");
+    assert.equal(r.standing, "visitor");
   });
 });
 

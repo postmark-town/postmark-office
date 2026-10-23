@@ -241,6 +241,14 @@ const REST_WORLD_WRITE_VERBS = new Map([
   ["/world/hold", "world_hold"], // same ledger as the MCP twin (the 08-17 parity audit's hole)
 ]);
 
+/**
+ * WHOSE world-write budget a call spends: the household's, and a bare berth's
+ * own (POS-739, review of #743). A berth carries no household, and charging
+ * `null` put every visitor's walks on ONE budget, so one berth walking its cap
+ * locked every visitor out for the hour. Its body, `berth-<slug>`, is its own.
+ */
+export const worldWriteHolder = (key) => key?.household ?? (key?.berth && key?.slug ? `berth-${key.slug}` : null);
+
 export const worldWriteVerbForRest = (method, path) => {
   if (method !== "POST") return null;
   return REST_WORLD_WRITE_VERBS.get(path) ?? null;

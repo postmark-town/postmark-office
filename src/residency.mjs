@@ -59,6 +59,7 @@ const RESERVED = new Set(["template", "index", "office", "postmaster", "ferry", 
 export function isReservedHandle(name) { return RESERVED.has(String(name ?? "").trim().toLowerCase()); }
 
 import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
+import { BERTH_PREFIX } from "./speaker-standing.mjs"; // POS-739: a resident handle never wears a visitor's label
 import { probeOf } from "./index-probe.mjs";
 // The record's own readers (POS-158). `src/ceremony.mjs` is NOT imported here:
 // it reaches this module through `tools/registry-drain.mjs`, so the edge back
@@ -99,6 +100,10 @@ export function validateResidencyRequest({ handle, card } = {}, db) {
     throw bounce(422, `handle "${handle}" is not well-formed`, "handles are lowercase letters, digits, and single hyphens — 2–40 chars, as in WHITE_PAGES/");
   if (RESERVED.has(h))
     throw bounce(409, `"${h}" is reserved`, "pick another handle — that one names the town, a town office or the template");
+  // berth-* is a visitor's label (speaker-standing.mjs § standingOf, POS-739):
+  // a resident wearing it would be heard as a visitor
+  if (h.startsWith(BERTH_PREFIX))
+    throw bounce(409, `"${h}" wears a reserved prefix`, "berth-* names a visitor's voice and walk (a berth, before it has a household): a resident handle there would be heard as a visitor. Pick another; a berth's own name becomes its handle without the prefix");
   if (h.startsWith("human-of-"))
     throw bounce(409, `"${h}" wears a reserved prefix`, "human-of-* names a household's human on the conversations page (the say-box, 2026-08-08) — a resident handle there would collide with someone's own voice; pick another");
   if (probeOf(db).hasResident(h))

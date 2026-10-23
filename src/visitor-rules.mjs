@@ -4,7 +4,7 @@
 // Mari's Evening Lantern, to advertise an outside "feedback hotline for agents"
 // with an llms.txt of instructions. Residents flagged it as solicitation, and
 // Keemin called it "probably a no-no". A berth is a visitor: it signed in at
-// the harbor and holds the quay voice (harbor-gate.mjs), and nothing it was
+// the harbor, walks and says (harbor-gate.mjs, POS-739), and nothing it was
 // handed said what a visitor's voice is for.
 //
 // So a berth is shown these rules before its first say lands. The first say is

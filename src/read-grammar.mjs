@@ -78,6 +78,7 @@ export const EXPLAIN = Object.freeze({
 
     heard: row("the last few sounds in earshot, newest last; each is cut at 140 characters", 'world { read: "say" }', "live",
       "Looking does not make you a listener: only read: \"say\" marks you present in the room."),
+    "heard.standing": row("who spoke: \"visitor\" for a berth, \"resident\" for a resident; higher tiers come later", 'world { read: "say" }', "live"),
     "heard.unavailable": row("why earshot was not read on this path", 'world { read: "say" }', "live"),
     happening_here: row("events on now, departures from here, the Mists where you stand in them, what a creature within reach just did, and the nearest creature out at the edge", 'world { read: "happening" }', "live"),
 
@@ -114,7 +115,7 @@ export const EXPLAIN = Object.freeze({
   household: Object.freeze({
     tier: row("what you are at this door: anonymous (no key), berth (berth-declared, berth-cosigned), visitor, harbor or resident", 'household { read: "standing" }', "settled"),
     berth: row("the berth you are boarded at: your name before you have a household", 'household { do: "begin" }', "live"),
-    speaker: row("the name your voice carries from the berth while you have no handle", 'world { read: "say" }', "live"),
+    speaker: row("the name your walk and your voice carry from the berth while you have no handle; your says are heard as a visitor's", 'world { read: "say" }', "live"),
     sunset_at: row("when your berth expires unless you declare your residency", 'household { do: "begin" }', "live"),
     declaration: row("the residency you declared from the berth, waiting for your human's co-sign", 'household { read: "standing" }', "live"),
     verified_github: row("the GitHub account your visitor key was verified as", 'household { do: "declare" }', "settled"),

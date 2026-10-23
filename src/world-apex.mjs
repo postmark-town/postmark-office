@@ -149,6 +149,7 @@ import { ARENA_TOOLS, ARENA_VERBS, arenaActViaOffice, arenaClosed } from "./aren
 // stride and its landing (src/portal-ground.mjs). Rides and vehicles are not this.
 import { cockpitPortal, groundAt, landingPointFor } from "./portal-ground.mjs";
 import { bounceExtras, caughtBounce, faultLogged, isHttpStatus, trippedError, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-573/578)
+import { VISITOR_ACTS, VISITOR_REFUSED, berthHandleOf, isBerthHandle } from "./speaker-standing.mjs"; // POS-739: a visitor walks and says
 
 export const apexEnabled = () => process.env.WORLD_APEX === "1";
 
@@ -1554,14 +1555,15 @@ export async function worldHouseholds({ repo = WORLD_CLONE, env = process.env } 
   const { world2Enabled, actsQuery } = await import("./world2-acts.mjs");
   if (!world2Enabled(env)) {
     const map = fileHouseholds(repo);
-    return (handle) => (handle ? map[handle] ?? `solo:${handle}` : null);
+    return (handle) => (handle && !isBerthHandle(handle) ? map[handle] ?? `solo:${handle}` : null);
   }
   let rows;
   try { rows = await actsQuery(IDENTITIES_SQL, [], env); }
   catch (e) { throw new HouseholdsUnreadable(e); }
   if (!Array.isArray(rows)) throw new HouseholdsUnreadable(null);
   const map = new Map(rows.map((r) => [String(r.handle), String(r.household)]));
-  return (handle) => (handle ? map.get(String(handle)) ?? `solo:${handle}` : null);
+  // a visitor's body has no household (POS-739): its walk, say, landing and ride all carry none
+  return (handle) => (handle && !isBerthHandle(handle) ? map.get(String(handle)) ?? `solo:${handle}` : null);
 }
 export const resetHouseholdCache = () => { _hh = null; };
 
@@ -1611,6 +1613,9 @@ export const seatBlock = async (ground, args = {}, key = null) => ({
  *  not a second one: one handle auto-resolves, several want naming. */
 export function standingHandle(args = {}, key = null) {
   const named = String(args?.handle ?? "").trim();
+  // a berth stands as its visitor body, as world.mjs § chooseStandpoint stands it (POS-739)
+  const berthBody = berthHandleOf(key);
+  if (berthBody && (!named || named === berthBody)) return berthBody;
   if (named) return named;
   const handles = [...(key?.handles ?? [])];
   return handles.length === 1 ? handles[0] : null;
@@ -2782,6 +2787,8 @@ async function apexRead(args, key, ctx = {}) {
   if (usable) actions = onlyUsable(actions, usable);
   // a creature in sight lends its afforded actions (POS-672): each verb once, the creatures it reaches named
   if (usable) actions = [...actions, ...creatureEntries(usable), ...encounterEntries(usable)];
+  // A visitor sees only what a visitor can do (POS-739; office AGENTS.md § The MCP surface): walk and say.
+  if (isBerthHandle(standingHandle(args, key))) actions = actions.filter((e) => VISITOR_ACTS.includes(e.action));
 
   // ── Stage ② · whose grant opened each door ────────────────────────────────
   //
@@ -3140,6 +3147,11 @@ async function apexDo(args, key, ctx = {}) {
   // Both are questions about WHO, and both are cheap enough to ask first.
   const actor = resolveHumanActor({ action, as: args.as, beside: args.beside, key, fence: "calculus" });
   if (actor?.error) return actor;
+
+  // A VISITOR WALKS AND SAYS (POS-739): every other act is refused by its own
+  // name, before anything is computed. The MCP and REST doors refuse it first
+  // (harbor-gate.mjs § visitorGated); this is the same answer for any caller.
+  if (isBerthHandle(standingHandle(args, key)) && !VISITOR_ACTS.includes(action)) return VISITOR_REFUSED(action);
 
   // The mail asymmetry, refused before anything else is computed — the answer
   // does not depend on where the caller stands, and saying so plainly is the

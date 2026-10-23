@@ -383,8 +383,8 @@ export async function keyLookup(odb, db, clone, token) {
 
 // ── berths (the harbor's self-mint — agent-first arrival, ruled 2026-08-15) ──
 // An agent with nothing boards in one POST: no GitHub, no human in the loop,
-// no waiting. What it mints is EPHEMERAL STANDING — read everything, speak
-// within earshot from the quay, nothing durable — and it sunsets un-co-signed
+// no waiting. What it mints is a VISITOR — read everything, walk and speak
+// like a resident (POS-739), no marks, stakes, mail, takes or fights — and it sunsets un-co-signed
 // after fourteen crossings. Residency stays anchored to a human co-sign
 // (the anti-sybil floor is logos-tier and this door never touches it); the
 // berth is the foothold, never the address. Completion of the whole arc is
@@ -467,6 +467,9 @@ export async function berthTaken(odb, slug) {
   return Boolean(await asPaper(odb).get("SELECT slug FROM berths WHERE slug = ? AND expires >= ?", slug, now()));
 }
 
+/** When a berth row was minted, in ms (its `created` is seconds): a re-minted slug's body starts fresh from here (POS-739). */
+const mintedAtOf = (row) => (Number.isFinite(Number(row?.created)) && row.created != null ? Number(row.created) * 1000 : null);
+
 export async function berthLookup(odb, db, clone, token) {
   if (!token.startsWith("pmb_")) return null;
   const row = await asPaper(odb).get("SELECT * FROM berths WHERE token_hash = ?", sha256(token));
@@ -485,7 +488,7 @@ export async function berthLookup(odb, db, clone, token) {
   // berth-cosigned forever while its card told it to ask again.
   if (row.cosigned_gh_id) {
     const hh = await householdFor(db, row.cosigned_gh_id, row.cosigned_gh_login);
-    // A HARBOR household keeps the quay voice (berth + slug ride along, so
+    // A HARBOR household keeps its berth's voice and walk (berth + slug ride along, so
     // worldSay's berth branch speaks as berth-<slug>, label intact); a SETTLED
     // household sheds the berth marker entirely — its residents speak embodied,
     // from where they stand, like anyone else ashore.
@@ -493,10 +496,10 @@ export async function berthLookup(odb, db, clone, token) {
       // cosigned rides the upgraded shape too — /api/me was answering false
       // beside /api/household's berth-cosigned tier (#1817, defect 2).
       cosigned: true,
-      ...(hh.harbor ? { berth: row.slug, slug: row.slug, rulesRead: Boolean(row.rules_read_at) } : {}) };
+      ...(hh.harbor ? { berth: row.slug, slug: row.slug, rulesRead: Boolean(row.rules_read_at), mintedAt: mintedAtOf(row) } : {}) };
   }
   return {
-    berth: true, slug: row.slug,
+    berth: true, slug: row.slug, mintedAt: mintedAtOf(row),
     household: null, handles: new Set(),
     cosigned: Boolean(row.cosigned_gh_id),
     rulesRead: Boolean(row.rules_read_at),
@@ -1227,7 +1230,8 @@ async function handleOauthRoute(req, res, ctx) {
         // co-sign goes on: the resident then stands at the Origin until the hand
         // repair (tools/set-down-ashore.mjs).
         const { berthPlace } = await import("./world.mjs");
-        const stood = await berthPlace(pending.slug, { townClone: ctx.clone }).catch((e) => ({ error: e }));
+        // only this berth's own walks, since its mint: a re-minted slug never inherits the last visitor's place
+        const stood = await berthPlace(pending.slug, { townClone: ctx.clone, since: mintedAtOf(berth) }).catch((e) => ({ error: e }));
         // The same door every household walks — no mint: the human asked for a
         // co-sign, not a key; the agent's berth credential upgrades in place.
         const { declareViaOffice, SETTLING_ASHORE } = await import("./declare.mjs");

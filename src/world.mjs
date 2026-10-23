@@ -48,6 +48,8 @@ import { guardedDraftsForKey, guardedLiveChildrenOf, guardedLiveMarks } from "./
 import { WORLD_STAKE_TOOLS, actingAs, callWorldStakeTool, emptyPurseRefusalFor, heldAtOffice, worldPortfolioStakeSlice, markStakeBlock } from "./world-stake.mjs"; // P3 draft, append-shaped
 import { toConfirm } from "./stamps-preview.mjs"; // POS-83: the inline stake's half of the confirmation step
 import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth reads the town's rules for visitors before its first say
+import { berthHandleOf, isBerthHandle, withStanding } from "./speaker-standing.mjs"; // POS-739: a visitor walks and says, where it stands
+import { harborWritesOpen, HARBOR_BOUNCE } from "./harbor-gate.mjs"; // POS-739: a harbor household walks as its berth, no other way
 import { classNodeNameOf, isSited, kindFieldOf, lineageOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
 import { classNames, classRoster, classDials, classExtendsOf, classProperty, departurePace, freeCellIn } from "./world-classes.mjs";
 import { makersOf } from "./holding-law.mjs"; // who may make an instance: the class's own makers (LOGOS v2, O1) // which classes exist — read from the record, never held
@@ -318,8 +320,21 @@ function berthAboard(slug, townClone = TOWN_CLONE_FOR_MANIFEST) {
  * here, so it must ask BEFORE the declaration writes `HARBOR/berths/<slug>.md`,
  * which would read as the deck afterwards. `mark` is the mark stood on, or null
  * when the record has lost it and the Origin stands in.
+ *
+ * A BERTH THAT WALKED STANDS WHERE IT WALKED (POS-739): a visitor walks as
+ * `berth-<slug>`, so "where it stood" is its own walk record first, and the
+ * deck or the quay only for a berth that never walked. The co-sign then sets
+ * the new resident down where the visitor actually was, not back at the water.
  */
-export async function berthPlace(slug, { townClone = TOWN_CLONE_FOR_MANIFEST } = {}) {
+export async function berthPlace(slug, { townClone = TOWN_CLONE_FOR_MANIFEST, since = null } = {}) {
+  const walked = await recordedStandpoint(`berth-${slug}`, null, { since: since ?? BERTH_MINTED.get(`berth-${slug}`) ?? null });
+  if (walked?.placed && !isGroundlessDefault(walked) && !walked.placeholder)
+    return { x: walked.x, y: walked.y, aboard: false, mark: walked.mark_id ?? null };
+  return harborPlace(slug, { townClone });
+}
+
+/** The harbor's own place for a berth, walked or not: the deck for a manifest berth, the quay stone for every other. */
+async function harborPlace(slug, { townClone = TOWN_CLONE_FOR_MANIFEST } = {}) {
   const aboard = berthAboard(slug, townClone);
   const at = aboard ? await berthShip() : await berthQuay();
   const markOf = async (id) => {
@@ -328,6 +343,13 @@ export async function berthPlace(slug, { townClone = TOWN_CLONE_FOR_MANIFEST } =
   };
   const mark = (await markOf(aboard ? SHIP_MARK_ID : QUAY_MARK_ID)) ?? (aboard ? await markOf(QUAY_MARK_ID) : null);
   return { x: at.x, y: at.y, aboard: aboard && mark === SHIP_MARK_ID, mark };
+}
+
+/** A visitor's home, for a walk with no target: its berth at the harbor, in homeCoords' shape. */
+async function visitorHome(handle) {
+  const at = await harborPlace(handle.slice("berth-".length));
+  return { x: at.x, y: at.y, from: at.aboard ? "your berth, aboard the ship at anchor" : "your berth, at the quay",
+    ...(at.mark ? { home_mark: at.mark } : {}) };
 }
 
 /** A mark's place in the world, read from the record as the berth's is: `{ x, y, mark }`, or null. */
@@ -390,6 +412,15 @@ export function chooseStandpoint(args, key) {
     return { bounce: { error: "bounce", defect: "your eyes ride your body — an embodied call cannot stand at coordinates",
       hint: "to look from elsewhere, look as the spectator: pass x/y WITHOUT handle. To stand where your body is, pass handle (or nothing on a one-resident key)." } };
   if (hasCoords) return { stance: "spectator", coords: { x, y, from: "coords" } };
+
+  // A VISITOR HAS A BODY (POS-739): a berth key stands as `berth-<slug>`, where
+  // its walk put it (the quay until it walks), so its eyes, its walk and its
+  // voice are one place. A co-signed household still at the harbor speaks as
+  // its berth (oauth.mjs § berthLookup), so it stands there too unless it names
+  // one of its own residents.
+  const berthBody = berthHandleOf(key);
+  noteBerthMint(key);
+  if (berthBody && (!named || named === berthBody)) return { stance: "embodied", handle: berthBody, visitor: true };
 
   if (named) {
     // handle: picks which of YOUR residents stands here; it is not how you find
@@ -802,7 +833,9 @@ export async function presentAround(at, radiusM) {
 // (`world-movement.mjs § vehicleStandpoint`) answers `source: "vehicle"` — a rider
 // inside the hull, placed at the hull. Left off this set, orient answered a rider
 // aboard the Post Office with their house, exactly the sentence above, one era on.
-const DERIVED_SOURCES = new Set(["walk", "timetable", "attachment", "vehicle"]);
+// `berth` (POS-739): a visitor that has not walked stands at the quay or on the
+// deck (berthStandpoint), and its eyes are there too, never at the Origin.
+const DERIVED_SOURCES = new Set(["walk", "timetable", "attachment", "vehicle", "berth"]);
 
 async function standCoords(handle, w) {
   try {
@@ -838,6 +871,43 @@ const foldForPresence = () => world().then((w) => w, () => null);
 // of smuggled. `aboard` says the deck is the place, which is what lets the
 // crossing hold one conversation.
 export async function residentStandpoint(handle, w = null) {
+  if (isBerthHandle(handle)) return berthStandpoint(handle, w);
+  return recordedStandpoint(handle, w);
+}
+
+// A VISITOR STANDS WHERE ITS WALK PUT IT, AND AT THE QUAY UNTIL IT WALKS
+// (POS-739, Darko 2026-10-22: a berth walks like a resident). A berth walks as
+// `berth-<slug>` into the same `acts` record a resident walks into (a walk act
+// with no household, the shape its says already have), so the ordinary
+// derivation places it once it has walked. Before its first walk the record
+// places it nowhere, and the answer is the harbor's, never the Origin's: the
+// deck for a manifest berth, the quay stone for every other.
+const BERTH_SOURCE = "berth";
+// WHEN EACH BERTH BODY WAS MINTED, as its key said (oauth.mjs § berthLookup): a
+// berth acts only through its key, so every door it reaches notes it here first.
+const BERTH_MINTED = new Map();
+/** Note a berth key's body and mint time (every door a berth acts through calls this). */
+export function noteBerthMint(key) {
+  const body = berthHandleOf(key);
+  if (body && Number.isFinite(key.mintedAt)) BERTH_MINTED.set(body, key.mintedAt);
+}
+/** The household an act by `who` carries: none for a visitor's body, the key's otherwise. One answer for walk, say and landing. */
+export const actHouseholdFor = (who, key) => (isBerthHandle(who) ? null : key ? resolvedWorldHousehold(key) : null);
+async function berthStandpoint(handle, w = null) {
+  const here = await recordedStandpoint(handle, w, { since: BERTH_MINTED.get(handle) ?? null });
+  if (here?.placed && !isGroundlessDefault(here) && !here.placeholder) return here;
+  const aboard = berthAboard(handle.slice("berth-".length));
+  const q = aboard ? await berthShip() : await berthQuay();
+  return {
+    handle, x: q.x, y: q.y, placed: true, source: BERTH_SOURCE,
+    moving: false, remaining_m: 0, narration: null, aboard,
+    mark_id: aboard ? SHIP_MARK_ID : QUAY_MARK_ID,
+    note: aboard ? "aboard the ship at anchor, where a boarded visitor stands until it walks"
+      : "the quay, where a visitor stands until it walks",
+  };
+}
+
+async function recordedStandpoint(handle, w = null, { since = null } = {}) {
   const world_ = w ?? await world();
   const { whereIs } = await whereMod();
   // BOTH ERAS. A resident set down ashore at the freeze has that record in the
@@ -856,6 +926,10 @@ export async function residentStandpoint(handle, w = null) {
   let departures = [];
   try { departures = projected ? await positionProjection.departures() : await departuresNow(WORLD_CLONE); }
   catch { /* no ledger and no store — ground is still an honest answer */ }
+  // A RE-MINTED BERTH STARTS AT THE WATER (POS-739, review of #743): a visitor's
+  // body is berth-<slug>, and a slug is reused after a sunset, so only the walks
+  // made since THIS berth was minted are its own.
+  if (since != null) departures = departures.filter((d) => d.handle !== handle || Date.parse(d.iso) >= since);
 
   // ── ABOARD BY OCCUPANCY (#2986, Keemin-ruled 2026-09-19) ──────────────────
   //
@@ -910,7 +984,8 @@ export async function residentStandpoint(handle, w = null) {
         recordsOf: (h) => departures.filter((d) => d.handle === h),
         // The projection already holds era two, so the store is not read again
         // for a question it has answered (`heardFromV2`'s own seam, POS-264).
-        ...(projected ? { storeRecordsOf: async () => [] } : {}),
+        // with a mint time, the store's era is already in `departures` and filtered there
+        ...(projected || since != null ? { storeRecordsOf: async () => [] } : {}),
       });
       if (v2) return v2;
     } catch (e) {
@@ -1531,7 +1606,7 @@ export async function landAt(worldClone, { who, at, via = null, why, key = null,
   const crossing = fractionalCrossing();
   const landedAt = new Date().toISOString();   // ONE clock read (POS-198), carried into the act and the projection
   const { at: stampAt, witnesses } = await witnessStampAt(who, point);
-  const entry = landEntry({ crossing, who, at: point, via, why, household: household ?? (key ? resolvedWorldHousehold(key) : null), writtenAt: landedAt, declaredBy: who });
+  const entry = landEntry({ crossing, who, at: point, via, why, household: household ?? actHouseholdFor(who, key), writtenAt: landedAt, declaredBy: who });
   entry.at = stampAt; entry.witnesses = witnesses;
   const row = laneFlipped("walk") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
   // THE PROJECTION, IN THE SAME STEP (POS-264), in the shape storedDepartures hands it back,
@@ -1680,20 +1755,11 @@ const voices = createVoices({
   // placed:false falls back — an engine failure still throws; the Origin must
   // never mask real breakage.
   standpoint: async (handle) => {
-    // A berth speaker is not a resident and has no standpoint to derive — the
-    // quay IS their standing, by the arrival ruling (2026-08-15). Named before
-    // the resident derivation so an unknown-handle path never has to guess.
-    // Since the relocation (2026-08-17) the quay is the harbor's stone edge,
-    // read from the-town/the-quay's own record; {0,0} is the fallback. A
-    // MANIFEST berth stands aboard the ship instead (the Monday ruling).
-    if (handle.startsWith("berth-")) {
-      const slug = handle.slice("berth-".length);
-      const aboard = berthAboard(slug);
-      const q = aboard ? await berthShip() : await berthQuay();
-      return { handle, placed: true, x: q.x, y: q.y, aboard, moving: false };
-    }
-    // A berth that came ashore is not here: the co-sign set it down where it
-    // stood (POS-740), so `residentStandpoint` reads that record like any other.
+    // A berth speaks where it stands (POS-739): `residentStandpoint` answers a
+    // `berth-` speaker from its own walk record, and from the quay (or a
+    // manifest berth's deck) until it has walked. A berth that came ashore is
+    // not here: the co-sign set it down where it stood (POS-740), so the same
+    // call reads that record like any other.
     const here = await residentStandpoint(handle);
     if (here?.placed) return here;
     return { handle, placed: true, x: ORIGIN.x, y: ORIGIN.y, aboard: false, moving: false };
@@ -1822,6 +1888,7 @@ async function sayAct(args = {}, key = null) {
   // visitor-rules.mjs): refused with the rules, nothing written, until the
   // berth sends rules_read: true once.
   if (key?.berth) {
+    noteBerthMint(key);
     try {
       const text = args.text == null ? "" : String(args.text);
       const rulesFirst = await visitorRulesGate(key, args, { speaking: Boolean(text.trim()) });
@@ -5822,14 +5889,25 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   // object into a resident name; and REST posts a raw body with no schema to
   // catch it. Reader and declared schema stay the same single vocabulary.
   const named = String(payload.handle ?? "").trim();
-  let who = named || (handles.length === 1 ? handles[0] : "");
+  // A VISITOR WALKS LIKE A RESIDENT (POS-739, Darko 2026-10-22 17:53): a berth
+  // key walks its own body, `berth-<slug>`, the label its voice already speaks
+  // under, by the same law as everyone else below. Its act is recorded with no
+  // household, as its says are (resolvedWorldHousehold answers null for it).
+  const berthBody = berthHandleOf(key);
+  noteBerthMint(key);
+  let who = named || berthBody || (handles.length === 1 ? handles[0] : "");
   if (!who) {
     throw bounce(422, "which resident is walking?",
       handles.length ? `this key stands as ${handles.length} residents — pass handle: one of ${handles.join(", ")}`
                      : "no residents on this key — sign in, or use a household key",
       { choices: handles });
   }
-  if (!key?.handles?.has(who)) throw bounce(403, `"${who}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+  const walksAsVisitor = Boolean(berthBody) && who === berthBody;
+  if (!walksAsVisitor && !key?.handles?.has(who)) throw bounce(403, `"${who}" is not one of your residents`, `this key acts for: ${[...handles, ...(berthBody ? [berthBody] : [])].join(", ") || "(none)"}`);
+  // A household still at the harbor walks as its berth and no other way: its
+  // own residents' durable acts wait for settlement (harbor-gate.mjs).
+  if (!walksAsVisitor && key?.harbor === true && !harborWritesOpen())
+    throw bounce(HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
 
   // ── enter_on_arrival (founder-ruled, the walk round) ──────────────────────
   //
@@ -5888,7 +5966,8 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   const departures = await departuresForWalk(worldClone).catch(() => []);
   const mine = currentDeparture(departures, who);
   const derived = mine ? positionAt(mine, at) : null;
-  const home = await homeCoords(who, w);
+  // A visitor's home is its berth: the quay, or the deck for a manifest berth.
+  const home = walksAsVisitor ? await visitorHome(who) : await homeCoords(who, w);
   let from = derived ? { x: derived.x, y: derived.y } : { x: home.x, y: home.y };
 
   // NOBODY JUMPS OFF THE BOAT (Keemin, 2026-08-08 mid-crossing — rook declared
@@ -5958,7 +6037,8 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
     // HOME IS PER RESIDENT (POS-368): the house the resident declared, when
     // they named one; else their ground (own, or the household's)
     const house = home.home_mark ? (w?.marks ?? []).find((m) => m.id === home.home_mark) : null;
-    targetFrom = house ? `home — your declared home (${house.id})`
+    targetFrom = walksAsVisitor ? `home — ${home.from}`
+      : house ? `home — your declared home (${house.id})`
       : home.parcel ? `home — your ground (${home.parcel.id})` : "home — the Origin (no ground yet)";
     if (house?.extent) {
       targetExtent = { w: house.extent.w, h: house.extent.h };
@@ -6226,7 +6306,7 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
       const { at: stampAt, witnesses } = await witnessStampAt(who, from);
       const entry = walkEntry({
         crossing: at, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent,
-        household: resolvedWorldHousehold(key),
+        household: actHouseholdFor(who, key),
         writtenAt: movement.at, declaredBy: movement.declaredBy, note: movement.note ?? null, approach,
       });
       try {
@@ -6346,7 +6426,7 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
       arrivalCrossing: arrivedAtCrossing,
       dueAt: crossingSailsAt(arrivedAtCrossing),
       walkActId: result.seq ?? null,
-      household: resolvedWorldHousehold(key),
+      household: actHouseholdFor(who, key),
     }, { enter: (p, k, d) => enterViaOffice(worldClone, p, k, d), crossingDeps });
     entry = made.entry;
     queued = made.queued;
@@ -6630,7 +6710,8 @@ export async function worldWalkers(worldClone, key = null, { roll = null } = {})
       : "no town roll supplied to this door — the answer covers residents with a walk record or ground, and cannot include a resident who has neither";
     return {
       at,
-      walkers: walkerLandings(walkerPaces(movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers, departures, { currentDeparture, WALK_KM_PER_CROSSING }), departures, { currentDeparture }),
+      // each row says its standing, as every heard say does (POS-739): presence is labelled like voices
+      walkers: walkerLandings(walkerPaces(movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers, departures, { currentDeparture, WALK_KM_PER_CROSSING }), departures, { currentDeparture }).map((r) => withStanding(r)),
       // The disclosure the reader assembled, carried rather than dropped. A door
       // that reads half the record and says nothing is the failure this whole
       // change is about.
@@ -6640,7 +6721,7 @@ export async function worldWalkers(worldClone, key = null, { roll = null } = {})
     };
   } catch {
     // No world to fold: the walk ledger alone is still an honest answer.
-    return { at, walkers: publicWalkers(departures, at) };
+    return { at, walkers: publicWalkers(departures, at).map((r) => withStanding(r)) };
   }
 }
 
