@@ -907,7 +907,7 @@ export function collect(manifest, { now = Date.now() } = {}) {
 
   for (const row of manifest.units) {
     const hb = row.heartbeat;
-    if (hb && hb.kind === "state_file" && hb.path) files[hb.path] = readFile(hb.path);
+    if (hb && (hb.kind === "state_file" || hb.kind === "state_list") && hb.path) files[hb.path] = readFile(hb.path);
     // §9's input: the rolling receipt log, read like any other state file. A
     // single receipt answers "what did the LAST crossing do"; only the log can
     // answer "has it published anything in three days".
@@ -1012,6 +1012,30 @@ export function heartbeatOf(row, snapshot) {
     return { found: true, at_ms: f.mtime_ms ?? null, source: `${hb.path} (mtime)` };
   }
   return { found: false, at_ms: null, source: "", no_kind: true };
+}
+
+/**
+ * THE `state_list` HEARTBEAT (POS-766/e, the #760 review): a file the office
+ * writes only when something goes wrong, which alarms while its `list_field`
+ * lists anything. Its age means nothing (a quiet office never writes it), so the
+ * row says why it has no allowance (`no_staleness_because`). No file is green:
+ * nothing was ever listed. An unreadable file alarms: a list nobody can read is
+ * not an empty one. Each entry is named by `summary_field`, the newest first,
+ * and `stale_means` says what the operator does.
+ */
+export function judgeStateList(row, snapshot) {
+  const hb = row.heartbeat || {};
+  const label = row.label || row.unit;
+  const f = (snapshot.files || {})[hb.path];
+  if (!f || !f.exists) return { unit: row.unit, label, verdict: OK, reason: `${label}: none, ever (${hb.path} has never been written)` };
+  let list;
+  try { list = JSON.parse(f.text)?.[hb.list_field]; } catch { list = undefined; }
+  if (!Array.isArray(list))
+    return { unit: row.unit, label, verdict: ALARM_OUTCOME, reason: `${label}: ${hb.path} cannot be read as a list (${hb.list_field}) — a list nobody can read is not an empty one. ${row.stale_means || ""}`.trim() };
+  if (!list.length) return { unit: row.unit, label, verdict: OK, reason: `${label}: none listed [${hb.path}]` };
+  const names = list.slice(0, 5).map((e) => String(e?.[hb.summary_field] ?? "?"));
+  return { unit: row.unit, label, verdict: ALARM_OUTCOME,
+    reason: `${label}: ${list.length} listed, newest first: ${names.join(", ")}${list.length > 5 ? ", …" : ""}. ${row.stale_means || ""} [${hb.path}]`.trim() };
 }
 
 export function humanUptime(ms) {
@@ -1172,6 +1196,9 @@ export function classifyRow(row, snapshot, now) {
         `. The clock is fine; the work is not (journalctl -u ${svcName})`,
     };
   }
+
+  // A FILE THAT ALARMS WHILE IT LISTS ANYTHING (POS-766/e): judged by its content, never its age
+  if (hb.kind === "state_list") return judgeStateList(row, snapshot);
 
   const beat = heartbeatOf(row, snapshot);
   if (!beat.found) {

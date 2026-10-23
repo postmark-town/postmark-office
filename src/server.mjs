@@ -976,7 +976,6 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   }
   if (path === "/ops/loop-lag" && req.method === "GET") return j(res, 200, loopLag.read()); // POS-267 (src/loop-lag.mjs)
   if (path === "/ops/store-txn" && req.method === "GET") return j(res, 200, storeTxnWatch.read()); // POS-370 (src/store-txn-watch.mjs)
-  if (path === "/ops/set-down-strands" && req.method === "GET") return j(res, 200, (await import("./set-down-strands.mjs")).readStrands()); // POS-766/e (src/set-down-strands.mjs)
   // POS-292: how arrivals heard, weekly COUNTS only, keyless. Safe by
   // construction: the store's own function folds every cell under 3 and never
   // returns a note (030_arrival_heard.sql, src/arrival-heard.mjs).
@@ -1359,6 +1358,18 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       worldWriteBudget: (household) => bouncer.worldWriteBudget(household),
       rateResponse,
     });
+  }
+
+  // GET /ops/set-down-strands (POS-766/e; #760 review): a set-down that could not be undone,
+  // newest first (src/set-down-strands.mjs). It names things and residents, so unlike the
+  // keyless numbers beside /ops/loop-lag it answers the principal only, by the role registry
+  // asked now (principalNow, /ops/gift's own wall): no key is 401, another key 403. The
+  // morning round reads it through the roll-call, which reads the file on the box.
+  if (path === "/ops/set-down-strands") {
+    if (req.method !== "GET") return bounce(res, 405, "GET only", "GET /ops/set-down-strands reads the stranded set-downs");
+    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "the stranded set-downs name things and residents; this read is the principal's"); }
+    if (!(await principalNow(rdb, key))) return bounce(res, 403, "the stranded set-downs are the principal's", "this read names things and residents, so it answers only the principal's GitHub sign-in");
+    return j(res, 200, (await import("./set-down-strands.mjs")).readStrands());
   }
 
   // GET /me — the one read that needs a credential: your OWN resolved identity
