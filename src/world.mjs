@@ -4743,7 +4743,13 @@ async function namedMadeRecord(payload, by, key, bounce) {
     throw bounce(503, "the office could not read the world, so it cannot tell whether that name is taken",
       `nothing was made; try again shortly (${plainReason(e, "files", "the world, for a named make's name")})`);
   }
-  const taken = canonHas ?? (await guardedLiveMarks(null, { household, actor: by }).catch(() => [])).find((m) => m.id === id);
+  // the maker's own drafts, read or refused: never guessed empty (#760 review 3, as the made names fail closed)
+  let live;
+  try { live = await guardedLiveMarks(null, { household, actor: by }); } catch (e) {
+    throw bounce(503, "the office could not read your household's drafts, so it cannot tell whether that name is taken",
+      `nothing was made; try again shortly (${plainReason(e, "record", "the live layer, for a named make's name")})`);
+  }
+  const taken = canonHas ?? (live ?? []).find((m) => m.id === id);
   if (taken) throw bounce(409, `you already have a mark "${slug}"`,
     "a slug is unique per author, and that one names a mark of yours, published or a draft. Pick another slug for the thing you are making. Nothing was made.");
   if ((await madeMarksOrRefuse([id], bounce)).has(id)) { const t = madeIdTaken(id); throw bounce(t.code, t.defect, t.hint); }

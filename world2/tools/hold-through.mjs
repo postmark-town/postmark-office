@@ -103,9 +103,12 @@ const isMarkId = (v) => typeof v === "string" && v.includes("/");
  * @param rows         the standing `marks` rows
  * @param from         the first printing clearing's cutoff, or null when none has printed yet
  * @param owners       `Map(thing → owner handle)`, the ownership fold's answer (absent: its maker)
+ * @param setDowns     the act ids of `set-down` hold rows (POS-766/e): a thing made in hand set down as its
+ *                     maker's draft. Its place is its draft's, which the settlement publishes like any draft,
+ *                     so the printout never places it from a drop (it has none) and never notes it
  * @returns `{ prints: [{ slug, row, geometry, data, why }], notes: [string] }`
  */
-export function holdPrintout({ attachments = [], drops = new Map(), rows = [], from = null, owners = new Map() }) {
+export function holdPrintout({ attachments = [], drops = new Map(), rows = [], from = null, owners = new Map(), setDowns = new Set() }) {
   const bySlug = new Map(rows.map((r) => [String(r.slug), { ...r, geometry: asObj(r.geometry), data: asObj(r.data) ?? {} }]));
   const centreOf = (id) => placedCentreOfRow(bySlug.get(String(id)) ?? null);
   const framedBy = new Map();   // slug -> marks filed inside it that carry their own place
@@ -129,6 +132,7 @@ export function holdPrintout({ attachments = [], drops = new Map(), rows = [], f
       continue;
     }
     if (hold.policy !== "detach") continue;
+    if (setDowns.has(String(hold.act_id))) continue; // set down as its maker's draft (POS-766/e): its draft places it
     const legacy = from == null || actIdOf(hold) <= from;
     if (legacy) continue; // the POS-138 era: D2 leaves it alone
     const drop = drops.get(slug) ?? null;
@@ -289,8 +293,9 @@ export async function writeHoldThrough(q, { windowId, materialize, houseOrRefusa
   const holding = await pgHoldingRows(client, {});
   const drops = new Map();
   for (const r of holding) if (r.action === "drop" && Number(r.seq) <= through) drops.set(String(r.object ?? r.payload?.thing), r);
+  const setDowns = new Set(holding.filter((r) => r.action === "set-down").map((r) => String(r.seq)));
   const owners = new Map([...(await ownersFrom(holding))].map(([slug, st]) => [slug, st.owner]));
-  const plan = holdPrintout({ attachments: atts, drops, rows, from, owners });
+  const plan = holdPrintout({ attachments: atts, drops, rows, from, owners, setDowns });
   plan.notes.unshift(...notes);
   const printed = [];
   for (const p of plan.prints) {

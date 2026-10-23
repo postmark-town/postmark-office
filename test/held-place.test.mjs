@@ -271,3 +271,14 @@ test("13. D5: the holder's row in anyone's view says how many things are in thei
   assert.equal((src.match(/withCarryingNow\(await presen(t|ce)Near\(/g) ?? []).length, 3, "orient, the eyes and GET /world/present all carry it");
   assert.ok(src.includes(", carrying ${r.carrying} ${r.carrying === 1 ? \"thing\" : \"things\"}"), "and the telling says it");
 });
+
+test("POS-766/e · a thing made in hand, set down as its maker's draft and then published, is never placed from a drop it does not have, and never noted, crossing after crossing", () => {
+  const row = { id: "u-pebble", slug: "sb-ash/a-pebble", kind: "thing", owner: "sb-ash", household: "hh", body: "b", locked_window: 260,
+    geometry: { at: { x: 12, y: -3 }, extent: { w: 1, h: 1 } }, data: { date: "2026-10-23" } };
+  const setDown = { seq: null, act_id: "900", entity: "sb-ash", target: "sb-ash/a-pebble", policy: "detach", declared_by: "sb-ash", born_at: "2026-10-23T06:00:00Z", era: "live" };
+  const plan = (setDowns) => holdPrintout({ attachments: [setDown], drops: new Map(), rows: [row], from: 600, setDowns });
+  const without = plan(new Set());
+  assert.ok(without.notes.some((n) => n.startsWith("sb-ash/a-pebble: its set-down could not be placed")), "the control: read as a drop, it is noted every crossing");
+  const out = plan(new Set(["900"]));
+  assert.deepEqual([out.prints.length, out.notes.length], [0, 0], "read as a set-down: its draft placed it, and nothing is said");
+});

@@ -385,3 +385,20 @@ test("#759 review A · the made names fail closed: an unread record is a refusal
   assert.equal(u.code, 503);
   assert.match(u.hint, /nothing was written/);
 });
+
+test("#760 review 2 · a strand (set-down failed AND its draft not withdrawn) is said twice: one ESCALATION line, and the strands file the ops door reads", async () => {
+  const { recordStrand, readStrands } = await import("../src/set-down-strands.mjs");
+  const { mkdtempSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const file = join(mkdtempSync(join(tmpdir(), "strands-")), "set-down-strands.json");
+  const lines = [];
+  assert.deepEqual(readStrands({ file }), { strands: [], last_strand_at: null });
+  recordStrand({ thing: `${LB}/a`, maker: LB, actor: LB, why: "the record did not answer", undo: "the withdraw door refused" }, { file, now: new Date("2026-10-23T07:00:00Z"), log: (l) => lines.push(l) });
+  recordStrand({ thing: `${LB}/b`, maker: LB, actor: LB, why: "x", undo: "y" }, { file, now: new Date("2026-10-23T07:05:00Z"), log: (l) => lines.push(l) });
+  const r = readStrands({ file });
+  assert.deepEqual(r.strands.map((s) => s.thing), [`${LB}/b`, `${LB}/a`], "newest first");
+  assert.equal(r.last_strand_at, "2026-10-23T07:05:00.000Z");
+  assert.match(lines[0], /^\[office\] ESCALATION set-down stranded: little-bird\/a .* both in hand and a draft/);
+  assert.match(lines[0], /Recorded in /);
+});

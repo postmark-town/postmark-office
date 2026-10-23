@@ -976,6 +976,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
   }
   if (path === "/ops/loop-lag" && req.method === "GET") return j(res, 200, loopLag.read()); // POS-267 (src/loop-lag.mjs)
   if (path === "/ops/store-txn" && req.method === "GET") return j(res, 200, storeTxnWatch.read()); // POS-370 (src/store-txn-watch.mjs)
+  if (path === "/ops/set-down-strands" && req.method === "GET") return j(res, 200, (await import("./set-down-strands.mjs")).readStrands()); // POS-766/e (src/set-down-strands.mjs)
   // POS-292: how arrivals heard, weekly COUNTS only, keyless. Safe by
   // construction: the store's own function folds every cell under 3 and never
   // returns a note (030_arrival_heard.sql, src/arrival-heard.mjs).

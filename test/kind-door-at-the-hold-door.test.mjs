@@ -207,3 +207,47 @@ test("#759 review A · a leave-mark when the made names cannot be read fails CLO
     await assert.rejects(leaveMarkViaOffice(repo, { slug: "a-made-name", body: "In hand.", to: "sbx-cy" }, KEY), (e) => e.code === 503);
   } finally { acts.__setPoolForTest(pool); }
 });
+
+test("#760 review 3 · a named make when the maker's drafts cannot be read fails CLOSED: 503, nothing made", { skip }, async () => {
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const { useGuardReader } = await import("../src/world2-guards.mjs");
+  const undo = useGuardReader(async () => { throw new Error("the record could not be reached (test)"); });
+  try {
+    await assert.rejects(leaveMarkViaOffice(repo, { slug: "while-blind", body: "Made blind.", to: "sbx-cy" }, KEY), (e) => {
+      assert.equal(e.code, 503, String(e.defect));
+      assert.match(e.defect, /could not read your household's drafts, so it cannot tell whether that name is taken/);
+      return true;
+    });
+  } finally { undo(); }
+  const c = await store.connect("world2_owner");
+  try { assert.equal((await c.query("SELECT count(*)::int AS n FROM acts WHERE object = 'sbx-cy/while-blind'")).rows[0].n, 0, "nothing made"); } finally { await c.end(); }
+});
+
+test("#760 review 2 · THE ROLLBACK: the draft is filed, the set-down act fails, and the draft is withdrawn again, so the thing stays in hand and can be set down once the store answers", { skip }, async () => {
+  const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
+  const pen = await import("../src/world2-pen.mjs");
+  const id = "sbx-cy/a-shell";
+  await leaveMarkViaOffice(repo, { slug: "a-shell", body: "A spiral shell.", to: "sbx-cy" }, KEY);
+  // the pen refuses exactly the set-down act; every other write lands
+  const refusing = {
+    connect: async () => {
+      const c = await pool.connect();
+      return new Proxy(c, { get(t, k) {
+        if (k === "query") return (text, params) => {
+          const sql = String(text?.text ?? text), vals = params ?? text?.values ?? [];
+          return /INSERT INTO acts/i.test(sql) && vals.includes("set-down") ? Promise.reject(new Error("the store refused the set-down (test)")) : t.query(text, params);
+        };
+        const v = t[k]; return typeof v === "function" ? v.bind(t) : v;
+      } });
+    },
+    query: (...a) => pool.query(...a),
+  };
+  pen.__setPoolForTest(refusing);
+  try {
+    await assert.rejects(callHoldTool("world_hold", { thing: id, accept: true }, KEY, { verb: "drop" }), (e) => String(e?.cause?.message ?? "").includes("refused the set-down (test)"), "the pen refused the set-down act");
+  } finally { pen.__setPoolForTest(pool); }
+  assert.equal((await worldMarkById(id)).mark?.held_by, "sbx-cy", "still in hand: no set-down act was written");
+  // the draft went back out: the same set-down now files its draft afresh (a draft left behind would refuse it by name)
+  const r = await callHoldTool("world_hold", { thing: id, accept: true }, KEY, { verb: "drop" });
+  assert.equal(r.did, "set-down", JSON.stringify(r).slice(0, 300));
+});

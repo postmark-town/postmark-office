@@ -1425,9 +1425,20 @@ async function setDownMade({ made, args, key, actor }) {
       await deps.append(entry, {});
     });
   } catch (e) {
-    // NEVER IN HAND AND ON THE GROUND AT ONCE: the draft goes back out, and the refusal is the answer
-    try { await (await import("./world.mjs")).journalWithdraw({ by: maker, slug: made.slug, household: String(key?.household ?? "") }); }
-    catch (w) { (await import("./fault-words.mjs")).faultLogged(`a set-down of ${id} failed and its draft could not be withdrawn`, w); }
+    // NEVER IN HAND AND ON THE GROUND AT ONCE: the draft goes back out through the withdraw door
+    // (its own pen, whichever files drafts here), and the refusal is the answer
+    let undone = null;
+    try {
+      const w = await (await import("./world.mjs")).withdrawMarkViaOffice(WORLD_CLONE, { mark: id }, key);
+      if (w?.error) undone = w;
+    } catch (w) { undone = w; }
+    if (undone) {
+      // BOTH FAILED: stranded in hand and on the ground. Said loudly, where an operator looks (set-down-strands.mjs)
+      const { plainReason } = await import("./fault-words.mjs");
+      const { recordStrand } = await import("./set-down-strands.mjs");
+      recordStrand({ thing: id, maker, actor, why: plainReason(e, "record", `the set-down act for ${id}`),
+        undo: undone instanceof Error ? plainReason(undone, "record", `the withdrawal of ${id}'s draft`) : String(undone.defect ?? "the withdraw door refused") });
+    }
     throw e;
   }
   const staked = dropStake?.stake ? await stakeTheDrop({ thing: id, actor, key, n: dropStake.stake }) : null;
