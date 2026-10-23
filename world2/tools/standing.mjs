@@ -382,8 +382,12 @@ export function classChainOf(classes, name) {
 
 /**
  * How a record stands: "sited", "parcel", "predicate", "naming", "post",
- * "class", "property", or null. mark-kind.mjs § standingOf, over the store's
- * class layer (`classes`, from `classLayerOf`).
+ * "landform", "class", "property", or null. mark-kind.mjs § standingOf, over the
+ * store's class layer (`classes`, from `classLayerOf`).
+ *
+ * A LANDFORM (WLD-97, ruled by Darko 2026-10-22 21:03–21:04) extends `mark`, a
+ * sibling of sited: it carries a place and only shapes the ground, so it is never
+ * sited and never ground, even on a skew where the place would otherwise answer.
  */
 export function standsAs(m, classes = null) {
   if (!m) return null;
@@ -394,8 +398,8 @@ export function standsAs(m, classes = null) {
   if (kind == null) return null;
   if (STANDING_WORDS.has(kind)) return kind;
   const chain = classes ? classChainOf(classes, kind) : [];
-  if (!chain.includes(CLASS_ROOT)) return m.at ? "sited" : null;
-  for (const s of ["post", "naming", "predicate", "parcel", "sited"]) if (chain.includes(s)) return s;
+  if (!chain.includes(CLASS_ROOT)) return kind === "landform" ? "landform" : m.at ? "sited" : null;
+  for (const s of ["post", "naming", "predicate", "parcel", "sited", "landform"]) if (chain.includes(s)) return s;
   return null;
 }
 
