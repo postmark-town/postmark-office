@@ -23,7 +23,7 @@ const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
 const BOWL = "sbx-ana/the-bowl";
 const repo = mkdtempSync(join(tmpdir(), "o2-hold-door-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
-const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL"];
+const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL", "TOWN_CLONE"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 let pool;
 
@@ -59,7 +59,8 @@ if (!skip) {
   execFileSync("git", ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qm", "synthetic canon"]);
   const { default: pg } = await import("pg");
   pool = new pg.Pool({ connectionString: store.url("office_api") });
-  Object.assign(process.env, { WORLD_CLONE: repo, WORLD_SINGLE_LOG: "", WORLD_POOL: "0", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "hold", W2_GUARDS: "1" });
+  // no town clone: a purse is unread, so a set-down's stake terms are asked and its accept is not refused on a balance (POS-766)
+  Object.assign(process.env, { TOWN_CLONE: join(repo, "no-town-clone"), WORLD_CLONE: repo, WORLD_SINGLE_LOG: "", WORLD_POOL: "0", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), W2_PEN: "hold", W2_GUARDS: "1" });
   (await import("../src/world2-pen.mjs")).__setPoolForTest(pool);
   const snap = await import("../src/law-snapshot.mjs");
   resetLawSnapshot = snap.resetLawSnapshot;
@@ -96,21 +97,57 @@ test("world_hold { from, label } still reaches #499's door (dark under #608), ne
   assert.equal(await units(), 0);
 });
 
-test("POS-766 · a thing made in hand at the real door: world_hold { act: consume, thing } eats it, and setting one down waits for part 2 (refused by name, nothing written)", { skip }, async () => {
+test("POS-766 · a thing made in hand at the real door: world_hold { act: consume, thing } eats it, and a candy is never set down (refused by name, nothing written)", { skip }, async () => {
   const { leaveMarkViaOffice } = await import("../src/world.mjs");
-  const comet = "sbx-cy/a-comet-of-mine", pebble = "sbx-cy/a-pebble";
+  const comet = "sbx-cy/a-comet-of-mine";
   await leaveMarkViaOffice(repo, { slug: "a-comet-of-mine", body: "A pocket comet I made myself.", kind: "pocket-comet", to: "sbx-cy" }, KEY);
-  await leaveMarkViaOffice(repo, { slug: "a-pebble", body: "A smooth pebble.", to: "sbx-cy" }, KEY);
-  const acts = async () => { const c = await store.connect("world2_owner"); try { return (await c.query("SELECT action, object FROM acts WHERE action IN ('make', 'consume', 'drop') ORDER BY id")).rows; } finally { await c.end(); } };
-  assert.deepEqual((await acts()).map((a) => a.action), ["make", "make"]);
-  await assert.rejects(callHoldTool("world_hold", { thing: pebble }, KEY, { verb: "drop" }), (e) => {
-    assert.equal(e.code, 501, `${e.defect} — ${e.hint}`);
-    assert.match(e.defect, /was made in hand, and setting a thing made in hand down is not built yet/);
+  const acts = async () => { const c = await store.connect("world2_owner"); try { return (await c.query("SELECT action, object FROM acts WHERE object = $1 ORDER BY id", [comet])).rows; } finally { await c.end(); } };
+  await assert.rejects(callHoldTool("world_hold", { thing: comet }, KEY, { verb: "drop" }), (e) => {
+    assert.equal(e.code, 422, `${e.defect} — ${e.hint}`);
+    assert.match(e.defect, /is a pocket-comet, a kind of candy, and candy is not set down on the ground/);
     return true;
   });
   const r = await callHoldTool("world_hold", { act: "consume", thing: comet }, KEY);
   assert.deepEqual([r.did, r.thing], ["consume", comet]);
-  assert.deepEqual((await acts()).map((a) => [a.action, a.object]), [["make", comet], ["make", pebble], ["consume", comet]], "no drop was written");
+  assert.deepEqual((await acts()).map((a) => a.action), ["make", "consume"], "no set-down was written");
+});
+
+test("POS-766 part 2 · SET DOWN: the maker's house sets a thing made in hand down as its own draft where it stands; the stake's terms come first, the holding ends, and the world lays it in no more", { skip }, async () => {
+  const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
+  const pebble = "sbx-cy/a-pebble", bag = "sbx-cy/a-bag", slip = "sbx-cy/a-slip";
+  await leaveMarkViaOffice(repo, { slug: "a-pebble", body: "A smooth pebble.", to: "sbx-cy" }, KEY);
+  const c = await store.connect("world2_owner");
+  const q = async (sql, a = []) => (await c.query(sql, a)).rows;
+  try {
+    // the Origin is the town's ground, not sbx-cy's: the terms first, nothing recorded
+    const terms = await callHoldTool("world_hold", { thing: pebble }, KEY, { verb: "drop" });
+    assert.deepEqual([terms.recorded, terms.stake], [false, 1], JSON.stringify(terms).slice(0, 300));
+    assert.equal((await q("SELECT count(*)::int AS n FROM acts WHERE object = $1 AND action = 'set-down'", [pebble]))[0].n, 0, "nothing recorded before accept");
+    const r = await callHoldTool("world_hold", { thing: pebble, accept: true }, KEY, { verb: "drop" });
+    assert.equal(r.did, "set-down", JSON.stringify(r).slice(0, 400));
+    assert.equal(r.draft, pebble);
+    // the draft is leave-mark's own (this office files it on the git lane: W2_PEN holds hold alone), by its maker, sited where it was set down
+    assert.deepEqual([r.leave?.id, r.leave?.kind, r.leave?.at, r.leave?.extent], [pebble, "thing", r.at, { w: 1, h: 1 }], JSON.stringify(r.leave).slice(0, 300));
+    assert.equal(r.leave?.branch, "draft/sbx-cy");
+    const hold = await q("SELECT action, payload FROM acts WHERE object = $1 AND class = 'holding' ORDER BY id", [pebble]);
+    assert.deepEqual(hold.map((a) => a.action), ["make", "set-down"]);
+    assert.equal(hold[1].payload.policy, "detach");
+    assert.equal((await worldMarkById(pebble)).mark, null, "set down: the overlay lets it go, and its draft is its maker's own");
+    // P2-d: a holder is set down empty
+    await leaveMarkViaOffice(repo, { slug: "a-bag", body: "A cloth bag.", holder: true, to: "sbx-cy" }, KEY);
+    await leaveMarkViaOffice(repo, { slug: "a-slip", body: "A slip of paper.", to: bag }, KEY);
+    await assert.rejects(callHoldTool("world_hold", { thing: bag, accept: true }, KEY, { verb: "drop" }), (e) => e.code === 409 && /holds 1 thing, and a holder is set down empty/.test(e.defect));
+    // P2-a: another house holding it is told what it can do, and nothing is written
+    await leaveMarkViaOffice(repo, { slug: "a-gift-for-dee", body: "A paper boat.", to: "sbx-cy" }, KEY);
+    await callHoldTool("world_hold", { thing: "sbx-cy/a-gift-for-dee", to: "sbx-dee" }, KEY);
+    const DEE = { household: "sbx-dee", handles: new Set(["sbx-dee"]) };
+    await assert.rejects(callHoldTool("world_hold", { thing: "sbx-cy/a-gift-for-dee", accept: true }, DEE, { verb: "drop" }), (e) => {
+      assert.equal(e.code, 403, `${e.defect} — ${e.hint}`);
+      assert.match(e.hint, /Give it back to its maker's house to set down, or keep, give or eat it/);
+      return true;
+    });
+    assert.equal((await q("SELECT count(*)::int AS n FROM acts WHERE object IN ($1, $2) AND action = 'set-down'", [bag, "sbx-cy/a-gift-for-dee"]))[0].n, 0, "no set-down for either refusal");
+  } finally { await c.end(); }
 });
 
 test("POS-766 · a thing made in hand changes hands like any held thing: given to another resident at the real door, it is theirs to hold", { skip }, async () => {

@@ -799,10 +799,11 @@ export async function publishedMarkFrom(client) {
 // covenant is exactly the claim under test. `DISCLOSURES.holdings_source` says
 // this on every answer.
 
-// `make` and `consume` (POS-766): a named thing made straight into hands or a holder, and one
-// eaten from hand. Both are hold-lane faces of the one edge: a make is held from its first act,
-// a consume ends the holding (policy detach, with no place: nothing is set down).
-export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume"]);
+// `make`, `consume` and `set-down` (POS-766): a named thing made straight into hands or a
+// holder, one eaten from hand, and one set down as its maker's draft. All are hold-lane faces of
+// the one edge: a make is held from its first act; a consume and a set-down end the holding
+// (policy detach, with no place: the set-down's place is its draft's, never a hold row's).
+export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down"]);
 export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", ...HOLD_FACES]);
 
 /**

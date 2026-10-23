@@ -1373,6 +1373,69 @@ async function madeThing(id) {
   try { return (await (await import("./world-kinds.mjs")).holdRecordNow())?.made?.get(String(id)) ?? null; } catch { return null; }
 }
 
+/**
+ * SETTING DOWN A THING MADE IN HAND (POS-766/e; P2-a..e, the lead's word 2026-10-23).
+ * It becomes a sited draft keeping its maker's id, where the dropper stands, and
+ * the hold face `set-down` ends the holding. In order, each refusal writing nothing:
+ *   · the maker's house only (P2-a): the key must act for its maker;
+ *   · a holder is set down empty (P2-d), and a candy is never set down (POS-692);
+ *   · the stake, exactly as a published thing's set-down asks it (P2-b,
+ *     dropStakeTerms): free on the maker's own ground, else ✦1 from the dropper,
+ *     terms first and accept: true;
+ *   · the draft, judged and filed by leave-mark itself (P2-c), sited at the
+ *     dropper's standpoint with the thing default extent;
+ *   · then the set-down act. If that act cannot be written, the draft is
+ *     withdrawn again, so the thing is never both in hand and on the ground.
+ * After it the made record lets it go (named-making § foldMade): it is a draft
+ * like any other, and the draft rules apply (P2-e).
+ */
+async function setDownMade({ made, args, key, actor }) {
+  const nm = await import("./named-making.mjs");
+  const id = String(made.id), maker = String(made.by);
+  const refuse = (r) => bounce(r.code, r.defect, r.hint);
+  if (!key?.handles?.has(maker)) throw refuse(nm.setDownNotByMaker(id, maker));
+  const { liveUnitDeps, thingHoldingEntry } = await import("./world-units.mjs");
+  const deps = await liveUnitDeps();
+  {
+    const { units, attachments } = await deps.readRows();
+    const { foldUnits, totalOf } = await import("./world-stacks.mjs");
+    const n = holdingsOf(attachments, id).length + totalOf(foldUnits(units), id);
+    if (n > 0) throw refuse(nm.setDownHolding(id, n));
+  }
+  const { lineageOf } = await import("./world-grants.mjs");
+  const { classExtendsOf } = await import("./world-classes.mjs");
+  if (lineageOf(String(made.kind), classExtendsOf()).includes("candy")) throw refuse(nm.setDownCandy(id, made.kind));
+  const stood = await standpointOfActor(actor);
+  if (!stood) throw bounce(409, "the record does not place you anywhere",
+    `a thing is set down where you stand, and the walk ledger has no position for ${actor}: walk somewhere first. Nothing was changed.`);
+  const dropStake = await dropStakeTerms({ thing: id, actor, stood, accept: args.accept === true, owner: maker }, { extentOf: async () => nm.SET_DOWN_EXTENT });
+  if (dropStake?.terms) return dropStake.terms;
+  const { leaveMarkViaOffice } = await import("./world.mjs");
+  const { WORLD_CLONE } = await import("./world-store.mjs");
+  const draft = await leaveMarkViaOffice(WORLD_CLONE, nm.setDownDraftOf(made, { at: stood, free: !dropStake?.stake }), key, { fromHand: true });
+  if (draft?.error) return draft;
+  try {
+    await holdTurn(async () => {
+      const { attachments } = await deps.readRows();
+      if (liveHolder(attachments, id) !== String(actor)) throw bounce(409, `you are not holding ${id} any more`, "Nothing was changed.");
+      const { entry } = await thingHoldingEntry(deps, key, actor, attachments, { did: nm.SET_DOWN_FACE, thing: id, holder: null, previous: String(actor), madeBy: maker });
+      entry.payload.policy = "detach"; // its place is its draft's: no hold row carries one
+      entry.payload.set_down = { at: stood, draft: id };
+      entry.effect = `${actor} set ${id} down where they stood, as ${maker}'s draft`;
+      await deps.append(entry, {});
+    });
+  } catch (e) {
+    // NEVER IN HAND AND ON THE GROUND AT ONCE: the draft goes back out, and the refusal is the answer
+    try { await (await import("./world.mjs")).journalWithdraw({ by: maker, slug: made.slug, household: String(key?.household ?? "") }); }
+    catch (w) { (await import("./fault-words.mjs")).faultLogged(`a set-down of ${id} failed and its draft could not be withdrawn`, w); }
+    throw e;
+  }
+  const staked = dropStake?.stake ? await stakeTheDrop({ thing: id, actor, key, n: dropStake.stake }) : null;
+  return { did: "set-down", thing: id, at: stood, draft: id, ...(staked ?? {}),
+    stands_note: nm.setDownWords({ id, maker, staked: !!dropStake?.stake && !staked?.stake_bounce }),
+    leave: draft };
+}
+
 export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
 async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
@@ -1489,11 +1552,7 @@ async function holdAct(name, args = {}, key = null, verb = null) {
         return await callKinds("consume", args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
       if (made && args.act == null && args.to == null && args.from == null && verb !== "take") {
         const { guardedAttachments: rowsNow } = await import("./world2-guards.mjs");
-        if (liveHolder(await rowsNow(), String(args.thing)) === String(actor)) {
-          const { setDownNotYet } = await import("./named-making.mjs");
-          const r = setDownNotYet(String(args.thing));
-          throw bounce(r.code, r.defect, r.hint);
-        }
+        if (liveHolder(await rowsNow(), String(args.thing)) === String(actor)) return await setDownMade({ made, args, key, actor });
       }
       const route = kindRouteOf(args, verb);
       if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());

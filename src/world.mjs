@@ -4741,7 +4741,9 @@ async function namedMadeRecord(payload, by, key, bounce) {
 }
 
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
-async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
+// `fromHand` IS THE HOLD DOOR'S, AND ONLY ITS SET-DOWN OF A THING MADE IN HAND PASSES IT (POS-766/e): the
+// draft keeps the made thing's own name, which every other leave is refused (G2). No payload can set it.
+async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
@@ -4798,7 +4800,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // ── A THING MADE IN HAND IS NOT LEFT, AMENDED OR DESCRIBED HERE (POS-766: G2, G6, G7) ──
   // Its name stays taken for good, its words are set when it is made, and a
   // detail laid on it would name a parent the settlement's lint cannot see.
-  if (!setDown && !dropUnit) {
+  if (!setDown && !dropUnit && !fromHand) {
     const made = await madeMarksNow();
     if (made?.has(`${by}/${slug}`)) {
       const { madeIdTaken } = await import("./named-making.mjs");
@@ -6867,7 +6869,7 @@ export const WORLD_TOOLS = [
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
       kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder, or the kind of the ONE named thing made with a slug (thing by default)" },
       // LOGOS v2 (16:02 item 1): leave-mark makes marks into a holder.
-      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). Two forms. With kind: and count: and nothing of its own, a count is that many marks of the kind, never named one by one. With slug: and body: and no count (POS-766), ONE thing of your own, named, held: free and live, published by its holder at once, no stake and no settlement wait; kind is a kind of thing (thing by default), holder, capacity, open, portable and image ride, and it has no place (at, extent, points are refused). Its slug is taken for good" },
+      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). Two forms. With kind: and count: and nothing of its own, a count is that many marks of the kind, never named one by one. With slug: and body: and no count (POS-766), ONE thing of your own, named, held: free and live, published by its holder at once, no stake and no settlement wait; kind is a kind of thing (thing by default), holder, capacity, open, portable and image ride, and it has no place (at, extent, points are refused). Its slug is taken for good. Set down later by its maker's house, it becomes their draft where it is set down: free on their own ground, the usual 1 stamp on the commons (a candy is eaten or given, never set down)" },
       count: { type: "number", description: "with to: how many of the kind to make, a whole number (default 1); refused whole, nothing made, when the holder has less room" },
       at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel). A sited mark publishes free only when its whole footprint (at ± extent/2) is inside one of your household's parcels; world { read: \"leave-mark\" } names their ranges as your_ground", properties: { x: { type: "number" }, y: { type: "number" } } },
       extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door)", properties: { w: { type: "number" }, h: { type: "number" } } },
