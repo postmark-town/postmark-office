@@ -95,3 +95,29 @@ test("world_hold { from, label } still reaches #499's door (dark under #608), ne
   await assert.rejects(callHoldTool("world_hold", { from: BOWL, label: "test-comets" }, KEY), (e) => !/draft holds nothing yet|holds nothing$/.test(String(e.hint ?? "")) && /chest/.test(`${e.defect} ${e.hint}`));
   assert.equal(await units(), 0);
 });
+
+test("POS-766 · a thing made in hand at the real door: world_hold { act: consume, thing } eats it, and setting one down waits for part 2 (refused by name, nothing written)", { skip }, async () => {
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  const comet = "sbx-cy/a-comet-of-mine", pebble = "sbx-cy/a-pebble";
+  await leaveMarkViaOffice(repo, { slug: "a-comet-of-mine", body: "A pocket comet I made myself.", kind: "pocket-comet", to: "sbx-cy" }, KEY);
+  await leaveMarkViaOffice(repo, { slug: "a-pebble", body: "A smooth pebble.", to: "sbx-cy" }, KEY);
+  const acts = async () => { const c = await store.connect("world2_owner"); try { return (await c.query("SELECT action, object FROM acts WHERE action IN ('make', 'consume', 'drop') ORDER BY id")).rows; } finally { await c.end(); } };
+  assert.deepEqual((await acts()).map((a) => a.action), ["make", "make"]);
+  await assert.rejects(callHoldTool("world_hold", { thing: pebble }, KEY, { verb: "drop" }), (e) => {
+    assert.equal(e.code, 501, `${e.defect} — ${e.hint}`);
+    assert.match(e.defect, /was made in hand, and setting a thing made in hand down is not built yet/);
+    return true;
+  });
+  const r = await callHoldTool("world_hold", { act: "consume", thing: comet }, KEY);
+  assert.deepEqual([r.did, r.thing], ["consume", comet]);
+  assert.deepEqual((await acts()).map((a) => [a.action, a.object]), [["make", comet], ["make", pebble], ["consume", comet]], "no drop was written");
+});
+
+test("POS-766 · a thing made in hand changes hands like any held thing: given to another resident at the real door, it is theirs to hold", { skip }, async () => {
+  const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
+  const gift = "sbx-cy/a-gift";
+  await leaveMarkViaOffice(repo, { slug: "a-gift", body: "A paper star, folded small.", to: "sbx-cy" }, KEY);
+  const r = await callHoldTool("world_hold", { thing: gift, to: "sbx-dee" }, KEY);
+  assert.equal(r.did, "give", JSON.stringify(r).slice(0, 300));
+  assert.equal((await worldMarkById(gift)).mark?.held_by, "sbx-dee");
+});
