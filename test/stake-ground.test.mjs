@@ -48,7 +48,8 @@ unflip();
 after(unflip);
 
 const { resetStore } = await import("./helpers/fake-pen.mjs");
-const { worldStakeViaOffice, zeroStakeAnswer, zeroStakeReason, commonsAtZero } = await import("../src/world-stake.mjs");
+const { worldStakeViaOffice, zeroStakeAnswer, zeroStakeReason, commonsAtZero, zeroStakeUnfiled } = await import("../src/world-stake.mjs");
+const { LateCrossingError } = await import("../src/world2-pen.mjs");
 
 const W = 260;
 const MARK = "neth/a-bench-on-open-ground";
@@ -84,11 +85,13 @@ test("COMMONS AT ✦0 · the answer warns that the crossing will refuse it, and 
   assert.doesNotMatch(`${a.effect} ${a.warning}`, OWN_GROUND, "POS-674: the sentence that mark was told");
 });
 
-test("HOME · the answer says the crossing's walk reads it as home, which covers a welcome as well as your own parcel", () => {
+test("HOME · a forecast, said as one: by the crossing's walk its ground reads as home as things stand now, a welcome included", () => {
   const a = zeroStakeAnswer({ mark: MARK, ground: HOME });
   assert.equal(a.ground, "home");
   assert.equal(a.warning, undefined);
-  assert.match(a.effect, /reads its ground as home to it \(your household's ground, or ground that has welcomed it\)/);
+  assert.match(a.effect, /by the crossing's own walk, its ground reads as home to it \(your household's ground, or ground that has welcomed it\) as things stand now/);
+  assert.match(a.effect, /locks, or is refused by name, at the next crossing/, "the door cannot see steps 1–5.4, the carry, or later claims");
+  assert.doesNotMatch(a.effect, /the crossing's own walk reads its ground/, "#756 review: the old sentence asserted the crossing's verdict");
 });
 
 test("COULD NOT TELL · the answer says the office could not read the ground and the crossing judges it", () => {
@@ -143,6 +146,51 @@ test("NOTHING TO PUT FORWARD · ✦0 on a mark that is no draft of yours asserts
   assert.equal(out.error, "bounce");
   assert.match(out.hint, /is not a draft of yours to put forward/);
   assert.doesNotMatch(`${out.defect} ${out.hint}`, OWN_GROUND);
+});
+
+// ── 2b · ✦0 THAT PUT NOTHING FORWARD: FOUR FACTS, FOUR SENTENCES (#756 review) ──
+
+const NOT_A_DRAFT = /is not a draft of yours to put forward/;
+const unfiled = async (promote) => {
+  const d = door({ ground: HOME });
+  d.deps.promote = promote;
+  return worldStakeViaOffice({ mark: MARK, stamps: 0 }, KEY, d.deps);
+};
+
+test("✦0 · THE STORE COULD NOT BE READ · says so and asks for another try, never 'not a draft of yours'", async () => {
+  const out = await unfiled(async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:5432"); });
+  assert.equal(out.error, "bounce");
+  assert.match(out.defect, /the store could not be read/);
+  assert.match(out.hint, /Try the stake again/);
+  assert.doesNotMatch(`${out.defect} ${out.hint}`, NOT_A_DRAFT);
+});
+
+test("✦0 · THE CANDLE IS DARK (no open window) · nothing is put forward until it is lit", async () => {
+  const out = await unfiled(async () => { throw new Error("no open candle — the candle is dark; the stake cannot put this mark forward"); });
+  assert.match(out.defect, /the candle is dark/);
+  assert.match(out.hint, /nothing is put forward until the next one is lit/);
+  assert.doesNotMatch(`${out.defect} ${out.hint}`, NOT_A_DRAFT);
+});
+
+test("✦0 · THE CANDLE IS DARK (the docket is off: window null) · the same sentence", async () => {
+  const out = await unfiled(async () => ({ promoted: false, claim: null, window: null }));
+  assert.match(out.defect, /the candle is dark/);
+  assert.doesNotMatch(`${out.defect} ${out.hint}`, NOT_A_DRAFT);
+});
+
+test("✦0 · TOO LATE FOR THIS CROSSING · nothing filed; staked again it goes to the next crossing's docket", async () => {
+  const out = await unfiled(async () => { throw new LateCrossingError(300, 262); });
+  assert.equal(out.code, 409);
+  assert.match(out.defect, /too late for this crossing's docket/);
+  assert.match(out.hint, /Stake it again at ✦0 and it goes to the next crossing's docket/);
+  assert.doesNotMatch(`${out.defect} ${out.hint}`, NOT_A_DRAFT);
+});
+
+test("✦0 · NO DRAFT (the store answered, window open) · the one case 'not a draft of yours' is true of", async () => {
+  const out = await unfiled(async () => ({ promoted: false, claim: null, window: W }));
+  assert.equal(out.code, 422);
+  assert.match(out.hint, NOT_A_DRAFT);
+  assert.equal(zeroStakeUnfiled({ mark: MARK, putForward: { promoted: false, window: W } }).code, 422);
 });
 
 test("THE PREVIEW · ✦0 on the commons says so before anything is written", async () => {
