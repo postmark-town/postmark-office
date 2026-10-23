@@ -45,9 +45,13 @@ const box = (at, ext) => `((${at.x - ext.w / 2},${at.y - ext.h / 2}),(${at.x + e
 const PARCEL = { w: 25, h: 25 }, ONE = { w: 1, h: 1 };
 // Rei's parcel; Sable's parcel, which welcomes one of Rei's marks; open
 // ground; Rei's second parcel, only pending in this window; and
-// Rei's oldest parcel, stored under the house's pre-ruling solo spelling.
+// Rei's oldest parcel, stored under the house's pre-ruling solo spelling; and
+// Sable's orchard, which an amend pending in this window MOVES (#756 review: a
+// claim must replace the standing row it continues, or the orchard stands in the
+// walk twice and the shed it leaves behind reads home).
 const REI = { x: 1000, y: 1000 }, SABLE = { x: 2000, y: 2000 }, GROUNDS = { x: 5000, y: 5000 },
-  PENDING = { x: 3000, y: 3000 }, OLD = { x: 4000, y: 4000 };
+  PENDING = { x: 3000, y: 3000 }, OLD = { x: 4000, y: 4000 },
+  ORCHARD_OLD = { x: 6000, y: 6000 }, ORCHARD_NEW = { x: 6100, y: 6000 };
 
 async function seed() {
   const c = await store.connect("world2_owner");
@@ -80,23 +84,27 @@ async function seed() {
         `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::box, 'standing', $9, $10)`,
         [id, slug, kind, owner, household, `${slug}.`, geometry, box(at, ext), WIN - 1, d]);
+      return id;
     };
     await mark("rei/the-parcel", "parcel", "rei", "hh:starforge", REI, PARCEL);
     await mark("sable/the-garden", "parcel", "sable", "hh:rabbit", SABLE, PARCEL,
       { tier: "home", consent: { "rei/a-lantern": "welcomed" } });
     await mark("rei/the-old-parcel", "parcel", "rei", "solo:rei", OLD, PARCEL);
+    const orchard = await mark("sable/the-orchard", "parcel", "sable", "hh:rabbit", ORCHARD_OLD, PARCEL);
     // somebody's stake on another mark, so the clearing's escrow read is a real
     // answer (an empty projection reports every commons claim UNCHECKED)
     await mark("sable/the-stone", "sited", "sable", "hh:rabbit", { x: 9000, y: 9000 }, ONE);
     await c.query(
       `INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k)
        VALUES ($1, 'sable/the-stone', 'rei', 'hh:starforge', 'hh:rabbit', 1, 0)`, [TOWN_SHA]);
-    const claim = async (slug, kind, at, ext, status) => (await c.query(
-      `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
-       VALUES ($1, $2, 'rei', 'hh:starforge', $3, $4, $5, $6::box, 0, '{"date":"2026-10-22"}', $7)
+    const claim = async (slug, kind, at, ext, status, { by = "rei", house = "hh:starforge", supersedes = null } = {}) => (await c.query(
+      `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug, supersedes)
+       VALUES ($1, $2, $8, $9, $3, $4, $5, $6::box, 0, '{"date":"2026-10-22"}', $7, $10)
        RETURNING id::text`,
-      [WIN, kind, status, `${slug}.`, JSON.stringify({ slug, at, extent: ext }), box(at, ext), slug])).rows[0].id;
+      [WIN, kind, status, `${slug}.`, JSON.stringify({ slug, at, extent: ext }), box(at, ext), slug, by, house, supersedes])).rows[0].id;
     await claim("rei/the-second-parcel", "parcel", PENDING, PARCEL, "pending");
+    const SABLE_HOUSE = { by: "sable", house: "hh:rabbit" };
+    await claim("sable/the-orchard", "parcel", ORCHARD_NEW, PARCEL, "pending", { ...SABLE_HOUSE, supersedes: orchard });
     return {
       home: await claim("rei/a-bench", "sited", REI, ONE, "draft"),
       openGround: await claim("rei/a-bench-on-open-ground", "sited", GROUNDS, ONE, "draft"),
@@ -104,11 +112,13 @@ async function seed() {
       unwelcomed: await claim("rei/a-ribbon", "sited", { x: SABLE.x + 3, y: SABLE.y + 3 }, ONE, "draft"),
       pendingGround: await claim("rei/a-shed", "sited", PENDING, ONE, "draft"),
       oldSpelling: await claim("rei/a-gate", "sited", OLD, ONE, "draft"),
+      leftBehind: await claim("sable/a-shed-left-behind", "sited", ORCHARD_OLD, ONE, "draft", SABLE_HOUSE),
+      movedTo: await claim("sable/a-shed-at-the-new-place", "sited", ORCHARD_NEW, ONE, "draft", SABLE_HOUSE),
     };
   } finally { await c.end(); }
 }
 
-const judge = (slug) => claimGroundClass({ actor: "rei", householdName: "rei", slug }, ENV);
+const judge = (slug, actor = "rei") => claimGroundClass({ actor, householdName: actor, slug }, ENV);
 
 test("OPEN GROUND · a ✦0 draft on open ground is judged commons, before the crossing says so", { skip }, async () => {
   await seed();
@@ -141,6 +151,13 @@ test("ONE HOUSE, WHICHEVER SPELLING · a parcel stored under the solo spelling s
     "the walk's houseOf (liveHouseOfVia): solo:rei is hh:starforge");
 });
 
+test("A MOVE PENDING THIS WINDOW · a draft where the parcel is leaving is commons; one where it is going is home", { skip }, async () => {
+  await seed();
+  assert.equal((await judge("sable/a-shed-left-behind", "sable")).ground, "commons",
+    "the amend replaces the orchard's standing row: it no longer stands at its old place");
+  assert.equal((await judge("sable/a-shed-at-the-new-place", "sable")).ground, "home");
+});
+
 test("NOTHING TO JUDGE · a slug with no draft or open claim of the author's is 'could not tell', never a ground", { skip }, async () => {
   await seed();
   const g = await judge("rei/no-such-mark");
@@ -159,7 +176,12 @@ test("PARITY · the export's commons answers are exactly the clearing's 5.5 escr
     const q = (sql, params) => c.query(sql, params);
     const { rows: pending } = await c.query("SELECT * FROM claims WHERE window_id = $1 AND status = 'pending'", [WIN]);
     const candidates = [];
-    for (const cl of pending) candidates.push(await candidateRowOf(q, cl));
+    for (const cl of pending) {
+      // the clearing's step-1 amend test: a claim continues the standing row of
+      // its slug when it supersedes that row
+      const { rows: [row] } = await c.query("SELECT id::text FROM marks WHERE slug = $1 AND status = 'standing'", [cl.slug]);
+      candidates.push(await candidateRowOf(q, cl, { continues: row && String(cl.supersedes ?? "") === row.id ? row : null }));
+    }
     tiers = await prospectiveTiers(q, { candidates });
   } finally { await c.end(); }
   const judged = Object.values(ids);
@@ -173,7 +195,8 @@ test("PARITY · the export's commons answers are exactly the clearing's 5.5 escr
     const { rows } = await o.query("SELECT slug, status, refusal_check FROM claims WHERE id = ANY($1::uuid[])", [judged]);
     const refused = rows.filter((x) => /^escrow-absent/.test(x.refusal_check ?? "")).map((x) => x.slug).sort();
     const commons = rows.filter((x) => rowClassOf(tiers.get(x.slug)) === "commons").map((x) => x.slug).sort();
-    assert.deepEqual(refused, ["rei/a-bench-on-open-ground", "rei/a-ribbon"], "the fixture exercises refusals, and only these");
+    assert.deepEqual(refused, ["rei/a-bench-on-open-ground", "rei/a-ribbon", "sable/a-shed-left-behind"],
+      "the fixture exercises refusals, and only these: open ground, unwelcomed ground, and the ground a moving parcel leaves");
     assert.deepEqual(commons, refused, "two readers of one walk, and they have drifted");
   } finally { await o.end(); }
 });

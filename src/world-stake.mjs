@@ -151,10 +151,15 @@ export const commonsAtZero = (mark) =>
   `"${mark}" stands on the commons: no parcel or sovereign mark of your household holds it, and none has welcomed it. ` +
   "At ✦0 the crossing will refuse it by name; stake at least ✦1 now and it can stand.";
 
-/** Why a mark needs no escrow, in words, for a walk that answered something other than commons. */
+/**
+ * Why a mark needs no escrow, in words, for a walk that answered something other
+ * than commons. A FORECAST, and worded as one: the door cannot see what the
+ * clearing refuses before 5.5 (steps 1–5.4), what the carry moves, or a claim
+ * filed after this act, so it says how the ground reads as things stand now.
+ */
 function homeWords(tier) {
-  if (tier === "constitution") return "the crossing's own walk reads it as the town's own, which needs no stake";
-  return "the crossing's own walk reads its ground as home to it (your household's ground, or ground that has welcomed it), where nothing needs buying";
+  if (tier === "constitution") return "by the crossing's own walk it reads as the town's own as things stand now, which needs no stake";
+  return "by the crossing's own walk, its ground reads as home to it (your household's ground, or ground that has welcomed it) as things stand now, where nothing needs buying";
 }
 
 /**
@@ -171,6 +176,34 @@ export function zeroStakeAnswer({ mark, ground }) {
   if (ground.ground === "commons")
     return { ground: "commons", effect: `put forward with no escrow. ${docket}`, warning: commonsAtZero(mark) };
   return { ground: ground.ground, effect: `put forward with no escrow — ${homeWords(ground.tier)}. ${docket}` };
+}
+
+/**
+ * A ✦0 stake that put nothing forward, in true words. Four facts, never one
+ * sentence for all of them (#756 review): the promotion
+ *   · was REFUSED as too late for this crossing's docket (`LateCrossingError`);
+ *   · found the candle DARK: no open window, or the docket switched off
+ *     (`promoteDraftOnStake` answers `window: null` without asking);
+ *   · could not reach the STORE at all;
+ *   · reached it, and the mark is no draft of this house's (an already-public
+ *     mark, or none), which is the only case the old sentence was true of.
+ * ✦0 moves no stamps in any of them, and none says a word about ground.
+ */
+export function zeroStakeUnfiled({ mark, putForward = null, refused = null, error = null }) {
+  if (refused)
+    return bounce(409, `"${mark}" was not put forward: it is too late for this crossing's docket`,
+      "this crossing's docket could not take it, so nothing was filed and your draft is as it was. " +
+      "Stake it again at ✦0 and it goes to the next crossing's docket; if it refuses twice, tell the postmaster.");
+  const dark = (putForward && !putForward.promoted && putForward.window == null) || /the candle is dark/.test(String(error?.message ?? ""));
+  if (dark)
+    return bounce(503, `"${mark}" was not put forward: the candle is dark`,
+      "no candle is burning, so the docket takes no claims and nothing is put forward until the next one is lit. " +
+      "Your draft is as it was; stake it again once the candle is lit.");
+  if (error || !putForward)
+    return bounce(503, `"${mark}" was not put forward: the store could not be read`,
+      "nothing was filed and your draft is as it was. Try the stake again.");
+  return bounce(422, "a zero stake only puts a draft forward",
+    `"${mark}" is not a draft of yours to put forward, and ✦0 moves no stamps — to back a published mark, stake at least ✦1`);
 }
 
 /** The preview's ✦0 reason: which ground the mark stands on, when the walk could say. */
@@ -702,6 +735,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   const zeroGround = n === 0 ? await judgeGround() : null;
   let putForward = null;
   let promotionRefused = null;
+  let promotionError = null;
   try {
     // NOTHING IS WRITTEN ONTO THE CLAIM ABOUT WHAT IS HELD, deliberately
     // (ruled 2026-09-12). `stake` here is the number ASKED and it stays that;
@@ -718,6 +752,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     // The docket is a shadow-era pen; a store that is down must not swallow a
     // resident's stake. Loud, and the ledger still runs.
     console.error(`[world-stake] the docket could not be reached for "${args.mark}": ${String(e?.message ?? e)}`);
+    promotionError = e;
     // ── AN OUTAGE AND A REFUSAL ARE DIFFERENT FACTS (postmark#2722) ────────
     //
     // The posture above is right for a store that is DOWN and wrong for a
@@ -734,13 +769,11 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   }
 
   if (n === 0) {
-    return putForward?.promoted
-      ? { mark: args.mark, staked: 0, put_forward: true, claim: putForward.claim, ...zeroStakeAnswer({ mark: args.mark, ground: zeroGround }) }
-      // Nothing was put forward: the mark is no draft of this house's (an
-      // already-public mark, or none), and ✦0 moves no stamps. Said without a
-      // word about its ground, which this answer has no business asserting.
-      : bounce(422, "a zero stake only puts a draft forward",
-          `"${args.mark}" is not a draft of yours to put forward, and ✦0 moves no stamps — to back a published mark, stake at least ✦1`);
+    if (putForward?.promoted)
+      return { mark: args.mark, staked: 0, put_forward: true, claim: putForward.claim, ...zeroStakeAnswer({ mark: args.mark, ground: zeroGround }) };
+    // Nothing was put forward, and ✦0 moves no stamps. WHY is one of four
+    // facts, and each gets its own true sentence (§ zeroStakeUnfiled).
+    return zeroStakeUnfiled({ mark: args.mark, putForward, refused: promotionRefused, error: promotionError });
   }
 
   // BEFORE THE LEDGER, NOT AFTER. Stamps taken for a mark that never reached the
