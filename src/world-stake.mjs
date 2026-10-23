@@ -129,6 +129,59 @@ export function emptyPurseRefusalFor({ n, held }) {
 /** What a resident holds, read from this office's town clone (`heldFor`), for the leave-mark door's pre-check. */
 export const heldAtOffice = (handle) => heldFor(TOWN_CLONE, handle);
 
+// ── THE GROUND, JUDGED (POS-674) ────────────────────────────────────────────
+//
+// THE INSTANCE: a resident staked ✦0 on a plain sited mark on open ground,
+// with no parcel above it. The door answered "it stands on your own
+// household's ground", because it printed that whenever the promotion went
+// through, and the promotion asks nothing about ground. The crossing refused it
+// `escrow-absent` (claim 56688387, window 260). A resident who trusts the
+// door's sentence learned otherwise a crossing later.
+//
+// So the door asks the walk the candle asks (`world2-claims.mjs §
+// claimGroundClass`, over `standing.mjs § markStanding`) and the sentence
+// follows its answer. It never refuses on it (R11): a ✦0 commons mark is put
+// forward exactly as before, and told now what the crossing will do.
+//
+// PURE, for `stakeRefusalFor`'s reason: the words take the walk's answer and
+// nothing else, so a falsifier can put each ground in front of them.
+
+/** The sentence for a ✦0 mark on the commons, said before the crossing says it. */
+export const commonsAtZero = (mark) =>
+  `"${mark}" stands on the commons: no parcel or sovereign mark of your household holds it, and none has welcomed it. ` +
+  "At ✦0 the crossing will refuse it by name; stake at least ✦1 now and it can stand.";
+
+/** Why a mark needs no escrow, in words, for a walk that answered something other than commons. */
+function homeWords(tier) {
+  if (tier === "constitution") return "the crossing's own walk reads it as the town's own, which needs no stake";
+  return "the crossing's own walk reads its ground as home to it (your household's ground, or ground that has welcomed it), where nothing needs buying";
+}
+
+/**
+ * The ✦0 act's answer fields, by the walk's answer `ground` (`{ known, tier,
+ * ground }`). `ground: null` on the answer is "the office could not tell", and
+ * the crossing still judges.
+ */
+export function zeroStakeAnswer({ mark, ground }) {
+  const docket = "It is on the public docket now and locks, or is refused by name, at the next crossing.";
+  if (!ground?.known)
+    return { ground: null,
+      effect: "put forward with no escrow. The office could not read its ground just now, so the crossing judges it: " +
+        "on home ground it locks, and on the commons it is refused by name. It is on the public docket now." };
+  if (ground.ground === "commons")
+    return { ground: "commons", effect: `put forward with no escrow. ${docket}`, warning: commonsAtZero(mark) };
+  return { ground: ground.ground, effect: `put forward with no escrow — ${homeWords(ground.tier)}. ${docket}` };
+}
+
+/** The preview's ✦0 reason: which ground the mark stands on, when the walk could say. */
+export function zeroStakeReason({ mark, ground }) {
+  const lead = "a zero stake moves no stamps — ";
+  if (!ground?.known)
+    return `${lead}on your own household's ground it still puts the mark forward, and on the commons the crossing refuses it by name`;
+  if (ground.ground === "commons") return `${lead}${commonsAtZero(mark)}`;
+  return `${lead}${homeWords(ground.tier)}, so ✦0 puts it forward`;
+}
+
 /**
  * A STAKE THAT HOLDS NOTHING IS NEVER FILED. Returns a bounce, or null.
  *
@@ -537,20 +590,38 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
       const exit = await exitOf(c, mark);
       return exit ? { left: "exit", ...exit } : null;
     }, { by: "stakeLeft" }),
+    // THE SIXTH (POS-674): how the mark will stand, by the candle's own walk
+    // (world2-claims.mjs § claimGroundClass). Injectable so a falsifier can put
+    // each ground in front of the door with no store.
+    ground = async (p) => (await import("./world2-claims.mjs")).claimGroundClass(p),
   } = deps;
   const who = actingAs(args.handle, key);
   if (who.bounce) return who.bounce;
   if (!args.mark) return bounce(422, "which mark?", "pass mark: '<by>/<slug>' — ids as they appear in the telling");
   const n = Number(args.stamps);
-  // ✦0 IS NOW A LAWFUL STAKE, on your own ground only (Keemin's ruling,
+  // ✦0 IS NOW A LAWFUL STAKE, on your own ground (Keemin's ruling,
   // 2026-08-28). Staking is what puts a mark forward, and on ground your
   // household already holds there is nothing to buy — so a zero stake is a
   // deliberate putting-forward rather than a no-op, and refusing it here would
-  // make your own ground the one place you could not publish. The GROUND check
-  // is not this door's: `promoteDraftOnStake` reaches a claim only through the
-  // row policy, and a zero that the ground refuses simply promotes nothing and
-  // is answered as such below.
+  // make your own ground the one place you could not publish.
+  //
+  // THE GROUND IS JUDGED, AND NEVER REFUSED HERE (POS-674; R11, Darko
+  // 2026-10-04: "The office accepts every physically legal act. It does not
+  // refuse on governance grounds… The settlement applies limits."). The door
+  // asks the candle's own walk how the mark will stand (§ THE GROUND, JUDGED)
+  // and says it up front: home ground puts it forward, and a ✦0 commons mark is
+  // put forward too, told that the crossing will refuse it by name.
   if (!Number.isInteger(n) || n < 0) return bounce(422, "how many stamps?", "pass stamps: a whole number — at least 1 on the commons, or 0 on your own household's ground, where a zero stake still puts the mark forward");
+  const by = String(args.mark).slice(0, String(args.mark).indexOf("/"));
+  // § THE GROUND, JUDGED. A judge that cannot answer is "could not tell", never
+  // either ground: the crossing still judges, and the answer says so.
+  const judgeGround = async () => {
+    try { return await ground({ actor: by, householdName: key?.household, key, slug: args.mark }); }
+    catch (e) {
+      console.error(`[world-stake] the ground under "${args.mark}" could not be walked: ${String(e?.message ?? e)}`);
+      return { known: false, why: "the walk failed" };
+    }
+  };
 
   // the door's own gate: the ledger cannot see the world record
   const ex = await exists(args.mark, key);
@@ -607,11 +678,10 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
       preview: true, mark: args.mark, handle: who.handle,
       stamps: stampsBlock({
         held: now, moves, requested: n, direction: "stake", rule: RULE_MARK,
-        // ✦0 IS LAWFUL ON YOUR OWN GROUND and moves nothing either way, so the
-        // block says so in the door's own two-case sentence rather than showing
-        // a bare zero. Which case you are in is the promotion's ruling, and the
-        // promotion is exactly what a preview does not make.
-        ...(n === 0 ? { reason: "a zero stake moves no stamps — on your own household's ground it still puts the mark forward, and on the commons it is refused with your draft left standing" } : {}),
+        // ✦0 moves nothing either way, so the block says which ground the mark
+        // stands on rather than showing a bare zero: the same walk the act asks
+        // (§ THE GROUND, JUDGED), a read, so the preview may ask it too.
+        ...(n === 0 ? { reason: zeroStakeReason({ mark: args.mark, ground: await judgeGround() }) } : {}),
         to_confirm: toConfirm(`world { do: "stake", args: { mark: "${args.mark}", stamps: ${n} } }`),
       }),
       nothing_written: NOTHING_MOVED,
@@ -626,7 +696,10 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   // before the close (retraction is free until then, gold §1), whereas stamps
   // taken for a mark that never reached the docket are a debt with no receipt.
   // Of the two failure shapes, this is the recoverable one.
-  const by = String(args.mark).slice(0, String(args.mark).indexOf("/"));
+  //
+  // A ✦0 stake's ground is walked FIRST, while the draft is still the draft the
+  // promotion will put forward; it changes nothing about whether it goes.
+  const zeroGround = n === 0 ? await judgeGround() : null;
   let putForward = null;
   let promotionRefused = null;
   try {
@@ -662,10 +735,12 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
 
   if (n === 0) {
     return putForward?.promoted
-      ? { mark: args.mark, staked: 0, put_forward: true, claim: putForward.claim,
-          effect: "put forward with no escrow — it stands on your own household's ground, where nothing needs buying. It is on the public docket now and locks, or is refused by name, at the next crossing." }
-      : bounce(422, "a zero stake puts forward only your own ground's marks",
-          `"${args.mark}" is not a draft of yours standing on your household's own ground — a commons mark publishes only with escrow behind it, so stake at least ✦1 to put it forward`);
+      ? { mark: args.mark, staked: 0, put_forward: true, claim: putForward.claim, ...zeroStakeAnswer({ mark: args.mark, ground: zeroGround }) }
+      // Nothing was put forward: the mark is no draft of this house's (an
+      // already-public mark, or none), and ✦0 moves no stamps. Said without a
+      // word about its ground, which this answer has no business asserting.
+      : bounce(422, "a zero stake only puts a draft forward",
+          `"${args.mark}" is not a draft of yours to put forward, and ✦0 moves no stamps — to back a published mark, stake at least ✦1`);
   }
 
   // BEFORE THE LEDGER, NOT AFTER. Stamps taken for a mark that never reached the
@@ -717,9 +792,11 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   // rather than leaving the candle to say so nine hours later.
   //
   // The ground read runs only here, on the path where the balance came up
-  // empty, and only through `world.mjs § markStandsOnOwnGround` — the leave-
-  // mark door's own rule, asked rather than copied. It is imported lazily
-  // because world.mjs imports this file.
+  // empty, and through the same walk the ✦0 answer asks (§ THE GROUND, JUDGED;
+  // POS-674), so this door has one ground rule and it is the candle's. It used
+  // to ask `world.mjs § markStandsOnOwnGround`, the leave-mark door's flat
+  // parcel scan, which answers a welcomed mark and a foreign sovereign mark
+  // inside your parcel the other way from the candle (POS-625).
   const applied = Number(staked?.applied ?? 0);
   // POS-412: where this stake reads back and when, on every answer that moved stamps.
   const readBack = applied > 0 ? stakeReadBack({ mark: args.mark, commit: staked?.commit ?? null }) : null;
@@ -735,15 +812,9 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     ...(staked?.reason ? { reason: staked.reason } : {}),
   });
   if (putForward?.promoted && n >= 1 && applied === 0) {
-    let ownGround = null;
-    try {
-      const { markStandsOnOwnGround } = await import("./world.mjs");
-      const rec = ex?.record ?? null;
-      if (rec) ownGround = await markStandsOnOwnGround({
-        by, kind: rec.kind, at: rec.at, extent: rec.extent, points: rec.points, parent_id: rec.parent_id ?? rec.parent ?? null });
-    } catch (e) {
-      console.error(`[world-stake] the ground under "${args.mark}" could not be read: ${String(e?.message ?? e)}`);
-    }
+    // `false` only on a walk that answered commons; "could not tell" is null.
+    const g = await judgeGround();
+    const ownGround = g?.known ? g.ground !== "commons" : null;
     const unbacked = unbackedRefusalFor({ mark: args.mark, n, promoted: true, applied, ownGround });
     if (unbacked) {
       // THE PROMOTION THIS ACT MADE, TAKEN BACK BY THIS ACT. `retractPendingClaim`
