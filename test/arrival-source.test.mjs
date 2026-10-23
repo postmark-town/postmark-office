@@ -131,6 +131,20 @@ test("A3 · 086: a park lands once as the house's came_from, the counts come onl
   } finally { await c.end(); }
 });
 
+test("A3b · since is clamped to its US-Eastern day: stepping it through a day never times a landing", async () => {
+  // three landings on 2026-10-15 (New York), at 08:00, 09:00 and 20:00 EDT
+  for (const [i, hour] of [12, 13, 0].entries()) {
+    const at = new Date(Date.UTC(2026, 9, hour === 0 ? 16 : 15, hour, 0, 0));
+    await parkSource({ ghId: 8820 + i, tag: "delve", at });
+    await landSource({ ghId: 8820 + i, household: `clamp-house-${i}`, at });
+  }
+  const cell = async (since) => (await dailySources({ since })).find((r) => r.tag === "delve" && r.day === "2026-10-15");
+  assert.deepEqual(await cell("2026-10-15T04:00:00Z"), { day: "2026-10-15", tag: "delve", n: 3 }, "from the day's own midnight (EDT)");
+  for (const since of ["2026-10-15T12:30:00Z", "2026-10-15T23:59:00Z", "2026-10-16T03:59:59Z"])
+    assert.deepEqual(await cell(since), { day: "2026-10-15", tag: "delve", n: 3 }, `since ${since} reads the whole day, not after it`);
+  assert.equal(await cell("2026-10-16T04:00:00Z"), undefined, "the next day's midnight leaves the day out whole");
+});
+
 // ── A4 the real road ────────────────────────────────────────────────────────
 
 const REGISTRY = () => ({ schema_version: 1, households: {

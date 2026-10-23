@@ -27,6 +27,10 @@
 -- answers a day × tag cell under 3 as a NULL count, which the read prints
 -- "<3", so a small source cannot single out a household.
 --
+-- `since` IS CLAMPED TO ITS DAY (the review of #754): it is read as the US-
+-- Eastern midnight that opens its day, so stepping `since` through a day can
+-- never time a landing to lay against the public declare commits.
+--
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
@@ -74,14 +78,14 @@ BEGIN
 END $$;
 
 -- Counts only: per day on Darko's clock (US-Eastern) and per tag, a cell
--- under 3 answered as NULL (folded: "<3").
+-- under 3 answered as NULL (folded: "<3"), from the whole of since's day.
 CREATE OR REPLACE FUNCTION arrival_sources_daily(since timestamptz)
   RETURNS TABLE (day date, tag text, n bigint)
   LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT day, tag, CASE WHEN n >= 3 THEN n END AS n
       FROM (SELECT (recorded_at AT TIME ZONE 'America/New_York')::date AS day, tag, count(*)::bigint AS n
               FROM public.arrival_sources
-             WHERE recorded_at >= since
+             WHERE (recorded_at AT TIME ZONE 'America/New_York')::date >= (since AT TIME ZONE 'America/New_York')::date
              GROUP BY 1, 2) cells
      ORDER BY 1, 2
 $$;
