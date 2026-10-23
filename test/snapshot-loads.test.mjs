@@ -45,7 +45,11 @@ test("a store that hangs every refresh statement: the refreshers hold at most th
   let s;
   try { s = await startStore({ db: "snapshot_loads" }); } catch { return t.skip(NO_STORE); }
   const [pen, owner, locker] = [await s.connect("law_ingester"), await s.connect("world2_owner"), await s.connect("world2_owner")];
-  t.after(async () => { for (const c of [pen, owner, locker]) await c.end().catch(() => {}); await s.stop(); });
+  // ONE teardown, in order: the refreshers stop, the pool drains (it waits for a refresh still holding a
+  // client), and only then the store stops. A store stopped first ends live connections under the pool,
+  // and pg throws "terminating connection due to administrator command" into the run.
+  const teardown = [];
+  t.after(async () => { for (const step of teardown) await step().catch(() => {}); for (const c of [pen, owner, locker]) await c.end().catch(() => {}); await s.stop(); });
   await writeLaw(pen, { lawSha: "c".repeat(40), rows: [cls("thing"), cls("resident")], identities: [], blessed: true });
   await owner.query("INSERT INTO settlements (number, tag_sha, published_at) VALUES (1, $1, now())", ["c".repeat(40)]);
 
@@ -56,7 +60,8 @@ test("a store that hangs every refresh statement: the refreshers hold at most th
   const graph = await import("../src/world-graph-snapshot.mjs");
   const { MAX_LOADS, loadsStanding } = await import("../src/snapshot-loads.mjs");
   const pool = await serve.world2Pool();
-  t.after(async () => { law.resetLawSnapshot(); graph.resetWorldGraph(); serve.__setPoolForTest(null); await pool.end().catch(() => {}); });
+  pool.on("error", () => {}); // a client the store drops mid-teardown is not this test's failure
+  teardown.push(async () => { law.resetLawSnapshot(); graph.resetWorldGraph(); serve.__setPoolForTest(null); await pool.end(); });
 
   // the hang: every refresh statement waits on a lock
   await locker.query("BEGIN");
@@ -67,7 +72,7 @@ test("a store that hangs every refresh statement: the refreshers hold at most th
   let maxHeld = 0, probing = false, slowest = 0;
   const probes = [];
   const sample = setInterval(() => { if (!probing) maxHeld = Math.max(maxHeld, pool.totalCount - pool.idleCount); }, 5);
-  t.after(() => clearInterval(sample));
+  teardown.unshift(async () => clearInterval(sample));
   for (let i = 0; i < 6; i++) {
     await sleep(250);
     probing = true;
