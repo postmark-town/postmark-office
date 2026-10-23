@@ -1432,7 +1432,7 @@ async function setDownMade({ made, args, key, actor }) {
   }
   const staked = dropStake?.stake ? await stakeTheDrop({ thing: id, actor, key, n: dropStake.stake }) : null;
   return { did: "set-down", thing: id, at: stood, draft: id, ...(staked ?? {}),
-    stands_note: nm.setDownWords({ id, maker, staked: !!dropStake?.stake && !staked?.stake_bounce }),
+    stands_note: nm.setDownWords({ id, maker, stake: !dropStake?.stake ? "free" : staked?.stake_bounce ? "bounced" : "staked" }),
     leave: draft };
 }
 

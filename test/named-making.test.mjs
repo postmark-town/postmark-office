@@ -335,8 +335,9 @@ test("part 2 · the draft a set-down files: the made mark whole, by its maker, w
   const commons = setDownDraftOf(made, { at: { x: 12, y: -3 }, free: false });
   assert.equal("stamps" in commons, false, "on the commons it is left a draft, and the dropper's stamp is staked behind it after");
   assert.deepEqual(SET_DOWN_EXTENT, { w: 1, h: 1 });
-  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, staked: true }), /with your stamp behind it: it publishes at the next settlement/);
-  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, staked: false }), /on its own ground, free/);
+  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, stake: "staked" }), /with your stamp behind it: it publishes at the next settlement/);
+  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, stake: "free" }), /on its own ground, free/);
+  assert.match(setDownWords({ id: `${LB}/lantern`, maker: LB, stake: "bounced" }), /but the stamp did not land/);
 });
 
 test("part 2 · the refusals say what can be done instead", () => {

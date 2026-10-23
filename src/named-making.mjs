@@ -174,11 +174,15 @@ export function setDownDraftOf(made, { at, free }) {
   return { slug, kind, body, ...own, by, at: { x: at.x, y: at.y }, extent: { ...SET_DOWN_EXTENT }, ...(free ? { stamps: 0 } : {}) };
 }
 
-/** The words a set-down answers with. */
-export function setDownWords({ id, maker, staked }) {
-  return staked
-    ? `${id} is set down where you stood, as ${maker}'s draft, with your stamp behind it: it publishes at the next settlement`
-    : `${id} is set down where you stood, as ${maker}'s draft, on its own ground, free: it publishes at the next settlement`;
+/**
+ * The words a set-down answers with. `stake`: "free" (the maker's own ground),
+ * "staked" (the dropper's stamp stands behind it) or "bounced" (asked, and the
+ * stake did not land: the answer's `stake_bounce` carries the call that does).
+ */
+export function setDownWords({ id, maker, stake }) {
+  if (stake === "staked") return `${id} is set down where you stood, as ${maker}'s draft, with your stamp behind it: it publishes at the next settlement`;
+  if (stake === "bounced") return `${id} is set down where you stood, as ${maker}'s draft, but the stamp did not land: it publishes only with one behind it (stake_bounce has the call)`;
+  return `${id} is set down where you stood, as ${maker}'s draft, on its own ground, free: it publishes at the next settlement`;
 }
 
 /** A slug once made in hand stays taken (G2): the words for a leave or a make that reuses one. */

@@ -126,6 +126,8 @@ test("POS-766 part 2 · SET DOWN: the maker's house sets a thing made in hand do
     const r = await callHoldTool("world_hold", { thing: pebble, accept: true }, KEY, { verb: "drop" });
     assert.equal(r.did, "set-down", JSON.stringify(r).slice(0, 400));
     assert.equal(r.draft, pebble);
+    // the stake was asked (commons): its words say whether it landed, never "free"
+    assert.match(r.stands_note, r.stake_bounce ? /but the stamp did not land/ : /with your stamp behind it/);
     // the draft is leave-mark's own (this office files it on the git lane: W2_PEN holds hold alone), by its maker, sited where it was set down
     assert.deepEqual([r.leave?.id, r.leave?.kind, r.leave?.at, r.leave?.extent], [pebble, "thing", r.at, { w: 1, h: 1 }], JSON.stringify(r.leave).slice(0, 300));
     assert.equal(r.leave?.branch, "draft/sbx-cy");
