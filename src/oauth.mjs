@@ -414,7 +414,8 @@ export async function mintBerth(odb, slug, fromTown = null, { t = now() } = {}) 
         slug, sha256(key), t, t + BERTH_TTL_S, fromTown);
     });
   } catch (e) {
-    if (/UNIQUE|duplicate key/i.test(String(e?.message ?? e)))
+    // the store's unique violation (23505), or the file's (SQLITE_CONSTRAINT_PRIMARYKEY 1555, _UNIQUE 2067): by code, never by the error's text
+    if (e?.code === "23505" || e?.cause?.code === "23505" || e?.errcode === 1555 || e?.errcode === 2067)
       throw Object.assign(new Error(`"${slug}" is already held`), { code: 409, defect: `"${slug}" is already held — it is a live berth`, hint: "names are single-occupancy across the whole town; pick another" });
     throw e;
   }
