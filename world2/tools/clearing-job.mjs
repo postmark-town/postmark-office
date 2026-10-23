@@ -62,7 +62,8 @@ import { escrowAbsentAmong, escrowPresenceAt, escrowLines, unbackedStakesAmong }
 // has to be the one to say no. The law itself is the WORLD's and is imported
 // from a checkout, never copied. See step 5.6.
 import { limitsAtClearing } from "./parcel-cap.mjs";
-import { computeStanding, gistContainment, classLayerVia, isGround } from "./standing.mjs";
+import { classLayerVia, isGround } from "./standing.mjs";
+import { candidateRowOf, prospectiveTiers } from "./prospective-standing.mjs"; // 5.5's walk input, shared with the stake door (POS-674/701)
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
 import { sealSnapshot } from "./world-snapshot-seal.mjs";
@@ -81,26 +82,6 @@ import { OVERLAP } from "./overlap.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Does a geometry stand on the same ground as another? `at`, `extent` and the
-// ring: a words-only amend answers yes, a move or a resize answers no.
-const groundOf = (g) => JSON.stringify([
-  g?.at ? [Number(g.at.x), Number(g.at.y)] : null,
-  g?.extent ? [Number(g.extent.w), Number(g.extent.h)] : null,
-  Array.isArray(g?.points) ? g.points : null,
-]);
-const sameGround = (a, b) => groundOf(a) === groundOf(b);
-
-// The GiST's answer with some slugs taken out of it: those are walked the long
-// way as inners and offered to every mark as outers (standing.mjs § the
-// candidate set). Null (no index) stays null.
-function withoutSlugs(containment, slugs) {
-  if (!containment || !slugs.size) return containment;
-  const covered = new Set([...containment.covered].filter((s) => !slugs.has(s)));
-  const pairs = new Map();
-  for (const [inner, outers] of containment.pairs)
-    if (!slugs.has(inner)) pairs.set(inner, outers.filter((o) => !slugs.has(o)));
-  return { ...containment, covered, pairs };
-}
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
 const has = (n) => process.argv.includes(n);
 
@@ -484,27 +465,16 @@ try {
     const laid = pending.filter((c) => !outcomes.has(c.id) && slugOf(c));
     const toJudge = laid.filter(judge);
     if (!toJudge.length) return;
-    const { rows: standing } = await q(
-      `SELECT id::text, slug, kind, owner, household, geometry, parent::text, data
-         FROM marks WHERE status = 'standing'`);
-    const candidates = [];
-    for (const c of laid) {
-      candidates.push({
-        // An amend stands in the walk under the uuid of the row it continues, so
-        // a predicate whose `parent` edge names that row still resolves to its
-        // slug (standing.mjs § the continuation edge; review-550, finding 4).
-        id: amends.get(String(c.id))?.id ?? String(c.id), slug: slugOf(c), kind: c.class, owner: c.claimant,
-        household: await ownerHouseholdFor(q, c.claimant),
-        geometry: c.geometry, parent: c.parent, data: c.data,
-      });
-    }
-    // A claim continues the standing row of its slug: the row leaves the walk
-    // and the claim stands in its place. A rider the carry moves stands where
-    // the carry puts it (carry.mjs § carryPlan's `geometry`).
-    const replaced = new Set(candidates.map((c) => c.slug));
-    const standingRows = standing
-      .filter((row) => !replaced.has(row.slug))
-      .map((row) => (carried.has(row.slug) ? { ...row, geometry: carried.get(row.slug) } : row));
+    // THE WALK INPUT IS prospective-standing.mjs's (POS-701), the one the stake
+    // door asks too (POS-674), so the door and this gate read one walk. A claim
+    // continues the standing row of its slug: the row leaves the walk and the
+    // claim stands in its place, under the row's uuid when it amends it, so a
+    // predicate whose `parent` edge names that row still resolves to its slug
+    // (standing.mjs § the continuation edge; review-550, finding 4). A rider the
+    // carry moves stands where the carry puts it (carry.mjs § carryPlan's
+    // `geometry`), and a standing row whose GROUND this window moves leaves the
+    // GiST's answer and is walked the long way.
+    //
     //   ONE FULL WALK PER CROSSING, and this is not it. The whole world is
     //   still resolved — a candidate's standing depends on ground it does not
     //   own — but the ANSWERS this gate needs are the candidates' and nothing
@@ -512,26 +482,10 @@ try {
     //   claims handed to it below. Naming that set turns the walk from a pass
     //   over the register into a climb up the candidates' own ancestry, and
     //   leaves `recomputeStanding` at step 7 as the crossing's single all-marks
-    //   walk (standing.mjs § `only`).
-    //
-    //   The containment candidates come from the store's own GiST
-    //   (standing.mjs § the spatial index). The CLAIMS in this set are not in
-    //   `marks` and no index has seen them, which is not a gap: the reader
-    //   hands back the set it can speak for, and the walk keeps scanning the
-    //   long way for everything else — including, deliberately, every one of
-    //   these candidates. EXCEPT a standing row whose GROUND this window moves
-    //   (an amend that changes its geometry, or a rider the carry moves): the
-    //   index answers for that slug at the place it is leaving, so that slug
-    //   leaves the index's answer. It is walked the long way as an inner and
-    //   offered to every mark as an outer, at its new place; every other row
-    //   keeps the prefilter. A words-only amend moves nothing and costs nothing.
-    const claimOf = new Map(candidates.map((c) => [c.slug, c]));
-    const movedSlugs = new Set(standing
-      .filter((row) => carried.has(row.slug) || (claimOf.has(row.slug) && !sameGround(row.geometry, claimOf.get(row.slug).geometry)))
-      .map((row) => row.slug));
-    const containment = withoutSlugs(await gistContainment(q), movedSlugs);
-    const tiers = computeStanding([...standingRows, ...candidates],
-      { only: new Set(candidates.map((c) => c.slug)), containment, houseOf: await liveHouseOfVia(q), classes });
+    //   walk (standing.mjs § `only`; the export's default answer set).
+    const candidates = [];
+    for (const c of laid) candidates.push(await candidateRowOf(q, c, { continues: amends.get(String(c.id)) ?? null }));
+    const tiers = await prospectiveTiers(q, { candidates, carried, classes });
     const escrowByMark = await escrowPresenceAt(q, { townSha });
     const verdict = escrowAbsentAmong(
       toJudge.map((c) => ({ id: c.id, slug: slugOf(c) })),

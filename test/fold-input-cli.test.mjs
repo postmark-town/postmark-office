@@ -83,14 +83,15 @@ test("TWO foldDeltas REFUSE rather than one winning silently", () => {
     const tools = join(dir, "world2", "tools");
     execFileSync("node", ["-e", `require("node:fs").mkdirSync(${JSON.stringify(tools)},{recursive:true})`]);
     // THE CLOSURE, NOT THE THREE FILES THE LANE STARTED WITH. `fold-delta.mjs`
-    // imports `canon-locks.mjs` (which imports `escrow-presence.mjs`) for the
-    // 2026-09-12 carry, and this CLI imports `canon-register.mjs` to build the
-    // register from `--world-repo`. A copy list that has fallen behind the
-    // imports fails as a module that will not LOAD — which arrives here as an
-    // empty stdout and an unparseable JSON, not as the refusal this test is
-    // about, so the guard would read broken exactly when it was still fine.
+    // imports `canon-locks.mjs` (which imports `escrow-presence.mjs`, which asks
+    // `standing.mjs § townOwned`, POS-701) for the 2026-09-12 carry, and this
+    // CLI imports `canon-register.mjs` to build the register from `--world-repo`.
+    // A copy list that has fallen behind the imports fails as a module that
+    // will not LOAD — which arrives here as an empty stdout and an unparseable
+    // JSON, not as the refusal this test is about, so the guard would read
+    // broken exactly when it was still fine.
     for (const f of ["fold-input-cli.mjs", "fold-delta.mjs", "mark-render.mjs",
-      "canon-locks.mjs", "canon-register.mjs", "escrow-presence.mjs"]) {
+      "canon-locks.mjs", "canon-register.mjs", "escrow-presence.mjs", "standing.mjs"]) {
       copyFileSync(join(OFFICE, "world2", "tools", f), join(tools, f));
     }
     // A stand-in for lane 2's module that exports BOTH names.
