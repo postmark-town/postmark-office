@@ -76,6 +76,7 @@ export function householdOf(handle) { return handle; }
 export function parcelFor() { return null; }
 export function homeOf() { return { ...NOWHERE }; }
 export function whereIs(h, { departures = [] } = {}) {
+  if (h === "berth-boom") throw new Error("the engine is down");
   const d = departures.filter((x) => x.handle === h).pop();
   return d ? { x: d.toward.x, y: d.toward.y, placed: true, source: "walk", mark_id: null,
     position: { x: d.toward.x, y: d.toward.y, arrived: true, remainingM: 0 } } : { ...NOWHERE };
@@ -90,7 +91,7 @@ export function parseWalkLedger(text) {
   const departures = String(text ?? "").split(/\\r?\\n/).filter((l) => l.startsWith("- ")).map((line) => {
     const handle = line.split(" · ")[1];
     const m = line.match(/toward (-?[\\d.]+),(-?[\\d.]+)/);
-    return { handle, line, toward: { x: Number(m?.[1] ?? 0), y: Number(m?.[2] ?? 0) } };
+    return { handle, line, iso: line.slice(2, 26), toward: { x: Number(m?.[1] ?? 0), y: Number(m?.[2] ?? 0) } };
   });
   return { departures, unrecognized: [] };
 }
@@ -130,6 +131,7 @@ const berthKey = (slug) => ({ berth: true, slug, household: null, handles: new S
 // A co-signed household still at the harbor that boarded as a berth.
 const harborBerthKey = { household: "newhuman", handles: new Set(["newcomer"]), harbor: true, berth: "wanderer", slug: "wanderer" };
 const houseA = { household: "house-a", handles: new Set(["alpha"]) };
+const pick = (p) => ({ x: p.x, y: p.y });
 const ledger = () => readFileSync(join(repo, "WORLD", "walk-ledger.md"), "utf8");
 
 // ── WALK ─────────────────────────────────────────────────────────────────────
@@ -259,6 +261,65 @@ test("FALSIFIER: no resident can be heard as a visitor — the door refuses a ha
   assert.throws(() => validateResidencyRequest({ handle: "berth-sly", card: "hello" }, null),
     (e) => e.code === 409 && /reserved prefix/.test(e.defect), "a resident could take a handle the town hears as a visitor");
   assert.equal(standingOf("berth-sly"), "visitor", "the label is the visitor's, which is why the door must hold it");
+});
+
+// ── THE REVIEW OF #743 ───────────────────────────────────────────────────────
+
+test("FALSIFIER: each bare berth spends its own world-write budget, never one shared by every visitor", async () => {
+  const { Bouncer, worldWriteHolder } = await import("../src/bouncer.mjs");
+  const b = new Bouncer({ limits: { household: { worldWritesPerHour: 3 } }, log: () => {} });
+  const one = berthKey("one"), two = berthKey("two");
+  assert.equal(worldWriteHolder(one), "berth-one");
+  assert.equal(worldWriteHolder(houseA), "house-a", "a household's budget is its own, as before");
+  for (let i = 0; i < 3; i += 1) assert.equal(b.checkHouseholdWorldWrite({ household: worldWriteHolder(one), verb: "world_walk" }), null);
+  assert.ok(b.checkHouseholdWorldWrite({ household: worldWriteHolder(one), verb: "world_walk" }), "the first berth is held at its own cap");
+  assert.equal(b.checkHouseholdWorldWrite({ household: worldWriteHolder(two), verb: "world_walk" }), null, "one berth's walks locked another visitor out");
+  // and every charging site in the server asks the holder, never the bare household
+  const server = readFileSync(new URL("../src/server.mjs", import.meta.url), "utf8");
+  assert.equal(server.split("checkHouseholdWorldWrite({ household: worldWriteHolder(key)").length - 1, 4);
+  assert.ok(!server.includes("checkHouseholdWorldWrite({ household: key.household"), "a site still charges the bare household");
+});
+
+test("FALSIFIER: a re-minted berth starts at the quay, never where the slug's last visitor stood", async () => {
+  const { noteBerthMint } = await import("../src/world.mjs");
+  const walkedAt = Date.parse("2026-10-22T00:00:00.000Z");   // the bottle's ledger stamps every walk here
+  await walkViaOffice(repo, { x: 777, y: 888 }, { ...berthKey("reused"), mintedAt: walkedAt - 3600_000 });
+  assert.deepEqual(pick(await residentStandpoint("berth-reused")), { x: 777, y: 888 }, "the first berth stands where it walked");
+  noteBerthMint({ ...berthKey("reused"), mintedAt: walkedAt + 3600_000 });   // the slug, boarded again after the sunset
+  assert.deepEqual(pick(await residentStandpoint("berth-reused")), QUAY.at, "the new visitor inherited the last one's place");
+  assert.deepEqual(pick(await berthPlace("reused", { since: walkedAt + 3600_000 })), QUAY.at, "its co-sign would set it down where the last visitor stood");
+});
+
+test("an engine failure under a berth's standpoint surfaces; it is never masked as the quay", async () => {
+  await assert.rejects(() => residentStandpoint("berth-boom"), /the engine is down/);
+  await assert.rejects(() => berthPlace("boom"), /the engine is down/);
+});
+
+test("a visitor's body carries no household on any act: walk, landing and ride ask one answer", async () => {
+  const { actHouseholdFor } = await import("../src/world.mjs");
+  const { worldHouseholds } = await import("../src/world-apex.mjs");
+  assert.equal(actHouseholdFor("berth-wanderer", harborBerthKey), null, "a harbor household's berth landed under the household");
+  assert.equal(actHouseholdFor("alpha", houseA), "house-a");
+  assert.equal((await worldHouseholds({ repo }))("berth-wanderer"), null, "the ride's record names a household for a visitor");
+  const world = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
+  assert.ok(world.includes("landEntry({ crossing, who, at: point, via, why, household: household ?? actHouseholdFor(who, key)"), "landAt does not ask the one answer");
+});
+
+test("FALSIFIER: a visitor is never in a creature's ring, and walkers rows say their standing", async () => {
+  const { ringRoster } = await import("../src/encounter.mjs");
+  const roster = ringRoster({ residents: [{ handle: "kai", distance_m: 5 }, { handle: "berth-wanderer", distance_m: 3 }] }, { ring: 40 });
+  assert.deepEqual(roster.map((r) => r.handle), ["kai"], "a visitor stood in a creature's ring, where the press and nerve name it");
+  const { withStanding } = await import("../src/speaker-standing.mjs");
+  assert.deepEqual(withStanding({ handle: "kai", x: 1 }), { handle: "kai", x: 1, standing: "resident" });
+  const world = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
+  assert.equal(world.split(".map((r) => withStanding(r))").length - 1, 2, "both of the walkers door's answers label each row");
+  const hook = readFileSync(new URL("../src/creatures-hook.mjs", import.meta.url), "utf8");
+  assert.ok(hook.includes('ring.includes(r.action) && !String(r.actor ?? "").startsWith("berth-")'), "a creature answers a visitor's act");
+});
+
+test("the declare door publishes the berth- prefix among its bounces", async () => {
+  const { DECLARE_BOUNCES } = await import("../src/declare.mjs");
+  assert.ok(DECLARE_BOUNCES.some((b) => b.field === "handle" && /must not start with berth-/.test(b.rule)));
 });
 
 // ── TRUE ─────────────────────────────────────────────────────────────────────

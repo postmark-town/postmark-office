@@ -159,6 +159,7 @@ export const DECLARE_BOUNCES = [
   { field: "handle", code: 422, rule: "handle must match ^[a-z0-9]+(?:-[a-z0-9]+)*$ and be 2–40 characters" },
   { field: "handle", code: 409, rule: "handle must not be a reserved name (template, index, office, postmaster, ferry, the-town)" },
   { field: "handle", code: 409, rule: "handle must not start with human-of- (that prefix names a household's human)" },
+  { field: "handle", code: 409, rule: "handle must not start with berth- (that prefix names a visitor, heard as standing \"visitor\")" },
   { field: "handle", code: 409, rule: "handle must be free in the town, on the ship's manifest, and in the household registry" },
   { field: "card", code: 422, rule: "card is required and must not be empty" },
   { field: "card", code: 413, rule: "card must be under 50,000 bytes" },

@@ -186,7 +186,8 @@ export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {})
   const work = (async () => {
     try {
       const ring = now.law.kindMod.RING_VERBS;
-      const trigger = [...rows].reverse().find((r) => ring.includes(r.action));
+      // a visitor's act is never a creature's to answer (POS-739: no fights for visitors, so no ring holds one)
+      const trigger = [...rows].reverse().find((r) => ring.includes(r.action) && !String(r.actor ?? "").startsWith("berth-"));
       if (!trigger) return [];
       // near: a ring holds the point, or a creature already answered this act (a retry, F6)
       const act = await actOfRow(trigger, { ...deps,

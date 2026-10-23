@@ -242,7 +242,8 @@ export const fillsEase = (creature, kind, reaction, actor, householdKey, now = D
  */
 export function ringRoster(present, { ring, lookup = null, living = null, now = Date.now(), holds = null } = {}) {
   // `holds`: the creature's own ring (creatures.mjs § ringHolds, its room's walls included); else the circle
-  const rows = (present?.residents ?? []).filter((r) => r?.handle && Number.isFinite(r.distance_m) && (holds ? holds(r) : r.distance_m <= ring));
+  // a visitor (berth-*) is never in a creature's ring: no fights for visitors (Darko, POS-739), so no press or nerve names one
+  const rows = (present?.residents ?? []).filter((r) => r?.handle && !String(r.handle).startsWith("berth-") && Number.isFinite(r.distance_m) && (holds ? holds(r) : r.distance_m <= ring));
   return rows.sort((a, b) => a.distance_m - b.distance_m).map((r) => {
     let hh = null;
     try { hh = lookup?.(r.handle) ?? null; } catch { hh = null; }

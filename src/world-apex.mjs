@@ -1555,14 +1555,15 @@ export async function worldHouseholds({ repo = WORLD_CLONE, env = process.env } 
   const { world2Enabled, actsQuery } = await import("./world2-acts.mjs");
   if (!world2Enabled(env)) {
     const map = fileHouseholds(repo);
-    return (handle) => (handle ? map[handle] ?? `solo:${handle}` : null);
+    return (handle) => (handle && !isBerthHandle(handle) ? map[handle] ?? `solo:${handle}` : null);
   }
   let rows;
   try { rows = await actsQuery(IDENTITIES_SQL, [], env); }
   catch (e) { throw new HouseholdsUnreadable(e); }
   if (!Array.isArray(rows)) throw new HouseholdsUnreadable(null);
   const map = new Map(rows.map((r) => [String(r.handle), String(r.household)]));
-  return (handle) => (handle ? map.get(String(handle)) ?? `solo:${handle}` : null);
+  // a visitor's body has no household (POS-739): its walk, say, landing and ride all carry none
+  return (handle) => (handle && !isBerthHandle(handle) ? map.get(String(handle)) ?? `solo:${handle}` : null);
 }
 export const resetHouseholdCache = () => { _hh = null; };
 

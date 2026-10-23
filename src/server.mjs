@@ -79,7 +79,7 @@ import { storeEngaged, storeSnapshot, worldStoreHealth } from "./world-serve.mjs
 import { worldGraphView, NODE_KINDS, gexfPath } from "./world-graph.mjs"; // stage E: the window
 import { dynamicHealth, dynamicDbPath, dynamicRetired } from "./dynamic-store.mjs"; // stage 2: the dynamic layer's instrument panel
 import { servedEnterExitLedger, DEPRECATED_DOOR } from "./enter-exit-ledger.mjs"; // the passages, derived from the frozen era + the journal (2026-08-26)
-import { Bouncer, DOORSTEPS_PER_READ, bulkCost, listParam, boxLocal, clientIp, keyIdForToken, worldWriteVerbForRest, worldWriteCost } from "./bouncer.mjs";
+import { Bouncer, DOORSTEPS_PER_READ, bulkCost, listParam, boxLocal, clientIp, keyIdForToken, worldWriteVerbForRest, worldWriteCost, worldWriteHolder } from "./bouncer.mjs";
 import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread keeps a caller waiting
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
@@ -1246,7 +1246,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     const limited = bouncer.checkKey({ keyId, verb, write, cost: write ? 1 : cost });
     if (limited) return limited;
     return worldVerb
-      ? bouncer.checkHouseholdWorldWrite({ household: key.household, verb: worldVerb, cost: worldCost })
+      ? bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb: worldVerb, cost: worldCost })
       : null;
   };
 
@@ -1262,7 +1262,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     if (limited) return rateResponse(res, limited);
 
     // The harbor write gate, REST face (Keemin-ruled 2026-08-16, harbor-gate
-    // .mjs): an unsettled household reads everything and keeps the quay voice;
+    // .mjs): an unsettled household reads everything and keeps its voice (and its berth's walk);
     // durable writes wait for settlement. Path exemptions are the arrival lane
     // (/residency, /households, /keys) and /household, whose apex gates its
     // own paper acts; /world/say is exempt by verb. /world/apex gates itself
@@ -2425,7 +2425,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // the stance, the household door's one such act, is charged one a mark)
           if (payload?.do != null && payload.do !== "") {
             const verb = householdDispatchToolFor(payload.do);
-            const limited = verb ? bouncer.checkHouseholdWorldWrite({ household: key.household, verb, cost: worldWriteCost(verb, payload) }) : null;
+            const limited = verb ? bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb, cost: worldWriteCost(verb, payload) }) : null;
             if (limited) return rateResponse(res, limited);
           }
           const r = await householdApex(payload, key, { clone: TOWN_CLONE, odb, pen: PEN, rdb, canWrite, asOf: AS_OF, schemas: flatPropsFromTools(), schemaRequired: flatRequiredFromTools(), channel, strictFields: true, worldWriteBudget: (household) => bouncer.worldWriteBudget(household) });
@@ -2586,7 +2586,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           req.tel.call = callShape("world", payload);
           if (payload?.do != null && payload.do !== "") {
             const verb = dispatchToolFor(payload.do) ?? "world";
-            const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb, cost: worldWriteCost(verb, payload) });
+            const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb, cost: worldWriteCost(verb, payload) });
             if (limited) return rateResponse(res, limited);
             if (harborGated(key, verb)) return bounce(res, HARBOR_BOUNCE.code, HARBOR_BOUNCE.defect, HARBOR_BOUNCE.hint);
             if (visitorGated(key, verb)) { const v = visitorBounceFor(payload.do); return bounce(res, v.code, v.defect, v.hint); }
@@ -2631,7 +2631,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           req.tel.call = callShape("town", payload);
           if (payload?.do != null && payload.do !== "") {
             const verb = townDispatchToolFor(payload.do) ?? "town";
-            const limited = bouncer.checkHouseholdWorldWrite({ household: key.household, verb });
+            const limited = bouncer.checkHouseholdWorldWrite({ household: worldWriteHolder(key), verb });
             if (limited) return rateResponse(res, limited);
             if (visitorBounces("town", payload, key)) return bounce(res, 403, VISITOR_BOUNCE.defect, VISITOR_BOUNCE.hint);
           }
