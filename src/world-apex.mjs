@@ -4065,6 +4065,8 @@ async function apexReadAction(args, key, ctx = {}) {
 // id, and a name neither knows keeps the grammar's bounce, with the classes
 // nearest it and where a class name is found (class-read.mjs).
 async function explainClassOr(path, bounced) {
+  // POS-680 part 2: explain stands on the same law the very next act will (act-law.mjs)
+  await (await import("./act-law.mjs")).lawForAnAnswer();
   const { explainClass, nearestClasses } = await import("./class-read.mjs");
   const store = openStore();
   // no store is an outage, not the reader's mistake: 503, never the grammar's 422

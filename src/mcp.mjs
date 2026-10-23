@@ -98,6 +98,7 @@ import { THREE_STRINGS } from "./mail-thread.mjs"; // POS-101: which of the thre
 
 import { withHouseholdBlock, householdsFor } from "./households.mjs";
 import { freshFor } from "./paper-fresh.mjs"; // POS-271: the pending paper rows, read before a composed read
+import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
 
 // Tools that WRITE — gated on a signed-in door. Called without a credential
 // they challenge for auth so MCP clients start the GitHub sign-in dance.
@@ -1185,6 +1186,14 @@ async function handleMessage(msg, ctx) {
         if (visitorGated(ctx.key, gatedVerb)) {
           return refusal(msg.id, visitorBounceFor(name === "world" || name === "town" ? (args?.do ?? gatedVerb) : gatedVerb));
         }
+      }
+      // POS-680 part 2: a world act stands on the law the store has NOW. Both
+      // pins are asked and a moved law is loaded first; when the store's law
+      // moved and could not be loaded, the act is refused and nothing is done
+      // (act-law.mjs). Below the gates that refuse a caller for who they are.
+      if (writeShaped(name, args) && ctx.key && (name === "world" || String(name).startsWith("world_"))) {
+        const moved = await lawForAnAct();
+        if (moved) return refusal(msg.id, { error: "bounce", defect: moved.defect, hint: moved.hint, behind: moved.behind });
       }
       // Visitor scope: a signed-in account with no household reads the whole town
       // and may declare_household or request_residency — but no other write acts

@@ -31,7 +31,8 @@
 // let go is ended by the store (a statement_timeout scoped to the refresh's own
 // transaction), and refreshes share one cap with the law's (snapshot-loads.mjs).
 // And every publish, from any path, is heard by the same listeners
-// (`onWorldGraphPublish`).
+// (`onWorldGraphPublish`). An act asks first (`freshGraph()`, part 2), as
+// law-snapshot.mjs § AN ACT ASKS FIRST says for the law.
 
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
@@ -71,7 +72,7 @@ export async function graphTablesAt(query, { tag_sha, office_sha }) {
 export const WORLD_GRAPH_REFRESH_DEADLINE_MS = Number(process.env.WORLD_GRAPH_REFRESH_DEADLINE_MS ?? 3_000);
 
 const fresh = () => ({ snap: null, key: null, inflight: null, lastError: null, timer: null, rowsRefused: null, atImport: null,
-  started: 0, publishedBy: 0, checkedAt: null, publishedAt: null, abandoned: 0, unhear: null });
+  started: 0, publishedBy: 0, checkedAt: null, publishedAt: null, abandoned: 0, unhear: null, seenKey: null });
 const state = fresh();
 const listeners = new Set();
 
@@ -115,7 +116,20 @@ export function worldGraphForRelease() {
 /** The refresher's own state, for the health line (law-snapshot.mjs § lawRefreshStanding, the same fields). */
 export function worldGraphRefreshStanding() {
   return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
-    in_flight: Boolean(state.inflight), deadline_ms: WORLD_GRAPH_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding() };
+    in_flight: Boolean(state.inflight), deadline_ms: WORLD_GRAPH_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding(),
+    ...(worldGraphBehind() ? { behind: worldGraphBehind() } : {}) };
+}
+
+/** Null when this process holds the newest graph the store last named, else the sentence. */
+export function worldGraphBehind() {
+  if (state.seenKey == null || state.seenKey === state.key) return null;
+  return `the store's newest world graph is ${String(state.seenKey).slice(0, 12)}, and this office has not loaded it yet`;
+}
+
+/** The world graph as the store has it NOW, for an act: asks the pin, loads a moved graph, answers `{ snap, behind }`. Never throws. */
+export async function freshGraph({ query, deadlineMs } = {}) {
+  await reloadWorldGraph({ ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
+  return { snap: state.snap, behind: worldGraphBehind() };
 }
 
 // ── THE TEST FIXTURE SEAM (POS-270 lane W 3a, Keemin-ruled 2026-09-30) ──────
@@ -229,6 +243,7 @@ export function reloadWorldGraph({ query = defaultQuery, force = false, deadline
       const pin = (await ask(PIN_SQL)).rows[0] ?? null;
       if (!pin) { if (newest()) state.lastError = "the store holds no world graph snapshot yet"; return { changed: false, standing: worldGraphStanding() }; }
       const key = `${pin.tag_sha}/${pin.office_sha}`;
+      if (newest() || n > state.publishedBy) state.seenKey = key;
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: worldGraphStanding() };

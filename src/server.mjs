@@ -65,6 +65,7 @@ import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, i
 import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
 import { lawForRelease } from "./law-snapshot.mjs"; // POS-680: which law this process acts on, on its receipt
 import { restoredStanding } from "./restored-classes.mjs"; // POS-680: whether the restored keep was read against the law in force
+import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
 import { graphOnSettlement, settledMarkIds, settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
@@ -2617,6 +2618,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
             // and the standing gate, inside the `do:` branch for the same
             // reason the harbor's is: the bare and `read:` shapes of this route
             // are reads, and reads are never suspended.
+            if (await lawMovedRefused(res)) return;
             const st = await standingBounce(key);
             if (st) return bounce(res, st.code, st.defect, st.hint);
           }
@@ -2680,6 +2682,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/marks", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await leaveMarkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a mark is a pen commit, folded now (no ferry)
         } catch (e) {
@@ -2701,6 +2704,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/walks", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await walkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a departure is a pen commit, recorded now (no ferry)
         } catch (e) {
@@ -2722,6 +2726,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/notes", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await worldNoteViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
@@ -2742,6 +2747,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/hold", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await callHoldTool("world_hold", judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
@@ -2785,6 +2791,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const judged = judgeOrBounce(res, "POST /world/say", JSON.parse(raw || "{}"));
           if (!judged) return;
           const payload = judged.fields;
+          // speaking is an act; listening (no words) is a read and is never refused for it
+          if (payload.text != null && payload.text !== "" && await lawMovedRefused(res)) return;
           const result = payload.human === true
             ? await worldSayHuman(payload, key)
             : await worldSay(payload, key);
@@ -2817,9 +2825,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const judged = judgeOrBounce(res, `POST ${path}`, payload);
         if (!judged) return;
         payload = judged.fields;
-        const fn = path === "/world/stake" ? worldStakeViaOffice(payload, key) : worldUnstakeViaOffice(payload, key);
-        return fn.then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
-          .catch((e) => bounceFault(res, "the stake door tripped", e));
+        return lawMovedRefused(res).then((refused) => {
+          if (refused) return;
+          return (path === "/world/stake" ? worldStakeViaOffice(payload, key) : worldUnstakeViaOffice(payload, key)).then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
+            .catch((e) => bounceFault(res, "the stake door tripped", e));
+        }).catch((e) => bounceFault(res, "the stake door tripped", e));
       }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
       return;
     }
@@ -2924,6 +2934,14 @@ const resolveBearer = async (token) =>
 
 // POS-633 H4: every act this request writes carries the door's route (act-provenance.mjs).
 const handle = (req, res) => withRoute(routeOfRequest(req), () => handleRequest(req, res));
+
+/** POS-680 part 2: true when the act was refused because the store's law moved and this process could not load it (act-law.mjs). */
+async function lawMovedRefused(res) {
+  const moved = await lawForAnAct();
+  if (!moved) return false;
+  j(res, moved.code, { error: "bounce", defect: moved.defect, hint: moved.hint, behind: moved.behind });
+  return true;
+}
 const handleRequest = (req, res) => {
   const t0 = Date.now();
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");
