@@ -34,8 +34,8 @@
 // stamp_lines, the same record, now.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { join, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 
 /**
  * A key → the house's canonical `hh:<slug>`, by the registry: a slug the house
@@ -148,13 +148,147 @@ export async function houseFactsNow({ env = process.env, townClone = null } = {}
  * one aside. `engine` is the world's fold module; an engine without the room
  * (before the world's law lands) says nothing. → `{ held, room, note }` or null.
  */
-export function parcelRoomNoteOf({ kind, amending = false, held, fact, engine }) {
+export function parcelRoomNoteOf({ kind, amending = false, held, fact, engine, by = null }) {
   if (kind !== "parcel" || amending) return null;            // an amend moves a parcel, it adds none
   if (typeof engine?.parcelRoomOf !== "function" || typeof engine?.parcelCapRefusal !== "function") return null;
   const room = engine.parcelRoomOf(fact ?? undefined);
   if (!Number.isInteger(held) || held < room) return null;   // it fits
+  // Room below the cap can be bought ahead (POS-762/e): the call, quoted first.
+  const cap = Number.isInteger(engine.PARCEL_CLAIM_CAP) ? engine.PARCEL_CLAIM_CAP : 3;
   return {
     held, room,
     note: `${engine.parcelCapRefusal(held, room)}. Your claim is written, and the next crossing opposes it unless the household has room by then.`,
+    ...(room < cap && by ? { buy_room: { do: BUY_ROOM_ACT, args: { from: by, preview: true } } } : {}),
   };
+}
+
+// ── BUYING ROOM AHEAD (Darko, 2026-10-23 09:51 EDT; POS-762/e and /f) ────────
+//
+//   /e "Buy room ahead": "a household act burns the stamps and adds one parcel
+//      of room for good; a claim then costs nothing, so a claim opposed for
+//      overlap never loses stamps; the quote shows price, room and cutoff"
+//   /f "Room bought": "50 x room already bought: room 1->2 costs 50, 2->3 costs
+//      100, whatever is held; simpler, never cheaper by withdrawing a parcel
+//      first"
+//
+// The act is `household { do: "buy-parcel-room", args: { from } }`. It writes
+// one line, the town's own, by the town's own builder and signer
+// (parcel-room-exec.mjs): `<from> → BURN · <price> · for: parcel:<nth>/hh:<slug>`.
+// The town's verifier holds the same terms the quote below checks first.
+export const BUY_ROOM_ACT = "buy-parcel-room";
+
+/**
+ * The town's household key for `handle` at `date`, as the town's verifier
+ * reads it (stamp-verify § hh): the ledger's own `registry:` lines first, then
+ * the checkout's pins (householdKeys), else the handle alone.
+ */
+export function townKeyAt(engine, clone, entries, handle, date) {
+  let key = null;
+  for (const r of engine.parseLaws(entries).revisions) if (r.handle === handle && r.date <= date) key = r.key;
+  return key ?? engine.householdKeys(clone).get(handle)?.key ?? `solo:${handle}`;
+}
+
+const refuse = (code, defect, hint) => ({ error: { code, defect, hint } });
+const ordinal = (n) => ({ 2: "second", 3: "third" })[n] ?? `${n}th`;
+
+/**
+ * THE QUOTE: what buying one more parcel of room would cost `handle`'s
+ * household today, or the refusal, in plain words that name the price and the
+ * cutoff. PURE over its inputs: `engine` is the town's stamp-mint module,
+ * `registry` its tools/households.json, `entries` its parsed ledger, `townKey`
+ * townKeyAt's answer. The act and its preview both ask this, so they cannot
+ * disagree. → `{ quote }` or `{ error }`.
+ */
+export function parcelRoomQuote({ handle, date, registry, entries, engine, townKey }) {
+  const { PARCEL_PRICE: price1, PARCEL_SETTLED_BY_DAY: lastDay, PARCEL_ROOM_FROM: firstDay } = engine ?? {};
+  if (typeof engine?.parcelBurnLine !== "function" || !price1 || !lastDay || !firstDay)
+    return refuse(409, "not-yet-open", "the town's ledger does not know a parcel purchase yet, so no room can be bought");
+  const cutoff = `households declared on or before ${lastDay} (town time) keep room for three parcels, one per resident; a household declared later holds one and buys room ahead`;
+  if (engine.meepChecker(engine.parseLaws(entries).laws)(handle, date))
+    return refuse(403, `meep accounts cannot buy room (${handle})`, "meeps stay outside the currency: a housemate who is not a meep can buy it");
+  const houses = registry?.households ?? {};
+  const slug = Object.keys(houses).find((s) => (houses[s]?.residents ?? []).includes(handle)) ?? null;
+  if (!slug) return refuse(409, `${handle} is in no declared household`, `parcel room belongs to a household; ${cutoff}`);
+  const since = typeof houses[slug].since === "string" ? houses[slug].since.slice(0, 10) : null;
+  if (!since) return refuse(409, `${slug} has no declaration day in the registry`, `without one it keeps room for three, and there is none to buy; ${cutoff}`);
+  if (since <= lastDay)
+    return refuse(409, `${slug} was declared on ${since}, on or before ${lastDay} (town time)`, "it keeps room for three parcels, one per resident, for good, and has none to buy");
+  if (date < firstDay) return refuse(409, `room is bought from ${firstDay} (town time)`, cutoff);
+  const house = `hh:${slug}`;
+  if (houseKeyCanon(registry)(townKey) !== house)
+    return refuse(409, `the town's ledger files ${handle} under ${townKey}, not ${house}`,
+      `its verifier would refuse the line, so nothing is burned: a housemate the ledger files under ${house} can buy the room`);
+  const bought = houseFactsOf({ registry, burns: parcelBurnsOf(entries.map((e) => e.canonical), engine.classifyEntry) })[house]?.bought ?? 0;
+  const room = 1 + bought;
+  if (room >= 3) return refuse(409, `${slug} already has room for three parcels`, "three is the cap, one per resident; there is no more room to buy");
+  const price = price1 * room;
+  const liquid = engine.foldBalances(entries).get(handle) ?? 0;
+  if (liquid < price)
+    return refuse(409, `room for a ${ordinal(room + 1)} parcel costs ${price} stamps, and ${handle} holds ${liquid} liquid`,
+      `the price is ${price1} × the room ${slug} already has (${room}), whatever it holds: room 1 to 2 costs ${price1}, 2 to 3 costs ${price1 * 2}, paid to the town and never returned`);
+  const residents = (houses[slug].residents ?? []).length;
+  return {
+    quote: {
+      handle, household: slug, declared: since,
+      cutoff: { last_day_keeping_three: lastDay, says: cutoff },
+      room: { now: room, after: room + 1 }, price,
+      price_says: `${price1} stamps × the room ${slug} already has (${room}), whatever it holds; paid to the town, burned and never returned; a claim then costs nothing`,
+      stamps: { liquid_now: liquid, liquid_after: liquid - price },
+      line: engine.parcelBurnLine({ date, handle, n: price, nth: room + 1, household: house }),
+      // A room past the residents' count holds no parcel until a resident
+      // arrives (one per resident): said, not refused (POS-762, a call for Darko).
+      ...(room + 1 > residents ? { heads_up: `${slug} has ${residents} resident${residents === 1 ? "" : "s"}, and a parcel is one per resident: room for a ${ordinal(room + 1)} parcel stands empty until a ${ordinal(room + 1)} resident joins` } : {}),
+    },
+  };
+}
+
+/** The quote at a town checkout: its engine, its households.json and its ledger, read now. */
+export async function quoteAt(clone, handle, date) {
+  const engine = await townEngineAt(clone);
+  if (!engine) return refuse(503, "not-yet-open", "the office has no town clone to read the ledger from");
+  const registry = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8"));
+  const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");
+  const entries = existsSync(ledger) ? engine.parseStampLedger(readFileSync(ledger, "utf8")) : [];
+  const townKey = typeof engine.householdKeys === "function" ? townKeyAt(engine, clone, entries, handle, date) : `solo:${handle}`;
+  return parcelRoomQuote({ handle, date, registry, entries, engine, townKey });
+}
+
+/**
+ * THE DOOR: `household { do: "buy-parcel-room", args: { from, preview } }`.
+ * Preview quotes and writes nothing; the act runs the exec under the town lock,
+ * which asks the same quote inside the lock and appends the town's line.
+ */
+export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key, { channel, date = null } = {}) {
+  const bounce = (code, defect, hint) => ({ error: "bounce", code, defect, hint });
+  if (!from) return bounce(422, "which resident pays?", `required: from, one of your residents — household { do: "${BUY_ROOM_ACT}", args: { from: "…" } }`);
+  if (!key?.handles?.has(from))
+    return bounce(403, `"${from}" is not one of your residents`, `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "nobody"}`);
+  const { townDay } = await import("./votes.mjs");
+  const today = date ?? townDay(); // the town day; a caller (a test) may name one
+  const { toConfirm, NOTHING_MOVED } = await import("./stamps-preview.mjs");
+  const call = `household { do: "${BUY_ROOM_ACT}", args: { from: "${from}" } }`;
+  if (preview === true) {
+    let q;
+    try { q = await quoteAt(clone, from, today); }
+    catch (e) {
+      const { faultLogged } = await import("./fault-words.mjs");
+      return bounce(503, "not-yet-open", `the office could not read the town's ledger, so the room could not be quoted; ${faultLogged("the parcel room quote could not read the town", e)}`);
+    }
+    if (q.error) return bounce(q.error.code, q.error.defect, q.error.hint);
+    return { preview: true, did: BUY_ROOM_ACT, ...q.quote, to_confirm: toConfirm(call), nothing_written: NOTHING_MOVED };
+  }
+  const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
+  const { viaFor } = await import("./channel.mjs");
+  const exec = join(dirname(fileURLToPath(import.meta.url)), "parcel-room-exec.mjs");
+  let out;
+  try {
+    out = await execUnderTownLock(exec, JSON.stringify({ handle: from, date: today, via: viaFor(channel) }), { ...process.env, TOWN_CLONE: clone });
+  } catch (e) {
+    if (lockTimedOut(e)) return bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
+    const { faultLogged } = await import("./fault-words.mjs");
+    return bounce(500, "the parcel room purchase tripped", faultLogged("the parcel room purchase tripped", e));
+  }
+  const result = JSON.parse(out.trim().split("\n").at(-1));
+  if (result.error) return bounce(result.error.code ?? 500, result.error.defect, result.error.hint);
+  return { did: BUY_ROOM_ACT, ...result };
 }

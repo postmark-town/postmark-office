@@ -24,7 +24,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { houseKeyCanon, parcelBurnsOf, houseFactsOf, houseFactsAt, parcelRoomNoteOf } from "../src/parcel-room.mjs";
+import { houseKeyCanon, parcelBurnsOf, houseFactsOf, houseFactsAt, parcelRoomNoteOf, parcelRoomQuote, buyParcelRoomViaOffice } from "../src/parcel-room.mjs";
 import { foldHouseholds } from "../src/world-snapshot.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -136,9 +136,13 @@ const engine = {
 
 test("5 · the door's note: only a new parcel past the room, in the engine's own sentence", () => {
   const fact = { since: "2026-11-02", bought: 0 };
-  const note = parcelRoomNoteOf({ kind: "parcel", held: 1, fact, engine });
+  const note = parcelRoomNoteOf({ kind: "parcel", held: 1, fact, engine, by: "ash" });
   assert.deepEqual(note, { held: 1, room: 1,
-    note: "parcel claim capped — this household holds 1 and has room for 1. Your claim is written, and the next crossing opposes it unless the household has room by then." });
+    note: "parcel claim capped — this household holds 1 and has room for 1. Your claim is written, and the next crossing opposes it unless the household has room by then.",
+    buy_room: { do: "buy-parcel-room", args: { from: "ash", preview: true } } },
+    "below the cap, the note hands the call that buys the room ahead (POS-762/e), as a preview first");
+  assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 3, fact: { since: "2026-11-02", bought: 2 }, engine, by: "ash" }).buy_room, undefined,
+    "at the cap there is no room to buy, and no call");
   assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 0, fact, engine }), null, "the first parcel fits");
   assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 1, fact: { ...fact, bought: 1 }, engine }), null, "a bought room fits the second");
   assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 2, fact: { since: "2026-10-31" }, engine }), null, "declared by 10-31: three");
@@ -167,4 +171,132 @@ test("6 · end to end: a house declared after 10-31 holds one, the limit pass op
   assert.deepEqual(limitOppositions(foldWith(none)).map((l) => [l.mark, l.law]), [["birch/two", "the-town/claim-cap"]]);
   const bought = houseFactsOf({ registry, burns: parcelBurnsOf([BUY("ash", 2, "gh:101")], classifyEntry) });
   assert.deepEqual(limitOppositions(foldWith(bought)), [], "one purchase is room for the second");
+});
+
+// ── 7 · the quote: buying room ahead (POS-762/e "Buy room ahead", /f "Room bought") ──
+// A stand-in for the town's stamp-mint module, in its own grammar and numbers;
+// the town's own tests hold the real ones (postmark tools/stamp-parcel-burn.test.mjs),
+// and test 9 runs the real engine end to end.
+const townEngine = {
+  PARCEL_PRICE: 50, PARCEL_SETTLED_BY_DAY: "2026-10-31", PARCEL_ROOM_FROM: "2026-11-01",
+  parcelBurnLine: ({ date, handle, n, nth, household }) => `- ${date} · ${handle} → BURN · ${n} · for: parcel:${nth}/${household}`,
+  classifyEntry,
+  parseLaws: (entries) => ({ laws: entries.filter((e) => e.canonical.includes("meeps: ")).map((e) => ({ date: e.canonical.slice(2, 12), meeps: new Set(e.canonical.split("meeps: ")[1].split(",")) })), revisions: [] }),
+  meepChecker: (laws) => (h, d) => laws.some((l) => l.date <= d && l.meeps.has(h)),
+  foldBalances: (entries) => {
+    const m = new Map();
+    for (const { canonical: c } of entries) {
+      const mint = /MINT → (\S+) · (\d+)/.exec(c); if (mint) m.set(mint[1], (m.get(mint[1]) ?? 0) + Number(mint[2]));
+      const burn = /^- \S+ · (\S+) → BURN · (\d+)/.exec(c); if (burn) m.set(burn[1], (m.get(burn[1]) ?? 0) - Number(burn[2]));
+    }
+    return m;
+  },
+};
+const GIFT = (handle, n) => ({ canonical: `- 2026-10-20 · MINT → ${handle} · ${n} · for: gift:seed · by: keemin` });
+const quote = (over = {}) => parcelRoomQuote({ handle: "ash", date: "2026-11-03", registry, entries: [GIFT("ash", 200)], engine: townEngine, townKey: "gh:101", ...over });
+
+test("7 · the quote: room 1→2 costs 50, 2→3 costs 100, whatever is held; the line is the town's", () => {
+  const q = quote().quote;
+  assert.deepEqual([q.household, q.declared, q.room, q.price], ["the-rowan", "2026-11-02", { now: 1, after: 2 }, 50]);
+  assert.equal(q.line, "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan");
+  assert.deepEqual(q.stamps, { liquid_now: 200, liquid_after: 150 });
+  assert.match(q.cutoff.says, /declared on or before 2026-10-31 \(town time\) keep room for three/, "the quote shows the cutoff");
+  assert.match(q.price_says, /50 stamps × the room the-rowan already has \(1\), whatever it holds/, "and the price, by the room");
+  const second = quote({ entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] }).quote;
+  assert.deepEqual([second.room, second.price], [{ now: 2, after: 3 }, 100], "the 3rd room costs 100");
+  assert.equal(second.line, "- 2026-11-03 · ash → BURN · 100 · for: parcel:3/hh:the-rowan");
+  assert.equal(quote().quote.heads_up, undefined, "two residents: room for a second parcel has a resident to hold it");
+  assert.match(second.heads_up, /has 2 residents, and a parcel is one per resident: room for a third parcel stands empty until a third resident joins/,
+    "room past the residents is said, not refused (a call for Darko)");
+});
+
+test("7 · the quote refuses, in plain words naming the price and the cutoff, and writes nothing", () => {
+  const no = (over, re) => { const r = quote(over); assert.ok(r.error, `no refusal for ${JSON.stringify(over)}`); assert.match(`${r.error.defect} — ${r.error.hint}`, re); };
+  no({ handle: "oak", townKey: "gh:102" }, /the-oak was declared on 2026-10-31, on or before 2026-10-31 \(town time\) — it keeps room for three parcels/);
+  no({ date: "2026-10-31" }, /room is bought from 2026-11-01 \(town time\)/);
+  no({ handle: "mist", townKey: "solo:mist" }, /no-day has no declaration day/);
+  no({ handle: "stray", townKey: "solo:stray" }, /stray is in no declared household/);
+  no({ townKey: "gh:999" }, /the town's ledger files ash under gh:999, not hh:the-rowan/);
+  no({ entries: [GIFT("ash", 30)] }, /room for a second parcel costs 50 stamps, and ash holds 30 liquid — the price is 50 × the room the-rowan already has \(1\), whatever it holds/);
+  no({ entries: [GIFT("ash", 300), { canonical: BUY("ash", 2, "hh:the-rowan") }, { canonical: BUY("ash", 3, "hh:the-rowan") }] }, /the-rowan already has room for three parcels/);
+  no({ entries: [{ canonical: "- 2026-07-13 · rules: stamps-v2 · meeps: ash" }, GIFT("ash", 200)] }, /meep accounts cannot buy room \(ash\)/);
+  no({ engine: { ...townEngine, parcelBurnLine: undefined } }, /not-yet-open — the town's ledger does not know a parcel purchase yet/);
+});
+
+// ── 8 · the door ─────────────────────────────────────────────────────────────
+test("8 · the door: a preview quotes and writes nothing; a stranger or no payer is refused", async () => {
+  const { readFileSync } = await import("node:fs");
+  const town = townWith(["- 2026-10-20 · MINT → ash · 200 · for: gift:seed · by: keemin"]);
+  try {
+    writeFileSync(join(town, "tools", "households.json"), JSON.stringify(registry));
+    // the stand-in engine module gains the rest of what the quote asks of the town's
+    writeFileSync(join(town, "tools", "stamp-mint.mjs"), [
+      `const PARCEL = ${PARCEL};`,
+      `export const classifyEntry = ${classifyEntry.toString()};`,
+      "export const parseStampLedger = (text) => text.split(/\\r?\\n/).filter((l) => l.startsWith('- ')).map((l) => ({ canonical: l.replace(/ · sig: \\S+$/, '') }));",
+      ...Object.entries(townEngine).filter(([k]) => k !== "classifyEntry")
+        .map(([k, v]) => `export const ${k} = ${typeof v === "function" ? v.toString() : JSON.stringify(v)};`),
+      "export const householdKeys = () => new Map([['ash', { key: 'gh:101' }]]);",
+    ].join("\n"));
+    const KEY = { household: "the-rowan", handles: new Set(["ash"]) };
+    const ledger = join(town, "WHITE_PAGES", "stamp-ledger.md");
+    const before = readFileSync(ledger, "utf8");
+    const p = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { date: "2026-11-03" });
+    assert.equal(p.error, undefined, JSON.stringify(p));
+    assert.deepEqual([p.preview, p.did, p.room, p.price], [true, "buy-parcel-room", { now: 1, after: 2 }, 50]);
+    assert.match(p.to_confirm, /household \{ do: "buy-parcel-room", args: \{ from: "ash" \} \} — the same call without preview: true/);
+    assert.ok(p.nothing_written);
+    assert.equal(readFileSync(ledger, "utf8"), before, "a preview writes nothing");
+    const early = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { date: "2026-10-30" });
+    assert.match(early.defect, /room is bought from 2026-11-01/);
+    assert.equal((await buyParcelRoomViaOffice(town, { from: "birch", preview: true }, KEY, { date: "2026-11-03" })).code, 403);
+    assert.equal((await buyParcelRoomViaOffice(town, { preview: true }, KEY, { date: "2026-11-03" })).code, 422);
+  } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+// ── 9 · end to end through the exec, with the town's real engine ─────────────
+const ENGINE_TOWN = process.env.TOWN_CLONE ?? TOWN_CLONE;
+let realMint = null;
+try { realMint = await import(pathToFileURL(join(ENGINE_TOWN, "tools", "stamp-mint.mjs")).href); } catch { realMint = null; }
+const NO_PURCHASE = typeof realMint?.parcelBurnLine === "function" ? false
+  : "the town engine at hand predates postmark#4094 (the parcel purchase); this runs once the town pin moves past it";
+
+test("9 · end to end: the exec burns the price, the town's verifier stays green, and the next room costs 100", { skip: NO_PURCHASE }, async () => {
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { execFileSync } = await import("node:child_process");
+  const { copyTownTools } = await import("./helpers/town-tools.mjs");
+  const repo = mkdtempSync(join(tmpdir(), "parcel-room-exec-"));
+  const env = { STAMP_KEY: process.env.STAMP_KEY, BOT_NAME: process.env.BOT_NAME, BOT_EMAIL: process.env.BOT_EMAIL, TOWN_PUSH: process.env.TOWN_PUSH };
+  try {
+    copyTownTools(ENGINE_TOWN, repo);
+    mkdirSync(join(repo, "WHITE_PAGES", "ash"), { recursive: true });
+    writeFileSync(join(repo, "WHITE_PAGES", "ash", "ADDRESS.md"), "---\nhandle: ash\n---\n");
+    writeFileSync(join(repo, "WHITE_PAGES", "mail-ledger.md"), "# ledger\n\n");
+    writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ ash: { login: "rowan-gh", id: 101 } }));
+    writeFileSync(join(repo, "tools", "households.json"), JSON.stringify({ schema_version: 1, households: {
+      "the-rowan": { accounts: [{ login: "rowan-gh", id: 101 }], residents: ["ash", "birch"], since: "2026-11-02" } } }));
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    writeFileSync(join(repo, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
+    const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+    writeFileSync(join(repo, "stamp-key.pem"), pem);
+    const mint = await import(pathToFileURL(join(repo, "tools", "stamp-mint.mjs")).href);
+    mint.appendSigned(repo, [mint.rulesLine("2026-06-12"), mint.giftLine({ date: "2026-10-20", handle: "ash", n: 200, slug: "seed", by: "keemin" })], pem);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    execFileSync("git", ["add", "-A"], { cwd: repo });
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: repo });
+    process.env.STAMP_KEY = join(repo, "stamp-key.pem"); process.env.BOT_NAME = "t"; process.env.BOT_EMAIL = "t@t"; delete process.env.TOWN_PUSH;
+    const KEY = { household: "the-rowan", handles: new Set(["ash"]) };
+    const r = await buyParcelRoomViaOffice(repo, { from: "ash" }, KEY, { date: "2026-11-03", channel: null });
+    assert.equal(r.error, undefined, JSON.stringify(r));
+    assert.ok(r.commit, "the exec committed the sealed ledger");
+    assert.equal(r.line, "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan");
+    const { verifyStampLedger } = await import(pathToFileURL(join(repo, "tools", "stamp-verify.mjs")).href);
+    const v = verifyStampLedger(repo);
+    assert.equal(v.ok, true, `the town's verifier, over the burned line: ${v.problems.join("; ")}`);
+    const next = await buyParcelRoomViaOffice(repo, { from: "ash", preview: true }, KEY, { date: "2026-11-04" });
+    assert.deepEqual([next.room, next.price], [{ now: 2, after: 3 }, 100], "the next room is quoted at 100 from the ledger the act just wrote");
+  } finally {
+    for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    rmSync(repo, { recursive: true, force: true });
+  }
 });

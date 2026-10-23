@@ -194,6 +194,10 @@ const ACTS = {
     inline: "Block a household's mail, both ways, privately." },
   unblock: { tool: "unblock_household", residue: null,
     inline: "Lift a block." },
+  // POS-762/e, /f (Darko 2026-10-23): a household declared after 10-31 buys
+  // parcel room ahead, 50 × the room it has (src/parcel-room.mjs § buying room).
+  "buy-parcel-room": { tool: null, residue: null,
+    inline: "Buy room for one more parcel." },
 };
 
 // ── THE OPERATOR ACTS · unlisted (#3231, Wright's ruling 2026-09-28) ────────
@@ -380,6 +384,13 @@ export const APEX_ONLY_FIELDS = {
       household: { type: "string", description: "a household your house has blocked: its slug, or the handle of any resident in it" },
     },
     required: ["household"],
+  },
+  "buy-parcel-room": {
+    properties: {
+      from: { type: "string", description: "which of your residents pays — their handle. A household declared after 2026-10-31 (town time) holds one parcel and buys room ahead, one parcel at a time: 50 stamps × the room it already has, whatever it holds, paid to the town and never returned, up to three" },
+      preview: { type: "boolean", description: "true = quote the price, the room and the cutoff, and write nothing" },
+    },
+    required: ["from"],
   },
 };
 
@@ -2239,6 +2250,12 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "fund-verify": {
         const { fundVerifyViaOffice } = await import("./fund.mjs");
         result = await fundVerifyViaOffice(clone, fields, { key });
+        break;
+      }
+      // POS-762/e, /f: parcel room bought ahead, the town's burn line by the town's own pen
+      case "buy-parcel-room": {
+        const { buyParcelRoomViaOffice } = await import("./parcel-room.mjs");
+        result = await buyParcelRoomViaOffice(clone, fields, key, { channel });
         break;
       }
       // ── round 2's three ──────────────────────────────────────────────────

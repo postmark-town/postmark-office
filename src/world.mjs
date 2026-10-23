@@ -5507,7 +5507,7 @@ async function discloseParcelRoom(result, by, clean = null) {
     const { houseFactsNow, parcelRoomNoteOf } = await import("./parcel-room.mjs");
     const facts = await houseFactsNow({ townClone: process.env.TOWN_CLONE ?? join(HERE, "..", "town-clone") });
     if (facts === null) return;
-    const note = parcelRoomNoteOf({ kind: "parcel", held, fact: facts[house.key], engine: await foldConstants() });
+    const note = parcelRoomNoteOf({ kind: "parcel", held, fact: facts[house.key], engine: await foldConstants(), by });
     if (note) result.parcel_room = note;
   } catch (e) {
     console.error(`[world] the parcel-room note tripped (${String(e?.message ?? e).slice(0, 160)}) — the claim stands`);
