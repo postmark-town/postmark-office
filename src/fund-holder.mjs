@@ -184,13 +184,16 @@ export function resolveAccount(ghId, { registry, isMeep, outside }) {
  * no law line at all, THROWS instead of answering "nobody is a meep".
  */
 export function meepLawOf(engine, entries, date, { strict = false } = {}) {
-  try {
-    const { laws } = engine.parseLaws(entries);
-    if (strict && !laws?.length) throw new Error("the ledger holds no law line");
-    const m = engine.meepChecker(laws);
-    return (h) => m(h, date);
-  } catch (e) {
-    if (strict) throw new Error(`the meep law is unreadable: ${String(e?.message ?? e).slice(0, 160)}`);
+  let laws;
+  try { ({ laws } = engine.parseLaws(entries)); }
+  catch (e) {
+    if (strict) throw new Error("the meep law is unreadable: its law lines could not be parsed", { cause: e });
+    return () => false;
+  }
+  if (strict && !laws?.length) throw new Error("the meep law is unreadable: the ledger holds no law line");
+  try { const m = engine.meepChecker(laws); return (h) => m(h, date); }
+  catch (e) {
+    if (strict) throw new Error("the meep law is unreadable: the town's checker refused its law lines", { cause: e });
     return () => false;
   }
 }
