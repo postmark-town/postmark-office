@@ -199,7 +199,7 @@ test("FALSIFIER: an expired berth's name boards again in one POST, and the old b
   assert.deepEqual({ ever: shore.ever, live: shore.live }, { ever: 2, live: 1 }, "the harbor's count lost a boarding");
   // a live berth's name is still held: no archive of a berth that has not sunset
   await mintBerth(odb, "still-here");
-  await assert.rejects(() => mintBerth(odb, "still-here"), /UNIQUE/, "a live berth's name was taken from under it");
+  await assert.rejects(() => mintBerth(odb, "still-here"), (e) => e.code === 409 && /already held/.test(e.defect), "a live berth's name was taken from under it");
 });
 
 test("ON THE STORE: the re-mint runs on Postgres's own oauth_berths, as the office runs it", async () => {
@@ -219,4 +219,36 @@ test("ON THE STORE: the re-mint runs on Postgres's own oauth_berths, as the offi
       assert.deepEqual(rows.map((r) => r.slug.replace(/~\d+$/, "~<created>")), ["returning", "returning~<created>"]);
     } finally { await owner.end(); }
   } finally { await pool.end(); await s.stop?.(); }
+});
+
+test("POS-761: a berth is live through its last second, so its name is held at expires == t and free one second after", async () => {
+  const t0 = 1_900_000_000;
+  const { key } = await mintBerth(odb, "edge-of-sunset", null, { t: t0 });
+  const expires = odb.prepare("SELECT expires FROM berths WHERE slug = 'edge-of-sunset'").get().expires;
+  await assert.rejects(() => mintBerth(odb, "edge-of-sunset", null, { t: expires }),
+    (e) => e.code === 409 && /already held/.test(e.defect), "the name was taken from a berth in its last second");
+  assert.equal(odb.prepare("SELECT count(*) AS n FROM berths WHERE slug LIKE 'edge-of-sunset%'").get().n, 1, "a refused boarding archived the live berth anyway");
+  await mintBerth(odb, "edge-of-sunset", null, { t: expires + 1 });
+  assert.equal(odb.prepare("SELECT count(*) AS n FROM berths WHERE slug LIKE 'edge-of-sunset%'").get().n, 2);
+  assert.ok(key);
+});
+
+test("POS-761: the rules acknowledgement and the co-sign write land on THIS berth's row, never a later visitor's under its name", async () => {
+  const t0 = 1_900_100_000;
+  await mintBerth(odb, "pinned-name", null, { t: t0 });
+  const old = odb.prepare("SELECT created, token_hash FROM berths WHERE slug = 'pinned-name'").get();
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'pinned-name'").run();
+  await mintBerth(odb, "pinned-name", null, { t: t0 + 10 });
+  // the old berth's key acknowledges, after the name was boarded again
+  await acknowledgeVisitorRules(odb, "pinned-name", old.created * 1000);
+  assert.equal(odb.prepare("SELECT rules_read_at FROM berths WHERE slug = 'pinned-name'").get().rules_read_at, null,
+    "the old visitor's acknowledgement was written on the new visitor's berth");
+  // the co-sign's own statement, read from the office, run for the OLD berth's token
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/oauth.mjs", import.meta.url), "utf8");
+  const sql = /odb\.run\("(UPDATE berths SET cosigned_gh_id = \?, cosigned_gh_login = \?, cosigned_at = \? WHERE [^"]+)"/.exec(src)?.[1];
+  assert.ok(sql, "the co-sign's write is not where this test reads it");
+  const r = odb.prepare(sql).run(4242, "old-human", 1, "pinned-name", old.token_hash);
+  assert.equal(Number(r.changes), 0, "the old berth's co-sign wrote onto the stranger's row");
+  assert.equal(odb.prepare("SELECT cosigned_gh_id FROM berths WHERE slug = 'pinned-name'").get().cosigned_gh_id, null);
 });

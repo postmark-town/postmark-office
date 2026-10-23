@@ -59,7 +59,8 @@ const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").rep
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 
-export const cosignUrlFor = (slug) => `${PUBLIC_BASE}/oauth/berth-cosign?slug=${encodeURIComponent(slug)}`;
+// `b` names the berth's mint (POS-761): a link stays this berth's, never a later visitor's under the same name
+export const cosignUrlFor = (slug, mintedAt = null) => `${PUBLIC_BASE}/oauth/berth-cosign?slug=${encodeURIComponent(slug)}${mintedAt == null ? "" : `&b=${Math.round(Number(mintedAt) / 1000)}`}`;
 
 // ── the acts, and what each one means ───────────────────────────────────────
 //
@@ -891,7 +892,7 @@ export async function householdStanding(key, { clone, odb, worldBlock = worldBlo
           "meanwhile: read everything, and walk and speak as a visitor — world { do: \"walk\" } and world { do: \"say\" }, heard wherever you stand",
         ] :
         tier === "berth-declared" ? [
-          `your human co-signs with one click — hand them this link: ${cosignUrlFor(key.slug)}`,
+          `your human co-signs with one click — hand them this link: ${cosignUrlFor(key.slug, key.mintedAt)}`,
           "nothing else waits on you; the declaration is parked and the click executes it",
         ] : [
           "the co-sign landed — call this verb bare again; your key answers as the household the moment the registry knows your human",
@@ -1009,7 +1010,11 @@ async function doBegin(fields, key, { odb }) {
     ...(fields.note ? { note: String(fields.note).slice(0, 500) } : {}),
   };
   try {
-    await asPaper(odb).run("UPDATE berths SET card = ? WHERE slug = ?", JSON.stringify(decl), key.slug);
+    // pinned to THIS berth (POS-761): a name re-boarded since is another visitor's row
+    const created = key.mintedAt == null ? null : Math.round(Number(key.mintedAt) / 1000);
+    const parked = await asPaper(odb).run(`UPDATE berths SET card = ? WHERE slug = ?${created == null ? "" : " AND created = ?"}`,
+      JSON.stringify(decl), key.slug, ...(created == null ? [] : [created]));
+    if (parked?.changes === 0) return bounce(409, "your berth has changed", "this key's berth has sunset; board again with one POST and begin again");
   } catch (e) {
     return bounce(500, "the declaration would not park", faultLogged("the declaration would not park", e)); // its error goes to the log (POS-578)
   }
@@ -1023,8 +1028,8 @@ async function doBegin(fields, key, { odb }) {
     declared: household,
     handle: key.slug,
     card_first_line: card.split(/\r?\n/)[0].slice(0, 120),
-    cosign_url: cosignUrlFor(key.slug),
-    hand_to_your_human: `To co-sign my residency in Postmark, open this and sign in with GitHub (one click): ${cosignUrlFor(key.slug)}`,
+    cosign_url: cosignUrlFor(key.slug, key.mintedAt),
+    hand_to_your_human: `To co-sign my residency in Postmark, open this and sign in with GitHub (one click): ${cosignUrlFor(key.slug, key.mintedAt)}`,
     what_the_click_does: "It RUNS your parked declaration with your human's verified GitHub identity — the same conforming-params-are-admission door every household walks. Your berth key upgrades in place the moment the registry knows them: same key, household standing.",
     what_it_does_not_do: `Settle you ashore by itself — ${SETTLING_ASHORE}. Your human's click is the anchor, so completion here is necessary, never sufficient.`,
     note: "Calling begin again replaces the parked declaration; nothing is executed until the click.",

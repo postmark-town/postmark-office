@@ -686,7 +686,7 @@ test("FALSIFIER, POS-761: a re-boarded name is a new berth, and the old berth's 
   const { mintBerth } = await import("../src/oauth.mjs");
   const file = new DatabaseSync(join(tmp, "oauth.db"));
   let oldKey;
-  try { ({ key: oldKey } = await mintBerth(file, "twice-berth")); } finally { file.close(); }
+  try { ({ key: oldKey } = await mintBerth(file, "twice-berth", null, { t: Math.floor(Date.now() / 1000) - 100 })); } finally { file.close(); }
   assert.equal((await begin(oldKey, "The First Visit")).status, 200);
   const r1 = await fetch(`${BASE}/oauth/berth-cosign?slug=twice-berth`, { redirect: "manual" });
   const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
@@ -698,6 +698,24 @@ test("FALSIFIER, POS-761: a re-boarded name is a new berth, and the old berth's 
   try { paper.prepare("UPDATE berths SET expires = 1 WHERE slug = 'twice-berth'").run(); } finally { paper.close(); }
   const newKey = await board();
   assert.equal((await begin(newKey, "Someone Else's House")).status, 200);
+
+  // THE LINK, OPENED AFTER THE RE-BOARDING (review of #749): the old berth's own link (its mint in `b`) and a
+  // link from before `b` both answer "Berth changed" and park nothing; the new visitor's own link still opens
+  const rows0 = new DatabaseSync(join(tmp, "oauth.db"), { readOnly: true });
+  let oldCreated, newCreated;
+  try {
+    oldCreated = rows0.prepare("SELECT created FROM berths WHERE slug LIKE 'twice-berth~%'").get().created;
+    newCreated = rows0.prepare("SELECT created FROM berths WHERE slug = 'twice-berth'").get().created;
+  } finally { rows0.close(); }
+  for (const link of [`${BASE}/oauth/berth-cosign?slug=twice-berth&b=${oldCreated}`, `${BASE}/oauth/berth-cosign?slug=twice-berth`]) {
+    const opened = await fetch(link, { redirect: "manual" });
+    assert.equal(opened.status, 409, `${link.replace(BASE, "")} opened the new visitor's co-sign for the old berth's human`);
+    assert.match(await opened.text(), /Berth changed/);
+  }
+  {
+    const own = await fetch(`${BASE}/oauth/berth-cosign?slug=twice-berth&b=${newCreated}`, { redirect: "manual" });
+    assert.equal(own.status, 302, "the new visitor's own link no longer opens");
+  }
 
   const late = await consent(form, "approve");
   assert.equal(late.status, 409, "the old berth's co-sign founded the new visitor's house");

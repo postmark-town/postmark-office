@@ -95,6 +95,19 @@ test("begin: parks the declaration and hands back the one link", async () => {
   assert.equal(JSON.parse(row.card).household, "The Bridge");
 });
 
+test("POS-761: begin parks on THIS berth only, and its link names the berth's mint", async () => {
+  await mintBerth(odb, "renamed-walker", null, { t: 1_900_200_000 });
+  const first = { berth: true, slug: "renamed-walker", household: null, handles: new Set(), mintedAt: 1_900_200_000 * 1000 };
+  const r = await householdApex({ do: "begin", args: { household: "The First", card: "first." } }, first, { odb });
+  assert.ok(r.result.cosign_url.endsWith("?slug=renamed-walker&b=1900200000"), r.result.cosign_url);
+  // the name sunsets and another visitor boards it; the first key's begin, racing in, lands nowhere
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'renamed-walker'").run();
+  await mintBerth(odb, "renamed-walker", null, { t: 1_900_200_100 });
+  const late = await householdApex({ do: "begin", args: { household: "Not Yours", card: "x." } }, first, { odb });
+  assert.equal(late.code, 409, JSON.stringify(late).slice(0, 200));
+  assert.equal(odb.prepare("SELECT card FROM berths WHERE slug = 'renamed-walker'").get().card, null, "the first visitor's declaration was parked on the new visitor's berth");
+});
+
 test("begin: refuses the wrong tiers by name", async () => {
   const asResident = await householdApex({ do: "begin", args: { household: "X", card: "y" } },
     { household: "keemin", handles: new Set(["wright"]) }, { odb });

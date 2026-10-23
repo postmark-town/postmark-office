@@ -56,7 +56,7 @@ export async function visitorRulesGate(key, args = {}, { speaking = true } = {})
     if (!recordAcknowledgement)
       return { error: "bounce", code: 503, defect: "the harbor can't record that you've read the rules right now",
         hint: "nothing was said; try again shortly", visitor_rules: VISITOR_RULES };
-    await recordAcknowledgement(key.slug);
+    await recordAcknowledgement(key.slug, key.mintedAt ?? null);
     return null;
   }
   if (!speaking) return null;

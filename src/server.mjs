@@ -198,7 +198,7 @@ try {
 }
 // The berth's acknowledgement of the town's rules for visitors is written on
 // its own row in this paperwork (POS-300, visitor-rules.mjs).
-useRulesRecorder((slug) => acknowledgeVisitorRules(odb, slug));
+useRulesRecorder((slug, mintedAt) => acknowledgeVisitorRules(odb, slug, mintedAt));
 // The hanging doors check a media URL against this same paper (POS-738).
 useMediaLedger(odb);
 
@@ -1211,6 +1211,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         });
       } catch (e) {
         if (isUnreachable(e)) return bounce(res, 503, e.defect, e.hint); // the store's own words (POS-268)
+        if (e?.code === 409) return bounce(res, 409, e.defect, e.hint); // two boardings raced for one name (POS-761)
         return bounceFault(res, "the gangplank tripped", e);
       }
     }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "the body never arrived", "one small JSON object: {\"slug\": \"…\"}"));
