@@ -194,7 +194,7 @@ export function zeroStakeUnfiled({ mark, putForward = null, refused = null, erro
     return bounce(409, `"${mark}" was not put forward: it is too late for this crossing's docket`,
       "this crossing's docket could not take it, so nothing was filed and your draft is as it was. " +
       "Stake it again at ✦0 and it goes to the next crossing's docket; if it refuses twice, tell the postmaster.");
-  const dark = (putForward && !putForward.promoted && putForward.window == null) || /the candle is dark/.test(String(error?.message ?? ""));
+  const dark = (putForward && !putForward.promoted && putForward.window == null) || error?.candleDark === true;
   if (dark)
     return bounce(503, `"${mark}" was not put forward: the candle is dark`,
       "no candle is burning, so the docket takes no claims and nothing is put forward until the next one is lit. " +
