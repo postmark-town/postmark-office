@@ -690,7 +690,8 @@ test("HEIGHTS UNREAD · /world2/apex: a law pin older than the height dials is a
   const r = await RECORDS_DOOR(new URLSearchParams({ x: "4000", y: "4000", crossing: "1" }), { p: recordsPool(), eng: heightsRefused() });
   assert.equal(r.error?.code, 503);
   assert.equal(r.error.body.defect, `the law at ${REC_LAW_SHA.slice(0, 8)} predates the height dials`);
-  assert.match(r.error.body.hint, /missing: the-town-centre/);
+  assert.match(r.error.body.hint, /no region anchors, or no river_fall_m/);
+  assert.doesNotMatch(r.error.body.hint, /missing: the-town-centre/, "the engine's own text is not read into the answer (error-text census)");
 });
 
 test("HEIGHTS UNREAD · /world2/investigate: the same law, the same 503", async (t) => {

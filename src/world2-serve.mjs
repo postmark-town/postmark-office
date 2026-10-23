@@ -678,7 +678,7 @@ export const SAY_READ_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_
 export function heightsUnreadBounce(e, lawSha) {
   if (e?.code !== "HEIGHTS_UNREAD") return null;
   return { defect: `the law at ${String(lawSha ?? "").slice(0, 8)} predates the height dials`,
-    hint: `the world engine reads every height from the skeleton's elevation dials, and the law this window is pinned to carries none (${e.message}). It answers again once the window's law pin carries them.` };
+    hint: `the world engine reads every height from the skeleton's elevation dials, and the law this window is pinned to carries none (no region anchors, or no river_fall_m). It answers again once the window's law pin carries them.` };
 }
 
 export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, eng: injectedEngine = null } = {}) {
