@@ -83,6 +83,18 @@ test("the containment parent of a mark standing in a thing is the thing, not the
     "the thing itself is placed by geometry, never by its directory edge");
 });
 
+test("A LANDFORM IS NEVER SITED: not on its chain, and not on a skew where the place would answer (WLD-97)", () => {
+  const valley = { kind: "landform", at: { x: -1400, y: -2775 }, extent: { w: 920, h: 800 }, ground_m: 8 };
+  // a skew: no class layer, so the place answers for every other kind
+  assert.equal(standsAs({ kind: "thing", at: valley.at }, null), "sited", "fixture: the place answers on a skew");
+  assert.equal(standsAs(valley, null), "landform");
+  assert.equal(isGround(valley, null), false);
+  // the chain: landform extends mark, a sibling of sited
+  const classes = new Map([["landform", "mark"], ["mark", "postmark-node"], ["sited", "mark"], ["postmark-node", null]]);
+  assert.equal(standsAs(valley, classes), "landform");
+  assert.equal(isGround(valley, classes), false);
+});
+
 test("how a row stands, every rung of the world's standingOf", () => {
   const at = { x: 5, y: 5 };
   const r = (kind, place = at) => ({ kind, at: place });
