@@ -256,8 +256,8 @@ test("9 · a store that hangs is never asked for the whole law once per act: two
   const c = await law.reloadLawSnapshot({ query: hung, deadlineMs: 20 });
   assert.equal(c.busy, true, "a third refresh with two still running is not started");
   assert.equal(pins, 2, "the store was asked twice, not three times");
-  assert.equal(law.lawRefreshStanding().loading, 2, "the receipt counts them");
+  assert.equal(law.lawRefreshStanding().loads.running, 2, "the receipt counts them");
   releases.forEach((r) => r());
   await sleep(20);
-  assert.equal(law.lawRefreshStanding().loading, 0, "they finish into the count");
+  assert.equal(law.lawRefreshStanding().loads.running, 0, "they finish into the count");
 });

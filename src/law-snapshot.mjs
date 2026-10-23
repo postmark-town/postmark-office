@@ -38,7 +38,10 @@
 // cleared, its callers get `{ changed: false, abandoned: true }`, and the next
 // tick starts a fresh one. A refresh that was let go and then finishes still
 // publishes, unless a refresh that started after it has already published, so
-// a store that is slow rather than stuck costs nothing.
+// a store that is slow rather than stuck costs nothing. What was let go is
+// ended by the store itself (a statement_timeout scoped to the refresh's own
+// transaction), and at most MAX_LOADS refreshes run at once, law and graph
+// together (snapshot-loads.mjs), so a store that hangs never takes the pool.
 //
 // ── ONE EVENT FOR EVERY PUBLISH (POS-680) ────────────────────────────────────
 // Whatever publishes a law (the timer, a read worker's announcement, a test, a
@@ -53,11 +56,12 @@
 // new law before it answers, so the act stands on the law the store has at
 // that moment. When the store says it moved and the new law could not be
 // loaded in time, `behind` says so, and the act refuses rather than judge
-// under law the store has replaced (act-law.mjs). A refresh let go keeps
-// running, so loads still running are capped (MAX_LOADS): a store that is slow
-// is never asked for the whole law once per act.
+// under law the store has replaced (act-law.mjs). The asks share the
+// refreshers' cap (snapshot-loads.mjs § MAX_LOADS): a store that is slow is
+// never asked for the whole law once per act.
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
+import { startLoad, endLoad, loadsStanding, timedSession, servePool, MAX_LOADS } from "./snapshot-loads.mjs";
 
 // The pair that says "the law to serve has moved". Both halves matter: a new
 // settlement whose law is not ingested moves `newest` (the disclosure changes),
@@ -86,11 +90,8 @@ const fresh = () => ({
   publishedAt: null,   // when the law in force was published (ISO)
   abandoned: 0,        // refreshes let go at the deadline, this process
   unhear: null,        // the refresher's own listener, removed by a reset
-  loading: 0,          // refreshes still running, let go or not (MAX_LOADS caps them)
   seenPinned: null,    // the settlement whose law the store last said is the newest ingested
 });
-/** Refreshes allowed to run at once, counting ones let go that have not finished. */
-export const MAX_LOADS = 2;
 const state = fresh();
 const listeners = new Set();
 
@@ -121,7 +122,7 @@ function publish(next, key, n) {
  */
 export function lawRefreshStanding() {
   return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
-    in_flight: Boolean(state.inflight), loading: state.loading, deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError,
+    in_flight: Boolean(state.inflight), deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding(),
     ...(lawBehind() ? { behind: lawBehind() } : {}) };
 }
 
@@ -163,10 +164,11 @@ export function lawStanding() {
   };
 }
 
+// The store, by default: a refresh handed no `query` reads in its own timed
+// session on the serve pool (snapshot-loads.mjs § timedSession). This function
+// is that default's name; a refresh never calls it statement by statement.
 async function defaultQuery(sql, params) {
-  const { world2ServeEnabled, world2Pool } = await import("./world2-serve.mjs");
-  if (!world2ServeEnabled()) throw new Error("the world 2.0 store is not engaged at this office (WORLD2_PG/WORLD2_PG_URL)");
-  return (await world2Pool()).query(sql, params);
+  return (await servePool()).query(sql, params);
 }
 
 /**
@@ -181,25 +183,27 @@ async function defaultQuery(sql, params) {
  */
 export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlineMs = LAW_REFRESH_DEADLINE_MS } = {}) {
   if (state.inflight) return state.inflight;
-  if (state.loading >= MAX_LOADS) {
-    state.lastError = `${state.loading} law refreshes are still running; no new one starts until one finishes`;
+  if (!startLoad()) {
+    state.lastError = `${MAX_LOADS} store refreshes are still running (the cap); this one was skipped and the next tick asks again`;
     return Promise.resolve({ changed: false, busy: true, standing: lawStanding() });
   }
   const n = ++state.started;
-  state.loading += 1;
   const newest = () => n === state.started; // only the newest refresh speaks for the health line
   let live = null;
   const work = (async () => {
     await null; // the body runs after `inflight` is set, even when `query` throws at once
+    let session = null;
     try {
-      const pin = (await query(PIN_SQL)).rows[0] ?? {};
+      if (query === defaultQuery) session = await timedSession(await servePool());
+      const ask = session ? session.query : query;
+      const pin = (await ask(PIN_SQL)).rows[0] ?? {};
       const key = `${pin.newest ?? "-"}/${pin.pinned ?? "-"}`;
       if (newest() || n > state.publishedBy) state.seenPinned = pin.pinned ?? null;
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: lawStanding() };
       }
-      const next = lawSnapshotFromRows((await query(LAW_AT_BLESSING_SQL)).rows);
+      const next = lawSnapshotFromRows((await ask(LAW_AT_BLESSING_SQL)).rows);
       // A refresh let go at its deadline publishes only if nothing that started
       // after it has published since. A store with no ingested blessing
       // publishes nothing and leaves whatever stood (null on a fresh process:
@@ -212,7 +216,8 @@ export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlin
       if (newest()) state.lastError = String(e?.message ?? e).slice(0, 160);
       return { changed: false, standing: lawStanding() };
     } finally {
-      state.loading -= 1;
+      await session?.end();
+      endLoad();
       if (state.inflight === live) state.inflight = null;
     }
   })();
@@ -255,5 +260,5 @@ export function resetLawSnapshot() {
   if (state.timer) clearInterval(state.timer);
   state.unhear?.();
   // the count goes on, and every refresh from before the reset is late: none publishes into it
-  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1, loading: state.loading });
+  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1 });
 }
