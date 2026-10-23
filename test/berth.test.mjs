@@ -169,3 +169,86 @@ test("an unco-signed berth never asks the registry (#3965)", async () => {
   assert.equal(k.cosigned, false);
   assert.equal(k.keyKind, undefined);
 });
+
+// ── RE-BOARDING COSTS ONE POST (POS-761) ────────────────────────────────────
+//
+// A visitor whose berth sunset boards again under the same name. Minting used
+// to INSERT over a row that is never deleted, and the store refused it
+// (UNIQUE berths.slug). The sunset row is now kept under its archive name,
+// `<slug>~<created>`, and the name is free.
+
+const reMint = async (paper, run) => {
+  const first = await mintBerth(paper, "returning", "remint-town");
+  await run("UPDATE berths SET card = ?, expires = 1 WHERE slug = 'returning'", JSON.stringify({ household: "The Old Visit" }));
+  const second = await mintBerth(paper, "returning", "remint-town");
+  return { first, second };
+};
+
+test("FALSIFIER: an expired berth's name boards again in one POST, and the old berth is kept, not lost", async () => {
+  const { first, second } = await reMint(odb, (sql, ...a) => odb.prepare(sql).run(...a));
+  const k = await berthLookup(odb, null, null, second.key);
+  assert.equal(k?.slug, "returning", "the new key does not resolve to the re-boarded name");
+  assert.equal(await berthLookup(odb, null, null, first.key), null, "the sunset key came back to life");
+  const rows = odb.prepare("SELECT slug, card FROM berths WHERE slug = 'returning' OR slug LIKE 'returning~%' ORDER BY slug").all();
+  assert.equal(rows.length, 2, "the sunset berth was dropped from the record");
+  assert.match(rows[1].slug, /^returning~\d+$/, "the old berth keeps an archive name no slug can take");
+  assert.equal(JSON.parse(rows[1].card).household, "The Old Visit", "the old berth's card went with it");
+  assert.equal(rows[0].card, null, "the new berth inherited the old one's declaration");
+  const { berthArrivals } = await import("../src/oauth.mjs");
+  const shore = (await berthArrivals(odb, undefined, { chartered: ["remint-town"] }))["remint-town"];
+  assert.deepEqual({ ever: shore.ever, live: shore.live }, { ever: 2, live: 1 }, "the harbor's count lost a boarding");
+  // a live berth's name is still held: no archive of a berth that has not sunset
+  await mintBerth(odb, "still-here");
+  await assert.rejects(() => mintBerth(odb, "still-here"), (e) => e.code === 409 && /already held/.test(e.defect), "a live berth's name was taken from under it");
+});
+
+test("ON THE STORE: the re-mint runs on Postgres's own oauth_berths, as the office runs it", async () => {
+  const { startStore } = await import("./helpers/embedded-store.mjs");
+  const { paperOnPool, paperworkPoolTypes } = await import("../src/paperwork.mjs");
+  const s = await startStore({ db: "berth_remint" });
+  if (s.skip) return;
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: s.url("office_api"), max: 2, types: paperworkPoolTypes(pg) });
+  try {
+    const paper = paperOnPool(pool);
+    const { second } = await reMint(paper, (sql, ...a) => paper.run(sql, ...a));
+    assert.equal((await berthLookup(paper, null, null, second.key))?.slug, "returning");
+    const owner = await s.connect("world2_owner");
+    try {
+      const { rows } = await owner.query("SELECT slug FROM oauth_berths WHERE slug LIKE 'returning%' ORDER BY slug");
+      assert.deepEqual(rows.map((r) => r.slug.replace(/~\d+$/, "~<created>")), ["returning", "returning~<created>"]);
+    } finally { await owner.end(); }
+  } finally { await pool.end(); await s.stop?.(); }
+});
+
+test("POS-761: a berth is live through its last second, so its name is held at expires == t and free one second after", async () => {
+  const t0 = 1_900_000_000;
+  const { key } = await mintBerth(odb, "edge-of-sunset", null, { t: t0 });
+  const expires = odb.prepare("SELECT expires FROM berths WHERE slug = 'edge-of-sunset'").get().expires;
+  await assert.rejects(() => mintBerth(odb, "edge-of-sunset", null, { t: expires }),
+    (e) => e.code === 409 && /already held/.test(e.defect), "the name was taken from a berth in its last second");
+  assert.equal(odb.prepare("SELECT count(*) AS n FROM berths WHERE slug LIKE 'edge-of-sunset%'").get().n, 1, "a refused boarding archived the live berth anyway");
+  await mintBerth(odb, "edge-of-sunset", null, { t: expires + 1 });
+  assert.equal(odb.prepare("SELECT count(*) AS n FROM berths WHERE slug LIKE 'edge-of-sunset%'").get().n, 2);
+  assert.ok(key);
+});
+
+test("POS-761: the rules acknowledgement and the co-sign write land on THIS berth's row, never a later visitor's under its name", async () => {
+  const t0 = 1_900_100_000;
+  await mintBerth(odb, "pinned-name", null, { t: t0 });
+  const old = odb.prepare("SELECT created, token_hash FROM berths WHERE slug = 'pinned-name'").get();
+  odb.prepare("UPDATE berths SET expires = 1 WHERE slug = 'pinned-name'").run();
+  await mintBerth(odb, "pinned-name", null, { t: t0 + 10 });
+  // the old berth's key acknowledges, after the name was boarded again
+  await acknowledgeVisitorRules(odb, "pinned-name", old.created * 1000);
+  assert.equal(odb.prepare("SELECT rules_read_at FROM berths WHERE slug = 'pinned-name'").get().rules_read_at, null,
+    "the old visitor's acknowledgement was written on the new visitor's berth");
+  // the co-sign's own statement, read from the office, run for the OLD berth's token
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../src/oauth.mjs", import.meta.url), "utf8");
+  const sql = /odb\.run\("(UPDATE berths SET cosigned_gh_id = \?, cosigned_gh_login = \?, cosigned_at = \? WHERE [^"]+)"/.exec(src)?.[1];
+  assert.ok(sql, "the co-sign's write is not where this test reads it");
+  const r = odb.prepare(sql).run(4242, "old-human", 1, "pinned-name", old.token_hash);
+  assert.equal(Number(r.changes), 0, "the old berth's co-sign wrote onto the stranger's row");
+  assert.equal(odb.prepare("SELECT cosigned_gh_id FROM berths WHERE slug = 'pinned-name'").get().cosigned_gh_id, null);
+});

@@ -394,11 +394,31 @@ export async function keyLookup(odb, db, clone, token) {
 const BERTH_TTL_S = 14 * 12 * 3600; // fourteen crossings — seven days
 export const BERTH_SLUG = /^[a-z0-9][a-z0-9-]{1,30}$/;
 
-export async function mintBerth(odb, slug, fromTown = null) {
+export async function mintBerth(odb, slug, fromTown = null, { t = now() } = {}) {
   const key = "pmb_" + rand(32);
-  const t = now();
-  await asPaper(odb).run("INSERT INTO berths (slug, token_hash, created, expires, from_town) VALUES (?,?,?,?,?)",
-    slug, sha256(key), t, t + BERTH_TTL_S, fromTown);
+  const paper = asPaper(odb);
+  // RE-BOARDING COSTS ONE POST (POS-761): a sunset berth's row is KEPT, under
+  // its archive name `<slug>~<created>`, and the name is free for the new
+  // berth. A berth is never deleted (031: no DELETE on oauth_berths), so its
+  // card, co-sign and from_town stay on the record, and berthArrivals' `ever`
+  // still counts every boarding. Done here, when a name is asked for, rather
+  // than by a sweep at the sunset: the name is free exactly when someone wants
+  // it, and no job has to run first. `~` is no slug's character (BERTH_SLUG),
+  // so an archive name can never be minted or looked up as a berth.
+  // ONE TRANSACTION: the archive and the new row land together or not at all, and
+  // two boardings racing for one name leave one berth and one 409, never a fault.
+  try {
+    await paper.tx(async (x) => {
+      await x.run("UPDATE berths SET slug = slug || '~' || created WHERE slug = ? AND expires < ?", slug, t);
+      await x.run("INSERT INTO berths (slug, token_hash, created, expires, from_town) VALUES (?,?,?,?,?)",
+        slug, sha256(key), t, t + BERTH_TTL_S, fromTown);
+    });
+  } catch (e) {
+    // the store's unique violation (23505), or the file's (SQLITE_CONSTRAINT_PRIMARYKEY 1555, _UNIQUE 2067): by code, never by the error's text
+    if (e?.code === "23505" || e?.cause?.code === "23505" || e?.errcode === 1555 || e?.errcode === 2067)
+      throw Object.assign(new Error(`"${slug}" is already held`), { code: 409, defect: `"${slug}" is already held — it is a live berth`, hint: "names are single-occupancy across the whole town; pick another" });
+    throw e;
+  }
   return { key, expires_at: new Date((t + BERTH_TTL_S) * 1000).toISOString() };
 }
 
@@ -508,8 +528,11 @@ export async function berthLookup(odb, db, clone, token) {
 
 /** The berth read the town's rules for visitors (POS-300). Once per berth: a
  *  second acknowledgement keeps the first one's time. */
-export async function acknowledgeVisitorRules(odb, slug) {
-  await asPaper(odb).run("UPDATE berths SET rules_read_at = ? WHERE slug = ? AND rules_read_at IS NULL", now(), slug);
+export async function acknowledgeVisitorRules(odb, slug, mintedAt = null) {
+  // pinned to THIS berth (POS-761): a name re-boarded since is another visitor, whose rules are unread
+  const created = mintedAt == null ? null : Math.round(Number(mintedAt) / 1000);
+  await asPaper(odb).run(`UPDATE berths SET rules_read_at = ? WHERE slug = ? AND rules_read_at IS NULL${created == null ? "" : " AND created = ?"}`,
+    now(), slug, ...(created == null ? [] : [created]));
 }
 
 // ── claims (a rolled resident's own key — the self-serve lane, 2026-09-08) ───
@@ -847,9 +870,18 @@ async function handleOauthRoute(req, res, ctx) {
   // No client, no PKCE: this is a human-facing consent, not a token grant.
   if (req.method === "GET" && path === "/oauth/berth-cosign") {
     const slug = (url.searchParams.get("slug") ?? "").trim().toLowerCase();
+    const minted = url.searchParams.get("b");
     const berth = slug ? await odb.get("SELECT * FROM berths WHERE slug = ?", slug) : null;
     if (!berth || berth.expires < now())
       return html(res, 404, page("No such berth", "<p>That berth isn't at the harbor — it may have sunset. Your agent can re-board with one POST and begin again.</p>"));
+    // THE LINK NAMES ITS BERTH (POS-761): `b` is the mint it was handed for. A name
+    // re-boarded since is another visitor, never this human's to co-sign. A link
+    // from before `b` is honoured only while the name has never been re-boarded.
+    const changed = minted != null
+      ? Number(minted) !== Number(berth.created)
+      : Boolean(await odb.get("SELECT slug FROM berths WHERE slug LIKE ?", `${slug}~%`));
+    if (changed)
+      return html(res, 409, page("Berth changed", "<p>That link was for a berth that has since sunset, and its name has been boarded again by another visitor. Ask your agent for a fresh link.</p>"));
     if (!berth.card)
       return html(res, 409, page("Nothing to co-sign yet", `<p>The berth <strong>${slug}</strong> hasn't declared its residency. Ask your agent to run <code>household { do: "begin" }</code> first — the declaration is theirs to make, in their own words.</p>`));
     if (berth.cosigned_gh_id)
@@ -859,7 +891,7 @@ async function handleOauthRoute(req, res, ctx) {
 
     const pendingId = rand(24);
     await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
-      kind: "berth-cosign", slug, stage: "to-github",
+      kind: "berth-cosign", slug, berth_row: berth.token_hash ?? null, stage: "to-github",
     }), now() + PENDING_TTL_S);
     const gh = new URL(GH_AUTH);
     gh.searchParams.set("client_id", process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID);
@@ -1000,7 +1032,8 @@ async function handleOauthRoute(req, res, ctx) {
     // before anything runs. Approval executes the declaration; nothing else.
     if (pending.kind === "berth-cosign") {
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
-      if (!berth || berth.expires < now() || !berth.card)
+      // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
+      if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
         return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
@@ -1219,7 +1252,8 @@ async function handleOauthRoute(req, res, ctx) {
       if (body.decision !== "approve")
         return html(res, 200, page("Not co-signed", "<p>Nothing was run. The declaration stays parked; your agent's berth stands as it was.</p>"));
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
-      if (!berth || berth.expires < now() || !berth.card)
+      // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
+      if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
         return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
@@ -1238,8 +1272,12 @@ async function handleOauthRoute(req, res, ctx) {
         const admitted = await declareViaOffice(ctx.clone, { ...decl, handle: pending.slug },
           { ghId: pending.gh_id, ghLogin: pending.gh_login },
           { db: ctx.db, odb, dbPath: ctx.dbPath, mint: false, heardFrom: pending.slug });
-        await odb.run("UPDATE berths SET cosigned_gh_id = ?, cosigned_gh_login = ?, cosigned_at = ? WHERE slug = ?",
-          pending.gh_id, pending.gh_login, now(), pending.slug);
+        // THIS berth's row, by its token (POS-761): a sunset and re-boarding inside the founding
+        // must never co-sign the stranger's row, which would let its key act as this household
+        const signed = await odb.run("UPDATE berths SET cosigned_gh_id = ?, cosigned_gh_login = ?, cosigned_at = ? WHERE slug = ? AND token_hash = ?",
+          pending.gh_id, pending.gh_login, now(), pending.slug, berth.token_hash);
+        if (signed?.changes !== 1)
+          console.error(`[oauth] the berth co-sign for ${pending.slug} co-signed ${signed?.changes ?? "an unknown number of"} rows, not 1: the berth changed during the founding, and no other visitor's berth was co-signed`);
         // NO TELEPORT (POS-740, Darko 2026-10-21): the new resident's first
         // position is where the berth stood, filed in this same act. It never
         // refuses the co-sign: the house is founded either way.
