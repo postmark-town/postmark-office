@@ -202,6 +202,9 @@ export function foldDifference(a, b) {
 //                           ledger position (its resolver, ADDRESS logins and dated
 //                           registry: lines), the crossing's own derivation
 //                           (tools/world-households-export.mjs § worldHouseholdsAt)
+//   houseFacts     SOURCE   the same two: each register house's `since`, and its
+//                           parcel purchases on the town ledger at town_sha
+//                           (parcel-room.mjs § houseFactsAt, POS-762)
 //   the engine     SHA REF  the world's tools/marks-fold.mjs at law_sha
 //   dials, fanup,  CONST    the engine's own defaults; the office passes none
 //   prev, tick
@@ -341,11 +344,11 @@ export async function snapshotFoldInputs(p, header, { townRepo = null } = {}) {
   if (!lawRows.length) throw new Error(`law_projection holds no class marks at ${header.law_sha.slice(0, 12)}, the law snapshot ${header.id} names`);
   const terrain = await terrainAt(p, header.law_sha);
   const { stakes, source: stakesSource } = await stakesAt(p, header.town_sha, { townRepo });
-  const { households, source: householdsSource } = await foldHouseholds(p, {
+  const { households, houseFacts, source: householdsSource } = await foldHouseholds(p, {
     lawSha: header.law_sha, townRepo,
     registerRows: header.register_digest ? () => snapshotRegisterRows(p, header.register_digest) : null,
   });
-  return { lawRows, terrain, stakes, stakesSource, households, householdsSource };
+  return { lawRows, terrain, stakes, stakesSource, households, houseFacts, householdsSource };
 }
 
 /**
@@ -354,15 +357,29 @@ export async function snapshotFoldInputs(p, header, { townRepo = null } = {}) {
  * checkout: the town's own resolver over them. Otherwise the printed roster at
  * `lawSha`. Otherwise none, and every handle folds solo. `registerRows` is a
  * thunk, so the register is read only when a town checkout will use it.
- * → `{ households, source }`.
+ *
+ * THE HOUSES' PARCEL FACTS RIDE THE SAME ROAD (POS-762, parcel-room.mjs): with
+ * the register and the town, each house's settling day and its parcel purchases,
+ * for the world's fold to size its parcel room by. Without them, none, and the
+ * fold keeps every household at three, as it did before November; the source
+ * says so.
+ * → `{ households, houseFacts, source }`.
  */
 export async function foldHouseholds(p, { lawSha, registerRows = null, townRepo = null }) {
-  if (registerRows && townRepo)
-    return { households: await householdsAt(await registerRows(), townRepo), source: "the register at the seal, through the town's resolver at the ledger position" };
+  if (registerRows && townRepo) {
+    const rows = await registerRows();
+    const { houseFactsAt } = await import("./parcel-room.mjs");
+    return {
+      households: await householdsAt(rows, townRepo),
+      houseFacts: await houseFactsAt(rows, townRepo),
+      source: "the register at the seal, through the town's resolver at the ledger position (parcel room: each house's settling day there, and its parcel purchases on the ledger)",
+    };
+  }
   const households = await rosterAt(p, lawSha);
+  const noFacts = "; no parcel facts, so every household keeps the cap of three";
   if (households)
-    return { households, source: `the printed WORLD/households.json at law ${String(lawSha).slice(0, 12)} (law_projection roster; a derived printout${registerRows ? ": pass the town checkout to derive it from the register" : ", and the snapshot predates 064"})` };
-  return { households: null, source: "nothing: every handle folds solo" };
+    return { households, houseFacts: null, source: `the printed WORLD/households.json at law ${String(lawSha).slice(0, 12)} (law_projection roster; a derived printout${registerRows ? ": pass the town checkout to derive it from the register" : ", and the snapshot predates 064"})${noFacts}` };
+  return { households: null, houseFacts: null, source: `nothing: every handle folds solo${noFacts}` };
 }
 
 /**
@@ -395,7 +412,8 @@ export async function snapshotFoldArgs(p, header, { townRepo = null, filing = nu
   const marks = inFilingOrder(marksFromRows(markRowsOfVersions(rows), inputs.lawRows), filing);
   await withClaimedAt(p, marks);
   return {
-    args: { marks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households },
+    // `houseFacts` only when there are some, so a fold without them is called exactly as before
+    args: { marks, terrain: inputs.terrain, stakes: inputs.stakes, households: inputs.households, ...(inputs.houseFacts ? { houseFacts: inputs.houseFacts } : {}) },
     stakesSource: inputs.stakesSource, householdsSource: inputs.householdsSource,
   };
 }
