@@ -315,7 +315,7 @@ test("I9 · the read groups invited households by the sweep that closes their wi
     row("sept", "quill-hall", "2026-09-30T12:00:00.000Z"),
     { slug: "plain", residents: ["p"], invited_by: null },
   ];
-  const plan = planInvites(rows, new Map([["b-house-r", "2026-10-22T07:00:05.000Z"]]));
+  const plan = planInvites(rows, { ashore: new Map([["b-house-r", "2026-10-22T07:00:05.000Z"]]) });
   assert.equal(plan.length, 13, "every invited household, and not the plain one");
   assert.deepEqual(plan.filter((p) => p.invited_by === "lantern-row").map((p) => [p.household, p.window, p.month.nth, p.ashore]), [
     ["a-house", "2026-10-22T06:00:00.000Z", 1, null],
@@ -328,9 +328,26 @@ test("I9 · the read groups invited households by the sweep that closes their wi
   assert.equal(/OVER the 10-a-month cap/.test(printed), false, "ten is within the cap");
   const eleven = planInvites([...rows, row("c10", "quill-hall", "2026-10-21T12:00:00.000Z")]);
   assert.match(printInvites(eleven), /c10 "c10" · invited by quill-hall .*invite 11 in 2026-10, OVER the 10-a-month cap/);
-  assert.deepEqual(planInvites(rows, new Map(), { since: "2026-10-22T00:00:00.000Z" }).map((p) => p.household), ["a-house", "b-house"],
+  assert.deepEqual(planInvites(rows, {}, { since: "2026-10-22T00:00:00.000Z" }).map((p) => p.household), ["a-house", "b-house"],
     "--since lists only the newer ones, and still counts the month from its start");
   assert.match(printInvites([]), /no household has joined with an invitation/);
+});
+
+test("I9c · the 30-day check (Wright's G5): the first letter and the first home, the earlier of them, and what it makes the inviter's 10", async () => {
+  const { realOf, planInvites, printInvites } = await import("../tools/invites.mjs");
+  const at = "2026-10-01T12:00:00.000Z";
+  const now = new Date("2026-10-20T00:00:00.000Z");
+  assert.deepEqual(realOf({ at, letter: "2026-10-05T00:00:00.000Z", home: "2026-10-03T00:00:00.000Z", now }),
+    { first_letter: "2026-10-05T00:00:00.000Z", first_home: "2026-10-03T00:00:00.000Z", by: "2026-10-31T12:00:00.000Z", status: "real", at: "2026-10-03T00:00:00.000Z" },
+    "the earlier of the two decides");
+  assert.equal(realOf({ at, letter: "2026-10-31T12:00:00.000Z", now }).status, "real", "the 30th day's own instant is within");
+  assert.equal(realOf({ at, letter: "2026-10-31T12:00:01.000Z", now }).status, "late");
+  assert.equal(realOf({ at, now }).status, "waiting", "neither yet, the 30 days still running");
+  assert.equal(realOf({ at, now: new Date("2026-11-01T00:00:00.000Z") }).status, "lapsed");
+  const rows = [{ slug: "new-hearth", name: "New Hearth", residents: ["kindling"], invited_by: { by: "lantern-row", named: "wick", at } }];
+  const plan = planInvites(rows, { letters: new Map([["new-hearth", "2026-10-04T00:00:00.000Z"]]), homes: new Map() }, { now });
+  assert.equal(plan[0].real.status, "real");
+  assert.match(printInvites(plan), /first letter 2026-10-04T00:00:00\.000Z · first home none · REAL: the inviter's 10 is owed/);
 });
 
 test("I9b · the read, run as Wright runs it, on the real store: it lists the household I8a invited and nothing it didn't", () => {
@@ -339,4 +356,28 @@ test("I9b · the read, run as Wright runs it, on the real store: it lists the ho
   const plan = JSON.parse(r.stdout);
   assert.deepEqual(plan.map((p) => [p.household, p.invited_by, p.named, p.first_resident]), [["new-hearth", "lantern-row", "wick", "kindling"]]);
   assert.match(plan[0].ashore ?? "", /^\d{4}-\d\d-\d\dT/, "and when it came ashore, by the store's own record");
+  assert.equal(plan[0].real.status, "waiting", "no letter and no home yet");
+});
+
+test("I9d · the read's 30-day facts come from the store: a delivered letter by any resident, and a parcel locked in the house's name", async () => {
+  const at = (await rowOf("new-hearth")).invited_by.at;
+  const soon = new Date(Date.parse(at) + 3 * 864e5).toISOString();
+  const later = new Date(Date.parse(at) + 5 * 864e5).toISOString();
+  const c = await IX.store.connect("world2_owner");
+  try {
+    await c.query("INSERT INTO town_letters (id, from_h, to_h, date, box, json, delivered_at, digest) VALUES ($1, $2, $3, $4, 'outbox', '{}', $5, 'd')",
+      ["letter-invite-1", "kindling", "wick", later.slice(0, 10), later]);
+    await c.query("INSERT INTO town_letters (id, from_h, to_h, date, box, json, delivered_at, digest) VALUES ($1, $2, $3, $4, 'outbox', '{}', NULL, 'd')",
+      ["letter-invite-2", "kindling", "wick", soon.slice(0, 10)]);
+    await c.query("INSERT INTO windows (id, opens_at, closes_at) VALUES (9901, $1, $2) ON CONFLICT DO NOTHING", [at, soon]);
+    await c.query(`INSERT INTO marks (id, slug, kind, owner, household, geometry, bbox, locked_window)
+      VALUES (gen_random_uuid(), 'kindling/hearth-ground', 'parcel', 'kindling', 'hh:new-hearth', '{}', box(point(9000,9000), point(9010,9010)), 9901)`);
+  } finally { await c.end(); }
+  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env } });
+  assert.equal(r.status, 0, r.stderr);
+  const [p] = JSON.parse(r.stdout);
+  assert.equal(p.real.first_letter, later, "the delivered letter counts; the undelivered one does not");
+  assert.equal(p.real.first_home, soon, "the parcel's home is the close of the window that locked it");
+  assert.equal(p.real.at, soon, "the earlier of the two");
+  assert.equal(p.real.status, "real");
 });
