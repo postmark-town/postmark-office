@@ -166,10 +166,16 @@ test("✦0 · THE STORE COULD NOT BE READ · says so and asks for another try, n
 });
 
 test("✦0 · THE CANDLE IS DARK (no open window) · nothing is put forward until it is lit", async () => {
-  const out = await unfiled(async () => { throw new Error("no open candle — the candle is dark; the stake cannot put this mark forward"); });
+  const out = await unfiled(async () => { throw Object.assign(new Error("no open candle"), { candleDark: true }); });
   assert.match(out.defect, /the candle is dark/);
   assert.match(out.hint, /nothing is put forward until the next one is lit/);
   assert.doesNotMatch(`${out.defect} ${out.hint}`, NOT_A_DRAFT);
+});
+
+test("THE MARK THE DOOR READS · openWindowFor marks a dark candle on its error, so no door reads the error's text", async () => {
+  const { openWindowFor } = await import("../src/world2-claims.mjs");
+  const client = { query: async () => ({ rows: [] }) };
+  await assert.rejects(openWindowFor(client, "no open candle — the candle is dark"), (e) => e.candleDark === true);
 });
 
 test("✦0 · THE CANDLE IS DARK (the docket is off: window null) · the same sentence", async () => {

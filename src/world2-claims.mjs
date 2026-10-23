@@ -442,12 +442,16 @@ export async function declaredKeys(client, household) {
  * behind a filing door, so the read below always answers with a window that
  * stays open until this transaction commits. Held to COMMIT, and taken BEFORE
  * any write on the claim, so the clearing never waits on a door that waits on it.
+ *
+ * A dark candle is MARKED on the error (`candleDark`), so a door can tell it
+ * from a store it could not reach without reading the error's text (#756
+ * review; error-text-census.test.mjs).
  */
 export async function openWindowFor(client, dark) {
   await client.query(DOOR_SHARES_THE_CANDLE);
   const { rows: [win] } = await client.query(
     "SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
-  if (!win) throw new Error(dark);
+  if (!win) throw Object.assign(new Error(dark), { candleDark: true });
   return win;
 }
 
