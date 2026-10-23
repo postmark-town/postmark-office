@@ -193,7 +193,8 @@ export function setDownWords({ id, maker, stake }) {
  * name was made in hand refuses then, never guesses "no" (a ground mark under
  * a made name would hide the held thing, canon winning the overlay).
  */
-export async function madeNamesRead({ ids, edgeOn, query, reasonOf = (e) => String(e?.message ?? e) }) {
+// `reasonOf` is the caller's (world.mjs hands in fault-words § plainReason): this file reads no error text
+export async function madeNamesRead({ ids, edgeOn, query, reasonOf = () => "the record did not answer" }) {
   const want = [...new Set([...(ids ?? [])].filter((x) => x != null).map(String))];
   if (!want.length || !edgeOn()) return { made: new Map() };
   try {

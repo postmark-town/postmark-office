@@ -378,7 +378,8 @@ test("#759 review A · the made names fail closed: an unread record is a refusal
     return [{ id: 7, action: "make", object: "a/b", payload: { thing: "a/b", made: { id: "a/b", kind: "thing" } } }]; } });
   assert.deepEqual([...r.made.keys()], ["a/b"]);
   assert.deepEqual(asked, [MADE_NAMES_SQL, madeNamesParams(["a/b"])]);
-  assert.match((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => { throw new Error("connection refused"); } })).unread, /connection refused/);
+  assert.match((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => { throw new Error("connection refused"); } })).unread, /the record did not answer/);
+  assert.equal((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => { throw new Error("x"); }, reasonOf: () => "said by the caller" })).unread, "said by the caller");
   assert.match((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => null })).unread, /not pointed at the record/);
   const u = madeNamesUnread("the record could not be reached");
   assert.equal(u.code, 503);
