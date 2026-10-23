@@ -1,8 +1,10 @@
 // parcel-room.mjs — PARCELS FROM 11-01: THE FACTS THE WORLD'S FOLD ASKS FOR (POS-762).
 //
-// Darko, 2026-10-22 (settled 20:35–20:42 EDT): a household settled by
-// 2026-11-01 04:00Z keeps a cap of three parcels, one per resident, for good.
-// A household settled after that holds one, and each further parcel costs
+// Darko, 2026-10-22 (ruled 20:35–20:42 EDT, "settled by Halloween's end"): a
+// household whose declaration is dated on or before 2026-10-31 (town time; the
+// cutoff is 2026-11-01 04:00Z) keeps a cap of three parcels, one per resident,
+// for good. The fact is the declaration day, never the day it came ashore. A
+// household declared after that holds one, and each further parcel costs
 // 50 stamps × the parcels it already holds, paid to the town and never
 // returned, up to the same cap of three.
 //
@@ -11,15 +13,16 @@
 // household's room from two facts it cannot see itself, handed in as
 // `houseFacts`, per household key:
 //
-//   since    the day the household settled, as the registry wrote it at its
-//            mint (households.since, a US-Eastern date string that nothing
+//   since    the household's declaration day, as the registry wrote it at its
+//            mint (households.since, a town-time date string that nothing
 //            rewrites; 019 and ceremony.mjs § joinHousehold)
-//   bought   how many parcels it bought: its `→ BURN · n · for: parcel:<nth>/
-//            <household>` lines on the town's ledger, read by the town's own
-//            classifyEntry (postmark tools/stamp-mint.mjs)
+//   bought   how many parcels it bought: the highest <nth> of its `→ BURN · n ·
+//            for: parcel:<nth>/<household>` lines on the town's ledger, less
+//            one, read by the town's own classifyEntry (postmark
+//            tools/stamp-mint.mjs)
 //
 // Every declared house gets its facts; the fold keeps three for any house
-// settled by 10-31. A solo handle has no house row and gets none, so it keeps
+// declared by 10-31. A solo handle has no house row and gets none, so it keeps
 // three as well (every solo handle predates November: since 11-01 every join
 // mints a house).
 //
@@ -69,15 +72,22 @@ export function parcelBurnsOf(canonicals, classifyEntry) {
 
 /**
  * `{ "hh:<slug>": { since, bought } }` for every declared house that states a
- * settling day. PURE. `registry` is `{ households: { slug: rec } }`
+ * declaration day. PURE. `registry` is `{ households: { slug: rec } }`
  * (registry-rows.mjs § registryFromRows); `burns` is parcelBurnsOf's answer.
+ *
+ * `bought` IS THE HIGHEST PARCEL BOUGHT, LESS ONE, never a count of lines
+ * (Wright's review): a purchase names the parcel it makes room for (2 or 3), so
+ * a house that bought its 3rd has bought two, and a duplicate or stray line can
+ * never raise the room past what the highest purchase says.
  */
+export const PARCEL_NTHS = Object.freeze([2, 3]);
 export function houseFactsOf({ registry, burns = [] }) {
   const canon = houseKeyCanon(registry);
   const bought = new Map();
   for (const b of burns) {
+    if (!PARCEL_NTHS.includes(b.nth)) continue;
     const k = canon(b.household);
-    bought.set(k, (bought.get(k) ?? 0) + 1);
+    bought.set(k, Math.max(bought.get(k) ?? 0, b.nth - 1));
   }
   const facts = {};
   for (const [slug, rec] of Object.entries(registry?.households ?? {})) {

@@ -372,7 +372,7 @@ export async function foldHouseholds(p, { lawSha, registerRows = null, townRepo 
     return {
       households: await householdsAt(rows, townRepo),
       houseFacts: await houseFactsAt(rows, townRepo),
-      source: "the register at the seal, through the town's resolver at the ledger position (parcel room: each house's settling day there, and its parcel purchases on the ledger)",
+      source: "the register at the seal, through the town's resolver at the ledger position (parcel room: each house's declaration day there, and its parcel purchases on the ledger)",
     };
   }
   const households = await rosterAt(p, lawSha);

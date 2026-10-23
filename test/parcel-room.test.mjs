@@ -15,7 +15,7 @@
 //      (and says so) when it has no town;
 //   5. the door's note speaks only for a new parcel past the room, in the
 //      engine's own sentence, and never without the engine's law;
-//   6. end to end, at a pinned world that carries the law: a house settled after
+//   6. end to end, at a pinned world that carries the law: a house declared after
 //      10-31 holds one, the clearing's limit pass opposes the second, and a
 //      purchase makes room.
 import { test } from "node:test";
@@ -60,13 +60,22 @@ test("2 · the purchases are the classifier's parcel-burn lines; no classifier, 
   assert.deepEqual(parcelBurnsOf(lines, () => ({ kind: "unknown" })), [], "a town too old to know the kind: none");
 });
 
-test("3 · the facts: each declared house's settling day and its purchases, counted across its spellings", () => {
+test("3 · the facts: each declared house's declaration day and its purchases, across its spellings", () => {
   const burns = parcelBurnsOf([BUY("ash", 2, "gh:101"), BUY("birch", 3, "hh:rowan-house")], classifyEntry);
   assert.deepEqual(houseFactsOf({ registry, burns }), {
     "hh:the-rowan": { since: "2026-11-02", bought: 2 },
     "hh:the-oak": { since: "2026-10-31", bought: 0 },
-  }, "a house with no settling day states no facts, so the fold keeps it at three");
+  }, "a house with no declaration day states no facts, so the fold keeps it at three");
   assert.deepEqual(houseFactsOf({ registry: null }), {});
+});
+
+test("3 · bought is the highest parcel bought less one, never a count of lines: a duplicate or stray line adds no room", () => {
+  const bought = (lines) => houseFactsOf({ registry, burns: parcelBurnsOf(lines, classifyEntry) })["hh:the-rowan"].bought;
+  assert.equal(bought([BUY("ash", 2, "hh:the-rowan"), BUY("birch", 2, "gh:101")]), 1, "two lines for the 2nd are one purchase");
+  assert.equal(bought([BUY("ash", 3, "hh:the-rowan")]), 2, "a purchase of the 3rd says two were bought");
+  assert.equal(bought([BUY("ash", 3, "hh:the-rowan"), BUY("ash", 2, "hh:the-rowan"), BUY("ash", 3, "gh:101")]), 2, "never past the highest");
+  assert.equal(houseFactsOf({ registry, burns: [{ household: "hh:the-rowan", nth: 4 }, { household: "hh:the-rowan", nth: "2" }] })["hh:the-rowan"].bought, 0,
+    "an nth the grammar never writes buys nothing");
 });
 
 /** The register rows a snapshot seals, as world-snapshot.mjs § registerOfVersions reads them. */
@@ -116,7 +125,7 @@ test("4 · foldHouseholds with the register and the town hands the facts on besi
   assert.ok(r.households && typeof r.households === "object" && Object.keys(r.households).length > 0, "the households, as before (the town's own residents)");
   assert.deepEqual(r.houseFacts, await houseFactsAt(registerRows(), TOWN_CLONE), "the facts, from the same two sources");
   assert.equal(r.houseFacts["hh:the-rowan"].since, "2026-11-02");
-  assert.match(r.source, /parcel room: each house's settling day there, and its parcel purchases on the ledger/);
+  assert.match(r.source, /parcel room: each house's declaration day there, and its parcel purchases on the ledger/);
 });
 
 // The engine's two exports, standing in for the world's law (its own test holds the law: postmark-world tools/parcel-room.test.mjs).
@@ -132,7 +141,7 @@ test("5 · the door's note: only a new parcel past the room, in the engine's own
     note: "parcel claim capped — this household holds 1 and has room for 1. Your claim is written, and the next crossing opposes it unless the household has room by then." });
   assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 0, fact, engine }), null, "the first parcel fits");
   assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 1, fact: { ...fact, bought: 1 }, engine }), null, "a bought room fits the second");
-  assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 2, fact: { since: "2026-10-31" }, engine }), null, "settled by 10-31: three");
+  assert.equal(parcelRoomNoteOf({ kind: "parcel", held: 2, fact: { since: "2026-10-31" }, engine }), null, "declared by 10-31: three");
   assert.ok(parcelRoomNoteOf({ kind: "parcel", held: 3, fact: { since: "2026-10-31" }, engine }), "and the fourth is still past the cap");
   assert.equal(parcelRoomNoteOf({ kind: "parcel", amending: true, held: 1, fact, engine }), null, "an amend moves a parcel, it adds none");
   assert.equal(parcelRoomNoteOf({ kind: "sited", held: 1, fact, engine }), null, "only a parcel");
@@ -148,7 +157,7 @@ try {
 const NO_LAW = typeof worldFold?.parcelRoomOf === "function" ? false
   : "the pinned world clone predates postmark-world#300 (the parcel room); this runs once the pin moves past it";
 
-test("6 · end to end: a house settled after 10-31 holds one, the limit pass opposes the second, and a purchase makes room", { skip: NO_LAW }, async () => {
+test("6 · end to end: a house declared after 10-31 holds one, the limit pass opposes the second, and a purchase makes room", { skip: NO_LAW }, async () => {
   const { limitOppositions } = await import("../src/world-settlement.mjs");
   const P = (id, by, x) => ({ id, by, household: by, kind: "parcel", tier: "market", at: { x, y: 0 }, extent: { w: 25, h: 25 }, date: `2026-11-0${x / 500 + 2}T12:00:00Z`, body: "b" });
   const marks = () => [P("ash/one", "ash", 0), P("birch/two", "birch", 500)];
