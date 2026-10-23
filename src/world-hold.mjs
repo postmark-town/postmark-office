@@ -1368,6 +1368,11 @@ async function ownerNow(thing) {
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+/** The mark a thing made in hand was made as (POS-766), or null: not one, or the hold record could not be read. */
+async function madeThing(id) {
+  try { return (await (await import("./world-kinds.mjs")).holdRecordNow())?.made?.get(String(id)) ?? null; } catch { return null; }
+}
+
 export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
 async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
@@ -1477,6 +1482,19 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // kind (world-kinds.mjs). A `label:` is #499's door, below.
     {
       const { kindRouteOf, callKinds } = await import("./world-kinds.mjs");
+      // A THING MADE IN HAND (POS-766): eating it is the kind door's consume { thing }, and
+      // setting it down is part 2 of its change (POS-766/e), refused by name until it lands
+      const made = args.thing != null ? await madeThing(String(args.thing)) : null;
+      if (made && String(args.act ?? "") === "consume")
+        return await callKinds("consume", args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
+      if (made && args.act == null && args.to == null && args.from == null && verb !== "take") {
+        const { guardedAttachments: rowsNow } = await import("./world2-guards.mjs");
+        if (liveHolder(await rowsNow(), String(args.thing)) === String(actor)) {
+          const { setDownNotYet } = await import("./named-making.mjs");
+          const r = setDownNotYet(String(args.thing));
+          throw bounce(r.code, r.defect, r.hint);
+        }
+      }
       const route = kindRouteOf(args, verb);
       if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
     }
