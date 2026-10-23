@@ -56,6 +56,7 @@ import { isSited, PREDICATE_KINDS } from "./world-grants.mjs"; // the kind rung 
 import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
 import { blessed, draftRefForKey, refExists } from "./world-branches.mjs";
 import { nextSettlementAttemptAt } from "./settlements.mjs";
+import { plainReason } from "./fault-words.mjs";
 
 // ── flags ────────────────────────────────────────────────────────────────────
 // Read from the environment on every call rather than latched at import: a test
@@ -502,14 +503,21 @@ export async function servedRead(name, { fold, store, key = null, repo, detail =
 }
 
 // ── the operator's surface ───────────────────────────────────────────────────
+//
+// KEYLESS, SO PLAIN (POS-663). The ops graph's As-Of bar reads this from the
+// browser, which holds no operator key, so the door stays open, and what it
+// says is what anyone may read: shas, counts, hashes and the office's own
+// words. No path on the box (the clone, the shadow log) and no raw git error;
+// a main that cannot be read answers the plain reason, and the error itself
+// goes to the journal (fault-words.mjs § plainReason, the POS-657 rule).
 
 export function worldStoreHealth({ repo = null } = {}) {
   const mode = storeMode();
   const snap = storeSnapshot();
   const db = snap.error
-    ? { path: snap.dbPath, present: false, error: snap.error }
+    ? { present: false, error: snap.error }
     : {
-      path: snap.dbPath, present: true,
+      present: true,
       ...(snap.source ? { source: snap.source } : {}),
       as_of_world: snap.meta.as_of_world ?? null,
       as_of_office: snap.meta.as_of_office || null,
@@ -535,8 +543,8 @@ export function worldStoreHealth({ repo = null } = {}) {
         fresh: !snap.error && snap.asOfWorld === b.sha,
         ...(b.disclosed ? { disclosed: b.disclosed } : {}),
       };
-      main = { repo, sha: b.main_sha, ref: b.main_ref, ahead_of_blessed: b.candidate_ahead != null };
-    } catch (e) { main = { repo, error: String(e?.message ?? e) }; }
+      main = { sha: b.main_sha, ref: b.main_ref, ahead_of_blessed: b.candidate_ahead != null };
+    } catch (e) { main = { error: plainReason(e, "files", "the world clone's main, for GET /world/store") }; }
   }
 
   return {
@@ -546,7 +554,7 @@ export function worldStoreHealth({ repo = null } = {}) {
     eligibility: "blessed reads only — a resolved household folds its draft branch and is never served from the store (ruling 9); the store must also be hydrated at the exact sha the newest settlement tag blesses (main, when the clone has no settlement tag)",
     db, blessed: canon, main,
     counters: COUNT,
-    shadow_log: { path: shadowLogPath(), lines_written: LOG_STATE.lines, suppressed: LOG_STATE.suppressed, distinct_diffs: LOGGED.size },
+    shadow_log: { lines_written: LOG_STATE.lines, suppressed: LOG_STATE.suppressed, distinct_diffs: LOGGED.size },
     recent_diffs: RECENT.slice(-RECENT_MAX),
   };
 }

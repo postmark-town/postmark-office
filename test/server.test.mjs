@@ -611,6 +611,11 @@ test("GET /world/store is a keyless read that reports mode off when nothing is f
   assert.match(h.eligibility, /blessed reads only/);   // the bless overrides the tick (postmark#2934)
   // no world clone here, so freshness cannot be established — and says so
   assert.ok(h.main.error || h.blessed?.fresh === false, `expected an honest main answer, got ${JSON.stringify(h.main)}`);
+  // keyless, so plain (POS-663): anyone may read this, so it names no path on
+  // the box and carries no raw error, only shas, counts and the office's words
+  const body = JSON.stringify(h);
+  assert.equal(/"(repo|path)":/.test(body), false, `a path key on the keyless panel: ${body.slice(0, 300)}`);
+  assert.equal(/\/srv\/|fatal:|not a git repository|ENOENT/i.test(body), false, `a box path or a raw error on the keyless panel: ${body.slice(0, 300)}`);
   // flag-off equivalence at the HTTP layer: no extra header appears on ANY
   // response, so a flags-off office is byte-identical on the wire too
   assert.equal(res.headers.get("x-postmark-world-store-as-of"), null);

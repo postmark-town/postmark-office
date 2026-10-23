@@ -99,7 +99,7 @@ const ALLOWED = {
   "world-movement.mjs": [1, `${OPERATOR} (storedDepartures' absent, for the crossing's save; the resident's disclosure in world.mjs plains it, POS-657)`],
   "world-pool.mjs": [2, `${OWN}: plumbing`],
   "world-refresher.mjs": [1, `${OWN}: plumbing`],
-  "world-serve.mjs": [2, `${OPERATOR} (the serving flag's instrument panel)`],
+  "world-serve.mjs": [1, `${OWN}: plumbing (the eligibility gate's detail, which only a log line reads; the instrument panel GET /world/store is keyless, so since POS-663 its unread main says plainReason's words and the raw error goes to the log)`],
   "world-stance.mjs": [3, `${OWN}: PenUnreachableError's ruled sentence (x3: the ground's word, the town's, and the owner's word on a thing, POS-688)`],
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
