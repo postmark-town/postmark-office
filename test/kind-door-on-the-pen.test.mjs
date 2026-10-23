@@ -152,6 +152,12 @@ test("POS-766 · leave-mark { slug, body, kind, to: yourself } through the flat 
     const m = (await worldMarkById(id)).mark;
     assert.equal(m?.held_by, ACTOR);
     assert.equal(m?.at, undefined);
+    // investigate reads it as the resident would: published by its holder, never "never-was"
+    const { worldInvestigate } = await import("../src/world.mjs");
+    const look = await worldInvestigate({ mark: id }, KEY);
+    assert.equal(look.receipt?.status, "published", JSON.stringify(look).slice(0, 400));
+    assert.equal(look.receipt?.made_in_hand, true);
+    assert.match(look.receipt?.says ?? "", /published by its holder .* held by sbx-cy/);
     // its name is taken for good: a second make, and a mark on the ground by that slug, are refused
     await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, { slug: "my-comet", body: "Again.", to: ACTOR }, KEY), (e) => e.code === 409);
     await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, { slug: "my-comet", body: "On the ground.", kind: "sited", at: { x: 1, y: 1 }, extent: { w: 1, h: 1 } }, KEY),

@@ -3141,11 +3141,26 @@ async function markReceipt(id, key, w, { terrain = false } = {}) {
     const raw = w?._raw ?? null;
     const canonRow = (raw?.worldState?.marks ?? []).find((m) => m.id === id) ?? null;
     const read_at = raw?.ref && raw?.sha ? { ref: raw.ref, sha: raw.sha } : null;
-    const receipt = await readMarkReceipt(id, {
+    let receipt = await readMarkReceipt(id, {
       repo: WORLD_CLONE, key, canon: canonRow,
       publishedSha: read_at?.sha ?? null, terrain,
     });
     if (!receipt) return null;
+    // A THING MADE IN HAND (POS-766) is on no docket and in no settlement, and it is
+    // published all the same: its holder confers its state (LOGOS classes.md § holders).
+    // The record that saw it is the hold record, so the receipt says so: never never-was, and
+    // never draft (its maker's own reading holds it, and no docket claim can share its name, G2).
+    if (!canonRow) {
+      const made = (await madeMarksNow())?.get(id) ?? null;
+      if (made) {
+        const holder = (await heldPlaced(w ?? { marks: [] }).catch(() => null))?.marks?.find((m) => m.id === id)?.held_by ?? null;
+        receipt = { ...receipt, status: "published", made_in_hand: true, ...(holder ? { held_by: holder } : {}),
+          sources: [...(receipt.sources ?? []), "hold record"],
+          says: holder
+            ? `made in hand by ${made.by}: published by its holder from the act that made it, live and free. It is held by ${holder}, so no settlement prints it while it is held`
+            : `made in hand by ${made.by}, and eaten: used up and gone. Its name stays taken` };
+      }
+    }
     let disclosed = [];
     try {
       const { storeSnapshot } = await import("./world-serve.mjs");
