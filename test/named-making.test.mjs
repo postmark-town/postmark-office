@@ -309,3 +309,27 @@ test("the can-matrix teaches only what works: a thing made in hand is never offe
   assert.equal(verbs({ made: new Map([[plain, made.get(plain)]]), attachments: attachments.slice(1), marks: marks.slice(1) }).includes("consume"), false, "a made pebble is not eaten");
   assert.equal(verbs({ made: null }).includes("drop"), true, "without the made record, a held thing offers its set-down as before");
 });
+
+test("#759 review C · a holder's room: making a named thing past its capacity is refused whole, nothing made", async () => {
+  const o = office();
+  const bag = `${LB}/small-bag`;
+  await make(o, LB, LB, "small-bag", "A bag with room for two.", { holder: { holder: true, capacity: 2 } });
+  await make(o, LB, bag, "slip-1", "Slip one.");
+  await make(o, LB, bag, "slip-2", "Slip two.");
+  const before = o.acts.length;
+  await assert.rejects(make(o, LB, bag, "slip-3", "Slip three."), (e) => e.code === 409 && /has room for 0, not 1/.test(e.defect));
+  assert.equal(o.acts.length, before, "nothing made");
+  assert.equal(o.holdRows().filter((x) => x.entity === bag).length, 2);
+});
+
+test("#759 review A · the made names fail closed: an unread hold record is a refusal, never 'no such name'; where no hold record is kept, nothing was made", async () => {
+  const { madeNamesRead, madeNamesUnread } = await import("../src/named-making.mjs");
+  const map = new Map([["a/b", { id: "a/b" }]]);
+  assert.deepEqual(await madeNamesRead({ edgeOn: () => false, readRecord: async () => { throw new Error("never asked"); } }), { made: new Map() });
+  assert.equal((await madeNamesRead({ edgeOn: () => true, readRecord: async () => ({ made: map }) })).made, map);
+  assert.match((await madeNamesRead({ edgeOn: () => true, readRecord: async () => { throw new Error("connection refused"); } })).unread, /connection refused/);
+  assert.match((await madeNamesRead({ edgeOn: () => true, readRecord: async () => ({ fold: null }) })).unread, /without its made record/);
+  const u = madeNamesUnread("the record could not be reached");
+  assert.equal(u.code, 503);
+  assert.match(u.hint, /nothing was written/);
+});

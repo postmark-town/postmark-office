@@ -82,7 +82,7 @@ export function namedFormRefusal(payload = {}, by = "<you>") {
   }
   if (own.length && Number(payload.stamps ?? 0) > 0)
     return { code: 422, defect: "a thing made into hands or a holder costs nothing, so there is nothing to stake",
-      hint: `it is published by its holder at once, free. Leave stamps off. Setting it down on the commons later costs the usual 1 stamp. Nothing was made.` };
+      hint: `it is published by its holder at once, free. Leave stamps off. Setting a made thing down comes next: the usual 1 stamp on the commons, free on your own ground. Nothing was made.` };
   return null;
 }
 
@@ -131,7 +131,29 @@ export const eatenWords = ({ actor, id }) => `${actor} consumed ${id}; it is use
 /** Part 2's refusal (POS-766/e): a named thing made in hand is not set down yet. */
 export function setDownNotYet(id) {
   return { code: 501, defect: `${id} was made in hand, and setting a thing made in hand down is not built yet`,
-    hint: `give it to a resident or into a holder (give { thing: "${id}", to }), or eat it if it is a consumable (consume { thing: "${id}" }). Setting it down (the usual 1 stamp on the commons, free on your own ground) lands with its own change. Nothing was changed.` };
+    hint: `give it to a resident or into a holder (give { thing: "${id}", to }), or eat it if it is a consumable (consume { thing: "${id}" }). Setting a made thing down comes next: it is not built yet (the usual 1 stamp on the commons, free on your own ground). Nothing was changed.` };
+}
+
+/**
+ * THE MADE NAMES, OR WHY THEY COULD NOT BE READ (#759 review A: fail closed).
+ * `{ made }` is the made record; where the hold lane is not on the record
+ * (`edgeOn` false) nothing can have been made, so it is empty. `{ unread }`
+ * when the record is kept and could not be read: a door that asks whether a
+ * name was made in hand refuses then, never guesses "no" (a ground mark under
+ * a made name would hide the held thing, canon winning the overlay).
+ */
+export async function madeNamesRead({ edgeOn, readRecord, reasonOf = (e) => String(e?.message ?? e) }) {
+  if (!edgeOn()) return { made: new Map() };
+  try {
+    const r = await readRecord();
+    return r?.made instanceof Map ? { made: r.made } : { unread: "the hold record answered without its made record" };
+  } catch (e) { return { unread: reasonOf(e) }; }
+}
+
+/** The refusal when the made names could not be read: nothing written, try again. */
+export function madeNamesUnread(unread) {
+  return { code: 503, defect: "the office could not read the hold record, so it cannot tell whether that name was made in hand",
+    hint: `nothing was written; try again shortly (${unread})` };
 }
 
 /** A slug once made in hand stays taken (G2): the words for a leave or a make that reuses one. */
