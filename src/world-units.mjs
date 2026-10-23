@@ -194,6 +194,8 @@ export async function liveUnitDeps() {
       return pen.officeWrite((c) => read(c, { mark, by }), { household: hh });
     },
     onActs: () => pen.laneFlipped("hold"),
+    // the things made straight into hands or a holder (POS-766): `Map(id → its mark)`, every make ever, from the kept record
+    made: async () => (await (await import("./world-kinds.mjs")).holdRecordNow())?.made ?? new Map(),
   };
 }
 

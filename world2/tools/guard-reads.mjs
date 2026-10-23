@@ -799,7 +799,11 @@ export async function publishedMarkFrom(client) {
 // covenant is exactly the claim under test. `DISCLOSURES.holdings_source` says
 // this on every answer.
 
-export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", "give", "drop", "take"]);
+// `make` and `consume` (POS-766): a named thing made straight into hands or a holder, and one
+// eaten from hand. Both are hold-lane faces of the one edge: a make is held from its first act,
+// a consume ends the holding (policy detach, with no place: nothing is set down).
+export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume"]);
+export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", ...HOLD_FACES]);
 
 /**
  * The ORDER clause every holder read must carry.
@@ -872,7 +876,7 @@ export function attachmentRowOf(act) {
 
   // ERA 2 — the live pen. world-hold.mjs `mirrorHoldingAct`'s payload, read with
   // `declareHolding`'s own expression for the entity (§ THE TWO ERAS above).
-  if (["give", "drop", "take"].includes(act.action)) {
+  if (HOLD_FACES.includes(act.action)) {
     if (!p.thing) {
       return { refused: true, reason: `act ${act.id} is a ${act.action} naming no thing` };
     }
