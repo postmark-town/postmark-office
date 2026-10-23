@@ -67,6 +67,9 @@ const { esc, comma } = V;
 // The site's own sentinel probes the office door on a timer; its lines are the
 // town watching itself, never a household reading.
 export const SENTINEL_UA = "postmark-site-sentinel";
+/** The public dashboard's count of acts, by actor, action and day (exported so a privacy test reads exactly what it reads, POS-757). */
+export const ACTS_BY_DAY_SQL = `SELECT actor, action, to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*)::int AS n
+        FROM acts GROUP BY 1, 2, 3`;
 // Declared crawlers — the same list traffic-report.mjs classes as "bot" (that
 // file is a top-level-await script and cannot be imported, so the list is
 // copied, and this comment is the pointer back to it).
@@ -562,8 +565,7 @@ async function main() {
     actsSource = `file ${basename(a.acts)}`;
   } else {
     try {
-      actRows = await acts.actsQuery(`SELECT actor, action, to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, count(*)::int AS n
-        FROM acts GROUP BY 1, 2, 3`, [], process.env);
+      actRows = await acts.actsQuery(ACTS_BY_DAY_SQL, [], process.env);
       actsSource = actRows === null ? "not read (the office is not pointed at the store here)" : "the store";
     } catch (e) { actRows = null; actsSource = `not read (${String(e.message).slice(0, 60)})`; }
   }
