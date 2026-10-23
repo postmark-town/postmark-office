@@ -15,9 +15,8 @@
 // (test/helpers/embedded-store.mjs). The judge runs as the door does, as
 // `office_api` under the staker's house; the PARITY case runs the real
 // `clearing-job.mjs` as `clearing_job` over the same rows and holds its 5.5
-// refusals equal to the export's commons answers. The clearing keeps its own
-// copy of the composition until train/2026-w45 (POS-701), and this is what holds
-// the two equal until then.
+// refusals equal to the export's commons answers. The clearing reads the same
+// export since POS-701; this holds the door's reading and the gate's equal.
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
