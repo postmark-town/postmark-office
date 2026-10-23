@@ -296,3 +296,16 @@ test("the words: the set-down waits for part 2, and a taken name says it is take
   assert.deepEqual(madeRecordOf({ by: LB, slug: "bag", kind: "thing", body: " A bag. ", holderFields: { holder: true, capacity: 10 } }),
     { id: `${LB}/bag`, by: LB, slug: "bag", kind: "thing", body: "A bag.", holder: true, capacity: 10 });
 });
+
+test("the can-matrix teaches only what works: a thing made in hand is never offered a set-down (part 2), and a consumable one offers consume", async () => {
+  const { usablePairs } = await import("../src/usable-verbs.mjs");
+  const id = `${LB}/sweet`, plain = `${LB}/pebble`;
+  const made = new Map([[id, { id, by: LB, kind: "pocket-comet", body: "a sweet" }], [plain, { id: plain, by: LB, kind: "thing", body: "a pebble" }]]);
+  const attachments = [{ entity: LB, target: id, policy: "cascade", born_at: "2026-10-23T05:00:00Z" }, { entity: LB, target: plain, policy: "cascade", born_at: "2026-10-23T05:00:01Z" }];
+  const marks = [...made.values()].map((m) => ({ ...m, [HELD_BY]: LB }));
+  const verbs = (over = {}) => usablePairs({ actor: LB, here: { x: 0, y: 0 }, marks, fold: foldUnits([]), attachments, view: VIEW, made, ...over }).map((p) => p.verb);
+  assert.equal(verbs().includes("drop"), false, "nothing in hand can be set down yet");
+  assert.equal(verbs().includes("consume"), true, "the made sweet is eaten by consume");
+  assert.equal(verbs({ made: new Map([[plain, made.get(plain)]]), attachments: attachments.slice(1), marks: marks.slice(1) }).includes("consume"), false, "a made pebble is not eaten");
+  assert.equal(verbs({ made: null }).includes("drop"), true, "without the made record, a held thing offers its set-down as before");
+});

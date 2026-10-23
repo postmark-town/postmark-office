@@ -66,7 +66,7 @@ export const TAKEN_IN_CAN = Object.freeze({ value: "show", ruled: "WLD-7/b, 2026
  *   consume  a consumable kind in your hands
  *   refill   a holder whose class affords it, its maker you, within reach, with room
  */
-export function usablePairs({ actor, here, marks = [], residents = [], fold, attachments = [], view, householdOf = null, pointWithinMark = null, places = null, takenInCan = TAKEN_IN_CAN.value }) {
+export function usablePairs({ actor, here, marks = [], residents = [], fold, attachments = [], view, householdOf = null, pointWithinMark = null, places = null, takenInCan = TAKEN_IN_CAN.value, made = null }) {
   const me = String(actor);
   // THE HOLD ROWS, READ ONCE: the last row per thing decides who holds it (liveHolder's rule)
   const last = new Map();
@@ -105,9 +105,12 @@ export function usablePairs({ actor, here, marks = [], residents = [], fold, att
     return Number.isFinite(Number(r.x)) ? withinArmsLength(here, { x: Number(r.x), y: Number(r.y) }).stands
       : Number.isFinite(Number(r.distance_m)) && Number(r.distance_m) <= EARSHOT_M;
   };
-  if (carriedThings.some(movable)) add("drop", null);
-  // consume: a consumable kind in your own hands (10:30's roster)
-  if (freeKinds(me).some((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"))) add("consume", null);
+  // a thing made in hand (POS-766, `made`: the hold record's made marks) is not set down until part 2 lands, and is eaten by its own consume
+  const madeIn = (t) => made?.has?.(String(t)) === true;
+  if (carriedThings.some((t) => movable(t) && !madeIn(t))) add("drop", null);
+  // consume: a consumable kind in your own hands (10:30's roster), counted or made in hand
+  const edibleMade = carriedThings.some((t) => madeIn(t) && !taken(String(made.get(String(t))?.kind)) && lineageOf(String(made.get(String(t))?.kind ?? "thing"), view.extendsOf).includes("consumable"));
+  if (edibleMade || freeKinds(me).some((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"))) add("consume", null);
   const seen = new Set();
   for (const m of marks) {
     if (!m?.id || seen.has(m.id)) continue;

@@ -691,14 +691,14 @@ export async function usableAt({ actor, here, markIds = [], residents = [] }) {
   const [{ lawSnapshot }, world, { usablePairs }, { classViewOf }] = await Promise.all([
     import("./law-snapshot.mjs"), import("./world.mjs"), import("./usable-verbs.mjs"), import("./world-units.mjs"),
   ]);
-  const { fold, attachments, places } = await holdRecordNow();
+  const { fold, attachments, places, made } = await holdRecordNow();
   const ids = [...new Set([...markIds.map(String), ...holdingsOf(attachments, String(actor))])];
   const marks = (await Promise.all(ids.map((id) => world.worldMarkById(id).then((r) => r.mark, () => null)))).filter(Boolean);
   let householdOf = null;
   try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
   const pointWithinMark = await world.pointWithinMarkFn().catch(() => null);
   return usablePairs({ actor, here, marks, residents, fold, attachments, places,
-    view: classViewOf(lawSnapshot()), householdOf, pointWithinMark });
+    view: classViewOf(lawSnapshot()), householdOf, pointWithinMark, made });
 }
 
 // ── THE HOLD RECORD, KEPT AND MOVED BY ITS DELTA (review-610 S5, F1) ───────
