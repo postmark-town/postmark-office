@@ -3151,7 +3151,7 @@ async function markReceipt(id, key, w, { terrain = false } = {}) {
     // The record that saw it is the hold record, so the receipt says so: never never-was, and
     // never draft (its maker's own reading holds it, and no docket claim can share its name, G2).
     if (!canonRow) {
-      const made = (await madeMarksNow())?.get(id) ?? null;
+      const made = (await madeMarksNow([id]))?.get(id) ?? null;
       if (made) {
         const holder = (await heldPlaced(w ?? { marks: [] }).catch(() => null))?.marks?.find((m) => m.id === id)?.held_by ?? null;
         receipt = { ...receipt, status: "published", made_in_hand: true, ...(holder ? { held_by: holder } : {}),
@@ -4698,9 +4698,19 @@ function publishedImageOf(worldClone, id) {
   } catch { return null; }
 }
 
-/** The things made in hand (POS-766): `Map(id → mark)`, every make ever, or null when the hold record cannot be read. */
-async function madeMarksNow() {
-  try { return (await (await import("./world-kinds.mjs")).holdRecordNow())?.made ?? null; } catch { return null; }
+/** Which of `ids` were made in hand (POS-766): `{ made }` (`Map(id → mark)`) or `{ unread }` (named-making § madeNamesRead). */
+async function madeMarksRead(ids) {
+  const [{ madeNamesRead }, { holdEdgeOnActs }, { actsQuery }] = await Promise.all([import("./named-making.mjs"), import("./hold-edge.mjs"), import("./world2-acts.mjs")]);
+  return madeNamesRead({ ids, edgeOn: () => holdEdgeOnActs(), query: (sql, params) => actsQuery(sql, params),
+    reasonOf: (e) => plainReason(e, "record", "the hold record, for a name made in hand") });
+}
+/** The same, for a read that may say less when it cannot look (investigate's receipt): the map, or null. */
+async function madeMarksNow(ids) { return (await madeMarksRead(ids)).made ?? null; }
+/** The same, for a door that writes: the map, or the 503 (#759 review A: fail closed). */
+async function madeMarksOrRefuse(ids, bounce) {
+  const r = await madeMarksRead(ids);
+  if (r.unread) { const { madeNamesUnread } = await import("./named-making.mjs"); const u = madeNamesUnread(r.unread); throw bounce(u.code, u.defect, u.hint); }
+  return r.made;
 }
 
 /**
@@ -4736,7 +4746,7 @@ async function namedMadeRecord(payload, by, key, bounce) {
   const taken = canonHas ?? (await guardedLiveMarks(null, { household, actor: by }).catch(() => [])).find((m) => m.id === id);
   if (taken) throw bounce(409, `you already have a mark "${slug}"`,
     "a slug is unique per author, and that one names a mark of yours, published or a draft. Pick another slug for the thing you are making. Nothing was made.");
-  if ((await madeMarksNow())?.has(id)) { const t = madeIdTaken(id); throw bounce(t.code, t.defect, t.hint); }
+  if ((await madeMarksOrRefuse([id], bounce)).has(id)) { const t = madeIdTaken(id); throw bounce(t.code, t.defect, t.hint); }
   return madeRecordOf({ by, slug, kind, body, holderFields, image, household, date: new Date().toISOString() });
 }
 
@@ -4801,14 +4811,14 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // Its name stays taken for good, its words are set when it is made, and a
   // detail laid on it would name a parent the settlement's lint cannot see.
   if (!setDown && !dropUnit && !fromHand) {
-    const made = await madeMarksNow();
-    if (made?.has(`${by}/${slug}`)) {
+    const made = await madeMarksOrRefuse([`${by}/${slug}`, parent_id], bounce); // fail closed (#759 review A)
+    if (made.has(`${by}/${slug}`)) {
       const { madeIdTaken } = await import("./named-making.mjs");
       const t = madeIdTaken(`${by}/${slug}`);
       throw bounce(t.code, payload.amend === true ? `${by}/${slug} was made in hand, and a thing made in hand is not amended` : t.defect,
         payload.amend === true ? "its words are set when it is made. Make a new one under another slug if the words should change. Nothing was written." : t.hint);
     }
-    if (parent_id != null && made?.has(String(parent_id)))
+    if (parent_id != null && made.has(String(parent_id)))
       throw bounce(422, `${parent_id} was made in hand, and a detail is laid on a mark that stands on the ground`,
         "a predicated or naming mark is filed against its parent at the settlement, and a thing held in hand is not printed there, so nothing can be laid on it yet. Nothing was written.");
   }

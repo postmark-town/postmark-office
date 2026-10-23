@@ -86,7 +86,7 @@ export function namedFormRefusal(payload = {}, by = "<you>") {
   }
   if (own.length && Number(payload.stamps ?? 0) > 0)
     return { code: 422, defect: "a thing made into hands or a holder costs nothing, so there is nothing to stake",
-      hint: `it is published by its holder at once, free. Leave stamps off. Setting it down on the commons later costs the usual 1 stamp. Nothing was made.` };
+      hint: `it is published by its holder at once, free. Leave stamps off. Set down later by its maker's house, it costs the usual 1 stamp on the commons, free on your own ground. Nothing was made.` };
   return null;
 }
 
@@ -183,6 +183,39 @@ export function setDownWords({ id, maker, stake }) {
   if (stake === "staked") return `${id} is set down where you stood, as ${maker}'s draft, with your stamp behind it: it publishes at the next settlement`;
   if (stake === "bounced") return `${id} is set down where you stood, as ${maker}'s draft, but the stamp did not land: it publishes only with one behind it (stake_bounce has the call)`;
   return `${id} is set down where you stood, as ${maker}'s draft, on its own ground, free: it publishes at the next settlement`;
+}
+
+/**
+ * THE MADE NAMES, OR WHY THEY COULD NOT BE READ (#759 review A: fail closed).
+ * `{ made }` is the made record; where the hold lane is not on the record
+ * (`edgeOn` false) nothing can have been made, so it is empty. `{ unread }`
+ * when the record is kept and could not be read: a door that asks whether a
+ * name was made in hand refuses then, never guesses "no" (a ground mark under
+ * a made name would hide the held thing, canon winning the overlay).
+ */
+export async function madeNamesRead({ ids, edgeOn, query, reasonOf = (e) => String(e?.message ?? e) }) {
+  const want = [...new Set([...(ids ?? [])].filter((x) => x != null).map(String))];
+  if (!want.length || !edgeOn()) return { made: new Map() };
+  try {
+    const rows = await query(MADE_NAMES_SQL, madeNamesParams(want));
+    if (!Array.isArray(rows)) return { unread: "this office is not pointed at the record" };
+    return { made: foldMade(rows.map((r) => ({ seq: r.id, action: r.action, object: r.object, payload: r.payload }))) };
+  } catch (e) { return { unread: reasonOf(e) }; }
+}
+
+/**
+ * THE ONE READ the made names are asked by, at a door that writes: the hold
+ * lane's makes and set-downs naming these ids, oldest first (a set-down lets the
+ * name go to its draft, foldMade's own rule). Narrow on purpose (an index
+ * step on class, then the ids), and in the shape every reader of `acts` uses.
+ */
+export const MADE_NAMES_SQL = "SELECT id, action, object, payload FROM acts WHERE class = $1 AND action = ANY($2) AND object = ANY($3) ORDER BY id";
+export const madeNamesParams = (ids) => ["holding", [MAKE_FACE, SET_DOWN_FACE], ids];
+
+/** The refusal when the made names could not be read: nothing written, try again. */
+export function madeNamesUnread(unread) {
+  return { code: 503, defect: "the office could not read the hold record, so it cannot tell whether that name was made in hand",
+    hint: `nothing was written; try again shortly (${unread})` };
 }
 
 /** A slug once made in hand stays taken (G2): the words for a leave or a make that reuses one. */

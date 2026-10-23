@@ -328,6 +328,14 @@ test("part 2 · the made record lets a set-down thing go: from its set-down act 
   assert.deepEqual([row.row.entity, row.row.policy], [LB, "detach"], "the holding ends, with no place on the hold row");
 });
 
+test("part 2 · the leave door's narrow read asks for set-downs too, so a set-down name is its draft's, and the draft rules apply", async () => {
+  const { madeNamesRead, madeNamesParams } = await import("../src/named-making.mjs");
+  assert.deepEqual(madeNamesParams(["a/b"])[1], [MAKE_FACE, SET_DOWN_FACE]);
+  const rows = [{ id: 1, action: MAKE_FACE, object: "a/b", payload: { thing: "a/b", made: { id: "a/b", kind: "thing" } } }, { id: 2, action: SET_DOWN_FACE, object: "a/b", payload: { thing: "a/b" } }];
+  const r = await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async (sql, params) => rows.filter((x) => params[1].includes(x.action)) });
+  assert.equal(r.made.has("a/b"), false);
+});
+
 test("part 2 · the draft a set-down files: the made mark whole, by its maker, where the dropper stands, 1×1; put forward free on the maker's ground, left for the stake on the commons", () => {
   const made = madeRecordOf({ by: LB, slug: "lantern", kind: "thing", body: "A paper lantern.", holderFields: { holder: true, capacity: 4 }, household: "hh:lb", date: "2026-10-23" });
   const free = setDownDraftOf(made, { at: { x: 12, y: -3, extra: 1 }, free: true });
@@ -346,4 +354,33 @@ test("part 2 · the refusals say what can be done instead", () => {
   assert.match(a.hint, /Give it back to its maker's house to set down, or keep, give or eat it/);
   assert.match(setDownHolding(`${LB}/bag`, 2).defect, /holds 2 things, and a holder is set down empty/);
   assert.ok(setDownCandy(`${LB}/c`, "pocket-comet").hint.includes(`eat it (consume { thing: "${LB}/c" }), give it, or give it into a bowl`));
+});
+
+test("#759 review C · a holder's room: making a named thing past its capacity is refused whole, nothing made", async () => {
+  const o = office();
+  const bag = `${LB}/small-bag`;
+  await make(o, LB, LB, "small-bag", "A bag with room for two.", { holder: { holder: true, capacity: 2 } });
+  await make(o, LB, bag, "slip-1", "Slip one.");
+  await make(o, LB, bag, "slip-2", "Slip two.");
+  const before = o.acts.length;
+  await assert.rejects(make(o, LB, bag, "slip-3", "Slip three."), (e) => e.code === 409 && /has room for 0, not 1/.test(e.defect));
+  assert.equal(o.acts.length, before, "nothing made");
+  assert.equal(o.holdRows().filter((x) => x.entity === bag).length, 2);
+});
+
+test("#759 review A · the made names fail closed: an unread record is a refusal, never 'no such name'; where no hold record is kept, nothing was made", async () => {
+  const { madeNamesRead, madeNamesUnread, MADE_NAMES_SQL, madeNamesParams } = await import("../src/named-making.mjs");
+  const never = async () => { throw new Error("never asked"); };
+  assert.deepEqual(await madeNamesRead({ ids: ["a/b"], edgeOn: () => false, query: never }), { made: new Map() });
+  assert.deepEqual(await madeNamesRead({ ids: [], edgeOn: () => true, query: never }), { made: new Map() }, "no name, no read");
+  let asked = null;
+  const r = await madeNamesRead({ ids: ["a/b", "a/b", null], edgeOn: () => true, query: async (sql, params) => { asked = [sql, params];
+    return [{ id: 7, action: "make", object: "a/b", payload: { thing: "a/b", made: { id: "a/b", kind: "thing" } } }]; } });
+  assert.deepEqual([...r.made.keys()], ["a/b"]);
+  assert.deepEqual(asked, [MADE_NAMES_SQL, madeNamesParams(["a/b"])]);
+  assert.match((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => { throw new Error("connection refused"); } })).unread, /connection refused/);
+  assert.match((await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async () => null })).unread, /not pointed at the record/);
+  const u = madeNamesUnread("the record could not be reached");
+  assert.equal(u.code, 503);
+  assert.match(u.hint, /nothing was written/);
 });

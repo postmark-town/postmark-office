@@ -191,3 +191,19 @@ test("POS-766 · leave-mark { slug, body, kind, to: yourself } at the flat tool:
   assert.equal(eaten.thing, id);
   assert.equal((await worldMarkById(id)).mark, null);
 });
+
+test("#759 review A · a leave-mark when the made names cannot be read fails CLOSED: 503, nothing written (a made name is never reused by a guess)", { skip }, async () => {
+  const { leaveMarkViaOffice } = await import("../src/world.mjs");
+  // the hold lane is on the record (W2_PEN hold, guards on), and the made-names read is the one that fails
+  const acts = await import("../src/world2-acts.mjs");
+  const { MADE_NAMES_SQL } = await import("../src/named-making.mjs");
+  acts.__setPoolForTest({ query: (sql, params) => (sql === MADE_NAMES_SQL ? Promise.reject(new Error("the record could not be reached (test)")) : pool.query(sql, params)) });
+  try {
+    await assert.rejects(leaveMarkViaOffice(repo, { slug: "a-name", body: "On the ground.", kind: "sited", at: { x: 1, y: 1 }, extent: { w: 1, h: 1 } }, KEY), (e) => {
+      assert.equal(e.code, 503, String(e.defect));
+      assert.match(e.defect, /could not read the hold record, so it cannot tell whether that name was made in hand/);
+      return true;
+    });
+    await assert.rejects(leaveMarkViaOffice(repo, { slug: "a-made-name", body: "In hand.", to: "sbx-cy" }, KEY), (e) => e.code === 503);
+  } finally { acts.__setPoolForTest(pool); }
+});
