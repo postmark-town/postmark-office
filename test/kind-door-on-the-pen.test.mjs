@@ -134,42 +134,6 @@ test("leave-mark { kind, count, to: yourself } through the flat tool's implement
   } finally { resetLawSnapshot(); }
 });
 
-test("POS-766 · leave-mark { slug, body, kind, to: yourself } through the flat tool's implementation: one make act in the store, the thing in the one world, eaten by consume { thing }", { skip }, async () => {
-  await seed(); await onThePen();
-  // a real world clone: the name is checked against canon (the suite exports WORLD_CLONE; the tree keeps one)
-  process.env.WORLD_CLONE = saved.WORLD_CLONE ?? join(process.cwd(), "world-clone");
-  const { reloadLawSnapshot, resetLawSnapshot, LAW_REFRESH_SQLS } = await import("../src/law-snapshot.mjs");
-  await reloadLawSnapshot({ force: true, query: async (sql) => ({ rows: sql === LAW_REFRESH_SQLS.pin ? [{ newest: 300, pinned: 300 }] : LAW }) });
-  try {
-    const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
-    const id = `${ACTOR}/my-comet`;
-    const r = await leaveMarkViaOffice(process.env.WORLD_CLONE, { slug: "my-comet", body: "A comet of my own, still warm.", kind: "pocket-comet", to: ACTOR }, KEY);
-    assert.deepEqual([r.did, r.made, r.kind, r.live, r.stamps], ["make", id, "pocket-comet", true, 0]);
-    const made = await owner(async (c) => (await c.query("SELECT action, object, class, actor, payload FROM acts WHERE action IN ('make', 'consume') ORDER BY id")).rows);
-    assert.deepEqual(made.map((a) => [a.action, a.object, a.class, a.actor]), [["make", id, "holding", ACTOR]]);
-    assert.equal(made[0].payload.made.body, "A comet of my own, still warm.");
-    // the one world lays it in, held and unplaced, from the store alone
-    const m = (await worldMarkById(id)).mark;
-    assert.equal(m?.held_by, ACTOR);
-    assert.equal(m?.at, undefined);
-    // investigate reads it as the resident would: published by its holder, never "never-was"
-    const { worldInvestigate } = await import("../src/world.mjs");
-    const look = await worldInvestigate({ mark: id }, KEY);
-    assert.equal(look.receipt?.status, "published", JSON.stringify(look).slice(0, 400));
-    assert.equal(look.receipt?.made_in_hand, true);
-    assert.match(look.receipt?.says ?? "", /published by its holder .* held by sbx-cy/);
-    // its name is taken for good: a second make, and a mark on the ground by that slug, are refused
-    await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, { slug: "my-comet", body: "Again.", to: ACTOR }, KEY), (e) => e.code === 409);
-    await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, { slug: "my-comet", body: "On the ground.", kind: "sited", at: { x: 1, y: 1 }, extent: { w: 1, h: 1 } }, KEY),
-      (e) => e.code === 409 && /taken for good/.test(e.defect));
-    // eaten from hand: the holding ends, and the world no longer holds it
-    const { liveUnitDeps } = await import("../src/world-units.mjs");
-    const eaten = await callKinds("consume", { thing: id }, KEY, ACTOR, await liveUnitDeps());
-    assert.equal(eaten.thing, id);
-    assert.equal((await worldMarkById(id)).mark, null);
-  } finally { resetLawSnapshot(); }
-});
-
 test("S4 · a pot-luck take that draws a whole mark commits the draw and the mark's holding act in ONE transaction; a failing half leaves nothing", { skip }, async () => {
   await seed(); await onThePen();
   const { liveUnitDeps } = await import("../src/world-units.mjs");

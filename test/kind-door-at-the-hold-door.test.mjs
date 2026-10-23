@@ -121,3 +121,34 @@ test("POS-766 · a thing made in hand changes hands like any held thing: given t
   assert.equal(r.did, "give", JSON.stringify(r).slice(0, 300));
   assert.equal((await worldMarkById(gift)).mark?.held_by, "sbx-dee");
 });
+
+test("POS-766 · leave-mark { slug, body, kind, to: yourself } at the flat tool: one make act in the store, the thing in the one world, investigate says published by its holder, its name taken for good, eaten by consume { thing }", { skip }, async () => {
+  const { leaveMarkViaOffice, worldMarkById, worldInvestigate } = await import("../src/world.mjs");
+  const { callKinds } = await import("../src/world-kinds.mjs");
+  const { liveUnitDeps } = await import("../src/world-units.mjs");
+  const id = "sbx-cy/my-comet";
+  const r = await leaveMarkViaOffice(repo, { slug: "my-comet", body: "A comet of my own, still warm.", kind: "pocket-comet", to: "sbx-cy" }, KEY);
+  assert.deepEqual([r.did, r.made, r.kind, r.live, r.stamps], ["make", id, "pocket-comet", true, 0]);
+  const c = await store.connect("world2_owner");
+  let made;
+  try { made = (await c.query("SELECT action, object, class, actor, payload FROM acts WHERE object = $1 ORDER BY id", [id])).rows; } finally { await c.end(); }
+  assert.deepEqual(made.map((a) => [a.action, a.object, a.class, a.actor]), [["make", id, "holding", "sbx-cy"]]);
+  assert.equal(made[0].payload.made.body, "A comet of my own, still warm.");
+  // the one world lays it in, held and unplaced, from the store alone
+  const m = (await worldMarkById(id)).mark;
+  assert.equal(m?.held_by, "sbx-cy");
+  assert.equal(m?.at, undefined);
+  // investigate reads it as the resident would: published by its holder, never draft or never-was
+  const look = await worldInvestigate({ mark: id }, KEY);
+  assert.equal(look.receipt?.status, "published", JSON.stringify(look).slice(0, 400));
+  assert.equal(look.receipt?.made_in_hand, true);
+  assert.match(look.receipt?.says ?? "", /published by its holder .* held by sbx-cy/);
+  // its name is taken for good: a second make, and a mark on the ground by that slug, are refused
+  await assert.rejects(leaveMarkViaOffice(repo, { slug: "my-comet", body: "Again.", to: "sbx-cy" }, KEY), (e) => e.code === 409);
+  await assert.rejects(leaveMarkViaOffice(repo, { slug: "my-comet", body: "On the ground.", kind: "sited", at: { x: 1, y: 1 }, extent: { w: 1, h: 1 } }, KEY),
+    (e) => e.code === 409 && /taken for good/.test(e.defect));
+  // eaten from hand: the holding ends, and the world no longer holds it
+  const eaten = await callKinds("consume", { thing: id }, KEY, "sbx-cy", await liveUnitDeps());
+  assert.equal(eaten.thing, id);
+  assert.equal((await worldMarkById(id)).mark, null);
+});
