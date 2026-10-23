@@ -18,8 +18,14 @@
 // background and the act goes on with what stood. Before the first read, nothing is
 // restored: a taken class stays taken until the record is read (fail closed). Each
 // process keeps its own, as each keeps its own law snapshot.
+//
+// DROPPED WITH THE LAW IT WAS READ FROM (POS-680). Which classes are taken, and since
+// when, is the law's answer, so a new law drops the keep at once (onLawPublish): the
+// kept read is cleared, a fresh one is asked straight away, and a read that was under
+// way against the old law is thrown away rather than kept. Until the new read lands,
+// nothing is restored (fail closed, as before the first read).
 
-import { lawSnapshot } from "./law-snapshot.mjs";
+import { lawSnapshot, onLawPublish } from "./law-snapshot.mjs";
 
 export const RESTORE_ACTION = "restore";
 const TOWN = "the-town";
@@ -80,7 +86,7 @@ export async function readRestored({ classes = [], query = defaultQuery } = {}) 
   return out;
 }
 
-const state = { byClass: new Map(), at: 0, inflight: null, failed: false };
+const state = { byClass: new Map(), at: 0, inflight: null, failed: false, law: 0 };
 
 /** Every class the published law says is stolen. */
 function stolenInLaw() {
@@ -95,20 +101,36 @@ function stolenInLaw() {
  *  once per act (Wright's review of #734). */
 export function refreshRestored({ query = defaultQuery, now = Date.now(), classes = null } = {}) {
   if (state.inflight) return state.inflight;
+  const law = state.law;   // the law this read is taken against
   state.inflight = (async () => {
     try {
-      state.byClass = await readRestored({ classes: classes ?? stolenInLaw(), query });
+      const byClass = await readRestored({ classes: classes ?? stolenInLaw(), query });
+      if (law !== state.law) return;   // the law moved under it: thrown away, never kept
+      state.byClass = byClass;
       state.at = now;
       state.failed = false;
     } catch {
+      if (law !== state.law) return;
       state.failed = true;   // no text kept: nothing here says it (error-text census)
       state.at = now;
     } finally {
       state.inflight = null;
+      // a read thrown away for a newer law is asked again at once, against it
+      if (law !== state.law) refreshRestored({ query }).catch(() => {});
     }
   })();
   return state.inflight;
 }
+
+/** A new law is in force: drop the keep and ask again now (§ DROPPED WITH THE LAW). */
+export function dropRestoredKeep({ query = defaultQuery } = {}) {
+  state.law += 1;
+  state.byClass = new Map();
+  state.at = 0;
+  state.failed = false;
+  if (!state.inflight) refreshRestored({ query }).catch(() => {});
+}
+onLawPublish(() => dropRestoredKeep());
 
 /** SYNCHRONOUS. Is this taken class restored, as this process last read? */
 export function restoredClass(klass, { now = Date.now(), query = defaultQuery, classes = null } = {}) {
