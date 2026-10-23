@@ -202,12 +202,27 @@ test("7 · the quote: room 1→2 costs 50, 2→3 costs 100, whatever is held; th
   assert.deepEqual(q.stamps, { liquid_now: 200, liquid_after: 150 });
   assert.match(q.cutoff.says, /declared on or before 2026-10-31 \(town time\) keep room for three/, "the quote shows the cutoff");
   assert.match(q.price_says, /50 stamps × the room the-rowan already has \(1\), whatever it holds/, "and the price, by the room");
-  const second = quote({ entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] }).quote;
+  const second = quote({ registry: withResidents(["ash", "birch", "cedar"]), entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] }).quote;
   assert.deepEqual([second.room, second.price], [{ now: 2, after: 3 }, 100], "the 3rd room costs 100");
   assert.equal(second.line, "- 2026-11-03 · ash → BURN · 100 · for: parcel:3/hh:the-rowan");
-  assert.equal(quote().quote.heads_up, undefined, "two residents: room for a second parcel has a resident to hold it");
-  assert.match(second.heads_up, /has 2 residents, and a parcel is one per resident: room for a third parcel stands empty until a third resident joins/,
-    "room past the residents is said, not refused (a call for Darko)");
+});
+
+// The registry with the-rowan's residents replaced, for the residents rule.
+function withResidents(residents) {
+  return { households: { ...registry.households, "the-rowan": { ...registry.households["the-rowan"], residents } } };
+}
+
+test("7 · no room past the residents (POS-762/g, \"Refuse it\"): add the resident first, then buy the room", () => {
+  const refused = (r, re) => { assert.ok(r.error, `sold: ${JSON.stringify(r.quote ?? r)}`); assert.match(`${r.error.defect} — ${r.error.hint}`, re); };
+  // two residents and room for two already: the third room has no resident to hold it
+  refused(quote({ entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] }),
+    /^the-rowan has 2 residents, and room for a third parcel needs a third resident to hold it — a parcel is one per resident: add the resident first \(household \{ do: "add-resident" \}\), then buy the room\. Nothing was burned$/);
+  // one resident: even the second room is refused
+  refused(quote({ registry: withResidents(["ash"]) }), /the-rowan has 1 resident, and room for a second parcel needs a second resident/);
+  // and it is the reason given before the price: short of stamps too, the step is still the resident
+  refused(quote({ registry: withResidents(["ash"]), entries: [GIFT("ash", 10)] }), /add the resident first/);
+  // a resident each: sold
+  assert.equal(quote({ registry: withResidents(["ash", "birch"]) }).quote.room.after, 2);
 });
 
 test("7 · the quote refuses, in plain words naming the price and the cutoff, and writes nothing", () => {
@@ -247,6 +262,13 @@ test("8 · the door: a preview quotes and writes nothing; a stranger or no payer
     assert.match(p.to_confirm, /household \{ do: "buy-parcel-room", args: \{ from: "ash" \} \} — the same call without preview: true/);
     assert.ok(p.nothing_written);
     assert.equal(readFileSync(ledger, "utf8"), before, "a preview writes nothing");
+    // POS-762/g: a preview quotes the same refusal for room past the residents, and writes nothing
+    writeFileSync(join(town, "tools", "households.json"), JSON.stringify(withResidents(["ash"])));
+    const lone = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { date: "2026-11-03" });
+    assert.equal(lone.code, 409);
+    assert.match(`${lone.defect} — ${lone.hint}`, /needs a second resident to hold it — a parcel is one per resident: add the resident first/);
+    assert.equal(readFileSync(ledger, "utf8"), before, "the refused preview writes nothing");
+    writeFileSync(join(town, "tools", "households.json"), JSON.stringify(registry));
     const early = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { date: "2026-10-30" });
     assert.match(early.defect, /room is bought from 2026-11-01/);
     assert.equal((await buyParcelRoomViaOffice(town, { from: "birch", preview: true }, KEY, { date: "2026-11-03" })).code, 403);
@@ -274,7 +296,7 @@ test("9 · end to end: the exec burns the price, the town's verifier stays green
     writeFileSync(join(repo, "WHITE_PAGES", "mail-ledger.md"), "# ledger\n\n");
     writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify({ ash: { login: "rowan-gh", id: 101 } }));
     writeFileSync(join(repo, "tools", "households.json"), JSON.stringify({ schema_version: 1, households: {
-      "the-rowan": { accounts: [{ login: "rowan-gh", id: 101 }], residents: ["ash", "birch"], since: "2026-11-02" } } }));
+      "the-rowan": { accounts: [{ login: "rowan-gh", id: 101 }], residents: ["ash", "birch", "cedar"], since: "2026-11-02" } } }));
     const { publicKey, privateKey } = generateKeyPairSync("ed25519");
     writeFileSync(join(repo, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
     const pem = privateKey.export({ type: "pkcs8", format: "pem" });

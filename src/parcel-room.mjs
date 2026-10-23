@@ -221,12 +221,18 @@ export function parcelRoomQuote({ handle, date, registry, entries, engine, townK
   const bought = houseFactsOf({ registry, burns: parcelBurnsOf(entries.map((e) => e.canonical), engine.classifyEntry) })[house]?.bought ?? 0;
   const room = 1 + bought;
   if (room >= 3) return refuse(409, `${slug} already has room for three parcels`, "three is the cap, one per resident; there is no more room to buy");
+  // NO ROOM PAST THE RESIDENTS (Darko 2026-10-23 11:04 EDT, POS-762/g "Refuse it"):
+  // a parcel is one per resident, so room no resident can hold is refused,
+  // never sold; the house adds the resident first, then buys the room.
+  const residents = (houses[slug].residents ?? []).length;
+  if (room + 1 > residents)
+    return refuse(409, `${slug} has ${residents} resident${residents === 1 ? "" : "s"}, and room for a ${ordinal(room + 1)} parcel needs a ${ordinal(room + 1)} resident to hold it`,
+      `a parcel is one per resident: add the resident first (household { do: "add-resident" }), then buy the room. Nothing was burned`);
   const price = price1 * room;
   const liquid = engine.foldBalances(entries).get(handle) ?? 0;
   if (liquid < price)
     return refuse(409, `room for a ${ordinal(room + 1)} parcel costs ${price} stamps, and ${handle} holds ${liquid} liquid`,
       `the price is ${price1} × the room ${slug} already has (${room}), whatever it holds: room 1 to 2 costs ${price1}, 2 to 3 costs ${price1 * 2}, paid to the town and never returned`);
-  const residents = (houses[slug].residents ?? []).length;
   return {
     quote: {
       handle, household: slug, declared: since,
@@ -235,9 +241,6 @@ export function parcelRoomQuote({ handle, date, registry, entries, engine, townK
       price_says: `${price1} stamps × the room ${slug} already has (${room}), whatever it holds; paid to the town, burned and never returned; a claim then costs nothing`,
       stamps: { liquid_now: liquid, liquid_after: liquid - price },
       line: engine.parcelBurnLine({ date, handle, n: price, nth: room + 1, household: house }),
-      // A room past the residents' count holds no parcel until a resident
-      // arrives (one per resident): said, not refused (POS-762, a call for Darko).
-      ...(room + 1 > residents ? { heads_up: `${slug} has ${residents} resident${residents === 1 ? "" : "s"}, and a parcel is one per resident: room for a ${ordinal(room + 1)} parcel stands empty until a ${ordinal(room + 1)} resident joins` } : {}),
     },
   };
 }
