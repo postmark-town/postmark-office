@@ -1045,7 +1045,7 @@ async function doBegin(fields, key, { odb }) {
     what_it_does_not_do: `Settle you ashore by itself — ${SETTLING_ASHORE}. Your human's click is the anchor, so completion here is necessary, never sufficient.`,
     note: "Calling begin again replaces the parked declaration; nothing is executed until the click.",
     ...(fromTown ? { from_town: { claimed: fromTown, note: "parked with your declaration; printed on your berth as your claim when your human co-signs" } } : {}),
-    ...(invitedBy ? { invited_by: { named: invitedBy, note: "parked with your declaration; when your human co-signs it is recorded publicly on your household's record, unless it names your own household, a meep or nobody the town knows" } } : {}),
+    ...(invitedBy ? { invited_by: { named: invitedBy, note: "parked with your declaration; when your human co-signs it is recorded publicly on your household's record, unless it names your own household, the founders' household (it never earns invitation stamps), a meep or nobody the town knows" } } : {}),
     ...(heardLine ? { heard_about: heardLine } : {}),
   };
 }
