@@ -163,10 +163,11 @@ async function main() {
 
     // WHO INVITED THEM (POS-576), judged against the registers read under this
     // lock. A bad name records nothing and refuses nothing (arrival-invite.mjs).
-    let isMeep = () => false;
+    // THE LAW FAILS CLOSED: unread, it is null, and judgeInvite refuses the credit.
+    let isMeep = null;
     if (args?.invited_by != null) {
-      try { isMeep = await meepLawAtOffice(CLONE); }
-      catch (e) { console.error(`[arrival-invite] the meep law could not be read — ${String(e?.message ?? e).slice(0, 200)}`); }
+      try { isMeep = await meepLawAtOffice(CLONE, { strict: true }); }
+      catch (e) { console.error(`[arrival-invite] ${decl.handle}: no credit — ${String(e?.message ?? e).slice(0, 200)}`); }
     }
     const invite = judgeInvite(args, { registry, own: { slug: plan.slug, handle: decl.handle }, isMeep });
     let invited = null;

@@ -18,6 +18,20 @@
 // Naming a resident credits their HOUSEHOLD, because a household is what
 // joins and what is paid.
 //
+// ── A HANDLE FIRST; `hh:<slug>` NAMES A HOUSE ─────────────────────────────
+//
+// The ruling's field takes a handle, and a house's slug can be spelled the same
+// as another house's resident (review of #751, B1: `mari` is Starforge's
+// resident and ev-attractor's house; `moth` is a Rookery resident and
+// Mothlingxx's house). So a bare name is a RESIDENT'S HANDLE when the roll has
+// one, and only otherwise a house's slug. `hh:<slug>` is the unambiguous
+// spelling of a house, the town's own house key.
+//
+// ── THE MEEP LAW FAILS CLOSED ───────────────────────────────────────────────
+//
+// A credit is permanent and public. When the town's meep law cannot be read,
+// nothing is credited ("the meep law is unreadable"), never "nobody is a meep".
+//
 // ── THE WRITE ───────────────────────────────────────────────────────────────
 //
 // `declare` and the berth co-sign both reach `src/declare-exec.mjs`, which
@@ -49,9 +63,12 @@ export const INVITE_GROUP = Object.freeze({
 });
 export const INVITE_FIELDS = Object.freeze({
   invited_by: { type: "string", title: "Who invited you?", ...INVITE_GROUP, "x-multiline": false, maxLength: INVITE_MAX, examples: ["wright"],
-    description: "Optional: the handle of the resident or household that invited you (an invitation link fills it in). This is a public credit: it shows on your household's record. When your household settles you get 10 stamps instead of 5, and they get 10 when you write your first letter or set your home within 30 days. Your own household, a meep or a name the town doesn't know records nothing, and your join goes through either way." },
+    description: "Optional: the handle of the resident who invited you, or hh:<slug> for a household (an invitation link fills it in). This is a public credit: it shows on your household's record. When your household settles you get 10 stamps instead of 5, and they get 10 when you write your first letter or claim your home parcel within 30 days. Your own household, a meep or a name the town doesn't know records nothing, and your join goes through either way." },
 });
 export const INVITE_FIELD_NAMES = Object.freeze(Object.keys(INVITE_FIELDS));
+
+/** The prefix that names a house rather than a resident (the town's own house key). */
+export const HOUSE_PREFIX = "hh:";
 
 /** The name a join carries, normalised (trimmed, one leading @ dropped, lowercased), or null. */
 export function inviteNamed(args = {}) {
@@ -64,21 +81,31 @@ export function inviteNamed(args = {}) {
 /**
  * Whose house the invite credits, judged against the registers. `registry` is
  * `{ households: { <slug>: { residents } } }`; `own` is the founding house's
- * `{ slug, handle }`; `isMeep(handle)` is the town's meep law.
+ * `{ slug, handle }`; `isMeep(handle)` is the town's meep law, or null when it
+ * could not be read (which refuses: the law fails closed).
  *
  * Answers `{ by, named }` to credit, `{ refused, named }` to record nothing,
  * or null when no invite was given.
  */
-export function judgeInvite(args, { registry, own = {}, isMeep = () => false } = {}) {
+export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
   const named = inviteNamed(args);
   if (!named) return null;
   const refuse = (refused) => ({ refused, named });
-  if (named === own.slug || named === own.handle) return refuse("own");
-  if (named === TOWN_HOUSE || isReservedHandle(named)) return refuse("town");
-  if (isMeep(named)) return refuse("meep");
+  const house = named.startsWith(HOUSE_PREFIX) ? named.slice(HOUSE_PREFIX.length) : null;
+  if (named === own.handle || named === own.slug || (house != null && house === own.slug)) return refuse("own");
+  if (named === TOWN_HOUSE || house === TOWN_HOUSE || isReservedHandle(named)) return refuse("town");
+  if (typeof isMeep !== "function") return refuse("law");
   const houses = registry?.households ?? {};
-  const owner = Object.hasOwn(houses, named) ? named
-    : Object.keys(houses).find((slug) => (houses[slug]?.residents ?? []).map(String).includes(named)) ?? null;
+  const residentOf = (h) => Object.keys(houses).find((slug) => (houses[slug]?.residents ?? []).map(String).includes(h)) ?? null;
+  let owner;
+  if (house != null) owner = Object.hasOwn(houses, house) ? house : null;
+  else {
+    const home = residentOf(named);
+    if (home != null) {
+      if (isMeep(named)) return refuse("meep");
+      owner = home;
+    } else owner = Object.hasOwn(houses, named) ? named : null;
+  }
   if (!owner) return refuse("unknown");
   if (owner === own.slug) return refuse("own");
   if (owner === TOWN_HOUSE) return refuse("town");
@@ -95,12 +122,12 @@ export async function recordInvite({ slug, judged, at = new Date(), write = setH
   try {
     const r = await write({ slug, invitedBy }, env);
     if (r === null) {
-      log(`[arrival-invite] ${slug}: not kept — the office is not pointed at the record`);
+      log(`[arrival-invite] ${slug}: not kept (by ${invitedBy.by}, named ${invitedBy.named}, at ${invitedBy.at}) — the office is not pointed at the record`);
       return { kept: false, why: "no record" };
     }
     return { kept: r.slug === slug, ...(r.slug === slug ? { invited_by: invitedBy } : {}) };
   } catch (e) {
-    log(`[arrival-invite] ${slug}: not kept — ${String(e?.message ?? e).slice(0, 200)}`);
+    log(`[arrival-invite] ${slug}: not kept (by ${invitedBy.by}, named ${invitedBy.named}, at ${invitedBy.at}) — ${String(e?.message ?? e).slice(0, 200)}`);
     return { kept: false, why: "the store refused" };
   }
 }
@@ -109,7 +136,8 @@ const REFUSED = Object.freeze({
   own: "names your own household",
   town: "names the town's own house, which is not credited for invitations",
   meep: "names a meep, and meeps can't be credited for invitations",
-  unknown: "names nobody the town knows: give a resident's handle or a household's name",
+  unknown: "names nobody the town knows: give a resident's handle, or hh:<slug> for a household",
+  law: "could not be judged: the town's meep law is unreadable right now, so no invitation is credited",
 });
 
 /** The one sentence the declaration's answer carries about the invite, or null. */
@@ -117,5 +145,6 @@ export function inviteReceipt(judged, outcome) {
   if (!judged) return null;
   if (judged.refused) return `Not recorded: "${judged.named}" ${REFUSED[judged.refused]}. Your join is unaffected.`;
   if (!outcome?.kept) return `Not recorded this time: "${judged.named}" could not be written to your household's record. Your join is unaffected.`;
-  return `Recorded publicly: invited by ${judged.by}${judged.named === judged.by ? "" : ` (${judged.named})`}.`;
+  const plain = judged.named === judged.by || judged.named === `${HOUSE_PREFIX}${judged.by}`;
+  return `Recorded publicly: invited by ${judged.by}${plain ? "" : ` (${judged.named})`}.`;
 }
