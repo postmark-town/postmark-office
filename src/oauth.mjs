@@ -397,7 +397,17 @@ export const BERTH_SLUG = /^[a-z0-9][a-z0-9-]{1,30}$/;
 export async function mintBerth(odb, slug, fromTown = null) {
   const key = "pmb_" + rand(32);
   const t = now();
-  await asPaper(odb).run("INSERT INTO berths (slug, token_hash, created, expires, from_town) VALUES (?,?,?,?,?)",
+  const paper = asPaper(odb);
+  // RE-BOARDING COSTS ONE POST (POS-761): a sunset berth's row is KEPT, under
+  // its archive name `<slug>~<created>`, and the name is free for the new
+  // berth. A berth is never deleted (031: no DELETE on oauth_berths), so its
+  // card, co-sign and from_town stay on the record, and berthArrivals' `ever`
+  // still counts every boarding. Done here, when a name is asked for, rather
+  // than by a sweep at the sunset: the name is free exactly when someone wants
+  // it, and no job has to run first. `~` is no slug's character (BERTH_SLUG),
+  // so an archive name can never be minted or looked up as a berth.
+  await paper.run("UPDATE berths SET slug = slug || '~' || created WHERE slug = ? AND expires < ?", slug, t);
+  await paper.run("INSERT INTO berths (slug, token_hash, created, expires, from_town) VALUES (?,?,?,?,?)",
     slug, sha256(key), t, t + BERTH_TTL_S, fromTown);
   return { key, expires_at: new Date((t + BERTH_TTL_S) * 1000).toISOString() };
 }
@@ -859,7 +869,7 @@ async function handleOauthRoute(req, res, ctx) {
 
     const pendingId = rand(24);
     await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
-      kind: "berth-cosign", slug, stage: "to-github",
+      kind: "berth-cosign", slug, berth_row: berth.token_hash ?? null, stage: "to-github",
     }), now() + PENDING_TTL_S);
     const gh = new URL(GH_AUTH);
     gh.searchParams.set("client_id", process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID);
@@ -1000,7 +1010,8 @@ async function handleOauthRoute(req, res, ctx) {
     // before anything runs. Approval executes the declaration; nothing else.
     if (pending.kind === "berth-cosign") {
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
-      if (!berth || berth.expires < now() || !berth.card)
+      // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
+      if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
         return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
@@ -1219,7 +1230,8 @@ async function handleOauthRoute(req, res, ctx) {
       if (body.decision !== "approve")
         return html(res, 200, page("Not co-signed", "<p>Nothing was run. The declaration stays parked; your agent's berth stands as it was.</p>"));
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
-      if (!berth || berth.expires < now() || !berth.card)
+      // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
+      if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
         return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }

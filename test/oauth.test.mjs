@@ -668,6 +668,48 @@ test("a berth's declared household and card are rendered as text on the co-sign 
   assert.match(await denied.text(), /Not co-signed/);
 });
 
+// POS-761: a sunset berth's name boards again, and a co-sign begun for the OLD
+// berth never lands on the new visitor who took the name: the pending co-sign
+// names the berth row it began on.
+test("FALSIFIER, POS-761: a re-boarded name is a new berth, and the old berth's co-sign cannot found the new visitor's house", async () => {
+  ghIdentity = { id: 999, login: "keeminlee" };
+  const board = async () => {
+    const r = await fetch(`${BASE}/berth`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: "twice-berth" }) });
+    assert.equal(r.status, 201, `a berth boards: ${await r.clone().text()}`);
+    return (await r.json()).key;
+  };
+  const begin = (key, household) => fetch(`${BASE}/household`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({ do: "begin", args: { household, card: "first line\nsecond line" } }),
+  });
+  // the first berth is minted on the office's own paper, so this test spends one of the door's five boardings an hour, not two
+  const { mintBerth } = await import("../src/oauth.mjs");
+  const file = new DatabaseSync(join(tmp, "oauth.db"));
+  let oldKey;
+  try { ({ key: oldKey } = await mintBerth(file, "twice-berth")); } finally { file.close(); }
+  assert.equal((await begin(oldKey, "The First Visit")).status, 200);
+  const r1 = await fetch(`${BASE}/oauth/berth-cosign?slug=twice-berth`, { redirect: "manual" });
+  const r2 = await fetch(r1.headers.get("location"), { redirect: "manual" });
+  const page1 = await (await fetch(r2.headers.get("location"))).text();
+  const form = { pending_id: /name="pending_id" value="([^"]+)"/.exec(page1)[1], nonce: /name="nonce" value="([^"]+)"/.exec(page1)[1] };
+
+  // the old berth sunsets, and another visitor boards under its name in one POST
+  const paper = new DatabaseSync(join(tmp, "oauth.db"));
+  try { paper.prepare("UPDATE berths SET expires = 1 WHERE slug = 'twice-berth'").run(); } finally { paper.close(); }
+  const newKey = await board();
+  assert.equal((await begin(newKey, "Someone Else's House")).status, 200);
+
+  const late = await consent(form, "approve");
+  assert.equal(late.status, 409, "the old berth's co-sign founded the new visitor's house");
+  assert.match(await late.text(), /Berth changed/);
+  const after = new DatabaseSync(join(tmp, "oauth.db"), { readOnly: true });
+  try {
+    const rows = after.prepare("SELECT slug, cosigned_gh_id FROM berths WHERE slug = 'twice-berth' OR slug LIKE 'twice-berth~%' ORDER BY slug").all();
+    assert.equal(rows.length, 2, "the old berth was not kept beside the new one");
+    assert.equal(rows[0].cosigned_gh_id, null, "the new visitor's berth was co-signed by the old berth's human");
+  } finally { after.close(); }
+});
+
 // POS-574: GET /berth answers, beside the rules, who berthed from where, as
 // counts only. tools/harbor-watch.mjs reads exactly this door for the harbor's
 // snapshot. Driven on the real server: the count moves when a traveller boards.

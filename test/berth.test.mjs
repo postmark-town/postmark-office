@@ -169,3 +169,54 @@ test("an unco-signed berth never asks the registry (#3965)", async () => {
   assert.equal(k.cosigned, false);
   assert.equal(k.keyKind, undefined);
 });
+
+// ── RE-BOARDING COSTS ONE POST (POS-761) ────────────────────────────────────
+//
+// A visitor whose berth sunset boards again under the same name. Minting used
+// to INSERT over a row that is never deleted, and the store refused it
+// (UNIQUE berths.slug). The sunset row is now kept under its archive name,
+// `<slug>~<created>`, and the name is free.
+
+const reMint = async (paper, run) => {
+  const first = await mintBerth(paper, "returning", "remint-town");
+  await run("UPDATE berths SET card = ?, expires = 1 WHERE slug = 'returning'", JSON.stringify({ household: "The Old Visit" }));
+  const second = await mintBerth(paper, "returning", "remint-town");
+  return { first, second };
+};
+
+test("FALSIFIER: an expired berth's name boards again in one POST, and the old berth is kept, not lost", async () => {
+  const { first, second } = await reMint(odb, (sql, ...a) => odb.prepare(sql).run(...a));
+  const k = await berthLookup(odb, null, null, second.key);
+  assert.equal(k?.slug, "returning", "the new key does not resolve to the re-boarded name");
+  assert.equal(await berthLookup(odb, null, null, first.key), null, "the sunset key came back to life");
+  const rows = odb.prepare("SELECT slug, card FROM berths WHERE slug = 'returning' OR slug LIKE 'returning~%' ORDER BY slug").all();
+  assert.equal(rows.length, 2, "the sunset berth was dropped from the record");
+  assert.match(rows[1].slug, /^returning~\d+$/, "the old berth keeps an archive name no slug can take");
+  assert.equal(JSON.parse(rows[1].card).household, "The Old Visit", "the old berth's card went with it");
+  assert.equal(rows[0].card, null, "the new berth inherited the old one's declaration");
+  const { berthArrivals } = await import("../src/oauth.mjs");
+  const shore = (await berthArrivals(odb, undefined, { chartered: ["remint-town"] }))["remint-town"];
+  assert.deepEqual({ ever: shore.ever, live: shore.live }, { ever: 2, live: 1 }, "the harbor's count lost a boarding");
+  // a live berth's name is still held: no archive of a berth that has not sunset
+  await mintBerth(odb, "still-here");
+  await assert.rejects(() => mintBerth(odb, "still-here"), /UNIQUE/, "a live berth's name was taken from under it");
+});
+
+test("ON THE STORE: the re-mint runs on Postgres's own oauth_berths, as the office runs it", async () => {
+  const { startStore } = await import("./helpers/embedded-store.mjs");
+  const { paperOnPool, paperworkPoolTypes } = await import("../src/paperwork.mjs");
+  const s = await startStore({ db: "berth_remint" });
+  if (s.skip) return;
+  const { default: pg } = await import("pg");
+  const pool = new pg.Pool({ connectionString: s.url("office_api"), max: 2, types: paperworkPoolTypes(pg) });
+  try {
+    const paper = paperOnPool(pool);
+    const { second } = await reMint(paper, (sql, ...a) => paper.run(sql, ...a));
+    assert.equal((await berthLookup(paper, null, null, second.key))?.slug, "returning");
+    const owner = await s.connect("world2_owner");
+    try {
+      const { rows } = await owner.query("SELECT slug FROM oauth_berths WHERE slug LIKE 'returning%' ORDER BY slug");
+      assert.deepEqual(rows.map((r) => r.slug.replace(/~\d+$/, "~<created>")), ["returning", "returning~<created>"]);
+    } finally { await owner.end(); }
+  } finally { await pool.end(); await s.stop?.(); }
+});
