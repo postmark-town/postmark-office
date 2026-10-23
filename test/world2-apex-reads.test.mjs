@@ -289,6 +289,18 @@ test("a published record is the FOLD's key set, and the seven fields no row hold
     ["kept", "ledger_weight", "placementParent", "sovereign", "stamps", "weight", "weight_parts"]);
 });
 
+// WLD-97 part 2: the fold publishes `ground_m` (the height a town mark holds the
+// ground at), so the store's published record carries it from the row's data,
+// a height or a [lo, hi] range, and a row without one publishes none.
+test("ground_m rides the published record, as the fold publishes it", () => {
+  const town = (ground_m) => apex.publishedRecordOf(apex.markRecordOf(markRow({
+    slug: "the-town/a-valley", owner: "the-town", data: { tier: "constitution", feature: "a-lake", ground_m } })));
+  assert.equal(town(8).ground_m, 8);
+  assert.deepEqual(town([6, 10]).ground_m, [6, 10]);
+  assert.ok(!("ground_m" in town(undefined)), "a mark with none publishes none");
+  assert.ok(apex.PUBLISHED_KEYS.indexOf("ground_m") === apex.PUBLISHED_KEYS.indexOf("points") + 1, "in the fold's own order: after points");
+});
+
 test("null is absent in the published shape, and `tier` alone survives as null", () => {
   // world-state.json is JSON: a fold that computed `far: undefined` publishes
   // no `far`. The engine record spells `at`/`extent`/`class`/`parent` as null

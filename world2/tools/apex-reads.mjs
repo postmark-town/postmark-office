@@ -280,15 +280,17 @@ export const PUBLISHED_SOURCE = Object.freeze({
   repo: "postmark-town/postmark-world",
   path: "tools/marks-fold.mjs",
   where: "§ the published mark — the `marks:` map of fold()'s return",
-  blob: "1c4a844d851facca8a4b8f90ab48744eb416ab26",
-  at: "1688a5afbf93d00d858864cb0c00441035a1230f",
+  // WLD-97 part 2: the fold publishes ground_m (the head of postmark-world's
+  // wld97/ground-m; re-pins to its merge on main).
+  blob: "ae22aa87066dad824e35ba81298471247a72bb0e",
+  at: "1e2e9d73056af3a72cf16d7d03ed3df814d58c29",
 });
 
 /** The fold's published keys this store can answer, in the fold's own order. */
 export const PUBLISHED_KEYS = Object.freeze([
   "id", "kind", "by", "tier", "household", "declared_household", "date",
   "at", "extent", "parent", "slot", "value", "far",
-  "body", "mechanic", "top_m", "feature", "points", "timetable", "entry",
+  "body", "mechanic", "top_m", "feature", "points", "ground_m", "timetable", "entry",
   "class", "ask", "reward", "status", "threshold", "dials", "image", "loot",
   "signal",
 ]);
