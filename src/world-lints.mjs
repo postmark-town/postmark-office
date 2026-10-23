@@ -47,6 +47,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { lawShapeOf, SHAPE_LAW_TREE, LAW_NODE_KIND } from "./world-law-shape.mjs"; // WLD-116: the world tree in either shape, decided in one place
 import { geometryIndex, geometryAsOf, rectOfVersion, reachable, out, inbound, nodesWhere, isClassMark, actionEntriesOf } from "./world-store.mjs";
 
 const RED = "RED", GREEN = "GREEN", NA = "N/A";
@@ -127,8 +128,10 @@ export const LAW = {
   },
 };
 
-/** Where the family stands in a world clone. One path, eight directories. */
+/** Where the family stands in a world clone. One path, eight directories. THE OLD SHAPE'S (classes filed as marks). */
 export const LAW_ROOT = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-invariant";
+/** Where it stands in the NEW shape (WLD-116): the invariants are law nodes in the Keeping Works' foundry, `node.md` not `mark.md`. */
+export const LAW_ROOT_LAW_TREE = "WORLD/law/the-keeping-works/postmark-invariant";
 
 /**
  * Hold the LAW table above against the marks themselves.
@@ -144,13 +147,17 @@ export const LAW_ROOT = "WORLD/marks/let-there-be-light/the-town-centre/the-keep
  * carries a different dial, or carries a different claim, is drift.
  */
 export function readLawPairing(treePath, law = LAW) {
-  const root = treePath ? join(treePath, ...LAW_ROOT.split("/")) : null;
+  // THE SHAPE IS ASKED OF THE ONE HELPER (src/world-law-shape.mjs), never tested here.
+  const lawTree = !!treePath && lawShapeOf(treePath) === SHAPE_LAW_TREE;
+  const LAW_DIR = lawTree ? LAW_ROOT_LAW_TREE : LAW_ROOT, RECORD = lawTree ? "node.md" : "mark.md";
+  const root = treePath ? join(treePath, ...LAW_DIR.split("/")) : null;
   if (!root || !existsSync(root)) return { status: "unavailable", root, checked: 0, drift: [] };
   const drift = [];
   let checked = 0;
   for (const [lint, entry] of Object.entries(law)) {
-    const file = join(root, entry.slug, "mark.md");
-    if (!existsSync(file)) { drift.push({ lint, slug: entry.slug, why: "no mark", expected: lint, found: null, at: `${LAW_ROOT}/${entry.slug}/mark.md` }); continue; }
+    const file = join(root, entry.slug, RECORD);
+    const at = `${LAW_DIR}/${entry.slug}/${RECORD}`;
+    if (!existsSync(file)) { drift.push({ lint, slug: entry.slug, why: "no mark", expected: lint, found: null, at }); continue; }
     const text = readFileSync(file, "utf8");
     checked++;
     const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
@@ -158,9 +165,16 @@ export function readLawPairing(treePath, law = LAW) {
     // autocrlf on must not read as a rewritten claim.
     const body = text.slice(front ? front[0].length : 0).replace(/\r\n/g, "\n").trim();
     const dials = front ? /^dials:\s*(.*)$/m.exec(front[1]) : null;
-    const found = dials ? (/"lint"\s*:\s*"([^"]*)"/.exec(dials[1])?.[1] ?? null) : null;
-    if (found !== lint) drift.push({ lint, slug: entry.slug, why: "dial mismatch", expected: lint, found, at: `${LAW_ROOT}/${entry.slug}/mark.md` });
-    if (body !== entry.text) drift.push({ lint, slug: entry.slug, why: "claim mismatch", expected: entry.text, found: body || null, at: `${LAW_ROOT}/${entry.slug}/mark.md` });
+    // The dial is the invariant's `lint` PROPERTY NODE since 2026-10-17 (W1: every dial moves to a
+    // `kind: property` node named by its key): `<slug>/<slug>-lint`, its `default:`. The record's own
+    // frontmatter `dials:` is the older spelling and is read first, so a tree that still says it reads.
+    let found = dials ? (/"lint"\s*:\s*"([^"]*)"/.exec(dials[1])?.[1] ?? null) : null;
+    if (found == null) {
+      const prop = join(root, entry.slug, `${entry.slug}-lint`, RECORD);
+      if (existsSync(prop)) found = /^default:\s*(.*?)\s*$/m.exec(readFileSync(prop, "utf8").replace(/\r\n/g, "\n"))?.[1] ?? null;
+    }
+    if (found !== lint) drift.push({ lint, slug: entry.slug, why: "dial mismatch", expected: lint, found, at });
+    if (body !== entry.text) drift.push({ lint, slug: entry.slug, why: "claim mismatch", expected: entry.text, found: body || null, at });
   }
   return { status: "read", root, checked, drift };
 }
@@ -518,10 +532,14 @@ export async function runLints({ store, sources = null, engineText = null, treeP
     // rather than fixed here.
     const inTheWorks = (a) => a.props?.in_works === true
       || String(a.props?.path ?? "").includes("/the-keeping-works/");
+    // (WLD-116: a LAW node is the Keeping Works' by its kind, and is asked no path: its
+    // `/the-keeping-works/` directory would answer yes by accident. The old shape's class
+    // marks are still marks and still pass the position test above; both are read.)
+    const holdsConstitution = (a) => (a.kind === "mark" && inTheWorks(a)) || a.kind === LAW_NODE_KIND;
 
     const declared = [];
     for (const { id, attr } of nodesWhere(graph, (a) =>
-      a.kind === "mark" && a.by === "the-town" && a.tier === "constitution" && inTheWorks(a))) {
+      a.by === "the-town" && a.tier === "constitution" && holdsConstitution(a))) {
       const p = attr.props ?? {};
       const pairs = [];
       if (p.dials && typeof p.dials === "object" && !Array.isArray(p.dials))

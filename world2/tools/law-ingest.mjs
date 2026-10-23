@@ -63,6 +63,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 
 import { actionEntriesOf } from "../../src/world-store.mjs";
 import { classNodeNameOf, dialsOfClassNode, extendsFromMarks, isSited, kindFieldOf, propertyParentId } from "../../src/world-grants.mjs"; // the kind rung (LOGOS v2, O1)
+import { readWorldRecords, SHAPE_LAW_TREE } from "../../src/world-law-shape.mjs"; // WLD-116: the world tree in either shape, decided in one place
 
 export const LAW_REPO_KEY = "world-law"; // projection_heads.repo for this pen
 
@@ -96,15 +97,20 @@ async function readersOf(lawRepo) {
     lossyValues: fold.lossyValues, lossyMessage: fold.lossyMessage };
 }
 
-// ── the ONE vendored predicate ───────────────────────────────────────────────
+// ── the ONE vendored predicate (THE OLD SHAPE'S ONLY; WLD-116) ───────────────
+//
+// Since the law-node move (postmark-world#304) a class is a law node and the world
+// exports its own test (tools/law.mjs `isClass`), which deriveLaw uses when the tree
+// is in the new shape (src/world-law-shape.mjs decides which). What follows is the
+// compatibility read for a world still in the old shape, and goes when it does.
 //
 // VENDOR SHIM. Source: postmark-town/postmark-world `tools/mark-lint.mjs` lines
 // 114–124 at world commit c701988f9ff937661297a8acc87a48925ba3b37f (blob
 // 68b1e35a67522cb03488cd8d8b940231d769f0c5), where it is `standsInTheWorks` +
-// `isClassDeclaration`. The world does not export it — it is a `const` inside a
-// CLI module that loads the whole marks tree at import — so it cannot be reached
+// `isClassDeclaration`. The world did not export it — it was a `const` inside a
+// CLI module that loads the whole marks tree at import — so it could not be reached
 // the way the other readers are, and this is the four-line copy the gold plan's
-// reuse line allows with its source named.
+// reuse line allowed with its source named.
 //
 // The law it encodes (LOGOS/classes.md § Instantiation, as the lint states it):
 // a class-carrying mark standing in the Keeping Works DECLARES its class;
@@ -189,7 +195,10 @@ export function githubLoginByHouseholdKey(logins) {
 }
 
 export const recordData = (rec) => {
-  const { _dir, ...rest } = rec;
+  // `_law` is the law tree loader's own stamp (tools/law-tree.mjs): a loader internal, like `_dir`,
+  // and it would be the one key a class row has in the new shape and not in the old. `foundry` stays:
+  // it is the record's own word for which book it is law in, added to a row's data and read by nobody yet.
+  const { _dir, _law, ...rest } = rec;
   if (Object.prototype.hasOwnProperty.call(rest, "ambient")) {
     rest.ambient = rest.ambient === true || rest.ambient === "true" ? true
       : rest.ambient === false || rest.ambient === "false" ? false
@@ -237,8 +246,16 @@ export async function deriveLaw({ lawRepo }) {
 
   const marksDir = join(repo, "WORLD", "marks");
   if (!existsSync(marksDir)) throw new Error(`no WORLD/marks under ${repo} — is this a world-law checkout?`);
-  const marks = loadMarks(marksDir);
-  const byId = new Map(marks.map((m) => [m.id, m]));
+  // THE SHAPE IS DECIDED IN ONE PLACE (src/world-law-shape.mjs, WLD-116). The new shape
+  // keeps the classes in WORLD/law/<foundry>/**/node.md, read by the checkout's own
+  // tools/law-tree.mjs; the old shape keeps them among the marks. `marks` here is the
+  // marks tree either way; `law` is the law tree's nodes ([] in the old shape).
+  const world = await readWorldRecords({ marksDir, toolsDir: join(repo, "tools"), loadMarks });
+  const { marks, law } = world;
+  const lawTree = world.shape === SHAPE_LAW_TREE;
+  const everyRecord = lawTree ? [...marks, ...law] : marks;      // what a parent id can name
+  const byId = new Map(everyRecord.map((m) => [m.id, m]));
+  const nodeFile = lawTree ? "node.md" : "mark.md";               // the record's own file name
 
   const rows = [];
   const push = (kind, path, key, data) => rows.push({ kind, path, key, data: jsonSafe(data) });
@@ -247,12 +264,15 @@ export async function deriveLaw({ lawRepo }) {
   // One row per class the law DECLARES, keyed by the class name, carrying the
   // whole record the world's own loader built (dials, implements, actions,
   // extends, version, body — the fields that make a class mark law).
-  const declarations = marks.filter((m) => isClassDeclaration(m, byId));
+  // The new shape: a law node of kind class declares by BEING one (the world's own
+  // tools/law.mjs `isClass`; an instance never does). The old shape: the ancestry-walked
+  // position test below, kept as the compatibility read until that shape is gone.
+  const declarations = lawTree ? law.filter((n) => world.tools.isClass(n)) : marks.filter((m) => isClassDeclaration(m, byId));
   // A class's DIALS are its property nodes first, its old `dials:` second (LOGOS
   // v2, W1 G3/G5), so the row carries the one merged map and every reader of a
   // class row's `dials` reads a dial in either form.
   const childrenOf = new Map();
-  for (const m of marks) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
+  for (const m of everyRecord) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
   for (const m of declarations) {
     const data = recordData(m);
     // THE FILE'S OWN DIALS, KEPT BESIDE THE MERGE (POS-704). `dials` below is the
@@ -262,7 +282,7 @@ export async function deriveLaw({ lawRepo }) {
     if (data.dials !== undefined) data._fileDials = data.dials;
     const dials = dialsOfClassNode(m, childrenOf.get(m.id));
     if (dials) data.dials = dials;
-    push("class", relPath(repo, join(m._dir, "mark.md")), String(classNodeNameOf(m)), data);
+    push("class", relPath(repo, join(m._dir, nodeFile)), String(classNodeNameOf(m)), data);
   }
 
   // ── kind: grant ────────────────────────────────────────────────────────────
@@ -284,7 +304,7 @@ export async function deriveLaw({ lawRepo }) {
   // The projection says what the door says, including where the door says
   // nothing.
   for (const m of declarations) {
-    const path = relPath(repo, join(m._dir, "mark.md"));
+    const path = relPath(repo, join(m._dir, nodeFile));
     for (const entry of actionEntriesOf({ props: m })) {
       push("grant", path, grantKey(classNodeNameOf(m), entry),
         { class: String(classNodeNameOf(m)), ...entry, from: m.id });
@@ -312,7 +332,7 @@ export async function deriveLaw({ lawRepo }) {
   // LAST for classPredicates, the FIRST for dialNode's `LIMIT 1` — and `ord`
   // (the loader's order, which is the order the hydrator writes its edges in)
   // lets law-classes.mjs answer the same way.
-  const lineage = extendsFromMarks(marks);
+  const lineage = extendsFromMarks(everyRecord);
   const isGeometric = (m) => isSited(m, lineage);
   const classOfId = new Map(declarations.map((m) => [m.id, String(classNodeNameOf(m))]));
   marks.forEach((m, ord) => {
@@ -332,7 +352,8 @@ export async function deriveLaw({ lawRepo }) {
   // its class, its own name and its immediate parent property's name.
   // KEYED BY (class, the names down from the class): a class states each once.
   const propName = (m) => String(m.name ?? m.slug ?? String(m.id).split("/").pop());
-  marks.forEach((m, ord) => {
+  // (the property nodes are the law tree's in the new shape, the marks' in the old; `ord` is the loader's order within the list read)
+  (lawTree ? law : marks).forEach((m, ord) => {
     if (kindFieldOf(m) !== "property") return;
     // the parent is `of:` when the node names one (W1's flat layout), else its directory parent
     const path = [propName(m)];
@@ -340,7 +361,7 @@ export async function deriveLaw({ lawRepo }) {
     while (up && kindFieldOf(up) === "property" && hops++ < 16) { path.unshift(propName(up)); up = byId.get(propertyParentId(up)); }
     const klass = up ? classOfId.get(up.id) : undefined;
     if (klass === undefined) return;
-    push("property", relPath(repo, join(m._dir, "mark.md")), `${klass}/${path.join("/")}`,
+    push("property", relPath(repo, join(m._dir, nodeFile)), `${klass}/${path.join("/")}`,
       { class: klass, parent: path.length > 1 ? path[path.length - 2] : null, name: path[path.length - 1], tier: m.tier ?? null, default: m.default ?? null, id: m.id, ord });
   });
 
@@ -351,10 +372,10 @@ export async function deriveLaw({ lawRepo }) {
   // law and answers the town's standing default, so it gets no row: law is an
   // exceptions ledger (enter-exit.mjs, atom 10), and a projection that spelled
   // out every silent mark's default would be asserting law nobody wrote.
-  for (const m of marks) {
+  for (const m of everyRecord) {
     const terms = termsAt(m);
     if (!terms) continue;
-    push("threshold", relPath(repo, join(m._dir, "mark.md")), String(m.id), terms);
+    push("threshold", relPath(repo, join(m._dir, m._law ? "node.md" : "mark.md")), String(m.id), terms);
   }
 
   // ── kind: skeleton ─────────────────────────────────────────────────────────

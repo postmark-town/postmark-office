@@ -68,6 +68,19 @@ const get = async (path) => {
   return r.json();
 };
 
+// THE 1.0 SIDE'S CLASSES, IN EITHER SHAPE OF THE WORLD (WLD-116). A class is a law node, never a
+// mark: in the new shape `/world/state` carries no class row and the 1.0 law is `/world/law`
+// (WORLD/law-state.json at the same blessing). In the old shape the classes are `kind: class`
+// marks in `/world/state` and `/world/law` answers an empty law. Both are read and joined by
+// class name, so the comparison holds whichever shape the blessed world is in.
+const oneDotZeroClasses = async () => {
+  const fromState = ((await get("/world/state")).marks ?? []).filter((m) => m.kind === "class").map((m) => m.id.split("/").pop());
+  let fromLaw = [];
+  try { fromLaw = ((await get("/world/law")).nodes ?? []).filter((n) => n.kind === "class").map((n) => String(n.class ?? n.id.split("/").pop())); }
+  catch { fromLaw = []; } // an office older than the law door: its world is the old shape
+  return [...new Set([...fromState, ...fromLaw])];
+};
+
 let pool = null;
 const sql = async (text, params = []) => {
   if (!pool) {
@@ -222,7 +235,7 @@ async function sweepLaw() {
 
   // Every class mark must reach a law row, or the 129 that left `marks` went nowhere.
   const classKeys = new Set((await sql("SELECT key FROM law_projection WHERE kind = 'class'")).map((r) => r.key));
-  const w1classes = ((await get("/world/state")).marks ?? []).filter((m) => m.kind === "class").map((m) => m.id.split("/").pop());
+  const w1classes = await oneDotZeroClasses();
   const lost = w1classes.filter((c) => !classKeys.has(c));
   if (lost.length) finding("law", "AB-L5", `${lost.length} class marks with no law_projection row: ${lost.slice(0, 8).join(", ")}`);
   else ok(`all ${w1classes.length} class marks carried into law_projection`);

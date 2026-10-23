@@ -22,6 +22,7 @@
 // runs it.
 
 import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
+import { LAW_NODE_KIND } from "./world-law-shape.mjs"; // WLD-116: a class is a law node
 
 const TWINS = new Map();
 const norm = (sql) => String(sql).replace(/\s+/g, " ").trim();
@@ -95,19 +96,32 @@ export function worksValue(p) {
 }
 export const inWorks = (p) => worksValue(p) === 1;
 
+// THE GATES' JS TWINS (world-store.mjs § a class is a law node builds the SQL these stand for).
+// The law arm: a node of kind `law` that carries a class. The mark arm is the
+// COMPATIBILITY READ for a store hydrated from the old shape (the position clause).
+const lawArm = (n) => n.kind === LAW_NODE_KIND && jx(n.p, "class") !== null;
+const markArm = (n) => n.kind === "mark" && n.by === "the-town" && n.tier === "constitution"
+  && jx(n.p, "class") !== null && inWorks(n.p);
+const hasActions = (n) => jx(n.p, "actions") !== null || jx(n.p, "affordances") !== null;
+
 /** `CLASS_MARK_GATE_SQL`: the verb-minting gate, over a snapshot row. */
-export const classMarkGate = (n) => n.kind === "mark" && n.by === "the-town" && n.tier === "constitution"
-  && jx(n.p, "class") !== null && inWorks(n.p) && (jx(n.p, "actions") !== null || jx(n.p, "affordances") !== null);
+export const classMarkGate = (n) => (lawArm(n) || markArm(n)) && hasActions(n);
 
 /** `CLASS_ROSTER_GATE_SQL`: the wider roster gate. */
-export const classRosterGate = (n) => n.kind === "mark" && n.by === "the-town" && n.tier === "constitution"
-  && jx(n.p, "class") !== null && inWorks(n.p);
+export const classRosterGate = (n) => lawArm(n) || markArm(n);
+
+/** `declaresSql()` SELECTed as a column: a law node declares outright; a mark by the position clause, three-valued. */
+export const declaresValue = (n) => (n.kind === LAW_NODE_KIND ? 1 : worksValue(n.p));
 
 /**
- * `CLASS_ROSTER_GATE_SQL` SELECTed as a column: sqlite's three-valued AND over
- * its terms (a NULL column makes its comparison NULL; any false term makes 0).
+ * `CLASS_ROSTER_GATE_SQL` SELECTed as a column: sqlite's three-valued logic. The
+ * law arm is two terms that are never NULL (kind is NOT NULL; `IS NOT NULL` is
+ * 0 or 1), so when it holds the gate is 1 and when it does not the gate is the mark
+ * arm's own three-valued AND over its terms (a NULL column makes its comparison
+ * NULL; any false term makes 0).
  */
 export function classRosterGateValue(n) {
+  if (lawArm(n)) return 1;
   const eq = (v, want) => (v === null || v === undefined ? null : (v === want ? 1 : 0));
   const terms = [eq(n.kind, "mark"), eq(n.by, "the-town"), eq(n.tier, "constitution"),
     jx(n.p, "class") !== null ? 1 : 0, worksValue(n.p)];

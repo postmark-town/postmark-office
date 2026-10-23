@@ -78,9 +78,11 @@ let _classSnap = null;
 
 // The two statements this read asks, named so the store's snapshot can answer
 // them too (POS-270 lane W 2b; world-graph-db.mjs holds each twin equal to its SQL).
-const MARK_PROPS = registerTwin("SELECT id, props FROM nodes WHERE kind='mark'",
-  // Answered off the (kind, subkind) index: subkind order (nulls first), then table order.
-  (g) => g.nodes.filter((n) => n.kind === "mark")
+// (WLD-116: a class is a LAW node now, and the class's `mobility:` is read off it, so the
+// statement asks both kinds; in a store hydrated from the old shape there are no `law` rows.)
+const MARK_PROPS = registerTwin("SELECT id, props FROM nodes WHERE kind IN ('mark', 'law')",
+  // Answered off the (kind, subkind) index: kind, then subkind order (nulls first), then table order.
+  (g) => g.nodes.filter((n) => n.kind === "mark" || n.kind === "law")
     .map((n, i) => [n, i]).sort(([a, i], [b, j]) => subkindOrder(a.subkind, b.subkind) || i - j)
     .map(([n]) => ({ id: n.id, props: n.props })));
 function subkindOrder(a, b) { return a === b ? 0 : a == null ? -1 : b == null ? 1 : a < b ? -1 : 1; }
@@ -161,9 +163,12 @@ export function carriersFrom(worldState, { classFields = null } = {}) {
   const fieldsFor = (id) => classFields?.get?.(id) ?? null;
   const fieldOf = (m, name) => m[name] ?? fieldsFor(m.id)?.[name] ?? null;
 
-  // class name -> mobility, from the class marks themselves.
+  // class name -> mobility, from the class records themselves. THE CLASSES ARE THE LAW'S
+  // (WLD-116: a class is a law node, never a mark, so the fold's marks carry none and the
+  // world holds them beside its marks as `law`); a world in the old shape still has them among
+  // its marks, and both are read.
   const mobilityOfClass = new Map();
-  for (const m of marks) {
+  for (const m of [...marks, ...(worldState?.law ?? [])]) {
     const cls = fieldOf(m, "class"), mob = fieldOf(m, "mobility");
     if (cls && mob) mobilityOfClass.set(String(cls), String(mob));
   }

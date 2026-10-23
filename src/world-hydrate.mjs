@@ -57,6 +57,7 @@ import { blessed } from "./world-branches.mjs";
 import { readReleaseStamp } from "./release.mjs";
 import { classFieldOf, classNodeNameOf, dialsOfClassNode, kindFieldOf, standingOf } from "./world-grants.mjs"; // the kind rung: one answer for both forms (LOGOS v2, O1)
 import { truth, whole } from "./holding-law.mjs"; // a record's true/false and whole number, in the spellings the parser leaves them
+import { readWorldRecords, SHAPE_LAW_TREE, LAW_NODE_KIND } from "./world-law-shape.mjs"; // WLD-116: classes are law nodes; the tree in either shape, decided in ONE place
 
 const argOf = (name, fallback) => { const i = process.argv.indexOf(name); return i !== -1 ? process.argv[i + 1] : fallback; };
 const flag = (name) => process.argv.includes(name);
@@ -196,7 +197,17 @@ gatePresent("world-tools", TOOLS_DIR, `marks-fold + geometry imported at ${world
 const { loadMarks, placementParent, parseRecord, worldRootOf, PARCEL_EXTENT_M, PARCEL_CLAIM_CAP, isValidMarkDate } = fold;
 const { rect, contains, marksContain, isIrregular, pointInRect } = geom;
 
-const marks = loadMarks(MARKS_DIR);
+// THE TREE IN EITHER SHAPE (WLD-116; src/world-law-shape.mjs decides which). The new
+// shape files every class and property in WORLD/law/<foundry>/**/node.md, read here by
+// the world's OWN tools/law-tree.mjs; the old shape files them among the marks. `marks`
+// is the marks tree either way, `lawNodes` is the law ([] in the old shape), and a law
+// node is written to the store as a node of kind `law` (LAW_NODE_KIND), never as a mark.
+const world = await readWorldRecords({ marksDir: MARKS_DIR, toolsDir: TOOLS_DIR, loadMarks });
+const marks = world.marks;
+const lawNodes = world.law;
+const LAW_TREE = world.shape === SHAPE_LAW_TREE;
+const isLaw = (m) => m?._law === true;                       // stamped by the law loader on every node it reads
+const kindIndex = LAW_TREE ? world.tools.kindIndexOf(lawNodes) : null; // the class lineage, the law's
 if (!marks.length) {
   GATES.push({ gate: "marks-readable", input: MARKS_DIR, status: "REFUSED", detail: "loadMarks returned 0 marks" });
   console.error(`\nGATE REFUSED marks-readable — the world's own loader returned 0 marks from ${MARKS_DIR}`);
@@ -204,6 +215,15 @@ if (!marks.length) {
   process.exit(1);
 }
 gatePresent("marks-readable", MARKS_DIR, `${marks.length} marks loaded by the world's own loadMarks`);
+if (LAW_TREE && !lawNodes.length) {
+  GATES.push({ gate: "law-readable", input: "WORLD/law", status: "REFUSED", detail: "WORLD/law exists but the world's own loadLaw returned 0 nodes" });
+  console.error(`\nGATE REFUSED law-readable — WORLD/law exists and the world's own loadLaw returned 0 nodes`);
+  console.error(`nothing written; the store's newest snapshot is untouched.`);
+  process.exit(1);
+}
+gatePresent("law-shape", LAW_TREE ? "WORLD/law" : "WORLD/marks", LAW_TREE
+  ? `law tree: ${lawNodes.length} law nodes in ${world.law.reduce((n, x) => n.add(x.foundry), new Set()).size} foundr(ies) loaded by the world's own loadLaw${world.problems.length ? ` · ${world.problems.length} law finding(s) (the lint's, not this index's)` : ""}`
+  : "class marks: the classes stand among the marks (the shape before postmark-world#304)");
 
 // ── the containment map · what contains what, after the freeze ───────────────
 //
@@ -274,7 +294,7 @@ try {
 // which was nine records and all of them the town's constitution.
 const rawKeys = (m) => {
   try {
-    const rec = parseRecord(readFileSync(join(m._dir, "mark.md"), "utf8"), m.id);
+    const rec = parseRecord(readFileSync(join(m._dir, isLaw(m) ? "node.md" : "mark.md"), "utf8"), m.id);
     return Object.keys(rec).filter((k) => k !== "body");
   } catch {
     return null;   // a record the loader already flagged with _error; null says "not read", never "no keys"
@@ -390,10 +410,15 @@ const standsInWorks = (m) => containmentSource === "containment-map"
 // resolver, and the store's `class` prop is that one answer, so every store
 // reader keyed on `$.class` reads both forms. The old form projects exactly as
 // it always did. The lineage is the declarations' own `extends`.
+// WHO DECLARES: in the new shape a law node of kind class declares by being one (the
+// world's own tools/law.mjs isClass); in the old shape a class-carrying mark does by
+// standing in the works (the compatibility read, dropped with the old shape).
+const declaring = LAW_TREE ? lawNodes.filter((n) => world.tools.isClass(n)) : marks;
+const declares = (m) => (isLaw(m) ? true : standsInWorks(m));
 const classDecls = new Map();
-for (const m of marks) {
+for (const m of declaring) {
   const n = kindFieldOf(m) === "class" || m.class !== undefined ? classNodeNameOf(m) : null;
-  if (n && standsInWorks(m) && !classDecls.has(n)) classDecls.set(n, m.extends ?? null);
+  if (n && declares(m) && !classDecls.has(n)) classDecls.set(n, m.extends ?? null);
 }
 function extendsOfClass(name) { const e = classDecls.get(String(name)); return e == null ? null : String(e); }
 const classOf = (m) => classFieldOf(m) ?? undefined;
@@ -409,22 +434,23 @@ const holdingWordOf = (m) => ({
 // The projection carries the one merged map, so every `$.dials` reader of the
 // store reads a dial in either form.
 const childrenOf = new Map();
-for (const m of marks) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
+for (const m of [...marks, ...lawNodes]) if (m._parentMarkId) { if (!childrenOf.has(m._parentMarkId)) childrenOf.set(m._parentMarkId, []); childrenOf.get(m._parentMarkId).push(m); }
 
 const oddFrontmatter = [];
-for (const m of marks) {
+for (const m of [...marks, ...lawNodes]) {
   const problems = [];
   if (m._error) problems.push(`unparseable frontmatter: ${m._error}`);
   if (!m.by) problems.push("no `by:`");
   if (!m.kind) problems.push("no `kind:`");
-  else if (!["sited", "parcel", "predicated", "naming", "predicate", "property"].includes(m.kind) && !classDecls.has(String(m.kind)))
+  else if (isLaw(m) ? !["class", "property"].includes(m.kind)     // a law node is a class or a property, nothing else
+    : (!["sited", "parcel", "predicated", "naming", "predicate", "property"].includes(m.kind) && !classDecls.has(String(m.kind))))
     problems.push(`unknown kind: ${m.kind}`); // the new form's kind names a declared class (the kind rung)
   if (!m.date) problems.push("no `date:`");
   else if (!isValidMarkDate(m.date)) problems.push(`bad date: ${m.date}`);
   if (GEOMETRIC(m) && (m.at?.x == null || m.at?.y == null)) problems.push("geometric kind without `at:`");
   if (GEOMETRIC(m) && kindFieldOf(m) !== "parcel" && (m.extent?.w == null || m.extent?.h == null)) problems.push("sited without `extent:`");
   if ((m.kind === "predicated" || m.kind === "predicate") && (m.slot == null || m.value == null)) problems.push("predicated without slot/value");
-  if (m.body != null && m.body.length > 150) problems.push(`body ${m.body.length} chars (schema says <=150)`);
+  if (m.body != null && m.body.length > 150 && !isLaw(m)) problems.push(`body ${m.body.length} chars (schema says <=150)`); // (a law node has no body cap: WLD-116)
   if (m.timetable != null && m.mechanic !== "timetable") problems.push("`timetable:` without `mechanic: timetable`");
   if (m.mechanic === "timetable" && m.timetable == null) problems.push("`mechanic: timetable` without `timetable:`");
   // `ambient:` widens a class's reach to the whole world, so the one spelling
@@ -442,7 +468,7 @@ for (const m of marks) {
   if (m.loot != null && m.loot !== true && m.loot !== "true") problems.push(`\`loot:\` must be true to hold a thing back until the encounter is spent (got ${JSON.stringify(m.loot)}) — this thing is an ordinary thing and is visible from the start`);
   if (problems.length) oddFrontmatter.push({ id: m.id, path: relPath(m._dir), problems });
 
-  node(m.id, "mark", {
+  node(m.id, isLaw(m) ? LAW_NODE_KIND : "mark", {
     subkind: m.kind ?? null, tier: m.tier ?? null, by: m.by ?? null,
     at_x: m.at?.x ?? null, at_y: m.at?.y ?? null,
     extent_w: m.extent?.w ?? null, extent_h: m.extent?.h ?? null,
@@ -453,7 +479,9 @@ for (const m of marks) {
       // store, in SQL and in JS alike, instead of a substring test on a path the
       // freeze stripped of meaning. A store hydrated before this stamp existed
       // carries no key at all, and the gate falls back to the path there.
-      in_works: standsInWorks(m),
+      // (a law node is the Keeping Works' by being filed in its foundry: stamped true outright, never left to the path fallback that its `/the-keeping-works/` directory would answer by accident)
+      in_works: isLaw(m) ? true : standsInWorks(m),
+      ...(isLaw(m) ? { foundry: m.foundry ?? null } : {}),
       slot: m.slot ?? null, value: m.value ?? null,
       // A PROPERTY NODE's own fields (LOGOS v2: name, tier, default, body; the
       // tier is the column). Carried only on `kind: property`, so every other
@@ -484,7 +512,7 @@ for (const m of marks) {
       // WORKS_PATH gates read the same clause). Derived here once so every
       // reader downstream — the lints, the payload, the site lens — reads the
       // fact instead of re-deriving it. Emitted only when true.
-      declares: (classOf(m) !== undefined && standsInWorks(m)) || undefined,
+      declares: (classOf(m) !== undefined && declares(m)) || undefined,
       class_version: Number.isFinite(Number(m.version)) ? Number(m.version) : null,
       extends: m.extends ?? null,
       dials: classOf(m) !== undefined ? dialsOfClassNode(m, childrenOf.get(m.id)) : ((m.dials && typeof m.dials === "object" && !Array.isArray(m.dials)) ? m.dials : null),
@@ -707,7 +735,8 @@ for (const m of marks) {
     // `contains` asks whether the named parent CAN hold the child. placementParent
     // — the repo's own placer, the function the write path calls to choose a
     // directory — asks the stronger question: is it the SMALLEST such mark?
-    const placed = placementParent(m, marks.filter((x) => x.id !== m.id)) ?? ROOT_ID;
+    // (the class lineage is the law's in the new shape: a caller holding the law hands its index in)
+    const placed = placementParent(m, marks.filter((x) => x.id !== m.id), kindIndex ? { kindIndex } : undefined) ?? ROOT_ID;
     props.placement_ok = placed === parentId;
     if (!props.placement_ok) {
       props.placement_parent = placed;
@@ -716,6 +745,15 @@ for (const m of marks) {
   }
   edge(parentId, m.id, "contains", props, born);
   containsEdges++;
+}
+
+// ── the law tree's own nesting: a class describes its properties and its subclasses ──
+// (the old shape drew these as predication edges between marks; the nesting is the law
+// loader's `_parentMarkId`, authorship and not ground, and a law node has no where.)
+for (const m of lawNodes) {
+  if (!m._parentMarkId) continue;
+  edge(m._parentMarkId, m.id, "describes", { direction: "parent-is-described-by-child", child_kind: m.kind ?? null, nesting: "directory" }, typeof m.date === "string" ? m.date : null);
+  describesEdges++;
 }
 
 // ── geometry_versions: the tense law, derived from git ───────────────────────
@@ -984,11 +1022,11 @@ const PARCEL_CLASS = "the-town/parcel";
 // class's declaration. A class value with no declaration dangles VISIBLY at
 // `class:<value>` — the dangle is the finding, never dropped.
 const declOfClass = new Map();
-for (const m of marks)
+for (const m of declaring)
   // Position by containment, not by path — the same clause `declares:` is
   // stamped from (§ the position clause). A declaration filed at its id after
   // the freeze must still be the one this rail points every instance at.
-  if (classOf(m) !== undefined && standsInWorks(m) && !declOfClass.has(String(classOf(m))))
+  if (classOf(m) !== undefined && declares(m) && !declOfClass.has(String(classOf(m))))
     declOfClass.set(String(classOf(m)), m.id);
 
 const danglingMechanics = [];
@@ -1359,7 +1397,7 @@ if (!flag("--no-gexf")) {
   const loaded = () => graphFromTables(tables, { source: "the hydration" });
   gexf = [
     exportGexf({ loaded: loaded(), out: join(OFFICE, "world-graph.gexf") }),
-    exportGexf({ loaded: loaded(), out: join(OFFICE, "world-graph-static.gexf"), kinds: ["mark", "class", "code", "doctrine"], dropUnresolved: true }),
+    exportGexf({ loaded: loaded(), out: join(OFFICE, "world-graph-static.gexf"), kinds: ["mark", "law", "class", "code", "doctrine"], dropUnresolved: true }),
   ];
 }
 

@@ -33,7 +33,8 @@
 // layer; moving them onto the store's graph snapshot is a part on POS-270.
 
 import { createHash } from "node:crypto";
-import { byId, jx, registerTwin } from "./world-graph-db.mjs";
+import { byId, classRosterGate, jx, registerTwin } from "./world-graph-db.mjs";
+import { CLASS_ROSTER_GATE_SQL } from "./world-store.mjs";
 
 /** The ground classes, innermost first. An arena IS a portal ground (`extends:
  *  portal-ground`); with the arena closed its floor keeps only the ground's law. */
@@ -61,13 +62,15 @@ const GROUNDS_ALL = `SELECT id, by,
        WHERE json_extract(props, '$.class') IN ('arena', 'portal-ground')
          AND at_x IS NOT NULL AND at_y IS NOT NULL`;
 
-// `subkind = 'class'` is a column: the hydrator stores a mark file's `kind:
-// class` there, and asking props for it finds nothing, silently.
+// A class node is a LAW node (WLD-116): the shared roster gate (world-store.mjs §
+// a class is a law node) says so, for the law tree's nodes and, as the compatibility
+// read, for an old store's class marks. (This used to ask the `subkind` column for
+// 'class', which a law node's property shares and an instance never has.)
 const CLASS_DIALS = `SELECT id,
          json_extract(props, '$.class') AS class,
          json_extract(props, '$.dials') AS dials
        FROM nodes WHERE json_extract(props, '$.class') IN (SELECT value FROM json_each(?))
-         AND subkind = 'class'`;
+         AND ${CLASS_ROSTER_GATE_SQL}`;
 
 // The store's snapshot answers these three too (world-graph-db.mjs), held equal
 // to the SQL by test/world-graph-db.test.mjs.
@@ -79,7 +82,7 @@ registerTwin(GROUNDS_ALL, (g) => g.nodes
   .filter((n) => ["arena", "portal-ground"].includes(jx(n.p, "class")) && n.at_x != null && n.at_y != null).map(groundRow));
 registerTwin(CLASS_DIALS, (g, namesJson) => {
   const names = new Set(JSON.parse(namesJson ?? "[]"));
-  return g.nodes.filter((n) => names.has(jx(n.p, "class")) && n.subkind === "class")
+  return g.nodes.filter((n) => names.has(jx(n.p, "class")) && classRosterGate(n))
     .map((n) => ({ id: n.id, class: jx(n.p, "class"), dials: jx(n.p, "dials") }));
 });
 
