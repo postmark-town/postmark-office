@@ -61,7 +61,7 @@
 // never asked for the whole law once per act.
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
-import { startLoad, endLoad, loadsStanding, timedSession, servePool, MAX_LOADS } from "./snapshot-loads.mjs";
+import { startLoad, endLoad, loadsStanding, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
 
 // The pair that says "the law to serve has moved". Both halves matter: a new
 // settlement whose law is not ingested moves `newest` (the disclosure changes),
@@ -113,6 +113,11 @@ function publish(next, key, n) {
   state.snap = next; state.key = key; state.publishedBy = n; state.publishedAt = new Date().toISOString();
   const standing = lawStanding();
   for (const fn of listeners) { try { fn(standing); } catch { /* a listener that throws does not stop the publish */ } }
+}
+
+/** The standing as GET /release (a keyless page) shows it: the law in force, and the refresher. Every field is the office's own words. */
+export function lawForRelease() {
+  return { ...lawStanding(), refresh: lawRefreshStanding() };
 }
 
 /**
@@ -213,7 +218,7 @@ export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlin
       if (newest()) { state.lastError = next ? null : "the store holds no settlement whose law is ingested"; state.checkedAt = new Date().toISOString(); }
       return { changed: Boolean(next) && !late, standing: lawStanding() };
     } catch (e) {
-      if (newest()) state.lastError = String(e?.message ?? e).slice(0, 160);
+      if (newest()) state.lastError = plainRefreshError(e, "the law refresh"); // plain words: the standing rides a keyless page
       return { changed: false, standing: lawStanding() };
     } finally {
       await session?.end();

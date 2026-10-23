@@ -62,8 +62,9 @@ import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worl
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
-import { rowsFixtureActive, worldGraphStanding, worldGraphRefreshStanding } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
-import { lawStanding, lawRefreshStanding } from "./law-snapshot.mjs"; // POS-680: which law this process acts on, on its receipt
+import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
+import { lawForRelease } from "./law-snapshot.mjs"; // POS-680: which law this process acts on, on its receipt
+import { restoredStanding } from "./restored-classes.mjs"; // POS-680: whether the restored keep was read against the law in force
 import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
@@ -977,10 +978,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // POS-680: which settlement's law and world graph THIS process answers
       // from, and whether its refreshers are keeping up: when each last asked
       // the store, when it last published, how many refreshes were let go at
-      // their deadline, and the last error. A refresher that stopped keeping up
+      // their deadline, and the last error, in plain words (a keyless page:
+      // no store text, role or path). A refresher that stopped keeping up
       // shows here, per process, instead of only after a restart.
-      law: { ...lawStanding(), refresh: lawRefreshStanding() },
-      world_graph: { ...worldGraphStanding(), refresh: worldGraphRefreshStanding() },
+      law: { ...lawForRelease(), restored: restoredStanding() },
+      world_graph: worldGraphForRelease(),
     });
   }
   if (path === "/ops/loop-lag" && req.method === "GET") return j(res, 200, loopLag.read()); // POS-267 (src/loop-lag.mjs)

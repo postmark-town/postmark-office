@@ -14,13 +14,18 @@
 //                statement_timeout, so Postgres cancels what was let go and
 //                the connection comes back.
 //
+// And what GET /release shows of it all stays in the office's own words: the
+// store's text (a cancelled statement, a relation), the role and the host
+// never reach that keyless page (POS-663's rule).
+//
 // THE HANG: another session holds ACCESS EXCLUSIVE locks on `settlements` and
 // `world_graphs`, so every refresh statement waits on a lock (a lock wait
 // counts toward statement_timeout).
 //
 // THE FLIPS: no cap (the pool fills, a plain read waits, and the case reds);
 // no SET LOCAL statement_timeout (the two loads at the cap never end, no
-// third refresh ever starts, and the case reds).
+// third refresh ever starts, and the case reds); a refresh keeping the
+// store's own text (the release case reds).
 
 process.env.LAW_REFRESH_DEADLINE_MS = "150";
 process.env.WORLD_GRAPH_REFRESH_DEADLINE_MS = "150";
@@ -80,6 +85,12 @@ test("a store that hangs every refresh statement: the refreshers hold at most th
   assert.ok(during.law.abandoned + during.graph.abandoned > MAX_LOADS,
     `no refresh after the first ${MAX_LOADS} ever started: the store never ended what was let go (${JSON.stringify(during)})`);
   assert.equal(law.lawSnapshot(), null, "nothing loaded while the store hung");
+
+  // what GET /release would show right now: the office's own words only
+  const release = JSON.stringify({ law: law.lawForRelease(), world_graph: graph.worldGraphForRelease() });
+  assert.match(release, /the record did not answer|refreshes are still running|was let go/, `the release names no reason at all: ${release}`);
+  for (const raw of [/canceling statement/i, /statement timeout/i, /\brelation\b/i, /office_api|world2_owner|law_ingester|snapshot_reader/, /127\.0\.0\.1|localhost/, /\bpostgres(ql)?:\/\//i, /ECONN|ETIMEDOUT/])
+    assert.doesNotMatch(release, raw, `GET /release would carry raw store text (${raw}): ${release}`);
 
   // the store answers again: the next tick loads the law, no restart
   await locker.query("COMMIT");
