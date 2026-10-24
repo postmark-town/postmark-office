@@ -240,10 +240,10 @@ test("3 · the hands move an idea to any named stage, in any order, with credit,
   const one = await read();
   assert.equal(one.state, "ruled-in");
   assert.deepEqual(one.history.map(({ at, ...h }) => h), [
-    { stage: "posted", hand: null, credit: "errant", link: null, note: null },
-    { stage: "building", hand: "wright", credit: "finn", link: null, note: "Finn has the lamp." },
-    { stage: "in-conversation", hand: "keemin", credit: null, link: LINK, note: null },
-    { stage: "ruled-in", hand: "architect", credit: null, link: null, note: null },
+    { stage: "posted", state: "posted", hand: null, credit: "errant", link: null, note: null },
+    { stage: "building", state: "building", hand: "wright", credit: "finn", link: null, note: "Finn has the lamp." },
+    { stage: "in-conversation", state: "in-conversation", hand: "keemin", credit: null, link: LINK, note: null },
+    { stage: "ruled-in", state: "ruled-in", hand: "architect", credit: null, link: null, note: null },
   ]);
   assert.deepEqual(one.fields.links, { "in-conversation": LINK });
   assert.equal(one.body, IDEA.body);

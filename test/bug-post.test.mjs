@@ -748,12 +748,12 @@ test("11 · the bug read carries history: the post and each advance, in order, w
 
   const one = (await postsAtOffice({ class: "bug", post: id }, { now: NOW, roll: ROLL })).post;
   assert.deepEqual(one.history.map(({ at, ...r }) => r), [
-    { stage: "reported", hand: "wright", credit: "ada", link: null, stamps_paid: null },
-    { stage: "confirmed", hand: "wright", credit: "ada", link: null, stamps_paid: 2 },
-    { stage: "reproduced", hand: "wright", credit: "finn", link: null, stamps_paid: null },
-    { stage: "diagnosed", skipped: true, reason: "the fix came straight from the steps", hand: "wright", credit: null, link: null, stamps_paid: null },
-    { stage: "briefed", skipped: true, reason: "the fix came straight from the steps", hand: "wright", credit: null, link: null, stamps_paid: null },
-    { stage: "fixed", hand: "wright", credit: "errant", link: FIX_PR, stamps_paid: 25 },
+    { stage: "reported", state: "reported", hand: "wright", credit: "ada", link: null, stamps_paid: null },
+    { stage: "confirmed", state: "confirmed", hand: "wright", credit: "ada", link: null, stamps_paid: 2 },
+    { stage: "reproduced", state: "reproduced", hand: "wright", credit: "finn", link: null, stamps_paid: null },
+    { stage: "diagnosed", state: "diagnosed", skipped: true, reason: "the fix came straight from the steps", hand: "wright", credit: null, link: null, stamps_paid: null },
+    { stage: "briefed", state: "briefed", skipped: true, reason: "the fix came straight from the steps", hand: "wright", credit: null, link: null, stamps_paid: null },
+    { stage: "fixed", state: "fixed", hand: "wright", credit: "errant", link: FIX_PR, stamps_paid: 25 },
   ], "six stage rows (the amend moves no stage; POS-713: the two skips are rows, crediting no one), the reproduced line not yet written");
   for (const r of one.history) assert.equal(new Date(r.at).toISOString(), r.at, "at is an ISO instant");
 
@@ -762,7 +762,7 @@ test("11 · the bug read carries history: the post and each advance, in order, w
   assert.equal(r.unavailable, undefined, "a store with a chain says nothing is missing");
   assert.deepEqual(r.posts.find((p) => p.id === id).history, one.history);
   assert.deepEqual(r.posts.find((p) => p.id === ID).history.map(({ at, ...x }) => x),
-    [{ stage: "reported", hand: null, credit: "errant", link: null, stamps_paid: null }],
+    [{ stage: "reported", state: "reported", hand: null, credit: "errant", link: null, stamps_paid: null }],
     "a bug posted by its reporter has no hand, and another post's line is not its");
 });
 
@@ -1074,8 +1074,8 @@ test("14 · #3757: briefed re-credited to kinofire with Kino's letter is its own
     `- 2026-10-15 · wright → BURN · 10 · for: correction:${"A".repeat(86)} · by: wright`];
   const one = (await postsAtOffice({ class: "bug", post: KINO_BUG }, { now: NOW, roll: ROLL })).post;
   assert.deepEqual(one.history.filter((h) => h.stage === "briefed").map(({ at, ...h }) => h), [
-    { stage: "briefed", hand: "wright", credit: "wright", link: t.own, stamps_paid: 10, recredited_to: "kinofire" },
-    { stage: "briefed", recredit: true, hand: "wright", credit: "kinofire", was: "wright", link: KINO_PLAN, note: NOTE, stamps_paid: 10 },
+    { stage: "briefed", state: "briefed", hand: "wright", credit: "wright", link: t.own, stamps_paid: 10, recredited_to: "kinofire" },
+    { stage: "briefed", state: "briefed", recredit: true, hand: "wright", credit: "kinofire", was: "wright", link: KINO_PLAN, note: NOTE, stamps_paid: 10 },
   ]);
   const { catchers } = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
   assert.deepEqual(catchers.find((c) => c.handle === "kinofire"), { handle: "kinofire", stamps: 10, bugs: 1 });
@@ -1254,7 +1254,7 @@ test("15 · (review-3842-578 nit) an idea award's label is never a bug stage's c
 // 10-19 a bug reached shipped without ever standing fixed. An advance now moves
 // one rung; a rung no one earned is `{ post, skip, reason }`, its own act.
 
-const SKIPPED = (stage, reason = "no one earned it in this test") => ({ stage, skipped: true, reason, hand: "wright", credit: null, link: null, stamps_paid: null });
+const SKIPPED = (stage, reason = "no one earned it in this test") => ({ stage, state: stage, skipped: true, reason, hand: "wright", credit: null, link: null, stamps_paid: null });
 
 test("16 · a jump is refused at every rung, naming the first unrecorded stage and both ways forward, and writes nothing", async () => {
   const { pen, posts } = setup();
@@ -1312,10 +1312,10 @@ test("16 · the bug read shows each skip as a history row, skipped with its reas
   ledger.lines = [stageLine("finn", 5, ID, "diagnosed")];
   const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
   assert.deepEqual(one.history.map(({ at, link, ...r }) => r), [
-    { stage: "reported", hand: null, credit: "errant", stamps_paid: null },
+    { stage: "reported", state: "reported", hand: null, credit: "errant", stamps_paid: null },
     { ...(({ link: _, ...r }) => r)(SKIPPED("confirmed", "reported by the founders' own probe")) },
     { ...(({ link: _, ...r }) => r)(SKIPPED("reproduced", "reported by the founders' own probe")) },
-    { stage: "diagnosed", hand: "wright", credit: "finn", stamps_paid: 5 },
+    { stage: "diagnosed", state: "diagnosed", hand: "wright", credit: "finn", stamps_paid: 5 },
   ]);
   const { catchers } = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
   assert.deepEqual(catchers, [{ handle: "finn", stamps: 5, bugs: 1 }, { handle: "errant", stamps: 0, bugs: 1 }]);
@@ -1462,4 +1462,15 @@ test("POS-777 · a bug post's post / advance / amend answers end `read` with the
     const hint = (await amendAtTown({ post: ID, body: "Again, with a different base." }, WRIGHT, { now: NOW, roll: ROLL })).read;
     assert.ok(hint.endsWith(`— or GET https://staging.example/api/posts/${ID}?class=bug`), hint);
   } finally { if (prev === undefined) delete process.env.PUBLIC_BASE; else process.env.PUBLIC_BASE = prev; }
+});
+
+test("POS-778 follow-up · every history row of the posts read carries state beside stage, the same value", async () => {
+  setup();
+  const at = { now: NOW, roll: ROLL };
+  await postAtTown(BUG, ERRANT, at);
+  await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, at);
+  const { post } = await postsAtOffice({ class: "bug", post: ID }, at);
+  assert.deepEqual(post.history.map((h) => [h.stage, h.state]), [["reported", "reported"], ["confirmed", "confirmed"]]);
+  const list = await postsAtOffice({ class: "bug" }, at);
+  assert.ok(list.posts.every((p) => p.history.every((h) => h.state === h.stage)));
 });
