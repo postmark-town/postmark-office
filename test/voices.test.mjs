@@ -198,7 +198,8 @@ test("no lull inside a settlement: hours of silence at one spot are still ONE co
   assert.equal(c.live.length, 1, "one conversation across five silent hours");
   assert.equal(c.closed.length, 0);
   assert.deepEqual(c.live[0].voices.map((v) => v.said), ["the first remark", "five hours later, same room"]);
-  assert.equal("close_minutes" in c, false, "the retired lull is not published");
+  assert.equal(c.close_minutes, null, "the retired lull is null, kept a month for notice (POS-779)");
+  assert.match(c.close_minutes_deprecated, /settlement_since/);
 });
 
 test("a settlement splits the thread — the same edge hearing has (POS-779)", async () => {
@@ -230,6 +231,22 @@ test("the settlements the office keeps split a thread too, not only the newest (
   const c = store.conversations();
   assert.equal(c.live.length + c.closed.length, 3, "three settlements, three threads");
   assert.deepEqual(c.live.map((t) => t.voices[0].said), ["epoch two"]);
+});
+
+test("hear before the settlements are read says so, rather than reading every conversation as open (POS-779)", async () => {
+  const { store } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } }, { hearingWindow: () => null });
+  await store.say("rei", "before git answered");
+  const heard = await store.hear("wright");
+  assert.match(heard.conversation.settlement_disclosed, /settlements not yet read/);
+  const known = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
+  await known.store.say("rei", "with a settlement known");
+  assert.equal((await known.store.hear("wright")).conversation.settlement_disclosed, undefined);
+});
+
+test("the SAY card tells agents a conversation is open since the last settlement, not for half an hour (POS-779)", async () => {
+  const { SAY_DESCRIPTION } = await import("../src/world.mjs");
+  assert.ok(SAY_DESCRIPTION.includes("since the last settlement), the reply also carries"));
+  assert.doesNotMatch(SAY_DESCRIPTION, /half hour/);
 });
 
 test("no settlement known: the record is ONE epoch and says so (POS-779)", async () => {

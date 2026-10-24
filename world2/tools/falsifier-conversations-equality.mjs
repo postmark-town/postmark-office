@@ -315,14 +315,8 @@ async function main() {
     // POS-779: a thread splits at the settlement and nowhere else. The falsifier
     // stands the settlements at the published heartbeat (06:00Z and 18:00Z), across
     // the span the record covers, because the comparison is about the derivation.
-    const boundaries = (() => {
-      const ats = derived.voices.map((v) => v.at);
-      if (!ats.length) return [];
-      const H = 12 * 3600_000, O = 6 * 3600_000;
-      const out = [];
-      for (let m = Math.floor((Math.min(...ats) - O) / H) * H + O; m <= Math.max(...ats); m += H) out.push(m);
-      return out;
-    })();
+    const boundaries = derived.voices.length
+      ? talk.heartbeatEdges(Math.min(...derived.voices.map((v) => v.at)), Math.max(...derived.voices.map((v) => v.at))) : [];
     const fadeMs = dials.fade_min.ms;
 
     // 1.0's own reader over the same log file, with its own clock pinned so both
