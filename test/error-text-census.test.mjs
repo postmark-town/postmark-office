@@ -94,6 +94,7 @@ const ALLOWED = {
   "world-filing-order.mjs": [1, `${OWN}: plumbing (git's stderr onto the thrown error, which the settlement's readers plain or log)`],
   "world-graph-snapshot.mjs": [2, `${OWN}: a rows fixture's load error (node --test only) and a tool's answer (worldGraphForTool), neither on a door; a refresh's error is plained (POS-680)`],
   "world-hold.mjs": [1, `${OWN}: PenUnreachableError's ruled sentence`],
+  "world-law-shape.mjs": [1, `${OWN}: plumbing (WLD-116: the first line of a failed import of the world's own tools, put in a thrown Error that names a path on the box; its readers are the hydrate gate, an operator's pass, and leave-exec's main, whose catch logs it to the child's stderr, so it never reaches a resident's answer)`],
   "world-hydrate.mjs": [5, `${OPERATOR} (the hydrate gate's refusals)`],
   "world-lints.mjs": [1, `${OPERATOR} (a lint's report)`],
   "world-movement.mjs": [1, `${OPERATOR} (storedDepartures' absent, for the crossing's save; the resident's disclosure in world.mjs plains it, POS-657)`],

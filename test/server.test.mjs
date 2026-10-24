@@ -648,7 +648,7 @@ test("GET /world/graph?kinds= filters, and refuses a kind that does not exist", 
 
   const bad = await get("/world/graph?kinds=marks", null);   // the plural is not a kind
   assert.equal(bad.status, 422);
-  assert.match((await bad.json()).hint, /kinds are mark, class, code, doctrine/);
+  assert.match((await bad.json()).hint, /kinds are mark, law, class, code, doctrine/);
 });
 
 test("GET /world/graph.gexf answers the filesystem, whichever state this office is in", async () => {
