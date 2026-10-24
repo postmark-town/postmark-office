@@ -197,7 +197,7 @@ const FLIPS = [
     edit: (t) => t
       .replace("      for (const e of entriesFrom(row, db)) {",
                "      for (const e of entriesOfClass(row, { channel: \"ground\", ground: groundId, parse: (s) => parseJson(s, null) })) {")
-      .replace("         ${WORKS_PATH_SQL}              AS declares,",
+      .replace("         ${declaresSql()}              AS declares,",
                "         json_extract(props, '$.declares') AS declares,") },
 ];
 

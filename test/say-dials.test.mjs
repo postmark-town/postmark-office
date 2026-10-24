@@ -228,17 +228,22 @@ test("CLASS_GATE_PARITY: the aliased gate in world-classes carries the roster ga
     "the aliased gate and CLASS_ROSTER_GATE_SQL have drifted — one of them is now reading a different set of class marks");
 });
 
-test("CLASS_GATE_PARITY: the position clause is SHARED, not hand-copied (the freeze re-key)", async () => {
+test("CLASS_GATE_PARITY: the gate is SHARED, not hand-copied (the freeze re-key; WLD-116)", async () => {
   // The bite this closes: two copies of a security boundary, and only one of
   // them re-keyed when the law moved. "A mark's directory is its historical
   // filing: it carries no claim" — so a hand-written path substring anywhere in
-  // the class gates is the pre-freeze law surviving in a second file.
+  // the class gates is the pre-freeze law surviving in a second file. WLD-116
+  // took the last hand-spelled clauses out of world-classes too: the aliased
+  // gate IS world-store's builder called with its alias, and the builder (one
+  // place) takes the position clause from worksClause(alias) for the old shape
+  // and asks the law-node kind for the new one.
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../src/world-classes.mjs", import.meta.url), "utf8");
-  const gate = /export const CLASS_GATE_C = `([\s\S]*?)`;/.exec(src)?.[1];
-  assert.ok(gate, "CLASS_GATE_C not found — did the aliased gate move?");
-  assert.match(gate, /\$\{worksClause\("c"\)\}/,
-    "the aliased gate must interpolate the shared worksClause, not spell the position clause itself");
-  assert.doesNotMatch(gate, /the-keeping-works/,
-    "a literal '/the-keeping-works/' in the aliased gate is the hand-copy come back — the freeze re-keyed position off the path");
+  assert.match(src, /export const CLASS_GATE_C = classRosterGateSql\("c"\);/,
+    "the aliased gate must be world-store's classRosterGateSql(\"c\"), not a second spelling of the clauses");
+  const gate = /export const CLASS_GATE_C = ([^;]*);/.exec(src)?.[1];
+  assert.doesNotMatch(gate, /the-keeping-works/, "a literal '/the-keeping-works/' in the aliased gate is the hand-copy come back");
+  const store = readFileSync(new URL("../src/world-store.mjs", import.meta.url), "utf8");
+  assert.ok(/\$\{worksClause\(alias\)\}/.test(store), "the shared builder must interpolate worksClause(alias), not spell the position clause itself");
+  assert.ok(/= '\$\{LAW_NODE_KIND\}'/.test(store), "the shared builder must ask the law-node kind: a class is a law node (WLD-116)");
 });

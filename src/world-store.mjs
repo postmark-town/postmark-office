@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync, rmSync } f
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { MultiDirectedGraph } from "graphology";
+import { LAW_NODE_KIND } from "./world-law-shape.mjs"; // WLD-116: classes are law nodes (store node kind `law`), never marks
 
 // ── the DDL ──────────────────────────────────────────────────────────────────
 
@@ -188,24 +189,60 @@ export const WORKS_PATH_SQL = worksClause();
 export const standsInTheWorks = (attr) => attr?.props?.in_works === true
   || (attr?.props?.in_works == null && String(attr?.props?.path ?? "").includes("/the-keeping-works/"));
 
-export const CLASS_MARK_GATE_SQL = `
-     kind = 'mark'
-     AND by   = 'the-town'
-     AND tier = 'constitution'
-     AND json_extract(props, '$.class') IS NOT NULL
-     AND ${WORKS_PATH_SQL}
-     AND (json_extract(props, '$.actions')     IS NOT NULL
-      OR  json_extract(props, '$.affordances') IS NOT NULL)`;
+// ── WLD-116: A CLASS IS A LAW NODE, AND THE GATE SAYS SO IN ONE PLACE ────────
+//
+// Classes are law nodes, never marks (postmark-node -> mark | post | law). The
+// hydrator writes one as a node of kind `law` (src/world-hydrate.mjs), and a node
+// of that kind IS a declaration: it stands in a foundry's law tree, which only the
+// foundry's authors can write, so the position clause, `by` and `tier` have
+// nothing left to prove. (A biome foundry's class carries `tier: biome`; asking
+// `tier = 'constitution'` of it would refuse the very classes the biome tier is
+// for, so the law arm asks no tier.)
+//
+// THE OLD ARM stays for a store hydrated from the old shape, where a class is a
+// `mark` row with `subkind = 'class'` and the gate is the position clause below.
+// It is the COMPATIBILITY READ and goes, here and nowhere else, with the old shape.
+// The two arms are disjoint on `kind`, so a store holds one shape or the other
+// and the gate answers either.
+//
+// Every gate below is built by these functions, with an alias where a joined
+// query needs one (world-classes.mjs' `c`), so the SQL, its twins in
+// world-graph-db.mjs and the tests' parity checks read ONE definition.
+const col = (alias, name) => (alias ? `${alias}.${name}` : name);
+const lawArm = (alias) => `${col(alias, "kind")} = '${LAW_NODE_KIND}'
+        AND json_extract(${col(alias, "props")}, '$.class') IS NOT NULL`;
+const markArm = (alias) => `${col(alias, "kind")} = 'mark'
+        AND ${col(alias, "by")}   = 'the-town'
+        AND ${col(alias, "tier")} = 'constitution'
+        AND json_extract(${col(alias, "props")}, '$.class') IS NOT NULL
+        AND ${worksClause(alias)}`;
+const actionsArm = (alias) => `(json_extract(${col(alias, "props")}, '$.actions')     IS NOT NULL
+        OR  json_extract(${col(alias, "props")}, '$.affordances') IS NOT NULL)`;
+/** The roster gate (which class NAMES exist in law), spelled against `alias` ("" for a bare column). */
+export const classRosterGateSql = (alias = "") => `(
+     (${lawArm(alias)})
+  OR (${markArm(alias)}))`;
+/** The verb-minting gate: the roster gate AND the class carries actions. */
+export const classMarkGateSql = (alias = "") => `(
+     (${lawArm(alias)}
+        AND ${actionsArm(alias)})
+  OR (${markArm(alias)}
+        AND ${actionsArm(alias)}))`;
+/** `declares` as a column: a law node declares outright; a mark by the position clause (NULL when unreadable). */
+export const declaresSql = (alias = "") => `(${col(alias, "kind")} = '${LAW_NODE_KIND}' OR ${worksClause(alias)})`;
+
+export const CLASS_MARK_GATE_SQL = classMarkGateSql();
 
 /** The same gate, as a predicate over a loaded node's attributes.
  *  `actions:` is the key (2026-08-15); `affordances:` is its pre-rename
  *  spelling, still admitted so a store hydrated from older law keeps its
  *  doors. */
-export const isClassMark = (attr) => attr?.kind === "mark"
-  && attr?.by === "the-town"
-  && attr?.tier === "constitution"
-  && attr?.props?.class != null
-  && standsInTheWorks(attr)
+export const isClassMark = (attr) => (attr?.kind === LAW_NODE_KIND && attr?.props?.class != null
+    || (attr?.kind === "mark"
+      && attr?.by === "the-town"
+      && attr?.tier === "constitution"
+      && attr?.props?.class != null
+      && standsInTheWorks(attr)))
   && (attr?.props?.actions != null || attr?.props?.affordances != null);
 
 // ── THE CLASS ROSTER — a WIDER gate than the one above, deliberately ─────────
@@ -225,21 +262,17 @@ export const isClassMark = (attr) => attr?.kind === "mark"
 // law grew a second resident-declarable class. This is the office's half of
 // that one definition, gated identically: authorship carries the weight, and no
 // credential at any door can author as the town.
-export const CLASS_ROSTER_GATE_SQL = `
-     kind = 'mark'
-     AND by   = 'the-town'
-     AND tier = 'constitution'
-     AND json_extract(props, '$.class') IS NOT NULL
-     AND ${WORKS_PATH_SQL}`;
+export const CLASS_ROSTER_GATE_SQL = classRosterGateSql();
 
 /** The same roster gate, as a predicate over a loaded node's attributes.
  *  Position-claused since the step-1 promotion (see WORKS_PATH_SQL above):
  *  a class-carrying mark OUTSIDE the works is an INSTANCE of that class. */
-export const isClassDefinition = (attr) => attr?.kind === "mark"
-  && attr?.by === "the-town"
-  && attr?.tier === "constitution"
-  && attr?.props?.class != null
-  && standsInTheWorks(attr);
+export const isClassDefinition = (attr) => attr?.props?.class != null
+  && (attr?.kind === LAW_NODE_KIND
+    || (attr?.kind === "mark"
+      && attr?.by === "the-town"
+      && attr?.tier === "constitution"
+      && standsInTheWorks(attr)));
 
 // ── AMBIENT REACH — a second, separate rule ─────────────────────────────────
 //

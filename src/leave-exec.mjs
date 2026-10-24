@@ -34,6 +34,7 @@ import { markRecord, recordKindOf } from "./mark-record.mjs";
 import { ensureDraftCheckout } from "./world-branches.mjs";
 import { isDroppedUnitMark } from "./world-stacks.mjs";
 import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung (LOGOS v2, O1)
+import { readWorldRecords, recordsOf } from "./world-law-shape.mjs"; // WLD-116: the classes are the law tree's in the new shape; one helper decides which shape the clone is in
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578, POS-617)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -101,7 +102,13 @@ async function main() {
     return err(409, "the household sketchbook is not ready", faultLogged("the household sketchbook is not ready", e));
   }
 
-  const marks = timed("load", () => loadMarks(MARKS_DIR));
+  // THE CLONE IN EITHER SHAPE: the new shape files the classes in WORLD/law/ (not marks), and the
+  // lineage this door judges a parent by ("can this mark hold a description") is theirs.
+  const tLoad = performance.now();
+  const world = await readWorldRecords({ marksDir: MARKS_DIR, toolsDir: tools, loadMarks });
+  phases.push(`load=${Math.round(performance.now() - tLoad)}ms`);
+  const marks = world.marks;
+  const kindIndex = world.tools ? world.tools.kindIndexOf(world.law) : null;
   const byId = new Map(marks.map((m) => [m.id, m]));
   const id = `${p.by}/${p.slug}`;
 
@@ -130,7 +137,7 @@ async function main() {
   // read rather than to no guard at all: a stale guard beats an absent one, and
   // the old behaviour is exactly what a pre-freeze tree wants.
   const containedBy = typeof containmentParents === "function"
-    ? containmentParents(marks).parent : null;
+    ? containmentParents(marks, { law: world.law }).parent : null;
   const holdsChildren = (d, markId = null) => {
     if (containedBy && markId) {
       for (const [child, parent] of containedBy) if (parent === markId && child !== markId) return true;
@@ -247,7 +254,7 @@ async function main() {
     const parent = byId.get(parentId);
     if (!parent) return err(422, `no mark "${parentId}" to describe`, "predicated/naming marks nest under the mark they describe — pass its id as parent_id");
     // sited in either form: `kind: thing` stands by its class's lineage, read off the clone's own class nodes
-    if (!isSited(parent, extendsFromMarks(marks))) return err(422, `"${parentId}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
+    if (!isSited(parent, extendsFromMarks(recordsOf(world)))) return err(422, `"${parentId}" cannot hold a description`, "only sited/parcel marks carry predicated/naming children");
     parentDir = parent._dir;
   }
 
@@ -380,7 +387,7 @@ async function main() {
   if (p.preview === true) {
     const candidate = { id, kind: p.kind, by: p.by, at: p.at ?? null, extent: p.extent ?? null, ...(p.points ? { points: p.points } : {}) };
     const all = [...marks.filter((m) => m.id !== id), candidate];
-    const parent = typeof containmentParentOf === "function" ? (containmentParentOf(candidate, all) ?? null)
+    const parent = typeof containmentParentOf === "function" ? (containmentParentOf(candidate, all, undefined, kindIndex) ?? null)
       : typeof placementParent === "function" ? (placementParent(candidate, all) ?? worldRootOf?.(all)?.id ?? null)
       : null;
     return answer({ preview: true, id, kind: p.kind, parent, would: amending ? "amend" : "leave",

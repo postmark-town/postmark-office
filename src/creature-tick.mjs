@@ -70,6 +70,7 @@ import { pathToFileURL } from "node:url";
 import { actsQuery, world2Enabled } from "./world2-acts.mjs";
 import { blessedSha, materializeAtRef, pathAtRef, readAtRef } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
+import { RECORD_FILE_RE, recordFileIn } from "./world-law-shape.mjs"; // WLD-116: node.md in the law tree, mark.md where a class is still filed as a mark
 import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { errorSaid, faultLogged } from "./fault-words.mjs";
@@ -113,9 +114,10 @@ export async function windowInputsAt(sha, { repo = WORLD_CLONE } = {}) {
   for (const name of ["creatureLaw", "scheduleFor", "dueSpawns", "secretFor", "commitmentOf"])
     if (typeof creaturesMod[name] !== "function") return { sha, creaturesMod, law: null, why: `tools/creatures.mjs at ${sha} has no ${name}` };
   const dir = creaturesMod.CREATURE_LAW_DIR;
-  if (!dir || !pathAtRef(repo, sha, `${dir}/mark.md`)) return { sha, creaturesMod, law: null, why: `no creature class at ${sha}` };
+  // (the class is a law node since WLD-116: `node.md` in the law tree, `mark.md` where the world still files it as a mark)
+  if (!dir || !recordFileIn(dir, (p) => pathAtRef(repo, sha, p))) return { sha, creaturesMod, law: null, why: `no creature class at ${sha}` };
   const root = materializeAtRef(repo, sha, dir);
-  const files = readdirSync(join(root, dir), { recursive: true }).map(String).filter((p) => /(^|[\\/])mark\.md$/.test(p));
+  const files = readdirSync(join(root, dir), { recursive: true }).map(String).filter((p) => RECORD_FILE_RE.test(p));
   const law = creaturesMod.creatureLaw(files.map((p) => marksFold.parseRecord(readFileSync(join(root, dir, p), "utf8"), `${dir}/${p}`)));
   if (!law) return { sha, creaturesMod, law: null, why: `no creature class at ${sha}` };
   const skeleton = JSON.parse(readAtRef(repo, sha, "WORLD/skeleton.json"));

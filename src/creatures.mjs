@@ -83,6 +83,7 @@ import { pathToFileURL } from "node:url";
 import { actsQuery } from "./world2-acts.mjs";
 import { blessedRef, materializeAtRef, readAtRef } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
+import { RECORD_FILE_RE } from "./world-law-shape.mjs"; // WLD-116: node.md in the law tree, mark.md in the old filing
 import { faultLogged } from "./fault-words.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
@@ -219,7 +220,7 @@ async function affordedAt({ repo, at, tool, kindMod, creaturesMod, lawRecords })
       const dir = creaturesMod.CREATURE_LAW_DIR;
       const { parseRecord } = await tool("marks-fold.mjs");
       const root = materializeAtRef(repo, at, dir);
-      const files = readdirSync(join(root, dir), { recursive: true }).map(String).filter((p) => /(^|[\\/])mark\.md$/.test(p));
+      const files = readdirSync(join(root, dir), { recursive: true }).map(String).filter((p) => RECORD_FILE_RE.test(p)); // node.md in the law tree, mark.md in the old filing (WLD-116)
       return files.map((p) => parseRecord(readFileSync(join(root, dir, p), "utf8"), `${dir}/${p}`));
     })();
     const law = creaturesMod.creatureLaw(records);

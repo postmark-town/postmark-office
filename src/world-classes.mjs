@@ -31,7 +31,7 @@
 // distinguished from a good read is the failure this file exists to avoid
 // twice: "a silent fallback is indistinguishable from success."
 
-import { CLASS_ROSTER_GATE_SQL, worksClause } from "./world-store.mjs"; // the roster gate is also the type/instance seam — see markClass
+import { CLASS_ROSTER_GATE_SQL, classRosterGateSql } from "./world-store.mjs"; // the roster gate is also the type/instance seam — see markClass
 import { lawSnapshot } from "./law-snapshot.mjs";
 // POS-270 lane W: every world read below opens the world graph snapshot (each
 // statement has a twin at the end of this file, held equal to its SQL). Before
@@ -672,15 +672,12 @@ export function departurePace() {
 // re-keyed position off the path, one edit moved both readers, which is what a
 // security boundary with two copies could not do.
 //
-// The other four clauses are still spelled out; if the roster gate grows a
-// fifth, this grows it too, and CLASS_GATE_PARITY in the test file is what makes
-// the omission fail out loud instead of narrowing the read.
-export const CLASS_GATE_C = `
-     c.kind = 'mark'
-     AND c.by   = 'the-town'
-     AND c.tier = 'constitution'
-     AND json_extract(c.props, '$.class') IS NOT NULL
-     AND ${worksClause("c")}`;
+// WLD-116: NOTHING IS SPELLED OUT HERE ANY MORE. The gate is world-store's
+// `classRosterGateSql(alias)`, which builds the law-node arm and the old mark arm
+// (the position clause) against whatever alias it is handed, so this is the same
+// implementation as CLASS_ROSTER_GATE_SQL, not a copy of its clauses.
+// CLASS_GATE_PARITY in the test file holds the two equal.
+export const CLASS_GATE_C = classRosterGateSql("c");
 
 const DIAL_PREDICATE_SQL = `
   SELECT json_extract(p.props, '$.slot') AS slot,

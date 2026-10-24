@@ -22,6 +22,7 @@ import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { LAW_STATE_FILE, lawNodesOfState } from "./world-law-shape.mjs"; // WLD-116: the law a published world carries
 
 import { NEWEST_SETTLEMENT_FORMAT, newestSettlementFromRefLines } from "./settlements.mjs";
 import { answerFrom, askRefresher, refresherBehind, replay } from "./world-refresher.mjs";
@@ -886,6 +887,15 @@ export function publishedState(repo) {
   const canon = blessed(repo);
   let state;
   let read = false;
+  let lawDoc = null;
+  let lawRead = false;
+  const lawState = () => {
+    if (!lawRead) {
+      lawDoc = pathAtRef(repo, canon.ref, LAW_STATE_FILE) === true ? readJsonAtRef(repo, canon.ref, LAW_STATE_FILE) : null;
+      lawRead = true;
+    }
+    return lawDoc;
+  };
   return {
     ref: canon.ref,
     sha: canon.sha,
@@ -893,6 +903,12 @@ export function publishedState(repo) {
       if (!read) { state = readJsonAtRef(repo, canon.ref, "WORLD/world-state.json"); read = true; }
       return state;
     },
+    // THE LAW AT THIS BLESSING (WLD-116): classes are law nodes, never marks, so the fold's state
+    // carries none and the fold writes WORLD/law-state.json beside it. A ref in the old shape has no
+    // such file (its classes are among the state's marks) and its law is [].
+    get law() { return lawNodesOfState(lawState()); },
+    /** The whole WORLD/law-state.json at this blessing, or null for a ref in the old shape. */
+    get lawState() { return lawState(); },
     blessed: canon,
   };
 }

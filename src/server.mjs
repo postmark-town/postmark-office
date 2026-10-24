@@ -58,7 +58,7 @@ import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs";
 import { logAccess } from "./telemetry.mjs";
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
-import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
+import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldLawStateRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
@@ -1667,6 +1667,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         return worldStakeRead(args).then((r) => j(res, r?.error === "bounce" ? (r.code ?? 422) : 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
       }
       if (path === "/world/skeleton") return worldSkeletonRaw().then((r) => j(res, 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
+      // GET /world/law — WORLD/law-state.json at the blessing /world/state stands on (WLD-116): the classes are law nodes, not marks.
+      if (path === "/world/law") return worldLawStateRaw().then((r) => j(res, 200, r)).catch((e) => bounceFault(res, "the world door tripped", e));
       // GET /world/walkers — the presence layer's read side (ruling 1): every
       // walker's DERIVED position this instant, from public records only.
       if (path === "/world/walkers") {
