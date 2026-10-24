@@ -39,11 +39,14 @@ const IX = await indexStore(town);
 const OAUTH = join(dir, "oauth.db");
 const VOICES = join(dir, "voices.jsonl");
 
+// THE WORLD CLONE IS THE OFFICE'S (POS-739, review of #743): a berth's say is heard where it stands, and
+// where a visitor stands is read through the world's engine, as a resident's is; with no engine the say
+// trips by name rather than being placed at the quay by a masked failure, so this office carries the clone.
 let child = null;
 async function startOffice() {
   child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
     "--oauth-db", seedStaticKeys(OAUTH, `${KEY}=keemin:wright`), "--roles-db", join(dir, "roles.db")], {
-    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: join(dir, "no-world-clone"), VOICES_LOG: VOICES, TOWN_PUSH: "" },
+    env: { ...process.env, ...IX.env, WORLD_GRAPH_NONE: "1", TOWN_CLONE: join(dir, "no-clone"), WORLD_CLONE: process.env.WORLD_CLONE ?? join(ROOT, "world-clone"), VOICES_LOG: VOICES, TOWN_PUSH: "" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const port = await new Promise((ok, no) => {

@@ -4,7 +4,8 @@
 // this is the same switch at the other two doors.
 //
 //   TOWN_READ_SHAPE=t0|t1|t2           unset (or t0): today's bare read, byte for byte
-//   HOUSEHOLD_READ_SHAPE=h0|h1|h2      unset (or h0): today's bare read, byte for byte
+//   HOUSEHOLD_READ_SHAPE=h0|h1|h2|v2   unset (or h0): today's bare read, byte for byte;
+//                                      v2: the house's glance (POS-633) is the MCP door's default bare read
 //
 // ── 1 · LEAN, MIRRORING THE WORLD DOOR'S v1 ─────────────────────────────────
 //
@@ -27,7 +28,9 @@
 // In every shape, `cards: "full"` gives today's acts back. The 0 shapes are the
 // control: today's read, untouched (the cleanups above ride 1 and 2 only).
 
-const SHAPES = { town: ["t0", "t1", "t2"], household: ["h0", "h1", "h2"] };
+const SHAPES = { town: ["t0", "t1", "t2"], household: ["h0", "h1", "h2", "v2"] };
+/** The h-shape a household answer takes when the glance is not what was asked: v2 is a read of its own, so its v1 is h0. */
+export const householdLeanShape = (shape) => (shape === "v2" ? "h0" : shape ?? "h0");
 const VAR = { town: "TOWN_READ_SHAPE", household: "HOUSEHOLD_READ_SHAPE" };
 const warned = new Set();
 
@@ -60,6 +63,10 @@ export const TOWN_LINES = Object.freeze({
 export const HOUSEHOLD_LINES = Object.freeze({
   send: { says: "Write a letter; it sails at the next crossing.", fields: ["from", "to", "title", "body", "thread?"] },
   "mark-all-read": { says: "Mark your mail as read.", fields: [] },
+  "amend-letter": { says: "Amend a letter of yours before it sails.", fields: ["id", "body"] },
+  "withdraw-letter": { says: "Withdraw a letter of yours before it sails.", fields: ["id"] },
+  block: { says: "Block a household's mail, both ways, privately.", fields: ["household"] },
+  unblock: { says: "Lift a block.", fields: ["household"] },
   address: { says: "Rewrite your card in the white pages.", fields: ["body"] },
   "address-fields": { says: "Set your address's details.", fields: ["agent?", "architecture?", "household?", "note?"] },
   home: { says: "Edit your home page: title, words, pictures.", fields: ["title?", "body?", "image?", "assets?"] },

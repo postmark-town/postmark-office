@@ -77,6 +77,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
+import { holdMedia } from "./helpers/media-ledger.mjs";
 
 Object.assign(process.env, RECORD_ON);
 const { postAtTown, amendAtTown, advanceAtTown, closeAtTown } = await import("../src/events-store.mjs");
@@ -589,9 +590,10 @@ test("8 · a name with markup is stored and returned as plain text, exactly as s
 // ── 9 · the reveal at ship (POS-236) ───────────────────────────────────────
 
 const { revealAtTown } = await import("../src/events-store.mjs");
-const PAINTED = ["https://media.postmark.town/media/iris/hinge-nibbler-1.png",
-  "https://media.postmark.town/media/iris/hinge-nibbler-2.png",
-  "https://media.postmark.town/media/iris/hinge-nibbler-3.png"];
+// Three pictures the town holds: a candidate is checked against the media
+// ledger before the reveal is written (POS-738).
+const PAINTED = ["1", "2", "3"].map((n) => `https://media.postmark.town/media/iris/${n.repeat(64)}.png`);
+holdMedia(...PAINTED);
 const ADA = { household: "the-harbor", handles: new Set(["ada"]) };
 
 async function toShipped() {
@@ -650,6 +652,8 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds 3 candidates/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [...PAINTED.slice(0, 2), "https://example.com/x.png"] }, WRIGHT, { now: NOW }), 422, /a candidate is a media URL/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0], PAINTED[0], PAINTED[1]] }, WRIGHT, { now: NOW }), 422, /three different images/);
+  // POS-738: a right-shaped URL whose bytes the town never held is refused, by name
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [...PAINTED.slice(0, 2), `https://media.postmark.town/media/iris/${"4".repeat(64)}.png`] }, WRIGHT, { now: NOW }), 422, /the town holds no file at that URL/);
   await refusedNothingWritten(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), 409, /has no candidates yet/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED, pick: 1 }, WRIGHT, { now: NOW }), 422, /one at a time/);
   await refusedNothingWritten(revealAtTown({ post: ID }, WRIGHT, { now: NOW }), 422, /one at a time/);
@@ -1437,4 +1441,25 @@ test("POS-778 · unknown query parameters are named with the nearest known one; 
   assert.equal(unknownPostsParam(["class", "stage", "state", "limit", "offset"]), null);
   assert.match(unknownPostsParam(["statee"]).defect, /did you mean `state`\?/);
   assert.doesNotMatch(unknownPostsParam(["zzzzzzzz"]).defect, /did you mean/);
+});
+
+// ── POS-777 · the read hint is an absolute url ──────────────────────────────
+
+test("POS-777 · a bug post's post / advance / amend answers end `read` with the ABSOLUTE https://postmark.town/api/posts/<id>?class=bug, built from PUBLIC_BASE", async () => {
+  setup();
+  const want = `https://postmark.town/api/posts/${ID}?class=bug`;
+  const r = await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  assert.ok(r.read.endsWith(`— or GET ${want}`), r.read);
+  const m = await amendAtTown({ post: ID, body: "The front door of the post office does not open on the second try, or the third." }, ERRANT, { now: NOW, roll: ROLL });
+  assert.ok(m.read.endsWith(`— or GET ${want}`), m.read);
+  const a = await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.ok(a.read.endsWith(`— or GET ${want}`), a.read);
+  assert.doesNotMatch(a.read, /GET \/posts/, "no bare relative path left in the hint");
+  // one place builds it: the office's own PUBLIC_BASE, read when the answer is made
+  const prev = process.env.PUBLIC_BASE;
+  process.env.PUBLIC_BASE = "https://staging.example/api/";
+  try {
+    const hint = (await amendAtTown({ post: ID, body: "Again, with a different base." }, WRIGHT, { now: NOW, roll: ROLL })).read;
+    assert.ok(hint.endsWith(`— or GET https://staging.example/api/posts/${ID}?class=bug`), hint);
+  } finally { if (prev === undefined) delete process.env.PUBLIC_BASE; else process.env.PUBLIC_BASE = prev; }
 });

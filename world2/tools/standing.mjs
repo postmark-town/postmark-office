@@ -88,9 +88,16 @@
 // file. The COLUMN staying NULL on those rows is the pen's, reported with
 // the lane, not repaired here: a row rewrite is a prod write.
 //
-// ── THE CONSTITUTION SHORTCUT READS THE COLUMN IT WRITES ─────────────────────
+// ── THE CONSTITUTION SHORTCUT IS THE TOWN'S HAND (POS-702) ──────────────────
 //
-// `markStanding`'s first line is the town's own exception:
+// SUPERSEDED 2026-10-19 (POS-702; Darko, 09:59: "By definition, the
+// constitutional marks are the ones that are belonging to the town"). The
+// shortcut is now `townOwned(mark)`, the owner alone, in the world and in this
+// port, so it no longer reads `data.tier` at all and the fixpoint below holds
+// trivially: the owner column is never written by the walk. Kept as the record
+// of why the old line was safe:
+//
+// `markStanding`'s first line was the town's own exception:
 //
 //   "The one exception is the town's own law, read BELOW BEFORE the walk. The
 //    constitution is the town speaking about the town's ground, and it has to be
@@ -258,6 +265,11 @@ export function marksContain(outer, inner, { cell = COVERAGE_CELL_M, frac = 0.99
 
 // The fold's own constants, at the same sha.
 export const TOWN = "the-town";                        // mark-standing.mjs:57
+
+/** mark-standing.mjs § townOwned: the town's own hand, which IS the constitution (POS-702). */
+export function townOwned(mark) {
+  return (mark?.by ?? mark?.household) === TOWN;
+}
 export const WORLD_ROOT_SLUG = "let-there-be-light";   // marks-fold.mjs:180
 export const WORLD_SCALE_M = 50000;                    // placementParent's default
 export const PARCEL_DIAL = { w: 25, h: 25 };           // DIALS.parcel_w / parcel_h
@@ -370,8 +382,12 @@ export function classChainOf(classes, name) {
 
 /**
  * How a record stands: "sited", "parcel", "predicate", "naming", "post",
- * "class", "property", or null. mark-kind.mjs § standingOf, over the store's
- * class layer (`classes`, from `classLayerOf`).
+ * "landform", "class", "property", or null. mark-kind.mjs § standingOf, over the
+ * store's class layer (`classes`, from `classLayerOf`).
+ *
+ * A LANDFORM (WLD-97, ruled by Darko 2026-10-22 21:03–21:04) extends `mark`, a
+ * sibling of sited: it carries a place and only shapes the ground, so it is never
+ * sited and never ground, even on a skew where the place would otherwise answer.
  */
 export function standsAs(m, classes = null) {
   if (!m) return null;
@@ -382,8 +398,8 @@ export function standsAs(m, classes = null) {
   if (kind == null) return null;
   if (STANDING_WORDS.has(kind)) return kind;
   const chain = classes ? classChainOf(classes, kind) : [];
-  if (!chain.includes(CLASS_ROOT)) return m.at ? "sited" : null;
-  for (const s of ["post", "naming", "predicate", "parcel", "sited"]) if (chain.includes(s)) return s;
+  if (!chain.includes(CLASS_ROOT)) return kind === "landform" ? "landform" : m.at ? "sited" : null;
+  for (const s of ["post", "naming", "predicate", "parcel", "sited", "landform"]) if (chain.includes(s)) return s;
   return null;
 }
 
@@ -682,7 +698,8 @@ const boxesTouch = (a, b) => a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y
  */
 export function markStanding(mark, byId) {
   if (!mark) return "market";
-  if ((mark.by ?? mark.household) === TOWN && mark.tier === "constitution") return "constitution";
+  // mark-standing.mjs § markStanding, POS-702: every town mark is the constitution.
+  if (townOwned(mark)) return "constitution";
   const house = standingHouseholdOf(mark);
   let m = mark;
   for (let hops = 0; m && hops < 32; hops++) {
@@ -966,7 +983,7 @@ export function admissionNotes(rows, { houseOf = null } = {}) {
 
   // 1 · the class-parent edge, and why the walk never needs it.
   const lawParented = records.filter((m) => m._parent_is_law);
-  const uncovered = lawParented.filter((m) => !(m.by === TOWN && m.tier === "constitution"));
+  const uncovered = lawParented.filter((m) => !townOwned(m));
   if (uncovered.length)
     notes.push(`${uncovered.length} mark(s) are predicated on a CLASS mark (no \`marks\` row to climb to) and are ` +
       `NOT answered by the constitution shortcut, so the walk dead-ends on them: ` +

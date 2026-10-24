@@ -204,7 +204,11 @@ before(async () => {
     const { join } = await import("node:path");
     const clone = WORLD_CLONE;
     if (!clone) throw new Error("WORLD_CLONE is unset");
-    const dir = branches.materializeAtRef(clone, branches.freshestMainRef(clone), "tools");
+    // AT THE BLESSED REF, as the door's own engine is (world2-serve.mjs § the blessed
+    // engine). This read the freshest main until 2026-10-19, which said "loaded the
+    // way the door loads it" and was not: a world pin past the last settlement
+    // (WLD-83's, at world#257's descent) gave the oracle an engine the door did not run.
+    const dir = branches.materializeAtRef(clone, branches.blessedRef(clone), "tools");
     const at = (f) => import(pathToFileURL(join(dir, "tools", f)).href);
     const [verbs, build] = await Promise.all([at("world-verbs.mjs"), at("world-build.mjs")]);
     ENGINE = { verbs, build };

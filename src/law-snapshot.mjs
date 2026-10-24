@@ -29,8 +29,29 @@
 // `reloadLawSnapshot()` is the one way to make THIS process learn the tag
 // moved. The timer calls it; a read worker (POS-266) calls it too, or runs its
 // own timer — each process holds its own copy and learns on its own.
+//
+// ── A REFRESH HAS A DEADLINE (POS-680) ───────────────────────────────────────
+// A refresh shared through `inflight` that never settled (a store query that
+// hangs) used to answer every later tick with the same pending promise, so the
+// law in force was the one before it until the process restarted. Now a
+// refresh still running after LAW_REFRESH_DEADLINE_MS is let go: `inflight` is
+// cleared, its callers get `{ changed: false, abandoned: true }`, and the next
+// tick starts a fresh one. A refresh that was let go and then finishes still
+// publishes, unless a refresh that started after it has already published, so
+// a store that is slow rather than stuck costs nothing. What was let go is
+// ended by the store itself (a statement_timeout scoped to the refresh's own
+// transaction), and at most MAX_LOADS refreshes run at once, law and graph
+// together (snapshot-loads.mjs), so a store that hangs never takes the pool.
+//
+// ── ONE EVENT FOR EVERY PUBLISH (POS-680) ────────────────────────────────────
+// Whatever publishes a law (the timer, a read worker's announcement, a test, a
+// tool), the same listeners hear it (`onLawPublish`): the main thread's
+// announcement to its read workers, and every kept read that is derived from
+// the law (restored-classes.mjs), so nothing derived outlives the law it was
+// read from.
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
+import { startLoad, endLoad, loadsStanding, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
 
 // The pair that says "the law to serve has moved". Both halves matter: a new
 // settlement whose law is not ingested moves `newest` (the disclosure changes),
@@ -44,16 +65,59 @@ export const PIN_SQL = `
 /** The two statements a refresh sends, by name — so a test can tell them apart. */
 export const LAW_REFRESH_SQLS = Object.freeze({ pin: PIN_SQL, law: LAW_AT_BLESSING_SQL });
 
-const state = {
+/** How long a refresh may run before it is let go (POS-680). */
+export const LAW_REFRESH_DEADLINE_MS = Number(process.env.LAW_REFRESH_DEADLINE_MS ?? 3_000);
+
+const fresh = () => ({
   snap: null,          // the published snapshot, or null (the floor)
   key: null,           // "newest/pinned" the published snapshot answers
   inflight: null,      // the refresh in progress, if any — never awaited by a read
   lastError: null,     // the last refresh's failure, for the health line
   timer: null,
-};
+  started: 0,          // refreshes started, numbered: a late one never publishes over a newer one
+  publishedBy: 0,      // the number of the refresh whose law is in force
+  checkedAt: null,     // when a refresh last finished asking the store (ISO), for the health line
+  publishedAt: null,   // when the law in force was published (ISO)
+  abandoned: 0,        // refreshes let go at the deadline, this process
+  unhear: null,        // the refresher's own listener, removed by a reset
+});
+const state = fresh();
+const listeners = new Set();
 
 /** The published snapshot, or null. Synchronous; never queries. */
 export const lawSnapshot = () => state.snap;
+
+/**
+ * Hear every publish, from any path. `fn(standing)` runs after the new law is
+ * in force; one that throws stops nothing. Returns the way to stop hearing.
+ */
+export function onLawPublish(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function publish(next, key, n) {
+  // THE PUBLISH. One assignment: a reader sees the old snapshot or the new
+  // one, never a half-built map.
+  state.snap = next; state.key = key; state.publishedBy = n; state.publishedAt = new Date().toISOString();
+  const standing = lawStanding();
+  for (const fn of listeners) { try { fn(standing); } catch { /* a listener that throws does not stop the publish */ } }
+}
+
+/** The standing as GET /release (a keyless page) shows it: the law in force, and the refresher. Every field is the office's own words. */
+export function lawForRelease() {
+  return { ...lawStanding(), refresh: lawRefreshStanding() };
+}
+
+/**
+ * The refresher's own state, for the health line: when the store was last
+ * asked, when the law in force was published, how many refreshes were let go,
+ * and whether one is running now.
+ */
+export function lawRefreshStanding() {
+  return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
+    in_flight: Boolean(state.inflight), deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding() };
+}
 
 /**
  * Where the class layer is standing right now, for a door to disclose:
@@ -72,10 +136,11 @@ export function lawStanding() {
   };
 }
 
+// The store, by default: a refresh handed no `query` reads in its own timed
+// session on the serve pool (snapshot-loads.mjs § timedSession). This function
+// is that default's name; a refresh never calls it statement by statement.
 async function defaultQuery(sql, params) {
-  const { world2ServeEnabled, world2Pool } = await import("./world2-serve.mjs");
-  if (!world2ServeEnabled()) throw new Error("the world 2.0 store is not engaged at this office (WORLD2_PG/WORLD2_PG_URL)");
-  return (await world2Pool()).query(sql, params);
+  return (await servePool()).query(sql, params);
 }
 
 /**
@@ -85,55 +150,86 @@ async function defaultQuery(sql, params) {
  * recorded for `lawStanding()`; it never throws into a caller.
  *
  * `query(sql, params)` → `{ rows }` — the pg pool by default; a test hands in
- * PGlite.
+ * PGlite. `deadlineMs` is how long callers wait before the refresh is let go
+ * (§ A REFRESH HAS A DEADLINE); null waits for it however long it takes.
  */
-export function reloadLawSnapshot({ query = defaultQuery, force = false } = {}) {
+export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlineMs = LAW_REFRESH_DEADLINE_MS } = {}) {
   if (state.inflight) return state.inflight;
-  state.inflight = (async () => {
+  if (!startLoad()) {
+    state.lastError = `${MAX_LOADS} store refreshes are still running (the cap); this one was skipped and the next tick asks again`;
+    return Promise.resolve({ changed: false, busy: true, standing: lawStanding() });
+  }
+  const n = ++state.started;
+  const newest = () => n === state.started; // only the newest refresh speaks for the health line
+  let live = null;
+  const work = (async () => {
+    await null; // the body runs after `inflight` is set, even when `query` throws at once
+    let session = null;
     try {
-      const pin = (await query(PIN_SQL)).rows[0] ?? {};
+      if (query === defaultQuery) session = await timedSession(await servePool());
+      const ask = session ? session.query : query;
+      const pin = (await ask(PIN_SQL)).rows[0] ?? {};
       const key = `${pin.newest ?? "-"}/${pin.pinned ?? "-"}`;
-      if (!force && state.snap && key === state.key) { state.lastError = null; return { changed: false, standing: lawStanding() }; }
-      const next = lawSnapshotFromRows((await query(LAW_AT_BLESSING_SQL)).rows);
-      // THE PUBLISH. One assignment: a reader sees the old snapshot or the new
-      // one, never a half-built map. A store with no ingested blessing publishes
-      // nothing and leaves whatever stood (null on a fresh process: the floor).
-      if (next) { state.snap = next; state.key = key; }
-      state.lastError = next ? null : "the store holds no settlement whose law is ingested";
-      return { changed: !!next, standing: lawStanding() };
+      if (!force && state.snap && key === state.key) {
+        if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
+        return { changed: false, standing: lawStanding() };
+      }
+      const next = lawSnapshotFromRows((await ask(LAW_AT_BLESSING_SQL)).rows);
+      // A refresh let go at its deadline publishes only if nothing that started
+      // after it has published since. A store with no ingested blessing
+      // publishes nothing and leaves whatever stood (null on a fresh process:
+      // the floor).
+      const late = n < state.publishedBy;
+      if (next && !late) publish(next, key, n);
+      if (newest()) { state.lastError = next ? null : "the store holds no settlement whose law is ingested"; state.checkedAt = new Date().toISOString(); }
+      return { changed: Boolean(next) && !late, standing: lawStanding() };
     } catch (e) {
-      state.lastError = String(e?.message ?? e).slice(0, 160);
+      if (newest()) state.lastError = plainRefreshError(e, "the law refresh"); // plain words: the standing rides a keyless page
       return { changed: false, standing: lawStanding() };
     } finally {
-      state.inflight = null;
+      await session?.end();
+      endLoad();
+      if (state.inflight === live) state.inflight = null;
     }
   })();
-  return state.inflight;
+  let timer = null;
+  live = deadlineMs == null ? work : Promise.race([work, new Promise((resolve) => {
+    timer = setTimeout(() => {
+      if (state.inflight === live) state.inflight = null;
+      state.abandoned += 1;
+      state.lastError = `a law refresh did not finish in ${deadlineMs} ms and was let go; the next tick asks again`;
+      resolve({ changed: false, abandoned: true, standing: lawStanding() });
+    }, deadlineMs);
+    timer.unref?.();
+  })]).finally(() => clearTimeout(timer));
+  state.inflight = live;
+  return live;
 }
 
 /**
  * Start the refresher: one load now, then a tick every `intervalMs`. The timer
  * is unref'd — it never holds a process open. Idempotent.
  *
- * `onChange(standing)` runs after a tick that PUBLISHED a new snapshot, and
- * only then. The office's main thread hands in `announce("law")`, so its read
- * workers (POS-266) reload the moment the tag moves rather than a tick later.
- * A worker runs no timer of its own: it loads once at boot
- * (`reloadLawSnapshot()`), then on each announcement.
+ * `onChange(standing)` runs after every PUBLISH, from the timer or any other
+ * path (§ ONE EVENT FOR EVERY PUBLISH), and only then. The office's main
+ * thread hands in `announce("law")`, so its read workers (POS-266) reload the
+ * moment the tag moves rather than a tick later. A worker runs no timer of its
+ * own: it loads once at boot (`reloadLawSnapshot()`), then on each
+ * announcement.
  */
 export function startLawRefresher({ intervalMs = Number(process.env.LAW_REFRESH_MS ?? 60_000), query, onChange = null } = {}) {
   if (state.timer) return;
-  const tick = async () => {
-    const r = await reloadLawSnapshot({ query });
-    if (r.changed && onChange) { try { onChange(r.standing); } catch { /* a listener that throws does not stop the timer */ } }
-  };
+  if (onChange) state.unhear = onLawPublish(onChange);
+  const tick = () => reloadLawSnapshot({ query });
   tick();
   state.timer = setInterval(tick, intervalMs);
   state.timer.unref?.();
 }
 
-/** Tests only: forget everything, stop the timer. */
+/** Tests only: forget everything, stop the timer and its listener. Listeners a module registered stay. */
 export function resetLawSnapshot() {
   if (state.timer) clearInterval(state.timer);
-  Object.assign(state, { snap: null, key: null, inflight: null, lastError: null, timer: null });
+  state.unhear?.();
+  // the count goes on, and every refresh from before the reset is late: none publishes into it
+  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1 });
 }

@@ -385,3 +385,9 @@ test("bulletin: human-gated notices are stamped by the renderer, not the body", 
   // an unflagged entry stays unstamped
   assert.equal(list.some((b) => b.slug !== slug && b.human_gated), false);
 });
+
+test("residents: the roster row reads the profile's pronouns first, the ADDRESS line after (WLD-83, 2026-10-20)", () => {
+  assert.equal(rollEntry("r", { profile: { pronouns: " they/them " }, address: { data: { pronouns: "he/him" } } }).pronouns, "they/them", "the profile wins");
+  assert.equal(rollEntry("r", { profile: { bio: "x" }, address: { data: { pronouns: "he/him" } } }).pronouns, "he/him", "the older ADDRESS line still answers");
+  assert.equal("pronouns" in rollEntry("r", { profile: {}, address: { data: {} } }), false);
+});

@@ -11,7 +11,7 @@ import {
   UNIT_ACTION, foldUnits, edgesOf, totalOf, stockedChests, exitedMarks, unitCount,
   candyLabels, labelOfCreator, labelRecord, capacityOf, chestDials, portableOf, welcomeOf,
   ancestry, nearestCommonClass, holdingDisplay, selectLabel, carryLoad, refuseOverCarry,
-  takenRefusal, planGive, planTake, planConsume, planRefill, planChestStock,
+  stolenRefusal, planGive, planTake, planConsume, planRefill, planChestStock,
   droppedUnitMark, isDroppedUnitMark, returnsAtExit, returnLine, isUnitRow,
 } from "../src/world-stacks.mjs";
 
@@ -177,18 +177,22 @@ test("carry: 24 fits, the 25th refuses; a chest held whole is one slot", () => {
   assert.equal(refuseOverCarry({ who: "x", units: 99, things: 0, adding: 1, cap: undefined }), null, "no cap on the record: nothing enforced here, and the door says so");
 });
 
-test("the taken-class hook: inactive with no taken class; a taken candy refuses with its clue; restored, it allows; non-candy unaffected", () => {
-  const records = { candy: { dials: {} }, consumable: { dials: {} }, thing: { dials: {} } };
+test("a class taken by the town's own act (WLD-7): inactive with none taken; taken, it refuses with its clue; `taken: true` is not read; returned, it allows; other classes unaffected", () => {
+  const records = { trinket: { dials: {} }, consumable: { dials: {} }, thing: { dials: {} } };
   const rec = (c) => records[c] ?? null;
-  assert.equal(takenRefusal("candy", rec, extendsOf), null);
-  records.candy = { dials: { taken: true, clue: "Someone has been in the sweet jars; follow the wrappers." } };
-  const r = takenRefusal("candy", rec, extendsOf);
+  const up = (c) => ({ trinket: "consumable", consumable: "thing", chest: "thing" }[c] ?? null);
+  assert.equal(stolenRefusal("trinket", rec, up), null);
+  records.trinket = { dials: { taken: true, clue: "a synthetic clue" } };
+  assert.equal(stolenRefusal("trinket", rec, up), null, "no alias: only `stolen` takes a class");
+  records.trinket = { dials: { stolen: true, clue: "a synthetic clue" } };
+  const r = stolenRefusal("trinket", rec, up);
   assert.equal(r.code, 423);
-  assert.equal(r.defect, "Someone has been in the sweet jars; follow the wrappers.");
-  assert.equal(takenRefusal("thing", rec, extendsOf), null, "a toaster or a mixed-with-things holding is not candy");
-  assert.equal(takenRefusal("chest", rec, extendsOf), null);
-  records.candy = { dials: { taken: false } };
-  assert.equal(takenRefusal("candy", rec, extendsOf), null, "restoring the flag allows it again");
+  assert.equal(r.defect, "a synthetic clue");
+  assert.equal(r.stolen, "trinket");
+  assert.equal(stolenRefusal("thing", rec, up), null, "a thing above it is not of it");
+  assert.equal(stolenRefusal("chest", rec, up), null);
+  records.trinket = { dials: { stolen: false } };
+  assert.equal(stolenRefusal("trinket", rec, up), null, "returned, it allows again");
 });
 
 test("the dropped unit's mark: sited candy, its label, its drop act, one stamp", () => {

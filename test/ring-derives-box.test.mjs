@@ -36,6 +36,11 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 
 import { KINOFIRE_12129 } from "./helpers/kinofire-12129.mjs";
+import { holdMedia } from "./helpers/media-ledger.mjs";
+
+// kinofire's amend re-sends the picture the town holds for that house; the
+// mark door now asks the ledger before it hangs one (POS-738).
+holdMedia(KINOFIRE_12129.image);
 
 const SOURCE_WORLD = process.env.WORLD_CLONE;
 // The lint's geometry.mjs is copied from the world clone, so without one every

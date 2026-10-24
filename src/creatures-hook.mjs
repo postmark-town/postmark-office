@@ -61,10 +61,8 @@
 // may judge one arrival. creatures.mjs § writeReaction locks on (creature,
 // trigger, moment) inside its transaction, so the second finds the first's row.
 
-import { pathToFileURL } from "node:url";
-import { join } from "node:path";
 import {
-  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, reactTo,
+  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, publishedMarks, reactTo,
 } from "./creatures.mjs";
 import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
@@ -72,7 +70,7 @@ import { actsQuery, world2Enabled } from "./world2-acts.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { CLASS_MOVE, composeAnchor } from "./world-journal.mjs";
 import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing } from "./crossings.mjs";
-import { publishedState } from "./world-branches.mjs";
+import { importEngineAt, publishedState } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
 import { departureRecordOf } from "../world2/tools/live-reads.mjs";
 import { PUBLIC_ACTS, activeOf, ago, hourZ, viewBlock, whoBlock } from "./world-read-v2.mjs";
@@ -103,6 +101,11 @@ export async function refreshCreatures({ query = actsQuery, law: given = null, n
     state.living = new LivingSet({ law });
   }
   const r = await state.living.refresh({ query, now });
+  // each creature's room, so its ring stops at the walls (world#268): once per creature per published sha
+  if (r.ok && typeof law.ringRoomOf === "function" && query === actsQuery) {
+    const pub = await publishedMarks();
+    if (pub) state.living.warmRooms(pub.marks, pub.key);
+  }
   setCreaturesAwake(state.living.living(now).length > 0);
   return r;
 }
@@ -183,7 +186,8 @@ export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {})
   const work = (async () => {
     try {
       const ring = now.law.kindMod.RING_VERBS;
-      const trigger = [...rows].reverse().find((r) => ring.includes(r.action));
+      // a visitor's act is never a creature's to answer (POS-739: no fights for visitors, so no ring holds one)
+      const trigger = [...rows].reverse().find((r) => ring.includes(r.action) && !String(r.actor ?? "").startsWith("berth-"));
       if (!trigger) return [];
       // near: a ring holds the point, or a creature already answered this act (a retry, F6)
       const act = await actOfRow(trigger, { ...deps,
@@ -217,11 +221,13 @@ async function byDeadline(work, deadline, clock, partial) {
  * end under a hung turn (CI 38770755044).
  */
 export function answerWithin(act, { living, law, around = aroundCreature, heardFor = creatureHeard, ask, write, env, only = null, except = null, aimed = null, jevMs = null,
-  clock = Date.now, deadline = null, partial = [] } = {}) {
+  present = null, households = null, flee = null, writeCost = null, clock = Date.now, deadline = null, partial = [] } = {}) {
   const until = deadline ?? clock() + ANSWER_WAIT_MS;
+  // `present`, `households`, `flee`, `writeCost`: an encounter's seams (creatures.mjs § encounterOf), the office's own when absent
   const turns = outsideRetryKey(() =>
     reactTo(act, { living, law, around, heardFor, ...(ask ? { ask } : {}), ...(write ? { write } : {}), ...(env ? { env } : {}), ...(only != null ? { only } : {}),
       ...(except != null ? { except } : {}), ...(aimed ? { aimed } : {}), ...(jevMs != null ? { jevMs } : {}),
+      ...(present ? { present } : {}), ...(households ? { households } : {}), ...(flee ? { flee } : {}), ...(writeCost ? { writeCost } : {}),
       clock, deadline: until, partial }));
   return byDeadline(turns, until, clock, partial);
 }
@@ -399,6 +405,9 @@ export function foldWalks(rows, walkMod) {
   for (const r of rows) {
     if (BigInt(r.id) <= BigInt(arrivals.cursor)) continue;
     arrivals.cursor = String(r.id);
+    // a landing replaces the walk before it, as a stop does: you were placed
+    // (WLD-63 row 68 B), so no arrival of that walk is still to come
+    if (r.action === "land") { arrivals.byActor.delete(r.actor); continue; }
     if (r.action !== "walk") continue;
     const land = landingOf(r, walkMod);
     if (!land) { arrivals.byActor.delete(r.actor); continue; } // a stop replaces the walk before it too
@@ -413,7 +422,7 @@ export function foldWalks(rows, walkMod) {
  * the reaction's row (happening_here, and their own happened).
  */
 export async function arrivalTick({ query = actsQuery, now = Date.now(), walkMod = null, judge = answerWithin } = {}) {
-  walkMod ??= await import(pathToFileURL(join((await import("./world.mjs")).WORLD_CLONE, "tools", "walk.mjs")));
+  walkMod ??= await importEngineAt((await import("./world.mjs")).WORLD_CLONE, "walk.mjs");
   if (!arrivals.booted) {
     const rows = await query(WALKS_BOOT_SQL, [Math.floor(currentCrossing(now)) - 1]);
     if (rows == null) return { ok: false, why: "the store is not switched on here" };
@@ -507,6 +516,10 @@ export function startCreatures({ port, env = process.env, log = console } = {}) 
       const r = await refreshCreatures();
       const a = r.ok ? await arrivalTick() : null;
       if (r.ok && state.living) await warmViews(state.living);
+      // presence at each finishable creature's point, and the household lookup, kept for the acts (eval round 1, F1–F3)
+      if (r.ok && state.living) await (await import("./creatures.mjs")).warmRosters(state.living).catch((e) => faultLogged("the encounter's rings could not be read", e));
+      // an encounter's repair (encounter-verbs.mjs § encounterTick): a missed finish, a missed flee
+      if (r.ok && state.living) await (await import("./encounter-verbs.mjs")).encounterTick({ living: state.living, law: state.living.law }).catch((e) => faultLogged("the encounter's tick tripped", e));
       state.last = { at: new Date().toISOString(), living: state.living?.living().length ?? 0, ...(r.ok ? {} : { why: r.why }), ...(a?.judged ? { arrivals: a } : {}) };
       if (a?.judged) log.log?.(`[creatures] arrivals: ${a.landed} landed · ${a.judged} judged · ${a.answered} answered`);
     } catch (e) {

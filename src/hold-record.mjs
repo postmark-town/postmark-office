@@ -43,6 +43,7 @@
 
 import { foldUnits, isUnitRow } from "./world-stacks.mjs";
 import { foldOwners, ownershipEvents } from "./ownership.mjs"; // POS-688: maker and owner, folded with the holds
+import { foldMade } from "./named-making.mjs"; // POS-766: the things made straight into hands or a holder, by their make act
 
 /** An act's id, from either reader's row: a holding row's `seq`, a live hold row's `act_id`; a frozen-era row has none (always base). */
 const idOf = (r) => { const v = r?.act_id ?? r?.seq ?? r?.id; const n = v == null ? NaN : Number(v); return Number.isFinite(n) ? n : -Infinity; };
@@ -77,7 +78,8 @@ export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHo
     const attachments = [...s.baseAtt.values(), ...s.window.attachments].sort(attachmentOrder);
     const drops = new Map(s.baseDrops);
     for (const r of s.window.holding) if (r.action === "drop" && r.object != null) drops.set(String(r.object), r);
-    return { top: s.top, epoch: s.epoch, cutoff: s.cutoff, fold, attachments, drops, places: await placesOf(drops), owners };
+    const made = foldMade(s.window.holding, s.baseMade);
+    return { top: s.top, epoch: s.epoch, cutoff: s.cutoff, fold, attachments, drops, places: await placesOf(drops), owners, made };
   };
   /** Fold rows into a base COPY: the kept base is never touched until the whole change has composed. */
   const intoBase = (s, holding, attachments, words = []) => {
@@ -87,6 +89,7 @@ export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHo
     for (const r of [...[...s.baseAtt.values()], ...attachments].sort(attachmentOrder)) s.baseAtt.set(String(r.target), r);
     s.baseDrops = new Map(s.baseDrops);
     for (const r of holding) if (r.action === "drop" && r.object != null) s.baseDrops.set(String(r.object), r);
+    s.baseMade = foldMade(holding, s.baseMade);
   };
 
   async function apply(top, epoch) {
@@ -98,7 +101,7 @@ export function holdRecordKeeper({ readTop, readEpoch = async () => null, readHo
       const [holding, attachments, words, houseOf] = await Promise.all([readHolding({}), readAttachments({}), readWords({}), houses()]);
       const high = Math.max(top ?? -Infinity, ...holding.map(idOf), ...attachments.map(idOf));
       const cutoff = Number.isFinite(high) ? high - width : -Infinity;
-      next = { top, epoch, cutoff, houseOf, baseFold: null, baseAtt: new Map(), baseDrops: new Map(), baseOwners: null, window: { holding: [], attachments: [], words: [] } };
+      next = { top, epoch, cutoff, houseOf, baseFold: null, baseAtt: new Map(), baseDrops: new Map(), baseMade: new Map(), baseOwners: null, window: { holding: [], attachments: [], words: [] } };
       intoBase(next, holding.filter((r) => idOf(r) <= cutoff), attachments.filter((r) => idOf(r) <= cutoff), words.filter((r) => idOf(r) <= cutoff));
       next.window = { holding: holding.filter((r) => idOf(r) > cutoff), attachments: attachments.filter((r) => idOf(r) > cutoff), words: words.filter((r) => idOf(r) > cutoff) };
     } else {

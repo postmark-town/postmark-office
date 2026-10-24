@@ -79,6 +79,16 @@ lawful AS (
     -- trigger allows once per row and only on the settle columns; no DELETE.
     ('office_api',   'arrival_entries',        'INSERT'),
     ('office_api',   'arrival_entries',        'UPDATE'),
+    -- 082_depictions.sql (WLD-83). Every picture made of a resident, one row
+    -- each; INSERT only, because a depiction is kept, never changed or removed
+    -- (a newer one supersedes it).
+    ('office_api',   'depictions',             'INSERT'),
+    -- 083_mail_blocks.sql (POS-666). A household's block on another
+    -- household's mail, narrowed by its row policy to the blocker's own rows:
+    -- INSERT to place one, UPDATE to lift it; no DELETE, because a lifted block
+    -- is kept with when it was lifted.
+    ('office_api',   'mail_blocks',            'INSERT'),
+    ('office_api',   'mail_blocks',            'UPDATE'),
     -- 019_households.sql. The household registry as store-of-record: the two
     -- town JSON files become a rendering of these tables. `office_api` because
     -- it is the role the door that DECLARES a household already connects as
@@ -117,6 +127,11 @@ lawful AS (
     -- rows; no DELETE, because a registration is replaced, never removed.
     ('office_api',   'household_harnesses', 'INSERT'),
     ('office_api',   'household_harnesses', 'UPDATE'),
+    -- 084_reports.sql (POS-757), the private report post. Narrowed by its row
+    -- policies: the filing household INSERTs its own; only the town's hands
+    -- UPDATE (a move, with its note); no DELETE, because a report is kept.
+    ('office_api',   'reports',          'INSERT'),
+    ('office_api',   'reports',          'UPDATE'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.
@@ -161,6 +176,12 @@ lawful AS (
     -- ledger and the town log are append-only, and the drain cursor is the one
     -- row that is upserted.
     ('office_api',   'office_media',     'INSERT'),
+    -- 080_media_freed.sql (POS-737, Darko 2026-10-21 "737 agreed"): the media
+    -- ledger stops being append-only. The UPDATE writes a row's states (the
+    -- unhung clock, the claim, the purge, a takedown's receipt) and clears them
+    -- when a freed file is uploaded again. No DELETE: a freed row stays, as its
+    -- own receipt.
+    ('office_api',   'office_media',     'UPDATE'),
     ('office_api',   'office_town_journal', 'INSERT'),
     ('office_api',   'office_meta',      'INSERT'),
     ('office_api',   'office_meta',      'UPDATE'),

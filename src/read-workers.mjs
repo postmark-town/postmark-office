@@ -31,8 +31,8 @@
 // ── WHY THREADS AND NOT DEC-4's PROCESSES ────────────────────────────────────
 //
 // DEC-4 (2026-09-08) proposed three read PROCESSES behind nginx, and its kit
-// (deploy/postmark-office-read@.service, nginx-postmark-read-pool*.conf) was
-// never applied. A process cannot be told what moved: since POS-264 the
+// (now deploy/_archived/postmark-office-read@.service, nginx-postmark-read-pool*.conf;
+// POS-729) was never applied. A process cannot be told what moved: since POS-264 the
 // positions projection is RAM on the writer, fed by its walk door, and a read
 // process would answer walkers from a projection up to PROJECTION_MAX_AGE_MS
 // old. The worker keeps DEC-4's three refusals (it boots as `--role read`), and

@@ -222,14 +222,17 @@ test("a return that fails halfway is finished by the retry — never doubled", a
   assert.equal(w.ledger.length, 3);
 });
 
-test("the taken-class hook at the door: refuses with the clue, inactive otherwise, restored allows", async () => {
+test("a class taken by the town's own act, at the label door (WLD-7): refuses with the clue, inactive otherwise, returned allows; `taken` is no alias", async () => {
   const classes = structuredClone(CLASSES);
-  classes.candy.dials = { taken: true, clue: "The sweet jars are empty; follow the wrappers." };
+  const labelled = classes.candy; // the class the labels stand on
+  labelled.dials = { taken: true, clue: "a synthetic clue" };
   const w = world({ classes, marks: { [CHEST]: chestMark() } });
   w.seed(UNIT_ACTION.stock, [{ from: null, to: CHEST, label: "test-comets", n: 30 }], CHEST);
-  await assert.rejects(callUnits("take", { from: CHEST }, KEY, "sbx-cy", w.deps), (e) => e.code === 423 && e.defect === "The sweet jars are empty; follow the wrappers.");
-  assert.equal(w.acts.length, 1);
-  classes.candy.dials = {};
+  assert.equal((await callUnits("take", { from: CHEST }, KEY, "sbx-cy", w.deps)).count, 1, "`taken: true` is not read");
+  labelled.dials = { stolen: true, clue: "a synthetic clue" };
+  await assert.rejects(callUnits("take", { from: CHEST }, KEY, "sbx-cy", w.deps), (e) => e.code === 423 && e.defect === "a synthetic clue");
+  assert.equal(w.acts.length, 2);
+  labelled.dials = {};
   const ok = await callUnits("take", { from: CHEST }, KEY, "sbx-cy", w.deps);
   assert.equal(ok.count, 1);
 });

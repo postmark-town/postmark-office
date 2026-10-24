@@ -767,7 +767,13 @@ test("send_letter FOLDS UNDER household — your pen lives where your standing d
   // { do: "reveal" }, born delisted behind the town apex. The counts moved in
   // the same commit.
   // 58 → 59: read_docs (the town's docs, 2026-10-06, #379) — town { read: "docs" }.
-  assert.equal(names.length, 59, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
+  // 59 → 60: world_describe (WLD-83, 2026-10-19) — world { do: "describe" }, born
+  // delisted behind the world apex. The counts moved in the same commit.
+  // 60 → 64: amend_letter, withdraw_letter, block_household, unblock_household
+  // (POS-666, 2026-10-22) — household { do: "amend-letter" | "withdraw-letter" |
+  // "block" | "unblock" }, born delisted behind the household apex. The counts
+  // moved in the same commit.
+  assert.equal(names.length, 64, "no tool was added or removed beyond the paid ledger; the flag-off listing is untouched");
 
   assert.ok(HOUSEHOLD_DISPATCHABLE.includes("send"), "household do: \"send\" is the letter's apex verb");
   assert.equal(householdDispatchToolFor("send"), "send_letter",

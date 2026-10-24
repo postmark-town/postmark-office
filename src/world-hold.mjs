@@ -420,12 +420,17 @@ export async function reachContext(thing, actor, { key = null } = {}) {
         // settlements run on time and for hours when one is held (kogane's
         // Swallets sat locked from 18:00Z on 10-13 to the next morning's).
         // So a "no" from the live layer is asked again of the docket, the way
-        // the receipt asks it, and only a docket with NO row for this slug
-        // counts as nothing there.
+        // the receipt asks it, and only a docket with no STANDING row for this
+        // slug counts as nothing there. A refused or retracted claim will never
+        // publish, so it is not a draft either (POS-689, Darko 2026-10-18,
+        // answering noprotocol-keith on #553): the set is drop-recovery's
+        // `standingClaim`, the one definition, never a copy here.
         if (!ownDraftExists) {
-          const { claimRowsForSlug } = await import("./world2-claims.mjs");
+          const [{ claimRowsForSlug }, { standingClaim }] = await Promise.all([
+            import("./world2-claims.mjs"), import("./drop-recovery.mjs"),
+          ]);
           const rows = await claimRowsForSlug(thing, { key });
-          if (rows.length) ownDraftExists = true;
+          if (rows.some(standingClaim)) ownDraftExists = true;
         }
         // DID YOU MEAN, from the same read. Added after the first review of
         // this fix (Emily, 2026-10-14): the commonest way to land in the refusal
@@ -1363,10 +1368,95 @@ async function ownerNow(thing) {
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+/** The mark a thing made in hand was made as (POS-766), or null: not one, or the hold record could not be read. */
+async function madeThing(id) {
+  try { return (await (await import("./world-kinds.mjs")).holdRecordNow())?.made?.get(String(id)) ?? null; } catch { return null; }
+}
+
+/**
+ * SETTING DOWN A THING MADE IN HAND (POS-766/e; P2-a..e, the lead's word 2026-10-23).
+ * It becomes a sited draft keeping its maker's id, where the dropper stands, and
+ * the hold face `set-down` ends the holding. In order, each refusal writing nothing:
+ *   · the maker's house only (P2-a): the key must act for its maker;
+ *   · a holder is set down empty (P2-d), and a candy is never set down (POS-692);
+ *   · the stake, exactly as a published thing's set-down asks it (P2-b,
+ *     dropStakeTerms): free on the maker's own ground, else ✦1 from the dropper,
+ *     terms first and accept: true;
+ *   · the draft, judged and filed by leave-mark itself (P2-c), sited at the
+ *     dropper's standpoint with the thing default extent;
+ *   · then the set-down act. If that act cannot be written, the draft is
+ *     withdrawn again, so the thing is never both in hand and on the ground.
+ * After it the made record lets it go (named-making § foldMade): it is a draft
+ * like any other, and the draft rules apply (P2-e).
+ */
+async function setDownMade({ made, args, key, actor }) {
+  const nm = await import("./named-making.mjs");
+  const id = String(made.id), maker = String(made.by);
+  const refuse = (r) => bounce(r.code, r.defect, r.hint);
+  if (!key?.handles?.has(maker)) throw refuse(nm.setDownNotByMaker(id, maker));
+  const { liveUnitDeps, thingHoldingEntry } = await import("./world-units.mjs");
+  const deps = await liveUnitDeps();
+  {
+    const { units, attachments } = await deps.readRows();
+    const { foldUnits, totalOf } = await import("./world-stacks.mjs");
+    const n = holdingsOf(attachments, id).length + totalOf(foldUnits(units), id);
+    if (n > 0) throw refuse(nm.setDownHolding(id, n));
+  }
+  const { lineageOf } = await import("./world-grants.mjs");
+  const { classExtendsOf } = await import("./world-classes.mjs");
+  if (lineageOf(String(made.kind), classExtendsOf()).includes("candy")) throw refuse(nm.setDownCandy(id, made.kind));
+  const stood = await standpointOfActor(actor);
+  if (!stood) throw bounce(409, "the record does not place you anywhere",
+    `a thing is set down where you stand, and the walk ledger has no position for ${actor}: walk somewhere first. Nothing was changed.`);
+  const dropStake = await dropStakeTerms({ thing: id, actor, stood, accept: args.accept === true, owner: maker }, { extentOf: async () => nm.SET_DOWN_EXTENT });
+  if (dropStake?.terms) return dropStake.terms;
+  const { leaveMarkViaOffice } = await import("./world.mjs");
+  const { WORLD_CLONE } = await import("./world-store.mjs");
+  const draft = await leaveMarkViaOffice(WORLD_CLONE, nm.setDownDraftOf(made, { at: stood, free: !dropStake?.stake }), key, { fromHand: true });
+  if (draft?.error) return draft;
+  try {
+    await holdTurn(async () => {
+      const { attachments } = await deps.readRows();
+      if (liveHolder(attachments, id) !== String(actor)) throw bounce(409, `you are not holding ${id} any more`, "Nothing was changed.");
+      const { entry } = await thingHoldingEntry(deps, key, actor, attachments, { did: nm.SET_DOWN_FACE, thing: id, holder: null, previous: String(actor), madeBy: maker });
+      entry.payload.policy = "detach"; // its place is its draft's: no hold row carries one
+      entry.payload.set_down = { at: stood, draft: id };
+      entry.effect = `${actor} set ${id} down where they stood, as ${maker}'s draft`;
+      await deps.append(entry, {});
+    });
+  } catch (e) {
+    // NEVER IN HAND AND ON THE GROUND AT ONCE: the draft goes back out through the withdraw door
+    // (its own pen, whichever files drafts here), and the refusal is the answer
+    let undone = null;
+    try {
+      const w = await (await import("./world.mjs")).withdrawMarkViaOffice(WORLD_CLONE, { mark: id }, key);
+      if (w?.error) undone = w;
+    } catch (w) { undone = w; }
+    if (undone) {
+      // BOTH FAILED: stranded in hand and on the ground. Said loudly, where an operator looks (set-down-strands.mjs)
+      const { plainReason } = await import("./fault-words.mjs");
+      const { recordStrand } = await import("./set-down-strands.mjs");
+      recordStrand({ thing: id, maker, actor, why: plainReason(e, "record", `the set-down act for ${id}`),
+        undo: undone instanceof Error ? plainReason(undone, "record", `the withdrawal of ${id}'s draft`) : String(undone.defect ?? "the withdraw door refused") });
+    }
+    throw e;
+  }
+  const staked = dropStake?.stake ? await stakeTheDrop({ thing: id, actor, key, n: dropStake.stake }) : null;
+  return { did: "set-down", thing: id, at: stood, draft: id, ...(staked ?? {}),
+    stands_note: nm.setDownWords({ id, maker, stake: !dropStake?.stake ? "free" : staked?.stake_bounce ? "bounced" : "staked" }),
+    leave: draft };
+}
+
 export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
 async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
   const actor = actingHandle(args, key);
+  // IT TAKES NOTHING (a creature that tempts; encounter-verbs.mjs § givenToATempter): a give to the one
+  // who speaks for it, from inside its ring while it is out, is answered and counted, and nothing moves
+  if (name === "world_hold" && args.to && verb !== "drop" && verb !== "take") {
+    const taken = await (await import("./encounter-verbs.mjs")).givenToATempter(args, key, actor).catch(() => null);
+    if (taken) return taken;
+  }
   // ⚑ THE READ ASKS FOR A READ HANDLE, AND ONLY THE WRITE ASKS FOR A WRITE ONE
   // (#2599, carried in the same commit that woke `GET /world/holdings`).
   //
@@ -1466,6 +1556,15 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // kind (world-kinds.mjs). A `label:` is #499's door, below.
     {
       const { kindRouteOf, callKinds } = await import("./world-kinds.mjs");
+      // A THING MADE IN HAND (POS-766): eating it is the kind door's consume { thing }, and
+      // setting it down is part 2 of its change (POS-766/e), refused by name until it lands
+      const made = args.thing != null ? await madeThing(String(args.thing)) : null;
+      if (made && String(args.act ?? "") === "consume")
+        return await callKinds("consume", args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
+      if (made && args.act == null && args.to == null && args.from == null && verb !== "take") {
+        const { guardedAttachments: rowsNow } = await import("./world2-guards.mjs");
+        if (liveHolder(await rowsNow(), String(args.thing)) === String(actor)) return await setDownMade({ made, args, key, actor });
+      }
       const route = kindRouteOf(args, verb);
       if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
     }
@@ -1520,10 +1619,11 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     refuseTakeOfHeld({ thing: args.thing, verb, actor, holder: preHolder });
     const face = faceOf(preHolder, args.to ?? null);
     const reached = await refuseOutOfReach({ thing: args.thing, to: args.to ?? null, actor, act: face, holder: preHolder, key });
+    // The thing's own mark, read once; null when canon does not hold it or could not be read.
+    let m = null;
+    try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark ?? null; } catch { m = null; }
     // A FIXED CHEST IS NOT CARRIED (WLD-27): a bowl stands where it was set.
     if (face === "take") {
-      let m = null;
-      try { m = (await (await import("./world.mjs")).worldMarkById(String(args.thing))).mark; } catch { m = null; }
       // FROM THE thing/portable PROPERTY (sovereign, default true), for any thing (LOGOS v2, O2; review-610 B2)
       if (m && !(await import("./kind-holding.mjs")).portableMark(m, classProperty))
         throw bounce(409, `${args.thing} is fixed where it stands`, "its maker made it portable: false, so it is not carried; if it holds things, take from it instead: world { do: \"take\", args: { from: \"" + args.thing + "\" } }. Nothing was recorded.");
@@ -1533,13 +1633,33 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // so there is one pen: the holding act, awaited. (The unflipped pen, which
     // wrote dynamic.db's edge and mirrored the act fire-and-forget, went with
     // dynamic.db, POS-269.)
+    // A CLASS TAKEN BY THE TOWN'S OWN ACT (WLD-7): a thing of it, or carrying anything
+    // of it, is not given, taken or set down until it is returned. What it is and what
+    // it carries are read here; whether that class is taken is asked inside the hold
+    // turn, of the law published at that moment (declareHoldingFlipped § classGuard).
+    // What it carries is read only while some class is taken: on every other day it
+    // costs nothing.
+    const units = await import("./world-units.mjs");
+    const { lawSnapshot } = await import("./law-snapshot.mjs");
+    let carried = () => [units.markClassFor(m)];
+    if (units.classViewOf(lawSnapshot()).stolenAny()) {
+      const deps = await units.liveUnitDeps();
+      const { units: unitRows, attachments } = await deps.readRows();
+      const { foldUnits } = await import("./world-stacks.mjs");
+      carried = await units.carriedClasses({ thing: String(args.thing), mark: m, fold: foldUnits(unitRows), attachments, markById: deps.markById });
+    }
+    const classGuard = () => {
+      const now = units.classViewOf(lawSnapshot());
+      for (const k of carried(now)) { const refused = (units.stolenQuestion)(k, now); if (refused) return refused; }
+      return null;
+    };
     {
       const stood = await standpointOfActor(actor);
       // a set-down off the OWNER's ground stakes 1✦: its terms, or its refusal, before anything is written (D4 step 3; D-O2)
       const owner = face === "drop" ? await ownerNow(args.thing) : null;
       const dropStake = face === "drop" ? await dropStakeTerms({ thing: args.thing, actor, stood, accept: args.accept === true, owner }) : null;
       if (dropStake?.terms) return dropStake.terms;
-      const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings });
+      const out = await declareHoldingFlipped({ db: null, thing: args.thing, to: args.to ?? null, actor, dials, key, reached, stood, carry: carryForThings, classGuard });
       if (out?.did !== "drop") return out;
       const staked = dropStake?.stake ? await stakeTheDrop({ thing: args.thing, actor, key, n: dropStake.stake }) : null;
       // NO AMEND (POS-688, E8): the settlement prints a set-down where it was made (D2),
@@ -1611,7 +1731,7 @@ export function holdingEntry(did, { crossing, at, witnesses, cls, household }) {
 // off the hold lane this refuses as the door does. `deps` exist so the
 // ordering can be proven with no world db and no Postgres; the door injects the
 // real ones.
-export async function declareHoldingFlipped({ db, thing, to = null, actor, dials = {}, key = null, deps = {}, reached = null, stood = null, carry = null }) {
+export async function declareHoldingFlipped({ db, thing, to = null, actor, dials = {}, key = null, deps = {}, reached = null, stood = null, carry = null, classGuard = null }) {
   // THE QUEUE IS ONE THREAD'S. `holdingQueue` serializes the holder check
   // against the commit only among the holds THIS thread runs; a hold written
   // from a read worker would run beside the main thread's with no lock between
@@ -1659,6 +1779,11 @@ export async function declareHoldingFlipped({ db, thing, to = null, actor, dials
     // (`carry: null`) for a caller that measures no load.
     if (carry && (did.did === "take" || did.did === "give")) await carry({ who: did.holder, attachments: rows, thing: String(thing), actor });
     const { at, witnesses } = await witnessStamp(did.declared_by);
+    // A CLASS TAKEN BY THE TOWN'S OWN ACT (WLD-7): the door's own question, handed in so
+    // this function still runs on a hand-built store. Asked after every refusal above and
+    // with no await between it and the append: this read is the linearisation point.
+    const refused = classGuard ? classGuard(did) : null;
+    if (refused) throw refused;
     const row = await appendActFlipped(db, holdingEntry(did, { crossing: currentCrossing(), at, witnesses, cls: CLASS_HOLDING, household: resolvedWorldHousehold(key) }));
     // Which store is the RECORD for this act — said in the answer, as the stance
     // door says it (the journal row behind it is the reverse-mirror copy).

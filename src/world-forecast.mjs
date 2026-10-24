@@ -61,6 +61,19 @@ export function nextSettlement(now = new Date()) {
   return null;
 }
 
+/** The settlement instant at or before `t` on the same clock (06:00/18:00Z): the
+ *  nominal beat a landed settlement settles, whenever its sweep pushed. ISO. */
+export function settlementAtOrBefore(t = new Date()) {
+  const now = t instanceof Date ? t : new Date(t);
+  for (const day of [0, -1]) {
+    for (const [h, m] of [...SETTLEMENTS_UTC].reverse()) {
+      const at = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + day, h, m, 0, 0));
+      if (at <= now) return at.toISOString();
+    }
+  }
+  return null;
+}
+
 // The town's own derive — the artifact a crossing hands the fold, read live. The
 // office never learns the ledger grammar; it asks the module that owns it, the
 // same way world_stake_read already does for escrow and retirement.

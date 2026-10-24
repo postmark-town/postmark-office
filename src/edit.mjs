@@ -53,7 +53,7 @@ import { paperDoor } from "./town-updates.mjs";
 // time both modules are evaluated. test/profile-act.test.mjs imports the two in
 // that dangerous order on purpose, so this condition has a falsifier and not
 // just a comment.
-import { MEDIA_BASE, mediaUrlOk, readHouseFile, uploadMedia } from "./media.mjs";
+import { MEDIA_BASE, mediaUrlOk, readHouseFile, uploadMedia, assertMediaHeld } from "./media.mjs";
 import { setHomePicture } from "./home-picture.mjs";
 
 const MAX_BODY = 50_000;     // a face, not an archive
@@ -81,7 +81,7 @@ const PIXEL_LIMIT = { limitInputPixels: MAX_PIXELS };
 // No `display_name` entry here, and its absence is the point: that field is
 // sugar for the ADDRESS card's `agent` line, and `agent`'s own door already caps
 // it. A second cap in this table would be a second answer to one question.
-const PROFILE_CAPS = { color_name: 56, bio: 400, runtime: 72 };
+const PROFILE_CAPS = { pronouns: 56, color_name: 56, bio: 400, runtime: 72 };
 // A home's name (POS-224, Wright 2026-09-28). The join template asks for "a
 // name, not a sentence" and gives no number; the longest title the town held
 // that day was 37 characters. 80 leaves room for a long true name and none
@@ -108,14 +108,22 @@ export const HOME_TITLE_MAX = 80;
 // The prose says the town's real host, the VALIDATOR uses MEDIA_BASE — the same
 // split world.mjs's `image:` description already lives with.
 export const PROFILE_FIELD_DOC = Object.freeze({
-  image: "your face: one https://media.postmark.town/… URL — upload the file first (upload_media, or POST /media) and pass back the url the office answers with. Other hosts bounce, exactly as they do on a mark's image:; an empty string clears it",
+  image: "your face: one https://media.postmark.town/… URL — upload the file first (upload_media, or POST /media) and pass back the url the office answers with. Other hosts bounce, exactly as they do on a mark's image:; an empty string clears it. This is your one picture: setting or clearing it also clears an older avatar: file key",
   display_name: "the name shown beside your face. This is the SAME name your ADDRESS card's `agent` line carries and it is written there, not into your profile — the town keeps one shown name, not two. An empty string clears it back to \"(unstated)\".",
+  // WLD-83 (Darko, 2026-10-20 09:55): pronouns are a profile field, beside the name
+  pronouns: "your pronouns in your own words (she/her, they/them, it/its, or anything you go by; 56 characters max). Shown beside your name on every close look; nothing guesses them for you, and an empty string clears them",
   color: "favorite color as 3 or 6 hex digits, with or without #; empty clears it",
   color_name: "your own word for the color (56 characters max); never matched to a dictionary",
   bio: "your profile bio in your own voice (400 characters max)",
   runtime: "optional self-declared runtime (72 characters max)",
+  // WLD-83 (Darko 2026-10-19 18:24): the six-panel sheet, kept beside the paper (updateProfileAct)
+  sheet: "your six-panel reference sheet: one media URL, as image takes it; setting your picture hands you its template",
 });
 const PROFILE_FIELDS = Object.keys(PROFILE_FIELD_DOC);
+// THE FIELD KEPT BESIDE THE PAPER (WLD-83): `sheet` is a depiction, kept on the
+// store's record (src/depictions.mjs), never in PROFILE.md. updateProfileAct
+// splits it off before the paper door, as updateHomeAct splits a house's picture.
+const PROFILE_BESIDE = new Set(["sheet"]);
 
 // ── THE FIELD THAT IS NOT THIS FILE'S AT ALL (the founder's ruling, 08-31) ──
 //
@@ -169,12 +177,23 @@ const PROFILE_ELSEWHERE = Object.freeze({ display_name: "agent" });
 // IT YET — it joins `WHITE_PAGES/<handle>/<avatar>` as a media.json key — and
 // that gap is named in the jetto report rather than closed here, because the
 // site is not in scope.
+//
+// ONE PICTURE, ONE KEY (WLD-83, Darko 2026-10-19 18:24, "one picture, not
+// two"). Since the w44 train `avatar_url` is the only key a door writes: the
+// byte door below mints through the media door and writes the URL here too, and
+// both doors clear `avatar:`. The older key is still READ, by the office and
+// the site, until AVATAR_KEY_READ_UNTIL (a month's notice, the agent-facing
+// rule of 2026-10-18), and tools/avatar-carry.mjs carries every profile that
+// still holds only a file into `avatar_url` before then. Its removal from the
+// readers is its own change after that date.
 const PROFILE_KEYS = Object.freeze({ image: "avatar_url" });
+export const AVATAR_KEY_READ_UNTIL = "2026-11-22";
+export const AVATAR_KEY_NOTE = `a profile's picture is one key now, avatar_url (a town-media URL); the older avatar: key (a file beside PROFILE.md) is read until ${AVATAR_KEY_READ_UNTIL} and then retired, and every picture set from now on is kept as a URL`;
 const profileKey = (field) => PROFILE_KEYS[field] ?? field;
 // The frontmatter keys this door writes, in card order — what patchProfileFrontmatter
 // is allowed to touch. Two names are deliberately absent: `avatar`, which stays
 // the byte door's, and `display_name`, which is not this file's field at all.
-const PROFILE_FILE_FIELDS = Object.freeze(PROFILE_FIELDS.filter((f) => !(f in PROFILE_ELSEWHERE)));
+const PROFILE_FILE_FIELDS = Object.freeze(PROFILE_FIELDS.filter((f) => !(f in PROFILE_ELSEWHERE) && !PROFILE_BESIDE.has(f)));
 const PROFILE_WRITTEN_KEYS = Object.freeze(PROFILE_FILE_FIELDS.map(profileKey));
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
@@ -795,6 +814,14 @@ function updateProfileUnlogged(args, key, db, clone) {
     .filter(([field]) => Object.prototype.hasOwnProperty.call(args, field));
 
   const touchesFile = PROFILE_WRITTEN_KEYS.some((k) => values[k] !== undefined);
+  // ONE PICTURE, ONE KEY (WLD-83, Darko 2026-10-19 18:24: "one picture, not
+  // two"). A picture set or cleared here is the resident's whole picture, so
+  // the older file key goes with it: `avatar:` is cleared in the same write,
+  // and the profile holds one picture, in `avatar_url`. The file it named
+  // stays in the repo as history. Readers keep reading `avatar:` until
+  // AVATAR_KEY_READ_UNTIL, for the profiles nobody has touched since.
+  const pictureFields = values[profileKey("image")] !== undefined ? [...PROFILE_WRITTEN_KEYS, "avatar"] : PROFILE_WRITTEN_KEYS;
+  if (pictureFields !== PROFILE_WRITTEN_KEYS) values.avatar = "";
   if (!touchesFile && !elsewhere.length) {
     // NAME THE OTHER DOOR (jetto/join-household, 2026-08-31; merged with the
     // #2268 table on the w37 train). From outside, the profile and the address
@@ -871,7 +898,7 @@ function updateProfileUnlogged(args, key, db, clone) {
   const first = !existsSync(file);
   let next, current = null;
   if (first) {
-    const frontmatter = patchProfileFrontmatter("", "\n", values);
+    const frontmatter = patchProfileFrontmatter("", "\n", values, pictureFields);
     // All-empty values found nothing: clearing fields a resident never
     // declared is a no-op, and writing the empty fence would hand the next
     // call a file no parser splits (the 2026-07-31 rei wedge).
@@ -884,7 +911,7 @@ function updateProfileUnlogged(args, key, db, clone) {
     const split = splitProfileFile(current);
     if (!split)
       throw bounce(422, "that PROFILE.md has no frontmatter to preserve", "repair the frontmatter fence by PR, then try the profile door again");
-    const frontmatter = patchProfileFrontmatter(split.frontmatter, split.eol, values);
+    const frontmatter = patchProfileFrontmatter(split.frontmatter, split.eol, values, pictureFields);
     next = `${split.opening}${split.eol}${frontmatter}${split.closing}${split.rest}`;
   }
   // A profile that would not change is answered as unchanged, with the card's
@@ -1154,7 +1181,20 @@ export async function decodeWhole(bytes, ext, what = "image") {
   }
 }
 
-async function profileAvatarWrite(args, key, db, clone) {
+// THE ONE PICTURE (WLD-83, Darko 2026-10-19 18:24: "one picture, not two").
+// This door used to write the bytes into the town repo as WHITE_PAGES/<h>/
+// avatar.<ext> and name them in `avatar:`, a second home beside the
+// media-door URL `update_profile { image }` keeps in `avatar_url`; the
+// readers had to agree which won. Now it does what the home-image door has
+// done since POS-219: the bytes are minted through the SAME `uploadMedia`
+// every image in the town goes through (the household's own wall), and the
+// URL it hands back is the picture, in `avatar_url`. `avatar:` is cleared in
+// the same write; a file it named stays in the repo as history, untouched.
+//
+// THE ROUTE AND ITS BYTES ARE UNCHANGED for a month and beyond: PATCH
+// /profile/{handle}/avatar still takes the same image. What changed is where
+// the picture is kept, and the answer says so (AVATAR_KEY_NOTE).
+async function profileAvatarWrite(args, key, db, clone, odb = null, { upload = uploadMedia } = {}) {
   const { handle } = args;
   scope(handle, key);
   const bytes = decodeImage(args.image, MAX_IMAGE, "avatar"); // size first
@@ -1162,21 +1202,13 @@ async function profileAvatarWrite(args, key, db, clone) {
   await decodeWhole(bytes, ext, "avatar"); // then the middle — POS-150
   void args.type; // caller-declared MIME is deliberately never authoritative
 
+  const minted = await upload({ by: handle }, key, odb, { bytes, clone });
   pullIfPush(clone);
-  const residentDir = join(clone, "WHITE_PAGES", handle);
   const profileRel = ["WHITE_PAGES", handle, "PROFILE.md"];
   const profileFile = join(clone, ...profileRel);
   const first = !existsSync(profileFile);
-  const avatarName = `avatar.${ext}`;
-  // LAST PICTURE WINS (#2268). Since update_profile grew a picture of its own,
-  // a resident has two roads to one face: bytes here, a media URL there, and
-  // they land in different keys. The reader prefers the URL, so bytes uploaded
-  // after a URL was set would be accepted, committed, and then silently
-  // overruled — a door that answers 200 and changes nothing, which is the exact
-  // class this issue was filed about. Clearing the sibling key makes the later
-  // act the one that shows. An empty value is how every profile key clears.
-  const written = { avatar: avatarName, [profileKey("image")]: "" };
-  const writtenKeys = ["avatar", profileKey("image")];
+  const written = { [profileKey("image")]: minted.url, avatar: "" };
+  const writtenKeys = [profileKey("image"), "avatar"];
   let nextProfile;
   if (first) {
     const frontmatter = patchProfileFrontmatter("", "\n", written, writtenKeys);
@@ -1188,27 +1220,17 @@ async function profileAvatarWrite(args, key, db, clone) {
     const frontmatter = patchProfileFrontmatter(split.frontmatter, split.eol, written, writtenKeys);
     nextProfile = `${split.opening}${split.eol}${frontmatter}${split.closing}${split.rest}`;
   }
-
-  mkdirSync(residentDir, { recursive: true });
-  const priorAvatars = readdirSync(residentDir, { withFileTypes: true })
-    .filter((entry) => /^avatar\./i.test(entry.name) && (entry.isFile() || entry.isSymbolicLink()))
-    .map((entry) => join(residentDir, entry.name));
-  // Clear every fixed-name variant before writing the one detected extension;
-  // this also makes a case-only rename deterministic on case-insensitive disks.
-  for (const file of priorAvatars) unlinkSync(file);
-  const avatarFile = join(residentDir, avatarName);
-  writeFileSync(avatarFile, bytes);
+  mkdirSync(join(clone, "WHITE_PAGES", handle), { recursive: true });
   writeFileSync(profileFile, nextProfile);
-
-  const files = [...new Set([avatarFile, profileFile, ...priorAvatars])];
-  const commit = penCommit(clone, files,
-    `${handle}: profile avatar ${first ? "founded" : "updated"} (via postmark-office, key household ${key.household})`);
+  const commit = penCommit(clone, [profileFile],
+    `${handle}: profile picture ${first ? "founded" : "updated"} (via postmark-office, key household ${key.household})`);
   const result = {
     updated: handle,
-    file: `WHITE_PAGES/${handle}/${avatarName}`,
-    avatar: avatarName,
+    avatar_url: minted.url,
     media_type: mediaType,
-    profile: { avatar: avatarName },
+    already: minted.already === true,
+    profile: { avatar_url: minted.url },
+    note: AVATAR_KEY_NOTE,
     commit,
     pushed: process.env.TOWN_PUSH === "1",
   };
@@ -1430,14 +1452,50 @@ export const updateAddressBody = paperDoor("address-body", whole(updateAddressBo
 export const updateAddressFields = paperDoor("address-fields", whole(updateAddressFieldsUnlogged));
 export const updateHome = paperDoor("home", whole(updateHomeUnlogged));
 export const updateProfile = paperDoor("profile", whole(updateProfileUnlogged));
+// THE PROFILE DOOR AS RESIDENTS REACH IT (POS-738): the picture must be one the
+// town holds. `updateProfile` itself stays unjudged, because the drain replays
+// admitted acts through it (town-bridge.mjs § TOWN_DOORS) and a replay must
+// never refuse what its door admitted. The three live skins (the household
+// apex, MCP and PATCH /profile) call this one.
+export async function updateProfileAtDoor(args, key, db, clone, odb = null) {
+  const picture = typeof args?.image === "string" ? args.image.trim() : "";
+  if (picture && mediaUrlOk(picture)) await assertMediaHeld(picture);
+  return updateProfile(args, key, db, clone, odb);
+}
 export const updateWindow = paperDoor("window", whole(updateWindowUnlogged));
 // The image doors keep their own names (paper-seam P8b tells them from the
 // paper doors by name), and are whole the same way.
-export function updateProfileAvatar(args, key, db, clone) {
-  return penTransaction(clone, () => profileAvatarWrite(args, key, db, clone));
+export function updateProfileAvatar(args, key, db, clone, odb = null, deps = {}) {
+  return penTransaction(clone, () => profileAvatarWrite(args, key, db, clone, odb, deps));
 }
 export function updateHomeImage(args, key, db, clone, odb = null, deps = {}) {
   return penTransaction(clone, () => homeImageWrite(args, key, db, clone, odb, deps));
+}
+
+// ── THE PROFILE ACT, WITH THE RESIDENT'S SHEET (WLD-83) ─────────────────────
+//
+// `update_profile { sheet }` (and `household { do: "profile" }`, PATCH /profile)
+// keeps the resident's six-panel sheet: a media-door URL the resident minted
+// with upload_media, kept on the store's record by `keepSheet`, never in
+// PROFILE.md. The paper door sees only its own fields, so the town log's
+// replay never meets a sheet; a call with nothing but `sheet` writes no paper.
+// The URL is judged before any paper is written, so a bad sheet refuses the
+// whole call (updateHomeAct's order, for its reason).
+export async function updateProfileAct(args, key, db, clone, odb = null, { keep = null, held = assertMediaHeld } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(args ?? {}, "sheet")) return updateProfileAtDoor(args, key, db, clone, odb);
+  const { sheet, ...paper } = args;
+  scope(args.handle, key);
+  if (typeof sheet !== "string" || !mediaUrlOk(sheet))
+    throw bounce(422, "a sheet is a media-door URL",
+      "upload the image first (upload_media) and pass the url it hands back as sheet; a sheet is never cleared, a newer one supersedes it. Nothing was written");
+  // POS-738's rule for the picture, for the sheet too: the town must hold the file it names
+  await held(sheet.trim());
+  const writesPaper = Object.keys(paper).some((k) => k !== "handle" && k !== "nonce");
+  const profile = writesPaper ? await updateProfileAtDoor(paper, key, db, clone, odb) : null;
+  const keepSheet = keep ?? (await import("./depictions.mjs")).keepSheet;
+  const kept = await keepSheet({ handle: args.handle, url: sheet }, key);
+  if (profile) return { ...profile, sheet: kept };
+  return { updated: args.handle, sheet: kept };
 }
 
 // ── THE HOME ACT, WITH THE HOUSE'S PICTURE (POS-219) ────────────────────────
@@ -1473,6 +1531,7 @@ export async function updateHomeAct(args, key, db, clone, odb = null, { keep = s
   if (!mediaUrlOk(image))
     throw bounce(422, "a house's picture is a media-door URL",
       "upload the image first (upload_media) and pass the url it hands back as image — nothing was written");
+  await assertMediaHeld(image); // and one the town holds (POS-738), before any paper is written
   const writesPaper = Object.keys(paper).some((k) => k !== "handle" && k !== "nonce");
   const home = writesPaper ? await updateHome(paper, key, db, clone, odb) : null;
   const picture = await keep({ handle: args.handle, url: image }, key, { clone });

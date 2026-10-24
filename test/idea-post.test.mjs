@@ -498,3 +498,17 @@ test("POS-778 · an idea's advance answer carries state and stage, and names sta
   const none = await postsAtOffice({ class: "idea", state: "built" }, { now: NOW, env: ON });
   assert.equal(none.total, 0);
 });
+
+// ── POS-777 · the read hint is an absolute url ──────────────────────────────
+
+test("POS-777 · an idea post's answers end `read` with the ABSOLUTE https://postmark.town/api/posts/<id>?class=idea", async () => {
+  setup();
+  const want = `— or GET https://postmark.town/api/posts/${ID}?class=idea`;
+  const r = await post();
+  assert.ok(r.read.endsWith(want), r.read);
+  const a = await advance({ post: ID, to: "building" });
+  assert.ok(a.read.endsWith(want), a.read);
+  const m = await amendAtTown({ post: ID, body: "A lantern would let late residents find the boat, and the ferry find them." }, ERRANT, { now: NOW, env: ON });
+  assert.ok(m.read.endsWith(want), m.read);
+  assert.doesNotMatch(a.read, /GET \/posts/);
+});

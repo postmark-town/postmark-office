@@ -297,6 +297,9 @@ export function storedShapeOf(r, { withActId = false } = {}) {
     // on that era, and `dynamic-presence.mjs` puts `era: "store"` in front of
     // a resident off this exact value.
     source: "store",
+    // A LANDING NAMES WHAT SET YOU DOWN (WLD-63 row 68 B): present only on a
+    // `land` act's record, so every walk's record is the one it always was.
+    ...(r.landed ? { landed: r.landed } : {}),
     // OPT-IN, AND OFF BY DEFAULT, so not one of the four standing callers
     // sees a key it did not see yesterday. `act_id` is the register's own
     // row id and the only monotone sequence this record carries — POS-196's

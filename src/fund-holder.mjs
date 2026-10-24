@@ -177,10 +177,25 @@ export function resolveAccount(ghId, { registry, isMeep, outside }) {
   };
 }
 
-/** The town's meep law at a date, from its own ledger and its own checker (the engine is the town's stamp-mint). */
-export function meepLawOf(engine, entries, date) {
-  try { const { laws } = engine.parseLaws(entries); const m = engine.meepChecker(laws); return (h) => m(h, date); }
-  catch { return () => false; }
+/**
+ * The town's meep law at a date, from its own ledger and its own checker (the
+ * engine is the town's stamp-mint). `strict` (POS-576's invitation credit,
+ * which is permanent and public): a law that cannot be read, or a ledger with
+ * no law line at all, THROWS instead of answering "nobody is a meep".
+ */
+export function meepLawOf(engine, entries, date, { strict = false } = {}) {
+  let laws;
+  try { ({ laws } = engine.parseLaws(entries)); }
+  catch (e) {
+    if (strict) throw new Error("the meep law is unreadable: its law lines could not be parsed", { cause: e });
+    return () => false;
+  }
+  if (strict && !laws?.length) throw new Error("the meep law is unreadable: the ledger holds no law line");
+  try { const m = engine.meepChecker(laws); return (h) => m(h, date); }
+  catch (e) {
+    if (strict) throw new Error("the meep law is unreadable: the town's checker refused its law lines", { cause: e });
+    return () => false;
+  }
 }
 
 // ── the holder at the office: what GET /me shows the fund page ──────────────
@@ -191,19 +206,31 @@ export function meepLawOf(engine, entries, date) {
 // stamp (the ledger is ~3 MB; /me is asked on every signed-in page). The idea's
 // award act asks it too (idea-store.mjs § awardAtTown, POS-290): a meep never receives stamps.
 let meepCache = null;
-export async function meepLawAtOffice(clone) {
+// `strict` (POS-576): a missing ledger or tool, or an unreadable law, throws
+// rather than answering "nobody is a meep"; the other callers keep the lenient
+// answer they had. A strict read is cached only when it read a law.
+export async function meepLawAtOffice(clone, { strict = false } = {}) {
   const { existsSync, readFileSync: rf } = await import("node:fs");
   const { pathToFileURL } = await import("node:url");
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");
   const tool = join(clone, "tools", "stamp-mint.mjs");
-  if (!existsSync(ledger) || !existsSync(tool)) return () => false;
+  if (!existsSync(ledger) || !existsSync(tool)) {
+    if (strict) throw new Error(`the meep law is unreadable: no ${existsSync(ledger) ? "tools/stamp-mint.mjs" : "WHITE_PAGES/stamp-ledger.md"} in the town clone`);
+    return () => false;
+  }
   const st = statSync(ledger);
   const key = `${ledger}|${st.mtimeMs}|${st.size}`;
-  if (meepCache?.key === key) return meepCache.isMeep;
+  if (meepCache?.key === key && (!strict || meepCache.read)) return meepCache.isMeep;
   const engine = await import(pathToFileURL(tool).href);
   const entries = engine.parseStampLedger(rf(ledger, "utf8"));
-  const isMeep = meepLawOf(engine, entries, new Date().toISOString().slice(0, 10));
-  meepCache = { key, isMeep };
+  const date = new Date().toISOString().slice(0, 10);
+  if (strict) {
+    const isMeep = meepLawOf(engine, entries, date, { strict: true });
+    meepCache = { key, isMeep, read: true };
+    return isMeep;
+  }
+  const isMeep = meepLawOf(engine, entries, date);
+  meepCache = { key, isMeep, read: false };
   return isMeep;
 }
 

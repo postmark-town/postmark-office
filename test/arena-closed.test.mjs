@@ -57,7 +57,10 @@ test("NO STORE, BY CONSTRUCTION: arena.mjs imports nothing and names no store op
 });
 
 test("NOTHING LEFT OF THE FIGHT: the fold, the wheel, the adversary, the encounter on the read, the shroud and the journal writer are gone from src", () => {
-  assert.equal(existsSync(join(SRC, "encounter.mjs")), false, "the encounter fold is back");
+  // THE NAME CAME BACK, NOT THE FOLD (Darko 2026-10-21, shape B: an encounter with a finishable creature,
+  // built new and porting nothing). src/encounter.mjs is that file; the arena's fold stays gone, by name, below.
+  const enc = join(SRC, "encounter.mjs");
+  assert.ok(!existsSync(enc) || /an encounter with a finishable creature/.test(readFileSync(enc, "utf8").split("\n")[0]), "the arena's encounter fold is back");
   // The portal ground's own law is NOT on this list, and must not be: the
   // ground lookup, its stride, its landing and `standpoint.portal` outlived the
   // arena (src/portal-ground.mjs; the rooms are walked with no fight in them).

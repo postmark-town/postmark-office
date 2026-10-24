@@ -98,7 +98,7 @@ import {
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { bounceExtras, faultLogged, isHttpStatus, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 // ── THE TEACHING LINE (walk #1 item 4 · walk #2, 2026-09-05/06) ─────────────
 //
@@ -286,6 +286,8 @@ export const STANCES = RESIDENT_WORDS;
 export const AMBIENT_CAP = 3;
 /** The shadow read's page size. A cursor, not a feed. */
 export const PAGE_SIZE = 20;
+/** A list `on` names at most this many marks per call (Darko, 2026-10-20 12:47, POS-633). */
+export const STANCE_LIST_MAX = 100;
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
@@ -1001,19 +1003,30 @@ const shadowLine = (c) => {
  * newest-first order; a set that changes between pages simply changes, which is
  * what a derived inbox is.
  */
-export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
+export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE, by = null, over = null, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
   const inbox = await stanceInbox(repo, key, { dbPath });
   if (inbox.unavailable) return { unavailable: inbox.unavailable, stances_awaiting_ground: stancesGround(key?.handles), awaiting: [],
     ...(setDowns ? { set_downs_awaiting: [], set_downs_unavailable: "the world could not be read, so neither group of this read could be — this is not an answer that nothing waits" } : {}),
     standing: [] };
 
+  // ONE WAITING GROUP (POS-633, round 3): `by` and `over` narrow the inbox to
+  // the marks one household laid over one ground of yours, keyed exactly as the
+  // household glance groups them (household-read-v2.mjs § needGroups: the
+  // author, and the FIRST ground the mark lies over), so the read lists the
+  // group the glance counted. Its `ids` go straight into a list stance.
+  const only = (v) => (v == null || String(v).trim() === "" ? null : String(v).trim());
+  const byOnly = only(by), overOnly = only(over), narrowed = byOnly != null || overOnly != null;
+  const candidates = narrowed
+    ? inbox.candidates.filter((c) => (byOnly == null || c.by === byOnly) && (overOnly == null || (c.on_your_ground ?? [])[0] === overOnly))
+    : inbox.candidates;
   const n = Math.max(1, Math.min(Number(limit) || PAGE_SIZE, 100));
   const start = Math.max(0, Number.parseInt(String(cursor ?? "0"), 10) || 0);
-  const page = inbox.candidates.slice(start, start + n).map(shadowLine);
-  const next = start + n < inbox.candidates.length ? String(start + n) : null;
+  const page = candidates.slice(start, start + n).map(shadowLine);
+  const next = start + n < candidates.length ? String(start + n) : null;
 
   return {
-    stances_awaiting: inbox.candidates.length,
+    stances_awaiting: candidates.length,
+    ...(narrowed ? { only: { ...(byOnly != null ? { by: byOnly } : {}), ...(overOnly != null ? { over: overOnly } : {}) }, ids: page.map((c) => c.mark) } : {}),
     // WHOSE GROUND THAT NUMBER COUNTED — see § WHOSE GROUND THIS NUMBER COUNTED.
     stances_awaiting_ground: inbox.scope ?? stancesGround(key?.handles),
     awaiting: page,
@@ -1065,17 +1078,17 @@ export async function stanceShadow(repo, key, { cursor = null, limit = PAGE_SIZE
 // courtesy bought with the door itself. The catch lives HERE, in the one
 // function both doors call, so the two can never disagree about what a
 // degraded world looks like.
-export async function stancesForHandles(handles, { cursor = null, limit = PAGE_SIZE, repo = null, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
+export async function stancesForHandles(handles, { cursor = null, limit = PAGE_SIZE, by = null, over = null, repo = null, dbPath = null, setDowns = false, setDownDeps = {} } = {}) {
   const set = new Set([...(handles ?? [])].filter(Boolean));
   try {
-    const answer = await stanceShadow(repo ?? WORLD_CLONE, { handles: set }, { cursor, limit, dbPath, setDowns, setDownDeps });
+    const answer = await stanceShadow(repo ?? WORLD_CLONE, { handles: set }, { cursor, limit, by, over, dbPath, setDowns, setDownDeps });
     // An honest empty, said out loud rather than left as a bare zero — psaFold's
     // manners: "no entry landed inside the window" is a real state and not a
     // failure to read. A resident with nothing awaiting must be able to tell
     // that from a door that did not answer.
     // A waiting take or set-down is a word awaited too, so the note that says
     // nothing awaits is only true when BOTH groups are empty.
-    if (!answer.unavailable && (answer.stances_awaiting ?? 0) === 0 && !(answer.set_downs_awaiting?.length) && !(answer.awaiting_your_word?.length))
+    if (!answer.unavailable && !answer.only && (answer.stances_awaiting ?? 0) === 0 && !(answer.set_downs_awaiting?.length) && !(answer.awaiting_your_word?.length))
       return { ...answer, note: "nothing awaits your word — no mark has been laid over ground you hold since you last spoke. This is an ordinary state, not a quiet failure." };
     return answer;
   } catch (e) {
@@ -1272,8 +1285,8 @@ async function setDownsGroup(key, inbox, deps = {}) {
  * folds with. Unreadable refuses: a word recorded with no version could never
  * be reopened by an amendment, which is the ruling's whole point (Q5).
  */
-async function versionToRecord(on, deps = {}) {
-  const read = await readVersions([on], { query: deps.versionsQuery });
+async function versionToRecord(on, deps = {}, readAlready = null) {
+  const read = readAlready ?? await readVersions([on], { query: deps.versionsQuery });
   if (read.unreachable) throw bounce(503, "the mark's version could not be read",
     `${read.unreachable} — every word is recorded with the version of the mark it was spoken on, so the door refuses rather than record one it cannot name; nothing was written`);
   return { version: read.versions.get(on)?.current?.id ?? null, versions: read.versions };
@@ -1357,7 +1370,7 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
   };
 }
 
-export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null, setDownDeps = {}, townDeps = {} } = {}) {
+export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null, setDownDeps = {}, townDeps = {}, shared = null } = {}) {
   // THE WORLD-FREEZE GATE (the engine cutover, 2026-08-24). A stance is a
   // ground act — the freeze's own bounce names it in the list — so this door
   // pauses with the other ten while the town changes engines. It is FIRST,
@@ -1376,6 +1389,11 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   if (!singleLogEnabled())
     throw bounce(501, "the consent door has no pen at this office",
       "a stance is a row in the single log, and the log is switched off here — the operator runs it behind WORLD_SINGLE_LOG=1");
+
+  // A LIST OF MARKS is this same door once per mark (below). The two gates
+  // above answer the whole call once; everything after them is per mark.
+  if (Array.isArray(args.on))
+    return await declareStanceList(repo, args, key, { dbPath, witnessStamp, crossing, setDownDeps, townDeps });
 
   // THE TOWN SPEAKS THROUGH THIS SAME VERB (POS-361), and only when the act
   // says so in its one explicit field. A town hand speaking without `as` is a
@@ -1403,7 +1421,8 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
       `got ${JSON.stringify(args.stance ?? null)} — welcomed confers your ground's standing on it, opposed is your veto, and a declared neutral clears "awaiting your word" without welcoming. All are revisable forever; silence leaves the mark awaiting.`);
 
   // ── THE GROUND'S HOLDER SPEAKS ───────────────────────────────────────────
-  const geom = await stanceGeometry(repo);
+  // `shared` is the list's reads, taken once for every id (§ declareStanceList); a single call reads its own
+  const geom = shared ? shared.geom : await stanceGeometry(repo);
   if (!geom) throw bounce(503, "the world's own geometry could not be read",
     "overlap is the engine's answer and this door will not substitute its own — try again once the world store is readable");
   const overlaps = (a, b) => geom.overlapArea(geom.rect(a), geom.rect(b)) > 0;
@@ -1413,7 +1432,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   // look", and answering `no mark "<on>"` to the second would teach a resident
   // their neighbour's sketch does not exist. The world-geometry refusal three
   // lines up is the same shape and the same wording.
-  const world = await worldForStances(repo, { dbPath });
+  const world = shared ? shared.world : await worldForStances(repo, { dbPath });
   if (world.unreachable) throw bounce(503, "the stance candidate list could not be read", world.unreachable);
   const all = world.marks;
   const target = all.find((m) => m.id === on);
@@ -1462,9 +1481,18 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
 
   // THE VERSION IT IS SPOKEN ON (POS-361, Q5), asked before anything is
   // written, so an unreadable version refuses with nothing behind it.
-  const { version, versions } = await versionToRecord(on, townDeps);
+  const { version, versions } = await versionToRecord(on, townDeps, shared?.versions ?? null);
 
-  const stamp = witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } };
+  // A RETRIED LIST IS SAFE (review of #678, item 2): in a list, a mark whose standing word from this speaker is
+  // already this word on this version is answered "already declared" and never written again. The single door
+  // keeps its own behaviour (a repeat is a new row that supersedes the last).
+  if (shared) {
+    const standing = standingStances(shared.rows, { by, versions }).find((s) => s.on === on) ?? null;
+    if (standing && standing.stance === stance)
+      return { on, stance, by, already_declared: { at: standing.at, seq: standing.seq }, on_your_ground: ground.map((g) => g.id), version };
+  }
+
+  const stamp = shared?.stamp ?? (witnessStamp ? await witnessStamp(by) : { at: { anchor: null, dx: null, dy: null }, witnesses: { source: "unread", reason: "no witness reader supplied", list: [] } });
 
   {
     // THE SUPERSEDED COURTESY READS THE WHOLE RECORD, NOT ONE STORE.
@@ -1485,7 +1513,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
     //
     // `stanceRows` is the one derivation every tier reads from; this now shares
     // it rather than keeping a fourth opinion about what has been said.
-    const prior = standingStances(await stanceRows({ dbPath, worldClone: repo }), { by, versions }).find((s) => s.on === on) ?? null;
+    const prior = standingStances(shared ? shared.rows : await stanceRows({ dbPath, worldClone: repo }), { by, versions }).find((s) => s.on === on) ?? null;
     const entry = {
       crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
       action: ACTION_STANCE, object: on, cls: CLASS_STANCE,
@@ -1544,6 +1572,111 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   }
 }
 
+// ── A LIST OF MARKS (Darko, 2026-10-20 12:47, POS-633) ────────────────────────
+//
+// `on` may be a list of explicit ids, at most STANCE_LIST_MAX. Each id is this
+// door's single call, unchanged: the same provenance, the same outcome path and
+// the same refusals, so a list writes exactly the acts the calls one by one
+// would. Nothing is judged for the list as a whole beyond its shape. A refusal
+// answers its own id and the next id is still spoken, because a mark not
+// waiting on this house is no reason to leave the rest of the group silent.
+//
+// One fault STOPS the list: an error that is not a refusal (its code not a
+// status) is the office failing, not the mark, so the ids after it are named
+// as not tried rather than spoken into a failing office. Every id before it
+// stands, and the answer says which.
+//
+// The answer lifts what every landed answer shares (the speaker, the word, the
+// record, the crossing, the door's note) to the top once, so a hundred ids do
+// not repeat it a hundred times.
+const LIST_SHARED = ["by", "stance", "log", "crossing", "note"];
+
+/**
+ * The reads a list shares, taken once. A read that fails is left to each id's call to read and refuse on its own,
+ * exactly as a single call would, so nothing here decides anything.
+ */
+async function listReads(repo, args, key, ids, { dbPath = null, witnessStamp = null, townDeps = {} } = {}) {
+  try {
+    const handles = [...(key?.handles ?? [])];
+    const by = args.by ?? args.handle ?? (handles.length === 1 ? handles[0] : undefined);
+    const [geom, world, rows, versions] = await Promise.all([
+      stanceGeometry(repo),
+      worldForStances(repo, { dbPath }),
+      stanceRows({ dbPath, worldClone: repo }),
+      readVersions(ids, { query: townDeps.versionsQuery }),
+    ]);
+    let householdOf;
+    try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
+    const stamp = witnessStamp && by && key?.handles?.has(by) ? await witnessStamp(by) : undefined;
+    return { geom, world, rows, versions, householdOf, ...(stamp ? { stamp } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+async function declareStanceList(repo, args, key, opts) {
+  const ids = args.on;
+  if (ids.length === 0) throw bounce(422, "which marks?",
+    `pass on: "<by>/<slug>" for one mark, or a list of ids for several (at most ${STANCE_LIST_MAX})`);
+  if (ids.length > STANCE_LIST_MAX) throw bounce(422, `on lists ${ids.length} marks; a call speaks on at most ${STANCE_LIST_MAX}`,
+    `split the list: the first ${STANCE_LIST_MAX} in this call, the rest in the next — nothing was written`);
+  const bad = ids.findIndex((id) => typeof id !== "string" || !id.trim());
+  if (bad >= 0) throw bounce(422, `on[${bad}] is not a mark id`,
+    `every entry is "<by>/<slug>", as the telling and household { read: "stances" } show ids — nothing was written`);
+  const seen = new Set();
+  for (const id of ids) {
+    const k = id.trim();
+    if (seen.has(k)) throw bounce(422, `on lists "${k}" twice`, "name each mark once: a second word on the same mark in one call would only replace the first — nothing was written");
+    seen.add(k);
+  }
+
+  // THE LIST'S READS, ONCE (review of #678, item 2): the world, its geometry, the stance record, every id's
+  // version, the speaker's witness stamp and the household lookup the set-down arm asks, read before the first
+  // id and handed to each id's call. Each id is still judged by the single door on its own; only the reading is
+  // shared. The town's word (as: "town") reads its own, as it always has.
+  const shared = args.as ? null : await listReads(repo, args, key, ids.map((id) => id.trim()), opts);
+  const each = shared ? { ...opts, shared, setDownDeps: { householdOf: shared.householdOf, ...(opts.setDownDeps ?? {}) } } : opts;
+
+  const results = [];
+  let fault = null;
+  for (const raw of ids) {
+    const on = raw.trim();
+    if (fault) { results.push({ on, not_tried: true }); continue; }
+    try {
+      const r = await declareStanceViaOffice(repo, { ...args, on }, key, each);
+      if (r?.error) results.push({ on, refused: { code: r.code, defect: r.defect, hint: r.hint } });
+      else if (r?.already_declared) results.push({ on, already_declared: r.already_declared });
+      else results.push({ on, landed: true, ...r, on });
+    } catch (e) {
+      if (isHttpStatus(e?.code)) {
+        results.push({ on, refused: { code: e.code, defect: e.defect, ...(e.hint ? { hint: e.hint } : {}), ...bounceExtras(e) } });
+      } else {
+        fault = faultLogged(`a listed stance on ${on} failed`, e);
+        results.push({ on, refused: { code: 500, defect: "the office failed on this mark", hint: fault } });
+      }
+    }
+  }
+
+  const landed = results.filter((r) => r.landed);
+  const common = {};
+  for (const k of LIST_SHARED) {
+    if (landed.length && landed.every((r) => k in r && JSON.stringify(r[k]) === JSON.stringify(landed[0][k]))) {
+      common[k] = landed[0][k];
+      for (const r of landed) delete r[k];
+    }
+  }
+  const refused = results.filter((r) => r.refused).length;
+  const notTried = results.filter((r) => r.not_tried).length;
+  const already = results.filter((r) => r.already_declared).length;
+  return {
+    marks: ids.length, landed: landed.length, refused,
+    ...(already ? { already_declared: already, already_note: "already your standing word on this version of the mark: nothing was written again (a retried list is safe)" } : {}),
+    ...(notTried ? { not_tried: notTried } : {}),
+    ...common,
+    results,
+  };
+}
+
 // ── the door's schema ────────────────────────────────────────────────────────
 //
 // STANCE_TOOLS ride the apex's SCHEMA lookup without joining the flat door's
@@ -1553,9 +1686,9 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
 // drift that seam exists to close. The flat `tools/list` count is unchanged.
 export const STANCE_TOOLS = [
   { name: "world_declare_stance",
-    description: "Speak your word on something standing on your ground — welcomed, neutral or opposed. A stance is a revisable word on an edge: latest wins; a declared neutral clears \"awaiting your word\" without welcoming, and silence leaves the mark awaiting. Every word is spoken on one version of the mark, and an amendment reopens it. THE TOWN'S WORD: a town hand passes as: \"town\" to speak for the town (neutral or opposed, an opposition citing law marks by id). WHO MAY SPEAK: the ground's holder. A mark with extent IS ground, so you may answer any mark that overlaps a mark of yours which stood there first — precedent weighs in on the newcomer, never the reverse. AND ONE MORE CASE: when another household has set down a thing your house made, your house answers that set-down here, on the thing itself — welcomed re-sites it where they left it, filed in your name; opposed keeps canon where you put it; silence leaves it unaccepted. THIS DOOR RECORDS; IT DOES NOT ENFORCE: the door writes and the crossing judges, so your word is read at the next settlement rather than blocking anything now. To see what is waiting for you, read this same action.",
+    description: "Speak your word on something standing on your ground — welcomed, neutral or opposed. A stance is a revisable word on an edge: latest wins; a declared neutral clears \"awaiting your word\" without welcoming, and silence leaves the mark awaiting. Every word is spoken on one version of the mark, and an amendment reopens it. THE TOWN'S WORD: a town hand passes as: \"town\" to speak for the town (neutral or opposed, an opposition citing law marks by id). WHO MAY SPEAK: the ground's holder. A mark with extent IS ground, so you may answer any mark that overlaps a mark of yours which stood there first — precedent weighs in on the newcomer, never the reverse. AND ONE MORE CASE: when another household has set down a thing your house made, your house answers that set-down here, on the thing itself — welcomed re-sites it where they left it, filed in your name; opposed keeps canon where you put it; silence leaves it unaccepted. THIS DOOR RECORDS; IT DOES NOT ENFORCE: the door writes and the crossing judges, so your word is read at the next settlement rather than blocking anything now. ONE WORD ON MANY MARKS: on: takes a list of up to 100 ids, each its own act, and the answer gives each id's result; household { read: \"stances\", args: { by, over } } lists one waiting group's ids. To see what is waiting for you, read this same action.",
     inputSchema: { type: "object", properties: {
-      on: { type: "string", description: "the mark you are speaking about — <by>/<slug>, as ids appear in the telling and in your own inbox" },
+      on: { type: ["string", "array"], items: { type: "string" }, description: "the mark you are speaking about — <by>/<slug>, as ids appear in the telling and in your own inbox; or a list of up to 100 ids, each its own act" },
       stance: { type: "string", enum: ["welcomed", "neutral", "opposed"], description: "welcomed confers your ground's standing on it; opposed is your veto; a declared neutral clears \"awaiting your word\" and confers nothing. Silence leaves the mark awaiting. Latest wins, and an amendment of the mark reopens every word. With as: \"town\" the words are neutral or opposed — the town's welcomed is adoption, reserved." },
       as: { type: "string", enum: ["town"], description: "speak the TOWN's word instead of your resident's: written by the town's pen (postmark-pen, household the-town) in your hand, for the town's hands only (darko, wright, worldkeeper). The town speaks on any published mark — its ground is the whole world." },
       law: { type: "array", items: { type: "string" }, description: "with as: \"town\": the law the word applies — one or more law-mark ids (<by>/<slug>, tier constitution) that stand at the law sha; the office records each mark's words verbatim beside its id. Required for opposed; neutral may cite." },

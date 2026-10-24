@@ -315,26 +315,53 @@ export function refuseOverCarry({ who, units, things, adding, cap }) {
   return { carried: now + adding, cap };
 }
 
-// ── THE TAKEN-CLASS HOOK (WLD-7's, built inactive) ──────────────────────────
+// ── A CLASS TAKEN BY THE TOWN'S OWN ACT (WLD-7) ─────────────────────────────
 //
-// "An act on a holding whose top class is taken candy refuses with its clue
-// sentence." WLD-7 owns the flag, its activation and the clue; this is only the
-// hook. A class is TAKEN when its record says so — `dials.taken: true`, its
-// sentence in `dials.clue` — and no class in the Keeping Works says so today,
-// so the hook stands and refuses nothing. It asks the holding's TOP class and
-// that class's ancestors: a holding of candies is a holding of consumables too.
+// The town can take a class away for a while: its record says `dials.stolen:
+// true` (the boolean, nothing else; a record saying `taken: true` is not read
+// as stolen, and there is no alias), with a sentence in `dials.clue`. While it
+// says so, every act that moves, makes or uses up a thing or a unit OF that
+// class, or of a class extending it, refuses with that sentence (423), and
+// nothing is recorded. When the record stops saying so, the same acts work
+// again. Removing the dial reverses it whole: the class was never deleted, so
+// nothing it made is orphaned. No class says so today, so this refuses nothing.
+// Built from Jetto's refit (58b633b8).
 
-export function takenRefusal(topClass, classRecord, extendsOf) {
-  if (!topClass) return null;
-  for (const c of ancestry(topClass, extendsOf)) {
+export function stolenRefusal(klass, classRecord, extendsOf, { restored = () => false } = {}) {
+  if (!klass) return null;
+  for (const c of ancestry(klass, extendsOf)) {
     const rec = classRecord(c);
     const d = rec?.dials && typeof rec.dials === "object" ? rec.dials : {};
-    if (d.taken === true) {
-      const clue = typeof d.clue === "string" && d.clue.trim() ? d.clue.trim() : `the ${c} is gone.`;
-      return bounce(423, clue, `the ${c} class is taken; this act waits until it is returned. Nothing was recorded.`, { taken: c });
+    // GIVEN BACK IN THE RECORD (WLD-25/j): the town's own restore act since the dial went
+    // on lifts it, though the dial still stands (restored-classes.mjs)
+    if (d.stolen === true && !restored(c)) {
+      const clue = typeof d.clue === "string" && d.clue.trim() ? d.clue.trim() : `the ${c} has been stolen.`;
+      return bounce(423, clue, `the ${c} has been stolen; nothing moves until it is returned. Nothing was recorded.`, { stolen: c });
     }
   }
   return null;
+}
+
+/**
+ * THE ONE QUESTION, FOR EVERY DOOR (WLD-7). `klass` is what the act is judged
+ * by: a class name; `null` for a thing whose mark was READ and names no class
+ * (a `thing`); `undefined` when it cannot be told (no mark, canon unread, a
+ * label the law does not register). `view` is the class layer of THIS moment.
+ *
+ *   no class stolen   inert: nothing refuses, whatever is unknown
+ *   a class stolen    ONLY WHAT IS KNOWN TO BE OF IT IS REFUSED (Darko 2026-10-13
+ *                     17:57: "collateral breakage is a platform bug"). A thing whose
+ *                     class cannot be told, or a class the law lacks, gets exactly
+ *                     its ordinary day's answer
+ *   no law loaded     inert (a process's cold start: nothing can be known stolen,
+ *                     and a published snapshot is never replaced by none)
+ *   given back        a taken class the town has restored by its own act since the
+ *                     dial went on is not refused (view.restored; restored-classes.mjs)
+ */
+export function stolenClassRefusal(klass, view) {
+  if (!view?.readable || !view.stolenAny?.()) return null;
+  if (klass === undefined) return null;
+  return stolenRefusal(klass === null ? "thing" : klass, view.record, view.extendsOf, { restored: view.restored ?? (() => false) });
 }
 
 // ── THE MOVES, ADJUDICATED ──────────────────────────────────────────────────

@@ -44,6 +44,11 @@
      "required": "boolean",
      "type": "string"
     },
+    "invited_by": {
+     "description": "string",
+     "maxLength": "number",
+     "type": "string"
+    },
     "note": {
      "description": "string",
      "type": "string"
@@ -159,7 +164,15 @@
      "description": "string",
      "type": "string"
     },
+    "pronouns": {
+     "description": "string",
+     "type": "string"
+    },
     "runtime": {
+     "description": "string",
+     "type": "string"
+    },
+    "sheet": {
      "description": "string",
      "type": "string"
     }
@@ -360,8 +373,13 @@
     },
     "on": {
      "description": "string",
+     "items": {
+      "type": "string"
+     },
      "required": "boolean",
-     "type": "string"
+     "type": [
+      "string"
+     ]
     },
     "stance": {
      "description": "string",
@@ -489,6 +507,58 @@
    "fields": {
     "handle": {
      "description": "string",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "string",
+   "fields": {
+    "body": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "id": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "seq": {
+     "description": "string",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "string",
+   "fields": {
+    "id": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "seq": {
+     "description": "string",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "string",
+   "fields": {
+    "household": {
+     "description": "string",
+     "required": "boolean",
      "type": "string"
     }
    },

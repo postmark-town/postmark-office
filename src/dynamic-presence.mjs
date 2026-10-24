@@ -50,6 +50,10 @@ import {
 } from "./dynamic-entities.mjs";
 import { everyonePlaced, withFrames } from "./positions.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+// WHERE A RESIDENT STANDS, AT THE RECORD'S OWN PRECISION (WLD-63 row 68 (b)): the
+// walk ledger writes tenths of a metre, and a door's landing stands on a half
+// metre, so a whole-metre round here moved a token by 0.7 m after it landed.
+const round1 = (n) => Math.round(n * 10) / 10;
 
 export const presenceEnabled = () => process.env.WORLD_PRESENCE === "1";
 
@@ -330,7 +334,7 @@ export async function near({
       // same words, because presence is a thing you see and not a new sense.
       bearing: quantizeBearing(bearingDeg(r.x - here.x, r.y - here.y)),
       band: distanceBand(r.distance_m),
-      at: { x: Math.round(r.x), y: Math.round(r.y) },
+      at: { x: round1(r.x), y: round1(r.y) },
       standing: r.standing, moving: r.moving, aboard: r.aboard,
       // ⚑ `available` STOOD HERE, beside standing and moving, and is parked
       // (2026-09-10, the founder's word; world#19 reverted, bytes on office
@@ -378,7 +382,7 @@ export async function everyone({
   for (const r of read.rows) {
     residents.push({
       handle: r.handle,
-      at: { x: Math.round(r.x), y: Math.round(r.y) },
+      at: { x: round1(r.x), y: round1(r.y) },
       source: r.source,
       standing: r.standing, moving: r.moving, aboard: r.aboard,
       // ⚑ `available` stood here too — parked with near()'s; see the note there.

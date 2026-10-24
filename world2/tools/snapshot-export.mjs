@@ -424,7 +424,8 @@ async function readWindows(client) {
   return rows.map((w) => ({ ...w, id: Number(w.id) }));
 }
 
-async function readActs(client, { after, upto }) {
+/** The acts the notary archives (exported so a privacy test reads exactly what it reads, POS-757). */
+export async function readActs(client, { after, upto }) {
   const sql = after === null
     ? "SELECT * FROM acts WHERE crossing IS NOT NULL AND crossing <= $1 ORDER BY id"
     : "SELECT * FROM acts WHERE crossing IS NOT NULL AND crossing > $2 AND crossing <= $1 ORDER BY id";

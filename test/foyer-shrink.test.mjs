@@ -271,8 +271,25 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 // this ceiling's own rule, "~30% over today": three calendar act cards took the
 // bare answer to 19,353, which no honest trim of three cards brings back under
 // 16,384. SLIM_CEILING is untouched and stays the load-bearing bound.
-const REST_CEILING = 24_576;
-const SLIM_CEILING = 8_192;
+// POS-633 round 4 (2026-10-20, Wright's call (a), lane plumb-hhv2): SLIM_CEILING
+// raised to 8,448 (+256, about 3%). The glance's blocks became reads of their own
+// names (Darko 15:46), and each read's line rides the foyer's read table: `waiting`
+// and `marks` took the connector's bare answer to 8,265 B, and `correspondents`
+// with the deep reads takes it to about 8,300, over 8,192 by about 100. Measured
+// today: connector bare 8,265 B, REST bare (unabridged) 24,282 B. The ceiling still
+// sits between the two, as its rule asks: losing the abridgement jumps the answer
+// to the unabridged 24K and trips 8,448 at once, which is the one regression it
+// exists to catch. It is not a budget for prose; the lasting fix (names in the
+// bare index, the lines through explain:) is filed under the grammar work.
+// POS-666 (2026-10-22, lane plumb-mail; raised on the recommendation sent to
+// Wright as G7, PENDING HIS WORD): the four mail-parity acts (amend-letter,
+// withdraw-letter, block, unblock) and the `blocks` read, which the ruling puts
+// in the door's own act list. Measured: REST bare 26,336 B (was 24,522, 54 B of
+// headroom), connector bare 8,834 B (was 8,298). REST_CEILING to 28,672 (+4 KiB,
+// about 9% over the measure), SLIM_CEILING to 8,960 (+512). Both still sit far
+// below the unabridged answer, so losing the abridgement still trips them at once.
+const REST_CEILING = 28_672;
+const SLIM_CEILING = 8_960;
 
 test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
   const { shapeOf } = await import("../tools/capture-household-golden.mjs");
@@ -298,6 +315,15 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   // ceiling because fund-verify's own teaching line was tightened in the same
   // act. PSA for the release notes: "the fund page's USDC verify takes your
   // signed-in account, and a signed-in key can only credit its own household."
+  //
+  // ⚑ REGENERATED 2026-10-20 FOR POS-633 round 3 (Darko 12:47, the bulk
+  // stance): declare-stance-on's `on` takes one id or a list of up to 100. The
+  // capture diff is exactly `/acts/11/fields/on/type` "string" -> ["string"]
+  // (the card now says ["string", "array"]) and `/acts/11/fields/on/items`
+  // added; nothing removed. The card's `type` is RETYPED, so this one is named
+  // for review rather than called additive. PSA for the release notes: "a
+  // stance can answer a whole group: on: takes a list of up to 100 ids, and
+  // each mark gets its own act."
   //
   // ⚑ REGENERATED 2026-10-06 FOR POS-361 (the town's stance as law, Darko's
   // rulings of 10-06): the declare-stance-on card gained `as` (as: "town", the
@@ -466,11 +492,68 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   // the live door.
   assert.equal(heardShapes[0].fields.from_town?.type, "string", "the frozen arrival shape carries from_town");
   assert.equal(beginLive.fields.from_town?.type, "string", "and the live begin card takes it");
+
+  // ⚑ REGENERATED 2026-10-22 FOR POS-576 (Darko 20:40, the invitation link),
+  // named here for the same reason. What grew: declare's and begin's shared
+  // shape gained one optional field, `invited_by`, who invited the household,
+  // printed on its row in the town's tools/households.json as a public credit.
+  // ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/0/fields/invited_by/{type,description,maxLength}` and removed or
+  // retyped none. It stays off the abridged index (household-apex.mjs §
+  // OFF_INDEX, F5d). PSA for the release notes: "declare_household (and begin)
+  // take an optional invited_by: the resident or household that invited you,
+  // credited publicly on your household's record."
+  //
+  // The witness: that shared shape carries invited_by, in the frozen copy and
+  // on the live door.
+  assert.equal(heardShapes[0].fields.invited_by?.type, "string", "the frozen arrival shape carries invited_by");
+  assert.equal(beginLive.fields.invited_by?.type, "string", "and the live begin card takes it");
+
+  // ⚑ REGENERATED 2026-10-20 FOR WLD-83 (Darko 09:55: pronouns are a profile
+  // field, beside the name). What grew: the profile act's fields gained one
+  // optional field, `pronouns`. ADDITIVE and proven so: the capture diff added
+  // exactly `/acts/4/fields/pronouns/{type,description}` and removed or retyped
+  // none. It stays off the abridged index (household-apex.mjs § OFF_INDEX, F5d's
+  // rule), which kept the connector's bare answer at its 8,192 B bound (it read
+  // 8,194 B with it on). PSA for the release notes: "update_profile takes
+  // pronouns: your own words (she/her, they/them, …), shown beside your name on
+  // every close look; nothing guesses them."
+  //
+  // The witness: the frozen profile card carries pronouns, and so does the live one.
+  const profileFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
+  assert.equal(profileFrozen?.fields.pronouns?.type, "string", "the frozen profile card carries pronouns");
+  assert.equal(full.acts.find((a) => a.act === "profile")?.fields.pronouns?.type, "string", "and the live profile card takes it");
+
+  // ⚑ REGENERATED 2026-10-21 FOR WLD-83 (Darko 2026-10-19 18:24: the household
+  // submits its resident's six-panel reference sheet, and it is canon). What
+  // grew: the profile act's fields gained one optional field, `sheet`. ADDITIVE
+  // and proven so: the capture diff added exactly
+  // `/acts/4/fields/sheet/{type,description}` and removed or retyped none. It
+  // stays off the abridged index (household-apex.mjs § OFF_INDEX, pronouns' rule),
+  // so the connector's answer and the index twins do not move. PSA for the release notes: "update_profile takes sheet: your
+  // resident's six-panel reference sheet, as a media URL; setting your picture
+  // hands you the template to make one."
+  const sheetFrozen = frozen.acts.find((a) => a.fields && "bio" in a.fields && "color_name" in a.fields);
+  assert.equal(sheetFrozen?.fields.sheet?.type, "string", "the frozen profile card carries sheet");
+  assert.equal(full.acts.find((a) => a.act === "profile")?.fields.sheet?.type, "string", "and the live profile card takes it");
+
+  // ⚑ REGENERATED 2026-10-22 FOR POS-666 (Darko 17:12–17:19: mail parity with
+  // git-era letters, and a household's block on another's mail). What grew:
+  // four act cards at the end of `acts` — amend-letter, withdraw-letter, block,
+  // unblock. ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/17`, `/acts/18` and `/acts/19` (block and unblock share one shape)
+  // and removed or retyped none. PSA for the release notes: "household does
+  // amend-letter and withdraw-letter on a letter of yours before it sails, and
+  // block and unblock another household's mail, privately; read: \"blocks\"
+  // lists your house's own."
+  for (const act of ["amend-letter", "withdraw-letter", "block", "unblock"])
+    assert.ok(full.acts.find((a) => a.act === act)?.fields, `the live REST answer carries ${act}'s card`);
 });
 
-test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async () => {
+test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the connector's bare answer under ${SLIM_CEILING}B`, async (t) => {
   const rest = Buffer.byteLength(JSON.stringify(await householdApex({}, KEY, REST())));
   const slim = Buffer.byteLength(JSON.stringify(await householdApex({}, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }))));
+  t.diagnostic(`REST bare ${rest} B of ${REST_CEILING}; connector bare ${slim} B of ${SLIM_CEILING}`);
   assert.ok(rest <= REST_CEILING, `the REST bare answer is ${rest}B, over its ${REST_CEILING}B ceiling — growth is lawful, unbounded growth is not`);
   assert.ok(slim <= SLIM_CEILING, `the connector's bare answer is ${slim}B, over its ${SLIM_CEILING}B ceiling — this is what losing Hal's abridgement looks like`);
   // AND THE CEILINGS MUST STILL MEAN SOMETHING: a bound so far above the
@@ -486,17 +569,17 @@ test(`F5c · and the answer stays BOUNDED — REST under ${REST_CEILING}B, the c
 // stay off the ABRIDGED index; the ceiling stays (raising it is Keemin's call).
 // Measured on the POS-292 head with them off: connector bare 8,180 B, so the
 // headroom under SLIM_CEILING is 12 B; REST bare 21,668 B under 24,576.
-// POS-570: begin asks the same two fields, on the same rule.
-test("F5d · POS-292 + POS-570 + POS-574: the abridged index leaves declare's and begin's heard fields and from_town off, and both cards still carry them", async () => {
+// POS-570: begin asks the same two fields, on the same rule. POS-576: invited_by too.
+test("F5d · POS-292 + POS-570 + POS-574 + POS-576: the abridged index leaves declare's and begin's heard fields, from_town and invited_by off, and both cards still carry them", async () => {
   const slim = await householdApex({}, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
   for (const act of ["declare", "begin"]) {
     const entry = slim.acts.find((a) => a.act === act);
     assert.ok(entry, `${act} is on the index`);
-    for (const f of ["heard", "heard_note", "from_town"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
+    for (const f of ["heard", "heard_note", "from_town", "invited_by"]) assert.equal(f in entry.fields, false, `${act}'s ${f} rides the foyer`);
     assert.ok("household" in entry.fields, `the rest of ${act}'s fields are still listed`);
     const card = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     const fields = card.card?.fields ?? card.fields ?? {};
-    for (const f of ["heard", "heard_note", "from_town"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
+    for (const f of ["heard", "heard_note", "from_town", "invited_by"]) assert.ok(f in fields, `${f} is on ${act}'s card: ${JSON.stringify(Object.keys(fields))}`);
   }
 });
 
@@ -563,7 +646,7 @@ test("F7 · an unknown read bounces naming BOTH namespaces — the reads and the
   assert.match(r.hint, /reads back its own full card/);
 });
 
-test("F7b · the FIFTEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
+test("F7b · the NINETEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
   // ⚠ THE ROUND ASKED FOR A DISJOINTNESS GUARD. It fired on the live door:
   // `address`, `home` and `window` have been both an act and a read since long
   // before this branch, because a read here IS that act's shadow. At the world
@@ -594,7 +677,11 @@ test("F7b · the FIFTEEN acts that own their name answer their card; the THREE t
   // ⚑ FOURTEEN → FIFTEEN, 2026-09-28 (POS-286): `mark-all-read` joined as a
   // BARE act; what it clears is counted on the doorstep's `unread` block, not
   // at a household read of its name.
-  assert.equal(bare.length, 15);
+  //
+  // ⚑ FIFTEEN → NINETEEN, 2026-10-22 (POS-666): `amend-letter`, `withdraw-letter`,
+  // `block` and `unblock` joined as BARE acts. The read beside them is
+  // `blocks`, a different name, so none shadows a household read.
+  assert.equal(bare.length, 19);
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);
@@ -1076,6 +1163,82 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //      count and the ground's size still bind, and the world's values do not.
   //      The tenth note's rule stands: a PR that moves the pin re-captures here.
   // The golden's bytes are unchanged (full 24984, slim 22546).
+  //
+  // ⚠ AND RE-CAPTURED A SEVENTEENTH TIME, 2026-10-19 (lane plumb-flaky, POS-703),
+  // because the PR moved the world pin to world main: 38cfd41b (daef8487 plus
+  // POS-699's one commit) -> 8e159d75, 206 commits that include W2's kind rung
+  // and the settlements through 10-19. As the tenth note says a pin move must,
+  // the code was cleared first: this PR changes no doorstep segment (tests and
+  // the pin only), and at its base on CI-shaped clones at the OLD pin F7c5 is
+  // green (office#641's suite, run 39267673715, at 38cfd41b). Then the diff, leaf by leaf, on CI-shaped clones at the NEW pin
+  // (suite-clones.sh's fetch, world 8e159d75, town 5efee017) BEFORE the
+  // capture: 1117 -> 1129 paths, 2 removed, 14 added, 158 changed, every one of
+  // them the world's own data at the pin, in two segments and nowhere else:
+  //   1. `stances`: the count awaiting (61 -> 64), the five newest awaiting
+  //      rows and their `on_your_ground` lists, and `ground` (72 -> 73 marks,
+  //      wright/three-ships-on-one-water joining it). No key added or removed.
+  //   2. `stakes.rows.N`: 7 rows' `kind` in W2's form (`thing`,
+  //      `predicate`, `portal-ground`), and 4 rows' `class` null -> "home"
+  //      (exposed-timber, the-candle-vault, the-cellar-door,
+  //      the-lanternstep-parlor), which the 10-19 settlement wrote into the
+  //      sweep's registry (WORLD/settlement-publications.json).
+  // On the golden's world the compare is byte-exact again, so the form-aware
+  // remedies above are now the identity here.
+  //
+  //   full  24984 -> 25070 (+86) · slim  22546 -> 22632 (+86)
+  //
+  // ⚠ AND RE-CAPTURED AN EIGHTEENTH TIME, 2026-10-21 (lane plumb-creature-verbs,
+  // POS-672), because the PR moved the world pin to world main: 77f7918a (the kept
+  // branch pos672/train-pin: c315bd76 plus #264's three commits) -> b81aa6f7b
+  // (#264's merge, with the settlements and marks since 10-20). This PR changes no
+  // doorstep segment (the pin and two creature-tick cases only). The page was read
+  // off CI itself at the new pin (a one-commit diagnostic printed it, run
+  // 39598920026, then reverted), and diffed leaf by leaf against the seventeenth
+  // capture BEFORE this one: 1129 -> 1139 paths, 14 removed, 24 added, 158 changed,
+  // every one of them in `stances`, the world's own data at the pin: the count
+  // awaiting (64 -> 65), the five newest awaiting rows and their `on_your_ground`
+  // lists, and `ground` (73 -> 78 marks). Nothing else moved; `stakes` is unchanged.
+  //
+  //   full  25070 -> 25214 (+144) · slim  22632 -> 22776 (+144)
+  //
+  // ⚠ AND MOVED A NINETEENTH TIME (POS-633 round 4, lane plumb-hhv2, built 2026-10-20 and merged over the eighteenth;
+  // Wright's call A, "one record every reader reads", the 10-04 ruling). The
+  // posts segment IS household { read: "posts" } (the bundle law), and that read
+  // gained its bug half (household-posts.mjs § bugRows): one row per bug the
+  // house reported (put_up) or answered (taking_part), its stage as its state,
+  // and, when the half cannot be read, one line in `unavailable`. On this
+  // fixture the half is unreadable, so the page moved by exactly TWO paths,
+  // `full.posts.unavailable.3` and `slim.posts.unavailable.3`, both "the bugs
+  // could not be read from the office's record". Diffed leaf by leaf between a
+  // capture at the PR's base and one at its head (the same machine, so its own
+  // world-data noise cancels) BEFORE the edit; the golden was then edited by
+  // those two paths and nothing else, since a pool tree's capture differs from a
+  // CI-shaped clone's in the stances segment's world data.
+  //
+  //   full  25214 -> 25268 (+54) · slim  22776 -> 22830 (+54), on the eighteenth's page
+  //
+  // ⚠ AND MOVED A TWENTIETH TIME (the same lane, 2026-10-20; Darko 15:54: "handle
+  // all posts the same whatever's intersecting"). householdPosts reads every class
+  // in POST_CLASSES through one generic pass, so the quests' half joins the events',
+  // bugs' and idea posts', and the halves' unreadable lines come in class order with
+  // the Think Tank's after them. Diffed the same way, base against head on one
+  // machine: `posts.unavailable.2` (the Think Tank's line -> the quests') and
+  // `posts.unavailable.4` (added: the Think Tank's), on both skins, and nothing else.
+  //
+  //   full  25268 -> 25324 (+56) · slim  22830 -> 22886 (+56)
+  //
+  // ⚠ AND RE-CAPTURED A TWENTY-FIRST TIME, 2026-10-22 (lane plumb-heist-publish), because
+  // the PR moved the world pin, d17e4cab4 -> 7f5f61c81 (the commit settlement/S123 blesses:
+  // #277, #280, #279, the S123 sweep with 64 published, #281). This PR changes no doorstep
+  // segment (the pin and this golden only). Captured with tools/capture-doorstep-golden.mjs
+  // on a CI-shaped clone (HEAD and origin/main at the pin, every tag merged into it and none
+  // newer), where F7c5 reproduced CI's red first, then diffed leaf by leaf against the
+  // twentieth capture BEFORE replacing it: 1143 -> 1129 paths, 24 removed, 10 added, 210
+  // changed, every one of them in `stances`, the world's own data at the pin (the count
+  // awaiting 65 -> 63, the five newest awaiting rows and their lists, and `ground`). Nothing
+  // else moved; `stakes` and `posts` are unchanged.
+  //
+  //   full  25324 -> 25086 (-238) · slim  22886 -> 22648 (-238)
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

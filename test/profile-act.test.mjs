@@ -114,14 +114,19 @@ test("a picture and a name are written, and the office's own reader can still se
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
-test("the picture does NOT land in `avatar:` — that key is the byte door's, and a URL there is deleted", () => {
+// WLD-83 (Darko 2026-10-19 18:24, "one picture, not two"): the URL is the one
+// picture key, so setting it clears the older `avatar:` filename rather than
+// leaving a second picture beside it. It never writes the URL INTO `avatar:`,
+// where normalizeProfile deletes any value carrying a separator.
+test("the picture lands in `avatar_url` alone: `avatar:` is cleared, never written with the URL", () => {
   const clone = editClone();
   try {
     const before = parseProfile(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"))?.avatar;
+    assert.ok(before, "CONTROL: the fixture carries an older file avatar");
     updateProfile({ handle: "wright", image: FACE }, fixtureKey, db, clone);
     const after = parseProfile(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"));
-    assert.equal(after.avatar, before, "the byte door's filename field is untouched by the URL door");
-    assert.notEqual(after.avatar, FACE);
+    assert.equal(after.avatar_url, FACE);
+    assert.equal(after.avatar, undefined, "one picture, one key: the older filename is cleared");
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 
@@ -148,7 +153,7 @@ test("the avatar allowlist IS mediaUrlOk — the same one the mark door's image:
 
 // ── 5. the two picture doors must not silently fight ────────────────────────
 
-test("LAST PICTURE WINS: uploading bytes clears a URL set through the act", async () => {
+test("LAST PICTURE WINS: uploading bytes replaces a URL set through the act", async () => {
   const clone = editClone();
   // A REAL 2×2 PNG since POS-150: the 20-byte signature-plus-empty-IEND that
   // stood here passes the sniff and the enclosure check and decodes to nothing,
@@ -159,11 +164,15 @@ test("LAST PICTURE WINS: uploading bytes clears a URL set through the act", asyn
     updateProfile({ handle: "wright", image: FACE }, fixtureKey, db, clone);
     assert.equal(parseProfile(read(clone, "WHITE_PAGES", "wright", "PROFILE.md")).avatar_url, FACE);
 
-    await updateProfileAvatar({ handle: "wright", image: PNG.toString("base64") }, fixtureKey, db, clone);
+    // WLD-83: the bytes are minted through the media door, and their URL
+    // replaces the earlier one in the one picture key.
+    const minted = `${MEDIA_BASE}/media/keemin/${"b2".repeat(32)}.png`;
+    const upload = async () => ({ url: minted, already: false });
+    await updateProfileAvatar({ handle: "wright", image: PNG.toString("base64") }, fixtureKey, db, clone, null, { upload });
     const after = parseProfile(read(clone, "WHITE_PAGES", "wright", "PROFILE.md"));
-    assert.equal(after.avatar, "avatar.png", "the bytes landed");
-    assert.equal(after.avatar_url, undefined,
-      "and the stale URL is gone — otherwise the upload is silently overruled, which is the class #2268 is about");
+    assert.equal(after.avatar_url, minted,
+      "the bytes' picture is the picture, and the stale URL is gone: otherwise the upload is silently overruled, which is the class #2268 is about");
+    assert.equal(after.avatar, undefined, "and no second key holds a second picture");
   } finally { rmSync(clone, { recursive: true, force: true }); }
 });
 

@@ -215,3 +215,19 @@ test("POST /ops/gift: no key at all is 401 (the write tier needs a credential)",
   const res = await postGift(null);
   assert.equal(res.status, 401);
 });
+
+// GET /ops/set-down-strands (POS-766/e; #760 review): it names things and residents, so it is the principal's
+const getStrands = (key) => fetch(`${BASE}/ops/set-down-strands`, { headers: key ? { authorization: `Bearer ${key}` } : {} });
+
+test("GET /ops/set-down-strands: no key at all is 401, and nothing is told", async () => {
+  const res = await getStrands(null);
+  assert.equal(res.status, 401);
+  const body = await res.json();
+  assert.equal(body.strands, undefined);
+});
+
+test("GET /ops/set-down-strands: a static (non-principal) key is refused 403 — the office is the wall", async () => {
+  const res = await getStrands("shellkey");
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).defect, /principal/);
+});

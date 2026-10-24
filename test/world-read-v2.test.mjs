@@ -68,7 +68,8 @@ test("G3/G5/G6: active is a public act in the last 12 hours, at most 8, nearest 
 });
 
 test("G5: the public acts are the ones the crossing log or the docket publishes, and note-to-self is not one", () => {
-  assert.deepEqual(Object.keys(PUBLIC_ACTS).sort(), ["drop", "enter", "exit", "give", "leave-mark", "say", "stake", "take", "walk", "withdraw"]);
+  // "land" (WLD-63 row 68 B): a set-down was a zero-length walk, shown as "walked"; it is its own act now, shown as "landed"
+  assert.deepEqual(Object.keys(PUBLIC_ACTS).sort(), ["drop", "enter", "exit", "give", "land", "leave-mark", "say", "stake", "take", "walk", "withdraw"]);
 });
 
 test("G8 (POS-697 G1a): each act's line is the approved sentence WITH its fields, grouped by intent; an unknown act rides `more`", () => {

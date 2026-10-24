@@ -24,6 +24,7 @@ stays true:
 | `world.mjs § positionProjection` (POS-264) | the walk door and the enter door's set-down, `recordMoved` | `position`: `{ record, actId }`, the governing record as `recordOfMovement` builds it and the act's id |
 | `server.mjs` `INDEX` (office.db) | the main thread's reload | `index`: the worker runs its own `reloadIndex` now instead of at its next poll |
 | `server.mjs` world.db caches (the five in the STAMP table) | the main thread's reload | `world-store`: the worker runs its own `reloadWorldCaches` now |
+| `entity-predicates.mjs` fold (WLD-83, the appearance trees) | the describe door, `worldDescribe` | `appearance`: the act row as the door applied it (`{ id, action, object, actor, payload, at }`); the worker runs the same `applyAct`. A write from another process reaches each thread by the fold's own catch-up (at most a second, with the late-commit overlap) |
 
 A writer outside the office (the playground's set-down, any pen in another
 process) does not call in. Since POS-691 the main thread and every worker hear it

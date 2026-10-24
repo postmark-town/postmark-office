@@ -232,7 +232,7 @@ test("10. W6: a take of a thing in someone else's hands answers as a take", () =
 test("11. ONE OWNER: every reader of a thing's place reads the one answer, and the copies are deleted (source pins)", () => {
   const read = (f) => readFileSync(join(ROOT, f), "utf8");
   const world = read("src/world.mjs"), hold = read("src/world-hold.mjs"), units = read("src/world-units.mjs"), apex = read("src/world-apex.mjs");
-  assert.match(world, /async function sightFor\(w, handle, key = null\) \{\n  w = await heldPlaced\(w\);/, "orient, the eyes, investigate and find read the placed world");
+  assert.match(world, /async function sightFor\(w, handle, key = null, \{ lens = null \} = \{\}\) \{\n  w = await heldPlaced\(w\);/, "orient, the eyes, investigate and find read the placed world");
   assert.match(world, /export async function worldMarkById\(id\) \{\n  const w = await heldPlaced\(await world\(\)\);/, "the take door and the hold reads read the placed world");
   const block = world.slice(world.indexOf("export async function thingStandsBlock"), world.indexOf("export async function thingStandsBlock") + 3000);
   assert.doesNotMatch(block, /standsRowsFromStore/, "the stands block runs no store read of its own");
@@ -270,4 +270,15 @@ test("13. D5: the holder's row in anyone's view says how many things are in thei
   const src = readFileSync(join(ROOT, "src", "world.mjs"), "utf8");
   assert.equal((src.match(/withCarryingNow\(await presen(t|ce)Near\(/g) ?? []).length, 3, "orient, the eyes and GET /world/present all carry it");
   assert.ok(src.includes(", carrying ${r.carrying} ${r.carrying === 1 ? \"thing\" : \"things\"}"), "and the telling says it");
+});
+
+test("POS-766/e · a thing made in hand, set down as its maker's draft and then published, is never placed from a drop it does not have, and never noted, crossing after crossing", () => {
+  const row = { id: "u-pebble", slug: "sb-ash/a-pebble", kind: "thing", owner: "sb-ash", household: "hh", body: "b", locked_window: 260,
+    geometry: { at: { x: 12, y: -3 }, extent: { w: 1, h: 1 } }, data: { date: "2026-10-23" } };
+  const setDown = { seq: null, act_id: "900", entity: "sb-ash", target: "sb-ash/a-pebble", policy: "detach", declared_by: "sb-ash", born_at: "2026-10-23T06:00:00Z", era: "live" };
+  const plan = (setDowns) => holdPrintout({ attachments: [setDown], drops: new Map(), rows: [row], from: 600, setDowns });
+  const without = plan(new Set());
+  assert.ok(without.notes.some((n) => n.startsWith("sb-ash/a-pebble: its set-down could not be placed")), "the control: read as a drop, it is noted every crossing");
+  const out = plan(new Set(["900"]));
+  assert.deepEqual([out.prints.length, out.notes.length], [0, 0], "read as a set-down: its draft placed it, and nothing is said");
 });

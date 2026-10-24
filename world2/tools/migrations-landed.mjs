@@ -126,6 +126,20 @@ export const LANDED = {
   "077_definer_pg_temp_last.sql":  { probe: "EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_heard_weekly' AND prosecdef AND proconfig @> ARRAY['search_path=public, pg_temp'])" },
   // 078 (POS-688): the clearing's insert trigger admits a hold printout (data._held_through, owned_by too), a held sited row may be placeless, and the owner's asked-back return (take or set-down) is the clearing's one act.
   "078_hold_printouts.sql":        { probe: "EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'claims_insert_carry_only' AND prosrc LIKE '%_held_through%' AND prosrc LIKE '%owned_by%') AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sited_marks_have_a_where' AND pg_get_constraintdef(oid) LIKE '%held_by%') AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'acts_insert_return_only') AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'acts_insert_return_only' AND prosrc LIKE '%set-down%')" },
+  // 079 (POS-633 H4): whose hand, for whom and by which route, on every act from the build forward.
+  "079_act_provenance.sql":        { probe: `${col("acts", "hand")} AND ${col("acts", "for_handle")} AND ${col("acts", "route")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'acts_route_known')` },
+  // 080 (POS-737): a media file can be freed; office_api may UPDATE the ledger's states.
+  "080_media_freed.sql":           { probe: `${col("office_media", "unreferenced_since")} AND ${col("office_media", "purged_at")} AND has_table_privilege('office_api', 'office_media', 'UPDATE')` },
+  // 081 (WLD-83): the household's human's answer to the likeness question.
+  "081_household_likeness.sql":    { probe: `${col("households", "likeness")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_likeness_answered')` },
+  // 082 (WLD-83): every picture made of a resident, one row each, append-only.
+  "082_depictions.sql":            { probe: `${rel("depictions")} AND ${trig("depictions_append_only")}` },
+  // 083 (POS-666): a household's block on another household's mail, and the crossing's one question.
+  "083_mail_blocks.sql":           { probe: `${rel("mail_blocks")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'mail_block_stands' AND prosecdef)` },
+  // 084 (POS-757): the private report post, its row policies, and office_api its only reader.
+  "084_reports.sql":               { probe: `${rel("reports")} AND EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reports' AND policyname = 'reports_move') AND NOT has_table_privilege('snapshot_reader', 'reports', 'SELECT')` },
+  // 085 (POS-576): who invited a household, a public credit on its row.
+  "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

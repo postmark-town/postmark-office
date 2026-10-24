@@ -151,7 +151,18 @@ export async function householdOf(handle, env = process.env) {
  */
 export async function withHouseholdBlock(card, handle, env = process.env) {
   if (!card) return card;
-  try { const hh = await householdOf(handle, env); if (hh) card.household = hh; } catch { /* garnish only */ }
+  try {
+    const rows = await loadRegistryRows(env);
+    if (rows === null) return card;
+    const registry = registryFromRows(rows);
+    const hh = householdLookupOf(registry, pinsFromRows(rows))(handle);
+    if (!hh) return card;
+    // THE LIKENESS ANSWER (WLD-83), on the card only: "given" or "not given",
+    // the house's human's yes or its absence (likeness.mjs § likenessOfHouse).
+    // A maker reads it here before using the resident's picture in made media.
+    const { likenessOfHouse } = await import("./likeness.mjs");
+    card.household = hh.slug ? { ...hh, likeness: likenessOfHouse(registry.households?.[hh.slug]) } : hh;
+  } catch { /* garnish only */ }
   return card;
 }
 

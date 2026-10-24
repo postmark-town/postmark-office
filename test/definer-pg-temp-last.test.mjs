@@ -88,8 +88,9 @@ test("D1 · the files: the last definition of every SECURITY DEFINER function na
   const last = new Map();
   for (const f of functionsIn()) last.set(f.name, f);
   const definers = [...last.values()].filter((f) => f.definer);
-  assert.deepEqual(definers.map((f) => f.name).sort(), ["arrival_heard_weekly", "berth_heard_land", "berth_heard_park"],
-    "the sweep's census: the three definer functions in world2/schema (a new one is held to the same rule below)");
+  // POS-666: 083's mail_block_stands is the fourth, born with search_path = public, pg_temp.
+  assert.deepEqual(definers.map((f) => f.name).sort(), ["arrival_heard_weekly", "berth_heard_land", "berth_heard_park", "mail_block_stands"],
+    "the sweep's census: the four definer functions in world2/schema (a new one is held to the same rule below)");
   for (const f of definers)
     assert.ok(f.search_path && pgTempLast(f.search_path), `${f.name} (${f.file}) sets search_path = ${f.search_path ?? "nothing"}: the caller's pg_temp would be searched first`);
   assert.equal(last.get("arrival_heard_weekly").file, "077_definer_pg_temp_last.sql", "077 is arrival_heard_weekly's last word");
@@ -131,7 +132,7 @@ test("D2 + D3 · the store: every SECURITY DEFINER function searches pg_temp las
       `SELECT p.proname, pg_get_userbyid(p.proowner) AS owner, p.proconfig
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public' AND p.prosecdef ORDER BY 1`);
-    assert.deepEqual(definers.map((d) => d.proname), ["arrival_heard_weekly", "berth_heard_land", "berth_heard_park"]);
+    assert.deepEqual(definers.map((d) => d.proname), ["arrival_heard_weekly", "berth_heard_land", "berth_heard_park", "mail_block_stands"]);
     for (const d of definers) {
       const sp = (d.proconfig ?? []).find((c) => c.startsWith("search_path="));
       assert.ok(sp && pgTempLast(sp.slice("search_path=".length)), `${d.proname}: proconfig ${JSON.stringify(d.proconfig)}`);

@@ -43,6 +43,7 @@
 import { worldFreezeBounce } from "./freeze.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
 import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { visitorBody } from "./harbor-gate.mjs"; // POS-739: a visitor enters, exits and rides as its berth body
 
 /** Half a day in milliseconds — the town's crossing, the one clock a pace is
  *  quoted against. Declared here rather than imported from the clone because
@@ -567,6 +568,10 @@ export function doorstepTransport(service, standpoint = null, worldState = null)
 function actorFrom(payload, key) {
   const handles = [...(key?.handles ?? [])];
   const named = String(payload.handle ?? "").trim();
+  // a visitor rides as its berth body, under this door's own law (POS-739)
+  const visitor = visitorBody(named, key);
+  if (visitor?.bounce) throw bounce(visitor.bounce.code, visitor.bounce.defect, visitor.bounce.hint);
+  if (visitor) return visitor.who;
   const who = named || (handles.length === 1 ? handles[0] : "");
   if (!who) {
     throw bounce(422, "which resident is riding?",

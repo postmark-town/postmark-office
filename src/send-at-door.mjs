@@ -56,6 +56,12 @@ export const NONCE_NOT_HONOURED = "this office keeps no town log, so a nonce can
  */
 export async function sendAtDoor(fields, key, { db, clone, odb }) {
   const f = inferSender(fields, key);
+  // THE BLOCKER IS TOLD (POS-666 G2): a letter to a household this key's own
+  // house has blocked is refused here, in plain words. The blocked side's
+  // letters are taken as ever; the crossing stops them (mail-blocks.mjs).
+  const { youBlockedRefusal } = await import("./mail-blocks.mjs");
+  const blocked = await youBlockedRefusal(key, f.to);
+  if (blocked) throw blocked;
   db = await recipientProbe(db, f.to);
   let result;
   if (townLogEnabled() && odb) {

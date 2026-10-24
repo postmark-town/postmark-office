@@ -1051,7 +1051,10 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
   else if (rows[0].by_hand !== byHand) p.push(`the store's receipt says by_hand ${rows[0].by_hand}, not ${byHand}`);
   const head = git(ctx.worldBare, "rev-parse", "main");
   const files = git(ctx.worldBare, "ls-tree", "-r", "--name-only", head, "--", "WORLD/marks").split("\n");
-  if (!files.some((f) => f.includes(`/${mark}/`) || f.endsWith(`/${mark}.md`))) p.push(`the copy's main (${head.slice(0, 9)}) carries no file for ${mark} after the crossing`);
+  // the receipt rides the line: "quiet" (nothing eligible) and "published" both exit 0, and
+  // CI keeps only this line, so a red that names no receipt cannot be read (POS-595's KF red,
+  // 6 times 10-12..10-17, cause unread)
+  if (!files.some((f) => f.includes(`/${mark}/`) || f.endsWith(`/${mark}.md`))) p.push(`the copy's main (${head.slice(0, 9)}) carries no file for ${mark} after the crossing (receipt: ${receipt.status ?? "no status"}: ${String(receipt.detail ?? "").slice(0, 300)})`);
   if (receipt.docket_window != null && Number(receipt.docket_window) !== Number(window)) p.push(`the crossing folded window ${receipt.docket_window}, not ${window}`);
   return p;
 }

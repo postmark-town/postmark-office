@@ -17,11 +17,26 @@
 // it, every 15 minutes), and a reader that trips leaves the last answer
 // standing. When world main cannot answer, the newest `settlement/S<n>` tag's
 // commit date stands in, and `disclosure` says so.
+//
+// ONE WINDOW, EVERY EAR (POS-693). The live ear (voices.mjs) and the store's
+// say read (`/world2/say`) ask this one reader, and both decide with
+// `hearable` below — never with a voice's stamped `ttl_expires_at`, which is
+// the sound class's `hearing_ttl_min` (five minutes) and predates POS-226. A
+// read asked at an earlier instant (`/world2/say?at=`) opens at the newest
+// sweep published at or before it, out of the same git answer kept as a short
+// history.
 
 import { execFile } from "node:child_process";
 
 export const SWEEP_SUBJECT = "^settlement: sweep";
 export const HEARING_REFRESH_MS = 60_000;
+/** How many published sweeps the reader keeps, so an earlier instant finds its own window: two a day, about a month. */
+export const HEARING_HISTORY = 60;
+
+/** Can an ear at `atMs` hear a voice born at `bornMs`, when its window opened at `since`? `since` null: the window is unknown, and nothing before `atMs` is cut. */
+export function hearable(bornMs, atMs, since) {
+  return bornMs <= atMs && (since == null || bornMs >= since);
+}
 
 // Both mains, whichever the clone has: `--glob` implies a trailing `/*` unless
 // the pattern holds a wildcard, so the bracket is what makes it match the ref
@@ -40,6 +55,12 @@ export async function publishedSettlementAt(repo) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+/** The instants (ms) of world main's newest `count` sweep commits, newest first. */
+export async function publishedSettlementsAt(repo, { count = HEARING_HISTORY } = {}) {
+  const out = await run(repo, ["log", `-${count}`, "--format=%cI", `--grep=${SWEEP_SUBJECT}`, ...MAIN_REFS]);
+  return out.split("\n").map((l) => Date.parse(l)).filter(Number.isFinite);
+}
+
 /** The newest settlement tag's commit date (ms), or null — the fallback. */
 export async function blessedSettlementAt(repo) {
   const out = await run(repo, ["for-each-ref", "--sort=-*committerdate", "--count=1",
@@ -54,8 +75,9 @@ export async function blessedSettlementAt(repo) {
  * awaitable, for the boot and for tests.
  */
 export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, clock = () => Date.now(),
-  published = publishedSettlementAt, blessed = blessedSettlementAt } = {}) {
+  published = publishedSettlementAt, blessed = blessedSettlementAt, history = publishedSettlementsAt } = {}) {
   let known = null;       // { since, source, disclosure }
+  let past = [];          // the published sweeps before it, newest first (ms)
   let askedAt = -Infinity;
   let inFlight = null;
 
@@ -63,6 +85,7 @@ export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, cloc
     if (inFlight) return inFlight;
     askedAt = clock();
     inFlight = (async () => {
+      try { past = await history(repo); } catch { /* the last history stands */ }
       try {
         const at = await published(repo);
         if (at != null) { known = { since: at, source: "world main's newest settlement commit", disclosure: null }; return known; }
@@ -80,9 +103,19 @@ export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, cloc
     return inFlight;
   }
 
-  function read() {
+  /**
+   * The window from memory. `at` omitted (the live ear), the newest; `at`
+   * before the newest window opened, the newest sweep published at or before
+   * `at` — or, older than the history this reader keeps, `since: null` and a
+   * sentence that says the window is unknown.
+   */
+  function read(at = null) {
     if (clock() - askedAt >= refreshMs) refresh().catch(() => {});
-    return known;
+    if (at == null || known == null || known.since == null || at >= known.since) return known;
+    const since = past.find((ms) => ms <= at) ?? null;
+    if (since != null) return { since, source: "world main's settlement commit at or before the asked instant", disclosure: null };
+    return { since: null, source: null,
+      disclosure: `the asked instant is older than the ${past.length} settlements this office keeps in memory, so its window could not be read` };
   }
 
   return { read, refresh };

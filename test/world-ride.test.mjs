@@ -182,7 +182,10 @@ async function officeWith({ standing = { x: -1380, y: -2543 }, ledger = "", at =
     nowMs: () => clock,
     crossing: () => at,
     walking: async () => null,
+    // a walk the door ends (`stop`) is a walk; a set-down is a LANDING (WLD-63 row 68 B). Both land in
+    // `stops`, so a deposit that wrote a walk would show as a row with no `why`.
     stop: async (who, pt, _key, opts) => { stops.push({ who, ...pt, ...(opts?.from ? { from: { x: opts.from.x, y: opts.from.y } } : {}) , ...(opts?.exit === true ? { exit: true } : {}) }); where = { x: pt.x, y: pt.y }; return { ok: true }; },
+    land: async (who, pt, _key, opts = {}) => { stops.push({ who, ...pt, via: opts.via ?? null, why: opts.why ?? null, ...(opts.exit === true ? { exit: true } : {}) }); where = { x: pt.x, y: pt.y }; return { recorded: true }; },
     record: async (entry) => {
       const { handle, act, lines = [], mark = null, via = null, set_down_at = null, arrived = null, action, object, payload } = entry;
       if (action === "ride") {
@@ -509,10 +512,10 @@ test("exit BEFORE the timer sets you down at the stop you came in through", { sk
   assert.deepEqual(o.within("rider"), []);
 
   const anchor = anchorOfStop(WHARF, await serviceOf(o.worldState));
-  assert.deepEqual(o.stops.at(-1), { who: "rider", x: anchor.x, y: anchor.y, from: { x: anchor.x, y: anchor.y } },
-    "the deposit is a ZERO-LENGTH DEPARTURE through the walk act — never a second pen — and it SAYS its origin: "
-    + "the movement record still has this body at the stop it boarded at, so a leg that took `from` off the record "
-    + "would be a road from the boarding stop to the landing (12.5 km on dev's first walk, 2026-09-20), not a set-down");
+  assert.deepEqual(o.stops.at(-1), { who: "rider", x: anchor.x, y: anchor.y, via: WHARF, why: "deposit" },
+    "the deposit is a LANDING at the stop (WLD-63 row 68 B: placed, not walked) through the one land pen, never a walk: "
+    + "a landing has no origin to take off the record, so it can never be a road from the boarding stop to the landing "
+    + "(12.5 km on dev's first walk, 2026-09-20)");
 });
 
 test("exit AT OR AFTER the timer sets you down at the destination", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
@@ -527,8 +530,8 @@ test("exit AT OR AFTER the timer sets you down at the destination", { skip: !HAV
   const anchor = anchorOfStop(SNUG, await serviceOf(o.worldState));
   assert.deepEqual({ x: o.stops.at(-1).x, y: o.stops.at(-1).y }, { x: anchor.x, y: anchor.y },
     "the deposit point is the stop mark's own anchor — you stand ON the jetty");
-  assert.deepEqual(o.stops.at(-1).from, { x: anchor.x, y: anchor.y },
-    "and the leg's origin is that same anchor — a set-down at the landing, not a walk to it from the wharf");
+  assert.equal(o.stops.at(-1).why, "deposit",
+    "and it is a landing there — a set-down, not a walk to it from the wharf");
 });
 
 // == postmark#3019 . THE DEPOSIT LEAVES THE REACH IT WAS BOARDED FROM ==
@@ -567,7 +570,7 @@ test("#3019: a deposit that would carry the rider out of rooms they boarded from
   assert.deepEqual(o.within("dom"), ["the-town/the-town-centre", "the-town/the-quay-reach"],
     "the vessel exit removes the hull and leaves the rooms standing — that remainder is the whole cause of #3019");
   assert.equal(o.stops.at(-1).exit, true,
-    "the deposit carries DEC-5's `exit: true`, so the walk door exits those rooms under the ledger's own discipline "
+    "the deposit carries DEC-5's `exit: true`, so the land pen exits those rooms under the walk door's own judgement "
     + "before setting the rider down — without it the walk is refused 409 AFTER the exit is already written, which is "
     + "the stuck state dom-pidgey is in on prod (postmark#3019)");
 
@@ -975,8 +978,8 @@ test("THE ONE STOP WHOSE ANCHOR IS THE WRONG ANSWER: exiting at the quay sets yo
   // observing that some point exists.
   assert.equal(inRect(po.at, hull), true,
     "her anchor is inside her own footprint -- that is the whole reason this stop is special, and if it ever stops being true this test is measuring nothing");
-  assert.deepEqual(o.stops.at(-1), { who: "rider", x: out.set_down.x, y: out.set_down.y, from: { x: out.set_down.x, y: out.set_down.y } },
-    "the ashore point is BOTH ends of the set-down — a zero-length departure there, not a walk to it");
+  assert.deepEqual(o.stops.at(-1), { who: "rider", x: out.set_down.x, y: out.set_down.y, via: out.set_down.at, why: "deposit" },
+    "the ashore point is where she lands you — a landing there (WLD-63 row 68 B), not a walk to it");
 });
 
 test("the quay's deposit point is derived from the RING, so it does not wobble with the clock", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
@@ -1196,4 +1199,38 @@ test("orient's derived set names the source the vehicle standpoint answers — a
   const answered = moveSrc.match(/source: "vehicle"/);
   assert.ok(answered, "vehicleStandpoint answers source: \"vehicle\"");
   assert.ok(named.includes("vehicle"), `DERIVED_SOURCES names ${JSON.stringify(named)} — "vehicle" is missing, so orient would answer a rider aboard with their house`);
+});
+
+// ── A VISITOR ENTERS, RIDES AND EXITS (POS-739; Darko 2026-10-22 18:12, "Enter, exit and ride") ──
+//
+// A berth key carries no resident. It moves as its berth body, `berth-<slug>`,
+// through each door's own law: boarding takes the vessel's terms (accept), the
+// ride is declared aboard, and the exit sets it down at the stop it came in by.
+const VISITOR = { berth: true, slug: "wanderer", household: null, handles: new Set(), cosigned: false, rulesRead: true };
+
+test("FALSIFIER, POS-739: a visitor boards, rides and exits as its berth body, under each door's own law", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const o = await officeWith();
+  await enterViaOffice(CLONE, { mark: WHARF, accept: true }, VISITOR, o.deps);
+  assert.ok(o.within("berth-wanderer").length, "the visitor did not board");
+  const r = await rideViaOffice(CLONE, { to: PANDO }, VISITOR, o.deps);
+  assert.equal(r.ride.to, PANDO);
+  o.setClock(Date.parse(r.ride.arrives_at) - 60_000);
+  const out = await exitViaOffice(CLONE, { mark: SHIP }, VISITOR, o.deps);
+  assert.equal(out.set_down.at, WHARF);
+  assert.deepEqual(o.within("berth-wanderer"), []);
+  assert.deepEqual([...new Set(o.journal.map((j) => j.actor))], ["berth-wanderer"], "an act stood as someone other than the visitor's body");
+  // and the door's own law still holds: boarding without the terms is not boarding
+  const o2 = await officeWith();
+  const asked = await enterViaOffice(CLONE, { mark: WHARF }, VISITOR, o2.deps).catch((e) => e);
+  assert.deepEqual(o2.within("berth-wanderer"), [], "a visitor boarded without taking the vessel's terms");
+  assert.ok(asked, "the door answered nothing");
+});
+
+test("a visitor's key enters as no resident, and a household at the harbor boards only as its berth", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const o = await officeWith();
+  await assert.rejects(() => enterViaOffice(CLONE, { mark: WHARF, handle: "rider", accept: true }, VISITOR, o.deps), (e) => e.code === 403);
+  const harbor = { household: "newhuman", handles: new Set(["newcomer"]), harbor: true, berth: "wanderer", slug: "wanderer" };
+  await assert.rejects(() => enterViaOffice(CLONE, { mark: WHARF, handle: "newcomer", accept: true }, harbor, o.deps), (e) => e.code === 403 && /harbor/.test(e.defect));
+  await enterViaOffice(CLONE, { mark: WHARF, accept: true }, harbor, o.deps);
+  assert.ok(o.within("berth-wanderer").length, "the harbor household did not board as its berth");
 });
