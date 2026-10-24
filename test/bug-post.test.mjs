@@ -1383,11 +1383,64 @@ test("16 · the advance card teaches the skip, and the door's validator takes { 
   const { TOWN_POST_TOOLS } = await import("../src/town-post.mjs");
   const { validateArgs } = await import("../src/validate-args.mjs");
   const card = TOWN_POST_TOOLS.find((t) => t.name === "town_advance");
-  assert.match(card.description, /Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, \{ post, skip: "<stage>", reason \}, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first\./);
+  assert.match(card.description, /Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, \{ post, skip: "<state>", reason \}, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first\./);
   assert.doesNotMatch(card.description, /may jump forward/);
   assert.equal(validateArgs(card, { post: ID, skip: "confirmed", reason: "r" }), null);
   assert.match(card.inputSchema.properties.skip.description, /confirmed, reproduced, diagnosed, briefed, fixed/);
   assert.match(card.inputSchema.properties.reason.description, /with skip only, and required there/);
+});
+
+// ── POS-778 · one word (state), a real state filter, counts ─────────────────
+
+test("POS-778 · an advance answer carries state AND stage (stage is named an alias); ?state= keeps only those states, comma is OR; total counts what matched; counts_by_state counts the class; stage= filters the same", async () => {
+  setup();
+  const at = { now: NOW, roll: ROLL };
+  const post = (title, house) => postAtTown({ class: "bug", title, body: `${title}, as it happened.` }, house, at);
+  await post("One", ERRANT); await post("Two", FINN); await post("Three", ERRANT); await post("Four", FINN);
+  const idOf = async (title) => (await postsAtOffice({ class: "bug", limit: 200 }, at)).posts.find((p) => p.title === title).id;
+  const a = await advanceAtTown({ post: await idOf("Two"), to: "confirmed" }, WRIGHT, at);
+  assert.deepEqual([a.state, a.stage], ["confirmed", "confirmed"]);
+  assert.match(a.note, /stage is an alias of state/);
+  const b = await advanceAtTown({ post: await idOf("Three"), to: "confirmed" }, WRIGHT, at);
+  await advanceAtTown({ post: await idOf("Three"), to: "reproduced", credit: "errant" }, WRIGHT, at);
+  await advanceAtTown({ post: await idOf("Four"), to: "not-a-bug" }, WRIGHT, at);
+  assert.equal(b.state, "confirmed");
+
+  const all = await postsAtOffice({ class: "bug" }, at);
+  assert.equal(all.total, 4);
+  assert.deepEqual(all.counts_by_state, { reported: 1, confirmed: 1, reproduced: 1, diagnosed: 0, briefed: 0, fixed: 0, shipped: 0, duplicate: 0, "not-a-bug": 1 });
+
+  const one = await postsAtOffice({ class: "bug", state: "reproduced" }, at);
+  assert.deepEqual([one.total, one.shown, one.posts.map((p) => p.title), one.state], [1, 1, ["Three"], ["reproduced"]]);
+  assert.ok(one.posts.every((p) => p.state === "reproduced"));
+  assert.deepEqual(one.counts_by_state, all.counts_by_state, "the counts are the whole class, never narrowed by the filter");
+  assert.equal(one.catchers.length, all.catchers.length, "the Hall of Fame is over the whole record");
+
+  const or = await postsAtOffice({ class: "bug", state: "confirmed, reproduced" }, at);
+  assert.deepEqual([or.total, or.posts.map((p) => p.title).sort()], [2, ["Three", "Two"]]);
+
+  // the alias filters exactly the same, and the answer names the canonical word
+  const alias = await postsAtOffice({ class: "bug", stage: "confirmed,reproduced" }, at);
+  assert.deepEqual(alias.posts.map((p) => p.id), or.posts.map((p) => p.id));
+  assert.match(alias.note, /stage is an alias of state/);
+  assert.equal(or.note, undefined, "state itself needs no note");
+
+  // a state the class does not have is refused naming the class's states, not answered as zero
+  await refusedWith(postsAtOffice({ class: "bug", state: "reprodused" }, at), 422, /not a bug state.*did you mean `reproduced`/);
+  await refusedWith(postsAtOffice({ class: "bug", state: "confirmed", stage: "shipped" }, at), 422, /same filter/);
+  // paging runs over the matched set
+  const paged = await postsAtOffice({ class: "bug", state: "confirmed,reproduced", limit: 1 }, at);
+  assert.deepEqual([paged.total, paged.shown, paged.complete], [2, 1, false]);
+});
+
+test("POS-778 · unknown query parameters are named with the nearest known one; stage is known (state's alias)", async () => {
+  const { unknownPostsParam } = await import("../src/town-posts.mjs");
+  const bad = unknownPostsParam(["class", "stags"]);
+  assert.equal(bad.code, 400);
+  assert.match(bad.defect, /no parameter `stags`; did you mean `stage`\?/);
+  assert.equal(unknownPostsParam(["class", "stage", "state", "limit", "offset"]), null);
+  assert.match(unknownPostsParam(["statee"]).defect, /did you mean `state`\?/);
+  assert.doesNotMatch(unknownPostsParam(["zzzzzzzz"]).defect, /did you mean/);
 });
 
 // ── POS-777 · the read hint is an absolute url ──────────────────────────────

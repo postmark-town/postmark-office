@@ -963,3 +963,34 @@ test("GET /posts takes a class: none → 422 naming it; an idea is a post class 
   const bugs = await (await get("/posts?class=bug&limit=7&offset=3", null)).json();
   assert.deepEqual([bugs.total, bugs.shown, bugs.limit, bugs.offset, bugs.complete, bugs.catchers, bugs.posts], [0, 0, 7, 3, true, [], []]);
 });
+
+// POS-778: the posts list is not silent about what it ignores. An unknown
+// parameter is a 400 naming the nearest known one; stage is state's alias and
+// is known; state= is a real filter with counts beside it.
+test("GET /posts: ?stage=x is not refused (it is the alias), ?stags= answers 400 naming `stage`, ?state= filters and counts_by_state rides", async () => {
+  const typo = await get("/posts?class=bug&stags=reproduced", null);
+  assert.equal(typo.status, 400);
+  const body = await typo.json();
+  assert.match(body.defect, /no parameter `stags`; did you mean `stage`\?/);
+  assert.match(body.hint, /state/);
+  const odd = await get("/posts/postmark-pen/first-idea?class=idea&colour=red", null);
+  assert.equal(odd.status, 400, "the one-post read judges its parameters too");
+  assert.match((await odd.json()).defect, /no parameter `colour`/);
+
+  const state = await get("/posts?class=bug&state=reproduced", null);
+  assert.equal(state.status, 200);
+  const s = await state.json();
+  assert.deepEqual([s.total, s.state], [0, ["reproduced"]]);
+  assert.equal(s.counts_by_state.reproduced, 0);
+  assert.deepEqual(Object.keys(s.counts_by_state), ["reported", "confirmed", "reproduced", "diagnosed", "briefed", "fixed", "shipped", "duplicate", "not-a-bug"]);
+
+  const alias = await get("/posts?class=bug&stage=reproduced", null);
+  assert.equal(alias.status, 200, "stage is a permanent alias, never refused");
+  const a = await alias.json();
+  assert.equal(a.total, 0);
+  assert.match(a.note, /stage is an alias of state/);
+
+  const bogus = await get("/posts?class=bug&state=nonsense", null);
+  assert.equal(bogus.status, 422);
+  assert.match((await bogus.json()).defect, /"nonsense" is not a bug state/);
+});

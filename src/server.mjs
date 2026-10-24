@@ -1989,10 +1989,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if (path === "/posts" || (m = /^\/posts\/([^/]+\/[^/]+)$/.exec(path))) {
         const post = path === "/posts" ? undefined : decodeURIComponent(m[1]);
         const cls = url.searchParams.get("class") ?? undefined;
+        // POS-778: an unknown parameter is a 400 naming the nearest known one, never a silent 200
+        const stray = import("./town-posts.mjs").then(({ unknownPostsParam }) => unknownPostsParam(url.searchParams.keys()));
+        // state= filters the list (comma is OR); stage= is its permanent alias and filters the same way
+        const stateQ = url.searchParams.get("state") ?? undefined;
+        const stageQ = url.searchParams.get("stage") ?? undefined;
         // the bug class pages (POS-558): limit and offset ride as on every paged read
         const limit = url.searchParams.get("limit") ?? undefined;
         const offset = url.searchParams.get("offset") ?? undefined;
-        return import("./town-posts.mjs").then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset }))
+        return stray.then((bad) => { if (bad) throw bad; return import("./town-posts.mjs"); })
+          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }))
           .then((r) => j(res, 200, r))
           .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounceFault(res, "the posts tripped", e));
