@@ -1274,12 +1274,21 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
     // WHERE A THREAD SPLITS (POS-779): the settlements the office knows, plus the
     // window open at the instant asked. A settlement is the ONLY edge a thread has.
-    const settlementEdges = (ms) => {
+    // Every settlement the STORE holds (its settlements table: the published
+    // instants), the live reader's sweeps, the window open at the instant asked,
+    // and, for history older than the oldest of those, the 06:00/18:00Z heartbeats.
+    const settlementEdges = async (ms, firstVoiceMs) => {
       let list = [];
       try { list = settlements() ?? []; } catch { list = []; }
+      try {
+        const { rows: srows } = await p.query("SELECT published_at FROM settlements WHERE published_at IS NOT NULL");
+        list = [...list, ...srows.map((r) => Date.parse(r.published_at)).filter(Number.isFinite)];
+      } catch { /* a store with no settlements table answers from what the reader keeps */ }
       let since = null;
       try { since = hearingWindow(ms)?.since ?? null; } catch { since = null; }
-      return [...new Set([...list, ...(Number.isFinite(since) ? [since] : [])])].filter((m) => m <= ms);
+      const known = [...new Set([...list, ...(Number.isFinite(since) ? [since] : [])])].filter((m) => m <= ms);
+      const oldest = known.length ? Math.min(...known) : ms;
+      return [...new Set([...talk.heartbeatEdges(firstVoiceMs, oldest - 1), ...known])];
     };
     let derived;
     try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
@@ -1287,7 +1296,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     const body = talk.conversationsOf(derived.voices, {
       now: at.ms,
       earshotM: dials.earshot_m.value,
-      boundaries: settlementEdges(at.ms),
+      boundaries: await settlementEdges(at.ms, derived.voices.length ? Math.min(...derived.voices.map((v) => v.at)) : at.ms),
       fadeMs: dials.fade_min.ms,
       closedMax: n("closed", 40), voiceCap: n("voices", 200),
     });

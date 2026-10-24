@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   voiceOf, voiceRecords, sayDials, sayDialsDisclosure, composeAnchor,
-  conversationsOf, clusterVoices, SAY_DIAL_SPEC,
+  conversationsOf, clusterVoices, heartbeatEdges, SAY_DIAL_SPEC,
 } from "../world2/tools/conversations.mjs";
 
 const emission = (over = {}) => ({
@@ -133,7 +133,8 @@ test("the RECORD has no lull: a long silence inside a settlement is one thread, 
   const voices = [v(0, 0), v(5 * hour, 0)];
   const same = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [-hour], fadeMs: 5 * 60 * 1000 });
   assert.equal(same.live.length + same.closed.length, 1, "one conversation across five hours of silence");
-  assert.equal("close_minutes" in same, false);
+  assert.equal(same.close_minutes, null);
+  assert.match(same.close_minutes_deprecated, /settlement_since/);
   const split = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [-hour, 2 * hour], fadeMs: 5 * 60 * 1000 });
   assert.equal(split.live.length, 1, "the newest settlement's thread is live");
   assert.equal(split.closed.length, 1, "the earlier settlement's is closed");
@@ -141,6 +142,13 @@ test("the RECORD has no lull: a long silence inside a settlement is one thread, 
   const unknown = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [], fadeMs: 5 * 60 * 1000 });
   assert.equal(unknown.live.length, 1);
   assert.match(unknown.settlement_disclosed, /ONE settlement/);
+});
+
+test("heartbeatEdges: 06:00Z and 18:00Z inside the span, for history older than the known settlements (POS-779)", () => {
+  const edges = heartbeatEdges(Date.UTC(2026, 9, 1, 0), Date.UTC(2026, 9, 2, 12));
+  assert.deepEqual(edges.map((m) => new Date(m).toISOString()),
+    ["2026-10-01T06:00:00.000Z", "2026-10-01T18:00:00.000Z", "2026-10-02T06:00:00.000Z"]);
+  assert.deepEqual(heartbeatEdges(NaN, 5), []);
 });
 
 test("boundaries given, the lull (fadeMs) is ignored; absent, the lull path is the sound class's own", () => {

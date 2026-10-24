@@ -72,7 +72,7 @@ import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every h
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "2a04f4824e5c2868de42a5820053645b4114b57d", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
+            blob: "e619c3560b592385086fbfd4156bff6d05ed8438", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -459,11 +459,28 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
     now: new Date(t).toISOString(),
     earshot_m: earshotM,
     fade_minutes: Math.round(fadeMs / 60000),
+    close_minutes: null,
+    close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
     settlement_since: marks.length ? new Date(since).toISOString() : null,
     ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
     live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
     closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
   };
+}
+
+/**
+ * The published heartbeat edges (06:00Z and 18:00Z, deploy/settlement-auto.sh), in
+ * [fromMs, toMs]. THE FALLBACK FOR HISTORY OLDER THAN THE KNOWN SETTLEMENTS
+ * (POS-779): the store knows a blessing only once its tag exists and the live
+ * reader keeps about sixty sweeps; every voice older than that would otherwise
+ * collapse into one never-closing thread per place. A heartbeat the gate refused
+ * is an edge that never was, so this over-splits by a thread at worst, never merges.
+ */
+export function heartbeatEdges(fromMs, toMs) {
+  const H = 12 * 3600_000, O = 6 * 3600_000, out = [];
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return out;
+  for (let m = Math.ceil((fromMs - O) / H) * H + O; m <= toMs; m += H) out.push(m);
+  return out;
 }
 
 /** What this door says about what it could not do. */

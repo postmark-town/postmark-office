@@ -699,6 +699,7 @@ export function createVoices({
     const participants = [];
     for (const v of voices) if (!participants.includes(v.handle)) participants.push(v.handle);
     return {
+      ...(boundaries.length ? {} : { settlement_disclosed: "settlements not yet read: until this office has read the last settlement from the world repo, every conversation here reads as open" }),
       started: agoWords(t - voices[0].at).replace(/^just now$/, "moments ago") + " (" + new Date(voices[0].at).toISOString() + ")",
       participants,
       voice_count: voices.length,
@@ -1043,8 +1044,8 @@ export function createVoices({
   // earshot grouping as ever, with the time-lull split gone: a conversation does
   // not expire inside a settlement, and splits only at one, the edge hearing has.
   // LIVE is the newest settlement's threads; CLOSED are the earlier settlements'.
-  // `close_minutes` is gone from the body (it named the retired lull) and
-  // `settlement_since` names the edge instead.
+  // `close_minutes` stays as null for a month (agent-facing breaks get notice, Darko):
+  // it named the retired lull, and `settlement_since` names the edge instead.
   function conversations({ closedMax = 40, voiceCap = 200 } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
@@ -1060,6 +1061,8 @@ export function createVoices({
       earshot_m: earshotM,
       fade_minutes: Math.round(fadeMs / 60000),
       hearable_since: ((w) => (w.since != null ? new Date(w.since).toISOString() : null))(windowOf(t)),
+      close_minutes: null,
+      close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
       settlement_since: boundaries.length ? new Date(since).toISOString() : null,
       ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
       live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
