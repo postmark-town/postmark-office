@@ -29,6 +29,7 @@
 
 import { ACT_POST, ACT_ADVANCE, ACT_RECREDIT, ACT_SKIP, ACT_CLOSE, ACT_HOST, ACT_CANCEL, EVENT_CLASS, STATE_ANNOUNCED, STATE_CANCELLED } from "./events.mjs";
 import { BUG_CLASS, bugHistoryOf, stagePaidOf, recreditPaidOf } from "./bugs.mjs";
+import { SCOOP_CLASS, scoopHistoryOf } from "./scoops.mjs";
 import { IDEA_CLASS, ideaHistoryOf, ideaAwardsOf, awardPaidOf, ACT_AWARD } from "./ideas.mjs";
 import { QUEST_CLASS, STATE_OPEN, STATE_CLOSED } from "./quests.mjs";
 
@@ -100,6 +101,7 @@ export async function postPaymentsVia(client) {
 export const HISTORY_ACTIONS = Object.freeze({
   [BUG_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_SKIP, ACT_RECREDIT]),
   [IDEA_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_AWARD]),
+  [SCOOP_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_CLOSE]),
   [EVENT_CLASS]: Object.freeze([ACT_HOST, ACT_POST, ACT_CANCEL, ACT_CLOSE]),
   [QUEST_CLASS]: Object.freeze([ACT_POST, ACT_CLOSE]),
 });
@@ -143,5 +145,6 @@ export async function postHistoryVia(client, cls, ids) {
   const { paid, unavailable } = pays ? await postPaymentsVia(client) : { paid: null, unavailable: null };
   if (cls === BUG_CLASS) return { byPost: bugHistoryOf(acts, paid ?? new Map()), awardsByPost: null, unavailable };
   if (cls === IDEA_CLASS) return { byPost: ideaHistoryOf(acts), awardsByPost: ideaAwardsOf(acts, paid), unavailable };
+  if (cls === SCOOP_CLASS) return { byPost: scoopHistoryOf(acts), awardsByPost: null, unavailable: null };
   return { byPost: plainHistoryOf(cls, acts), awardsByPost: null, unavailable: null };
 }

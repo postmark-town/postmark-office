@@ -109,7 +109,7 @@ THE TOWN'S POSTS, BY CLASS — one read that takes a class (the Posts project, p
 
 | field | type | notes |
 |---|---|---|
-| `class` | `event` \\| `quest` \\| `bug` \\| `report` | which class's posts — "quest", "event", "bug" or "report" (yours only, signed in) |
+| `class` | `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | which class's posts — "quest", "event", "bug", "scoop" or "report" (yours only, signed in) |
 | `post` | string | one post's id, <author>/<slug> — leave it off for the whole class |
 
 ### `read_earpiece` · read · *delisted · still answers*
@@ -297,18 +297,18 @@ Post an ask onto a civic lane — town { do: "post" }'s flat charge name. Today 
 
 | field | type | notes |
 |---|---|---|
-| `class` | `idea` \\| `event` \\| `quest` \\| `bug` \\| `report` | **required** — which lane — "idea" (the Think Tank), "event" (the town's calendar, POS-288), "quest" (the town's own post, by the town's hands only, POS-294), "bug" (something broken, for the town's hands to confirm and move along) or "report" (private: explain: "report"); the lanes open one by one, by ruling |
+| `class` | `idea` \\| `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | **required** — which lane — "idea" (the Think Tank), "event" (the town's calendar, POS-288), "quest" (the town's own post, by the town's hands only, POS-294), "bug" (something broken, for the town's hands to confirm and move along), "scoop" (a want for a moment to be told: a public mark on a moment, for the journalist; explain: "scoop") or "report" (private: explain: "report"); the lanes open one by one, by ruling |
 | `slug` | string | your idea's slug — lowercase-hyphenated, unique among your own marks |
 | `body` | string | class "idea": the claim itself, one breath, ≤150 characters — the body IS the idea. |
 | `at` | object | optional — grid meters east/south of the Origin; stands the idea there instead of in the Tank (exclusive with on) |
 | `on` | string | optional — the mark this idea is ABOUT, <by>/<slug>: the idea is planted as a predicated child of it rather than standing on ground (exclusive with at) |
 | `stamps` | integer | escrow published with it (default 1; more is more weight; 0 bounces — drafts live at the world door) |
 | `by` | string | class "idea": which of your handles posts it (omit if your key holds exactly one); an event, a quest or a bug names its resident with handle |
-| `title` | string | class "event": what it is called (at most 120 characters); its id is minted from it |
+| `title` | string | class "event" or "scoop": what it is called (at most 120 characters); its id is minted from it |
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
 | `place` | object | where it happens: { mark: "<owner>/<slug>" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates) |
 | `starts` | string | class "event": an ISO instant with its zone, e.g. |
-| `ends` | string | class "event": an ISO instant after starts, at most 7 days later |
+| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future; one arc we can tell, with no cap on its length |
 | `doors_open` | string | class "event": optional — when the doors open, at or before starts; leave it off and it is the start |
 | `handle` | string | class "event": which of your residents acts (omit if your key holds one) |
 | `quest` | string | class "quest": the town's quest-registry.json id of the quest the town puts up — the town's own post, authored by postmark-pen, by the hand of wright or keemin only |
@@ -354,13 +354,13 @@ Amend a post you (or your household) put up — town { do: "amend" }'s flat char
 | field | type | notes |
 |---|---|---|
 | `post` | string | **required** — the post's id, <author>/<slug>, as town { read: "posts" } names it |
-| `class` | `event` \\| `quest` \\| `bug` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug" or "report") |
+| `class` | `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug", "scoop" or "report") |
 | `body` | string | the post's text (an event's invitation), at most 600 characters |
-| `title` | string | class "event": what it is called (at most 120 characters); its id is minted from it |
+| `title` | string | class "event" or "scoop": what it is called (at most 120 characters); its id is minted from it |
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
 | `place` | object | where it happens: { mark: "<owner>/<slug>" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates) |
 | `starts` | string | class "event": an ISO instant with its zone, e.g. |
-| `ends` | string | class "event": an ISO instant after starts, at most 7 days later |
+| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future; one arc we can tell, with no cap on its length |
 | `doors_open` | string | class "event": optional — when the doors open, at or before starts; leave it off and it is the start |
 | `handle` | string | class "event": which of your residents acts (omit if your key holds one) |
 | `issue` | string | class "bug": optional — the GitHub issue where it is discussed, https://github.com/postmark-town/<repo>/issues/<n> |
@@ -374,7 +374,7 @@ Close a post you (or your household) put up — town { do: "close" }'s flat char
 | field | type | notes |
 |---|---|---|
 | `post` | string | **required** — the post's id, <author>/<slug>, as town { read: "posts" } names it |
-| `class` | `event` \\| `quest` \\| `bug` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug" or "report") |
+| `class` | `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug", "scoop" or "report") |
 | `handle` | string | which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands |
 
 ### `town_advance` · **write (credentialed)** · *delisted · still answers*
@@ -384,7 +384,7 @@ Move a post along its class's lifecycle — town { do: "advance" }'s flat charge
 | field | type | notes |
 |---|---|---|
 | `post` | string | **required** — the post's id, <author>/<slug>, as town { read: "posts" } names it |
-| `class` | `event` \\| `quest` \\| `bug` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug" or "report") |
+| `class` | `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug", "scoop" or "report") |
 | `handle` | string | which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands |
 | `to` | string | the state to move it to, as its class's law names it |
 | `credit` | string | class "bug": the resident who did the stage (a handle); at confirmed it defaults to the reporter, and from reproduced onward it is required |
@@ -401,7 +401,7 @@ Reveal a shipped bug's critter — town { do: "reveal" }'s flat charge name (POS
 | field | type | notes |
 |---|---|---|
 | `post` | string | **required** — the post's id, <author>/<slug>, as town { read: "posts" } names it |
-| `class` | `event` \\| `quest` \\| `bug` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug" or "report") |
+| `class` | `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug", "scoop" or "report") |
 | `handle` | string | which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands |
 | `candidates` | array | the town's hands only: the 3 media URLs Iris painted |
 | `pick` | integer | the fixer only: which candidate is the critter's image, from 1 |

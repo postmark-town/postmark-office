@@ -31,7 +31,7 @@
 //
 // ── THE CLASSES ─────────────────────────────────────────────────────────────
 //
-// event, quest, bug and idea. An idea is a post since POS-290 (behind
+// event, quest, bug, scoop (POS-780) and idea. An idea is a post since POS-290 (behind
 // IDEA_POSTS for the acts; the read reports what the store holds, which is
 // nothing until the switch has been on). The Think Tank's marks stay marks and
 // are read at town { read: "ideas" }, beside these posts.
@@ -97,6 +97,8 @@ import { BUG_STATES } from "./bugs.mjs";
 import { QUEST_STATES } from "./quests.mjs";
 import { IDEA_STAGES } from "./ideas.mjs";
 import { ALIAS_NOTE } from "./post-words.mjs";
+import { SCOOP_CLASS, SCOOP_FINISHED, SCOOP_STATES } from "./scoops.mjs";
+import { scoopExtrasVia } from "./scoop-store.mjs";
 
 import { REPORT_CLASS, REPORT_IS_PRIVATE } from "./reports.mjs";
 
@@ -109,6 +111,7 @@ export const POST_CLASSES = Object.freeze({
   [QUEST_CLASS]: Object.freeze({ finished: QUEST_FINISHED }),
   [BUG_CLASS]: Object.freeze({ finished: BUG_FINISHED }),
   [IDEA_CLASS]: Object.freeze({ finished: IDEA_FINISHED }),
+  [SCOOP_CLASS]: Object.freeze({ finished: SCOOP_FINISHED }),
 });
 
 /** Every state a class of post stands in (an event's come from its clock: household-posts.mjs). */
@@ -117,6 +120,7 @@ export const CLASS_STATES = Object.freeze({
   [QUEST_CLASS]: Object.freeze([...QUEST_STATES]),
   [BUG_CLASS]: Object.freeze([...BUG_STATES]),
   [IDEA_CLASS]: Object.freeze([...IDEA_STAGES]),
+  [SCOOP_CLASS]: Object.freeze([...SCOOP_STATES]),
 });
 
 /** The query parameters the posts list takes over HTTP; stage is state's permanent alias (POS-778). */
@@ -237,7 +241,7 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       const rows = await postRowsOf(client, cls, now);
       const ids = rows.map((r) => r.id).filter((id) => !one || id === one);
       return { rows, history: await postHistoryVia(client, cls, ids),
-        extras: cls === IDEA_CLASS ? await ideaExtrasVia(client, ids) : null };
+        extras: cls === IDEA_CLASS ? await ideaExtrasVia(client, ids) : cls === SCOOP_CLASS ? await scoopExtrasVia(client, ids) : null };
     }, { env }));
   } catch (e) {
     if (e && typeof e.code === "number" && typeof e.defect === "string") throw e;
@@ -270,6 +274,15 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), body: extras.bodies.get(r.id) ?? "", fields: { ...(r[FIELDS] ?? {}) },
       history: historyOf(r.id), awards: history.awardsByPost.get(r.id) ?? [],
       ...ideaResponsesOf(extras.responses.get(r.id) ?? []) }));
+  } else if (cls === SCOOP_CLASS) {
+    // A scoop (POS-780) carries its moment: the window, the place where the
+    // scooper stood, and the scooper's note, beside its fields (the video's
+    // link, once it is published) and its history.
+    posts = [...rows].sort(postOrder).map((r) => {
+      const x = extras.byId.get(r.id);
+      return { ...plain(r), body: x?.body ?? "", window: x?.window ?? null, place: x?.place ?? null, fields: { ...(r[FIELDS] ?? {}) },
+        history: historyOf(r.id) };
+    });
   } else {
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), history: historyOf(r.id) }));
   }

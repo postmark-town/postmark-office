@@ -62,6 +62,7 @@ const ALLOWED = {
   "fund-exec.mjs": [1, `${OWN}: classifyFatal's input (its last word is FAULT_LOGGED)`],
   "gangway-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "gift-exec.mjs": [1, `${OWN}: classifyFatal's input (its last word is FAULT_LOGGED)`],
+  "scoop-store.mjs": [2, `${OWN}: LateCrossingError's ruled message; PenUnreachableError's ruled sentence, as the 503's defect`],
   "idea-store.mjs": [2, `${OWN}: LateCrossingError's ruled message; PenUnreachableError's ruled sentence, as the 503's defect`],
   "join-bind-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "join-bind.mjs": [2, `${OWN}: relay, a refusal (a defect or an HTTP status) in its own words`],

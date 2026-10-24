@@ -185,7 +185,7 @@ test("1 · OFF: town_post sends an idea where it went before, and every idea-pos
   const { pen, posts } = setup();
   assert.equal(await townPostEvent({ class: "idea", slug: "lantern", body: "A lantern on the quay." }, ERRANT, { roll: ROLL, env: OFF }), null,
     "off, the town door answers null and the idea lane (a Think Tank mark) runs exactly as before");
-  await refusedWith(postAtTown(IDEA, ERRANT, { now: NOW, env: OFF, roll: ROLL }), 422, /answers class "event", "quest" or "bug", not "idea"/);
+  await refusedWith(postAtTown(IDEA, ERRANT, { now: NOW, env: OFF, roll: ROLL }), 422, /answers class "event", "quest", "bug" or "scoop", not "idea"/);
   // a post that exists from a time the switch was on is refused, not hidden
   await post();
   const n = pen.rows().length;

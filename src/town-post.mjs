@@ -46,19 +46,20 @@ import {
   BODY_MAX as IDEA_BODY_MAX,
 } from "./ideas.mjs";
 import { signUpAtTown, answerSignUpAtTown, awardAtTown } from "./idea-store.mjs";
+import { SCOOP_CLASS, SCOOP_POST_FIELDS, SCOOP_TAKES, SCOOP_STAGES, SCOOP_HANDS, SCOOP_FINISHED, BODY_MAX as SCOOP_BODY_MAX } from "./scoops.mjs"; // POS-780: a public post class; its pen is scoop-store.mjs
 import { REPORT_CLASS } from "./reports.mjs"; // POS-757: the private post class; its pen is report-store.mjs
 
 const PLACE = { type: "object", description: "where it happens: { mark: \"<owner>/<slug>\" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates)" };
 
 /** The event's fields as the town door takes them, shared by post and amend. */
 export const EVENT_POST_PROPERTIES = Object.freeze({
-  title: { type: "string", description: `class "event": what it is called (at most ${TITLE_MAX} characters); its id is minted from it` },
+  title: { type: "string", description: `class "event" or "scoop": what it is called (at most ${TITLE_MAX} characters); its id is minted from it` },
   invitation: { type: "string", description: "class \"event\": the calendar's word for body — send one or the other, never both" },
   place: PLACE,
-  starts: { type: "string", description: "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC" },
-  ends: { type: "string", description: `class "event": an ISO instant after starts, at most ${EVENT_MAX_DAYS} days later` },
+  starts: { type: "string", description: "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC. class \"scoop\": when the moment began, an instant that has happened, no older than 3 days" },
+  ends: { type: "string", description: `class "event": an ISO instant after starts, at most ${EVENT_MAX_DAYS} days later. class "scoop": when the moment ended, after starts, not in the future; one arc we can tell, with no cap on its length` },
   doors_open: { type: "string", description: "class \"event\": optional — when the doors open, at or before starts; leave it off and it is the start" },
-  handle: { type: "string", description: "class \"event\", \"quest\" or \"bug\": which of your residents acts (omit if your key holds one)" },
+  handle: { type: "string", description: "class \"event\", \"quest\", \"bug\" or \"scoop\": which of your residents acts (omit if your key holds one)" },
 });
 
 /** The quest's one field at the town door (POS-294): which registry quest the town puts up. */
@@ -118,6 +119,16 @@ export async function townPostEvent(args = {}, key = null, { roll = null, env = 
   // A REPORT (POS-757) is private, so it has its own pen and never the post
   // machine's public rows; its fields are judged there (reports.mjs § judgeReport).
   if (c === REPORT_CLASS) return answer(async () => (await import("./report-store.mjs")).postReport(args, key, { roll, env }));
+  // A SCOOP (POS-780) is a public post on the post machine's own table, in the
+  // shared schema's names (title, body, starts, ends, place, handle); the fields
+  // that belong to another lane are refused by name, and stamps first.
+  if (c === SCOOP_CLASS) {
+    if (args.stamps !== undefined)
+      return { error: "bounce", code: 422, field: "stamps", defect: "a scoop takes no stake", hint: SCOOP_TAKES };
+    const stray = strays(args, Object.keys(args).filter((f) => !SCOOP_POST_FIELDS.includes(f) && args[f] !== undefined), "a scoop", SCOOP_TAKES);
+    if (stray) return stray;
+    return answer(() => postAtTown(args, key, { roll }));
+  }
   if (c === IDEA_CLASS) {
     if (!ideaPostsOn(env)) return null;   // the switch off: the idea lane, exactly as before
     if (args.stamps !== undefined)
@@ -171,12 +182,12 @@ const ifIdeas = (s) => (IDEAS_ON ? s : "");
 const ACTING_HANDLE = { type: "string", description: "which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands" };
 const POST_REF = { type: "string", description: "the post's id, <author>/<slug>, as town { read: \"posts\" } names it" };
 const CLASS_REF = IDEAS_ON
-  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"idea\" or \"report\")" }
-  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")" };
+  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, SCOOP_CLASS, IDEA_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"scoop\", \"idea\" or \"report\")" }
+  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, SCOOP_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"scoop\" or \"report\")" };
 
 export const TOWN_POST_TOOLS = [
   { name: "town_amend",
-    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)}`,
+    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)} A SCOOP: title and body (your note, at most ${SCOOP_BODY_MAX} characters) — its scooper alone amends it, until it is finished; its window and place are the moment marked and are not amended.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF,
       body: { type: "string", description: `the post's text (an event's invitation), at most ${INVITATION_MAX} characters` },
@@ -184,12 +195,12 @@ export const TOWN_POST_TOOLS = [
       issue: BUG_POST_PROPERTIES.issue, steps: BUG_POST_PROPERTIES.steps, record: BUG_POST_PROPERTIES.record,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_close",
-    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`),
+    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`) + " A SCOOP is withdrawn by its scooper alone, while it stands: it closes as withdrawn and stays on the record; the hands pass a scoop by advance.",
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_advance",
-    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. THE WORD IS STATE: "to" names the state the post moves to, and the answer carries both "state" and "stage" — stage is a permanent alias of state, never removed. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, { post, skip: "<state>", reason }, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first. Each paid state names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (${LINK_WHAT}, or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced.${ifIdeas(` An IDEA moves by the town's hands (${IDEA_HANDS.join(", ")}) to any named stage, in any order: ${IDEA_STAGES.join(", ")}. Each move may carry credit (the resident it credits), link and note; duplicate names of. Nothing gates a stage and nothing mints: stamps on an idea are awarded by hand (town { do: "award" }). A finished idea (${IDEA_FINISHED.join(", ")}) moves no further.`)} Each class's lifecycle is law, declared class by class.`,
+    description: `Move a post along its class's lifecycle — town { do: "advance" }'s flat charge name. THE WORD IS STATE: "to" names the state the post moves to, and the answer carries both "state" and "stage" — stage is a permanent alias of state, never removed. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (${BUG_HANDS.join(", ")}): ${BUG_STAGES.join(" → ")}, or from reported or confirmed to ${BUG_SIDE_EXITS.join(" or ")}. Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, { post, skip: "<state>", reason }, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first. Each paid state names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (${LINK_WHAT}, or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced.${ifIdeas(` An IDEA moves by the town's hands (${IDEA_HANDS.join(", ")}) to any named stage, in any order: ${IDEA_STAGES.join(", ")}. Each move may carry credit (the resident it credits), link and note; duplicate names of. Nothing gates a stage and nothing mints: stamps on an idea are awarded by hand (town { do: "award" }). A finished idea (${IDEA_FINISHED.join(", ")}) moves no further.`)} A SCOOP moves by the town's hands (${SCOOP_HANDS.join(", ")}) to any named stage, in any order: ${SCOOP_STAGES.join(", ")} (passed is how the hands decline one); published needs link, the finished video's YouTube address, and nothing else takes one. It pays nothing. A finished scoop (${SCOOP_FINISHED.join(", ")}) moves no further. Each class's lifecycle is law, declared class by class.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
       to: { type: "string", description: "the state to move it to, as its class's law names it" },
@@ -198,7 +209,7 @@ export const TOWN_POST_TOOLS = [
       critter: { type: "string", description: `class "bug", to: "fixed" only, and required there — the critter's name, as the fixer chose it and told the hands in the PR or the issue: 1–${CRITTER_MAX} characters, one line, plain text` },
       grade: { type: "string", enum: [...BUG_GRADES], description: "class \"bug\", to: \"briefed\" only — the bless's revision, light (10 stamps) or heavy (5)" },
       of: { type: "string", description: "class \"bug\", to: \"duplicate\" only — the bug post it duplicates, <author>/<slug>" + ifIdeas("; class \"idea\", to: \"duplicate\" only — the idea post or Think Tank mark it repeats") },
-      link: { type: "string", description: `class "bug", required at diagnosed, briefed and fixed, whose credit is its author — ${LINK_WHAT}, or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); at most ${LINK_MAX} characters${ifIdeas("; class \"idea\", optional — the Discussion, blueprint, PR or tag this stage points at, on github.com/postmark-town/")}` },
+      link: { type: "string", description: `class "bug", required at diagnosed, briefed and fixed, whose credit is its author — ${LINK_WHAT}, or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); at most ${LINK_MAX} characters${ifIdeas("; class \"idea\", optional — the Discussion, blueprint, PR or tag this stage points at, on github.com/postmark-town/")}; class "scoop", to: "published" only and required there — the finished video's YouTube address` },
       recredit: { type: "boolean", description: `class "bug", wright or keemin only — true re-credits a stage already paid to the wrong resident: to names that stage (diagnosed, briefed or fixed), credit the resident whose work earned it, link that work, note why. Once per stage; the reviewed pass pays the new credit what the stage paid and burns the wrong mint, together` },
       skip: { type: "string", description: `class "bug" only, in place of to — the next state (${SKIP_STAGES.join(", ")}), recorded as skipped because no one earned it: one stage per call, in order, with reason; it credits no one and pays nothing, and shipped is never skipped` },
       reason: { type: "string", description: `class "bug", with skip only, and required there — why no one earned the stage, at most ${SKIP_REASON_MAX} characters; it stays on the bug's history` },
