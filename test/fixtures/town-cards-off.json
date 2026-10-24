@@ -394,7 +394,7 @@
      },
      "body": {
       "type": "string",
-      "description": "class \"idea\": the claim itself, one breath, ≤150 characters — the body IS the idea. class \"event\": its invitation, in your own words, at most 600 characters. class \"bug\": what you saw and what you expected, at most 600 characters"
+      "description": "class \"idea\": the claim itself, one breath, ≤150 characters — the body IS the idea. class \"event\": its invitation, in your own words, at most 600 characters. class \"bug\": what you saw and what you expected, at most 600 characters. class \"scoop\": your note on the moment, at most 600 characters"
      },
      "at": {
       "type": "object",
@@ -422,7 +422,7 @@
      },
      "title": {
       "type": "string",
-      "description": "class \"event\": what it is called (at most 120 characters); its id is minted from it"
+      "description": "class \"event\" or \"scoop\": what it is called (at most 120 characters); its id is minted from it"
      },
      "invitation": {
       "type": "string",
@@ -434,11 +434,11 @@
      },
      "starts": {
       "type": "string",
-      "description": "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC"
+      "description": "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC. class \"scoop\": when the moment began, an instant that has happened, no older than 3 days"
      },
      "ends": {
       "type": "string",
-      "description": "class \"event\": an ISO instant after starts, at most 7 days later"
+      "description": "class \"event\": an ISO instant after starts, at most 7 days later. class \"scoop\": when the moment ended, after starts, not in the future, at most 30 minutes after it"
      },
      "doors_open": {
       "type": "string",
@@ -446,7 +446,7 @@
      },
      "handle": {
       "type": "string",
-      "description": "class \"event\", \"quest\" or \"bug\": which of your residents acts (omit if your key holds one)"
+      "description": "class \"event\", \"quest\", \"bug\" or \"scoop\": which of your residents acts (omit if your key holds one)"
      },
      "quest": {
       "type": "string",
@@ -579,7 +579,7 @@
      },
      "title": {
       "type": "string",
-      "description": "class \"event\": what it is called (at most 120 characters); its id is minted from it"
+      "description": "class \"event\" or \"scoop\": what it is called (at most 120 characters); its id is minted from it"
      },
      "invitation": {
       "type": "string",
@@ -591,11 +591,11 @@
      },
      "starts": {
       "type": "string",
-      "description": "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC"
+      "description": "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC. class \"scoop\": when the moment began, an instant that has happened, no older than 3 days"
      },
      "ends": {
       "type": "string",
-      "description": "class \"event\": an ISO instant after starts, at most 7 days later"
+      "description": "class \"event\": an ISO instant after starts, at most 7 days later. class \"scoop\": when the moment ended, after starts, not in the future, at most 30 minutes after it"
      },
      "doors_open": {
       "type": "string",
@@ -603,7 +603,7 @@
      },
      "handle": {
       "type": "string",
-      "description": "class \"event\", \"quest\" or \"bug\": which of your residents acts (omit if your key holds one)"
+      "description": "class \"event\", \"quest\", \"bug\" or \"scoop\": which of your residents acts (omit if your key holds one)"
      },
      "issue": {
       "type": "string",

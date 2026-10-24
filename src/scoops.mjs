@@ -97,7 +97,7 @@ export function judgeWindow({ starts, ends }, now) {
   if (tE <= tS) throw refuse(422, "a moment ends after it starts", `ends (${e}) is not after starts (${s})`, { field: "ends" });
   if (tE > now + SCOOP_SKEW_MS) throw refuse(422, "a scoop marks a moment that has happened", `ends (${e}) is in the future — scoop it once it is over`, { field: "ends" });
   if (tS < now - SCOOP_LOOKBACK_MS)
-    throw refuse(422, "a scoop points back at most 3 days", `starts (${s}) is older than ${new Date(now - SCOOP_LOOKBACK_MS).toISOString()} — the record of a moment that old is not kept for the journalist`, { field: "starts" });
+    throw refuse(422, "a scoop points back at most 3 days", `starts (${s}) is older than ${new Date(now - SCOOP_LOOKBACK_MS).toISOString()} — the town points a scoop back three days and no further`, { field: "starts" });
   if (tE - tS > SCOOP_WINDOW_MAX_MS)
     throw refuse(422, `a moment is at most ${SCOOP_WINDOW_MAX_MS / 60_000} minutes`, `this window is ${minutes(tE - tS)} minutes — mark the stretch the story happened in`, { field: "ends" });
   return { starts: s, ends: e };

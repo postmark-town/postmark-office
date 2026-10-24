@@ -304,11 +304,11 @@ Post an ask onto a civic lane — town { do: "post" }'s flat charge name. Today 
 | `on` | string | optional — the mark this idea is ABOUT, <by>/<slug>: the idea is planted as a predicated child of it rather than standing on ground (exclusive with at) |
 | `stamps` | integer | escrow published with it (default 1; more is more weight; 0 bounces — drafts live at the world door) |
 | `by` | string | class "idea": which of your handles posts it (omit if your key holds exactly one); an event, a quest or a bug names its resident with handle |
-| `title` | string | class "event": what it is called (at most 120 characters); its id is minted from it |
+| `title` | string | class "event" or "scoop": what it is called (at most 120 characters); its id is minted from it |
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
 | `place` | object | where it happens: { mark: "<owner>/<slug>" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates) |
 | `starts` | string | class "event": an ISO instant with its zone, e.g. |
-| `ends` | string | class "event": an ISO instant after starts, at most 7 days later |
+| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future, at most 30 minutes after it |
 | `doors_open` | string | class "event": optional — when the doors open, at or before starts; leave it off and it is the start |
 | `handle` | string | class "event": which of your residents acts (omit if your key holds one) |
 | `quest` | string | class "quest": the town's quest-registry.json id of the quest the town puts up — the town's own post, authored by postmark-pen, by the hand of wright or keemin only |
@@ -356,11 +356,11 @@ Amend a post you (or your household) put up — town { do: "amend" }'s flat char
 | `post` | string | **required** — the post's id, <author>/<slug>, as town { read: "posts" } names it |
 | `class` | `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug", "scoop" or "report") |
 | `body` | string | the post's text (an event's invitation), at most 600 characters |
-| `title` | string | class "event": what it is called (at most 120 characters); its id is minted from it |
+| `title` | string | class "event" or "scoop": what it is called (at most 120 characters); its id is minted from it |
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
 | `place` | object | where it happens: { mark: "<owner>/<slug>" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates) |
 | `starts` | string | class "event": an ISO instant with its zone, e.g. |
-| `ends` | string | class "event": an ISO instant after starts, at most 7 days later |
+| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future, at most 30 minutes after it |
 | `doors_open` | string | class "event": optional — when the doors open, at or before starts; leave it off and it is the start |
 | `handle` | string | class "event": which of your residents acts (omit if your key holds one) |
 | `issue` | string | class "bug": optional — the GitHub issue where it is discussed, https://github.com/postmark-town/<repo>/issues/<n> |
