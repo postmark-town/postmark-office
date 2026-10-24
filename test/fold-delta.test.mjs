@@ -38,7 +38,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
-import { foldDelta } from "../world2/tools/fold-delta.mjs";
+import { foldDelta, holdsOwed } from "../world2/tools/fold-delta.mjs";
+import { starvingCheck } from "../src/store-writedown.mjs";
+import { withholdTakenAway } from "../world2/tools/fold-input-cli.mjs";
 // The sha-taking register, built here the way `fold-input-cli.mjs` builds it,
 // so the registry-refresh falsifier below exercises the real reader and not a
 // hand-built object that could not reproduce the defect.
@@ -50,7 +52,7 @@ import { canonRegisterAtSha } from "../world2/tools/canon-register.mjs";
  * as an unanticipated read rather than as a silent pass.
  */
 function stubClient(windows, {
-  marks = [], docketClaims = null, standing = null, absentRows = [], onUnexpected = null, withdrawnOwed = [],
+  marks = [], docketClaims = null, standing = null, absentRows = [], onUnexpected = null, withdrawnOwed = [], townHolds = null,
 } = {}) {
   const seen = [];
   return {
@@ -95,6 +97,11 @@ function stubClient(windows, {
       // this field sets it to something the mark array cannot supply.
       if (/FROM claims WHERE window_id = \$1 AND status = 'locked'/.test(text)) {
         return { rows: [{ n: docketClaims === null ? marks.length : docketClaims }] };
+      }
+      // THE FOURTH TERM'S READ (WLD-5): the town's standing marks with their holder and owner as the store has them.
+      if (/FROM marks WHERE owner = 'the-town'/.test(text)) {
+        if (townHolds === null) throw new Error("the fold asked for the town's holds, and this test supplied none — it should not have asked");
+        return { rows: townHolds };
       }
       if (/FROM marks WHERE locked_window/.test(text)) return { rows: marks };
       if (onUnexpected) return onUnexpected(text);
@@ -537,6 +544,7 @@ test("REGISTRY REFRESH · HEAD one commit past worldSha still CARRIES, and stamp
     const register = await canonRegisterAtSha({ worldRepo: dir, sha: worldFrom });
 
     const client = carryClient({
+      townHolds: [], // the real register carries the town's holds, so the fourth term looks (and finds none here)
       marks: [markRow("alpha/one", { window: 185 })],
       docketClaims: 1,
       standing: [standingRow("alpha/one", { window: 185 }), standingRow(WARM_STONE), standingRow(REACHABILITY)],
@@ -709,4 +717,92 @@ test("WITHDRAWN · no register: the term says it did not check, and asks nothing
   assert.equal(out.selection.withdrawn_owed.checked, false);
   assert.deepEqual(out.withdrawals, []);
   assert.ok(!client.seen.some((q) => /latest_mark_act|m\.owner/.test(q)), JSON.stringify(client.seen));
+});
+
+// ── THE FOURTH TERM: A TOWN-SIGNED HOLD CANON HAS NOT PRINTED (WLD-5) ────────
+//
+// The first run-through of the heist lost a key's hold: held out at one settlement, absent from
+// the next docket, and a key that keeps cannot be given again. The term offers every standing
+// town-signed mark whose store holder differs from canon's, every crossing, until the print lands.
+
+const KEY_W = "the-town/the-hall-of-keepers-key";
+const KEY_B = "the-town/the-lumber-room-key";
+const KEY_R = "the-town/the-mirror-room-key";
+const townRow = (slug, held_by, owned_by = null) => ({ slug, held_by, owned_by });
+const holdsRegister = (entries, ...slugs) => ({
+  ...registerOf(...slugs),
+  holds: new Map(Object.entries(entries).map(([k, v]) => [k, { held_by: v[0] ?? null, owned_by: v[1] ?? null }])),
+});
+const keyMark = (slug) => ({ ...markRow(slug, { window: 180 }), owner: "the-town", household: "solo:the-town" });
+
+test("HOLD OWED · holdsOwed: a differing holder or owner is owed, an equal one is not, an absent one is the carry's", () => {
+  const canon = new Map([[KEY_W, { held_by: "the-town", owned_by: null }], [KEY_B, { held_by: "the-town", owned_by: null }]]);
+  const rows = [townRow(KEY_W, "wright/a-knight", "hr-fern"), townRow(KEY_B, "the-town"), townRow("the-town/not-in-canon", "x")];
+  assert.deepEqual(holdsOwed(rows, canon), [KEY_W]);
+  assert.deepEqual(holdsOwed(rows, canon, new Set([KEY_W])), [], "a slug another term holds is skipped");
+  assert.deepEqual(holdsOwed([townRow(KEY_B, "  ", "")], new Map([[KEY_B, { held_by: null, owned_by: null }]])), [], "empty is not held, on both sides");
+  assert.deepEqual(holdsOwed([townRow(KEY_B, null)], canon), [KEY_B], "a hold released in the store while canon still prints it is owed too");
+});
+
+test("HOLD OWED · a key held by a knight in the store and still the town's in canon is offered, and the others are not", async () => {
+  const client = carryClient({
+    marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1,
+    standing: [standingRow("alpha/one", { window: 185 })],
+    townHolds: [townRow(KEY_W, "wright/wolf-knight", "hr-fern"), townRow(KEY_B, "the-town"), townRow(KEY_R, "wright/raven-knight", "hr-finch")],
+    absentRows: [keyMark(KEY_W), keyMark(KEY_R)],
+  });
+  const reg = holdsRegister({ [KEY_W]: ["the-town"], [KEY_B]: ["the-town"], [KEY_R]: ["wright/raven-knight", "hr-finch"] }, "alpha/one", KEY_W, KEY_B, KEY_R);
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: reg });
+  assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one", KEY_W], "the docket first, then the owed hold; the printed one (raven) and the unmoved one (bat) are not offered");
+  assert.deepEqual(out.selection.hold_owed, { checked: true, count: 1, slugs: [KEY_W], skipped_no_household: [], canon_sha: WORLD_SHA });
+  assert.equal(out.selection.carried_absent.count, 0, "and it is not counted as canon-absent");
+});
+
+test("HOLD OWED · the print landing ends it: when canon carries the holder, nothing is offered", async () => {
+  const client = carryClient({
+    marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1, standing: [standingRow("alpha/one", { window: 185 })],
+    townHolds: [townRow(KEY_W, "wright/wolf-knight", "hr-fern")],
+  });
+  const reg = holdsRegister({ [KEY_W]: ["wright/wolf-knight", "hr-fern"] }, "alpha/one", KEY_W);
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: reg });
+  assert.deepEqual(out.marks.map((m) => m.slug), ["alpha/one"]);
+  assert.equal(out.selection.hold_owed.count, 0);
+  assert.equal(out.selection.hold_owed.checked, true, "it looked and found nothing owed");
+});
+
+test("HOLD OWED · the docket wins its own crossing: a docket key is not also offered", async () => {
+  const client = carryClient({
+    marks: [keyMark(KEY_W)], docketClaims: 1, standing: [standingRow(KEY_W, { window: 185 })],
+    townHolds: [townRow(KEY_W, "wright/wolf-knight", "hr-fern")],
+  });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: holdsRegister({ [KEY_W]: ["the-town"] }, KEY_W) });
+  assert.deepEqual(out.marks.map((m) => m.slug), [KEY_W], "once");
+  assert.equal(out.selection.hold_owed.count, 0);
+});
+
+test("HOLD OWED · a register with no holds says it did not check, and asks the store nothing", async () => {
+  const client = carryClient({ marks: [markRow("alpha/one", { window: 185 })], docketClaims: 1, standing: [standingRow("alpha/one", { window: 185 })] });
+  const out = await foldDelta(client, { window: 185, worldSha: WORLD_SHA, canonRegister: registerOf("alpha/one") });
+  assert.deepEqual(out.selection.hold_owed, { checked: false, count: 0, slugs: [], skipped_no_household: [], canon_sha: WORLD_SHA });
+  assert.ok(!client.seen.some((q) => /owner = 'the-town'/.test(q)), "no town read without the canon side");
+});
+
+test("HOLD OWED · the starving guard counts the owed holds apart from the docket's own, and refuses a count that cannot be", () => {
+  const marks = [{ slug: KEY_W }];
+  const r = starvingCheck({ marks, docketClaims: 0, holdOwed: 1, window: 185 });
+  assert.equal(r.docket_offered, 0);
+  assert.equal(r.hold_owed, 1);
+  assert.equal(r.starving, false);
+  assert.equal(r.quiet, false, "files are being published, so the crossing is not quiet");
+  assert.throws(() => starvingCheck({ marks, docketClaims: 0, holdOwed: 2, window: 185 }), /offered only 1/);
+  assert.throws(() => starvingCheck({ marks, docketClaims: 0, holdOwed: "1", window: 185 }), /not a count/);
+});
+
+test("HOLD OWED · a hold the settlement takes away leaves the term's count and slugs, like a carried mark", () => {
+  const selection = { hold_owed: { checked: true, count: 2, slugs: [KEY_W, KEY_R] }, carried_absent: { count: 0, slugs: [] } };
+  const w = withholdTakenAway({ marks: [{ slug: KEY_W }, { slug: KEY_R }, { slug: "alpha/one" }], selection }, new Set([KEY_W]));
+  assert.deepEqual(w.selection.hold_owed.slugs, [KEY_R]);
+  assert.equal(w.selection.hold_owed.count, 1);
+  assert.equal(w.fromCarry, 1);
+  assert.equal(w.fromDocket, 0);
 });

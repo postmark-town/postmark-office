@@ -781,7 +781,7 @@ export function planStoreWriteDown(marks, { publishedPathOf = null, canonBytesAt
  * from this file and the failure would arrive as a refusal naming a resident.
  */
 export function starvingCheck({
-  marks = [], stakes = [], docketClaims = null, carriedAbsent = 0, window = null, withheldBySettlement = 0,
+  marks = [], stakes = [], docketClaims = null, carriedAbsent = 0, holdOwed = 0, window = null, withheldBySettlement = 0,
 } = {}) {
   const staked = stakes.filter((s) => Number(s.n) > 0);
   const stakedMarks = new Set(staked.map((s) => s.mark));
@@ -848,6 +848,24 @@ export function starvingCheck({
   // offered would produce a negative `docket_offered`, which is not `> 0`, so it
   // would fall through to the quiet branches and read as "the docket offered
   // nothing" — a wrong input arriving as a lawful-looking answer.
+  // THE FOURTH TERM'S ROWS (a town-signed hold canon has not printed) are carried too, and counted apart
+  // so the receipt names which term swept them up; the docket's own is what is left of the offer.
+  const owedHolds = holdOwed ?? 0;
+  if (!isDocketCount(owedHolds)) {
+    throw new FoldInputRefusal(
+      "fold-input-shape",
+      `\`selection.hold_owed.count\` is ${JSON.stringify(holdOwed)}, which is not a count. It is subtracted from the offered `
+      + "set with the carried rows to find the docket's own, and a value that coerces to 0 would hand this guard a docket "
+      + "larger than the one the fold actually read.",
+    );
+  }
+  if (carried + owedHolds > offered) {
+    throw new FoldInputRefusal(
+      "fold-input-shape",
+      `the fold says it carried ${carried} canon-absent and ${owedHolds} hold-owed mark(s) and offered only ${offered}. `
+      + "Carried rows are a subset of the offered set, so this input describes no crossing that could have happened.",
+    );
+  }
   if (carried > offered) {
     throw new FoldInputRefusal(
       "fold-input-shape",
@@ -858,7 +876,7 @@ export function starvingCheck({
   }
   // WHAT THIS WINDOW'S OWN DOCKET PUT ON THE TABLE. Every test below is about
   // this number and not about `offered`, which is the whole of the repair.
-  const docketOffered = offered - carried;
+  const docketOffered = offered - carried - owedHolds;
   // THE FIFTH INPUT: WHAT THE SETTLEMENT TOOK AWAY (POS-364). Since R11 a docket
   // mark the settlement opposes (a parcel over a limit, a word standing at the
   // seal) is withheld from the sketchbooks before this guard sees the set
@@ -871,6 +889,7 @@ export function starvingCheck({
     offered,
     docket_offered: docketOffered,
     carried_absent: carried,
+    hold_owed: owedHolds,
     ...(withheld ? { withheld_by_settlement: withheld } : {}),
     docket_claims: docket,
     staked_marks: stakedMarks.size,
@@ -896,11 +915,11 @@ export function starvingCheck({
     // published. A guard that passed correctly and then told the keeper the
     // crossing was quiet would be right about the town and wrong about the day.
     return {
-      starving: false, ...counts, quiet: carried === 0,
-      why: carried === 0
+      starving: false, ...counts, quiet: carried + owedHolds === 0,
+      why: carried + owedHolds === 0
         ? "nothing was offered and nothing is staked: both paths agree the crossing is quiet"
         : `this window's docket offered nothing and nothing is staked, and ${carried} mark(s) canon does not carry `
-          + "are being carried from earlier window(s)",
+          + `and ${owedHolds} town-signed hold(s) canon has not printed are being carried from earlier window(s)`,
     };
   }
 
@@ -911,11 +930,11 @@ export function starvingCheck({
     // log line because the keeper reads receipts twelve hours later, and "the
     // guard passed" and "the guard was never asked" must not look alike.
     return {
-      starving: false, ...counts, quiet: carried === 0,
-      why: carried === 0
+      starving: false, ...counts, quiet: carried + owedHolds === 0,
+      why: carried + owedHolds === 0
         ? `the docket was empty: nobody locked a claim in window ${window ?? "?"}`
         : `the docket was empty — nobody locked a claim in window ${window ?? "?"} — and ${carried} mark(s) canon does `
-          + "not carry are being carried from earlier window(s)",
+          + `not carry and ${owedHolds} town-signed hold(s) canon has not printed are being carried from earlier window(s)`,
     };
   }
 
@@ -1100,6 +1119,7 @@ export function storeWriteDown({
     ...normalized,
     docketClaims: normalized.selection?.docket_claims ?? null,
     carriedAbsent: normalized.selection?.carried_absent?.count ?? 0,
+    holdOwed: normalized.selection?.hold_owed?.count ?? 0,
     withheldBySettlement: normalized.selection?.settlement?.withheld_from_docket ?? 0,
     window: normalized.as_of.window,
   });

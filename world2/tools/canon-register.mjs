@@ -90,6 +90,24 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+/**
+ * THE TOWN'S OWN HOLDS, as canon prints them (WLD-5): for every record the town
+ * signed, the `held_by` and `owned_by` canon carries (null when it carries none).
+ * The fold's fourth term compares the store's holder with this to find a hold canon
+ * has not printed yet. Town-signed only: the town's things are few, and a term that
+ * read every resident's hold would first meet whatever backlog the sweep has left
+ * drafted. PURE over the loader's records.
+ */
+export function townHoldsOf(records) {
+  const holds = new Map();
+  for (const r of records) {
+    if (r._error || !r.id || r.by !== "the-town") continue;
+    const v = (x) => (typeof x === "string" && x.trim() ? x.trim() : null);
+    holds.set(String(r.id), { held_by: v(r.held_by), owned_by: v(r.owned_by) });
+  }
+  return holds;
+}
+
 /** The backends this predicate can be asked through. One line selects. */
 export const CANON_BACKENDS = Object.freeze(["git", "fold"]);
 
@@ -191,6 +209,7 @@ export async function canonRegisterAt({ backend = "git", worldRepo = null } = {}
     sha,
     source: `world checkout ${repo} @ ${sha}`,
     count: slugs.size,
+    holds: townHoldsOf(records),
     unreadable: records.filter((r) => r._error).map((r) => String(r.id ?? r._dir ?? "?")),
   };
 }
@@ -343,7 +362,8 @@ export async function canonRegisterAtSha({ worldRepo = null, sha = null } = {}) 
       sha,
       source: `world ${repo} @ ${sha} (tree materialized)`,
       count: slugs.size,
-      unreadable: records.filter((r) => r._error).map((r) => String(r.id ?? r._dir ?? "?")),
+      holds: townHoldsOf(records),
+    unreadable: records.filter((r) => r._error).map((r) => String(r.id ?? r._dir ?? "?")),
     };
   } finally {
     rmSync(dest, { recursive: true, force: true });
