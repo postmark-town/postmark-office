@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { buildMoment, loadFromArchive, parseArgs, fileNameFor, MOMENT_ACTIONS, normaliseAct } from "../tools/moment-export.mjs";
+import { buildMoment, loadFromArchive, parseArgs, fileNameFor, MOMENT_ACTIONS, PAYLOAD_FIELDS, screenAct, normaliseAct, EXPORTABLE_STATES } from "../tools/moment-export.mjs";
 import { worldClone } from "./fixture-paths.mjs";
 
 const walk = await import(pathToFileURL(join(worldClone(), "tools", "walk.mjs")).href);
@@ -47,6 +47,11 @@ const scoopPost = (extra = {}) => act({ actor: "errant", action: "post", class: 
   payload: { post: SCOOP_ID, class: "scoop", title: "The lantern lighting", body: "Ada lit it.", state: "scooped",
     place: { mark: null, x: 0, y: 0 }, starts: at(T0), ends: at(T0 + 8 * MIN), fields: {}, ...extra } });
 
+// the founders take a scoop up first: scooped → picked-up (the export reads a moment only for a scoop the journalist has taken up)
+const move = (to, extra = {}) => act({ actor: "wright", action: "advance", class: "scoop", object: SCOOP_ID, at: at(T0 + 12 * MIN),
+  payload: { post: SCOOP_ID, to, hand: "wright", ...extra } });
+const takenUp = () => move("picked-up");
+
 const MARKS = [
   { id: "ada/the-lantern", slug: "the-lantern", by: "ada", kind: "sited", at: { x: 40, y: 10 }, extent: { w: 6, h: 6 }, image: "https://media.postmark.test/lantern.png", body: "A lantern on a post." },
   { id: "far/the-mill", slug: "the-mill", by: "far", kind: "sited", at: { x: 5000, y: 5000 }, extent: { w: 20, h: 20 }, image: "https://media.postmark.test/mill.png", body: "A mill." },
@@ -64,13 +69,14 @@ function scene() {
     act({ actor: "errant", action: "say", class: "voice", at: at(T0 - 1000), at_anchor: "the-town/let-there-be-light", at_dx: -30, at_dy: 5, payload: { text: "Too early." } }),
     act({ actor: "ada", action: "take", class: "holding", at: at(T0 + 3 * MIN), object: "ada/a-match", at_anchor: "the-town/let-there-be-light", at_dx: 20, at_dy: 0, payload: { thing: "ada/a-match" } }),
     act({ actor: "ada", action: "leave-mark", class: "mark", at: at(T0 + 4 * MIN), object: "ada/a-flame", at_anchor: "the-town/let-there-be-light", at_dx: 25, at_dy: 0,
-      payload: { slug: "ada/a-flame", kind: "sited", at: { x: 25, y: 0 }, extent: { w: 2, h: 2 }, body: "A small flame.", image: "https://media.postmark.test/flame.png" } }),
+      payload: { slug: "a-flame", by: "ada", kind: "sited", at: { x: 25, y: 0 }, extent: { w: 2, h: 2 }, date: at(T0 + 4 * MIN), body: "A small flame.", image: "https://media.postmark.test/flame.png",
+        stamps: 0, put_forward: true, _consent: { likeness: "yes" }, _placed_by: "ada-human" } }),
     // never public
     act({ actor: "ada", action: "declare-stance-on", class: "stance", at: at(T0 + 3 * MIN), object: "ada/a-flame", payload: { stance: "for" } }),
     act({ actor: "ada", action: "stake", class: "mark", at: at(T0 + 3 * MIN), object: "ada/a-flame", payload: { stamps: 3 } }),
     act({ actor: "ada", action: "letter", class: "mail", at: at(T0 + 3 * MIN), payload: { text: "dear errant, a private word" } }),
   ];
-  return { scoopActs: [scoopPost()], acts };
+  return { scoopActs: [scoopPost(), takenUp()], acts };
 }
 
 const build = (over = {}) => buildMoment({ scoopId: SCOOP_ID, ...scene(), marks: MARKS, walk, now: T0 + 20 * MIN, ...over });
@@ -134,6 +140,8 @@ test("5 · marks in view carry their image URLs; a far mark is left out; a mark 
   assert.equal(byId["ada/the-lantern"].image, "https://media.postmark.test/lantern.png");
   assert.equal(byId["ada/the-lantern"].source, "world");
   assert.equal(byId["far/the-mill"], undefined);
+  assert.equal(byId["ada/a-flame"].by, "ada", "the id is the act's object (by/slug); by comes from the payload");
+  assert.equal(byId["a-flame"], undefined, "never the bare slug as an id");
   assert.equal(byId["ada/a-flame"].image, "https://media.postmark.test/flame.png");
   assert.match(byId["ada/a-flame"].source, /^act \d+$/);
   assert.ok(m.acts.some((a) => a.action === "take" && a.object === "ada/a-match"));
@@ -145,11 +153,11 @@ test("5 · marks in view carry their image URLs; a far mark is left out; a mark 
 test("6 · a scoop with no place stands where its scooper stood at the window's end; with no position it refuses, naming --at; --at wins", () => {
   const noPlace = scoopPost();
   delete noPlace.payload.place;
-  const m = build({ scoopActs: [noPlace] });
+  const m = build({ scoopActs: [noPlace, takenUp()] });
   assert.deepEqual(m.manifest.place, { x: -30, y: 5 });
   assert.match(m.manifest.place_from, /where errant stood/);
   const lost = scene();
-  assert.throws(() => buildMoment({ scoopId: SCOOP_ID, scoopActs: [noPlace], acts: lost.acts.filter((a) => a.actor !== "errant"), marks: MARKS, walk }), /pass --at x,y/);
+  assert.throws(() => buildMoment({ scoopId: SCOOP_ID, scoopActs: [noPlace, takenUp()], acts: lost.acts.filter((a) => a.actor !== "errant"), marks: MARKS, walk }), /pass --at x,y/);
   assert.deepEqual(build({ at: { x: 5000, y: 5000 } }).manifest.place, { x: 5000, y: 5000 });
   assert.equal(Object.keys(build({ at: { x: 5000, y: 5000 } }).positions).length, 0, "nobody is near the far place");
   assert.deepEqual(Object.keys(build({ radius: 5 }).positions), [], "a 5 m radius around the origin holds nobody");
@@ -166,7 +174,7 @@ test("7 · the archive loader reads the notary's JSONL in two passes, and says p
   writeFileSync(join(dir, "11.jsonl"), scoopActs.map(line).join("\n") + "\n");
   const got = await loadFromArchive(dir, SCOOP_ID);
   assert.equal(got.source.files, 2);
-  assert.equal(got.scoopActs.length, 1);
+  assert.equal(got.scoopActs.length, 2);
   const m = buildMoment({ scoopId: SCOOP_ID, scoopActs: got.scoopActs, acts: got.acts, marks: MARKS, walk });
   const direct = build();
   const bare = (xs) => xs.map(({ act: _a, ...r }) => r);
@@ -177,14 +185,76 @@ test("7 · the archive loader reads the notary's JSONL in two passes, and says p
   assert.deepEqual(normaliseAct({ id: "7", at: new Date(T0), action: "say", payload: "{\"text\":\"x\"}" }).payload, { text: "x" });
 });
 
+// ── 9 · the field screen ────────────────────────────────────────────────────
+
+test("9 · the screen is by FIELD: a leave-mark keeps only its named fields and only when put forward; stamps, put_forward, _consent and _placed_by never reach the file", async () => {
+  const secret = "a private draft sentence";
+  const extra = scene();
+  extra.acts.push(
+    // a draft: a leave-mark that was not put forward (and one with no verdict at all)
+    act({ actor: "ada", action: "leave-mark", class: "mark", at: at(T0 + 5 * MIN), object: "ada/a-draft", at_anchor: "the-town/let-there-be-light", at_dx: 30, at_dy: 0,
+      payload: { slug: "a-draft", by: "ada", kind: "sited", at: { x: 30, y: 0 }, extent: { w: 2, h: 2 }, body: secret, stamps: 0, put_forward: false, _placed_by: "ada-human" } }),
+    act({ actor: "ada", action: "leave-mark", class: "mark", at: at(T0 + 5 * MIN), object: "ada/a-draft-2", at_anchor: "the-town/let-there-be-light", at_dx: 31, at_dy: 0,
+      payload: { slug: "a-draft-2", by: "ada", kind: "sited", at: { x: 31, y: 0 }, body: secret } }),
+    // fields no one judged, on acts that are public
+    act({ actor: "ada", action: "say", class: "voice", at: at(T0 + 6 * MIN), at_anchor: "the-town/let-there-be-light", at_dx: 20, at_dy: 0,
+      payload: { text: "A public line.", place: "the Quay", _internal_note: "household-private", stamps: 9 } }),
+    act({ actor: "ada", action: "take", class: "holding", at: at(T0 + 6 * MIN), object: "ada/a-key", payload: { thing: "ada/a-key", holder: "ada", _consent: "x", declared_household: "hh:private" } }));
+  const m = buildMoment({ scoopId: SCOOP_ID, ...extra, marks: MARKS, walk });
+  const text = JSON.stringify(m);
+  for (const gone of [secret, "_consent", "_placed_by", "put_forward", "\"stamps\"", "_internal_note", "household-private", "declared_household", "ada-human", "a-draft"])
+    assert.equal(text.includes(gone), false, `${gone} is not in the file`);
+  const flame = m.acts.find((a) => a.object === "ada/a-flame");
+  assert.deepEqual(Object.keys(flame.payload).sort(), ["at", "body", "by", "date", "extent", "image", "kind", "slug"], "only the named fields of a put-forward leave-mark");
+  assert.ok(m.says.some((x) => x.text === "A public line."), "the say itself is kept");
+  assert.deepEqual(Object.keys(m.acts.find((a) => a.action === "take" && a.object === "ada/a-key").payload).sort(), ["holder", "thing"]);
+  // the same through the loader's screen, one row at a time
+  assert.equal(screenAct({ ...act({ action: "leave-mark", payload: { slug: "x", put_forward: false } }) }), null);
+  assert.equal(screenAct({ ...act({ action: "leave-mark", payload: { slug: "x" } }) }), null);
+  assert.equal(screenAct({ ...act({ action: "letter", payload: {} }) }), null);
+  assert.ok(screenAct({ ...act({ action: "leave-mark", at: at(T0), payload: { slug: "x", put_forward: true, stamps: 1 } }) }));
+  // a walk keeps what a departure needs and nothing else; an emission keeps its sound fields
+  const w = screenAct(depart("ada", T0, { x: 1, y: 1 }, { x: 2, y: 2 }));
+  assert.deepEqual(Object.keys(w.payload).sort(), ["_ledger", "at", "from", "handle", "pace", "toward"]);
+  const em = screenAct(act({ action: "legacy:emission", at: at(T0), payload: { at: at(T0), payload: { class: "sound", text: "hi", x: 1, y: 2, secret: "no" }, extra: "no" } }));
+  assert.deepEqual(em.payload, { at: at(T0), payload: { class: "sound", text: "hi", x: 1, y: 2 } });
+  // every allowlisted action has a field list, and none lists a private field
+  for (const a of MOMENT_ACTIONS) assert.ok(Array.isArray(PAYLOAD_FIELDS[a]), `${a} has a field list`);
+  for (const list of Object.values(PAYLOAD_FIELDS)) for (const bad of ["stamps", "put_forward", "_consent", "_placed_by"]) assert.ok(!list.includes(bad), `${bad} is on no list`);
+  // and through the archive loader
+  const dir = mkdtempSync(join(tmpdir(), "moment-export-priv-"));
+  writeFileSync(join(dir, "20.jsonl"), [...extra.acts, ...extra.scoopActs].map((a) => JSON.stringify(a)).join("\n") + "\n");
+  const got = await loadFromArchive(dir, SCOOP_ID);
+  const loaded = JSON.stringify(got.acts);
+  for (const gone of [secret, "_consent", "_placed_by", "put_forward", "ada-human"]) assert.equal(loaded.includes(gone), false, `${gone} never leaves the loader`);
+});
+
+// ── 10 · the scoop's state ──────────────────────────────────────────────────
+
+test("10 · the export reads a moment only for a scoop the journalist has taken up: scooped, passed and withdrawn are refused; picked-up through published are read", () => {
+  const base = scene();
+  const go = (acts) => buildMoment({ scoopId: SCOOP_ID, scoopActs: acts, acts: base.acts, marks: MARKS, walk });
+  assert.throws(() => go([scoopPost()]), /is scooped.*advance it to picked-up first/s);
+  assert.throws(() => go([scoopPost(), move("passed")]), /is passed.*not taken up/s);
+  assert.throws(() => go([scoopPost(), act({ actor: "errant", action: "close", class: "scoop", object: SCOOP_ID, at: at(T0 + 12 * MIN), payload: { post: SCOOP_ID, state: "withdrawn" } })]), /is withdrawn.*not taken up/s);
+  for (const to of EXPORTABLE_STATES) assert.equal(go([scoopPost(), move(to)]).scoop.state, to);
+  assert.deepEqual([...EXPORTABLE_STATES], ["picked-up", "scripted", "keyframed", "filmed", "published"]);
+});
+
 // ── 8 · the command ─────────────────────────────────────────────────────────
 
 test("8 · the command's arguments are judged, and the file is named for the scoop", () => {
   const o = parseArgs(["--scoop", SCOOP_ID, "--world", "w", "--acts", "a", "--radius", "100", "--at", "1,2"]);
   assert.deepEqual([o.scoop, o.radius, o.at, o.step], [SCOOP_ID, 100, { x: 1, y: 2 }, 1]);
-  assert.throws(() => parseArgs(["--scoop", SCOOP_ID, "--world", "w"]), /usage/);
+  assert.throws(() => parseArgs(["--scoop", SCOOP_ID, "--world", "w"], {}), /usage/);
   assert.throws(() => parseArgs(["--scoop", SCOOP_ID, "--world", "w", "--acts", "a", "--pg-url", "p"]), /name one source/);
   assert.throws(() => parseArgs(["--scoop", SCOOP_ID, "--world", "w", "--acts", "a", "--radius", "0"]), /radius is metres above 0/);
   assert.throws(() => parseArgs(["--bogus"]), /unknown argument --bogus/);
+  // the store's address may come from MOMENT_PG_URL; a flag beats it, and --acts beats it
+  const viaEnv = parseArgs(["--scoop", SCOOP_ID, "--world", "w"], { MOMENT_PG_URL: "postgres://env/db" });
+  assert.equal(viaEnv.pgUrl, "postgres://env/db");
+  assert.equal(parseArgs(["--scoop", SCOOP_ID, "--world", "w", "--pg-url", "postgres://flag/db"], { MOMENT_PG_URL: "postgres://env/db" }).pgUrl, "postgres://flag/db");
+  assert.equal(parseArgs(["--scoop", SCOOP_ID, "--world", "w", "--acts", "a"], { MOMENT_PG_URL: "postgres://env/db" }).pgUrl, undefined);
+  assert.throws(() => parseArgs(["--scoop", SCOOP_ID, "--world", "w"], {}), /usage/);
   assert.equal(fileNameFor(SCOOP_ID), "moment-errant-the-lantern-lighting.json");
 });

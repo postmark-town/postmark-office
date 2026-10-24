@@ -8,7 +8,7 @@
 //
 //   node tools/moment-export.mjs --scoop errant/the-lantern-lighting --acts <notary archives/acts dir or one .jsonl> \
 //        --world <a postmark-world checkout> [--out <dir>] [--radius 250] [--step 1] [--at x,y]
-//   node tools/moment-export.mjs --scoop … --pg-url postgres://… --world <checkout>       # a sandbox or dev store
+//   MOMENT_PG_URL=postgres://… node tools/moment-export.mjs --scoop … --world <checkout>   # a sandbox or dev store (or --pg-url)
 //
 // ── A FOUNDER'S TOOL, NOT A RESIDENT'S DOOR ─────────────────────────────────
 //
@@ -24,8 +24,12 @@
 // (MOMENT_ACTIONS): walk, say, enter, exit, ride, take, give, drop, leave-mark,
 // and their pre-pen spellings. Letters, drafts, notes to self, stances,
 // declarations, stakes and every other action are never read into the file, and
-// a test holds the list. (A private draft never reaches `acts` at all:
-// world-journal.mjs § the private draft.) This is the first of two passes: the
+// a test holds the list. It screens FIELDS as well as actions: each action keeps
+// a named list of payload fields (PAYLOAD_FIELDS) and nothing else is copied, so
+// `stamps`, `put_forward`, `_consent` and `_placed_by` never reach the file; and a
+// leave-mark is kept only when its payload says `put_forward === true` (a draft's
+// deed is not public). That draft screen is this tool's own: it does not depend on
+// the office's candle switch having kept drafts out of `acts`. This is the first of two passes: the
 // consent pass (design § 3.3) is the NEXT stage's, run on the file against each
 // resident's likeness card, and this file says so in its manifest.
 //
@@ -67,6 +71,43 @@ export const MOMENT_ACTIONS = Object.freeze([
 ]);
 const DEPARTURES = new Set(DEPARTURE_ACTIONS);
 const MOMENT_SET = new Set(MOMENT_ACTIONS);
+
+// THE FIELD SCREEN. Each public action keeps these payload fields and no others.
+// Anything not named here (stamps, put_forward, _consent, _placed_by, _deferred_act,
+// declared households, a future field nobody has judged) is dropped when the act is
+// read, before anything can use it.
+const DEPARTURE_FIELDS = Object.freeze(["from", "toward", "to", "within", "pace", "declared_by", "lines", "at", "iso", "handle", "_ledger", "line", "targetExtent", "targetMarkId"]);
+const HOLDING_FIELDS = Object.freeze(["thing", "holder", "previous_holder", "policy", "made_by", "to", "from"]);
+const FRAME_FIELDS = Object.freeze(["lines", "mark", "to", "from"]);
+export const PAYLOAD_FIELDS = Object.freeze({
+  walk: DEPARTURE_FIELDS, land: DEPARTURE_FIELDS, "legacy:departure": DEPARTURE_FIELDS,
+  say: Object.freeze(["text", "place", "aboard"]),
+  enter: FRAME_FIELDS, exit: FRAME_FIELDS, "legacy:enter": FRAME_FIELDS, "legacy:exit": FRAME_FIELDS,
+  ride: Object.freeze(["origin", "to", "distance_m", "arrives_at", "pace_km_per_crossing"]),
+  take: HOLDING_FIELDS, give: HOLDING_FIELDS, drop: HOLDING_FIELDS,
+  "leave-mark": Object.freeze(["at", "by", "body", "date", "kind", "slug", "image", "extent", "parent", "points"]),
+  "legacy:leave-mark": Object.freeze(["at", "by", "body", "date", "kind", "slug", "image", "extent", "parent", "points"]),
+  "legacy:emission": Object.freeze(["at", "payload"]),
+  emission: Object.freeze(["at", "payload"]),
+});
+const EMISSION_FIELDS = Object.freeze(["class", "text", "x", "y", "place", "spoken_by", "aboard"]);
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && Object.hasOwn(o, k) && o[k] !== undefined).map((k) => [k, o[k]]));
+
+/**
+ * One `acts` row, screened: `null` for an action off the allowlist, or for a leave-mark
+ * whose payload does not say `put_forward === true`; otherwise the normalised act with
+ * only its action's named payload fields.
+ */
+export function screenAct(row) {
+  if (!MOMENT_SET.has(row?.action)) return null;
+  if (row.action === "leave-mark" && payloadOf(row).put_forward !== true) return null;   // before anything else is read
+  const a = normaliseAct(row);
+  const kept = pick(a.payload, PAYLOAD_FIELDS[a.action] ?? []);
+  if (kept.payload && typeof kept.payload === "object") kept.payload = a.action.endsWith("emission") ? pick(kept.payload, EMISSION_FIELDS) : pick(kept.payload, ["lines"]);
+  return { ...a, payload: kept };
+}
+/** A scoop is exported only once the founders have taken it up: not while `scooped`, and not once `passed` or `withdrawn`. */
+export const EXPORTABLE_STATES = Object.freeze(["picked-up", "scripted", "keyframed", "filmed", "published"]);
 /** What the file says it leaves out. */
 export const NOT_INCLUDED = Object.freeze([
   "the consent pass: every resident in the file still has to be checked against their likeness card before anyone is drawn",
@@ -131,7 +172,7 @@ export async function loadFromArchive(path, scoopId) {
   for (const f of files) await eachLine(f, (r) => { if (r.class === SCOOP_CLASS && r.object === scoopId) scoopActs.push(normaliseAct(r)); }, scoopId);
   const window = windowOf(scoopActs, scoopId);
   const keep = momentCollector(window);
-  for (const f of files) await eachLine(f, (r) => { if (MOMENT_SET.has(r.action)) keep.add(r); });
+  for (const f of files) await eachLine(f, (r) => { if (MOMENT_SET.has(r.action)) keep.add(r); });   // add() screens
   return { scoopActs, acts: keep.rows(), source: { kind: "notary-archive", path: resolve(path), files: files.length } };
 }
 
@@ -170,8 +211,8 @@ function momentCollector({ fromMs, toMs }) {
   const before = new Map();   // actor → the latest departure at or before the window's start
   return {
     add(r) {
-      if (!MOMENT_SET.has(r.action)) return;
-      const a = normaliseAct(r);
+      const a = screenAct(r);
+      if (!a) return;
       const t = msOf(a.at);
       if (t >= fromMs && t <= toMs) inside.push(a);
       if (t < fromMs && DEPARTURES.has(a.action) && a.actor) {
@@ -249,12 +290,14 @@ const imageOf = (m) => (typeof m?.image === "string" && m.image ? m.image : null
 export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = null, source = null, radius = DEFAULT_RADIUS_M, stepS = DEFAULT_STEP_S, at = null, now = Date.now() }) {
   const scoop = foldPostActs(scoopActs).posts.get(scoopId);
   if (!scoop) throw new Error(`no scoop "${scoopId}" in the acts given`);
+  if (!EXPORTABLE_STATES.includes(scoop.state))
+    throw new Error(`"${scoopId}" is ${scoop.state}, and the export reads a moment only for a moment the journalist takes up: ${scoop.state === "scooped" ? "advance it to picked-up first (town { do: \"advance\", args: { post, to: \"picked-up\" } })" : "a " + scoop.state + " scoop is not taken up"}`);
   const fromMs = msOf(scoop.starts), toMs = msOf(scoop.ends);
   const standing = marks.filter((m) => m.at && Number.isFinite(m.at.x) && Number.isFinite(m.at.y));
   const centres = new Map(standing.map((m) => [m.id, m.at]));
   const centreOf = (id) => centres.get(id) ?? null;
 
-  const moment = acts.filter((a) => MOMENT_SET.has(a.action));   // the privacy filter, again, on whatever the loader handed over
+  const moment = acts.map(screenAct).filter(Boolean);   // the privacy screen, again, on whatever the loader handed over
   const { by: deps, refused } = departuresOf(moment, walk);
 
   // the place
@@ -306,9 +349,9 @@ export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = 
     const objectInView = typeof a.object === "string" && nearIds.has(a.object);
     if ((spot && dist(spot, place) <= radius) || here(a.actor, t) || objectInView || (a.action === "leave-mark" && p?.at && dist(p.at, place) <= radius)) {
       kept.push(a);
-      if (a.action === "leave-mark" && p?.slug && !seenIds.has(p.slug)) {
-        seenIds.add(p.slug);
-        markRows.push({ id: p.slug, kind: p.kind ?? null, by: a.actor, at: p.at ?? null, extent: p.extent ?? null, image: typeof p.image === "string" ? p.image : null,
+      if (a.action === "leave-mark" && a.object && !seenIds.has(a.object)) {
+        seenIds.add(a.object);   // the act's own object is the mark's id, by/slug; the payload carries the bare slug and `by`
+        markRows.push({ id: a.object, kind: p.kind ?? null, by: p.by ?? a.actor, at: p.at ?? null, extent: p.extent ?? null, image: typeof p.image === "string" ? p.image : null,
           body: String(p.body ?? "").slice(0, 600), source: `act ${a.id}` });
       }
     } else if (!spot && a.at_anchor) unplaced.push(a.id);
@@ -357,10 +400,12 @@ export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = 
 
 // ── the command ─────────────────────────────────────────────────────────────
 
-const USAGE = `usage: node tools/moment-export.mjs --scoop <author/slug> --world <postmark-world checkout> (--acts <archives/acts dir or .jsonl> | --pg-url <postgres url>)
+const USAGE = `usage: node tools/moment-export.mjs --scoop <author/slug> --world <postmark-world checkout> (--acts <archives/acts dir or .jsonl> | --pg-url <postgres url, or MOMENT_PG_URL>)
        [--out <dir>] [--radius ${DEFAULT_RADIUS_M}] [--step ${DEFAULT_STEP_S}] [--at x,y]`;
 
-export function parseArgs(argv) {
+export const PG_URL_ENV = "MOMENT_PG_URL";
+
+export function parseArgs(argv, env = process.env) {
   const o = { radius: DEFAULT_RADIUS_M, step: DEFAULT_STEP_S, out: "." };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
@@ -375,6 +420,8 @@ export function parseArgs(argv) {
     else if (k === "--at") { const [x, y] = v().split(",").map(Number); o.at = { x, y }; }
     else throw new Error(`unknown argument ${k}\n${USAGE}`);
   }
+  // the store's address may come from the environment (a URL on the command line is in the process list); a flag beats it
+  if (!o.acts && !o.pgUrl && env[PG_URL_ENV]) o.pgUrl = env[PG_URL_ENV];
   if (!o.scoop || !o.world || (!o.acts && !o.pgUrl)) throw new Error(USAGE);
   if (o.acts && o.pgUrl) throw new Error(`name one source, --acts or --pg-url\n${USAGE}`);
   if (!(o.radius > 0) || !(o.step >= 1)) throw new Error(`--radius is metres above 0 and --step whole seconds from 1\n${USAGE}`);
