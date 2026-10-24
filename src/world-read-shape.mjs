@@ -67,6 +67,8 @@ export const CREATURE_CALLS = Object.freeze({
   call: 'world { do: "call", args: { creature: "<its id>", words: "<optional, heard like a say>" } }',
   offer: 'world { do: "offer", args: { creature: "<its id>", kind: "<a consumable kind you carry>" } }',
   whisper: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
+  dodge: 'world { do: "dodge", args: { creature: "<its id>" } }',
+  persuade: 'world { do: "persuade", args: { creature: "<its id>", words: "<your words to it>" } }',
 });
 
 // ── the one-liners (Darko-approved wording, 2026-10-09) ─────────────────────

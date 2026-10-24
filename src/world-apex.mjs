@@ -115,8 +115,8 @@ import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own v
 import { callHoldTool, holdingsOf, liveHolder, nearestIds } from "./world-hold.mjs";
 import { termsId, termsOnce } from "./terms-seen.mjs"; // POS-697 G5a: the law you were shown, named on a repeat act
 import { onlyUsable, canOn, viewMarkIds, CREATURE_VERBS } from "./usable-verbs.mjs"; // verbs show when usable (LOGOS v2, O2)
-import { worldCreature, creatureEntries, CREATURE_TOOLS, FIGHT_VERBS } from "./creature-verbs.mjs"; // a creature's afforded actions (POS-672)
-import { worldEncounter, encounterEntries, worldSpeakFor, SPEAK_FOR } from "./encounter-verbs.mjs"; // an encounter's verbs: strike, steady, shield; the live door
+import { worldCreature, creatureEntries, readCreatureVerb, CREATURE_TOOLS, FIGHT_VERBS } from "./creature-verbs.mjs"; // a creature's afforded actions (POS-672)
+import { worldEncounter, encounterEntries, readEncounterVerb, worldSpeakFor, SPEAK_FOR } from "./encounter-verbs.mjs"; // an encounter's verbs: strike, steady, shield; the live door
 import { ENCOUNTER_VERBS } from "./encounter.mjs";
 // The walk's pace, the resident class's own dial (WLD-29): read off the record
 // like every other departure's, never a constant here (decision 008b).
@@ -1983,6 +1983,15 @@ async function usableHere(args, key, oriented, nearby = []) {
   } catch { return null; }
 }
 
+/** The creature law and the living set the creature cards quote (blurb, class, fields), or none. */
+async function creatureCardContext() {
+  try {
+    const { creaturesForRead } = await import("./creatures-read.mjs");
+    const cr = await creaturesForRead();
+    return cr?.law && cr?.living ? { law: cr.law, living: cr.living } : {};
+  } catch { return {}; }
+}
+
 /** The creature columns of the matrix at a standpoint (creature-verbs.mjs § creaturePairs; encounter-verbs.mjs §
  *  encounterPairs, the residents near you being steady's and shield's objects), or none. */
 async function creaturePairsHere(who, here, residents = []) {
@@ -2786,7 +2795,12 @@ async function apexRead(args, key, ctx = {}) {
   const usable = await usableHere(args, key, oriented, nearby);
   if (usable) actions = onlyUsable(actions, usable);
   // a creature in sight lends its afforded actions (POS-672): each verb once, the creatures it reaches named
-  if (usable) actions = [...actions, ...creatureEntries(usable), ...encounterEntries(usable)];
+  // each card quotes the class mark's own words (its blurb) and names its fields, so the glance
+  // teaches the act and `read: "<verb>"` can answer for it (the 10-24 bug report)
+  if (usable) {
+    const cardContext = await creatureCardContext();
+    actions = [...actions, ...creatureEntries(usable, cardContext), ...encounterEntries(usable, cardContext)];
+  }
   // A visitor sees only what a visitor can do (POS-739; office AGENTS.md § The MCP surface): walk and say.
   if (isBerthHandle(standingHandle(args, key))) actions = actions.filter((e) => VISITOR_ACTS.includes(e.action));
 
@@ -3942,6 +3956,31 @@ async function apexReadAction(args, key, ctx = {}) {
     const renamed = findRenamed(fields.q == null ? "" : String(fields.q).trim());
     if (found?.error) return { ...found, read: FIND_READ, card: FIND_CARD, renamed };
     return { read: FIND_READ, card: FIND_CARD, ...found, renamed };
+  }
+
+  // A CREATURE'S AFFORDED ACTION, READ (the 2026-10-24 bug post): the bare read lists
+  // watch, approach and the rest under granted.here when a creature is in sight, and the
+  // act goes to its own door before the grant calculus (apexDo). Its shadow must go the
+  // same way: no ground or class at a standpoint grants it, so the calculus below can
+  // never find it, and answered "not an action anywhere in your view". Anything you can
+  // do, you can read; a read performs nothing (readCreatureVerb writes no row).
+  // THE TRAIN'S FIGHT AND ENCOUNTER VERBS go the way their acts go (apexDo), and only when the act does: dodge and persuade
+  // once the blessed law knows them (fightsLive), strike, steady, shield and the live line once it knows an encounter
+  // (encountersLive). Until then each read answers exactly as before, through the grant calculus below.
+  const readsHere = CREATURE_VERBS.includes(action) || (FIGHT_VERBS.includes(action) && await fightsLive());
+  const readsEncounter = !readsHere && (ENCOUNTER_VERBS.includes(action) || action === SPEAK_FOR) && await encountersLive();
+  if (readsHere || readsEncounter) {
+    // the act resolves `as` first (an unknown kind, an agent-held key, a human): so does the read
+    const asker = resolveHumanActor({ action, as: args.as, beside: args.beside, key, fence: "calculus" });
+    if (asker?.error) return asker;
+    if (asker) return bounce(422, "a creature's afforded actions are a resident's", 'read them as one of your residents (handle:), never as: "human".');
+    try {
+      const fields = { ...(envelope ?? {}), ...(args.handle ? { handle: args.handle } : {}) };
+      return await (readsEncounter ? readEncounterVerb(action, fields, key, ctx.creatureDeps ?? {}) : readCreatureVerb(action, fields, key, ctx.creatureDeps ?? {}));
+    } catch (e) {
+      if (!e?.code) throw e;
+      return { ...actCaught(e), read: action };
+    }
   }
 
   const oriented = await worldOrient(args, key, { roll: ctx.roll ?? [] }); // DEC-11: the town roll rides into `present`

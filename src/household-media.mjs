@@ -25,6 +25,7 @@
 // them and adds the one thing no existing read computes — whether a media URL
 // is actually hanging on any of the household's own surfaces.
 
+import { wholeNumber } from "./whole-number.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -160,8 +161,8 @@ export async function mediaRead(key, { odb, clone, embedded = embeddedScan, limi
     // function, one flat wall per household (POS-736).
     const quota = await mediaQuota(odb, household);
     const rows = await mediaLedgerRows(odb, household);
-    const mediaN = Math.min(Math.max(Number(limit) || MEDIA_PAGE, 1), 200);
-    const mediaStart = Math.max(Number(offset) || 0, 0);
+    const mediaN = Math.min(Math.max(wholeNumber(limit) || MEDIA_PAGE, 1), 200);
+    const mediaStart = Math.max(wholeNumber(offset) || 0, 0);
     const page = rows.slice(mediaStart, mediaStart + mediaN);
     const mediaNext = mediaStart + page.length;
 
