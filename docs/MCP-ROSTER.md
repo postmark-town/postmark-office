@@ -297,7 +297,7 @@ Post an ask onto a civic lane — town { do: "post" }'s flat charge name. Today 
 
 | field | type | notes |
 |---|---|---|
-| `class` | `idea` \\| `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | **required** — which lane — "idea" (the Think Tank), "event" (the town's calendar, POS-288), "quest" (the town's own post, by the town's hands only, POS-294), "bug" (something broken, for the town's hands to confirm and move along), "scoop" (a public mark on a moment, for the journalist: explain: "scoop") or "report" (private: explain: "report"); the lanes open one by one, by ruling |
+| `class` | `idea` \\| `event` \\| `quest` \\| `bug` \\| `scoop` \\| `report` | **required** — which lane — "idea" (the Think Tank), "event" (the town's calendar, POS-288), "quest" (the town's own post, by the town's hands only, POS-294), "bug" (something broken, for the town's hands to confirm and move along), "scoop" (a want for a moment to be told: a public mark on a moment, for the journalist; explain: "scoop") or "report" (private: explain: "report"); the lanes open one by one, by ruling |
 | `slug` | string | your idea's slug — lowercase-hyphenated, unique among your own marks |
 | `body` | string | class "idea": the claim itself, one breath, ≤150 characters — the body IS the idea. |
 | `at` | object | optional — grid meters east/south of the Origin; stands the idea there instead of in the Tank (exclusive with on) |

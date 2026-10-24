@@ -8,6 +8,9 @@
 //
 //   town { do: "post", args: { class: "scoop", title, starts, ends, body?, place? } }
 //
+// Posts are the town's wants, and a scoop is a want for a moment to be told (Darko and Wright, 2026-10-24 13:55):
+// a scoop asks the town to tell a moment: to turn something that happened into a richer telling.
+//
 // The window is `starts` to `ends` (the post's own span columns, the names
 // events already use); `body` is the scooper's note; `place` is where the
 // scooper stood ({ mark } or { at: { x, y } }, optional). The scooper is the
@@ -203,7 +206,7 @@ export function scoopHistoryOf(acts) {
 /** The class's whole law, for `town { explain: "scoop" }`. Docs, never data. */
 export const SCOOP_EXPLAIN = Object.freeze({
   explains: SCOOP_CLASS,
-  what: "a public post that marks a moment for content: a window of time, where you stood, and a note. Scoops feed the town's journalist, who may turn one into a short video",
+  what: "posts are the town's wants, and a scoop is a want for a moment to be told: a scoop asks the town to tell a moment: to turn something that happened into a richer telling. It is a public post that marks the moment: a window of time, where you stood, and a note. Scoops feed the town's journalist, who may turn one into a short video",
   post: SCOOP_POST_HOW,
   fields: Object.freeze({
     title: `the moment in a few words, at most ${TITLE_MAX} characters; its id is minted from it`,

@@ -303,6 +303,9 @@ test("9 · explain teaches the whole law, and the town door's class enums carry 
   const E = S.SCOOP_EXPLAIN;
   assert.equal(E.explains, "scoop");
   assert.match(E.post, /class: "scoop", title, starts, ends/);
+  assert.match(E.what, /posts are the town's wants, and a scoop is a want for a moment to be told/);
+  assert.match(E.what, /asks the town to tell a moment: to turn something that happened into a richer telling/);
+  assert.match((await import("../src/mcp.mjs")).TOOLS.find((t) => t.name === "town_post").description, /want for a moment to be told/);
   assert.match(E.window, /3 days/);
   assert.match(E.life, /published/);
   assert.match(E.public, /public post/);
