@@ -23,7 +23,7 @@ import { OFFICE_ROOT } from "./fixture-paths.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 
 // Seven numbers none of the repo's constants carry, so a fallback cannot pass.
-const RECORD = { earshot_m: 137, fade_min: 7, conversation_lull_min: 31, speak_every_s: 16, text_max: 501, hear_max: 21, presence_min: 17 };
+const RECORD = { earshot_m: 137, fade_min: 7, speak_every_s: 16, text_max: 501, hear_max: 21, presence_min: 17 };
 const TABLES = {
   meta: [
     { key: "as_of_world", value: "a".repeat(40) }, { key: "as_of_office", value: "b".repeat(40) },

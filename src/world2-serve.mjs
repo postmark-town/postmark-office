@@ -95,7 +95,7 @@ import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 // The CANDLE'S OWN escrow reader, not a second one — § THE DOCKET ROW says why.
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
-import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, heldPlaced } from "./world.mjs";
+import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, heldPlaced } from "./world.mjs";
 import { hearable } from "./hearing-window.mjs";
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
@@ -681,7 +681,7 @@ export function heightsUnreadBounce(e, lawSha) {
     hint: `the world engine reads every height from the skeleton's elevation dials, and the law this window is pinned to carries none (no region anchors, or no river_fall_m). It answers again once the window's law pin carries them.` };
 }
 
-export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, eng: injectedEngine = null } = {}) {
+export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, settlements = settlementsKnown, eng: injectedEngine = null } = {}) {
   if (!world2ServeEnabled()) return null;
   const p = injected ?? await pool();
 
@@ -1272,15 +1272,24 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     ]);
     const centres = talk.anchorCentres(markRows);
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
+    // WHERE A THREAD SPLITS (POS-779): the settlements the office knows, plus the
+    // window open at the instant asked. A settlement is the ONLY edge a thread has.
+    const settlementEdges = (ms) => {
+      let list = [];
+      try { list = settlements() ?? []; } catch { list = []; }
+      let since = null;
+      try { since = hearingWindow(ms)?.since ?? null; } catch { since = null; }
+      return [...new Set([...list, ...(Number.isFinite(since) ? [since] : [])])].filter((m) => m <= ms);
+    };
     let derived;
     try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } }; }
     const body = talk.conversationsOf(derived.voices, {
       now: at.ms,
       earshotM: dials.earshot_m.value,
-      closeMs: dials.conversation_lull_min.ms,
+      boundaries: settlementEdges(at.ms),
       fadeMs: dials.fade_min.ms,
-      closedMax: n("closed", 40), voiceCap: n("voices", 80),
+      closedMax: n("closed", 40), voiceCap: n("voices", 200),
     });
     const fellBack = talk.sayDialsDisclosure(dials);
     const unplacedLine = talk.unplacedDisclosure(derived.unplaced);

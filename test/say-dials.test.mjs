@@ -57,12 +57,12 @@ const storeHasSay = haveStore && (() => {
   } catch { return false; }
 })();
 
-// The seven slots speech reads, and the values the RECORD carries for them —
+// The six slots speech reads, and the values the RECORD carries for them —
 // read here by the test's own SQL over the say class's predicate children, not
 // pinned: these numbers are law, and a copy of law in a test is a copy that
 // decays (it did: this file asserted fade_min 5 for weeks after the record said
 // 15, unseen, because it only ever ran beside a hand-hydrated world.db).
-const SLOTS = ["earshot_m", "fade_min", "conversation_lull_min", "speak_every_s", "text_max", "hear_max", "presence_min"];
+const SLOTS = ["earshot_m", "fade_min", "speak_every_s", "text_max", "hear_max", "presence_min"];
 // A dial's node, in EITHER form the record has filed it: a `kind: predicated`
 // child (`slot:`, `value:`; W2 spells it `kind: predicate`) or, under LOGOS v2's
 // W2 world, a `kind: property` node named by its key (`name:`, `default:`).
@@ -84,8 +84,8 @@ const SAY_ROWS = DB == null ? [] : (() => {
 const EXPECTED = Object.fromEntries(SAY_ROWS.filter((r) => SLOTS.includes(String(r.slot))).map((r) => [String(r.slot), Number(r.value)]));
 
 describe("the say dials, read off the live world store", { skip: storeHasSay ? false : `no world checkout carrying the-town/say at its newest blessing (${NO_WORLD || "the record lacks it"}) — skipping rather than passing on a fallback, which is the bug this file exists to catch` }, () => {
-  test("every one of speech's seven numbers reads from the record", () => {
-    assert.deepEqual(Object.keys(EXPECTED).sort(), [...SLOTS].sort(), "the record does not carry all seven of speech's slots");
+  test("every one of speech's six numbers reads from the record", () => {
+    assert.deepEqual(Object.keys(EXPECTED).sort(), [...SLOTS].sort(), "the record does not carry all six of speech's slots");
     const preds = classPredicates(SAY_CLASS_NAME);
     for (const [slot, want] of Object.entries(EXPECTED)) {
       const d = dialNumber(SAY_CLASS_NAME, slot, -1, { min: 0 });
@@ -100,7 +100,9 @@ describe("the say dials, read off the live world store", { skip: storeHasSay ? f
     const v = await import("../src/voices.mjs");
     assert.equal(v.EARSHOT_M, EXPECTED.earshot_m);
     assert.equal(v.FADE_MS, EXPECTED.fade_min * 60_000);
-    assert.equal(v.CLOSE_MS, EXPECTED.conversation_lull_min * 60_000);
+    // conversation_lull_min is RETIRED (POS-779): CLOSE_MS is a constant now, the retry key's window, and no dial
+    assert.equal(v.CLOSE_MS, 30 * 60_000);
+    assert.equal(Object.hasOwn(v.SAY_DIALS, "conversation_lull_min"), false, "the retired dial is not read");
     assert.equal(v.SPEAK_EVERY_MS, EXPECTED.speak_every_s * 1000);
     assert.equal(v.PRESENCE_MS, EXPECTED.presence_min * 60_000);
     assert.equal(v.TEXT_MAX, EXPECTED.text_max);
@@ -200,7 +202,7 @@ test("classDials reads frontmatter and properties — predicates are their own q
   // over the frontmatter `dials:` (law-classes § dialsOf), so "frontmatter only"
   // no longer holds on a world whose say class files its dials as property
   // nodes. What still holds on every world: a PREDICATE child is never a dial.
-  // On a world that files the seven as predicated children (the pin CI reads)
+  // On a world that files the six as predicated children (the pin CI reads)
   // none of them is in classDials; on W2, where they are properties, each is,
   // at its default.
   const dials = classDials(SAY_CLASS_NAME);
