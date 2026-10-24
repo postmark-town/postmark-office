@@ -21,7 +21,7 @@ import { LivingSet, loadCreatureLaw } from "../src/creatures.mjs";
 import { windowAt } from "../src/encounter.mjs";
 import { PHASE_ACTION, HURL_ACTION, PERSUADE_ACTION } from "../src/set-pieces.mjs";
 import { FIGHT_VERBS, creatureEntries, creaturePairs, worldCreature, readCreatureVerb } from "../src/creature-verbs.mjs";
-import { ENCOUNTER_CALLS, encounterEntries, encounterPairs, readEncounterVerb } from "../src/encounter-verbs.mjs";
+import { ENCOUNTER_CALLS, classOfVerb, encounterEntries, encounterPairs, readEncounterVerb, worldEncounter, worldSpeakFor } from "../src/encounter-verbs.mjs";
 import { __setCreaturesForTest } from "../src/creatures-hook.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
@@ -310,7 +310,8 @@ test("the bare read's encounter cards carry blurb, blurb_from, class and fields 
   assert.deepEqual(entries.map((e) => e.action), ["strike", "steady", "shield"]);
   for (const e of entries) {
     assert.ok(e.blurb.length > 10, `${e.action}: an empty blurb is the bug`);
-    assert.ok(e.blurb_from && e.class, e.action);
+    assert.ok(e.blurb_from, e.action);
+    assert.equal(e.class, undefined, `${e.action}: no class mark grants it at this law, and a module name is not a class`);
     assert.ok(Object.keys(e.fields).length >= 2, e.action);
   }
   assert.deepEqual(Object.keys(entries[0].fields).sort(), ["creature", "handle"]);
@@ -342,8 +343,107 @@ test("a creature behind its room's wall reads can:false with the act's own reaso
   assert.match(p.creatures[0].why_not, /beyond the walls/);
   const s = await worldApex({ read: "strike" }, KEY, { creatureDeps: seams(law, living2, { here: behind }).deps });
   assert.equal(s.creatures[0].can, false);
+  assert.match(s.creatures[0].why_not, /beyond the walls of the room you stand in, and a strike is from inside its ring/);
+  const struck = await worldEncounter({ act: "strike", creature: ID }, KEY, seams(law, living2, { here: behind }).deps).catch((e) => e);
+  assert.equal(struck.code, 409);
+  assert.equal(s.creatures[0].why_not, struck.defect, "the read says the act's own words");
   // inside the room, the same creature reads can:true
   const inside = await readCreatureVerb("watch", {}, KEY, seams(law, living, { here: { x: 3, y: 0 } }).deps);
   assert.equal(inside.creatures[0].can, true, inside.creatures[0].why_not);
   assert.ok(nothingDone(calls));
+});
+
+// ── the strike read and a set piece with no fight file ──────────────────────
+
+test("a strike on a set-piece creature whose fight file is not law reads can:false with the act's reason, and the act refuses it with the same words", async () => {
+  const law = { ...lawWith(), fightOf: () => null }; // the kind says fight: but the blessed ref has no such file
+  const living = livingOf(law);
+  const { worldApex } = await apexWith(living);
+  const { deps, calls } = seams(law, living);
+  const r = await worldApex({ read: "strike" }, KEY, { creatureDeps: deps });
+  assert.equal(r.error, undefined, r.defect);
+  assert.equal(r.creatures[0].can, false);
+  assert.match(r.creatures[0].why_not, /fight cannot be read here/);
+  const act = seams(law, living);
+  const refused = await worldEncounter({ act: "strike", creature: ID }, KEY, act.deps).catch((e) => e);
+  assert.equal(refused.code, 409);
+  assert.equal(r.creatures[0].why_not, refused.defect, "read and act say the same words");
+  assert.ok(nothingDone(calls) && nothingDone(act.calls));
+  // with its fight file in the law, the same strike reads can:true
+  const ok = await readEncounterVerb("strike", {}, KEY, seams(lawWith(), living).deps);
+  assert.equal(ok.creatures[0].can, true, ok.creatures[0].why_not);
+});
+
+// ── the read cards' class ────────────────────────────────────────────────────
+
+test("an encounter card's class is the class mark that grants the verb, and is left off when no mark does (never a module name)", async () => {
+  const law = lawWith();
+  const living = livingOf(law);
+  assert.equal(classOfVerb(law, "strike"), null);
+  const granting = { ...law, afforded: { fighter: [{ action: "strike", from_class: "the-town/creature", who: "anyone", from: "ring", effect: "x" }] } };
+  assert.equal(classOfVerb(granting, "strike"), "the-town/creature");
+  const pairs = encounterPairs({ here: SPOTS.kai, actor: "kai", living, law, residents: [{ handle: "ren", at: SPOTS.ren }], env: ENV });
+  const entries = encounterEntries(pairs, { law: granting, living, now: NOW });
+  assert.equal(entries.find((e) => e.action === "strike").class, "the-town/creature");
+  assert.equal(entries.find((e) => e.action === "steady").class, undefined, "only the verb a mark grants");
+  const read = await readEncounterVerb("strike", {}, KEY, seams(granting, living).deps);
+  assert.equal(read.card.class, "the-town/creature");
+  assert.equal(read.card.terms.binds.class, "the-town/creature");
+  const bare = await readEncounterVerb("strike", {}, KEY, seams(law, living).deps);
+  assert.equal(bare.card.class, undefined);
+  assert.equal(bare.card.terms.binds.class, undefined);
+});
+
+// ── speak-for ───────────────────────────────────────────────────────────────
+
+const TEMPTER = NO_WORLD ? null : { ...BASE.kindOf("fighter"), finishable: true, resolve: 40, strike: 2, tempts: "tempter.menu.json", who: "tess" };
+const tempterLaw = ({ lint = true } = {}) => (NO_WORLD ? null : { ...lawWith(), kindOf: (n) => (n === "fighter" ? TEMPTER : null), fightOf: () => null,
+  temptsMod: lint ? { lintWhisper: () => ({ ok: true }), TEMPT_ACTS: ["walk"] } : {} });
+const TESS = { handles: new Set(["tess"]), household: "hh:tess" }; // the one who speaks for it; she has no standpoint, sight or nerve in these seams
+
+test("speak-for reads what the live door judges: who speaks for it, and who stands in its ring; no standpoint, sight or nerve of the speaker", async () => {
+  const law = tempterLaw();
+  const living = livingOf(law);
+  const { deps } = seams(law, living); // tess has no standpoint here: the door never asks for it
+  // bare: every creature that tempts, judged by who speaks for it (the ring needs a resident)
+  const bare = await readEncounterVerb("speak-for", {}, TESS, deps);
+  assert.deepEqual(bare.creatures.map((c) => [c.id, c.can]), [[ID, true]], JSON.stringify(bare.creatures));
+  assert.equal(bare.residents, undefined, "not the steady/shield rows");
+  assert.equal(bare.card.action, "speak-for");
+  assert.deepEqual(Object.keys(bare.card.fields).sort(), ["creature", "handle", "resident", "text"]);
+  const notHer = await readEncounterVerb("speak-for", {}, KEY, deps);
+  assert.equal(notHer.creatures[0].can, false);
+  const act403 = await worldSpeakFor({ creature: ID, resident: "ren", text: "hello" }, KEY, seams(law, living).deps).catch((e) => e);
+  assert.equal(act403.code, 403);
+  assert.equal(notHer.creatures[0].why_not, act403.defect, "the read says the act's own words");
+  // creature + resident: the ring, and the act's own words
+  for (const [resident, can] of [["ren", true], ["far", false]]) {
+    const r = await readEncounterVerb("speak-for", { creature: ID, resident }, TESS, deps);
+    assert.deepEqual(r.creatures.map((c) => [c.id, c.resident, c.can]), [[ID, resident, can]], JSON.stringify(r.creatures));
+    const act = seams(law, living);
+    const done = await worldSpeakFor({ creature: ID, resident, text: "hello" }, TESS, { ...act.deps, jevLint: async () => true, writeLive: async () => ({ rows: [] }) }).catch((e) => e);
+    if (can) assert.equal(done.said, true, "the act agrees: it speaks");
+    else { assert.equal(done.code, 409); assert.equal(r.creatures[0].why_not, done.defect); }
+  }
+  // a resident alone: judged against every creature that tempts
+  const one = await readEncounterVerb("speak-for", { resident: "ren" }, TESS, deps);
+  assert.deepEqual(one.creatures.map((c) => [c.id, c.resident, c.can]), [[ID, "ren", true]]);
+});
+
+test("speak-for reads can:false with the act's words when the law has no whisper-lint, and 404 when no creature that tempts is out", async () => {
+  const lawNoLint = tempterLaw({ lint: false });
+  const living = livingOf(lawNoLint);
+  const r = await readEncounterVerb("speak-for", { creature: ID, resident: "ren" }, TESS, seams(lawNoLint, living).deps);
+  assert.equal(r.creatures[0].can, false);
+  const act = await worldSpeakFor({ creature: ID, resident: "ren", text: "hello" }, TESS, seams(lawNoLint, living).deps).catch((e) => e);
+  assert.equal(act.code, 409);
+  assert.equal(r.creatures[0].why_not, act.defect);
+  assert.match(act.defect, /not law yet/);
+  // a creature that does not tempt: the act says 404, and so does the read
+  const plain = lawWith();
+  const living2 = livingOf(plain);
+  const gone = await readEncounterVerb("speak-for", { creature: ID }, TESS, seams(plain, living2).deps).catch((e) => e);
+  assert.equal(gone.code, 404);
+  const actGone = await worldSpeakFor({ creature: ID, resident: "ren", text: "hi" }, TESS, seams(plain, living2).deps).catch((e) => e);
+  assert.equal(gone.defect, actGone.defect);
 });
