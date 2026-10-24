@@ -260,21 +260,42 @@ test("the tick spawns each declaration once ever, at its own place, from its cro
 
 // ── the ending ──────────────────────────────────────────────────────────────
 
-nodeTest("took part (D1, settled 2026-10-21): every act it answered, aimed or only in its ring; aimed acts on the other reading; finishers always", () => {
+nodeTest("took part (D1 option A, ruled 2026-10-24, WLD-5/t): only residents whose acts were AIMED at it; presence alone never counts; finishers always", () => {
   const answered = [
-    { act_id: "10", actor: "lu", object: "some/mark", approach: null },  // in its ring, not aimed
+    { act_id: "10", actor: "lu", object: "some/mark", approach: null },  // a passer-by: in its ring, aimed elsewhere
     { act_id: "11", actor: "bo", object: ID, approach: null },           // aimed
     { act_id: "12", actor: "ze", object: null, approach: ID },           // a walk toward it
     { act_id: "13", actor: "bo", object: ID, approach: null },
     { act_id: "14", actor: "the-town", object: ID, approach: null },
+    { act_id: "15", actor: "ivy", object: "creature:another", approach: null }, // aimed at a different creature
   ];
   const finishers = [{ by: "kai", act_id: "20", act_actor: "kai" }];
-  assert.equal(TOOK_PART.value, "answered");
-  assert.match(TOOK_PART.ruled, /settled by Wright/);
+  assert.equal(TOOK_PART.value, "aimed");
+  assert.match(TOOK_PART.ruled, /ruled by Darko 2026-10-24/);
   assert.equal(NAMES_SHOWN.value, 12);
   assert.match(NAMES_SHOWN.ruled, /settled by Wright/);
-  assert.deepEqual(tookPart(ID, answered, finishers), ["lu", "bo", "ze", "kai"], "lu acted only in its ring, and it answered: lu took part");
-  assert.deepEqual(tookPart(ID, answered, finishers, { mode: "aimed" }), ["bo", "ze", "kai"]);
+  // RED BEFORE (the default was "answered"): ["lu", "bo", "ze", "ivy", "kai"], every passer-by named
+  assert.deepEqual(tookPart(ID, answered, finishers), ["bo", "ze", "kai"], "lu and ivy were only in its ring; the finisher is always named");
+  assert.deepEqual(tookPart(ID, answered, finishers, { mode: "answered" }), ["lu", "bo", "ze", "ivy", "kai"], "the superseded reading, still one switch");
+});
+
+nodeTest("an ending names the aimed, not the bystander: an aimed actor who never finished is named, the finisher always is", () => {
+  const spawn = { object: ID, payload: { kind: "wolf", x: 1, y: 2 } };
+  // bo watched it and never finished; lu walked through its ring on the way elsewhere; kai finished it with no other act on the record
+  const answered = [
+    { act_id: "10", actor: "lu", object: "some/mark", approach: null },
+    { act_id: "11", actor: "bo", object: ID, approach: null },
+  ];
+  const finishers = [{ by: "kai", act_id: "20", act_actor: "kai" }];
+  const plan = planEnding({ spawn, finishers, answered, settlement: 300, cutoff: "2026-10-26T18:00:00.000Z" });
+  assert.deepEqual(plan.took_part, ["bo", "kai"], "bo is named though he never finished; lu is not named though he stood in the ring");
+  assert.equal(plan.finisher, "kai");
+  assert.match(plan.line, /bo took part/);
+  assert.doesNotMatch(plan.line, /lu/);
+});
+
+nodeTest("the aimed read is on the record: ANSWERED_SQL also takes acts whose object is the creature, answered or not", () => {
+  assert.match(ANSWERED_SQL, /a\.object = \$1/);
 });
 
 nodeTest("the first finisher is the lowest act id, by record order, never the order the finish rows were written", () => {
