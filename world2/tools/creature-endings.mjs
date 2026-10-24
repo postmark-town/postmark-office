@@ -94,8 +94,9 @@ export const FINISHES_SQL = `SELECT f.payload->>'by' AS by, t.id::text AS act_id
   ORDER BY t.id`;
 /**
  * The acts it answered, and the acts aimed at it, before the cutoff ($2): whose,
- * and what each was aimed at. The second half is what makes "aimed" complete: an
- * act whose object is the creature counts whether or not a reaction row followed.
+ * and what each was aimed at. The second and third are what make "aimed" complete:
+ * an act whose object is the creature, and a walk toward it, count whether or not
+ * a reaction row followed.
  */
 export const ANSWERED_SQL = `SELECT act_id, actor, object, approach FROM (
     SELECT t.id AS id, t.id::text AS act_id, t.actor, t.object, t.payload->>'approach' AS approach FROM acts r
@@ -104,6 +105,14 @@ export const ANSWERED_SQL = `SELECT act_id, actor, object, approach FROM (
     UNION
     SELECT a.id, a.id::text, a.actor, a.object, a.payload->>'approach' FROM acts a
       WHERE a.object = $1 AND a.at < $2 AND a.actor <> '${TOWN}' AND a.actor <> $1
+    UNION
+    -- a walk toward it (an approach) names the creature in its payload, not its object. Bounded by
+    -- the move class's index (class, id) from the creature's own spawn row on, with no new index:
+    -- only walks since it appeared are read, and only the approaches among them are kept.
+    SELECT w.id, w.id::text, w.actor, w.object, w.payload->>'approach' FROM acts w
+      WHERE w.class = 'move' AND w.action = 'walk' AND w.at < $2 AND w.actor <> '${TOWN}'
+        AND w.id >= COALESCE((SELECT min(s.id) FROM acts s WHERE s.object = $1 AND s.class = '${CREATURE}' AND s.action = 'spawn'), 9223372036854775807)
+        AND w.payload->>'approach' = $1
   ) x ORDER BY id`;
 /**
  * A CREATURE THAT TEMPTS ends by its two tallies over the window the settlement
