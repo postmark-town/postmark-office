@@ -17,7 +17,7 @@
 //      `published` needs the video's YouTube link and no other stage takes one;
 //      a finished scoop moves no further;
 //   6. its scooper amends the title and the note, never the window or the
-//      place; a stranger cannot; a hand can;
+//      place; a stranger and a hand cannot;
 //   7. its scooper withdraws it (`close`); nobody else can; it stays on the record;
 //   8. the rebuild folds the scoop acts into exactly the rows the pen wrote;
 //   9. the explain text teaches the whole law, and the town door's class enums
@@ -161,7 +161,7 @@ test("1 · a resident scoops a moment in public: a scooped row, an anchored act,
 
 // ── 2 · the window ──────────────────────────────────────────────────────────
 
-test("2 · the window: an instant with its zone, a moment that has happened, at most 3 days back, at most 30 minutes long", async () => {
+test("2 · the window: an instant with its zone, a moment that has happened, at most 3 days back, and no cap on its length", async () => {
   const { pen } = setup();
   const w = (starts, ends) => post({ ...MOMENT, starts, ends });
   await refusedWith(w("yesterday", at(NOW)), 422, /starts is not an instant/);
@@ -169,12 +169,14 @@ test("2 · the window: an instant with its zone, a moment that has happened, at 
   await refusedWith(w(at(NOW - 5 * MIN), at(NOW - 5 * MIN)), 422, /ends after it starts/);
   await refusedWith(w(at(NOW - 5 * MIN), at(NOW + 10 * MIN)), 422, /marks a moment that has happened/);
   await refusedWith(w(at(NOW - 3 * DAY - MIN), at(NOW - 3 * DAY + 5 * MIN)), 422, /points back at most 3 days/);
-  await refusedWith(w(at(NOW - 40 * MIN), at(NOW - 5 * MIN)), 422, /at most 30 minutes/);
   assert.equal(pen.rows().length, 0, "every refusal wrote nothing");
   // the edges stand: exactly 3 days back, exactly the cap, a minute of clock skew ahead
   await w(at(NOW - 3 * DAY), at(NOW - 3 * DAY + 30 * MIN));
+  // no cap on the length: one arc we can tell, a full settlement (12 h) and more
+  await post({ ...MOMENT, title: "The whole afternoon", starts: at(NOW - 2 * DAY), ends: at(NOW - 2 * DAY + 12 * 60 * MIN) });
+  await post({ ...MOMENT, title: "Two settlements and a bit", starts: at(NOW - 2.5 * DAY), ends: at(NOW - 2 * DAY + 60 * MIN) });
   await post({ ...MOMENT, title: "Just now", starts: at(NOW - 2 * MIN), ends: at(NOW + 30_000) });
-  assert.equal(pen.rows().length, 2);
+  assert.equal(pen.rows().length, 4);
 });
 
 // ── 3 · the cap ─────────────────────────────────────────────────────────────
@@ -209,7 +211,7 @@ test("4 · the read answers the moment (note, window, place), the history and th
   assert.deepEqual(one.place, { mark: null, x: 100, y: -50 });
   assert.equal(one.fields.video_url, VIDEO);
   assert.deepEqual(one.history.map(({ at: _at, ...h }) => h), [
-    { stage: "scooped", state: "scooped", hand: null, link: null, note: null },
+    { stage: "scooped", state: "scooped", hand: "errant", link: null, note: null },
     { stage: "picked-up", state: "picked-up", hand: "wright", link: null, note: "The journalist has it." },
     { stage: "published", state: "published", hand: "keemin", link: VIDEO, note: null },
   ]);
@@ -246,7 +248,7 @@ test("5 · the hands move a scoop to any stage in any order; published needs the
 
 // ── 6 · amend ───────────────────────────────────────────────────────────────
 
-test("6 · the scooper amends the title and the note, never the window or the place; a stranger cannot, a hand can; a finished scoop is not amended", async () => {
+test("6 · the scooper alone amends the title and the note, never the window or the place; a stranger and a hand cannot; a finished scoop is not amended", async () => {
   const { posts } = setup();
   await post();
   const a = await amendAtTown({ post: ID, body: "Ada lit it; the quay cheered." }, ERRANT, { now: NOW, env: process.env });
@@ -257,8 +259,8 @@ test("6 · the scooper amends the title and the note, never the window or the pl
     await refusedWith(amendAtTown({ post: ID, [f]: f === "place" ? { at: { x: 1, y: 1 } } : at(NOW) }, ERRANT, { now: NOW, env: process.env }), 422, /is not amended/);
   await refusedWith(amendAtTown({ post: ID, title: "Mine now" }, FINN, { now: NOW, env: process.env }), 403, /not yours to amend/);
   await refusedWith(amendAtTown({ post: ID, body: "Ada lit it; the quay cheered." }, ERRANT, { now: NOW, env: process.env }), 422, /nothing to amend/);
-  const byHand = await amendAtTown({ post: ID, title: "The quay lantern" }, WRIGHT, { now: NOW, env: process.env });
-  assert.equal(byHand.post.title, "The quay lantern");
+  await refusedWith(amendAtTown({ post: ID, title: "The quay lantern" }, WRIGHT, { now: NOW, env: process.env }), 403, /only they change its title or note.*passed/s);
+  assert.equal(posts.get(ID).title, MOMENT.title, "a hand does not amend another resident's scoop");
   assert.equal(posts.get(ID).id, ID, "the id is never re-minted");
   await advance({ post: ID, to: "passed" });
   await refusedWith(amendAtTown({ post: ID, title: "Late" }, ERRANT, { now: NOW, env: process.env }), 409, /finished \(passed\)/);

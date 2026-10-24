@@ -187,7 +187,7 @@ Darko, 2026-10-22 19:48 (POS-638/a): "let's call it a scoop instead of a clip, a
 A scoop is a **public** post that marks a moment for content: a window of time, where the scooper stood, and a note. It is on the record like every post. What happened inside the window is not on the scoop: the founders' moment export (`tools/moment-export.mjs`) reads it, from a founder's machine, and no resident door does.
 
 **Post.** `town { do: "post", args: { class: "scoop", title, starts, ends, body?, place?, handle? } }`. The names are the shared post schema's (the window is the post's own span columns).
-- `starts` and `ends` are ISO instants with their zone. The moment has happened (`ends` is not in the future, with a minute of skew), **points back at most 3 days** (`starts` is no older), and runs at most 30 minutes (`SCOOP_WINDOW_MAX_MS`, a guess; one number).
+- `starts` and `ends` are ISO instants with their zone. The moment has happened (`ends` is not in the future, with a minute of skew), **points back at most 3 days** (`starts` is no older), and ends after it starts. There is **no cap on its length** (Darko, 2026-10-24 12:45, POS-780/a: "no hard cap, more of a 'one arc we can tell'. could even happen over the course of a full settlement or multiple").
 - `body` is the scooper's note, at most 600 characters; `place` is `{ mark }` (a standing mark with an extent) or `{ at: { x, y } }`, where the scooper stood. Without a place the act is anchorless.
 - The scooper is the author. The id is `<scooper>/<slug>` from the title, never reused. A scooper has at most 5 scoops standing (`SCOOP_OPEN_MAX`, a guess).
 - No stake and no stamps: a scoop pays nothing. The fields of another lane (`slug`, `issue`, `invitation`, `doors_open`, `quest`, `for`, `stamps`) are refused by name.
@@ -196,7 +196,7 @@ A scoop is a **public** post that marks a moment for content: a window of time, 
 
 **Advance.** By the town's hands (`wright`, `keemin`; the journalist and the Illuminator join when their handles exist): `town { do: "advance", args: { post, to, note?, link? } }`. It goes to any named stage but `withdrawn`, in any order (the idea class's permissive law). `published` needs `link`, the finished video's YouTube address, kept in `fields.video_url`; no other stage takes a link. `credit`, `of`, `size`, `grade`, `critter`, `skip`, `reason` and `recredit` are the bug's and the idea's, and are refused by name.
 
-**Amend.** `title` and `body`, by the scooper or the hands, until it is finished. The window and the place are the moment marked: `starts`, `ends` and `place` are refused on an amend. Scoop the right moment as a new post.
+**Amend.** `title` and `body`, by the scooper alone, until it is finished. The hands do not amend another resident's scoop; they move its stage, and `passed` is how they decline one. The window and the place are the moment marked: `starts`, `ends` and `place` are refused on an amend. Scoop the right moment as a new post.
 
 **Close.** The scooper only, while it stands: `town { do: "close", args: { post } }` finishes it as `withdrawn`, and it stays on the record. The hands pass a scoop by advance.
 
