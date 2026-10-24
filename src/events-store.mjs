@@ -35,6 +35,7 @@ import { householdKeyFor } from "./world2-claims.mjs";
 import { holdsHand } from "./named-hand.mjs";
 import { sessionKeysVia } from "./household-deriver.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import { apiUrl } from "./public-base.mjs";
 import { wakesNote, earpieceEnabled } from "./earpiece.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import {
@@ -63,8 +64,8 @@ import {
 // are read-only views for the readers that have not moved (the earpiece, the
 // pinned board); nothing here reads or writes them.
 export const POST_COLUMNS = "id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act";
-const READ_HINT = (id) => `town { read: "calendar", args: { event: "${id}" } } — or GET /calendar/${id}`;
-const POST_READ_HINT = (id) => `town { read: "event", args: { post: "${id}" } } — or GET /calendar/${id}`;
+const READ_HINT = (id) => `town { read: "calendar", args: { event: "${id}" } } — or GET ${apiUrl(`/calendar/${id}`)}`;
+const POST_READ_HINT = (id) => `town { read: "event", args: { post: "${id}" } } — or GET ${apiUrl(`/calendar/${id}`)}`;
 
 const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === "string";
 
@@ -466,7 +467,7 @@ function questActRow({ action, object, payload, now }) {
   };
 }
 
-const questReadHint = (id) => `town { read: "posts", args: { class: "quest", post: "${id}" } } — or GET /posts/${id}`;
+const questReadHint = (id) => `town { read: "posts", args: { class: "quest", post: "${id}" } } — or GET ${apiUrl(`/posts/${id}`)}`;
 const questAnswer = (row) => ({ id: row.id, class: QUEST_CLASS, author: row.author, household: row.household ?? null, state: row.state, fields: row.fields });
 
 /** Put a registry quest up as the town's post: one `post` act, one `posts` row. */
@@ -560,7 +561,7 @@ function bugActRow({ action, actor, object, payload, now }) {
   };
 }
 
-const bugReadHint = (id) => `town { read: "posts", args: { class: "bug", post: "${id}" } } — or GET /posts/${id}?class=bug`;
+const bugReadHint = (id) => `town { read: "posts", args: { class: "bug", post: "${id}" } } — or GET ${apiUrl(`/posts/${id}?class=bug`)}`;
 const bugAnswer = (row) => ({ id: row.id, class: BUG_CLASS, title: row.title, body: row.body, author: row.author,
   household: row.household ?? null, state: row.state, fields: row.fields });
 

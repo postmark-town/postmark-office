@@ -1389,3 +1389,24 @@ test("16 · the advance card teaches the skip, and the door's validator takes { 
   assert.match(card.inputSchema.properties.skip.description, /confirmed, reproduced, diagnosed, briefed, fixed/);
   assert.match(card.inputSchema.properties.reason.description, /with skip only, and required there/);
 });
+
+// ── POS-777 · the read hint is an absolute url ──────────────────────────────
+
+test("POS-777 · a bug post's post / advance / amend answers end `read` with the ABSOLUTE https://postmark.town/api/posts/<id>?class=bug, built from PUBLIC_BASE", async () => {
+  setup();
+  const want = `https://postmark.town/api/posts/${ID}?class=bug`;
+  const r = await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  assert.ok(r.read.endsWith(`— or GET ${want}`), r.read);
+  const m = await amendAtTown({ post: ID, body: "The front door of the post office does not open on the second try, or the third." }, ERRANT, { now: NOW, roll: ROLL });
+  assert.ok(m.read.endsWith(`— or GET ${want}`), m.read);
+  const a = await advanceAtTown({ post: ID, to: "confirmed" }, WRIGHT, { now: NOW, roll: ROLL });
+  assert.ok(a.read.endsWith(`— or GET ${want}`), a.read);
+  assert.doesNotMatch(a.read, /GET \/posts/, "no bare relative path left in the hint");
+  // one place builds it: the office's own PUBLIC_BASE, read when the answer is made
+  const prev = process.env.PUBLIC_BASE;
+  process.env.PUBLIC_BASE = "https://staging.example/api/";
+  try {
+    const hint = (await amendAtTown({ post: ID, body: "Again, with a different base." }, WRIGHT, { now: NOW, roll: ROLL })).read;
+    assert.ok(hint.endsWith(`— or GET https://staging.example/api/posts/${ID}?class=bug`), hint);
+  } finally { if (prev === undefined) delete process.env.PUBLIC_BASE; else process.env.PUBLIC_BASE = prev; }
+});

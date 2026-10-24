@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { officeRead, officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
+import { apiUrl } from "./public-base.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import {
   refuse, applyPostAct, slugFromTitle, ACT_POST, ACT_AMEND_POST, ACT_ADVANCE, ACT_SIGN_UP, ACT_WITHDRAW_SIGN_UP,
@@ -78,7 +79,7 @@ function actRow({ action, actor, object, payload, now }) {
   };
 }
 
-const readHint = (id) => `town { read: "posts", args: { class: "idea", post: "${id}" } } — or GET /posts/${id}?class=idea`;
+const readHint = (id) => `town { read: "posts", args: { class: "idea", post: "${id}" } } — or GET ${apiUrl(`/posts/${id}?class=idea`)}`;
 const answerOf = (row) => ({ id: row.id, class: IDEA_CLASS, title: row.title, body: row.body, author: row.author,
   household: row.household ?? null, state: row.state, fields: row.fields });
 

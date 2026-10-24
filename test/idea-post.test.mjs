@@ -484,3 +484,17 @@ test("the flat tools: town_sign_up, town_answer_sign_up and town_award answer th
     assert.deepEqual([b.error, b.code], ["bounce", 403]);
   } finally { if (prev === undefined) delete process.env.IDEA_POSTS; else process.env.IDEA_POSTS = prev; }
 });
+
+// ── POS-777 · the read hint is an absolute url ──────────────────────────────
+
+test("POS-777 · an idea post's answers end `read` with the ABSOLUTE https://postmark.town/api/posts/<id>?class=idea", async () => {
+  setup();
+  const want = `— or GET https://postmark.town/api/posts/${ID}?class=idea`;
+  const r = await post();
+  assert.ok(r.read.endsWith(want), r.read);
+  const a = await advance({ post: ID, to: "building" });
+  assert.ok(a.read.endsWith(want), a.read);
+  const m = await amendAtTown({ post: ID, body: "A lantern would let late residents find the boat, and the ferry find them." }, ERRANT, { now: NOW, env: ON });
+  assert.ok(m.read.endsWith(want), m.read);
+  assert.doesNotMatch(a.read, /GET \/posts/);
+});
