@@ -122,3 +122,21 @@ test("an earlier instant opens at its own settlement, read off the same sweeps",
   assert.equal(old.since, null);
   assert.match(old.disclosure, /older than the 3 settlements/);
 });
+
+test("settlements(): every published sweep the reader keeps, ascending — where a conversation splits (POS-779)", async () => {
+  const w = world();
+  w.commit("settlement: sweep 3 published", "2026-09-27T18:00:34Z");
+  w.commit("settlement: sweep 12 published", "2026-09-28T06:00:51Z");
+  w.commit("crossing-save 217", "2026-09-28T12:02:47Z");
+  w.commit("settlement: sweep 13 published", "2026-09-28T18:00:20Z");
+  const h = createHearingWindow({ repo: w.repo });
+  await h.refresh();
+  assert.deepEqual(h.settlements().map((ms) => new Date(ms).toISOString()),
+    ["2026-09-27T18:00:34.000Z", "2026-09-28T06:00:51.000Z", "2026-09-28T18:00:20.000Z"],
+    "the crossing-save is no settlement");
+  // and an unreadable world answers an empty list, never a throw
+  const none = createHearingWindow({ repo: "unused", published: async () => { throw new Error("stuck"); },
+    blessed: async () => { throw new Error("stuck"); }, history: async () => { throw new Error("stuck"); } });
+  await none.refresh();
+  assert.deepEqual(none.settlements(), []);
+});

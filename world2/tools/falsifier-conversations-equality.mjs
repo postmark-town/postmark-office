@@ -216,11 +216,11 @@ export function c1Record(fromActs, fromLog) {
 
 // ── C2 · the vendored clusterVoices against 1.0's ───────────────────────────
 
-export function c2Vendor(voices, oracleCluster, { earshotM, fadeMs }) {
+export function c2Vendor(voices, oracleCluster, { earshotM, boundaries }) {
   const findings = [];
   const shape = (cs) => cs.map((c) => ({ latest: c.latest, voices: c.voices.map((v) => v.act_id ?? `${v.at}|${v.handle}`) }));
-  const o = JSON.stringify(shape(oracleCluster(voices, { earshotM, fadeMs })));
-  const m = JSON.stringify(shape(talk.clusterVoices(voices, { earshotM, fadeMs })));
+  const o = JSON.stringify(shape(oracleCluster(voices, { earshotM, boundaries })));
+  const m = JSON.stringify(shape(talk.clusterVoices(voices, { earshotM, boundaries })));
   if (o !== m) {
     const i = firstDiff(o, m);
     findings.push(`C2 the vendored clusterVoices differs from voices.mjs's — first divergence at char ${i}\n` +
@@ -250,7 +250,7 @@ export function c3Page(oracleBody, portBody) {
         `      1.0:  …${a.slice(Math.max(0, d - 70), d + 70)}…\n      port: …${b.slice(Math.max(0, d - 70), d + 70)}…`);
     }
   }
-  for (const k of ["earshot_m", "fade_minutes", "close_minutes"]) {
+  for (const k of ["earshot_m", "fade_minutes", "settlement_since"]) {
     if (oracleBody[k] !== portBody[k]) findings.push(`C3 the body's ${k} is ${oracleBody[k]} in 1.0 and ${portBody[k]} in the port`);
     else compared++;
   }
@@ -312,7 +312,11 @@ async function main() {
 
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
     const earshotM = dials.earshot_m.value;
-    const closeMs = dials.conversation_lull_min.ms;
+    // POS-779: a thread splits at the settlement and nowhere else. The falsifier
+    // stands the settlements at the published heartbeat (06:00Z and 18:00Z), across
+    // the span the record covers, because the comparison is about the derivation.
+    const boundaries = derived.voices.length
+      ? talk.heartbeatEdges(Math.min(...derived.voices.map((v) => v.at)), Math.max(...derived.voices.map((v) => v.at))) : [];
     const fadeMs = dials.fade_min.ms;
 
     // 1.0's own reader over the same log file, with its own clock pinned so both
@@ -321,7 +325,7 @@ async function main() {
     const nowMs = Date.now();
     const oracle = voicesMod.createVoices({
       standpoint: async () => null, logPath: () => logPath, now: () => nowMs,
-      earshotM, fadeMs, closeMs,
+      earshotM, fadeMs, settlements: () => boundaries,
       // The WHOLE log, not 1.0's last-2,000 RAM window. C1's question is "does
       // the store hold the record" and the window is a property of a running
       // process — truncating the oracle would silently move the era boundary
@@ -338,12 +342,12 @@ async function main() {
     // derivations rather than about the two records agreeing — which is C1's
     // question and is asked separately. (The live lane's lesson: a break fed to
     // both sides of an equality proves nothing.)
-    const c2 = c2Vendor(derived.voices, voicesMod.clusterVoices, { earshotM, fadeMs: closeMs });
+    const c2 = c2Vendor(derived.voices, voicesMod.clusterVoices, { earshotM, boundaries });
 
     // The page, both ways, over ONE voice list at ONE instant. 1.0's side runs
     // its whole pipeline — its `hydrate`, its `clusterVoices`, its private
     // `threadOf` — over a temp log carrying exactly the voices `acts` yielded.
-    const portBody = talk.conversationsOf(derived.voices, { now: nowMs, earshotM, closeMs, fadeMs });
+    const portBody = talk.conversationsOf(derived.voices, { now: nowMs, earshotM, boundaries, fadeMs });
     const scratch = mkdtempSync(join(tmpdir(), "world2-conv-"));
     let oracleBody;
     try {
@@ -354,7 +358,7 @@ async function main() {
       })).join("\n") + "\n");
       oracleBody = voicesMod.createVoices({
         standpoint: async () => null, logPath: () => mirror, now: () => nowMs,
-        earshotM, fadeMs, closeMs,
+        earshotM, fadeMs, settlements: () => boundaries,
         // `MEMORY_MAX_VOICES` (2000) is 1.0's RAM window — "the look-back the
         // page can serve after a restart" — not a law about the page. The port
         // holds no window; it queries. Comparing against a truncated oracle
@@ -428,26 +432,29 @@ async function main() {
         let pairs = 0;
         for (let i = 0; i < aboard.length; i++) {
           for (let j = i + 1; j < aboard.length; j++) {
-            if (aboard[j].at - aboard[i].at > closeMs) break;
+            if (aboard[j].at - aboard[i].at > 30 * 60_000) break;   // pairs close enough in time to be one room
             if (Math.hypot(aboard[i].x - aboard[j].x, aboard[i].y - aboard[j].y) > earshotM) pairs++;
           }
         }
         if (!pairs) return { bit: 0, findings: [] };   // INERT: the record holds no such pair
         const grounded = derived.voices.map((v) => ({ ...v, aboard: false }));
         const shape = (cs) => JSON.stringify(cs.map((c) => c.voices.map((v) => v.act_id)));
-        const o = shape(voicesMod.clusterVoices(derived.voices, { earshotM, fadeMs: closeMs }));
-        const m = shape(talk.clusterVoices(grounded, { earshotM, fadeMs: closeMs }));
+        const o = shape(voicesMod.clusterVoices(derived.voices, { earshotM, boundaries }));
+        const m = shape(talk.clusterVoices(grounded, { earshotM, boundaries }));
         return { bit: pairs, findings: o === m ? [] : [`the deck exception changes the clustering (${pairs} aboard pair(s) beyond earshot) — it is load-bearing`] };
       });
-      // 4 · THE EAR'S CLOCK USED FOR THE RECORD. Aimed at C3: fadeMs instead of
-      //     closeMs is the sailing-night bug, and it shatters the threads.
-      proof("the record clustered on the EAR's clock (fadeMs, not the lull)", () => {
-        const bent = talk.conversationsOf(derived.voices, { now: nowMs, earshotM, closeMs: fadeMs, fadeMs });
+      // 4 · A LULL SPLIT BROUGHT BACK. Aimed at C3: a thread that splits on a
+      //     silence instead of the settlement is the bug POS-779 retired, and it
+      //     shatters the threads (the Twin Veils picnic, 10-24).
+      proof("the record split on a lull (the retired fade) instead of the settlement", () => {
+        // a boundary at the first voice of every lull-split cluster is the lull rule, spelled as edges
+        const lulled = talk.clusterVoices(derived.voices, { earshotM, fadeMs });
+        const bent = talk.conversationsOf(derived.voices, { now: nowMs, earshotM, boundaries: [...boundaries, ...lulled.map((c) => c.voices[0].at)], fadeMs });
         return { bit: derived.voices.length, findings: c3Page(oracleBody, bent).findings };
       });
       // 5 · THE EARSHOT WIDENED — the town as one room.
       proof("the earshot widened to the whole town", () => {
-        const bent = talk.conversationsOf(derived.voices, { now: nowMs, earshotM: 1e9, closeMs, fadeMs });
+        const bent = talk.conversationsOf(derived.voices, { now: nowMs, earshotM: 1e9, boundaries, fadeMs });
         return { bit: derived.voices.length, findings: c3Page(oracleBody, bent).findings };
       });
       // 6 · A REFUSAL SWALLOWED — an act shape no era explains, skipped instead

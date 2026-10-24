@@ -72,7 +72,7 @@ import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every h
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "e1004a5257f6b84756f0a28e22ea3a4cd3baa321", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
+            blob: "e619c3560b592385086fbfd4156bff6d05ed8438", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -82,7 +82,7 @@ export const SAY_CLASS_NAME = "say";
 export const SAY_DIAL_SPEC = Object.freeze({
   earshot_m: [60, 1],                      // a hall, not a district
   fade_min: [5, 60 * 1000],                // on HEARING
-  conversation_lull_min: [30, 60 * 1000],  // silence that ends a conversation IN THE RECORD
+  // conversation_lull_min RETIRED (POS-779, Darko 2026-10-24): a thread splits at the settlement, not at a lull
   speak_every_s: [15, 1000],
   text_max: [500, 1],
   hear_max: [20, 1],
@@ -146,21 +146,32 @@ const distM = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= earshotM;
 
 /**
- * voices.mjs `clusterVoices`, verbatim.
+ * voices.mjs `clusterVoices`, verbatim (POS-779).
  *
- * "The thread derivation (spec, 'a thread is a derivation, not an object').
- *  Voices chain into one conversation when they chain with ANY voice already in
- *  it and land within fadeMs of that cluster's latest voice; a cluster that goes
- *  quiet for fadeMs is finished and never reopens — five silent minutes at the
- *  same spot is a NEW conversation, not a continuation of the old one."
+ * "Voices chain into one conversation when they chain with ANY voice already in
+ *  it (earshot, or a shared deck). THERE IS NO LULL: inside one settlement a
+ *  conversation never expires, and a thread splits only at a settlement. A
+ *  settlement is an instant in `boundaries` (ms, any order); a voice's epoch is
+ *  how many boundaries sit at or before it, two voices in different epochs never
+ *  chain, and a finished epoch never reopens."
+ *
+ * The `fadeMs` lull path is kept for the one caller that is not the say record
+ * (the sound class's `thread_close_min`); `boundaries` absent means it.
  */
-export function clusterVoices(list, { earshotM, fadeMs } = {}) {
+export function clusterVoices(list, { earshotM, fadeMs, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
+  const marks = Array.isArray(boundaries) ? boundaries.filter(Number.isFinite).sort((a, b) => a - b) : null;
+  const epochOf = marks && ((at) => {
+    let lo = 0, hi = marks.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (marks[mid] <= at) lo = mid + 1; else hi = mid; }
+    return lo;
+  });
   const open = [];
   const closed = [];
   for (const v of sorted) {
     for (let i = open.length - 1; i >= 0; i--) {
-      if (v.at - open[i].latest > fadeMs) closed.push(...open.splice(i, 1));
+      const over = epochOf ? epochOf(open[i].latest) !== epochOf(v.at) : v.at - open[i].latest > fadeMs;
+      if (over) closed.push(...open.splice(i, 1));
     }
     const hits = open.filter((c) => c.voices.some((o) => chains(o, v, earshotM)));
     if (hits.length === 0) { open.push({ voices: [v], latest: v.at }); continue; }
@@ -426,29 +437,50 @@ export function unplacedDisclosure(unplaced = []) {
  * voices.mjs `conversations`, over voice records.
  *
  * "The page's read: every conversation in the world, live ones first. Served
- *  from the LOG, not the five-minute window — the conversation is ephemeral to
- *  attend, the record is not (Keemin: 'let's not auto-delete, so we can look
- *  back at them')."
+ *  from the LOG, not the ear's window (Keemin: 'let's not auto-delete, so we can
+ *  look back at them')."
  *
- * THE RECORD'S CLOCK, NOT THE EAR'S: clusters chain across a `closeMs` lull, not
- * a `fadeMs` one. That split is the sailing-night ruling — "agents on the deck
- * spoke ten minutes apart and the record shattered a four-hour party into serial
- * threads" — and passing `fadeMs` here would re-shatter every one of them.
+ * ONE THREAD PER PLACE PER SETTLEMENT (POS-779, Darko 2026-10-24): the same
+ * earshot grouping, the time-lull split gone. `boundaries` are the settlements
+ * (ms) at or before `now`; LIVE is the newest settlement's threads, CLOSED the
+ * earlier ones'. No boundary known: one epoch, everything live, said in
+ * `settlement_disclosed`. (The sailing night's lull ruling is superseded by this
+ * one: a four-hour party is one thread because nothing splits it but a settlement.)
  */
-export function conversationsOf(voices, { now, earshotM, closeMs, closedMax = 40, voiceCap = 80, fadeMs }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 200, fadeMs }) {
   const t = now;
-  const clusters = clusterVoices(voices, { earshotM, fadeMs: closeMs });
+  const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
+  const since = marks.length ? marks[marks.length - 1] : -Infinity;
+  const clusters = clusterVoices(voices, { earshotM, boundaries: marks });
   const live = [];
   const closed = [];
-  for (const c of clusters) (t - c.latest <= closeMs ? live : closed).push(c);
+  for (const c of clusters) (c.latest >= since ? live : closed).push(c);
   return {
     now: new Date(t).toISOString(),
     earshot_m: earshotM,
     fade_minutes: Math.round(fadeMs / 60000),
-    close_minutes: Math.round(closeMs / 60000),
+    close_minutes: null,
+    close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
+    settlement_since: marks.length ? new Date(since).toISOString() : null,
+    ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
     live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
     closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
   };
+}
+
+/**
+ * The published heartbeat edges (06:00Z and 18:00Z, deploy/settlement-auto.sh), in
+ * [fromMs, toMs]. THE FALLBACK FOR HISTORY OLDER THAN THE KNOWN SETTLEMENTS
+ * (POS-779): the store knows a blessing only once its tag exists and the live
+ * reader keeps about sixty sweeps; every voice older than that would otherwise
+ * collapse into one never-closing thread per place. A heartbeat the gate refused
+ * is an edge that never was, so this over-splits by a thread at worst, never merges.
+ */
+export function heartbeatEdges(fromMs, toMs) {
+  const H = 12 * 3600_000, O = 6 * 3600_000, out = [];
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return out;
+  for (let m = Math.ceil((fromMs - O) / H) * H + O; m <= toMs; m += H) out.push(m);
+  return out;
 }
 
 /** What this door says about what it could not do. */
