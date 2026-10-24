@@ -88,7 +88,6 @@ export const PRESENCE_DIAL_NODE = dialNode(SAY_CLASS_NAME, "presence_min");
 const SAY_DIAL_SPEC = {
   earshot_m: [60, 1],                 // a hall, not a district
   fade_min: [5, 60 * 1000],           // the DISPLAY fade — how long a page draws a voice (POS-226)
-  conversation_lull_min: [30, 60 * 1000], // silence that ends a conversation IN THE RECORD
   speak_every_s: [15, 1000],          // one voice per handle per this
   text_max: [500, 1],                 // speech, not letters
   hear_max: [20, 1],                  // flood cap: the room's most recent hum
@@ -125,6 +124,9 @@ export function sayDialsDisclosure() {
 // the record shattered a four-hour party into serial threads. The record's
 // grouping tolerates a lull the way a real room does; threading is derived, so
 // widening it healed the already-shattered threads retroactively.
+// SUPERSEDED 2026-10-24 (POS-779, Darko): the record no longer has a lull clock
+// at all. A conversation never expires inside a settlement and splits only at
+// one, so the two clocks are now one edge, the settlement, for ear and record.
 // (The law now also stands as a node: the-town/say § the-hearing-and-the-record.)
 //
 // THE EAR'S CLOCK IS THE SETTLEMENT (POS-226). It was `fade_min` — five
@@ -138,7 +140,14 @@ export function sayDialsDisclosure() {
 // `fade_minutes`) and hearing never reads it.
 export const EARSHOT_M = dial("earshot_m");
 export const FADE_MS = dial("fade_min");
-export const CLOSE_MS = dial("conversation_lull_min");
+// RETIRED AS A DIAL (POS-779, Darko 2026-10-24): `conversation_lull_min` was the
+// silence that ended a conversation IN THE RECORD. Within a settlement a
+// conversation never expires now; a thread splits only at the settlement, the
+// same edge hearing has. The number lives on here for the two things that are
+// not the record's grouping: the retry key's window (THE RETRY KEY, below) and the
+// sound class's code default for `thread_close_min` (dynamic-store.mjs). It is a
+// constant, not a dial; nothing reads the say class for it.
+export const CLOSE_MS = 30 * 60 * 1000;
 export const HEAR_MAX = dial("hear_max");
 export const SPEAK_EVERY_MS = dial("speak_every_s");
 export const TEXT_MAX = dial("text_max");
@@ -206,20 +215,31 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
 
 // The thread derivation (spec, "a thread is a derivation, not an object").
 // Voices chain into one conversation when they chain with ANY voice already in
-// it and land within fadeMs of that cluster's latest voice; a cluster that goes
-// quiet for fadeMs is finished and never reopens — a silence that long at the
-// same spot is a NEW conversation, not a continuation of the old one. `fadeMs`
-// defaults to the display fade (5 minutes on the fallback), but every caller
-// passes a close window as `fadeMs`: `closeMs` in createVoices (the say class's
-// `conversation_lull_min`, 30 minutes on the fallback), and the sound class's
-// `thread_close_min` in `dynamic-emissions.mjs § threadsFrom`.
-export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS } = {}) {
+// it (earshot, or a shared deck). THERE IS NO LULL (POS-779, Darko 2026-10-24:
+// "just covering time spanning the settlement"): inside one settlement a
+// conversation never expires, and a thread splits only at a settlement. A
+// settlement is an instant in `boundaries` (ms, any order); a voice's epoch is
+// how many boundaries sit at or before it, two voices in different epochs never
+// chain, and a finished epoch never reopens.
+//
+// `boundaries` absent keeps the old lull rule (`fadeMs`) for the one caller that
+// is not the say record: the sound class's own `thread_close_min`
+// (dynamic-emissions.mjs). `boundaries: []` is a record with no settlement known:
+// ONE epoch, and the caller discloses it.
+export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
+  const marks = Array.isArray(boundaries) ? boundaries.filter(Number.isFinite).sort((a, b) => a - b) : null;
+  const epochOf = marks && ((at) => {
+    let lo = 0, hi = marks.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (marks[mid] <= at) lo = mid + 1; else hi = mid; }
+    return lo;
+  });
   const open = [];
   const closed = [];
   for (const v of sorted) {
     for (let i = open.length - 1; i >= 0; i--) {
-      if (v.at - open[i].latest > fadeMs) closed.push(...open.splice(i, 1));
+      const over = epochOf ? epochOf(open[i].latest) !== epochOf(v.at) : v.at - open[i].latest > fadeMs;
+      if (over) closed.push(...open.splice(i, 1));
     }
     const hits = open.filter((c) => c.voices.some((o) => chains(o, v, earshotM)));
     if (hits.length === 0) { open.push({ voices: [v], latest: v.at }); continue; }
@@ -363,12 +383,18 @@ export function createVoices({
   // so a test can stand the settlement anywhere; world.mjs injects the office's
   // (hearing-window.mjs). Absent, the reply says the settlement is unknown.
   hearingWindow = () => null,
+  // `settlements()` → the instants (ms) of the settlements this office knows, any
+  // order (POS-779): where a conversation splits. Absent or empty, the newest
+  // window's `since` is the one known edge; with none at all the record is ONE
+  // epoch and the conversations read says so.
+  settlements = () => null,
   // `recordKept()` — is this office writing voices into the public record
   // (WORLD_EMISSIONS)? world.mjs injects the flag; true, the conversation's
   // note names where the record lives (RECORD_KEPT_AT). Absent: never said.
   recordKept = () => false,
   // the DISPLAY fade only: published as `fade_minutes` for the pages; hearing never reads it
   fadeMs = FADE_MS,
+  // NOT the record's grouping any more (POS-779): only the retry key's window
   closeMs = CLOSE_MS,
   hearMax = HEAR_MAX,
   speakEveryMs = SPEAK_EVERY_MS,
@@ -422,6 +448,22 @@ export function createVoices({
     const since = Number.isFinite(w?.since) ? w.since : null;
     return { since, source: w?.source ?? null, disclosure: w?.disclosure ?? (since == null ? "the last settlement could not be read, so hearing reaches back as far as this office's memory" : null) };
   }
+
+  // WHERE A CONVERSATION SPLITS (POS-779): the settlements at or before `t`.
+  // The list the reader keeps (about a month of published sweeps), else the one
+  // edge the ear's window knows, else none. `known` says which, for the disclosure.
+  function boundariesAt(t) {
+    let list = null;
+    try { list = settlements(); } catch { list = null; }
+    let marks = Array.isArray(list) ? list.filter((m) => Number.isFinite(m) && m <= t) : [];
+    const since = windowOf(t).since;
+    if (since != null && !marks.includes(since)) marks = [...marks, since];
+    marks.sort((a, b) => a - b);
+    return marks;
+  }
+  // A thread is LIVE while it sits in the newest settlement: hearing lasts that
+  // long, and so does the conversation. With no settlement known, everything is.
+  const liveSince = (marks) => (marks.length ? marks[marks.length - 1] : -Infinity);
 
   function hydrate() {
     const file = pathOf();
@@ -570,8 +612,9 @@ export function createVoices({
     }
     stats.clusters += 1;
     // The ear alone needs no clusters (POS-632 W4's carried earshot skips them).
-    const clusters = wantClusters ? clusterByRoom(hydrate()) : null;
-    return { t, audible, clusters, window };
+    const boundaries = boundariesAt(t);
+    const clusters = wantClusters ? clusterByRoom(hydrate(), boundaries) : null;
+    return { t, audible, clusters, window, boundaries };
   }
 
   // THE RECORD, CLUSTERED ROOM BY ROOM (POS-886).
@@ -586,7 +629,7 @@ export function createVoices({
   // clusters. A Map keyed by the room, read once, from the same `hydrate()` the
   // snapshot is built on; `openConversationAt` takes the reader's own key and
   // never another's.
-  function clusterByRoom(list) {
+  function clusterByRoom(list, boundaries) {
     const byRoom = new Map();
     for (const v of list) {
       const key = v.room ?? null;
@@ -594,7 +637,7 @@ export function createVoices({
       byRoom.get(key).push(v);
     }
     const clusters = new Map();
-    for (const [key, spoken] of byRoom) clusters.set(key, clusterVoices(spoken, { earshotM, fadeMs: closeMs }));
+    for (const [key, spoken] of byRoom) clusters.set(key, clusterVoices(spoken, { earshotM, boundaries }));
     return clusters;
   }
 
@@ -690,13 +733,14 @@ export function createVoices({
   // it (Keemin, party night: an agent arriving mid-lull heard silence while the
   // page showed a twenty-voice thread; hearing was five minutes then, and a
   // conversation was longer than an ear). Chains exactly like the page: earshot or shared deck.
-  function openConversationAt(here, t, clusters0) {
+  function openConversationAt(here, t, clusters0, boundaries = boundariesAt(t)) {
+    const since = liveSince(boundaries);
     // WLD-74: only the voices spoken in the reader's own room (the open, for one in no room) are the room's record they may read.
     // POS-886: `clusters0` is the snapshot's record clustered room by room (`clusterByRoom`), so the reader takes their own room's
     // clusters, which were grouped from that room's voices alone. The filter after it cannot change them; it stays as the WLD-74 guard.
     const clusters = (clusters0?.get(here.room ?? null) ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
     const mine = clusters.find((c) =>
-      t - c.latest <= closeMs &&
+      c.latest >= since &&
       c.voices.some((v) => (v.aboard && here.aboard) || distM(v, here.at) <= earshotM));
     if (!mine) return null;
     const voices = mine.voices;
@@ -810,7 +854,7 @@ export function createVoices({
     // answer you — which is simply not the same question as who is here. Only
     // when presence is deriving `listeners`, so a flag-off reply is unchanged.
     if (present) out.at_the_door = atTheDoor;
-    const convo = openConversationAt(here, t, snap.clusters);
+    const convo = openConversationAt(here, t, snap.clusters, snap.boundaries);
     // THE HEARD MARKER, on every reply (#3350, Kogane): a record line the ear
     // also carried on this reply rides `heard: true`; one it did not carries no
     // field. The since-reply has marked them since 2026-09-30 (the Well House);
@@ -1056,25 +1100,33 @@ export function createVoices({
 
   // The page's read: every conversation in the world, live ones first. Served
   // from the LOG, not the ear's window — the ear starts fresh at a settlement,
-  // the record does not (Keemin: "let's not auto-delete, so we can look
-  // back at them").
-  function conversations({ closedMax = 40, voiceCap = 80 } = {}) {
+  // the record does not (Keemin: "let's not auto-delete, so we can look back at
+  // them").
+  //
+  // ONE THREAD PER PLACE PER SETTLEMENT (POS-779, Darko 2026-10-24). The same
+  // earshot grouping as ever, with the time-lull split gone: a conversation does
+  // not expire inside a settlement, and splits only at one, the edge hearing has.
+  // LIVE is the newest settlement's threads; CLOSED are the earlier settlements'.
+  // `close_minutes` is gone from the body (it named the retired lull) and
+  // `settlement_since` names the edge instead.
+  function conversations({ closedMax = 40, voiceCap = 200 } = {}) {
     const t = now();
-    // the record's clock, not the ear's: clusters chain and stay open across a
-    // closeMs lull (the deck ruling above); hearing keeps the settlement's.
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
     // page draws a voice. `hearable_since` beside it is where an ear's window opens.
+    const boundaries = boundariesAt(t);
+    const since = liveSince(boundaries);
     // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
-    const clusters = clusterVoices(hydrate().filter((v) => !v.room), { earshotM, fadeMs: closeMs });
+    const clusters = clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries });
     const live = [];
     const closed = [];
-    for (const c of clusters) (t - c.latest <= closeMs ? live : closed).push(c);
+    for (const c of clusters) (c.latest >= since ? live : closed).push(c);
     return {
       now: new Date(t).toISOString(),
       earshot_m: earshotM,
       fade_minutes: Math.round(fadeMs / 60000),
       hearable_since: ((w) => (w.since != null ? new Date(w.since).toISOString() : null))(windowOf(t)),
-      close_minutes: Math.round(closeMs / 60000),
+      settlement_since: boundaries.length ? new Date(since).toISOString() : null,
+      ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
       live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
       closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
     };

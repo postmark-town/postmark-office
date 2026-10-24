@@ -118,5 +118,17 @@ export function createHearingWindow({ repo, refreshMs = HEARING_REFRESH_MS, cloc
       disclosure: `the asked instant is older than the ${past.length} settlements this office keeps in memory, so its window could not be read` };
   }
 
-  return { read, refresh };
+  /**
+   * Every settlement this reader knows, as instants (ms) ascending: the history
+   * and the newest window's edge. Where a conversation splits (POS-779) — the
+   * record's one edge, the same one hearing has. Memory only, like `read`.
+   */
+  function settlements() {
+    if (clock() - askedAt >= refreshMs) refresh().catch(() => {});
+    const all = new Set(past);
+    if (known?.since != null) all.add(known.since);
+    return [...all].filter(Number.isFinite).sort((a, b) => a - b);
+  }
+
+  return { read, refresh, settlements };
 }

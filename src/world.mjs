@@ -2052,6 +2052,8 @@ const hearing = createHearingWindow({ repo: WORLD_CLONE });
 hearing.refresh().catch(() => {});
 /** The same reader, for the store's say read (`/world2/say`, POS-693): one window, every ear. */
 export const hearingWindowAt = (at) => hearing.read(at);
+/** Every published settlement this office keeps in memory (ms, ascending): where a conversation splits (POS-779). */
+export const settlementsKnown = () => hearing.settlements();
 
 const voices = createVoices({
   roomOf: roomOfNow, // WLD-74: the dungeon room a speaker or an ear is entered in
@@ -2139,6 +2141,7 @@ const voices = createVoices({
   // (migration 027), and a retry this process does not remember asks the record.
   spentNonce: spentSayNonce,
   hearingWindow: () => hearing.read(),
+  settlements: () => hearing.settlements(),
   nonceKept: actsHaveNonce,
 });
 
