@@ -57,21 +57,21 @@ import { currentCrossing } from "./crossings.mjs";
  * `office_town_journal_handle (handle, seq)`.
  */
 export const LAST_ACTIVE_SQL = `
-SELECT handle, at, src FROM (
+SELECT handle, at, src, what FROM (
   SELECT DISTINCT ON (actor) actor AS handle,
          to_char(acts.at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS at,
-         'act' AS src
+         'act' AS src, acts.action AS what
     FROM acts
    WHERE actor = ANY($1::text[])
    ORDER BY actor, acts.at DESC
 ) newest_act
 UNION ALL
-SELECT from_h AS handle, max(delivered_at) AS at, 'letter' AS src
+SELECT from_h AS handle, max(delivered_at) AS at, 'letter' AS src, 'letter' AS what
   FROM town_letters
  WHERE from_h = ANY($1::text[]) AND delivered_at IS NOT NULL
  GROUP BY from_h
 UNION ALL
-SELECT handle, max(written_at) AS at, 'update' AS src
+SELECT handle, max(written_at) AS at, 'update' AS src, 'update' AS what
   FROM office_town_journal
  WHERE class = 'update' AND handle = ANY($1::text[])
  GROUP BY handle`;
@@ -93,7 +93,8 @@ export function pickLastActive(rows) {
     if (!at) continue;
     const prev = out.get(r.handle);
     if (prev && prev.at >= at) continue;
-    out.set(r.handle, { at, crossing: currentCrossing(Date.parse(at)) });
+    // `what`: the act's own name, "letter" or "update" (the household glance's member line, POS-633); the two stamped fields never read it
+    out.set(r.handle, { at, crossing: currentCrossing(Date.parse(at)), what: r.what ?? r.src ?? null });
   }
   return out;
 }

@@ -34,9 +34,8 @@
 // the write and the settle re-runs safely: the pen answers with the first
 // enter's act, and the row is settled as entered.
 
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { actsQuery, world2Enabled } from "./world2-acts.mjs";
+import { importEngineAt } from "./world-branches.mjs"; // the engine at the newest blessing
 import { errorSaid, faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { DEPARTURE_ACTIONS, departureRecordOf, fractionalCrossing } from "../world2/tools/live-reads.mjs";
 
@@ -158,7 +157,7 @@ export async function entryAtTheWalk({ who, key, mark, accept = false, into = nu
   // walk to stop.
   const base = crossingDeps();
   const dry = {
-    ...base, walking: null, stop: null,
+    ...base, walking: null, stop: null, land: null,
     now: () => arrivalCrossing,
     standpointOf: async () => ({ x: target.x, y: target.y, name: who }),
     record: async () => ({ within: [], dry: true }),
@@ -299,7 +298,7 @@ export async function arrivalOf(row, { query = actsQuery, now = Date.now(), walk
   const [act] = (await query(WALK_SQL, [String(row.walk)])) ?? [];
   const rec = act ? departureRecordOf(act)?.record : null;
   if (!rec) return { arrived: false, target: null, why: "the walk act could not be read back" };
-  const walk = walkMod ?? await import(pathToFileURL(join((await import("./world.mjs")).WORLD_CLONE, "tools", "walk.mjs")));
+  const walk = walkMod ?? await importEngineAt((await import("./world.mjs")).WORLD_CLONE, "walk.mjs");
   const pos = walk.positionAt(rec, fractionalCrossing(now));
   return { arrived: pos?.arrived === true, target: { x: rec.toward.x, y: rec.toward.y }, position: pos };
 }

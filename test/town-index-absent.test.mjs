@@ -123,10 +123,33 @@ const CHANGED = {
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
+    // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
+    ["your published MARKS and what stands behind each — the escrow on every one, which of them the next settlement would sweep (a commons mark holding ✦0) listed first with the stake that fixes it, and the settlement's time. Not the pot stake (do: \\\"stake\\\") and not your books (read: \\\"stamps\\\"); bare it is your whole house, handle: narrows to one resident", "your published MARKS and the escrow behind each, the ones the next settlement would sweep (a commons mark holding ✦0) first, with the stake that fixes it. Not the pot stake nor your books; bare it is your whole house, handle: narrows to one resident"],
+    [`"posts":"the house's posts: what it put up, and others' it takes part in"`,
+      `"posts":"the house's posts: what it put up, and others' it takes part in","closer":"who your house writes most, this fortnight","correspondents":"the same as closer","happened":"what your house did, newest first","waiting":"what waits on your word, grouped","marks":"your marks: by state, decided, at risk"`],
     // POS-672: a creature's afforded actions are world writes, charged on the same ledger as one verb
-    ['"counted_verbs":["world_hold","world_leave_mark"', '"counted_verbs":["world_hold","world_creature","world_leave_mark"']],
-  'MCP household {"read":"standing","handle":"wright"}': [['"counted_verbs":["world_hold","world_leave_mark"', '"counted_verbs":["world_hold","world_creature","world_leave_mark"']],
+    ['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
+  'MCP household {"read":"standing","handle":"wright"}': [['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
 };
+// AND MAIL PARITY (POS-666, Darko 2026-10-22): the send card says a letter SAILS
+// (a letter a mail block stops is never delivered, and the office never lies),
+// the four acts join the index after mark-all-read, and `blocks` joins the reads.
+CHANGED["MCP household {}"].push(
+  ["taken into the office's keeping the moment it conforms, delivered on the next ferry crossing.",
+    "taken into the office's keeping the moment it conforms, and it sails on the next ferry crossing."],
+  [`{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}}]`,
+    `{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}},{"act":"amend-letter","teaches":"Amend a letter of yours before it sails; only the last version sails.","fields":{"id":{"required":true},"body":{"required":true}}},{"act":"withdraw-letter","teaches":"Withdraw a letter of yours before it sails.","fields":{"id":{"required":true}}},{"act":"block","teaches":"Block a household's mail, both ways, privately.","fields":{"household":{"required":true}}},{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`],
+  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`]);
+// AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
+// since now, and the one recorded answer that lists the tool's fields says so.
+CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
+  "this tool takes: do, read, explain, args, handle, read_shape, since, hide_bounces_older_than_days, view"]];
+// AND THE GLANCE'S BLOCKS AS READS (POS-633 round 4, Darko 2026-10-20 15:46): the bare menu's
+// read table names `correspondents`, `waiting` and `marks` too (in the posts line's substitution above).
+// AND THE STANCE IS A COUNTED WORLD WRITE (review of #678, item 2): the budget's counted_verbs names it last, in the
+// two recorded answers that carry the budget, and nothing else in them moves.
+for (const label of ["MCP household {}", 'MCP household {"read":"standing","handle":"wright"}'])
+  (CHANGED[label] ??= []).push([`"world_unstake","world_walk"]`, `"world_unstake","world_walk","world_declare_stance"]`]);
 const RECORDED_AS = {
   'MCP household {"read":"house","args":{"full":true}}': 'MCP household {"read":"house"}',
 };

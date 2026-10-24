@@ -227,7 +227,12 @@ const silent = () => {};
 // fixture these tests were already writing — and awaits the drain. Without it
 // every crossing here would answer "the record is unreachable" and defer every
 // row, which is correct behaviour answering the wrong question.
-const run = (o, over = {}) => withRecordFrom(over.clone, () => runTownDrain(o, { db, doors: TOWN_DOORS, lockHeld: HELD, log: silent, ...over }));
+// THE BLOCKS ARE ASKED OF THE STORE (POS-666), and the registry stub models
+// the registry, not 083's table: its pen pool dials a host that is not there,
+// which the drain rightly reads as "cannot say" and holds every letter. So the
+// crossings here stand no block unless a falsifier says otherwise (§ POS-666 below).
+const NO_BLOCKS = async () => new Set();
+const run = (o, over = {}) => withRecordFrom(over.clone, () => runTownDrain(o, { db, doors: TOWN_DOORS, lockHeld: HELD, log: silent, stopsFor: NO_BLOCKS, ...over }));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // F0 · THE DRAIN SPEAKS THE TOWN'S CLOCK — found live 2026-08-30 (the gift
@@ -644,7 +649,10 @@ test("F9 · send_letter no longer promises a commit it does not make flag-on", (
 
   // …and what it must still say, because it is true in BOTH states and it is
   // the only part a sender can act on:
-  assert.match(d, /DELIVERED ON THE NEXT FERRY CROSSING/);
+  // POS-666 (Darko 2026-10-22, the office never lies): a letter a mail block
+  // stops at the crossing is never delivered, so the description says it SAILS.
+  assert.match(d, /SAILS ON THE NEXT FERRY CROSSING/);
+  assert.doesNotMatch(d, /DELIVERED ON THE NEXT/);
   assert.match(d, /Nothing reaches your recipient before that boat/);
   assert.match(d, /Slow-mail town/);
 
@@ -1332,4 +1340,117 @@ test("F25 · PUSHING, A CLONE DIVERGED BY A STRAY UNPUSHED COMMIT TAKES THE BATC
     o.close(); dropOdbHomes();
     for (const d of [clone, bare]) rmSync(d, { recursive: true, force: true, maxRetries: 5 });
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POS-666 · A LETTER'S LATER WORDS, AND THE BLOCKS (Darko 2026-10-22). The
+// crossing sails a letter as its sender last left it: the last amendment's
+// body, never a withdrawn letter, and never a letter between two households
+// that stand blocked (the silent drop). The rows stay in the log; the cursor
+// moves past them. The door half is test/letter-amend.test.mjs; the blocks'
+// store half is test/mail-blocks.test.mjs.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const laterWord = (o, act, letterSeq, extra = {}) => appendTownJournal(o, {
+  cls: "letter", act, household: "keemin", handle: "wright", ghId: "42", ghLogin: "keeminlee",
+  payload: { letter_seq: letterSeq, ...extra },
+});
+const gitLogOf = (clone) => execFileSync("git", ["-C", clone, "log", "--all", "--format=%B"], { encoding: "utf8" });
+const allRows = async (o) => (await import("../src/town-journal.mjs")).readTownJournal(o, { sinceSeq: 0 });
+
+test("POS-666 · M1 · an amended letter sails with its LAST body; the amendment rows write nothing of their own", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  try {
+    await flagOn(async () => {
+      const seq = await seedLetter(o);
+      const a1 = await laterWord(o, "amend-letter", seq, { body: "limen —\n\nThe second draft." });
+      const a2 = await laterWord(o, "amend-letter", seq, { body: "limen —\n\nThe last word." });
+      const r = await run(o, { clone, date: "2026-10-22" });
+      const files = outboxFiles(clone, "wright");
+      assert.equal(files.length, 1, "one letter, one file");
+      const text = readFileSync(join(clone, "WHITE_PAGES", "wright", "outbox", files[0]), "utf8");
+      // flip: `l.versions.length > 1 ? { ...row, payload: { …, args: l.args } }` in town-bridge.mjs
+      assert.match(text, /The last word\./, "the last version sails");
+      assert.doesNotMatch(text, /second draft|the drain will materialize/, "and no earlier one");
+      assert.equal(r.letters.find((l) => l.seq === seq).version, 3);
+      assert.deepEqual(r.letters.filter((l) => l.of === seq).map((l) => l.seq), [a1, a2], "each amendment is reported against its letter");
+      assert.equal(r.bounced, 0);
+      assert.deepEqual(await pendingRows(o), [], "the cursor moved past all three");
+      assert.equal((await allRows(o)).length, 3, "and all three rows are still in the log");
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("POS-666 · M2 · a withdrawn letter never becomes a file; its rows stay in the log and the cursor moves past them", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  try {
+    await flagOn(async () => {
+      const seq = await seedLetter(o, { title: "take it back", slug: "take-it-back" });
+      const w = await laterWord(o, "withdraw-letter", seq);
+      const r = await run(o, { clone, date: "2026-10-22" });
+      // flip: the `if (l?.withdrawn)` line in town-bridge.mjs
+      assert.deepEqual(outboxFiles(clone, "wright"), [], "it never sails");
+      assert.equal(r.letters.find((l) => l.seq === seq).withdrawn, w);
+      assert.doesNotMatch(gitLogOf(clone), /take-it-back/, "the town's history never names it");
+      assert.deepEqual(await pendingRows(o), []);
+      assert.deepEqual((await allRows(o)).map((x) => x.act), ["send-letter", "withdraw-letter"], "nothing was deleted");
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("POS-666 · M3 · a letter between two blocked households is STOPPED: no file, no line in the town's history, the cursor moves; another letter sails", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  try {
+    await flagOn(async () => {
+      const blocked = await seedLetter(o, { title: "unwelcome", slug: "unwelcome" });
+      const fine = await seedLetter(o, { title: "welcome", slug: "welcome" });
+      const asked = [];
+      const stopsFor = async (letters) => { asked.push(...letters); return new Set([blocked]); };
+      const r = await run(o, { clone, date: "2026-10-22", stopsFor });
+      assert.deepEqual(asked.map((l) => [l.seq, l.from, l.to]), [[blocked, "wright", "limen"], [fine, "wright", "limen"]],
+        "the crossing asks once, for every letter that would sail");
+      // flip: the `if (stopped.has(row.seq))` line in town-bridge.mjs
+      assert.equal(r.letters.find((l) => l.seq === blocked).stopped, true);
+      const files = outboxFiles(clone, "wright");
+      assert.equal(files.length, 1);
+      assert.match(files[0], /welcome\.md$/);
+      assert.doesNotMatch(files[0], /unwelcome/);
+      assert.doesNotMatch(gitLogOf(clone), /unwelcome/, "the batch's commit, the town's public history, never names a stopped letter");
+      assert.deepEqual(await pendingRows(o), [], "a stop is a judgement: the cursor moves past it");
+      assert.equal(r.bounced, 0, "and it is no bounce: nothing the ferry or the sender reads says it failed");
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("POS-666 · M4 · a store that cannot say which households stand blocked HOLDS every letter: no file, the cursor stays", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  try {
+    await flagOn(async () => {
+      const seq = await seedLetter(o);
+      const stopsFor = async () => { throw new Error("the record did not answer"); };
+      const r = await run(o, { clone, date: "2026-10-22", stopsFor });
+      assert.deepEqual(outboxFiles(clone, "wright"), [], "nothing sails a block may stand against");
+      assert.equal(r.held, 1);
+      assert.equal(r.letters.find((l) => l.seq === seq).code, 503);
+      assert.equal((await pendingRows(o)).length, 1, "held, never passed over: the next crossing judges it again");
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
+});
+
+test("POS-666 · M5 · a later word whose letter is not pending changes nothing and is passed over by name", async () => {
+  const clone = townClone();
+  const o = liveShapeOdb();
+  try {
+    await flagOn(async () => {
+      const w = await laterWord(o, "amend-letter", 9_999, { body: "a letter that already sailed" });
+      const r = await run(o, { clone, date: "2026-10-22" });
+      assert.match(r.letters.find((l) => l.seq === w).passed, /not pending/);
+      assert.deepEqual(outboxFiles(clone, "wright"), []);
+      assert.deepEqual(await pendingRows(o), []);
+    });
+  } finally { o.close(); dropOdbHomes(); rmSync(clone, { recursive: true, force: true, maxRetries: 5 }); }
 });

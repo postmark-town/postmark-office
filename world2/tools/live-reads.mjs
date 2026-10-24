@@ -405,7 +405,9 @@ const orderSqlOf = (keys) => `ORDER BY ${keys.map((k) => k.sql).join(", ")}`;
 
 export const DEPARTURE_ORDER_SQL = orderSqlOf(DEPARTURE_ORDER_KEYS);
 
-export const DEPARTURE_ACTIONS = Object.freeze(["legacy:departure", "walk"]);
+// `land` (WLD-63 row 68 B): a placement, read as a departure that has already
+// arrived (from = toward), so every reader of where you stand takes it unchanged
+export const DEPARTURE_ACTIONS = Object.freeze(["legacy:departure", "walk", "land"]);
 
 /**
  * One `acts` row → one walk.mjs departure record, whichever pen wrote it.
@@ -527,6 +529,9 @@ export function departureRecordOf(row) {
         targetMarkId: p.to ?? null,
         pace: p.pace ?? null,
         line: null,
+        // a landing says what set you down (WLD-63 row 68 B), so a reader can
+        // tell a placement from a walk without a second record
+        ...(row.action === "land" ? { landed: { via: p.via ?? null, why: p.why ?? null } } : {}),
         // a set-down's own words (POS-740: "set down where the berth stood"),
         // only where the record carries them; no walk the door files has one
         ...(typeof p.note === "string" && p.note ? { note: p.note } : {}),
@@ -1001,15 +1006,23 @@ export function emissionOf(row) {
  */
 export function presentEmissionsAt(rows, atMs = Date.now(), { cls = SOUND } = {}) {
   const now = new Date(atMs).toISOString();
+  return emissionsOfClass(rows, { cls }).filter((e) => e.born_at <= now && e.ttl_expires_at > now);
+}
+
+/**
+ * Every emission of the class in the record, in `presentEmissionsAt`'s order,
+ * with no clock applied. The caller says what an instant keeps: 1.0's presence
+ * asks the stamped TTL (above); the store's say read asks the ear's window
+ * (POS-693, office `src/hearing-window.mjs § hearable`), because hearing
+ * reaches the settlement and the stamp's five minutes is not the ear's law.
+ */
+export function emissionsOfClass(rows, { cls = SOUND } = {}) {
   const out = [];
   for (const row of rows) {
     const r = emissionOf(row);
     if (r.refused) continue;
-    const e = r.emission;
-    if (e.class !== cls) continue;
-    if (!(e.born_at <= now)) continue;
-    if (!(e.ttl_expires_at > now)) continue;
-    out.push(e);
+    if (r.emission.class !== cls) continue;
+    out.push(r.emission);
   }
   return out.sort((a, b) => (a.born_at < b.born_at ? -1 : a.born_at > b.born_at ? 1 : (a.id < b.id ? -1 : 1)));
 }

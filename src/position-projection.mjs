@@ -91,6 +91,7 @@ export function recordOfMovement(movement) {
     targetExtent: asStored(movement.within), targetMarkId: movement.toMark ?? null, pace: asStored(movement.pace),
     ...(movement.note ? { note: movement.note } : {}),
     source: "store",
+    ...(movement.landed ? { landed: movement.landed } : {}),   // WLD-63 row 68 B, as storedShapeOf carries it
   };
 }
 

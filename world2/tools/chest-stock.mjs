@@ -39,6 +39,8 @@
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "../../src/law-classes.mjs";
 import { UNIT_ACTION, foldUnits, stockedChests, candyLabels, planChestStock, chestDials } from "../../src/world-stacks.mjs";
+import { stolenRefusal } from "../../src/world-stacks.mjs"; // a class taken by the town's own act (WLD-7)
+import { readRestored } from "../../src/restored-classes.mjs"; // ...and given back by its own act (WLD-25/j)
 import { lockedChestUse } from "../../src/chest-lock.mjs";
 import { pgAttachmentsFor } from "./guard-reads.mjs";
 
@@ -106,6 +108,21 @@ export async function planFromStore(client) {
   const law = lawSnapshotFromRows((await client.query(LAW_AT_BLESSING_SQL)).rows);
   if (!law) return { unreadable: "the store holds no settlement whose law is ingested — the candy labels cannot be read, so nothing is stocked" };
   const candy = law.classes.get("candy") ?? null;
+  // A CLASS TAKEN BY THE TOWN'S OWN ACT (WLD-7; making refuses too, 2026-10-17 ruling (2)):
+  // the first stock MAKES units of the class this chest stocks (the class whose record
+  // registers the labels, read above), so it waits while that class (or an ancestor) is
+  // taken, and the next tick after the return stocks it, once, by the same plan and nonce.
+  // Asked of the law at the pin, the law the plan reads.
+  const stockedClass = [...law.classes.entries()].find(([, r]) => r === candy)?.[0] ?? null;
+  const recOf = (n) => { const r = law.classes.get(String(n)) ?? null; if (!r) return null; const d = typeof r.dials === "string" ? (() => { try { return JSON.parse(r.dials); } catch { return {}; } })() : r.dials; return { ...r, dials: d ?? {} }; };
+  const upOf = (n) => (law.classes.get(String(n))?.extends ? String(law.classes.get(String(n)).extends) : null);
+  let taken = stockedClass ? stolenRefusal(stockedClass, recOf, upOf) : null;
+  // ...unless the town has given it back by its own act since the dial went on (WLD-25/j)
+  if (taken) {
+    const back = await readRestored({ classes: [taken.stolen], query: (sql, params) => client.query(sql, params) });
+    if (back.get(String(taken.stolen))?.restored) taken = stolenRefusal(stockedClass, recOf, upOf, { restored: (c) => back.get(String(c))?.restored === true });
+  }
+  if (taken) return { waits: `a class is taken by the town's own act (${taken.stolen}) — the first stock makes units of the class this chest stocks, so each chest is stocked at the first settlement after it is returned` };
   const chestRec = law.classes.get("chest") ?? null;
   // A STALLED INGEST IS NOT AN EMPTY LAW (POS-627, review-612 F1): with no chest
   // class AND a newer blessing whose law is not ingested, the class may be in
@@ -145,6 +162,7 @@ export async function planFromStore(client) {
 export async function stockChests(client, { crossing = null } = {}) {
   const plan = await planFromStore(client);
   if (plan.unreadable) return { stocked: [], skipped: [], unstocked: [], refused: [], line: `chests: not stocked — ${plan.unreadable}` };
+  if (plan.waits) return { stocked: [], skipped: [], unstocked: [], refused: [], waits: true, line: `chests: not stocked — ${plan.waits}` };
   const stocked = [], skipped = [];
   for (const s of plan.stock) {
     await client.query("BEGIN");

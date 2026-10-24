@@ -42,7 +42,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   ingest, planIngest, applyIngest, recordDiff, isRecordField, pathsAt, HEAD_KEY, amendClaimId,
-  commitReader, isPrintoutCommit, PRINTOUT_PENS,
+  commitReader, isPrintoutCommit, PRINTOUT_PENS, carriedRow,
 } from "../world2/tools/marks-ingest.mjs";
 import { REFUSED_BY_NAME } from "../world2/tools/backfill-register.mjs";
 import { marksFromRows, inPublishedOrder } from "../src/world2-fold.mjs";
@@ -225,16 +225,22 @@ before(async () => {
 
   // AMEND — a resident's sited mark: a new image line and a changed body.
   const amended = seed.marks.find((m) => m.kind === "sited" && m.owner !== "the-town" && paths.has(m.slug));
-  // ADD — a predicated child of a CLASS mark, filed the way its siblings are:
-  // a copy of an existing class-parented child's record under a new leaf.
-  const sibling = seed.marks.find((m) => m.data?._parent_is_law && isLeafDir(dirname(abs(m.slug))));
+  // ADD — a child of a CLASS mark, filed the way its siblings are: a copy of an
+  // existing class-parented child's record under a new leaf. Before W2 that was
+  // a predicated child the seed marked `_parent_is_law`; under W2 (POS-703) it
+  // is a `kind: property` node whose `_parentMarkId` is a class the seed
+  // leaves to law (`notPlaced.law`). Either form is the same relation.
+  const lawIds = new Set(seed.notPlaced?.law ?? []);
+  const lawParent = (m) => m.data?._parent_is_law ?? (lawIds.has(m.data?._parentMarkId) ? m.data._parentMarkId : null);
+  const sibling = seed.marks.find((m) => lawParent(m) && paths.has(m.slug) && isLeafDir(dirname(abs(m.slug))));
   const classDir = dirname(dirname(abs(sibling.slug)));
   const addedLeaf = "pos142-fixture-child";
   const added = `${sibling.owner}/${addedLeaf}`;
-  // RETIRE — a leaf continuation (predicated/naming) on a resident's mark, with
-  // nothing filed beneath it, and not the amended mark's own.
-  const retired = seed.marks.find((m) => (m.kind === "predicated" || m.kind === "naming") && m.parent
-    && !m.data?._parent_is_law && m.owner !== "the-town" && m.slug !== "wright/the-lit-name"
+  // RETIRE — a leaf continuation (predicate/naming; W2 spells the predicate
+  // `predicate`, the old form `predicated`) on a resident's mark, with nothing
+  // filed beneath it, and not the amended mark's own.
+  const retired = seed.marks.find((m) => ["predicated", "predicate", "naming"].includes(m.kind) && m.parent
+    && !lawParent(m) && m.owner !== "the-town" && m.slug !== "wright/the-lit-name"
     && isLeafDir(dirname(abs(m.slug))) && !seed.marks.some((x) => String(x.parent) === String(m.id)));
   assert.ok(amended && sibling && retired, "the fixture could not find its three marks in the tag");
 
@@ -247,8 +253,10 @@ before(async () => {
   commit("fixture-amender", `amend: ${amended.slug} (pos142 fixture)`);
 
   mkdirSync(join(classDir, addedLeaf), { recursive: true });
+  // a property is keyed by its class and its `name`, so the copy takes a name of its own (POS-703)
+  const copied = readFileSync(abs(sibling.slug), "utf8");
   writeFileSync(join(classDir, addedLeaf, "mark.md"),
-    readFileSync(abs(sibling.slug), "utf8").replace(/(\r?\n---\r?\n)[\s\S]*$/, "$1A predicated child added at B by the fixture.\n"));
+    (sibling.kind === "property" ? setLine(copied, "name", addedLeaf) : copied).replace(/(\r?\n---\r?\n)[\s\S]*$/, "$1A predicated child added at B by the fixture.\n"));
   git(repo, ["add", "-A"]);
   commit("fixture-founder", `law: ${added} (pos142 fixture)`);
 
@@ -676,6 +684,14 @@ test("THE TOWN'S MARK comes in: a town add plans AND applies through the stub as
   await assert.rejects(() => applyIngest(store2.client.query, plan2, { windowId: 7, target: { ref: "B", sha: "b".repeat(40) } }),
     (e) => e.code === 404 && /vireo/.test(e.detail ?? e.message));
   assert.equal(store2.bySlug(stranger), undefined, "the stranger's mark was written");
+});
+
+test("POS-704 · a carried tier brings the property's authored tier with it, and the store's other data stands", () => {
+  const row = (data) => ({ body: "the die", kind: "property", owner: "the-town", household: null, geometry: null, data });
+  const was = row({ tier: "constitution", name: "damage_die", note: "the store's" });
+  const ref = row({ tier: "constitution", _authoredTier: "sovereign", name: "damage_die", note: "the file's" });
+  assert.deepEqual(carriedRow(was, ref, new Set(["tier"])).data, { tier: "constitution", _authoredTier: "sovereign", name: "damage_die", note: "the store's" });
+  assert.deepEqual(carriedRow(was, ref, new Set(["note"])).data, { tier: "constitution", name: "damage_die", note: "the file's" }, "a carry without the tier leaves it");
 });
 
 test("recordDiff compares the record, not the store's stamps", () => {

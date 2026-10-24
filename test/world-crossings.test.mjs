@@ -404,11 +404,15 @@ test("THE WALK FIELD SURVIVES EVERY DOOR THAT REBUILDS THIS BOUNCE", async () =>
     const src = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
     const m = src.match(re);
     assert.ok(m, `${file}: the bounce-rebuild site was not found — this check has stopped reading anything`);
-    assert.match(m[0], /e\.walk \? \{ walk: e\.walk \}/,
-      `${file} rebuilds the bounce and does not carry \`walk\` — the page's "walk there and enter" button reads it off that body`);
-    assert.match(m[0], /e\.choices \? \{ choices: e\.choices \}/,
-      `${file} stopped carrying \`choices\` — the multi-resident bounce needs it and this list is shared`);
+    // WLD-63 (play fix 50): both rebuild from ONE list, fault-words.mjs § BOUNCE_EXTRAS
+    assert.match(m[0], /bounceExtras\(e\)/,
+      `${file} rebuilds the bounce without the one extras list — a field one door carries and the other drops reaches half its callers`);
   }
+  const { BOUNCE_EXTRAS, bounceExtras } = await import("../src/fault-words.mjs");
+  for (const field of ["walk", "choices", "choose"])
+    assert.ok(BOUNCE_EXTRAS.includes(field), `the one list stopped carrying \`${field}\` — the page reads it off the rebuilt body`);
+  assert.deepEqual(bounceExtras({ walk: { mark: "m" }, choose: [{ id: "a" }], other: 1 }), { walk: { mark: "m" }, choose: [{ id: "a" }] },
+    "and only what it names rides");
 });
 
 test("the enter door and the hold door ask ONE function — the reach is not copied", async () => {

@@ -39,8 +39,8 @@
 // marks as they stand. No notice is kept, nothing is delivered, no mark moves.
 
 import { crossingSailsAt, currentCrossing } from "./crossings.mjs";
-import { pathToFileURL } from "node:url";
 import { join } from "node:path";
+import { importEngineAt } from "./world-branches.mjs"; // the doors' engine, at the newest blessing
 import { plainReason, ownWordsError } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 export const MISTS_FORECAST_UNAVAILABLE = "mists-forecast-unavailable";
@@ -317,10 +317,10 @@ export function sentencesFor(id, { fringe, wall }) {
   return says;
 }
 
-/** Import the World engine from a clone; null when it cannot be read. */
+/** Import the World engine from a clone, at its newest blessing; null when it cannot be read. */
 export async function mistsEngine(worldClone) {
   try {
-    const eng = await import(pathToFileURL(join(String(worldClone), "tools", "world-engine.mjs")).href);
+    const eng = await importEngineAt(worldClone, "world-engine.mjs");
     return typeof eng.mistsAt === "function" && typeof eng.mistsHere === "function" ? eng : null;
   } catch { return null; }
 }

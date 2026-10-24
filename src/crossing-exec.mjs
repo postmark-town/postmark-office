@@ -121,6 +121,12 @@ async function main() {
         // WHICH WALK THIS ENTRY ARRIVED WITH (WLD-5, POS-618): the arrival
         // tick's enter names its walk act, and the guard below writes it once.
         ...(p.arrival_of ? { arrival_of: String(p.arrival_of) } : {}),
+        // THE EXIT LOCK (WLD-5 A): a whole-dungeon exit by the exit verb records
+        // which dungeon it closes to this walker and until which settlement, and
+        // when they left. The enter door reads them back (world-apex § dungeonLocksOf).
+        ...(p.dungeon && p.locked_until ? { dungeon: String(p.dungeon), locked_until: String(p.locked_until), ...(p.left_at ? { left_at: String(p.left_at) } : {}) } : {}),
+        // FLED (an encounter): an exit the office made because the resident's nerve ran out names why
+        ...(p.fled ? { fled: String(p.fled) } : {}),
       },
       effect: "the crossing is declared; the record receives it at the save",
     };

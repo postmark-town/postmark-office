@@ -133,7 +133,15 @@ const ROSTER = {
   "tools/backfill-home-shelf.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "no manifest at" },
   // POS-219: refuses with neither --dry-run nor --apply before it imports a door or reads anything
   "tools/home-picture-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
+  "tools/avatar-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
+  "tools/seed-sheets.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/media-thumbnails-backfill.mjs": { args: ["--from-record", NOWHERE], code: 2, needle: "no record at" },
+  // POS-737: an unknown flag is a usage refusal before the paper or the store is opened
+  "tools/media-sweep.mjs": { args: ["--nowhere"], code: 2, needle: "media-sweep: unknown --nowhere" },
+  // POS-737: no --url is a usage refusal before the paper is opened
+  "tools/media-takedown.mjs": { args: [], code: 2, needle: "media-takedown: which file? --url" },
+  // POS-722: with no telemetry dir it refuses by name before reading anything
+  "tools/mcp-usage.mjs": { args: ["--since", "2026-10-20", "--dir", NOWHERE], code: 2, needle: "no telemetry at" },
   // POS-428 (#403): with no telemetry clone it refuses by name before any capture or network read.
   "tools/traffic-snapshot.mjs": { args: [], env: { TELEMETRY_REPO: NOWHERE }, code: 1, needle: "no clone at" },
   "tools/box-rollcall.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "the roll-call itself could not run" },
@@ -148,6 +156,10 @@ const ROSTER = {
   "tools/crossing-save.mjs": { args: ["--world", NOWHERE], code: 1, needle: "GATE REFUSED world-clone" },
   "tools/funding-report.mjs": { args: ["--clone", NOWHERE, "--out", NOWHERE_OUT], code: 0, needle: "" },
   "tools/harbor-watch.mjs": { args: [], code: 2, needle: "usage: harbor-watch.mjs" },
+  // POS-576: Wright's read of invited households. A bad --since refuses before
+  // any store is asked; NO_PG on top, so a regression that reached for a
+  // connection fails on it.
+  "tools/invites.mjs": { args: ["--since", "not-a-date"], env: NO_PG, code: 2, needle: "--since takes an ISO instant" },
   "tools/hydrate-equivalence.mjs": { args: ["--a", NOWHERE, "--b", `${NOWHERE}-b`], code: 2, needle: "not a world checkout:" },
   "tools/ledger-freeze.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
   // POS-178. A safe entry proof for a tool that WRITES THE WHITE PAGES: a clone

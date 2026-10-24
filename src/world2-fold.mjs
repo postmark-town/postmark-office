@@ -29,7 +29,10 @@
 //   points        marks.geometry.points      already composed the frame; see
 //                                            seed-import § the frame note)
 //   parent        marks.parent → that row's slug, or `data._parent_is_law`
-//                 (a parent that is a class mark lives in law_projection)
+//                 (a parent that is a class mark lives in law_projection);
+//                 a property's is its enclosing mark, `data._parentMarkId`
+//                 (POS-704: walkMarks gives class and property nodes the
+//                 enclosing dir as their parent, as it does a continuation)
 //   _parentMarkId data._parentMarkId, or the continuation parent for a
 //                 predicated/naming row the live pen wrote (it carries none)
 //   everything else  data                   (the record's own remainder)
@@ -55,7 +58,11 @@
 /** The leaf of `<by>/<leaf>`. */
 const leafOf = (slug) => String(slug ?? "").split("/").pop();
 
-const CONTINUED = new Set(["predicated", "naming"]);
+// The continuations, in BOTH forms: W2's kind rung spells the predicate
+// `predicate` (world tools/mark-kind.mjs § PREDICATE_KINDS), and a row written
+// before it keeps `predicated`. Spelled once here, as seed-import.mjs § CONTINUES
+// spells it (POS-704: with the old word alone, 374 predicates lost their parent).
+const CONTINUED = new Set(["predicated", "predicate", "naming"]);
 
 /**
  * The store's rows → the records `loadMarks(dir)` yields. PURE: no store, no fs.
@@ -71,11 +78,15 @@ export function marksFromRows(markRows = [], lawRows = []) {
     const d = { ...(row.data ?? {}) };
     const parentIsLaw = d._parent_is_law ?? null;
     delete d._parent_is_law;                     // the seed's own receipt, not a record field
+    // a property's own `tier:` line (POS-704): the loader's record carries it, and
+    // the fold prints it as `property_tier`; `data.tier` is the derived standing
+    const authoredTier = d._authoredTier;
+    delete d._authoredTier;
     const rec = { ...d };
     rec.kind = row.kind;
     rec.by = row.owner;
     rec.household = row.owner;                   // walkMarks: `rec.household = by`
-    rec.tier = d.tier ?? "market";               // walkMarks: `rec.tier ?? "market"`
+    rec.tier = authoredTier ?? d.tier ?? "market"; // walkMarks: `rec.tier ?? "market"`
     rec.slug = leafOf(row.slug);
     rec.id = row.slug;
     rec.body = row.body ?? "";
@@ -91,6 +102,10 @@ export function marksFromRows(markRows = [], lawRows = []) {
     if (CONTINUED.has(row.kind)) {
       rec.parent = parentSlug ?? parentIsLaw ?? d._explicitParent ?? d._parentMarkId ?? undefined;
       if (rec.parent === undefined) delete rec.parent;
+    } else if (row.kind === "property") {
+      // walkMarks: a property stands under the class (or property) it belongs to
+      rec.parent = parentSlug ?? parentIsLaw ?? d._parentMarkId ?? undefined;
+      if (rec.parent === undefined) delete rec.parent;
     } else {
       delete rec.parent;                         // walkMarks: sited/parcel never carry an authored parent
     }
@@ -99,7 +114,18 @@ export function marksFromRows(markRows = [], lawRows = []) {
   }
   for (const row of lawRows) {
     if (row.kind !== "class") continue;
-    out.push({ ...(row.data ?? {}) });
+    // The row's `dials` is law-ingest's merge (property nodes first), which every
+    // live class reader asks; the loader's record holds only the file's own
+    // `dials:` line, which law-ingest keeps beside it as `_fileDials`, written
+    // only when the file has the line (POS-704). So a row without it is a class
+    // whose file has no `dials:`, and its record has none. A row ingested before
+    // POS-704 cannot say either way and reads as having none: the store's law is
+    // re-ingested before W2_FOLD is switched on (POS-704's box step).
+    const rec = { ...(row.data ?? {}) };
+    if ("_fileDials" in rec) rec.dials = rec._fileDials;
+    else delete rec.dials;
+    delete rec._fileDials;
+    out.push(rec);
   }
   return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }

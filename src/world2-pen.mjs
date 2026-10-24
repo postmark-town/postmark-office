@@ -50,6 +50,7 @@
 // flip a Postgres outage is a visible town outage (DESIGN §4 F1).
 
 import { world2Enabled } from "./world2-acts.mjs";
+import { actsHaveProvenance, provenanceOf } from "./act-provenance.mjs"; // POS-633 H4: the triple the pen writes
 import { currentCrossing } from "./crossings.mjs";
 import { sessionKeysVia, sessionKeyString } from "./household-deriver.mjs";
 import { nonceForActRow } from "./act-nonce.mjs";
@@ -352,7 +353,9 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
   // is the cutover. `seq` is still TAKEN, because the arena's mirror still has
   // one to offer and a caller that passed it would otherwise think it landed;
   // it is ignored here, deliberately and in writing.
-  const { text, values } = actsInsert(row, household);
+  // POS-633 H4: whose hand, for whom, by which route, once the store has taken 079
+  const provenance = (await actsHaveProvenance(client)) ? provenanceOf(row) : null;
+  const { text, values } = actsInsert(row, household, { provenance });
   const { rows: [r] } = await client.query(`${text} RETURNING id`, values);
   // Inside an act door, the creatures are told what reached the record (POS-637
   // PR-B; act-watch.mjs § perceived). Outside one, this is nothing.
@@ -374,7 +377,7 @@ export async function insertAct(client, rowIn, seq = null, { lateArrival = null 
  * (POS-246, act-nonce.mjs § nonceForActRow): the first act row a keyed call
  * writes carries it, and the door asked the store the same question first.
  */
-export function actsInsert(row, household) {
+export function actsInsert(row, household, { provenance = null } = {}) {
   const cols = ["at", "crossing", "actor", "action", "object",
     "at_anchor", "at_dx", "at_dy", "witnesses", "class",
     "payload", "effect", "household"];
@@ -383,6 +386,12 @@ export function actsInsert(row, household) {
     row.payload, row.effect, household];
   const nonce = nonceForActRow(row);
   if (nonce != null) { cols.push("nonce"); values.push(nonce); }
+  // POS-633 H4 (migration 079): named only when the caller read the triple, so a
+  // store without the columns takes the INSERT it always has.
+  if (provenance) {
+    cols.push("hand", "for_handle", "route");
+    values.push(provenance.hand ?? null, provenance.for_handle ?? null, provenance.route ?? null);
+  }
   return {
     text: `INSERT INTO acts (${cols.join(", ")}) VALUES (${values.map((_, i) => `$${i + 1}`).join(",")})`,
     values,

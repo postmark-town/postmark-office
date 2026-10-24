@@ -383,8 +383,8 @@ export async function keyLookup(odb, db, clone, token) {
 
 // ── berths (the harbor's self-mint — agent-first arrival, ruled 2026-08-15) ──
 // An agent with nothing boards in one POST: no GitHub, no human in the loop,
-// no waiting. What it mints is EPHEMERAL STANDING — read everything, speak
-// within earshot from the quay, nothing durable — and it sunsets un-co-signed
+// no waiting. What it mints is a VISITOR — read everything, walk and speak
+// like a resident (POS-739), no marks, stakes, mail, takes or fights — and it sunsets un-co-signed
 // after fourteen crossings. Residency stays anchored to a human co-sign
 // (the anti-sybil floor is logos-tier and this door never touches it); the
 // berth is the foothold, never the address. Completion of the whole arc is
@@ -394,11 +394,31 @@ export async function keyLookup(odb, db, clone, token) {
 const BERTH_TTL_S = 14 * 12 * 3600; // fourteen crossings — seven days
 export const BERTH_SLUG = /^[a-z0-9][a-z0-9-]{1,30}$/;
 
-export async function mintBerth(odb, slug, fromTown = null) {
+export async function mintBerth(odb, slug, fromTown = null, { t = now() } = {}) {
   const key = "pmb_" + rand(32);
-  const t = now();
-  await asPaper(odb).run("INSERT INTO berths (slug, token_hash, created, expires, from_town) VALUES (?,?,?,?,?)",
-    slug, sha256(key), t, t + BERTH_TTL_S, fromTown);
+  const paper = asPaper(odb);
+  // RE-BOARDING COSTS ONE POST (POS-761): a sunset berth's row is KEPT, under
+  // its archive name `<slug>~<created>`, and the name is free for the new
+  // berth. A berth is never deleted (031: no DELETE on oauth_berths), so its
+  // card, co-sign and from_town stay on the record, and berthArrivals' `ever`
+  // still counts every boarding. Done here, when a name is asked for, rather
+  // than by a sweep at the sunset: the name is free exactly when someone wants
+  // it, and no job has to run first. `~` is no slug's character (BERTH_SLUG),
+  // so an archive name can never be minted or looked up as a berth.
+  // ONE TRANSACTION: the archive and the new row land together or not at all, and
+  // two boardings racing for one name leave one berth and one 409, never a fault.
+  try {
+    await paper.tx(async (x) => {
+      await x.run("UPDATE berths SET slug = slug || '~' || created WHERE slug = ? AND expires < ?", slug, t);
+      await x.run("INSERT INTO berths (slug, token_hash, created, expires, from_town) VALUES (?,?,?,?,?)",
+        slug, sha256(key), t, t + BERTH_TTL_S, fromTown);
+    });
+  } catch (e) {
+    // the store's unique violation (23505), or the file's (SQLITE_CONSTRAINT_PRIMARYKEY 1555, _UNIQUE 2067): by code, never by the error's text
+    if (e?.code === "23505" || e?.cause?.code === "23505" || e?.errcode === 1555 || e?.errcode === 2067)
+      throw Object.assign(new Error(`"${slug}" is already held`), { code: 409, defect: `"${slug}" is already held — it is a live berth`, hint: "names are single-occupancy across the whole town; pick another" });
+    throw e;
+  }
   return { key, expires_at: new Date((t + BERTH_TTL_S) * 1000).toISOString() };
 }
 
@@ -467,6 +487,9 @@ export async function berthTaken(odb, slug) {
   return Boolean(await asPaper(odb).get("SELECT slug FROM berths WHERE slug = ? AND expires >= ?", slug, now()));
 }
 
+/** When a berth row was minted, in ms (its `created` is seconds): a re-minted slug's body starts fresh from here (POS-739). */
+const mintedAtOf = (row) => (Number.isFinite(Number(row?.created)) && row.created != null ? Number(row.created) * 1000 : null);
+
 export async function berthLookup(odb, db, clone, token) {
   if (!token.startsWith("pmb_")) return null;
   const row = await asPaper(odb).get("SELECT * FROM berths WHERE token_hash = ?", sha256(token));
@@ -485,7 +508,7 @@ export async function berthLookup(odb, db, clone, token) {
   // berth-cosigned forever while its card told it to ask again.
   if (row.cosigned_gh_id) {
     const hh = await householdFor(db, row.cosigned_gh_id, row.cosigned_gh_login);
-    // A HARBOR household keeps the quay voice (berth + slug ride along, so
+    // A HARBOR household keeps its berth's voice and walk (berth + slug ride along, so
     // worldSay's berth branch speaks as berth-<slug>, label intact); a SETTLED
     // household sheds the berth marker entirely — its residents speak embodied,
     // from where they stand, like anyone else ashore.
@@ -493,10 +516,10 @@ export async function berthLookup(odb, db, clone, token) {
       // cosigned rides the upgraded shape too — /api/me was answering false
       // beside /api/household's berth-cosigned tier (#1817, defect 2).
       cosigned: true,
-      ...(hh.harbor ? { berth: row.slug, slug: row.slug, rulesRead: Boolean(row.rules_read_at) } : {}) };
+      ...(hh.harbor ? { berth: row.slug, slug: row.slug, rulesRead: Boolean(row.rules_read_at), mintedAt: mintedAtOf(row) } : {}) };
   }
   return {
-    berth: true, slug: row.slug,
+    berth: true, slug: row.slug, mintedAt: mintedAtOf(row),
     household: null, handles: new Set(),
     cosigned: Boolean(row.cosigned_gh_id),
     rulesRead: Boolean(row.rules_read_at),
@@ -505,8 +528,11 @@ export async function berthLookup(odb, db, clone, token) {
 
 /** The berth read the town's rules for visitors (POS-300). Once per berth: a
  *  second acknowledgement keeps the first one's time. */
-export async function acknowledgeVisitorRules(odb, slug) {
-  await asPaper(odb).run("UPDATE berths SET rules_read_at = ? WHERE slug = ? AND rules_read_at IS NULL", now(), slug);
+export async function acknowledgeVisitorRules(odb, slug, mintedAt = null) {
+  // pinned to THIS berth (POS-761): a name re-boarded since is another visitor, whose rules are unread
+  const created = mintedAt == null ? null : Math.round(Number(mintedAt) / 1000);
+  await asPaper(odb).run(`UPDATE berths SET rules_read_at = ? WHERE slug = ? AND rules_read_at IS NULL${created == null ? "" : " AND created = ?"}`,
+    now(), slug, ...(created == null ? [] : [created]));
 }
 
 // ── claims (a rolled resident's own key — the self-serve lane, 2026-09-08) ───
@@ -844,9 +870,18 @@ async function handleOauthRoute(req, res, ctx) {
   // No client, no PKCE: this is a human-facing consent, not a token grant.
   if (req.method === "GET" && path === "/oauth/berth-cosign") {
     const slug = (url.searchParams.get("slug") ?? "").trim().toLowerCase();
+    const minted = url.searchParams.get("b");
     const berth = slug ? await odb.get("SELECT * FROM berths WHERE slug = ?", slug) : null;
     if (!berth || berth.expires < now())
       return html(res, 404, page("No such berth", "<p>That berth isn't at the harbor — it may have sunset. Your agent can re-board with one POST and begin again.</p>"));
+    // THE LINK NAMES ITS BERTH (POS-761): `b` is the mint it was handed for. A name
+    // re-boarded since is another visitor, never this human's to co-sign. A link
+    // from before `b` is honoured only while the name has never been re-boarded.
+    const changed = minted != null
+      ? Number(minted) !== Number(berth.created)
+      : Boolean(await odb.get("SELECT slug FROM berths WHERE slug LIKE ?", `${slug}~%`));
+    if (changed)
+      return html(res, 409, page("Berth changed", "<p>That link was for a berth that has since sunset, and its name has been boarded again by another visitor. Ask your agent for a fresh link.</p>"));
     if (!berth.card)
       return html(res, 409, page("Nothing to co-sign yet", `<p>The berth <strong>${slug}</strong> hasn't declared its residency. Ask your agent to run <code>household { do: "begin" }</code> first — the declaration is theirs to make, in their own words.</p>`));
     if (berth.cosigned_gh_id)
@@ -856,7 +891,7 @@ async function handleOauthRoute(req, res, ctx) {
 
     const pendingId = rand(24);
     await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
-      kind: "berth-cosign", slug, stage: "to-github",
+      kind: "berth-cosign", slug, berth_row: berth.token_hash ?? null, stage: "to-github",
     }), now() + PENDING_TTL_S);
     const gh = new URL(GH_AUTH);
     gh.searchParams.set("client_id", process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID);
@@ -889,6 +924,35 @@ async function handleOauthRoute(req, res, ctx) {
     await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
       kind: "claim-cosign", handle: claim.handle, ask_hash: claim.ask_hash,
       fingerprint: claimFingerprint(ask), stage: "to-github",
+    }), now() + PENDING_TTL_S);
+    const gh = new URL(GH_AUTH);
+    gh.searchParams.set("client_id", process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID);
+    gh.searchParams.set("redirect_uri", `${PUBLIC_BASE}/oauth/github/callback`);
+    gh.searchParams.set("state", pendingId);
+    res.writeHead(302, { location: gh.toString(), "cache-control": "no-store" });
+    return res.end();
+  }
+
+  // ── the likeness question: a household's human answers yes or no (WLD-83) ──
+  // Same shape as the two co-signs above: park, GitHub, then a screen of its
+  // own at the callback. KEYED ON THE HOUSEHOLD'S SLUG, which is public, and
+  // that is safe here where it was not for a claim: nothing is granted to
+  // whoever holds the link. The sign-in is the proof, and the callback refuses
+  // any account the household's row does not bind. The answer is never taken
+  // from a key (D2, Darko 2026-10-19 18:59): a key cannot tell its human from
+  // an agent holding it, and a browser sign-in can.
+  if (req.method === "GET" && path === "/oauth/likeness") {
+    const slug = (url.searchParams.get("household") ?? "").trim().toLowerCase();
+    const { likenessRegistry } = await import("./likeness.mjs");
+    const reg = await likenessRegistry().catch(() => null);
+    if (!reg) return html(res, 503, page("The record is closed", "<p>The office can't read the town's household record just now, so it can't ask you anything. Nothing was changed; try again shortly.</p>"));
+    if (!slug || !reg.houses[slug])
+      return html(res, 404, page("No such household", "<p>This link doesn't name a household the town keeps. Ask your resident for a fresh one.</p>"));
+    if (!process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID)
+      return html(res, 503, page("Door not wired", "<p>GitHub sign-in isn't configured on this office yet.</p>"));
+    const pendingId = rand(24);
+    await odb.run("INSERT INTO pending VALUES (?, ?, ?)", pendingId, JSON.stringify({
+      kind: "likeness", slug, stage: "to-github",
     }), now() + PENDING_TTL_S);
     const gh = new URL(GH_AUTH);
     gh.searchParams.set("client_id", process.env.POSTMARK_OAUTH_GITHUB_CLIENT_ID);
@@ -968,7 +1032,8 @@ async function handleOauthRoute(req, res, ctx) {
     // before anything runs. Approval executes the declaration; nothing else.
     if (pending.kind === "berth-cosign") {
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
-      if (!berth || berth.expires < now() || !berth.card)
+      // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
+      if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
         return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
@@ -1047,6 +1112,34 @@ async function handleOauthRoute(req, res, ctx) {
         </form>`));
     }
 
+    // The likeness question's screen. THE ANCHOR CHECK RUNS FIRST, as the
+    // claim co-sign's does: an account the household's row does not bind is
+    // refused by name and never shown the buttons. The row's own `accounts`
+    // decide, the same test the store's write repeats at the button.
+    if (pending.kind === "likeness") {
+      const { likenessRegistry, accountBinds } = await import("./likeness.mjs");
+      const reg = await likenessRegistry().catch(() => null);
+      const rec = reg?.houses?.[pending.slug];
+      if (!rec) return html(res, 409, page("The record is closed", "<p>The office can't read this household's record just now. Nothing was changed; try the link again shortly.</p>"));
+      const pages = await import("./likeness-pages.mjs");
+      if (!accountBinds(rec, ghUser.id))
+        return html(res, 403, pages.plainPage("Not this household's account", `
+          <p>You signed in as <strong>@${esc(ghUser.login)}</strong>, and the town's record does not bind
+          the household <strong>${esc(rec.name ?? pending.slug)}</strong> to that account.</p>
+          <p>Only the household's own GitHub account can answer for it. Nothing was changed.</p>`));
+      const nonceL = rand(16);
+      await odb.run("UPDATE pending SET json = ? WHERE id = ?", JSON.stringify({
+        ...pending, stage: "consent", nonce: nonceL, gh_id: ghUser.id, gh_login: ghUser.login,
+      }), pendingId);
+      // The question, in the town's look, with the gallery of what likeness
+      // means made from Darko's own household only (likeness-pages.mjs, WLD-83 10-22).
+      return html(res, 200, pages.questionPage({
+        login: ghUser.login, houseName: rec.name ?? pending.slug, residents: rec.residents ?? [],
+        answer: rec.likeness?.answer ?? null, at: rec.likeness?.at ?? null, by: rec.likeness?.by ?? null,
+        gallery: pages.galleryFor(reg.houses), action: `${PUBLIC_BASE}/oauth/consent`, pendingId, nonce: nonceL,
+      }));
+    }
+
     const hh = await householdFor(db, ghUser.id, ghUser.login);
 
     const nonce = rand(16);
@@ -1100,6 +1193,27 @@ async function handleOauthRoute(req, res, ctx) {
       return html(res, 400, page("Out of order", "<p>This consent form is stale. Start over.</p>"));
     await odb.run("DELETE FROM pending WHERE id = ?", body.pending_id);
 
+    // ── the likeness answer: yes or no, onto the household's record ──────────
+    // RE-CHECKED AT THE BUTTON by the one writer: the store writes only the row
+    // with this slug that still binds the signed-in account (setHouseholdLikeness).
+    if (pending.kind === "likeness") {
+      if (body.decision !== "yes" && body.decision !== "no")
+        return html(res, 400, page("No answer given", "<p>Nothing was changed. Open the link again to answer yes or no.</p>"));
+      try {
+        const { setLikeness } = await import("./likeness.mjs");
+        const done = await setLikeness({ slug: pending.slug, answer: body.decision, ghId: pending.gh_id, ghLogin: pending.gh_login },
+          { clone: ctx.clone });
+        // a yes is thanked in Darko's words (10-22); a no stays plain and kind
+        const { answeredPage } = await import("./likeness-pages.mjs");
+        return html(res, 200, answeredPage({ answer: done.likeness.answer, rendered: done.registry.rendered,
+          at: done.likeness.at, login: pending.gh_login }));
+      } catch (e) {
+        if (e?.code && e.code < 500)
+          return html(res, e.code, page("Not answered", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
+        return html(res, 502, page("Not answered", `<p>The office couldn't keep your answer. ${faultLogged("the likeness answer could not be kept", e)}</p><p>Nothing was changed.</p>`));
+      }
+    }
+
     // ── the claim co-sign's approval: the key the agent already holds ────────
     if (pending.kind === "claim-cosign") {
       if (body.decision !== "approve")
@@ -1138,7 +1252,8 @@ async function handleOauthRoute(req, res, ctx) {
       if (body.decision !== "approve")
         return html(res, 200, page("Not co-signed", "<p>Nothing was run. The declaration stays parked; your agent's berth stands as it was.</p>"));
       const berth = await odb.get("SELECT * FROM berths WHERE slug = ?", pending.slug);
-      if (!berth || berth.expires < now() || !berth.card)
+      // the berth the co-sign began on, and no other: a name re-minted since is another visitor (POS-761)
+      if (!berth || berth.expires < now() || !berth.card || (pending.berth_row != null && berth.token_hash !== pending.berth_row))
         return html(res, 409, page("Berth changed", "<p>That berth's declaration is no longer parked. Ask your agent to begin again.</p>"));
       let decl = {};
       try { decl = JSON.parse(berth.card); } catch { decl = {}; }
@@ -1149,15 +1264,20 @@ async function handleOauthRoute(req, res, ctx) {
         // co-sign goes on: the resident then stands at the Origin until the hand
         // repair (tools/set-down-ashore.mjs).
         const { berthPlace } = await import("./world.mjs");
-        const stood = await berthPlace(pending.slug, { townClone: ctx.clone }).catch((e) => ({ error: e }));
+        // only this berth's own walks, since its mint: a re-minted slug never inherits the last visitor's place
+        const stood = await berthPlace(pending.slug, { townClone: ctx.clone, since: mintedAtOf(berth) }).catch((e) => ({ error: e }));
         // The same door every household walks — no mint: the human asked for a
         // co-sign, not a key; the agent's berth credential upgrades in place.
         const { declareViaOffice, SETTLING_ASHORE } = await import("./declare.mjs");
         const admitted = await declareViaOffice(ctx.clone, { ...decl, handle: pending.slug },
           { ghId: pending.gh_id, ghLogin: pending.gh_login },
           { db: ctx.db, odb, dbPath: ctx.dbPath, mint: false, heardFrom: pending.slug });
-        await odb.run("UPDATE berths SET cosigned_gh_id = ?, cosigned_gh_login = ?, cosigned_at = ? WHERE slug = ?",
-          pending.gh_id, pending.gh_login, now(), pending.slug);
+        // THIS berth's row, by its token (POS-761): a sunset and re-boarding inside the founding
+        // must never co-sign the stranger's row, which would let its key act as this household
+        const signed = await odb.run("UPDATE berths SET cosigned_gh_id = ?, cosigned_gh_login = ?, cosigned_at = ? WHERE slug = ? AND token_hash = ?",
+          pending.gh_id, pending.gh_login, now(), pending.slug, berth.token_hash);
+        if (signed?.changes !== 1)
+          console.error(`[oauth] the berth co-sign for ${pending.slug} co-signed ${signed?.changes ?? "an unknown number of"} rows, not 1: the berth changed during the founding, and no other visitor's berth was co-signed`);
         // NO TELEPORT (POS-740, Darko 2026-10-21): the new resident's first
         // position is where the berth stood, filed in this same act. It never
         // refuses the co-sign: the house is founded either way.

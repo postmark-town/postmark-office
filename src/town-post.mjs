@@ -46,6 +46,7 @@ import {
   BODY_MAX as IDEA_BODY_MAX,
 } from "./ideas.mjs";
 import { signUpAtTown, answerSignUpAtTown, awardAtTown } from "./idea-store.mjs";
+import { REPORT_CLASS } from "./reports.mjs"; // POS-757: the private post class; its pen is report-store.mjs
 
 const PLACE = { type: "object", description: "where it happens: { mark: \"<owner>/<slug>\" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates)" };
 
@@ -114,6 +115,9 @@ function strays(args, fields, lane, takes) {
  */
 export async function townPostEvent(args = {}, key = null, { roll = null, env = process.env } = {}) {
   const c = String(args.class ?? "").trim();
+  // A REPORT (POS-757) is private, so it has its own pen and never the post
+  // machine's public rows; its fields are judged there (reports.mjs § judgeReport).
+  if (c === REPORT_CLASS) return answer(async () => (await import("./report-store.mjs")).postReport(args, key, { roll, env }));
   if (c === IDEA_CLASS) {
     if (!ideaPostsOn(env)) return null;   // the switch off: the idea lane, exactly as before
     if (args.stamps !== undefined)
@@ -167,8 +171,8 @@ const ifIdeas = (s) => (IDEAS_ON ? s : "");
 const ACTING_HANDLE = { type: "string", description: "which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands" };
 const POST_REF = { type: "string", description: "the post's id, <author>/<slug>, as town { read: \"posts\" } names it" };
 const CLASS_REF = IDEAS_ON
-  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"idea\")" }
-  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\" or \"bug\")" };
+  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"idea\" or \"report\")" }
+  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")" };
 
 export const TOWN_POST_TOOLS = [
   { name: "town_amend",

@@ -201,13 +201,15 @@ test("v2: no url anywhere in a bare read, and a picture is a flag", { skip: !HAV
   for (const [b, rows] of Object.entries(v2.view)) if (b !== "how") for (const r of rows) if ("image" in r) assert.equal(r.image, true);
 });
 
-// THE SIZE BUDGET IS PENDING DARKO (POS-632). The ≤5K was the build's target;
-// Darko's 22:33 ruling put every mark's whole body back (bodies win; the lever is
-// rows, never bodies), and the budget went to his Call. 8K holds CI meaningful
-// meanwhile, on Wright's word.
-test("v2: within the budget as the MCP door serves it, at the rig's standpoint (8k, pending Darko on POS-632)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+// THE SIZE BUDGET IS 10,000 (Darko, 2026-10-19 13:58, on POS-632). The ≤5K was
+// the build's target; Darko's 22:33 ruling put every mark's whole body back
+// (bodies win; the lever is rows, never bodies), and 8K held CI meanwhile on
+// Wright's word, until the read outgrew it as law granted acts (the consume card,
+// +58; POS-697's field tails, ~+250): 8,069 on CI. The cap is a guard against
+// runaway growth, not a target.
+test("v2: within the budget as the MCP door serves it, at the rig's standpoint (10k, Darko on POS-632)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
   const served = JSON.stringify(await v2At(), null, 1).length; // mcp.mjs § the answer's text block
-  assert.ok(served <= 8000, `v2 served is ${served} characters`);
+  assert.ok(served <= 10000, `v2 served is ${served} characters`);
 });
 
 test("v2: every mark the bare read shows carries its whole body (Darko 22:33)", { skip: !HAVE_CLONE && WHY_NOT }, async () => {

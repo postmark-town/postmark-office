@@ -442,12 +442,16 @@ export async function declaredKeys(client, household) {
  * behind a filing door, so the read below always answers with a window that
  * stays open until this transaction commits. Held to COMMIT, and taken BEFORE
  * any write on the claim, so the clearing never waits on a door that waits on it.
+ *
+ * A dark candle is MARKED on the error (`candleDark`), so a door can tell it
+ * from a store it could not reach without reading the error's text (#756
+ * review; error-text-census.test.mjs).
  */
 export async function openWindowFor(client, dark) {
   await client.query(DOOR_SHARES_THE_CANDLE);
   const { rows: [win] } = await client.query(
     "SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
-  if (!win) throw new Error(dark);
+  if (!win) throw Object.assign(new Error(dark), { candleDark: true });
   return win;
 }
 
@@ -916,6 +920,76 @@ export async function promoteDraftOnStake({ actor, householdName, key = null, sl
   // pen restamped the released deed into this window. The door says it in
   // words; a null here means the ordinary same-window promotion.
   return { promoted: true, claim: out.id, window: windowId, late_from: out.lateFrom ?? null };
+}
+
+/**
+ * HOW THIS CLAIM WILL STAND, BY THE CANDLE'S OWN WALK (POS-674).
+ *
+ * The stake door told a ✦0 staker "it stands on your own household's ground"
+ * whenever the promotion above went through, and the promotion asks nothing
+ * about ground: the candle was the only judge, a crossing later (a plain sited
+ * mark on open ground, claim 56688387, refused `escrow-absent` in window 260). This is the question the candle asks at 5.5, asked here first: the
+ * author's claim on `slug` (their draft, or the row this act's promotion just
+ * filed in the open window) laid on the world with the open window's other
+ * pending claims, and walked prospectively (prospective-standing.mjs, the same
+ * composition, over `standing.mjs § markStanding`). No ground clause of its own.
+ *
+ * Returns `{ known: true, tier, ground }`, where `ground` is the sweep's row
+ * class (`rowClassOf`: `commons` needs escrow, anything else does not), or
+ * `{ known: false, why }`. It is a FORECAST, and says less than the candle can:
+ * it does not see what the clearing refuses before 5.5 or what the carry moves,
+ * so a parcel pending in this window counts as ground here and is judged there.
+ * Read-only; it takes no lock.
+ */
+export async function claimGroundClass({ actor, householdName, key = null, slug }, env = process.env) {
+  if (!candleEnabled(env)) return { known: false, why: "the candle is dark, so the store cannot walk its ground" };
+  const { candidateRowOf, prospectiveTiers } = await import("../world2/tools/prospective-standing.mjs");
+  const { classLayerVia } = await import("../world2/tools/standing.mjs");
+  const { rowClassOf } = await import("../world2/tools/escrow-presence.mjs");
+  const p = await pool(env);
+  // The staker's house, read exactly as `promoteDraftOnStake` reads it, so the
+  // judge sees the draft the promotion will put forward.
+  const staker = key ? await keyHouseholdOf(p, key) : null;
+  const household = staker ? staker.household : await householdKeyFor(p, householdName ?? actor);
+  const also = staker?.households?.slice(1) ?? [];
+  return withHousehold(p, household, async (c, keys) => {
+    const q = (sql, params) => c.query(sql, params);
+    const { rows: [win] } = await c.query("SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
+    const { rows: [own] } = await c.query(
+      `SELECT * FROM claims
+        WHERE claimant = $1 AND slug = $2 AND household = ANY($3)
+          AND (status = 'draft' OR (status = 'pending' AND window_id = $4))
+        ORDER BY (status = 'draft') DESC, submitted_at DESC NULLS LAST LIMIT 1`,
+      [actor, slug, keys, win?.id ?? null]);
+    if (!own) return { known: false, why: `no draft or open claim of ${actor}'s on "${slug}" to judge` };
+    // The author's earlier pending claim on this mark is replaced by this one
+    // (`retractReplaced`), so it is not laid beside it.
+    const { rows: laid } = win
+      ? await c.query(
+        `SELECT * FROM claims WHERE window_id = $1 AND status = 'pending' AND id <> $2 AND NOT (claimant = $3 AND slug = $4)`,
+        [win.id, own.id, actor, slug])
+      : { rows: [] };
+    // The standing row a claim continues, by the clearing's step-1 test: a slug
+    // that stands is continued only by a claim that supersedes that row; any
+    // other claim on it is refused there as a duplicate, and is not laid.
+    const standingOf = async (cl) => {
+      const { rows: [row] } = await c.query("SELECT id::text FROM marks WHERE slug = $1 AND status = 'standing'", [cl.slug]);
+      return row ?? null;
+    };
+    const candidates = [];
+    for (const cl of laid) {
+      const row = await standingOf(cl);
+      if (row && String(cl.supersedes ?? "") !== row.id) continue;
+      // A claimant the roll does not name is refused at 5.4 and lays no ground.
+      try { candidates.push(await candidateRowOf(q, cl, { continues: row })); } catch { /* not laid */ }
+    }
+    const row = await standingOf(own);
+    candidates.push(await candidateRowOf(q, own, { continues: row && String(own.supersedes ?? "") === row.id ? row : null }));
+    const tiers = await prospectiveTiers(q, { candidates, only: new Set([slug]), classes: await classLayerVia(q) });
+    const tier = tiers.get(slug) ?? null;
+    if (tier == null) return { known: false, why: `the walk gave "${slug}" no answer` };
+    return { known: true, tier, ground: rowClassOf(tier) };
+  }, { also });
 }
 
 /**

@@ -1568,7 +1568,11 @@ test("a resident is never shown the visitors' gate: the say lands, with or witho
   assert.ok(!second.error || second.defect === "you just spoke", JSON.stringify(second).slice(0, 300));
 });
 
-test("berth: nothing durable — a mark refuses a berth at the dispatch, terms still shown", async () => {
+// A VISITOR WALKS AND SAYS (POS-739, Darko 2026-10-22 17:53): a berth's
+// leave-mark is refused by its own name before anything is computed, with the
+// visitor's sentence. It used to reach the dispatch and be refused there with
+// the terms; the terms bound nothing a visitor could take.
+test("berth: a visitor walks and says — a mark is refused by name, before the dispatch", async () => {
   on();
   // The base fixture grants only say; stand leave-mark up ambient so the
   // refusal under test is the HOUSEHOLD gate at the dispatch, not the
@@ -1583,8 +1587,9 @@ test("berth: nothing durable — a mark refuses a berth at the dispatch, terms s
   await withStore(path, async () => {
     const r = await worldApex({ do: "leave-mark", args: { slug: "berth-mark", kind: "sited", at: { x: 1, y: 1 } } }, BERTH_KEY);
     assert.equal(r.error, "bounce", "a berth must never write the durable world");
-    assert.ok(r.terms, "even the refusal shows the law");
-    assert.equal(r.did, "leave-mark", "the refusal is the dispatch's, not the door's");
+    assert.equal(r.code, 403);
+    assert.match(r.defect, /^a visitor walks and says; "leave-mark" comes with residency/, "the refusal names the act and the visitor");
+    assert.equal(r.standing, "visitor");
   });
 });
 
@@ -1973,6 +1978,13 @@ test("THE ARENA IS CLOSED: do: strike and do: loot answer \"the arena is closed\
         assert.match(r.hint, /the arena is closed while it is rebuilt/);
         assert.equal(r.action, verb);
       }
+      // an encounter's verbs and its live door reach their doors only once the blessed law knows them: here it
+      // does not, so steady and speak-for are no place's, and nothing of them is said (WLD-25)
+      for (const verb of ["steady", "speak-for"]) {
+        const r = await worldApex({ do: verb, args: { resident: "x", creature: "y", text: "z" } }, KEY_ALPHA);
+        assert.equal(r.error, "bounce", `${verb}: ${JSON.stringify(r).slice(0, 200)}`);
+        assert.notEqual(r.dispatched_to, "world_creature", `${verb} reached the encounter's door before its law`);
+      }
     });
   } finally {
     if (was === undefined) delete process.env.WORLD_DYNAMIC_DB; else process.env.WORLD_DYNAMIC_DB = was;
@@ -2169,7 +2181,8 @@ test("O2 · do: leave-mark { kind, count, to } reaches the kind door through the
       const vehicle = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha" } }, KEY_ALPHA);
       assert.match(String(vehicle.defect), /"vehicle" is the town's to make/);
       const own = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha", body: "mine" } }, KEY_ALPHA);
-      assert.match(String(own.defect), /carries no body/, "a count carries nothing of its own, said before the class law");
+      // a count beside a thing's own field: both forms named, said before the class law (POS-766)
+      assert.match(String(own.defect), /count makes that many alike, with nothing of their own, and body is one thing's own/, "a count carries nothing of its own, said before the class law");
     });
   } finally { resetLawSnapshot(); }
 });

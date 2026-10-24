@@ -35,7 +35,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  escrowAbsentAmong, escrowPresenceAt, escrowAbsentCheck, rowClassOf, ESCROW_ABSENT_CHECK, escrowLines,
+  escrowAbsentAmong, escrowPresenceAt, escrowAbsentCheck, rowClassOf, townsOwn, ESCROW_ABSENT_CHECK, escrowLines,
 } from "../world2/tools/escrow-presence.mjs";
 
 // Window 177's own pinned town sha, off the store. NOT 2a681e6c, which is the
@@ -216,4 +216,12 @@ test("both lines at once, and neither when there is nothing to say", () => {
 test("a missing town sha is spelled, not silently blank", () => {
   const [line] = escrowLines({ unchecked: [DRIFT_ROOM] }, null);
   assert.match(line, /town \?/, "the operator must be able to tell 'no sha' from a sha they misread");
+});
+
+test("townsOwn (POS-696): the town's own hand needs no stake, whatever the walk said; a resident's never qualifies", () => {
+  assert.equal(townsOwn({ owner: "the-town", tier: "market" }), true);
+  assert.equal(townsOwn({ owner: "lupi", tier: "market" }), false);
+  assert.equal(townsOwn({ owner: "the-town-crier", tier: "market" }), false, "a handle that starts like the town is not the town");
+  assert.equal(townsOwn({ slug: "the-town/orient" }), false, "the slug is not the owner: the answer is the column, never a prefix");
+  assert.equal(townsOwn(null), false);
 });

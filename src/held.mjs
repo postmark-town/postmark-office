@@ -100,7 +100,8 @@ const cutoff = (n) => (n != null && Number.isFinite(Number(n)) ? Number(n) : nul
  * clearing cutoffs (`from`, `through`), and the store's last places.
  */
 export const viewOf = ({ record, from = null, through = null, placed = new Map() } = {}) =>
-  record ? { last: latestRows(record.attachments), from: cutoff(from), through: cutoff(through), places: record.places ?? new Map(), drops: record.drops ?? new Map(), placed } : null;
+  record ? { last: latestRows(record.attachments), from: cutoff(from), through: cutoff(through), places: record.places ?? new Map(), drops: record.drops ?? new Map(), placed,
+    made: record.made ?? new Map() } : null;
 
 /** One mark as the one answer places it: held → no place and `held_by`; set down → there; else as it is. PURE. */
 export function placedMark(m, view) {
@@ -127,7 +128,27 @@ export function unplaceHeld(w, view) {
   if (!w?.marks || !view) return w;
   let changed = false;
   const marks = w.marks.map((m) => { const n = placedMark(m, view); if (n !== m) changed = true; return n; });
+  const made = heldMadeMarks(view, marks);
+  if (made.length) { marks.push(...made); changed = true; }
   return changed ? { ...w, marks } : w;
+}
+
+/**
+ * THE THINGS MADE IN HAND, laid into the one world (POS-766/d, "Store, overlaid"):
+ * each mark a named make carried (`view.made`, named-making.mjs § foldMade) that
+ * is held now, as a held thing reads (`held_by`, no place). Not held (eaten),
+ * or already in canon, it adds nothing: the overlay never prints a place for one.
+ */
+export function heldMadeMarks(view, marks = []) {
+  if (!view?.made?.size) return [];
+  const have = new Set((marks ?? []).map((m) => m?.id));
+  const out = [];
+  for (const [id, m] of view.made) {
+    if (have.has(id)) continue;
+    const row = view.last.get(id);
+    if (row?.policy === "cascade" && row.entity != null) out.push({ ...m, [HELD_BY]: String(row.entity) });
+  }
+  return out;
 }
 
 /**

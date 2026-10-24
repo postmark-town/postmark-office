@@ -52,7 +52,9 @@ const propertyOf = (view) => (n, p) => view.property?.(n, p) ?? null;
  * of its own, which a count cannot carry (O2 gap G2, the lead's call). Returns
  * `{ kind, lineage }`, or throws the door's refusal, nothing made.
  */
-export function makeableKind(kind, view) {
+// `named` (POS-766): ONE named thing made into a holder, by its slug, so a kind that holds things is
+// makeable this way (its contents have somewhere to be); a kind that is no thing is still refused.
+export function makeableKind(kind, view, { named = false } = {}) {
   if (kind == null || String(kind).trim() === "")
     throw bounce(422, "make what kind?", "kind: a class id, e.g. a kind of candy — explain: \"candy\" lists the kinds. Nothing was made.");
   const k = String(kind).trim();
@@ -64,10 +66,12 @@ export function makeableKind(kind, view) {
       ? `its makers is false (set on ${makers.from}), under the-town/nothing-you-control-mints. Nothing was made.`
       : `no class in its lineage states makers, and an unread makers answers false (the root's own answer). Nothing was made.`);
   if (!lineage.includes("thing"))
-    throw bounce(422, `a ${k} is not a thing, so nothing holds it`, `a holder holds things; a ${k} is left as its own mark (leave-mark with a slug). Nothing was made.`);
-  if (holdingOf({ className: k, classProperty: propertyOf(view) }).holder)
+    throw bounce(422, `a ${k} is not a thing, so nothing holds it`, named
+      ? `a thing made into hands or a holder is a kind of thing (kind: "thing" by default); a ${k} is left on the ground, with to: off. Nothing was made.`
+      : `a holder holds things; a ${k} is left as its own mark (leave-mark with a slug). Nothing was made.`);
+  if (!named && holdingOf({ className: k, classProperty: propertyOf(view) }).holder)
     throw bounce(422, `a ${k} holds things of its own, so it is not made by count`,
-      `make it as its own mark, with a slug, so what it holds has somewhere to be. Nothing was made.`);
+      `make it as one thing of its own, named, so what it holds has somewhere to be: leave-mark { slug, body, kind: "${k}", to } makes one into your hands or a holder, held, free and live. Nothing was made.`);
   return { kind: k, lineage };
 }
 
@@ -89,7 +93,7 @@ export function holderLawOf({ holder, mark = null, view }) {
   const thing = className != null && lineageOf(className, view.extendsOf).includes("thing");
   if (!thing) return { resident: false, holder: false, capacity: null, open: null, className };
   const h = holdingOf({ mark, className, classProperty: propertyOf(view) });
-  return { resident: false, holder: h.holder === true, capacity: h.capacity, open: h.open !== false, className,
+  return { resident: false, holder: h.holder === true, capacity: h.capacity, open: h.open !== false, accepts: h.accepts, keeps: h.keeps, accepts_shown: h.accepts_shown, className,
     // an own capacity outside its class's bounds is refused, never clamped (holding-law § holdingOf, O1 review-606)
     ...(h.capacity_refused ? { capacity_refused: h.capacity_refused } : {}) };
 }

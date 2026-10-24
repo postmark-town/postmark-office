@@ -106,7 +106,7 @@ const LANE_OF = Object.freeze({
   // mirror — a beat still reaches `acts` the journalled way. Named
   // 2026-09-02, the first census run against an apex that dispatches them
   // (the C1 flip night); until then check 0 had never been asked.
-  strike: "journal", cast: "journal", guard: "journal", lift: "journal", loot: "journal",
+  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal", // strike: the encounter's now (below)
   // THE VEHICLE'S ACT (#2986, 2026-09-19). Which lane: journal. Which table:
   // `journal`, class `ride`. Which pen: `appendJournal`, which carries the
   // World 2.0 mirror into `acts` itself — the same path enter/exit take, so
@@ -132,6 +132,11 @@ const LANE_OF = Object.freeze({
   // to mirror and nothing for check 2's attachments to twin. Answered here
   // because the census asked, as it did for `ride`.
   consume: "lane", refill: "lane",
+  // WLD-83: a resident describes itself. Which lane: its own. Which table: `acts`
+  // itself, class `appearance` (entity-predicates.mjs § defaultWrite, through
+  // appendActFlipped), the only record an appearance has, so there is no first
+  // pen to close against. Canon at the act; the notary publishes it.
+  describe: "lane",
   // A CREATURE'S AFFORDED ACTIONS (POS-672, W1, 2026-10-20). Which lane, which
   // table, which pen: watch, shoo, call and whisper write one row each into
   // `acts` itself, class `creature` (creature-verbs.mjs through appendActFlipped),
@@ -140,6 +145,17 @@ const LANE_OF = Object.freeze({
   // lane's `units:offer`, as consume is. Approach IS a walk (check 3), its row
   // naming the creature. Answered here because the census asked, as for `ride`.
   watch: "lane", shoo: "lane", call: "lane", whisper: "lane", offer: "lane", approach: "lane",
+  // AN ENCOUNTER'S VERBS (WLD-25, 2026-10-21; src/encounter-verbs.mjs). Which lane, which table, which
+  // pen: strike, steady and shield each write one row into `acts` itself, class `creature`, through
+  // appendActFlipped (the door's own guard inside the transaction), the only record they have, as the
+  // afforded actions' rows are. `strike` was the closed arena's beat (journal, above); the apex hands it
+  // to the encounter's door once the blessed law knows encounters, and the arena's refusal before that.
+  steady: "lane", shield: "lane",
+  // the live door (a creature that tempts): one creature-class row, a line or a temptation, through the pen
+  "speak-for": "lane",
+  // a fight in set pieces (src/set-pieces.mjs): dodge and persuade, aimed at a creature, one creature-class row each
+  // through the afforded actions' own pen, the only record they have
+  dodge: "lane", persuade: "lane",
 
   // ruled out, each with its reason
   "note-to-self": "none",
@@ -204,6 +220,9 @@ const CLASS_LANE_OF = Object.freeze({
   // there is no first pen to close against. Its payload was checked against
   // the public export: a reaction row never carries the slice Jev read.
   creature: "lane",
+  // WLD-83: a resident's appearance tree, describe and withdraw. `acts` is its only
+  // pen (entity-predicates.mjs), and every payload is the resident's own public words.
+  appearance: "lane",
 });
 
 function checkClassCensus(classesInJournal) {

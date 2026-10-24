@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isPrincipal } from "./ops.mjs";
+import { pronounsOf } from "./profiles.mjs"; // WLD-83: pronouns, profile first
 import { householdOf, giverLookup } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
 import { isResidentHandle } from "./residency.mjs"; // the door's own admission grammar — one definition of what a handle is
@@ -25,8 +26,8 @@ export function identityOf(key) {
     handles: [...(key.handles ?? [])],
     visitor: key.visitor === true,
     // A berth is its own standing (2026-08-15): not a visitor, not a resident
-    // — a self-minted arrival at the quay. Reads + say; residency is what a
-    // human co-sign makes of it.
+    // — a self-minted arrival at the quay. Reads, walk and say (a visitor,
+    // POS-739); residency is what a human co-sign makes of it.
     ...(key.berth ? { berth: key.slug, speaker: `berth-${key.slug}`, cosigned: key.cosigned === true } : {}),
     verified_github: verified,
     key_kind: key.berth ? "berth" : (key.keyKind ?? (verified ? "oauth" : "static")),
@@ -275,7 +276,10 @@ export function townSummaryOf(meta, all, residents) {
  * a default: a resident who has said nothing has said nothing.
  */
 export const rollEntry = (handle, d) => {
-  const pronouns = typeof d.address?.data?.pronouns === "string" ? d.address.data.pronouns.trim() : "";
+  // the profile's pronouns first, the ADDRESS line after (WLD-83, 2026-10-20: a
+  // profile field; profiles.mjs § pronounsOf, the one rule), so the roll Ferry's
+  // daily reads says what every close look says
+  const pronouns = pronounsOf(d) ?? "";
   return { handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null,
     ...(pronouns ? { pronouns } : {}) };
 };
@@ -941,7 +945,7 @@ export function lawWithStanding(law, standing) {
   return { ...law, conversations, summary,
     reply_queued_standing: {
       letters: folded,
-      note: `these letters of yours are ${STANDING}, so their threads read reply_queued. They are the ones your doorstep lists under your_pending_letters. Only your own key is shown them; the record has them once the ferry delivers`,
+      note: `these letters of yours are ${STANDING}, so their threads read reply_queued. They are the ones your doorstep lists under your_pending_letters. Only your own key is shown them; the record has them once they sail`,
     } };
 }
 

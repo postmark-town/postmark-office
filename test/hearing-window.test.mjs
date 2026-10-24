@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createHearingWindow, publishedSettlementAt, blessedSettlementAt } from "../src/hearing-window.mjs";
+import { createHearingWindow, publishedSettlementAt, publishedSettlementsAt, blessedSettlementAt, hearable } from "../src/hearing-window.mjs";
 
 function world() {
   const repo = mkdtempSync(join(tmpdir(), "postmark-hearing-"));
@@ -89,4 +89,36 @@ test("the say path never waits: read() answers from memory, and a failed refresh
   h.read();
   await h.refresh();
   assert.equal(h.read().since, kept, "a reader that trips leaves the last answer standing");
+});
+
+// ── ONE WINDOW, EVERY EAR (POS-693) ─────────────────────────────────────────
+
+test("hearable: born inside the window and not after the instant; an unknown window cuts nothing", () => {
+  const since = Date.UTC(2026, 9, 19, 6, 1, 41);
+  const at = since + 6 * 3600_000;
+  assert.equal(hearable(since, at, since), true, "spoken the instant the window opened");
+  assert.equal(hearable(since + 3600_000, at, since), true, "six hours is not five minutes");
+  assert.equal(hearable(since - 1, at, since), false, "before the settlement");
+  assert.equal(hearable(at + 1, at, since), false, "not yet spoken");
+  assert.equal(hearable(since - 86_400_000, at, null), true, "an unknown window reaches back");
+});
+
+test("an earlier instant opens at its own settlement, read off the same sweeps", async () => {
+  const w = world();
+  w.commit("settlement: sweep 1 published", "2026-10-18T06:00:30Z");
+  w.commit("settlement: sweep 2 published", "2026-10-18T18:00:40Z");
+  w.commit("crossing-save 256", "2026-10-18T20:00:00Z");
+  w.commit("settlement: sweep 3 published", "2026-10-19T06:01:41Z");
+  assert.deepEqual((await publishedSettlementsAt(w.repo)).map((ms) => new Date(ms).toISOString()),
+    ["2026-10-19T06:01:41.000Z", "2026-10-18T18:00:40.000Z", "2026-10-18T06:00:30.000Z"]);
+  const h = createHearingWindow({ repo: w.repo });
+  await h.refresh();
+  const iso = (r) => new Date(r.since).toISOString();
+  assert.equal(iso(h.read()), "2026-10-19T06:01:41.000Z", "the live ear: the newest");
+  assert.equal(iso(h.read(Date.parse("2026-10-19T09:00:00Z"))), "2026-10-19T06:01:41.000Z");
+  assert.equal(iso(h.read(Date.parse("2026-10-18T23:00:00Z"))), "2026-10-18T18:00:40.000Z", "the sweep before, not the save after it");
+  assert.equal(iso(h.read(Date.parse("2026-10-18T06:00:30Z"))), "2026-10-18T06:00:30.000Z", "a sweep's own instant opens its own window");
+  const old = h.read(Date.parse("2026-10-17T12:00:00Z"));
+  assert.equal(old.since, null);
+  assert.match(old.disclosure, /older than the 3 settlements/);
 });

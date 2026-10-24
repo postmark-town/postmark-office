@@ -1,3 +1,10 @@
+// ARCHIVED 2026-10-20 (POS-729), with the kit it tested, now in deploy/_archived/.
+// Every assertion here reads the process-pool kit (the template, the slice and the
+// two nginx confs), which was never installed: the office's read workers are
+// worker_threads in the writer (src/read-workers.mjs, POS-266). The suite runs
+// test/*.test.mjs only, so this file no longer runs, and its paths are as they
+// stood at retirement. workerSafe keeps its own coverage in test/read-worker.test.mjs.
+//
 // read-pool-deploy.test.mjs — the deploy kit's own falsifier (DEC-4 / G3).
 //
 // THE GAP THIS CLOSES, in the reviewer's words: "No test names either" — the

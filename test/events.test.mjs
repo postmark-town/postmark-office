@@ -865,7 +865,7 @@ test("post machine · the town door reads the event class: read: \"event\" dispa
     assert.ok(WRITE_TOOLS.has(flat), `${flat} is a credentialed act`);
   }
   const post = TOOLS.find((t) => t.name === "town_post").inputSchema;
-  assert.deepEqual(post.properties.class.enum, ["idea", "event", "quest", "bug"]);
+  assert.deepEqual(post.properties.class.enum, ["idea", "event", "quest", "bug", "report"]); // report: POS-757, one value, its fields in explain
   assert.deepEqual(post.required, ["class"]);
 });
 

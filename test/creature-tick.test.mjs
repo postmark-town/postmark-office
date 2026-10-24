@@ -1,7 +1,17 @@
 // creature-tick.test.mjs — the creatures' clock (WLD-56 part 3; src/creature-tick.mjs).
 //
-// RULED (Darko, 2026-10-15 12:09 EDT, D1–D6): a wolf 2, a raven 4 and a bat 3 a
-// window at seeded minutes, each lasting 12 h from its own minute. WLD-96 (Darko,
+// RULED (Darko, 2026-10-15 12:09 EDT, D1–D6): creatures out a window at seeded
+// minutes, each lasting 12 h from its own minute. RE-RULED 2026-10-17 13:58 EDT
+// (world 9acaff9b, WLD-56 on LOGOS v2 part 2): ONE creature a window from
+// crossing 259, the kinds in turn (bat, raven, wolf), each kind's count 1.
+// RE-RULED 2026-10-19 20:05 EDT (WLD-84, the ramp, world #258): from the 10-21
+// settlement every kind every window, 2 bats, 3 ravens and 1 wolf, the rotation
+// written null. The first case pins that law at the clone's sha (world main
+// b81aa6f7b since POS-672's re-pin). The mechanism cases (a window's
+// order, what is hidden, a key rotated mid-window) need several spawns in one
+// window, so they run the pin's law with every kind out at once and no rotation
+// (`many`): the old 10-15 counts, under a rotation written null, which the
+// law reads as lawful (tools/creatures.mjs § creatureLaw). WLD-96 (Darko,
 // 2026-10-21 19:39 and 19:41 EDT): the fade is gone, the Mists creatures gather
 // until one flees. The window's
 // inputs are the WORLD's, read at the pinned clone's sha through the same
@@ -15,7 +25,7 @@ import { readFileSync } from "node:fs";
 
 import {
   ABANDON_ACTION, CREATURE_TICK_MS, LOOKBACK_MS, PRIOR_ROW_SQL, REVEAL_ACTION, SEED_ACTION, TICK_ACTIONS, keyFingerprint,
-  creatureTick, startCreatureTick, stopCreatureTick, townRow, windowInputsAt, windowObject, writeOnce,
+  creatureTick, startCreatureTick, stopCreatureTick, townRow, windowInputsAt, windowObject, writeOnce, UNSEAL_DUE_SQL,
 } from "../src/creature-tick.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
@@ -24,8 +34,13 @@ const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
 const PIN = JSON.parse(readFileSync(new URL("./clone-pins.json", import.meta.url), "utf8")).world.sha;
 const KEY = "a test master key, never the box's";
 const W = NO_WORLD ? null : await windowInputsAt(PIN, { repo: worldClone() });
-/** The pin's law with the launch dial turned on from `from` (the pin's own dial is null: off). */
-const on = (from = 270, w = W) => ({ ...w, law: { ...w.law, fromCrossing: from }, inputs: { ...w.inputs, fromCrossing: from } });
+/** The pin's law with every kind out in one window and no rotation: the 10-15 counts, for the mechanism cases. */
+const MANY = { bat: 3, raven: 4, wolf: 2 };
+const many = (w) => ({ ...w, law: { ...w.law, dials: { ...w.law.dials, counts: MANY, rotation: null } }, inputs: { ...w.inputs, dials: { ...w.inputs.dials, counts: MANY, rotation: null } } });
+/** That law with the launch dial at `from`. */
+const on = (from = 270, w = W) => { const m = many(w); return { ...m, law: { ...m.law, fromCrossing: from }, inputs: { ...m.inputs, fromCrossing: from } }; };
+/** The pin's own law with the launch dial written null: off. */
+const off = (w = W) => ({ ...w, law: { ...w.law, fromCrossing: null }, inputs: { ...w.inputs, fromCrossing: null } });
 const N = 271;
 const { startMs, endMs } = NO_WORLD ? {} : W.creaturesMod.windowOf(N);
 const MIN = 60_000;
@@ -38,6 +53,7 @@ function store() {
     acts,
     query: async (sql, [actions, since]) => {
       assert.match(sql, /class = 'creature'/);
+      if (sql === UNSEAL_DUE_SQL) return []; // no creature here tells (POS-712)
       return acts.filter((a) => actions.includes(a.action) && Date.parse(a.at) > Date.parse(since)).map((a) => ({ ...a, payload: JSON.stringify(a.payload) }));
     },
     write: async (row) => {
@@ -59,8 +75,15 @@ async function runThrough(s, from, to, step = 10 * MIN, over = {}) {
 
 test("the window's inputs are the world's, read at a sha: the ruled law, the kinds' start states, the Mists and the marks", () => {
   assert.equal(W.sha, PIN);
-  assert.deepEqual(W.law.dials.counts, { bat: 3, raven: 4, wolf: 2 });
-  assert.equal(W.law.fromCrossing, null, "the pin's launch dial is off");
+  assert.deepEqual(W.law.dials.counts, { bat: 2, raven: 3, wolf: 1 }, "every kind every window: 2 bats, 3 ravens, 1 wolf (Darko, 10-19 20:05, WLD-84)");
+  assert.equal(W.law.dials.rotation, undefined, "no rotation: the ramp writes it null");
+  assert.equal(W.law.fromCrossing, 259, "from crossing 259");
+  // the pin's own law, through the world's scheduler: every window brings all six
+  for (const M of [259, 262, 271]) {
+    const sched = W.creaturesMod.scheduleFor(M, W.creaturesMod.secretFor(KEY, M), W.inputs);
+    const n = (k) => sched.spawns.filter((x) => x.kind === k).length;
+    assert.deepEqual([n("bat"), n("raven"), n("wolf")], [2, 3, 1], `window ${M} brings 2 bats, 3 ravens and a wolf`);
+  }
   assert.deepEqual(W.starts.wolf, { moods: { fear: 1, curiosity: 1, hunger: 2 }, flags: [] });
   assert.deepEqual(W.starts.raven.moods, { fear: 1, curiosity: 2, hunger: 1 });
   assert.ok(W.inputs.mists?.clear || W.inputs.mists?.schedule, "the skeleton's Mists");
@@ -68,12 +91,20 @@ test("the window's inputs are the world's, read at a sha: the ruled law, the kin
   assert.equal(W.inputs.world_sha, PIN);
 });
 
+test("the pin's own law through the tick: every kind in the window, at its count (the ramp, WLD-84)", async () => {
+  const s = store();
+  await runThrough(s, startMs, endMs - 1, 10 * MIN, { inputsAt: async () => W });
+  const spawns = s.acts.filter((a) => a.action === "spawn");
+  const n = (k) => spawns.filter((a) => a.payload.kind === k).length;
+  assert.deepEqual([n("bat"), n("raven"), n("wolf")], [2, 3, 1], `window ${N}: 2 bats, 3 ravens and a wolf`);
+});
+
 test("off by the launch dial, or with no key: nothing is seeded or spawned", async () => {
   const s = store();
-  const r = await tickAt(s, startMs + MIN, { inputsAt: async () => W });
-  assert.deepEqual([r.wrote, s.acts.length], [{ seed: 0, spawn: 0, reveal: 0, abandon: 0 }, 0], "the pin's dial is null");
+  const r = await tickAt(s, startMs + MIN, { inputsAt: async () => off() });
+  assert.deepEqual([r.wrote, s.acts.length], [{ seed: 0, spawn: 0, reveal: 0, abandon: 0, unseal: 0 }, 0], "a launch dial written null");
   const k = await tickAt(s, startMs + MIN, { key: null });
-  assert.deepEqual([k.wrote, s.acts.length], [{ seed: 0, spawn: 0, reveal: 0, abandon: 0 }, 0], "no key: no seed, even with the dial on");
+  assert.deepEqual([k.wrote, s.acts.length], [{ seed: 0, spawn: 0, reveal: 0, abandon: 0, unseal: 0 }, 0], "no key: no seed, even with the dial on");
   assert.match(k.line, /no key \(no window is seeded\)/);
   const n = await tickAt(s, startMs + MIN, { query: async () => null });
   assert.match(n.line, /not switched on/);

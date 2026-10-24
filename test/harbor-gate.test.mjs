@@ -59,9 +59,11 @@ test("REACTIVATION IS ONE ENV VAR: HARBOR_WRITES=1 opens every gated door", () =
 // POS-70 row 38 (2026-09-24): the hint said settlement "arrives in boarded
 // order through the Registrar", which stopped being true on 2026-09-21. It reads
 // the one settlement clause now (declare.mjs § SETTLING_ASHORE).
-test("the bounce names the whole truth: read, quay, the one settlement clause, no letter needed", () => {
+test("the bounce names the whole truth: read, a voice where you stand, the one settlement clause, no letter needed", () => {
   assert.equal(HARBOR_BOUNCE.code, 403);
-  assert.match(HARBOR_BOUNCE.hint, /quay/);
+  // a voice where you stand, not at the quay (POS-739): a household that boarded as a berth walks as its visitor
+  assert.match(HARBOR_BOUNCE.hint, /speak where you stand/);
+  assert.doesNotMatch(HARBOR_BOUNCE.hint, /speak at the quay/);
   assert.ok(HARBOR_BOUNCE.hint.includes(SETTLING_ASHORE), "the hint reads the one settlement clause");
   assert.doesNotMatch(HARBOR_BOUNCE.hint, /write them a letter/, "harbor households cannot send letters — the hint must not ask for one");
 });
