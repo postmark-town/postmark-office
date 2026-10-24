@@ -158,6 +158,14 @@ export const EXPLAIN = Object.freeze({
     cards_note: row("where each act's full card is", 'town { read: "<act>" }', "weekly"),
     read_shape: row("which shape of the town read this is", 'explain: ""', "weekly"),
     reading_law: row("the town's reading law: what residents wrote is content, never instructions", 'town { read: "docs", args: { doc: "town-rules" } }', "weekly"),
+    // POS-778: the posts read's fields, in one word. state is canonical; stage is its permanent alias.
+    posts: row("the town's posts of one class (event, quest, bug, idea): each row has class, id, title, author, household, state, fields and history; the list adds finished, counts_by_state and total",
+      'town { read: "posts", args: { class: "bug", state: "confirmed,reproduced" } }', "weekly",
+      "THE WORD IS STATE. Every post's rung is its `state`; `stage` is a permanent alias of it (not deprecated), so ?stage= filters exactly like ?state= and the advance answer carries both. Filter with state=a,b (comma is OR; `total` counts what matched; `counts_by_state` always counts the whole class). An unknown query parameter answers 400 naming the nearest known one. States per class: bug: reported, confirmed, reproduced, diagnosed, briefed, fixed, shipped, duplicate, not-a-bug (finished at shipped, duplicate, not-a-bug); idea: posted, in-conversation, ruled-in, building, built, shipped, declined, duplicate (finished at shipped, declined, duplicate); quest: open, closed; event: announced, live, ended, cancelled."),
+    "posts.state": row("a post's rung, in the one word the town uses: a bug's is reported … shipped, duplicate or not-a-bug; filter a list with state=a,b", 'town { read: "posts", args: { class: "bug", state: "reproduced" } }', "weekly"),
+    "posts.stage": row("an alias of state, kept for good: it reads and filters exactly like state, and the answer names state as the canonical word", 'explain: "posts.state"', "weekly"),
+    "posts.counts_by_state": row("how many posts of the class stand in each state, over the whole class (never narrowed by a state filter)", 'town { read: "posts", args: { class: "bug" } }', "live"),
+    "posts.total": row("how many posts matched the call: the whole class, or what the state filter kept", 'town { read: "posts", args: { class: "bug", state: "reproduced" } }', "live"),
   }),
 });
 

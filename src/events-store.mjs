@@ -35,6 +35,7 @@ import { householdKeyFor } from "./world2-claims.mjs";
 import { holdsHand } from "./named-hand.mjs";
 import { sessionKeysVia } from "./household-deriver.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import { rungWords } from "./post-words.mjs";
 import { wakesNote, earpieceEnabled } from "./earpiece.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import {
@@ -676,7 +677,7 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     await judgeEarnedCreditVia(client, r, gh);
     const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
-    return { post: id, act_id: actId, hand, stage: r.to, recredit: true, was, credit: r.credit, stamps: n, link: r.link,
+    return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
       receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. `
         + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
         + `If the ledger holds no such line paid to ${was}, or ${was} no longer holds its amount in liquid stamps, the pass holds the correction and says why.`,
@@ -716,7 +717,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     const pays = BUG_LADDER[j.to]
       ? `the ladder owes ${j.credit} ${n} stamps for ${j.to}, paid by the reviewed stage pass (not by this act), subject to the town's meep law and, at confirmed, three paid reports per household a week`
       : `${j.to} pays nothing`;
-    return { post: bugAnswer(row), act_id: actId, hand, stage: j.to, ...(j.credit ? { credit: j.credit } : {}), stamps: n,
+    return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
       read: bugReadHint(id) };
@@ -740,7 +741,7 @@ async function skipBug(fields, key, id, { now, env }) {
       { id: actId, action: ACT_SKIP, actor: hand, object: id, payload, household: prev.household });
     await updatePost(client, row);
     const next = BUG_STAGES[BUG_STAGES.indexOf(s.to) + 1];
-    return { post: bugAnswer(row), act_id: actId, hand, stage: s.to, skipped: true, reason: s.reason, stamps: 0,
+    return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(s.to), skipped: true, reason: s.reason, stamps: 0,
       receipt: `skipped: ${id} ${prev.state} → ${s.to} by ${hand}'s hand, because ${s.reason}; a skipped stage credits no one and pays nothing, and the bug's history keeps it as skipped. Next: ${next}`,
       read: bugReadHint(id) };
   }, env);

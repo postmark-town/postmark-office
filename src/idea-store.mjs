@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { officeRead, officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
+import { rungWords } from "./post-words.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import {
   refuse, applyPostAct, slugFromTitle, ACT_POST, ACT_AMEND_POST, ACT_ADVANCE, ACT_SIGN_UP, ACT_WITHDRAW_SIGN_UP,
@@ -189,7 +190,7 @@ export async function advanceIdea(fields, key, id, { now = Date.now(), env = pro
       { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
     await updatePost(client, row);
     const finished = IDEA_FINISHED.includes(j.to);
-    return { post: answerOf(row), act_id: actId, hand, stage: j.to, ...(j.credit ? { credit: j.credit } : {}),
+    return { post: answerOf(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand${j.credit ? `, crediting ${j.credit}` : ""}${j.link ? `; it points at ${j.link}` : ""}${j.to === STATE_DUPLICATE ? `; it repeats ${j.of}` : ""}. A stage pays nothing by itself: stamps are awarded by hand (town { do: "award" }).${finished ? " It is finished, and moves no further." : ""}`,
       read: readHint(id) };
   }, env);

@@ -93,6 +93,10 @@ import { IDEA_CLASS, IDEA_FINISHED, ideaResponsesOf } from "./ideas.mjs";
 import { postHistoryVia, NO_CHAIN } from "./post-history.mjs";
 import { ideaExtrasVia } from "./idea-store.mjs";
 import { ideasTank } from "./world-classes.mjs";
+import { BUG_STATES } from "./bugs.mjs";
+import { QUEST_STATES } from "./quests.mjs";
+import { IDEA_STAGES } from "./ideas.mjs";
+import { ALIAS_NOTE } from "./post-words.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = () => process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -104,6 +108,68 @@ export const POST_CLASSES = Object.freeze({
   [BUG_CLASS]: Object.freeze({ finished: BUG_FINISHED }),
   [IDEA_CLASS]: Object.freeze({ finished: IDEA_FINISHED }),
 });
+
+/** Every state a class of post stands in (an event's come from its clock: household-posts.mjs). */
+export const CLASS_STATES = Object.freeze({
+  [EVENT_CLASS]: Object.freeze(["announced", "live", "ended", "cancelled"]),
+  [QUEST_CLASS]: Object.freeze([...QUEST_STATES]),
+  [BUG_CLASS]: Object.freeze([...BUG_STATES]),
+  [IDEA_CLASS]: Object.freeze([...IDEA_STAGES]),
+});
+
+/** The query parameters the posts list takes over HTTP; stage is state's permanent alias (POS-778). */
+export const POSTS_PARAMS = Object.freeze(["class", "state", "stage", "limit", "offset"]);
+
+const editDistance = (a, b) => {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+};
+/** The known name nearest `name` (containing or contained counts as close), or null when nothing is near. */
+export function nearestName(name, known) {
+  const n = String(name).toLowerCase();
+  let best = null;
+  for (const k of known) {
+    const dist = k.includes(n) || n.includes(k) ? 1 : editDistance(n, k);
+    if (dist <= Math.max(2, Math.floor(k.length / 3)) && (!best || dist < best.dist)) best = { k, dist };
+  }
+  return best?.k ?? null;
+}
+
+/**
+ * Unknown query parameters answer 400, naming the parameter and the nearest
+ * known one (POS-778): the same courtesy the MCP doors give an unknown arg.
+ * `stage` is known (state's alias), so it is never refused here.
+ * @param {Iterable<string>} names the query's parameter names
+ */
+export function unknownPostsParam(names, known = POSTS_PARAMS) {
+  for (const name of names) {
+    if (known.includes(name)) continue;
+    const near = nearestName(name, known);
+    return refuse(400, `no parameter \`${name}\`${near ? `; did you mean \`${near}\`?` : ""}`,
+      `this read takes: ${known.join(", ")} (stage is an alias of state)`, { field: name });
+  }
+  return null;
+}
+
+/**
+ * `state=a,b` (comma is OR); `stage=` is the alias and filters the same way.
+ * @returns {{ states: string[]|null, alias: boolean }}
+ */
+function judgeStateFilter(fields, cls) {
+  const has = (k) => fields?.[k] !== undefined && fields[k] !== null && fields[k] !== "";
+  if (!has("state") && !has("stage")) return { states: null, alias: false };
+  for (const k of ["state", "stage"]) if (has(k) && typeof fields[k] !== "string")
+    throw refuse(422, `${k} is a state name, or several joined by commas`, 'state: "reproduced" or "confirmed,reproduced"', { field: k });
+  if (has("state") && has("stage") && fields.state !== fields.stage)
+    throw refuse(422, "state and stage are the same filter, and these two disagree", "pass state only (stage is its alias)", { field: "stage" });
+  const alias = !has("state");
+  const states = [...new Set(String(alias ? fields.stage : fields.state).split(",").map((x) => x.trim()).filter(Boolean))];
+  if (!states.length) throw refuse(422, `${alias ? "stage" : "state"} names no state`, `state: one of ${CLASS_STATES[cls].join(", ")}`, { field: alias ? "stage" : "state" });
+  return { states, alias };
+}
 
 /** The quest registry the office reads, from its own town clone. */
 export const questRegistryAtOffice = (townClone = TOWN_CLONE()) => readQuestRegistry(townClone);
@@ -156,6 +222,7 @@ export { NO_CHAIN };
  */
 export async function postsAtOffice(fields = {}, { now = Date.now(), env = process.env, townClone = TOWN_CLONE(), tank = ideasTank, pointer = true } = {}) {
   const cls = judgePostsClass(fields);
+  const wanted = judgeStateFilter(fields, cls);
   const one = String(fields?.post ?? "").trim();
   let rows;
   let history = null;
@@ -200,8 +267,27 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
   } else {
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), history: historyOf(r.id) }));
   }
+  // counts_by_state (POS-778): the whole class by state, before any state filter, so a reader sees
+  // the ladder at a glance and never has to hand-filter the list.
+  const counts = new Map(CLASS_STATES[cls].map((st) => [st, 0]));
+  for (const p of posts) counts.set(p.state, (counts.get(p.state) ?? 0) + 1);
+  const counts_by_state = Object.fromEntries(counts);
+  const wholeClass = posts;
+  let filterNote = null;
+  if (wanted.states && !one) {
+    const unknown = wanted.states.filter((st) => !counts.has(st));
+    if (unknown.length) {
+      const near = nearestName(unknown[0], [...counts.keys()]);
+      throw refuse(422, `${unknown.map((u) => `"${u}"`).join(", ")} ${unknown.length === 1 ? "is" : "are"} not a ${cls} state`,
+        `a ${cls} stands in: ${[...counts.keys()].join(", ")}${near ? ` — did you mean \`${near}\`?` : ""}`, { field: wanted.alias ? "stage" : "state" });
+    }
+    posts = posts.filter((p) => wanted.states.includes(p.state));
+    if (wanted.alias) filterNote = ALIAS_NOTE;
+  }
   const head = { as_of: new Date(now).toISOString(), class: cls, finished: [...POST_CLASSES[cls].finished],
     ...(unavailable ? { unavailable } : {}) };
+  const listHead = { ...head, ...(wanted.states && !one ? { state: wanted.states } : {}), counts_by_state,
+    ...(filterNote ? { note: filterNote } : {}) };
   if (one) {
     const hit = posts.find((p) => p.id === one);
     if (!hit) throw refuse(404, `no ${cls} "${one}"`, `town { read: "posts", args: { class: "${cls}" } } lists them`);
@@ -209,8 +295,8 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
   }
   if (cls === BUG_CLASS) {
     const { posts: page, ...paging } = bugPageOf(posts, fields);
-    return { ...head, ...paging, catchers: bugCatchersOf(posts, { unavailable: Boolean(history?.unavailable) }), posts: page };
+    return { ...listHead, ...paging, catchers: bugCatchersOf(wholeClass, { unavailable: Boolean(history?.unavailable) }), posts: page };
   }
-  return { ...head, total: posts.length, posts,
+  return { ...listHead, total: posts.length, posts,
     ...(cls === IDEA_CLASS && pointer ? { think_tank: thinkTankPointer(await Promise.resolve().then(tank).catch(() => null)) } : {}) };
 }
