@@ -6,6 +6,7 @@
 // line, every position, the marks in view and their image URLs. It is what the
 // journalist's script worker reads to turn a scoop into a shot list.
 //
+//   node tools/moment-export.mjs --window 2026-10-16T03:14:00Z/2026-10-16T04:10:00Z --at berthillon/le-petit-berthillon --acts <…> --world <…>   # a moment with no scoop
 //   node tools/moment-export.mjs --scoop errant/the-lantern-lighting --acts <notary archives/acts dir or one .jsonl> \
 //        --world <a postmark-world checkout> [--out <dir>] [--radius 250] [--step 1] [--at x,y]
 //   MOMENT_PG_URL=postgres://… node tools/moment-export.mjs --scoop … --world <checkout>   # a sandbox or dev store (or --pg-url)
@@ -32,6 +33,16 @@
 // the office's candle switch having kept drafts out of `acts`. This is the first of two passes: the
 // consent pass (design § 3.3) is the NEXT stage's, run on the file against each
 // resident's likeness card, and this file says so in its manifest.
+//
+// ── BY WINDOW: A MOMENT THAT PRE-DATES THE SCOOP ────────────────────────────
+//
+// --window <start>/<end> --at <mark id | x,y> writes the SAME file for a moment no
+// scoop names (one older than the 3-day look-back, or from before the class
+// existed). `scoop` is null and the manifest says "exported by window, no scoop (a
+// pre-POS-780 moment)". Same allowlists and screens, the same sources, no door.
+// There is no state check, because there is no scoop to take up: the founder
+// who runs it is the one taking the moment up. --world-ref names the world's
+// settlement the checkout stands at when it is a plain extract with no .git.
 //
 // ── THE MOMENT'S SHAPE ──────────────────────────────────────────────────────
 //
@@ -76,7 +87,7 @@ const MOMENT_SET = new Set(MOMENT_ACTIONS);
 // Anything not named here (stamps, put_forward, _consent, _placed_by, _deferred_act,
 // declared households, a future field nobody has judged) is dropped when the act is
 // read, before anything can use it.
-const DEPARTURE_FIELDS = Object.freeze(["from", "toward", "to", "within", "pace", "declared_by", "lines", "at", "iso", "handle", "_ledger", "line", "targetExtent", "targetMarkId"]);
+const DEPARTURE_FIELDS = Object.freeze(["actor", "payload", "from", "toward", "to", "within", "pace", "declared_by", "lines", "at", "iso", "handle", "_ledger", "line", "targetExtent", "targetMarkId"]);
 const HOLDING_FIELDS = Object.freeze(["thing", "holder", "previous_holder", "policy", "made_by", "to", "from"]);
 const FRAME_FIELDS = Object.freeze(["lines", "mark", "to", "from"]);
 export const PAYLOAD_FIELDS = Object.freeze({
@@ -90,6 +101,8 @@ export const PAYLOAD_FIELDS = Object.freeze({
   "legacy:emission": Object.freeze(["at", "payload"]),
   emission: Object.freeze(["at", "payload"]),
 });
+// a pre-pen departure keeps its walk inside `payload`: the geometry and the crossing, not the ledger's free-text note
+const DEPARTURE_NESTED = Object.freeze(["crossing", "declared_by", "from", "toward", "to", "within", "pace", "at", "lines", "targetExtent", "targetMarkId"]);
 const EMISSION_FIELDS = Object.freeze(["class", "text", "x", "y", "place", "spoken_by", "aboard"]);
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && Object.hasOwn(o, k) && o[k] !== undefined).map((k) => [k, o[k]]));
 
@@ -103,7 +116,7 @@ export function screenAct(row) {
   if (row.action === "leave-mark" && payloadOf(row).put_forward !== true) return null;   // before anything else is read
   const a = normaliseAct(row);
   const kept = pick(a.payload, PAYLOAD_FIELDS[a.action] ?? []);
-  if (kept.payload && typeof kept.payload === "object") kept.payload = a.action.endsWith("emission") ? pick(kept.payload, EMISSION_FIELDS) : pick(kept.payload, ["lines"]);
+  if (kept.payload && typeof kept.payload === "object") kept.payload = a.action.endsWith("emission") ? pick(kept.payload, EMISSION_FIELDS) : DEPARTURES.has(a.action) ? pick(kept.payload, DEPARTURE_NESTED) : pick(kept.payload, ["lines"]);
   return { ...a, payload: kept };
 }
 /** A scoop is exported only once the founders have taken it up: not while `scooped`, and not once `passed` or `withdrawn`. */
@@ -166,26 +179,26 @@ async function eachLine(file, fn, needle = null) {
  * each actor's governing departure at the window's start. Two passes, the first
  * cheap (a line is parsed only if it names the scoop).
  */
-export async function loadFromArchive(path, scoopId) {
+export async function loadFromArchive(path, scoopId, givenWindow = null) {
   const files = archiveFiles(path);
   const scoopActs = [];
-  for (const f of files) await eachLine(f, (r) => { if (r.class === SCOOP_CLASS && r.object === scoopId) scoopActs.push(normaliseAct(r)); }, scoopId);
-  const window = windowOf(scoopActs, scoopId);
+  if (scoopId) for (const f of files) await eachLine(f, (r) => { if (r.class === SCOOP_CLASS && r.object === scoopId) scoopActs.push(normaliseAct(r)); }, scoopId);
+  const window = givenWindow ?? windowOf(scoopActs, scoopId);
   const keep = momentCollector(window);
   for (const f of files) await eachLine(f, (r) => { if (MOMENT_SET.has(r.action)) keep.add(r); });   // add() screens
   return { scoopActs, acts: keep.rows(), source: { kind: "notary-archive", path: resolve(path), files: files.length } };
 }
 
 /** Read the same from a store you name (a sandbox or dev Postgres), as a read-only transaction. */
-export async function loadFromStore(pgUrl, scoopId) {
+export async function loadFromStore(pgUrl, scoopId, givenWindow = null) {
   const { default: pg } = await import("pg");
   const client = new pg.Client({ connectionString: pgUrl });
   await client.connect();
   try {
     await client.query("BEGIN READ ONLY");
-    const { rows: s } = await client.query("SELECT * FROM acts WHERE class = $1 AND object = $2 ORDER BY id", [SCOOP_CLASS, scoopId]);
+    const { rows: s } = scoopId ? await client.query("SELECT * FROM acts WHERE class = $1 AND object = $2 ORDER BY id", [SCOOP_CLASS, scoopId]) : { rows: [] };
     const scoopActs = s.map(normaliseAct);
-    const window = windowOf(scoopActs, scoopId);
+    const window = givenWindow ?? windowOf(scoopActs, scoopId);
     const inWindow = await client.query(
       "SELECT * FROM acts WHERE action = ANY($1) AND at >= $2 AND at <= $3 ORDER BY at, id", [[...MOMENT_ACTIONS], iso(window.fromMs), iso(window.toMs)]);
     const governing = await client.query(
@@ -233,7 +246,7 @@ export async function loadWorld(worldDir) {
   const fold = await import(pathToFileURL(join(root, "tools", "marks-fold.mjs")).href);
   const marks = fold.loadMarks(join(root, "WORLD", "marks"));
   let sha = null;
-  try { sha = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); } catch { /* not a git checkout */ }
+  try { sha = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* not a git checkout */ }
   return { walk, marks, sha, root };
 }
 
@@ -287,12 +300,14 @@ const imageOf = (m) => (typeof m?.image === "string" && m.image ? m.image : null
  * `marks` (the world's records, in world coordinates), `walk` (the engine's
  * walk.mjs). Returns the file's whole content.
  */
-export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = null, source = null, radius = DEFAULT_RADIUS_M, stepS = DEFAULT_STEP_S, at = null, now = Date.now() }) {
-  const scoop = foldPostActs(scoopActs).posts.get(scoopId);
-  if (!scoop) throw new Error(`no scoop "${scoopId}" in the acts given`);
-  if (!EXPORTABLE_STATES.includes(scoop.state))
+export function buildMoment({ scoopId = null, scoopActs = [], window = null, atLabel = null, worldRef = null, acts, marks, walk, worldSha = null, source = null, radius = DEFAULT_RADIUS_M, stepS = DEFAULT_STEP_S, at = null, now = Date.now() }) {
+  const byWindow = !scoopId;
+  if (byWindow && (!window || !at)) throw new Error("a moment with no scoop needs its window and its place (--window and --at)");
+  const scoop = byWindow ? null : foldPostActs(scoopActs).posts.get(scoopId);
+  if (!byWindow && !scoop) throw new Error(`no scoop "${scoopId}" in the acts given`);
+  if (!byWindow && !EXPORTABLE_STATES.includes(scoop.state))
     throw new Error(`"${scoopId}" is ${scoop.state}, and the export reads a moment only for a moment the journalist takes up: ${scoop.state === "scooped" ? "advance it to picked-up first (town { do: \"advance\", args: { post, to: \"picked-up\" } })" : "a " + scoop.state + " scoop is not taken up"}`);
-  const fromMs = msOf(scoop.starts), toMs = msOf(scoop.ends);
+  const fromMs = byWindow ? window.fromMs : msOf(scoop.starts), toMs = byWindow ? window.toMs : msOf(scoop.ends);
   const standing = marks.filter((m) => m.at && Number.isFinite(m.at.x) && Number.isFinite(m.at.y));
   const centres = new Map(standing.map((m) => [m.id, m.at]));
   const centreOf = (id) => centres.get(id) ?? null;
@@ -302,7 +317,7 @@ export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = 
 
   // the place
   let place; let placeFrom;
-  if (at) { place = at; placeFrom = "the --at given"; }
+  if (at) { place = at; placeFrom = atLabel ?? "the --at given"; }
   else if (scoop.place_x != null) { place = { x: Number(scoop.place_x), y: Number(scoop.place_y) }; placeFrom = scoop.place_mark ? `the scoop's place (${scoop.place_mark})` : "the scoop's place"; }
   else {
     const here = positionOf(deps.get(scoop.author), toMs, walk);
@@ -381,14 +396,14 @@ export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = 
   return {
     manifest: {
       tool: "tools/moment-export.mjs", exported_at: iso(now), format: 1,
-      scoop: scoopId, source, world_sha: worldSha,
+      scoop: scoopId, ...(byWindow ? { mode: "window", note: "exported by window, no scoop (a pre-POS-780 moment)" } : {}), source, world_sha: worldSha, ...(worldRef ? { world_ref: worldRef } : {}),
       window: { starts: iso(fromMs), ends: iso(toMs) }, place, place_from: placeFrom, radius_m: radius, step_s: stepS,
       counts: { acts: kept.length, says: says.length, residents: residents.size, in_view: Object.keys(positions).length, marks: markRows.length },
       public_actions: [...MOMENT_ACTIONS],
       refused_departures: refused, unplaced_acts: unplaced, position_notes: [...POSITION_NOTES],
       not_included: [...NOT_INCLUDED],
     },
-    scoop: { id: scoopId, title: scoop.title, note: scoop.body, scooper: scoop.author, household: scoop.household, state: scoop.state, fields: scoop.fields,
+    scoop: byWindow ? null : { id: scoopId, title: scoop.title, note: scoop.body, scooper: scoop.author, household: scoop.household, state: scoop.state, fields: scoop.fields,
       window: { starts: iso(fromMs), ends: iso(toMs) }, place: scoop.place_x == null ? null : { mark: scoop.place_mark ?? null, x: Number(scoop.place_x), y: Number(scoop.place_y) } },
     residents: [...residents.values()].sort((a, b) => a.handle.localeCompare(b.handle)),
     says,
@@ -400,8 +415,8 @@ export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = 
 
 // ── the command ─────────────────────────────────────────────────────────────
 
-const USAGE = `usage: node tools/moment-export.mjs --scoop <author/slug> --world <postmark-world checkout> (--acts <archives/acts dir or .jsonl> | --pg-url <postgres url, or MOMENT_PG_URL>)
-       [--out <dir>] [--radius ${DEFAULT_RADIUS_M}] [--step ${DEFAULT_STEP_S}] [--at x,y]`;
+const USAGE = `usage: node tools/moment-export.mjs (--scoop <author/slug> | --window <start>/<end> --at <mark id or x,y>) --world <postmark-world checkout> (--acts <archives/acts dir or .jsonl> | --pg-url <postgres url, or MOMENT_PG_URL>)
+       [--out <dir>] [--radius ${DEFAULT_RADIUS_M}] [--step ${DEFAULT_STEP_S}] [--at x,y] [--world-ref <label>] [--name <file stem>]`;
 
 export const PG_URL_ENV = "MOMENT_PG_URL";
 
@@ -411,18 +426,25 @@ export function parseArgs(argv, env = process.env) {
     const k = argv[i];
     const v = () => { if (i + 1 >= argv.length) throw new Error(`${k} needs a value\n${USAGE}`); return argv[++i]; };
     if (k === "--scoop") o.scoop = v();
+    else if (k === "--window") { const [a, b] = v().split("/"); o.window = { fromMs: Date.parse(a), toMs: Date.parse(b) }; o.windowRaw = [a, b]; }
+    else if (k === "--world-ref") o.worldRef = v();
     else if (k === "--acts") o.acts = v();
     else if (k === "--pg-url") o.pgUrl = v();
     else if (k === "--world") o.world = v();
     else if (k === "--out") o.out = v();
+    else if (k === "--name") o.name = v();
     else if (k === "--radius") o.radius = Number(v());
     else if (k === "--step") o.step = Number(v());
-    else if (k === "--at") { const [x, y] = v().split(",").map(Number); o.at = { x, y }; }
+    else if (k === "--at") { const raw = v(); if (raw.includes("/")) o.atMark = raw; else { const [x, y] = raw.split(",").map(Number); o.at = { x, y }; } }
     else throw new Error(`unknown argument ${k}\n${USAGE}`);
   }
   // the store's address may come from the environment (a URL on the command line is in the process list); a flag beats it
   if (!o.acts && !o.pgUrl && env[PG_URL_ENV]) o.pgUrl = env[PG_URL_ENV];
-  if (!o.scoop || !o.world || (!o.acts && !o.pgUrl)) throw new Error(USAGE);
+  if (o.scoop && o.window) throw new Error(`a scoop has its own window: name --scoop or --window, not both\n${USAGE}`);
+  if (o.window && !(Number.isFinite(o.window.fromMs) && Number.isFinite(o.window.toMs) && o.window.toMs > o.window.fromMs))
+    throw new Error(`--window is <start>/<end>, two ISO instants, the end after the start\n${USAGE}`);
+  if (o.window && !o.at && !o.atMark) throw new Error(`--window needs --at, a mark id or x,y\n${USAGE}`);
+  if ((!o.scoop && !o.window) || !o.world || (!o.acts && !o.pgUrl)) throw new Error(USAGE);
   if (o.acts && o.pgUrl) throw new Error(`name one source, --acts or --pg-url\n${USAGE}`);
   if (!(o.radius > 0) || !(o.step >= 1)) throw new Error(`--radius is metres above 0 and --step whole seconds from 1\n${USAGE}`);
   if (o.at && !(Number.isFinite(o.at.x) && Number.isFinite(o.at.y))) throw new Error(`--at is x,y in metres\n${USAGE}`);
@@ -434,14 +456,20 @@ export const fileNameFor = (scoopId) => `moment-${scoopId.replace(/[^a-z0-9]+/gi
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   const world = await loadWorld(o.world);
-  const loaded = o.acts ? await loadFromArchive(o.acts, o.scoop) : await loadFromStore(o.pgUrl, o.scoop);
-  const moment = buildMoment({ scoopId: o.scoop, scoopActs: loaded.scoopActs, acts: loaded.acts, marks: world.marks, walk: world.walk,
-    worldSha: world.sha, source: loaded.source, radius: o.radius, stepS: o.step, at: o.at });
+  const loaded = o.acts ? await loadFromArchive(o.acts, o.scoop ?? null, o.window ?? null) : await loadFromStore(o.pgUrl, o.scoop ?? null, o.window ?? null);
+  let at = o.at; let atLabel = null;
+  if (o.atMark) {
+    const m = world.marks.find((x) => x.id === o.atMark);
+    if (!m?.at) throw new Error(`no mark "${o.atMark}" with a place in this world checkout`);
+    at = { x: m.at.x, y: m.at.y }; atLabel = `the mark ${o.atMark}`;
+  }
+  const moment = buildMoment({ scoopId: o.scoop ?? null, scoopActs: loaded.scoopActs, window: o.window ?? null, atLabel, worldRef: o.worldRef ?? null, acts: loaded.acts, marks: world.marks, walk: world.walk,
+    worldSha: world.sha, source: loaded.source, radius: o.radius, stepS: o.step, at });
   mkdirSync(resolve(o.out), { recursive: true });
-  const file = join(resolve(o.out), fileNameFor(o.scoop));
+  const file = join(resolve(o.out), o.name ? `${o.name}.json` : fileNameFor(o.scoop ?? `window-${(o.atMark ?? "place")}-${o.windowRaw[0]}`));
   writeFileSync(file, JSON.stringify(moment, null, 1) + "\n");
   const c = moment.manifest.counts;
-  console.log(`wrote ${file}\n  ${moment.scoop.title} · ${moment.manifest.window.starts} to ${moment.manifest.window.ends} · place ${moment.manifest.place.x},${moment.manifest.place.y} (${moment.manifest.place_from}), radius ${o.radius} m`);
+  console.log(`wrote ${file}\n  ${moment.scoop?.title ?? "(no scoop: exported by window)"} · ${moment.manifest.window.starts} to ${moment.manifest.window.ends} · place ${moment.manifest.place.x},${moment.manifest.place.y} (${moment.manifest.place_from}), radius ${o.radius} m`);
   console.log(`  ${c.acts} acts, ${c.says} says, ${c.in_view} residents in view (${c.residents} in all), ${c.marks} marks; world ${moment.manifest.world_sha?.slice(0, 9) ?? "unknown"}`);
   console.log("  not included: the consent pass, the telling and the air line, image bytes (see manifest.not_included)");
 }

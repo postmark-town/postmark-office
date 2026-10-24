@@ -258,3 +258,36 @@ test("8 · the command's arguments are judged, and the file is named for the sco
   assert.throws(() => parseArgs(["--scoop", SCOOP_ID, "--world", "w"], {}), /usage/);
   assert.equal(fileNameFor(SCOOP_ID), "moment-errant-the-lantern-lighting.json");
 });
+
+// ── 11 · by window ──────────────────────────────────────────────────────────
+
+test("11 · by window: the same file with scoop null and the manifest's line, the same screens, no state check; the arguments are judged", async () => {
+  const { acts } = scene();
+  const window = { fromMs: T0, toMs: T0 + 8 * MIN };
+  const m = buildMoment({ window, at: { x: 0, y: 0 }, atLabel: "the mark ada/the-lantern", worldRef: "settlement/S111", acts, marks: MARKS, walk });
+  assert.equal(m.scoop, null);
+  assert.equal(m.manifest.scoop, null);
+  assert.equal(m.manifest.mode, "window");
+  assert.equal(m.manifest.note, "exported by window, no scoop (a pre-POS-780 moment)");
+  assert.equal(m.manifest.world_ref, "settlement/S111");
+  assert.equal(m.manifest.place_from, "the mark ada/the-lantern");
+  const same = build();
+  const bare = (xs) => xs.map(({ act: _a, id: _i, ...r }) => r);
+  assert.deepEqual(bare(m.says), bare(same.says));
+  assert.deepEqual(Object.keys(m.positions), Object.keys(same.positions));
+  assert.ok(!JSON.stringify(m).includes("a private word"), "the same screens");
+  assert.throws(() => buildMoment({ window, acts, marks: MARKS, walk }), /needs its window and its place/);
+  // the archive loader takes the window and reads no scoop
+  const dir = mkdtempSync(join(tmpdir(), "moment-export-win-"));
+  writeFileSync(join(dir, "30.jsonl"), acts.map((a) => JSON.stringify(a)).join("\n") + "\n");
+  const got = await loadFromArchive(dir, null, window);
+  assert.deepEqual(got.scoopActs, []);
+  assert.ok(got.acts.length > 0 && got.acts.every((a) => MOMENT_ACTIONS.includes(a.action)));
+  // the arguments
+  const o = parseArgs(["--window", "2026-10-16T03:14:00Z/2026-10-16T04:10:00Z", "--at", "berthillon/le-petit-berthillon", "--world", "w", "--acts", "a", "--world-ref", "S111"], {});
+  assert.deepEqual([o.window.fromMs, o.window.toMs, o.atMark, o.worldRef], [Date.parse("2026-10-16T03:14:00Z"), Date.parse("2026-10-16T04:10:00Z"), "berthillon/le-petit-berthillon", "S111"]);
+  assert.throws(() => parseArgs(["--window", "2026-10-16T03:14:00Z/2026-10-16T04:10:00Z", "--world", "w", "--acts", "a"], {}), /needs --at/);
+  assert.throws(() => parseArgs(["--window", "2026-10-16T04:10:00Z/2026-10-16T03:14:00Z", "--at", "1,2", "--world", "w", "--acts", "a"], {}), /the end after the start/);
+  assert.throws(() => parseArgs(["--window", "x/y", "--at", "1,2", "--world", "w", "--acts", "a"], {}), /two ISO instants/);
+  assert.throws(() => parseArgs(["--scoop", SCOOP_ID, "--window", "2026-10-16T03:14:00Z/2026-10-16T04:10:00Z", "--at", "1,2", "--world", "w", "--acts", "a"], {}), /not both/);
+});
