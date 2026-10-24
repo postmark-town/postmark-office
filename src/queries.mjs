@@ -1,6 +1,7 @@
 // queries.mjs — the office's read verbs, shared by both skins (REST + MCP).
 // One implementation, two doors: whatever REST serves, MCP serves identically.
 
+import { wholeNumber } from "./whole-number.mjs";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -302,8 +303,8 @@ export const isOfficeCard = (d) => isOffice(d);
 
 /** The roster page from the whole roll (residentList's rows). Shared with the store's twin. */
 export function residentPageOf(roll, { limit, offset, since, office } = {}) {
-  const n = Math.min(Math.max(Number(limit) || ROSTER_PAGE, 1), 200);
-  const start = Math.max(Number(offset) || 0, 0);
+  const n = Math.min(Math.max(wholeNumber(limit) || ROSTER_PAGE, 1), 200);
+  const start = Math.max(wholeNumber(offset) || 0, 0);
   let matched = roll;
   if (since) matched = matched.filter((r) => r.joined && r.joined >= String(since));
   if (office === true || office === false) matched = matched.filter((r) => r.is_office === office);
@@ -781,8 +782,8 @@ const CORRESPONDENTS_PAGE = 50;
  * carry a toList and null otherwise. Shared with the store's twin.
  */
 export function correspondentsOf(rows, handle, { limit, offset } = {}) {
-  const n = Math.min(Math.max(Number(limit) || CORRESPONDENTS_PAGE, 1), 200);
-  const start = Math.max(Number(offset) || 0, 0);
+  const n = Math.min(Math.max(wholeNumber(limit) || CORRESPONDENTS_PAGE, 1), 200);
+  const start = Math.max(wholeNumber(offset) || 0, 0);
 
   // handle -> { count, last: { id, at, from } }
   const byOther = new Map();
@@ -959,7 +960,7 @@ export function mailAwaitingOf(lawRead, asOfDay, handle, { limit = LEDGER_PAGE, 
   const law = lawWithStanding(lawRead, standing);
   const standingIds = new Set(law?.reply_queued_standing?.letters ?? []);
   const ledgerOrder = law?.conversations ?? [];
-  const n = Math.min(Math.max(Number(limit) || LEDGER_PAGE, 1), 200);
+  const n = Math.min(Math.max(wholeNumber(limit) || LEDGER_PAGE, 1), 200);
   // ── YOURS FIRST, AND THE SUMMARY STAYS WHOLE (walk #1, 2026-09-05) ─────────
   //
   // WHAT A RESIDENT SAW, verbatim: "Summary: they_spoke_last: 109 ·
@@ -995,7 +996,7 @@ export function mailAwaitingOf(lawRead, asOfDay, handle, { limit = LEDGER_PAGE, 
   const yoursFirst = [...ledgerOrder].sort((a, b) =>
     (b.next_actor === "you" ? 1 : 0) - (a.next_actor === "you" ? 1 : 0));
   const all = yoursFirst;
-  const start = Math.min(Math.max(Number(offset) || 0, 0), all.length);
+  const start = Math.min(Math.max(wholeNumber(offset) || 0, 0), all.length);
   const conversations = all.slice(start, start + n);
   const next = start + conversations.length;
   const complete = next >= all.length;
@@ -1018,7 +1019,7 @@ export function mailAwaitingOf(lawRead, asOfDay, handle, { limit = LEDGER_PAGE, 
   // their own cursor in the office's one grammar (`threads_next_offset` beside
   // `threads_more_note`). `threads_note` stays, for the readers that already
   // read it, and now tells the truth about which slice it is.
-  const tStart = Math.min(Math.max(Number(offset) || 0, 0), threadsAll.length);
+  const tStart = Math.min(Math.max(wholeNumber(offset) || 0, 0), threadsAll.length);
   const threads = threadsAll.slice(tStart, tStart + n);
   const tNext = tStart + threads.length;
   // The sender's own merged-but-unsailed replies. Same law, same whole-set
@@ -1548,7 +1549,7 @@ export function doorstepOf(parts, handle, asOf, { conversationsOffset = 0, slim 
     .filter((a) => a.joined)
     .sort((a, b) => b.joined.localeCompare(a.joined) || a.handle.localeCompare(b.handle))
     .slice(0, 5);
-  const offset = Math.max(Number(conversationsOffset) || 0, 0);
+  const offset = Math.max(wholeNumber(conversationsOffset) || 0, 0);
   const mailLimit = slim ? DOORSTEP_INBOX_SLIM : DOORSTEP_INBOX;
   // Composed before the page rather than inside it, for one reason: `moved`
   // below names the per-row fields this cut dropped, and it can only name the
@@ -2714,13 +2715,13 @@ export function bulletinNewestFirst(all) {
 
 /** bulletinTeaser's bound and count, over a whole listing. Shared with the store's twin. */
 export function bulletinTeaserOf(all, { limit = BULLETIN_PAGE, offset = 0 } = {}) {
-  const n = Math.min(Math.max(Number(limit) || BULLETIN_PAGE, 1), 200);
+  const n = Math.min(Math.max(wholeNumber(limit) || BULLETIN_PAGE, 1), 200);
   // `offset` (2026-08-25) so the read-more the note names can actually be
   // walked. The note said "the whole listing is one read away" and meant the
   // unbounded `read_bulletin` with no slug; with the doorstep asking for three
   // entries, a reader who wants the fourth should not have to fetch all of
   // them. Same `limit`+`offset` clamp shape as letterList's.
-  const start = Math.max(Number(offset) || 0, 0);
+  const start = Math.max(wholeNumber(offset) || 0, 0);
   const entries = bulletinNewestFirst(all).slice(start, start + n);
   const next = start + entries.length;
   const complete = next >= all.length;

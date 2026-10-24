@@ -127,6 +127,30 @@ test("stampsRoster and stampsDetail answer as their office.db twins did", async 
     await same(`stampsDetail ${h}`, store.stampsDetail(api, h));
 });
 
+test("a fractional or enormous limit/offset pages the store as its whole number, never a 500", async (t) => {
+  if (skip) return t.skip(skip);
+  // Postgres binds LIMIT/OFFSET as bigint: "2.5" and "1e+30" are not integers
+  // to it, and the door answered "nothing in your request caused it" (500).
+  // Against the store only (office.db is retired): the fractional ask must
+  // answer exactly what its floored twin answers, as the bytes a door sends.
+  const readers = { stampsRoster: store.stampsRoster, repoLog: store.repoLog, regionList: store.regionList };
+  const pairs = [
+    [{ limit: 2.5 }, { limit: 2 }],
+    [{ offset: 1.5, limit: 2 }, { offset: 1, limit: 2 }],
+    [{ limit: "2.9", offset: "1.1" }, { limit: 2, offset: 1 }],
+  ];
+  for (const [name, read] of Object.entries(readers)) {
+    for (const [asked, whole] of pairs) {
+      assert.deepEqual(await read(api, asked), await read(api, whole), `${name} ${JSON.stringify(asked)} reads as ${JSON.stringify(whole)}`);
+    }
+    for (const huge of [{ offset: 1e30 }, { limit: 1e30, offset: Infinity }]) {
+      await assert.doesNotReject(read(api, huge), `${name} ${JSON.stringify(huge)} is past the end, not a throw`);
+    }
+  }
+  assert.equal((await store.stampsRoster(api, { limit: 2.5 })).limit, 2, "the echoed limit is the whole number that paged");
+  assert.equal((await store.stampsRoster(api, { limit: 2, offset: 1.5 })).offset, 1, "so is the offset");
+});
+
 test("the store's as-of is the index's own", async (t) => {
   if (skip) return t.skip(skip);
   TWINS.equal("indexAsOf", await store.townIndexAsOf(api));

@@ -59,6 +59,7 @@
 // grows an explicit terminal column — at which point `liveHolder` below is the
 // one function that changes.
 
+import { wholeNumber } from "./whole-number.mjs";
 import { worldFreezeBounce } from "./freeze.mjs";
 import { readAttachments, declareAttachment } from "./dynamic-entities.mjs";
 import { holdEdgeOnActs } from "./hold-edge.mjs";
@@ -1500,8 +1501,8 @@ async function holdAct(name, args = {}, key = null, verb = null) {
       //
       // `count` was already here and already the true number; what it lacked
       // was a bound to be a count AGAINST. Count first, slice after.
-      const n = Math.min(Math.max(Number(args.limit) || HOLDINGS_PAGE, 1), 200);
-      const start = Math.max(Number(args.offset) || 0, 0);
+      const n = Math.min(Math.max(wholeNumber(args.limit) || HOLDINGS_PAGE, 1), 200);
+      const start = Math.max(wholeNumber(args.offset) || 0, 0);
       const page = held.slice(start, start + n);
       const next = start + page.length;
       return {

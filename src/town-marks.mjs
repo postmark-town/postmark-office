@@ -60,6 +60,7 @@
 // pretended. A module that could only be tested by touching prod would be a
 // module nobody tests.
 
+import { wholeNumber } from "./whole-number.mjs";
 import { publishedState } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
@@ -187,8 +188,8 @@ export async function marksRead(handle, {
   if (!who && !ranked)
     return bounce(422, "whose marks?", 'name a resident — town { read: "marks", args: { handle: "errant" } }; the roster is town { read: "residents" }. Or read the whole town ranked: town { read: "marks", args: { sort: "weight" } } (sort: "stamps" | "weight")');
 
-  const n = Math.min(Math.max(Number(limit) || MARKS_PAGE, 1), 200);
-  const start = Math.max(Number(offset) || 0, 0);
+  const n = Math.min(Math.max(wholeNumber(limit) || MARKS_PAGE, 1), 200);
+  const start = Math.max(wholeNumber(offset) || 0, 0);
 
   // THE TOWN-WIDE READ (WLD-12, town #3028): no handle, a sort. The whole published set,
   // ranked and THEN paged, in one read. It touches neither the docket nor a sketchbook, and
