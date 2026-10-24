@@ -199,6 +199,49 @@ export const WITHDRAWN_OWED_SELECT = `
    ORDER BY m.slug`;
 
 
+// ── THE FOURTH TERM: A TOWN-SIGNED HOLD CANON HAS NOT PRINTED (WLD-5) ────────
+//
+// THE DEFECT. A hold lands in the docket at the window that locks it, and ONLY
+// there. If the settlement does not print it at that crossing (the write-down
+// holds it out, or the sweep leaves it drafted), the mark is in canon and in the
+// store and they disagree about who holds it, and no later docket names it: the
+// docket is by window, the second term is by absence, the third by withdrawal.
+// The first run-through of the heist lost a key's hold exactly so (held out at
+// S137, absent from S138's fold), and a key's hold has no hand path: a key that
+// keeps cannot be given again.
+//
+// THE TERM. Every STANDING mark the TOWN signed whose store holder (`held_by`) or
+// owner (`owned_by`) differs from what canon carries for it. State, not a window:
+// it is carried by every crossing that looks until the print lands, and the mark
+// leaves the set by the print landing, which is what bounds it. Canon-absent
+// marks are the second term's, withdrawn ones the third's, and a docket mark is
+// written by the docket, so none of those is offered twice.
+//
+// TOWN-SIGNED ONLY, ON PURPOSE. A resident's held mark has the same defect, but
+// the set of resident holds the sweep has left drafted over the weeks is unknown
+// and would be re-offered whole by the first crossing that carried it. The town's
+// things are few; widening the term is its own decision after that count is read.
+//
+// `canonRegister.holds` (canon-register.mjs § townHoldsOf) is the canon side. A
+// register built before it existed answers `checked: false`, never an empty set:
+// "owed nothing" and "never looked" differ.
+export const TOWN_HOLDS_SELECT = `
+  SELECT slug, data->>'held_by' AS held_by, data->>'owned_by' AS owned_by
+    FROM marks WHERE owner = 'the-town' AND status = 'standing' ORDER BY slug`;
+
+/** The town's slugs whose holder or owner in the store differs from canon's. PURE. */
+export function holdsOwed(storeRows, canonHolds, skip = new Set()) {
+  const v = (x) => (typeof x === "string" && x.trim() ? x.trim() : null);
+  const out = [];
+  for (const r of storeRows) {
+    if (skip.has(r.slug)) continue;
+    const canon = canonHolds.get(r.slug);
+    if (!canon) continue;                       // not in canon at all: the second term's
+    if (v(r.held_by) !== canon.held_by || v(r.owned_by) !== canon.owned_by) out.push(r.slug);
+  }
+  return out;
+}
+
 /**
  * WHAT COUNTS AS A DOCKET COUNT — one rule, one home, two readers.
  *
@@ -479,6 +522,34 @@ export async function foldDelta(
     }
   }
 
+  // § THE FOURTH TERM: a town-signed hold canon has not printed.
+  let holdSlugs = [];
+  let holdRows = [];
+  const holdSkippedNoHousehold = [];
+  const holdChecked = Boolean(canonRegister && canonRegister.holds instanceof Map);
+  if (holdChecked) {
+    const docketSlugs = new Set(rows.map((r) => r.slug));
+    const skip = new Set([...docketSlugs, ...carriedSlugs, ...withdrawals.map((x) => x.slug), ...retireOnly]);
+    const town = await client.query(TOWN_HOLDS_SELECT);
+    const wanted = holdsOwed(town.rows, canonRegister.holds, skip);
+    if (wanted.length) {
+      const got = await client.query(
+        `SELECT ${MARK_COLUMNS} FROM marks WHERE slug = ANY($1::text[]) ORDER BY slug`, [wanted]);
+      if (got.rows.length !== wanted.length) {
+        const have = new Set(got.rows.map((r) => r.slug));
+        throw new Error(
+          `carried-mark-vanished: the hold-owed read named ${wanted.length} slug(s) and the mark read returned `
+          + `${got.rows.length} — missing ${wanted.filter((x) => !have.has(x)).join(", ")}. Two reads of \`marks\` in one `
+          + "crossing disagreed about which rows exist.");
+      }
+      for (const r of got.rows) {
+        if (!r.household) { holdSkippedNoHousehold.push(r.slug); continue; }   // named and skipped, as the carry does
+        holdRows.push(r);
+      }
+      holdSlugs = holdRows.map((r) => r.slug);
+    }
+  }
+
   const stakes = await stakesFromStore(client, { townSha: sha });
 
   return {
@@ -549,6 +620,15 @@ export async function foldDelta(
         skipped_no_household: withdrawnSkippedNoHousehold,
         canon_sha: canonRegister ? canonRegister.sha : null,
       },
+      // THE FOURTH TERM (WLD-5): town-signed holds canon has not printed. `checked: false`
+      // when the register carries no holds (never looked), as the terms above say it.
+      hold_owed: {
+        checked: holdChecked,
+        count: holdSlugs.length,
+        slugs: holdSlugs,
+        skipped_no_household: holdSkippedNoHousehold,
+        canon_sha: canonRegister ? canonRegister.sha : null,
+      },
       // `note: null` is not decoration. There is one selector now and no
       // fallback, so nothing ever fills this — and that is exactly when a field
       // goes missing and its absence starts meaning "fine". An empty channel is
@@ -559,7 +639,7 @@ export async function foldDelta(
     // order is the structure: a keeper scrolling the fold sees this crossing's
     // own window, then the rows it swept up behind it, in the same shape
     // `written_by_locked_window` reports downstream.
-    marks: [...rows, ...carriedRows].map((r) => ({
+    marks: [...rows, ...carriedRows, ...holdRows].map((r) => ({
       slug: r.slug,
       kind: r.kind,
       by: r.owner,
