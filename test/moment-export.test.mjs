@@ -103,6 +103,8 @@ test("2 · in view is the engine's positionAt: the resident standing there and t
   assert.deepEqual(m.positions.ada.points.at(-1), [20, 0]);
   assert.equal(JSON.stringify(m).includes("far-away"), false, "nothing of the one far away is in the file");
   assert.equal(m.manifest.place_from, "the scoop's place");
+  assert.ok(m.residents.every((r) => r.trajectory === r.in_view), "a resident in view has a trajectory");
+  assert.equal(m.manifest.position_notes.length, 2);
 });
 
 // ── 3 · the window binds ────────────────────────────────────────────────────

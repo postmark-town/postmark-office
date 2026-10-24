@@ -73,6 +73,11 @@ export const NOT_INCLUDED = Object.freeze([
   "the telling and the air line: re-derive them from the world sha in the manifest and a standpoint",
   "image bytes: marks carry their image URLs, which the media door serves",
 ]);
+/** What the positions do and do not say. */
+export const POSITION_NOTES = Object.freeze([
+  "a position is null before a resident's first departure in the record: it places them nowhere, and the town reads that as the Origin, which this file does not guess",
+  "a resident with no walk on record has no trajectory (trajectory: false) even when their acts were within the radius; their acts and says are still here, with the point each was made from",
+]);
 
 export const DEFAULT_RADIUS_M = 250;
 export const DEFAULT_STEP_S = 1;
@@ -326,8 +331,8 @@ export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = 
   }
 
   const residents = new Map();
-  const note = (h, via) => { if (!h) return; const r = residents.get(h) ?? { handle: h, household: null, in_view: false, acts: 0 }; if (via === "act") r.acts += 1; residents.set(h, r); };
-  for (const h of Object.keys(positions)) { note(h); residents.get(h).in_view = true; }
+  const note = (h, via) => { if (!h) return; const r = residents.get(h) ?? { handle: h, household: null, in_view: false, trajectory: false, acts: 0 }; if (via === "act") r.acts += 1; residents.set(h, r); };
+  for (const h of Object.keys(positions)) { note(h); residents.get(h).in_view = true; residents.get(h).trajectory = true; }
   for (const a of kept) { note(a.actor, "act"); const r = residents.get(a.actor); if (r && a.household && !r.household) r.household = a.household; }
 
   return {
@@ -337,7 +342,7 @@ export function buildMoment({ scoopId, scoopActs, acts, marks, walk, worldSha = 
       window: { starts: iso(fromMs), ends: iso(toMs) }, place, place_from: placeFrom, radius_m: radius, step_s: stepS,
       counts: { acts: kept.length, says: says.length, residents: residents.size, in_view: Object.keys(positions).length, marks: markRows.length },
       public_actions: [...MOMENT_ACTIONS],
-      refused_departures: refused, unplaced_acts: unplaced,
+      refused_departures: refused, unplaced_acts: unplaced, position_notes: [...POSITION_NOTES],
       not_included: [...NOT_INCLUDED],
     },
     scoop: { id: scoopId, title: scoop.title, note: scoop.body, scooper: scoop.author, household: scoop.household, state: scoop.state, fields: scoop.fields,
