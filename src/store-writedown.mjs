@@ -107,6 +107,59 @@ const isTheTown = (household) => {
   return k === TOWN || k.slice(k.indexOf(":") + 1) === TOWN;
 };
 
+// ── A HAND-OFF ON A TOWN-SIGNED THING IS NOT THE TOWN AUTHORING IT (WLD-5) ───
+//
+// The hold-out below keeps the town's own record out of every sketchbook. That
+// stays. What it must not do is stop a town-signed thing that was GIVEN INTO a
+// holder from printing where it now is: holding a thing is not authoring it, and
+// the world's sweep already lets exactly that change land (world `mark-kind.mjs §
+// handOffOnly`). This is the same predicate, asked of two rendered files instead
+// of two parsed records, so the office decides what to write down by the rule the
+// sweep decides what to publish by.
+//
+// The hand-off fields are `held_by`, `owned_by`, and the place (`at`, `extent`,
+// `points`), the place moving only as the thing goes into hands (it leaves) or
+// comes out of them (a fresh one is printed). Every other field, and the words,
+// must read as canon holds them. Anything else about a town-signed mark is still
+// held out exactly as before.
+const HAND_FIELDS = new Set(["held_by", "owned_by", "at", "extent", "points"]);
+const PLACE_FIELDS = ["at", "extent", "points"];
+
+/** A mark file as { fields, body }: one `key: value` per line between the fences. */
+function splitMarkFile(text) {
+  const t = String(text ?? "").replace(/\r\n/g, "\n");
+  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(t);
+  if (!m) return null;
+  const fields = new Map();
+  for (const line of m[1].split(/\n/)) {
+    const i = line.indexOf(":");
+    if (i > 0 && !/^\s/.test(line)) fields.set(line.slice(0, i).trim(), line.slice(i + 1).trim());
+  }
+  return { fields, body: m[2].trim() };
+}
+
+/**
+ * Do these two renderings of one mark differ ONLY by a hand-off? PURE. False when
+ * either does not read as a mark file, when nothing about the hands changed, and
+ * for any change beyond the hand-off fields (new words, any other field, a place
+ * that moves while the thing stays on the ground).
+ */
+export function handOffOnlyBytes(canonBytes, nextBytes) {
+  const a = splitMarkFile(canonBytes), b = splitMarkFile(nextBytes);
+  if (!a || !b || a.body !== b.body) return false;
+  for (const k of new Set([...a.fields.keys(), ...b.fields.keys()])) {
+    if (HAND_FIELDS.has(k)) continue;
+    if ((a.fields.get(k) ?? null) !== (b.fields.get(k) ?? null)) return false;
+  }
+  const get = (f, k) => f.get(k) ?? null;
+  const heldA = !!get(a.fields, "held_by"), heldB = !!get(b.fields, "held_by");
+  const ownedMoved = get(a.fields, "owned_by") !== get(b.fields, "owned_by");
+  if (!ownedMoved && get(a.fields, "held_by") === get(b.fields, "held_by") && get(a.fields, "at") === get(b.fields, "at")) return false; // no hand moved
+  if (!(heldA || heldB || ownedMoved)) return false;     // not about holding at all
+  if (heldA !== heldB) return true;                      // into or out of hands: the place may leave or return
+  return PLACE_FIELDS.every((k) => get(a.fields, k) === get(b.fields, k)); // otherwise the place stays put
+}
+
 /** A refusal that names itself, so the chain can put the reason in the receipt verbatim. */
 export class FoldInputRefusal extends Error {
   constructor(reason, detail) {
@@ -1201,8 +1254,25 @@ export function storeWriteDown({
   // receipt.
   const held = [];
   const carried = [];
+  const handOffs = [];
+  // Canon's own bytes for a mark, wherever canon files it: its frozen filing,
+  // else the path the supplier named, else the id's own directory.
+  const canonOf = (m) => {
+    for (const p of [publishedPathOf(m.id), m.plannedPath, `WORLD/marks/${m.id}/mark.md`]) {
+      const b = p ? canonBytesAt(p) : null;
+      if (b !== null) return b;
+    }
+    return null;
+  };
   for (const m of normalized.marks) {
     if (isTheTown(m.household) || m.by === TOWN) {
+      // A hand-off on a thing canon already holds goes through; see handOffOnlyBytes.
+      const canon = canonOf(m);
+      if (canon !== null && handOffOnlyBytes(canon, m.bytes)) {
+        handOffs.push(m.id);
+        carried.push(m);
+        continue;
+      }
       held.push({
         id: m.id,
         household_key: m.household,
@@ -1312,6 +1382,8 @@ export function storeWriteDown({
     // can tell a law node from a household whose registry row is missing.
     held_unbound: held,
     held_unbound_count: held.length,
+    // The town-signed things let through because ONLY their hands changed.
+    town_hand_offs: handOffs,
     households: households.map(({ household, household_key, branch, base, base_from, commit, changed, touched }) =>
       ({ household, household_key, branch, base, base_from, commit, changed, touched })),
     main: mainSha,

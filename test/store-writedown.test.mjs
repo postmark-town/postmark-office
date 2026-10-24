@@ -36,7 +36,7 @@ import { writeDownHousehold } from "../src/world-drain.mjs";
 import { isDocketCount } from "../world2/tools/fold-delta.mjs";
 import {
   FoldInputRefusal, clearGitSketchbooks, normalizeFoldInput, normalizeMark,
-  planStoreWriteDown, sketchbookNameFor, starvingCheck, storeWriteDown,
+  handOffOnlyBytes, planStoreWriteDown, sketchbookNameFor, starvingCheck, storeWriteDown,
 } from "../src/store-writedown.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -868,6 +868,13 @@ test("F8o · the guard and the fold CLI share ONE rule, not two spellings of it"
 // rather than refusing it — so not opening one is the only place this can be
 // stopped.
 
+// NARROWED (WLD-5, ruled 2026-10-24): F9a below still pins the hold-out for a
+// town-signed mark canon does not hold, and for any town-signed change that is
+// not a hand-off. What it used to pin as well, "every town-signed mark is held
+// out", is no longer true: a town-signed thing given into a holder must reach a
+// sketchbook with its `held_by`, because the 2026-09-08 reason (the-town binds to
+// no household) is stale and a hold print that never reaches a sketchbook never
+// reaches the world. See F9d-F9f for the narrowed rule.
 test("F9a · a docket mark whose household the wall cannot bind opens NO sketchbook", () => {
   const w = makeWorld("unbound");
   w.git("update-index", "--add", "--cacheinfo",
@@ -899,7 +906,7 @@ test("F9a · a docket mark whose household the wall cannot bind opens NO sketchb
 
   assert.equal(report.held_unbound_count, 1);
   assert.deepEqual(report.held_unbound, [{
-    id: "the-town/co-sign-guard",
+    id: "the-town/co-sign-guard", // not in canon at all: a new town-signed mark, so not a hand-off, so still held out
     household_key: "solo:the-town",
     sketchbook: "the-town",
     crossing_output: "unbound-household",
@@ -1247,4 +1254,95 @@ test("W4 · a withdrawal with no slug or no household REFUSES rather than removi
   }
   assert.equal(caught(() => normalizeFoldInput(foldInput([], { withdrawals: "x" })))?.reason, "fold-input-shape");
   assert.deepEqual(normalizeFoldInput(foldInput([])).withdrawals, [], "a supplier from before the term owed none");
+});
+
+// ── F9d-F9f · A TOWN-SIGNED THING'S HAND-OFF IS WRITTEN; ITS AUTHORING IS NOT ──
+
+const TOWN_THING = "the-town/a-given-thing";
+const TOWN_PATH = `WORLD/marks/${TOWN_THING}/mark.md`;
+const GROUND = "at: { x: 3, y: 4 }\nextent: { w: 1, h: 1 }\n";
+const MOVED = "at: { x: 9, y: 9 }\nextent: { w: 1, h: 1 }\n";
+const townThingText = (extra = "", { place = GROUND, body = "a thing the town made" } = {}) =>
+  `---\nkind: sited\nby: the-town\ndate: 2026-10-01\n${place}${extra}---\n\n${body}\n`;
+
+/** A world whose canon holds one town-signed thing, standing on the ground. */
+function makeTownWorld(label) {
+  const w = makeWorld(label);
+  const f = join(w.repo, TOWN_PATH);
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, townThingText());
+  w.git("add", "-A");
+  execFileSync("git", ["-C", w.repo, "commit", "-qm", "canon holds a town-signed thing"],
+    { env: { ...process.env, ...SEED_ENV } });
+  return w;
+}
+
+const townThingMark = (rec, body = "a thing the town made") => storeMark({
+  slug: TOWN_THING, by: "the-town", household: "solo:the-town", path: TOWN_PATH,
+  fileRec: { kind: "sited", by: "the-town", date: "2026-10-01", ...rec }, body,
+});
+
+const sketchbookNames = (w) =>
+  w.git("for-each-ref", "--format=%(refname:short)", "refs/heads/draft/").trim().split(/\r?\n/).filter(Boolean);
+
+test("F9d · a town-signed thing GIVEN INTO a holder is written down into the town's sketchbook with held_by", () => {
+  // RED BEFORE (every town-signed mark was held out as unbound-household, so the
+  // hold print never reached a sketchbook): held_unbound_count was 1, written 0,
+  // and no draft/the-town existed. GREEN AFTER: the thing's only change is that
+  // it is in hands (held_by set, the place left), so it is written.
+  const w = makeTownWorld("town-handoff");
+  const report = storeWriteDown({
+    repo: w.repo, at: Date.parse(AT_ISO),
+    input: foldInput([townThingMark({ held_by: "alpha/a-holder" })]),
+  });
+  assert.equal(report.held_unbound_count, 0, "a hand-off on a town-signed thing is not held out");
+  assert.deepEqual(report.town_hand_offs, [TOWN_THING]);
+  assert.equal(report.written, 1);
+  assert.deepEqual(sketchbookNames(w), ["draft/the-town"]);
+  const printed = w.git("show", `draft/the-town:${TOWN_PATH}`);
+  assert.match(printed, /^held_by: alpha\/a-holder$/m, "the hold is printed");
+  assert.doesNotMatch(printed, /^at:/m, "and the place left with it");
+  assert.match(printed, /a thing the town made/, "the words are canon's, untouched");
+});
+
+test("F9d2 · an owner stamped on the same ground is a hand-off too", () => {
+  const w = makeTownWorld("town-owner");
+  const report = storeWriteDown({
+    repo: w.repo, at: Date.parse(AT_ISO),
+    input: foldInput([townThingMark({ at: { x: 3, y: 4 }, extent: { w: 1, h: 1 }, owned_by: "alpha" })]),
+  });
+  assert.equal(report.held_unbound_count, 0);
+  assert.deepEqual(report.town_hand_offs, [TOWN_THING]);
+});
+
+test("F9e · the wall's other half stays: new words, a ground move, or any other field is still held out", () => {
+  const cases = {
+    "new words beside a hold": townThingMark({ held_by: "alpha/a-holder" }, "the town rewrote its own words"),
+    "a ground move": townThingMark({ at: { x: 9, y: 9 }, extent: { w: 1, h: 1 } }),
+    "a ground move with an owner stamped on": townThingMark({ at: { x: 9, y: 9 }, extent: { w: 1, h: 1 }, owned_by: "alpha" }),
+    "another field beside the hold": townThingMark({ held_by: "alpha/a-holder", date: "2026-10-24" }),
+    "no change in the hands at all": townThingMark({ at: { x: 3, y: 4 }, extent: { w: 1, h: 1 } }),
+  };
+  for (const [name, mark] of Object.entries(cases)) {
+    const w = makeTownWorld("town-wall");
+    const report = storeWriteDown({ repo: w.repo, at: Date.parse(AT_ISO), input: foldInput([mark]) });
+    assert.equal(report.held_unbound_count, 1, `${name}: still held out`);
+    assert.deepEqual(report.town_hand_offs, [], `${name}: not a hand-off`);
+    assert.deepEqual(sketchbookNames(w), [], `${name}: opens no sketchbook`);
+  }
+});
+
+test("F9f · handOffOnlyBytes: the world's handOffOnly rule, over rendered files", () => {
+  const placed = townThingText();
+  const held = townThingText("held_by: alpha/a-holder\n", { place: "" });
+  assert.equal(handOffOnlyBytes(placed, held), true, "into hands: the place leaves");
+  assert.equal(handOffOnlyBytes(held, townThingText("held_by: alpha/other\n", { place: "" })), true, "hand to hand");
+  assert.equal(handOffOnlyBytes(held, placed), true, "out of hands: the place returns");
+  assert.equal(handOffOnlyBytes(placed, townThingText("owned_by: alpha\n")), true, "an owner on the same ground");
+  assert.equal(handOffOnlyBytes(placed, townThingText("owned_by: alpha\n", { place: MOVED })), false, "owner plus a move");
+  assert.equal(handOffOnlyBytes(placed, townThingText("", { place: MOVED })), false, "a ground move");
+  assert.equal(handOffOnlyBytes(placed, townThingText("held_by: alpha/a-holder\n", { place: "", body: "new words" })), false, "new words");
+  assert.equal(handOffOnlyBytes(placed, placed), false, "no change");
+  assert.equal(handOffOnlyBytes(placed, "not a mark file"), false, "unreadable");
+  assert.equal(handOffOnlyBytes(placed, held.replace("date: 2026-10-01", "date: 2026-10-24")), false, "any other field");
 });
