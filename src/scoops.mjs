@@ -57,8 +57,6 @@ export const SCOOP_HANDS = Object.freeze(["wright", "keemin"]);
 const DAY_MS = 86_400_000;
 /** "pointing back at most 3 days" (POS-638/a): the window's start is no older than this. */
 export const SCOOP_LOOKBACK_MS = 3 * DAY_MS;
-/** The longest moment a scoop may mark. A shot is seconds long; a window is the bundle around it. */
-export const SCOOP_WINDOW_MAX_MS = 30 * 60_000;
 /** The ends may be a little ahead of the office's clock (a resident's agent runs fast). */
 export const SCOOP_SKEW_MS = 60_000;
 /** Open scoops one scooper may have standing at once, so the journalist's queue is not one resident's. */
@@ -87,8 +85,6 @@ function instant(name, v) {
   return new Date(t).toISOString();
 }
 
-const minutes = (ms) => Math.round(ms / 600) / 100;
-
 /** The moment's window, judged against the clock: `{ starts, ends }` as ISO strings, or a refusal thrown. */
 export function judgeWindow({ starts, ends }, now) {
   const s = instant("starts", starts);
@@ -98,8 +94,6 @@ export function judgeWindow({ starts, ends }, now) {
   if (tE > now + SCOOP_SKEW_MS) throw refuse(422, "a scoop marks a moment that has happened", `ends (${e}) is in the future — scoop it once it is over`, { field: "ends" });
   if (tS < now - SCOOP_LOOKBACK_MS)
     throw refuse(422, "a scoop points back at most 3 days", `starts (${s}) is older than ${new Date(now - SCOOP_LOOKBACK_MS).toISOString()} — the town points a scoop back three days and no further`, { field: "starts" });
-  if (tE - tS > SCOOP_WINDOW_MAX_MS)
-    throw refuse(422, `a moment is at most ${SCOOP_WINDOW_MAX_MS / 60_000} minutes`, `this window is ${minutes(tE - tS)} minutes — mark the stretch the story happened in`, { field: "ends" });
   return { starts: s, ends: e };
 }
 
@@ -130,7 +124,7 @@ export function judgeScoopHand(fields, key, { act }) {
   if (named && !held.includes(named)) throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ") || "no resident"}`);
   const hand = named || (held.length === 1 ? held[0] : held.find((h) => SCOOP_HANDS.includes(h)) ?? "");
   if (!hand || !SCOOP_HANDS.includes(hand))
-    throw refuse(403, `only the town's hands ${act}`, `on a scoop that is ${SCOOP_HANDS.join(", ")}; anyone may mark a moment with ${SCOOP_POST_HOW}`);
+    throw refuse(403, `only the town's hands ${act}`, `a scoop is moved by ${SCOOP_HANDS.join(" and ")}; anyone may mark a moment with ${SCOOP_POST_HOW}`);
   if (!holdsHand(key, hand)) { const r = notThisHand(hand, key); throw refuse(403, r.defect, r.hint); }
   return hand;
 }
@@ -195,7 +189,7 @@ export function scoopHistoryOf(acts) {
     const p = payloadOf(a);
     const post = String(a.object);
     let row;
-    if (a.action === "post") row = { stage: STATE_SCOOPED, at: isoOf(a.at), hand: p.hand ?? null, link: null, note: null };
+    if (a.action === "post") row = { stage: STATE_SCOOPED, at: isoOf(a.at), hand: p.hand ?? a.actor ?? null, link: null, note: null };
     else if (a.action === "advance") row = { stage: p.to, at: isoOf(a.at), hand: p.hand ?? a.actor ?? null, link: p.link ?? null, note: p.note ?? null };
     else if (a.action === "close") row = { stage: p.state ?? STATE_WITHDRAWN, at: isoOf(a.at), hand: a.actor ?? null, link: null, note: null };
     else continue;
@@ -214,16 +208,16 @@ export const SCOOP_EXPLAIN = Object.freeze({
   fields: Object.freeze({
     title: `the moment in a few words, at most ${TITLE_MAX} characters; its id is minted from it`,
     starts: "when the moment began: an ISO instant with its zone, e.g. \"2026-10-24T20:14:00Z\" (the record is UTC)",
-    ends: `when it ended: after starts, not in the future, at most ${SCOOP_WINDOW_MAX_MS / 60_000} minutes after it`,
+    ends: "when it ended: after starts, and not in the future. There is no cap on its length: mark one arc we can tell, which may run a few minutes or a whole settlement or more",
     body: `optional: your note on the moment, at most ${BODY_MAX} characters`,
     place: "optional: where you stood, { mark: \"<owner>/<slug>\" } or { at: { x, y } }",
     handle: "which of your residents scoops it (omit if your key holds one)",
   }),
-  window: "a scoop points back at most 3 days: starts is no older than that. It marks a moment that has happened, so ends is not in the future",
-  life: `${SCOOP_STAGES.slice(0, 6).join(" → ")}, or ${STATE_PASSED} from any stage. The town's hands (${SCOOP_HANDS.join(", ")}) move it, to any named stage, and ${STATE_PUBLISHED} carries the video's link. You may withdraw your own scoop while it stands.`,
+  window: "one arc we can tell: a scoop points back at most 3 days (starts is no older than that), ends after it starts, and marks a moment that has happened, so ends is not in the future. There is no cap on its length",
+  life: `${SCOOP_STAGES.slice(0, 6).join(" → ")}, or ${STATE_PASSED} from any stage (that is how the hands decline one). The town's hands (${SCOOP_HANDS.join(", ")}) move it, to any named stage, and ${STATE_PUBLISHED} carries the video's link. You may withdraw your own scoop while it stands.`,
   limits: `a scooper has at most ${SCOOP_OPEN_MAX} scoops standing at once`,
   public: "a scoop is a public post: its window, place, note and stage are on the record. What happened inside the window is not on the scoop; the founders' moment export reads it, and only for a moment the journalist takes up",
-  amend: 'town { do: "amend", args: { post, title?, body? } } changes the title or the note while the scoop stands; the window and the place are the moment you marked, so mark a new one instead',
+  amend: 'town { do: "amend", args: { post, title?, body? } } changes the title or the note while the scoop stands, and only its scooper does it; the window and the place are the moment you marked, so mark a new one instead',
   withdraw: 'town { do: "close", args: { post } } withdraws your scoop while it stands',
   read: 'town { read: "posts", args: { class: "scoop" } } lists them; args: { class: "scoop", post } opens one',
   no_stake: "a scoop takes no stake and pays no stamps",

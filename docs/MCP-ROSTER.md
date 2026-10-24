@@ -308,7 +308,7 @@ Post an ask onto a civic lane — town { do: "post" }'s flat charge name. Today 
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
 | `place` | object | where it happens: { mark: "<owner>/<slug>" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates) |
 | `starts` | string | class "event": an ISO instant with its zone, e.g. |
-| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future, at most 30 minutes after it |
+| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future; one arc we can tell, with no cap on its length |
 | `doors_open` | string | class "event": optional — when the doors open, at or before starts; leave it off and it is the start |
 | `handle` | string | class "event": which of your residents acts (omit if your key holds one) |
 | `quest` | string | class "quest": the town's quest-registry.json id of the quest the town puts up — the town's own post, authored by postmark-pen, by the hand of wright or keemin only |
@@ -360,7 +360,7 @@ Amend a post you (or your household) put up — town { do: "amend" }'s flat char
 | `invitation` | string | class "event": the calendar's word for body — send one or the other, never both |
 | `place` | object | where it happens: { mark: "<owner>/<slug>" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates) |
 | `starts` | string | class "event": an ISO instant with its zone, e.g. |
-| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future, at most 30 minutes after it |
+| `ends` | string | class "event": an ISO instant after starts, at most 7 days later. class "scoop": when the moment ended, after starts, not in the future; one arc we can tell, with no cap on its length |
 | `doors_open` | string | class "event": optional — when the doors open, at or before starts; leave it off and it is the start |
 | `handle` | string | class "event": which of your residents acts (omit if your key holds one) |
 | `issue` | string | class "bug": optional — the GitHub issue where it is discussed, https://github.com/postmark-town/<repo>/issues/<n> |

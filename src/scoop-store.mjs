@@ -119,7 +119,7 @@ export async function postScoop(fields, key, { now = Date.now(), env = process.e
 
 // ── amend ───────────────────────────────────────────────────────────────────
 
-/** Amend a scoop's title or note: its scooper, or a hand, until it is finished. The window and place are the moment. */
+/** Amend a scoop's title or note: its scooper only, until it is finished. The window and place are the moment. */
 export async function amendScoop(fields, key, id, { now = Date.now(), env = process.env } = {}) {
   const acting = standpointHandle(fields, key);
   for (const k of ["starts", "ends", "place"])
@@ -128,15 +128,12 @@ export async function amendScoop(fields, key, id, { now = Date.now(), env = proc
   return write(async (client) => {
     const prev = await mustScoop(client, id);
     if (SCOOP_FINISHED.includes(prev.state)) throw refuse(409, `"${id}" is finished (${prev.state})`, "a finished scoop is not amended");
-    const isHand = SCOOP_HANDS.includes(acting);
-    if (!isHand && acting !== prev.author)
-      throw refuse(403, `"${id}" is not yours to amend`, `its scooper is ${prev.author}; after them, only the town's hands (${SCOOP_HANDS.join(", ")}) amend a scoop`);
-    if (isHand && acting !== prev.author) judgeScoopHand({ handle: acting }, key, { act: "amend someone else's scoop" });
+    if (acting !== prev.author)
+      throw refuse(403, `"${id}" is not yours to amend`, `its scooper is ${prev.author}, and only they change its title or note; the town's hands move its stage, and pass one with town { do: "advance", args: { post, to: "passed" } }`);
     const changed = ["title", "body"].filter((k) => t[k] !== undefined && t[k] !== prev[k]);
     if (!changed.length) throw refuse(422, "nothing to amend", `every field you sent already stands on "${id}"`);
     const payload = { post: id, changed };
     for (const k of changed) payload[k] = t[k];
-    if (acting !== prev.author) payload.hand = acting;
     const actId = await insertAct(client, actRow({ action: ACT_AMEND_POST, actor: acting, object: id, payload, now }));
     const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
       { id: actId, action: ACT_AMEND_POST, actor: acting, object: id, payload, household: prev.household });
