@@ -345,9 +345,15 @@ export async function investigateCreature(id, { creatures, from = null, handle =
   // and the save's row by the same rule: one the save carries ahead of now is not out yet either
   const saving = await Promise.resolve(saved(id)).catch(() => null);
   const snap = saving && !(msOf(saving.row?.spawned_at) > nowMs) ? saving : null;
-  if (!c && !snap)
+  // WHAT IT DID OUTLIVES ITS PLACE IN THE FOLD (POS-781): its reactions are acts rows, so they are read whether or not the fold
+  // still holds it. A creature that fled, or ended over an hour ago, has no fold row and may have no save, but it is not "no creature"
+  // while its record shows it did something
+  const got = await Promise.resolve(rows(id, REACTIONS_SHOWN)).catch(() => null);
+  if (!c && !snap && !(Array.isArray(got) && got.length))
     return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };
-  const kind = c ? law.kindOf(c.kind) : null;
+  // the kind of one the fold no longer holds is the one its id names (`creature:wolf-270-1` is a wolf)
+  const kindName = c?.kind ?? snap?.row?.kind ?? String(id).slice("creature:".length).replace(/-\d.*$/, "");
+  const kind = law.kindOf(kindName) ?? null;
   const here = point(from);
   // A DISGUISE IS BROKEN BY A LOOK FROM INSIDE ITS RING (set-pieces.mjs): the first investigate by a resident
   // standing there breaks it for everyone, and this look already sees it as it is. `looker` is the key's own
@@ -378,12 +384,11 @@ export async function investigateCreature(id, { creatures, from = null, handle =
       : encounterRead({ living }, c, kind, { handle, now: nowMs }) ? { encounter: encounterRead({ living }, c, kind, { handle, now: nowMs }) } : {}),
     answered_by: "the record, as of now",
   } : { unavailable: "it is no longer held in this office's fold (it ended over an hour ago)" };
-  const got = await Promise.resolve(rows(id, REACTIONS_SHOWN)).catch(() => null);
   const reactions = got == null ? { unavailable: "its reactions could not be read this time" } : {
     shown: got.length,
     rows: got.map((r) => {
       const p = typeof r.payload === "string" ? JSON.parse(r.payload) : (r.payload ?? {});
-      const reaction = c ? reactionOf(law, c, p.reaction) : null;
+      const reaction = kind ? reactionOf(law, { kind: kindName }, p.reaction) : null;
       return { to: p.to, verb: p.verb, ...(p.moment ? { moment: p.moment } : {}), reaction: p.reaction,
         ...(reaction ? { line: lineOf(law, reaction, p.to, lineWords(p)) } : {}), roll: p.roll, judged_by: p.judged_by, ...(p.why ? { why: p.why } : {}),
         // whom a finishable creature pressed, and what each paid (encounter.mjs)
