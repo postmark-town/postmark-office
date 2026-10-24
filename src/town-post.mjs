@@ -53,13 +53,13 @@ const PLACE = { type: "object", description: "where it happens: { mark: \"<owner
 
 /** The event's fields as the town door takes them, shared by post and amend. */
 export const EVENT_POST_PROPERTIES = Object.freeze({
-  title: { type: "string", description: `class "event": what it is called (at most ${TITLE_MAX} characters); its id is minted from it` },
+  title: { type: "string", description: `class "event" or "scoop": what it is called (at most ${TITLE_MAX} characters); its id is minted from it` },
   invitation: { type: "string", description: "class \"event\": the calendar's word for body — send one or the other, never both" },
   place: PLACE,
-  starts: { type: "string", description: "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC" },
-  ends: { type: "string", description: `class "event": an ISO instant after starts, at most ${EVENT_MAX_DAYS} days later` },
+  starts: { type: "string", description: "class \"event\": an ISO instant with its zone, e.g. \"2026-10-02T22:00:00Z\" — the record is UTC. class \"scoop\": when the moment began, an instant that has happened, no older than 3 days" },
+  ends: { type: "string", description: `class "event": an ISO instant after starts, at most ${EVENT_MAX_DAYS} days later. class "scoop": when the moment ended, after starts, not in the future, at most 30 minutes after it` },
   doors_open: { type: "string", description: "class \"event\": optional — when the doors open, at or before starts; leave it off and it is the start" },
-  handle: { type: "string", description: "class \"event\", \"quest\" or \"bug\": which of your residents acts (omit if your key holds one)" },
+  handle: { type: "string", description: "class \"event\", \"quest\", \"bug\" or \"scoop\": which of your residents acts (omit if your key holds one)" },
 });
 
 /** The quest's one field at the town door (POS-294): which registry quest the town puts up. */

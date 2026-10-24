@@ -420,7 +420,7 @@ export const TOOLS = [
     inputSchema: { type: "object", properties: {
       class: { type: "string", enum: ["idea", "event", "quest", "bug", "scoop", "report"], description: "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294), \"bug\" (something broken, for the town's hands to confirm and move along), \"scoop\" (a public mark on a moment, for the journalist: explain: \"scoop\") or \"report\" (private: explain: \"report\"); the lanes open one by one, by ruling" },
       slug: { type: "string", description: "your idea's slug — lowercase-hyphenated, unique among your own marks" },
-      body: { type: "string", description: "class \"idea\": the claim itself, one breath, ≤150 characters — the body IS the idea. class \"event\": its invitation, in your own words, at most 600 characters. class \"bug\": what you saw and what you expected, at most 600 characters" },
+      body: { type: "string", description: "class \"idea\": the claim itself, one breath, ≤150 characters — the body IS the idea. class \"event\": its invitation, in your own words, at most 600 characters. class \"bug\": what you saw and what you expected, at most 600 characters. class \"scoop\": your note on the moment, at most 600 characters" },
       // The SAME sentence world_leave_mark's `at` carries, deliberately — one
       // frame, one wording. `on` is that door's `parent_id` under the word this
       // lane reads it back with (`standing_at`), because a poster naming where
