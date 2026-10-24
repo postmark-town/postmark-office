@@ -292,6 +292,10 @@ const receipt = {
         // those two look the same.
         held_unbound: store.held_unbound ?? null,
         held_unbound_count: store.held_unbound_count ?? null,
+        // THE TOWN-SIGNED THINGS LET THROUGH BECAUSE ONLY THEIR HANDS CHANGED
+        // (WLD-5), named beside the ones held out: together they say what the
+        // write-down did with every town-signed mark in the docket.
+        town_hand_offs: store.town_hand_offs ?? null,
         // WHERE THE ESCROW INGEST STANDS. `behind: 0` is the ordinary case; a
         // number that climbs across crossings is an ingest that has stopped
         // running, which is otherwise indistinguishable from a quiet town.

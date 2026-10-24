@@ -1346,3 +1346,38 @@ test("F9f · handOffOnlyBytes: the world's handOffOnly rule, over rendered files
   assert.equal(handOffOnlyBytes(placed, "not a mark file"), false, "unreadable");
   assert.equal(handOffOnlyBytes(placed, held.replace("date: 2026-10-01", "date: 2026-10-24")), false, "any other field");
 });
+
+test("F9g · a HAND-WRITTEN canon file compares by value: reordered keys, a reordered flow map, quotes, an extra key", () => {
+  // The three keys are written by hand in git, not by markRecord, so their spelling is
+  // whatever the author typed. The rule compares what the file SAYS, so a spelling that is
+  // not markRecord's still reads as a hand-off, and the hold prints (the rehearsal failure
+  // was a hold that never printed).
+  const canon = '---\nheld_by: the-town\nby: "the-town"\nextent: { h: 2, w: 3 }\nkind: thing\nat: { y: 4.0, x: 3 }\ndate: 2026-10-21\nflavour: sweet\n---\n\nA thing the town made.\n';
+  const next = '---\nkind: thing\nby: the-town\ndate: 2026-10-21\nat: { x: 3, y: 4 }\nextent: { w: 3, h: 2 }\nflavour: sweet\nheld_by: alpha/a-holder\nowned_by: kai\n---\n\nA thing the town made.\n';
+  assert.equal(handOffOnlyBytes(canon, next), true, "the same record, spelled differently, plus a hand-off");
+  assert.equal(handOffOnlyBytes(canon, next.replace("flavour: sweet", "flavour: sour")), false, "an extra key that CHANGED is another field");
+  assert.equal(handOffOnlyBytes(canon, next.replace("flavour: sweet\n", "")), false, "an extra key that went missing is another field");
+});
+
+test("F9h · the three-key shape: a key held by the town handed to a knight, canon as written in git, next as markRecord prints it", () => {
+  // The spire/heist batch's key files, byte for byte (held_by: the-town, no place).
+  const body = "A heavy bronze key with a star worn into its bow, caramel in its teeth.";
+  const canon = `---\nkind: thing\nby: the-town\ndate: 2026-10-21\nheld_by: the-town\n---\n\n${body}\n`;
+  const next = markRecord({ kind: "thing", by: "the-town", date: "2026-10-21", held_by: "wright/a-knight", owned_by: "kai" }, body);
+  assert.equal(handOffOnlyBytes(canon, next), true, "held by the town -> held by the knight, finisher the owner");
+});
+
+test("F9i · the parser fails closed on a file it does not understand", () => {
+  const canon = townThingText();
+  const held = (fm) => `---\n${fm}\n---\n\na thing the town made\n`;
+  const base = "kind: sited\nby: the-town\ndate: 2026-10-01\nat: { x: 3, y: 4 }\nextent: { w: 1, h: 1 }";
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder`)), true, "control: the plain file reads");
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder\nheld_by: alpha/other`)), false, "a repeated key");
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder\n# a comment`)), false, "a comment line");
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder\n\nnote: x`)), false, "a blank line inside the frontmatter");
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder\nlist:\n  - one`)), false, "an indented continuation");
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder\n- stray`)), false, "a list item");
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder\nno colon here`)), false, "a line with no key");
+  assert.equal(handOffOnlyBytes(held(`${base}\nby: the-town`), held(`${base}\nheld_by: alpha/a-holder`)), false, "a repeated key in canon");
+  assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by:`)), false, "an empty held_by is not held");
+});

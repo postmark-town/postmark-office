@@ -125,15 +125,49 @@ const isTheTown = (household) => {
 const HAND_FIELDS = new Set(["held_by", "owned_by", "at", "extent", "points"]);
 const PLACE_FIELDS = ["at", "extent", "points"];
 
-/** A mark file as { fields, body }: one `key: value` per line between the fences. */
+/**
+ * A frontmatter VALUE as the thing it says, not the spelling it was typed in: a
+ * hand-written file and `markRecord`'s render of the same record must compare
+ * equal. Quotes come off a plain string; a number is a number; a flow map
+ * (`{ w: 2, h: 1 }`) is compared by its pairs, whatever their order; a JSON
+ * array is compared as JSON. Anything else is its trimmed text. A value this
+ * cannot read as one of those is its raw text, so it fails CLOSED, never open.
+ */
+function valueOf(raw) {
+  const v = String(raw).trim();
+  if (/^-?\d+(\.\d+)?$/.test(v)) return `n:${Number(v)}`;
+  if ((v.startsWith('"') && v.endsWith('"') && v.length >= 2) || (v.startsWith("'") && v.endsWith("'") && v.length >= 2)) {
+    try { return `s:${v.startsWith('"') ? JSON.parse(v) : v.slice(1, -1)}`; } catch { return `r:${v}`; }
+  }
+  if (v.startsWith("{") && v.endsWith("}")) {
+    const pairs = v.slice(1, -1).split(",").map((x) => x.trim()).filter(Boolean).map((x) => {
+      const k = x.indexOf(":");
+      return k > 0 ? [x.slice(0, k).trim(), valueOf(x.slice(k + 1))] : null;
+    });
+    if (pairs.every(Boolean)) return `m:${JSON.stringify(pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)))}`;
+    return `r:${v}`;
+  }
+  if (v.startsWith("[")) { try { return `j:${JSON.stringify(JSON.parse(v))}`; } catch { return `r:${v}`; } }
+  return `s:${v}`;
+}
+
+/**
+ * A mark file as { fields, body }, fields compared by VALUE (see valueOf). STRICT:
+ * every frontmatter line must be a plain top-level `key: value`. A blank line, a
+ * comment, an indented continuation, a list item, a line with no key, or a key
+ * that repeats is a file this does not understand, and it answers null, so the
+ * caller holds the mark out as it always did.
+ */
 function splitMarkFile(text) {
   const t = String(text ?? "").replace(/\r\n/g, "\n");
   const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(t);
   if (!m) return null;
   const fields = new Map();
   for (const line of m[1].split(/\n/)) {
-    const i = line.indexOf(":");
-    if (i > 0 && !/^\s/.test(line)) fields.set(line.slice(0, i).trim(), line.slice(i + 1).trim());
+    const k = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]+(.*))?$/.exec(line);
+    if (!k || fields.has(k[1])) return null;
+    const v = valueOf(k[2] ?? "");
+    fields.set(k[1], v === "s:" ? undefined : v); // an empty value is no value (the world reads held_by "" as not held)
   }
   return { fields, body: m[2].trim() };
 }
