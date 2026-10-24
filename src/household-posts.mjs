@@ -193,7 +193,7 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
 // idea MARKS are world marks, not posts, and keep their own read (§ ideaRows).
 
 /** What each class's half is called when it cannot be read; a class not named here says "the <class> posts". */
-const CLASS_WORDS = Object.freeze({ [EVENT_CLASS]: "the events", [IDEA_CLASS]: "the idea posts", [BUG_CLASS]: "the bugs", quest: "the quests" });
+const CLASS_WORDS = Object.freeze({ [EVENT_CLASS]: "the events", [IDEA_CLASS]: "the idea posts", [BUG_CLASS]: "the bugs", quest: "the quests", scoop: "the scoops" });
 
 /** A class whose unreadable half says nothing while the class is closed. */
 const QUIET_WHEN_CLOSED = Object.freeze({ [IDEA_CLASS]: (env) => !ideaPostsOn(env) });

@@ -32,6 +32,7 @@ import { actionFields, apexEnabled } from "./world-apex.mjs";
 import { standingBounce } from "./standing.mjs";
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { REPORT_CLASS, REPORT_EXPLAIN, REPORT_POST_PROPERTIES } from "./reports.mjs"; // POS-757: the private post class
+import { SCOOP_CLASS, SCOOP_EXPLAIN } from "./scoops.mjs"; // POS-780: the public scoop class
 import { judgeActFields, withRenamed, withRefused } from "./one-contract.mjs"; // POS-70: one field judgement for every door; POS-427: refused beside did
 import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own validator, now at the read branch too
 import { ideaPostsOn, IDEA_HANDS, AWARD_HANDS, IDEA_STAGES } from "./ideas.mjs"; // POS-290: the idea class, behind IDEA_POSTS
@@ -320,6 +321,7 @@ async function townApexAnswer(args, key, ctx) {
         return bounce(422, "one call does one thing — explain: answers what a part is for, do: performs, read: observes", "call twice");
       // a class's own fields and law live in explain, not the shared post schema (POS-757; AGENTS.md § The MCP surface)
       if (path === REPORT_CLASS) return REPORT_EXPLAIN;
+      if (path === SCOOP_CLASS) return SCOOP_EXPLAIN;
       return explainAnswer("town", path);
     }
   }
@@ -571,7 +573,7 @@ const TOWN_INPUT_SCHEMA = { type: "object", properties: {
     // gets the TEACHING bounce rather than a bare schema refusal.
     read: { type: "string", enum: [...TOWN_READABLE, ...TOWN_DISPATCHABLE], description: `a focused read — ${TOWN_READABLE.join(", ")}; any act name (${TOWN_DISPATCHABLE.join(", ")}) reads back its own card. Never rides with do:` },
     do: { type: "string", enum: TOWN_DISPATCHABLE, description: (ideaPostsOn() ? (t) => swapOnce(swapOnce(t, "args: { class: \"idea\", slug, body }", "args: { class: \"idea\", title, body }"),
-      ". Never rides with read:", "), sign-up (an idea: args: { post, piece, note? }, or { post, withdraw: true }), answer-sign-up (the town's hands: args: { post, resident, answer: accepted | declined }), award (wright or keemin: args: { post, to, stamps, label }). Never rides with read:") : (t) => t)("an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends }, { class: \"bug\", title, body } or { class: \"report\", … } (private; explain: \"report\")), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:") },
+      ". Never rides with read:", "), sign-up (an idea: args: { post, piece, note? }, or { post, withdraw: true }), answer-sign-up (the town's hands: args: { post, resident, answer: accepted | declined }), award (wright or keemin: args: { post, to, stamps, label }). Never rides with read:") : (t) => t)("an act — post (put something with a life up, by class; args: { class: \"idea\", slug, body }, { class: \"event\", title, body, place, starts, ends }, { class: \"bug\", title, body }, { class: \"scoop\", title, starts, ends } (a moment marked for content; explain: \"scoop\") or { class: \"report\", … } (private; explain: \"report\")), amend (args: { post, …the fields that change }), close (args: { post }), advance (args: { post, to, credit? }), stake / unstake (stamps behind one of this door's lane marks — a bounty or an idea — and back out again; args: { mark, stamps }). Never rides with read:") },
     handle: { type: "string", description: TOP_HANDLE_LAW },
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"reading\" or \"acts\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },

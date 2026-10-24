@@ -50,6 +50,7 @@ import {
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
+import { SCOOP_CLASS } from "./scoops.mjs"; // POS-780: a public post class; its pen is scoop-store.mjs
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
@@ -155,7 +156,7 @@ const announcementsByEvent = (list) => {
   return m;
 };
 
-async function placeFor(client, shape) {
+export async function placeFor(client, shape) {
   if (shape.at) return { mark: null, name: null, x: shape.at.x, y: shape.at.y };
   const { rows } = await client.query("SELECT slug, status, kind, geometry FROM marks WHERE slug = $1", [shape.mark]);
   return placeFromMarkRow(rows[0] ?? null, shape.mark);
@@ -350,7 +351,8 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
 // class "idea" (POS-290) joins behind IDEA_POSTS; its pen is idea-store.mjs,
 // loaded when an idea act arrives (it imports this file's row helpers).
 const IDEA_CLASS = "idea";
-const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS];
+const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, SCOOP_CLASS];
+const scoopPen = () => import("./scoop-store.mjs");
 const ideaPen = () => import("./idea-store.mjs");
 
 function judgeClass(fields, { required, env = process.env }) {
@@ -359,8 +361,8 @@ function judgeClass(fields, { required, env = process.env }) {
   // act naming class "idea" is refused exactly as it was before the class existed.
   const ideas = ideaPostsOn(env);
   const classes = ideas ? [...POST_MACHINE_CLASSES, IDEA_CLASS] : POST_MACHINE_CLASSES;
-  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
-  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug" or "idea", not "${c}"` : `this act answers class "event", "quest" or "bug", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
+  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken; class: "scoop" marks a moment for content' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
+  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug", "scoop" or "idea", not "${c}"` : `this act answers class "event", "quest", "bug" or "scoop", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
   return c || null;
 }
 function postId(fields) {
@@ -386,14 +388,16 @@ async function classOf(fields, id, env) {
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
   const { ideaRow } = await ideaPen();
+  const { scoopRow } = await scoopPen();
   return read(async (client) => ((await questRow(client, id)) ? QUEST_CLASS
-    : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
+    : (await bugRow(client, id)) ? BUG_CLASS : (await scoopRow(client, id)) ? SCOOP_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
 }
 
 export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null, titleOf = null } = {}) {
   const cls = judgeClass(fields, { required: true, env });
   if (cls === QUEST_CLASS) return postQuest(fields, key, { now, env, registry });
   if (cls === BUG_CLASS) return postBug(fields, key, { now, env, roll });
+  if (cls === SCOOP_CLASS) return (await scoopPen()).postScoop(fields, key, { now, env });
   if (cls === IDEA_CLASS) return (await ideaPen()).postIdea(fields, key, { now, env, roll, titleOf });
   const handle = standpointHandle(fields, key);
   return postEvent(handle, { title: fields.title, body: bodyOf(fields), place: fields.place,
@@ -406,6 +410,7 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
   if (cls === REPORT_CLASS) throw REPORT_NO_AMEND();
   if (cls === QUEST_CLASS) throw QUEST_NO_AMEND();
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
+  if (cls === SCOOP_CLASS) return (await scoopPen()).amendScoop(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
   const handle = standpointHandle(fields, key);
   return amendEvent(handle, id, { title: fields.title, body: bodyOf(fields), place: fields.place,
@@ -418,6 +423,7 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
   if (cls === REPORT_CLASS) throw REPORT_NO_CLOSE();
   if (cls === QUEST_CLASS) return closeQuest(fields, key, id, { now, env });
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
+  if (cls === SCOOP_CLASS) return (await scoopPen()).closeScoop(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
     "it finishes by advance: town { do: \"advance\", args: { post, to: \"shipped\" | \"declined\" | \"duplicate\" } }, by the town's hands");
   const handle = standpointHandle(fields, key);
@@ -437,6 +443,7 @@ export async function advanceAtTown(fields, key, { now = Date.now(), env = proce
   if (cls === REPORT_CLASS) return (await import("./report-store.mjs")).advanceReport(fields, key, id, { now, env });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
+  if (cls === SCOOP_CLASS) return (await scoopPen()).advanceScoop(fields, key, id, { now, env });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
   for (const k of ["skip", "reason"])
     if (fields?.[k] !== undefined) throw refuse(422, `${k} is a bug's`, "only a bug's stage is skipped on the record; this post moves by its own class's law", { field: k });

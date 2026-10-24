@@ -339,6 +339,7 @@ test("a class the office cannot read is named, and its rows are left out rather 
       "the events could not be read from the office's record",
       "the quests could not be read from the office's record",
       "the bugs could not be read from the office's record",
+      "the scoops could not be read from the office's record",
       "the Think Tank could not be read from the world record",
     ]);
     assert.deepEqual([a.put_up.total, a.taking_part.total], [0, 0]);
@@ -372,5 +373,5 @@ test("every post class goes through the one generic pass: a quest the house answ
   const src = readFileSync(new URL("../src/household-posts.mjs", import.meta.url), "utf8");
   assert.match(src, /Object\.keys\(\(await import\("\.\/town-posts\.mjs"\)\)\.POST_CLASSES\)/);
   assert.doesNotMatch(src, /tableRows\((EVENT|IDEA|BUG|QUEST)_CLASS/, "no class has a half of its own");
-  assert.deepEqual(Object.keys(POST_CLASSES).sort(), ["bug", "event", "idea", "quest"]);
+  assert.deepEqual(Object.keys(POST_CLASSES).sort(), ["bug", "event", "idea", "quest", "scoop"]);
 });

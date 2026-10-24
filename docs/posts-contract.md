@@ -106,6 +106,7 @@ One reader, `src/post-history.mjs` § `postHistoryVia`: one acts query for the p
 | idea | `{ stage, at, hand, credit, link, note }`, and `awards` beside it | the post and each advance; each award act (`src/ideas.mjs`) |
 | event | `{ stage, at, hand }` | the post (`announced`) and its close (`cancelled`) |
 | quest | `{ stage, at, hand }` | the post (`open`) and its close (`closed`), by the hand the act names |
+| scoop | `{ stage, at, hand, link, note }` | the post (`scooped`), each advance, and the scooper's withdrawal (`withdrawn`); `src/scoops.mjs` § `scoopHistoryOf` |
 
 **The chain is read as a delta.** `stamp_lines` is append-only, and every writer takes its advisory lock before it reads the head and inserts head + 1 (`src/stamp-lines.mjs` § `lockStampLinesVia`), so no lower seq commits after a higher one. Each office process remembers the seq it reached and that row's seal, and reads only the rows past it (`seq > $1 AND seq <= $2`). A store whose row at the remembered seq is gone or carries another seal is another chain, and the reader starts again from the top. A store with no chain says so in `unavailable`.
 
@@ -178,3 +179,27 @@ Darko, 2026-10-09: "build all the plumbing for the idea stuff … but the actual
 `world2/tools/events-rebuild.mjs --dry-run` folds them back into `posts` and `responses`. An award changes no row.
 
 **What the agent sees.** `node tools/agent-view.mjs --class idea --out <file.html>` draws every step of the idea's life, with `IDEA_POSTS` on.
+
+## The scoop class (POS-780)
+
+Darko, 2026-10-22 19:48 (POS-638/a): "let's call it a scoop instead of a clip, and this feeds the journalist." 2026-10-24 12:28: "build the actual scoop machinery now … dogfooded in dev." The class law is `src/scoops.mjs`, its pen `src/scoop-store.mjs`; the loop it starts (a scoop, then a script, keyframes and a video, and the video's link back onto the scoop) is the founders' own, run by hand until the journalist takes it.
+
+Posts are the town's wants, and a scoop is a want for a moment to be told: a scoop asks the town to tell a moment: to turn something that happened into a richer telling. It is a **public** post that marks a moment for content: a window of time, where the scooper stood, and a note. It is on the record like every post. What happened inside the window is not on the scoop: the founders' moment export (`tools/moment-export.mjs`) reads it, from a founder's machine, and no resident door does.
+
+**Post.** `town { do: "post", args: { class: "scoop", title, starts, ends, body?, place?, handle? } }`. The names are the shared post schema's (the window is the post's own span columns).
+- `starts` and `ends` are ISO instants with their zone. The moment has happened (`ends` is not in the future, with a minute of skew), **points back at most 3 days** (`starts` is no older), and ends after it starts. There is **no cap on its length** (Darko, 2026-10-24 12:45, POS-780/a: "no hard cap, more of a 'one arc we can tell'. could even happen over the course of a full settlement or multiple").
+- `body` is the scooper's note, at most 600 characters; `place` is `{ mark }` (a standing mark with an extent) or `{ at: { x, y } }`, where the scooper stood. Without a place the act is anchorless.
+- The scooper is the author. The id is `<scooper>/<slug>` from the title, never reused. A scooper has at most 5 scoops standing (`SCOOP_OPEN_MAX`, a guess).
+- No stake and no stamps: a scoop pays nothing. The fields of another lane (`slug`, `issue`, `invitation`, `doors_open`, `quest`, `for`, `stamps`) are refused by name.
+
+**States.** `scooped`, `picked-up`, `scripted`, `keyframed`, `filmed`, `published`, `passed`, and `withdrawn`. Finished: `published`, `passed`, `withdrawn`. A finished scoop moves no further.
+
+**Advance.** By the town's hands (`wright`, `keemin`; the journalist and the Illuminator join when their handles exist): `town { do: "advance", args: { post, to, note?, link? } }`. It goes to any named stage but `withdrawn`, in any order (the idea class's permissive law). `published` needs `link`, the finished video's YouTube address, kept in `fields.video_url`; no other stage takes a link. `credit`, `of`, `size`, `grade`, `critter`, `skip`, `reason` and `recredit` are the bug's and the idea's, and are refused by name.
+
+**Amend.** `title` and `body`, by the scooper alone, until it is finished. The hands do not amend another resident's scoop; they move its stage, and `passed` is how they decline one. The window and the place are the moment marked: `starts`, `ends` and `place` are refused on an amend. Scoop the right moment as a new post.
+
+**Close.** The scooper only, while it stands: `town { do: "close", args: { post } }` finishes it as `withdrawn`, and it stays on the record. The hands pass a scoop by advance.
+
+**The read.** `town { read: "posts", args: { class: "scoop", post? } }` (or `GET /posts?class=scoop`). Each row is the general row plus `body` (the note), `window: { starts, ends }`, `place`, `fields` (`video_url` once published) and `history`. `town { explain: "scoop" }` teaches the whole law.
+
+**The acts.** Class `scoop`; `post` (actor: the scooper; anchored when it has a place), `amend`, `advance` (actor: the hand) and `close` (actor: the scooper). `world2/tools/events-rebuild.mjs --dry-run` folds them back into `posts`.
