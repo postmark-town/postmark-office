@@ -248,7 +248,8 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
   let unavailable = history?.unavailable ?? null;
   // Every class carries its history (POS-547 for the bug, generalized): the
   // rows its class's mapper shapes, oldest first.
-  const historyOf = (id) => history.byPost.get(id) ?? [];
+  // POS-778 follow-up: each history row carries `state` (the canonical word) beside `stage` (its permanent alias), same value.
+  const historyOf = (id) => (history.byPost.get(id) ?? []).map(({ stage, ...rest }) => ({ stage, state: stage, ...rest }));
   if (cls === QUEST_CLASS) {
     const registry = questRegistryAtOffice(townClone);
     if (!registry) unavailable = "the quest registry could not be read, so each quest's terms are null";
