@@ -32,11 +32,12 @@ import { dirname, join } from "node:path";
 
 import { loginKeys, sketchbookKeys } from "../src/household-logins.mjs";
 import { markRecord } from "../src/mark-record.mjs";
+import { renderRecord } from "../world2/tools/mark-render.mjs";
 import { writeDownHousehold } from "../src/world-drain.mjs";
 import { isDocketCount } from "../world2/tools/fold-delta.mjs";
 import {
   FoldInputRefusal, clearGitSketchbooks, normalizeFoldInput, normalizeMark,
-  handOffOnlyBytes, planStoreWriteDown, sketchbookNameFor, starvingCheck, storeWriteDown,
+  handOffOnlyBytes, handOffPrint, planStoreWriteDown, sketchbookNameFor, starvingCheck, storeWriteDown,
 } from "../src/store-writedown.mjs";
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -1380,4 +1381,83 @@ test("F9i · the parser fails closed on a file it does not understand", () => {
   assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by: alpha/a-holder\nno colon here`)), false, "a line with no key");
   assert.equal(handOffOnlyBytes(held(`${base}\nby: the-town`), held(`${base}\nheld_by: alpha/a-holder`)), false, "a repeated key in canon");
   assert.equal(handOffOnlyBytes(canon, held(`${base}\nheld_by:`)), false, "an empty held_by is not held");
+});
+
+// ── F9j-F9m · THE GAP THAT HID THE FIRST RUN-THROUGH: A REAL STORE ROW ────────
+//
+// The first run-through stopped because the store renders `tier: constitution` on every
+// town-signed row and the hand-written canon key files do not carry it. The earlier dry run
+// rendered a synthetic row without it. These cases render REAL rows (renderRecord over a
+// `marks` row shaped as the store holds it), against the key files as the batch writes them.
+
+const KEY_BODIES = {
+  "the-hall-of-keepers-key": "A heavy bronze key with a star worn into its bow, caramel in its teeth. The candied wolf kept it from anyone alone.",
+  "the-lumber-room-key": "A small iron key gone sticky with sugar, its bow a folded wing. The candied bat kept it for someone quiet enough.",
+  "the-mirror-room-key": "A key of dark glass that shows your face the wrong way round. The candied raven kept it for someone who remembered.",
+};
+const keyCanon = (body) => `---\nkind: thing\nby: the-town\ndate: 2026-10-21\nheld_by: the-town\n---\n\n${body}\n`;
+const keyRow = (body, data) => ({ kind: "thing", owner: "the-town", body, geometry: null, data: { tier: "constitution", date: "2026-10-21", ...data } });
+
+test("F9j · the three real keys: a REAL store row (tier and all) given into a knight prints as canon's own file plus the hand-off", () => {
+  for (const [slug, body] of Object.entries(KEY_BODIES)) {
+    const canon = keyCanon(body);
+    const row = keyRow(body, { held_by: `wright/${slug}-knight`, owned_by: "hr-fern" });
+    const rendered = renderRecord(row);
+    assert.match(rendered, /^tier: constitution$/m, "the real render carries the tier line canon does not (the first blocker)");
+    const print = handOffPrint(canon, rendered);
+    assert.ok(print, `${slug}: a hand-off, tier or no tier`);
+    assert.deepEqual(print.ignored, ["tier"], "the store's addition is named");
+    assert.equal(print.bytes, `---\nkind: thing\nby: the-town\ndate: 2026-10-21\nheld_by: wright/${slug}-knight\nowned_by: hr-fern\n---\n\n${body}\n`,
+      "canon's file with held_by and owned_by replaced, and nothing the store added");
+    assert.doesNotMatch(print.bytes, /tier:/);
+  }
+});
+
+test("F9k · a field the store adds that nobody has thought of is named and never written", () => {
+  const body = KEY_BODIES["the-lumber-room-key"];
+  const rendered = renderRecord(keyRow(body, { held_by: "wright/a-knight", owned_by: "kai", some_new_derived_line: "7", another_one: "x" }));
+  assert.match(rendered, /some_new_derived_line: 7/, "the render really carries the unknown lines");
+  const print = handOffPrint(keyCanon(body), rendered);
+  assert.ok(print);
+  assert.deepEqual(print.ignored.sort(), ["another_one", "some_new_derived_line", "tier"]);
+  assert.doesNotMatch(print.bytes, /some_new_derived_line|another_one|tier:/);
+  // but a field canon HAS, changed, is never a store addition
+  assert.equal(handOffPrint(keyCanon(body), rendered.replace("date: 2026-10-21", "date: 2026-10-24")), null);
+  assert.equal(handOffPrint(keyCanon(body), rendered.replace(body, "other words")), null);
+});
+
+test("F9l · end to end on a real row: draft/the-town carries canon's file with the hold, and the receipt names what the store added", () => {
+  const w = makeWorld("town-real-key");
+  const path = "WORLD/marks/the-town/the-lumber-room-key/mark.md";
+  const body = KEY_BODIES["the-lumber-room-key"];
+  const f = join(w.repo, path);
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, keyCanon(body));
+  w.git("add", "-A");
+  execFileSync("git", ["-C", w.repo, "commit", "-qm", "canon holds a key"], { env: { ...process.env, ...SEED_ENV } });
+  const report = storeWriteDown({
+    repo: w.repo, at: Date.parse(AT_ISO),
+    input: foldInput([storeMark({
+      slug: "the-town/the-lumber-room-key", by: "the-town", household: "solo:the-town", path,
+      fileRec: { kind: "thing", by: "the-town", tier: "constitution", date: "2026-10-21", held_by: "wright/a-knight", owned_by: "kai", some_new_derived_line: "7" },
+      body,
+    })]),
+    at: Date.parse(AT_ISO),
+  });
+  assert.equal(report.held_unbound_count, 0);
+  assert.deepEqual(report.town_hand_offs, ["the-town/the-lumber-room-key"]);
+  assert.deepEqual(report.town_hand_off_store_additions["the-town/the-lumber-room-key"].sort(), ["some_new_derived_line", "tier"]);
+  assert.equal(w.git("show", `draft/the-town:${path}`), `---\nkind: thing\nby: the-town\ndate: 2026-10-21\nheld_by: wright/a-knight\nowned_by: kai\n---\n\n${body}\n`);
+});
+
+test("F9m · out of hands: the place returns from the render on a root filing, and a frame-relative filing stays held out", () => {
+  const held = `---\nkind: sited\nby: the-town\ndate: 2026-10-01\nheld_by: kai\n---\n\nwords\n`;
+  const back = `---\nkind: sited\nby: the-town\ntier: constitution\ndate: 2026-10-01\nat: { x: 3, y: 4 }\nextent: { w: 1, h: 1 }\n---\n\nwords\n`;
+  const print = handOffPrint(held, back, { nested: false });
+  assert.equal(print.bytes, `---\nkind: sited\nby: the-town\ndate: 2026-10-01\nat: { x: 3, y: 4 }\nextent: { w: 1, h: 1 }\n---\n\nwords\n`);
+  assert.equal(handOffPrint(held, back, { nested: true }), null, "a world number would land in a file frame");
+  // into hands from a placed canon: the place leaves, the rest is canon's
+  const placed = `---\nkind: sited\nby: the-town\ndate: 2026-10-01\nat: { x: 3, y: 4 }\nextent: { w: 1, h: 1 }\n---\n\nwords\n`;
+  const into = `---\nkind: sited\nby: the-town\ntier: constitution\ndate: 2026-10-01\nheld_by: kai\n---\n\nwords\n`;
+  assert.equal(handOffPrint(placed, into, { nested: true }).bytes, `---\nkind: sited\nby: the-town\ndate: 2026-10-01\nheld_by: kai\n---\n\nwords\n`);
 });

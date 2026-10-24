@@ -73,6 +73,7 @@ const STORE_REPORT = {
   held_unbound: [{ id: "the-town/a-new-thing", household_key: "solo:the-town" }],
   held_unbound_count: 1,
   town_hand_offs: ["the-town/a-given-thing"],
+  town_hand_off_store_additions: { "the-town/a-given-thing": ["tier"] },
   households: [{ household: "alpha", changed: true }, { household: "beta", changed: false }],
 };
 
@@ -147,6 +148,7 @@ test("entry, rehearsal and wall all ARRIVE on the receipt — the reader check o
   assert.deepEqual(withProvenance.store.town_hand_offs, ["the-town/a-given-thing"],
     "and the town-signed things let through for their hand-off alone, beside the ones held out (WLD-5)");
   assert.equal(withProvenance.store.held_unbound_count, 1);
+  assert.deepEqual(withProvenance.store.town_hand_off_store_additions, { "the-town/a-given-thing": ["tier"] });
 });
 
 test("`selection` reaches the receipt, and says the fold chose by DOCKET with its window", () => {

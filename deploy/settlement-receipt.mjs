@@ -296,6 +296,8 @@ const receipt = {
         // (WLD-5), named beside the ones held out: together they say what the
         // write-down did with every town-signed mark in the docket.
         town_hand_offs: store.town_hand_offs ?? null,
+        // what the store rendered for those marks that canon does not carry (tier, and anything new): named, never written
+        town_hand_off_store_additions: store.town_hand_off_store_additions ?? null,
         // WHERE THE ESCROW INGEST STANDS. `behind: 0` is the ordinary case; a
         // number that climbs across crossings is an ingest that has stopped
         // running, which is otherwise indistinguishable from a quiet town.
