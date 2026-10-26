@@ -176,3 +176,15 @@ test("POS-697 G3a: a live walk carries its destination (the act row's object), a
   assert.deepEqual([elowen.x, elowen.y, elowen.m, elowen.toward], [130, 240, 50, "a/the-pier"]);
   assert.equal(around.events.find((e) => e.actor === "mari").text, undefined, "a say's words never ride around_you");
 });
+
+test("POS-778: explain: \"posts\" names state as the canonical word, stage as its alias, and each class's states", async () => {
+  const p = explainAnswer("town", "posts");
+  assert.equal(p.explains, "posts");
+  assert.match(p.detail, /THE WORD IS STATE/);
+  assert.match(p.detail, /`stage` is a permanent alias/);
+  for (const v of ["reported, confirmed, reproduced, diagnosed, briefed, fixed, shipped, duplicate, not-a-bug", "open, closed"]) assert.ok(p.detail.includes(v), v);
+  const { BUG_STATES } = await import("../src/bugs.mjs");
+  assert.ok(p.detail.includes(`bug: ${BUG_STATES.join(", ")}`.replace(", duplicate, not-a-bug", ", duplicate, not-a-bug")), "the explain's bug states are the ladder's");
+  assert.match(explainAnswer("town", "posts.stage").what, /alias of state/);
+  assert.ok(explainAnswer("town", "posts.counts_by_state").what);
+});

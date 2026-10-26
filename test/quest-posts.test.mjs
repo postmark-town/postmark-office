@@ -252,8 +252,8 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   const welcome = r.posts.find((p) => p.fields.quest === "welcome-to-postmark");
   assert.deepEqual([welcome.state, welcome.latest.act], ["closed", "close"]);
   // every class carries its history (POS-547, generalized for POS-290): a quest's is its post and its close, by the hand
-  assert.deepEqual(welcome.history.map(({ at, ...h }) => h), [{ stage: "open", hand: "wright" }, { stage: "closed", hand: "wright" }]);
-  assert.deepEqual(send.history.map(({ at, ...h }) => h), [{ stage: "open", hand: "wright" }]);
+  assert.deepEqual(welcome.history.map(({ at, ...h }) => h), [{ stage: "open", state: "open", hand: "wright" }, { stage: "closed", state: "closed", hand: "wright" }]);
+  assert.deepEqual(send.history.map(({ at, ...h }) => h), [{ stage: "open", state: "open", hand: "wright" }]);
   // what the Guild draws: the open daily and milestone posts, by their terms
   const guild = r.posts.filter((p) => p.state === "open" && ["daily", "milestone"].includes(p.terms.cadence)).map((p) => p.terms.title);
   assert.deepEqual(guild, BOARD);

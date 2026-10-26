@@ -21,7 +21,8 @@
 // that is not `open` refuses another household at the door.
 
 import { foldUnits, kindEdgesOf, totalOf, unitCount, refuseOverCarry, UNIT_ACTION } from "./world-stacks.mjs";
-import { holdingsOf, sameHousehold, holdTurn, liveHolder } from "./world-hold.mjs";
+import { holdingsOf, sameHousehold, holdTurn, liveHolder, rowsFor } from "./world-hold.mjs";
+import { MAKE_FACE, CONSUME_FACE, madeWords, eatenWords, madeIdTaken } from "./named-making.mjs"; // POS-766: one named thing, made into a holder
 import { liveHolders, weightOf, refuseNesting } from "./holder-tree.mjs"; // the walks, cycle-safe; counts confer up
 import { chestRoomGuard } from "./chest-lock.mjs";
 import { inFlightFor, writeThingHolding, thingHoldingEntry, wholeLoadIn, heldLoadOf, refuseOverRoomAbove, refuseIfStolenNow, refuseIfAnyStolenNow, carriedClasses } from "./world-units.mjs";
@@ -29,7 +30,7 @@ import { markClassOf, lineageOf } from "./world-grants.mjs";
 import { standsWithin, EARSHOT_M } from "./reach.mjs";
 import {
   makeableKind, holderLawOf, roomIn, refuseOverRoom, blurOf, planMake, planTakeKinds, planGiveKinds,
-  oneHolderOf, drawSeed, affordedActions, selectKind, refuseSecondHolder,
+  oneHolderOf, drawSeed, affordedActions, selectKind, refuseSecondHolder, potLuck,
 } from "./kind-holding.mjs";
 
 const bounce = (code, defect, hint, extra = {}) => {
@@ -282,6 +283,79 @@ async function makeInto({ args, key, actor, deps, view, via = "leave-mark" }) {
   });
 }
 
+/**
+ * ONE NAMED THING MADE INTO A HOLDER (POS-766): `leave-mark { slug, body, kind?, to }`.
+ * `args.made` is the mark the leave door built and judged (its slug, body, own
+ * holder fields and image; world.mjs § leaveMarkAct). Here, as makeInto judges a
+ * count: its kind (a kind of thing its makers allow, a holder kind included),
+ * the holder (you, or one at hand), the room (it counts 1, as a whole thing
+ * does), and its name, never one a hold row has carried before. Then ONE hold
+ * act, `make`, carrying the mark whole: held from that act, live and free
+ * (POS-766/b), and laid into the world by the overlay (held.mjs § unplaceHeld).
+ */
+async function makeNamed({ args, key, actor, deps, view }) {
+  const made = args.made;
+  const { kind } = makeableKind(made.kind, view, { named: true });
+  const to = String(args.to);
+  let mark = null, law;
+  if (!isHolderId(to)) {
+    if (to !== String(actor)) throw bounce(422, `make into ${to}? make it into yourself, then give`,
+      "leave-mark { slug, body, to } makes into you or a holder at hand; a resident is handed things by a give. Nothing was made.");
+    law = holderLawOf({ holder: to, view });
+  } else {
+    if (to === made.id) throw bounce(422, "a holder cannot hold itself", "Nothing was made.");
+    ({ mark, law } = await holderOrThrow(deps, to, view));
+    refuseIfClosed({ mark, id: to, law, actor, deps, verb: "make into" });
+    refuseIfNotAccepted({ id: to, law, thing: made.id });
+    await reachHolder(to, mark, actor, deps, { verb: "make" });
+  }
+  return holdTurn(async () => {
+    const inFlight = law.resident ? await inFlightFor(to, deps) : 0; // BEFORE the rows (world-units § inFlightFor)
+    const { units, attachments } = await deps.readRows();
+    // A NAME A HOLD ROW HAS EVER CARRIED IS TAKEN (G2): a thing made in hand, eaten or not, or a published thing once held
+    if (rowsFor(attachments, made.id).length) { const t = madeIdTaken(made.id); throw bounce(t.code, t.defect, t.hint); }
+    const fold = foldUnits(units);
+    if (law.resident) refuseOverCarry({ who: to, units: totalOf(fold, to) + inFlight, things: holdingsOf(attachments, to).length, adding: 1, cap: law.capacity });
+    let above = [];
+    if (!law.resident) {
+      const things = wholeLoadIn(attachments, fold, to);
+      refuseOverRoom({ n: 1, room: roomIn({ capacity: law.capacity, fold, holder: to, things }), name: `the ${law.className ?? "holder"} ${to}`,
+        capacity: law.capacity, holding: totalOf(fold, to) + things });
+      above = await refuseOverRoomAbove({ deps, view, fold, attachments, holder: to, n: 1, nothing: "Nothing was made." });
+    }
+    refuseIfStolenNow(deps, () => kind);
+    const words = madeWords({ actor, id: made.id, to });
+    const live_note = law.resident ? "made into your hands, live and free: a resident is a holder, and what it holds stands with it"
+      : "made into a published holder, live and free: a holder confers its state on what it holds";
+    if (args.preview === true)
+      return { preview: true, would: { did: "make", made: made.id, kind, to, live: true, stamps: 0, live_note }, wrote: "nothing: this was a preview" };
+    const { entry, at } = await thingHoldingEntry(deps, key, actor, attachments, { did: MAKE_FACE, thing: made.id, holder: to, previous: null, madeBy: String(actor) });
+    entry.payload.made = { ...made, kind };
+    entry.effect = words;
+    const row = await deps.append(entry, law.resident ? {} : { guard: chestRoomGuard({ chest: to, capacity: law.capacity, adding: 1, above }) });
+    const after = [...attachments, { entity: to, target: made.id, policy: "cascade", born_at: at }];
+    return { did: "make", made: made.id, kind, to, seq: row?.actId ?? row?.seq ?? null, effect: words, live: true, stamps: 0, live_note,
+      holds: await shownIn(fold, to, after, view, deps) };
+  });
+}
+
+/** The things made in hand that `holder` holds now: `[{ thing, class }]`, from the made record (POS-766). */
+async function madeHeldBy(holder, attachments, deps) {
+  const made = deps.made ? await deps.made() : null;
+  if (!made?.size) return [];
+  return holdingsOf(attachments, String(holder)).filter((t) => made.has(t)).map((t) => ({ thing: t, class: String(made.get(t).kind ?? "thing") }));
+}
+
+/** The hold act that eats one thing made in hand (POS-766/f): its holding ends, with no place. */
+async function eatNamed(deps, key, actor, attachments, thing, stamp = null) {
+  const { entry } = await thingHoldingEntry(deps, key, actor, attachments, { did: CONSUME_FACE, thing, holder: null, previous: String(actor), madeBy: String(thing).split("/")[0] }, stamp);
+  entry.payload.policy = "detach"; // nothing holds it, and nothing set it anywhere: it is gone
+  entry.payload.consumed = true;
+  entry.effect = eatenWords({ actor, id: thing });
+  const row = await deps.append(entry, {});
+  return { seq: row?.actId ?? row?.seq ?? null, effect: entry.effect };
+}
+
 /** A WHOLE MARK INTO A HOLDER: `give { thing, to: <holder> }`, from your hands, its room counting kinds and whole marks alike. */
 async function thingIntoHolder({ args, key, actor, deps, view }) {
   const thing = String(args.thing), to = String(args.to);
@@ -359,6 +433,8 @@ export async function callKinds(route, args, key, actor, deps) {
   switch (route) {
     case "make":
       if (args.to == null) throw bounce(422, "make into what?", "to: yourself, or a holder's id <by>/<slug>");
+      // ONE NAMED THING (POS-766): the leave door built its mark; a count of a kind is the batch form
+      if (args.made != null) return makeNamed({ args, key, actor, deps, view });
       return makeInto({ args, key, actor, deps, view });
     case "refill": {
       // NO GENERAL REFILL VERB (18:44 item 3): refill is a class's own afforded
@@ -499,14 +575,42 @@ export async function callKinds(route, args, key, actor, deps) {
       // the kind; with one kind in hand it may be omitted, with several it is named.
       const n = unitCount(args.count);
       if (n !== 1) throw bounce(422, "consume one at a time", "consume uses up one mark of a kind; call again for another. Nothing was changed.");
+      const isEdible = (k) => lineageOf(String(k), view.extendsOf).includes("consumable");
+      // CONSUME { thing } (POS-766/f): that one, a thing made in hand, from your own hands
+      if (args.thing != null) {
+        const thing = String(args.thing);
+        return holdTurn(async () => {
+          const { attachments } = await deps.readRows();
+          const made = deps.made ? await deps.made() : null;
+          if (!made?.has(thing))
+            throw bounce(422, `${thing} was not made in hand`, `consume { thing } eats a thing made straight into hands or a holder (leave-mark { slug, body, to }); a counted one is eaten by its kind: consume { kind }. Nothing was changed.`);
+          const holder = liveHolder(attachments, thing);
+          if (holder !== String(actor))
+            throw bounce(409, holder == null ? `${thing} is gone: it was eaten` : `you are not holding ${thing}: ${holder} is`,
+              holder == null ? "Nothing was changed." : `consume eats from your own hands${String(holder).includes("/") ? `; take it out of ${holder} first` : ""}. Nothing was changed.`);
+          const klass = String(made.get(thing).kind ?? "thing");
+          if (!isEdible(klass))
+            throw bounce(422, `a ${klass} is not a consumable`, `consume uses up what is made to be used up (a consumable, as candy is); ${thing} is a ${klass}. Nothing was changed.`);
+          refuseIfStolenNow(deps, () => klass);
+          const w = await eatNamed(deps, key, actor, attachments, thing);
+          const after = [...attachments, { entity: String(actor), target: thing, policy: "detach", born_at: new Date().toISOString() }];
+          return { did: "consume", thing, kind: klass, count: 1, ...w, holds: await shownIn(foldUnits((await deps.readRows()).units), actor, after, view, deps) };
+        });
+      }
       return holdTurn(async () => {
         const { units, attachments } = await deps.readRows();
         const fold = foldUnits(units);
-        const edible = kindEdgesOf(fold, actor).filter((e) => lineageOf(e.kind, view.extendsOf).includes("consumable"));
+        const counted = kindEdgesOf(fold, actor).filter((e) => isEdible(e.kind));
+        // THE NAMED ONES IN HAND JOIN THE DRAW (POS-766/f): a kind counts its counted marks and its named ones
+        const mine = await madeHeldBy(actor, attachments, deps);
+        const named = mine.filter((t) => isEdible(t.class));
+        const edible = [...counted.map((e) => ({ ...e }))];
+        for (const t of named) { const e = edible.find((x) => x.kind === t.class); if (e) e.count += 1; else edible.push({ kind: t.class, count: 1 }); }
+        edible.sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : 0));
         if (args.kind != null && !edible.some((e) => e.kind === String(args.kind))) {
           // WORDS ONLY (hotfix w43.1, XH2): a kind that is no consumable is told so, by its class line, and
           // the consumables you do hold are named; "no thing in your hands" with candies in them read as false
-          const held = kindEdgesOf(fold, actor).some((e) => e.kind === String(args.kind));
+          const held = kindEdgesOf(fold, actor).some((e) => e.kind === String(args.kind)) || mine.some((t) => t.class === String(args.kind));
           const consumable = lineageOf(String(args.kind), view.extendsOf).includes("consumable");
           const yours = edible.length ? `you hold ${edible.map((e) => blurOf({ edges: [e], things: [], extendsOf: view.extendsOf }).shows).join(", ")} to consume: consume { kind: "${edible[0].kind}" }` : "you hold nothing to consume";
           throw bounce(held || !consumable ? 422 : 409, held || !consumable ? `a ${args.kind} is not a consumable` : `no ${args.kind} in your hands`,
@@ -514,6 +618,19 @@ export async function callKinds(route, args, key, actor, deps) {
         }
         const edge = selectKind(edible, args.kind ?? null, { where: "your hands", verb: "consume" });
         refuseIfStolenNow(deps, () => edge.kind);
+        // POT LUCK WITHIN THE KIND, over the counted ones and the named ones alike (POS-766/f; the take draw's own potLuck)
+        const ofKind = named.filter((t) => t.class === edge.kind);
+        if (ofKind.length) {
+          const stamp = await deps.stamp(actor);
+          const d = potLuck({ edges: counted.filter((e) => e.kind === edge.kind), things: ofKind, n: 1,
+            seed: drawSeed({ actor, from: actor, crossing: deps.crossing(), at: stamp.at, ordinal: units.length }) });
+          if (d.things?.length) {
+            const thing = d.things[0];
+            const w = await eatNamed(deps, key, actor, attachments, thing, stamp);
+            const after = [...attachments, { entity: String(actor), target: thing, policy: "detach", born_at: new Date().toISOString() }];
+            return { did: "consume", thing, kind: edge.kind, count: 1, draw: `pot luck within ${edge.kind}`, ...w, holds: await shownIn(fold, actor, after, view, deps) };
+          }
+        }
         const plan = { action: UNIT_ACTION.consume, object: String(actor), moves: [{ from: String(actor), to: null, kind: edge.kind, n: 1 }], edge: { giver: String(actor), receiver: null } };
         const w = await writeKinds(deps, key, actor, plan, { words: `${actor} consumed 1 ${edge.kind}` });
         const after = foldUnits([...units, { class: "holding", action: plan.action, payload: { moves: plan.moves } }]);
@@ -574,14 +691,14 @@ export async function usableAt({ actor, here, markIds = [], residents = [] }) {
   const [{ lawSnapshot }, world, { usablePairs }, { classViewOf }] = await Promise.all([
     import("./law-snapshot.mjs"), import("./world.mjs"), import("./usable-verbs.mjs"), import("./world-units.mjs"),
   ]);
-  const { fold, attachments, places } = await holdRecordNow();
+  const { fold, attachments, places, made } = await holdRecordNow();
   const ids = [...new Set([...markIds.map(String), ...holdingsOf(attachments, String(actor))])];
   const marks = (await Promise.all(ids.map((id) => world.worldMarkById(id).then((r) => r.mark, () => null)))).filter(Boolean);
   let householdOf = null;
   try { householdOf = await (await import("./households.mjs")).householdLookup(); } catch { householdOf = null; }
   const pointWithinMark = await world.pointWithinMarkFn().catch(() => null);
   return usablePairs({ actor, here, marks, residents, fold, attachments, places,
-    view: classViewOf(lawSnapshot()), householdOf, pointWithinMark });
+    view: classViewOf(lawSnapshot()), householdOf, pointWithinMark, made });
 }
 
 // ── THE HOLD RECORD, KEPT AND MOVED BY ITS DELTA (review-610 S5, F1) ───────

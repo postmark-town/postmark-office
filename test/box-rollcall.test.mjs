@@ -2777,3 +2777,30 @@ test("outcomes[]: the loader refuses both forms on one row, an empty list, and a
   writeFileSync(tmp, JSON.stringify({ units: [{ ...row, outcomes: [spec, { ...spec, means: undefined }] }] }));
   assert.throws(() => loadManifest(tmp), /declares an outcome with no means/, "each block in the list is held to the same law");
 });
+
+test("POS-766/e · the office's stranded set-downs: a state_list row alarms while its file lists anything, is green with no file or an empty list, and alarms on a file it cannot read", () => {
+  const m = manifest();
+  const label = "the office's stranded set-downs";
+  const row = m.units.find((r) => r.label === label);
+  assert.ok(row, "the manifest carries the row");
+  assert.equal(row.heartbeat.kind, "state_list");
+  const path = row.heartbeat.path;
+  const verdictOf = (snap) => rollcall(m, snap, T0).rows.find((r) => r.label === label);
+  // the control: a quiet office never wrote the file
+  const quiet = healthy(m);
+  assert.equal(quiet.files[path]?.exists ?? false, false);
+  assert.equal(verdictOf(quiet).verdict, OK);
+  assert.match(verdictOf(quiet).reason, /none, ever/);
+  const withText = (text) => mutate(quiet, (s) => { s.files[path] = { exists: true, mtime_ms: T0 - 400 * 24 * 60 * MINUTE, text }; });
+  // an emptied list is green, however old the file
+  assert.equal(verdictOf(withText(JSON.stringify({ last_strand_at: "2026-10-23T07:00:00Z", strands: [] }))).verdict, OK);
+  // a strand alarms, named, newest first, and fails the run
+  const stranded = withText(JSON.stringify({ last_strand_at: "2026-10-23T07:05:00Z", strands: [{ thing: "little-bird/b" }, { thing: "little-bird/a" }] }));
+  const r = verdictOf(stranded);
+  assert.equal(r.verdict, ALARM_OUTCOME);
+  assert.match(r.reason, /2 listed, newest first: little-bird\/b, little-bird\/a/);
+  assert.match(r.reason, /Fix it by hand/);
+  assert.equal(rollcall(m, stranded, T0).exitCode, 1);
+  // a file it cannot read is not an empty list
+  assert.equal(verdictOf(withText("{ not json")).verdict, ALARM_OUTCOME);
+});

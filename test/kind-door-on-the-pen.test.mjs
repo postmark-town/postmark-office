@@ -127,8 +127,9 @@ test("leave-mark { kind, count, to: yourself } through the flat tool's implement
     assert.deepEqual(kindEdgesOf(foldUnits(await rows()), ACTOR), [{ kind: "pocket-comet", count: 3 }]);
     // past a resident's 24, refused whole, nothing made
     await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, { kind: "pocket-comet", count: 22, to: ACTOR }, KEY), (e) => /has room for 21, not 22/.test(e.defect));
-    // a count carries nothing of its own
-    await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, { kind: "pocket-comet", count: 1, to: ACTOR, body: "mine" }, KEY), (e) => /carries no body/.test(e.defect));
+    // a count carries nothing of its own: beside a thing's own field it is refused by name, both forms named (POS-766)
+    await assert.rejects(leaveMarkViaOffice(process.env.WORLD_CLONE, { kind: "pocket-comet", count: 1, to: ACTOR, body: "mine" }, KEY),
+      (e) => /count makes that many alike, with nothing of their own, and body is one thing's own/.test(e.defect) && /leave-mark \{ slug, body, kind\?, to \}/.test(e.hint));
     assert.equal(totalOf(foldUnits(await rows()), ACTOR), 3);
   } finally { resetLawSnapshot(); }
 });

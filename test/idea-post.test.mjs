@@ -240,10 +240,10 @@ test("3 · the hands move an idea to any named stage, in any order, with credit,
   const one = await read();
   assert.equal(one.state, "ruled-in");
   assert.deepEqual(one.history.map(({ at, ...h }) => h), [
-    { stage: "posted", hand: null, credit: "errant", link: null, note: null },
-    { stage: "building", hand: "wright", credit: "finn", link: null, note: "Finn has the lamp." },
-    { stage: "in-conversation", hand: "keemin", credit: null, link: LINK, note: null },
-    { stage: "ruled-in", hand: "architect", credit: null, link: null, note: null },
+    { stage: "posted", state: "posted", hand: null, credit: "errant", link: null, note: null },
+    { stage: "building", state: "building", hand: "wright", credit: "finn", link: null, note: "Finn has the lamp." },
+    { stage: "in-conversation", state: "in-conversation", hand: "keemin", credit: null, link: LINK, note: null },
+    { stage: "ruled-in", state: "ruled-in", hand: "architect", credit: null, link: null, note: null },
   ]);
   assert.deepEqual(one.fields.links, { "in-conversation": LINK });
   assert.equal(one.body, IDEA.body);
@@ -373,7 +373,7 @@ test("7b · the idea list points at the Think Tank's marks, after its rows: thei
   assert.equal(empty.total, 0, "the posts table holds no idea post: the list is still empty, and says so");
   assert.deepEqual(empty.think_tank, { ideas: 2, read: 'town { read: "ideas" }',
     note: `the Think Tank's ideas are world marks, not posts, so they are not in this list: town { read: "ideas" } answers them` });
-  assert.deepEqual(Object.keys(empty), ["as_of", "class", "finished", "total", "posts", "think_tank"], "additive: the pointer rides after the rows");
+  assert.deepEqual(Object.keys(empty), ["as_of", "class", "finished", "counts_by_state", "total", "posts", "think_tank"], "additive: the pointer rides after the rows");
   await post();
   const one = await postsAtOffice({ class: "idea" }, { now: NOW, env: ON, tank: TANK });
   assert.deepEqual([one.total, one.think_tank.ideas], [1, 2], "with an idea post, the rows are the posts and the pointer still counts the marks");
@@ -483,4 +483,32 @@ test("the flat tools: town_sign_up, town_answer_sign_up and town_award answer th
     const b = await callTownPostTool("town_answer_sign_up", { post: ID, resident: "finn", answer: "accepted" }, ERRANT, { roll: ROLL });
     assert.deepEqual([b.error, b.code], ["bounce", 403]);
   } finally { if (prev === undefined) delete process.env.IDEA_POSTS; else process.env.IDEA_POSTS = prev; }
+});
+
+// ── POS-778 · one word: an idea's advance carries state and stage ───────────
+
+test("POS-778 · an idea's advance answer carries state and stage, and names stage an alias; the list keeps ?state= on the idea class", async () => {
+  setup();
+  await post();
+  const a = await advance({ post: ID, to: "building" });
+  assert.deepEqual([a.state, a.stage], ["building", "building"]);
+  assert.match(a.note, /stage is an alias of state/);
+  const hit = await postsAtOffice({ class: "idea", state: "building" }, { now: NOW, env: ON });
+  assert.deepEqual([hit.total, hit.counts_by_state.building, hit.counts_by_state.posted], [1, 1, 0]);
+  const none = await postsAtOffice({ class: "idea", state: "built" }, { now: NOW, env: ON });
+  assert.equal(none.total, 0);
+});
+
+// ── POS-777 · the read hint is an absolute url ──────────────────────────────
+
+test("POS-777 · an idea post's answers end `read` with the ABSOLUTE https://postmark.town/api/posts/<id>?class=idea", async () => {
+  setup();
+  const want = `— or GET https://postmark.town/api/posts/${ID}?class=idea`;
+  const r = await post();
+  assert.ok(r.read.endsWith(want), r.read);
+  const a = await advance({ post: ID, to: "building" });
+  assert.ok(a.read.endsWith(want), a.read);
+  const m = await amendAtTown({ post: ID, body: "A lantern would let late residents find the boat, and the ferry find them." }, ERRANT, { now: NOW, env: ON });
+  assert.ok(m.read.endsWith(want), m.read);
+  assert.doesNotMatch(a.read, /GET \/posts/);
 });

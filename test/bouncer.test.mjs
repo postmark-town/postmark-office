@@ -196,6 +196,7 @@ test("a bulk read's cost: cards by the page's limit, doorsteps by the handles, a
   const p = (q) => new URLSearchParams(q);
   assert.equal(bulkCost("/residents", p("cards=1&limit=200")), 200);
   assert.equal(bulkCost("/residents", p("limit=200")), 1, "the roll alone is one read");
+  assert.equal(bulkCost("/residents", p("cards=1&limit=2.5")), 2, "a fractional limit is charged as the whole page it pages");
   assert.equal(bulkCost("/doorsteps", p("handles=a,b,c")), 3);
   assert.equal(bulkCost("/letters", p("digests=1&limit=5000")), 25);
   assert.equal(bulkCost("/letters", p("digests=1&limit=99999")), 25, "clamped where the door clamps");

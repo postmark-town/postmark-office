@@ -22,10 +22,21 @@
 // old floor, is retired (lane W 3b), and an office not pointed at the store
 // refuses to boot unless told to serve no world (server.mjs § THE WORLD GRAPH'S
 // SWITCH). `worldGraphStanding()` says which, with the key.
+//
+// ── A REFRESH HAS A DEADLINE; EVERY PUBLISH IS HEARD (POS-680) ───────────────
+// The same two rules as law-snapshot.mjs, for the same reason: a refresh still
+// running after WORLD_GRAPH_REFRESH_DEADLINE_MS is let go (`inflight` cleared,
+// the next tick asks again), never kept until a restart; one that was let go
+// and then finishes still publishes, unless a later one already has. What was
+// let go is ended by the store (a statement_timeout scoped to the refresh's own
+// transaction), and refreshes share one cap with the law's (snapshot-loads.mjs).
+// And every publish, from any path, is heard by the same listeners
+// (`onWorldGraphPublish`).
 
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
 import { graphFromTables, EDGE_TYPES } from "./world-store.mjs";
+import { startLoad, endLoad, loadsStanding, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
 
 /** The newest snapshot's key. Newest by settlement, then by build. */
 export const PIN_SQL = `
@@ -56,16 +67,55 @@ export async function graphTablesAt(query, { tag_sha, office_sha }) {
   return out;
 }
 
-const state = { snap: null, key: null, inflight: null, lastError: null, timer: null, rowsRefused: null, atImport: null };
+/** How long a refresh may run before it is let go (POS-680). */
+export const WORLD_GRAPH_REFRESH_DEADLINE_MS = Number(process.env.WORLD_GRAPH_REFRESH_DEADLINE_MS ?? 3_000);
+
+const fresh = () => ({ snap: null, key: null, inflight: null, lastError: null, timer: null, rowsRefused: null, atImport: null,
+  started: 0, publishedBy: 0, checkedAt: null, publishedAt: null, abandoned: 0, unhear: null });
+const state = fresh();
+const listeners = new Set();
+
+/** Hear every publish, from any path; `fn(standing)` runs once the new graph is in force. Returns the way to stop. */
+export function onWorldGraphPublish(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
 
 /** One assignment: a reader sees the old graph or the new one. */
-function publish(tables, pin, key, source) {
+function publish(tables, pin, key, source, n = state.started) {
   const built = graphFromTables(tables, { source });
   // `tables` rides along for the readers that ask the graph questions in
   // SQL's shape (world-graph-db.mjs § graphDb): one set of rows, two views.
   state.snap = { ...built, tables, pin };
   state.key = key;
   state.lastError = null;
+  state.publishedBy = Math.max(state.publishedBy, n);
+  state.publishedAt = new Date().toISOString();
+  const standing = worldGraphStanding();
+  for (const fn of listeners) { try { fn(standing); } catch { /* a listener that throws does not stop the publish */ } }
+}
+
+/**
+ * The standing as GET /release (a keyless page) shows it: the graph's pin and
+ * disclosure, the load at import's time and outcome, and the refresher. Never
+ * the role or the connection it read with, and never a fixture's path.
+ */
+export function worldGraphForRelease() {
+  const { refused, loaded_at_import: atImport, ...rest } = worldGraphStanding();
+  const REFUSED = "WORLD_GRAPH_ROWS is set, and refused outside node --test";
+  return {
+    ...rest,
+    ...(rest.disclosed && state.rowsRefused ? { disclosed: rest.disclosed.split(state.rowsRefused).join(REFUSED) } : {}),
+    ...(refused ? { refused: REFUSED } : {}),
+    ...(atImport ? { loaded_at_import: { ms: atImport.ms, published: atImport.published } } : {}),
+    refresh: worldGraphRefreshStanding(),
+  };
+}
+
+/** The refresher's own state, for the health line (law-snapshot.mjs § lawRefreshStanding, the same fields). */
+export function worldGraphRefreshStanding() {
+  return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
+    in_flight: Boolean(state.inflight), deadline_ms: WORLD_GRAPH_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding() };
 }
 
 // ── THE TEST FIXTURE SEAM (POS-270 lane W 3a, Keemin-ruled 2026-09-30) ──────
@@ -136,10 +186,10 @@ export function worldGraphStanding() {
   };
 }
 
+// The store: a refresh that asks it reads in its own timed session on the
+// serve pool (snapshot-loads.mjs § timedSession), never statement by statement.
 async function storeQuery(sql, params) {
-  const { world2ServeEnabled, world2Pool } = await import("./world2-serve.mjs");
-  if (!world2ServeEnabled()) throw new Error("the world 2.0 store is not engaged at this office (WORLD2_PG/WORLD2_PG_URL)");
-  return (await world2Pool()).query(sql, params);
+  return (await servePool()).query(sql, params);
 }
 
 // What a reload asks when no query is handed in: the store. A child process
@@ -156,41 +206,72 @@ export function __setDefaultQueryForTest(fn) {
 /**
  * Ask whether a newer snapshot has been copied in, and if so load it and
  * PUBLISH it. Concurrent calls share one refresh. A failure keeps what stood.
- * Resolves `{ changed, standing }`; never throws into a caller.
+ * Resolves `{ changed, standing }`; never throws into a caller. `deadlineMs`
+ * is how long callers wait before the refresh is let go (§ A REFRESH HAS A
+ * DEADLINE); null waits however long it takes.
  */
-export function reloadWorldGraph({ query = defaultQuery, force = false } = {}) {
+export function reloadWorldGraph({ query = defaultQuery, force = false, deadlineMs = WORLD_GRAPH_REFRESH_DEADLINE_MS } = {}) {
   if (query === defaultQuery && loadRowsFixture()) return Promise.resolve({ changed: false, standing: worldGraphStanding() });
   if (state.inflight) return state.inflight;
-  state.inflight = (async () => {
+  if (!startLoad()) {
+    state.lastError = `${MAX_LOADS} store refreshes are still running (the cap); this one was skipped and the next tick asks again`;
+    return Promise.resolve({ changed: false, busy: true, standing: worldGraphStanding() });
+  }
+  const n = ++state.started;
+  const newest = () => n === state.started; // only the newest refresh speaks for the health line
+  let live = null;
+  const work = (async () => {
+    await null; // the body runs after `inflight` is set, even when `query` throws at once
+    let session = null;
     try {
-      const pin = (await query(PIN_SQL)).rows[0] ?? null;
-      if (!pin) { state.lastError = "the store holds no world graph snapshot yet"; return { changed: false, standing: worldGraphStanding() }; }
+      if (query === storeQuery) session = await timedSession(await servePool());
+      const ask = session ? session.query : query;
+      const pin = (await ask(PIN_SQL)).rows[0] ?? null;
+      if (!pin) { if (newest()) state.lastError = "the store holds no world graph snapshot yet"; return { changed: false, standing: worldGraphStanding() }; }
       const key = `${pin.tag_sha}/${pin.office_sha}`;
-      if (!force && state.snap && key === state.key) { state.lastError = null; return { changed: false, standing: worldGraphStanding() }; }
-      const tables = await graphTablesAt(query, pin);
+      if (!force && state.snap && key === state.key) {
+        if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
+        return { changed: false, standing: worldGraphStanding() };
+      }
+      const tables = await graphTablesAt(ask, pin);
+      // a refresh let go at its deadline publishes only if nothing that started after it has published since
+      if (n < state.publishedBy) return { changed: false, standing: worldGraphStanding() };
       publish(tables, { tag_sha: pin.tag_sha, office_sha: pin.office_sha, settlement: pin.settlement }, key,
-        `world_graphs@S${pin.settlement ?? "?"}:${pin.tag_sha}`);
+        `world_graphs@S${pin.settlement ?? "?"}:${pin.tag_sha}`, n);
+      if (newest()) state.checkedAt = new Date().toISOString();
       return { changed: true, standing: worldGraphStanding() };
     } catch (e) {
-      state.lastError = String(e?.message ?? e).slice(0, 160);
+      if (newest()) state.lastError = plainRefreshError(e, "the world graph refresh"); // plain words: the standing rides a keyless page
       return { changed: false, standing: worldGraphStanding() };
     } finally {
-      state.inflight = null;
+      await session?.end();
+      endLoad();
+      if (state.inflight === live) state.inflight = null;
     }
   })();
-  return state.inflight;
+  let timer = null;
+  live = deadlineMs == null ? work : Promise.race([work, new Promise((resolve) => {
+    timer = setTimeout(() => {
+      if (state.inflight === live) state.inflight = null;
+      state.abandoned += 1;
+      state.lastError = `a world graph refresh did not finish in ${deadlineMs} ms and was let go; the next tick asks again`;
+      resolve({ changed: false, abandoned: true, standing: worldGraphStanding() });
+    }, deadlineMs);
+    timer.unref?.();
+  })]).finally(() => clearTimeout(timer));
+  state.inflight = live;
+  return live;
 }
 
 /**
  * The main thread's refresher: one load now, then a tick every `intervalMs`.
- * `onChange` runs after a tick that published a new snapshot, and only then.
+ * `onChange` runs after every publish, from the timer or any other path, and
+ * only then.
  */
 export function startWorldGraphRefresher({ intervalMs = Number(process.env.WORLD_GRAPH_REFRESH_MS ?? 60_000), query, onChange = null } = {}) {
   if (state.timer) return;
-  const tick = async () => {
-    const r = await reloadWorldGraph({ query });
-    if (r.changed && onChange) { try { onChange(r.standing); } catch { /* a listener that throws does not stop the timer */ } }
-  };
+  if (onChange) state.unhear = onWorldGraphPublish(onChange);
+  const tick = () => reloadWorldGraph({ query });
   tick();
   state.timer = setInterval(tick, intervalMs);
   state.timer.unref?.();
@@ -216,10 +297,12 @@ export async function worldGraphForTool({ rows = null } = {}) {
     : { error: worldGraphStanding().disclosed };
 }
 
-/** Tests only: forget everything, stop the timer. */
+/** Tests only: forget everything, stop the timer and its listener. Listeners a module registered stay. */
 export function resetWorldGraph() {
   if (state.timer) clearInterval(state.timer);
-  Object.assign(state, { snap: null, key: null, inflight: null, lastError: null, timer: null, rowsRefused: null, atImport: null });
+  state.unhear?.();
+  // the count goes on, and every refresh from before the reset is late: none publishes into it
+  Object.assign(state, { ...fresh(), started: state.started, publishedBy: state.started + 1 });
 }
 
 // ── THE LOAD AT IMPORT (POS-270 lane W 3b, Keemin-ruled 2026-09-30) ──────────
@@ -260,9 +343,9 @@ async function loadAtImport(url) {
     const { default: pg } = await import("pg");
     client = new pg.Client({ connectionString: url, connectionTimeoutMillis: 2000, query_timeout: 2000 });
     await client.connect();
-    await reloadWorldGraph({ query: (sql, params) => client.query(sql, params) });
+    await reloadWorldGraph({ query: (sql, params) => client.query(sql, params), deadlineMs: null }); // its own 2 s per query govern
   } catch (e) {
-    state.lastError = `the load at import failed: ${String(e?.message ?? e).slice(0, 140)}`;
+    state.lastError = `the load at import failed: ${plainRefreshError(e, "the world graph's load at import")}`;
   } finally {
     try { await client?.end(); } catch { /* the connection is already gone */ }
   }

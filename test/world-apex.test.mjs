@@ -2181,7 +2181,8 @@ test("O2 · do: leave-mark { kind, count, to } reaches the kind door through the
       const vehicle = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha" } }, KEY_ALPHA);
       assert.match(String(vehicle.defect), /"vehicle" is the town's to make/);
       const own = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha", body: "mine" } }, KEY_ALPHA);
-      assert.match(String(own.defect), /carries no body/, "a count carries nothing of its own, said before the class law");
+      // a count beside a thing's own field: both forms named, said before the class law (POS-766)
+      assert.match(String(own.defect), /count makes that many alike, with nothing of their own, and body is one thing's own/, "a count carries nothing of its own, said before the class law");
     });
   } finally { resetLawSnapshot(); }
 });

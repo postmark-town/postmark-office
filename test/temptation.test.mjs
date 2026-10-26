@@ -291,14 +291,15 @@ test("a give to the one who speaks for it, from inside its ring, is answered and
 
 // ── how it ends, and when it comes out ─────────────────────────────────────
 
-test("it ends by the window's tallies: the larger road, a tie to persuasion, its menu's words and everyone who took part; both 0, it stays", () => {
+test("it ends by the window's tallies: the larger road, a tie to persuasion, its menu's words and everyone who took part (aimed acts only); both 0, it stays", () => {
   const spawnRow = { object: ID, payload: { kind: "tempter", x: 0, y: 0 } };
   const rows = [{ action: "strike", actor: "kai", object: ID, payload: { damage: 2 } }, { action: "tally", actor: ID, object: "ren", payload: { road: "persuasion", by: 2 } }];
   assert.deepEqual(talliesFrom(rows), { damage: 2, persuasion: 2 });
   assert.equal(roadFrom({ damage: 2, persuasion: 2 }), "persuasion");
-  const plan = planTallyEnding({ spawn: spawnRow, rows, answered: [{ act_id: "5", actor: "mo", object: "x" }], settlement: 300, cutoff: "2026-10-26T18:00:00.000Z", menu: MENU });
+  const plan = planTallyEnding({ spawn: spawnRow, rows, answered: [{ act_id: "5", actor: "mo", object: "x" }, { act_id: "6", actor: "jo", object: ID }], settlement: 300, cutoff: "2026-10-26T18:00:00.000Z", menu: MENU });
   assert.equal(plan.road, "persuasion");
-  assert.deepEqual(plan.took_part.sort(), ["kai", "mo", "ren"]);
+  // WLD-5/t: aimed acts only. jo aimed at it and is named; mo acted in its ring on something else and is not.
+  assert.deepEqual(plan.took_part.sort(), ["jo", "kai", "ren"]);
   assert.match(plan.line, /^It turns back\. /);
   assert.equal(planTallyEnding({ spawn: spawnRow, rows: [], answered: [], settlement: 300, cutoff: "x", menu: MENU }), null);
   assert.equal(planTallyEnding({ spawn: spawnRow, rows: [{ action: "strike", actor: "kai", object: ID, payload: { damage: 5 } }], answered: [], settlement: 300, cutoff: "x", menu: MENU }).road, "damage");

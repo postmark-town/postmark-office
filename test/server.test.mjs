@@ -347,6 +347,69 @@ test("GET /letters filters: resident, since/until, region, exclude-office, combi
   assert.equal(paged.limit, 2);
 });
 
+test("an unreadable since/until is a 422, never an empty roll marked complete or a filter that was ignored", async () => {
+  // `since=yesterday` sorts after every digit (0 rows, complete: true);
+  // `since=10/01/2026` sorts before every digit (the filter vanishes).
+  for (const bad of ["yesterday", "10/01/2026", "2026-13-45", "2026-02-30", "2026-10-1", "2026-07-03T25:00:00Z", "2026-07-03T08:30:00+25:00", "2026-07-03Tnoon"]) {
+    for (const door of ["/letters?since=", "/letters?until=", "/mail/wright?since=", "/repo/log?until=", "/residents?since="]) {
+      const r = await get(door + encodeURIComponent(bad));
+      assert.equal(r.status, 422, `${door}${bad}`);
+      const b = await r.json();
+      assert.match(b.defect, /ISO date/, `${door}${bad}`);
+      assert.match(b.hint, /^send \?(since|until)=2026-10-01$/, "the hint says what to send over HTTP");
+    }
+  }
+  // what worked keeps working: a date, a Z timestamp, +00:00 (Python isoformat), a zoneless time (read as UTC), and an offset (converted to UTC)
+  const total = async (v) => (await (await get("/letters?limit=1&since=" + encodeURIComponent(v))).json()).total;
+  assert.equal(await total("2026-07-03T08:30:00+02:00"), await total("2026-07-03T06:30:00.000Z"), "an offset is converted to UTC");
+  assert.equal(await total("2026-07-03T06:30:00+00:00"), await total("2026-07-03T06:30:00Z"), "+00:00 reads as Z");
+  assert.equal(await total("2026-07-03T06:30"), await total("2026-07-03T06:30:00Z"), "a zoneless time reads as UTC");
+  // the raw form: curl ...?since=2026-07-03T08:30:00+02:00 unencoded, where the query string decodes `+` to a space
+  const rawTotal = async (v) => (await (await get("/letters?limit=1&since=" + v)).json()).total;
+  assert.equal(await rawTotal("2026-07-03T08:30:00+02:00"), await total("2026-07-03T06:30:00.000Z"), "a raw + offset is read as +");
+  assert.equal(await rawTotal("2026-07-03T06:30:00+00:00"), await total("2026-07-03T06:30:00Z"), "a raw +00:00 reads as Z");
+  assert.equal((await get("/letters?since=yesterday%2000:00")).status, 422, "a space that is not before an offset is still refused");
+  assert.equal((await get("/letters?since=2026-07-03%2008:30")).status, 422, "a date and a space is not a timestamp");
+  for (const ok of ["2026-07-03", "2026-07-03T08:30:00.000Z", "2026-07-03T08:30Z", "2026-07-03T08:30:00+00:00", "2026-07-03T08:30", "2026-07-03T08:30:00+02:00"]) {    assert.equal((await get("/letters?since=" + encodeURIComponent(ok))).status, 200, ok);
+  }
+  assert.equal((await get("/letters")).status, 200);
+});
+
+test("MCP: an unreadable since/until is a 422 bounce naming the field, on every list verb (the apex is in date-filter.test.mjs)", async () => {
+  const bounced = async (name, args) => {
+    const { body } = await rpc("tools/call", { name, arguments: args });
+    assert.equal(body.result.isError, true, `${name} ${JSON.stringify(args)}`);
+    return JSON.parse(body.result.content[0].text);
+  };
+  for (const [name, args, field] of [
+    ["list_letters", { since: "yesterday" }, "since"],
+    ["list_letters", { until: "10/01/2026" }, "until"],
+    ["list_mail", { handle: "wright", since: "yesterday" }, "since"],
+    ["list_commits", { until: "2026-02-30" }, "until"],
+    ["list_residents", { since: "yesterday" }, "since"],
+  ]) {
+    const b = await bounced(name, args);
+    assert.equal(b.code, 422, `${name}`);
+    assert.equal(b.field, field, `${name} names the field`);
+    assert.match(b.defect, new RegExp(`^${field} must be an ISO date`), `${name}`);
+    assert.equal(b.hint, `send ${field}: "2026-10-01"`, "the hint says what to send over MCP");
+  }
+  const ok = await rpc("tools/call", { name: "list_letters", arguments: { since: "2026-07-03" } });
+  assert.notEqual(ok.body.result.isError, true);
+});
+
+test("GET /residents?office= takes true or false and refuses the rest, instead of reading 1/yes as false", async () => {
+  for (const bad of ["1", "yes", "TRUE", ""]) {
+    const r = await get("/residents?office=" + bad);
+    assert.equal(r.status, 422, `office=${bad}`);
+    assert.equal((await r.json()).field, "office");
+  }
+  const offices = await (await get("/residents?office=true")).json();
+  const people = await (await get("/residents?office=false")).json();
+  const all = await (await get("/residents")).json();
+  assert.equal(offices.total + people.total, all.total);
+});
+
 test("GET /mail/{handle} answers a BARE ARRAY, honors since/until, and pages", async () => {
   // TRUED TO THE PANE CONTRACT, 2026-08-26, not deleted. This test asserted the
   // wrapper the 08-25 bounded-reads commit introduced, and that wrapper is what
@@ -611,6 +674,11 @@ test("GET /world/store is a keyless read that reports mode off when nothing is f
   assert.match(h.eligibility, /blessed reads only/);   // the bless overrides the tick (postmark#2934)
   // no world clone here, so freshness cannot be established — and says so
   assert.ok(h.main.error || h.blessed?.fresh === false, `expected an honest main answer, got ${JSON.stringify(h.main)}`);
+  // keyless, so plain (POS-663): anyone may read this, so it names no path on
+  // the box and carries no raw error, only shas, counts and the office's words
+  const body = JSON.stringify(h);
+  assert.equal(/"(repo|path)":/.test(body), false, `a path key on the keyless panel: ${body.slice(0, 300)}`);
+  assert.equal(/\/srv\/|fatal:|not a git repository|ENOENT/i.test(body), false, `a box path or a raw error on the keyless panel: ${body.slice(0, 300)}`);
   // flag-off equivalence at the HTTP layer: no extra header appears on ANY
   // response, so a flags-off office is byte-identical on the wire too
   assert.equal(res.headers.get("x-postmark-world-store-as-of"), null);
@@ -957,4 +1025,35 @@ test("GET /posts takes a class: none → 422 naming it; an idea is a post class 
   // POS-558: the bug read pages, and the door hands it limit and offset
   const bugs = await (await get("/posts?class=bug&limit=7&offset=3", null)).json();
   assert.deepEqual([bugs.total, bugs.shown, bugs.limit, bugs.offset, bugs.complete, bugs.catchers, bugs.posts], [0, 0, 7, 3, true, [], []]);
+});
+
+// POS-778: the posts list is not silent about what it ignores. An unknown
+// parameter is a 400 naming the nearest known one; stage is state's alias and
+// is known; state= is a real filter with counts beside it.
+test("GET /posts: ?stage=x is not refused (it is the alias), ?stags= answers 400 naming `stage`, ?state= filters and counts_by_state rides", async () => {
+  const typo = await get("/posts?class=bug&stags=reproduced", null);
+  assert.equal(typo.status, 400);
+  const body = await typo.json();
+  assert.match(body.defect, /no parameter `stags`; did you mean `stage`\?/);
+  assert.match(body.hint, /state/);
+  const odd = await get("/posts/postmark-pen/first-idea?class=idea&colour=red", null);
+  assert.equal(odd.status, 400, "the one-post read judges its parameters too");
+  assert.match((await odd.json()).defect, /no parameter `colour`/);
+
+  const state = await get("/posts?class=bug&state=reproduced", null);
+  assert.equal(state.status, 200);
+  const s = await state.json();
+  assert.deepEqual([s.total, s.state], [0, ["reproduced"]]);
+  assert.equal(s.counts_by_state.reproduced, 0);
+  assert.deepEqual(Object.keys(s.counts_by_state), ["reported", "confirmed", "reproduced", "diagnosed", "briefed", "fixed", "shipped", "duplicate", "not-a-bug"]);
+
+  const alias = await get("/posts?class=bug&stage=reproduced", null);
+  assert.equal(alias.status, 200, "stage is a permanent alias, never refused");
+  const a = await alias.json();
+  assert.equal(a.total, 0);
+  assert.match(a.note, /stage is an alias of state/);
+
+  const bogus = await get("/posts?class=bug&state=nonsense", null);
+  assert.equal(bogus.status, 422);
+  assert.match((await bogus.json()).defect, /"nonsense" is not a bug state/);
 });

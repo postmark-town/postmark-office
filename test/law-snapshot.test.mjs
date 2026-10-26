@@ -64,7 +64,9 @@ test("a failed refresh leaves the floor standing and names why", async () => {
   const r = await reloadLawSnapshot({ query: async () => { throw new Error("connection refused"); } });
   assert.equal(r.changed, false);
   assert.equal(lawSnapshot(), null);
-  assert.match(lawStanding().disclosed, /connection refused/);
+  // in plain words: the standing rides GET /release, a keyless page (POS-680; the raw error goes to the log)
+  assert.match(lawStanding().disclosed, /the record did not answer/);
+  assert.doesNotMatch(lawStanding().disclosed, /connection refused/);
 });
 
 test("with world.db ABSENT, the class layer answers from the store once the snapshot lands", async (t) => {

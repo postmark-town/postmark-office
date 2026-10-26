@@ -17,6 +17,7 @@
 // REFS; the draft-branch writes below use leased worktrees of it (world-pool.mjs,
 // tier 1) so two households do not queue behind one working tree.
 
+import { wholeNumber } from "./whole-number.mjs";
 import { worldFreezeBounce } from "./freeze.mjs";
 import { STARTER_SLOTS, starterHint } from "./entity-predicates.mjs"; // WLD-83: the describe card's starter set
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
@@ -2448,8 +2449,13 @@ export async function markRows(ids = [], w = null) {
   let byId = _byIds.get(w);
   if (!byId) _byIds.set(w, byId = new Map((w?.marks ?? []).map((m) => [m.id, m])));
   const out = [];
+  let made = null; // a thing made in hand is not in canon; the overlay names it (POS-766/d), asked only on a miss
   for (const id of ids) {
-    const m = byId.get(id);
+    let m = byId.get(id);
+    if (!m) {
+      made ??= await heldPlaced(w).then((p) => new Map((p?.marks ?? []).filter((x) => !byId.has(x.id)).map((x) => [x.id, x])), () => new Map());
+      m = made.get(id);
+    }
     if (m) out.push({ id, name: markName(m, w.marks ?? [], determinedOf(w)), body: m.body ?? "" });
   }
   return out;
@@ -3136,11 +3142,26 @@ async function markReceipt(id, key, w, { terrain = false } = {}) {
     const raw = w?._raw ?? null;
     const canonRow = (raw?.worldState?.marks ?? []).find((m) => m.id === id) ?? null;
     const read_at = raw?.ref && raw?.sha ? { ref: raw.ref, sha: raw.sha } : null;
-    const receipt = await readMarkReceipt(id, {
+    let receipt = await readMarkReceipt(id, {
       repo: WORLD_CLONE, key, canon: canonRow,
       publishedSha: read_at?.sha ?? null, terrain,
     });
     if (!receipt) return null;
+    // A THING MADE IN HAND (POS-766) is on no docket and in no settlement, and it is
+    // published all the same: its holder confers its state (LOGOS classes.md § holders).
+    // The record that saw it is the hold record, so the receipt says so: never never-was, and
+    // never draft (its maker's own reading holds it, and no docket claim can share its name, G2).
+    if (!canonRow) {
+      const made = (await madeMarksNow([id]))?.get(id) ?? null;
+      if (made) {
+        const holder = (await heldPlaced(w ?? { marks: [] }).catch(() => null))?.marks?.find((m) => m.id === id)?.held_by ?? null;
+        receipt = { ...receipt, status: "published", made_in_hand: true, ...(holder ? { held_by: holder } : {}),
+          sources: [...(receipt.sources ?? []), "hold record"],
+          says: holder
+            ? `made in hand by ${made.by}: published by its holder from the act that made it, live and free. It is held by ${holder}, so no settlement prints it while it is held`
+            : `made in hand by ${made.by}, and eaten: used up and gone. Its name stays taken` };
+      }
+    }
     let disclosed = [];
     try {
       const { storeSnapshot } = await import("./world-serve.mjs");
@@ -3312,7 +3333,7 @@ const MARKS_PAGE = 20;
  * what `world { read: "leave-mark", args: { mark: <id> } }` takes.
  */
 export function markPage(rows, offset = 0) {
-  const start = Math.min(Math.max(Number(offset) || 0, 0), Math.max(rows.length - 1, 0));
+  const start = Math.min(Math.max(wholeNumber(offset) || 0, 0), Math.max(rows.length - 1, 0));
   const page = rows.slice(start, start + MARKS_PAGE);
   const rest = [...rows.slice(0, start), ...rows.slice(start + page.length)].map((m) => m.id);
   return { page, rest, offset: start, complete: rest.length === 0 };
@@ -4664,7 +4685,7 @@ async function placementForecast({ worldClone, w, worldUnread, id, ring, mistsCr
  */
 export const CANDY_IS_MADE = Object.freeze({
   defect: "candy is made by its kind, into hands or a bowl, not placed as a mark",
-  hint: (by) => `every kind of candy is the town's, and anyone may make it: explain: "candy" lists the kinds. leave-mark { kind: "<a kind>", count: 5, to: "${by}" } makes five into your hands, and to: a bowl's id (a thing made with holder: true) fills the bowl instead. give { kind: "<the kind>", count: 1, to: <a resident or a bowl> } hands one on, and consume { kind: "<the kind>" } eats one. Your own candy not a kind yet? Write to wright with its name and a line about it, and the town makes it a kind. Nothing was written.`,
+  hint: (by) => `every kind of candy is the town's, and anyone may make it: explain: "candy" lists the kinds. leave-mark { kind: "<a kind>", count: 5, to: "${by}" } makes five into your hands, and to: a bowl's id (a thing made with holder: true) fills the bowl instead. give { kind: "<the kind>", count: 1, to: <a resident or a bowl> } hands one on, and consume { kind: "<the kind>" } eats one. One of your own, named: leave-mark { slug, body, kind: "<a kind>", to: "${by}" } makes ONE into your hands, held, free and live. Your own candy not a kind yet? Write to wright with its name and a line about it, and the town makes it a kind. Nothing was written.`,
 });
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
@@ -4678,8 +4699,68 @@ function publishedImageOf(worldClone, id) {
   } catch { return null; }
 }
 
+/** Which of `ids` were made in hand (POS-766): `{ made }` (`Map(id → mark)`) or `{ unread }` (named-making § madeNamesRead). */
+async function madeMarksRead(ids) {
+  const [{ madeNamesRead }, { holdEdgeOnActs }, { actsQuery }] = await Promise.all([import("./named-making.mjs"), import("./hold-edge.mjs"), import("./world2-acts.mjs")]);
+  return madeNamesRead({ ids, edgeOn: () => holdEdgeOnActs(), query: (sql, params) => actsQuery(sql, params),
+    reasonOf: (e) => plainReason(e, "record", "the hold record, for a name made in hand") });
+}
+/** The same, for a read that may say less when it cannot look (investigate's receipt): the map, or null. */
+async function madeMarksNow(ids) { return (await madeMarksRead(ids)).made ?? null; }
+/** The same, for a door that writes: the map, or the 503 (#759 review A: fail closed). */
+async function madeMarksOrRefuse(ids, bounce) {
+  const r = await madeMarksRead(ids);
+  if (r.unread) { const { madeNamesUnread } = await import("./named-making.mjs"); const u = madeNamesUnread(r.unread); throw bounce(u.code, u.defect, u.hint); }
+  return r.made;
+}
+
+/**
+ * THE MARK A NAMED MAKE CARRIES (POS-766), judged at the leave door by the leave
+ * door's own rules: the slug, the body and its cap, the kind (a kind of thing,
+ * `thing` by default; the old spelling `kind: "sited"` + `class:` is taken), the
+ * thing's own holder fields (kind-holding § holderWordOf) and a picture the
+ * ledger holds. Its name is refused when canon or the maker's own live layer
+ * already holds it (G2); one a hold row carried is refused in the hold turn.
+ */
+async function namedMadeRecord(payload, by, key, bounce) {
+  const { madeRecordOf, madeIdTaken } = await import("./named-making.mjs");
+  const { slug, body } = payload;
+  if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw bounce(422, "slug must be kebab-case", `lowercase letters, digits, single hyphens — got "${slug}"`);
+  if (!body || !String(body).trim()) throw bounce(422, "a thing needs a body", "one present-tense observation, ≤150 characters: what it is, as anyone holding it would read it");
+  const bodyLength = [...String(body).trim()].length;
+  if (bodyLength > 150) throw bounce(422, `body is ${bodyLength} chars; the cap is 150`, "the cap is the law (MARKS.md 07-22 ruling: one claim per mark): say what the thing is in one sentence of 150 characters or fewer. Nothing was made.");
+  const sentKind = payload.kind === "sited" && payload.class != null ? payload.class : payload.kind ?? payload.class ?? "thing";
+  const kind = (typeof sentKind === "string" && sentKind.trim() ? markClassOf({ kind: sentKind.trim() }) : null) ?? String(sentKind);
+  const holderFields = (await import("./kind-holding.mjs")).holderWordOf({ payload, klass: kind, classProperty, extendsOf: classExtendsOf() });
+  const image = payload.image === undefined ? undefined : String(payload.image).trim();
+  if (image !== undefined) {
+    const refused = await mediaHeldRefusal(image);
+    if (refused) throw bounce(refused.code, refused.defect, refused.hint);
+  }
+  const id = `${by}/${slug}`;
+  const household = String(key?.household ?? "").trim() || null;
+  let canonHas;
+  try { canonHas = canonForGuards().byId.get(id); } catch (e) {
+    throw bounce(503, "the office could not read the world, so it cannot tell whether that name is taken",
+      `nothing was made; try again shortly (${plainReason(e, "files", "the world, for a named make's name")})`);
+  }
+  // the maker's own drafts, read or refused: never guessed empty (#760 review 3, as the made names fail closed)
+  let live;
+  try { live = await guardedLiveMarks(null, { household, actor: by }); } catch (e) {
+    throw bounce(503, "the office could not read your household's drafts, so it cannot tell whether that name is taken",
+      `nothing was made; try again shortly (${plainReason(e, "record", "the live layer, for a named make's name")})`);
+  }
+  const taken = canonHas ?? (live ?? []).find((m) => m.id === id);
+  if (taken) throw bounce(409, `you already have a mark "${slug}"`,
+    "a slug is unique per author, and that one names a mark of yours, published or a draft. Pick another slug for the thing you are making. Nothing was made.");
+  if ((await madeMarksOrRefuse([id], bounce)).has(id)) { const t = madeIdTaken(id); throw bounce(t.code, t.defect, t.hint); }
+  return madeRecordOf({ by, slug, kind, body, holderFields, image, household, date: new Date().toISOString() });
+}
+
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
-async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null } = {}) {
+// `fromHand` IS THE HOLD DOOR'S, AND ONLY ITS SET-DOWN OF A THING MADE IN HAND PASSES IT (POS-766/e): the
+// draft keeps the made thing's own name, which every other leave is refused (G2). No payload can set it.
+async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
@@ -4699,9 +4780,21 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     const actor = named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
     if (!actor) throw bounce(422, "which resident is making these?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
     if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
-    const own = ["slug", "body", "at", "extent", "points", "slot", "value", "parent_id", "class", "consent", "placed_by", "preview", "amend"].filter((k) => payload[k] !== undefined);
+    // ── ONE NAMED THING, MADE INTO HANDS OR A HOLDER (POS-766, Darko 2026-10-22 21:55) ──
+    // With anything of its own (a slug, a body, its holder fields, a picture) and
+    // no count, `to:` makes ONE mark, held, free and live; with kind and count it
+    // stays the batch form. A place, or a count beside a thing's own fields, is
+    // refused by name for both (named-making.mjs § namedFormRefusal).
+    const namedForm = await import("./named-making.mjs");
+    { const r = namedForm.namedFormRefusal(payload, actor); if (r) throw bounce(r.code, r.defect, r.hint); }
+    if (namedForm.isNamedForm(payload)) {
+      const made = await namedMadeRecord(payload, actor, key, bounce);
+      const [{ callKinds }, { liveUnitDeps }] = await Promise.all([import("./world-kinds.mjs"), import("./world-units.mjs")]);
+      return callKinds("make", { to: payload.to, made, ...(payload.preview === true ? { preview: true } : {}) }, key, actor, await liveUnitDeps());
+    }
+    const own = ["slot", "value", "parent_id", "class", "consent", "placed_by", "preview", "amend"].filter((k) => payload[k] !== undefined);
     if (own.length) throw bounce(422, `a count made into a holder carries no ${own.join(", ")}`,
-      "with to:, leave-mark takes kind, count and to: what it makes is that many of the kind, held, with nothing of its own. To leave one mark of your own, leave to: off");
+      "with kind and count, leave-mark makes that many alike, held, with nothing of their own. To make ONE thing of your own into hands or a holder, send slug and body: leave-mark { slug, body, kind?, to }. To leave a mark on the ground, leave to: off. Nothing was made.");
     const [{ callKinds }, { liveUnitDeps }] = await Promise.all([import("./world-kinds.mjs"), import("./world-units.mjs")]);
     return callKinds("make", { kind: payload.kind, count: payload.count, to: payload.to }, key, actor, await liveUnitDeps());
   }
@@ -4721,6 +4814,21 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   let klass = payload.class;
   let { at, extent, points } = payload;
   if (!slug || !/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw bounce(422, "slug must be kebab-case", `lowercase letters, digits, single hyphens — got "${slug}"`);
+  // ── A THING MADE IN HAND IS NOT LEFT, AMENDED OR DESCRIBED HERE (POS-766: G2, G6, G7) ──
+  // Its name stays taken for good, its words are set when it is made, and a
+  // detail laid on it would name a parent the settlement's lint cannot see.
+  if (!setDown && !dropUnit && !fromHand) {
+    const made = await madeMarksOrRefuse([`${by}/${slug}`, parent_id], bounce); // fail closed (#759 review A)
+    if (made.has(`${by}/${slug}`)) {
+      const { madeIdTaken } = await import("./named-making.mjs");
+      const t = madeIdTaken(`${by}/${slug}`);
+      throw bounce(t.code, payload.amend === true ? `${by}/${slug} was made in hand, and a thing made in hand is not amended` : t.defect,
+        payload.amend === true ? "its words are set when it is made. Make a new one under another slug if the words should change. Nothing was written." : t.hint);
+    }
+    if (parent_id != null && made.has(String(parent_id)))
+      throw bounce(422, `${parent_id} was made in hand, and a detail is laid on a mark that stands on the ground`,
+        "a predicated or naming mark is filed against its parent at the settlement, and a thing held in hand is not printed there, so nothing can be laid on it yet. Nothing was written.");
+  }
   // ── THE INSTANCE KIND (LOGOS v2 part 2: W2 migrates the record, O2 flips the writers) ──
   // "The `class:` field folds into `kind`: … `kind: candy` names `the-town/candy`"
   // (classes.md § The LOGOS ladder, ruled 16:02). After W2 a thing is `kind:
@@ -6807,9 +6915,9 @@ export const WORLD_TOOLS = [
     description: "Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHES, below). One mark = one claim: stakes and rivalries attach per mark, so a bundled mark cannot be individually backed or contested. Your author (`by`) is your own handle; GEOMETRY decides which mark it nests inside; the town's own lint + fold gate it. HOW IT PUBLISHES: at the next Settlement, homes inside their own parcel and constitution marks publish automatically; commons marks (any ground not your household's own) publish ONLY while backed by escrow — pass stamps: 1 to stake it in the same act, or leave stamps at 0 (the default) for a draft: not the town's canon, living only in your own reading of the world. A parcel is its own ground and publishes free: stamps: 0 puts it forward with nothing to buy. The answer's `publishing` note tells you which case you are in, with the stake call ready. Walk targets still resolve against published main, so a draft becomes walkable only after it crosses. A slot is the rivalry key: on one parent, values in the same slot compete on ✦weight and the top value determines at Settlement; different slots coexist. Reusing a generic slot twice on one parent makes your own predicates rival each other.",
     inputSchema: { type: "object", properties: {
       slug: { type: "string", description: "the mark's leaf name — kebab-case, unique among your own marks" },
-      kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder" },
+      kind: { type: "string", description: "sited, parcel, predicate (or predicated) or naming for a mark of its own, or the class it is an instance of: kind: \"thing\" is a thing (the old spelling, kind: \"sited\" with class: \"thing\", is still taken, and either is written as the class tree says). predicated requires slot + value (spelled predicate too); naming requires value and uses slot \"name\"; sited/parcel carry neither slot nor value, and nor does a class instance. With to:, a kind — a class id, e.g. a kind of candy — made by count into a holder, or the kind of the ONE named thing made with a slug (thing by default)" },
       // LOGOS v2 (16:02 item 1): leave-mark makes marks into a holder.
-      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). With kind: and count:, and no slug, body or at — a count is that many marks of the kind, never named one by one" },
+      to: { type: "string", description: "make into a holder, live: yourself (your own handle), or a published holder's id <by>/<slug> (a thing its maker made with holder: true, open or your household's, within reach). Two forms. With kind: and count: and nothing of its own, a count is that many marks of the kind, never named one by one. With slug: and body: and no count (POS-766), ONE thing of your own, named, held: free and live, published by its holder at once, no stake and no settlement wait; kind is a kind of thing (thing by default), holder, capacity, open, portable and image ride, and it has no place (at, extent, points are refused). Its slug is taken for good. Set down later by its maker's house, it becomes their draft where it is set down: free on their own ground, the usual 1 stamp on the commons (a candy is eaten or given, never set down)" },
       count: { type: "number", description: "with to: how many of the kind to make, a whole number (default 1); refused whole, nothing made, when the holder has less room" },
       at: { type: "object", description: "grid meters east/south of the Origin (sited/parcel). A sited mark publishes free only when its whole footprint (at ± extent/2) is inside one of your household's parcels; world { read: \"leave-mark\" } names their ranges as your_ground", properties: { x: { type: "number" }, y: { type: "number" } } },
       extent: { type: "object", description: "footprint in meters (sited only — a parcel carries no extent: every parcel is the town's 25×25, set by the door)", properties: { w: { type: "number" }, h: { type: "number" } } },

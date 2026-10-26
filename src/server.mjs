@@ -17,6 +17,7 @@
 // tokens table since POS-352: OFFICE_KEYS='devkey1=keemin:wright,postmaster'
 // node tools/static-keys-import.mjs writes it (src/static-keys.mjs).
 
+import { dateFilterDefect } from "./date-filter.mjs";
 import { createServer } from "node:http";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,7 +63,9 @@ import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worl
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
-import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
+import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
+import { lawForRelease } from "./law-snapshot.mjs"; // POS-680: which law this process acts on, on its receipt
+import { restoredStanding } from "./restored-classes.mjs"; // POS-680: whether the restored keep was read against the law in force
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
 import { graphOnSettlement, settledMarkIds, settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
@@ -972,6 +975,14 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       ...roleDisclosure(ROLE, WRITER_URL),
       write_grant: PEN.token !== "",
       ...(readPool ? { read_workers: readPool.disclose() } : {}),
+      // POS-680: which settlement's law and world graph THIS process answers
+      // from, and whether its refreshers are keeping up: when each last asked
+      // the store, when it last published, how many refreshes were let go at
+      // their deadline, and the last error, in plain words (a keyless page:
+      // no store text, role or path). A refresher that stopped keeping up
+      // shows here, per process, instead of only after a restart.
+      law: { ...lawForRelease(), restored: restoredStanding() },
+      world_graph: worldGraphForRelease(),
     });
   }
   if (path === "/ops/loop-lag" && req.method === "GET") return j(res, 200, loopLag.read()); // POS-267 (src/loop-lag.mjs)
@@ -1358,6 +1369,18 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       worldWriteBudget: (household) => bouncer.worldWriteBudget(household),
       rateResponse,
     });
+  }
+
+  // GET /ops/set-down-strands (POS-766/e; #760 review): a set-down that could not be undone,
+  // newest first (src/set-down-strands.mjs). It names things and residents, so unlike the
+  // keyless numbers beside /ops/loop-lag it answers the principal only, by the role registry
+  // asked now (principalNow, /ops/gift's own wall): no key is 401, another key 403. The
+  // morning round reads it through the roll-call, which reads the file on the box.
+  if (path === "/ops/set-down-strands") {
+    if (req.method !== "GET") return bounce(res, 405, "GET only", "GET /ops/set-down-strands reads the stranded set-downs");
+    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "the stranded set-downs name things and residents; this read is the principal's"); }
+    if (!(await principalNow(rdb, key))) return bounce(res, 403, "the stranded set-downs are the principal's", "this read names things and residents, so it answers only the principal's GitHub sign-in");
+    return j(res, 200, (await import("./set-down-strands.mjs")).readStrands());
   }
 
   // GET /me — the one read that needs a credential: your OWN resolved identity
@@ -1860,6 +1883,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           since: url.searchParams.get("since") ?? undefined,
           office: url.searchParams.has("office") ? url.searchParams.get("office") === "true" : undefined,
         };
+        { const bad = dateFilterDefect(opts, ["since"]); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
+        // `office=1` / `office=yes` used to read as false: the people-only roll, the opposite of the ask
+        if (url.searchParams.has("office") && !["true", "false"].includes(url.searchParams.get("office")))
+          return bounce(res, 422, `office must be true or false, not "${url.searchParams.get("office").slice(0, 20)}"`, "GET /residents?office=true (the offices) or ?office=false (the people)", "office");
         // last_active is the newest act of their own, one store read for the
         // page (last-active.mjs, POS-481), on the client the read already holds.
         // ?cards=1 (Darko 2026-10-13): the page's cards beside it, one per row
@@ -1927,6 +1954,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // this every offset served page one and echoed offset: 0
           offset: p.get("offset") ?? undefined,
         };
+        { const bad = dateFilterDefect(opts); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
         return fromTownIndex(res, (c) => townIndexStore.repoLog(c, opts));
       }
 
@@ -1967,10 +1995,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if (path === "/posts" || (m = /^\/posts\/([^/]+\/[^/]+)$/.exec(path))) {
         const post = path === "/posts" ? undefined : decodeURIComponent(m[1]);
         const cls = url.searchParams.get("class") ?? undefined;
+        // POS-778: an unknown parameter is a 400 naming the nearest known one, never a silent 200
+        const stray = import("./town-posts.mjs").then(({ unknownPostsParam }) => unknownPostsParam(url.searchParams.keys()));
+        // state= filters the list (comma is OR); stage= is its permanent alias and filters the same way
+        const stateQ = url.searchParams.get("state") ?? undefined;
+        const stageQ = url.searchParams.get("stage") ?? undefined;
         // the bug class pages (POS-558): limit and offset ride as on every paged read
         const limit = url.searchParams.get("limit") ?? undefined;
         const offset = url.searchParams.get("offset") ?? undefined;
-        return import("./town-posts.mjs").then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset }))
+        return stray.then((bad) => { if (bad) throw bad; return import("./town-posts.mjs"); })
+          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }))
           .then((r) => j(res, 200, r))
           .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounceFault(res, "the posts tripped", e));
@@ -2007,6 +2041,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: p.get("limit") ?? undefined,
           offset: p.get("offset") ?? undefined,
         };
+        { const bad = dateFilterDefect(opts); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
         if (opts.ids && (!opts.ids.length || opts.ids.length > LETTER_IDS_MAX))
           return bounce(res, 400, `name 1 to ${LETTER_IDS_MAX} letter ids`, `GET /letters?full=1&ids=a,b,c (at most ${LETTER_IDS_MAX})`);
         return fromTownIndex(res, (c) => townIndexStore.letterList(c, opts));
@@ -2046,6 +2081,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
+        { const bad = dateFilterDefect(opts); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
         return fromTownIndex(res, async (c) => (await townIndexStore.mailList(c, handle, box, opts)).letters);
       }
 

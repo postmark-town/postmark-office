@@ -341,6 +341,22 @@
       "stale_means": "For five minutes or more, every minute either found an office_api session idle inside a transaction for 5 s or more, or could not ask the store at all. That is the 2026-10-04 stall's signature (POS-370): a connection held open while its holder waits on something else, the pool drains, and every later store read waits behind it while the CPU sits idle. Read last_minute.stuck_sessions for which pool and worker hold them (application_name postmark-office:<pool>:t<thread>) and the statement each last ran; GET /api/ops/store-txn gives the live numbers. With idle_in_transaction_session_timeout on (the office's own pools ask for 30 s, and DEPLOY.md § POS-370 sets it on the roles) such a session should not outlive 30 s, so this alarm also means the timeout is not in force. If switch 2 is on, its rollback is the documented one (the env line out, the office restarted). THE LIMIT, said once: a point-in-time reader like the rest of the board; a stall that cleared before the roll-call ran is in worst_24h."
     },
     {
+      "unit": "postmark-office.service",
+      "label": "the office's stranded set-downs",
+      "stage": "live",
+      "activation_owner": "Darko — POS-766/e (2026-10-23, the set-down of a thing made in hand, ruled 00:15 EDT), built by the lane plumb-named-making on Wright's #760 review word (\"a stranded thing reaches the morning round and not only the journal\"). The office writes the file itself from src/set-down-strands.mjs, and only when a set-down strands, so the row goes live with the first release that carries that module and reads green (none, ever) until then",
+      "cadence": "read as: anything listed — the office writes the file only when a set-down of a thing made in hand fails AND its draft cannot be withdrawn again",
+      "cadence_source": "src/set-down-strands.mjs (recordStrand); the office API row says whether the process is up",
+      "heartbeat": {
+        "kind": "state_list",
+        "path": "/srv/postmark-office/telemetry/set-down-strands.json",
+        "list_field": "strands",
+        "summary_field": "thing"
+      },
+      "no_staleness_because": "The file is written only when something goes wrong, so its age says nothing: a quiet office never touches it. It is judged by what it lists (state_list): any entry is the alarm, and no file is green.",
+      "stale_means": "A thing made in hand is stranded: its set-down act failed and its draft could not be withdrawn, so it is both in someone's hands and a draft. Each entry names the thing, its maker, who set it down and both failures (the journal has the same line, tagged [office] ESCALATION). Fix it by hand: withdraw the draft as its maker (world_withdraw_mark), or write its set-down act, whichever the record shows missing. Then remove the entry from the file's strands list; the row is green again when the list is empty. GET /ops/set-down-strands (the principal's) answers the same file."
+    },
+    {
       "unit": "postmark-office-read@4391.service",
       "label": "read worker 4391 (the systemd read pool), retired",
       "stage": "retired",
