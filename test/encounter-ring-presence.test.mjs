@@ -32,6 +32,7 @@ import { fixtureWorldCloneWithEngine, fixtureWorldDb, mainShaOf, scratchDir, cro
 import { NO_WORLD_DB } from "./helpers/world-rows.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 import { NERVE_ACTION, windowAt } from "../src/encounter.mjs";
+import { __setOccupancyForTest } from "../src/creature-sight.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
 
@@ -110,6 +111,8 @@ test("the ring is presence's own: four at one point in the room are the ring (th
     assert.ok(pub?.marks?.length, "the published marks are read");
     living.warmRooms(pub.marks, pub.key);
     assert.equal(living.living(now)[0].room?.id, ROOM, "it stands in the room");
+    // a creature in a room exists only for those who entered it (WLD-74): the four entered the room; oak, past its wall, did not
+    __setOccupancyForTest(() => new Map(["ash", "bram", "gale", "heron"].map((h) => [h, [ROOM]])));
 
     // the tick: presence at the creature's point, by presence's own read (no seam)
     creatures.__resetRostersForTest();
@@ -149,6 +152,7 @@ test("the ring is presence's own: four at one point in the room are the ring (th
     assert.deepEqual(payloadOf(dropped.find((r) => r.action === "react")).press.menu.map((e) => e.on), ["heron"], "heron is the other one alone; gale, the actor, only when no one else is");
 
   } finally {
+    __setOccupancyForTest(null);
     delete process.env.WORLD_PRESENCE;
     delete process.env.WORLD_POSITIONS;
     creatures.__resetRostersForTest();

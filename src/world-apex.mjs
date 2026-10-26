@@ -1998,13 +1998,15 @@ async function creaturePairsHere(who, here, residents = []) {
   try {
     const [{ creaturesForRead }, { creaturePairs, carryingConsumableNow }, { encounterPairs }, kinds, units] = await Promise.all([
       import("./creatures-read.mjs"), import("./creature-verbs.mjs"), import("./encounter-verbs.mjs"), import("./world-kinds.mjs"), import("./world-units.mjs")]);
-    const cr = await creaturesForRead();
+    const cr = await creaturesForRead({ as: who }); // only the creatures in rooms you have entered (WLD-74)
     if (!cr?.law || cr.law.unavailable) return [];
+    // the residents beside you hold a ring only if they entered its room too (read only when one of those creatures is in sight)
+    const occupancy = await (await import("./creature-sight.mjs")).occupancyIfRoomed(cr.living);
     // a persuade's household (once each per settlement), as the door reads it
     const lookup = await (await import("./creatures.mjs")).householdsNow().catch(() => null);
     const afforded = cr.law.afforded ? creaturePairs({ here, living: cr.living, law: cr.law, carryingConsumable: await carryingConsumableNow(who, { kinds, units }),
       actor: who, household: lookup?.(who)?.key ?? `solo:${who}` }) : [];
-    return [...afforded, ...encounterPairs({ here, actor: who, living: cr.living, law: cr.law, residents })];
+    return [...afforded, ...encounterPairs({ here, actor: who, living: cr.living, law: cr.law, residents, occupancy })];
   } catch { return []; }
 }
 
@@ -2031,7 +2033,7 @@ async function investigateOn(args, oriented, usable = null, key = null) {
     // POS-637 PR-C: the creature as of now, its newest reactions with their odds, and the crossing save's row
     const { creaturesForRead, investigateCreature, savedCreatureOf, lookerOf, REACTIONS_SQL } = await import("./creatures-read.mjs");
     const { actsQuery } = await import("./world2-acts.mjs");
-    const creatures = await creaturesForRead();
+    const creatures = await creaturesForRead({ as: standingHandle(args, key) ?? "" }); // a creature in a room you have not entered is no creature (WLD-74)
     const seen = await investigateCreature(kind.id, {
       creatures,
       from: oriented?.standpoint ?? null,
@@ -2167,7 +2169,7 @@ async function findOn(args, key) {
   if (found && !found.error) {
     try {
       const { creaturesForRead, findCreatures } = await import("./creatures-read.mjs");
-      const cur = await creaturesForRead();
+      const cur = await creaturesForRead({ as: standingHandle(args, key) ?? "" });
       const hits = cur ? findCreatures(cur, payload.q, found.standpoint, { engine: await worldEngine() }) : null;
       if (hits) found.creatures = hits;
     } catch { /* a find answers its marks whatever the creatures do */ }
@@ -2181,10 +2183,10 @@ async function worldEngine() {
 }
 
 /** v2's creature rows at a standpoint: { who, happening }, or null when none is living here. */
-async function creaturesAt(at, nowMs) {
+async function creaturesAt(at, nowMs, handle = "") {
   try {
     const { creaturesForRead, creaturesInWho, creatureHappening } = await import("./creatures-read.mjs");
-    const cur = await creaturesForRead({ nowMs });
+    const cur = await creaturesForRead({ nowMs, as: handle ?? "" }); // WLD-74: the rooms this resident has entered
     if (!cur?.living?.byId.size) return null;
     const engine = await worldEngine();
     const who = creaturesInWho(cur, at, { nowMs, engine });
@@ -2226,7 +2228,7 @@ async function nerveAt(handle, at, nowMs) {
   if (!handle) return null;
   try {
     const [{ creaturesForRead }, { nerveRead }] = await Promise.all([import("./creatures-read.mjs"), import("./encounter.mjs")]);
-    const cur = await creaturesForRead({ nowMs });
+    const cur = await creaturesForRead({ nowMs, as: handle });
     const { ringHolds } = await import("./creatures.mjs");
     return cur?.living ? nerveRead(cur, handle, at, nowMs, { holds: (c, p) => ringHolds(cur.law, c, p) }) : null;
   } catch { return null; }
@@ -2581,7 +2583,7 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
     if (who && live) try {
       const { creaturesForRead, creatureToYou } = await import("./creatures-read.mjs");
       const { CROSSING_EPOCH_UTC, CROSSING_MS } = await import("./crossings.mjs");
-      const cur = await creaturesForRead();
+      const cur = await creaturesForRead({ as: who });
       // whenever the law is read here, an empty fold included: a since older than
       // the fold's reach is then said incomplete rather than silently whole (review-574 C1)
       if (cur?.living)
@@ -2998,9 +3000,9 @@ async function apexRead(args, key, ctx = {}) {
     // THE CREATURES (POS-637 PR-C; C3, C6): those within presence's radius in
     // who, their answers within reach and the nearest out at the edge in
     // happening_here. None living, or no law at the blessed ref: nothing added.
-    const creatures = await creaturesAt(at, nowMs);
     // what your own hands hold by kind, beside the whole things (QA fail 5); unread, the kinds are left out
     const standing = oriented.standpoint?.stance === "embodied" ? standingHandle(args, key) : null;
+    const creatures = await creaturesAt(at, nowMs, standing);
     const heldKinds = standing ? await (await import("./world-kinds.mjs")).kindsHeldBy(standing) : null;
     // an encounter near, or nerve spent this window: what you have left (encounter.mjs)
     const nerve = await nerveAt(standing, at, nowMs);

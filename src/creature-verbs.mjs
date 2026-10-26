@@ -37,6 +37,7 @@
 // afforded actions (a blessing before the world half) refuses every verb with
 // its reason and shows none.
 
+import { sightedCreatures } from "./creature-sight.mjs";
 import { capOf, dial, distanceM, judgeMode, ringHolds, seesCreature } from "./creatures.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { CREATURE_CALLS, WHISPER_WORDS } from "./world-read-shape.mjs";
@@ -219,7 +220,7 @@ export async function worldCreature(args = {}, key = null, deps = {}) {
 
   // THE LAW, FAIL CLOSED
   if (judgeMode(d.env) === "off") throw bounce(503, "the creatures are resting", "the office's creatures are switched off for now (CREATURE_JUDGE=off). Nothing was done.");
-  const cr = await d.creatures();
+  const cr = await sightedCreatures(await d.creatures(), actor); // a creature in a room you have not entered is no creature (WLD-74)
   if (!cr?.living || !cr?.law || cr.law.unavailable) throw bounce(503, "the creatures cannot be read here", `${cr?.law?.unavailable ?? "the world's creature law is not read on this office"}. Nothing was done.`);
   const { living, law } = cr;
   if (!law.afforded) throw bounce(409, "the creatures' afforded actions are not law yet",
@@ -270,7 +271,7 @@ export async function readCreatureVerb(verb, fields = {}, key = null, deps = {})
   const d = { ...(await liveDeps(deps)), ...deps };
   const actor = actorOf(fields, key);
   if (judgeMode(d.env) === "off") throw bounce(503, "the creatures are resting", "the office's creatures are switched off for now (CREATURE_JUDGE=off).");
-  const cr = await d.creatures();
+  const cr = await sightedCreatures(await d.creatures(), actor); // a creature in a room you have not entered is no creature (WLD-74)
   if (!cr?.living || !cr?.law || cr.law.unavailable) throw bounce(503, "the creatures cannot be read here", `${cr?.law?.unavailable ?? "the world's creature law is not read on this office"}.`);
   const { living, law } = cr;
   if (!law.afforded) throw bounce(409, "the creatures' afforded actions are not law yet", "the world's creature law at the blessed ref declares no afforded actions, so none can be aimed; they arrive with a settlement.");

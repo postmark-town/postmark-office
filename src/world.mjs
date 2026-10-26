@@ -5851,9 +5851,14 @@ async function sitedWithin(parcel, marks) {
 // with a ledger and a clock, this answers "what is this resident within, now",
 // and a falsifier can hand it a row from the future and watch it stay out.
 export async function occupiedNowBy(who, thresholds, deps) {
+  return [...((await occupancyNowAll(thresholds, deps)).get(who) ?? [])];
+}
+
+// Everyone's stack now, the same fold (creature-sight.mjs reads it once for a creature's many residents).
+export async function occupancyNowAll(thresholds, deps) {
   const atNow = thresholds.stampAt(deps.now());
   const acts = thresholds.parseEnterExitLedger(await deps.ledger()).acts;
-  return [...(thresholds.occupancyAt(acts, atNow).get(who) ?? [])];
+  return thresholds.occupancyAt(acts, atNow);
 }
 
 // ── THE RECEIPT IS WRITTEN AT DEPARTURE, SO IT SPEAKS IN DEPARTURE'S TENSE ──

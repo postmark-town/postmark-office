@@ -88,6 +88,7 @@ import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { scopeSecret, sealedItem } from "./sealed.mjs";
 import { settlementAtOrBefore } from "./world-forecast.mjs";
+import { enteredBy, occupancyIfRoomed, sightedLiving, stackedAt } from "./creature-sight.mjs";
 import {
   ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
   easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt,
@@ -343,6 +344,8 @@ export function judgeMode(env = process.env) {
 export function ringHolds(law, creature, point) {
   const ring = Number(law?.kindOf?.(creature.kind)?.ring_m);
   if (!(ring > 0) || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false;
+  // a point that carries its resident's entered stack (creature-sight.mjs § stackedAt) is held only if they entered the creature's room (WLD-74)
+  if (point.stack !== undefined && !enteredBy(creature, point.stack)) return false;
   if (creature.room && typeof law?.inCreatureRing === "function") return law.inCreatureRing(point, creature, ring, creature.room);
   return distanceM(point, creature) <= ring;
 }
@@ -354,6 +357,7 @@ export function ringHolds(law, creature, point) {
  */
 export function seesCreature(law, creature, point, radius) {
   if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false;
+  if (point.stack !== undefined && !enteredBy(creature, point.stack)) return false;
   if (creature.room && typeof law?.inCreatureRing === "function") return law.inCreatureRing(point, creature, radius, creature.room);
   return distanceM(point, creature) <= radius;
 }
@@ -1422,7 +1426,12 @@ export async function reactTo(act, deps = {}) {
   if (aimed) {
     if (!(law.kindMod.AFFORDED_VERBS ?? []).includes(act?.verb) && !encounterVerbs.includes(act?.verb)) return [];
   } else if (!law.kindMod.RING_VERBS.includes(act?.verb) && !encounterVerbs.includes(act?.verb)) return [];
-  const living = deps.living;
+  // WLD-74: a creature in a room exists for this actor only if they entered it. The ledger is read once for the act, and every
+  // creature's turn (its ring, roster, press and cost) judges the residents by the same read
+  const occupancy = deps.occupancy ?? await occupancyIfRoomed(deps.living);
+  const living = occupancy ? sightedLiving(deps.living, occupancy.get(String(act?.actor ?? "")) ?? []) : deps.living;
+  if (occupancy) deps = { ...deps, living, occupancy };
+  if (aimed && occupancy && !enteredBy(aimed, occupancy.get(String(act?.actor ?? "")) ?? [])) return [];
   if (!living?.byId?.size || !act?.point || !Number.isFinite(act.point.x) || !Number.isFinite(act.point.y)) return [];
   if (act.actId == null || !Number.isFinite(Date.parse(act.atIso ?? ""))) return []; // no instant, no d20 (carry 2)
   const now = deps.now ?? Date.now();
@@ -1807,14 +1816,16 @@ async function encounterOf(creature, kind, act, distance_m, deps) {
     ?? await within((deps.present ?? presentAt)(creature, ring), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS));
   const lookup = await within((deps.households ?? householdsNow)(), AROUND_WAIT_MS);
   // who the ring holds: its walls too (world#268), where presence says where each stands
-  const holds = (r) => (r.at ? ringHolds(deps.law, creature, r.at) : r.distance_m <= ring);
+  // and, in a room, only those who entered it (WLD-74: the resident's stack rides the point; no point, the distance AND the stack)
+  const occ = deps.occupancy ?? await occupancyIfRoomed(living);
+  const holds = (r) => (r.at ? ringHolds(deps.law, creature, stackedAt(r.at, r.handle, occ)) : r.distance_m <= ring && (!occ || enteredBy(creature, occ.get(String(r.handle)) ?? [])));
   const inside = ringHolds(deps.law, creature, act.point);
   let roster = ringRoster(present ?? { residents: [] }, { ring, lookup, living, now, holds });
   // the actor stands where the act said, whatever presence read
   if (inside && !roster.some((r) => r.handle === act.actor))
     roster = [...roster, ...ringRoster({ residents: [{ handle: act.actor, distance_m }] }, { ring, lookup, living, now })].sort((a, b) => a.distance_m - b.distance_m);
   // and a steady's or a shield's friend, whom its door found in the same ring (F3: a kept roster may predate them)
-  if (act.target && act.targetAt && !roster.some((r) => r.handle === act.target) && ringHolds(deps.law, creature, act.targetAt))
+  if (act.target && act.targetAt && !roster.some((r) => r.handle === act.target) && ringHolds(deps.law, creature, stackedAt(act.targetAt, act.target, occ)))
     roster = [...roster, ...ringRoster({ residents: [{ handle: String(act.target), distance_m: distanceM(act.targetAt, creature) }] }, { ring, lookup, living, now })]
       .sort((a, b) => a.distance_m - b.distance_m);
   const household = roster.find((r) => r.handle === act.actor)?.household ?? `solo:${act.actor}`;
@@ -1841,8 +1852,9 @@ async function encounterOf(creature, kind, act, distance_m, deps) {
 /** Who stands in a creature's ring now (its walls too), as an encounter reads it: the resolver's split of an obeyed cost. */
 export async function ringRosterNow(creature, { law, living, now = Date.now(), present = presentAt, households = householdsNow } = {}) {
   const ring = Number(law.kindOf(creature.kind)?.ring_m);
-  const [p, lookup] = await Promise.all([present(creature, ring), households()]);
-  return ringRoster(p ?? { residents: [] }, { ring, lookup, living, now, holds: (r) => (r.at ? ringHolds(law, creature, r.at) : r.distance_m <= ring) });
+  const [p, lookup, occ] = await Promise.all([present(creature, ring), households(), occupancyIfRoomed({ byId: new Map([[creature.id, creature]]) })]);
+  // WLD-74: the residents it holds are those who entered its room
+  return ringRoster(p ?? { residents: [] }, { ring, lookup, living, now, holds: (r) => (r.at ? ringHolds(law, creature, stackedAt(r.at, r.handle, occ)) : r.distance_m <= ring && (!occ || enteredBy(creature, occ.get(String(r.handle)) ?? []))) });
 }
 
 /**
