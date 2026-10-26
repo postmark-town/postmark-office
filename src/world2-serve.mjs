@@ -681,6 +681,22 @@ export function heightsUnreadBounce(e, lawSha) {
     hint: `the world engine reads every height from the skeleton's elevation dials, and the law this window is pinned to carries none (no region anchors, or no river_fall_m). It answers again once the window's law pin carries them.` };
 }
 
+/**
+ * THE MARKS NOBODY OUTSIDE A DUNGEON MAY SEE (WLD-74, Darko 2026-10-26: "NOTHING inside the dungeon you can see"). A keyless read has entered
+ * nothing, so it reads what the one sight function (world `standpointSight`, no occupancy) leaves: a dungeon is its own mark and nothing it holds.
+ * Their slugs, from the store's own rows; a Set of nothing where the world has no dungeon. It refuses (503) when the engine cannot be read, rather
+ * than listing what it cannot judge.
+ */
+export async function interiorSlugs(p, eng = null) {
+  const e = eng ?? await engine();
+  if (typeof e?.verbs?.standpointSight !== "function") return new Set();
+  const { rows } = await p.query(apex.MARK_ROWS_SQL);
+  const marks = apex.worldStateFromMarkRows(rows).marks;
+  const seen = new Set(e.verbs.standpointSight({ marks }, {}).marks.map((m) => m.id));
+  return new Set(marks.filter((m) => !seen.has(m.id)).map((m) => m.id));
+}
+const interiorBounce = (hint) => ({ code: 503, body: { error: "bounce", defect: "the marks cannot be sorted into inside and outside just now", hint } });
+
 export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, eng: injectedEngine = null } = {}) {
   if (!world2ServeEnabled()) return null;
   const p = injected ?? await pool();
@@ -721,10 +737,13 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     const cols = full
       ? "slug, kind, owner, household, geometry, bbox, status, locked_window, parent, body, data"
       : "slug, kind, owner, household, geometry, status, locked_window, parent";
-    const { rows } = await p.query(
+    const { rows: every } = await p.query(
       `SELECT ${cols}
        FROM marks WHERE status = 'standing' ${all ? "" : "AND geometry IS NOT NULL"}
        ORDER BY slug`);
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    const rows = every.filter((r) => !inside.has(r.slug)); // nothing inside a dungeon is listed to one who has entered nothing
     return { code: 200, body: {
       what: (all ? "the whole standing register (de-sited included — a predicated mark is its parent continued)"
                  : "placed standing marks (every row has a where); ?all=true for the whole register")
@@ -738,6 +757,9 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     if (!slug) return { code: 422, body: { error: "bounce", defect: "which mark?", hint: "?slug=<owner>/<name>" } };
     const { rows: [mark] } = await p.query("SELECT * FROM marks WHERE slug = $1", [slug]);
     if (!mark) return { code: 404, body: { error: "bounce", defect: `no mark "${slug}"` } };
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    if (inside.has(slug)) return { code: 404, body: { error: "bounce", defect: `no mark "${slug}"` } }; // the same words as one that was never there
     return { code: 200, body: mark };
   }
 
@@ -960,6 +982,13 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       const h = heightsUnreadBounce(e, pin.law_sha);   // WLD-97: a law pin older than the height dials
       if (!h) throw e;
       return { code: 503, body: { error: "bounce", ...h } };
+    }
+    // WLD-74: a mark inside a dungeon is no mark to a keyless reader, record, receipt and all (the same 404 as one that was never there)
+    if (typeof eng.verbs.standpointSight === "function") {
+      const seen = eng.verbs.standpointSight(world, {});
+      if (seen !== world && !seen.marks.some((m) => m.id === String(mark)) && world.marks.some((m) => m.id === String(mark)))
+        return { code: 404, body: { error: "bounce", defect: `no mark "${mark}"`, hint: "ids are <by>/<slug> — see /world2/marks" } };
+      world = seen;
     }
     const r = (await import("./held.mjs")).withHolder(eng.verbs.investigate(String(mark), world, { depth }), world, mark); // POS-688: whose hands it is in
 
@@ -1439,6 +1468,10 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
     if (!h) throw e;
     return bounce(503, h.defect, h.hint);
   }
+  // THE KEYLESS READER HAS ENTERED NOTHING (WLD-74, Darko 2026-10-26: nothing inside a dungeon is seen from outside it): the world as
+  // the one sight function reads it with no occupancy, so a dungeon is its own mark and nothing it holds, the 1.0 spectator's rule.
+  // This door assembled the whole world and read it from any point, so it listed a room's contents to anyone standing near it.
+  if (typeof eng.verbs.standpointSight === "function") world = eng.verbs.standpointSight(world, {});
   const state = { x: near.x, y: near.y };
   const oriented = eng.verbs.orient(state, world, { crossing: n });
   const seen = eng.verbs.openYourEyes(state, world, { crossing: n });

@@ -2065,11 +2065,12 @@ async function investigateOn(args, oriented, usable = null, key = null) {
   const { actsQuery } = await import("./world2-acts.mjs");
   const { composeAnchor } = await import("./world-journal.mjs");
   const centreOf = await markCentreOf();
+  const viewer = oriented?.standpoint?.stance === "embodied" ? standingHandle(args, key) : null; // WLD-74: the labels name only the rooms the reader entered
   const seen = await investigateResident(kind.handle, {
     from: oriented?.standpoint ?? null,
     known: (h) => houseOf(h) != null,
     standpoint: (h) => residentStandpoint(h),
-    place: (p) => placeWords(p),
+    place: (p) => placeWords({ ...p, handle: viewer }),
     saved: (h) => savedPositionOf(h),
     recent: (h) => actsQuery(RECENT_SQL, [h, Object.keys(PUBLIC_ACTS_FOR_INVESTIGATE), ACTIVE_WINDOW_FOR_INVESTIGATE / 1000, RECENT_CAP]),
     holds: async (h) => {
@@ -2078,7 +2079,7 @@ async function investigateOn(args, oriented, usable = null, key = null) {
       return holdingsOf(await storeAttachmentRows(), h);
     },
     placeOf: (r) => composeAnchor({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf),
-    placeMarks: (p) => placeMarksAt(p),
+    placeMarks: (p) => placeMarksAt({ ...p, handle: viewer }),
     marksOf: (ids) => markRows(ids),
     appearance: (h) => looks(h),
     // their pronouns from their profile, read off the office's town checkout (WLD-83, 10-20)
@@ -2685,7 +2686,7 @@ async function apexRead(args, key, ctx = {}) {
     const usable = eyes && !eyes.error ? await usableHere(args, key, oriented, eyes.objects ?? []) : null;
     const looks = await closeLooks(args, key, oriented, usable);
     const sp = oriented.standpoint ?? {};
-    return shapeV2Focus({ ...looks, standpoint: sp, here: await placeWords({ x: sp.x, y: sp.y }),
+    return shapeV2Focus({ ...looks, standpoint: sp, here: await placeWords({ x: sp.x, y: sp.y, handle: sp.stance === "embodied" ? standingHandle(args, key) : null }),
       handle: sp.stance === "embodied" ? standingHandle(args, key) : null });
   }
   // The eyes light no houses here: this read lights the houses it shows
@@ -2987,7 +2988,7 @@ async function apexRead(args, key, ctx = {}) {
     // in the words `you.here` uses; a place the words cannot name is left unsaid.
     if (happened?.around_you?.events?.length) {
       const shown = happened.around_you.events.slice(0, AROUND_SHOWN);
-      const where = await Promise.all(shown.map((e) => (Number.isFinite(e.x) && Number.isFinite(e.y) ? placeWords({ x: e.x, y: e.y }).catch(() => null) : null)));
+      const where = await Promise.all(shown.map((e) => (Number.isFinite(e.x) && Number.isFinite(e.y) ? placeWords({ x: e.x, y: e.y, handle: oriented.standpoint?.stance === "embodied" ? standingHandle(args, key) : null }).catch(() => null) : null)));
       happened.around_you = { ...happened.around_you,
         events: happened.around_you.events.map((e, i) => (where[i] ? { ...e, where: where[i] } : e)) };
     }
@@ -2995,8 +2996,8 @@ async function apexRead(args, key, ctx = {}) {
     const marks = new Map((await markRows(shownIds).catch(() => [])).map((r) => [r.id, r]));
     // On open ground the words name the place you are near: it rides as a row too.
     const at = { x: answer.standpoint?.x, y: answer.standpoint?.y };
-    const here = await placeWords(at);
-    const near = /^near /.test(here ?? "") ? (await placeMarksAt(at).catch(() => ({}))).near ?? null : null;
+    const here = await placeWords({ ...at, handle: oriented.standpoint?.stance === "embodied" ? standingHandle(args, key) : null });
+    const near = /^near /.test(here ?? "") ? (await placeMarksAt({ ...at, handle: oriented.standpoint?.stance === "embodied" ? standingHandle(args, key) : null }).catch(() => ({}))).near ?? null : null;
     // THE CREATURES (POS-637 PR-C; C3, C6): those within presence's radius in
     // who, their answers within reach and the nearest out at the edge in
     // happening_here. None living, or no law at the blessed ref: nothing added.

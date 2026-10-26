@@ -87,3 +87,8 @@ export function stackedAt(point, handle, occupancy) {
 export async function occupancyIfRoomed(living) {
   return hasRoomed(living) ? occupancyAll() : null;
 }
+
+/** What `handle` has entered now: their stack, read from the ledger once (empty when unreadable). */
+export async function stackOf(handle) {
+  return [...((await occupancyAll()).get(String(handle ?? "")) ?? [])];
+}

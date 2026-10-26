@@ -1122,6 +1122,13 @@ const determinedOf = (w) => w?._raw?.worldState?.determined ?? null;
 // point: the shadow's agreement then means "the store holds the same world",
 // which is the only question a serving flag actually has to answer. A second
 // implementation over the store would have made the diff measure my typing.
+/** The words from outside every dungeon (what nobody who has not entered may read past) and the whole world's. */
+export function bothWords(w, { x, y }, verbs) {
+  const inside = placeWordsFrom(w.marks ?? [], { x, y }, verbs);
+  const outside = typeof verbs?.standpointSight === "function" ? placeWordsFrom(verbs.standpointSight(w, {}).marks ?? [], { x, y }, verbs) : inside;
+  return { outside, inside };
+}
+
 export function placeWordsFrom(marks, { x, y }, verbs) {
   // A THING IS NOT GROUND. The viewer has said so since 2026-08-22 (Keemin:
   // carried things were winning the walk desk's "From"); this is the office
@@ -1168,8 +1175,24 @@ export function placeMarksFrom(marks, { x, y }, verbs) {
 // the line below said "always published main" long before there was a store;
 // the flag simply gives that sentence a second way to be true, and §1c has since
 // made it true of every other read too.
-export async function placeWords({ x, y, aboard = false, moving = false } = {}) {
+export async function placeWords({ x, y, aboard = false, moving = false, handle = null } = {}) {
+  // THE LABEL IS WHAT THE READER MAY SEE (WLD-74, Darko 2026-10-26: nothing inside a dungeon is seen from outside it). The shared,
+  // cached answer is the OUTSIDE one: a point on a room's spot reads as the dungeon itself, never the room, whatever stands there.
+  // A reader who entered the room (`handle`) is told its name, by the one function sight reads (standpointSight over their stack).
   if (aboard) return moving ? `aboard ${VESSEL_NAME}, mid-crossing` : `aboard ${VESSEL_NAME}`;
+  const both = await placeWordsBoth({ x, y });
+  if (both == null) return null;
+  if (!handle || both.outside === both.inside) return both.outside;
+  const stack = await (await import("./creature-sight.mjs")).stackOf(handle);
+  if (!stack.length) return both.outside;
+  try {
+    const w = await world();
+    const { verbs } = await mods();
+    return placeWordsFrom(sightedWorld(w, { verbs, handle: String(handle), stack }).marks ?? [], { x, y }, verbs);
+  } catch { return both.outside; }
+}
+
+async function placeWordsBoth({ x, y } = {}) {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   const cacheKey = `${Math.round(x / 10)},${Math.round(y / 10)}`;
   // In serve mode `world()` never runs, so the rebuild that normally clears this
@@ -1197,7 +1220,7 @@ export async function placeWords({ x, y, aboard = false, moving = false } = {}) 
       fold: async () => {
         const w = await world(); // place names are public — always published main
         const { verbs } = await mods();
-        return placeWordsFrom(w.marks ?? [], { x, y }, verbs);
+        return bothWords(w, { x, y }, verbs);
       },
       store: async (snap) => {
         const { verbs } = await mods();
@@ -1207,7 +1230,7 @@ export async function placeWords({ x, y, aboard = false, moving = false } = {}) 
         // what it may answer has not replaced anything.
         const spine = verbs.containmentChain({ x, y }, snap.marks).filter((m) => m.id !== WORLD_FRAME);
         const veto = pointAnswerable(snap, { x, y }, await geomMod(), { checkNearest: spine.length === 0 });
-        return veto ? cannotAnswer(veto) : placeWordsFrom(snap.marks, { x, y }, verbs);
+        return veto ? cannotAnswer(veto) : bothWords({ marks: snap.marks }, { x, y }, verbs);
       },
     });
   } catch { return null; } // no world to read: the coordinates still speak
@@ -2466,10 +2489,13 @@ export async function markRows(ids = [], w = null) {
  * root first (as v2's you.within), or `{ near: row }` on open ground beside a
  * place, or {} on open ground. The same derivation as placeWords (§ placeMarksFrom).
  */
-export async function placeMarksAt({ x, y } = {}) {
+export async function placeMarksAt({ x, y, handle = null } = {}) {
   if (!Number.isFinite(x) || !Number.isFinite(y)) return {};
-  const w = await world();
+  const w0 = await world();
   const { verbs } = await mods();
+  // WLD-74: only what the reader may see (placeWords): outside every dungeon, or inside the rooms `handle` entered
+  const stack = handle ? await (await import("./creature-sight.mjs")).stackOf(handle) : [];
+  const w = typeof verbs?.standpointSight === "function" ? { ...w0, ...sightedWorld(w0, { verbs, handle: stack.length ? String(handle) : "", stack }) } : w0;
   const marks = w.marks ?? [];
   const row = (m) => ({ id: m.id, name: markName(m, marks, determinedOf(w)), body: m.body ?? "" });
   const { spine, near } = placeMarksFrom(marks, { x, y }, verbs);
