@@ -1047,7 +1047,13 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     let derived;
     try { derived = live.departureRecords(rows); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: faultLogged("a departure act matches no known era", e) } }; }
-    const all = derived.records.map((d) => ({
+    // WLD-74: a walk's target is a mark the reader may name only if it is not inside a dungeon; an interior target is left out, and the
+    // ledger line (which names it) is rendered again without it
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    const all = derived.records.map((d0) => {
+      const d = inside.has(d0.targetMarkId) ? { ...d0, targetMarkId: null, targetExtent: null, line: null } : d0;
+      return ({
       iso: d.iso, handle: d.handle,
       from: d.from, toward: d.toward, at: d.at,
       within: d.targetExtent, to: d.targetMarkId, pace: d.pace,
@@ -1055,7 +1061,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       line: d.line ?? live.formatDeparture({ ...d, iso: d.iso }),
       ...(d.line ? {} : { line_derived: true }),
       ...(d.landed ? { landed: d.landed } : {}),   // a placement says what set you down (WLD-63 row 68 B)
-    }));
+    }); });
     // THE CUT IS MADE ON THE RENDERED ROWS, NOT IN SQL, and the reason is this
     // derivation's own law. `departureRecords` REFUSES a row it cannot read
     // rather than skipping it, and censuses the eras over everything; a WHERE
@@ -1114,7 +1120,11 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       what: "every walker's derived position at one instant — position is a function of (record, clock); nothing en route is stored",
       evaluated_at: new Date(at.ms).toISOString(), crossing: fc,
       count: Object.keys(derived.records.length ? live.positionsAt(derived.records, fc) : {}).length,
-      walkers: live.publicWalkers(derived.records, fc),
+      walkers: await (async () => { // WLD-74: a walker's target mark is named only if it is not inside a dungeon
+        let inside;
+        try { inside = await interiorSlugs(p, injectedEngine); } catch { inside = null; }
+        return (await import("./world.mjs")).hideInteriorTargets(live.publicWalkers(derived.records, fc), inside);
+      })(),
       eras: derived.eras,
       disclosed: [live.DISCLOSURES.frames, ...discardedOf(dep)],
     } };
@@ -1339,7 +1349,10 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     try { derived = live.passageRecords(rows); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a passage act matches no known era", hint: faultLogged("a passage act matches no known era", e) } }; }
     const fc = live.fractionalCrossing(at.ms);
-    const occ = live.occupancyAt(derived.passages, fc);
+    // WLD-74: a passage into a room inside a dungeon is not the keyless reader's to see: the stacks and the manifest keep only marks they may name
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    const occ = new Map([...live.occupancyAt(derived.passages, fc)].map(([h, s]) => [h, s.filter((m) => !inside.has(m))]).filter(([, s]) => s.length));
     const handle = searchParams?.get("handle");
     if (handle) {
       return { code: 200, body: {

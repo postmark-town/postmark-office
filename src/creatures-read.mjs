@@ -70,7 +70,7 @@ async function creaturesRaw({ nowMs, hook, law: given, query }) {
     cache.inflight ??= (async () => {
       const law = given ?? await creatureLaw();
       if (!lawReady(law)) { cache.living = null; cache.ref = null; return; }
-      if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law }); }
+      if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law, hideUnwarmed: true }); }
       const r = await cache.living.refresh({ ...(query ? { query } : {}), now: nowMs });
       if (!r.ok && !cache.living.booted) cache.living = null;
       // each creature's room, so its ring stops at the walls (world#268); a read without the marks keeps the circle

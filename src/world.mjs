@@ -1123,6 +1123,22 @@ const determinedOf = (w) => w?._raw?.worldState?.determined ?? null;
 // which is the only question a serving flag actually has to answer. A second
 // implementation over the store would have made the diff measure my typing.
 /** The words from outside every dungeon (what nobody who has not entered may read past) and the whole world's. */
+/**
+ * The marks nobody outside a dungeon may name (WLD-74): what the one sight function (standpointSight, no occupancy) leaves out of the
+ * published world. Null when the world cannot be read, which callers treat as "name nothing".
+ */
+export async function interiorIdsNow() {
+  try {
+    const w = await world();
+    const { verbs } = await mods();
+    if (typeof verbs?.standpointSight !== "function") return new Set();
+    const seen = new Set(verbs.standpointSight(w, {}).marks.map((m) => m.id));
+    return new Set((w.marks ?? []).filter((m) => !seen.has(m.id)).map((m) => m.id));
+  } catch { return null; }
+}
+/** `rows` with each `mark_id` that names an interior mark left null (every one, when the interior cannot be told). */
+export const hideInteriorTargets = (rows, hidden) => (rows ?? []).map((r) => (r && r.mark_id != null && (hidden == null || hidden.has(r.mark_id)) ? { ...r, mark_id: null } : r));
+
 export function bothWords(w, { x, y }, verbs) {
   const inside = placeWordsFrom(w.marks ?? [], { x, y }, verbs);
   const outside = typeof verbs?.standpointSight === "function" ? placeWordsFrom(verbs.standpointSight(w, {}).marks ?? [], { x, y }, verbs) : inside;
@@ -6850,7 +6866,7 @@ export async function worldWalkers(worldClone, key = null, { roll = null } = {})
     return {
       at,
       // each row says its standing, as every heard say does (POS-739): presence is labelled like voices
-      walkers: walkerLandings(walkerPaces(movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers, departures, { currentDeparture, WALK_KM_PER_CROSSING }), departures, { currentDeparture }).map((r) => withStanding(r)),
+      walkers: hideInteriorTargets(walkerLandings(walkerPaces(movementV2Enabled() ? await walkersInFrames(walkers, w) : walkers, departures, { currentDeparture, WALK_KM_PER_CROSSING }), departures, { currentDeparture }).map((r) => withStanding(r)), await interiorIdsNow()),
       // The disclosure the reader assembled, carried rather than dropped. A door
       // that reads half the record and says nothing is the failure this whole
       // change is about.
@@ -6860,7 +6876,7 @@ export async function worldWalkers(worldClone, key = null, { roll = null } = {})
     };
   } catch {
     // No world to fold: the walk ledger alone is still an honest answer.
-    return { at, walkers: publicWalkers(departures, at).map((r) => withStanding(r)) };
+    return { at, walkers: hideInteriorTargets(publicWalkers(departures, at).map((r) => withStanding(r)), null) };
   }
 }
 

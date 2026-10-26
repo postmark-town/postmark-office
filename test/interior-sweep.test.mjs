@@ -219,3 +219,63 @@ test("from outside, and from a neighbouring room, no creature route names the wo
     assert.equal((out["the hook: a walk onto its spot"] ?? []).length, 1);
   } finally { __setOccupancyForTest(null); }
 });
+
+// ── the public record of movement: walks, positions, occupancy ───────────────
+
+test("keyless walks and occupancy name no room: a walk's target, its ledger line, and the stacks and manifest", async (t) => {
+  if (WHY) return t.skip(WHY);
+  const walkRow = { id: 1, at: new Date("2026-10-26T16:42:00Z"), crossing: "300", actor: "ann", action: "walk",
+    payload: { from: { x: 1900, y: 2000 }, toward: HALL_AT, within: { w: 60, h: 60 }, to: HALL, pace: 60 } };
+  const plainWalk = { id: 2, at: new Date("2026-10-26T16:43:00Z"), crossing: "300", actor: "bo", action: "walk",
+    payload: { from: { x: 0, y: 0 }, toward: { x: 100, y: 100 }, within: { w: 2, h: 1 }, to: "townsfolk/a-bench", pace: 60 } };
+  const enter = (id, handle, mark, act) => ({ id, at: new Date("2026-10-26T16:30:00Z"), crossing: null, actor: handle, action: act === "enters" ? "legacy:enter" : "legacy:exit",
+    payload: { _ledger: "WORLD/enter-exit-ledger.md", iso: "2026-10-26T16:30:00.000Z", handle, act, mark, at: 1, word: "neutral" } });
+  const acts = [enter(10, "ann", KEEP, "enters"), enter(11, "ann", HALL, "enters"), enter(12, "bo", KEEP, "enters")];
+  const p = { query: async (sql, args) => {
+    if (/FROM acts/i.test(sql) && /walk|departure/i.test(JSON.stringify(args ?? []))) return { rows: [walkRow, plainWalk] };
+    if (/FROM acts/i.test(sql)) return { rows: acts };
+    return pool().query(sql, args);
+  } };
+  const walks = await world2Serve("/world2/walks", new URLSearchParams(""), { p });
+  assert.equal(walks.code, 200, JSON.stringify(walks.body).slice(0, 300));
+  assert.deepEqual(leaks(walks.body), [], "/world2/walks");
+  const mine = walks.body.walks.find((w) => w.handle === "ann");
+  assert.equal(mine.to, null);
+  assert.equal(walks.body.walks.find((w) => w.handle === "bo").to, "townsfolk/a-bench", "an open-ground target is untouched");
+  const occ = await world2Serve("/world2/occupancy", new URLSearchParams(""), { p });
+  assert.equal(occ.code, 200, JSON.stringify(occ.body).slice(0, 300));
+  assert.deepEqual(leaks(occ.body), [], "/world2/occupancy");
+  assert.deepEqual(occ.body.inside.ann, [KEEP], "she is inside the keep, which a stranger may name");
+  assert.deepEqual(occ.body.occupants[KEEP], ["ann", "bo"]);
+  const one = await world2Serve("/world2/occupancy", new URLSearchParams({ handle: "ann" }), { p });
+  assert.deepEqual([one.body.stack, one.body.within], [[KEEP], KEEP]);
+});
+
+test("a walker's target mark is dropped when it is inside (the positions and walkers rows), and every one when the interior cannot be told", async () => {
+  const { hideInteriorTargets } = await import("../src/world.mjs");
+  const rows = [{ handle: "a", mark_id: HALL }, { handle: "b", mark_id: "townsfolk/a-bench" }, { handle: "c", mark_id: null }];
+  assert.deepEqual(hideInteriorTargets(rows, new Set([HALL])).map((r) => r.mark_id), [null, "townsfolk/a-bench", null]);
+  assert.deepEqual(hideInteriorTargets(rows, null).map((r) => r.mark_id), [null, null, null], "fail closed");
+});
+
+// ── a creature whose room is not known yet ───────────────────────────────────
+
+test("a creature whose room is not known yet is hidden from everyone, inside the hall too; known outdoors it is seen again", async () => {
+  const mk = () => {
+    const l = new LivingSet({ law: LAW, hideUnwarmed: true }).fold([{ id: "1", at: iso(NOW - 3600_000), actor: "the-town", action: "spawn", object: WOLF,
+      payload: { kind: "wolf", at: iso(NOW - 3600_000), fades_at: iso(NOW + 12 * 3600_000), x: 2000, y: 2000 } }]);
+    return l;
+  };
+  for (const occ of [OUTSIDE, NEXT_DOOR, INSIDE]) {
+    const cur = await creaturesForRead({ hook: { living: mk(), law: LAW }, as: "ann", occupancy: occ });
+    assert.ok(!cur.living.byId.has(WOLF), "no room yet, so no one sees it");
+    assert.deepEqual(findCreatures({ living: cur.living, law: LAW }, "creature", HALL_AT, { nowMs: NOW }), null);
+  }
+  const l = mk();
+  l.warmRooms([], "sha-1"); // looked up: outdoors
+  assert.ok((await creaturesForRead({ hook: { living: l, law: LAW }, as: "ann", occupancy: OUTSIDE })).living.byId.has(WOLF));
+  const l2 = mk();
+  Object.assign(l2.byId.get(WOLF), { room: HALL_MARK, roomKey: "sha-1" }); // looked up: in the hall
+  assert.ok(!(await creaturesForRead({ hook: { living: l2, law: LAW }, as: "ann", occupancy: OUTSIDE })).living.byId.has(WOLF));
+  assert.ok((await creaturesForRead({ hook: { living: l2, law: LAW }, as: "ann", occupancy: INSIDE })).living.byId.has(WOLF));
+});

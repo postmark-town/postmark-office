@@ -88,7 +88,7 @@ import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { scopeSecret, sealedItem } from "./sealed.mjs";
 import { settlementAtOrBefore } from "./world-forecast.mjs";
-import { enteredBy, occupancyIfRoomed, sightedLiving, stackedAt } from "./creature-sight.mjs";
+import { enteredBy, occupancyIfRoomed, roomUnknown, sightedLiving, stackedAt } from "./creature-sight.mjs";
 import {
   ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
   easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt,
@@ -485,8 +485,9 @@ export const NEVER_FADES = "never: it stays out until something frightens it bac
  * `law` is `loadCreatureLaw`'s answer: its kinds, its town and its despawn reasons.
  */
 export class LivingSet {
-  constructor({ law } = {}) {
+  constructor({ law, hideUnwarmed = false } = {}) {
     this.law = law;
+    this.hideUnwarmed = hideUnwarmed; // the office's own sets: a creature whose room is not yet looked up is hidden from every resident (creature-sight.mjs § roomUnknown)
     this.kindOf = law?.kindOf ?? (() => null);
     this.skipped = []; // spawn rows the fold would not take, and why (logged)
     this.byId = new Map();
@@ -1431,7 +1432,7 @@ export async function reactTo(act, deps = {}) {
   const occupancy = deps.occupancy ?? await occupancyIfRoomed(deps.living);
   const living = occupancy ? sightedLiving(deps.living, occupancy.get(String(act?.actor ?? "")) ?? []) : deps.living;
   if (occupancy) deps = { ...deps, living, occupancy };
-  if (aimed && occupancy && !enteredBy(aimed, occupancy.get(String(act?.actor ?? "")) ?? [])) return [];
+  if (aimed && occupancy && (roomUnknown(aimed, deps.living) || !enteredBy(aimed, occupancy.get(String(act?.actor ?? "")) ?? []))) return [];
   if (!living?.byId?.size || !act?.point || !Number.isFinite(act.point.x) || !Number.isFinite(act.point.y)) return [];
   if (act.actId == null || !Number.isFinite(Date.parse(act.atIso ?? ""))) return []; // no instant, no d20 (carry 2)
   const now = deps.now ?? Date.now();

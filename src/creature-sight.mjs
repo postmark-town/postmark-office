@@ -46,7 +46,14 @@ export async function occupancyAll() {
 }
 
 /** Does the set hold any creature in a room? When none does, nobody needs the ledger. */
-export const hasRoomed = (living) => !!living?.byId && [...living.byId.values()].some((c) => c.room);
+export const hasRoomed = (living) => !!living?.byId && [...living.byId.values()].some((c) => c.room || roomUnknown(c, living));
+
+/**
+ * A creature whose room has not been looked up yet (LivingSet § warmRooms has not run for it: a boot, or a creature just out) under a law
+ * that has rooms. It may stand inside a dungeon, and nothing yet says it does not, so it is hidden from everyone until its room is known
+ * (WLD-74: zero means zero, the moment after a boot too). Outdoors it is seen again the moment its room reads null.
+ */
+export const roomUnknown = (c, living) => !!living?.hideUnwarmed && c?.room === undefined && c?.roomKey === undefined && typeof living?.law?.ringRoomOf === "function";
 
 /**
  * `living` as `stack` may see it: a view whose creatures in a room the stack has not entered are
@@ -56,7 +63,7 @@ export const hasRoomed = (living) => !!living?.byId && [...living.byId.values()]
 export function sightedLiving(living, stack) {
   if (!living?.byId || !hasRoomed(living)) return living;
   const seen = new Set(stack instanceof Set ? stack : Array.isArray(stack) ? stack : []);
-  const byId = new Map([...living.byId].filter(([, c]) => enteredBy(c, seen)));
+  const byId = new Map([...living.byId].filter(([, c]) => !roomUnknown(c, living) && enteredBy(c, seen)));
   const view = Object.create(living);
   view.byId = byId;
   view.hidden = new Set([...living.byId.keys()].filter((id) => !byId.has(id))); // what this view leaves out (investigate says no creature of them too)

@@ -98,7 +98,7 @@ export async function refreshCreatures({ query = actsQuery, law: given = null, n
   }
   if (law.ref !== state.ref || !state.living) {
     state.ref = law.ref;
-    state.living = new LivingSet({ law });
+    state.living = new LivingSet({ law, hideUnwarmed: true }); // WLD-74: a creature whose room is not yet known is seen by no one
   }
   const r = await state.living.refresh({ query, now });
   // each creature's room, so its ring stops at the walls (world#268): once per creature per published sha
