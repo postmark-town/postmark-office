@@ -2,7 +2,7 @@
 //
 // RULED (Darko, 2026-10-26 13:45 and 13:54 EDT): "there needs to be no visibility whatsoever. Zero paths through
 // the office that reveal a creature that is within a dungeon's room unless you too are within that dungeon's room",
-// and "until you find a way through the gilded doors, there is NOTHING inside the dungeon you can see".
+// and "there is NOTHING inside the dungeon you can see" until a way in is found.
 //
 // This sweep drives every route the audit table in the PR names, from OUTSIDE the dungeon (a keyless reader, or a
 // resident who exited it) and from a NEIGHBOURING room, and reads each answer whole: no interior mark id, name or
