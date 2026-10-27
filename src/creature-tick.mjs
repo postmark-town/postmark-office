@@ -72,6 +72,7 @@ import { blessedSha, materializeAtRef, pathAtRef, readAtRef } from "./world-bran
 import { WORLD_CLONE } from "./world-store.mjs";
 import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import { settlementAtOrBefore } from "./world-forecast.mjs";
 import { errorSaid, faultLogged } from "./fault-words.mjs";
 import { CREATURE_CLASS, SPAWN_ACTION, WITHDRAW_ACTION, TELL_ACTION, UNSEAL_ACTION } from "./creatures.mjs";
 import { scopeSecret } from "./sealed.mjs";
@@ -267,7 +268,8 @@ export async function creatureTick({
   for (const n of named) {
     const r = await put(townRow({ action: SPAWN_ACTION, object: n.id, place: n, now,
       payload: { kind: n.kind, crossing: N, x: n.x, y: n.y, at: new Date(now).toISOString(), stays: true,
-        ...(n.carries ? { carries: n.carries } : {}), ...(n.declared ? { declared: n.declared } : {}), moods: { ...n.moods }, flags: [] },
+        ...(n.carries ? { carries: n.carries } : {}), ...(n.declared ? { declared: n.declared } : {}),
+        ...(n.generation ? { generation: n.generation, returns_after: n.returns_after } : {}), moods: { ...n.moods }, flags: [] },
       effect: `a ${n.kind} is found here` }));
     if (!r.prior) wrote.spawn += 1;
     if (n.carries) {
@@ -305,6 +307,63 @@ export const UNSEAL_DUE_SQL = `SELECT DISTINCT t.actor AS id FROM acts t
 export const ENDED_OF_SQL = `SELECT DISTINCT object FROM acts WHERE class = '${CREATURE_CLASS}' AND action = '${WITHDRAW_ACTION}'
   AND payload->>'reason' = 'ended' AND object = ANY($1::text[])`;
 
+// ── A NAMED CREATURE THAT COMES BACK (WLD-124, Darko 2026-10-27) ──────────────
+//
+// A declaration with `return_until` (the world's tools/creatures.mjs § namedOf) is written once and comes
+// back after each ending, as a new GENERATION: generation 1 is the declaration's own id, generation N is
+// `<id>-r<N>`. The suffix is the record's, never a resident's: a creature's name is its kind's.
+//   · NEXT SETTLEMENT. Generation N+1 comes out once the newest landed settlement is later than the one that
+//     ended generation N (the withdraw's `settlement`; a hand-written withdraw has none, so the settlement
+//     landed at its own time stands in, and it comes back at the first settlement after it).
+//   · THE CUTOFF. That settlement's nominal instant (06:00/18:00Z) must be strictly before `return_until`.
+//     One that came back before it stays, and ends normally; nothing is recalled.
+//   · NEVER TWICE. Each generation has its own id, and writeOnce looks for (spawn, id) first, under a lock.
+//   · KEYLESS ONCE EARNED. A comeback carries what the declaration carries until the key has been won: an
+//     earlier generation's ended withdraw carried it, or the key's latest holder is no longer the town.
+export const GENERATIONS_SQL = `SELECT DISTINCT object FROM acts WHERE class = '${CREATURE_CLASS}' AND action = '${SPAWN_ACTION}'
+  AND actor = 'the-town' AND (object = $1::text OR object ~ ('^' || $1::text || '-r[0-9]+$'))`;
+export const ENDED_ROWS_SQL = `SELECT object, at, payload FROM acts WHERE class = '${CREATURE_CLASS}' AND action = '${WITHDRAW_ACTION}'
+  AND payload->>'reason' = 'ended' AND object = ANY($1::text[])`;
+export const NEWEST_SETTLEMENT_SQL = `SELECT number, published_at FROM settlements ORDER BY number DESC LIMIT 1`;
+export const SETTLEMENT_AT_SQL = `SELECT COALESCE(max(number), 0) AS number FROM settlements WHERE published_at <= $1::timestamptz`;
+export const KEY_HOLDER_SQL = `SELECT payload->>'holder' AS holder FROM acts WHERE class = 'holding' AND object = $1 ORDER BY id DESC LIMIT 1`;
+
+/** Generation N's id: the declaration's own for 1, `<id>-r<N>` after. */
+export const generationId = (id, n) => (n <= 1 ? id : `${id}-r${n}`);
+const generationOf = (id, object) => (object === id ? 1 : Number(String(object).slice(id.length + 2)));
+
+/**
+ * The next generation of a returning declaration, or null: { id, generation, after, carries }.
+ * Null while no generation has come out, while the newest is not ended, until a settlement later than its
+ * ending has landed, and from the settlement whose instant is not before `return_until`.
+ */
+export async function comebackOf(d, { query }) {
+  if (d.return_until == null || !query) return null;
+  const until = Date.parse(d.return_until);
+  if (!Number.isFinite(until)) return null;
+  const gens = ((await query(GENERATIONS_SQL, [d.id])) ?? []).map((r) => generationOf(d.id, r.object)).filter(Number.isInteger);
+  if (!gens.length) return null; // never out yet: the declaration's own spawn is the ordinary path
+  const top = Math.max(...gens);
+  const ids = gens.map((n) => generationId(d.id, n));
+  const ended = (await query(ENDED_ROWS_SQL, [ids])) ?? [];
+  const last = ended.find((r) => r.object === generationId(d.id, top));
+  if (!last) return null; // the newest generation has not ended
+  const lp = asPayload(last.payload);
+  let endedAt = Number(lp.settlement);
+  if (!Number.isFinite(endedAt)) endedAt = Number(((await query(SETTLEMENT_AT_SQL, [isoOf(last.at)])) ?? [])[0]?.number ?? 0);
+  const [newest] = (await query(NEWEST_SETTLEMENT_SQL, [])) ?? [];
+  if (!newest || !(Number(newest.number) > endedAt)) return null; // the next settlement has not landed
+  const instant = Date.parse(settlementAtOrBefore(new Date(newest.published_at)));
+  if (!(instant < until)) return null; // from the cutoff on, none comes back
+  let carries = typeof d.carries === "string" ? d.carries : null;
+  if (carries) {
+    let earned = ended.some((r) => asPayload(r.payload).carried === carries);
+    if (!earned) { const [h] = (await query(KEY_HOLDER_SQL, [carries])) ?? []; earned = !!h?.holder && h.holder !== "the-town"; }
+    if (earned) carries = null;
+  }
+  return { id: generationId(d.id, top + 1), generation: top + 1, after: generationId(d.id, top), carries };
+}
+
 export async function namedSpawns({ now, N = currentCrossing(now), inputsAt, blessed, held = [], query = null }) {
   let w;
   try { w = await inputsAt(blessed()); } catch (e) { held.push(`the named creatures: the blessed world cannot be read (${errorSaid(e).slice(0, 120)})`); return []; }
@@ -333,8 +392,12 @@ export async function namedSpawns({ now, N = currentCrossing(now), inputsAt, ble
       try { door = w.creaturesMod.afterDoorOpen(d, w.inputs?.marks ?? []); } catch (e) { door = { open: false, why: `its door could not be read (${errorSaid(e).slice(0, 120)})` }; }
       if (!door?.open) { if (!door?.shut) held.push(`the named creature ${d.id}: ${door?.why ?? "its door cannot be read"}`); continue; }
     }
-    out.push({ id: d.id, kind: d.kind, x: Number(d.x), y: Number(d.y), carries: typeof d.carries === "string" ? d.carries : null,
-      declared: d.declared ?? null, moods: w.starts[d.kind].moods ?? {} });
+    // COMES BACK (WLD-124): the next generation, when the declaration says so and its time has come
+    let back = null;
+    try { back = await comebackOf(d, { query }); } catch (e) { held.push(`the named creature ${d.id}: its comeback could not be read (${errorSaid(e).slice(0, 120)})`); }
+    out.push({ id: back?.id ?? d.id, kind: d.kind, x: Number(d.x), y: Number(d.y), carries: back ? back.carries : typeof d.carries === "string" ? d.carries : null,
+      declared: d.declared ?? null, moods: w.starts[d.kind].moods ?? {},
+      ...(back ? { generation: back.generation, returns_after: back.after } : {}) });
   }
   return out;
 }
