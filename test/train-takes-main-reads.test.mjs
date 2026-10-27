@@ -23,6 +23,7 @@ import { PHASE_ACTION, HURL_ACTION, PERSUADE_ACTION } from "../src/set-pieces.mj
 import { FIGHT_VERBS, creatureEntries, creaturePairs, worldCreature, readCreatureVerb } from "../src/creature-verbs.mjs";
 import { ENCOUNTER_CALLS, classOfVerb, encounterEntries, encounterPairs, readEncounterVerb, worldEncounter, worldSpeakFor } from "../src/encounter-verbs.mjs";
 import { __setCreaturesForTest } from "../src/creatures-hook.mjs";
+import { __setOccupancyForTest } from "../src/creature-sight.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
@@ -324,6 +325,7 @@ test("a creature behind its room's wall reads can:false with the act's own reaso
   const law = lawWith({ walls: true });
   const living = livingOf(law);
   living.byId.get(ID).room = "the-fixture-room"; // what warmRooms sets: it stands inside a room, and its ring stops at the walls
+  __setOccupancyForTest(() => new Map([["kai", ["the-fixture-room"]]])); // the resident entered it (WLD-74: a creature in a room exists only for those who did)
   const { worldApex } = await apexWith(living);
   const behind = { x: 30, y: 0 }; // 30 m off, within the 40 m ring as a circle, past the wall at x = 5
   const { deps, calls } = seams(law, living, { here: behind });
@@ -351,6 +353,7 @@ test("a creature behind its room's wall reads can:false with the act's own reaso
   const inside = await readCreatureVerb("watch", {}, KEY, seams(law, living, { here: { x: 3, y: 0 } }).deps);
   assert.equal(inside.creatures[0].can, true, inside.creatures[0].why_not);
   assert.ok(nothingDone(calls));
+  __setOccupancyForTest(null);
 });
 
 // ── the strike read and a set piece with no fight file ──────────────────────

@@ -23,6 +23,7 @@
 // finish on any strike instead of the one that reaches 0; count strikes from before
 // the settlement; forget to flee at 0.
 
+import { __setOccupancyForTest } from "../src/creature-sight.mjs";
 import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 
@@ -512,6 +513,11 @@ test("a ring stops at its room's walls: the world's own ringRoomOf and inCreatur
   assert.equal(living.inRing({ x: 15, y: 0 }).length, 1);
   // a strike from beyond the wall is refused, naming the wall; the matrix offers none there
   const s = strikeDeps(living, { law, at: { x: 30, y: 0 } });
+  // one who has not entered the room has no creature there at all (WLD-74: the same 404 as for an unknown id, never a word about the walls)
+  __setOccupancyForTest(() => new Map());
+  await assert.rejects(worldEncounter({ act: "strike", creature: ID }, KEY, s.d), (e) => e.code === 404 && /no creature/.test(e.defect));
+  // and one who has, past the wall by geometry, is told the wall
+  __setOccupancyForTest(() => new Map([["kai", ["a-room"]]]));
   await assert.rejects(worldEncounter({ act: "strike", creature: ID }, KEY, s.d), (e) => e.code === 409 && /beyond the walls of the room/.test(e.defect));
   assert.deepEqual(encounterPairs({ here: { x: 30, y: 0 }, actor: "kai", living, law, residents: [], now: NOW }), []);
   // an afforded action "from its ring" says the wall too (creature-verbs.mjs § whyNot)
@@ -522,6 +528,7 @@ test("a ring stops at its room's walls: the world's own ringRoomOf and inCreatur
   const { w, d } = deps(living, { law });
   assert.deepEqual(await reactTo(act({ point: { x: 30, y: 0 } }), { ...d, law }), []);
   assert.equal(w.calls.length, 0);
+  __setOccupancyForTest(null);
   // outdoors: no room, the circle
   const out = new LivingSet({ law }).fold([spawn()]);
   out.warmRooms([], "sha-1");

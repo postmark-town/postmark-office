@@ -18,7 +18,8 @@
 // door that says it cannot read it.
 
 import { worldFreezeBounce } from "./freeze.mjs";
-import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
+import { forgetOccupancy } from "./creature-sight.mjs"; // WLD-74: a passage written is forgotten by the shared occupancy read
+import { perceived } from "./act-watch.mjs";
 import { standsWithin } from "./reach.mjs"; // the ONE "do you truly stand there" test — shared with the hold door (the-town/the-reach)
 import { anchorOfStop, arrivedNotice, depositAt, depositPointFor, isVehicleStop, rideStateFrom, stopsOfService, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
@@ -444,7 +445,7 @@ async function enterViaPortal(portal, { who, w, at, iso, occupancy, here, thresh
  * they are — the walk ledger's derivation, which this verb READS and never
  * writes), `ledger()` (the threshold ledger's text), `record(payload)` (the pen).
  */
-export async function enterViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => enterAct(worldClone, payload, key, deps)); }
+export async function enterViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => enterAct(worldClone, payload, key, deps).finally(forgetOccupancy)); }
 // POS-637 PR-B: the export above is this act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
@@ -896,7 +897,7 @@ async function leaveTheDungeon(answer, { who, at, markId, held, key, deps, fled 
 }
 
 /** exit(mark) — the walker nullifying his own side of the edge he authored. */
-export async function exitViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => exitAct(worldClone, payload, key, deps)); }
+export async function exitViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => exitAct(worldClone, payload, key, deps).finally(forgetOccupancy)); }
 // POS-637 PR-B: the export above is this act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }

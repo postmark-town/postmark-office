@@ -681,6 +681,39 @@ export function heightsUnreadBounce(e, lawSha) {
     hint: `the world engine reads every height from the skeleton's elevation dials, and the law this window is pinned to carries none (no region anchors, or no river_fall_m). It answers again once the window's law pin carries them.` };
 }
 
+/**
+ * THE MARKS NOBODY OUTSIDE A DUNGEON MAY SEE (WLD-74, Darko 2026-10-26: "NOTHING inside the dungeon you can see"). A keyless read has entered
+ * nothing, so it reads what the one sight function (world `standpointSight`, no occupancy) leaves: a dungeon is its own mark and nothing it holds.
+ * Their slugs, from the store's own rows; a Set of nothing where the world has no dungeon. It refuses (503) when the engine cannot be read, rather
+ * than listing what it cannot judge.
+ */
+export async function interiorSlugs(p, eng = null, markRows = null) {
+  const e = eng ?? await engine();
+  if (typeof e?.verbs?.standpointSight !== "function") return new Set();
+  const rows = markRows ?? (await p.query(apex.MARK_ROWS_SQL)).rows; // a caller that already read the marks hands them over: one read composes the answer
+  const marks = apex.worldStateFromMarkRows(rows).marks;
+  const seen = new Set(e.verbs.standpointSight({ marks }, {}).marks.map((m) => m.id));
+  return new Set(marks.filter((m) => !seen.has(m.id)).map((m) => m.id));
+}
+/**
+ * THE RESIDENTS A KEYLESS READER MAY NOT SEE (WLD-74): those entered in a room inside a dungeon, from the enter record (the same passage fold
+ * /world2/occupancy serves). Dungeons only; empty where the world has none, and the ledger is read only when it has one.
+ */
+export async function insiderHandles(p, eng = null, markRows = null, known = null) {
+  const inside = known ?? await interiorSlugs(p, eng, markRows);
+  if (!inside.size) return new Set();
+  const { rows } = await p.query(`SELECT id, at, crossing, actor, action, payload FROM acts WHERE action = ANY($1) ${live.PASSAGE_ORDER_SQL}`, [live.PASSAGE_ACTIONS]);
+  const occ = live.occupancyAt(live.passageRecords(rows).passages, live.fractionalCrossing(Date.now()));
+  return new Set([...occ].filter(([, stack]) => stack.some((m) => inside.has(m))).map(([h]) => h));
+}
+/** A say act spoken inside a dungeon room (its payload carries the room): shown only to readers in that room, so never on a keyless route (WLD-74). */
+export const spokenInRoom = (row) => {
+  let p = row?.payload;
+  if (typeof p === "string") { try { p = JSON.parse(p); } catch { p = null; } }
+  return !!(p?.room ?? p?.payload?.room);
+};
+const interiorBounce = (hint) => ({ code: 503, body: { error: "bounce", defect: "the marks cannot be sorted into inside and outside just now", hint } });
+
 export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, eng: injectedEngine = null } = {}) {
   if (!world2ServeEnabled()) return null;
   const p = injected ?? await pool();
@@ -721,10 +754,16 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     const cols = full
       ? "slug, kind, owner, household, geometry, bbox, status, locked_window, parent, body, data"
       : "slug, kind, owner, household, geometry, status, locked_window, parent";
-    const { rows } = await p.query(
-      `SELECT ${cols}
+    // ONE READ composes the list and the sorting of inside from outside (WLD-74): the same rows carry the id, body and data the sight function needs,
+    // and the listing drops them again when it was not asked for them
+    const { rows: every } = await p.query(
+      `SELECT id::text AS _id, ${cols}${full ? "" : ", body, data"}
        FROM marks WHERE status = 'standing' ${all ? "" : "AND geometry IS NOT NULL"}
        ORDER BY slug`);
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine, every.map(({ _id, ...row }) => ({ ...row, id: _id ?? row.id }))); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    const rows = every.filter((row) => !inside.has(row.slug)) // nothing inside a dungeon is listed to one who has entered nothing
+      .map(({ _id, ...row }) => { if (full) return row; const { body, data, ...listed } = row; return listed; });
     return { code: 200, body: {
       what: (all ? "the whole standing register (de-sited included — a predicated mark is its parent continued)"
                  : "placed standing marks (every row has a where); ?all=true for the whole register")
@@ -738,6 +777,9 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     if (!slug) return { code: 422, body: { error: "bounce", defect: "which mark?", hint: "?slug=<owner>/<name>" } };
     const { rows: [mark] } = await p.query("SELECT * FROM marks WHERE slug = $1", [slug]);
     if (!mark) return { code: 404, body: { error: "bounce", defect: `no mark "${slug}"` } };
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    if (inside.has(slug)) return { code: 404, body: { error: "bounce", defect: `no mark "${slug}"` } }; // the same words as one that was never there
     return { code: 200, body: mark };
   }
 
@@ -961,6 +1003,13 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       if (!h) throw e;
       return { code: 503, body: { error: "bounce", ...h } };
     }
+    // WLD-74: a mark inside a dungeon is no mark to a keyless reader, record, receipt and all (the same 404 as one that was never there)
+    if (typeof eng.verbs.standpointSight === "function") {
+      const seen = eng.verbs.standpointSight(world, {});
+      if (seen !== world && !seen.marks.some((m) => m.id === String(mark)) && world.marks.some((m) => m.id === String(mark)))
+        return { code: 404, body: { error: "bounce", defect: `no mark "${mark}"`, hint: "ids are <by>/<slug> — see /world2/marks" } };
+      world = seen;
+    }
     const r = (await import("./held.mjs")).withHolder(eng.verbs.investigate(String(mark), world, { depth }), world, mark); // POS-688: whose hands it is in
 
     // THE RECEIPT FROM ROWS (POS-142 S3 item 4). 1.0's own pure `receiptFrom`,
@@ -1018,7 +1067,15 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     let derived;
     try { derived = live.departureRecords(rows); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a departure act matches no known era", hint: faultLogged("a departure act matches no known era", e) } }; }
-    const all = derived.records.map((d) => ({
+    // WLD-74: a walk's target is a mark the reader may name only if it is not inside a dungeon; an interior target is left out, and the
+    // ledger line (which names it) is rendered again without it
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    let insiders;
+    try { insiders = await insiderHandles(p, injectedEngine, null, inside); } catch (e) { return interiorBounce(faultLogged("the residents inside a dungeon cannot be told from the rest", e)); }
+    const all = derived.records.filter((d0) => !insiders.has(d0.handle)).map((d0) => { // WLD-74: a resident inside a dungeon room has no walk on a keyless read
+      const d = inside.has(d0.targetMarkId) ? { ...d0, targetMarkId: null, targetExtent: null, line: null } : d0;
+      return ({
       iso: d.iso, handle: d.handle,
       from: d.from, toward: d.toward, at: d.at,
       within: d.targetExtent, to: d.targetMarkId, pace: d.pace,
@@ -1026,7 +1083,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       line: d.line ?? live.formatDeparture({ ...d, iso: d.iso }),
       ...(d.line ? {} : { line_derived: true }),
       ...(d.landed ? { landed: d.landed } : {}),   // a placement says what set you down (WLD-63 row 68 B)
-    }));
+    }); });
     // THE CUT IS MADE ON THE RENDERED ROWS, NOT IN SQL, and the reason is this
     // derivation's own law. `departureRecords` REFUSES a row it cannot read
     // rather than skipping it, and censuses the eras over everything; a WHERE
@@ -1085,7 +1142,12 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       what: "every walker's derived position at one instant — position is a function of (record, clock); nothing en route is stored",
       evaluated_at: new Date(at.ms).toISOString(), crossing: fc,
       count: Object.keys(derived.records.length ? live.positionsAt(derived.records, fc) : {}).length,
-      walkers: live.publicWalkers(derived.records, fc),
+      walkers: await (async () => { // WLD-74: a walker's target mark is named only if it is not inside a dungeon
+        let inside, insiders;
+        try { inside = await interiorSlugs(p, injectedEngine); insiders = await insiderHandles(p, injectedEngine, null, inside); } catch { inside = null; insiders = null; }
+        const w = await import("./world.mjs");
+        return w.hideInteriorTargets(live.publicWalkers(derived.records, fc), inside).filter((r) => insiders != null && !insiders.has(r.handle));
+      })(),
       eras: derived.eras,
       disclosed: [live.DISCLOSURES.frames, ...discardedOf(dep)],
     } };
@@ -1133,8 +1195,10 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     // Origin — the right label over the wrong set, which is worse than the
     // defect it replaces. The rewrite rides `everyonePlaced`'s return and
     // nothing downstream sees the porch.
+    let insiders;
+    try { insiders = await insiderHandles(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the residents inside a dungeon cannot be told from the rest", e)); }
     const residents = live.everyonePlaced({ world, departures: derived.records, at: fc, roll })
-      .map((r) => (isGroundlessDefault(r) ? atOrigin(r) : r));
+      .map((r) => (isGroundlessDefault(r) ? atOrigin(r) : r)).filter((r) => !insiders.has(r.handle)); // WLD-74
     const notes = live.admissionNotes({ marks: markRows, identities: idRows, roll, departureRecords: derived.records, eras: derived.eras, world });
     // THE FOLD FOR `households_known`, and it MAY NOT TAKE THIS ROUTE DOWN.
     // This is a public read that has never touched the registry, so a store
@@ -1200,10 +1264,11 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     // an index range that holds every act at or after the lookback, and
     // `at >= ` is then the exact cut.
     const readFrom = at.ms - SAY_LOOKBACK_MS;
-    const [{ rows: voiceRows }, { rows: markRows }] = await Promise.all([
+    const [{ rows: voiceRows0 }, { rows: markRows }] = await Promise.all([
       p.query(SAY_READ_SQL, [talk.VOICE_ACTIONS, currentCrossing(readFrom) - 1, new Date(readFrom).toISOString()]),
       p.query(talk.ANCHOR_MARKS_SQL),
     ]);
+    const voiceRows = voiceRows0.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
     const centres = talk.anchorCentres(markRows);
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
     const air = talk.sayActsAsEmissions(voiceRows, { centreOf: (id) => centres.get(id) ?? null,
@@ -1265,11 +1330,12 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     const at = clockOf(searchParams);
     if (at.error) return at.error;
     const n = (k, d) => { const v = Number(searchParams?.get(k)); return Number.isFinite(v) && v > 0 ? v : d; };
-    const [{ rows }, { rows: markRows }] = await Promise.all([
+    const [{ rows: allVoices }, { rows: markRows }] = await Promise.all([
       p.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
                 WHERE action = ANY($1) ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS]),
       p.query(talk.ANCHOR_MARKS_SQL),
     ]);
+    const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
     const centres = talk.anchorCentres(markRows);
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
     let derived;
@@ -1310,7 +1376,10 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     try { derived = live.passageRecords(rows); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a passage act matches no known era", hint: faultLogged("a passage act matches no known era", e) } }; }
     const fc = live.fractionalCrossing(at.ms);
-    const occ = live.occupancyAt(derived.passages, fc);
+    // WLD-74: a passage into a room inside a dungeon is not the keyless reader's to see: the stacks and the manifest keep only marks they may name
+    let inside;
+    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    const occ = new Map([...live.occupancyAt(derived.passages, fc)].map(([h, s]) => [h, s.filter((m) => !inside.has(m))]).filter(([, s]) => s.length));
     const handle = searchParams?.get("handle");
     if (handle) {
       return { code: 200, body: {
@@ -1439,6 +1508,10 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
     if (!h) throw e;
     return bounce(503, h.defect, h.hint);
   }
+  // THE KEYLESS READER HAS ENTERED NOTHING (WLD-74, Darko 2026-10-26: nothing inside a dungeon is seen from outside it): the world as
+  // the one sight function reads it with no occupancy, so a dungeon is its own mark and nothing it holds, the 1.0 spectator's rule.
+  // This door assembled the whole world and read it from any point, so it listed a room's contents to anyone standing near it.
+  if (typeof eng.verbs.standpointSight === "function") world = eng.verbs.standpointSight(world, {});
   const state = { x: near.x, y: near.y };
   const oriented = eng.verbs.orient(state, world, { crossing: n });
   const seen = eng.verbs.openYourEyes(state, world, { crossing: n });
@@ -1481,7 +1554,7 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
   // byte-equal). `?roster=apex` serves the older two-term union, named, for
   // anyone comparing against a pre-DEC-11 answer. See § apexPresent.
   const roster = searchParams?.get("roster") === "apex" ? "apex" : "roll";
-  const present = await apexPresent(p, { world, at: { x: near.x, y: near.y }, engine: eng, roster });
+  const present = await apexPresent(p, { world, at: { x: near.x, y: near.y }, engine: eng, roster, markRows });
 
   // ── THE SHORE SIDE OF THE CARRIAGE CONTRACT ──────────────────────────────
   //
@@ -1653,7 +1726,7 @@ export async function departuresForEndpoints(p) {
 /** The discard, said the way the projection says it. */
 const discardedOf = (dep) => (dep.discarded ? [`positions-snapshot-discarded: ${dep.discarded} — the whole record served`] : []);
 
-export async function apexPresent(p, { world, at, engine: eng, roster = "roll" }) {
+export async function apexPresent(p, { world, at, engine: eng, roster = "roll", markRows = null }) {
   const { bearingDeg, quantizeBearing, distanceBand } = eng.engine;
   const [dep, { rows: rollRows }] = await Promise.all([
     departuresForEndpoints(p),
@@ -1670,8 +1743,10 @@ export async function apexPresent(p, { world, at, engine: eng, roster = "roll" }
   // quay and relabelled afterwards would be absent from the Origin's list and
   // present in the quay's — the two answers this lane exists to join, swapped
   // rather than reconciled. Rewrite first, measure distance second.
+  let insiders;
+  try { insiders = await insiderHandles(p, eng, markRows); } catch (e) { return { unavailable: "the residents inside a dungeon cannot be told from the rest", detail: plainReason(e, "record", "the interior") }; }
   const residents = live.everyonePlaced({ world, departures: derived.records, at: fc, roll })
-    .map((r) => (isGroundlessDefault(r) ? atOrigin(r) : r));
+    .map((r) => (isGroundlessDefault(r) ? atOrigin(r) : r)).filter((r) => !insiders.has(r.handle)); // WLD-74
 
   const radiusM = live.PRESENCE_DIALS.near_radius_m, limit = live.PRESENCE_DIALS.near_cap;
   const dist = (r) => Math.hypot((r.x ?? 0) - at.x, (r.y ?? 0) - at.y);
