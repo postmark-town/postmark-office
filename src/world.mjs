@@ -170,7 +170,11 @@ async function geomMod() {
 // ONE WORLD, and it takes no identity to ask for (§1c). Every caller below used
 // to thread a key through here so a drafter could be handed a different, folded
 // world; there is no such world any more, so there is no key to thread.
+let _worldSeam = null;
+/** Tests only: `w` is the published world, or null to read the clone again. */
+export const __setWorldForTest = (w) => { _worldSeam = w ?? null; };
 async function world() {
+  if (_worldSeam) return _worldSeam;
   _worldAsks += 1;
   const selected = publishedState(WORLD_CLONE);
   const cached = _worlds.get(selected.ref);
@@ -251,6 +255,48 @@ async function sightFor(w, handle, key = null, { lens = null } = {}) {
     stack = law?.thresholds ? await occupiedNowBy(who, law.thresholds, crossingDeps()).catch(() => []) : [];
   }
   return sightedWorld(w, { verbs, handle: who, stack, key, lens });
+}
+
+/**
+ * WHO MAY REACH A MARK (WLD-74): a thing inside a dungeon room is reachable, as ground and by a take, only by a resident whose occupancy
+ * stack holds that room. Not a second containment test: the marks `sightFor` leaves in a resident's world (the one function every read asks).
+ * A predicate over a mark id, or null when the world hides nothing from anyone (no dungeon), so the common case reads no ledger.
+ */
+export async function reachableBy(handle, key = null) {
+  const w = await heldPlaced(await world()); // a held thing is in hands, not in the room it was picked up in (POS-688)
+  const { verbs } = await mods();
+  if (typeof verbs?.standpointSight !== "function" || verbs.standpointSight(w, {}) === w) return null;
+  const { occupancyAll } = await import("./creature-sight.mjs"); // the shared enter-ledger fold (an unreadable ledger is nobody entered anywhere)
+  const who = String(handle ?? "").trim();
+  const stack = who ? [...((await occupancyAll()).get(who) ?? [])] : [];
+  const held = new Set(stack);
+  const sighted = sightedWorld(w, { verbs, handle: who, stack, key }).marks ?? [];
+  // THE ENGINE'S SIGHT WALKS ONE LEVEL FROM THE INNERMOST MARK A STACK HOLDS (portals.mjs § hiddenFrom), so a stack holding only the dungeon is shown
+  // what sits in every room of it. A thing in a room is reachable only when that room is on the stack: the room it stands in is found by the engine's own containerOf
+  // (portals.mjs, the test roomHolds ends in; ringRoomOf is not in the blessed engine), and the stack must hold it, as #784 asks of a creature
+  // (creature-sight.mjs § enteredBy). The dungeon itself as the room, no room, and a room mark
+  // (its own outside) pass.
+  const roomOf = await roomsOfInterior(w);
+  const seen = new Set(sighted.filter((m) => { const room = roomOf.get(m.id); return !room || room === m.id || held.has(room); }).map((m) => m.id));
+  return (id) => seen.has(String(id));
+}
+const _roomsOf = new WeakMap(); // the published world object -> Map(interior mark id -> the id of the room it stands in), once per fold
+async function roomsOfInterior(w) {
+  const kept = _roomsOf.get(w);
+  if (kept) return kept;
+  const out = new Map();
+  const interior = await interiorIdsNow();
+  if (interior?.size) {
+    const portals = await engineImport("portals.mjs");
+    const dungeons = new Set((w.marks ?? []).filter((m) => portals.isDungeon(m)).map((m) => m.id));
+    for (const m of w.marks ?? []) {
+      if (!interior.has(m.id) || !m.at) continue;
+      const room = typeof portals.containerOf === "function" ? portals.containerOf(m, w.marks) : { id: m.id + "#unknown" }; // no way to tell the room: the stack cannot hold it
+      if (room && !dungeons.has(room.id)) out.set(m.id, room.id);
+    }
+  }
+  _roomsOf.set(w, out);
+  return out;
 }
 
 /** The pure half of sightFor, so a test can hand it the clone's verbs: the
@@ -1143,6 +1189,11 @@ export async function interiorIdsNow() {
   } catch { return null; }
 }
 
+/** The dungeons themselves in the published world (empty when it cannot be read). */
+async function dungeonIdsNow() {
+  try { const { verbs } = await mods(); const w = await world(); return typeof verbs?.isDungeon === "function" ? (w.marks ?? []).filter((m) => verbs.isDungeon(m)).map((m) => m.id) : []; } catch { return []; }
+}
+
 /** The dungeon room a resident is entered in now (the innermost interior mark of their stack), or null; null for every resident when the world has no dungeon. */
 export async function dungeonRoomOf() {
   const interior = await interiorIdsNow();
@@ -1169,8 +1220,10 @@ export async function hearersHiddenFrom(room) {
 export async function insidersHiddenFrom(reader) {
   const interior = await interiorIdsNow();
   if (!interior?.size) return new Set();
+  // entered a dungeon is inside it: the dungeon is the room when it is the innermost entry on a stack (WLD-74)
+  const inside = new Set([...interior, ...(await dungeonIdsNow())]);
   const { occupancyAll } = await import("./creature-sight.mjs");
-  return hiddenInsiders(await occupancyAll(), interior, reader);
+  return hiddenInsiders(await occupancyAll(), inside, reader);
 }
 /** The pure half: every handle in `occupancy` (Map handle → stack) whose innermost interior mark is not in `reader`'s stack. */
 export function hiddenInsiders(occupancy, interior, reader) {

@@ -5,6 +5,11 @@
 //   node tools/static-keys-retire.mjs --household <slug> --handle <h>
 //   node tools/static-keys-retire.mjs --household <slug> --handle <h> --mirror-only
 //
+//   --gh-id <n|none>   when two static keys hold exactly this handle, pick the one
+//                      whose stored gh_id is n ("none": the one with no gh_id).
+//                      Zero or several matches refuse and write nothing; without
+//                      it an ambiguous handle still refuses. A gh_id is not a
+//                      secret; it is never a key or a hash (POS-805).
 //   --oauth-db <path>  the office's sign-in file, the mirror (default: oauth.db
 //                      at the repo root, as the import's)
 //   --json             machine-readable output
@@ -42,15 +47,23 @@ const argOf = (name) => { const i = argv.indexOf(name); return i !== -1 ? argv[i
 const flag = (name) => argv.includes(name);
 const die = (code, msg) => { console.error(msg); process.exit(code); };
 
-const KNOWN = new Set(["--household", "--handle", "--dry", "--mirror-only", "--oauth-db", "--json"]);
+const KNOWN = new Set(["--household", "--handle", "--dry", "--mirror-only", "--gh-id", "--oauth-db", "--json"]);
 for (const a of argv.filter((x) => x.startsWith("--")))
-  if (!KNOWN.has(a)) die(2, `static-keys-retire: unknown option ${a}. It takes --household, --handle, --dry, --mirror-only, --oauth-db, --json: never a key or a hash.`);
+  if (!KNOWN.has(a)) die(2, `static-keys-retire: unknown option ${a}. It takes --household, --handle, --gh-id, --dry, --mirror-only, --oauth-db, --json: never a key or a hash.`);
 
 const household = argOf("--household");
 const handle = argOf("--handle");
 if (!household || !handle || household.startsWith("--") || handle.startsWith("--"))
   die(2, "static-keys-retire: --household <slug> and --handle <h> are both required.");
 if (flag("--dry") && flag("--mirror-only")) die(2, "static-keys-retire: --dry and --mirror-only do not combine.");
+
+let GH_ID; // undefined: no flag; null: "none"; else the number
+if (flag("--gh-id")) {
+  const v = argOf("--gh-id");
+  if (v === "none") GH_ID = null;
+  else if (v && /^[0-9]{1,15}$/.test(v)) GH_ID = Number(v);
+  else die(2, "static-keys-retire: --gh-id takes a whole number (a GitHub id) or the word none.");
+}
 
 const JSON_OUT = flag("--json");
 const FILE = resolve(argOf("--oauth-db") ?? resolve(ROOT, "oauth.db"));
@@ -63,9 +76,9 @@ async function main() {
   pool.on("error", () => { /* an idle client; the verbs below carry their own failures */ });
   let out;
   try {
-    out = flag("--mirror-only") ? await mirrorOnly(pool, { household, handle, file: FILE })
-      : flag("--dry") ? await planRetire(pool, { household, handle, file: FILE })
-      : await retireStaticKey(pool, { household, handle, file: FILE });
+    out = flag("--mirror-only") ? await mirrorOnly(pool, { household, handle, ghId: GH_ID, file: FILE })
+      : flag("--dry") ? await planRetire(pool, { household, handle, ghId: GH_ID, file: FILE })
+      : await retireStaticKey(pool, { household, handle, ghId: GH_ID, file: FILE });
   } finally { await pool.end().catch(() => {}); }
 
   if (JSON_OUT) console.log(JSON.stringify(out, null, 1));

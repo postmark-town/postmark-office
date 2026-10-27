@@ -1695,7 +1695,10 @@ export async function groundWithinReach(oriented, key = null) {
       try { const { stanceRows } = await import("./world-stance.mjs"); return await stanceRows(); }
       catch { return []; }
     })();
-    const rows = store.db.prepare(GROUND_THINGS).all();
+    // WLD-74: a thing inside a dungeon room is ground only to one whose stack holds that room (world.mjs § reachableBy, the one sight function)
+    const who = String(here?.handle ?? ([...(key?.handles ?? [])].length === 1 ? [...key.handles][0] : "")).trim();
+    const reachable = who ? await (await import("./world.mjs")).reachableBy(who, key) : null;
+    const rows = store.db.prepare(GROUND_THINGS).all().filter((r) => !reachable || reachable(r.id));
     const marks = rows.map((r) => ({ id: r.id, at: { x: Number(r.at_x), y: Number(r.at_y) }, extent: { w: Number(r.extent_w) || 1, h: Number(r.extent_h) || 1 } }));
     // the one centre reader: canon's, or where a held anchor last stood (POS-688, W4)
     const { markCentreOf } = await import("./world.mjs");

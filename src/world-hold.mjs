@@ -387,10 +387,13 @@ export function nearestIds(id, ids) {
  */
 export async function reachContext(thing, actor, { key = null } = {}) {
   try {
-    const [{ worldMarkById, pointWithinMarkFn, residentStandpoint }, { standsWithin }] = await Promise.all([
+    const [{ worldMarkById, pointWithinMarkFn, residentStandpoint, reachableBy }, { standsWithin }] = await Promise.all([
       import("./world.mjs"), import("./reach.mjs"),
     ]);
-    const { mark, canon_marks } = await worldMarkById(thing);
+    const { mark: found, canon_marks } = await worldMarkById(thing);
+    // WLD-74: a thing in a room inside a dungeon is no mark to one whose stack does not hold the room (the one sight function, world.mjs § reachableBy)
+    const reachable = found ? await reachableBy(actor, key) : null;
+    const mark = found && reachable && !reachable(found.id) ? null : found;
     const within = await pointWithinMarkFn();
     const standing = await residentStandpoint(actor).catch(() => null);
     // The town's own household map, for clause 4's unit. Lazily imported like

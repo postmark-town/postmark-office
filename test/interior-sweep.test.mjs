@@ -226,7 +226,7 @@ test("keyless walks and occupancy name no room: a walk's target, its ledger line
   if (WHY) return t.skip(WHY);
   const walkRow = { id: 1, at: new Date("2026-10-26T16:42:00Z"), crossing: "300", actor: "ann", action: "walk",
     payload: { from: { x: 1900, y: 2000 }, toward: HALL_AT, within: { w: 60, h: 60 }, to: HALL, pace: 60 } };
-  const plainWalk = { id: 2, at: new Date("2026-10-26T16:43:00Z"), crossing: "300", actor: "bo", action: "walk",
+  const plainWalk = { id: 2, at: new Date("2026-10-26T16:43:00Z"), crossing: "300", actor: "cy", action: "walk",
     payload: { from: { x: 0, y: 0 }, toward: { x: 100, y: 100 }, within: { w: 2, h: 1 }, to: "townsfolk/a-bench", pace: 60 } };
   const enter = (id, handle, mark, act) => ({ id, at: new Date("2026-10-26T16:30:00Z"), crossing: null, actor: handle, action: act === "enters" ? "legacy:enter" : "legacy:exit",
     payload: { _ledger: "WORLD/enter-exit-ledger.md", iso: "2026-10-26T16:30:00.000Z", handle, act, mark, at: 1, word: "neutral" } });
@@ -240,14 +240,14 @@ test("keyless walks and occupancy name no room: a walk's target, its ledger line
   assert.equal(walks.code, 200, JSON.stringify(walks.body).slice(0, 300));
   assert.deepEqual(leaks(walks.body), [], "/world2/walks");
   assert.ok(!walks.body.walks.some((w) => w.handle === "ann"), "ann entered the great room, so her walk is not on a keyless read at all (and so neither is its target)");
-  assert.equal(walks.body.walks.find((w) => w.handle === "bo").to, "townsfolk/a-bench", "an open-ground target is untouched");
+  assert.equal(walks.body.walks.find((w) => w.handle === "cy").to, "townsfolk/a-bench", "an open-ground target is untouched");
   const occ = await world2Serve("/world2/occupancy", new URLSearchParams(""), { p });
   assert.equal(occ.code, 200, JSON.stringify(occ.body).slice(0, 300));
   assert.deepEqual(leaks(occ.body), [], "/world2/occupancy");
-  assert.deepEqual(occ.body.inside.ann, [KEEP], "she is inside the keep, which a stranger may name");
-  assert.deepEqual(occ.body.occupants[KEEP], ["ann", "bo"]);
+  assert.deepEqual(occ.body.inside, {}, "ann (the hall) and bo (the keep itself) have entered, so are inside and not listed");
+  assert.deepEqual(occ.body.occupants, {});
   const one = await world2Serve("/world2/occupancy", new URLSearchParams({ handle: "ann" }), { p });
-  assert.deepEqual([one.body.stack, one.body.within], [[KEEP], KEEP]);
+  assert.deepEqual(one.body.stack, []);
 });
 
 test("a walker's target mark is dropped when it is inside (the positions and walkers rows), and every one when the interior cannot be told", async () => {
@@ -317,6 +317,14 @@ test("a resident entered in a dungeon room is seen only by readers entered in th
   assert.deepEqual([...hiddenInsiders(occ, interior, "ann")].sort(), ["cy"], "ann, in the hall, sees no one in the vault, and no one sees her hall but her");
   assert.deepEqual([...hiddenInsiders(occ, interior, "bo")].sort(), ["ann", "cy"], "bo, in the keep, sees neither room");
   assert.deepEqual([...hiddenInsiders(occ, interior, "cy")].sort(), ["ann"]);
+  // the dungeon itself counts as entered (WLD-74): the keep is the room when it is the innermost entry on a stack
+  const withKeep = new Set([...interior, KEEP]);
+  assert.deepEqual([...hiddenInsiders(occ, withKeep, null)].sort(), ["ann", "bo", "cy"], "a keyless reader sees neither the rooms nor those who entered the keep; di (a house) stays");
+  assert.deepEqual([...hiddenInsiders(occ, withKeep, "bo")].sort(), ["ann", "cy"], "bo, in the keep, sees only those whose innermost entry is the keep too");
+  assert.deepEqual([...hiddenInsiders(occ, withKeep, "ann")].sort(), ["cy"], "ann, in the hall, still sees bo (the keep is on her stack)");
+  const withEv = ledger([["ann", "enters", KEEP, 1], ["ann", "enters", HALL, 2], ["bo", "enters", KEEP, 1], ["ev", "enters", KEEP, 1]]);
+  assert.deepEqual([...hiddenInsiders(withEv, withKeep, "bo")], ["ann"], "stack [keep] only: ev (the same stack) is present to bo, and absent from a stranger");
+  assert.deepEqual([...hiddenInsiders(withEv, withKeep, "zed")].sort(), ["ann", "bo", "ev"], "a reader who entered nothing sees none of them");
   assert.deepEqual(hideInsiders([{ handle: "ann" }, { handle: "bo" }], new Set(["ann"])), [{ handle: "bo" }]);
 });
 
@@ -327,7 +335,7 @@ test("the keyless store presence routes leave out a resident entered in a room: 
     payload: { _ledger: "WORLD/enter-exit-ledger.md", iso: "2026-10-26T16:30:00.000Z", handle, act, mark, at: 1, word: "neutral" } });
   const acts = [enter(10, "ann", KEEP, "enters"), enter(11, "ann", HALL, "enters"), enter(12, "bo", KEEP, "enters"), enter(13, "cy", HALL, "enters"), enter(14, "cy", HALL, "exits")];
   const p = { query: async (sql, args) => (/FROM acts/i.test(sql) ? { rows: acts } : pool().query(sql, args)) };
-  assert.deepEqual([...await insiderHandles(p)], ["ann"], "ann is in the hall; bo only in the keep; cy came out");
+  assert.deepEqual([...await insiderHandles(p)].sort(), ["ann", "bo"], "ann is in the hall and bo has entered the keep itself (inside); cy came out");
 });
 
 test("the keyless routes themselves: /world2/present, /world2/positions and the apex's present list no resident entered in a room, and no coordinates of one", async (t) => {
@@ -348,14 +356,14 @@ test("the keyless routes themselves: /world2/present, /world2/positions and the 
   const handlesOf = (list) => (list ?? []).map((r) => r.handle).sort();
   const present = await world2Serve("/world2/present", new URLSearchParams(""), { p });
   assert.equal(present.code, 200, JSON.stringify(present.body).slice(0, 300));
-  assert.deepEqual(handlesOf(present.body.residents), ["bo", "cy"], "ann, entered in the great room, is not listed");
-  assert.equal(present.body.count, 2);
+  assert.deepEqual(handlesOf(present.body.residents), ["cy"], "ann (the great room) and bo (the keep itself) have entered, so are not listed");
+  assert.equal(present.body.count, 1);
   const positions = await world2Serve("/world2/positions", new URLSearchParams(""), { p });
   assert.equal(positions.code, 200, JSON.stringify(positions.body).slice(0, 300));
-  assert.deepEqual(handlesOf(positions.body.walkers), ["bo", "cy"]);
+  assert.deepEqual(handlesOf(positions.body.walkers), ["cy"]);
   const apexed = await world2Apex(new URLSearchParams({ x: String(HALL_AT.x), y: String(HALL_AT.y), crossing: "1" }), { p });
   assert.ok(!apexed.error, JSON.stringify(apexed.error?.body));
-  assert.deepEqual(handlesOf(apexed.body.present?.residents), ["bo", "cy"], "the apex's present at the room's own spot");
+  assert.deepEqual(handlesOf(apexed.body.present?.residents), ["cy"], "the apex's present at the room's own spot");
 });
 
 // ── hearing stops at a dungeon room's walls, both ways ───────────────────────

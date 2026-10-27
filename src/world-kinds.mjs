@@ -197,6 +197,9 @@ async function reachHolder(id, mark, actor, deps, { verb = "take" } = {}) {
     return deps.reachGive(place.holder, actor);
   }
   if (!place.moved || !place.at) return deps.reachTake(String(id), actor);
+  // WLD-74: a holder set down inside a dungeon room is out of reach of one whose stack does not hold the room, as it is at its canon place
+  if (deps.reachable && !(await deps.reachable(String(id), actor)))
+    throw bounce(409, `you are not standing where ${id} stands`, `a holder is reached within its reach (the-town/the-reach), where it was set down, not where it was made. Walk there first. Nothing was changed.`);
   const here = await deps.standpoint(actor);
   if (!here) throw bounce(409, "the record does not place you anywhere", `a holder is reached where it stands, and the walk ledger has no position for ${me}: walk somewhere first. Nothing was changed.`);
   const r = standsWithin(here, { ...mark, at: place.at });

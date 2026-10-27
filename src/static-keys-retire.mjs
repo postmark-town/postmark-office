@@ -56,6 +56,16 @@
 // (`commit_unknown`): the store may or may not hold the retirement, and the tool
 // says so rather than claiming either.
 //
+// ── TWO KEYS, ONE HANDLE: --gh-id (POS-805) ─────────────────────────────────
+//
+// When two static rows hold exactly this handle (an old key and its replacement),
+// the selector refuses as ambiguous. `ghId` picks among those EXACT rows by the
+// gh_id each stores (a number, or null for "none"); zero or several matches
+// refuse and write nothing. Without it nothing changes. The cover below needs no
+// change: it is computed over every row EXCEPT the target's own hash, so the
+// OTHER exact row (the new key) is "another static key for this household and
+// handle" and stands as the cover.
+//
 // ── THE COVER, FAIL CLOSED ──────────────────────────────────────────────────
 //
 // Retiring the last working key for a household/handle would lock it out, so one
@@ -156,11 +166,24 @@ function proveCover({ rows, target, household, handle, view, now }) {
  * The selector over the household's static rows: exactly one row that holds
  * THIS handle and only this handle. A second exact row is ambiguous. A row that
  * holds this handle among others is never retired (that would widen past the
- * handle named), but it is a cover for the exact row, so it is not ambiguity.
+ * handle (that would widen past the handle named), but it is a cover for the exact row, so it is not ambiguity.
+ *
+ * `ghId` (POS-805) narrows ONLY the exact rows, and only when the operator gave
+ * --gh-id: undefined = no flag (behaviour unchanged, ambiguity included); null =
+ * "none" (the exact row whose stored gh_id is null); a number = the exact row whose
+ * stored gh_id equals it. Zero or several matches refuse. gh_id is nonsecret
+ * metadata; it is the only thing the flag compares, and no key or hash is involved.
  */
-function selectorOf(staticRows, handle) {
+function selectorOf(staticRows, handle, ghId = undefined) {
   const holding = staticRows.filter((r) => handlesOf(r).includes(handle));
   const exact = holding.filter((r) => handlesOf(r).length === 1);
+  if (ghId !== undefined && exact.length) {
+    const hit = exact.filter((r) => num(r.gh_id) === ghId);
+    const said = ghId === null ? "no gh_id" : "that gh_id";
+    if (hit.length === 1) return { ok: true, row: hit[0] };
+    if (hit.length > 1) return { ok: false, reason: `${hit.length} of the ${exact.length} static rows holding exactly this handle have ${said} (still ambiguous)` };
+    return { ok: false, reason: `none of the ${exact.length} static row${exact.length === 1 ? "" : "s"} holding exactly this handle has ${said}` };
+  }
   if (exact.length === 1) return { ok: true, row: exact[0] };
   if (exact.length > 1) return { ok: false, reason: `${exact.length} static rows hold exactly this handle (ambiguous)` };
   if (!holding.length) return { ok: false, reason: "no matching static row" };
@@ -173,9 +196,9 @@ async function registryOrNull(q) {
 }
 
 /** A retire that writes nothing: what apply would try, from the store as it is now. ADVISORY. */
-export async function planRetire(pool, { household, handle, now = Math.floor(Date.now() / 1000), file = null }) {
+export async function planRetire(pool, { household, handle, ghId = undefined, now = Math.floor(Date.now() / 1000), file = null }) {
   const statics = (await pool.query(`SELECT ${lockedColumns} FROM oauth_tokens WHERE kind = 'static' AND household = $1 ORDER BY token_hash`, [household])).rows;
-  const sel = selectorOf(statics, handle);
+  const sel = selectorOf(statics, handle, ghId);
   const tombstones = (await pool.query(`SELECT ${lockedColumns} FROM oauth_tokens WHERE kind = 'retired' AND household = $1 ORDER BY token_hash`, [household])).rows
     .filter((r) => handlesOf(r).includes(handle));
   if (!sel.ok) {
@@ -244,7 +267,7 @@ const mirrorFailure = (household, handle, why, extra = {}) => ({
  *          (afterLock: holding the table lock, nothing read yet; afterDelete: proved and deleted, not committed)
  *   lockTimeoutMs  how long to wait for the table lock (default LOCK_TIMEOUT_MS = 2000)
  */
-export async function retireStaticKey(pool, { household, handle, file, now = Math.floor(Date.now() / 1000), hooks = {},
+export async function retireStaticKey(pool, { household, handle, ghId = undefined, file, now = Math.floor(Date.now() / 1000), hooks = {},
   lockTimeoutMs = LOCK_TIMEOUT_MS, statementTimeoutMs = STATEMENT_TIMEOUT_MS }) {
   const client = await pool.connect();
   let discard = false;
@@ -274,7 +297,7 @@ export async function retireStaticKey(pool, { household, handle, file, now = Mat
       + ` OR (kind = 'household' AND gh_id = $2) ORDER BY token_hash`,
       [household, view.pinnedId])).rows.sort(byHash);
     // 3. the selector and the cover, proved over the rows just read
-    const sel = selectorOf(rowsNow.filter((r) => r.kind === STATIC_KIND && r.household === household), handle);
+    const sel = selectorOf(rowsNow.filter((r) => r.kind === STATIC_KIND && r.household === household), handle, ghId);
     if (!sel.ok) {
       // no static row but a recorded retirement: say where the repair is (the file may be what is behind)
       const recorded = sel.reason === "no matching static row"
@@ -326,10 +349,11 @@ export async function retireStaticKey(pool, { household, handle, file, now = Mat
 // ── repair ──────────────────────────────────────────────────────────────────
 
 /** `--mirror-only`: make the file match the store's recorded retirements. Never writes the store. */
-export async function mirrorOnly(pool, { household, handle, file }) {
+export async function mirrorOnly(pool, { household, handle, ghId = undefined, file }) {
   const tombs = (await pool.query(`SELECT ${lockedColumns} FROM oauth_tokens WHERE kind = 'retired' AND household = $1 ORDER BY token_hash`, [household])).rows
-    .filter((r) => handlesOf(r).includes(handle));
-  if (!tombs.length) return refuse(`no retirement is recorded for ${household}/${handle}`);
+    .filter((r) => handlesOf(r).includes(handle))
+    .filter((r) => ghId === undefined || num(r.gh_id) === ghId); // --gh-id (POS-805) picks among the recorded tombstones
+  if (!tombs.length) return refuse(`no retirement is recorded for ${household}/${handle}${ghId === undefined ? "" : ghId === null ? " with no gh_id" : " with that gh_id"}`);
   const statics = (await pool.query("SELECT handles FROM oauth_tokens WHERE kind = 'static' AND household = $1", [household])).rows
     .filter((r) => handlesOf(r).includes(handle)).length;
   for (const t of tombs) {

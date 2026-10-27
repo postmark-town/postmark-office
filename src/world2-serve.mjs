@@ -687,20 +687,24 @@ export function heightsUnreadBounce(e, lawSha) {
  * Their slugs, from the store's own rows; a Set of nothing where the world has no dungeon. It refuses (503) when the engine cannot be read, rather
  * than listing what it cannot judge.
  */
-export async function interiorSlugs(p, eng = null, markRows = null) {
+export async function interiorSlugs(p, eng = null, markRows = null) { return (await sortedMarks(p, eng, markRows)).interior; }
+/** The interior marks, and the dungeons themselves (a resident whose stack holds a dungeon has entered it: inside, WLD-74). */
+async function sortedMarks(p, eng = null, markRows = null) {
   const e = eng ?? await engine();
-  if (typeof e?.verbs?.standpointSight !== "function") return new Set();
+  if (typeof e?.verbs?.standpointSight !== "function") return { interior: new Set(), dungeons: new Set() };
   const rows = markRows ?? (await p.query(apex.MARK_ROWS_SQL)).rows; // a caller that already read the marks hands them over: one read composes the answer
   const marks = apex.worldStateFromMarkRows(rows).marks;
   const seen = new Set(e.verbs.standpointSight({ marks }, {}).marks.map((m) => m.id));
-  return new Set(marks.filter((m) => !seen.has(m.id)).map((m) => m.id));
+  const dungeons = typeof e.verbs.isDungeon === "function" ? new Set(marks.filter((m) => e.verbs.isDungeon(m)).map((m) => m.id)) : new Set();
+  return { interior: new Set(marks.filter((m) => !seen.has(m.id)).map((m) => m.id)), dungeons };
 }
 /**
- * THE RESIDENTS A KEYLESS READER MAY NOT SEE (WLD-74): those entered in a room inside a dungeon, from the enter record (the same passage fold
+ * THE RESIDENTS A KEYLESS READER MAY NOT SEE (WLD-74): those entered in a dungeon or a room inside one (the dungeon counts: entered is inside), from the enter record (the same passage fold
  * /world2/occupancy serves). Dungeons only; empty where the world has none, and the ledger is read only when it has one.
  */
 export async function insiderHandles(p, eng = null, markRows = null, known = null) {
-  const inside = known ?? await interiorSlugs(p, eng, markRows);
+  const { interior, dungeons } = await sortedMarks(p, eng, markRows);
+  const inside = new Set([...interior, ...dungeons]); // entered a dungeon, or a room inside one
   if (!inside.size) return new Set();
   const { rows } = await p.query(`SELECT id, at, crossing, actor, action, payload FROM acts WHERE action = ANY($1) ${live.PASSAGE_ORDER_SQL}`, [live.PASSAGE_ACTIONS]);
   const occ = live.occupancyAt(live.passageRecords(rows).passages, live.fractionalCrossing(Date.now()));
@@ -1377,9 +1381,10 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a passage act matches no known era", hint: faultLogged("a passage act matches no known era", e) } }; }
     const fc = live.fractionalCrossing(at.ms);
     // WLD-74: a passage into a room inside a dungeon is not the keyless reader's to see: the stacks and the manifest keep only marks they may name
-    let inside;
-    try { inside = await interiorSlugs(p, injectedEngine); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
-    const occ = new Map([...live.occupancyAt(derived.passages, fc)].map(([h, s]) => [h, s.filter((m) => !inside.has(m))]).filter(([, s]) => s.length));
+    // a resident whose stack holds a dungeon or a room inside one has entered it, so is inside and not listed (WLD-74)
+    let inside, dungeons;
+    try { ({ interior: inside, dungeons } = await sortedMarks(p, injectedEngine)); } catch (e) { return interiorBounce(faultLogged("the interior marks cannot be told from the rest", e)); }
+    const occ = new Map([...live.occupancyAt(derived.passages, fc)].filter(([, s]) => !s.some((m) => inside.has(m) || dungeons.has(m))).filter(([, s]) => s.length));
     const handle = searchParams?.get("handle");
     if (handle) {
       return { code: 200, body: {
