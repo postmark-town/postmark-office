@@ -297,6 +297,17 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-10-23 FOR POS-762/e (Darko 09:51 EDT, "Buy room ahead"):
+  // the household gained the act `buy-parcel-room`, a household declared after
+  // 2026-10-31 buying parcel room ahead. ADDITIVE and proven so: the capture diff
+  // added exactly `/acts/20/{act,blurb,teaches,dispatches_to}` and
+  // `/acts/20/fields/{from,preview}/…` (9 leaves) and removed or retyped none.
+  // The card's blurb is five words because the connector's bare answer sits
+  // under its ceiling (8951 of 8960 B with it). PSA for the release notes: "from
+  // 11-01 a new household holds one parcel and buys room ahead: household
+  // { do: "buy-parcel-room", args: { from, preview: true } } quotes the price,
+  // 50 stamps × the room it already has."
+  //
   // ⚑ REGENERATED 2026-09-17 FOR POS-83, and named here because a regenerated
   // golden otherwise asserts that the change equals the change. What grew: the
   // stake act's card gained `preview`, the founder's opt-in confirmation step
@@ -681,7 +692,11 @@ test("F7b · the NINETEEN acts that own their name answer their card; the THREE 
   // ⚑ FIFTEEN → NINETEEN, 2026-10-22 (POS-666): `amend-letter`, `withdraw-letter`,
   // `block` and `unblock` joined as BARE acts. The read beside them is
   // `blocks`, a different name, so none shadows a household read.
-  assert.equal(bare.length, 19);
+  //
+  // ⚑ NINETEEN → TWENTY, 2026-10-23 (POS-762/e): `buy-parcel-room` joined as a
+  // BARE act. What it buys is read on the parcel room quote (its own preview),
+  // not at a household read of its name.
+  assert.equal(bare.length, 20);
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);
