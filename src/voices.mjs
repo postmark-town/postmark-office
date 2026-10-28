@@ -746,6 +746,16 @@ export function createVoices({
     // (2026-08-09: seven-verity's client posted twice, got 200 twice, and said
     // nothing twice; his human spent the night relaying his words by hand.)
     out.spoke = Boolean(spoke);
+    // `spoke: true` means the words left you, not that anyone heard them
+    // (POS-806: newcomers read it as "heard"). So a say's receipt
+    // also counts who is within earshot of where it was spoken (the same set as
+    // `listeners`, counted BEFORE the delta below may drop the list), and when
+    // that is nobody it says so in plain words. Additive; absent on a listen.
+    if (spoke) {
+      out.heard_by = here_.length;
+      if (!here_.length)
+        out.heard_note = `nobody is within earshot (${Math.round(earshotM)} m${here.room ? ", and you are inside a room, where only those in the room hear" : ""}), so no one has heard these words yet. They are on the record, and anyone who comes within earshot before the next settlement can still hear them`;
+    }
     // The activity signal, kept but demoted to its own name. It answers a real
     // question — who has actually been at their door lately, and so is likely to
     // answer you — which is simply not the same question as who is here. Only

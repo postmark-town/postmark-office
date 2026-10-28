@@ -349,7 +349,23 @@ const byWhat = (h) => (h.how === "household"
 
 /** The distance sentence a refusal opens with, in the enter refusal's grammar. */
 const standsOff = (id, reach) =>
-  `${id} stands ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you`;
+  `${id} stands ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you${walkToReach(reach)}`;
+
+/**
+ * HOW FAR TO WALK, not only how far you are (POS-806). A take stands within the
+ * thing's extent or within `earshot_m` of it (reach.mjs § standsWithin), so the
+ * walk that closes it is the distance less that margin, rounded UP so the walk
+ * lands inside. Said in the refusal's own grammar: "; walk 476 m NE to be within
+ * 60 m of it". Empty when the distance could not be measured. The thing's extent
+ * may let you in sooner; the sentence promises only the margin leg, which is
+ * always enough.
+ */
+const walkToReach = (reach) => {
+  const d = Number(reach?.distance_m), margin = Number(reach?.earshot_m);
+  if (!Number.isFinite(d) || !Number.isFinite(margin)) return "";
+  const walk = Math.max(1, Math.ceil(d - margin));
+  return `; walk ${walk} m${reach.bearing ? ` ${reach.bearing}` : ""} to be within ${Math.round(margin)} m of it`;
+};
 
 /**
  * Up to three ids from `ids` within a typo's distance of `id`, nearest first —

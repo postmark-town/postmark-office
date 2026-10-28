@@ -1030,3 +1030,36 @@ test("earshotSnapshot: a burst that lands before the first walk resolves shares 
   assert.equal(store.room.stats.rooms - rooms, 1, "three handed reads at once walk the window once");
   assert.ok(burst.every((s) => s === burst[0]), "and hear the same snapshot");
 });
+
+// ── POS-806 · `spoke: true` means the words left you; heard_by says who got them ──
+
+test("POS-806 — a say to an empty room: spoke true, heard_by 0, and plain words that nobody heard", async () => {
+  const { store } = bench({ rei: { x: 0, y: 0 }, far: { x: 0, y: EARSHOT_M + 5 } });
+  const said = await store.say("rei", "is anyone there?");
+  assert.equal(said.spoke, true);
+  assert.equal(said.heard_by, 0);
+  assert.match(said.heard_note, /nobody is within earshot \(60 m\)/);
+  assert.match(said.heard_note, /no one has heard these words yet/);
+  assert.match(said.heard_note, /on the record/);
+  assert.equal("heard_by" in (await store.hear("rei")), false, "a listen is not a say: no count, no note");
+});
+
+test("POS-806 — a say with listeners within earshot counts them and carries no note; one past earshot is not counted", async () => {
+  const { store } = bench({ rei: { x: 0, y: 0 }, a: { x: 0, y: 10 }, b: { x: EARSHOT_M, y: 0 }, far: { x: 0, y: EARSHOT_M + 1 } });
+  // the bench's nearby is off, so listeners come from the door's own activity: each listens once
+  await store.hear("a"); await store.hear("b"); await store.hear("far");
+  const said = await store.say("rei", "hello");
+  assert.deepEqual(said.listeners, ["a", "b"]);
+  assert.equal(said.heard_by, 2);
+  assert.equal("heard_note" in said, false, "the note is only for the none case");
+});
+
+test("POS-806 — heard_by rides a say that passes `since` too, even where the listeners list is held back as unchanged", async () => {
+  const { store, tick } = bench({ rei: { x: 0, y: 0 }, a: { x: 0, y: 10 } });
+  await store.hear("a");
+  const first = await store.say("rei", "one");
+  tick(15000);
+  const again = await store.say("rei", "two", { since: first.latest });
+  assert.equal(again.heard_by, 1);
+  assert.equal(again.listener_count, 1);
+});
