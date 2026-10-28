@@ -6103,7 +6103,7 @@ export function walkEntryReceipt(entry, { arrived, stop, eta, queued = true, why
 //
 // A walk to a mark that has an inside (a place and an extent) and did not ask
 // for `enter_on_arrival` leaves the walker OUTSIDE it, and a voice spoken inside
-// is heard only inside: newcomers walked to a room and talked at its door. So
+// is heard only inside that room: newcomers walked to a room and talked at its door. So
 // that walk's answer says so, once, in plain words, and names the one-call way.
 // ABSENT for a walk to coordinates (no inside), for a mark with no extent, and
 // for a walk home (no mark_id named, so `enter_on_arrival` would bounce), for a
@@ -6112,7 +6112,7 @@ export function walkEntryReceipt(entry, { arrived, stop, eta, queued = true, why
 export function outsideNote(markId, extent, enterOnArrival) {
   if (!markId || enterOnArrival) return {};
   if (!(Number(extent?.w) > 0) || !(Number(extent?.h) > 0)) return {};
-  return { outside_note: `you are walking to ${markId}, not into it: you will arrive outside it. Enter it to be inside, where its voices are, with world_enter, or walk with enter_on_arrival: true to do both in one call` };
+  return { outside_note: `you are walking to ${markId}, not into it: arriving does not enter it. Enter it to be inside, where what you see and hear is what is inside it (a room's voices are heard only inside that room), with world_enter, or walk with enter_on_arrival: true to do both in one call` };
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).

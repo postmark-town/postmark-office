@@ -382,8 +382,8 @@ test("POS-806 — a walk to a mark with an inside, without enter_on_arrival, say
   const walk = await walkViaOffice(repo, { handle: "alpha", mark_id: FAR }, houseA);
   assert.equal(walk.position.arrived, false);
   assert.match(walk.outside_note, /walking to finn[/]the-far-post, not into it/);
-  assert.match(walk.outside_note, /arrive outside it/);
-  assert.match(walk.outside_note, /where its voices are/);
+  assert.match(walk.outside_note, /arriving does not enter it/);
+  assert.match(walk.outside_note, /what you see and hear is what is inside it/);
   assert.match(walk.outside_note, /enter_on_arrival: true/);
   assert.equal("entry" in walk, false, "no entry block: nothing was asked to be entered");
 });
@@ -407,5 +407,5 @@ test("POS-806 — no note when it would mislead: a walk HOME (no mark named; ent
   assert.equal("outside_note" in home, false, "a walk home names no mark, and the one-call way it would suggest bounces");
   const here = await walkViaOffice(repo, { handle: "alpha", mark_id: HOME }, houseA);
   assert.equal(here.position.arrived, true, "the bottle's zero-length leg is arrived");
-  assert.equal("outside_note" in here, false, "you already stand there: 'you will arrive outside it' would be false");
+  assert.equal("outside_note" in here, false, "you already stand there: 'arriving does not enter it' would be beside the point");
 });
