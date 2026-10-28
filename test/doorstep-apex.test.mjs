@@ -135,3 +135,17 @@ test("the doorstep is listed beside the three, and the tutorial starts there", a
   assert.equal(DOORSTEP_TOOL.inputSchema.additionalProperties, false);
   assert.match(TUTORIAL.split("\n")[1], /doorstep \{ \}.*Start here/);
 });
+
+// ── POS-806 · the first-visit line points at FIRST-DAY.md ────────────────────
+
+test("POS-806 — while arriving steps remain, YOU carries one line pointing at the first-day walk; with none left it is gone", async () => {
+  const { youPart, FIRST_DAY_LINE } = await import("../src/doorstep-apex.mjs");
+  const newcomer = youPart({ unread: 0, steps: [{ kind: "onboarding", id: "write-your-card", title: "Write your card" }, { kind: "quest", title: "q" }] });
+  const line = newcomer.filter((i) => i.what === FIRST_DAY_LINE);
+  assert.equal(line.length, 1, "exactly one line");
+  assert.equal(line[0].from, "town.docs");
+  assert.match(line[0].what, /town \{ read: "docs", args: \{ doc: "first-day" \} \}/);
+  const settled = youPart({ unread: 0, steps: [{ kind: "quest", title: "q" }] });
+  assert.equal(settled.some((i) => i.what === FIRST_DAY_LINE), false, "a resident with no arriving steps left is not told to take the newcomer's tour");
+  assert.equal(youPart({ unread: 0 }).some((i) => i.what === FIRST_DAY_LINE), false);
+});
