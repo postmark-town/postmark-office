@@ -427,9 +427,8 @@ test("the two halves are one door: read: \"stances\" names what do: \"declare-st
   assert.equal(inbox.stances_awaiting, 1);
   assert.equal(inbox.awaiting[0].mark, "beta/on-wrights-edge");
   assert.deepEqual(inbox.awaiting[0].on_your_ground, ["wright/wrights-parcel"]);
-  // POS-812: the stance read says "new ground, new edge" where the row shows
-  assert.equal(inbox.awaiting[0].edge, "new ground, new edge: awaiting wright's word here, on wright/wrights-parcel");
-  assert.match(inbox.edge, /^A word stays with the ground it was spoken on./);
+  // POS-812: the household door's read is the doorstep bundle's segment, so it carries no edge words (F7c5)
+  assert.equal(inbox.awaiting[0].edge, undefined);
   // Speak, and the same read empties itself.
   await door({ do: ACTION_STANCE, args: { on: "beta/on-wrights-edge", stance: "welcomed" } });
   const after2 = await door({ read: "stances" });

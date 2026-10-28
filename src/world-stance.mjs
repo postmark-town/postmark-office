@@ -884,6 +884,23 @@ export const stancesGround = (handles) => {
 // ── tier 1 + 2 · what rides the bare read ────────────────────────────────────
 
 /**
+ * POS-812 (RULED, Darko 2026-10-28: "new ground, new edge"). A stance is a word on an edge, the
+ * pair of a thing and a ground. A thing on new ground is a new edge: it awaits that ground's
+ * holder, and a welcome spoken on the old ground stays with the old ground. Said in plain words
+ * on the world door's reads a stance shows in (the bare read's ambient block and the stance
+ * shadow); NOT on the shared fold, and NOT on household { read: "stances" }: the doorstep bundle's
+ * stances segment IS that read, and its bytes are held still (test/foyer-shrink F7c5,
+ * test/doorstep-stances). Putting the words there moves the morning page: Darko's call.
+ */
+export const EDGE_LAW = "A word stays with the ground it was spoken on. The same thing on new ground is a new edge, and it starts awaiting that ground's holder.";
+// the reads that carry it are the ground holder's own, so the word awaited is theirs
+export const edgeLine = (c) => { const g = Array.isArray(c?.on_your_ground) ? c.on_your_ground[0] : c?.on_your_ground; return g ? `new ground, new edge: awaiting your word here, on ${g}` : null; };
+export function withEdgeWords(answer) {
+  if (!answer || answer.unavailable || !Array.isArray(answer.awaiting) || !answer.awaiting.length) return answer;
+  return { ...answer, awaiting: answer.awaiting.map((c) => { const edge = edgeLine(c); return edge ? { ...c, edge } : c; }), edge: EDGE_LAW };
+}
+
+/**
  * One candidate, as the ambient block shows it: one line each.
  *
  * ── `says` IS OMITTED WHEN THERE IS NO BODY TO SAY (POS-195, 2026-09-22) ────
@@ -900,22 +917,6 @@ export const stancesGround = (handles) => {
  * sentence"). Omit, do not negate: what a reader does not see, they do not have
  * to interpret.
  */
-/**
- * POS-812 (RULED, Darko 2026-10-28: "new ground, new edge"). A stance is a word on an edge, the
- * pair of a thing and a ground. A thing on new ground is a new edge: it awaits that ground's
- * holder, and a welcome spoken on the old ground stays with the old ground. Said in plain words
- * on the reads a resident's stance shows in (the world's bare read, its stance shadow, and
- * household { read: "stances" }); NOT on the shared fold, because the doorstep bundle spreads
- * the same answer and its bytes are held still (test/foyer-shrink F7c5).
- */
-export const EDGE_LAW = "A word stays with the ground it was spoken on. The same thing on new ground is a new edge, and it starts awaiting that ground's holder.";
-const holderOfGround = (id) => String(id ?? "").split("/")[0];
-export const edgeLine = (c) => (c?.on_your_ground ? `new ground, new edge: awaiting ${holderOfGround(Array.isArray(c.on_your_ground) ? c.on_your_ground[0] : c.on_your_ground)}'s word here, on ${Array.isArray(c.on_your_ground) ? c.on_your_ground[0] : c.on_your_ground}` : null);
-export function withEdgeWords(answer) {
-  if (!answer || answer.unavailable || !Array.isArray(answer.awaiting) || !answer.awaiting.length) return answer;
-  return { ...answer, awaiting: answer.awaiting.map((c) => { const edge = edgeLine(c); return edge ? { ...c, edge } : c; }), edge: EDGE_LAW };
-}
-
 const ambientLine = (c) => ({
   mark: c.mark, by: c.by, at: c.at, date: c.date,
   on_your_ground: c.on_your_ground[0] ?? null,

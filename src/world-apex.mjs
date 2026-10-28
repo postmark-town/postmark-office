@@ -1219,10 +1219,10 @@ const BLOCK_NAMES = Object.freeze(Object.keys(BLOCK_READS));
 // in the hundreds. Handed to a world read's since: it used to ride as a crossing nobody could read,
 // and the delta came back "could not be read" with no word why. Name the mismatch instead.
 const SAY_STAMP_FLOOR = 1e10;
-export function sayStampBounce(raw) {
+export function sayStampBounce(raw, field = "since") {
   const n = Number(raw);
   if (raw == null || raw === "" || !Number.isFinite(n) || n < SAY_STAMP_FLOOR) return null;
-  return bounce(422, `since: ${n} is a say timestamp (milliseconds), not a cursor`,
+  return bounce(422, `${field}: ${n} is a say timestamp (milliseconds), not a cursor`,
     'this is the `latest` a say receipt hands back, and it belongs to the say room: world { read: "say", args: { since: <latest> } }. On a world read, since: takes the cursor the v2 read handed you (its `cursor` field, like "c1.250.1792022882579.18234"), or an old crossing number');
 }
 const readableWords = (here) => here.join(", ") || "(nothing)";
@@ -3965,7 +3965,7 @@ async function apexReadAction(args, key, ctx = {}) {
     if (bad) return bounce(422, bad.defect, bad.hint, bad.extra);
     const { read: _r, args: _a, ...look } = args;
     // the one cursor rides a block read too: read: "happened", since: "<cursor>"
-    const stamped = sayStampBounce(look.since) ?? sayStampBounce(look.since_crossing);
+    const stamped = sayStampBounce(look.since) ?? sayStampBounce(look.since_crossing, "since_crossing");
     if (stamped) return stamped;
     if (typeof look.since === "string" && look.since.trim() !== "" && !/^\d+(\.\d+)?$/.test(look.since.trim())) {
       const c = decodeCursor(look.since);
@@ -4270,7 +4270,7 @@ async function worldApexAnswer(args, key, ctx) {
   // a number (its old spelling). The say room's args: { since } (ms) is renamed
   // at read: "say" (readDomainFor).
   let sinceRenamed = null;
-  const stamped = sayStampBounce(args.since) ?? sayStampBounce(args.since_crossing);
+  const stamped = sayStampBounce(args.since) ?? sayStampBounce(args.since_crossing, "since_crossing");
   if (stamped) return stamped;
   if (typeof args.since === "string" && args.since.trim() !== "" && !/^\d+(\.\d+)?$/.test(args.since.trim())) {
     if (args.since_crossing != null && args.since_crossing !== "")

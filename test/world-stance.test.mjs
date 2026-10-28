@@ -537,13 +537,13 @@ test("POS-812: new ground, new edge — the reads a stance shows in say so, and 
   // the world door's shadow and household { read: "stances" } add the words
   const said = withEdgeWords(shadow);
   assert.match(said.edge, /^A word stays with the ground it was spoken on\. The same thing on new ground is a new edge/);
-  for (const row of said.awaiting) assert.equal(row.edge, "new ground, new edge: awaiting alpha's word here, on alpha/alphas-parcel");
+  for (const row of said.awaiting) assert.equal(row.edge, "new ground, new edge: awaiting your word here, on alpha/alphas-parcel");
   assert.equal(withEdgeWords({ awaiting: [] }).edge, undefined, "nothing awaiting, nothing to say");
   // the bare read's ambient block says it where the awaiting rows show
   const block = await stancesBlock(repo, houseA, { spine: [{ id: "alpha/alphas-parcel" }], dbPath });
   assert.ok(block.awaiting.length > 0);
   assert.match(block.edge, /new edge/);
-  for (const row of block.awaiting) assert.match(row.edge, /^new ground, new edge: awaiting alpha's word here, on alpha\/alphas-parcel$/);
+  for (const row of block.awaiting) assert.match(row.edge, /^new ground, new edge: awaiting your word here, on alpha\/alphas-parcel$/);
 });
 
 // ── the-late-welcome ─────────────────────────────────────────────────────────
