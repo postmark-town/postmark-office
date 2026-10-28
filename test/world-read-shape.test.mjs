@@ -488,3 +488,65 @@ test("NO DIGEST AT ANY VERSION: v0, v1 and v2 carry no `dials` and no `activity`
     assert.ok(JSON.stringify(back).length > stated(shape) * 1.08, `${shape}: a dial table back on the read (${JSON.stringify(back).length}) would not be seen`);
   }
 });
+
+// ── POS-745 / POS-811: the pointers the doors hand out lead somewhere ───────
+
+test("POS-745 F1: every world.<read> the doorstep hands out answers when followed", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { herePart } = await import("../src/doorstep-apex.mjs");
+  const glance = await v2At();
+  // the real glance gives world.you and world.who; a synthetic happening_here gives the third pointer
+  const items = herePart({ ...glance, happening_here: [{ what: "a gathering", kind: "event", phase: "underway", place: { id: "kogane/the-well-house-parcel" } }] });
+  const froms = items.map((it) => it.from).filter((f) => /^world\./.test(f));
+  for (const want of ["world.you", "world.who", "world.happening"]) assert.ok(froms.includes(want), "the doorstep hands out " + want);
+  for (const from of new Set(froms)) {
+    const r = await worldApex({ handle: WHO, read: from.slice("world.".length), read_shape: "v2" }, KEY, {});
+    assert.ok(!r.error, from + " is followed to a 200, not " + JSON.stringify(r).slice(0, 200));
+    assert.equal(r.read, from.slice("world.".length));
+  }
+  const you = await worldApex({ handle: WHO, read: "you", read_shape: "v2" }, KEY, {});
+  assert.equal(you.you.here, glance.you.here, "read: \"you\" says the place the doorstep line said");
+  assert.equal(you.you.handle, WHO);
+});
+
+test("POS-745 F2: the bounce's readable_here lists the v2 blocks, and each listed block answers", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const { BLOCK_READS } = await import("../src/world-read-v2.mjs");
+  const bounced = await worldApex({ handle: WHO, read: "no-such-act" }, KEY, {});
+  assert.equal(bounced.code, 422);
+  for (const b of Object.keys(BLOCK_READS)) {
+    assert.ok(bounced.readable_here.includes(b), "readable_here lists " + b);
+    assert.ok(bounced.hint.split("each read whole: ")[1]?.split(/[,.]\s*/).includes(b), "the hint says " + b);
+    const r = await worldApex({ handle: WHO, read: b }, KEY, {});
+    assert.ok(!r.error, "following " + b + " from the bounce answers: " + JSON.stringify(r).slice(0, 160));
+  }
+  assert.ok(bounced.readable_here.includes("say"), "the acts are still listed");
+});
+
+test("POS-745 F3: world_note names the read that gives the note back, and that read answers", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const note = toolList().find((t) => t.name === "world_note");
+  assert.ok(note, "world_note is listed");
+  assert.doesNotMatch(note.description, /world_orient/, "no tool by that name is listed");
+  const m = /world \{ read: "([a-z-]+)" \}/.exec(note.description);
+  assert.ok(m, "it names a world read: " + note.description.slice(0, 300));
+  assert.ok(!toolList().some((t) => t.name === "world_orient"), "the old name is not a listed tool");
+  const r = await worldApex({ handle: WHO, read: m[1] }, KEY, {});
+  assert.ok(!r.error, JSON.stringify(r).slice(0, 200));
+  assert.ok("note" in r, "the read answers { note }");
+});
+
+test("POS-811: a say receipt's latest (milliseconds) passed as since on a world read says what it is", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
+  const latest = 1792022882579; // what voices.mjs hands back as 'latest'
+  setEnv("WORLD_MOVEMENT_V2", "1");
+  try {
+    for (const args of [{ since: latest }, { since: String(latest) }, { since_crossing: latest }, { read: "happened", since: latest }, { read: "who", since: String(latest) }]) {
+      const r = await v2At(args);
+      assert.equal(r.code, 422, JSON.stringify(args) + " bounces");
+      assert.match(r.defect, /say timestamp \(milliseconds\), not a cursor/);
+      assert.match(r.hint, /read: "say"/, "it says where the stamp belongs");
+      assert.match(r.hint, /the cursor the v2 read handed you/, "and what since takes");
+    }
+    // what since DOES take still answers: the v2 read's own cursor, and an old crossing number
+    const first = await v2At();
+    assert.ok(!(await v2At({ since: first.cursor })).error);
+    assert.ok(!(await v2At({ since: 250 })).error);
+  } finally { setEnv("WORLD_MOVEMENT_V2", undefined); }
+});

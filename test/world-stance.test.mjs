@@ -525,6 +525,24 @@ test("candidatesFrom is pure, and a mark you already answered leaves the inbox",
     "hold no ground, have no say");
 });
 
+test("POS-812: new ground, new edge — an awaiting row says it is a new edge, and a standing word says it stays with its ground", async () => {
+  const mine = [mark("alpha/alphas-parcel")];
+  const open = candidatesFrom({ mine, all: MARKS, spoken: new Set(), overlaps });
+  for (const c of open) {
+    assert.match(c.edge, /^new ground, new edge: awaiting alpha's word here, on alpha\/alphas-parcel$/, c.mark);
+  }
+  // the ambient block (the bare read) and the full shadow both carry it where the row shows
+  await speak({ on: "gamma/well-inside", stance: "welcomed" });
+  const shadow = await stanceShadow(repo, houseA, { dbPath });
+  assert.ok(shadow.awaiting.length > 0);
+  for (const row of shadow.awaiting) assert.match(row.edge, /^new ground, new edge: awaiting /);
+  const word = shadow.standing.find((s) => s.on === "gamma/well-inside");
+  assert.match(word.edge, /^this word stays with alpha\/alphas-parcel; the same thing on new ground is a new edge, awaiting that ground's holder$/);
+  const block = await stancesBlock(repo, houseA, { spine: [{ id: "alpha/alphas-parcel" }], dbPath });
+  assert.ok(block.awaiting.length > 0);
+  for (const row of block.awaiting) assert.match(row.edge, /^new ground, new edge: awaiting /);
+});
+
 // ── the-late-welcome ─────────────────────────────────────────────────────────
 
 test("the-late-welcome — an UNPUBLISHED sketch on your ground is a candidate, and is marked as one", async () => {

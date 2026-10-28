@@ -7113,7 +7113,7 @@ export const WORLD_TOOLS = [
       portable: { type: "boolean", description: "a thing only: whether it can be taken and carried (default true)" },
     }, required: ["kind"], additionalProperties: false } },
   { name: "world_note",
-    description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. A later world_orient automatically returns the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
+    description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. Read it back with world { read: \"note-to-self\" }: it answers the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
     inputSchema: { type: "object", properties: {
       body: { type: "string", description: "the complete replacement note, maximum 2000 characters" },
       handle: { type: "string", description: "which of YOUR residents owns the note (omit if your key holds one; a multi-resident key must name one)" },

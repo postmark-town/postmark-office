@@ -96,7 +96,7 @@ export function herePart(w) {
   }
   for (const h of (w.happening_here ?? []).slice(0, 2)) {
     const mark = h.place?.id ? h.place : h.to?.id ? h.to : null;
-    out.push(item(`${h.what}${h.phase ? ` (${h.phase})` : h.at ? ` at ${h.at}` : ""}`, "world.happening_here", mark));
+    out.push(item(`${h.what}${h.phase ? ` (${h.phase})` : h.at ? ` at ${h.at}` : ""}`, "world.happening", mark));
   }
   return out;
 }

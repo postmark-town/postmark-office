@@ -398,6 +398,9 @@ export function candidatesFrom({ mine = [], all = [], spoken = new Set(), overla
       // WHICH of your marks makes you a speaker. Without it a resident is told
       // to judge something with no way to see why it is theirs to judge.
       on_your_ground: ground.map((g) => g.id),
+      // POS-812 (RULED, Darko 2026-10-28): a stance is on an edge, a thing and a ground. This pair
+      // is new to its holder, so it awaits, whatever was said about the thing on other ground.
+      edge: `new ground, new edge: awaiting ${ground[0].by}'s word here, on ${ground[0].id}`,
     });
   }
   out.sort((a, b) => (a.date === b.date
@@ -463,6 +466,9 @@ export function standingStances(rows, { by = null, versions = null } = {}) {
       ...(r.payload?.as ? { as: r.payload.as } : {}),
       ...(r.payload?.hand ? { hand: r.payload.hand } : {}),
       ...(r.payload?.version !== undefined ? { version: r.payload.version } : {}),
+      // POS-812: a word stays with the ground it was spoken on; the same thing on new ground is a new edge.
+      ...(Array.isArray(r.payload?.on_your_ground) && r.payload.on_your_ground.length
+        ? { edge: `this word stays with ${r.payload.on_your_ground.join(", ")}; the same thing on new ground is a new edge, awaiting that ground's holder` } : {}),
     }))
     .sort((a, b) => (String(a.at) === String(b.at) ? b.seq - a.seq : (String(a.at) < String(b.at) ? 1 : -1)));
 }
@@ -903,6 +909,7 @@ export const stancesGround = (handles) => {
 const ambientLine = (c) => ({
   mark: c.mark, by: c.by, at: c.at, date: c.date,
   on_your_ground: c.on_your_ground[0] ?? null,
+  ...(c.edge ? { edge: c.edge } : {}),
   ...(c.body ? { says: c.body.length > 120 ? `${c.body.slice(0, 117)}…` : c.body } : {}),
   published: c.published,
 });
