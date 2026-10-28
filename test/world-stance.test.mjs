@@ -35,7 +35,7 @@ import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs
 import {
   ACTION_STANCE, AMBIENT_CAP, CLASS_STANCE, PAGE_SIZE, STANCES,
   candidatesFrom, declareStanceViaOffice, groundFor, resetStanceGeometry,
-  readNeverPerforms, stanceInbox, stanceShadow, stanceTeach, standingStances, standsBefore, stancesBlock,
+  readNeverPerforms, stanceInbox, stanceShadow, stanceTeach, standingStances, standsBefore, stancesBlock, withEdgeWords,
 } from "../src/world-stance.mjs";
 import { STANCE_ON, clearStancePool, stancePoolFromJournal } from "./stance-pool-stub.mjs";
 
@@ -523,6 +523,27 @@ test("candidatesFrom is pure, and a mark you already answered leaves the inbox",
 
   assert.deepEqual(candidatesFrom({ mine: [], all, spoken: new Set(), overlaps }), [],
     "hold no ground, have no say");
+});
+
+test("POS-812: new ground, new edge — the reads a stance shows in say so, and the shared fold (the doorstep bundle's bytes) does not", async () => {
+  const mine = [mark("alpha/alphas-parcel")];
+  for (const c of candidatesFrom({ mine, all: MARKS, spoken: new Set(), overlaps })) assert.equal(c.edge, undefined, "the fold carries no prose");
+  await speak({ on: "gamma/well-inside", stance: "welcomed" });
+  const shadow = await stanceShadow(repo, houseA, { dbPath });
+  assert.ok(shadow.awaiting.length > 0);
+  assert.equal(shadow.edge, undefined, "the shadow the doorstep bundle spreads is unchanged");
+  for (const row of shadow.awaiting) assert.equal(row.edge, undefined);
+  for (const row of shadow.standing) assert.equal(row.edge, undefined);
+  // the world door's shadow and household { read: "stances" } add the words
+  const said = withEdgeWords(shadow);
+  assert.match(said.edge, /^A word stays with the ground it was spoken on\. The same thing on new ground is a new edge/);
+  for (const row of said.awaiting) assert.equal(row.edge, "new ground, new edge: awaiting your word here, on alpha/alphas-parcel");
+  assert.equal(withEdgeWords({ awaiting: [] }).edge, undefined, "nothing awaiting, nothing to say");
+  // the bare read's ambient block says it where the awaiting rows show
+  const block = await stancesBlock(repo, houseA, { spine: [{ id: "alpha/alphas-parcel" }], dbPath });
+  assert.ok(block.awaiting.length > 0);
+  assert.match(block.edge, /new edge/);
+  for (const row of block.awaiting) assert.match(row.edge, /^new ground, new edge: awaiting your word here, on alpha\/alphas-parcel$/);
 });
 
 // ── the-late-welcome ─────────────────────────────────────────────────────────

@@ -884,6 +884,23 @@ export const stancesGround = (handles) => {
 // ── tier 1 + 2 · what rides the bare read ────────────────────────────────────
 
 /**
+ * POS-812 (RULED, Darko 2026-10-28: "new ground, new edge"). A stance is a word on an edge, the
+ * pair of a thing and a ground. A thing on new ground is a new edge: it awaits that ground's
+ * holder, and a welcome spoken on the old ground stays with the old ground. Said in plain words
+ * on the world door's reads a stance shows in (the bare read's ambient block and the stance
+ * shadow); NOT on the shared fold, and NOT on household { read: "stances" }: the doorstep bundle's
+ * stances segment IS that read, and its bytes are held still (test/foyer-shrink F7c5,
+ * test/doorstep-stances). Putting the words there moves the morning page: Darko's call.
+ */
+export const EDGE_LAW = "A word stays with the ground it was spoken on. The same thing on new ground is a new edge, and it starts awaiting that ground's holder.";
+// the reads that carry it are the ground holder's own, so the word awaited is theirs
+export const edgeLine = (c) => { const g = Array.isArray(c?.on_your_ground) ? c.on_your_ground[0] : c?.on_your_ground; return g ? `new ground, new edge: awaiting your word here, on ${g}` : null; };
+export function withEdgeWords(answer) {
+  if (!answer || answer.unavailable || !Array.isArray(answer.awaiting) || !answer.awaiting.length) return answer;
+  return { ...answer, awaiting: answer.awaiting.map((c) => { const edge = edgeLine(c); return edge ? { ...c, edge } : c; }), edge: EDGE_LAW };
+}
+
+/**
  * One candidate, as the ambient block shows it: one line each.
  *
  * ── `says` IS OMITTED WHEN THERE IS NO BODY TO SAY (POS-195, 2026-09-22) ────
@@ -947,7 +964,8 @@ export async function stancesBlock(repo, key, { spine = [], dbPath = null } = {}
     return {
       stances_awaiting: n,
       stances_awaiting_ground: ground,
-      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map(ambientLine),
+      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map((c) => { const edge = edgeLine(c); return edge ? { ...ambientLine(c), edge } : ambientLine(c); }),
+      edge: EDGE_LAW,
       ...(n > AMBIENT_CAP ? { more: n - AMBIENT_CAP } : {}),
       // ⚑ TRUED 2026-09-02 (#2392). This sentence taught the WORLD door for
       // both halves, and BOTH were dead: the grant hangs on the `household`
