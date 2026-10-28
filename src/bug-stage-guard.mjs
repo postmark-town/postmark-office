@@ -56,15 +56,17 @@ export function shipRefOf(link) {
   throw refuse(422, "shipped's link is not one the office can read", SHIP_SHAPES, { field: "link" });
 }
 
-const cannot = (what) => refuse(503, `can't confirm ${what} right now: GitHub could not be read`,
-  `nothing was written; ask again shortly, or ${FORCE_NOTE}`, { field: "link" });
+// At fixed the credit's author check reads GitHub too (bug-credit.mjs), so a force would not get past an outage there: only shipped offers it.
+const cannot = (what, forceable = false) => refuse(503, `can't confirm ${what} right now: GitHub could not be read`,
+  `nothing was written; ask again shortly${forceable ? `, or ${FORCE_NOTE}` : ""}`, { field: "link" });
 
 /** The fix's pull request as GitHub holds it: `{ ref, merged, sha, open, draft }`; refuses when unreadable or absent. */
-async function pullOf(ref, ctx, link) {
+async function pullOf(ref, ctx, link, forceable) {
   const got = await githubGet(`/repos/postmark-town/${ref.repo}/pulls/${ref.number}`, ctx);
-  if (!got) throw cannot(`the merge of ${refName(ref)}`);
+  if (!got) throw cannot(`the merge of ${refName(ref)}`, forceable);
   if (got.status === 404) throw refuse(422, `${link} is not on GitHub`, "fixed is earned by the fix: link its pull request, as GitHub shows it", { field: "link" });
   const b = got.body ?? {};
+  if (typeof b.merged !== "boolean" || typeof b.state !== "string") throw cannot(`the merge of ${refName(ref)}`, forceable);
   return { ref, merged: b.merged === true, sha: typeof b.merge_commit_sha === "string" ? b.merge_commit_sha : null,
     open: b.state === "open", draft: b.draft === true };
 }
@@ -72,7 +74,7 @@ async function pullOf(ref, ctx, link) {
 /** Refuse a fix that is not merged, naming what it is instead. */
 function mustBeMerged(p, stage) {
   if (p.merged && p.sha) return;
-  if (p.merged) throw cannot(`${refName(p.ref)}'s merge commit`);
+  if (p.merged) throw cannot(`${refName(p.ref)}'s merge commit`, stage === "shipped");
   const what = p.open ? (p.draft ? "an open draft" : "open") : "closed without merging";
   throw refuse(409, `${stage} waits for the PR to merge: ${refName(p.ref)} is ${what}`,
     p.open ? `advance again once ${refName(p.ref)} is merged; ${FORCE_NOTE}` : `link the pull request that fixed it; ${FORCE_NOTE}`, { field: "link" });
@@ -87,7 +89,7 @@ export async function stageProofOf(j, prev, { env = process.env, fetchImpl = fet
   const ctx = { env, fetchImpl };
   if (j?.to === STATE_FIXED) {
     // judgeEarnedLink already made j.earned a pull request link for this stage.
-    const p = await pullOf(j.earned, ctx, j.link);
+    const p = await pullOf(j.earned, ctx, j.link, false);
     mustBeMerged(p, "fixed");
     return { stage: STATE_FIXED, fix: refName(p.ref), sha: p.sha };
   }
@@ -105,23 +107,23 @@ export async function stageProofOf(j, prev, { env = process.env, fetchImpl = fet
     throw refuse(422, `${j.link} is on ${ship.repo}, and the fix ${refName(fix)} is on ${fix.repo}`,
       `shipped links the tag or commit on ${fix.repo}, where the fix merged`, { field: "link" });
 
-  const p = await pullOf(fix, ctx, fixLink);
+  const p = await pullOf(fix, ctx, fixLink, true);
   mustBeMerged(p, "shipped");
   const repo = `/repos/postmark-town/${fix.repo}`;
   if (ship.kind === "tag") {
     const ref = await githubGet(`${repo}/git/ref/tags/${segs(ship.name)}`, ctx);
-    if (!ref) throw cannot(`that ${ship.name} exists`);
+    if (!ref) throw cannot(`that ${ship.name} exists`, true);
     if (ref.status === 404)
       throw refuse(409, `shipped waits for the tag: ${ship.name} is not a tag on ${fix.repo} yet`, `advance again once it is cut; ${FORCE_NOTE}`, { field: "link" });
   }
-  const head = ship.kind === "tag" ? segs(ship.name) : ship.name;
+  const head = ship.kind === "tag" ? `refs/tags/${segs(ship.name)}` : ship.name;
   const cmp = await githubGet(`${repo}/compare/${p.sha}...${head}?per_page=1`, ctx);
-  if (!cmp) throw cannot(`that ${ship.name} holds the merge`);
+  if (!cmp) throw cannot(`that ${ship.name} holds the merge`, true);
   if (cmp.status === 404)
     throw refuse(409, `shipped waits for the ${ship.kind === "tag" ? "tag" : "commit"}: ${ship.name} is not on ${fix.repo}`, `advance again once it is; ${FORCE_NOTE}`, { field: "link" });
   const status = cmp.body?.status;
   if (status !== "ahead" && status !== "identical") {
-    if (status !== "behind" && status !== "diverged") throw cannot(`that ${ship.name} holds the merge`);
+    if (status !== "behind" && status !== "diverged") throw cannot(`that ${ship.name} holds the merge`, true);
     throw refuse(409, `${ship.name} does not hold ${refName(fix)}'s merge (${p.sha.slice(0, 9)})`,
       `shipped waits for a ${ship.kind === "tag" ? "tag" : "commit"} cut after the merge; ${FORCE_NOTE}`, { field: "link" });
   }

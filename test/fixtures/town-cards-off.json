@@ -719,7 +719,7 @@
      },
      "force": {
       "type": "string",
-      "description": "class \"bug\", to: \"fixed\" or \"shipped\" only, wright or keemin only — goes past the stage guard (the PR not merged, no tag holding the merge, GitHub unreadable) and says why, at most 600 characters; the reason and what it went past are written on the bug's history"
+      "description": "class \"bug\", to: \"fixed\" or \"shipped\" only, wright or keemin only — goes past the stage guard (the PR not merged; no tag holding the merge, or GitHub unreadable while checking it, at shipped) and says why, at most 600 characters; the reason and what it went past are written on the bug's history"
      },
      "skip": {
       "type": "string",

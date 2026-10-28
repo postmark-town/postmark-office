@@ -166,7 +166,7 @@ function tagFor(fixLink, { tag = "release/2026-w45", holds = true, exists = true
   const [, repo, n] = /postmark-town\/([^/]+)\/pull\/(\d+)$/.exec(fixLink);
   const base = `/repos/postmark-town/${repo}`;
   if (exists) GITHUB.set(`${base}/git/ref/tags/${tag}`, { status: 200, body: { ref: `refs/tags/${tag}` } });
-  GITHUB.set(`${base}/compare/${shaOf(n)}...${tag}?per_page=1`, exists ? { status: 200, body: { status: holds ? "ahead" : "diverged" } } : { status: 404, body: { message: "Not Found" } });
+  GITHUB.set(`${base}/compare/${shaOf(n)}...refs/tags/${tag}?per_page=1`, exists ? { status: 200, body: { status: holds ? "ahead" : "diverged" } } : { status: 404, body: { message: "Not Found" } });
   return `https://github.com/postmark-town/${repo}/releases/tag/${tag}`;
 }
 /** An issue opened by `who`'s account (a pull request when `pr`, as GitHub's issues API answers one); its link. */
@@ -1551,7 +1551,7 @@ test("17 · GitHub unreadable fails closed at fixed and at shipped: a 503 that s
   GITHUB.set(PATH, { status: 502, body: { message: "Bad Gateway" } });
   const n = pen.rows().length;
   await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 503,
-    /^can't confirm the merge of postmark-office#810 right now: GitHub could not be read nothing was written; ask again shortly, or wright or keemin can force it with a reason$/);
+    /^can't confirm the merge of postmark-office#810 right now: GitHub could not be read nothing was written; ask again shortly$/);
   assert.equal(pen.rows().length, n);
   // a rate limit is the same doubt
   GITHUB.set(PATH, { status: 403, body: { message: "API rate limit exceeded" } });
@@ -1560,7 +1560,7 @@ test("17 · GitHub unreadable fails closed at fixed and at shipped: a 503 that s
   await advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17);
   // shipped, with the tag's compare unreadable
   const tag = tagFor(PR);
-  GITHUB.set(`/repos/postmark-town/postmark-office/compare/${shaOf(810)}...release/2026-w45?per_page=1`, { status: 500, body: {} });
+  GITHUB.set(`/repos/postmark-town/postmark-office/compare/${shaOf(810)}...refs/tags/release/2026-w45?per_page=1`, { status: 500, body: {} });
   const m = pen.rows().length;
   await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 503, /^can't confirm that release\/2026-w45 holds the merge right now/);
   assert.equal(pen.rows().length, m);
@@ -1685,4 +1685,41 @@ test("17 · force belongs to fixed and shipped alone: a skip refuses it by name"
   setup();
   await postAtTown(BUG, ERRANT, at17);
   await refusedWith(advanceAtTown({ post: ID, skip: "confirmed", reason: "no one", force: "x" }, WRIGHT, at17), 422, /a skip takes no force/);
+});
+
+test("17 · the guard's odd answers: a 200 that does not say merged, a merged PR with no merge commit, a compare with an unknown status, and a fix link that is no PR each refuse and write nothing", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const PR = pull("finn", { n: 870 });
+  const PATH = "/repos/postmark-town/postmark-office/pulls/870";
+  const good = GITHUB.get(PATH);
+  GITHUB.set(PATH, { status: 200, body: { number: 870, user: userOf("finn") } });
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 503, /^can't confirm the merge of postmark-office#870 right now/);
+  GITHUB.set(PATH, { status: 200, body: { ...good.body, merge_commit_sha: null } });
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 503, /^can't confirm postmark-office#870's merge commit right now/);
+  GITHUB.set(PATH, good);
+  await advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17);
+
+  const tag = tagFor(PR);
+  const CMP = `/repos/postmark-town/postmark-office/compare/${shaOf(870)}...refs/tags/release/2026-w45?per_page=1`;
+  GITHUB.set(CMP, { status: 200, body: { status: "sideways" } });
+  const n = pen.rows().length;
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 503, /^can't confirm that release\/2026-w45 holds the merge right now.*or wright or keemin can force it/);
+  GITHUB.set(CMP, { status: 200, body: {} });
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 503, /holds the merge right now/);
+  // a non-founder's force at shipped is refused before any read
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag, force: "it is live" }, BUGCATCHER, at17), 403, /^only wright and keemin force a stage past the guard/);
+  // a fix link on the post that is no pull request (an old link) cannot be proven
+  posts.get(ID).fields.links.fixed = "https://github.com/postmark-town/postmark-office/issues/870";
+  GITHUB.set(CMP, { status: 200, body: { status: "ahead" } });
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 409, /is not a pull request, so the office can't tell what shipped/);
+  assert.equal(pen.rows().length, n, "a refused shipped wrote an act");
+  assert.equal(posts.get(ID).state, "fixed");
+});
+
+test("17 · force is for fixed and shipped only: on any other stage it is refused by name, before the stage's own checks", async () => {
+  setup();
+  await postAtTown(BUG, ERRANT, at17);
+  await skipThrough(ID, "reproduced");
+  await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn"), force: "x" }, WRIGHT, at17), 422, /^force is for fixed and shipped only/);
 });
