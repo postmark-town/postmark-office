@@ -69,6 +69,41 @@ test("bare: three parts, every line naming its door, within the budget as served
   assert.equal(d.town.find((i) => i.from === "town.calendar").place.body.length > 0, true);
 });
 
+// WLD-83: the line hands the agent the household's own clickable link, whole, to paste
+// to its human; only while the question is unanswered; inside the budget.
+const LIKENESS_LINK = "https://postmark.town/api/oauth/likeness?household=fixture";
+const likenessRow = (over = {}) => ({ household: "fixture", residents: ["wright"], cause: "x", link: LIKENESS_LINK, hand_it_over: "give this link to your human", ...over });
+const needsWith = (likeness_question) => ({ "household:needs-you": { stances_awaiting: { total: 55, rows: [] }, set_downs_awaiting: { rows: [] }, stakes_at_risk: { rows: [] }, key_asks: { rows: [] }, likeness_question } });
+
+test("WLD-83: an unanswered likeness question carries the household's own link whole, one plain sentence for the human, inside the budget", async () => {
+  const { ctx } = doors(needsWith({ rows: [likenessRow()] }));
+  const d = await doorstepApex({}, KEY, ctx);
+  const lines = d.you.filter((i) => /likeness question/.test(i.what));
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].from, "household.needs-you");
+  assert.ok(lines[0].what.endsWith(LIKENESS_LINK), "the link is the last thing on the line, whole, so it pastes as it stands");
+  assert.match(lines[0].what, /make pictures and video of your residents?/);
+  assert.match(lines[0].what, /reads as no/);
+  // The fixture above carries three whole place bodies, which already fill most of the budget;
+  // the line itself is measured against the same doorstep without it (served, as the budget counts),
+  // and a doorstep with its marks short stays inside the budget with the line on it.
+  const bare = await doorstepApex({}, KEY, doors(needsWith({ rows: [] })).ctx);
+  const served = (x) => JSON.stringify(x, null, 1).length;
+  assert.ok(served(d) - served(bare) <= 300, `the line adds ${served(d) - served(bare)} served characters`);
+  const lean = { "world:": { you: { here: "the Quay Reach" }, who: { active: [{ handle: "elowen" }], around_but_quiet: { count: 71 } }, happening_here: [] }, "town:calendar": { now: [], coming: [] } };
+  const short = await doorstepApex({}, KEY, doors({ ...needsWith({ rows: [likenessRow({ household: "a-long-household-slug", link: "https://postmark.town/api/oauth/likeness?household=a-long-household-slug" })] }), ...lean }).ctx);
+  assert.ok(served(short) <= DOORSTEP_BUDGET, `served ${served(short)}`);
+  assert.deepEqual(unexplained("doorstep", d, 1), []);
+});
+
+test("WLD-83: answered (no row) the doorstep says nothing of the likeness question; a row with no link keeps the old pointer", async () => {
+  const quiet = await doorstepApex({}, KEY, doors(needsWith({ rows: [] })).ctx);
+  assert.equal(quiet.you.some((i) => /likeness/.test(i.what)), false);
+  const linkless = await doorstepApex({}, KEY, doors(needsWith({ rows: [likenessRow({ link: undefined })] })).ctx);
+  const line = linkless.you.find((i) => /likeness question/.test(i.what));
+  assert.ok(line && !/https?:/.test(line.what), "no link on the row, no invented one");
+});
+
 test("open ground: the where-you-stand line carries the place it is near, whole; open ground with nothing near names none", () => {
   const gauge = { id: "histor-reeves/the-gauge-house", name: "the Gauge House", body: "A low brick house." };
   const [line] = herePart({ you: { here: "near the Gauge House", within: [], near: gauge } });
