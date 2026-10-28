@@ -1959,7 +1959,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (!scope.length)
         return bounce(422, "whose word?", "pass handle: — or call with a key that holds a resident; the inbox is derived from the ground your household holds");
       const { stancesForHandles } = await import("./world-stance.mjs");
-      return stancesForHandles(scope, { cursor: f.cursor ?? null, limit: f.limit, by: f.by ?? null, over: f.over ?? null, setDowns: true });
+      const { withEdgeWords } = await import("./world-stance.mjs");
+      return withEdgeWords(await stancesForHandles(scope, { cursor: f.cursor ?? null, limit: f.limit, by: f.by ?? null, over: f.over ?? null, setDowns: true }));
     }
     // ── what the crossings did to your things (2026-09-07, #2526) ───────────
     //

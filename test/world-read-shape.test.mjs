@@ -504,8 +504,7 @@ test("POS-745 F1: every world.<read> the doorstep hands out answers when followe
     assert.equal(r.read, from.slice("world.".length));
   }
   const you = await worldApex({ handle: WHO, read: "you", read_shape: "v2" }, KEY, {});
-  assert.equal(you.you.here, glance.you.here, "read: \"you\" says the place the doorstep line said");
-  assert.equal(you.you.handle, WHO);
+  assert.deepEqual(you.you, glance.you, "read: \"you\" is the glance's own you, whole (the houses in within keep their lit flags)");
 });
 
 test("POS-745 F2: the bounce's readable_here lists the v2 blocks, and each listed block answers", { skip: !HAVE_CLONE && WHY_NOT }, async () => {
@@ -514,7 +513,7 @@ test("POS-745 F2: the bounce's readable_here lists the v2 blocks, and each liste
   assert.equal(bounced.code, 422);
   for (const b of Object.keys(BLOCK_READS)) {
     assert.ok(bounced.readable_here.includes(b), "readable_here lists " + b);
-    assert.ok(bounced.hint.split("each read whole: ")[1]?.split(/[,.]\s*/).includes(b), "the hint says " + b);
+    assert.ok(bounced.hint.split("readable too, each whole: ")[1]?.split(/[,.]\s*/).includes(b), "the hint says " + b);
     const r = await worldApex({ handle: WHO, read: b }, KEY, {});
     assert.ok(!r.error, "following " + b + " from the bounce answers: " + JSON.stringify(r).slice(0, 160));
   }
@@ -537,7 +536,7 @@ test("POS-811: a say receipt's latest (milliseconds) passed as since on a world 
   const latest = 1792022882579; // what voices.mjs hands back as 'latest'
   setEnv("WORLD_MOVEMENT_V2", "1");
   try {
-    for (const args of [{ since: latest }, { since: String(latest) }, { since_crossing: latest }, { read: "happened", since: latest }, { read: "who", since: String(latest) }]) {
+    for (const args of [{ since: latest }, { since: String(latest) }, { since_crossing: latest }, { read: "happened", since_crossing: latest }, { read: "happened", since: latest }, { read: "who", since: String(latest) }]) {
       const r = await v2At(args);
       assert.equal(r.code, 422, JSON.stringify(args) + " bounces");
       assert.match(r.defect, /say timestamp \(milliseconds\), not a cursor/);

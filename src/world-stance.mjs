@@ -398,9 +398,6 @@ export function candidatesFrom({ mine = [], all = [], spoken = new Set(), overla
       // WHICH of your marks makes you a speaker. Without it a resident is told
       // to judge something with no way to see why it is theirs to judge.
       on_your_ground: ground.map((g) => g.id),
-      // POS-812 (RULED, Darko 2026-10-28): a stance is on an edge, a thing and a ground. This pair
-      // is new to its holder, so it awaits, whatever was said about the thing on other ground.
-      edge: `new ground, new edge: awaiting ${ground[0].by}'s word here, on ${ground[0].id}`,
     });
   }
   out.sort((a, b) => (a.date === b.date
@@ -466,9 +463,6 @@ export function standingStances(rows, { by = null, versions = null } = {}) {
       ...(r.payload?.as ? { as: r.payload.as } : {}),
       ...(r.payload?.hand ? { hand: r.payload.hand } : {}),
       ...(r.payload?.version !== undefined ? { version: r.payload.version } : {}),
-      // POS-812: a word stays with the ground it was spoken on; the same thing on new ground is a new edge.
-      ...(Array.isArray(r.payload?.on_your_ground) && r.payload.on_your_ground.length
-        ? { edge: `this word stays with ${r.payload.on_your_ground.join(", ")}; the same thing on new ground is a new edge, awaiting that ground's holder` } : {}),
     }))
     .sort((a, b) => (String(a.at) === String(b.at) ? b.seq - a.seq : (String(a.at) < String(b.at) ? 1 : -1)));
 }
@@ -906,10 +900,25 @@ export const stancesGround = (handles) => {
  * sentence"). Omit, do not negate: what a reader does not see, they do not have
  * to interpret.
  */
+/**
+ * POS-812 (RULED, Darko 2026-10-28: "new ground, new edge"). A stance is a word on an edge, the
+ * pair of a thing and a ground. A thing on new ground is a new edge: it awaits that ground's
+ * holder, and a welcome spoken on the old ground stays with the old ground. Said in plain words
+ * on the reads a resident's stance shows in (the world's bare read, its stance shadow, and
+ * household { read: "stances" }); NOT on the shared fold, because the doorstep bundle spreads
+ * the same answer and its bytes are held still (test/foyer-shrink F7c5).
+ */
+export const EDGE_LAW = "A word stays with the ground it was spoken on. The same thing on new ground is a new edge, and it starts awaiting that ground's holder.";
+const holderOfGround = (id) => String(id ?? "").split("/")[0];
+export const edgeLine = (c) => (c?.on_your_ground ? `new ground, new edge: awaiting ${holderOfGround(Array.isArray(c.on_your_ground) ? c.on_your_ground[0] : c.on_your_ground)}'s word here, on ${Array.isArray(c.on_your_ground) ? c.on_your_ground[0] : c.on_your_ground}` : null);
+export function withEdgeWords(answer) {
+  if (!answer || answer.unavailable || !Array.isArray(answer.awaiting) || !answer.awaiting.length) return answer;
+  return { ...answer, awaiting: answer.awaiting.map((c) => { const edge = edgeLine(c); return edge ? { ...c, edge } : c; }), edge: EDGE_LAW };
+}
+
 const ambientLine = (c) => ({
   mark: c.mark, by: c.by, at: c.at, date: c.date,
   on_your_ground: c.on_your_ground[0] ?? null,
-  ...(c.edge ? { edge: c.edge } : {}),
   ...(c.body ? { says: c.body.length > 120 ? `${c.body.slice(0, 117)}…` : c.body } : {}),
   published: c.published,
 });
@@ -954,7 +963,8 @@ export async function stancesBlock(repo, key, { spine = [], dbPath = null } = {}
     return {
       stances_awaiting: n,
       stances_awaiting_ground: ground,
-      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map(ambientLine),
+      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map((c) => { const edge = edgeLine(c); return edge ? { ...ambientLine(c), edge } : ambientLine(c); }),
+      edge: EDGE_LAW,
       ...(n > AMBIENT_CAP ? { more: n - AMBIENT_CAP } : {}),
       // ⚑ TRUED 2026-09-02 (#2392). This sentence taught the WORLD door for
       // both halves, and BOTH were dead: the grant hangs on the `household`

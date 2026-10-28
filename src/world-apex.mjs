@@ -103,7 +103,7 @@ import { RIDE_TOOLS, rideBlockFrom, rideViaOffice, stopDoorsNearest, stopsOfServ
 import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 // POS-5's consent verb. STANCE_TOOLS ride the schema lookup without joining
 // the flat tool list, exactly as CROSSING_TOOLS do and for the same reason.
-import { ACTION_STANCE, STANCE_TOOLS, declareStanceViaOffice, readNeverPerforms, stanceShadow, stancesBlock } from "./world-stance.mjs";
+import { ACTION_STANCE, STANCE_TOOLS, declareStanceViaOffice, readNeverPerforms, stanceShadow, stancesBlock, withEdgeWords } from "./world-stance.mjs";
 import { validateReadArgs } from "./validate-args.mjs"; // the flat tools' own validator, now at the read branch too
 // ⚑ PARKED 2026-09-10 (the founder's word): the subscription (world#20), the
 // gathering (world#15) and the handoff (world#16) were three finished modules
@@ -1222,10 +1222,11 @@ const SAY_STAMP_FLOOR = 1e10;
 export function sayStampBounce(raw) {
   const n = Number(raw);
   if (raw == null || raw === "" || !Number.isFinite(n) || n < SAY_STAMP_FLOOR) return null;
-  return bounce(422, `since: ${String(raw).trim()} is a say timestamp (milliseconds), not a cursor`,
+  return bounce(422, `since: ${n} is a say timestamp (milliseconds), not a cursor`,
     'this is the `latest` a say receipt hands back, and it belongs to the say room: world { read: "say", args: { since: <latest> } }. On a world read, since: takes the cursor the v2 read handed you (its `cursor` field, like "c1.250.1792022882579.18234"), or an old crossing number');
 }
-const readableWords = (here) => `${here.join(", ") || "(nothing)"}; and the v2 blocks, each read whole: ${BLOCK_NAMES.join(", ")}`;
+const readableWords = (here) => here.join(", ") || "(nothing)";
+const BLOCKS_SENTENCE = ` The v2 blocks are readable too, each whole: ${BLOCK_NAMES.join(", ")}.`;
 
 // The args envelope, read tolerantly. CONNECTOR-CACHE TOLERANCE (field-found
 // the hour Stage ② shipped, 2026-08-15): a client still holding a schema with
@@ -2903,7 +2904,7 @@ async function apexRead(args, key, ctx = {}) {
   const v2Rows = v2 ? (seen._fov?.rows ?? []) : null;
   // a deep block read that is not `view` (who, happened, happening) shows no
   // house, so it asks for no activity and never waits on the batch
-  const showsHouses = !(deep && deep.block !== "view");
+  const showsHouses = !(deep && deep.block !== "view" && deep.block !== "you");
   const activity = showsHouses ? await lightsFor(v2 ? [...spine, ...v2Rows] : [...spine, ...nearbyOut], args, { byId }) : null;
 
   const answer = {
@@ -3089,7 +3090,7 @@ async function apexRead(args, key, ctx = {}) {
       : deep.block === "happening" ? (shaped.happening_here ?? [])
       : shaped[deep.block];
     // the deep view carries the one light sentence its rows need, as the glance does (WLD-29)
-    const litNote = deep.block === "view" && shaped.lit_unknown ? { lit_unknown: shaped.lit_unknown } : {};
+    const litNote = (deep.block === "view" || deep.block === "you") && shaped.lit_unknown ? { lit_unknown: shaped.lit_unknown } : {};
     return { read: deep.block, [deep.block]: whole, ...litNote, cursor: shaped.cursor, reading_law: shaped.reading_law };
   }
   // THE SHAPE (POS-486) IS THE MCP CALL'S, NEVER THE PROCESS'S (#455 review,
@@ -3910,7 +3911,7 @@ export async function readDomainFor(action, fields, key, oriented, ctx = {}) {
     case ACTION_STANCE: {
       const performing = readNeverPerforms(fields);
       if (performing) return performing;
-      return await stanceShadow(WORLD_CLONE, key, { cursor: fields?.cursor ?? null, limit: fields?.limit });
+      return withEdgeWords(await stanceShadow(WORLD_CLONE, key, { cursor: fields?.cursor ?? null, limit: fields?.limit }));
     }
     // THE RIDER'S SHADOW (POS-169). The one read whose domain is a TIMER: the
     // ride you declared, whether it has come due, and where an exit would set
@@ -3964,7 +3965,7 @@ async function apexReadAction(args, key, ctx = {}) {
     if (bad) return bounce(422, bad.defect, bad.hint, bad.extra);
     const { read: _r, args: _a, ...look } = args;
     // the one cursor rides a block read too: read: "happened", since: "<cursor>"
-    const stamped = sayStampBounce(look.since);
+    const stamped = sayStampBounce(look.since) ?? sayStampBounce(look.since_crossing);
     if (stamped) return stamped;
     if (typeof look.since === "string" && look.since.trim() !== "" && !/^\d+(\.\d+)?$/.test(look.since.trim())) {
       const c = decodeCursor(look.since);
@@ -4052,17 +4053,17 @@ async function apexReadAction(args, key, ctx = {}) {
       const standing = standingDoorHint(action);
       if (standing)
         return bounce(422, `"${action}" is not an action anywhere in your view — it is not read from a standpoint`,
-          `${standing} Readable from here: ${readableWords(here)}.`,
+          `${standing} Readable from here: ${readableWords(here)}.${BLOCKS_SENTENCE}`,
           { standing_door: STANDING_SCOPED_DOORS[action], readable_here: [...here, ...BLOCK_NAMES], affordable_at: elsewhere });
       // The ride's doors, as the act's bounce names them (POS-379). Ashore and
       // away from her, `read: "ride"` meets this bounce and never rideDomain.
       const ride = action === "ride" ? await rideDoorsFor(oriented) : null;
       if (ride)
         return bounce(422, `"ride" is not an action anywhere in your view — you are not aboard ${ride.vessel ?? "her"}`,
-          `${ride.sentence} Readable from here: ${readableWords(here)}.`,
+          `${ride.sentence} Readable from here: ${readableWords(here)}.${BLOCKS_SENTENCE}`,
           { ride_doors: ride.doors, readable_here: [...here, ...BLOCK_NAMES], affordable_at: ride.affordable_at, ...(ride.timetable_unreadable ? { timetable_unreadable: ride.timetable_unreadable } : {}) });
       return bounce(422, `"${action}" is not an action anywhere in your view — nothing to read`,
-        `Readable from here: ${readableWords(here)}${elsewhere.length ? ` — and "${action}" stands at ${elsewhere.map((w) => w.mark).join(", ")}` : ""}.`,
+        `Readable from here: ${readableWords(here)}${elsewhere.length ? ` — and "${action}" stands at ${elsewhere.map((w) => w.mark).join(", ")}` : ""}.${BLOCKS_SENTENCE}`,
         { readable_here: [...here, ...BLOCK_NAMES], affordable_at: elsewhere });
     }
     const affording = { ...rows.find((r) => r.id === match.from), blurb: match.blurb };
