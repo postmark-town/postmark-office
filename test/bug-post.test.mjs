@@ -55,6 +55,15 @@
 //      history row; a skipped stage is never re-credited; a bug already past a
 //      gap before the rule moves on from where it stands, never back-filled.
 //      The tests above walk their bugs with skipThrough, since a jump bounces.
+//  17. (the stage guard, Darko 2026-10-28 "Staff now, ship w45") fixed waits
+//      for its linked PR to MERGE and shipped waits for a tag, commit or
+//      settlement that CONTAINS the fix's merge (bug-stage-guard.mjs): an open,
+//      draft or closed PR refuses fixed; a tag that does not exist, does not
+//      hold the merge, is on another repo or is a PR refuses shipped; GitHub
+//      down refuses both (503), writing nothing; every other stage and a bug
+//      whose fixed was skipped are untouched; force: "<why>" is wright's and
+//      keemin's alone and writes the reason and what it went past on the act.
+//      GitHub is the stub above: pull() serves a merged PR, tagFor() a tag.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -138,10 +147,27 @@ function comment(who, { repo = "postmark", issue = 3500, id = ++ghSeq } = {}) {
     { status: 200, body: { id, issue_url: `https://api.github.com/repos/postmark-town/${repo}/issues/${issue}`, user: userOf(who) } });
   return `https://github.com/postmark-town/${repo}/issues/${issue}#issuecomment-${id}`;
 }
-/** A pull request by `who`'s account; its link. */
-function pull(who, { repo = "postmark-office", n = ++ghSeq } = {}) {
-  GITHUB.set(`/repos/postmark-town/${repo}/pulls/${n}`, { status: 200, body: { number: n, user: userOf(who) } });
+/** The merge commit a stubbed pull request carries (17): 40 hex, one per number. */
+const shaOf = (n) => Number(n).toString(16).padStart(40, "c");
+/**
+ * A pull request by `who`'s account; its link. MERGED unless said otherwise
+ * (17): since the stage guard, fixed waits for the merge.
+ */
+function pull(who, { repo = "postmark-office", n = ++ghSeq, state = "merged", draft = false } = {}) {
+  GITHUB.set(`/repos/postmark-town/${repo}/pulls/${n}`, { status: 200, body: { number: n, user: userOf(who), draft,
+    state: state === "open" ? "open" : "closed", merged: state === "merged", merge_commit_sha: state === "merged" ? shaOf(n) : null } });
   return `https://github.com/postmark-town/${repo}/pull/${n}`;
+}
+/**
+ * A release tag on `fixLink`'s repo, served by the stub (17): it exists, and
+ * GitHub's compare says it holds (or does not hold) the fix's merge. Its link.
+ */
+function tagFor(fixLink, { tag = "release/2026-w45", holds = true, exists = true } = {}) {
+  const [, repo, n] = /postmark-town\/([^/]+)\/pull\/(\d+)$/.exec(fixLink);
+  const base = `/repos/postmark-town/${repo}`;
+  if (exists) GITHUB.set(`${base}/git/ref/tags/${tag}`, { status: 200, body: { ref: `refs/tags/${tag}` } });
+  GITHUB.set(`${base}/compare/${shaOf(n)}...refs/tags/${tag}?per_page=1`, exists ? { status: 200, body: { status: holds ? "ahead" : "diverged" } } : { status: 404, body: { message: "Not Found" } });
+  return `https://github.com/postmark-town/${repo}/releases/tag/${tag}`;
 }
 /** An issue opened by `who`'s account (a pull request when `pr`, as GitHub's issues API answers one); its link. */
 function issue(who, { repo = "postmark", n = ++ghSeq, pr = false } = {}) {
@@ -391,13 +417,14 @@ test("5 · the advance's law: forward only, a skip pays nothing, credit from rep
   const brief = await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "heavy", link: comment("finn") }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(brief.stamps, 5, "a heavy revision pays 5");
   await refusedWith(advanceAtTown({ post: ID, to: "fixed", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /fixed needs a size/);
-  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: "Hinge Nibbler", link: pull("finn") }, WRIGHT, { now: NOW, roll: ROLL });
+  const FINN_PR = pull("finn");
+  const fix = await advanceAtTown({ post: ID, to: "fixed", credit: "finn", size: "M", critter: "Hinge Nibbler", link: FINN_PR }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(fix.stamps, 25);
   const { links, ...rest } = posts.get(ID).fields;
   assert.deepEqual(rest, { grade: "heavy", size: "M", critter: "Hinge Nibbler", named_by: "finn" });
   assert.deepEqual(Object.keys(links), ["diagnosed", "briefed", "fixed"], "each earned stage keeps its link");
   await refusedWith(advanceAtTown({ post: ID, to: "shipped", credit: "finn" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /shipped pays nothing and credits no one/);
-  const ship = await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: tagFor(FINN_PR) }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(ship.stamps, 0);
   assert.match(ship.receipt, /shipped pays nothing/);
   await refusedWith(advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL }), 409, /is finished \(shipped\)/);
@@ -556,7 +583,7 @@ test("8 · a fixed bug's posts read carries critter and named_by (the fixer's cr
   const all = (await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL })).posts.find((p) => p.id === ID);
   assert.deepEqual([all.fields.critter, all.fields.named_by], ["Hinge Nibbler", "ada"]);
   // shipping it keeps the name
-  await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "shipped", link: tagFor(ADA_PR) }, WRIGHT, { now: NOW, roll: ROLL });
   assert.deepEqual([posts.get(ID).fields.critter, posts.get(ID).fields.named_by], ["Hinge Nibbler", "ada"]);
 
   // the rebuild: the acts alone derive the name and its namer, and the table agrees
@@ -598,8 +625,9 @@ const ADA = { household: "the-harbor", handles: new Set(["ada"]) };
 
 async function toShipped() {
   await toBriefed();
-  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: pull("ada") }, WRIGHT, { now: NOW, roll: ROLL });
-  await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
+  const PR = pull("ada");
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: PR }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "shipped", link: tagFor(PR) }, WRIGHT, { now: NOW, roll: ROLL });
 }
 
 test("9 · the reveal: a hand sets Iris's three candidates, the fixer picks one, the jar reads the picked image, and the rebuild folds it", async () => {
@@ -637,7 +665,8 @@ test("9 · the reveal: a hand sets Iris's three candidates, the fixer picks one,
 test("9 · the reveal's refusals each write nothing: not shipped, not a hand, not three media URLs, no candidates, not the fixer, a pick out of range, both at once, and after the pick", async () => {
   const { pen, posts } = setup();
   await toBriefed();
-  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: pull("ada") }, WRIGHT, { now: NOW, roll: ROLL });
+  const PR9 = pull("ada");
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: PR9 }, WRIGHT, { now: NOW, roll: ROLL });
   const refusedNothingWritten = async (p, code, re) => {
     const n = pen.rows().length;
     const had = JSON.stringify(posts.get(ID));
@@ -646,7 +675,7 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
     assert.equal(JSON.stringify(posts.get(ID)), had, "a refused reveal changed the post");
   };
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED }, WRIGHT, { now: NOW }), 409, /stands fixed, and a critter is revealed when its fix ships/);
-  await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, { now: NOW, roll: ROLL });
+  await advanceAtTown({ post: ID, to: "shipped", link: tagFor(PR9) }, WRIGHT, { now: NOW, roll: ROLL });
 
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED }, FINN, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds 3 candidates/);
@@ -686,6 +715,7 @@ test("10 · an advance may carry link, kept per stage in fields.links; the posts
   assert.match(d.receipt, new RegExp(`; diagnosed points at ${CAUSE.replace(/[.#/]/g, "\$&")}$`));
   await advanceAtTown({ post: ID, to: "briefed", credit: "finn", grade: "light", link: BRIEF }, WRIGHT, { now: NOW, roll: ROLL });
   await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "S", critter: "Stickle", link: PR }, WRIGHT, { now: NOW, roll: ROLL });
+  tagFor(PR, { tag: "release/2026-w42" });   // the stub serves it, holding the merge (17)
   const ship = await advanceAtTown({ post: ID, to: "shipped", link: TAG }, WRIGHT, { now: NOW, roll: ROLL });
   assert.equal(ship.stamps, 0, "a link pays nothing");
   const LINKS = { diagnosed: CAUSE, briefed: BRIEF, fixed: PR, shipped: TAG };
@@ -866,7 +896,7 @@ test("12 · the bug read walks the jar's order across a page cut: open by the fu
   await post("Reported, older", ERRANT);
   await post("Confirmed", FINN); await go("Confirmed", "confirmed");
   await post("Fixed, named", ERRANT); await go("Fixed, named", "fixed", { credit: "finn", size: "S", critter: "Stickle", link: pull("finn") });
-  await post("Shipped, named", FINN); await go("Shipped, named", "fixed", { credit: "errant", size: "S", critter: "Quill", link: pull("errant") }); await go("Shipped, named", "shipped");
+  await post("Shipped, named", FINN); const QUILL_PR = pull("errant"); await go("Shipped, named", "fixed", { credit: "errant", size: "S", critter: "Quill", link: QUILL_PR }); await go("Shipped, named", "shipped", { link: tagFor(QUILL_PR) });
   await post("The legacy fix, older", ERRANT); await go("The legacy fix, older", "shipped");
   await post("Not one", FINN); await go("Not one", "not-a-bug");
   await postAtTown({ class: "bug", title: "Reported, newer", body: "Reported, newer, as it happened.", for: "ada" }, WRIGHT, at);
@@ -1473,4 +1503,223 @@ test("POS-778 follow-up · every history row of the posts read carries state bes
   assert.deepEqual(post.history.map((h) => [h.stage, h.state]), [["reported", "reported"], ["confirmed", "confirmed"]]);
   const list = await postsAtOffice({ class: "bug" }, at);
   assert.ok(list.posts.every((p) => p.history.every((h) => h.state === h.stage)));
+});
+
+// ── 17 · the stage guard: fixed waits for the merge, shipped waits for the tag ──
+
+const FIX = (over = {}) => ({ to: "fixed", credit: "finn", size: "M", critter: "Hinge Nibbler", ...over });
+const at17 = { now: NOW, roll: ROLL };
+const KEEMIN = { household: "starforge", handles: new Set(["keemin"]) };
+const WSITE = "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w45";
+
+test("17 · fixed waits for the PR to merge: open, a draft and closed-unmerged each refuse by name and write nothing; merged passes", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const n = pen.rows().length;
+  const refusedClean = async (link, re) => {
+    await refusedWith(advanceAtTown({ post: ID, ...FIX({ link }) }, WRIGHT, at17), 409, re);
+    assert.equal(pen.rows().length, n, "a refused fixed wrote an act");
+    assert.equal(posts.get(ID).state, "briefed");
+  };
+  const open = pull("finn", { repo: "postmark-office", n: 774, state: "open" });
+  await refusedClean(open, /^fixed waits for the PR to merge: postmark-office#774 is open advance again once postmark-office#774 is merged/);
+  await refusedClean(pull("finn", { n: 775, state: "open", draft: true }), /postmark-office#775 is an open draft/);
+  await refusedClean(pull("finn", { n: 776, state: "closed" }), /^fixed waits for the PR to merge: postmark-office#776 is closed without merging link the pull request that fixed it/);
+  const merged = pull("finn", { n: 777 });
+  const ok = await advanceAtTown({ post: ID, ...FIX({ link: merged }) }, WRIGHT, at17);
+  assert.deepEqual([ok.stage, ok.stamps, ok.link], ["fixed", 25, merged]);
+  assert.equal(ok.forced, undefined, "an unforced pass records no force");
+  assert.equal(posts.get(ID).fields.links.fixed, merged);
+});
+
+test("17 · the PR is read when asked: a PR merging after the first refusal passes the next try", async () => {
+  setup();
+  await toBriefed();
+  const PR = pull("finn", { n: 800, state: "open" });
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 409, /is open/);
+  pull("finn", { n: 800 });   // merged now
+  const ok = await advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17);
+  assert.equal(ok.stage, "fixed");
+});
+
+test("17 · GitHub unreadable fails closed at fixed and at shipped: a 503 that says so, and nothing written", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const PR = pull("finn", { n: 810 });
+  const PATH = "/repos/postmark-town/postmark-office/pulls/810";
+  const keep = GITHUB.get(PATH);
+  GITHUB.set(PATH, { status: 502, body: { message: "Bad Gateway" } });
+  const n = pen.rows().length;
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 503,
+    /^can't confirm the merge of postmark-office#810 right now: GitHub could not be read nothing was written; ask again shortly$/);
+  assert.equal(pen.rows().length, n);
+  // a rate limit is the same doubt
+  GITHUB.set(PATH, { status: 403, body: { message: "API rate limit exceeded" } });
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 503, /can't confirm the merge/);
+  GITHUB.set(PATH, keep);
+  await advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17);
+  // shipped, with the tag's compare unreadable
+  const tag = tagFor(PR);
+  GITHUB.set(`/repos/postmark-town/postmark-office/compare/${shaOf(810)}...refs/tags/release/2026-w45?per_page=1`, { status: 500, body: {} });
+  const m = pen.rows().length;
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 503, /^can't confirm that release\/2026-w45 holds the merge right now/);
+  assert.equal(pen.rows().length, m);
+  assert.equal(posts.get(ID).state, "fixed");
+});
+
+async function toFixed(over = {}) {
+  await toBriefed();
+  const PR = pull("finn", over);
+  await advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17);
+  return PR;
+}
+
+test("17 · shipped waits for the tag: no link, a missing tag, a tag without the merge, another repo and a PR each refuse; a tag holding the merge passes", async () => {
+  const { pen, posts } = setup();
+  const PR = await toFixed({ n: 820 });
+  const n = pen.rows().length;
+  const refusedShip = async (link, code, re) => {
+    await refusedWith(advanceAtTown({ post: ID, to: "shipped", ...(link ? { link } : {}) }, WRIGHT, at17), code, re);
+    assert.equal(pen.rows().length, n, "a refused shipped wrote an act");
+    assert.equal(posts.get(ID).state, "fixed");
+  };
+  await refusedShip(null, 422, /^shipped needs the ref that carries postmark-office#820's merge link: "https:\/\/github\.com\/postmark-town\/<repo>\/releases\/tag\/<tag>"/);
+  await refusedShip("https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w99", 409,
+    /^shipped waits for the tag: release\/2026-w99 is not a tag on postmark-office yet advance again once it is cut/);
+  await refusedShip(tagFor(PR, { tag: "release/2026-w44", holds: false }), 409,
+    /^release\/2026-w44 does not hold postmark-office#820's merge \(c{9}\)/);
+  await refusedShip("https://github.com/postmark-town/postmark-site/releases/tag/release/2026-w45", 422,
+    /on postmark-site, and the fix postmark-office#820 is on postmark-office/);
+  await refusedShip("https://github.com/postmark-town/postmark-office/pull/820", 422, /^a pull request is the fix, not the ship/);
+  await refusedShip("https://github.com/postmark-town/postmark-office/tree/main", 422, /^shipped's link is not one the office can read/);
+  await refusedShip("https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w45/../x", 422, /not a tag name the office can read/);
+
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: tagFor(PR) }, WRIGHT, at17);
+  assert.deepEqual([ship.stage, ship.stamps], ["shipped", 0]);
+  assert.equal(posts.get(ID).fields.links.shipped, WSITE);
+});
+
+test("17 · shipped by a commit or a settlement tag: the commit is judged by the same ancestry, and a settlement tag is a tag on the world repo", async () => {
+  const { posts } = setup();
+  await toFixed({ n: 830 });
+  const sha = "d".repeat(40);
+  const COMMIT = `https://github.com/postmark-town/postmark-office/commit/${sha}`;
+  const CMP = `/repos/postmark-town/postmark-office/compare/${shaOf(830)}...${sha}?per_page=1`;
+  GITHUB.set(CMP, { status: 200, body: { status: "behind" } });
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: COMMIT }, WRIGHT, at17), 409, /does not hold postmark-office#830's merge/);
+  GITHUB.set(CMP, { status: 404, body: { message: "Not Found" } });
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: COMMIT }, WRIGHT, at17), 409, /^shipped waits for the commit: d{40} is not on postmark-office/);
+  GITHUB.set(CMP, { status: 200, body: { status: "identical" } });
+  const ok = await advanceAtTown({ post: ID, to: "shipped", link: COMMIT }, WRIGHT, at17);
+  assert.equal(ok.stage, "shipped");
+  assert.ok(posts.get(ID).fields.links.shipped.endsWith(sha));
+
+  // a world fix, shipped by its settlement tag
+  const { stageProofOf } = await import("../src/bug-stage-guard.mjs");
+  const WPR = pull("finn", { repo: "postmark-world", n: 840 });
+  const SET = tagFor(WPR, { tag: "settlement/S137" });
+  assert.equal(SET, "https://github.com/postmark-town/postmark-world/releases/tag/settlement/S137");
+  const proof = await stageProofOf({ to: "shipped", link: SET }, { id: "x/y", fields: { links: { fixed: WPR } } });
+  assert.deepEqual(proof, { stage: "shipped", fix: "postmark-world#840", sha: shaOf(840), ref: "settlement/S137" });
+});
+
+test("17 · a bug whose fixed rung was skipped has no fix to prove, so shipped goes as before; the other stages never read the guard", async () => {
+  const { posts } = setup();
+  await postAtTown(BUG, ERRANT, at17);
+  await skipThrough(ID, "fixed");
+  assert.equal(posts.get(ID).fields.links, undefined);
+  const ship = await advanceAtTown({ post: ID, to: "shipped" }, WRIGHT, at17);
+  assert.equal(ship.stage, "shipped");
+
+  // confirmed and the side exits need no GitHub at all: it could be down for them
+  const second = await postAtTown(BUG, ERRANT, at17);
+  const down = process.env.GITHUB_API_URL;
+  process.env.GITHUB_API_URL = "http://127.0.0.1:9";
+  try {
+    assert.equal((await advanceAtTown({ post: second.post.id, to: "confirmed" }, WRIGHT, at17)).stage, "confirmed");
+    assert.equal((await advanceAtTown({ post: second.post.id, to: "not-a-bug" }, WRIGHT, at17)).stage, "not-a-bug");
+  } finally { process.env.GITHUB_API_URL = down; }
+});
+
+test("17 · the founders' door: force passes an open PR and an absent tag, writes why and what it went past on the act and the history; nobody else may force", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const OPEN = pull("finn", { n: 850, state: "open" });
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: OPEN }), force: "it is live" }, BUGCATCHER, at17), 403, /^only wright and keemin force a stage past the guard/);
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: OPEN }), force: "  " }, WRIGHT, at17), 422, /^a force says why/);
+  await refusedWith(advanceAtTown({ post: ID, to: "briefed", force: "x" }, WRIGHT, at17), 409, /already stands briefed/);
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: OPEN }) }, WRIGHT, at17), 409, /waits for the PR to merge/);
+  assert.equal(posts.get(ID).state, "briefed");
+
+  const why = "the hotfix is live; this PR is its twin";
+  const fx = await advanceAtTown({ post: ID, ...FIX({ link: OPEN }), force: why }, KEEMIN, at17);
+  assert.equal(fx.stage, "fixed");
+  assert.deepEqual(fx.forced, { reason: why, past: "fixed waits for the PR to merge: postmark-office#850 is open" });
+  assert.match(fx.receipt, /; FORCED past the stage guard because "the hotfix is live; this PR is its twin" \(it went past: fixed waits for the PR to merge: postmark-office#850 is open\)$/);
+  const act = JSON.parse(pen.rows().at(-1).payload);
+  assert.deepEqual(act.forced, fx.forced);
+  assert.equal(act.hand, "keemin");
+
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w99", force: "the tag is cut at 20:00" }, WRIGHT, at17);
+  assert.equal(ship.forced.past, "shipped waits for the PR to merge: postmark-office#850 is open");
+  const one = (await postsAtOffice({ class: "bug", post: ID }, at17)).post;
+  assert.deepEqual(one.history.filter((h) => h.forced).map((h) => [h.stage, h.forced.reason]), [["fixed", why], ["shipped", "the tag is cut at 20:00"]]);
+  // the acts alone derive the same post, and the table agrees
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+});
+
+test("17 · a force the guard did not need is not recorded, and a force survives a GitHub outage with the outage written as what it went past", async () => {
+  const { pen } = setup();
+  await toBriefed();
+  const PR = pull("finn", { n: 860 });
+  const ok = await advanceAtTown({ post: ID, ...FIX({ link: PR }), force: "just in case" }, WRIGHT, at17);
+  assert.equal(ok.forced, undefined);
+  assert.equal(JSON.parse(pen.rows().at(-1).payload).forced, undefined);
+  GITHUB.set("/repos/postmark-town/postmark-office/git/ref/tags/release/2026-w45", { status: 502, body: {} });
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: WSITE, force: "GitHub is down; the box serves the tag" }, WRIGHT, at17);
+  assert.match(ship.forced.past, /^can't confirm that release\/2026-w45 exists right now/);
+});
+
+test("17 · force belongs to fixed and shipped alone: a skip refuses it by name", async () => {
+  setup();
+  await postAtTown(BUG, ERRANT, at17);
+  await refusedWith(advanceAtTown({ post: ID, skip: "confirmed", reason: "no one", force: "x" }, WRIGHT, at17), 422, /a skip takes no force/);
+});
+
+test("17 · the guard's odd answers: a 200 that does not say merged, a merged PR with no merge commit, a compare with an unknown status, and a fix link that is no PR each refuse and write nothing", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const PR = pull("finn", { n: 870 });
+  const PATH = "/repos/postmark-town/postmark-office/pulls/870";
+  const good = GITHUB.get(PATH);
+  GITHUB.set(PATH, { status: 200, body: { number: 870, user: userOf("finn") } });
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 503, /^can't confirm the merge of postmark-office#870 right now/);
+  GITHUB.set(PATH, { status: 200, body: { ...good.body, merge_commit_sha: null } });
+  await refusedWith(advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17), 503, /^can't confirm postmark-office#870's merge commit right now/);
+  GITHUB.set(PATH, good);
+  await advanceAtTown({ post: ID, ...FIX({ link: PR }) }, WRIGHT, at17);
+
+  const tag = tagFor(PR);
+  const CMP = `/repos/postmark-town/postmark-office/compare/${shaOf(870)}...refs/tags/release/2026-w45?per_page=1`;
+  GITHUB.set(CMP, { status: 200, body: { status: "sideways" } });
+  const n = pen.rows().length;
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 503, /^can't confirm that release\/2026-w45 holds the merge right now.*or wright or keemin can force it/);
+  GITHUB.set(CMP, { status: 200, body: {} });
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 503, /holds the merge right now/);
+  // a non-founder's force at shipped is refused before any read
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag, force: "it is live" }, BUGCATCHER, at17), 403, /^only wright and keemin force a stage past the guard/);
+  // a fix link on the post that is no pull request (an old link) cannot be proven
+  posts.get(ID).fields.links.fixed = "https://github.com/postmark-town/postmark-office/issues/870";
+  GITHUB.set(CMP, { status: 200, body: { status: "ahead" } });
+  await refusedWith(advanceAtTown({ post: ID, to: "shipped", link: tag }, WRIGHT, at17), 409, /is not a pull request, so the office can't tell what shipped/);
+  assert.equal(pen.rows().length, n, "a refused shipped wrote an act");
+  assert.equal(posts.get(ID).state, "fixed");
+});
+
+test("17 · force is for fixed and shipped only: on any other stage it is refused by name, before the stage's own checks", async () => {
+  setup();
+  await postAtTown(BUG, ERRANT, at17);
+  await skipThrough(ID, "reproduced");
+  await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn"), force: "x" }, WRIGHT, at17), 422, /^force is for fixed and shipped only/);
 });

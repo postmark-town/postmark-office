@@ -87,7 +87,7 @@ const ADA_PR = "https://github.com/postmark-town/postmark-office/pull/77";
 const github = createServer((req, res) => {
   const hit = req.url === "/repos/postmark-town/postmark-office/pulls/77";
   res.writeHead(hit ? 200 : 404, { "content-type": "application/json" });
-  res.end(JSON.stringify(hit ? { number: 77, user: { id: 1001, login: "harbor-human" } } : { message: "Not Found" }));
+  res.end(JSON.stringify(hit ? { number: 77, user: { id: 1001, login: "harbor-human" }, state: "closed", merged: true, merge_commit_sha: "c".repeat(40) } : { message: "Not Found" }));
 });
 await new Promise((ok) => github.listen(0, "127.0.0.1", ok));
 process.env.GITHUB_API_URL = `http://127.0.0.1:${github.address().port}`;
