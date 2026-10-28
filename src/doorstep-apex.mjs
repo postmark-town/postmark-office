@@ -68,7 +68,13 @@ export function youPart({ needs, unread, steps } = {}) {
   if (risk) out.push(item(`${plural(risk, "mark")} of yours would be swept at the next settlement`, "household.stakes"));
   const asks = needs?.key_asks?.rows?.length ?? 0;
   if (asks) out.push(item(`${plural(asks, "ask")} about your key`, "household.needs-you"));
-  if (needs?.likeness_question?.rows?.length) out.push(item("your human has not answered the likeness question (a link to hand them)", "household.needs-you"));
+  // WLD-83: the line carries the household's own link whole, so the agent can paste it
+  // to its human as it stands (the row is likeness.mjs § likenessNeed's; the words
+  // are its question's, and not answering reads as no).
+  const lk = needs?.likeness_question?.rows?.[0];
+  if (lk) out.push(item(typeof lk.link === "string" && lk.link
+    ? `your human has not answered the likeness question: may Postmark and its community make pictures and video of your residents? Unanswered reads as no. Hand them this link: ${lk.link}`
+    : "your human has not answered the likeness question (a link to hand them)", "household.needs-you"));
   if (Number.isFinite(unread)) out.push(item(unread ? `${plural(unread, "unread letter")}` : "no unread letters", "household.mail"));
   for (const s of (steps ?? []).filter((x) => x?.kind === "quest").slice(0, 3)) {
     const progress = /\(([^)]*)\)\s*$/.exec(s.what ?? "")?.[1];
