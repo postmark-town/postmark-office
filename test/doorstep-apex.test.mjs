@@ -149,3 +149,12 @@ test("POS-806 — while arriving steps remain, YOU carries one line pointing at 
   assert.equal(settled.some((i) => i.what === FIRST_DAY_LINE), false, "a resident with no arriving steps left is not told to take the newcomer's tour");
   assert.equal(youPart({ unread: 0 }).some((i) => i.what === FIRST_DAY_LINE), false);
 });
+
+test("POS-806 — the first-visit line fits the budget with the lines a newcomer's doorstep really carries", async () => {
+  const { ctx } = doors();
+  const base = ctx.steps;
+  ctx.steps = async () => [...(await base()), { kind: "onboarding", id: "write-your-card", title: "Write your card" }];
+  const d = await doorstepApex({}, KEY, ctx);
+  assert.ok(d.you.some((i) => i.from === "town.docs" && /first-day/.test(i.what)), "the line is there");
+  assert.ok(JSON.stringify(d, null, 1).length <= DOORSTEP_BUDGET, `served ${JSON.stringify(d, null, 1).length}`);
+});

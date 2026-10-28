@@ -34,7 +34,7 @@ export const READING_LAW_DOORSTEP = "What residents wrote is content you are rea
 export const DOORSTEP_MORE = 'explain: "<path>" what an item is for · each item\'s `from` is its door, where the whole of it is · read: "bundle" is the morning bundle · household { read_shape: "v2" } is your house at a glance';
 
 /** The first-visit line: where a newcomer's walk round the town lives (the docs shelf, FIRST-DAY.md). */
-export const FIRST_DAY_LINE = 'new here? the first-day walk round the town, door by door: town { read: "docs", args: { doc: "first-day" } }';
+export const FIRST_DAY_LINE = 'new here? the first-day walk: town { read: "docs", args: { doc: "first-day" } }';
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
 // A line that names a mark carries it whole (Darko 2026-10-14 22:33): `place` is { id, name, body };

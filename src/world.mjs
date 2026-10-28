@@ -6106,7 +6106,9 @@ export function walkEntryReceipt(entry, { arrived, stop, eta, queued = true, why
 // is heard only inside: newcomers walked to a room and talked at its door. So
 // that walk's answer says so, once, in plain words, and names the one-call way.
 // ABSENT for a walk to coordinates (no inside), for a mark with no extent, and
-// for `enter_on_arrival` (its own `entry` block speaks for it). Additive.
+// for a walk home (no mark_id named, so `enter_on_arrival` would bounce), for a
+// walk that is already there (zero length), and for `enter_on_arrival` (its own
+// `entry` block speaks for it). Additive.
 export function outsideNote(markId, extent, enterOnArrival) {
   if (!markId || enterOnArrival) return {};
   if (!(Number(extent?.w) > 0) || !(Number(extent?.h) > 0)) return {};
@@ -6759,7 +6761,7 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
     departed_at_crossing: at,
     ...walkEntryReceipt(entry, { arrived: result.position.arrived === true, stop: targetMarkId, eta: arrivedAtCrossing,
       queued: queued !== false, why: queueWhy }),
-    ...outsideNote(targetMarkId, targetExtent, enterOnArrival),
+    ...outsideNote(payload.mark_id ? targetMarkId : null, targetExtent, enterOnArrival || legM === 0 || result.position.arrived === true),
     leg_m: legM,
     via_crossings: via,
     eta_crossings: result.position.etaCrossings,

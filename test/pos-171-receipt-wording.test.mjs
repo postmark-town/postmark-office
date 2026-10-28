@@ -401,3 +401,11 @@ test("POS-806 — falsifiers: enter_on_arrival speaks through its own entry bloc
   assert.deepEqual(outsideNote(null, { w: 9, h: 9 }, false), {});
   assert.deepEqual(Object.keys(outsideNote("a/b", { w: 9, h: 9 }, false)), ["outside_note"]);
 });
+
+test("POS-806 — no note when it would mislead: a walk HOME (no mark named; enter_on_arrival would bounce) and a zero-length walk to where you already stand", async () => {
+  const home = await walkViaOffice(repo, { handle: "alpha" }, houseA);
+  assert.equal("outside_note" in home, false, "a walk home names no mark, and the one-call way it would suggest bounces");
+  const here = await walkViaOffice(repo, { handle: "alpha", mark_id: HOME }, houseA);
+  assert.equal(here.position.arrived, true, "the bottle's zero-length leg is arrived");
+  assert.equal("outside_note" in here, false, "you already stand there: 'you will arrive outside it' would be false");
+});

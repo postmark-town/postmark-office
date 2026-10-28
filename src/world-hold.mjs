@@ -361,7 +361,8 @@ const standsOff = (id, reach) =>
  * always enough.
  */
 const walkToReach = (reach) => {
-  const d = Number(reach?.distance_m), margin = Number(reach?.earshot_m);
+  if (reach?.distance_m == null || reach?.earshot_m == null) return ""; // unmeasured is not 0 m
+  const d = Number(reach.distance_m), margin = Number(reach.earshot_m);
   if (!Number.isFinite(d) || !Number.isFinite(margin)) return "";
   const walk = Math.max(1, Math.ceil(d - margin));
   return `; walk ${walk} m${reach.bearing ? ` ${reach.bearing}` : ""} to be within ${Math.round(margin)} m of it`;

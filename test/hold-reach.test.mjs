@@ -940,3 +940,13 @@ test("POS-806 — a 61 m refusal says walk 1 m; the walk it names always lands i
   const after = { x: 0, y: 1 };
   assert.equal(standsWithin(after, top).stands, true);
 });
+
+test("POS-806 — an unmeasured distance (no anchor) adds no walk clause: null is not 0 m", async () => {
+  const ghost = thingAt("wright/a-thing-at-no-number", NaN, NaN); // an anchor the distance cannot be measured to
+  const e = await refusal(() => refuseOutOfReach({
+    thing: ghost.id, to: null, actor: "rei", act: "take", holder: null,
+    ctx: ctxOf(ghost, { x: 0, y: 0 }),
+  }));
+  assert.ok(e);
+  assert.doesNotMatch(e.defect, /; walk /, "no walk is named when the distance could not be measured");
+});
