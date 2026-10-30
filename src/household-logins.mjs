@@ -383,3 +383,68 @@ export function worldHouseholdsFromStore({ identities, pins, declared }) {
   const { logins } = loginKeys(pins, households);
   return oneKeyPerHouse(households, logins, declared);
 }
+
+// ── THE PINNED IDS: who a GitHub account IS, for the PR lane (WLD-122) ───────
+//
+// "Bind pinned ids" (Darko, AUTHORITY 2026-10-27T17:33:26.677Z). The World's PR
+// lane (first knock in lane.yml, the authorship wall in tools/lane-wall.mjs)
+// must know which household a pull request's author belongs to, and the only
+// fact GitHub hands it that a person cannot choose is the account's NUMERIC id.
+// A login can be renamed, and `logins` above is not an identity table: it also
+// binds every sketchbook name (`hh:<house>` and `solo:<handle>` keys under the
+// house's own slug), so a GitHub account named like a house would read as that
+// house. This projection is the identity table, and nothing else reads it.
+//
+// THE RULE, Settled by Bevel on 2026-10-30 03:53Z from the existing derivation
+// (no new eligibility policy):
+//   · An id binds only through a PIN: a `household_pins` row whose `id` is that
+//     account. A declared house's account list ALONE never seeds an id.
+//   · The house is the existing derivation's, through its two existing roads,
+//     keyed by id instead of login: the exported household of every handle
+//     pinned to the id (`identities`, 055, after oneKeyPerHouse), and — only for
+//     an id that is pinned — the declared house whose `accounts` lists it (the
+//     road `loginKeys` + `oneKeyPerHouse` already give that id's login).
+//   · Exactly one house → bound. A retired pin is a pin (055 keeps a retired
+//     handle in its house; the existing maps do not filter it), so it binds.
+//   · Two or more houses (handles in different houses, two unhoused handles —
+//     two `solo:` houses by the existing deriver — or a pin that disagrees with
+//     a declared account list) → NOT bound, and named. Never last-wins, never a
+//     house picked by iteration order, never a new grouping.
+//   · A pin whose id is not a positive whole number binds nothing, and is named.
+//
+// Returns `{ ids, conflicts, malformed }`: `ids` is numeric id (as a string) →
+// household key, sorted by id; `conflicts` is `[{ id, keys }]`; `malformed` is
+// the handles whose pin carries no usable id. Pure: no store, no clock.
+const accountId = (v) => {
+  const s = typeof v === "number" ? (Number.isSafeInteger(v) && v > 0 ? String(v) : null) : typeof v === "string" ? v.trim() : null;
+  return s && /^[1-9][0-9]*$/.test(s) ? s : null;
+};
+
+export function pinnedAccountKeys({ pins, households, declared }) {
+  const declaredOf = new Map();
+  for (const [slug, rec] of Object.entries(declared?.households ?? {})) {
+    for (const a of rec?.accounts ?? []) {
+      const id = accountId(a?.id);
+      if (!id) continue;
+      if (!declaredOf.has(id)) declaredOf.set(id, new Set());
+      declaredOf.get(id).add(`hh:${slug}`);
+    }
+  }
+  const candidates = new Map();
+  const malformed = [];
+  for (const [handle, rec] of Object.entries(pins ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+    const id = accountId(rec?.id);
+    if (!id) { malformed.push(handle); continue; }
+    if (!candidates.has(id)) candidates.set(id, new Set(declaredOf.get(id) ?? []));
+    const key = households?.[handle];
+    if (typeof key === "string" && key) candidates.get(id).add(key);
+  }
+  const ids = {};
+  const conflicts = [];
+  for (const id of [...candidates.keys()].sort((a, b) => (a.length - b.length) || a.localeCompare(b))) {
+    const keys = [...candidates.get(id)].sort((a, b) => a.localeCompare(b));
+    if (keys.length === 1) ids[id] = keys[0];
+    else if (keys.length > 1) conflicts.push({ id, keys });
+  }
+  return { ids, conflicts, malformed };
+}
