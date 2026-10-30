@@ -38,6 +38,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const bounce = (code, defect, hint, extra = {}) => {
   const e = new Error(defect); Object.assign(e, { code, defect, hint, ...extra }); return e;
 };
+// WLD-68: the one hint for an enter target that is missing, hidden or not in your room
+const ENTER_UNAVAILABLE_HINT = "That mark is not available to enter from here. Choose a doorway visible from where you stand. Nothing was recorded.";
 
 /** The clone's enter/exit law, or a named refusal. Never substituted.
  *
@@ -505,6 +507,14 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
     if (answer.choose)
       throw bounce(422, answer.error, "name one of the portal's ways with into: <id>. Nothing was recorded",
         { choose: answer.choose });
+    // NOT AVAILABLE FROM HERE (WLD-68; wording settled by Bevel under Wright's
+    // 2026-10-26 delegation). The clone answers a mark a dungeon hides from you
+    // exactly as it answers an id that does not exist, so naming one learns
+    // nothing; this hint is that same answer for both, and names no room, no
+    // portal and no other way. Telling the walker a hidden portal "has no
+    // inside" was false: it has one, just not from where they stand.
+    if (answer.error === `no mark '${markId}' to enter`)
+      throw bounce(422, answer.error, ENTER_UNAVAILABLE_HINT);
     throw bounce(422, answer.error, "a mark you can step inside has a place and an extent; a point has no inside");
   }
 
