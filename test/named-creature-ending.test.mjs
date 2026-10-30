@@ -31,7 +31,7 @@ import { creatureTick, namedSpawns } from "../src/creature-tick.mjs";
 import { settlementAtOrBefore } from "../src/world-forecast.mjs";
 import {
   FINISHES_SQL, ANSWERED_SQL, NEWEST_SETTLEMENT_SQL, PRIOR_WITHDRAW_SQL, STAYING_SPAWNS_SQL, THING_HOLDER_SQL, THING_STANDING_SQL,
-  NAMES_SHOWN, TOOK_PART, endCreatures, endingLine, firstFinisher, namesSaid, planEnding, tookPart,
+  NAMES_SHOWN, TOOK_PART, endCreatures, endingLine, firstFinisher, namesSaid, planEnding, planFightEnding, planTallyEnding, supportersOf, tookPart,
 } from "../world2/tools/creature-endings.mjs";
 import { endingsOnTick, softStepStatus } from "../world2/tools/settlements-backfill.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
@@ -296,6 +296,74 @@ nodeTest("an ending names the aimed, not the bystander: an aimed actor who never
 
 nodeTest("the aimed read is on the record: ANSWERED_SQL also takes acts whose object is the creature, answered or not", () => {
   assert.match(ANSWERED_SQL, /a\.object = \$1/);
+});
+
+// ── WLD-129: supporters are named after the fighters ─────────────────────────
+
+nodeTest("WLD-129 · a steady or a shield for a fighter names its giver after the fighters, earliest support first", () => {
+  const spawn = { object: ID, payload: { kind: "wolf", x: 1, y: 2 } };
+  const answered = [
+    { act_id: "11", actor: "bo", object: ID, approach: null, support: null },        // bo fought
+    { act_id: "14", actor: "ona", object: "bo", approach: null, support: "shield" },  // ona shielded bo, after lu
+    { act_id: "12", actor: "lu", object: "bo", approach: null, support: "steady" },   // lu steadied bo, first
+    { act_id: "16", actor: "lu", object: "bo", approach: null, support: "shield" },   // lu again: still one name
+    { act_id: "17", actor: "bo", object: "kai", approach: null, support: "steady" },  // bo steadied the finisher: bo is a fighter already
+  ];
+  const finishers = [{ by: "kai", act_id: "20", act_actor: "kai" }];
+  const plan = planEnding({ spawn, finishers, answered, settlement: 300, cutoff: "2026-10-26T18:00:00.000Z" });
+  assert.deepEqual(plan.took_part, ["bo", "kai", "lu", "ona"], "fighters by their first act, then supporters by theirs; nobody twice");
+  assert.equal(plan.finisher, "kai");
+  assert.match(plan.line, /bo, lu and ona took part/);
+  assert.deepEqual(supportersOf(answered, ["bo", "kai"]), ["lu", "ona"]);
+});
+
+nodeTest("WLD-129 · a support for someone who did not fight, for a fighter of another creature, or by the town names no one", () => {
+  const spawn = { object: ID, payload: { kind: "wolf", x: 1, y: 2 } };
+  const answered = [
+    { act_id: "11", actor: "bo", object: ID, approach: null, support: null },
+    { act_id: "12", actor: "lu", object: "ze", approach: null, support: "steady" },            // ze never fought: a bystander
+    { act_id: "13", actor: "ona", object: "ze", approach: null, support: "shield" },
+    { act_id: "14", actor: "the-town", object: "bo", approach: null, support: "steady" },      // never a resident
+    { act_id: "15", actor: "bo", object: "bo", approach: null, support: "steady" },            // never for oneself
+    { act_id: "16", actor: "ivy", object: "bo", approach: null, support: null },               // an act that is not a support
+  ];
+  const finishers = [{ by: "kai", act_id: "20", act_actor: "kai" }];
+  const plan = planEnding({ spawn, finishers, answered, settlement: 300, cutoff: "x" });
+  assert.deepEqual(plan.took_part, ["bo", "kai"], "lu and ona supported a bystander; ze did not take part, so they are not named");
+  assert.doesNotMatch(plan.line, /lu|ona|ze|ivy/);
+});
+
+nodeTest("WLD-129 · with no support rows the ending is exactly what it was", () => {
+  const spawn = { object: ID, payload: { kind: "wolf", x: 1, y: 2 } };
+  const answered = [
+    { act_id: "10", actor: "lu", object: "some/mark", approach: null },
+    { act_id: "11", actor: "bo", object: ID, approach: null },
+  ];
+  const finishers = [{ by: "kai", act_id: "20", act_actor: "kai" }];
+  const plan = planEnding({ spawn, finishers, answered, settlement: 300, cutoff: "2026-10-26T18:00:00.000Z" });
+  assert.deepEqual(plan.took_part, ["bo", "kai"]);
+  assert.equal(plan.line, "The wolf is finished. kai finished it first; bo took part.");
+  assert.deepEqual(supportersOf(answered, tookPart(ID, answered, finishers)), []);
+  assert.deepEqual(supportersOf(), []);
+});
+
+nodeTest("WLD-129 · a fight in set pieces and a tempter name their supporters too (act 31618's shape: limen steadied little-bird)", () => {
+  const spawn = { object: ID, payload: { kind: "candied-jetto", x: 1, y: 2 } };
+  const answered = [
+    { act_id: "30963", actor: "little-bird", object: ID, approach: null, support: null },
+    { act_id: "31107", actor: "limen", object: "little-bird", approach: null, support: "steady" },
+    { act_id: "31108", actor: "umber", object: "limen", approach: null, support: "shield" },    // for a supporter, not a fighter: not named
+  ];
+  const fight = { pieces: [{}, {}], sanity_max: 30 };
+  const rows = [{ id: "5", at: "2026-10-29T06:00:00.000Z", action: "phase", object: ID, payload: { index: 1 } },
+    { id: "30966", at: "2026-10-29T12:20:01.846Z", action: "sanity", object: "little-bird", payload: { by: 30 } }];
+  const fightPlan = planFightEnding({ spawn, rows, answered, settlement: 139, cutoff: "2026-10-29T18:00:00.000Z", from: "2026-10-29T12:00:00.000Z", fight });
+  assert.deepEqual(fightPlan.took_part, ["little-bird", "limen"]);
+  assert.match(fightPlan.line, /little-bird and limen took part/);
+  const tallyRows = [{ action: "strike", actor: "bo", object: ID, payload: { damage: 3 } }];
+  const tallyPlan = planTallyEnding({ spawn, rows: tallyRows, answered: [{ act_id: "9", actor: "lu", object: "bo", approach: null, support: "shield" }],
+    settlement: 139, cutoff: "x" });
+  assert.deepEqual(tallyPlan.took_part, ["bo", "lu"], "bo is named by the tally; lu shielded bo");
 });
 
 nodeTest("the first finisher is the lowest act id, by record order, never the order the finish rows were written", () => {
