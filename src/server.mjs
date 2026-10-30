@@ -341,16 +341,26 @@ const RELOAD_POLL_MS = msEnv("OFFICE_RELOAD_POLL_MS", 5_000);        // the inge
 const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 
 // ONE STORE READ IN FLIGHT, AND NEVER FOREVER (POS-639; store-refresh.mjs says
-// why): a tick that finds the last roll+probe pair still reading skips. Each
-// read carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a
-// read that runs past the bound, and the guard is freed only when the pair has
-// settled: the poll holds at most the pair's two of the thread's three pen
-// connections (world2-pen.mjs § pool), whatever the store does.
+// why): a tick that finds the last refresh still reading skips. Each read
+// carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a read that
+// runs past the bound, and the guard is freed only when the refresh has settled.
+//
+// THE PROBE, THEN THE ROLL (POS-815; Darko 2026-10-29: "Serialize them",
+// "Probe first"). The two reads used to run side by side and held two of the
+// thread's pen connections at once (the pen is three per pool instance,
+// world2-pen.mjs § pool); one after the other, the refresh holds ONE, whatever
+// the store does. The probe goes first: it
+// carries the as-of and the write path's sign-in and resident checks, and the
+// roll behind the position doors waits for it. Each is still its own
+// transaction, published on its own success and refused on its own: a refused
+// probe still reads the roll, and a refused roll leaves the probe it followed.
+// Under a slow store the roll is therefore later than it was (accepted, the
+// same ruling). Boot reads through this same tick, below.
 const storeTick = storeRefresher({
-  read: () => Promise.all([
-    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-  ]),
+  read: async () => {
+    await townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {});
+    await townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {});
+  },
   onRead: () => {
     const was = AS_OF;
     AS_OF = storeAsOf();
@@ -365,16 +375,20 @@ setInterval(() => {
   // a throw from onRead must never become an unhandled rejection that ends the process
   storeTick.tick().catch((e) => faultLogged("the store poll's tick tripped", e));
 }, RELOAD_POLL_MS).unref();
-// AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
-// probe are loaded first, so the first ask is never answered by a process that
-// has not read its index yet (a berth or a sign-in a moment after a restart was
-// a 503 or an anonymous key). Bounded: a store that does not answer within 10 s
-// leaves both unloaded, the checks answer the store's 503 and the poll retries.
+// AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the probe and the roll are
+// loaded first, so the first ask is never answered by a process that has not
+// read its index yet (a berth or a sign-in a moment after a restart was a 503
+// or an anonymous key). Bounded: a store that does not answer within 10 s lets
+// the office listen with whichever reader has not finished still unavailable
+// (the probe refusing with the store's 503, the roll absent) and what has
+// finished kept, and the poll retries.
+// THROUGH THE POLL'S OWN TICK (POS-815): the boot read used to run beside the
+// guard, so a boot read still waiting when the first tick came started a second
+// pair. Now it IS the first tick: the bound returns the boot and lets the office
+// listen, the read goes on holding the guard, and the interval's ticks skip
+// until it settles.
 await Promise.race([
-  Promise.all([
-    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-  ]),
+  storeTick.tick().catch((e) => faultLogged("the store poll's boot read tripped", e)),
   new Promise((ok) => setTimeout(ok, STORE_READ_BOUND_MS).unref()),
 ]);
 AS_OF = storeAsOf();
