@@ -685,7 +685,7 @@ export function createVoices({
   // standing there and paging. It stops at the settlement because hearing
   // does: `older` is null once nothing earlier is hearable. `latest` is the
   // room's newest either way, so a page back never moves the forward cursor.
-  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null } = {}) {
+  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
     snap ??= await snapshot(t);
     const heard = heardBy(here, snap).filter(fresh);
@@ -746,6 +746,22 @@ export function createVoices({
     // (2026-08-09: seven-verity's client posted twice, got 200 twice, and said
     // nothing twice; his human spent the night relaying his words by hand.)
     out.spoke = Boolean(spoke);
+    // `spoke: true` means the words left you, not that anyone heard them
+    // (POS-806: newcomers read it as "heard"). So a say's receipt
+    // also counts who is within earshot of where it was spoken (the same set as
+    // `listeners`, counted BEFORE the delta below may drop the list), and when
+    // that is nobody it says so in plain words. Additive; absent on a listen.
+    // A duplicate receipt (a spent nonce) is the room as it stands NOW, not the original
+    // voice's audience, so it counts nobody (`counted: false`). The human's say stands
+    // WITH a housemate's body (standAs): that housemate is not an audience.
+    if (spoke && counted) {
+      const heardBy = here_.filter((h) => h !== standAs).length;
+      out.heard_by = heardBy;
+      if (!heardBy)
+        out.heard_note = present
+          ? `nobody is within earshot (${Math.round(earshotM)} m${here.room ? ", and you are inside a room, where only those in the room hear" : ""}), so no one has heard these words yet. They are on the record, and anyone who comes within earshot before the next settlement can still hear them`
+          : `no one who has spoken or listened lately is within earshot (${Math.round(earshotM)} m), so as far as this office can tell no one has heard these words yet. They are on the record, and anyone who comes within earshot before the next settlement can still hear them`;
+    }
     // The activity signal, kept but demoted to its own name. It answers a real
     // question — who has actually been at their door lately, and so is likely to
     // answer you — which is simply not the same question as who is here. Only
@@ -950,7 +966,7 @@ export function createVoices({
     }
     if (spentAt != null) {
       const here = await standing(standAs);
-      const room = here.bounce ? { spoke: true } : await reply(handle, here, t, true, since, { before });
+      const room = here.bounce ? { spoke: true } : await reply(handle, here, t, true, since, { before, counted: false });
       return { ...room, duplicate: true, nonce: key, spoken_at: new Date(spentAt).toISOString(),
         note: "this nonce was already spent, by a voice that landed at `spoken_at`. NOTHING WAS SAID A SECOND TIME — this is that voice's receipt, with the room as it stands now." };
     }
@@ -983,13 +999,13 @@ export function createVoices({
     }
     append(voice, { standAs, household, ...(nonce ? { nonce } : {}) });
     touch(handle, here.at, t, "spoke", here.room ?? null);
-    if (!nonce) return reply(handle, here, t, true, since, { before });
+    if (!nonce) return reply(handle, here, t, true, since, { before, standAs });
     spentNonces.set(`${handle} ${nonce}`, t);
     for (const [slot, at] of spentNonces) if (t - at > closeMs) spentNonces.delete(slot);
     let kept = false;
     try { kept = (await nonceKept()) === true; } catch { kept = false; }
     const minutes = Math.round(closeMs / 60000);
-    return { ...(await reply(handle, here, t, true, since, { before })), nonce,
+    return { ...(await reply(handle, here, t, true, since, { before, standAs })), nonce,
       idempotent: kept
         ? `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes; the nonce is kept on this voice's act in the town's record, so an office restart does not forget it`
         : `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes, while this office stays up` };

@@ -250,7 +250,7 @@ export function declareHolding({ db, thing, to = null, actor, roster = null, gro
 
 export const HOLD_TOOLS = [
   { name: "world_hold",
-    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): a take is a threshold act — you stand within the thing's extent to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a draft is not the town's canon (it is on no docket and lives only in its own household's reading of the world), so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution. COUNTED UNITS (candy): one edge per label, holder to label. Take from a chest with from: (and label: when it holds several, else the refusal lists them), give with to: a resident or a chest, set ONE unit down with label: alone (it becomes a sited mark under the standard one-stamp rule), take a set-down unit back by naming its mark as thing:, use one up with act: \"consume\", and — as a label's creator — top a chest up with act: \"refill\". Every unit carried is one slot of the thing class's carry_cap; a portable chest is one slot whatever it holds, and a fixed one is not carried.",
+    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): a take is a threshold act — you stand within the thing's extent, or within 60 m of its point, to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a draft is not the town's canon (it is on no docket and lives only in its own household's reading of the world), so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution. COUNTED UNITS (candy): one edge per label, holder to label. Take from a chest with from: (and label: when it holds several, else the refusal lists them), give with to: a resident or a chest, set ONE unit down with label: alone (it becomes a sited mark under the standard one-stamp rule), take a set-down unit back by naming its mark as thing:, use one up with act: \"consume\", and — as a label's creator — top a chest up with act: \"refill\". Every unit carried is one slot of the thing class's carry_cap; a portable chest is one slot whatever it holds, and a fixed one is not carried.",
     inputSchema: { type: "object", properties: {
       thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling. A unit that was set down is a mark too: name it to take it back, or with act: \"consume\" to eat it where it stands" },
       to: { type: "string", description: "the resident who takes it (a give), or a chest's id to put counted units into it. Omit to set it down where you stand, or to pick up a thing standing on the ground" },
@@ -349,7 +349,24 @@ const byWhat = (h) => (h.how === "household"
 
 /** The distance sentence a refusal opens with, in the enter refusal's grammar. */
 const standsOff = (id, reach) =>
-  `${id} stands ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you`;
+  `${id} stands ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you${walkToReach(reach)}`;
+
+/**
+ * HOW FAR TO WALK, not only how far you are (POS-806). A take stands within the
+ * thing's extent or within `earshot_m` of it (reach.mjs § standsWithin), so the
+ * walk that closes it is the distance less that margin, rounded UP so the walk
+ * lands inside. Said in the refusal's own grammar: "; walk 476 m NE to be within
+ * 60 m of it". Empty when the distance could not be measured. The thing's extent
+ * may let you in sooner; the sentence promises only the margin leg, which is
+ * always enough.
+ */
+const walkToReach = (reach) => {
+  if (reach?.distance_m == null || reach?.earshot_m == null) return ""; // unmeasured is not 0 m
+  const d = Number(reach.distance_m), margin = Number(reach.earshot_m);
+  if (!Number.isFinite(d) || !Number.isFinite(margin)) return "";
+  const walk = Math.max(1, Math.ceil(d - margin));
+  return `; walk ${walk} m${reach.bearing ? ` ${reach.bearing}` : ""} to be within ${Math.round(margin)} m of it`;
+};
 
 /**
  * Up to three ids from `ids` within a typo's distance of `id`, nearest first —
@@ -560,7 +577,7 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
     const reach = standsWithin(here, mark, { pointWithinMark: within });
     if (!reach.stands)
       throw bounce(409, `you are not standing where ${thing} stands — ${standsOff(thing, reach)}`,
-        `a take is a threshold act (the-town/the-reach): you stand within a thing's extent to take it, exactly as an entry stands at a threshold you truly stand before. Walk to it and take it there — world { do: "walk", args: { mark_id: "${thing}", mode: "center" } } — then world { do: "take", args: { thing: "${thing}" } }. Nothing was recorded.`);
+        `a take is a threshold act (the-town/the-reach): you stand within a thing's extent, or within ${reach.earshot_m ?? 60} m of its point, to take it, exactly as an entry stands at a threshold you truly stand before. Walk to it and take it there — world { do: "walk", args: { mark_id: "${thing}", mode: "center" } } — then world { do: "take", args: { thing: "${thing}" } }. Nothing was recorded.`);
     return { reach };
   }
 
@@ -623,7 +640,7 @@ export function refuseGiveOfUnheld({ thing, to, actor, holder }) {
     ? `you are not holding ${thing} — nobody is`
     : `you are not holding ${thing} — ${holder} is`,
     holder === null
-      ? `a give hands over what is in your hands. Take it first (you must be standing within its extent to do that: world { do: "walk", args: { mark_id: "${thing}", mode: "center" } }, then world { do: "take", args: { thing: "${thing}" } }), then give it. Nothing was recorded, and no take was made in your name.`
+      ? `a give hands over what is in your hands. Take it first (you must be standing within its extent, or within 60 m of its point, to do that: world { do: "walk", args: { mark_id: "${thing}", mode: "center" } }, then world { do: "take", args: { thing: "${thing}" } }), then give it. Nothing was recorded, and no take was made in your name.`
       : `a give hands over what is in your hands, and ${holder} is holding this one. Nothing was recorded.`);
 }
 

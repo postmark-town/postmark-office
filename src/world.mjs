@@ -6099,6 +6099,22 @@ export function walkEntryReceipt(entry, { arrived, stop, eta, queued = true, why
     note: "the entry is adjudicated when you arrive; nothing has been entered yet" } };
 }
 
+// ── WALKING SOMEWHERE IS NOT BEING INSIDE IT (POS-806) ─────────
+//
+// A walk to a mark that has an inside (a place and an extent) and did not ask
+// for `enter_on_arrival` leaves the walker OUTSIDE it, and a voice spoken inside
+// is heard only inside that room: newcomers walked to a room and talked at its door. So
+// that walk's answer says so, once, in plain words, and names the one-call way.
+// ABSENT for a walk to coordinates (no inside), for a mark with no extent, and
+// for a walk home (no mark_id named, so `enter_on_arrival` would bounce), for a
+// walk that is already there (zero length), and for `enter_on_arrival` (its own
+// `entry` block speaks for it). Additive.
+export function outsideNote(markId, extent, enterOnArrival) {
+  if (!markId || enterOnArrival) return {};
+  if (!(Number(extent?.w) > 0) || !(Number(extent?.h) > 0)) return {};
+  return { outside_note: `you are walking to ${markId}, not into it: arriving does not enter it. Enter it to be inside, where what you see and hear is what is inside it (a room's voices are heard only inside that room), with world_enter, or walk with enter_on_arrival: true to do both in one call` };
+}
+
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 export async function walkViaOffice(worldClone, payload = {}, key = null) { return perceived(() => walkAct(worldClone, payload, key)); }
 async function walkAct(worldClone, payload = {}, key = null, { approach = null } = {}) {
@@ -6745,6 +6761,7 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
     departed_at_crossing: at,
     ...walkEntryReceipt(entry, { arrived: result.position.arrived === true, stop: targetMarkId, eta: arrivedAtCrossing,
       queued: queued !== false, why: queueWhy }),
+    ...outsideNote(payload.mark_id ? targetMarkId : null, targetExtent, enterOnArrival || legM === 0 || result.position.arrived === true),
     leg_m: legM,
     via_crossings: via,
     eta_crossings: result.position.etaCrossings,
