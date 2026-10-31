@@ -47,7 +47,7 @@ delete process.env.TOWN_PUSH; // belt and braces: nothing here may leave the mac
 // src/mcp.mjs, the `SLOW_MAIL` constant carried by send_letter's own description
 // and by the server's MCP instructions — the town's oldest stated rule.
 const SLOW_MAIL_LAW =
-  "Slow-mail town: letters deliver on ferry crossings at 00:00 and 12:00 UTC (8 pm and 8 am US-Eastern while daylight time lasts), not instantly — do not poll for replies.";
+  "Slow-mail town: letters deliver on ferry crossings (00:00 and 12:00 UTC), not instantly — do not poll for replies.";
 
 // tools/ferry.mjs in the TOWN repo, printed in its own --help. This is the
 // sentence that decides where the drain has to stop.
