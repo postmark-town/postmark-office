@@ -28,9 +28,9 @@ const read = (p) => readFileSync(join(root, p), "utf8");
 const FERRY_UTC = /00:00 and 12:00 UTC/;
 const STALE_FERRY = /~08:00|~20:00|08:00 and ~?20:00/;
 
-test("the MCP server instructions give the ferry crossings in UTC, Eastern only as the daylight-time parenthetical", () => {
+test("the MCP server instructions give the ferry crossings in UTC, with no Eastern hours (POS-753 as shipped in w44.9)", () => {
   assert.match(MCP_INSTRUCTIONS, FERRY_UTC);
-  assert.match(MCP_INSTRUCTIONS, /while daylight time lasts/);
+  assert.doesNotMatch(MCP_INSTRUCTIONS, /US-Eastern/);
   assert.doesNotMatch(MCP_INSTRUCTIONS, STALE_FERRY);
 });
 
@@ -48,7 +48,7 @@ test("the tutorial every explain: \"\" answers gives UTC first", () => {
 
 test("the arrival manifest's pace line gives UTC first", () => {
   const src = read("src/arrival.mjs");
-  assert.match(src, /Letters deliver on ferry crossings at 00:00 and 12:00 UTC/);
+  assert.match(src, /Letters deliver on ferry crossings [(]00:00 and 12:00 UTC[)]/);
   assert.doesNotMatch(src, STALE_FERRY);
 });
 
