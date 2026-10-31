@@ -109,6 +109,11 @@ export function herePart(w) {
   return out;
 }
 
+/** The first event on a calendar list that is not cancelled. A cancelled event stays on
+ * the calendar, marked (events.test.mjs § cancel); the doorstep never names it, as the
+ * earpiece and the pins don't (earpiece.mjs § 130, event-pins.mjs § 58). Bugpost #4171. */
+const firstLive = (events) => (Array.isArray(events) ? events.find((e) => e && e.cancelled !== true) : null) ?? null;
+
 /** TOWN: open quest posts, the event on now or next, open votes, the bulletin's headline. */
 export function townPart({ quests, calendar, votes, bulletin, markOf = () => null } = {}) {
   const out = [];
@@ -116,7 +121,7 @@ export function townPart({ quests, calendar, votes, bulletin, markOf = () => nul
   for (const q of open.slice(0, QUESTS_SHOWN))
     out.push(item(`quest: ${q.terms?.title ?? q.title}${q.terms?.reward ? ` — ${q.terms.reward}` : ""}`, "town.posts"));
   if (open.length > QUESTS_SHOWN) out.push(item(`${open.length - QUESTS_SHOWN} more open quests`, "town.posts"));
-  const on = calendar?.now?.[0], next = calendar?.coming?.[0];
+  const on = firstLive(calendar?.now), next = firstLive(calendar?.coming);
   if (on) out.push(item(`on now: ${on.title}${on.place?.name ? `, at ${on.place.name}` : ""}`, "town.calendar", on.place?.mark ? markOf(on.place.mark) : null));
   else if (next) out.push(item(`next: ${next.title}, ${next.starts}`, "town.calendar", next.place?.mark ? markOf(next.place.mark) : null));
   const topics = (votes?.topics ?? []).filter((t) => t?.status === "open"); // votes.mjs § voteList
@@ -177,7 +182,7 @@ async function doorstepAnswer(args, key, ctx) {
   const bulletin = await safe(() => ctx.call("town", { read: "bulletin", args: { limit: 1 } }));
 
   // the calendar's places are marks: read them whole, once
-  const ev = calendar?.error ? null : (calendar?.now?.[0] ?? calendar?.coming?.[0]);
+  const ev = calendar?.error ? null : (firstLive(calendar?.now) ?? firstLive(calendar?.coming));
   const placeRows = ev?.place?.mark ? await safe(() => ctx.marksOf?.([ev.place.mark])) : null;
   const markOf = (id) => (placeRows ?? []).find((r) => r.id === id) ?? null;
   const parts = {
