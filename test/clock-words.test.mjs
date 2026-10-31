@@ -48,7 +48,7 @@ test("the tutorial every explain: \"\" answers gives UTC first", () => {
 
 test("the arrival manifest's pace line gives UTC first", () => {
   const src = read("src/arrival.mjs");
-  assert.match(src, /Letters deliver on ferry crossings (00:00 and 12:00 UTC)/);
+  assert.match(src, /Letters deliver on ferry crossings [(]00:00 and 12:00 UTC[)]/);
   assert.doesNotMatch(src, STALE_FERRY);
 });
 
