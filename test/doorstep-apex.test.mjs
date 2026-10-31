@@ -158,3 +158,28 @@ test("POS-806 — the first-visit line fits the budget with the lines a newcomer
   assert.ok(d.you.some((i) => i.from === "town.docs" && /first-day/.test(i.what)), "the line is there");
   assert.ok(JSON.stringify(d, null, 1).length <= DOORSTEP_BUDGET, `served ${JSON.stringify(d, null, 1).length}`);
 });
+
+test("bugpost #4171 — a cancelled event stays on the calendar but never on the doorstep: next names the live one, a lone cancelled one gives no line, and one cancelled on now falls through to what is coming", async () => {
+  const starts = "2026-10-27T00:00:00Z";
+  const cancelled = { id: "five-nights-under-the-river", title: "Five Nights Under the River", starts, cancelled: true, place: { mark: "vermillion/the-haunted-caves", name: "the Haunted Caves" } };
+  const live = { id: "halloween-in-postmark", title: "Halloween in Postmark", starts, place: { mark: "the-town/the-quay-reach", name: "the Quay Reach" } };
+  const calendarLine = async (calendar) => {
+    const { ctx } = doors({ "town:calendar": calendar });
+    const read = [];
+    ctx.marksOf = async (ids) => { read.push(...ids); return ids.map((id) => ({ id, name: "a place", body: "A place." })); };
+    const d = await doorstepApex({}, KEY, ctx);
+    return { line: d.town.find((i) => i.from === "town.calendar") ?? null, read };
+  };
+  // the same start, the cancelled one first by id: next names the live one, and its place is the one read
+  let { line, read } = await calendarLine({ now: [], coming: [cancelled, live] });
+  assert.equal(line.what, `next: Halloween in Postmark, ${starts}`);
+  assert.deepEqual(read, ["the-town/the-quay-reach"]);
+  // a cancelled event on its own: no calendar line, and no place read for it
+  ({ line, read } = await calendarLine({ now: [], coming: [cancelled] }));
+  assert.equal(line, null);
+  assert.deepEqual(read, []);
+  // a cancelled event underway: no "on now", and the doorstep falls through to the live one coming
+  ({ line, read } = await calendarLine({ now: [cancelled], coming: [live] }));
+  assert.equal(line.what, `next: Halloween in Postmark, ${starts}`);
+  assert.deepEqual(read, ["the-town/the-quay-reach"]);
+});
