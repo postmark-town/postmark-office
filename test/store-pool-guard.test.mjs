@@ -73,10 +73,9 @@ test("the pool options: the acquire timeout and the idle-transaction limit defau
 // socket's keepalive timer is read from /proc/net/tcp (timer 2, expiry in
 // 1/100 s). Without the initial delay the timer is the kernel's tcp_keepalive_time
 // (7200 s = 720000 ticks here); with it, about 10 s. This proves the setting
-// reaches the socket. How long a dead peer then takes to be found (about 11 s
-// of probes on top) needs a peer that stops answering, which a local server
-// cannot be, so that figure is the PR's measurement in a network namespace,
-// not this test's claim.
+// reaches the socket. How long a dead peer then takes to be found needs a peer
+// that stops answering, which a local server cannot be, so this test makes no
+// claim about it; the PR body carries the one-host observations, attributed.
 test("a pool connection's kernel keepalive timer is the initial delay, not the kernel's two hours", { skip: process.platform !== "linux" && "reads /proc/net/tcp (Linux only)" }, async () => {
   const { createServer } = await import("node:net");
   const { default: pg } = await import("pg");
