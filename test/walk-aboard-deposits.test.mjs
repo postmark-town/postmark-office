@@ -104,6 +104,44 @@ test("a walker who leaves only a room is read first and refused first, as before
   assert.equal(exits.length, 0);
 });
 
+// DEC-5 (the occupancy invariant), the four shapes Truey named at a95b866. The earlier room-only test passed
+// because it ran with exit:true, which proceeds to the road read; none of the tests ran a room-only walk WITHOUT exit.
+const clear = async () => ({ factor: 1, deepest: 0 });
+
+test("DEC-5: a walk that leaves only a room, without exit:true, is the 409 and writes no exit", async () => {
+  const exits = [];
+  const out = await roadFromTheDeposit({ from: STOP, leaving: [ROOM], byId, exit: false, readRoad: clear,
+    exitOne: async (id) => { exits.push(id); return {}; } });
+  assert.equal(out.blocked, true);
+  assert.equal(exits.length, 0);
+});
+
+test("DEC-5: a walk that leaves only a room, with exit:true, exits and proceeds", async () => {
+  const exits = [];
+  const out = await roadFromTheDeposit({ from: STOP, leaving: [ROOM], byId, exit: true, readRoad: clear,
+    exitOne: async (id) => { exits.push(id); return {}; } });
+  assert.equal(out.blocked, undefined);
+  assert.deepEqual(exits, [ROOM]);
+  assert.deepEqual(out.exitedFirst, [ROOM]);
+});
+
+test("DEC-5: a walk that leaves only a vehicle, without exit:true, deposits first", async () => {
+  const exits = [];
+  const out = await roadFromTheDeposit({ from: HULL, leaving: [SHIP], byId, exit: false, readRoad: road([]),
+    exitOne: async (id) => { exits.push(id); return setDown(STOP, "s", false)(); } });
+  assert.equal(out.blocked, undefined);
+  assert.deepEqual(exits, [SHIP]);
+  assert.deepEqual(out.from, STOP);
+});
+
+test("DEC-5: [room, vehicle] without exit:true is the 409 (restated beside its siblings)", async () => {
+  const exits = [];
+  const out = await roadFromTheDeposit({ from: HULL, leaving: [ROOM, SHIP], byId, exit: false, readRoad: road([]),
+    exitOne: async (id) => { exits.push(id); return {}; } });
+  assert.equal(out.blocked, true);
+  assert.equal(exits.length, 0);
+});
+
 test("a road from the deposit that still meets the wall is refused AFTER the exit, and says they are ashore", async () => {
   const wallStop = { x: 0, y: -11000 };
   const exits = [];
@@ -139,3 +177,14 @@ test("a refusal outside a vehicle reads exactly as it did", () => {
   assert.doesNotMatch(e.hint, /do: "exit"/);
 });
 
+
+// A PIN, not a drive (WIRING-AND-PINS): no harness runs walkAct end to end, so the call that hands the real
+// walker's inputs to roadFromTheDeposit is read as text. It is the only check on the wiring, and says so.
+test("PIN: walkAct hands roadFromTheDeposit the walker's own leaving, marks and exit flag", () => {
+  const door = SOURCE.slice(SOURCE.indexOf("async function walkAct("), SOURCE.indexOf("export async function worldWalkers"));
+  const call = door.slice(door.indexOf("await roadFromTheDeposit({"), door.indexOf("if (roadRead.blocked)"));
+  assert.ok(call.includes("leaving: occupying?.leaving ?? []"));
+  assert.ok(call.includes("byId: occupying?.byId ?? new Map()"));
+  assert.ok(call.includes("exit: payload.exit === true"));
+  assert.ok(call.includes("afterDeposit: (pt) => aimAt(pt)"));
+});

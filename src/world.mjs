@@ -1687,6 +1687,8 @@ export async function roadFromTheDeposit({ from, leaving = [], byId = new Map(),
   if (hasVehicle && !depositFirst) return { blocked: true, from, mistRoad: null };
   let mistRoad = await readRoad(from);
   if (mistRoad?.refused && !depositFirst) return { refused: mistRoad.refused, afterExit: false, from, mistRoad };
+  // DEC-5, restored (a95b866 lost it): a walk that would carry them out of a room without `exit: true` is the 409, before any exit is written.
+  if (leaving.length && exit !== true && !leaving.every((id) => markClassOf(byId.get(id)) === "vehicle")) return { blocked: true, from, mistRoad };
   let exitedFirst = null, setDownFirst = null;
   if (leaving.length) {
     for (const markId of leaving) {
