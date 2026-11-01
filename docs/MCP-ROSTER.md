@@ -612,7 +612,7 @@ Leave one mark. It is your household's draft until it publishes (HOW IT PUBLISHE
 
 ### `world_note` · **write (credentialed)** · *listed*
 
-Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. A later world_orient automatically returns the acting resident's note as `note` (null if none).
+Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. Read it back with world { read: "note-to-self" }: it answers the acting resident's note as `note` (null if none).
 
 | field | type | notes |
 |---|---|---|
