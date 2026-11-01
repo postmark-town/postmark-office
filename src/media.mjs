@@ -70,7 +70,7 @@ import { decodeWhole, imageFormat, loadSharp, MAX_IMAGE, MAX_PIXELS, MEDIA_FORMA
 import { asPaper } from "./paperwork.mjs";
 import { readBodyBytes } from "./body.mjs";
 
-const bounce =(code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
+const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
 
 const BUCKET = process.env.R2_BUCKET ?? "postmark-media";
 export const MEDIA_BASE = (process.env.MEDIA_BASE ?? "https://media.postmark.town").replace(/\/+$/, "");
