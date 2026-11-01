@@ -20,7 +20,7 @@
 //      purchase makes room;
 //   7–9. buying room ahead: the quote, the door, and the exec end to end;
 //   10. a retry or a double click burns once (the 10-26 review's F1).
-import { test, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -40,7 +40,9 @@ const WORLD_CLONE = process.env.WORLD_CLONE ?? join(ROOT, "world-clone");
 const LAW_WORLD = mkdtempSync(join(tmpdir(), "parcel-room-law-world-"));
 mkdirSync(join(LAW_WORLD, "tools"), { recursive: true });
 writeFileSync(join(LAW_WORLD, "tools", "marks-fold.mjs"), "export const parcelRoomOf = () => 3;\n");
-after(() => rmSync(LAW_WORLD, { recursive: true, force: true }));
+// Removed at exit, not in a root `after`: under --test-name-pattern the root hook
+// ran before the filtered tests and took the folder from under them (measured).
+process.on("exit", () => rmSync(LAW_WORLD, { recursive: true, force: true }));
 
 const registry = { households: {
   "the-rowan": { accounts: [{ login: "rowan-gh", id: 101 }], residents: ["ash", "birch"], since: "2026-11-02", formerly: ["rowan-house"] },
