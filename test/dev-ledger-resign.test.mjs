@@ -269,7 +269,8 @@ function seedCorrectionTown(prod, { withVerifier = false } = {}) {
   mkdirSync(join(dir, "tools")); mkdirSync(join(dir, "WHITE_PAGES"));
   copyFileSync(join(TOWN, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
   if (withVerifier) copyFileSync(join(TOWN, "tools", "stamp-verify.mjs"), join(dir, "tools", "stamp-verify.mjs"));
-  const head = [...BASE, NAMED_STAGE];
+  // the verifier replays the witnessed mail, so the lawful-fixture arm carries no BASE mints (they would be owed): the rules line, the stage, the pair
+  const head = [...(withVerifier ? BASE.slice(0, 1) : BASE), NAMED_STAGE];
   const stageSig = ENGINE.signSeal(ENGINE.sealChain(head)[head.length - 1], prod.key);
   const all = [...head, NAMED_RECREDIT, burnOf(stageSig)];
   const seals = ENGINE.sealChain(all);
