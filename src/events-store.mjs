@@ -46,9 +46,10 @@ import {
 import {
   BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
-  RECREDIT_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
+  RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
+import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
 import {
@@ -701,7 +702,20 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
   // POS-649: who wrote an earned stage's linked work is read from GitHub before
   // the write's transaction opens, so no store connection waits on the network.
   const before = await read((c) => bugRow(c, id), env);
-  const gh = before ? await githubAuthorOf(judgeAdvance(fields, before, roll), { env }) : null;
+  const first = before ? judgeAdvance(fields, before, roll) : null;
+  // The stage guard (bug-stage-guard.mjs): fixed waits for its PR's merge, shipped for a tag holding it.
+  // Only a founder's force goes past a refusal, and the act keeps why and what it went past.
+  if (first?.force && !FORCE_HANDS.includes(hand))
+    throw refuse(403, `only ${FORCE_HANDS.join(" and ")} force a stage past the guard`, `${hand} advances ${first.to} when the work is there: ${first.to === "fixed" ? "its PR merged" : "a tag holding the merge"}`, { field: "force" });
+  let forced = null;
+  if (first) {
+    try { await stageProofOf(first, before, { env }); }
+    catch (e) {
+      if (!first.force || !e?.defect) throw e;
+      forced = { reason: first.force, past: e.defect };
+    }
+  }
+  const gh = first ? await githubAuthorOf(first, { env }) : null;
   return write(async (client) => {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
@@ -715,7 +729,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       // The link is kept per stage; the act carries the post's whole map after it, as the reveal does.
       ...(j.link ? { links: { ...(prev.fields?.links ?? {}), [j.to]: j.link } } : {}) };
     const payload = { post: id, from: prev.state, to: j.to, ...(j.credit ? { credit: j.credit } : {}),
-      ...(Object.keys(set).length ? { fields: set } : {}), hand };
+      ...(Object.keys(set).length ? { fields: set } : {}), ...(forced ? { forced } : {}), hand };
     const actId = await insertAct(client, bugActRow({ action: ACT_ADVANCE, actor: hand, object: id, payload, now }));
     const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
       { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
@@ -725,8 +739,9 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       ? `the ladder owes ${j.credit} ${n} stamps for ${j.to}, paid by the reviewed stage pass (not by this act), subject to the town's meep law and, at confirmed, three paid reports per household a week`
       : `${j.to} pays nothing`;
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
-      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}),
-      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
+      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
+      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
       read: bugReadHint(id) };
   }, env);
 }
