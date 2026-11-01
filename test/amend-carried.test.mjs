@@ -43,7 +43,8 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,11 +72,10 @@ const MIGRATION = join(OFFICE, "world2", "schema", "075_amend_carried.sql");
 const world = tempDir("postmark-amend-carried-");
 after(() => removeTempDirSync(world));
 let clock = Date.parse("2026-09-20T06:00:00Z");
-const gitIn = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], {
+const git = (...a) => execFileSync("git", ["-C", world, ...a], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   env: { ...process.env, GIT_COMMITTER_DATE: new Date(clock).toISOString(), GIT_AUTHOR_DATE: new Date(clock).toISOString(), TZ: "UTC" },
 });
-const git = (...a) => gitIn(world, ...a);
 const put = (p, t) => { const f = join(world, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
 const markPath = (id) => `WORLD/marks/${id}/mark.md`;
 // Each body unlike every other (`--follow` pairs look-alikes), and the date line
@@ -118,41 +118,48 @@ after(async () => { if (!skip) await store.stop(); });
 
 // ── the world's git runs its auto maintenance in the foreground (POS-837) ────
 
-// On Linux a commit runs `gc --auto` DETACHED: git returns while the child still packs
-// objects/, and a teardown races it (POS-419; helpers/temp-dir.mjs). The helper's import
-// turns that off for every git this file spawns, through `gitIn`'s inherited env. This
-// drives that very `gitIn` on a scratch repo with auto-gc forced on (gc.auto=1: the
-// 1500 loose objects are over it) and reads the repo at the moment git returns.
-function commitForcingAutoGc(dir, extra = []) {
-  for (let i = 0; i < 1500; i++) writeFileSync(join(dir, `f${i}`), `${i}\n`);
-  gitIn(dir, "add", "-A");
-  gitIn(dir, ...extra, "-c", "gc.auto=1", "-c", "gc.autoPackLimit=0", "-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "-m", "x");
-  const stats = Object.fromEntries(gitIn(dir, "count-objects", "-v").split("\n").map((l) => l.split(": ")));
-  return { running: existsSync(join(dir, ".git", "gc.pid")), loose: Number(stats.count), packs: Number(stats.packs) };
-}
-
-test("THE WORLD'S GIT: auto gc has finished, not detached, when the commit returns (the config is only the instrument)", async () => {
-  assert.equal(gitIn(world, "config", "--get", "gc.autoDetach").trim(), "false", "config instrument: the helper's env reaches this file's git");
-  const dir = tempDir("postmark-amend-carried-gc-");
-  gitIn(dir, "init", "-q", "-b", "main");
-  const after = commitForcingAutoGc(dir);
-  assert.deepEqual(after, { running: false, loose: 0, packs: 1 }, "gc ran to the end inside the commit: no gc.pid, everything packed");
-  await removeTempDir(dir);
-  assert.equal(existsSync(dir), false, "the scratch repo is gone");
+// Two instruments, and neither reproduces git's own detached gc (POS-419: a commit's
+// `gc --auto` can outlive the command on Linux and race the teardown's rmdir; whether it
+// does depends on the git version, and a runner's git 2.56 ran none at all for a
+// gc.auto=1 commit here, so no test below needs that child to exist).
+//
+// 1. CONFIG: the helper's import puts foreground maintenance into this process's env, so
+//    the `git` above, whose env spreads process.env, hands it to every child. Asked of
+//    git itself with --show-origin: the value comes from the env ("command line:"), not
+//    from a global file such as CI's, which sets the same keys. A config instrument, not
+//    proof that a detached child ended.
+test("THE WORLD'S GIT: foreground maintenance reaches it from the helper's env, not from a config file", () => {
+  for (const key of ["gc.autoDetach", "maintenance.autoDetach"])
+    assert.match(git("config", "--show-origin", "--get", key).trim(), /^command line:\s+false$/, `${key}: false, from the process env`);
 });
 
-test("THE WORLD'S GIT, CONTROL: with detach switched back on the same commit returns while gc is still running", async () => {
-  const dir = tempDir("postmark-amend-carried-gc-control-");
-  gitIn(dir, "init", "-q", "-b", "main");
-  const after = commitForcingAutoGc(dir, ["-c", "gc.autoDetach=true", "-c", "maintenance.autoDetach=true"]);
+// 2. LIFECYCLE: a synthetic child (this file only) holds a writer open until the parent
+//    releases it; removeTempDir(dir, { children }) must wait for its exit. The ready and
+//    release signals are the child's stdout and stdin, so no sleep or deadline decides
+//    anything. A helper that did not wait would run its removal before returning the
+//    promise: the folder would be gone at the first assertion, with the writer unreleased.
+const WRITER = `const fs=require("fs"),p=require("path");const d=process.argv[1];
+process.stdin.resume();process.stdout.write("ready");
+process.stdin.on("end",()=>{fs.mkdirSync(p.join(d,"pack"),{recursive:true});for(let i=0;i<50;i++)fs.writeFileSync(p.join(d,"pack","tmp_"+i),"x".repeat(512));});`;
+
+test("THE WORLD'S TEARDOWN: removeTempDir waits for a child still writing into the scratch repo, then removes it whole", async () => {
+  const dir = tempDir("postmark-amend-carried-child-");
+  const objects = join(dir, ".git", "objects");
+  mkdirSync(objects, { recursive: true });
+  const child = spawn(process.execPath, ["-e", WRITER, objects], { stdio: ["pipe", "pipe", "inherit"] });
+  const exited = once(child, "exit");
   try {
-    assert.equal(after.running, true, "gc.pid is held: a detached gc outlives the command");
-    assert.equal(after.packs, 0, "nothing is packed yet");
+    await Promise.race([once(child.stdout, "data"), exited.then(() => { throw new Error("the writer exited before it was ready"); })]);
+    const removal = removeTempDir(dir, { children: [child] });
+    assert.equal(existsSync(objects), true, "the folder stands while the writer is held: the removal is waiting on it");
+    assert.equal(child.exitCode, null, "and the writer has not exited");
+    child.stdin.end(); // release: the writer fills objects/pack, then exits
+    await removal;
+    assert.notEqual(child.exitCode, null, "the writer had exited when the removal returned");
+    assert.equal(existsSync(dir), false, "the scratch repo is gone, writer's files and all");
   } finally {
-    // the detached child is the race itself: wait for its pid file to go before removing
-    const end = Date.now() + 30000;
-    while (existsSync(join(dir, ".git", "gc.pid")) && Date.now() < end) await new Promise((ok) => setTimeout(ok, 50));
-    await removeTempDir(dir);
+    child.stdin.end(); // a failed assertion still releases its own child and waits for it
+    await removeTempDir(dir, { children: [child] });
   }
 });
 
