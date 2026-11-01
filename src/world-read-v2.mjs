@@ -527,6 +527,7 @@ export const FOCUS_MORE_V2 = 'this answered your focus alone · world { read_sha
  * find:: looking performs nothing"). Each takes its own narrowing fields.
  */
 export const BLOCK_READS = Object.freeze({
+  you: {}, // where you stand, in words (the doorstep's "world.you" lands here)
   view: { limit: { type: "number", description: "how many places, ranked as the glance ranks them (default 30, at most 60)" } },
   who: { limit: { type: "number", description: "how many residents (default 50, at most 200)" }, offset: { type: "number", description: "walk past the first rows: the previous answer's next_offset" } },
   happened: {}, // a cursor rides at the top level: world { read: "happened", since: "<cursor>" }

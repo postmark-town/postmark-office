@@ -79,7 +79,7 @@ export function createSayPush({
     if (due.length === 0) return;
     let lists = null;
     if (nearbyMany) {
-      try { lists = await nearbyMany(due.map((w) => ({ at: w.here.at, aboard: Boolean(w.here.aboard) })), t); }
+      try { lists = await nearbyMany(due.map((w) => ({ at: w.here.at, aboard: Boolean(w.here.aboard), room: w.here.room ?? null })), t); }
       catch { lists = null; }
     }
     for (const [i, w] of due.entries()) {

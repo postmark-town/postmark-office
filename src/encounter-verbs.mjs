@@ -25,6 +25,7 @@
 // FAIL CLOSED: no law read here, CREATURE_JUDGE=off, or a blessed law with no
 // ENCOUNTER_VERBS refuses every verb with its reason and shows none.
 
+import { sightedCreatures, occupancyIfRoomed, stackedAt } from "./creature-sight.mjs";
 import { capOf, creatureRow, dial, distanceM, judgeMode, recordFinish, ringHolds, ringRosterNow, askJev, JEV_TIMEOUT_MS, seesCreature, advanceFight, unmaskFight } from "./creatures.mjs";
 import { BARS_NOTE, GLANCES, HURLED_ACTION, PRIOR_HURLED_SQL, barsOf, isDisguised, isSetPiece, openHurls, pieceOf, writeOnce } from "./set-pieces.mjs";
 import { AIM_ACTIONS, AIM_GUARD_SQL, SIGHT_M, windowLeftS } from "./creature-verbs.mjs";
@@ -53,6 +54,12 @@ function finishableAround(point, { living, law, now }) {
     .sort((a, b) => distanceM(point, a) - distanceM(point, b));
 }
 
+/** A resident's standpoint carrying what they have entered, so a ring holds them only if they entered the creature's room (WLD-74). */
+async function standingIn(d, living, handle) {
+  const p = await d.standpoint(handle);
+  return p ? stackedAt(p, handle, await occupancyIfRoomed(living)) : p;
+}
+
 /**
  * THE MATRIX'S ENCOUNTER COLUMNS (creature-verbs.mjs § creaturePairs' W4): every
  * (verb, object) pair the doors would admit now. Strike: each strikable
@@ -60,7 +67,7 @@ function finishableAround(point, { living, law, now }) {
  * Steady and shield: each resident in the same ring as you who still has nerve.
  * `residents` is presence's [{ handle, at: { x, y } }] near you.
  */
-export function encounterPairs({ here, actor, living, law, residents = [], now = Date.now(), env = process.env }) {
+export function encounterPairs({ here, actor, living, law, residents = [], occupancy = null, now = Date.now(), env = process.env }) {
   if (!here || !living || !law?.kindMod?.ENCOUNTER_VERBS || judgeMode(env) === "off") return [];
   const mine = nerveOf(living, actor, now);
   const pairs = [];
@@ -76,7 +83,7 @@ export function encounterPairs({ here, actor, living, law, residents = [], now =
     if (mine < encounterDial("act_cost")) continue;
     for (const r of residents) {
       const at = r?.at && Number.isFinite(r.at.x) ? r.at : null;
-      if (!at || r.handle === actor || !ringHolds(law, c, at) || nerveOf(living, r.handle, now) <= 0) continue;
+      if (!at || r.handle === actor || !ringHolds(law, c, stackedAt(at, r.handle, occupancy)) || nerveOf(living, r.handle, now) <= 0) continue;
       for (const verb of [STEADY_ACTION, SHIELD_ACTION])
         if (!pairs.some((p) => p.verb === verb && p.object === r.handle)) pairs.push({ verb, object: r.handle });
     }
@@ -175,7 +182,7 @@ export async function readEncounterVerb(verb, fields = {}, key = null, deps = {}
   if (!key?.handles?.has(actor)) throw bounce(403, `"${actor}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
 
   if (judgeMode(d.env) === "off") throw bounce(503, "the creatures are resting", "the office's creatures are switched off for now (CREATURE_JUDGE=off).");
-  const cr = await d.creatures();
+  const cr = await sightedCreatures(await d.creatures(), actor); // WLD-74: only the rooms you have entered
   if (!cr?.living || !cr?.law || cr.law.unavailable) throw bounce(503, "the creatures cannot be read here", `${cr?.law?.unavailable ?? "the world's creature law is not read on this office"}.`);
   const { living, law } = cr;
   const blessed = law.kindMod?.ENCOUNTER_VERBS;
@@ -222,7 +229,7 @@ export async function readEncounterVerb(verb, fields = {}, key = null, deps = {}
     const around = finishableAround(here, { living, law, now });
     const seen = new Map();
     if (target) {
-      const there = target === actor ? null : await d.standpoint(target);
+      const there = target === actor ? null : await standingIn(d, living, target);
       const shared = there ? around.filter((c) => ringHolds(law, c, there)) : [];
       let why = target === actor ? `you cannot ${verb} yourself` : !there ? `the world doesn't know where ${target} stands`
         : !shared.length ? `${target} is not in the same ring as you` : nerveOf(living, target, now) <= 0 ? `${target} has no nerve left`
@@ -263,7 +270,7 @@ async function readSpeakFor(fields, key, d) {
   const frozen = d.freeze?.() ?? null; // the door answers a freeze before anything else
   const raw = String(fields.creature ?? "").trim();
   const target = String(fields.resident ?? "").trim();
-  const there = target ? await d.standpoint(target) : null;
+  const there = target ? await standingIn(d, living, target) : null;
   const ids = raw ? [raw.startsWith("creature:") ? raw : `creature:${raw}`] : living.living(now).filter((c) => isTempter(law.kindOf(c.kind))).map((c) => c.id);
   const rows = [];
   for (const id of ids) {
@@ -299,7 +306,7 @@ export async function worldEncounter(args = {}, key = null, deps = {}) {
 
   // THE LAW, FAIL CLOSED
   if (judgeMode(d.env) === "off") throw bounce(503, "the creatures are resting", "the office's creatures are switched off for now (CREATURE_JUDGE=off). Nothing was done.");
-  const cr = await d.creatures();
+  const cr = await sightedCreatures(await d.creatures(), actor); // WLD-74: only the rooms you have entered
   if (!cr?.living || !cr?.law || cr.law.unavailable) throw bounce(503, "the creatures cannot be read here", `${cr?.law?.unavailable ?? "the world's creature law is not read on this office"}. Nothing was done.`);
   if (!Array.isArray(cr.law.kindMod?.ENCOUNTER_VERBS) || !cr.law.kindMod.ENCOUNTER_VERBS.includes(verb))
     throw bounce(409, "an encounter's verbs are not law yet", "the world's creature law at the blessed ref has no encounters, so nothing can be struck, steadied or shielded; they arrive with a settlement. Nothing was done.");
@@ -461,7 +468,8 @@ async function aidAt({ d, key, verb, actor, target, here, cr }) {
   const now = d.now();
   const there = await d.standpoint(target);
   if (!there) throw bounce(422, `the world doesn't know where ${target} stands`, "Nothing was done.");
-  const shared = finishableAround(here, { living, law, now }).filter((c) => ringHolds(law, c, there));
+  const thereIn = stackedAt(there, target, await occupancyIfRoomed(living)); // they hold only if they entered its room (WLD-74)
+  const shared = finishableAround(here, { living, law, now }).filter((c) => ringHolds(law, c, thereIn));
   if (!shared.length) throw bounce(409, `${target} is not in the same ring as you`,
     `${verb} is for a resident in the ring of the same creature that can be finished, beside you. Nothing was done.`);
   const c = shared[0];
@@ -558,7 +566,7 @@ async function liveDeps(given) {
     actsSince: (h, sinceIso) => acts.actsQuery(ACTS_SINCE_SQL, [h, sinceIso]),
     outside: async (c, h, { law }) => {
       const s = await world.residentStandpoint(h).catch(() => null);
-      return s?.placed ? !ringHolds(law, c, { x: Number(s.x), y: Number(s.y) }) : false;
+      return s?.placed ? !ringHolds(law, c, stackedAt({ x: Number(s.x), y: Number(s.y) }, h, await occupancyIfRoomed({ byId: new Map([[c.id, c]]) }))) : false;
     },
     gist: (a, tm) => sayCarries(a, tm),
     roster: (c, o) => ringRosterNow(c, o),
@@ -677,7 +685,7 @@ export async function givenToATempter(args = {}, key = null, actor = null, deps 
   const to = String(args.to ?? "").trim();
   if (!to || !actor) return null;
   const d = { ...(await liveDeps(deps)), ...deps };
-  const cr = await d.creatures().catch(() => null);
+  const cr = await sightedCreatures(await d.creatures().catch(() => null), actor); // WLD-74: only the rooms you have entered
   if (!cr?.living || !cr?.law || cr.law.unavailable) return null;
   const { living, law } = cr;
   const now = d.now();
@@ -740,7 +748,7 @@ export async function worldSpeakFor(args = {}, key = null, deps = {}) {
   const c = living.byId.get(id);
   const target = String(args.resident ?? "").trim();
   // the standpoint is asked only once the creature and the speaker pass, as the door always did
-  const there = target && !speakForRefusal({ law, c, id, key, target, ring: false, lint: false }) ? await d.standpoint(target) : null;
+  const there = target && !speakForRefusal({ law, c, id, key, target, ring: false, lint: false }) ? await standingIn(d, living, target) : null;
   const refused = speakForRefusal({ law, c, id, key, target, there });
   if (refused) throw refusedAs(refused, "Nothing was said.");
   const kind = law.kindOf(c.kind);

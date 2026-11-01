@@ -930,6 +930,9 @@ What it does, and what it will not:
 - It retires exactly one `static` row whose handles are exactly `[<h>]`. No match,
   two exact matches (ambiguous), or only a row that holds `<h>` among other
   handles (widened) are refused and write nothing.
+  When two keys hold exactly `<h>` (an old key and its replacement), add `--gh-id <n>`
+  (or `--gh-id none`) to pick the one whose stored gh_id is `<n>` (or null); zero or
+  several matches refuse, the other key stands as the cover, and it is never a key or a hash (POS-805).
 - ANOTHER working key must still cover THIS household and handle: another
   `static` row of the household that holds the handle, or a live human
   household key of the account the registry pins the handle to, where the

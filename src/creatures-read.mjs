@@ -40,6 +40,7 @@ import { BARS_NOTE, HURL_ACTION, barsOf, isSetPiece, pieceOf } from "./set-piece
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WORLD_CLONE } from "./world-store.mjs";
+import { sightedFor } from "./creature-sight.mjs";
 
 const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
 
@@ -53,7 +54,15 @@ export function __resetCreaturesReadForTest() { Object.assign(cache, { at: 0, re
  * before world#218) or no record here. The writer reuses the hook's set; a
  * read worker refreshes its own when it is older than REFRESH_MS.
  */
-export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: given = null, query = null } = {}) {
+export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: given = null, query = null, as = undefined, occupancy = null } = {}) {
+  const cur = await creaturesRaw({ nowMs, hook, law: given, query });
+  // `as`: a resident's read (WLD-74): the creatures in a room they have not entered do not exist for them (creature-sight.mjs).
+  // Left out, the whole set, which the law-only readers (is this law live?) use.
+  if (as === undefined || !cur?.living) return cur;
+  return { ...cur, living: await sightedFor(cur.living, as, { occupancy }) };
+}
+
+async function creaturesRaw({ nowMs, hook, law: given, query }) {
   try {
     const writer = hook ?? (await import("./creatures-hook.mjs")).creaturesNow();
     if (writer) return writer;
@@ -61,7 +70,7 @@ export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: g
     cache.inflight ??= (async () => {
       const law = given ?? await creatureLaw();
       if (!lawReady(law)) { cache.living = null; cache.ref = null; return; }
-      if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law }); }
+      if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law, hideUnwarmed: true }); }
       const r = await cache.living.refresh({ ...(query ? { query } : {}), now: nowMs });
       if (!r.ok && !cache.living.booted) cache.living = null;
       // each creature's room, so its ring stops at the walls (world#268); a read without the marks keeps the circle
@@ -339,6 +348,8 @@ export async function investigateCreature(id, { creatures, from = null, handle =
   const { living, law } = creatures ?? {};
   if (!living || !lawReady(law))
     return { kind: "creature", id, unavailable: "the creatures' law cannot be read at this office's blessed ref, so no creature can be looked at" };
+  // one in a room you have not entered is no creature to you: its record is not read either (WLD-74, creature-sight.mjs)
+  if (living.hidden?.has(id)) return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };
   // a row the tick wrote ahead of its arrival is not out yet, so it is not here to look at (livingNow)
   const held = living.byId.get(id);
   const c = held && held.spawned_at <= nowMs ? held : null;
