@@ -310,20 +310,29 @@ function repeatReceipt(made) {
 // the engine at header.law_sha … the blessed ref." Room bought while the
 // blessed engine has no parcel room buys nothing: every house keeps three. So
 // the purchase, and its preview, open only when the engine at the newest
-// blessing carries `parcelRoomOf`, read through the seam the leave-mark note's
-// engine comes from (world-branches.mjs § importEngineAt, world.mjs §
-// foldConstants). Darko, 2026-10-31 22:56 EDT: "build the fix for this
-// overnight (so land world 300 it seems like)".
+// blessing carries `parcelRoomOf`. Darko, 2026-10-31 22:56 EDT: "build the fix
+// for this overnight (so land world 300 it seems like)".
+//
+// IT FAILS CLOSED (Truey's re-review of 62a707c, N1). The read seam's two
+// fallbacks are right for reads and wrong for a money gate: `blessed()` answers
+// main when the clone has no settlement tag (world-branches.mjs § blessedUncached),
+// and `engineDirAt` answers the working tree when the blessing can't be
+// materialised. With the law on main, either would sell room before the bless.
+// So the gate asks for a settlement tag by name and materialises it directly
+// (`materializeAtRef`, which throws rather than falling back), and anything
+// else — no tag, no git, a failed read — refuses.
 
 /** Does the engine at the newest blessing size a household's parcel room? → `{ live, at }`. */
 export async function parcelLawBlessed(worldClone) {
-  const { importEngineAt, blessed } = await import("./world-branches.mjs");
-  let at = "the newest blessing";
-  try { const b = blessed(worldClone); at = b.tag ?? `${b.ref} (no settlement tag)`; } catch { /* a folder with no git: its own engine */ }
-  let live = false;
-  try { live = typeof (await importEngineAt(worldClone, "marks-fold.mjs")).parcelRoomOf === "function"; }
-  catch { live = false; }
-  return { live, at };
+  const { blessed, materializeAtRef } = await import("./world-branches.mjs");
+  let b;
+  try { b = blessed(worldClone); } catch { return { live: false, at: "the newest blessing (the world clone could not be read)" }; }
+  if (b?.source !== "settlement" || !b.tag) return { live: false, at: `${b?.ref ?? "main"} (no settlement tag)` };
+  try {
+    const dir = materializeAtRef(worldClone, b.ref, "tools");
+    const fold = await import(pathToFileURL(join(dir, "tools", "marks-fold.mjs")).href);
+    return { live: typeof fold.parcelRoomOf === "function", at: b.tag };
+  } catch { return { live: false, at: `${b.tag} (its engine could not be read)` }; }
 }
 
 // ── THE PURCHASES IN FLIGHT (Truey's review of d97cfa2, F1) ─────────────────
@@ -353,7 +362,7 @@ export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key,
     return bounce(403, `"${from}" is not one of your residents`, `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "nobody"}`);
   const law = await parcelLawBlessed(worldClone ?? (await import("./world.mjs")).WORLD_CLONE);
   if (!law.live)
-    return bounce(409, "not-yet-open", `room is sold once the world's parcel law is blessed: the engine at ${law.at} does not size a household's parcel room yet, so room bought now would change nothing. Nothing was burned`);
+    return bounce(409, "not-yet-open", `room is sold once the world's parcel law is blessed: the engine at ${law.at} does not size a household's parcel room yet, so room bought now would change nothing until it is blessed. Nothing was burned`);
   const { townDay } = await import("./votes.mjs");
   const today = date ?? townDay(); // the town day; a caller (a test) may name one
   const { toConfirm, NOTHING_MOVED } = await import("./stamps-preview.mjs");

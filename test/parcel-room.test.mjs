@@ -35,11 +35,9 @@ const WORLD_CLONE = process.env.WORLD_CLONE ?? join(ROOT, "world-clone");
 
 // A world whose engine carries the parcel law (world#300's `parcelRoomOf`), for
 // the door's calls: the purchase opens only once the blessed engine sizes a
-// household's room (Truey's F2, § 11). A folder with no .git is its own engine
-// (world-branches.mjs § engineDirAt); § 11 tests the blessed ref itself.
-const LAW_WORLD = mkdtempSync(join(tmpdir(), "parcel-room-law-world-"));
-mkdirSync(join(LAW_WORLD, "tools"), { recursive: true });
-writeFileSync(join(LAW_WORLD, "tools", "marks-fold.mjs"), "export const parcelRoomOf = () => 3;\n");
+// household's room (Truey's F2, § 11): a git world whose settlement tag carries
+// the law, since the gate opens on nothing less (N1). worldRepo is below (hoisted).
+const LAW_WORLD = worldRepo([{ law: true, tag: "settlement/S1" }]);
 // Removed at exit, not in a root `after`: under --test-name-pattern the root hook
 // ran before the filtered tests and took the folder from under them (measured).
 process.on("exit", () => rmSync(LAW_WORLD, { recursive: true, force: true }));
@@ -555,4 +553,42 @@ test("11 · F2 control: once the blessing carries the law, the purchase sells", 
     assert.deepEqual([r.room, r.price], [{ now: 1, after: 2 }, 50]);
     assert.deepEqual(burnsIn(town), ["- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan"]);
   } finally { rmSync(town, { recursive: true, force: true }); rmSync(world, { recursive: true, force: true }); }
+});
+
+// N1 (Truey's re-review of 62a707c): "the law gate fails open through the two
+// fallbacks of the seam it borrows": no settlement tag answers main, and a
+// blessing that can't be materialised answers the working tree. Both carry the
+// law here, on main only, so a gate that falls back sells.
+async function refusedBeforeBless(world, re) {
+  const town = standInTown();
+  try {
+    const before = readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
+    const r = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: world, date: "2026-11-03" }));
+    assert.equal(readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8"), before, `nothing burned; it answered: ${JSON.stringify(r)}`);
+    assert.deepEqual([r.code, r.defect], [409, "not-yet-open"], JSON.stringify(r));
+    assert.match(r.hint, re);
+    assert.match(r.hint, /would change nothing until it is blessed\. Nothing was burned$/);
+  } finally { rmSync(town, { recursive: true, force: true }); }
+}
+
+test("11 · N1: no settlement tag, the law on main: the gate refuses rather than read main", async () => {
+  const world = worldRepo([{ law: true, tag: null }]);
+  try { await refusedBeforeBless(world, /\(no settlement tag\)/); }
+  finally { rmSync(world, { recursive: true, force: true }); }
+});
+
+test("11 · N1: a blessing whose engine can't be materialised refuses rather than read the working tree", async () => {
+  // settlement/S1 blesses a commit with no tools/ at all (materializeAtRef throws
+  // "no files under tools"); the working tree, at main, carries the law
+  const world = mkdtempSync(join(tmpdir(), "parcel-room-world-"));
+  const g = (...a) => execFileSync("git", a, { cwd: world, encoding: "utf8" });
+  try {
+    g("init", "-q", "-b", "main");
+    writeFileSync(join(world, "README.md"), "a world before its tools\n");
+    g("add", "-A"); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "bare"); g("tag", "settlement/S1");
+    mkdirSync(join(world, "tools"), { recursive: true });
+    writeFileSync(join(world, "tools", "marks-fold.mjs"), "export const PARCEL_CLAIM_CAP = 3;\nexport function parcelRoomOf() { return 3; } // main only\n");
+    g("add", "-A"); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "the law, on main");
+    await refusedBeforeBless(world, /settlement\/S1 \(its engine could not be read\)/);
+  } finally { rmSync(world, { recursive: true, force: true }); }
 });
