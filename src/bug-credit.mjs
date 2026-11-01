@@ -100,6 +100,28 @@ export async function githubAuthorOf(j, { env = process.env, fetchImpl = fetch }
   return { id, login: String(body.user.login ?? ""), pull: ref.kind === "pull" || Boolean(body?.pull_request) };
 }
 
+/**
+ * One GET against the town's GitHub, for the stage guard (bug-stage-guard.mjs):
+ * `{ status, body }` for any answer GitHub gives (404 included), or null when
+ * it could not be read at all (no answer, a timeout, a rate limit, a 5xx, a
+ * refused token with the keyless retry refused too). The same token, the same
+ * keyless retry on a 401 and the same test override as githubAuthorOf.
+ */
+export async function githubGet(apiPath, { env = process.env, fetchImpl = fetch } = {}) {
+  const api = String(env.GITHUB_API_URL ?? GITHUB_API).replace(/\/+$/, "");
+  const token = api === GITHUB_API ? readToken(env) : null;
+  const plain = { accept: "application/vnd.github+json", "user-agent": "postmark-office", "x-github-api-version": "2022-11-28" };
+  const headers = { ...plain, ...(token ? { authorization: `Bearer ${token}` } : {}) };
+  try {
+    const url = `${api}${apiPath}`;
+    let res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    if (token && res.status === 401) res = await fetchImpl(url, { headers: plain, signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    if (res.status === 404 || res.status === 410) return { status: 404, body: null };
+    if (!res.ok) return null;
+    return { status: res.status, body: await res.json() };
+  } catch { return null; }
+}
+
 /** The household a handle stands in, as the act would be filed: `hh:<slug>`, else `solo:<handle>`. */
 function keyOfHandle(handle, registry, pins) {
   const { slug } = resolveHouse(handle, registry, pins, { via: [VIA.RESIDENT, VIA.PIN] });

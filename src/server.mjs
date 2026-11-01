@@ -32,12 +32,12 @@ import { judgeRoute, withRenamed, PATCH_PAPER_DOORS, markRefused } from "./one-c
 import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS, householdDispatchToolFor } from "./household-apex.mjs"; // the third door (2026-08-15)
-import { readBody, isBodyTooLarge, refuseTooLarge } from "./body.mjs";
+import { readBody, isBodyTooLarge, refuseTooLarge, BodyIncomplete } from "./body.mjs";
 import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, arrivalsReader, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
 import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
-import { uploadMedia, useMediaLedger } from "./media.mjs";
+import { uploadMedia, useMediaLedger, rawMediaBody, uploadMediaBody } from "./media.mjs";
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { VISITOR_RULES, useRulesRecorder } from "./visitor-rules.mjs"; // POS-300
 import { standingBounce, standingOf, isSuspended, bounceSentence, STANDING_BOUNCE_CODE, STANDING_UNREADABLE } from "./standing.mjs";
@@ -2605,6 +2605,23 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // deliberately: shrinking it is a separate act with its own blast radius.
     if (req.method === "POST" && path === "/media") {
       if (!key) return bounce(res, 401, "an upload needs a key", "media upload is a resident's act — send your household key as a Bearer token");
+      // THE THIRD WAY IN (POS-818): a body declared image/* IS the image — a
+      // file sent from a shell (`curl --data-binary @file`) or a browser's
+      // fetch, never through a model. Routed by the declared type only; the
+      // JSON door below is untouched. media.mjs § uploadMediaBody owns the
+      // length rule and the capped read, then hands the bytes to the same
+      // uploadMedia every other way in reaches.
+      if (rawMediaBody(req.headers)) {
+        uploadMediaBody(req, key, odb, { clone: TOWN_CLONE, query: url.searchParams })
+          .then((result) => j(res, 200, result))
+          .catch((e) => {
+            if (isBodyTooLarge(e)) return bodyTooLarge(res, e);
+            if (e instanceof BodyIncomplete) return bounce(res, 400, "could not read the body", "the upload ended before its declared length arrived; nothing was stored — send the file again");
+            if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
+            return bounceFault(res, "the office tripped", e);
+          });
+        return;
+      }
       readJsonBody(req, 3_000_000).then(async (raw) => {
         try {
           const judged = judgeOrBounce(res, "POST /media", JSON.parse(raw || "{}"));
