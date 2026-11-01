@@ -1666,9 +1666,24 @@ export async function mistsTrackHint(worldClone, at, crossing) {
 
 /** The refusal for a road into the wall, in plain words. `track` is mistsTrackHint's sentence, when there is one. */
 export function mistsRefusal(bounce, at, extra = {}, track = null) {
+  const { aboard = false, ...fields } = extra ?? {};
   return bounce(422, "the mist is too thick to walk into",
-    `this road runs into the wall of the Mists at (${at.x}, ${at.y}), and no road goes into the wall, ends on it or crosses it. Choose a point short of it: walking into the mist's edge is allowed, but the deeper a road goes the slower it walks, and at the wall it stops altogether.${track ? ` ${track}` : ""}`,
-    { law: "LOGOS/classes.md § The emission lines: the Mists (POS-466, POS-468)", wall_at: at, ...extra });
+    `this road runs into the wall of the Mists at (${at.x}, ${at.y}), and no road goes into the wall, ends on it or crosses it. Choose a point short of it: walking into the mist's edge is allowed, but the deeper a road goes the slower it walks, and at the wall it stops altogether.${track ? ` ${track}` : ""}${aboard ? ` ${ABOARD_TERMS}` : ""}`,
+    { law: "LOGOS/classes.md § The emission lines: the Mists (POS-466, POS-468)", wall_at: at, ...fields });
+}
+
+/** What works inside a vehicle (WLD-139, Volt's report): the two acts, named where a refusal reaches a rider.
+ *  A walk's fields cannot ride, which is what Volt tried; `ride` and `exit` live on the world door. */
+export const ABOARD_TERMS = 'Aboard a vehicle, two acts work: world { do: "ride", args: { to: "<stop>" } } names a stop and starts its timer, and world { do: "exit" } sets you down (at the destination once the timer has run, otherwise at the stop you came in through).';
+
+/** Whether a walk declared from within a vehicle is the leaving itself (WLD-139; LOGOS/classes.md § The vehicle,
+ *  "A walk declared aboard is the choice to leave: the deposit, then the walk from it"). PURE over the marks the
+ *  walk would carry the walker out of: true when one is a vehicle and the walk goes on to exit (every one a
+ *  vehicle, or `exit: true`). Then the road is read from the DEPOSIT, never from the hull, which moves. */
+export function walkDepositsFirst(leaving = [], byId = new Map(), exit = false) {
+  if (!leaving.length) return false;
+  const vehicles = leaving.filter((id) => markClassOf(byId.get(id)) === "vehicle");
+  return vehicles.length > 0 && (vehicles.length === leaving.length || exit === true);
 }
 
 /** The leg's stride: the dial's pace, slowed by the Mists' factor when there is one.
@@ -6485,8 +6500,14 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   // No Mists this crossing, or a clone that predates them: null, and nothing here
   // changes.
   const shelter = occupying ? roadShelter(law.verbs, occupying.w, occupying.stack, occupying.leaving) : null;
+  // A WALK DECLARED ABOARD IS READ FROM THE DEPOSIT, NOT THE HULL (WLD-139, Volt 2026-10-31). `from` is the moving
+  // hull's standpoint until the vehicle's exit sets the rider down; reading the road from it refused a rider who had
+  // done nothing wrong ("the mist is too thick", at a wall point that moved with the hull). Such a walk skips this
+  // first refusal and is read again below, from where the deposit put them.
+  const depositFirst = occupying ? walkDepositsFirst(occupying.leaving, occupying.byId, payload.exit === true) : false;
+  const aboardNow = occupying ? occupying.stack.some((id) => markClassOf(occupying.byId.get(id)) === "vehicle") : false;
   let mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at, { shelter });
-  if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, {}, await mistsTrackHint(worldClone, mistRoad.refused, at));
+  if (mistRoad?.refused && !depositFirst) throw mistsRefusal(bounce, mistRoad.refused, aboardNow ? { aboard: true } : {}, await mistsTrackHint(worldClone, mistRoad.refused, at));
 
   if (occupying) {
     const { deps, stack, byId, leaving } = occupying;
@@ -6531,9 +6552,9 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
     }
   }
   // stepping ashore moved the road's start: read the Mists again from where it now begins
-  if (setDownFirst) {
+  if (setDownFirst || depositFirst) {
     mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at, { shelter });
-    if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, { exited_first: exitedFirst }, await mistsTrackHint(worldClone, mistRoad.refused, at));
+    if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, { exited_first: exitedFirst, ...(aboardNow ? { aboard: true } : {}) }, await mistsTrackHint(worldClone, mistRoad.refused, at));
   }
   const mistFactor = mistRoad && mistRoad.factor < 1 ? mistRoad.factor : null;
   const clean = { handle: who, from, toward, at, targetExtent, targetMarkId, ...(mistFactor ? { mistFactor } : {}) };

@@ -53,7 +53,7 @@ test("the walk reads the Mists after DEC-5's occupancy read and before its exits
   const exits = walk.indexOf("await exitViaOffice(worldClone, { handle: who, mark: markId }, key, deps)");
   assert.ok(occ > 0 && road > occ && exits > road, `order: occupancy ${occ}, road ${road}, exits ${exits}`);
   assert.match(walk, /const shelter = occupying \? roadShelter\(law\.verbs, occupying\.w, occupying\.stack, occupying\.leaving\) : null;/);
-  assert.match(walk, /if \(setDownFirst\) \{\n    mistRoad = await mistsOnTheRoad\(worldClone, skeleton, from, toward, at, \{ shelter \}\);/,
+  assert.match(walk, /if \(setDownFirst \|\| depositFirst\) \{\n    mistRoad = await mistsOnTheRoad\(worldClone, skeleton, from, toward, at, \{ shelter \}\);/,
     "stepping ashore re-reads the road with the same shelter");
 });
 

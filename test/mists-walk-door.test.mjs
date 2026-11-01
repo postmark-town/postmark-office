@@ -49,7 +49,7 @@ test("no Mists on the record, or a clone without the reading: the road is untouc
 test("THE ORDER: the Mists are read before the exits under DEC-5 and before the pen, and the pen's pace is the slowed stride", () => {
   const door = SOURCE.slice(SOURCE.indexOf("export async function walkViaOffice"), SOURCE.indexOf("export async function worldWalkers"));
   const read = door.indexOf("let mistRoad = await mistsOnTheRoad(");
-  const refused = door.indexOf("if (mistRoad?.refused) throw mistsRefusal(");
+  const refused = door.indexOf("if (mistRoad?.refused && !depositFirst) throw mistsRefusal(");
   const exits = door.indexOf("await exitViaOffice(");
   const pen = door.indexOf("walkEntry({");
   assert.ok(read > 0 && refused > read, "the road is read, and a refusal thrown, in the door");
