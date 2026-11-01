@@ -73,8 +73,8 @@ fresh as the main thread:
 - `world.mjs _walkClock`, `_mods`, `_where`, `_geom`; `votes.mjs engineCache`;
   `town-mail.mjs engines`; `world2-serve.mjs _engine`; `enter-exit-ledger.mjs
   _header`: engine modules imported once per process.
-- `household-deriver.mjs loaded / answers / viaRows`: its header says every
-  registry writer clears it, and nothing in `src/` calls `__clearHouseCache`.
+- `household-deriver.mjs loaded / viaRows / viaAnswers`: no registry writer
+  clears it, and nothing in `src/` calls `__clearHouseCache` (the tests do).
   The registry's writers are outside the office, so the fold is per process.
 - `world-journal.mjs _frozen / _pathIndex`: the frozen era.
 - Static tables: `mcp.mjs _flat*`, `world-apex.mjs` schemas, `queries.mjs
