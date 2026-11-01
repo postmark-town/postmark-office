@@ -44,6 +44,7 @@ import { threadId } from "node:worker_threads";
 
 export const ACQUIRE_MS_DEFAULT = 10_000;
 export const IDLE_TX_MS_DEFAULT = 30_000;
+const KEEPALIVE_DELAY_MS = 10_000;
 
 // A number of milliseconds from the env, or the default. 0 is a real value
 // (pg reads it as "no limit"), so it is kept; anything unreadable is the default.
@@ -69,7 +70,14 @@ export function storePoolOptions(env = process.env, { name, max, connectionStrin
     // TCP keepalive on every connection (review-595): a half-open socket, a
     // store that went away without a FIN, is found by the kernel's probes
     // and errors, rather than holding a pool slot until the process restarts.
+    // `keepAlive: true` alone leaves the kernel's idle time, 7200 s on Linux
+    // (measured here: tcp_keepalive_time), before the first probe, so a read
+    // waiting on a vanished store held the poll's guard for about two hours
+    // (POS-821). The initial delay brings the first probe to the same 10 s the
+    // poll gives a statement; the probes that follow add about 11 s (measured:
+    // a query out on a dead peer errored 13 s after a 2 s delay).
     keepAlive: true,
+    keepAliveInitialDelayMillis: KEEPALIVE_DELAY_MS,
     application_name: `postmark-office:${name}:t${threadId}`,
     ...rest,
   };

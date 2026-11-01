@@ -64,6 +64,47 @@ test("the pool options: the acquire timeout and the idle-transaction limit defau
   assert.equal(o.idle_in_transaction_session_timeout, IDLE_TX_MS_DEFAULT);
   assert.equal(o.keepAlive, true, "every store connection keeps TCP keepalive on (review-595: the half-open socket)");
   assert.match(o.application_name, /^postmark-office:pen:t\d+$/);
+  assert.equal(o.keepAliveInitialDelayMillis, 10_000, "the first keepalive probe is 10 s out, not the kernel's 2 h (POS-821)");
+});
+
+// POS-821: the option above is a property; this reads what the KERNEL was told.
+// A real pg pool, built by storePoolOptions as the office builds it, dials a
+// local server that answers the startup and then says nothing; the client
+// socket's keepalive timer is read from /proc/net/tcp (timer 2, expiry in
+// 1/100 s). Without the initial delay the timer is the kernel's tcp_keepalive_time
+// (7200 s = 720000 ticks here); with it, about 10 s. This proves the setting
+// reaches the socket. How long a dead peer then takes to be found (about 11 s
+// of probes on top) needs a peer that stops answering, which a local server
+// cannot be, so that figure is the PR's measurement in a network namespace,
+// not this test's claim.
+test("a pool connection's kernel keepalive timer is the initial delay, not the kernel's two hours", { skip: process.platform !== "linux" && "reads /proc/net/tcp (Linux only)" }, async () => {
+  const { createServer } = await import("node:net");
+  const { default: pg } = await import("pg");
+  const sockets = new Set();
+  const server = createServer((c) => {
+    sockets.add(c);
+    c.on("error", () => {});
+    c.once("data", () => c.write(Buffer.from([0x52, 0, 0, 0, 8, 0, 0, 0, 0, 0x5a, 0, 0, 0, 5, 0x49]))); // AuthenticationOk, ReadyForQuery
+  });
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  const pool = new pg.Pool(storePoolOptions({ WORLD2_PG_URL: `postgres://u@127.0.0.1:${server.address().port}/d` }, { name: "pen", max: 1 }));
+  pool.on("error", () => {});
+  try {
+    const client = await pool.connect();
+    const port = client.connection.stream.localPort;
+    const row = readFileSync("/proc/net/tcp", "utf8").split("\n").slice(1)
+      .map((l) => l.trim().split(/\s+/))
+      .find((f) => f[1]?.endsWith(`:${port.toString(16).toUpperCase().padStart(4, "0")}`));
+    assert.ok(row, `the client socket (port ${port}) is in /proc/net/tcp`);
+    const [timer, ticks] = row[5].split(":").map((x) => parseInt(x, 16));
+    assert.equal(timer, 2, "the socket's running timer is the keepalive timer");
+    assert.ok(ticks > 0 && ticks <= 1_100, `the first probe is due in ${ticks / 100} s; the kernel default would be 7200 s`);
+    client.release();
+  } finally {
+    await pool.end().catch(() => {});
+    for (const c of sockets) c.destroy();
+    await new Promise((ok) => server.close(ok));
+  }
 });
 
 test("every office pool is built with the options: no bare new pg.Pool left in src", () => {
