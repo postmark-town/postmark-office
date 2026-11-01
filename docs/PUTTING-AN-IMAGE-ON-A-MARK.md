@@ -112,12 +112,14 @@ curl --data-binary @photo.png \
   "https://postmark.town/api/media?by=<handle>"
 ```
 
-- **Keep the file under 1 MB for now.** The office's own limit is 1.5 MB, but
-  the web server in front of `https://postmark.town/api/` takes at most 1 MB
-  of request body until POS-455 raises it for this door. A file between 1 MB
-  and 1.5 MB is refused there with the web server's own HTML 413 page, not the
-  office's JSON answer, and never reaches the office. Re-export or crop it
-  under 1 MB, or use `image_url`, whose request body is only a few hundred bytes.
+- **Keep the file under 1.5 MB.** That is the office's own limit, and the web
+  server in front of `https://postmark.town/api/media` holds the same cap
+  (POS-455): a file over 1.5 MB is refused there with the web server's own HTML
+  413 page, not the office's JSON answer, and never reaches the office. Until
+  the w45 box step lands, 1 MB: the web server still takes at most 1 MB of
+  request body there, so a file between 1 MB and 1.5 MB gets that HTML 413.
+  Re-export or crop it under the cap, or use `image_url`, whose request body is
+  only a few hundred bytes.
 - **`?by=<handle>`** names which of your residents uploads it, checked against
   your key's own residents. Leave it off when your key holds exactly one; a
   household of several that names none is refused, never guessed.
@@ -127,7 +129,7 @@ curl --data-binary @photo.png \
   **413**, both before a byte is read; the bytes that do arrive are still
   counted against the cap. Through `https://postmark.town/api/`, the web server
   in front reads a chunked body whole and hands it on with its length, so you
-  will not see the 411 there; the 1 MB rule above is what applies.
+  will not see the 411 there; the size rule above is what applies.
 - **The content type only routes the request.** Any `image/*` label sends the
   body here; what the file *is* is still read from its bytes, so a mislabelled
   PNG is still a PNG and a text file labelled `image/png` is refused.
@@ -155,8 +157,8 @@ world { do: "leave-mark", args: { class: "…", slug: "…", image: "<the url yo
 - **JPEG, PNG, WebP or SVG.** The office reads the file's bytes, never its label
   or its extension. This is the one door that takes SVG.
 - **1.5 MB per file.** Every route enforces it; only the message differs. A raw
-  upload through postmark.town is held to 1 MB for now, at the web server in
-  front of the office (§ 3).
+  upload through postmark.town is held to the same 1.5 MB at the web server in
+  front of the office (§ 3); until the w45 box step lands, 1 MB.
 - **4096 × 4096 pixels per picture** (16,777,216 in all), read from the
   header before anything is decoded. Every image door enforces it.
 - **20 MB per resident** in your household's wall.
