@@ -304,16 +304,56 @@ function repeatReceipt(made) {
   };
 }
 
+// ── NOT BEFORE THE LAW IS BLESSED (Truey's review of d97cfa2, F2) ───────────
+//
+// "world#300 merging to main does not make it law. The settlement folds with
+// the engine at header.law_sha … the blessed ref." Room bought while the
+// blessed engine has no parcel room buys nothing: every house keeps three. So
+// the purchase, and its preview, open only when the engine at the newest
+// blessing carries `parcelRoomOf`, read through the seam the leave-mark note's
+// engine comes from (world-branches.mjs § importEngineAt, world.mjs §
+// foldConstants). Darko, 2026-10-31 22:56 EDT: "build the fix for this
+// overnight (so land world 300 it seems like)".
+
+/** Does the engine at the newest blessing size a household's parcel room? → `{ live, at }`. */
+export async function parcelLawBlessed(worldClone) {
+  const { importEngineAt, blessed } = await import("./world-branches.mjs");
+  let at = "the newest blessing";
+  try { const b = blessed(worldClone); at = b.tag ?? `${b.ref} (no settlement tag)`; } catch { /* a folder with no git: its own engine */ }
+  let live = false;
+  try { live = typeof (await importEngineAt(worldClone, "marks-fold.mjs")).parcelRoomOf === "function"; }
+  catch { live = false; }
+  return { live, at };
+}
+
+// ── THE PURCHASES IN FLIGHT (Truey's review of d97cfa2, F1) ─────────────────
+//
+// "A second click whose entry quote lands after A's appendSigned and before A
+// answers reads A's line, sees room 2, sets expect.nth = 3, and in the lock buys
+// room 3 at 100." Taking the entry quote under the lock would not close it: a
+// click that waits for the lock sees the room AFTER the first purchase, and buys
+// the next one. So the room a call saw excludes purchases still in flight: while
+// one is, a new call expects the lowest room in flight, and inside the lock that
+// room already on the ledger is answered with its receipt (§ ONE CALL, ONE ROOM).
+// In flight means from the entry quote to the answer, in this process: the
+// office's one writer (src/server.mjs; its read workers take only GET reads and
+// the MCP's bare world reads, read-workers.mjs § workerTakes, § mcpWorkerTakes).
+const roomInFlight = new Map(); // household slug -> Map(token -> nth)
+
 /**
  * THE DOOR: `household { do: "buy-parcel-room", args: { from, preview } }`.
  * Preview quotes and writes nothing; the act runs the exec under the town lock,
  * which asks the same quote inside the lock and appends the town's line.
+ * `worldClone` (a test names one) is the world whose blessing says the law is live.
  */
-export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key, { channel, date = null } = {}) {
+export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key, { channel, date = null, worldClone = null } = {}) {
   const bounce = (code, defect, hint) => ({ error: "bounce", code, defect, hint });
   if (!from) return bounce(422, "which resident pays?", `required: from, one of your residents — household { do: "${BUY_ROOM_ACT}", args: { from: "…" } }`);
   if (!key?.handles?.has(from))
     return bounce(403, `"${from}" is not one of your residents`, `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "nobody"}`);
+  const law = await parcelLawBlessed(worldClone ?? (await import("./world.mjs")).WORLD_CLONE);
+  if (!law.live)
+    return bounce(409, "not-yet-open", `room is sold once the world's parcel law is blessed: the engine at ${law.at} does not size a household's parcel room yet, so room bought now would change nothing. Nothing was burned`);
   const { townDay } = await import("./votes.mjs");
   const today = date ?? townDay(); // the town day; a caller (a test) may name one
   const { toConfirm, NOTHING_MOVED } = await import("./stamps-preview.mjs");
@@ -329,20 +369,32 @@ export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key,
   if (q.error) return bounce(q.error.code, q.error.defect, q.error.hint);
   if (preview === true)
     return { preview: true, did: BUY_ROOM_ACT, ...q.quote, to_confirm: toConfirm(call), nothing_written: NOTHING_MOVED };
-  const expect = { household: q.quote.household, nth: q.quote.room.after };
-  const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
-  const { viaFor } = await import("./channel.mjs");
-  const exec = join(dirname(fileURLToPath(import.meta.url)), "parcel-room-exec.mjs");
-  let out;
+  // The room this call saw, less any purchase still in flight (§ THE PURCHASES
+  // IN FLIGHT), registered before the next await so a later call sees it.
+  const slug = q.quote.household;
+  const flying = roomInFlight.get(slug) ?? new Map();
+  roomInFlight.set(slug, flying);
+  const expect = { household: slug, nth: Math.min(q.quote.room.after, ...flying.values()) };
+  const token = Symbol(from);
+  flying.set(token, expect.nth);
   try {
-    out = await execUnderTownLock(exec, JSON.stringify({ handle: from, date: today, via: viaFor(channel), expect }), { ...process.env, TOWN_CLONE: clone });
-  } catch (e) {
-    if (lockTimedOut(e)) return bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
-    const { faultLogged } = await import("./fault-words.mjs");
-    return bounce(500, "the parcel room purchase tripped", faultLogged("the parcel room purchase tripped", e));
+    const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
+    const { viaFor } = await import("./channel.mjs");
+    const exec = join(dirname(fileURLToPath(import.meta.url)), "parcel-room-exec.mjs");
+    let out;
+    try {
+      out = await execUnderTownLock(exec, JSON.stringify({ handle: from, date: today, via: viaFor(channel), expect }), { ...process.env, TOWN_CLONE: clone });
+    } catch (e) {
+      if (lockTimedOut(e)) return bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
+      const { faultLogged } = await import("./fault-words.mjs");
+      return bounce(500, "the parcel room purchase tripped", faultLogged("the parcel room purchase tripped", e));
+    }
+    const result = JSON.parse(out.trim().split("\n").at(-1));
+    if (result.error) return bounce(result.error.code ?? 500, result.error.defect, result.error.hint);
+    if (result.repeat) { const { repeat: _r, ...made } = result; return repeatReceipt(made); }
+    return { did: BUY_ROOM_ACT, ...result };
+  } finally {
+    flying.delete(token);
+    if (!flying.size && roomInFlight.get(slug) === flying) roomInFlight.delete(slug);
   }
-  const result = JSON.parse(out.trim().split("\n").at(-1));
-  if (result.error) return bounce(result.error.code ?? 500, result.error.defect, result.error.hint);
-  if (result.repeat) { const { repeat: _r, ...made } = result; return repeatReceipt(made); }
-  return { did: BUY_ROOM_ACT, ...result };
 }

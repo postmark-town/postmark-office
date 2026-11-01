@@ -20,7 +20,7 @@
 //      purchase makes room;
 //   7–9. buying room ahead: the quote, the door, and the exec end to end;
 //   10. a retry or a double click burns once (the 10-26 review's F1).
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -32,6 +32,15 @@ import { foldHouseholds } from "../src/world-snapshot.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WORLD_CLONE = process.env.WORLD_CLONE ?? join(ROOT, "world-clone");
+
+// A world whose engine carries the parcel law (world#300's `parcelRoomOf`), for
+// the door's calls: the purchase opens only once the blessed engine sizes a
+// household's room (Truey's F2, § 11). A folder with no .git is its own engine
+// (world-branches.mjs § engineDirAt); § 11 tests the blessed ref itself.
+const LAW_WORLD = mkdtempSync(join(tmpdir(), "parcel-room-law-world-"));
+mkdirSync(join(LAW_WORLD, "tools"), { recursive: true });
+writeFileSync(join(LAW_WORLD, "tools", "marks-fold.mjs"), "export const parcelRoomOf = () => 3;\n");
+after(() => rmSync(LAW_WORLD, { recursive: true, force: true }));
 
 const registry = { households: {
   "the-rowan": { accounts: [{ login: "rowan-gh", id: 101 }], residents: ["ash", "birch"], since: "2026-11-02", formerly: ["rowan-house"] },
@@ -259,7 +268,7 @@ test("8 · the door: a preview quotes and writes nothing; a stranger or no payer
     const KEY = { household: "the-rowan", handles: new Set(["ash"]) };
     const ledger = join(town, "WHITE_PAGES", "stamp-ledger.md");
     const before = readFileSync(ledger, "utf8");
-    const p = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { date: "2026-11-03" });
+    const p = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-11-03" });
     assert.equal(p.error, undefined, JSON.stringify(p));
     assert.deepEqual([p.preview, p.did, p.room, p.price], [true, "buy-parcel-room", { now: 1, after: 2 }, 50]);
     assert.match(p.to_confirm, /household \{ do: "buy-parcel-room", args: \{ from: "ash" \} \} — the same call without preview: true/);
@@ -267,15 +276,15 @@ test("8 · the door: a preview quotes and writes nothing; a stranger or no payer
     assert.equal(readFileSync(ledger, "utf8"), before, "a preview writes nothing");
     // POS-762/g: a preview quotes the same refusal for room past the residents, and writes nothing
     writeFileSync(join(town, "tools", "households.json"), JSON.stringify(withResidents(["ash"])));
-    const lone = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { date: "2026-11-03" });
+    const lone = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-11-03" });
     assert.equal(lone.code, 409);
     assert.match(`${lone.defect} — ${lone.hint}`, /needs a second resident to hold it — a parcel is one per resident: add the resident first/);
     assert.equal(readFileSync(ledger, "utf8"), before, "the refused preview writes nothing");
     writeFileSync(join(town, "tools", "households.json"), JSON.stringify(registry));
-    const early = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { date: "2026-10-30" });
+    const early = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-10-30" });
     assert.match(early.defect, /room is bought from 2026-11-01/);
-    assert.equal((await buyParcelRoomViaOffice(town, { from: "birch", preview: true }, KEY, { date: "2026-11-03" })).code, 403);
-    assert.equal((await buyParcelRoomViaOffice(town, { preview: true }, KEY, { date: "2026-11-03" })).code, 422);
+    assert.equal((await buyParcelRoomViaOffice(town, { from: "birch", preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-11-03" })).code, 403);
+    assert.equal((await buyParcelRoomViaOffice(town, { preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-11-03" })).code, 422);
   } finally { rmSync(town, { recursive: true, force: true }); }
 });
 
@@ -311,14 +320,14 @@ test("9 · end to end: the exec burns the price, the town's verifier stays green
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: repo });
     process.env.STAMP_KEY = join(repo, "stamp-key.pem"); process.env.BOT_NAME = "t"; process.env.BOT_EMAIL = "t@t"; delete process.env.TOWN_PUSH;
     const KEY = { household: "the-rowan", handles: new Set(["ash"]) };
-    const r = await buyParcelRoomViaOffice(repo, { from: "ash" }, KEY, { date: "2026-11-03", channel: null });
+    const r = await buyParcelRoomViaOffice(repo, { from: "ash" }, KEY, { worldClone: LAW_WORLD, date: "2026-11-03", channel: null });
     assert.equal(r.error, undefined, JSON.stringify(r));
     assert.ok(r.commit, "the exec committed the sealed ledger");
     assert.equal(r.line, "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan");
     const { verifyStampLedger } = await import(pathToFileURL(join(repo, "tools", "stamp-verify.mjs")).href);
     const v = verifyStampLedger(repo);
     assert.equal(v.ok, true, `the town's verifier, over the burned line: ${v.problems.join("; ")}`);
-    const next = await buyParcelRoomViaOffice(repo, { from: "ash", preview: true }, KEY, { date: "2026-11-04" });
+    const next = await buyParcelRoomViaOffice(repo, { from: "ash", preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-11-04" });
     assert.deepEqual([next.room, next.price], [{ now: 2, after: 3 }, 100], "the next room is quoted at 100 from the ledger the act just wrote");
   } finally {
     for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -357,8 +366,27 @@ function standInTown({ residents = ["ash", "birch", "cedar"], lines = [] } = {})
     "}",
     `const PARCEL = ${PARCEL};`,
     `export const classifyEntry = ${classifyEntry.toString()};`,
-    "export const parseStampLedger = (text) => text.split(/\\r?\\n/).filter((l) => l.startsWith('- ')).map((l) => ({ canonical: l.replace(/ · sig: \\S+$/, '') }));",
-    "export const appendSigned = (clone, lines) => appendFileSync(join(clone, 'WHITE_PAGES', 'stamp-ledger.md'), lines.map((l) => l + ' · sig: x\\n').join(''));",
+    // THE WINDOW HOOK (§ 11, Truey's F1): with <RACE>_PAUSE_DIR set, the first
+    // exec to append holds after its line is on disk, before its commit, until
+    // the door's next entry quote has read the ledger (`entered`); any later
+    // exec reads the ledger only after the test says the first has answered
+    // (`answered`). Both waits are bounded, so a broken hook is a red, not a hang.
+    "const IN_EXEC = String(process.argv[1] ?? '').endsWith('parcel-room-exec.mjs');",
+    `const PAUSE = () => process.env.${RACE}_PAUSE_DIR;`,
+    "const nap = new Int32Array(new SharedArrayBuffer(4));",
+    "const waitFor = (f) => { const t0 = Date.now(); while (!existsSync(f) && Date.now() - t0 < 20000) Atomics.wait(nap, 0, 0, 20); };",
+    "let iHeld = false;",
+    "export const parseStampLedger = (text) => {",
+    "  const p = PAUSE();",
+    "  if (p && !IN_EXEC && existsSync(join(p, 'paused'))) writeFileSync(join(p, 'entered'), 'entered');",
+    "  if (p && IN_EXEC && !iHeld && existsSync(join(p, 'paused'))) waitFor(join(p, 'answered'));",
+    "  return text.split(/\\r?\\n/).filter((l) => l.startsWith('- ')).map((l) => ({ canonical: l.replace(/ · sig: \\S+$/, '') }));",
+    "};",
+    "export const appendSigned = (clone, lines) => {",
+    "  appendFileSync(join(clone, 'WHITE_PAGES', 'stamp-ledger.md'), lines.map((l) => l + ' · sig: x\\n').join(''));",
+    "  const p = PAUSE();",
+    "  if (p && IN_EXEC && !existsSync(join(p, 'paused'))) { iHeld = true; writeFileSync(join(p, 'paused'), 'paused'); waitFor(join(p, 'entered')); }",
+    "};",
     ...Object.entries(townEngine).filter(([k]) => k !== "classifyEntry")
       .map(([k, v]) => `export const ${k} = ${typeof v === "function" ? v.toString() : JSON.stringify(v)};`),
     "export const householdKeys = () => new Map([['ash', { key: 'gh:101' }], ['birch', { key: 'gh:101' }], ['cedar', { key: 'gh:101' }]]);",
@@ -394,7 +422,7 @@ test("10 · a double click burns once: the first click lands while the second wa
   try {
     const first = "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan";
     const second = await withExecEnv(town, { [RACE]: first, [`${RACE}_MARK`]: join(markDir, "landed") },
-      () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { date: "2026-11-03" }));
+      () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
     assert.ok(existsSync(join(markDir, "landed")), "the race hook fired inside the exec: the first click's line landed between this call's entry and its lock");
     assert.deepEqual(burnsIn(town), [first],
       `a double click burns once: one line, 50 stamps, never 50 and then 100 (F1). The second click answered: ${JSON.stringify(second)}`);
@@ -440,12 +468,89 @@ test("10 · a call never buys a room it did not see: a room that moved any other
 test("10 · control: a call made after the first purchase is a new purchase, and buys the next room at 100", async () => {
   const town = standInTown();
   try {
-    const one = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { date: "2026-11-03" }));
+    const one = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
     assert.equal(one.error, undefined, JSON.stringify(one));
     assert.equal(one.duplicate, undefined, "the first purchase is no repeat");
-    const two = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { date: "2026-11-04" }));
+    const two = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-04" }));
     assert.equal(two.error, undefined, JSON.stringify(two));
     assert.deepEqual([two.duplicate, two.room, two.price], [undefined, { now: 2, after: 3 }, 100], "a call that saw room 2 buys room 3");
     assert.deepEqual(burnsIn(town), ["- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan", "- 2026-11-04 · ash → BURN · 100 · for: parcel:3/hh:the-rowan"]);
   } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+// ── 11 · Truey's review of d97cfa2 ────────────────────────────────────────────
+// F1: "A second click whose entry quote lands after A's appendSigned and before A
+// answers reads A's line, sees room 2, sets expect.nth = 3, and in the lock buys
+// room 3 at 100." The window hook holds the first click after its line is on
+// disk and before its commit, until the second click's entry has read the ledger.
+test("11 · F1's window: a second click entering after the first click's line is on disk, before it answers, burns nothing", async () => {
+  const town = standInTown();
+  const pause = mkdtempSync(join(tmpdir(), "parcel-room-pause-"));
+  try {
+    await withExecEnv(town, { [`${RACE}_PAUSE_DIR`]: pause }, async () => {
+      const a = buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" });
+      const t0 = Date.now(); // wait on the event, bounded: the first click's exec holds with its line written
+      while (!existsSync(join(pause, "paused")) && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 20));
+      assert.ok(existsSync(join(pause, "paused")), "the first click's line is on disk, and its exec holds before the commit");
+      const b = buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" });
+      const first = await a;
+      writeFileSync(join(pause, "answered"), "answered");
+      const second = await b;
+      assert.ok(existsSync(join(pause, "entered")), "the second click's entry read the ledger while the first click's line was on disk, unanswered");
+      assert.equal(first.error, undefined, JSON.stringify(first));
+      assert.deepEqual([first.duplicate, first.price], [undefined, 50], "the first click buys room 2 at 50");
+      assert.deepEqual(burnsIn(town), ["- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan"],
+        `the second click burned nothing (F1's window: it bought room 3 for 100). It answered: ${JSON.stringify(second)}`);
+      assert.deepEqual([second.duplicate, second.room, second.price], [true, { now: 1, after: 2 }, 50], "the second click answers the first purchase's receipt");
+    });
+  } finally { rmSync(town, { recursive: true, force: true }); rmSync(pause, { recursive: true, force: true }); }
+});
+
+// F2: "world#300 merging to main does not make it law. The settlement folds with
+// the engine at header.law_sha … the blessed ref." The purchase opens only when
+// the engine at the newest blessing carries `parcelRoomOf`, read through the seam
+// the leave-mark note already reads (world-branches.mjs § importEngineAt).
+function worldRepo(steps) {
+  const repo = mkdtempSync(join(tmpdir(), "parcel-room-world-"));
+  mkdirSync(join(repo, "tools"), { recursive: true });
+  const g = (...a) => execFileSync("git", a, { cwd: repo, encoding: "utf8" });
+  g("init", "-q", "-b", "main");
+  for (const [i, { law, tag }] of steps.entries()) {
+    writeFileSync(join(repo, "tools", "marks-fold.mjs"), law
+      ? `export const PARCEL_CLAIM_CAP = 3;\nexport function parcelRoomOf() { return 3; } // step ${i}\n`
+      : `export const PARCEL_CLAIM_CAP = 3; // step ${i}, before world#300\n`);
+    g("add", "-A");
+    g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", `step ${i}`);
+    if (tag) g("tag", tag);
+  }
+  return repo;
+}
+
+test("11 · F2: the law merged to main but not blessed: the purchase and its preview refuse not-yet-open, and nothing burns", async () => {
+  const town = standInTown();
+  const world = worldRepo([{ law: false, tag: "settlement/S1" }, { law: true, tag: null }]);
+  try {
+    const before = readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8");
+    const [buy, look] = await withExecEnv(town, {}, async () => [
+      await buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: world, date: "2026-11-03" }),
+      await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY3, { worldClone: world, date: "2026-11-03" }),
+    ]);
+    assert.equal(readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8"), before, `nothing burned before the bless; it answered: ${JSON.stringify(buy)}`);
+    for (const r of [buy, look]) {
+      assert.deepEqual([r.code, r.defect], [409, "not-yet-open"], JSON.stringify(r));
+      assert.match(r.hint, /settlement\/S1/, "it names the blessing it read");
+      assert.match(r.hint, /Nothing was burned/);
+    }
+  } finally { rmSync(town, { recursive: true, force: true }); rmSync(world, { recursive: true, force: true }); }
+});
+
+test("11 · F2 control: once the blessing carries the law, the purchase sells", async () => {
+  const town = standInTown();
+  const world = worldRepo([{ law: false, tag: "settlement/S1" }, { law: true, tag: "settlement/S2" }]);
+  try {
+    const r = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: world, date: "2026-11-03" }));
+    assert.equal(r.error, undefined, JSON.stringify(r));
+    assert.deepEqual([r.room, r.price], [{ now: 1, after: 2 }, 50]);
+    assert.deepEqual(burnsIn(town), ["- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan"]);
+  } finally { rmSync(town, { recursive: true, force: true }); rmSync(world, { recursive: true, force: true }); }
 });
