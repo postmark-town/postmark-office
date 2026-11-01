@@ -72,8 +72,9 @@ export function slugFromName(name) {
  * by login, so nothing pinned breaks and nothing unpinned regresses.
  *
  * Vendored from `residency.mjs § accountMatches`, which vendored it from the
- * town's `tools/account-match.mjs`. `residency.mjs` now re-exports THIS one, so
- * the office holds a single copy again and the town's is the only twin left.
+ * town's `tools/account-match.mjs`. `residency.mjs` imports THIS one for its own
+ * use and does not re-export it, so the office holds a single copy again and the
+ * town's is the only twin left.
  */
 export function accountMatches(account, actorId, actorLogin) {
   if (!account) return false;
