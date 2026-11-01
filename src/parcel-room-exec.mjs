@@ -15,7 +15,8 @@
 // short of the price, nothing is written.
 //
 // Env: TOWN_CLONE, STAMP_KEY, TOWN_PUSH, BOT_NAME/BOT_EMAIL, TOWN_TZ.
-// argv[2]: JSON { handle, date, via }.
+// argv[2]: JSON { handle, date, via, expect? } — expect is { household, nth },
+// the room the door's call saw (the retry guard; parcel-room.mjs § ONE CALL, ONE ROOM).
 
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -48,7 +49,11 @@ async function main() {
   const result = await penTransaction(CLONE, async () => {
     if (process.env.TOWN_PUSH === "1")
       execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
-    const q = await quoteAt(CLONE, payload.handle, payload.date);
+    // ONE CALL, ONE ROOM (the 10-26 review's F1): `expect` is the room the
+    // door's call saw. Already bought, by this click or the one before it, is
+    // that purchase's receipt, and nothing is written (parcel-room.mjs § quoteAt).
+    const q = await quoteAt(CLONE, payload.handle, payload.date, { expect: payload.expect ?? null });
+    if (q.repeat) return { repeat: true, ...q.repeat };
     if (q.error) return q;
     const { quote } = q;
     appendSigned(CLONE, [quote.line], keyPem);

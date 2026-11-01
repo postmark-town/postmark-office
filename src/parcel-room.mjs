@@ -245,15 +245,63 @@ export function parcelRoomQuote({ handle, date, registry, entries, engine, townK
   };
 }
 
-/** The quote at a town checkout: its engine, its households.json and its ledger, read now. */
-export async function quoteAt(clone, handle, date) {
+// ── ONE CALL, ONE ROOM: THE RETRY GUARD (the 10-26 review's F1) ─────────────
+//
+// F1: "a three-resident house that retries, or double-clicks, burns 50 and then
+// 100: the exec re-quotes inside the lock and sells the next room." A call sells
+// only the room it saw. The door quotes at entry and hands the exec the
+// household and the nth it would buy (`expect`); inside the lock, a purchase of
+// that nth already on the ledger IS that purchase (by this click or the one
+// before it), so the call answers its receipt and burns nothing. The ledger is
+// the record: no new field on the act and no new row. A call made after the
+// first one answered sees the new room at entry, and buys the next room.
+
+/**
+ * The purchase of `nth` room for `household` (a slug) already on the ledger, by
+ * any spelling of the house, or null. PURE. → `{ handle, household, date,
+ * room, price, line }`, the first purchase's own facts.
+ */
+export function parcelRoomBought({ registry, entries, engine, household, nth }) {
+  if (!household || !PARCEL_NTHS.includes(nth)) return null;
+  const canon = houseKeyCanon(registry);
+  const house = `hh:${household}`;
+  const b = parcelBurnsOf((entries ?? []).map((e) => e.canonical), engine?.classifyEntry)
+    .find((x) => x.nth === nth && canon(x.household) === house);
+  if (!b) return null;
+  return { handle: b.handle, household, date: b.date, room: { now: nth - 1, after: nth }, price: b.n,
+    ...(typeof engine?.parcelBurnLine === "function" ? { line: engine.parcelBurnLine({ date: b.date, handle: b.handle, n: b.n, nth, household: b.household }) } : {}) };
+}
+
+/**
+ * The quote at a town checkout: its engine, its households.json and its ledger,
+ * read now. With `expect` (the room the call saw at the door), a purchase of
+ * that room already made answers `{ repeat }`, and a room that moved past it
+ * any other way is refused: a call never buys a room it did not see.
+ */
+export async function quoteAt(clone, handle, date, { expect = null } = {}) {
   const engine = await townEngineAt(clone);
   if (!engine) return refuse(503, "not-yet-open", "the office has no town clone to read the ledger from");
   const registry = JSON.parse(readFileSync(join(clone, "tools", "households.json"), "utf8"));
   const ledger = join(clone, "WHITE_PAGES", "stamp-ledger.md");
   const entries = existsSync(ledger) ? engine.parseStampLedger(readFileSync(ledger, "utf8")) : [];
+  if (expect) {
+    const made = parcelRoomBought({ registry, entries, engine, household: expect.household, nth: expect.nth });
+    if (made) return { repeat: made };
+  }
   const townKey = typeof engine.householdKeys === "function" ? townKeyAt(engine, clone, entries, handle, date) : `solo:${handle}`;
-  return parcelRoomQuote({ handle, date, registry, entries, engine, townKey });
+  const q = parcelRoomQuote({ handle, date, registry, entries, engine, townKey });
+  if (expect && q.quote && (q.quote.household !== expect.household || q.quote.room.after !== expect.nth))
+    return refuse(409, `${expect.household}'s room changed while this call waited for the pen`,
+      `this call would have bought room for parcel ${expect.nth}, and the next room is now parcel ${q.quote.room.after}${q.quote.household !== expect.household ? ` of ${q.quote.household}` : ""}. Nothing was burned: quote again with preview: true`);
+  return q;
+}
+
+/** The answer to a repeat: the first purchase's receipt, and that nothing was burned again. */
+function repeatReceipt(made) {
+  return {
+    did: BUY_ROOM_ACT, duplicate: true, ...made,
+    note: `this room was already bought: ${made.handle} bought room for ${made.household}'s parcel ${made.room.after} (${made.price} stamps), and this is that purchase's receipt. NOTHING WAS BURNED A SECOND TIME. To buy the next room, quote it first: household { do: "${BUY_ROOM_ACT}", args: { from, preview: true } }`,
+  };
 }
 
 /**
@@ -270,22 +318,24 @@ export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key,
   const today = date ?? townDay(); // the town day; a caller (a test) may name one
   const { toConfirm, NOTHING_MOVED } = await import("./stamps-preview.mjs");
   const call = `household { do: "${BUY_ROOM_ACT}", args: { from: "${from}" } }`;
-  if (preview === true) {
-    let q;
-    try { q = await quoteAt(clone, from, today); }
-    catch (e) {
-      const { faultLogged } = await import("./fault-words.mjs");
-      return bounce(503, "not-yet-open", `the office could not read the town's ledger, so the room could not be quoted; ${faultLogged("the parcel room quote could not read the town", e)}`);
-    }
-    if (q.error) return bounce(q.error.code, q.error.defect, q.error.hint);
-    return { preview: true, did: BUY_ROOM_ACT, ...q.quote, to_confirm: toConfirm(call), nothing_written: NOTHING_MOVED };
+  // The quote at entry, for the preview AND the act: the act's is the room its
+  // call saw, which the exec sells and no other (§ ONE CALL, ONE ROOM).
+  let q;
+  try { q = await quoteAt(clone, from, today); }
+  catch (e) {
+    const { faultLogged } = await import("./fault-words.mjs");
+    return bounce(503, "not-yet-open", `the office could not read the town's ledger, so the room could not be quoted; ${faultLogged("the parcel room quote could not read the town", e)}`);
   }
+  if (q.error) return bounce(q.error.code, q.error.defect, q.error.hint);
+  if (preview === true)
+    return { preview: true, did: BUY_ROOM_ACT, ...q.quote, to_confirm: toConfirm(call), nothing_written: NOTHING_MOVED };
+  const expect = { household: q.quote.household, nth: q.quote.room.after };
   const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
   const { viaFor } = await import("./channel.mjs");
   const exec = join(dirname(fileURLToPath(import.meta.url)), "parcel-room-exec.mjs");
   let out;
   try {
-    out = await execUnderTownLock(exec, JSON.stringify({ handle: from, date: today, via: viaFor(channel) }), { ...process.env, TOWN_CLONE: clone });
+    out = await execUnderTownLock(exec, JSON.stringify({ handle: from, date: today, via: viaFor(channel), expect }), { ...process.env, TOWN_CLONE: clone });
   } catch (e) {
     if (lockTimedOut(e)) return bounce(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
     const { faultLogged } = await import("./fault-words.mjs");
@@ -293,5 +343,6 @@ export async function buyParcelRoomViaOffice(clone, { from, preview } = {}, key,
   }
   const result = JSON.parse(out.trim().split("\n").at(-1));
   if (result.error) return bounce(result.error.code ?? 500, result.error.defect, result.error.hint);
+  if (result.repeat) { const { repeat: _r, ...made } = result; return repeatReceipt(made); }
   return { did: BUY_ROOM_ACT, ...result };
 }

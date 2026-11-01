@@ -17,10 +17,13 @@
 //      engine's own sentence, and never without the engine's law;
 //   6. end to end, at a pinned world that carries the law: a house declared after
 //      10-31 holds one, the clearing's limit pass opposes the second, and a
-//      purchase makes room.
+//      purchase makes room;
+//   7–9. buying room ahead: the quote, the door, and the exec end to end;
+//   10. a retry or a double click burns once (the 10-26 review's F1).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -321,4 +324,128 @@ test("9 · end to end: the exec burns the price, the town's verifier stays green
     for (const [k, v] of Object.entries(env)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+// ── 10 · a retry or a double click burns once (the 10-26 review's F1) ────────
+// F1: "a three-resident house that retries, or double-clicks, burns 50 and then
+// 100: the exec re-quotes inside the lock and sells the next room." The act
+// sells only the room its call saw: the door quotes at entry and hands the exec
+// the household and the nth; inside the lock, an nth already on the ledger is
+// that purchase, answered with its receipt, and nothing is burned again.
+//
+// The town here is a stand-in engine module in the town's grammar, so this runs
+// in CI at any town pin (test 9 is the real engine's). Its RACE HOOK models the
+// interleaving: when the exec (not the door) first imports the engine, it lands
+// the first click's line, as if that click took the lock while this one waited
+// (TEST-DESIGN: give the store an answer between the check and the write).
+const RACE = "PARCEL_ROOM_TEST_RACE_LINE";
+function standInTown({ residents = ["ash", "birch", "cedar"], lines = [] } = {}) {
+  const town = mkdtempSync(join(tmpdir(), "parcel-room-retry-"));
+  mkdirSync(join(town, "tools"), { recursive: true });
+  mkdirSync(join(town, "WHITE_PAGES"), { recursive: true });
+  writeFileSync(join(town, "tools", "households.json"), JSON.stringify(withResidents(residents)));
+  writeFileSync(join(town, "tools", "stamp-mint.mjs"), [
+    "import { appendFileSync, existsSync, writeFileSync } from 'node:fs';",
+    "import { join, dirname } from 'node:path';",
+    "import { fileURLToPath } from 'node:url';",
+    "const LEDGER = join(dirname(fileURLToPath(import.meta.url)), '..', 'WHITE_PAGES', 'stamp-ledger.md');",
+    `const RACE = process.env.${RACE};`,
+    `const MARK = process.env.${RACE}_MARK;`,
+    "if (RACE && MARK && !existsSync(MARK) && String(process.argv[1] ?? '').endsWith('parcel-room-exec.mjs')) {",
+    "  writeFileSync(MARK, 'landed');",
+    "  appendFileSync(LEDGER, RACE + ' · sig: x\\n');",
+    "}",
+    `const PARCEL = ${PARCEL};`,
+    `export const classifyEntry = ${classifyEntry.toString()};`,
+    "export const parseStampLedger = (text) => text.split(/\\r?\\n/).filter((l) => l.startsWith('- ')).map((l) => ({ canonical: l.replace(/ · sig: \\S+$/, '') }));",
+    "export const appendSigned = (clone, lines) => appendFileSync(join(clone, 'WHITE_PAGES', 'stamp-ledger.md'), lines.map((l) => l + ' · sig: x\\n').join(''));",
+    ...Object.entries(townEngine).filter(([k]) => k !== "classifyEntry")
+      .map(([k, v]) => `export const ${k} = ${typeof v === "function" ? v.toString() : JSON.stringify(v)};`),
+    "export const householdKeys = () => new Map([['ash', { key: 'gh:101' }], ['birch', { key: 'gh:101' }], ['cedar', { key: 'gh:101' }]]);",
+  ].join("\n"));
+  writeFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "# stamp-ledger\n\n"
+    + ["- 2026-10-20 · MINT → ash · 200 · for: gift:seed · by: keemin", ...lines].map((l) => `${l} · sig: x`).join("\n") + "\n");
+  writeFileSync(join(town, ".gitignore"), "stamp-key.pem\n");
+  writeFileSync(join(town, "stamp-key.pem"), "stand-in: the stand-in engine signs nothing\n");
+  execFileSync("git", ["init", "-q"], { cwd: town });
+  execFileSync("git", ["add", "-A"], { cwd: town });
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: town });
+  return town;
+}
+const burnsIn = (town) => readFileSync(join(town, "WHITE_PAGES", "stamp-ledger.md"), "utf8").split("\n")
+  .filter((l) => l.includes("for: parcel:")).map((l) => l.replace(/ · sig: \S+$/, ""));
+/** Run `fn` with the exec's env set (the stand-in key, a lock file outside the town, no push), restoring it after. */
+async function withExecEnv(town, extra, fn) {
+  const lockDir = mkdtempSync(join(tmpdir(), "parcel-room-lock-"));
+  const set = { STAMP_KEY: join(town, "stamp-key.pem"), BOT_NAME: "t", BOT_EMAIL: "t@t", TOWN_PUSH: undefined, TOWN_LOCK: join(lockDir, "town.lock"), ...extra };
+  const saved = Object.fromEntries(Object.keys(set).map((k) => [k, process.env[k]]));
+  for (const [k, v] of Object.entries(set)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  try { return await fn(); }
+  finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+const KEY3 = { household: "the-rowan", handles: new Set(["ash"]) };
+
+test("10 · a double click burns once: the first click lands while the second waits, and the second answers the first's receipt", async () => {
+  const town = standInTown();
+  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  try {
+    const first = "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan";
+    const second = await withExecEnv(town, { [RACE]: first, [`${RACE}_MARK`]: join(markDir, "landed") },
+      () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { date: "2026-11-03" }));
+    assert.ok(existsSync(join(markDir, "landed")), "the race hook fired inside the exec: the first click's line landed between this call's entry and its lock");
+    assert.deepEqual(burnsIn(town), [first],
+      `a double click burns once: one line, 50 stamps, never 50 and then 100 (F1). The second click answered: ${JSON.stringify(second)}`);
+    assert.equal(second.error, undefined, JSON.stringify(second));
+    assert.deepEqual([second.did, second.duplicate, second.room, second.price, second.handle, second.household],
+      ["buy-parcel-room", true, { now: 1, after: 2 }, 50, "ash", "the-rowan"], "the second click's answer is the first purchase's receipt");
+    assert.match(second.note, /NOTHING WAS BURNED A SECOND TIME/);
+    assert.equal(second.commit, undefined, "and it made no commit of its own");
+  } finally { rmSync(town, { recursive: true, force: true }); rmSync(markDir, { recursive: true, force: true }); }
+});
+
+test("10 · the same call twice through the exec, from the same state, burns once", async () => {
+  const town = standInTown();
+  const exec = join(ROOT, "src", "parcel-room-exec.mjs");
+  try {
+    const payload = JSON.stringify({ handle: "ash", date: "2026-11-03", via: "api", expect: { household: "the-rowan", nth: 2 } });
+    const run = () => withExecEnv(town, {}, () => JSON.parse(execFileSync(process.execPath, [exec, payload], {
+      encoding: "utf8", env: { ...process.env, TOWN_CLONE: town } }).trim().split("\n").at(-1)));
+    const a = await run();
+    assert.equal(a.error, undefined, JSON.stringify(a));
+    assert.equal(a.price, 50);
+    const b = await run();
+    assert.deepEqual(burnsIn(town), ["- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan"],
+      `the retry burned nothing (F1: it sold the third room for 100). It answered: ${JSON.stringify(b)}`);
+    assert.deepEqual([b.repeat, b.price, b.room], [true, 50, { now: 1, after: 2 }], "the retry answers the first purchase");
+  } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+test("10 · a call never buys a room it did not see: a room that moved any other way is refused, and nothing is burned", async () => {
+  const town = standInTown();
+  const exec = join(ROOT, "src", "parcel-room-exec.mjs");
+  try {
+    // the call saw room 2 bought (its nth was 3), and the ledger the pen holds has no purchase at all
+    const payload = JSON.stringify({ handle: "ash", date: "2026-11-03", via: "api", expect: { household: "the-rowan", nth: 3 } });
+    const r = await withExecEnv(town, {}, () => JSON.parse(execFileSync(process.execPath, [exec, payload], {
+      encoding: "utf8", env: { ...process.env, TOWN_CLONE: town } }).trim().split("\n").at(-1)));
+    assert.deepEqual(burnsIn(town), [], `nothing burned; it answered: ${JSON.stringify(r)}`);
+    assert.equal(r.error?.code, 409);
+    assert.match(`${r.error.defect} — ${r.error.hint}`, /^the-rowan's room changed while this call waited for the pen — this call would have bought room for parcel 3, and the next room is now parcel 2\. Nothing was burned: quote again with preview: true$/);
+  } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+test("10 · control: a call made after the first purchase is a new purchase, and buys the next room at 100", async () => {
+  const town = standInTown();
+  try {
+    const one = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { date: "2026-11-03" }));
+    assert.equal(one.error, undefined, JSON.stringify(one));
+    assert.equal(one.duplicate, undefined, "the first purchase is no repeat");
+    const two = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { date: "2026-11-04" }));
+    assert.equal(two.error, undefined, JSON.stringify(two));
+    assert.deepEqual([two.duplicate, two.room, two.price], [undefined, { now: 2, after: 3 }, 100], "a call that saw room 2 buys room 3");
+    assert.deepEqual(burnsIn(town), ["- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan", "- 2026-11-04 · ash → BURN · 100 · for: parcel:3/hh:the-rowan"]);
+  } finally { rmSync(town, { recursive: true, force: true }); }
 });
