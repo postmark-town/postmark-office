@@ -107,6 +107,78 @@ test("a pool connection's kernel keepalive timer is the initial delay, not the k
   }
 });
 
+// POS-821: the pen's pool is built lazily, and `await import("pg")` yields. These
+// drive the pen's real doors (officeRead) with no pool injected, so they
+// traverse pool() itself; the real pg.Pool is wrapped only to COUNT
+// constructions (its own behaviour is unchanged), and every pool built is ended
+// below. The store is a closed port: no pool here ever reaches a database, and
+// each door's refusal is the store being unreachable, which is not what is judged.
+async function countingPg(failFirst = false) {
+  const { default: pg } = await import("pg");
+  const Real = pg.Pool;
+  const built = [];
+  let asked = 0;
+  pg.Pool = class extends Real {
+    constructor(o) {
+      asked++;
+      if (failFirst && asked === 1) throw new Error("the first construction fails");
+      super(o);
+      built.push(this);
+    }
+  };
+  return {
+    asked: () => asked, built,
+    async done() { pg.Pool = Real; await Promise.all(built.map((p) => p.end().catch(() => {}))); },
+  };
+}
+const NO_STORE_ENV = { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://u@127.0.0.1:1/d" };
+const fiveFirstCallers = (pen, env) => Promise.allSettled(Array.from({ length: 5 }, () => pen.officeRead(async (c) => c.query("SELECT 1"), { env })));
+
+test("simultaneous first requests to the pen build one pool, and a later request builds none", async () => {
+  const pen = await import("../src/world2-pen.mjs");
+  pen.__setPoolForTest(null);
+  const count = await countingPg();
+  try {
+    const first = await fiveFirstCallers(pen, NO_STORE_ENV);
+    assert.equal(count.asked(), 1, "five callers that arrived before the first pool was built share its construction");
+    assert.equal(count.built.length, 1);
+    for (const r of first) assert.equal(r.status, "rejected", "the closed port refuses each, as the unreachable store it is");
+    await fiveFirstCallers(pen, NO_STORE_ENV);
+    assert.equal(count.asked(), 1, "the pool built is the pool kept");
+  } finally { pen.__setPoolForTest(null); await count.done(); }
+});
+
+test("a first construction that fails fails every caller that was waiting on it, and the next caller builds afresh", async () => {
+  const pen = await import("../src/world2-pen.mjs");
+  pen.__setPoolForTest(null);
+  const count = await countingPg(true);
+  try {
+    const first = await fiveFirstCallers(pen, NO_STORE_ENV);
+    assert.deepEqual(first.map((r) => r.status), Array(5).fill("rejected"));
+    for (const r of first) assert.match(r.reason.message, /the first construction fails/);
+    assert.equal(count.asked(), 1, "the five shared the one failing construction");
+    assert.equal(count.built.length, 0, "a failed construction left no pool");
+    const again = await fiveFirstCallers(pen, NO_STORE_ENV);
+    assert.equal(count.asked(), 2, "the failure was forgotten: one fresh construction, shared");
+    assert.equal(count.built.length, 1);
+    for (const r of again) assert.doesNotMatch(String(r.reason?.message), /the first construction fails/);
+  } finally { pen.__setPoolForTest(null); await count.done(); }
+});
+
+test("an office pointed at no record refuses by name at once and builds no pool, however many ask", async () => {
+  const pen = await import("../src/world2-pen.mjs");
+  pen.__setPoolForTest(null);
+  const count = await countingPg();
+  try {
+    const refused = await fiveFirstCallers(pen, {});
+    for (const r of refused) assert.equal(r.reason?.name, "NoRecordError");
+    assert.equal(count.asked(), 0, "nothing was built, so nothing dialled");
+    const later = await fiveFirstCallers(pen, NO_STORE_ENV);
+    assert.equal(count.asked(), 1, "the refusal left nothing behind: the next office that is pointed at a record builds its one pool");
+    assert.equal(later.length, 5);
+  } finally { pen.__setPoolForTest(null); await count.done(); }
+});
+
 test("every office pool is built with the options: no bare new pg.Pool left in src", () => {
   // the pen, the acts and stance pools, claims, serve and paperwork: a pool
   // built without the options would hang where the others refuse
