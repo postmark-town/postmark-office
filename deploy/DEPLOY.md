@@ -1,9 +1,22 @@
-# Deploying the office to the atelier box (EC2, nginx/Ubuntu)
+# Deploying the office to the box (EC2, nginx/Ubuntu)
 
 The same box that serves `starforge-atelier.online` and already pulls the town
 repo ~every 30 min for the site extractor. The office rides that rhythm.
 
-> **Live-truth note (2026-07-19):** the box's `/srv/postmark-office` is a plain
+> **How code reaches the box (current):** from a `release/2026-wNN[.k]` tag,
+> never from a branch tip. `release-train.yml` takes `git archive <tag>`, rsyncs
+> it onto the box, restarts `postmark-office`, and polls `GET /release` until it
+> names the tag (§ The auto-deploy below; `deploy/remote-deploy.sh` is the box
+> half). Which branch a PR targets, how a train or a hotfix hand tag is cut, and
+> who merges are `SHIPPING.md`'s (linked under § The weekly train); this file does
+> not restate them. A hand-run `scp` of single files is **break-glass only**, and
+> the dated note below is its record, not a competing recipe.
+
+> **Live-truth note (2026-07-19) — historical; superseded as the normal code
+> deploy by the tag route above (POS-60). Kept verbatim as the discovery
+> receipt and as the break-glass procedure.** What it said that day:
+>
+> the box's `/srv/postmark-office` is a plain
 > file copy, NOT the git clone step 1 below describes — a code deploy is
 > `scp src/<changed>.mjs meepo-ec2:/srv/postmark-office/src/` +
 > `sudo systemctl restart postmark-office`, then probe a route whose response
@@ -29,8 +42,8 @@ ENGINE changes reach prod through the site's world pin riding the site train.
 
 `.github/workflows/release-train.yml` no longer only cuts the tag — it deploys
 it, in the same run. **Nothing about the procedure changed; only the hand did.**
-The workflow does the three steps the live-truth note above prescribes, in that
-order, and goes red if any of them cannot be proven:
+The workflow does the three steps the (now historical) live-truth note above
+prescribed, in that order, and goes red if any of them cannot be proven:
 
 | the hand-carry | the workflow |
 |---|---|
@@ -46,7 +59,9 @@ no train name cuts no tag and deploys nothing.
 
 Until the repo variable `OFFICE_AUTODEPLOY` is `on`, an automatic trigger cuts
 the tag exactly as it always did **and stops**. Today's behaviour, unchanged;
-the hand-carry stays the way code reaches the box.
+the deploy of that tag is then a person's act: run the workflow from the
+Actions tab (`workflow_dispatch`, never gated), or, as break-glass only, the
+hand-carry in the live-truth note above.
 
 ```sh
 gh variable set OFFICE_AUTODEPLOY --body on  -R postmark-town/postmark-office   # adopt
@@ -1111,9 +1126,14 @@ A new box alarm is a probe in `tools/site-sentinel.mjs`, never a script with
 its own webhook call; `test/site-sentinel.test.mjs` § ONE ROUTE reds on a PR
 that adds one. The root disk is probe `disk_root` (DOWN at 85%, the line the
 retired disk watch used). The meeps are probe `meeps`: it reads
-`/srv/postmark-sentinel/meeps.json`, which Wright's watcher on Darko's desktop
-(`G:/Wright-HQ/tools/meep-watch.mjs`) lands every 5 minutes by scp. The record's
-DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
+`/srv/postmark-sentinel/meeps.json`, a record landed from outside the box. The
+desktop watcher that once wrote it (`G:/Wright-HQ/tools/meep-watch.mjs`, every 5
+minutes by scp) is **retired**; the producer is routed to the
+starforge-rig repo, source tree `windows/meepops` (MeepOps). Read its source there for
+how, and how often, the record is written: this file does not restate the
+producer, and nothing here was checked against the live box. The probe's own
+contract does not depend on the producer: it reads that path, `status` `OK` is
+healthy, and the record's DEGRADED or DOWN is DOWN, with its one-line summary as the reason. A record
 older than 15 minutes, or none at all, is STALE, never UNKNOWN, because /fleet
 barks only on DOWN or STALE. The one alarm outside the sentinel is the
 watchman's watchman: the town repo's `.github/workflows/offbox-watch.yml` runs
