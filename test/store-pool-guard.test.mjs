@@ -89,8 +89,9 @@ test("a pool connection's kernel keepalive timer is the initial delay, not the k
   await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
   const pool = new pg.Pool(storePoolOptions({ WORLD2_PG_URL: `postgres://u@127.0.0.1:${server.address().port}/d` }, { name: "pen", max: 1 }));
   pool.on("error", () => {});
+  let client = null;
   try {
-    const client = await pool.connect();
+    client = await pool.connect();
     const port = client.connection.stream.localPort;
     const row = readFileSync("/proc/net/tcp", "utf8").split("\n").slice(1)
       .map((l) => l.trim().split(/\s+/))
@@ -99,8 +100,8 @@ test("a pool connection's kernel keepalive timer is the initial delay, not the k
     const [timer, ticks] = row[5].split(":").map((x) => parseInt(x, 16));
     assert.equal(timer, 2, "the socket's running timer is the keepalive timer");
     assert.ok(ticks > 0 && ticks <= 1_100, `the first probe is due in ${ticks / 100} s; the kernel default would be 7200 s`);
-    client.release();
   } finally {
+    client?.release();
     await pool.end().catch(() => {});
     for (const c of sockets) c.destroy();
     await new Promise((ok) => server.close(ok));
