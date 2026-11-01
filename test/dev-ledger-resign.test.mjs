@@ -18,7 +18,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync, createPublicKey, verify as edVerify } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -241,4 +241,69 @@ test("--verify: a red town verifier refuses, and the clone is put back on the se
   writeFileSync(join(t.dir, "tools", "stamp-verify.mjs"), "process.exit(0);\n");
   t.g("add", "-A"); t.g("commit", "-q", "-m", "a verifier that passes");
   assert.equal((await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key, verify: true })).status, "resigned");
+});
+
+// ── A LINE THAT NAMES ANOTHER BY ITS SIGNATURE (the w45 dev rehearsal, 2026-11-01) ──
+//
+// A bug-post correction is two lines written together: the re-credit and the burn of
+// the mint it corrects, and the burn's text carries that mint's SIGNATURE
+// (`for: correction:<sig>`). The town's verifier demands the burn's sig be the sig of
+// the line it corrects. Re-signing changed the mint's sig and left the burn naming the
+// old one, so dev's freshen refused on prod's real ledger ("line 21582: LAWFUL fails:
+// ... briefed-recredit is not followed by the burn of the mint it corrects").
+// LAW (stamp-verify.mjs, LAWFUL): "the two are written together or not at all".
+//
+// THE CAN-FAIL FLIP: in resignLedger (tools/stamp-sandbox.mjs) drop the
+// `canonical.split(tok).join(...)` rewrite; every test below goes red.
+
+const NAMED_STAGE = "- 2026-10-20 · MINT → wronghouse · 10 · for: post:kinofire/some-post/briefed · by: the-town";
+const NAMED_RECREDIT = "- 2026-10-21 · MINT → righthouse · 10 · for: post:kinofire/some-post/briefed-recredit · by: the-town";
+const burnOf = (sig) => `- 2026-10-21 · wronghouse → BURN · 10 · for: correction:${sig} · by: wright`;
+
+/** A town checkout whose ledger holds BASE, a stage mint, its re-credit and the burn that names the mint's signature; signed by `prod`. */
+function seedCorrectionTown(prod, { withVerifier = false } = {}) {
+  const dir = tempDir("dev-ledger-resign-corr-");
+  const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_DATE: SEED_DATE, GIT_COMMITTER_DATE: SEED_DATE } }).trim();
+  g("init", "-q", "-b", "main");
+  g("config", "user.name", "seed"); g("config", "user.email", "seed@postmark.invalid"); g("config", "core.autocrlf", "false");
+  mkdirSync(join(dir, "tools")); mkdirSync(join(dir, "WHITE_PAGES"));
+  copyFileSync(join(TOWN, "tools", "stamp-mint.mjs"), join(dir, "tools", "stamp-mint.mjs"));
+  if (withVerifier) copyFileSync(join(TOWN, "tools", "stamp-verify.mjs"), join(dir, "tools", "stamp-verify.mjs"));
+  const head = [...BASE, NAMED_STAGE];
+  const stageSig = ENGINE.signSeal(ENGINE.sealChain(head)[head.length - 1], prod.key);
+  const all = [...head, NAMED_RECREDIT, burnOf(stageSig)];
+  const seals = ENGINE.sealChain(all);
+  const sigs = all.map((_, i) => ENGINE.signSeal(seals[i], prod.key));
+  writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), `# the stamp ledger\n\n${all.map((c, i) => `${c} · sig: ${sigs[i]}`).join("\n")}\n`);
+  writeFileSync(join(dir, "tools", "stamp-pubkey.pem"), prod.pub);
+  g("add", "-A"); g("commit", "-q", "-m", "the seed");
+  g("tag", "sandbox/seed");
+  return { dir, g, stageSig, stageIdx: head.length - 1 };
+}
+
+test("a line that names an earlier line by its signature is carried to the new signature, and every line verifies under dev's key", { skip: SKIP }, async () => {
+  const prod = keys(), dev = keys();
+  const t = seedCorrectionTown(prod);
+  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key });
+  assert.equal(r.status, "resigned", JSON.stringify(r));
+  const after = ENGINE.parseStampLedger(readFileSync(join(t.dir, "WHITE_PAGES", "stamp-ledger.md"), "utf8"));
+  assert.ok(verifiesUnder(t.dir, dev.pub), "every line, the burn included, verifies under dev's key");
+  const burn = after[after.length - 1].canonical;
+  assert.equal(burn, burnOf(after[t.stageIdx].sig), "the burn names the stage mint's NEW signature");
+  assert.ok(!burn.includes(t.stageSig), "and not the old one (its text is the one thing a re-sign must move)");
+  assert.deepEqual(after.slice(0, t.stageIdx + 1).map((e) => e.canonical), [...BASE, NAMED_STAGE], "every line before the one that names is untouched");
+  assert.equal(after[after.length - 2].canonical, NAMED_RECREDIT, "the re-credit's text is untouched");
+  assert.equal(t.g("status", "--porcelain"), "", "committed");
+});
+
+const HAS_CORRECTION_GRAMMAR = !!TOWN && existsSync(join(TOWN, "tools", "stamp-verify.mjs")) && readFileSync(join(TOWN, "tools", "stamp-mint.mjs"), "utf8").includes("correction-burn");
+
+test(`the town's own verifier stays green on a re-signed re-credit and its burn${HAS_CORRECTION_GRAMMAR ? "" : " (SKIPPED: this town clone predates POS-649's correction grammar; set TOWN_CLONE to a town at or after it)"}`, { skip: SKIP || !HAS_CORRECTION_GRAMMAR }, async () => {
+  const prod = keys(), dev = keys();
+  const t = seedCorrectionTown(prod, { withVerifier: true });
+  const verifier = await import(pathToFileURL(join(t.dir, "tools", "stamp-verify.mjs")).href);
+  assert.equal(verifier.verifyStampLedger(t.dir).ok, true, "control: the prod-signed fixture is lawful before the re-sign");
+  const r = await resignDevTown({ town: t.dir, keyPem: dev.key, notKeyPem: prod.key });
+  assert.equal(r.status, "resigned", JSON.stringify(r));
+  assert.equal(verifier.verifyStampLedger(t.dir).ok, true, "and lawful after it");
 });
