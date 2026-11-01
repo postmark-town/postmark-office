@@ -44,12 +44,12 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startStore } from "./helpers/embedded-store.mjs";
+import { tempDir, removeTempDir, removeTempDirSync } from "./helpers/temp-dir.mjs";
 import {
   planAmendsCarried, proofFrom, holdsAmend, markFileParts, recordAmendsCarried, verifyAmendsCarried, amendsLine, isDoorAmend,
   HAND_CARRIED, TICK_CAP, proposedLines,
@@ -66,13 +66,16 @@ const MIGRATION = join(OFFICE, "world2", "schema", "075_amend_carried.sql");
 
 // ── the world ────────────────────────────────────────────────────────────────
 
-const world = mkdtempSync(join(tmpdir(), "postmark-amend-carried-"));
-after(() => rmSync(world, { recursive: true, force: true }));
+// POS-837: made and removed by the shared helper (helpers/temp-dir.mjs), whose import
+// also puts git's auto maintenance in the foreground for every git this file runs.
+const world = tempDir("postmark-amend-carried-");
+after(() => removeTempDirSync(world));
 let clock = Date.parse("2026-09-20T06:00:00Z");
-const git = (...a) => execFileSync("git", ["-C", world, ...a], {
+const gitIn = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
   env: { ...process.env, GIT_COMMITTER_DATE: new Date(clock).toISOString(), GIT_AUTHOR_DATE: new Date(clock).toISOString(), TZ: "UTC" },
 });
+const git = (...a) => gitIn(world, ...a);
 const put = (p, t) => { const f = join(world, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, t); };
 const markPath = (id) => `WORLD/marks/${id}/mark.md`;
 // Each body unlike every other (`--follow` pairs look-alikes), and the date line
@@ -112,6 +115,46 @@ const WINDOW_OF = { 1: 101, 2: 102, 3: 104, 4: 105, 5: 106, 6: 107 };
 const store = await startStore({ db: "amend_carried_test" });
 const skip = store.skip ?? false;
 after(async () => { if (!skip) await store.stop(); });
+
+// ── the world's git runs its auto maintenance in the foreground (POS-837) ────
+
+// On Linux a commit runs `gc --auto` DETACHED: git returns while the child still packs
+// objects/, and a teardown races it (POS-419; helpers/temp-dir.mjs). The helper's import
+// turns that off for every git this file spawns, through `gitIn`'s inherited env. This
+// drives that very `gitIn` on a scratch repo with auto-gc forced on (gc.auto=1: the
+// 1500 loose objects are over it) and reads the repo at the moment git returns.
+function commitForcingAutoGc(dir, extra = []) {
+  for (let i = 0; i < 1500; i++) writeFileSync(join(dir, `f${i}`), `${i}\n`);
+  gitIn(dir, "add", "-A");
+  gitIn(dir, ...extra, "-c", "gc.auto=1", "-c", "gc.autoPackLimit=0", "-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "-m", "x");
+  const stats = Object.fromEntries(gitIn(dir, "count-objects", "-v").split("\n").map((l) => l.split(": ")));
+  return { running: existsSync(join(dir, ".git", "gc.pid")), loose: Number(stats.count), packs: Number(stats.packs) };
+}
+
+test("THE WORLD'S GIT: auto gc has finished, not detached, when the commit returns (the config is only the instrument)", async () => {
+  assert.equal(gitIn(world, "config", "--get", "gc.autoDetach").trim(), "false", "config instrument: the helper's env reaches this file's git");
+  const dir = tempDir("postmark-amend-carried-gc-");
+  gitIn(dir, "init", "-q", "-b", "main");
+  const after = commitForcingAutoGc(dir);
+  assert.deepEqual(after, { running: false, loose: 0, packs: 1 }, "gc ran to the end inside the commit: no gc.pid, everything packed");
+  await removeTempDir(dir);
+  assert.equal(existsSync(dir), false, "the scratch repo is gone");
+});
+
+test("THE WORLD'S GIT, CONTROL: with detach switched back on the same commit returns while gc is still running", async () => {
+  const dir = tempDir("postmark-amend-carried-gc-control-");
+  gitIn(dir, "init", "-q", "-b", "main");
+  const after = commitForcingAutoGc(dir, ["-c", "gc.autoDetach=true", "-c", "maintenance.autoDetach=true"]);
+  try {
+    assert.equal(after.running, true, "gc.pid is held: a detached gc outlives the command");
+    assert.equal(after.packs, 0, "nothing is packed yet");
+  } finally {
+    // the detached child is the race itself: wait for its pid file to go before removing
+    const end = Date.now() + 30000;
+    while (existsSync(join(dir, ".git", "gc.pid")) && Date.now() < end) await new Promise((ok) => setTimeout(ok, 50));
+    await removeTempDir(dir);
+  }
+});
 
 // ── the pure half ────────────────────────────────────────────────────────────
 
