@@ -50,6 +50,7 @@
 import { loadRegistryRows, insertHousehold, upsertHousehold, upsertPin, renameHousehold } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { houseForAccount } from "./residency.mjs";
+import { __clearHouseCache } from "./household-deriver.mjs";
 import { drainRegistry } from "../tools/registry-drain.mjs";
 import { adoptAtCeremony } from "./solo-adoption.mjs";
 
@@ -260,6 +261,18 @@ async function adoptionOutcome(where, adopt, args) {
   }
 }
 
+// ── THE REGISTRY CHANGED UNDER THIS THREAD'S COPY (POS-860) ─────────────────
+//
+// Every write below changes who stands in which house, and `household-deriver.mjs`
+// keeps a copy of the registry per thread (and, drawn from it, the answers it
+// has given, misses included). So each write is followed by
+// `__clearHouseCache()`: the thread that founded the house, or admitted the
+// resident, reads it at once, rather than filing their next act under
+// `solo:<handle>` until the copy ages out. The ceremony runs inside the office
+// (declare-exec, join-bind, settle-join, town-drain), so this reaches the thread
+// that wrote. It reaches THIS thread only: a read worker is another thread, and
+// a tool is another process, and each heals by age (HOUSE_CACHE_TTL_MS).
+
 // ── THE HOUSE ───────────────────────────────────────────────────────────────
 
 /**
@@ -367,6 +380,7 @@ export async function mintHousehold({
       // the borrowed nameplate standing rather than clearing it.
       name: name?.trim() || standingRow.name || null,
     }, env);
+    __clearHouseCache();   // the house's key moved (a `null` answer means a row moved under us: still no copy to trust)
     // `null` = the record went out of reach between the read and the write, or
     // the row moved under us. Neither is a thing to paper over: the house did
     // not choose, and the ceremony says so in its own words.
@@ -437,6 +451,7 @@ export async function mintHousehold({
   // between the read above and this write, which is not a thing to paper over:
   // the house was not founded, and the ceremony says so in its own words.
   const written = await insertHousehold(row, env);
+  __clearHouseCache();   // a new house stands in the record
   if (written === null) throw refuse(REFUSALS.NO_RECORD);
   const drained = await drain({ env, ...drainOptions });
   logRefusedDrain(`mintHousehold(${key})`, drained);
@@ -542,6 +557,7 @@ export async function joinHousehold({
     // mint, not an admission.
     provisional: standingRow.provisional === true,
   }, env);
+  __clearHouseCache();   // the house lists a new resident
 
   // THE PIN IS NEVER RE-BOUND HERE. A handle the pin file already names has an
   // identity on record, and re-binding one is a human ceremony (the join PR
@@ -556,6 +572,7 @@ export async function joinHousehold({
       pinned: pinnedOn,
       renamed: null, note: null, retired: null, renamed_to: null,
     }, env);
+    __clearHouseCache();   // and the pin is a second write: a request may have read between the two
     pinned = true;
   }
 
