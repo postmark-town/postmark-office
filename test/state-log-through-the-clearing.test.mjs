@@ -155,7 +155,29 @@ const metaOf = (repo, crossing) => JSON.parse(readFileSync(join(repo, "STATE", "
 // W11's drop: committed 1.5 s into window 283's clearing, below the printout's cutoff.
 const HOLD_RACE_DROP = act(37397, "2026-10-31T18:00:35.927Z", "sbx-ana", "drop", "holding", {
   object: "sbx-ana/tin-whistle", payload: { thing: "sbx-ana/tin-whistle", holder: null, policy: "detach" } });
-const actOf = (id) => [...ACTS, ...LATE_ACTS, HOLD_RACE_DROP].find((a) => a.id === id);
+
+// THE NEXT WINDOW, CLEARED IN ITS TURN (W12, W13): the store as it stands when
+// window 283 is photographed again, checked or backfilled after window 284 has
+// cleared at its own 06:00Z. Its claims are folded and its printout printed,
+// and none of them is window 283's.
+const WINDOWS_NEXT = [
+  WINDOWS[0],
+  { id: 284, opens_at: CLOSES, closes_at: NEXT_CLOSES, status: "closed", cleared_at: "2026-11-01T06:00:12.250000Z" },
+  { id: 285, opens_at: NEXT_CLOSES, closes_at: "2026-11-01T17:45:40.000Z", status: "open", cleared_at: null },
+];
+// Filed into window 284 after 283's clearing, and folded at 284's own.
+const NEXT_WINDOW_MARK = act(37405, "2026-10-31T18:12:00.000Z", "sbx-gus", "leave-mark", "mark", {
+  object: "sbx-gus/harbour-bell", payload: { slug: "harbour-bell", kind: "sited", body: "A bell for the late ferry." } });
+// A drop in ferry crossing 284, printed by window 284's clearing.
+const NEXT_WINDOW_DROP = act(37520, "2026-11-01T03:30:00.000Z", "sbx-ana", "drop", "holding", {
+  object: "sbx-ana/tin-whistle", payload: { thing: "sbx-ana/tin-whistle", holder: null, policy: "detach" } });
+// Said 2.6 s into window 283's clearing (W14). A later instant than the
+// clearing's own return act (37398, stamped at its now()), and an earlier id,
+// since the return is inserted at step 6.2, after this say: the inversion the
+// clearing's own acts always carry. It is no hold act, and no claim names it.
+const CLEARING_SAY = act(37394, "2026-10-31T18:00:37.000Z", "sbx-bo", "say", "voice", { payload: { text: "said while the bell rang" } });
+
+const actOf = (id) => [...ACTS, ...LATE_ACTS, HOLD_RACE_DROP, NEXT_WINDOW_MARK, NEXT_WINDOW_DROP, CLEARING_SAY].find((a) => a.id === id);
 
 /**
  * THE KEEPER'S QUESTION, asked of the files: is there a line for this act, in
@@ -351,6 +373,61 @@ test("W11 · a hold printout's source drop, committed DURING the clearing's own 
   assert.equal(out.through, "2026-10-31T18:00:35.927000Z", "the horizon is the latest hold act at or below the cutoff");
   assert.equal(out.through_from, "claim");
   assert.equal(sourceOf(repo, 37401), null, "and the act filed after the clearing still stays out");
+});
+
+// ── THE WINDOW SCOPING OF TERMS 3 AND 4 (the independent review's note 4) ────
+//
+// Terms 3 and 4 read only the claims filed in THIS window, and term 4 only the
+// hold record. Without those filters nothing is lost or written twice, but the
+// next window's rows come into this window's photograph, and a re-photograph or
+// a --check of an old window reaches into later crossings. Each filter gets a
+// control that goes red without it; each seeds only what that filter decides.
+
+test("W12 · a claim filed in the NEXT window, naming a later act, lifts nothing in this one", async () => {
+  // Term 3's window filter. Window 284 has cleared and folded a claim naming
+  // 37405 (18:12Z). Read across windows, that act would carry window 283's
+  // horizon to 18:12Z and pull 37401 and 37405 into its photograph.
+  await seed({
+    windows: WINDOWS_NEXT, acts: [...ACTS, NEXT_WINDOW_MARK],
+    claims: [...CLAIMS, { window: 284, slug: "sbx-gus/harbour-bell", claimant: "sbx-gus", status: "locked", data: { _act_id: "37405" } }],
+  });
+  const repo = world("w12");
+  const out = await writeWindow(repo, 283);
+  assert.equal(out.refused, undefined, JSON.stringify(out));
+  assert.equal(sourceOf(repo, 37405), null, "act 37405, whose claim window 284 folded, is not in window 283's photograph");
+  assert.equal(sourceOf(repo, 37401), null, "nor is 37401, filed after window 283's clearing");
+  assert.equal(out.through, "2026-10-31T18:00:34.478000Z", "window 283's horizon is its own claims' latest act, as in W4");
+});
+
+test("W13 · a hold printout filed in the NEXT window lifts nothing in this one", async () => {
+  // Term 4's window filter. Window 284's printout names the cutoff 37520, a
+  // drop at 03:30Z on 11-01. Read across windows, that cutoff would carry
+  // window 283's horizon into ferry crossing 284 and write a file for it.
+  await seed({
+    windows: WINDOWS_NEXT, acts: [...ACTS, NEXT_WINDOW_DROP],
+    claims: [...CLAIMS, { window: 284, slug: "sbx-ana/tin-whistle", claimant: "sbx-ana", status: "locked", data: { _held_through: 37520 } }],
+  });
+  const repo = world("w13");
+  const out = await writeWindow(repo, 283);
+  assert.equal(out.refused, undefined, JSON.stringify(out));
+  assert.equal(sourceOf(repo, 37520), null, "the drop window 284 printed is not in window 283's photograph");
+  assert.deepEqual(out.windows.map((w) => w.crossing), [282, 283], "and window 283 writes no file for ferry crossing 284");
+  assert.equal(sourceOf(repo, 37401), null, "nor is 37401, filed after window 283's clearing");
+  assert.equal(out.through, "2026-10-31T18:00:34.478000Z", "window 283's horizon is untouched by the next window's cutoff");
+});
+
+test("W14 · a say below this window's printout cutoff, dated after every hold act up to it, lifts nothing: only hold acts count under the cutoff", async () => {
+  // Term 4's class filter. The say 37394 has an id below the old-lantern
+  // printout's cutoff (37398) and an instant after every hold act at or below
+  // it. Counted as hold record, it would carry the horizon to 18:00:37Z and
+  // pull the say, filed during the clearing with no claim here, into this
+  // window. It is the next window's row.
+  await seed({ acts: [...ACTS, CLEARING_SAY] });
+  const repo = world("w14");
+  const out = await writeWindow(repo, 283);
+  assert.equal(out.refused, undefined, JSON.stringify(out));
+  assert.equal(sourceOf(repo, 37394), null, "a say filed during the clearing, below the cutoff but no hold act, is not in window 283's photograph");
+  assert.equal(out.through, "2026-10-31T18:00:34.478000Z", "the cutoff lifts the horizon only to the hold acts under it");
 });
 
 test("W10 · a register that answers the window's row without its horizon REFUSES; it never falls back to the close", async () => {
