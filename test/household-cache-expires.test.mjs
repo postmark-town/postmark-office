@@ -128,6 +128,32 @@ const MINT = (over = {}) => ({
   drain: NO_DRAIN, adopt: NO_ADOPT, env: RECORD_ON, ...over,
 });
 
+/** The two doors that store a copy: the queryable's copy (`houseOfVia`) and the module pool's fold (`houseRows`). */
+const DOORS = [
+  { name: "the queryable's copy", ask: async (pool) => (await houseOfVia(pool, "founder")).slug },
+  { name: "the module pool's fold", ask: async () => { const rows = await houseRows(RECORD_ON); return resolveHouse("founder", rows.registry, rows.pins).slug; } },
+];
+
+/** Hold the next registry read at the store's door: it takes its rows now and hands them over when `release()` is called. */
+function holdTheNextRegistryRead(pool) {
+  const query = pool.query;
+  let release; const mayLeave = new Promise((resolve) => { release = resolve; });
+  const gate = { held: false, release: () => release() };
+  pool.query = async (text, params) => {
+    const out = await query(text, params);
+    if (!gate.held && /^\s*SELECT slug, ord/.test(text)) { gate.held = true; await mayLeave; }
+    return out;
+  };
+  return gate;
+}
+
+/**
+ * The store is in memory, so by the next macrotask every step a read needs has
+ * run: the read is held at the store's door, or no read was needed and none will
+ * be. Nothing here waits on a clock.
+ */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
 // ── the named constant ──────────────────────────────────────────────────────
 
 test("THE TIME-TO-LIVE IS ONE NAMED CONSTANT, a short number of milliseconds", () => {
@@ -333,61 +359,151 @@ test("CEREMONY: a resident joining a house is seen at once (joinHousehold's hous
   assert.equal((await houseOfVia(pool, "drifter")).slug, "the-rookery", "the house lists the drifter and this thread sees it at once");
 });
 
-test("CEREMONY: the pin the join writes is seen at once too, even by a request that read between the join's two writes", async (t) => {
-  pinClock(t);
-  const pool = store();
-  officeUses(t, pool);
-  // A request lands between joinHousehold's house write and its pin write, and
-  // fills the cache with a registry that lists the joiner but does not pin them.
-  const query = pool.query;
-  pool.query = async (text, params) => {
-    if (/^\s*INSERT INTO household_pins/.test(text)) await houseRowsVia(pool);
-    return query(text, params);
-  };
+// ── 4. THE CLEAR COMES AFTER THE COMMIT ─────────────────────────────────────
+//
+// A clear that comes BEFORE its write is worth nothing. A request that lands
+// between the clear and the commit reads the registry as it stood before the
+// write and stores that, and nobody clears again, so the house stays unseen for
+// a time-to-live: the very window the clear exists to close. So each case lands
+// such a request while the ceremony's write is IN FLIGHT: the statement reaches
+// the store, a request reads the registry through the deriver, and only then is
+// the write applied. The clear after the commit drops what that request stored;
+// a clear moved above the write, or none at all, leaves it, and the ceremony
+// hands back a thread that still cannot see what it just wrote.
+const WRITES = [
+  {
+    name: "the mint's new house",
+    write: /^\s*INSERT INTO households \(ord,/,
+    run: () => mintHousehold(MINT()),
+    seen: async (pool) => (await houseOfVia(pool, "founder")).slug,
+    want: "founders-nest",
+  },
+  {
+    name: "the choose-once rename",
+    store: { houses: { ...HOUSES, "chooser": { accounts: [{ login: "choosing-login", id: 555002 }], residents: ["chooser"], provisional: true } } },
+    write: /^\s*UPDATE households\s+SET slug/,
+    run: () => mintHousehold(MINT({ slug: "the-chosen-key", coSign: { ghId: 555002, ghLogin: "choosing-login" }, residents: [], declaredBy: "chooser" })),
+    seen: async (pool) => (await houseOfVia(pool, "hh:the-chosen-key")).slug,
+    want: "the-chosen-key",
+  },
+  {
+    name: "the join's house row",
+    write: /^\s*INSERT INTO households \(slug,/,
+    run: () => joinHousehold({
+      slug: "the-rookery", handle: "drifter", coSign: { ghId: ROOKERY_ID, ghLogin: "CrowAndClock" },
+      pinnedOn: "2026-11-02", drain: NO_DRAIN, adopt: NO_ADOPT, env: RECORD_ON,
+    }),
+    // the drifter's pin is already on record, so this join writes no pin and its house row's clear stands alone
+    control: (pool) => assert.equal(pool.state.writes.pins, 0, "control: the join wrote no pin, so no later clear can hide the house row's"),
+    seen: async (pool) => (await houseOfVia(pool, "drifter")).slug,
+    want: "the-rookery",
+  },
+  {
+    name: "the join's pin",
+    write: /^\s*INSERT INTO household_pins/,
+    run: () => joinHousehold({
+      slug: "the-rookery", handle: "joiner", coSign: { ghId: ROOKERY_ID, ghLogin: "CrowAndClock" },
+      pinnedOn: "2026-11-02", drain: NO_DRAIN, adopt: NO_ADOPT, env: RECORD_ON,
+    }),
+    // a pin is read by its id, so ask the pin's road alone: the house row, written first, already lists the joiner
+    seen: async (pool) => (await houseOfVia(pool, "joiner", { via: [VIA.PIN] })).slug,
+    want: "the-rookery",
+  },
+];
 
-  await joinHousehold({
-    slug: "the-rookery", handle: "joiner", coSign: { ghId: ROOKERY_ID, ghLogin: "CrowAndClock" },
-    pinnedOn: "2026-11-02", drain: NO_DRAIN, adopt: NO_ADOPT, env: RECORD_ON,
+for (const w of WRITES) {
+  test(`THE CLEAR COMES AFTER THE COMMIT: ${w.name} is seen at once even by a request that read while the write was in flight`, async (t) => {
+    pinClock(t);
+    const pool = store(w.store);
+    officeUses(t, pool);
+    const query = pool.query;
+    let landed = 0;
+    pool.query = async (text, params) => {
+      if (w.write.test(text)) { landed++; await houseRowsVia(pool); }   // the request lands; the write is applied after it
+      return query(text, params);
+    };
+
+    await w.run();
+
+    assert.equal(landed, 1, `control: a request read the registry while ${w.name} was in flight`);
+    w.control?.(pool);
+    assert.equal(await w.seen(pool), w.want,
+      "ceremony.mjs calls __clearHouseCache() AFTER it writes the registry: a clear before the commit leaves the pre-write copy the request stored");
   });
-
-  assert.deepEqual(await houseOfVia(pool, "joiner", { via: [VIA.PIN] }), { slug: "the-rookery", via: "pin" },
-    "the pin write clears the copy as the house write did: a pin is read by its id");
-});
+}
 
 // A read that began before a clear may have read the registry before the write
 // the clear answers. It may hand what it read to its own caller; it must not
 // store it, or the clear is undone and the house stays unseen for a
 // time-to-live. One case per door that stores a copy.
-for (const door of [
-  { name: "the queryable's copy", ask: async (pool) => (await houseOfVia(pool, "founder")).slug },
-  { name: "the module pool's fold", ask: async () => { const rows = await houseRows(RECORD_ON); return resolveHouse("founder", rows.registry, rows.pins).slug; } },
-]) {
+for (const door of DOORS) {
   test(`A CLEAR IS NOT UNDONE BY A READ IN FLIGHT: ${door.name} is not refilled with what the read took before the write`, async (t) => {
     pinClock(t);
     const pool = store();
     officeUses(t, pool);
-    // Hold the households SELECT at the door: it takes its rows now and hands them over when released.
-    const query = pool.query;
-    let release; const mayLeave = new Promise((resolve) => { release = resolve; });
-    let held = false;
-    pool.query = async (text, params) => {
-      const out = await query(text, params);
-      if (!held && /^\s*SELECT slug, ord/.test(text)) { held = true; await mayLeave; }
-      return out;
-    };
+    const gate = holdTheNextRegistryRead(pool);   // the read takes its rows now and hands them over when released
 
     const inFlight = door.ask(pool);
-    // The store is in memory, so by the next macrotask every step the read needs
-    // has run: it is held at the door, or no read was needed and none will be.
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.ok(held, "control: the read reached the store and is held at its door (a copy that answered it would leave no read in flight to test)");
+    await settle();
+    assert.ok(gate.held, "control: the read reached the store and is held at its door (a copy that answered it would leave no read in flight to test)");
     foundedElsewhere(pool, "founders-nest", { name: "Founders Nest", accounts: [{ login: "founder-login", id: 880001 }], residents: ["founder"] });
     __clearHouseCache();           // the ceremony's clear, landing while that read is still out
-    release();
+    gate.release();
     await inFlight;                // (its own answer is the pre-write one; the next ask is what matters)
 
     assert.equal(await door.ask(pool), "founders-nest",
       "an invalidation that a read in flight can undo is not one: the stale copy must not be stored after the clear");
+  });
+}
+
+// ── 5. THE AGE COUNTS FROM WHEN THE READ BEGAN ──────────────────────────────
+//
+// A copy's age is stamped before its read goes to the store, not after, so a slow
+// read does not lengthen its copy's life by its own duration: the data is as old
+// as the moment the read took it. The clock is pinned and the read is HELD at the
+// store while the pinned clock moves, so the two stamps differ by a known amount
+// and the test waits on nothing. One pair of cases per door that stores a copy.
+for (const door of DOORS) {
+  test(`THE AGE COUNTS FROM WHEN THE READ BEGAN (${door.name}): a read that ends inside the time-to-live gives a copy that expires a time-to-live after the read BEGAN`, async (t) => {
+    const clock = pinClock(t);
+    const pool = store();
+    officeUses(t, pool);
+    const gate = holdTheNextRegistryRead(pool);
+
+    const inFlight = door.ask(pool);                 // the read begins at T0 ...
+    await settle();
+    assert.ok(gate.held, "control: the read began and is held at the store");
+    clock.advance(Math.floor(TTL / 2));              // ... and is slow: half a time-to-live passes inside it
+    gate.release();
+    await inFlight;                                  // it ends at T0 + TTL/2, and its copy is stored
+    assert.equal(pool.registryReads, 1, "control: one read so far");
+
+    clock.set(T0 + TTL - 1);
+    await door.ask(pool);
+    assert.equal(pool.registryReads, 1, "control: counted from when the read began, the copy is a tick short of a time-to-live old, so it is still young");
+    clock.set(T0 + TTL + 1);
+    await door.ask(pool);
+    assert.equal(pool.registryReads, 2,
+      "the copy is a time-to-live old a tick after the read BEGAN, though the read ENDED only half a time-to-live ago: stamping at the end would extend its life by the read's own duration");
+  });
+
+  test(`THE AGE COUNTS FROM WHEN THE READ BEGAN (${door.name}): a read that outlasts the time-to-live gives a copy that is already too old to reuse`, async (t) => {
+    const clock = pinClock(t);
+    const pool = store();
+    officeUses(t, pool);
+    const gate = holdTheNextRegistryRead(pool);
+
+    const inFlight = door.ask(pool);                 // the read begins at T0 ...
+    await settle();
+    assert.ok(gate.held, "control: the read began and is held at the store");
+    clock.advance(TTL + 5);                          // ... and its start and its end straddle the time-to-live boundary
+    gate.release();
+    await inFlight;
+    assert.equal(pool.registryReads, 1, "control: one read so far");
+
+    await door.ask(pool);                            // the same instant it ended
+    assert.equal(pool.registryReads, 2,
+      "what the read took is already older than the time-to-live when it arrives: the next ask reads again, it is not served a copy stamped at the end");
   });
 }
 
