@@ -3603,17 +3603,24 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
   // branch's half, which the guard's own header refuses to drop ("dropping it
   // would make a resident's existing work vanish from their own overlay on the
   // day the guard flipped"). It is private too, so it files under `drafts`.
-  // ⚠ `drafts` IS A NEGATIVE FILTER, AND IT IS CORRECT ONLY BECAUSE
-  // `LIVE_STATUSES` IS EXACTLY `["draft","pending"]` (noted 2026-09-07, on the
-  // reviewer's reading — a trap, not a defect today). The day a `locked`,
-  // `refused` or `held_review` row joins that constant, it lands HERE and is
-  // labelled "YOURS AND PRIVATE — on no docket, in no export, in no archive, in
-  // no public answer" about a row 007 makes public. If you are widening
-  // `LIVE_STATUSES` (world2/tools/guard-reads.mjs), make this filter positive
-  // first — `=== "draft" || m.claim_status == null` — and give the new status
-  // its own shelf and label.
+  // `drafts` IS A POSITIVE FILTER (bug post #4014): a draft by its own state, or a
+  // sketchbook row with no claim status, and nothing else. It was
+  // `!== "pending"`, correct only because `LIVE_STATUSES` is exactly
+  // `["draft","pending"]` (the trap noted 2026-09-07, on the reviewer's reading):
+  // the day a `locked`, `refused` or `held_review` row joined that constant it
+  // would have landed HERE, labelled "YOUR DRAFTS" about a row 007 makes public.
+  // A row with any other status files under no list now, which says nothing
+  // false, until that status is given a shelf and a label of its own.
+  //
+  // ⚑ THAT SHELF IS NOT HERE, AND THIS SPLIT IS NOT WHY THE BOWL IS MISSING. A
+  // locked claim never reaches these two lines: the overlay reads `claims` with
+  // `status = ANY(LIVE_STATUSES)` (guard-reads.mjs § pgLiveMarks), so a locked
+  // claim is on no shelf because it is never read (test/my-marks-locked-claim-has-
+  // a-shelf.test.mjs holds the measurement). Carrying locked and held claims into
+  // this read is a reader change and a ruling: which locked claims count as not
+  // yet carried, and whether held_review rides with them.
   const live = delta.marks ?? [];
-  const drafts = live.filter((m) => m.claim_status !== "pending");
+  const drafts = live.filter((m) => m.claim_status === "draft" || m.claim_status == null);
   const docket = live.filter((m) => m.claim_status === "pending");
   const draftIds = new Set(live.map((mark) => mark.id).filter(Boolean));
   const backedIds = new Set(stake.backed.map((position) => position.id));
