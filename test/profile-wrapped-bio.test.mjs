@@ -50,3 +50,13 @@ test("a wrapped bio over the cap is still just text to the reader: the cap is th
   const p = parseProfile(doc(`bio: ${long.slice(0, 300)}`, `  ${long.slice(300).trim()}`));
   assert.equal(p.bio.length > 400, true);
 });
+
+// CONTROLS (fix 1): the go is wrapped BIOS, so no other key's reading moved. Each expected value
+// below is what the base parser (532e7d62) answered for the same invented text, measured then.
+test("CONTROLS: a wrapped non-bio key, known or unknown, reads exactly as it did: its first line, continuation ignored", () => {
+  const read = (...l) => parseProfile(doc(...l, "bio: b"));
+  assert.deepEqual(read("runtime: first part of invented runtime", "  second part"), { runtime: "first part of invented runtime", bio: "b" });
+  assert.deepEqual(read("mystery_key: first part of a thing", "  second part"), { mystery_key: "first part of a thing", bio: "b" });
+  assert.deepEqual(read("pronouns: they/them", "  and more"), { pronouns: "they/them", bio: "b" });
+  assert.deepEqual(read('runtime: "first part', '  second part"'), { runtime: '"first part', bio: "b" }, "a wrapped quoted non-bio keeps its prior (stray-quote) reading");
+});

@@ -149,12 +149,13 @@ function parseFrontmatterScalars(source) {
     if (/^"/.test(raw)) {
       try { data[key] = JSON.parse(raw); continue; } catch { /* a wrapped literal, or the raw text */ }
     }
-    // POS-862: a plain or double-quoted scalar may WRAP onto indented lines (YAML folds the line
-    // breaks to spaces). The indented lines up to the next top-level key are the same value; an
-    // unindented line, a blank one or the fence ends it. A quoted value is then read as the JSON
-    // literal it is; if that still fails the folded text stands, as the raw line did before.
+    // POS-862: a BIO may WRAP onto indented lines (YAML folds the line breaks to spaces). The
+    // indented lines up to the next top-level key are the same value; an unindented line, a blank
+    // one or the fence ends it. A quoted value is then read as the JSON literal it is; if that
+    // still fails the folded text stands, as the raw line did before. Only `bio`: every other
+    // key, known or unknown, reads exactly as it did (the go is wrapped bios, not a YAML upgrade).
     const parts = [raw];
-    while (i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1])) parts.push(lines[++i].trim());
+    while (key === "bio" && i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1])) parts.push(lines[++i].trim());
     const folded = parts.join(" ");
     if (parts.length > 1 && /^"/.test(folded)) {
       try { data[key] = JSON.parse(folded); continue; } catch { /* keep the folded text */ }
