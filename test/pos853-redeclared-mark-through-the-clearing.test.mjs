@@ -50,15 +50,16 @@
 // them is where S145's gap was.
 //
 // Synthetic handles only. The original act keeps the keeper's id, 36196; every
-// other id, and every second below, is illustrative. The scratch checkouts are
-// left in the OS temp dir: this file deletes nothing.
+// other id, and every second below, is illustrative. The scratch checkouts live
+// in one `tempDir` (test/helpers/temp-dir.mjs, POS-479), gone when the file's
+// process ends.
 
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
+import { tempDir } from "./helpers/temp-dir.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 import { boxOf } from "../world2/tools/seed-import.mjs";
 import { writeStateLogForWindow } from "../world2/tools/state-log-write.mjs";
@@ -67,7 +68,7 @@ import { actsRangeFor, archiveLine, ferryPartition, readActs } from "../world2/t
 const store = await startStore({ db: "pos853_redeclared" });
 after(() => store.stop());
 
-const scratch = mkdtempSync(join(tmpdir(), "postmark-pos853-"));
+const scratch = tempDir("postmark-pos853-");
 
 const LAW = "LAW: \"the retained journal covers every act whose claim the clearing folds, including acts filed between a window's close and its clearing\"";
 const BOUND = "BOUND: \"an already-public declaration must resolve to its own act/version, not an older one\"";
