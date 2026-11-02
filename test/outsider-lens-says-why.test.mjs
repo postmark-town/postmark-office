@@ -286,6 +286,20 @@ test("a keyless look through the lens has no household to speak to: it is stampe
   assert.equal(Object.hasOwn(r, "lens_note"), false);
 });
 
+test("a read with no household is not even looked at: nothing is placed or sighted for it", { skip: SKIP }, async () => {
+  // Since the no-published-marks guard, the answer for a household-less read is null either way (an empty household has no
+  // marks); the early return in lensNoteFor is what keeps it from doing the work first, and only a spy can see that.
+  const calls = [];
+  const spyPlaced = async (w) => { calls.push("placed"); return w; };
+  const spySight = async (w) => { calls.push("sight"); return w; };
+  assert.equal(await world.lensNoteFor({ x: 0, y: 0 }, null, { sight: spySight, placed: spyPlaced }), null);
+  // ⚑ THE FLIP: drop the `!owners.size` early return in lensNoteFor → the world is placed before the read is found to have no household; this reds
+  assert.deepEqual(calls, [], "no household, no work: the world is not placed and nothing is sighted");
+  // control: the same spies are live for a household that reads
+  await world.lensNoteFor({ handle: "ann" }, key("ann"), { sight: spySight, placed: spyPlaced });
+  assert.ok(calls.includes("placed") && calls.includes("sight"), "control: the spies see a household's read");
+});
+
 test("the v2 blocks read whole carry the line too: read: \"view\" under the lens", { skip: SKIP }, async () => {
   const ann = await apex.worldApex({ read: "view", lens: "outsider", handle: "ann" }, key("ann"));
   assert.ok(!ann.error, JSON.stringify(ann).slice(0, 300));
