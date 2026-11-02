@@ -38,7 +38,7 @@
 // its reason and shows none.
 
 import { sightedCreatures } from "./creature-sight.mjs";
-import { capOf, dial, distanceM, judgeMode, ringHolds, seesCreature } from "./creatures.mjs";
+import { ENDED, capOf, dial, distanceM, judgeMode, ringHolds, seesCreature } from "./creatures.mjs";
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { CREATURE_CALLS, WHISPER_WORDS } from "./world-read-shape.mjs";
 import { DODGE_ACTION, PERSUADE_ACTION, isSetPiece, openHurls, persuadedThisWindow, pieceOf } from "./set-pieces.mjs";
@@ -360,8 +360,12 @@ async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
   const now = d.now();
   const c = living.byId.get(id);
   if (!c) throw bounce(404, `no creature ${id}`, `world { find: "creature" } names the living ones. Nothing was done.`);
-  if (c.gone || !(c.fades_at > now))
-    throw bounce(410, `${theOf(law, c)} is gone`, `${c.gone === "fled" ? "it fled back into the Mists" : "it faded back into the Mists"}; a creature never comes back. Nothing was done.`);
+  if (c.gone || !(c.fades_at > now)) {
+    // HOW IT LEFT, from the reason on its withdraw (WLD-96: a creature does not fade; it flees, or its settlement ends it; bug
+    // post #4288, WLD-131). `faded` stays the fallback arm, because old withdraw rows carry it and the fold still honours them.
+    const left = c.gone === "fled" ? "it fled back into the Mists" : c.gone === ENDED ? "it ended at its settlement" : "it faded back into the Mists";
+    throw bounce(410, `${theOf(law, c)} is gone`, `${left}; a creature never comes back. Nothing was done.`);
+  }
 
   // FROM WHERE, AND WHAT YOU HOLD (D1, D3): the matrix's own judgment
   const dist = distanceM(here, c);
