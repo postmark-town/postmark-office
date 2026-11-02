@@ -87,7 +87,7 @@ export const RECEIPT_CLOCK =
  *
  *     duplicate: a standing mark already carries this slug
  *     superseded: a later claim in this candle amends this one
- *     insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c
+ *     insufficient-stamps: staked 3, held 0, liquid 1 at town 9f2a1b0c
  *     parcel-overlap: standing parcel "k-of-garrison/the-long-field"
  *     counterclaim: collides with 77 — a mind rules (census D2)
  *     review-ruling: wright refused this contest — <because>
