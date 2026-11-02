@@ -57,18 +57,21 @@ import { signedRegistryLines } from "./ledger-pen.mjs";
 
 // ── THE GANGWAY REACHES THE SETTLEMENT ROAD ────────────────────────────────
 //
-// HARBOR/GANGWAY.md is the town's circuit breaker on ARRIVALS, and until this
-// it was wired only to the lane the cutover retires. tools/settle.mjs refuses
-// unless `state: open`, residency.mjs § requestResidency boards a berth instead
-// of joining while frozen — and this planner, the road that replaces both under
-// TOWN_SINGLE_LOG, never opened the file. So a founder could raise the gangway
-// and a crossing would settle join rows straight past it. The breaker was on
-// the old pipe.
+// The gangway is the town's circuit breaker on ARRIVALS, and until this it was
+// wired only to the lane the cutover retires. tools/settle.mjs refuses unless
+// `state: open`, residency.mjs § requestResidency boards a berth instead of
+// joining while frozen — and this planner, the road that replaces both under
+// TOWN_SINGLE_LOG, never asked for the state. So a founder could raise the
+// gangway and a crossing would settle join rows straight past it. The breaker
+// was on the old pipe.
 //
-// It is read from the SAME place, the same way, live per crossing: no cache, so
-// a founder commit flipping the state costs a pull and not a restart. Absent
-// file = open, which is residency.mjs's own answer — a town with no HARBOR has
-// no freeze.
+// It is read from the SAME place, the same way, live per crossing: the store's
+// state, through gangwayState (src/gangway.mjs, the newest gangway_acts row),
+// with no cache, so a change of state takes hold at the next crossing and not
+// at a restart. HARBOR/GANGWAY.md is only an export of that row, and a founder
+// commit to it reaches the store when the next gangway drain adopts it. No row,
+// or no store to ask (a test, a dev box), = open, which is gangway.mjs's own
+// answer — a town with no record of a freeze has no freeze.
 //
 // JOINS ONLY, AND THAT IS A CHOICE. The gangway is the ARRIVALS breaker: its
 // own law is about who comes ashore, and mail and paper have their own controls
@@ -449,8 +452,8 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
     if (drained?.refused) touched.refused = drained.refused;
     for (const rel of drained?.changed ?? []) touched.push(rel);
     // and the ledger's appended lines, dated and SIGNED (#2040: the bare append
-    // was the office's one unsigned ledger writer): one for each join that
-    // landed and one for each housemate re-key (src/house-key.mjs).
+    // was the office's one unsigned ledger writer): up to one for each join that
+    // landed and up to one for each housemate re-key (src/house-key.mjs).
     //
     // THE LINES OF THE ROWS THAT LANDED, AND ONLY THEIRS (POS-600). The preflight
     // above only proves the pen can sign, before any write. What is appended is
