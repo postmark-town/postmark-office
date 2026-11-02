@@ -390,7 +390,13 @@ export function sampleWith(roll, probabilities) {
   return { picked: (cdf.find((c) => u < c.upto) ?? cdf[cdf.length - 1]).option, u, cdf };
 }
 
-/** C2 (pending): code's answer is a flat distribution over the reactions whose `when` holds. */
+/**
+ * Code's answer: a flat distribution over the reactions whose `when` holds. It
+ * answers when Jev cannot (judgmentFor: a timeout, a fault, one possible
+ * reaction, or CREATURE_JUDGE=code). C2 was ruled 2026-10-16 17:50 EDT (see
+ * CREATURE_DIALS), and the per-creature cap that once sent a creature to code
+ * is gone.
+ */
 export const codeDistribution = (allowed) =>
   Object.fromEntries(allowed.map((r) => [r.name, 1 / allowed.length]));
 
@@ -1301,6 +1307,14 @@ export const PRIOR_REACTION_SQL = `SELECT id::text AS id, at, payload FROM acts
 export const TRIGGER_SQL = `SELECT 1 AS here FROM acts WHERE id = $1::bigint`;
 export const NO_TRIGGER = "its trigger act is not on the record";
 
+/** A feint's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
+async function writeHurledOnce(client, row, insertAct) {
+  const p = asPayload(row.payload);
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-hurled:${p.hurl}`]);
+  const { rows: before } = await client.query(PRIOR_HURLED_SQL, [row.actor, String(p.hurl)]);
+  return before.length ? null : insertAct(client, row);
+}
+
 /**
  * W4: write the rows in one transaction, unless this creature already answered
  * this act at this moment (a retried act, an arrival judged twice). Answers
@@ -1312,14 +1326,6 @@ export const NO_TRIGGER = "its trigger act is not on the record";
  * lock on (creature, trigger, moment) before it asks, so the second waits for
  * the first and then finds its row: one reaction, never two.
  */
-/** A feint's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
-async function writeHurledOnce(client, row, insertAct) {
-  const p = asPayload(row.payload);
-  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-hurled:${p.hurl}`]);
-  const { rows: before } = await client.query(PRIOR_HURLED_SQL, [row.actor, String(p.hurl)]);
-  return before.length ? null : insertAct(client, row);
-}
-
 export async function writeReaction(rows, { officeWrite: ow = null, insertAct: ins = null } = {}) {
   const pen = ow && ins ? null : await import("./world2-pen.mjs");
   const officeWrite = ow ?? pen.officeWrite;
