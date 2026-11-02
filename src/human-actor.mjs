@@ -78,8 +78,6 @@ const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, def
 // human may do anywhere, standing on nobody's ground in particular — and it is
 // still exactly one, because the ambient half of the fence did not move.
 export const HUMAN_AMBIENT_GRANTS = Object.freeze(["say"]);
-/** @deprecated the ambient half only — a human's full set depends on standpoint. */
-export const HUMAN_GRANTS = HUMAN_AMBIENT_GRANTS;
 export const HUMAN_RESIDUE = "the-town/say";
 // classes.md § The human class, verbatim — the sentence the fence is drawn with.
 export const ONE_GRANT_FENCE =
