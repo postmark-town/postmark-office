@@ -400,7 +400,7 @@ const RECENT = [];
 
 const fingerprintOf = (v) => createHash("sha256").update(stable(v)).digest("hex").slice(0, 16);
 function stable(v) {
-  if (v === undefined) return " undefined";
+  if (v === undefined) return "\u0000undefined";
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
   return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`;
