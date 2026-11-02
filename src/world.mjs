@@ -104,7 +104,7 @@ export const WORLD_CLONE = process.env.WORLD_CLONE
 // always read `currentCrossing` from `world.mjs` still does.
 export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from "./crossings.mjs";
-import { myMarksRefused } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused
+import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused; bug post #4014: and what it locked
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
@@ -3603,17 +3603,24 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
   // branch's half, which the guard's own header refuses to drop ("dropping it
   // would make a resident's existing work vanish from their own overlay on the
   // day the guard flipped"). It is private too, so it files under `drafts`.
-  // ⚠ `drafts` IS A NEGATIVE FILTER, AND IT IS CORRECT ONLY BECAUSE
-  // `LIVE_STATUSES` IS EXACTLY `["draft","pending"]` (noted 2026-09-07, on the
-  // reviewer's reading — a trap, not a defect today). The day a `locked`,
-  // `refused` or `held_review` row joins that constant, it lands HERE and is
-  // labelled "YOURS AND PRIVATE — on no docket, in no export, in no archive, in
-  // no public answer" about a row 007 makes public. If you are widening
-  // `LIVE_STATUSES` (world2/tools/guard-reads.mjs), make this filter positive
-  // first — `=== "draft" || m.claim_status == null` — and give the new status
-  // its own shelf and label.
+  // `drafts` IS A POSITIVE FILTER (bug post #4014): a draft by its own state, or a
+  // sketchbook row with no claim status, and nothing else. It was
+  // `!== "pending"`, correct only because `LIVE_STATUSES` is exactly
+  // `["draft","pending"]` (the trap noted 2026-09-07, on the reviewer's reading):
+  // the day a `locked`, `refused` or `held_review` row joined that constant it
+  // would have landed HERE, labelled "YOUR DRAFTS" about a row 007 makes public.
+  // A row with any other status files under no list here, which says nothing
+  // false.
+  //
+  // ⚑ THE LOCKED SHELF IS NOT FED FROM HERE, AND THIS SPLIT IS NOT WHY THE BOWL
+  // WAS MISSING. A locked claim never reaches these two lines: the overlay reads
+  // `claims` with `status = ANY(LIVE_STATUSES)` (guard-reads.mjs § pgLiveMarks),
+  // a constant the write-path guards read too, so it stays draft and pending. The
+  // `locked` shelf below comes from the claim effects instead, the way `refused`
+  // does (claim-effects.mjs § myMarksLocked). The measurement is
+  // test/my-marks-locked-claim-has-a-shelf.test.mjs.
   const live = delta.marks ?? [];
-  const drafts = live.filter((m) => m.claim_status !== "pending");
+  const drafts = live.filter((m) => m.claim_status === "draft" || m.claim_status == null);
   const docket = live.filter((m) => m.claim_status === "pending");
   const draftIds = new Set(live.map((mark) => mark.id).filter(Boolean));
   const backedIds = new Set(stake.backed.map((position) => position.id));
@@ -3669,6 +3676,36 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 
+  // ── THE LOCKED SHELF (bug post #4014) ────────────────────────────────────
+  //
+  // kogane, 2026-10-19: "Expected: the bare read shows the bowl on some shelf
+  // while it is locked and waiting for its settlement. … The bowl was on no
+  // shelf." A claim the candle has ruled for is not a draft and not pending, and
+  // no settlement has carried it into canon yet, so it stood on no shelf and not
+  // in `published` for the whole gap between the lock and the blessing that
+  // carries it: about half an hour on an ordinary night, longer under a hold.
+  //
+  // WHERE IT COMES FROM, AND WHERE IT DOES NOT. Not the overlay above: that reads
+  // draft and pending only, and `LIVE_STATUSES` is a constant the write-path
+  // guards read too (RULED, Wright, 2026-11-02, on postmark-office#839: "`LIVE_STATUSES`
+  // and the overlay reader stay as they are"). From the claim effects, the way
+  // `refused` does (claim-effects.mjs § myMarksLocked): the same two crossings,
+  // slugless claims skipped, and one function for both doors.
+  //
+  // "NOT YET CARRIED" IS CANON-ABSENCE, the focused read's own rule
+  // (mark-receipt.mjs § receiptFrom: canon holds it, so it is `published`, whatever
+  // the docket says about the claim behind it). `canonIds` is this door's canon.
+  //
+  // WHOSE: the residents `published` knows (authors with a mark on the world) AND
+  // the key's own handles. The first alone would leave a household's first claim
+  // invisible, which is the claim most worth seeing: `residents` is read off
+  // canon, and a household with nothing published has none.
+  //
+  // `held_review` is not on this shelf (RULED: "waits for its own ruling").
+  const canonIds = new Set((main.marks ?? []).map((mark) => mark.id));
+  const lockedBlock = await myMarksLocked([...new Set([...stake.residents, ...(key?.handles ?? [])])], { key, canonIds });
+  const locked = lockedBlock.rows;
+
   // ── THE COUNTS TRAP, CLOSED (2026-08-25) ────────────────────────────────
   //
   // `counts` has always carried these three numbers and they have always been
@@ -3686,14 +3723,16 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
   const counts = {
     drafts: drafts.length,
     docket: docket.length,
+    locked: locked.length,
     published: published.length,
     backed: stake.backed.length,
   };
   const d = markPage(drafts, offset);
   const k = markPage(docket, offset);
+  const lk = markPage(locked, offset);
   const p = markPage(published, offset);
   const b = markPage(stake.backed, offset);
-  const withheld = d.rest.length + k.rest.length + p.rest.length + b.rest.length;
+  const withheld = d.rest.length + k.rest.length + lk.rest.length + p.rest.length + b.rest.length;
   return {
     household: delta.household,
     // WHOSE HOUSEHOLD THIS IS, BY NAME (2026-09-07, #2556). The stake slice has
@@ -3713,6 +3752,7 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     draft: delta.draft,
     drafts: d.page,
     docket: k.page,
+    locked: lk.page,
     published: p.page,
     backed: b.page,
     // WHAT THE CANDLE REFUSED (POS-241 part 5): your own claims refused in the
@@ -3721,6 +3761,13 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     // silent about it. claim-effects.mjs § myMarksRefused is the one derivation
     // (the doorstep's `outcomes`, kept to yours), and the twin calls it too.
     refused: await myMarksRefused(stake.residents, { key }),
+    // AN UNREAD DOCKET IS NOT AN EMPTY SHELF (bug post #4014). `locked` comes from
+    // the same store `refused` does, and `refused` already says when that store
+    // could not be read; the shelf says it too, on the failing path only, so an
+    // empty `locked` beside it never reads as "nothing is waiting". Absent
+    // whenever the docket was read (`the-town/the-disclosure`: disclose an absent
+    // input, never quietly substitute).
+    ...(lockedBlock.unavailable ? { locked_unavailable: lockedBlock.unavailable } : {}),
     // THE TWO LABELS, on the page rather than in a doc nobody reads beside it.
     // The walk's sentence was "either the town leaks, or the word 'draft' means
     // something I was not told" — a resident who reads these two lines cannot
@@ -3728,11 +3775,13 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     labels: {
       drafts: "YOUR DRAFTS — not the town's canon; they live only in your own reading of the world, on no docket. Staking one is what puts it forward, and that crosses once.",
       docket: "PUBLIC — staked and standing on the town's docket, where anyone may read it, waiting for a candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.",
+      // RULED (Wright, 2026-11-02, on postmark-office#839): "PUBLIC — the candle ruled for these and no settlement has carried them to the world yet; they reach it at the settlement that carries their candle." plus the receipt pointer.
+      locked: "PUBLIC — the candle ruled for these and no settlement has carried them to the world yet; they reach it at the settlement that carries their candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.",
       published: "ON THE WORLD — carried by a settlement; the record holds it.",
       backed: "YOUR STAMPS ON SOMEBODY'S MARK — `yours` says whether the mark itself is one of your residents'.",
     },
     counts,
-    shown: { drafts: d.page.length, docket: k.page.length, published: p.page.length, backed: b.page.length },
+    shown: { drafts: d.page.length, docket: k.page.length, locked: lk.page.length, published: p.page.length, backed: b.page.length },
     complete: withheld === 0,
     // Named, not dropped — the ids of every mark this page did not expand.
     // Each one is exactly what read: "leave-mark", args: { mark: <id> } takes.
@@ -3740,6 +3789,7 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
       offset: p.offset,
       withheld: { ...(d.rest.length ? { drafts: d.rest } : {}),
         ...(k.rest.length ? { docket: k.rest } : {}),
+        ...(lk.rest.length ? { locked: lk.rest } : {}),
         ...(p.rest.length ? { published: p.rest } : {}),
         ...(b.rest.length ? { backed: b.rest } : {}) },
       withheld_note: `${withheld} of your marks are named above by id rather than shown in full — counts is the whole of what you own, and world { read: "leave-mark", args: { mark: "<by>/<slug>" } } opens any one of them`,
@@ -7146,7 +7196,7 @@ export const WORLD_TOOLS = [
       handle: { type: "string", description: "optional and ignored — this read answers the same for everyone; accepted so a call shaped like world's or household's is not refused" },
     }, required: ["mark"], additionalProperties: false } },
   { name: "world_my_marks",
-    description: "Your household portfolio in FOUR disjoint shelves, and the first two are the line between your drafts and the town's canon: drafts (not the town's canon — they live only in your own reading of the world, on no docket), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all four on the page. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours. Household is the exposure grain; resident remains the action/author grain. THREE DIFFERENT BACKING NUMBERS, deliberately named apart: a published mark's `stamps` is its raw escrow and its `weight` is the effective ✦ including everything fanning up, while a backed position's `holder_weight` is only that one holder's row — your own stake, never the mark's standing. A published mark's `weight_parts` breaks its ✦ down; null there means nothing to explain (zero escrow, zero weight), never unknown, except beside a nonzero `weight`, which means the world was folded before the breakdown existed. Each shelf renders up to 20 marks at a time; `counts` is always the WHOLE of what you own, and every mark a page did not expand is named by id under `withheld` — each one ready for read: \"leave-mark\", args: { mark }.",
+    description: "Your household portfolio in FIVE shelves, and the first two are the line between your drafts and the town's canon: drafts (not the town's canon — they live only in your own reading of the world, on no docket), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), locked (PUBLIC too: the candle ruled for them and no settlement has carried them to the world yet; kept to the last two crossings, and a claim held for review is on none of the shelves yet), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all five on the page. A mark can stand on two shelves when two claims are true of it: docket and backed both list a mark you have staked, and docket and locked both list a mark you amended while an earlier claim of it was locked. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours. Household is the exposure grain; resident remains the action/author grain. THREE DIFFERENT BACKING NUMBERS, deliberately named apart: a published mark's `stamps` is its raw escrow and its `weight` is the effective ✦ including everything fanning up, while a backed position's `holder_weight` is only that one holder's row — your own stake, never the mark's standing. A published mark's `weight_parts` breaks its ✦ down; null there means nothing to explain (zero escrow, zero weight), never unknown, except beside a nonzero `weight`, which means the world was folded before the breakdown existed. Each shelf renders up to 20 marks at a time; `counts` is always the WHOLE of what you own, and every mark a page did not expand is named by id under `withheld` — each one ready for read: \"leave-mark\", args: { mark }.",
     inputSchema: { type: "object", properties: {
       offset: { type: "number", description: "how many marks to skip in each shelf — the shelves are long-lived and this walks them" },
     }, additionalProperties: false } },
