@@ -620,8 +620,17 @@ export async function checkStateLog(client, {
  * The crossing step's entry point. Resolves the window's own crossings and
  * hands them to `writeStateLog` with the window's horizon (`through`: its
  * clearing once it has cleared, WLD-137), so every act whose claim this
- * window's clearing folded is in this window's commit, and a row filed after
- * that clearing (the NEXT window's) is never pulled into it.
+ * window's clearing folded is in this window's commit.
+ *
+ * SOME OF THE NEXT WINDOW'S ROWS CAN BE PULLED IN TOO. The commit carries
+ * every row of its crossings dated at or below `through` (`WINDOW_BOUNDARY`),
+ * so it takes the acts between this window's close and its clearing, which
+ * the next window's range also holds, and any act filed after the clearing
+ * began whose instant is at or below a horizon that a folded claim's act or
+ * cutoff lifted, such as a say during the clearing dated before a late stake's
+ * act. That is harmless: the next window writes the same act under the same
+ * seq, and `writeJournalWindow` merges by seq, so the file keeps one line for
+ * it. A row dated past `through` stays out.
  */
 export async function writeStateLogForWindow(client, { window, ...rest } = {}) {
   const w = await windowCrossings(client, window);
