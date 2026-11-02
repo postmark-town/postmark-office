@@ -478,10 +478,14 @@ export async function runTownDrain(odb, {
   // WHAT THAT COSTS, stated because the next person to touch this needs it.
   // Letters and paper acts on the same crossing still drain (the scope call —
   // the gangway is the arrivals breaker), and with the cursor held they are
-  // read again on the next crossing. Paper acts replay to the same bytes and
-  // penCommit returns null for an empty diff. A letter whose outbox file still
-  // stands is caught by the resume check below (`already`). A letter the ferry
-  // has ALREADY DELIVERED is the one that is not: its outbox file is gone, so
+  // read again on the next crossing. A paper act that recorded the shas it
+  // landed (`payload.commits`) is caught by the resume check (`already`) once
+  // every sha is an ancestor of the clone's HEAD; one logged without them is
+  // replayed into the batch worktree, and the header (§ idempotence, #2302)
+  // says why that replay is not safe to assume harmless. A letter whose outbox
+  // file still stands is caught by the resume check below (`already`). A
+  // letter the ferry has ALREADY DELIVERED is the one that is not: its outbox
+  // file is gone, so
   // the drain writes it again — and the FERRY bounces it, because dedupe is
   // rebuilt from WHITE_PAGES/mail-ledger.md at every crossing and `classify`
   // answers "duplicate id". Bounced, never delivered twice. That is a backstop
