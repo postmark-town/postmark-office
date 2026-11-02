@@ -41,7 +41,7 @@ export const BALLOT_CLASS = "ballot";
 export const STATE_SUBMISSIONS = "submissions";
 export const STATE_STAKING = "staking";
 export const STATE_CLOSED = "closed";
-/** The class's lifecycle, in order, and the states it is finished in. */
+/** The class's lifecycle, in order. */
 export const BALLOT_STATES = Object.freeze([STATE_SUBMISSIONS, STATE_STAKING, STATE_CLOSED]);
 
 /** The town's own pen is every ballot's author, as it is every quest's. */
