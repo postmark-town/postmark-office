@@ -340,6 +340,111 @@ export async function myMarksRefused(handles = [], { key = null, nowMs = Date.no
   };
 }
 
+// ── MY-MARKS' `locked` (bug post #4014) ───────────────────────────────────
+//
+// kogane, 2026-10-19, the bug post's own kept record: "Expected: the bare read
+// shows the bowl on some shelf while it is locked and waiting for its
+// settlement. … The bowl was on no shelf."
+//
+// A claim the candle has ruled for is `locked`, and it stays `locked` for good:
+// the status set has no `carried` (world2/schema 001, 007), so a claim a
+// settlement carried long ago is still `locked` in the store. The overlay
+// behind drafts and docket reads only draft and pending (guard-reads.mjs §
+// LIVE_STATUSES, a constant the write-path guards read too), so a locked claim
+// never reached my-marks at all. The shelf is derived the way `refused` is, and
+// for the same reason: the doorstep's `outcomes` already say "the candle ruled
+// for it" from these events, and one question must not have two derivations.
+//
+// RULED (Wright, 2026-11-02 00:4x EST, on postmark-office#839, quoted):
+//   · "B: locked rows come from claim effects, the way `refused` does. Add
+//      `lockedRowsFrom(events, canonIds)` beside `refusedRowsFrom`, derived from
+//      `readClaimEffects` over the same two-crossing window, skipping slugless
+//      rows, and shared by both doors. `LIVE_STATUSES` and the overlay reader
+//      stay as they are, since the write-path guards read the same constant."
+//   · "'Not yet carried' is canon-absence, the 1.0 focused read's own rule,
+//      inside that two-crossing bound."
+//   · "`held_review` waits for its own ruling. It isn't on this shelf."
+//
+// CANON-ABSENCE IS `mark-receipt.mjs § receiptFrom`'s own order: "1 · PUBLISHED.
+// Canon holds it, so the settlement ruled and the answer is a fact about the
+// world, whatever the docket says about the claim behind it" comes first, and
+// only then does a locked row say `locked`. So a locked claim whose mark canon
+// holds is `published`'s, and the shelf never lists it.
+//
+// WHAT THE RULING LEAVES, NAMED (none of it is new behaviour):
+//   · a locked AMEND of a mark canon already holds is not on the shelf (canon
+//     holds the id); it was invisible before and still is.
+//   · a locked claim whose mark was withdrawn or swept after the candle reads as
+//     waiting until the two crossings pass (the focused read says the same).
+//   · a mark that is also on `docket` (an amend put forward over a locked
+//     claim) or in `backed` (it carries stamps) is listed on both shelves; each
+//     shelf is true of a different claim, and none of the existing lists
+//     excludes the others but `published`.
+
+/** What a locked claim's row says: the focused read's own sentence (mark-receipt.mjs § receiptFrom), so the two reads cannot tell it two ways. */
+const lockedSays = (window) => `locked at candle ${window ?? "?"} — the candle ruled for it; it reaches the world at the settlement that carries that candle`;
+
+/**
+ * The household's own `claim-locked` events that no settlement has carried, as
+ * my-marks rows, one per mark. Pure.
+ *
+ * `events` are `claimEffectsFrom`'s, which already skip a slugless claim (it
+ * names no mark; `test/slugless-claims.test.mjs` binds that), kept here to
+ * `claim-locked` and to `yours` (a portfolio is what the household authored,
+ * not what was laid on its ground — `refusedRowsFrom`'s rule). `canonIds` is
+ * the ids canon holds: a mark in it has been carried.
+ *
+ * ONE ROW PER MARK, THE NEWEST RULING DECIDING — `receiptFrom`'s own rule ("the
+ * newest row the store holds for this slug decides the tense; older rows are its
+ * history"). A mark locked, then amended and locked again before either was
+ * carried is one mark on one shelf, at the later candle.
+ *
+ * The row is `id`-keyed like every other shelf's (`markPage` names what it
+ * withholds by `id`) and carries no position, body or kind: the events do not
+ * (that is the cost of deriving it as `refused` is derived). `locked_at`, not
+ * `at`: on a mark row `at` is the mark's place on the grid.
+ */
+export function lockedRowsFrom(events = [], canonIds = new Set()) {
+  const carried = canonIds instanceof Set ? canonIds : new Set(canonIds);
+  const newest = new Map();
+  for (const e of events) {
+    if (e.kind !== "claim-locked" || !e.yours || !e.mark) continue;
+    if (carried.has(e.mark)) continue;
+    const had = newest.get(e.mark);
+    if (!had || String(e.at ?? "") >= String(had.at ?? "")) newest.set(e.mark, e);
+  }
+  return [...newest.values()]
+    .map((e) => ({
+      id: e.mark,
+      by: String(e.mark).split("/")[0],
+      window: e.window ?? null,
+      locked_at: e.at ?? null,
+      says: lockedSays(e.window),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * The household's own claims the candle locked in the last two crossings and
+ * that canon does not hold yet. `readable: false` is carried as `unavailable`,
+ * never as an empty list: "nothing is waiting" and "the docket could not be
+ * read" are different sentences (`myMarksRefused`'s rule, for the same store).
+ *
+ * The window is `myMarksRefused`'s (`RULINGS_SINCE_CROSSINGS`), so the two
+ * blocks speak of the same two crossings. Both my-marks doors call this one
+ * function, handed their own roster and their own canon.
+ */
+export async function myMarksLocked(handles = [], { key = null, nowMs = Date.now(), canonIds = new Set() } = {}) {
+  const through = currentCrossing(nowMs);
+  const from = Math.max(0, through - RULINGS_SINCE_CROSSINGS);
+  const effects = await readClaimEffects({ key, handles: [...handles], sinceCrossing: from, nowCrossing: through });
+  const rows = lockedRowsFrom(effects.events ?? [], canonIds);
+  return {
+    since_crossing: from, through_crossing: through, count: rows.length, rows,
+    ...(effects.readable === false ? { unavailable: effects.reason ?? "the docket store could not be read — that is not the same as nothing waiting to be carried" } : {}),
+  };
+}
+
 /** The published/refused rows a crossing produced, as headlines. Pure. */
 export function headlinesFrom({ rows = [], cap = 3 } = {}) {
   const locked = [], refused = [];

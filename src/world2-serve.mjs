@@ -105,7 +105,7 @@ import { backedRow } from "./world-stake.mjs";
 // rather than restated; see § THE SETTLEMENTS TWIN below.
 import { settlementsFrom } from "./settlements.mjs";
 import { askedCrossing, CROSSING_DERIVATION, currentCrossing } from "./crossings.mjs";
-import { myMarksRefused } from "./claim-effects.mjs";
+import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs";
 import { actorRoster } from "./human-actor.mjs";
 import { stopDepartures } from "./world-movement.mjs";
 // WLD-29: a shown house's porch light, from the office's shared activity answer
@@ -218,7 +218,7 @@ export async function world2MyDrafts(key) {
  * `tree_only`; see that module's header for why each is absent rather than
  * approximated.
  */
-export async function world2MyMarks(key, { offset = 0, p: injected = null, refusedReader = myMarksRefused } = {}) {
+export async function world2MyMarks(key, { offset = 0, p: injected = null, refusedReader = myMarksRefused, lockedReader = myMarksLocked } = {}) {
   const p = injected ?? await pool();
   const { household, households = [], disclosure } = await keyHouseholdOf(p, key);
 
@@ -288,8 +288,43 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
     .filter((m) => residents.includes(m.by) && !draftIds.has(m.id) && !backedIds.has(m.id))
     .sort((a, b) => a.id.localeCompare(b.id));
 
+  // ── THE LOCKED SHELF (bug post #4014) — the plumbing, and the one piece NOT built ──
+  //
+  // The same one function 1.0 calls (claim-effects.mjs § myMarksLocked), handed
+  // this door's roster: every handle the household has, not only the authors of
+  // standing marks, so a household's first claim is not invisible. The shelf's
+  // rows, counts, pager, label and disclosure are 1.0's own.
+  //
+  // ⚑ STOPPED, ON ONE PIECE (RULED, Wright, 2026-11-02: "If that `published`
+  // repair needs more than the canon check you already have, STOP on that one
+  // piece and build the rest"). What "canon" is, for the canon-absence rule, is
+  // the whole question here, and this door's answer is the one thing not built.
+  // 1.0's canon is the world at the newest blessing, so a locked claim is not in
+  // it until a settlement carries it. THIS door's `marks` table is "Materialized
+  // cleared state. Writer: clearing_job only, inside the window transaction"
+  // (world2/schema/001): the clearing writes a standing row at the lock, before
+  // any settlement carries it (this file's own receipt says so, § CARRIED, NOT
+  // MERELY STANDING). So `canonRows` is every locked mark too, and:
+  //
+  //   · `published` above lists a locked, uncarried mark as ON THE WORLD. It has
+  //     always done so; nothing here changes it.
+  //   · the shelf, handed `canonRows` as canon, excludes every mark the clearing
+  //     has locked, and stays empty. It is the correct plumbing over the wrong
+  //     canon, and it is kept off `published` by construction rather than
+  //     double-listing a mark on both.
+  //
+  // What the repair needs is more than a canon check: the newest window a
+  // settlement closed (`storeSettlements`, below) read beside each mark's
+  // `locked_window` (a column PORTFOLIO_MARKS_SQL does not select), which is the
+  // receipt's rule here ("newest claim LOCKED at a window beyond the newest
+  // window a settlement closed") and not 1.0's, so the two doors would carry
+  // "not yet carried" differently. That is a ruling. When it lands, `carriedIds`
+  // replaces the `canonRows` ids below and both `published` and this shelf follow
+  // from it; test/world2-my-marks-reads.test.mjs holds the acceptance, skipped.
+  const lockedBlock = await lockedReader([...handles], { key, canonIds: new Set(canonRows.map((m) => m.id)) });
+
   const body = portfolio.portfolioAnswerFrom({
-    household, residents, live: liveMarks, published, backed, offset, pager: markPage,
+    household, residents, live: liveMarks, locked: lockedBlock.rows, published, backed, offset, pager: markPage,
   });
 
   return {
@@ -302,6 +337,9 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
     // 1.0's own `refused`, from the same one derivation (claim-effects.mjs §
     // myMarksRefused), handed this door's roster as 1.0 is handed its own.
     refused: await refusedReader(residents, { key }),
+    // An unread docket is not an empty shelf — 1.0's own disclosure, on the
+    // failing path only (world.mjs § worldMyMarks `locked_unavailable`).
+    ...(lockedBlock.unavailable ? { locked_unavailable: lockedBlock.unavailable } : {}),
     // NAMED, NOT SILENT — and `backed` says which absence it is, because a
     // refusal and an empty ledger are different facts.
     ...(stakeRows == null ? { backed_unavailable:
