@@ -110,9 +110,15 @@ test("RED CONTROL: the two rows are indistinguishable WITHOUT claim_status", asy
 // The predicate is one line in `world.mjs`; it is asserted here on the same
 // shapes the door hands it, so a change to it goes red in a test that names
 // the law rather than only in a door test that needs a clone.
+//
+// ⚑ THIS IS A COPY OF THE RULE, and a copy cannot fail when the door's changes.
+// Until 2026-11-02 it was the door's negative filter (`claim_status !==
+// "pending"`); bug post #4014 made the door's positive, and this copy follows
+// it. What holds the DOOR is test/my-marks-locked-claim-has-a-shelf.test.mjs,
+// which drives `worldMyMarks` itself.
 
 const split = (live) => ({
-  drafts: live.filter((m) => m.claim_status !== "pending"),
+  drafts: live.filter((m) => m.claim_status === "draft" || m.claim_status == null),
   docket: live.filter((m) => m.claim_status === "pending"),
 });
 
