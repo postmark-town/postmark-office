@@ -116,8 +116,10 @@ export const CAUSE_WORDS = Object.freeze(["held", "contested", "unbacked", "malf
  *
  * The first version of this map was built from the SWEEP's channel names and
  * never measured against the writers that actually fill the column. Every one
- * of them — `world2/tools/clearing-job.mjs` (its steps 1 duplicate, 2 supersession,
- * 3 escrow sufficiency, 4 parcel overlap and 5 counterclaim) and
+ * of them — `world2/tools/clearing-job.mjs` (steps 1 duplicate, 2 supersession,
+ * 4 parcel overlap and 5 counterclaim write their own text there; step 3, escrow
+ * sufficiency, takes its `insufficient-stamps:` text from
+ * `escrow-presence.mjs § unbackedStakesAmong`) and
  * `world2/tools/review-rule.mjs § main` — writes `<name>: <detail>`:
  *
  *     duplicate: a standing mark already carries this slug

@@ -186,11 +186,13 @@ const DERIVED_SET = new Set(DERIVED);
  *
  * THE RULE IS THE GATES' OWN PREDICATE, WHOLE (sharpened 2026-09-08 21:4x):
  * `by === the-town AND tier === constitution`. Three readers on the file side
- * carry that exact pair, quoted verbatim so a drift in any of them is a drift
- * from this line:
+ * carried that exact pair on 2026-09-08, quoted verbatim so a drift in any of
+ * them is a drift from this line:
  *
  *   world `tools/mark-standing.mjs § markStanding` / office `world2/tools/standing.mjs § markStanding`
  *     if ((mark.by ?? mark.household) === TOWN && mark.tier === "constitution") return "constitution";
+ *     (as of 2026-09-08, before POS-702: both now read `if (townOwned(mark)) return "constitution";`,
+ *     with no `tier` half)
  *   world `tools/mark-lint.mjs § an AUTHORED tier: is residue` — the gate that refuses every other tier line
  *     if (rawTier && rawTier !== "draft" && !(rec.by === TOWN && rawTier === "constitution"))
  *     (the gate has since gained a second exemption, for a property: `&& !(rec.by === TOWN && isProperty)`)

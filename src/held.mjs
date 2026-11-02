@@ -78,10 +78,10 @@ export function placedCentreOfRow(row) {
  *   `{ at, extent?, source: "set-down" }` set down and not yet printed: past the
  *                                         last printout, or from before the first
  *                                         (that one, and any answer from a view
- *                                         with no cutoffs, also carries
- *                                         `before_printout: true`); `extent` is
- *                                         left off when neither canon nor the
- *                                         view has one
+ *                                         with either cutoff missing, also
+ *                                         carries `before_printout: true`);
+ *                                         `extent` is left off when neither
+ *                                         canon nor the view has one
  *   `null`                                canon's own answer stands: no view, no
  *                                         row, a row that is neither a holding
  *                                         nor a drop, a drop already printed
