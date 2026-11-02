@@ -171,6 +171,10 @@ export async function bulletinEntry(q, slug) {
   return row ? bulletinEntryOf(row.json) : null;
 }
 
+// The stamps roster page a caller who names no size gets. ✎ A proposal: the top
+// of the table is what a roster read is for, and the whole table was 256 rows
+// when this was first written (more than the town's 131 people then, because
+// escrow accounts are rows too) and grows with every household.
 const STAMPS_PAGE = 50;
 
 /** queries.stampsRoster, from the store; the minted total is the store's own meta. */
@@ -398,6 +402,9 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
 const LETTER_COLS = "id, from_h, to_h, date, thread, box, owner, path, json, delivered_at";
 // queries.mjs § NEWEST, bytewise: real timestamps win over a bare same-day date.
 const NEWEST = `COALESCE(delivered_at, date) COLLATE "C" DESC, id COLLATE "C"`;
+// (NEWEST above: delivered_at is UTC ISO, so bytewise string order IS time
+// order, and a bare `date` sorts as that day's midnight, before any timestamped
+// same-day letter. Ties break on id.)
 const count = async (q, sql, params = []) => Number((await q.query(sql, params)).rows[0].n);
 
 /** queries.letter, from the store: one letter whole, or null. */
@@ -780,6 +787,18 @@ export async function deliveredTo(q, handle) {
  * whatever the caller passes: the segments came from this index.
  */
 export async function doorstep(q, handle, _asOf, opts = {}) {
+  // `nowMs` is injected only so the PSA window is testable against a fixed day —
+  // the doorstep is a page generated fresh each morning, so its default clock is
+  // the wall clock, exactly as "the last week" reads.
+  // `fresh` rides through to the window segment for one reason and it is a hard
+  // one: the bundle falsifier dispatches every segment's `serves` pointer through
+  // the real apex and deep-equals the answer. A window composed at
+  // `household read: "window"` and not composed here would fail that test — which
+  // is the falsifier doing exactly its job, and the reason to thread the context
+  // rather than to compose at the doors.
+  // `slim` is the CONNECTOR SKIN's bound and only mcp.mjs passes it — see
+  // queries.mjs's bounds note above DOORSTEP_INBOX_SLIM, and its slimAwaiting,
+  // slimPsa and slimStamps helpers.
   const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false, standing = null } = opts;
   if (!(await hasResident(q, handle))) return null;
   const asOf = await townIndexAsOf(q);
@@ -975,6 +994,12 @@ export async function home(q, handle, fresh = null) {
     return composeFoundedHome(handle, freshnessFor(handle, { ...fresh, asOf: await townIndexAsOf(q) }));
   }
   const asOf = await townIndexAsOf(q);
+  // One resident's home: description body, region, image paths (repo-relative).
+  // `region` is deliberately NOT composed (composeHome leaves it as stored).
+  // Placement is the atlas ledger's — a social act in the town, never a door
+  // parameter (edit.mjs § the home founds UNPLACED) — so no paper act can move
+  // it and there is no pen for it to be ahead of. Composing it would invent a
+  // tense for a field that has none.
   return composeHome(JSON.parse(row.json), freshnessFor(handle, { ...fresh, asOf }));
 }
 
