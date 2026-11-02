@@ -7,7 +7,9 @@
 // serial reads, 1.15–1.34s). Full N-worker serving waits for G1, because the
 // reverse mirror is a sqlite writer with a per-process serial queue and N
 // queues on one journal file red the reverse-parity arm (P-152). DEC-4 rules
-// the earlier, cheaper placement: read-only workers behind nginx NOW.
+// the earlier, cheaper placement: read-only workers NOW. They shipped as worker
+// threads (POS-266, `read-workers.mjs § WHY THREADS AND NOT DEC-4's PROCESSES`);
+// the nginx process kit was archived and never applied (POS-729).
 //
 // A read worker is defined by three refusals, and the falsifier DEC-4 asks for
 // checks all three:
@@ -43,9 +45,10 @@ export const ROLES = ["write", "read"];
  *
  * Everything else a GET can reach was measured on 2026-09-08 against the real
  * server, one route at a time with the dynamic store deleted between them:
- * 41 GET routes, ZERO created or touched dynamic.db. The one write every read
- * does is the telemetry line, which is not sqlite — see the note in
- * `server.mjs` where `logAccess` is wired.
+ * 41 GET routes, ZERO created or touched dynamic.db. The one write a read does
+ * is the telemetry line, which is not sqlite. A read worker thread writes none:
+ * the main thread that handed it the read already wrote the line for that
+ * request — see the note in `server.mjs` where `logAccess` is wired.
  */
 export function workerSafe(method, path) {
   if (method !== "GET" && method !== "HEAD") return false;
