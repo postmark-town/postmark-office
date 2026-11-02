@@ -59,7 +59,7 @@
 // Nothing derives that order, so it is a column.
 //
 // The PIN order is derived: the file is sorted by handle, and the town's own
-// `serializePins` (residency.mjs:148) sorts on every write. A column for it
+// `serializePins` (src/residency.mjs) sorts on every write. A column for it
 // would be a second answer to a settled question.
 //
 // ── ONE SERIALIZER, NOT A SECOND ────────────────────────────────────────────
@@ -70,15 +70,14 @@
 // does not spell JSON. If the pen's spelling ever moves, the drain moves with
 // it in the same breath, because it is literally the same function.
 //
-// NOTE, FOR WHOEVER TOUCHES `serializePins` NEXT: there are two spellings of it
-// in this repo today and only one sorts. `src/residency.mjs:148` sorts;
-// `src/declare.mjs:455` does not, and `src/declare.mjs:411` is what the
-// declaration ceremony commits through. The live file IS sorted, so the sorted
-// spelling is the one that matches today's bytes and the one this module uses —
-// but a declaration landing through declare.mjs's unsorted writer would append
-// its new handle at the END of the file and `--check` would red on the next
-// crossing. That divergence is older than this lane and is named in the PR
-// rather than fixed in it.
+// NOTE, FOR WHOEVER TOUCHES `serializePins` NEXT: there is one spelling of it
+// in this repo now, and it sorts: `serializePins` in `src/residency.mjs`. The
+// live file IS sorted, so that is the spelling that matches today's bytes and
+// the one this module uses. `src/declare.mjs` once had a second, unsorted
+// `serializePins` (a declaration landing through it would have appended its new
+// handle at the END of the file, and `--check` would have redded on the next
+// crossing); POS-158 deleted it, and `src/declare.mjs` says so under "THE
+// UNSORTED SERIALIZER IS GONE".
 
 import { serializeRegistry, serializePins } from "./residency.mjs";
 import { publicRegistry } from "./registry-public.mjs";
