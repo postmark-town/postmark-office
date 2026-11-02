@@ -1164,12 +1164,6 @@ function markName(mark, marks, determined = null) {
 /** The fold's determined slots for an assembled world (a sighted copy keeps `_raw`). */
 const determinedOf = (w) => w?._raw?.worldState?.determined ?? null;
 
-// The derivation, over WHICHEVER published-main mark list it is handed — the
-// fold's, or the store's (Stage 1). One body, two sources, and that is the whole
-// point: the shadow's agreement then means "the store holds the same world",
-// which is the only question a serving flag actually has to answer. A second
-// implementation over the store would have made the diff measure my typing.
-/** The words from outside every dungeon (what nobody who has not entered may read past) and the whole world's. */
 /**
  * The marks nobody outside a dungeon may name (WLD-74): what the one sight function (standpointSight, no occupancy) leaves out of the
  * published world. Null when the world cannot be read, which callers treat as "name nothing".
@@ -1241,12 +1235,18 @@ export const hideInsiders = (rows, hide) => (hide?.size ? (rows ?? []).filter((r
 /** `rows` with each `mark_id` that names an interior mark left null (every one, when the interior cannot be told). */
 export const hideInteriorTargets = (rows, hidden) => (rows ?? []).map((r) => (r && r.mark_id != null && (hidden == null || hidden.has(r.mark_id)) ? { ...r, mark_id: null } : r));
 
+/** The words from outside every dungeon (what nobody who has not entered may read past) and the whole world's. */
 export function bothWords(w, { x, y }, verbs) {
   const inside = placeWordsFrom(w.marks ?? [], { x, y }, verbs);
   const outside = typeof verbs?.standpointSight === "function" ? placeWordsFrom(verbs.standpointSight(w, {}).marks ?? [], { x, y }, verbs) : inside;
   return { outside, inside };
 }
 
+// The derivation, over WHICHEVER published-main mark list it is handed — the
+// fold's, or the store's (Stage 1). One body, two sources, and that is the whole
+// point: the shadow's agreement then means "the store holds the same world",
+// which is the only question a serving flag actually has to answer. A second
+// implementation over the store would have made the diff measure my typing.
 export function placeWordsFrom(marks, { x, y }, verbs) {
   // A THING IS NOT GROUND. The viewer has said so since 2026-08-22 (Keemin:
   // carried things were winning the walk desk's "From"); this is the office
@@ -1366,89 +1366,6 @@ async function placeWordsBoth({ x, y } = {}) {
 // in the room. Truncating that list would recreate the defect being fixed.
 const EARSHOT_PRESENCE_CAP = 500;
 
-// ── THE SAY GAP, CLOSED (2026-08-28) ────────────────────────────────────────
-//
-// THE DEFECT, in the LIVE lane's own words: "world.mjs calls appendJournal for
-// leave-mark/amend/withdraw only. The say path writes no journal row, so
-// nothing said since the seed is mirrored into acts. /world2/say answers over
-// the crossing-save's crystallized record only."
-//
-// THE LAW IT BREAKS (gold plan §1, verbatim): "LIVE — acts: walks, says,
-// enters/exits, throws, arena beats." A say is named in the first sentence of
-// the lane it was missing from.
-//
-// The voices log stays the first pen and stays the ruled durable operator
-// record; this is a second consumer of the same fact, in the shape
-// `emissionFromVoice` established beside it. `mirrorLaneAct` rather than a
-// journal row, for the reasons in world-journal.mjs § THE LANE HOOK.
-//
-// ── WHAT THE ROW SAYS, field by field, because each one was a choice ────────
-//
-//   actor        voice.handle — WHO SPOKE. Not `standAs`: on the human lane the
-//                speaker is `human-of-<slug>` and a housemate only lends the
-//                PLACE, so recording the housemate as the actor would put words
-//                in a resident's mouth. (The emissions row makes the opposite
-//                choice for its own reasons — `source: standAs ?? handle` — and
-//                the two are answering different questions.) Whose body lent
-//                the standpoint rides the payload where it belongs.
-//   written_at   voice.at — WHEN IT WAS SAID, not when this hook ran.
-//   at           stamped at the voice's OWN x/y (witnessStampAt), never at the
-//                speaker's position now.
-//   witnesses    who was within earshot, pinned — the-witnessed-line's plural,
-//                and for speech the most literal witnesses this log will ever
-//                hold.
-//   household    `resolvedWorldHousehold(key)` — THE SAME RESOLVER THE MARK
-//                LANE USES, threaded down through `voices.say` rather than
-//                re-derived here. One column, one spelling: world2-claims.mjs
-//                already paid for the alternative once ("one column carried
-//                three spellings of one fact"), and a say row spelling the
-//                household differently from a leave-mark row would seed exactly
-//                that again. Null for a berth (which has no household) and for
-//                a visitor key, which is what the resolver already answers.
-//
-// ── PRIVACY: NOTHING NEW LEAVES THE BOX ────────────────────────────────────
-//
-// `acts` exports to public git through the notary, so every mirrored field has
-// to be already-public. Speech is: the town's law is that words "fade from
-// hearing, never from the record", the record is served at
-// postmark.town/conversations, and the say path has no household scoping of any
-// kind. This mirror publishes nothing that the conversations page does not
-// already publish.
-/** ONE ROW SHAPE for a walk act, whichever pen records it. THE MOVEMENTS ROW'S
- * OWN COLUMN VOCABULARY — `within` and `to`, not `targetExtent`/`targetMarkId`:
- * that is 1.0's one converter for this exact record (world-movement.mjs §
- * storedDepartures: "`within` and `to` are the store's column names"), and using
- * it here is what lets live-reads.mjs read this pen with the mapping it already
- * has rather than a fifth spelling of one departure. */
-/*
- * ── THE DEPARTURE'S OWN INSTANT RIDES THIS ACT (POS-198, 2026-09-22) ────────
- *
- * `writtenAt` is the DECLARATION INSTANT, and it is the same string the
- * `movements` row is stamped with — one `Date` read in `walkViaOffice`, handed
- * to both pens, never two reads of a clock that moved in between.
- *
- * WHY IT HAD TO BE CARRIED. `at` above is `witnessStampAt`'s PLACE anchor
- * (`{anchor, dx, dy}`), not an instant, and nothing else here was one — so
- * `world-journal.mjs § normalizeRow` fell back to its own clock for
- * `written_at`, and that column IS `acts.at`, which is the instant every world
- * reader of a departure reads first (`live-reads § departureRecordOf`, era 5:
- * `iso: isoOf(row.at)`). POS-196 measured the cost on the record itself: of
- * 2,808 live door-written lines in windows 120–204, the act's own `crossing`
- * reconstructs the instant exactly ZERO times, median −203 ms, 235 of them
- * missing by more than a second, the worst by 10.6 hours. The register could
- * not render the record while its instant was the mirror's clock.
- *
- * `declared_by` and `note` ride the payload for the same reason and in the
- * record's own spelling. `note` is CONDITIONAL, as it is on the record's own
- * 2,870 lines (28 carry it), so a walk with no note writes no key rather than a
- * null one — the register agreeing with the grammar it is rendered into.
- */
-/* EXPORTED FOR ITS FALSIFIER (POS-198), and for one reason worth the line: the
- * alternative is a test that RE-IMPLEMENTS this shape, which is the trap POS-196
- * named about its own fixture — "a fixture generous enough to carry fields the
- * live pen does not write would prove the renderer equal to a store nobody
- * runs". A falsifier that builds its acts with the live builder cannot drift
- * from the live builder. Nothing else imports it. */
 // ── GROUND BEHIND THE WALL (POS-468 B) ────────────────────────────────────────
 // The placement door and the portal landing ask it.
 /** The first point of `ground` that stands behind the wall this crossing, as
@@ -1730,6 +1647,42 @@ export function mistedPace(pace, factor, legacyKm) {
   return (pace ?? legacyKm) * factor;
 }
 
+/** ONE ROW SHAPE for a walk act, whichever pen records it. THE MOVEMENTS ROW'S
+ * OWN COLUMN VOCABULARY — `within` and `to`, not `targetExtent`/`targetMarkId`:
+ * that is 1.0's one converter for this exact record (world-movement.mjs §
+ * storedDepartures: "`within` and `to` are the store's column names"), and using
+ * it here is what lets live-reads.mjs read this pen with the mapping it already
+ * has rather than a fifth spelling of one departure. */
+/*
+ * ── THE DEPARTURE'S OWN INSTANT RIDES THIS ACT (POS-198, 2026-09-22) ────────
+ *
+ * `writtenAt` is the DECLARATION INSTANT, and it is the same string the
+ * `movements` row is stamped with — one `Date` read in `walkViaOffice`, handed
+ * to both pens, never two reads of a clock that moved in between.
+ *
+ * WHY IT HAD TO BE CARRIED. `at` above is `witnessStampAt`'s PLACE anchor
+ * (`{anchor, dx, dy}`), not an instant, and nothing else here was one — so
+ * `world-journal.mjs § normalizeRow` fell back to its own clock for
+ * `written_at`, and that column IS `acts.at`, which is the instant every world
+ * reader of a departure reads first (`live-reads § departureRecordOf`, era 5:
+ * `iso: isoOf(row.at)`). POS-196 measured the cost on the record itself: of
+ * 2,808 live door-written lines in windows 120–204, the act's own `crossing`
+ * reconstructs the instant exactly ZERO times, median −203 ms, 235 of them
+ * missing by more than a second, the worst by 10.6 hours. The register could
+ * not render the record while its instant was the mirror's clock.
+ *
+ * `declared_by` and `note` ride the payload for the same reason and in the
+ * record's own spelling. `note` is CONDITIONAL, as it is on the record's own
+ * 2,870 lines (28 carry it), so a walk with no note writes no key rather than a
+ * null one — the register agreeing with the grammar it is rendered into.
+ */
+/* EXPORTED FOR ITS FALSIFIER (POS-198), and for one reason worth the line: the
+ * alternative is a test that RE-IMPLEMENTS this shape, which is the trap POS-196
+ * named about its own fixture — "a fixture generous enough to carry fields the
+ * live pen does not write would prove the renderer equal to a store nobody
+ * runs". A falsifier that builds its acts with the live builder cannot drift
+ * from the live builder. Outside this file, `src/set-down.mjs` takes it (as
+ * `w.walkEntry`) to write a set-down's own walk act; every other importer is a test. */
 export function walkEntry({ crossing, who, targetMarkId, stampAt, witnesses, from, toward, pace, targetExtent, household, writtenAt, declaredBy = null, note = null, approach = null }) {
   return {
     crossing, actor: who, action: "walk",
@@ -1838,6 +1791,29 @@ export async function landAt(worldClone, { who, at, via = null, why, key = null,
   return { at: point, via, why, recorded: true, ...(exited.length ? { exited } : {}), ...(row?.seq != null ? { seq: row.seq } : {}) };
 }
 
+// ── WHAT THE ROW SAYS, field by field, because each one was a choice ────────
+//
+//   actor        voice.handle — WHO SPOKE. Not `standAs`: on the human lane the
+//                speaker is `human-of-<slug>` and a housemate only lends the
+//                PLACE, so recording the housemate as the actor would put words
+//                in a resident's mouth. (The emissions row makes the opposite
+//                choice for its own reasons — `source: standAs ?? handle` — and
+//                the two are answering different questions.) Whose body lent
+//                the standpoint rides the payload where it belongs.
+//   written_at   voice.at — WHEN IT WAS SAID, not when this hook ran.
+//   at           stamped at the voice's OWN x/y (witnessStampAt), never at the
+//                speaker's position now.
+//   witnesses    who was within earshot, pinned — the-witnessed-line's plural,
+//                and for speech the most literal witnesses this log will ever
+//                hold.
+//   household    `resolvedWorldHousehold(key)` — THE SAME RESOLVER THE MARK
+//                LANE USES, threaded down through `voices.say` rather than
+//                re-derived here. One column, one spelling: world2-claims.mjs
+//                already paid for the alternative once ("one column carried
+//                three spellings of one fact"), and a say row spelling the
+//                household differently from a leave-mark row would seed exactly
+//                that again. Null for a berth (which has no household) and for
+//                a visitor key, which is what the resolver already answers.
 function voiceEntry(voice, spoken, { at, witnesses, crossing, nonce = null }) {
   const household = spoken?.household ?? null;
   const standAs = spoken?.standAs && spoken.standAs !== voice.handle ? spoken.standAs : null;
@@ -1907,6 +1883,30 @@ export async function spentSayNonce(handle, nonce, sinceMs) {
   return Number.isFinite(at) ? at : null;
 }
 
+// ── THE SAY GAP, CLOSED (2026-08-28) ────────────────────────────────────────
+//
+// THE DEFECT, in the LIVE lane's own words: "world.mjs calls appendJournal for
+// leave-mark/amend/withdraw only. The say path writes no journal row, so
+// nothing said since the seed is mirrored into acts. /world2/say answers over
+// the crossing-save's crystallized record only."
+//
+// THE LAW IT BREAKS (gold plan §1, verbatim): "LIVE — acts: walks, says,
+// enters/exits, throws, arena beats." A say is named in the first sentence of
+// the lane it was missing from.
+//
+// The voices log stays the first pen and stays the ruled durable operator
+// record; this is a second consumer of the same fact, in the shape
+// `emissionFromVoice` established beside it. `mirrorLaneAct` rather than a
+// journal row, for the reasons in world-journal.mjs § THE LANE HOOK.
+//
+// ── PRIVACY: NOTHING NEW LEAVES THE BOX ────────────────────────────────────
+//
+// `acts` exports to public git through the notary, so every mirrored field has
+// to be already-public. Speech is: the town's law is that words "fade from
+// hearing, never from the record", the record is served at
+// postmark.town/conversations, and the say path has no household scoping of any
+// kind. This mirror publishes nothing that the conversations page does not
+// already publish.
 function mirrorVoiceAct(voice, spoken = null) {
   if (!world2Enabled()) return;
   if (laneFlipped("say")) return; // the flipped pen already holds this act (penVoiceAct, before the log line)
@@ -2651,19 +2651,6 @@ async function groundMarkIds(w) {
 }
 
 /**
- * The mark record for every id in `ids`, plus the town's ground set.
- *
- * Keyed by id because the only question any caller asks of it is "what is this
- * id" — a list would make every reader build this map first, and two of them
- * would build it differently.
- *
- * An id with no mark behind it is SKIPPED rather than carried as null: the
- * promise is "what this response names", and a null would be the door asserting
- * that a named thing has no record, which it cannot know. The falsifier that
- * catches a genuinely broken read is the one that compares the response's own
- * named ids against these keys, and it lives beside the doors, not here.
- */
-/**
  * MARKS SHOWN WITH THEIR BODIES (Darko, 2026-10-14 22:33: "every read that shows
  * a mark includes its WHOLE body"). { id, name, body } for each id the fold knows,
  * in order: the name is the mark's naming mark, else its slug in words, and the
@@ -2707,6 +2694,19 @@ export async function placeMarksAt({ x, y, handle = null } = {}) {
 /** THE PRESENCE CHAIN, for v2 (POS-632): v2's `who` splits everyone within reach, uncapped and without place words. */
 export const crowdPresence = () => ({ limit: Infinity });
 
+/**
+ * The mark record for every id in `ids`, plus the town's ground set.
+ *
+ * Keyed by id because the only question any caller asks of it is "what is this
+ * id" — a list would make every reader build this map first, and two of them
+ * would build it differently.
+ *
+ * An id with no mark behind it is SKIPPED rather than carried as null: the
+ * promise is "what this response names", and a null would be the door asserting
+ * that a named thing has no record, which it cannot know. The falsifier that
+ * catches a genuinely broken read is the one that compares the response's own
+ * named ids against these keys, and it lives beside the doors, not here.
+ */
 export async function markRecords(ids = [], w = null) {
   w ??= await world();   // cached by ref+sha; the apex has no world of its own in hand
   let byId = _byIds.get(w);
@@ -3026,8 +3026,7 @@ export async function worldPresent(args = {}, { roll = null } = {}) {
 //
 // The upload seam asks "may these bytes LIVE behind the media door?" and answers
 // MAX_IMAGE = 1.5 MB (edit.mjs, imported by media.mjs). That is a storage
-// with MAX_IMAGE = 1.5 MB. That is a storage ceiling, and every media object
-// is bounded by it at birth.
+// ceiling, and every media object is bounded by it at birth.
 //
 // This door asks a different question: "should these bytes ride back inside a
 // JSON-RPC answer?" That is a TRANSPORT budget, and it is not the storage
@@ -6463,10 +6462,9 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   // does not run, and the door writes the box it has always written.
   //
   // The result is a departure with a frozen `toward` and NO `within` — the
-  // shape `src/arena.mjs § arrivalOnGround` already writes and the vessel has
-  // always sailed. The arena block below still runs after this and still wins
-  // for a wheel-keeping ground, which is right: a ground that places its own
-  // entrants has said something more specific than "somewhere on my ground".
+  // shape the vessel has always sailed. (The arena's own placement, which once
+  // ran after this and won for a wheel-keeping ground, closed with the arena,
+  // 2026-09-30: test/arena-closed.test.mjs lists `arrivalOnGround` as gone.)
   // A closure, because a walk declared aboard a vehicle is aimed TWICE (WLD-139): the ring's near edge is
   // chosen relative to where the walker STARTS, and a rider starts at the deposit, not on the moving hull.
   // `aimAt(from)` runs once here, and again from the deposit point once the vehicle's exit has set them down.
@@ -6869,18 +6867,6 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
  */
 export async function walkApproach(worldClone, payload = {}, key = null, creature) { return walkAct(worldClone, payload, key, { approach: String(creature) }); }
 
-/**
- * A WALKING ROW CARRIES ITS LEG'S STRIDE (POS-331 part 3, review of #448).
- *
- * `pace_km_per_crossing` on each row that is walking a leg: the pace stamped on
- * the resident's current departure, else the engine's legacy constant, which is
- * the rule the engine's positionAt moves the walker by. It is what lets
- * `read: "walk"` say the arrival from the unrounded `remaining_m`
- * (crossings.mjs § arrivesAt) and agree with the walk receipt to the second.
- * Additive; rows at rest, riders (`aboard`) and the vessel's own timetable row
- * carry none. `walk` is the engine's walk.mjs (currentDeparture and the
- * constant), passed in so this stays pure.
- */
 /** WHO WAS JUST SET DOWN (WLD-63 row 68 (b)): a standing walker whose current
  *  departure is a landing carries `landed: { via, why, iso }`, so the page can
  *  draw the room and the token together the moment it sees a new one. */
@@ -6893,6 +6879,18 @@ export function walkerLandings(rows, departures = [], walk = {}) {
   });
 }
 
+/**
+ * A WALKING ROW CARRIES ITS LEG'S STRIDE (POS-331 part 3, review of #448).
+ *
+ * `pace_km_per_crossing` on each row that is walking a leg: the pace stamped on
+ * the resident's current departure, else the engine's legacy constant, which is
+ * the rule the engine's positionAt moves the walker by. It is what lets
+ * `read: "walk"` say the arrival from the unrounded `remaining_m`
+ * (crossings.mjs § arrivesAt) and agree with the walk receipt to the second.
+ * Additive; rows at rest, riders (`aboard`) and the vessel's own timetable row
+ * carry none. `walk` is the engine's walk.mjs (currentDeparture and the
+ * constant), passed in so this stays pure.
+ */
 export function walkerPaces(rows, departures = [], walk = {}) {
   if (!Array.isArray(rows) || typeof walk.currentDeparture !== "function") return rows;
   return rows.map((r) => {
@@ -6939,22 +6937,6 @@ async function walkersInFrames(walkers, w, atMs = Date.now()) {
   return out;
 }
 
-// The presence layer's read side (ruling 1): every walker's derived position at
-// one instant, from public records only. Read-only, keyless-safe.
-/**
- * `roll` is the town's own list of who exists — every resident, not only those
- * the world has a record of DOING something. Without it this door can only ask
- * about `walk records ∪ parcel households`, a union that structurally cannot
- * contain a resident who has neither, and 28 of 103 went unasked-about while the
- * engine stood ready to answer `the-town/the-standing-porch` for them.
- *
- * It is optional, and its ABSENCE IS DISCLOSED rather than silently narrowing
- * the answer (`the-town/the-disclosure`: refuse or disclose absent inputs, never
- * quietly substitute). A caller with no roll to give gets exactly the old
- * behaviour plus a line saying which question was actually asked — which is the
- * difference between this defect recurring visibly and recurring the way it did
- * the first time.
- */
 /**
  * The walkers a standpoint can see — bounded BY RADIUS, never by truncation.
  *
@@ -7027,6 +7009,22 @@ export function whoOnRoll(walkers, who, roll = null) {
   return { who: null, who_note: note };
 }
 
+// The presence layer's read side (ruling 1): every walker's derived position at
+// one instant, from public records only. Read-only, keyless-safe.
+/**
+ * `roll` is the town's own list of who exists — every resident, not only those
+ * the world has a record of DOING something. Without it this door can only ask
+ * about `walk records ∪ parcel households`, a union that structurally cannot
+ * contain a resident who has neither, and 28 of 103 went unasked-about while the
+ * engine stood ready to answer `the-town/the-standing-porch` for them.
+ *
+ * It is optional, and its ABSENCE IS DISCLOSED rather than silently narrowing
+ * the answer (`the-town/the-disclosure`: refuse or disclose absent inputs, never
+ * quietly substitute). A caller with no roll to give gets exactly the old
+ * behaviour plus a line saying which question was actually asked — which is the
+ * difference between this defect recurring visibly and recurring the way it did
+ * the first time.
+ */
 export async function worldWalkers(worldClone, key = null, { roll = null } = {}) {
   // publicWalkers is the single writer of the walker vocabulary — the spectator
   // publishes the same shape from the same function, so the two cannot drift.
@@ -7310,7 +7308,6 @@ export const SAY_PRESENCE_DISCLOSURE = " QUIET IS NOT GONE: `listeners` is every
 // were up to.
 export const SAY_RECORD_DISCLOSURE = " And the town remembers out loud: what you say leaves everyone's hearing at the next settlement, but it is written into Postmark's own public record at every crossing — the words, the speaker, the place and the hour — and kept there openly, so the people whose agents live here can read back later what the day actually held. Where: " + RECORD_KEPT_AT + ".";
 
-// `ctx.roll` — the town roll, when the caller holds one. Only the walkers door
 // ── town_post — the civic lanes' pen (founder-ruled 2026-08-30 evening) ──────
 //
 // `town { do: "post" }` charges as this flat verb. It is a THIN WRAPPER over
@@ -7452,6 +7449,7 @@ export async function townPost(payload = {}, key = null) {
 // cannot drift into three sentences.
 const TOWN_POST_VISIBLE = "your household's sketchbook holds it now; the town sees it at the next crossing, when the settlement publishes it";
 
+// `ctx.roll` — the town roll, when the caller holds one. Only the walkers door
 // uses it today; it rides on a ctx rather than a positional arg so the next
 // door that needs a town-side fact does not re-open this signature.
 export async function callWorldTool(name, args = {}, key = null, ctx = {}) {
