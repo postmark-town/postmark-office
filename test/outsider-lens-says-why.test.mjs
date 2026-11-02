@@ -240,6 +240,10 @@ test("a household with no published marks gets no line: the sentence is about ma
   const lou = await lensRead("lou");
   assert.ok(!Object.hasOwn(lou, "error"));
   assert.equal(lou.lens_note, LINE, "one published mark is enough");
+  // the household is the unit here too: zed has none, but a key that also holds lou holds a published mark, so zed reads with the line
+  // ⚑ THE FLIP: count only the first handle's marks → this key's only mark is its second resident's; this reds
+  const together = await lensRead("zed", key("zed", "lou"));
+  assert.equal(together.lens_note, LINE, "the household has one, though the resident reading has none");
 });
 
 test("a household's published marks are the world's marks that name its residents: a carried mark counts, a predicate counts, a second resident counts", { skip: SKIP }, async () => {
