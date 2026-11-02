@@ -8,8 +8,10 @@
 //
 // G1 deleted the general journal INSERT. `appendJournal` writes the RECORD now,
 // so a suite that built its population by calling it no longer puts anything in
-// this table — and `src/world-drain.mjs` still READS it (the arena's fold, the
-// other reader, went when the arena closed on 2026-09-30):
+// this table — and readers remain: `src/world-drain.mjs`, `readJournal` and
+// `journalHead` (src/world-journal.mjs), `dynamicHealth` (src/dynamic-store.mjs)
+// and `tools/g1-dev-proof.mjs`. (The arena's fold went when the arena closed on
+// 2026-09-30.) In detail, the drain:
 //
 //   · `src/world-drain.mjs` — the drain and its photograph. Its retirement is
 //     G2's, and `world2-acts.mjs` schedules it there in its own words ("its
