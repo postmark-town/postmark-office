@@ -80,6 +80,63 @@
 // instead is § WINDOW_BOUNDARY, stated from the window's own number with no
 // clock read anywhere in this process.
 //
+// ── THE PHOTOGRAPH ENDS AT THE CLEARING, NOT AT THE RECORDED CLOSE (WLD-137) ──
+//
+// RULED (Wright, 2026-10-31, the class fix under SHIPPING § 9): "the retained
+// journal covers every act whose claim the clearing folds, including acts
+// filed between a window's close and its clearing", so that "the keeper's
+// source check and the published record agree by construction".
+//
+// THE MEASUREMENT. Window 283's recorded close was 17:45:40Z; its clearing ran
+// at 18:00:34Z. The timer fires at :00 while the candle's chain still closes at
+// :45 (deploy/postmark-world2-clearing.timer § MOVING THESE MARKS DOES NOT MOVE
+// THE WINDOWS), so the gap is fifteen minutes at every crossing. A window stays
+// `open` until its clearing runs (clearing-job.mjs closes it in its own
+// transaction), so the door goes on filing claims into it, and the clearing
+// folds them. This file capped the photograph at `closes_at`: acts 37315 and
+// 37360 were published by S143 and photographed nowhere until the next
+// window's write, twelve hours later, and the keeper held S142 and S143 for a
+// source act its journal did not hold.
+//
+// SO THE WINDOW'S HORIZON (`through`) IS THE LATEST OF THREE, read from the
+// store and never from a clock:
+//
+//   1. its recorded close, `closes_at` — today's boundary, kept as the floor:
+//      the photograph never covers less than it did;
+//   2. its recorded clearing, `cleared_at`, once it has cleared — every act
+//      filed before the clearing began, which is what the clearing could fold;
+//   3. the latest act any claim filed in this window names
+//      (`claims.data._act_id`), once it has cleared — the construction itself.
+//      The stake door (world2-claims.mjs § promoteDraftOnStake) takes the
+//      candle FIRST and dates the act it releases at its insert, so a stake
+//      that held the candle while the clearing waited files an act dated after
+//      `cleared_at` whose claim the clearing still folds. No instant on the
+//      window's row covers that act; its claim names it.
+//
+// A window not yet cleared keeps its recorded close: it has folded nothing.
+//
+// THE HORIZON IS COMPUTED IN SQL AND HANDED BACK AS MICROSECOND TEXT, never as
+// a JS Date. `cleared_at` is `now()` in the clearing's transaction, and so is
+// the act the hold write-through writes when it returns a thing to its owner:
+// that act sits exactly ON the horizon. A Date keeps milliseconds, so a horizon
+// carried through one (18:00:34.427113 -> .427) would leave that act out of
+// `at <= horizon` by its last three digits.
+//
+// The crossing set is still read off the window's own time range, (opens_at,
+// through]. An old act that a claim names — a hold printout keeps its author's
+// last leave-mark as `_act_id` — only ever LOWERS a max, so it raises nothing
+// and re-renders no old crossing's file.
+//
+// NAMED, NOT BUILT: a hold printout whose source hold act commits DURING the
+// clearing's own transaction. The hold doors take no candle lock, and the
+// clearing's step 6.2 reads the hold record through `HOLD_TOP_SQL` under READ
+// COMMITTED, so such an act can be printed while dated after `cleared_at`. Its
+// printout's claim names the cutoff (`_held_through`), but that cutoff can be an
+// act the clearing itself stamped at its own `now()`, which is earlier than the
+// act it follows: the cutoff's instant is not a sound horizon. The candidate
+// rule, for the class owner: the window's photograph also covers every hold act
+// with an id at or below the window's `receipts.hold_through`.
+//
 // ── MY REVIEWER'S FINDING, AND IT WAS RIGHT ──────────────────────────────────
 //
 // Lap 1 shipped the derivation and a proposed wiring diff, and did NOT ship a
@@ -165,11 +222,14 @@ export const shaOf = (bytes) => createHash("sha256").update(bytes ?? "", "utf8")
  * `--check` and `--write` receipts both carry it.
  */
 export const WINDOW_BOUNDARY =
-  "candle window N's acts are the `acts` rows whose `at` falls in the window's OWN recorded "
-  + "half-open interval (opens_at, closes_at], read from the `windows` row with id = N — never "
-  + "from any clock this process reads. Their FILES are named by each row's own `acts.crossing` "
-  + "value, the ferry clock, because that is the drain's grouping and the photograph's key; one "
-  + "window therefore writes into two journal files and `writeJournalWindow` merges by seq.";
+  "candle window N's acts are the `acts` rows whose `at` falls in (opens_at, through], read from "
+  + "the `windows` row with id = N — never from any clock this process reads. `through` is the "
+  + "window's recorded close until it clears; once cleared, the latest of its close, its recorded "
+  + "clearing (`cleared_at`) and every act a claim filed in it names (`claims.data._act_id`), "
+  + "because the clearing folds every claim filed before it ran, the ones filed after the close "
+  + "included (WLD-137). Their FILES are named by each row's own `acts.crossing` value, the ferry "
+  + "clock, because that is the drain's grouping and the photograph's key; one window therefore "
+  + "writes into two journal files and `writeJournalWindow` merges by seq.";
 
 /** A window this store does not hold is a refusal, not an empty answer. */
 export const NO_SUCH_WINDOW =
@@ -177,48 +237,105 @@ export const NO_SUCH_WINDOW =
   + "there is nothing to derive it from but a clock — which is the mis-count this rule exists to "
   + "prevent";
 
+/** A register that answers the row but not its horizon is a defect, never a reason to use the close. */
+export const NO_HORIZON =
+  "the register answered the window's row without its horizon, and falling back to the recorded "
+  + "close would put back the gap between the close and the clearing (WLD-137)";
+
+/**
+ * THE WINDOW'S ROW AND ITS HORIZON, ONE STATEMENT (WLD-137; see the header's
+ * § THE PHOTOGRAPH ENDS AT THE CLEARING).
+ *
+ * `through` is the latest of the recorded close, the recorded clearing and the
+ * instant of every act a claim filed in this window names, once the window has
+ * cleared, and the recorded close until then. `through_from` says which term
+ * set it: `close`, `clearing` or `claim`. Returned as UTC text to the
+ * MICROSECOND, because the act the clearing writes at its own `now()` sits
+ * exactly on `cleared_at`, and a JS Date would drop the digits that keep it
+ * inside.
+ *
+ * `_act_id` is the act's id as text (world2-claims.mjs § the identity
+ * `_journal_seq` never was). Only an id Postgres can hold is cast, inside a
+ * CASE, so the cast is never tried on anything else: a cast error here would
+ * refuse the whole crossing for one odd claim. No status is filtered: a claim
+ * the clearing refused, or one retracted before it, names an act filed before
+ * the clearing too, so it can only lower the max; a private draft carries no
+ * `_act_id` at all (world2-claims.mjs: "NULL for a private draft"), and the row
+ * policy hides drafts from every runtime role besides (007_private_drafts.sql).
+ */
+export const WINDOW_ROW_SQL = `
+SELECT w.id, w.opens_at, w.closes_at, w.cleared_at,
+       to_char(t.through AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS through,
+       CASE WHEN w.cleared_at IS NULL THEN 'close'
+            WHEN t.through > GREATEST(w.closes_at, w.cleared_at) THEN 'claim'
+            WHEN w.cleared_at > w.closes_at THEN 'clearing'
+            ELSE 'close' END AS through_from
+  FROM windows w
+  CROSS JOIN LATERAL (
+    SELECT CASE WHEN w.cleared_at IS NULL THEN w.closes_at
+                ELSE GREATEST(w.closes_at, w.cleared_at, (
+                  SELECT max(a.at) FROM acts a
+                   WHERE a.id IN (
+                     SELECT CASE WHEN c.data->>'_act_id' ~ '^[0-9]{1,18}$'
+                                 THEN (c.data->>'_act_id')::bigint END
+                       FROM claims c
+                      WHERE c.window_id = w.id)))
+           END AS through) t
+ WHERE w.id = $1`;
+
 /**
  * THE WINDOW'S OWN EDGES, AND THE CROSSING VALUES INSIDE THEM.
  *
  * Two reads, in this order and no other:
  *
- *   1. the `windows` row, BY ID. Its `opens_at`/`closes_at` are the boundary.
- *      A missing row refuses (`NO_SUCH_WINDOW`) rather than falling back to
- *      arithmetic on the number, because the arithmetic would be a clock in
- *      disguise: window 151's `opens_at` was REPAIRED by hand
- *      (`005_candle_tiling.sql`), so the tile is a recorded fact and not a
- *      formula, and a formula would have been wrong about exactly one window
- *      and right about every other — the worst shape a boundary can have.
+ *   1. the `windows` row, BY ID, with its horizon (`WINDOW_ROW_SQL`). Its
+ *      `opens_at` and `through` are the boundary. A missing row refuses
+ *      (`NO_SUCH_WINDOW`) rather than falling back to arithmetic on the
+ *      number, because the arithmetic would be a clock in disguise: window
+ *      151's `opens_at` was REPAIRED by hand (`005_candle_tiling.sql`), so the
+ *      tile is a recorded fact and not a formula, and a formula would have been
+ *      wrong about exactly one window and right about every other — the worst
+ *      shape a boundary can have.
  *
  *   2. the DISTINCT `acts.crossing` values inside that interval, ascending.
  *      One file each, which is the drain's grouping verbatim (`planDrain`:
  *      "Grouped by the row's OWN crossing").
  *
- * `(opens_at, closes_at]` — half-open at the bottom, closed at the top — is the
- * notary's own grouping (`snapshot-export.mjs`, "(previous closed, N]") and it
- * is what makes the tiling a partition: window N's close IS window N+1's open,
- * so a row landing exactly on the boundary instant belongs to N and to nothing
- * else. An inclusive bottom would file it twice.
+ * `(opens_at, through]` — half-open at the bottom, closed at the top. The
+ * bottom is the notary's own grouping (`snapshot-export.mjs`, "(previous
+ * closed, N]"): window N's close IS window N+1's open, so a row landing exactly
+ * on that instant is window N's. The top now reaches past that close to N's
+ * clearing, so N and N+1 both photograph the acts between them; that is
+ * harmless by construction, since each is the same act under the same seq and
+ * `writeJournalWindow` merges by seq, and it was already so for every row of a
+ * shared crossing (a write re-derives its whole crossing up to its horizon).
  */
 export async function windowCrossings(client, windowId) {
   const id = Number(windowId);
   if (!Number.isInteger(id)) {
     throw new Error(`windowCrossings needs a candle window id (an integer), got ${JSON.stringify(windowId)}`);
   }
-  const { rows: ws } = await client.query(
-    "SELECT id, opens_at, closes_at FROM windows WHERE id = $1", [id]);
+  const { rows: ws } = await client.query(WINDOW_ROW_SQL, [id]);
   if (!ws.length) return { window: id, refused: "no-such-window", detail: `window ${id} — ${NO_SUCH_WINDOW}` };
-  const { opens_at, closes_at } = ws[0];
+  const { opens_at, closes_at, cleared_at = null, through = null, through_from = null } = ws[0];
+  if (through == null || !Number.isFinite(Date.parse(String(through)))) {
+    return { window: id, refused: "no-horizon", detail: `window ${id} — ${NO_HORIZON} (through = ${JSON.stringify(through)})` };
+  }
 
   const { rows } = await client.query(
     "SELECT DISTINCT crossing FROM acts"
     + " WHERE crossing IS NOT NULL AND at > $1 AND at <= $2"
-    + " ORDER BY crossing", [opens_at, closes_at]);
+    + " ORDER BY crossing", [opens_at, through]);
 
   return {
     window: id,
     opens_at,
     closes_at,
+    cleared_at,
+    // THE HORIZON, as the register computed it: microsecond UTC text, handed
+    // back to Postgres untouched as every `upto` below.
+    through,
+    through_from,
     // Numbers, not the driver's `numeric` strings: `stateLogFromStore` refuses
     // anything `Number.isFinite` says is not a crossing value, and a string
     // that looks like one is the shape that passes here and fails three frames
@@ -353,7 +470,8 @@ export function gapClassOf(cause) {
  * compare with `<stateDir>/log/<crossing>.journal.jsonl` and its meta.
  *
  * THE HORIZON IS APPLIED TO BOTH SIDES, and it has to be. The derivation is
- * capped at the window's `closes_at`; the FILE is not, because the next
+ * capped at the window's `through` (`WINDOW_ROW_SQL`: its clearing once it has
+ * cleared, WLD-137); the FILE is not, because the next
  * settlement will have written its later rows into the same file. Comparing an
  * uncapped file against a capped derivation would report every one of those
  * later rows as `onlyInFile` — a screenful of false findings on any window but
@@ -385,7 +503,7 @@ export async function checkStateLog(client, {
   const crossings = [];
   for (const c of w.crossings) {
     const out = await stateLogFromStore(client, {
-      window: c, upto: w.closes_at, asOfWorld, householdNameFor: namer, lastDrainedWindow,
+      window: c, upto: w.through, asOfWorld, householdNameFor: namer, lastDrainedWindow,
     });
     const logPath = join(STATE, "log", `${out.crossing}.journal.jsonl`);
     const metaPath = join(STATE, "log", `${out.crossing}.journal.meta.json`);
@@ -412,7 +530,9 @@ export async function checkStateLog(client, {
     // is how a corrupt file reads clean.
     const fileLines = [];
     let unparsed = 0, beyondHorizon = 0;
-    const horizon = Date.parse(w.closes_at instanceof Date ? w.closes_at.toISOString() : String(w.closes_at));
+    // Milliseconds here, as every line's `at` is (journalInstant): a line ON the
+    // horizon compares equal at the grain the file holds, and is kept.
+    const horizon = Date.parse(String(w.through));
     for (const raw of onDiskBytes.split("\n")) {
       if (!raw.trim()) continue;
       let l;
@@ -473,6 +593,7 @@ export async function checkStateLog(client, {
   const clean = crossings.length > 0 && crossings.every((c) => c.byte_equal);
   return {
     window: w.window, opens_at: w.opens_at, closes_at: w.closes_at,
+    cleared_at: w.cleared_at, through: w.through, through_from: w.through_from,
     boundary: WINDOW_BOUNDARY, crossings, clean,
     // An empty window is CLEAN-less rather than clean: nothing was compared, so
     // nothing was shown, and a check that answers "green, I looked at nothing"
@@ -485,23 +606,26 @@ export async function checkStateLog(client, {
  * WRITE ONE CANDLE WINDOW, whichever crossing files it lands in.
  *
  * The crossing step's entry point. Resolves the window's own crossings and
- * hands them to `writeStateLog` with the window's close as the horizon, so a
- * row belonging to the NEXT window is never pulled into this one's commit.
+ * hands them to `writeStateLog` with the window's horizon (`through`: its
+ * clearing once it has cleared, WLD-137), so every act whose claim this
+ * window's clearing folded is in this window's commit, and a row filed after
+ * that clearing (the NEXT window's) is never pulled into it.
  */
 export async function writeStateLogForWindow(client, { window, ...rest } = {}) {
   const w = await windowCrossings(client, window);
   if (w.refused) return w;
+  const horizon = { cleared_at: w.cleared_at, through: w.through, through_from: w.through_from };
   if (!w.crossings.length) {
-    return { window: w.window, windows: [], state_commit: null, boundary: WINDOW_BOUNDARY,
+    return { window: w.window, ...horizon, windows: [], state_commit: null, boundary: WINDOW_BOUNDARY,
       state_note: "the window holds no acts — nothing to photograph" };
   }
   // THE WINDOW'S OWN VALUES WIN, AND THE SPREAD ORDER IS WHAT MAKES THAT TRUE.
   // Written `{ windows, upto, ...rest }` a caller passing `upto` would silently
-  // override the window's close and pull the NEXT window's rows into this
+  // override the window's horizon and pull the NEXT window's rows into this
   // commit — the boundary defeated by an argument, which is the one thing this
   // door exists to prevent. `rest` goes first so it cannot reach them.
-  const out = await writeStateLog(client, { ...rest, windows: w.crossings, upto: w.closes_at });
-  return { window: w.window, opens_at: w.opens_at, closes_at: w.closes_at, boundary: WINDOW_BOUNDARY, ...out };
+  const out = await writeStateLog(client, { ...rest, windows: w.crossings, upto: w.through });
+  return { window: w.window, opens_at: w.opens_at, closes_at: w.closes_at, ...horizon, boundary: WINDOW_BOUNDARY, ...out };
 }
 
 // ── the CLI ──────────────────────────────────────────────────────────────────

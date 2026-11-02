@@ -150,7 +150,7 @@ function world(name) {
 const files = (repo) => readdirSync(join(repo, "STATE", "log")).filter((n) => n.endsWith(".journal.jsonl")).sort();
 const lines = (repo, name) => readFileSync(join(repo, "STATE", "log", name), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const metaOf = (repo, crossing) => JSON.parse(readFileSync(join(repo, "STATE", "log", `${crossing}.journal.meta.json`), "utf8"));
-const actOf = (id) => ACTS.find((a) => a.id === id);
+const actOf = (id) => [...ACTS, ...LATE_ACTS].find((a) => a.id === id);
 
 /**
  * THE KEEPER'S QUESTION, asked of the files: is there a line for this act, in
@@ -199,20 +199,25 @@ test("W1 · window 283's shape: the acts behind the two records the clearing fol
 });
 
 test("W2 · an act filed in the gap that no claim names is in it too: the photograph ends at the clearing, not at the close", async () => {
-  // Isolates the clearing term. A say has no claim, so nothing but the window's
-  // horizon reaching its clearing can put it in this window's photograph.
-  await seed();
+  // Isolates the clearing term. NO CLAIMS in this window, so no act a claim
+  // names can carry the horizon past this say: only the window's own clearing
+  // can put it in this window's photograph.
+  await seed({ claims: [] });
   const repo = world("w2");
-  await writeWindow(repo, 283);
+  const out = await writeWindow(repo, 283);
   assertIsTheAct(sourceOf(repo, 37330), 37330, "said after the close and before the clearing; no claim names it");
+  assert.equal(out.through, "2026-10-31T18:00:34.427113Z", "the horizon is the clearing, to the microsecond");
+  assert.equal(out.through_from, "clearing");
+  assert.equal(sourceOf(repo, 37396), null, "and an act after the clearing that no folded claim names stays out");
 });
 
 test("W3 · the clearing's own act, stamped at its instant to the microsecond, is inside the horizon", async () => {
-  // The precision arm. `cleared_at` and the hold write-through's return act are
-  // both `now()` in the clearing's transaction, so the act sits exactly ON the
-  // horizon. A horizon carried through a JS Date loses the microseconds
+  // The precision arm, with no claims so nothing else lifts the horizon.
+  // `cleared_at` and the hold write-through's return act are both `now()` in
+  // the clearing's transaction, so the act sits exactly ON the horizon. A
+  // horizon carried through a JS Date loses the microseconds
   // (18:00:34.427113 -> .427) and `at <= horizon` then leaves this act out.
-  await seed();
+  await seed({ claims: [] });
   const repo = world("w3");
   const out = await writeWindow(repo, 283);
   assertIsTheAct(sourceOf(repo, 37398), 37398, "written by the clearing itself at its own instant");
@@ -287,6 +292,38 @@ test("W7 · --check reads the same horizon: after the next window writes into th
   assert.equal(c283.equal, 6, "and every one pairs");
   assert.equal(c283.classes.unexplained, undefined, `no false finding: ${c283.first_difference}`);
   assert.equal(chk.through, "2026-10-31T18:00:34.478000Z", "and the check names the horizon it read");
+});
+
+// A CLEARING RUN BY HAND, LATE, past a ferry's sailing (SHIPPING § 9 and
+// settlement-auto.sh name the by-hand door; window 184 was cleared by hand
+// hours after its close on 2026-09-12). Window 285 closes 17:45:40Z on 11-01
+// and is cleared at 00:20Z on 11-02, after ferry 286 sailed at 00:00Z. The one
+// claim filed in between names an act in crossing 286, a crossing the window's
+// own (opens, close] never touched, and the window holds no other act.
+const LATE_WINDOWS = [
+  { id: 285, opens_at: "2026-11-01T05:45:40.000Z", closes_at: "2026-11-01T17:45:40.000Z", status: "closed", cleared_at: "2026-11-02T00:20:00.000000Z" },
+  { id: 286, opens_at: "2026-11-01T17:45:40.000Z", closes_at: "2026-11-02T05:45:40.000Z", status: "open", cleared_at: null },
+];
+const LATE_ACTS = [
+  act(37900, "2026-11-02T00:05:00.000Z", "sbx-fen", "leave-mark", "mark", {
+    object: "sbx-fen/night-gate", payload: { slug: "night-gate", kind: "sited", body: "A gate left open for the night ferry." } }),
+  act(37950, "2026-11-02T00:40:00.000Z", "sbx-fen", "say", "voice", { payload: { text: "after the late clearing" } }),
+];
+
+test("W9 · a clearing run by hand after a ferry sailed: the act filed past the ferry, in a crossing the window's own range never touched, is written into its own file", async () => {
+  // The crossing SET is read over (opens_at, through], not (opens_at, close].
+  // Read over the close, this window has no crossing at all, the writer
+  // answers "nothing to photograph", and the claim the clearing folded has no
+  // source act anywhere.
+  await seed({ windows: LATE_WINDOWS, acts: LATE_ACTS,
+    claims: [{ window: 285, slug: "sbx-fen/night-gate", claimant: "sbx-fen", status: "locked", data: { _act_id: "37900" } }] });
+  const repo = world("w9");
+  const out = await writeWindow(repo, 285);
+  assert.equal(out.refused, undefined, JSON.stringify(out));
+  assertIsTheAct(sourceOf(repo, 37900), 37900, "filed after ferry 286 sailed and before the by-hand clearing folded its claim");
+  assert.deepEqual(out.windows.map((w) => w.crossing), [286], "the crossing past the ferry is this window's to write");
+  assert.equal(out.through_from, "clearing");
+  assert.equal(sourceOf(repo, 37950), null, "and the act after the clearing stays out");
 });
 
 test("W8 · the box's own command line, over the real register: `state-log-write.mjs --window 283 --check` answers with the horizon and refuses nothing", async () => {
