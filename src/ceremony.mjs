@@ -336,7 +336,7 @@ export async function mintHousehold({
   //
   // THE ACCOUNT IS THE DECIDER, not the slug. `houseForAccount` matches on the
   // immutable GitHub id (login only where a row carries no id at all —
-  // `src/residency.mjs § accountMatches`), so the house that renames is the
+  // `src/household-deriver.mjs § accountMatches`), so the house that renames is the
   // house this verified human already co-signs for, and no caller can rename
   // somebody else's by naming it. An account that stands in nobody's house
   // falls straight through to the ordinary mint.
@@ -510,7 +510,7 @@ export async function joinHousehold({
   const residents = [...new Set([...(rec.residents ?? []), h])];
 
   // THE ACCOUNT IS APPENDED ONLY WHEN THE HOUSE HAS NEVER LISTED IT, and the
-  // rule is `src/residency.mjs § accountMatches`'s: id first, and a login
+  // rule is `src/household-deriver.mjs § accountMatches`'s: id first, and a login
   // matches only where no id is on record. Getting this wrong authorises
   // nothing, but appending a stranger's account to a pinned household is how a
   // recycled GitHub login would have become permanent.
@@ -567,7 +567,7 @@ export async function joinHousehold({
 
 // The account matcher, in this file's own words for the same reason the
 // alphabet is: id first, login only where no id is on record. Asserted equal to
-// `residency.mjs § accountMatches`'s behaviour in test.
+// `household-deriver.mjs § accountMatches`'s behaviour in test.
 function accountIs(account, ghId, ghLogin) {
   if (account?.id != null || ghId != null) {
     if (account?.id == null || ghId == null) return false;
