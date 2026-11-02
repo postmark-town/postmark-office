@@ -83,6 +83,7 @@ import {
   placeMarksAt, // POS-632: the marks place words name, as rows (v2 you.near; PR-4 every place line)
   engineDescend, // WLD-83 P10: the engine's one descent, for an appearance tree
   isOutsiderLens, OUTSIDER_LENS, // WLD-26: the outsider lens, one switch on the owner rule
+  lensNoteFor, // POS-823: the line a lens read carries when the lens changed nothing for the household
 } from "./world.mjs";
 // v2.2 §B — the frame block and the three-shelf delta. Both compose the one
 // standpoint derivation; neither derives a position of its own.
@@ -4152,6 +4153,15 @@ export async function worldApex(args = {}, key = null, ctx = {}) {
   return withRefused(await worldApexAnswer(args, key, ctx));
 }
 
+/** POS-823: an outsider read that changed nothing for the household says why, in `lens_note` (world.mjs §
+ *  the lens says why it changed nothing). Additive: a read without the lens, and a lens read that moved
+ *  something of the household's, come back exactly as they did. */
+async function withLensNote(answer, args, key) {
+  if (!isOutsiderLens(args.lens) || !answer || answer.error) return answer;
+  const note = await lensNoteFor(args, key);
+  return note ? { ...answer, lens_note: note } : answer;
+}
+
 /** The outsider lens's one refusal (WLD-26), or null: the lens rides the bare
  *  read, its focuses and the v2 blocks read whole (BLOCK_READS); with do:, or
  *  with read: of an action, it is refused. Exported and pure so the decision is
@@ -4231,7 +4241,7 @@ async function worldApexAnswer(args, key, ctx) {
   if (lensBounce) return lensBounce;
   if (blockRead && isOutsiderLens(args.lens)) {
     const block = await apexReadAction(args, key, ctx);
-    return block && !block.error ? { ...block, lens: OUTSIDER_LENS } : block;
+    return block && !block.error ? await withLensNote({ ...block, lens: OUTSIDER_LENS }, args, key) : block;
   }
   if (reading) return apexReadAction(args, key, ctx);
   if (doing) {
@@ -4292,6 +4302,7 @@ async function worldApexAnswer(args, key, ctx) {
   let answer = await apexRead(args, key, ctx);
   // WLD-26: an outsider read says so, in its own words (explain: "lens")
   if (isOutsiderLens(args.lens) && answer && !answer.error) answer = { ...answer, lens: OUTSIDER_LENS };
+  answer = await withLensNote(answer, args, key); // POS-823: and says why when the lens changed nothing
   return sinceRenamed && answer && !answer.error ? { ...answer, renamed: sinceRenamed } : answer;
 }
 
