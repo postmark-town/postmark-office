@@ -6,21 +6,25 @@
 // locks at 17:45" (gold §1). clearing_job alone transitions it at the close;
 // retraction stays free until then (claims_update_guard, 002_grants.sql).
 //
-// SHADOW-ERA SHIM like world2-acts.mjs, dying with the same lane it serves —
-// the mark lane's row in `LANE_MIRROR` (world2-acts.mjs), per-lane since DEC-2
-// was ruled 2026-08-29 rather than one date for the whole store: during
-// the shadow era the sketchbook drain is still 1.0's truth; the docket is the
-// lane being proven. Same serialized fire-and-forget queue, loud on failure.
+// IT WAS A SHADOW-ERA SHIM, AND IS THE DOCKET'S WRITER NOW. It began as a
+// fire-and-forget queue beside the sqlite journal, per lane (DEC-2, 2026-08-29)
+// while the sketchbook drain was still 1.0's truth. Since the mark lane's flip
+// and G1 (POS-156) the claim is written by `claimTxFromJournal` on the client
+// and in the transaction of `world2-pen.mjs § penWrite`, called from
+// `world-journal.mjs § appendJournal` and `appendActFlipped`, so the act and its
+// claim commit or vanish together. This module's own `state.queue` is empty
+// (`docketSettled` still awaits it beside the pen's).
 //
 // Geometry identity: bbox comes from seed-import's own boxOf (centre + extent),
 // imported so the door and the seed CANNOT disagree about where a claim is.
 // Slug identity is the 1.0 path identity: <by>/<slug>.
 //
-// Env: WORLD2_CANDLE=1 (+ the same WORLD2_PG_URL as the acts mirror).
+// Env: WORLD2_CANDLE=1 (+ the same WORLD2_PG_URL as world2-acts.mjs).
 //
-// v0 scope, stated: leave-mark + amend submit; withdraw-as-retraction and
-// supersedes-chain wiring are the next slice (the clearing already handles
-// both when present).
+// Scope: leave-mark + amend submit, and withdraw retracts a pending claim or
+// deletes a draft (both inside `claimTxFromJournal`); an amend names the
+// standing mark it continues in `supersedes`, and a second pending claim on a
+// mark in the same window replaces the first (`retractReplaced`).
 
 import { boxOf } from "../world2/tools/seed-import.mjs";
 import { ringOf, ringBox, ringAgrees } from "./ring-box.mjs"; // POS-322: the bbox of a ringed mark is its ring's
@@ -123,7 +127,7 @@ const householdKeys = new Map();
  * the registry pins, so an OAuth resident whose login is not one of their
  * residents' handles resolved to `solo:<login>` and read an empty portfolio
  * and none of their own drafts, while the write path, which resolves from the
- * acting HANDLE (`world-apex.mjs § worldHouseholdOf`), had filed those drafts
+ * acting HANDLE (`actHouseholdFor`, below), had filed those drafts
  * under their house. 1.0 answers it the same way (`world-stake.mjs §
  * worldPortfolioStakeSlice`, which since POS-573 asks the store's registry
  * for every handle on the key, never the town ledger's pins): the household is
@@ -363,32 +367,6 @@ export async function actHouseholdFor(p, row) {
   return householdKeyFor(p, named);
 }
 
-/**
- * Called from appendJournal beside mirrorAct, with the same normalized row.
- *
- * -- THE STAKE IS THE BOUNDARY (Keemin's ruling, 2026-08-28) -----------------
- *
- * Submit is not a word. The town's own economy law already decided where the
- * private/public line falls -- "a commons mark PUBLISHES ONLY WITH ESCROW
- * BEHIND IT" (town#1990) -- so STAKING a mark IS submitting it, and this pen
- * reads the status straight off that law instead of off a flag:
- *
- *   leave-mark, unstaked            -> status 'draft'   (private compose space)
- *   leave-mark with stamps: n>0     -> status 'pending' (draft + stake, one act)
- *   a later world_stake on a draft  -> promoted to 'pending' (promoteDraftOnStake)
- *
- * `put_forward` is the DOOR's verdict, not the caller's word: the door owns the
- * ground check (commons needs >0; your own sovereign ground allows an explicit
- * 0) because the ground's lawful minimum is law, and law is readable
- * office-side and not from in here.
- *
- * THIS CHANGES WHAT THE DOCKET CONTAINS, deliberately and for every lane: an
- * unstaked commons mark never published in 1.0 either -- it sat invisible in a
- * household branch -- so a docket carrying it was 2.0 promising a hearing that
- * 1.0's economy would never have given it. Sibling lanes asserting on docket
- * counts (A/B parity, replay) will see the difference, and it is the fix rather
- * than drift.
- */
 /** Whether this journal row is the candle's business at all. */
 export function claimEligible(row, env = process.env) {
   return candleEnabled(env)
@@ -464,6 +442,32 @@ export async function openWindowFor(client, dark) {
  * rides that client, so the act and its claim commit or vanish TOGETHER.
  *
  * All the shadow-era semantics below are unchanged — only the plumbing moved.
+ *
+ * Called from `world-journal.mjs § appendJournal` and `appendActFlipped`, as
+ * `penWrite`'s `claimFn`, with the same normalized row the act is filed from.
+ *
+ * -- THE STAKE IS THE BOUNDARY (Keemin's ruling, 2026-08-28) -----------------
+ *
+ * Submit is not a word. The town's own economy law already decided where the
+ * private/public line falls -- "a commons mark PUBLISHES ONLY WITH ESCROW
+ * BEHIND IT" (town#1990) -- so STAKING a mark IS submitting it, and this pen
+ * reads the status straight off that law instead of off a flag:
+ *
+ *   leave-mark, unstaked            -> status 'draft'   (private compose space)
+ *   leave-mark with stamps: n>0     -> status 'pending' (draft + stake, one act)
+ *   a later world_stake on a draft  -> promoted to 'pending' (promoteDraftOnStake)
+ *
+ * `put_forward` is the DOOR's verdict, not the caller's word: the door owns the
+ * ground check (commons needs >0; your own sovereign ground allows an explicit
+ * 0) because the ground's lawful minimum is law, and law is readable
+ * office-side and not from in here.
+ *
+ * THIS CHANGES WHAT THE DOCKET CONTAINS, deliberately and for every lane: an
+ * unstaked commons mark never published in 1.0 either -- it sat invisible in a
+ * household branch -- so a docket carrying it was 2.0 promising a hearing that
+ * 1.0's economy would never have given it. Sibling lanes asserting on docket
+ * counts (A/B parity, replay) will see the difference, and it is the fix rather
+ * than drift.
  */
 export async function claimTxFromJournal(client, row, seq, { household, actId = null, env = process.env } = {}) {
       const payload = row.payload == null ? {} : JSON.parse(row.payload);
@@ -570,8 +574,8 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
         parent = ground?.id ?? null;
       }
 
-      // THE DEFERRED ACT rides on the draft it belongs to (world2-acts.mjs
-      // § the deferral). A draft is not a public deed, so nothing was mirrored;
+      // THE DEFERRED ACT rides on the draft it belongs to (world-journal.mjs
+      // § appendJournal, THE DEFERRAL). A draft is not a public deed, so nothing was mirrored;
       // the row is carried here, in the claim's own `data`, and mirrored the
       // moment a stake makes it public. Carried in the DATABASE rather than in
       // process memory on purpose: a draft composed before a restart and staked
@@ -1202,6 +1206,27 @@ export async function lastAmendedRow(mark, { env = process.env, p: injected = nu
 }
 
 /**
+ * EVERY CLAIM THE CANDLE RULED ON SINCE AN INSTANT — the town's news.
+ *
+ * Keyless and unscoped, and lawfully so: a `locked` or `refused` claim is a
+ * public fact, and 007's row policy says which row is not
+ * (`USING (status <> 'draft' OR household = …)`). No `withHousehold` here means
+ * `app.household` is undeclared, so the policy compares against NULL and every
+ * draft in town — including the caller's own — is invisible to this query. That
+ * is the right answer for a shelf that describes what the TOWN did.
+ */
+export async function claimRowsDecidedSince(since, { env = process.env } = {}) {
+  const p = await pool(env);
+  const { rows } = await p.query(
+    `SELECT slug, status, window_id, decided_at, refusal_check
+       FROM claims
+      WHERE status IN ('locked','refused') AND decided_at >= $1
+      ORDER BY decided_at DESC, slug ASC
+      LIMIT 500`, [since]);
+  return rows;
+}
+
+/**
  * EVERY CLAIM THAT MOVED SINCE AN INSTANT, for a named set of authors and slugs
  * — the backlog's half.
  *
@@ -1223,27 +1248,6 @@ export async function lastAmendedRow(mark, { env = process.env, p: injected = nu
  * through `householdKeyForKey`, drafts are the caller's own by 007's policy, and
  * every other status is a public fact.
  */
-/**
- * EVERY CLAIM THE CANDLE RULED ON SINCE AN INSTANT — the town's news.
- *
- * Keyless and unscoped, and lawfully so: a `locked` or `refused` claim is a
- * public fact, and 007's row policy says which row is not
- * (`USING (status <> 'draft' OR household = …)`). No `withHousehold` here means
- * `app.household` is undeclared, so the policy compares against NULL and every
- * draft in town — including the caller's own — is invisible to this query. That
- * is the right answer for a shelf that describes what the TOWN did.
- */
-export async function claimRowsDecidedSince(since, { env = process.env } = {}) {
-  const p = await pool(env);
-  const { rows } = await p.query(
-    `SELECT slug, status, window_id, decided_at, refusal_check
-       FROM claims
-      WHERE status IN ('locked','refused') AND decided_at >= $1
-      ORDER BY decided_at DESC, slug ASC
-      LIMIT 500`, [since]);
-  return rows;
-}
-
 export async function claimRowsSince(since, { claimants = [], slugs = [], key = null, env = process.env } = {}) {
   if (!(claimants.length || slugs.length)) return [];
   const p = await pool(env);
