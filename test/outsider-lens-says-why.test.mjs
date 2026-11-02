@@ -71,6 +71,9 @@ const MARKS = [
   parcel("ivy", 1280, 80),
   // hank: a lantern whose canon record stands inside the tower but is in somebody's hands (the hold record, handed in by the test)
   parcel("hank", 1300, 160), sited("hank/the-lantern", "hank", 1222, 8, 2, 2),
+  // lou: exactly ONE published mark (a parcel), in the open: the control for a household that has some. zed is not
+  // listed anywhere on purpose: zed has no published mark at all
+  parcel("lou", -400, 0),
 ];
 // REAL enters acts, in the ledger the doors fold (servedEnterExitLedger: the frozen era's file, plus the store's acts,
 // which this rig does not have). The grammar and the clock are the engine's: a ferry number in the past counts.
@@ -224,6 +227,34 @@ test("a carried mark is counted where the hold record puts it: unplaced, so not 
   assert.equal(await world.lensNoteFor({ handle: "hank" }, key("hank"), { placed }), LINE, "in somebody's hands the lantern is in no place, so nothing of his is in a closed place and nothing of his is hidden");
 });
 
+test("a household with no published marks gets no line: the sentence is about marks it has not got; one published mark earns it", { skip: SKIP }, async () => {
+  // zed has no mark of any kind in the published world. The lens moved nothing for zed and nothing of zed's is in a
+  // closed place, so only this guard can withhold the line: "Strangers see your published marks just as you do" is
+  // vacuous for a household that has none (the re-review's note).
+  const zedOwn = await ownRead("zed");
+  const zed = await lensRead("zed");
+  assert.deepEqual(ids(zed), ids(zedOwn), "control: the lens moved nothing for zed either");
+  // ⚑ THE FLIP: drop the no-published-marks guard in lensNoteFor → zed is told what strangers see of marks zed has not got; this reds
+  assert.equal(zed.lens_note, undefined, "nothing published to speak of");
+  // the control: lou has exactly one published mark, in the open, and the same lens that moves nothing
+  const lou = await lensRead("lou");
+  assert.ok(!Object.hasOwn(lou, "error"));
+  assert.equal(lou.lens_note, LINE, "one published mark is enough");
+});
+
+test("a household's published marks are the world's marks that name its residents: a carried mark counts, a predicate counts, a second resident counts", { skip: SKIP }, async () => {
+  const { hasPublishedMarks } = world;
+  assert.equal(hasPublishedMarks(MARKS, new Set(["ann"])), true);
+  assert.equal(hasPublishedMarks(MARKS, new Set(["lou"])), true, "one is enough");
+  assert.equal(hasPublishedMarks(MARKS, new Set(["zed"])), false, "none");
+  assert.equal(hasPublishedMarks(MARKS, new Set()), false, "no household");
+  assert.equal(hasPublishedMarks([], new Set(["ann"])), false, "an empty world");
+  assert.equal(hasPublishedMarks(undefined, new Set(["ann"])), false, "no world");
+  assert.equal(hasPublishedMarks([{ id: "x/lantern", by: "x", held_by: "ann" }], new Set(["x"])), true, "carried: no place, still a mark");
+  assert.equal(hasPublishedMarks([{ id: "x/naming", by: "x", kind: "naming", parent: "a/b" }], new Set(["x"])), true, "a predicate is a mark");
+  assert.equal(hasPublishedMarks(MARKS, new Set(["zed", "ann"])), true, "a second resident of the household");
+});
+
 test("the owner of a closed place gets no line even where the lens moved nothing: the reason would be false for him", { skip: SKIP }, async () => {
   const own = await ownRead("dan");
   const r = await lensRead("dan");
@@ -307,6 +338,7 @@ test("explain: \"lens_note\" says what the line is, in the grammar's fixed shape
   assert.match(e.what, /outsider lens changed nothing/);
   assert.match(e.detail, /closed place/);
   assert.match(e.detail, /published marks/, "it speaks of what strangers see of your published marks, like the line");
+  assert.match(e.detail, /when you have published marks/, "and says it is only said to a household that has some");
   assert.match(e.detail, /none of your residents stands in one/, "and says residents count");
   // until 2026-11-02 this said every other place "is open to everyone"; open reads as "anyone can go in", and the lens governs sight
   assert.doesNotMatch(e.detail, /open to everyone/);
