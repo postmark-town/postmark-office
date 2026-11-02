@@ -26,7 +26,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
@@ -268,6 +268,36 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   const blind = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: join(DIR, "nowhere") });
   assert.match(blind.unavailable, /registry could not be read/);
   assert.equal(blind.posts[0].terms, null);
+});
+
+// ── 5b (POS-857) ────────────────────────────────────────────────────────────
+//
+// LAW (Wright on Darko's behalf, 2026-11-01): "An optional registry `ends`, holding the
+// existing inclusive cutoff ... The post's own state and act history stay as they are: no
+// invented 'closed-by-window' state and no close act." So the terms carry `ends` as a fact
+// for the offer surfaces, an open post stays open and an explicitly closed one stays closed.
+
+test("5b · a registry row's ends rides the quest post's terms, and the post's state and history are untouched", async () => {
+  const { pen, posts } = setup();
+  const SYN = join(DIR, "synthetic-town");
+  mkdirSync(SYN, { recursive: true });
+  const row = (id, extra = {}) => ({ id, title: `An invented ${id}`, cadence: "milestone", validation: "automatic", source: "s", target: 1, reward: "r", ...extra });
+  const synthetic = { quests: [row("window", { ends: "2026-03-15" }), row("lasting"), row("shut", { ends: "2026-03-15" }), row("daily-one", { cadence: "daily" })] };
+  writeFileSync(join(SYN, "quest-registry.json"), JSON.stringify(synthetic));
+  await seedQuestPosts({ hand: "wright", registry: synthetic, now: NOW });
+  await closeAtTown({ post: "postmark-pen/shut" }, WRIGHT, { now: NOW });
+  const actsBefore = pen.rows().length;
+  const stateBefore = JSON.stringify([...posts.values()].map((r) => [r.id, r.state, r.last_act]));
+
+  const r = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: SYN });
+  const by = Object.fromEntries(r.posts.map((p) => [p.fields.quest, p]));
+  assert.equal(by.window.terms.ends, "2026-03-15", "the ended-window row's terms carry its last offered day");
+  assert.equal("ends" in by.lasting.terms, false, "no ends in the registry: no key, as before");
+  assert.equal("ends" in by["daily-one"].terms, false, "cadence is not an end");
+  assert.deepEqual([by.window.state, by.shut.state], ["open", "closed"], "no state was invented or reopened");
+  assert.deepEqual(by.window.history.map(({ at, ...h }) => h), [{ stage: "open", state: "open", hand: "wright" }], "an open post gains no act");
+  assert.equal(pen.rows().length, actsBefore, "the read wrote no act");
+  assert.equal(JSON.stringify([...posts.values()].map((p) => [p.id, p.state, p.last_act])), stateBefore, "the stored rows are as they were");
 });
 
 // ── 6 ───────────────────────────────────────────────────────────────────────
