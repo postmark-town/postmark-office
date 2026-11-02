@@ -13,9 +13,14 @@
 //                  `apexTools()` returns a frozen empty array on its first line
 //                  and the callers spread it into their existing lists.
 //
-// This module is imported by mcp.mjs and server.mjs DIRECTLY, never through
-// world.mjs, so that world.mjs (which this file imports) stays a leaf of the
-// dependency and there is no cycle to reason about.
+// This module is imported by mcp.mjs and server.mjs DIRECTLY (static imports),
+// and it imports world.mjs statically. world.mjs reaches back to it only
+// through `await import("./world-apex.mjs")` INSIDE function bodies (to take
+// `crossingDeps`; seven sites), never as a top-level import. A dynamic import
+// runs when that function runs, not when world.mjs loads, so no static import
+// cycle exists: world.mjs can be loaded without this file, and this file
+// finds world.mjs already loaded. (world.mjs does not reach this file through
+// any other module's static imports either.)
 //
 // ── WHERE AFFORDANCES COME FROM, AND WHY IT IS THE STORE ────────────────────
 //
@@ -89,8 +94,9 @@ import {
 import { carrierReader, movementV2Enabled, stopDepartures, vesselServiceFrom } from "./world-movement.mjs";
 import { carriedLegsFor, happenedBlock, latestSettlement, readCrossingLogs } from "./world-happened.mjs";
 import { WORLD_STAKE_TOOLS, callWorldStakeTool } from "./world-stake.mjs";
-// DEMO SLICE (step 5) — the crossings. Imported for the dispatch table and the
-// `fields` lookup; unreachable in production because no class mark grants them.
+// The crossings (step 5 of the world-view-system plan began as a demo slice and
+// is live now). Imported for the dispatch table (`enter` / `exit` below), the
+// `fields` lookup and the pen (`CROSSING_EXEC`, run under the town lock).
 import { CROSSING_EXEC, CROSSING_TOOLS, VEHICLE_CLASS, enterViaOffice, exitViaOffice } from "./world-crossings.mjs";
 // The vehicle's act. RIDE_TOOLS ride the SCHEMA lookup beside CROSSING_TOOLS
 // and for the same reason: an apex action's `fields` come from the flat
@@ -154,7 +160,7 @@ import { VISITOR_ACTS, VISITOR_REFUSED, berthHandleOf, isBerthHandle } from "./s
 
 export const apexEnabled = () => process.env.WORLD_APEX === "1";
 
-// ── the crossings' office plumbing (DEMO SLICE, step 5) ─────────────────────
+// ── the crossings' office plumbing (live; began as step 5's demo slice) ─────
 //
 // enter/exit read their law from the CLONE and their people from here. This is
 // the whole of "here": the folded world, where a resident is standing (the walk
@@ -378,6 +384,19 @@ export function spineWithVehicles(geometricIds = [], occupied = [], classOf = ()
   return out;
 }
 
+// One id map per published state, not one per read (WLD-29 review): the bare
+// read asks this on every call to tell its houses, and the state it maps only
+// changes at a fold.
+const _markLookups = new WeakMap();
+async function markLookup() {
+  try {
+    const marks = (await worldStateRaw())?.marks ?? [];
+    let byId = _markLookups.get(marks);
+    if (!byId) _markLookups.set(marks, (byId = new Map(marks.map((m) => [m.id, m]))));
+    return (id) => byId.get(id) ?? null;
+  } catch { return () => null; }
+}
+
 /**
  * THE `within` A RESIDENT READS, with the vessel they are aboard (WLD-11, town #3394).
  *
@@ -393,19 +412,6 @@ export function spineWithVehicles(geometricIds = [], occupied = [], classOf = ()
  *
  * Pure over (spine, occupied, markOf) so the union itself can be falsified.
  */
-// One id map per published state, not one per read (WLD-29 review): the bare
-// read asks this on every call to tell its houses, and the state it maps only
-// changes at a fold.
-const _markLookups = new WeakMap();
-async function markLookup() {
-  try {
-    const marks = (await worldStateRaw())?.marks ?? [];
-    let byId = _markLookups.get(marks);
-    if (!byId) _markLookups.set(marks, (byId = new Map(marks.map((m) => [m.id, m]))));
-    return (id) => byId.get(id) ?? null;
-  } catch { return () => null; }
-}
-
 export function withinWithVehicles(spine = [], occupied = [], markOf = () => null) {
   const out = [...spine];
   const have = new Set(out.map((m) => m.id));
@@ -1094,7 +1100,8 @@ function flatSchemas() {
   if (_flatSchemas) return _flatSchemas;
   _flatSchemas = new Map();
   // CROSSING_TOOLS ride the SCHEMA lookup without joining the flat door's tool
-  // list (R16: the pair stays out of production until the law is planted). The
+  // list (`world_enter` / `world_exit` are defined in CROSSING_TOOLS only, and the
+  // pair is live through the apex's `enter` / `exit` acts). The
   // fields an act takes must still come from the act's own schema — the seam-4
   // discipline — and inventing a second grammar here for two verbs would be
   // exactly the drift that seam exists to close.
@@ -1967,22 +1974,6 @@ export function buildTerms({ affording, spine, means = null }) {
 // present-vs-walkers split is the cautionary tale nailed above the door.
 
 /**
- * The close look at one mark, for the bare read's `mark:` focus.
- *
- * Null when nothing was asked for, so a read without `mark:` grows no key and
- * is byte-identical to the read that shipped before this.
- *
- * EMBODIED BY CONSTRUCTION: the apex went embodied-only in this same round, so
- * anything reaching here is standing somewhere. The flat `world_investigate`
- * stays the SPECTATOR's lane and is deliberately still un-delisted — a
- * spectator may investigate freely (it is public information), and the apex,
- * having no standpoint to offer them, is not their door. (That un-delist was
- * made 2026-08-23 with a note to re-delist "the day the apex grows an
- * equivalent"; this is that day, and the answer is still no — the equivalent is
- * embodied-only, so the flat tool is the only door a spectator has.)
- */
-/** investigate: on a living thing, or null when the call asked for none (PR-4). */
-/**
  * The matrix of (verb, object) pairs where the reader stands, or null when the
  * reader is not standing anywhere as a resident (a read from elsewhere trims
  * nothing) or the hold record cannot be read.
@@ -2029,6 +2020,7 @@ async function creaturePairsHere(who, here, residents = []) {
   } catch { return []; }
 }
 
+/** investigate: on a living thing, or null when the call asked for none (PR-4). */
 async function investigateOn(args, oriented, usable = null, key = null) {
   if (args.investigate == null || String(args.investigate).trim() === "") return null;
   const kind = entityKindOf(args.investigate);
@@ -2133,6 +2125,21 @@ export function savedPositionOf(handle, repo = WORLD_CLONE) {
   return e && Number.isFinite(e.x) ? { crossing: n, x: e.x, y: e.y } : null;
 }
 
+/**
+ * The close look at one mark, for the bare read's `mark:` focus.
+ *
+ * Null when nothing was asked for, so a read without `mark:` grows no key and
+ * is byte-identical to the read that shipped before this.
+ *
+ * EMBODIED BY CONSTRUCTION: the apex went embodied-only in this same round, so
+ * anything reaching here is standing somewhere. The flat `world_investigate`
+ * stays the SPECTATOR's lane and is deliberately still un-delisted — a
+ * spectator may investigate freely (it is public information), and the apex,
+ * having no standpoint to offer them, is not their door. (That un-delist was
+ * made 2026-08-23 with a note to re-delist "the day the apex grows an
+ * equivalent"; this is that day, and the answer is still no — the equivalent is
+ * embodied-only, so the flat tool is the only door a spectator has.)
+ */
 async function focusOn(args, key) {
   const payload = focusArgs(args);
   return payload ? worldInvestigate(payload, key) : null;
@@ -2225,7 +2232,6 @@ async function pendingAt(handle, nowMs) {
   } catch { return null; }
 }
 
-/** Does the blessed creature law know an encounter's verbs? (The office's read of it; any fault is no.) */
 /** Does the blessed law know a fight in set pieces' own verbs? Until it does, dodge and persuade answer as before. */
 async function fightsLive() {
   try {
@@ -2235,6 +2241,7 @@ async function fightsLive() {
   } catch { return false; }
 }
 
+/** Does the blessed creature law know an encounter's verbs? (The office's read of it; any fault is no.) */
 async function encountersLive() {
   try {
     const { creaturesForRead } = await import("./creatures-read.mjs");
