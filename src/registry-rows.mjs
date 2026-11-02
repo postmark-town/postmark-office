@@ -76,8 +76,7 @@
 // the one this module uses. `src/declare.mjs` once had a second, unsorted
 // `serializePins` (a declaration landing through it would have appended its new
 // handle at the END of the file, and `--check` would have redded on the next
-// crossing); POS-158 deleted it, and `src/declare.mjs` says so under "THE
-// UNSORTED SERIALIZER IS GONE".
+// crossing); POS-158 removed it, so there is no second spelling to keep in step.
 
 import { serializeRegistry, serializePins } from "./residency.mjs";
 import { publicRegistry } from "./registry-public.mjs";
