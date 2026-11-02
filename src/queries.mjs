@@ -216,10 +216,11 @@ export const TOWN_OFFICES_CAP = 25;
 // the answer now SAYS when it stopped listing.
 // ── ONE ROLL, AND THIS READ NO LONGER KEEPS A SECOND ONE (#1981) ────────────
 //
-// `counts.residents` came out of `meta.hydrated_counts` — a snapshot stamped when
-// the index was built, from the VENDORED roll, which enumerates WHITE_PAGES with a name
-// list (`vendor/tools/lib/town.mjs`: `n !== "TEMPLATE"`). A name list is not a rule, so
-// the second non-resident directory the town grew walked straight through it,
+// `counts.residents` came out of `meta.hydrated_counts` — a snapshot stamped
+// when the index was built, from the VENDORED roll, which enumerates
+// WHITE_PAGES with a name list (`vendor/tools/lib/town.mjs`:
+// `n !== "TEMPLATE"`). A name list is not a rule, so the second non-resident
+// directory the town grew walked straight through it,
 // and this door published 166 residents while `/metrics/mail` and `/residents`
 // — both counting the admitted table — published 165.
 //
@@ -238,10 +239,9 @@ export const TOWN_OFFICES_CAP = 25;
 //
 // ⚑ WHY NOT FIX THE STAMP INSTEAD, which is the other half of the choice. A
 // snapshot corrected when the index is built is right only from the next
-// rebuild — and
-// it would leave two counters in the office, agreeing only for as long as
-// somebody keeps their predicates in step. That is the arrangement that has now
-// produced this bug twice. The other counts in `hydrated_counts` are left
+// rebuild — and it would leave two counters in the office, agreeing only for as
+// long as somebody keeps their predicates in step. That is the arrangement that
+// has now produced this bug twice. The other counts in `hydrated_counts` are left
 // exactly as they are: they are not what this issue is about, and widening the
 // derivation to them is a change nobody has asked for.
 
@@ -803,8 +803,8 @@ export function correspondentsOf(rows, handle, { limit, offset } = {}) {
     const parties = [r.from_h, ...recipients].filter(Boolean);
     if (!parties.includes(handle)) continue;
     // The ledger's own tense, and the same one the store's `NEWEST`
-    // (town-index-store.mjs) orders every other mail read by: a delivery date where the record has one, the letter's own day
-    // where it does not.
+    // (town-index-store.mjs) orders every other mail read by: a delivery date
+    // where the record has one, the letter's own day where it does not.
     const at = r.delivered_at ?? r.date ?? null;
     for (const other of new Set(parties)) {
       if (other === handle) continue;
