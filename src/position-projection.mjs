@@ -38,7 +38,7 @@
 // photograph, so it is absent until a writer there calls in.
 
 /** The earshot this grid is sized for — `voices.mjs § EARSHOT_M`, which a pure module cannot import. */
-export const GRID_CELL_M = 64;
+const GRID_CELL_M = 64;
 
 /**
  * How long a projection may be trusted without a rebuild. Every writer in this
@@ -336,7 +336,7 @@ export function createPositionGrid({ rowsFor, cellM = GRID_CELL_M, frames = null
 // `everyonePlaced` itself, exactly as before.
 
 /** How many placements are kept at once: orient's, the witness's and the walkers' answers differ by roster, not by instant. */
-export const PLACEMENTS_KEPT = 8;
+const PLACEMENTS_KEPT = 8;
 
 /**
  * `rows({ key, at, place })` answers `place(null, at)` — `everyonePlaced`'s rows

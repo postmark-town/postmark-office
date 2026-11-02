@@ -106,7 +106,7 @@ export const KEY_JUDGEMENT_HELD = (outcome) =>
   + "its key lines and the printed registers were not written at this crossing — the record may already hold its "
   + "membership and pin. The row is still pending; the next crossing plans it again from the record as it then stands.";
 
-export const UNREACHABLE_RECORD =
+const UNREACHABLE_RECORD =
   "this office could not read the town's record at this crossing, so nothing was settled and nothing was written — the row is still pending and the next crossing settles it; nothing about it expires and nothing is lost by waiting";
 
 /**
@@ -215,7 +215,7 @@ export async function planTownDrain(odb, clone, { date }) {
 // its plans to that writer's joins.
 
 /** A crossing's plans as house-key joins: each row's handle, house and residents. */
-export const joinsOfPlans = (plans) => plans.map(({ row, plan: p }) => {
+const joinsOfPlans = (plans) => plans.map(({ row, plan: p }) => {
   const slug = p?.slug ?? row.payload?.slug ?? row.household;
   return { seq: row.seq, handle: row.handle, slug, residents: p?.registry?.households?.[slug]?.residents ?? [] };
 });

@@ -23,7 +23,7 @@
 // The method rule fails the other way — a new door is unsafe until somebody
 // says otherwise, which is the direction a mistake should fall.
 
-export const ROLES = ["write", "read"];
+const ROLES = ["write", "read"];
 
 /**
  * The three doors a GET reaches that are NOT reads, each excluded by the line

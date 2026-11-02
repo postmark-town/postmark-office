@@ -132,7 +132,7 @@ export function normalizeSubject(ghId) {
 }
 
 /** A login for the display column: trimmed, lowercased, or null. Never a key. */
-export const displayLogin = (login) => {
+const displayLogin = (login) => {
   const s = String(login ?? "").trim().toLowerCase();
   return s === "" ? null : s;
 };
@@ -242,7 +242,7 @@ export async function grantRole(rdb, { subject, role = ROLE_SUBSCRIBER, actor, n
  * Fires only when the label actually differs, so the common request writes
  * nothing.
  */
-export async function refreshLogin(rdb, subject, login) {
+async function refreshLogin(rdb, subject, login) {
   const s = normalizeSubject(subject);
   const who = displayLogin(login);
   if (!rdb || !s || !who) return false;

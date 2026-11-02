@@ -297,7 +297,7 @@ export const stampTipOf = (entries) => {
 };
 
 /** A fold's rows: every account but MINT and BURN, and the minted total. */
-export function stampRows(fold) {
+function stampRows(fold) {
   const rows = [];
   for (const [acct, n] of fold.balance) if (acct !== "MINT" && acct !== "BURN") rows.push([acct, n, fold.mintCount.get(acct) ?? 0, fold.staked.get(acct) ?? 0]);
   return { rows, minted: String(-(fold.balance.get("MINT") ?? 0)) };

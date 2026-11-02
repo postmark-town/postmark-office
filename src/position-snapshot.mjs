@@ -62,7 +62,7 @@
 import { departureRecords, DEPARTURE_ACTIONS, DEPARTURE_ORDER_SQL, DEPARTURE_ORDER_KEYS } from "../world2/tools/live-reads.mjs";
 
 /** Every departure act, both eras — what the 2.0 endpoints read, and what a snapshot reduces. */
-export const ALL_ERAS = `action = ANY($1)`;
+const ALL_ERAS = `action = ANY($1)`;
 export const ALL_ROWS_SQL =
   `SELECT id, at, crossing, actor, action, payload FROM acts WHERE ${ALL_ERAS} ${DEPARTURE_ORDER_SQL}`;
 /**
@@ -73,7 +73,7 @@ export const ALL_ROWS_SQL =
  * one row carries it alone (`id` null). The lateral is named `acts` so
  * DEPARTURE_ORDER_SQL's own keys order the outer read.
  */
-export const RECOUNT_AND_DELTA_SQL =
+const RECOUNT_AND_DELTA_SQL =
   `SELECT c.n AS recount, acts.id, acts.at, acts.crossing, acts.actor, acts.action, acts.payload
      FROM (SELECT count(*)::int AS n FROM acts WHERE ${ALL_ERAS} AND id <= $2) c
      LEFT JOIN LATERAL (SELECT id, at, crossing, actor, action, payload FROM acts
@@ -84,7 +84,7 @@ export { DEPARTURE_ACTIONS };
 const isLedger = (r) => r.era === "ledger";
 
 /** A row's place in DEPARTURE_ORDER, as the order's own keys read it. */
-export const keyOf = (row) => DEPARTURE_ORDER_KEYS.map((k) => {
+const keyOf = (row) => DEPARTURE_ORDER_KEYS.map((k) => {
   const v = k.of(row);
   return v instanceof Date ? v.getTime() : typeof v === "string" ? Date.parse(v) : v;
 });
@@ -112,7 +112,7 @@ function recordsOf(actRows) {
 }
 
 /** The ledger instant as `departuresAcrossEras` holds it: no ledger is 0. */
-export const ledgerMsOf = (iso) => (iso == null ? 0 : Date.parse(iso) || 0);
+const ledgerMsOf = (iso) => (iso == null ? 0 : Date.parse(iso) || 0);
 
 /** `departuresAcrossEras`' own count: store records older than the ledger's newest line. */
 const overlapOf = (records, newestLedgerMs) =>

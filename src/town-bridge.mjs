@@ -239,7 +239,7 @@ export function isAncestorOfHead(clone, sha) {
 // nothing that outlives the next crossing.
 const git = (dir, ...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-export const drainWorktreePath = (clone) =>
+const drainWorktreePath = (clone) =>
   process.env.TOWN_DRAIN_WORKTREE ?? join(git(clone, "rev-parse", "--absolute-git-dir"), "drain-worktree");
 
 /**
@@ -259,7 +259,7 @@ export const drainWorktreePath = (clone) =>
  * the crossing's mail held. `remove` takes only a registered worktree: a
  * path that is anything else is never touched.
  */
-export function prepareDrainWorktree(clone, log = console.error) {
+function prepareDrainWorktree(clone, log = console.error) {
   const wt = drainWorktreePath(clone);
   const pushingNow = process.env.TOWN_PUSH === "1";
   if (pushingNow) git(clone, "fetch", "-q", "origin", "main");
@@ -297,7 +297,7 @@ export function prepareDrainWorktree(clone, log = console.error) {
  * ferry, every crossing (review 2 of office#673). Answers whether the clone
  * now holds the tip; the caller decides what a `false` costs.
  */
-export function catchUpClone(clone, sha, log = console.error) {
+function catchUpClone(clone, sha, log = console.error) {
   for (let i = 1; ; i++) {
     try { git(clone, "merge", "--ff-only", "-q", sha); return true; }
     catch (e) {
@@ -359,7 +359,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
  * still finds the act it found before. The store's town log is the record of
  * record; this is its printed copy in the town's history.
  */
-export function batchMessage(inBatch, head) {
+function batchMessage(inBatch, head) {
   const letters = inBatch.filter((b) => b.row.cls === "letter").length;
   const papers = inBatch.length - letters;
   const seqs = inBatch.map((b) => b.row.seq);
