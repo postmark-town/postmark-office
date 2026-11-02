@@ -68,6 +68,8 @@ const PINS = {
   darko: { login: "CrowAndClock", id: ROOKERY_ID, pinned: "2026-07-01" },
   rei: { login: "CrowAndClock", id: ROOKERY_ID, pinned: "2026-07-01" },
   wick: { login: "lantern-keeper", id: 777001, pinned: "2026-07-01" },
+  // pinned, and in no house: a join that finds the pin already there writes no pin
+  drifter: { login: "drifter-login", id: 990001, pinned: "2026-07-01" },
 };
 
 // ── the rig ─────────────────────────────────────────────────────────────────
@@ -316,18 +318,19 @@ test("CEREMONY: a house choosing its key (the choose-once rename) is seen at onc
     "and to the provisional key it wore, through the alias list");
 });
 
-test("CEREMONY: a resident joining a house is seen at once (joinHousehold's house row)", async (t) => {
+test("CEREMONY: a resident joining a house is seen at once (joinHousehold's house row, for a handle whose pin is already on record)", async (t) => {
   pinClock(t);
   const pool = store();
   officeUses(t, pool);
-  assert.equal((await houseOfVia(pool, "joiner")).slug, null, "the joiner is a cached miss");
+  assert.equal((await houseOfVia(pool, "drifter")).slug, null, "the drifter is a cached miss: pinned, and in no house");
 
   await joinHousehold({
-    slug: "the-rookery", handle: "joiner", coSign: { ghId: ROOKERY_ID, ghLogin: "CrowAndClock" },
+    slug: "the-rookery", handle: "drifter", coSign: { ghId: ROOKERY_ID, ghLogin: "CrowAndClock" },
     pinnedOn: "2026-11-02", drain: NO_DRAIN, adopt: NO_ADOPT, env: RECORD_ON,
   });
+  assert.equal(pool.state.writes.pins, 0, "control: the pin was already on record, so the join wrote no pin and only its house write can have cleared the copy");
 
-  assert.equal((await houseOfVia(pool, "joiner")).slug, "the-rookery", "the house lists the joiner and this thread sees it at once");
+  assert.equal((await houseOfVia(pool, "drifter")).slug, "the-rookery", "the house lists the drifter and this thread sees it at once");
 });
 
 test("CEREMONY: the pin the join writes is seen at once too, even by a request that read between the join's two writes", async (t) => {
@@ -351,30 +354,40 @@ test("CEREMONY: the pin the join writes is seen at once too, even by a request t
     "the pin write clears the copy as the house write did: a pin is read by its id");
 });
 
-test("CEREMONY: a read still in flight when the clear lands does not refill the cache with what it read before the write", async (t) => {
-  pinClock(t);
-  const pool = store();
-  // Hold the households SELECT at the door: it takes its rows now and hands them over when released.
-  const query = pool.query;
-  let reached; const hasReached = new Promise((resolve) => { reached = resolve; });
-  let release; const mayLeave = new Promise((resolve) => { release = resolve; });
-  let held = false;
-  pool.query = async (text, params) => {
-    const out = await query(text, params);
-    if (!held && /^\s*SELECT slug, ord/.test(text)) { held = true; reached(); await mayLeave; }
-    return out;
-  };
+// A read that began before a clear may have read the registry before the write
+// the clear answers. It may hand what it read to its own caller; it must not
+// store it, or the clear is undone and the house stays unseen for a
+// time-to-live. One case per door that stores a copy.
+for (const door of [
+  { name: "the queryable's copy", ask: async (pool) => (await houseOfVia(pool, "founder")).slug },
+  { name: "the module pool's fold", ask: async () => { const rows = await houseRows(RECORD_ON); return resolveHouse("founder", rows.registry, rows.pins).slug; } },
+]) {
+  test(`A CLEAR IS NOT UNDONE BY A READ IN FLIGHT: ${door.name} is not refilled with what the read took before the write`, async (t) => {
+    pinClock(t);
+    const pool = store();
+    officeUses(t, pool);
+    // Hold the households SELECT at the door: it takes its rows now and hands them over when released.
+    const query = pool.query;
+    let reached; const hasReached = new Promise((resolve) => { reached = resolve; });
+    let release; const mayLeave = new Promise((resolve) => { release = resolve; });
+    let held = false;
+    pool.query = async (text, params) => {
+      const out = await query(text, params);
+      if (!held && /^\s*SELECT slug, ord/.test(text)) { held = true; reached(); await mayLeave; }
+      return out;
+    };
 
-  const inFlight = houseOfVia(pool, "founder");
-  await hasReached;
-  foundedElsewhere(pool, "founders-nest", { name: "Founders Nest", accounts: [{ login: "founder-login", id: 880001 }], residents: ["founder"] });
-  __clearHouseCache();           // the ceremony's clear, landing while that read is still out
-  release();
-  await inFlight;                // (its own answer is the pre-write one; the next ask is what matters)
+    const inFlight = door.ask(pool);
+    await hasReached;
+    foundedElsewhere(pool, "founders-nest", { name: "Founders Nest", accounts: [{ login: "founder-login", id: 880001 }], residents: ["founder"] });
+    __clearHouseCache();           // the ceremony's clear, landing while that read is still out
+    release();
+    await inFlight;                // (its own answer is the pre-write one; the next ask is what matters)
 
-  assert.equal((await houseOfVia(pool, "founder")).slug, "founders-nest",
-    "an invalidation that a read in flight can undo is not one: the stale copy must not be stored after the clear");
-});
+    assert.equal(await door.ask(pool), "founders-nest",
+      "an invalidation that a read in flight can undo is not one: the stale copy must not be stored after the clear");
+  });
+}
 
 test("THE OTHER THREADS hear no clear and heal by age alone (a read worker is a thread with its own copy of the module)", async (t) => {
   const clock = pinClock(t);
