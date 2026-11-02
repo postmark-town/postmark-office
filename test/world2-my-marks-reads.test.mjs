@@ -140,7 +140,7 @@ const ESCROW_ROWS = [
   { mark: "wright/the-trueing-house", holder: "pos104-wright", household: HOUSEHOLD, own_household: HOUSEHOLD, n: 3, weight_k: 5 },
 ];
 
-function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESCROW_ROWS, townSha = TOWN_SHA, settlements = [] } = {}) {
+function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESCROW_ROWS, townSha = TOWN_SHA, settlements = [], roster = ["pos104-wright"] } = {}) {
   const asked = [];
   const answer = async (sql, params) => {
     asked.push({ sql: String(sql).replace(/\s+/g, " ").trim(), params });
@@ -167,7 +167,7 @@ function fixturePool({ marks = PUBLISHED_ROWS, claims = CLAIM_ROWS, escrow = ESC
     }] };
     if (/FROM household_pins/i.test(sql)) return { rows: [] };
     if (/FROM registry_meta/i.test(sql)) return { rows: [{ key: "schema_version", value: 1 }] };
-    if (/FROM identities WHERE household/i.test(sql)) return { rows: [{ handle: "pos104-wright" }] };
+    if (/FROM identities WHERE household/i.test(sql)) return { rows: roster.map((handle) => ({ handle })) };
     if (/FROM projection_heads/i.test(sql)) return { rows: townSha ? [{ sha: townSha }] : [] };
     // The settlements the store holds (bug post #4014): empty by default, which is the
     // answer this door has always got from this fixture; the skipped acceptance below
@@ -414,9 +414,11 @@ test("THE LOCKED SHELF reaches the twin from the one derivation, handed this doo
     calls.push({ handles: [...handles], key: opts.key, canonIds: [...opts.canonIds] });
     return { rows: lockedRowsFrom(events, opts.canonIds) };
   };
-  const body = await mine({ lockedReader });
+  // A housemate with no standing mark yet: the roster names two handles, canon names one author.
+  const body = await mine({ lockedReader, pool: { roster: ["pos104-newcomer", "pos104-wright"] } });
+  assert.deepEqual(body.residents, ["pos104-wright"], "the premise: canon names one resident of this household");
   assert.equal(calls.length, 1, "asked once");
-  assert.deepEqual(calls[0].handles, ["pos104-wright"], "handed the household's whole roster (every handle the store's identities name), not only the authors of standing marks");
+  assert.deepEqual(calls[0].handles, ["pos104-newcomer", "pos104-wright"], "handed the household's whole roster (every handle the store's identities name), not only the authors of standing marks");
   assert.equal(calls[0].key, KEY, "and the key, so the docket read is scoped by the policy");
   assert.ok(calls[0].canonIds.includes(STANDING) && !calls[0].canonIds.includes(NEW), "and this door's own canon: the ids it holds standing");
   assert.deepEqual(body.locked.map((m) => m.id), [NEW], "the shelf lists the one the canon does not hold");
