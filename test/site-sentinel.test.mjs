@@ -1370,25 +1370,80 @@ test("§10 OK is OK, and the watcher's summary is the reason", () => {
   assert.match(r.reason, /all 9 meeps answering/);
 });
 
+// The shape of a problem on the watcher that splits severity (rig branch k/meep-watch, 23583c8): every problem is
+// stamped with `severity`, "down" or "warn" (STUCK, CUT OFF and DOWN are "down"; MISSED, FAILED and the memory words are
+// "warn"), and the record is DOWN if any problem is "down", else DEGRADED. The watcher that ran before the split
+// stamped nothing, and marked a STUCK or CUT OFF meep DEGRADED just as it did a lone MISSED round.
+const WARN_PROBLEM = { kind: "MISSED", meep: "Registrar", severity: "warn" };
+const DOWN_PROBLEM = { kind: "STUCK", meep: "Rei", severity: "down" };
+const UNSTAMPED_PROBLEM = { kind: "MISSED", meep: "Registrar" }; // as the watcher before the split wrote it
+
 // POS-838 (Wright 2026-10-30 23:42, Jetto's STAR-84 option B): the sentinel learns WARN. Until 2026-11-02 the next
 // test asserted that DEGRADED and DOWN were BOTH DOWN (POS-556, 10-10), so a lone missed round barked as an outage:
 // the Registrar's 559-second late fire of 10-31. Darko, 2026-11-01 22:59 EST, on the noise: "the spam is a bit too
 // much isn't it?".
 // LAW (POS-838): "`classifyMeeps`: DEGRADED becomes its own verdict, `WARN`, and DOWN stays DOWN."
+// LAW (POS-838, Wright's Settled comment of 2026-11-02, as relayed to the lane): "`classifyMeeps` reads WARN only when
+// every problem in the record carries `severity: "warn"`, and DOWN otherwise. ... A record with no `severity` on any
+// problem (the running watcher) reads DOWN, today's behaviour."
 test("§10 DOWN is DOWN, and the reason is the record's one-line summary verbatim", () => {
-  const r = classifyMeeps({ raw: MEEPS_REC({ status: "DOWN", summary: STUCK_SUMMARY, problems: [{ kind: "STUCK", meep: "Rei" }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+  const r = classifyMeeps({ raw: MEEPS_REC({ status: "DOWN", summary: STUCK_SUMMARY, problems: [DOWN_PROBLEM] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
   assert.equal(r.verdict, "DOWN", 'LAW (POS-838): "DOWN stays DOWN"');
   assert.equal(r.reason, STUCK_SUMMARY);
   assert.equal(r.detail.problems, 1);
 });
 
-test("§10 DEGRADED is a WARN, not DOWN, and the reason is the record's one-line summary verbatim (POS-838)", () => {
-  const r = classifyMeeps({ raw: MEEPS_REC({ status: "DEGRADED", summary: MISSED_SUMMARY, problems: [{ kind: "MISSED", meep: "Registrar" }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+test("§10 a DEGRADED record whose every problem says severity warn is a WARN, not DOWN, and the reason is the summary verbatim (POS-838)", () => {
+  const r = classifyMeeps({ raw: MEEPS_REC({ status: "DEGRADED", summary: MISSED_SUMMARY, problems: [WARN_PROBLEM, { ...WARN_PROBLEM, kind: "FAILED" }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
   assert.equal(r.verdict, "WARN", 'LAW (POS-838): "DEGRADED becomes its own verdict, `WARN`"');
   assert.notEqual(r.verdict, "DOWN", "a warning never barks as an outage");
   assert.equal(r.reason, MISSED_SUMMARY);
   assert.equal(r.detail.status, "DEGRADED");
-  assert.equal(r.detail.problems, 1);
+  assert.equal(r.detail.problems, 2);
+});
+
+test("§10 FAIL SAFE: a DEGRADED record with no severity on its problems is DOWN, today's behaviour (POS-838)", () => {
+  // The watcher that ran before the severity split wrote exactly these: a stuck meep, a cut-off one and a lone missed
+  // round alike came out DEGRADED, with nothing on the problem to tell them apart. None of them may read as a warning.
+  for (const [problem, summary] of [
+    [{ kind: "STUCK", meep: "Rei" }, STUCK_SUMMARY],
+    [{ kind: "CUT OFF", meep: "Rei" }, STUCK_SUMMARY],
+    [UNSTAMPED_PROBLEM, MISSED_SUMMARY],
+  ]) {
+    const r = classifyMeeps({ raw: MEEPS_REC({ status: "DEGRADED", summary, problems: [problem] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+    assert.equal(r.verdict, "DOWN", `LAW (POS-838): "A record with no severity on any problem reads DOWN" (${problem.kind})`);
+    assert.equal(r.reason, summary, "and the reason is still the summary verbatim");
+  }
+});
+
+test("§10 FAIL SAFE: one problem that is not a warning keeps a DEGRADED record DOWN (POS-838)", () => {
+  for (const [what, problems] of [
+    ["a down beside a warn", [WARN_PROBLEM, DOWN_PROBLEM]],
+    ["a down first", [DOWN_PROBLEM, WARN_PROBLEM]],
+    ["a warn beside a problem with no severity", [WARN_PROBLEM, UNSTAMPED_PROBLEM]],
+  ]) {
+    const r = classifyMeeps({ raw: MEEPS_REC({ status: "DEGRADED", summary: STUCK_SUMMARY, problems }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+    assert.equal(r.verdict, "DOWN", `every problem must say warn, and ${what} does not`);
+  }
+});
+
+test("§10 FAIL SAFE: a DEGRADED record that lists no problems is DOWN, because nothing in it says warn (POS-838)", () => {
+  for (const [what, over] of [
+    ["an empty list", { problems: [] }],
+    ["no list at all", { problems: undefined }],
+    ["a null list", { problems: null }],
+    ["something that is not a list", { problems: "MISSED Registrar" }],
+  ]) {
+    const r = classifyMeeps({ raw: MEEPS_REC({ status: "DEGRADED", summary: MISSED_SUMMARY, ...over }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+    assert.equal(r.verdict, "DOWN", `a DEGRADED record with ${what} cannot say it is only a warning`);
+  }
+});
+
+test("§10 FAIL SAFE: only the exact word warn counts as a warning (POS-838)", () => {
+  for (const severity of ["WARN", "Warn", "warning", " warn", "", "info", "down", null, true, 1]) {
+    const r = classifyMeeps({ raw: MEEPS_REC({ status: "DEGRADED", summary: MISSED_SUMMARY, problems: [{ ...WARN_PROBLEM, severity }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+    assert.equal(r.verdict, "DOWN", `severity ${JSON.stringify(severity)} is not the word warn`);
+  }
 });
 
 test("§10 a WARN alone rolls the board up to DEGRADED, never DOWN, and the headline names it (POS-838)", () => {
@@ -1469,12 +1524,160 @@ test("§10 the probe reaches the board as `meeps` and the sentinel's message car
   assert.equal(composeBoard({ probes: t2.probes, nowIso: t2.nowIso, alerting: {} }).status, "STALE");
 });
 
-test("§10 a DEGRADED record reaches the board as a WARN and never barks DOWN (POS-838)", async () => {
-  const dir = tempDir("sentinel-meeps-warn-");
-  const path = join(dir, "meeps.json");
-  _wf(path, MEEPS_REC({ status: "DEGRADED", summary: MISSED_SUMMARY, problems: [{ kind: "MISSED", meep: "Registrar" }] }));
-  const cfg = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path } };
-  const t1 = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
+// ── POS-838, the notice: a WARN is announced once, in its own words ──────────
+//
+// LAW (POS-838, Wright's Settled comment of 2026-11-02, as relayed to the lane): "A WARN posts once when the verdict
+// enters WARN, never repeats, and clears silently. `BAD` stays {DOWN, STALE}, and 'INFO and UNKNOWN never alert' stays
+// true. The header reads 'a warning, as of <time>.' and the line is `the meeps: warning: <summary>.`" and "A DOWN or
+// STALE easing into WARN posts one closing line, e.g. 'the meeps: no longer down after 1h27m, still a warning:
+// <summary>.' That line is the WARN episode's one post."
+const WARN_NEXT = { verdict: "WARN", reason: MISSED_SUMMARY };
+const OK_NEXT = { verdict: "OK", reason: "all 9 meeps answering; every round due in the last 3 h fired" };
+
+test("§10 BAD stays DOWN and STALE: a WARN is a notice, not an alarm (POS-838)", () => {
+  assert.deepEqual([...BAD].sort(), ["DOWN", "STALE"], 'LAW (POS-838): "`BAD` stays {DOWN, STALE}"');
+});
+
+test("§10 a WARN posts once on the way in, never repeats however long it lasts, and clears silently (POS-838)", () => {
+  const cold = transition({ prev: null, next: WARN_NEXT, nowMs: T0 });
+  assert.equal(cold.alert?.kind, "warn", "a sentinel that boots into a warning says so once");
+  assert.equal(cold.alert.verdict, "WARN");
+  assert.equal(cold.alert.reason, MISSED_SUMMARY);
+  const fromOk = transition({ prev: { verdict: "OK", reason: "fine", since: T0 - HOUR, last_alert_at: null }, next: WARN_NEXT, nowMs: T0 });
+  assert.equal(fromOk.alert?.kind, "warn", "LAW (POS-838): \"A WARN posts once when the verdict enters WARN\"");
+  assert.equal(fromOk.state.since, T0);
+  assert.equal(fromOk.state.last_alert_at, T0);
+
+  // however long it lasts: no reminder
+  for (const later of [10 * MINUTE, 11 * HOUR, 12 * HOUR, 13 * HOUR, 30 * HOUR]) {
+    const held = transition({ prev: fromOk.state, next: WARN_NEXT, nowMs: T0 + later });
+    assert.equal(held.alert, null, `LAW (POS-838): "never repeats" (${later / MINUTE} minutes on)`);
+    assert.equal(held.state.since, T0, "the episode's clock survives the silence");
+    assert.equal(held.state.last_alert_at, T0, "and so does the time it spoke");
+  }
+  // CONTROL: twelve hours on a DOWN does remind, so the silence above is the WARN's own
+  const down = { verdict: "DOWN", reason: "x", since: T0, last_alert_at: T0 };
+  assert.equal(transition({ prev: down, next: { verdict: "DOWN", reason: "x" }, nowMs: T0 + 12 * HOUR }).alert?.kind, "reminder");
+
+  // it clears silently: no recovery for a notice
+  const clear = transition({ prev: fromOk.state, next: OK_NEXT, nowMs: T0 + 3 * HOUR });
+  assert.equal(clear.alert, null, 'LAW (POS-838): "clears silently"');
+  assert.equal(clear.state.verdict, "OK");
+  // so the next WARN is a new episode and speaks again
+  assert.equal(transition({ prev: clear.state, next: WARN_NEXT, nowMs: T0 + 4 * HOUR }).alert?.kind, "warn");
+});
+
+test("§10 a DOWN or STALE easing into a WARN gets one closing line, and that line is the WARN's one post (POS-838)", () => {
+  for (const from of ["DOWN", "STALE"]) {
+    const bad = { verdict: from, reason: "x", since: T0, last_alert_at: T0 };
+    const eased = transition({ prev: bad, next: WARN_NEXT, nowMs: T0 + 87 * MINUTE });
+    assert.equal(eased.alert?.kind, "eased", `LAW (POS-838): "A DOWN or STALE easing into WARN posts one closing line" (${from})`);
+    assert.equal(eased.alert.from, from);
+    assert.equal(eased.alert.verdict, "WARN");
+    assert.equal(eased.alert.reason, MISSED_SUMMARY);
+    assert.equal(eased.alert.downFor, 87 * MINUTE, "the closing line says how long the outage lasted");
+    assert.equal(eased.state.since, T0 + 87 * MINUTE, "and the WARN episode starts there");
+    // the closing line was the episode's one post: the WARN that goes on says nothing, and clearing it says nothing
+    assert.equal(transition({ prev: eased.state, next: WARN_NEXT, nowMs: T0 + 100 * MINUTE }).alert, null, `${from} to WARN to WARN`);
+    assert.equal(transition({ prev: eased.state, next: OK_NEXT, nowMs: T0 + 3 * HOUR }).alert, null, `${from} to WARN to OK posts no recovery`);
+  }
+});
+
+test("§10 a WARN going bad is the ordinary onset, and an outage that eases and returns speaks each time (POS-838)", () => {
+  const warn = transition({ prev: null, next: WARN_NEXT, nowMs: T0 }).state;
+  const down = transition({ prev: warn, next: { verdict: "DOWN", reason: STUCK_SUMMARY }, nowMs: T0 + 10 * MINUTE });
+  assert.equal(down.alert?.kind, "onset");
+  assert.equal(down.alert.verdict, "DOWN");
+  assert.equal(down.state.since, T0 + 10 * MINUTE, "a DOWN is its own episode, with its own clock");
+  const eased = transition({ prev: down.state, next: WARN_NEXT, nowMs: T0 + 40 * MINUTE });
+  assert.equal(eased.alert?.kind, "eased");
+  assert.equal(eased.alert.downFor, 30 * MINUTE);
+  const again = transition({ prev: eased.state, next: { verdict: "DOWN", reason: STUCK_SUMMARY }, nowMs: T0 + 50 * MINUTE });
+  assert.equal(again.alert?.kind, "onset", "DOWN, WARN, DOWN: the second DOWN is announced too");
+});
+
+test("§10 INFO and UNKNOWN still never alert beside a WARN (POS-838)", () => {
+  // The earlier test's law, kept true by the settled shape: a third class was added, nothing was loosened.
+  assert.equal(transition({ prev: null, next: { verdict: "INFO", reason: "gated" }, nowMs: T0 }).alert, null);
+  assert.equal(transition({ prev: null, next: { verdict: "UNKNOWN", reason: "x" }, nowMs: T0 }).alert, null);
+  const warn = transition({ prev: null, next: WARN_NEXT, nowMs: T0 }).state;
+  const murky = transition({ prev: warn, next: { verdict: "UNKNOWN", reason: "unreadable" }, nowMs: T0 + HOUR });
+  assert.equal(murky.alert, null, "a warning that goes unreadable says nothing, and does not read as a recovery");
+  assert.equal(murky.state.verdict, "UNKNOWN");
+});
+
+test("§10 a WARN is posted in its own words, under its own header, and nothing in it says DOWN (POS-838)", () => {
+  const nowIso = "2026-11-02T01:07:44Z";
+  const board = composeBoard({ probes: [{ key: "a", label: "home", verdict: "OK", reason: "200" }, { key: "meeps", label: "the meeps", verdict: "WARN", reason: MISSED_SUMMARY }], nowIso, alerting: {} });
+  const warn = { key: "meeps", label: "the meeps", alert: { kind: "warn", verdict: "WARN", reason: MISSED_SUMMARY, since: T0 } };
+  const msg = composeMessage({ alerts: [warn], board, nowIso });
+  const lines = msg.split("\n");
+  assert.ok(lines[0].startsWith("**") && lines[0].endsWith("Postmark sentinel** — a warning, as of 2026-11-02T01:07:44Z."), `LAW (POS-838): 'The header reads "a warning, as of <time>."', got: ${lines[0]}`);
+  assert.ok(lines.includes(`the meeps: warning: ${MISSED_SUMMARY}.`), "LAW (POS-838): \"the line is `the meeps: warning: <summary>.`\"");
+  assert.doesNotMatch(msg, /DOWN|wrong on the site|RECOVERED/, "no outage framing, and no recovery");
+  assert.doesNotMatch(msg, /TOP PRIORITY/i);
+  assert.ok(!msg.includes("|---") && !/^\s*\|/m.test(msg), "still plain prose, no markdown table");
+  assert.match(msg, /1 green, 1 warning\. The full board is /, "and the board's own sentence still closes it");
+
+  // two warnings read as two
+  const two = composeMessage({ alerts: [warn, { ...warn, key: "other", label: "the box" }], board, nowIso });
+  assert.ok(two.split("\n")[0].endsWith("2 warnings, as of 2026-11-02T01:07:44Z."), two);
+  assert.ok(two.split("\n").includes(`the box: warning: ${MISSED_SUMMARY}.`));
+});
+
+test("§10 the closing line of an outage that eased into a WARN reads as the settled sentence (POS-838)", () => {
+  const nowIso = "2026-11-02T01:07:44Z";
+  const board = composeBoard({ probes: [{ key: "meeps", label: "the meeps", verdict: "WARN", reason: MISSED_SUMMARY }], nowIso, alerting: {} });
+  for (const [from, word] of [["DOWN", "down"], ["STALE", "stale"]]) {
+    const eased = { key: "meeps", label: "the meeps", alert: { kind: "eased", verdict: "WARN", reason: MISSED_SUMMARY, since: T0, from, downFor: 87 * MINUTE } };
+    const msg = composeMessage({ alerts: [eased], board, nowIso });
+    const lines = msg.split("\n");
+    assert.ok(lines[0].endsWith("Postmark sentinel** — a warning, as of 2026-11-02T01:07:44Z."), lines[0]);
+    assert.ok(lines.includes(`the meeps: no longer ${word} after 1h27m, still a warning: ${MISSED_SUMMARY}.`), `LAW (POS-838): "the meeps: no longer down after 1h27m, still a warning: <summary>." (${from})`);
+    assert.doesNotMatch(msg, /DOWN|RECOVERED|wrong on the site/);
+  }
+});
+
+test("§10 a WARN rides beside a DOWN or a recovery without borrowing their framing, and every older header is unchanged (POS-838)", () => {
+  const nowIso = "2026-11-02T01:07:44Z";
+  const board = composeBoard({ probes: [{ key: "a", label: "home", verdict: "OK", reason: "200" }], nowIso, alerting: {} });
+  const onset = { key: "disk_root", label: "the box's root disk", alert: { kind: "onset", verdict: "DOWN", reason: "at 87% used", since: T0 } };
+  const back = { key: "site_daily", label: "the Daily page", alert: { kind: "recovered", verdict: "OK", reason: "HTTP 200", since: T0, downFor: 20 * MINUTE } };
+  const warn = { key: "meeps", label: "the meeps", alert: { kind: "warn", verdict: "WARN", reason: MISSED_SUMMARY, since: T0 } };
+  const first = (alerts) => composeMessage({ alerts, board, nowIso }).split("\n")[0];
+
+  // beside a DOWN: the post is still about a DOWN, and the warning line is its own sentence, not a DOWN line
+  const withDown = composeMessage({ alerts: [onset, warn], board, nowIso });
+  assert.ok(first([onset, warn]).endsWith("Postmark sentinel** — something is wrong on the site, as of 2026-11-02T01:07:44Z."));
+  assert.ok(withDown.split("\n").includes("DOWN — the box's root disk: at 87% used."));
+  assert.ok(withDown.split("\n").includes(`the meeps: warning: ${MISSED_SUMMARY}.`));
+  assert.doesNotMatch(withDown, /DOWN — the meeps/, "the warning never takes a DOWN line");
+  // beside a recovery
+  assert.ok(first([warn, back]).endsWith("Postmark sentinel** — 1 warning and 1 recovery, as of 2026-11-02T01:07:44Z."), first([warn, back]));
+
+  // CONTROL: with no notice in the post, the three older headers are word for word what they were
+  assert.ok(first([onset]).endsWith("Postmark sentinel** — something is wrong on the site, as of 2026-11-02T01:07:44Z."));
+  assert.ok(first([onset, back]).endsWith("Postmark sentinel** — 1 problem and 1 recovery, as of 2026-11-02T01:07:44Z."));
+  assert.ok(first([back]).endsWith("Postmark sentinel** — recovered, as of 2026-11-02T01:07:44Z."));
+});
+
+// One real tick, the meeps record rewritten for that tick (a minute old, so never stale). The fixture's town clone is
+// never at the town's tip, so past 25 minutes its own probe would speak too: these tests are about the meeps alone,
+// so the tick runs without it. Clocks stay inside two hours, short of the 18:00Z settlement slot.
+async function meepsTick(path, rec, state, nowMs) {
+  _wf(path, MEEPS_REC({ generated_at: new Date(nowMs - MINUTE).toISOString(), ...rec }));
+  const config = { ...FIXTURE_CONFIG, clones: [], meeps: { ...CONFIG.meeps, path } };
+  return tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state, nowMs, config, readDisk: GREEN_DISK });
+}
+const DEGRADED_REC = { status: "DEGRADED", summary: MISSED_SUMMARY, problems: [WARN_PROBLEM] };
+const DOWN_REC = { status: "DOWN", summary: STUCK_SUMMARY, problems: [DOWN_PROBLEM] };
+const said = (t) => t.alerts.map((a) => `${a.key}:${a.alert.kind}`);
+const wordsOf = (t) => composeMessage({ alerts: t.alerts, board: composeBoard({ probes: t.probes, nowIso: t.nowIso, alerting: {} }), nowIso: t.nowIso });
+
+test("§10 THE TICK: a WARN episode posts once and clears without a DOWN post (POS-838)", async () => {
+  // LAW (POS-838, the brief's test): "A WARN episode posts once and clears without a DOWN post."
+  const path = join(tempDir("sentinel-meeps-warn-"), "meeps.json");
+  const t1 = await meepsTick(path, DEGRADED_REC, {}, T0);
   const probe = t1.probes.find((p) => p.key === "meeps");
   assert.equal(probe.verdict, "WARN");
   assert.equal(probe.kind, "meeps");
@@ -1482,13 +1685,70 @@ test("§10 a DEGRADED record reaches the board as a WARN and never barks DOWN (P
   const board = composeBoard({ probes: t1.probes, nowIso: t1.nowIso, alerting: {} });
   assert.equal(board.status, "DEGRADED", "an otherwise green town with one warning is DEGRADED, not DOWN");
   assert.match(board.headline, /^DEGRADED · .*1 warning/);
-  assert.equal(t1.nextState.probes.meeps.verdict, "WARN", "the next tick reads WARN as the previous verdict");
-  // The point of POS-838: the old mapping barked this record as "DOWN — the meeps: MISSED Registrar: ...". How (and
-  // whether) a WARN is announced is the open half of POS-838 and is deliberately not pinned here; that it is never
-  // announced as DOWN is.
-  assert.ok(t1.alerts.every((a) => a.alert.verdict !== "DOWN"), "a warning raises no DOWN alert");
-  const msg = composeMessage({ alerts: t1.alerts, board, nowIso: t1.nowIso });
-  assert.ok(msg === null || !/DOWN/.test(msg), `a warning is never announced as DOWN, got: ${msg}`);
+  assert.deepEqual(said(t1), ["meeps:warn"], "the first tick speaks once, and nothing else on the town does");
+  const msg = wordsOf(t1);
+  assert.ok(msg.split("\n").includes(`the meeps: warning: ${MISSED_SUMMARY}.`), msg);
+  assert.doesNotMatch(msg, /DOWN/, "the old mapping barked this very record as DOWN");
+
+  // ten minutes on, and half an hour on: the same warning says nothing
+  const t2 = await meepsTick(path, DEGRADED_REC, t1.nextState, T0 + 10 * MINUTE);
+  const t3 = await meepsTick(path, DEGRADED_REC, t2.nextState, T0 + 30 * MINUTE);
+  assert.deepEqual(said(t2), [], "never repeats");
+  assert.deepEqual(said(t3), [], "never repeats");
+  // the record goes back to OK: it clears silently, with no recovery and no message at all
+  const t4 = await meepsTick(path, {}, t3.nextState, T0 + 40 * MINUTE);
+  assert.equal(t4.probes.find((p) => p.key === "meeps").verdict, "OK");
+  assert.deepEqual(said(t4), [], "clears silently");
+  assert.equal(wordsOf(t4), null);
+  // and nothing the episode ever said was a DOWN or a recovery
+  for (const t of [t1, t2, t3, t4]) assert.ok(t.alerts.every((a) => a.alert.verdict !== "DOWN" && a.alert.kind !== "recovered"));
+  // a new episode speaks again
+  const t5 = await meepsTick(path, DEGRADED_REC, t4.nextState, T0 + 50 * MINUTE);
+  assert.deepEqual(said(t5), ["meeps:warn"]);
+});
+
+test("§10 THE TICK: a DOWN that eases into a WARN gets one closing line, and the WARN says nothing more (POS-838)", async () => {
+  const path = join(tempDir("sentinel-meeps-eased-"), "meeps.json");
+  const t1 = await meepsTick(path, DOWN_REC, {}, T0);
+  assert.deepEqual(said(t1), ["meeps:onset"], "a stuck meep still barks DOWN, as before");
+  assert.match(wordsOf(t1), /DOWN — the meeps: STUCK Rei: an input in local-conv-333/);
+
+  const t2 = await meepsTick(path, DEGRADED_REC, t1.nextState, T0 + 87 * MINUTE);
+  assert.equal(t2.probes.find((p) => p.key === "meeps").verdict, "WARN");
+  assert.deepEqual(said(t2), ["meeps:eased"]);
+  const msg = wordsOf(t2);
+  assert.ok(msg.split("\n")[0].endsWith("Postmark sentinel** — a warning, as of " + t2.nowIso + "."), msg);
+  assert.ok(msg.split("\n").includes(`the meeps: no longer down after 1h27m, still a warning: ${MISSED_SUMMARY}.`), msg);
+  assert.doesNotMatch(msg, /DOWN|RECOVERED/);
+
+  const t3 = await meepsTick(path, DEGRADED_REC, t2.nextState, T0 + 100 * MINUTE);
+  assert.deepEqual(said(t3), [], "the closing line was the WARN episode's one post");
+});
+
+test("§10 THE TICK: DOWN, then WARN, then OK posts no stray recovery and no stray alarm (POS-838)", async () => {
+  const path = join(tempDir("sentinel-meeps-down-warn-ok-"), "meeps.json");
+  const t1 = await meepsTick(path, DOWN_REC, {}, T0);
+  const t2 = await meepsTick(path, DEGRADED_REC, t1.nextState, T0 + 20 * MINUTE);
+  const t3 = await meepsTick(path, {}, t2.nextState, T0 + 40 * MINUTE);
+  assert.equal(t3.probes.find((p) => p.key === "meeps").verdict, "OK");
+  assert.deepEqual([said(t1), said(t2), said(t3)], [["meeps:onset"], ["meeps:eased"], []], "one onset, one closing line, and then quiet");
+  assert.equal(wordsOf(t3), null, "no RECOVERED for an outage that was already closed by its closing line");
+  // the same road with a flap in the middle: DOWN, WARN, DOWN, WARN each speak once, and the end is still quiet
+  const f2 = await meepsTick(path, DEGRADED_REC, t1.nextState, T0 + 20 * MINUTE);
+  const f3 = await meepsTick(path, DOWN_REC, f2.nextState, T0 + 30 * MINUTE);
+  const f4 = await meepsTick(path, DEGRADED_REC, f3.nextState, T0 + 50 * MINUTE);
+  const f5 = await meepsTick(path, {}, f4.nextState, T0 + 60 * MINUTE);
+  assert.deepEqual([said(f2), said(f3), said(f4), said(f5)], [["meeps:eased"], ["meeps:onset"], ["meeps:eased"], []]);
+});
+
+test("§10 THE TICK: a DEGRADED record from the watcher before the severity split still barks DOWN (POS-838 fail safe)", async () => {
+  // The record the running watcher writes for a stuck meep: DEGRADED, and nothing on the problem to say it is only a warning.
+  const path = join(tempDir("sentinel-meeps-unstamped-"), "meeps.json");
+  const t1 = await meepsTick(path, { status: "DEGRADED", summary: STUCK_SUMMARY, problems: [{ kind: "STUCK", meep: "Rei" }] }, {}, T0);
+  assert.equal(t1.probes.find((p) => p.key === "meeps").verdict, "DOWN");
+  assert.deepEqual(said(t1), ["meeps:onset"]);
+  assert.match(wordsOf(t1), /DOWN — the meeps: STUCK Rei: an input in local-conv-333/);
+  assert.equal(composeBoard({ probes: t1.probes, nowIso: t1.nowIso, alerting: {} }).status, "DOWN");
 });
 
 // ── §11: the settlement (Darko 2026-10-11) ──────────────────────────────────

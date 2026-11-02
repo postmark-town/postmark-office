@@ -115,14 +115,18 @@
 //                 own timer (POS-556, Darko 2026-10-10: ONE route to the Meepo
 //                 bot, the one /fleet also reads).
 // 10. MEEPS     — the town's meeps on Letta are answering. Read from
-//                 /srv/postmark-sentinel/meeps.json, the record Wright's watcher
-//                 (G:/Wright-HQ/tools/meep-watch.mjs, on Darko's desktop, every 5
-//                 min) lands here by scp. A record the watcher marks DOWN is
-//                 DOWN; one it marks DEGRADED is a WARN, which the board counts
-//                 and rolls up as DEGRADED, never as DOWN (POS-838). A record
-//                 older than 15 min, or none at all, is STALE: the watcher or
-//                 the desktop has stopped, and a silent watcher must not read
-//                 as healthy meeps (Darko 2026-10-10 13:27, POS-556).
+//                 /srv/postmark-sentinel/meeps.json, the record the desktop
+//                 watcher (starforge-rig's windows/meepops/meep-watch.mjs, on
+//                 Darko's desktop, every 5 min) lands here by scp. A record
+//                 the watcher marks DOWN is DOWN. One it marks DEGRADED is a
+//                 WARN only when every one of its problems says severity
+//                 "warn"; a DEGRADED record that cannot say so is DOWN, as it
+//                 always was (POS-838). A WARN is announced once, as a notice
+//                 and never as an outage, and the board rolls it up as
+//                 DEGRADED. A record older than 15 min, or none at all, is
+//                 STALE: the watcher or the desktop has stopped, and a silent
+//                 watcher must not read as healthy meeps (Darko 2026-10-10
+//                 13:27, POS-556).
 // 11. SETTLEMENT — the newest sweep receipt (/srv/postmark-harbor/settlement-
 //                 auto.json) settled within the hour: a publishing sweep whose
 //                 world the newest settlement/S<n> tag covers, peeled, by
@@ -1014,15 +1018,20 @@ export function classifyDisk({ usedPct = null, freeBytes = null, error = null, l
 // file feeds. The watcher's `summary` is already the one line that names the
 // meep, the kind and the evidence, so it is the reason verbatim.
 //
-// DEGRADED IS A WARN, NOT DOWN (POS-838, Wright 2026-10-30 23:42, STAR-84 option
-// B). Until then both DEGRADED and DOWN were DOWN, so a lone missed round barked
-// as an outage: the Registrar's 559-second late fire of 10-31 was announced as a
-// meep down. Only the record's own DOWN is DOWN now. A WARN is counted and rolled
-// up by composeBoard as DEGRADED, never as DOWN. This trusts the watcher's
-// DEGRADED to mean "every problem is a warning"; a watcher whose DEGRADED also
-// covers a stuck or cut-off meep would have that meep read as a warning here.
+// A DEGRADED RECORD IS A WARN ONLY WHEN IT SAYS SO (POS-838, Wright 2026-10-30
+// 23:42, STAR-84 option B). Until then both DEGRADED and DOWN were DOWN, so a
+// lone missed round barked as an outage: the Registrar's 559-second late fire of
+// 10-31 was announced as a meep down. The watcher now gives every problem a
+// severity, "down" or "warn", and marks the record DOWN if any is "down". So a
+// DEGRADED record is a WARN when it lists problems and every one carries severity
+// "warn", and DOWN otherwise, which is what it always was. The failure is on the
+// safe side on purpose: the watcher that ran before the severity split marked
+// STUCK and CUT OFF meeps DEGRADED too, with no severity on anything, and a stuck
+// meep must never read as a warning because a field was missing. Only the exact
+// word "warn" counts. A WARN is announced once as a notice (see transition), and
+// composeBoard rolls it up as DEGRADED, never as DOWN.
 export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterMs = 15 * MINUTE, path = "the meeps record" } = {}) {
-  const watcher = "the desktop watcher (meep-watch, every 5 min by scp)";
+  const watcher = "the desktop watcher (starforge-rig's windows/meepops/meep-watch.mjs, every 5 min by scp)";
   if (raw == null) {
     return { verdict: "STALE", reason: `there is no meeps record at ${path}${readError ? ` (${String(readError).slice(0, 80)})` : ""} — ${watcher} has not landed one, so nothing is watching the meeps` };
   }
@@ -1042,7 +1051,11 @@ export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterM
   const summary = String(rec.summary ?? "").trim() || "no summary in the record";
   if (rec.status === "OK") return { verdict: "OK", reason: summary, detail };
   if (rec.status === "DOWN") return { verdict: "DOWN", reason: summary, detail };
-  if (rec.status === "DEGRADED") return { verdict: "WARN", reason: summary, detail };
+  if (rec.status === "DEGRADED") {
+    const problems = Array.isArray(rec.problems) ? rec.problems : [];
+    const allWarn = problems.length > 0 && problems.every((p) => p?.severity === "warn");
+    return { verdict: allWarn ? "WARN" : "DOWN", reason: summary, detail };
+  }
   return { verdict: "STALE", reason: `the meeps record's status is ${JSON.stringify(rec.status ?? null)}, which this probe does not read — unread is never healthy`, detail };
 }
 
@@ -1458,9 +1471,8 @@ export function judgeQuietRange(cmp) {
 }
 
 // What alarms, reminds and recovers. WARN is deliberately not in it (POS-838): a
-// warning is not an outage, and every alert BAD makes is shaped like one. Until a
-// WARN has a post of its own, one is counted on the board and printed by a hand
-// run, and it raises no alert.
+// warning is not an outage, and every alert BAD makes is shaped like one. A WARN
+// has its own, quieter post in transition: once, with no reminder and no recovery.
 export const BAD = new Set(["DOWN", "STALE"]);
 
 /**
@@ -1483,17 +1495,34 @@ export const BAD = new Set(["DOWN", "STALE"]);
  * INFO and UNKNOWN never alert: an info-only door and an unreadable reference
  * are not site outages, and alarming on them teaches the reader to ignore the
  * channel.
+ *
+ * A WARN (POS-838) is a notice, not an alarm. It is not in BAD, so none of the
+ * edges above fire for it, and it speaks once per episode, however long it lasts:
+ *   - anything else -> WARN .... fires "warn": the episode's one post.
+ *   - DOWN or STALE -> WARN .... fires "eased": one closing line for the outage
+ *                                that has ended, which is also the WARN
+ *                                episode's one post.
+ *   - WARN -> WARN ............. silent. No reminder, ever.
+ *   - WARN -> OK ............... silent. A notice clears quietly, and a DOWN that
+ *                                eased into it was already closed by its line.
+ * WARN -> bad is the ordinary onset of that bad.
  */
 export function transition({ prev = null, next, nowMs, reminderMs = CONFIG.reminderMs }) {
   const alertable = BAD.has(next.verdict);
   const wasBad = prev != null && BAD.has(prev.verdict);
-  const since = wasBad && prev.verdict === next.verdict ? prev.since : nowMs;
+  const isWarn = next.verdict === "WARN";
+  const wasWarn = prev != null && prev.verdict === "WARN";
+  // A clock survives only inside one episode: the same bad, or the same WARN.
+  const since = (wasBad && prev.verdict === next.verdict) || (wasWarn && isWarn) ? prev.since : nowMs;
 
   let alert = null;
   if (alertable) {
     if (!wasBad) alert = { kind: "onset", verdict: next.verdict, reason: next.reason, since };
     else if (prev.verdict !== next.verdict) alert = { kind: "changed", verdict: next.verdict, reason: next.reason, since, from: prev.verdict };
     else if (nowMs - (prev.last_alert_at ?? 0) >= reminderMs) alert = { kind: "reminder", verdict: next.verdict, reason: next.reason, since };
+  } else if (isWarn) {
+    if (wasBad) alert = { kind: "eased", verdict: "WARN", reason: next.reason, since, from: prev.verdict, downFor: nowMs - prev.since };
+    else if (!wasWarn) alert = { kind: "warn", verdict: "WARN", reason: next.reason, since };
   } else if (wasBad && next.verdict === "OK") {
     alert = { kind: "recovered", verdict: "OK", reason: next.reason, since: prev.since, downFor: nowMs - prev.since };
   }
@@ -1502,7 +1531,7 @@ export function transition({ prev = null, next, nowMs, reminderMs = CONFIG.remin
     verdict: next.verdict,
     reason: next.reason,
     since,
-    last_alert_at: alert ? nowMs : (alertable && wasBad ? prev.last_alert_at ?? null : null),
+    last_alert_at: alert ? nowMs : (((alertable && wasBad) || (isWarn && wasWarn)) ? prev.last_alert_at ?? null : null),
   };
   return { alert, state };
 }
@@ -1515,12 +1544,19 @@ export function transition({ prev = null, next, nowMs, reminderMs = CONFIG.remin
  */
 export function composeMessage({ alerts, board, nowIso }) {
   if (!alerts.length) return null;
-  const bad = alerts.filter((a) => a.alert.kind !== "recovered");
+  // A notice (a WARN's one post, or the closing line of an outage that eased into
+  // one) is not an alarm, so it has its own header and its own words, and nothing
+  // in it says DOWN (POS-838).
+  const isNotice = (a) => a.alert.kind === "warn" || a.alert.kind === "eased";
+  const notices = alerts.filter(isNotice);
+  const bad = alerts.filter((a) => a.alert.kind !== "recovered" && !isNotice(a));
   const back = alerts.filter((a) => a.alert.kind === "recovered");
 
   const lines = [];
-  if (bad.length && back.length) lines.push(`**📮 Postmark sentinel** — ${bad.length} problem${bad.length > 1 ? "s" : ""} and ${back.length} recovery${back.length > 1 ? "ies" : ""}, as of ${nowIso}.`);
+  const trouble = bad.length || notices.length;
+  if (trouble && back.length) lines.push(`**📮 Postmark sentinel** — ${trouble} ${bad.length ? "problem" : "warning"}${trouble > 1 ? "s" : ""} and ${back.length} recovery${back.length > 1 ? "ies" : ""}, as of ${nowIso}.`);
   else if (bad.length) lines.push(`**📮 Postmark sentinel** — ${bad.length === 1 ? "something is" : `${bad.length} things are`} wrong on the site, as of ${nowIso}.`);
+  else if (notices.length) lines.push(`**📮 Postmark sentinel** — ${notices.length === 1 ? "a warning" : `${notices.length} warnings`}, as of ${nowIso}.`);
   else lines.push(`**📮 Postmark sentinel** — recovered, as of ${nowIso}.`);
   lines.push("");
 
@@ -1529,6 +1565,11 @@ export function composeMessage({ alerts, board, nowIso }) {
       : alert.kind === "changed" ? ` (it was ${alert.from} before this)`
       : "";
     lines.push(`${alert.verdict} — ${label}: ${alert.reason}.${tail}`);
+  }
+  for (const { label, alert } of notices) {
+    lines.push(alert.kind === "eased"
+      ? `${label}: no longer ${String(alert.from).toLowerCase()} after ${humanDuration(alert.downFor)}, still a warning: ${alert.reason}.`
+      : `${label}: warning: ${alert.reason}.`);
   }
   for (const { label, alert } of back) {
     lines.push(`RECOVERED — ${label} is healthy again after ${humanDuration(alert.downFor)}: ${alert.reason}.`);
