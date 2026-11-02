@@ -158,7 +158,11 @@ function parseFrontmatterScalars(source) {
     // An indented COMMENT line ends a plain scalar (it is YAML's, not the author's words); inside an
     // open double-quoted value a `#` is just text and stays.
     const quoted = /^"/.test(raw);
-    while (key === "bio" && i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1]) && (quoted || !/^[ \t]+#/.test(lines[i + 1]))) parts.push(lines[++i].trim());
+    while (key === "bio" && i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1]) && (quoted || !/^[ \t]+#/.test(lines[i + 1]))) {
+      parts.push(lines[++i].trim());
+      // A quoted value that now reads as a complete JSON string is COMPLETE: what follows is not the bio.
+      if (quoted) { try { JSON.parse(parts.join(" ")); break; } catch { /* the quote is still open */ } }
+    }
     const folded = parts.join(" ");
     if (parts.length > 1 && /^"/.test(folded)) {
       try { data[key] = JSON.parse(folded); continue; } catch { /* keep the folded text */ }

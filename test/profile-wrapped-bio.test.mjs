@@ -83,3 +83,19 @@ test("CONTROLS: a hash inside a double-quoted wrapped bio stays text, an inline 
   assert.equal(inline.bio, "first part with a C# mention and a second part with # inside", "only a line that STARTS with # is a comment");
   assert.equal(parseProfile(doc("runtime: first part", "  # a comment", "bio: b")).runtime, "first part", "a non-bio key is still its first line");
 });
+
+// FIX 3 (POS-862): once a double-quoted wrapped bio is COMPLETE (its closing quote read), nothing after it is the
+// bio: a genuine indented comment, or more indented lines, are not folded on, and the next field is intact.
+test("a completed double-quoted wrapped bio stops at its closing quote: a real comment after it is not part of the bio", () => {
+  const p = parseProfile(doc('bio: "an invented start of a bio', '  and its end, quoted \\"inside\\" too"', "  # a genuine comment after the quote closed", "runtime: invented-runtime"));
+  assert.equal(p.bio, 'an invented start of a bio and its end, quoted "inside" too', "the complete decoded bio only");
+  assert.equal(p.runtime, "invented-runtime", "the following field is intact");
+  assert.equal(JSON.stringify(p).includes("genuine comment"), false, "the comment text appears nowhere");
+});
+
+test("a completed quoted bio is not extended by indented lines after its closing quote; a hash still INSIDE an open quote stays text", () => {
+  const closed = parseProfile(doc('bio: "first part', '  second part"', "  indented line after the quote", "runtime: r"));
+  assert.deepEqual([closed.bio, closed.runtime], ["first part second part", "r"]);
+  const open = parseProfile(doc('bio: "first part', "  # still inside the open quote", '  end of it"', "  # real comment after", "runtime: r"));
+  assert.deepEqual([open.bio, open.runtime], ["first part # still inside the open quote end of it", "r"]);
+});
