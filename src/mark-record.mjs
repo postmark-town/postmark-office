@@ -28,9 +28,9 @@
  *
  * The original had one: `{ k: v }` for every object. That form is readable ONLY
  * for an all-numeric object, because the reader's fallback scan is a number scan
- * — `marks-fold.mjs:83`: `pair.match(/([\w]+)\s*:\s*(-?[\d.]+)/)`, quoted whole
- * so a drift in it is a drift from this line. It captures a numeric pair and
- * NOTHING else, and it splits on `,`.
+ * — `tools/marks-fold.mjs § parseRecord`: `pair.match(/([\w]+)\s*:\s*(-?[\d.]+)/)`,
+ * quoted whole so a drift in it is a drift from this line. It captures a numeric
+ * pair and NOTHING else, and it splits on `,`.
  *
  * So a structured value written in the bare form does not come back diminished,
  * it comes back EMPTY, and a nested one never even gets that far: measured on
@@ -40,8 +40,8 @@
  * carries the `, ` the scan splits on. Three marks, three different ways for one
  * form to be wrong.
  *
- * The reader tries STRICT JSON FIRST (`marks-fold.mjs:79`, and its own comment
- * says why: "the shape a structured field like `timetable:` needs"). So a
+ * The reader tries STRICT JSON FIRST (`marks-fold.mjs § parseRecord`, and its own
+ * comment says why: "the shape a structured field like `timetable:` needs"). So a
  * structured value goes out as strict JSON and comes back identical.
  *
  * THIS CHANGES NOTHING THE DOOR WRITES TODAY, and that is measured rather than
@@ -130,7 +130,7 @@ export const RECORD_FIELDS = Object.freeze([
  * with an `EMITS` rule, because it has exactly one file-side reader. It is on
  * 1,044 of 1,044 rows (`home` 428 / `market` 297 / `constitution` 319), and
  * writing it unconditionally is what the world's own gate refuses
- * (`tools/mark-lint.mjs:189 § an AUTHORED tier: is residue`).
+ * (`tools/mark-lint.mjs § an AUTHORED tier: is residue`).
  *
  * ── FAMILY 2 · THE DOOR'S AND THE DRAIN'S TRANSPORT KEYS ─────────────────────
  *
@@ -140,14 +140,15 @@ export const RECORD_FIELDS = Object.freeze([
  * `world.mjs § clean` IS built from named keys only — and six of those named
  * keys are transport, not frontmatter:
  *
- *   leave-exec.mjs:295  `const fileRec = { ...p }` — p IS `clean`, so a blanket
- *                       pass-through writes slug, body, household, parent_id,
- *                       amend and stamps into every new mark.md. `body:` would
- *                       be the whole body, duplicated into a frontmatter line.
- *   world-drain.mjs:232 `fileRec = { ...p, … }` then deletes FOUR — slug, body,
- *                       parent_id, household — and the journal declaration
- *                       (world.mjs:2126) carries `stamps` and `put_forward`
- *                       past that delete.
+ *   leave-exec.mjs § main  `const fileRec = { ...p, kind: recordKindOf(p.kind) }`
+ *                       — p IS `clean`, so a blanket pass-through writes slug,
+ *                       body, household, parent_id, amend and stamps into every
+ *                       new mark.md. `body:` would be the whole body, duplicated
+ *                       into a frontmatter line.
+ *   world-drain.mjs § planDrain  `fileRec = { ...p, … }` then deletes FOUR — slug,
+ *                       body, parent_id, household — and the journal declaration
+ *                       (`world.mjs § journalLeaveMark`) carries `stamps` and
+ *                       `put_forward` past that delete.
  *
  * None of the six appears on any of world main's 1,199 files. They are refused
  * here rather than by widening the two doors, because the renderer is the one
@@ -171,9 +172,11 @@ const DERIVED_SET = new Set(DERIVED);
  * THE GRAMMAR MIRRORS ITS READER, BY VALUE (ruled 2026-09-08 21:3x): a field
  * is written only where something on the file side READS it, and `tier` has
  * exactly one reader. The world's fold takes the file's own line —
- * `tools/marks-fold.mjs:329`: `rec.tier = rec.tier ?? "market";` — into the
- * standing walk's one shortcut, `world2/tools/standing.mjs:376` (transcribed
- * from the world's own):
+ * `tools/marks-fold.mjs § walkMarks`: `rec.tier = rec.tier ?? "market";` — into
+ * the standing walk's one shortcut, `world2/tools/standing.mjs § markStanding`
+ * (transcribed from the world's own; as it read on 2026-09-08 — POS-702 has since
+ * made every town mark the constitution, `mark-standing.mjs § townOwned`, which
+ * drops the `tier` half of the test):
  *
  *   if ((mark.by ?? mark.household) === TOWN && mark.tier === "constitution") return "constitution";
  *
@@ -186,10 +189,11 @@ const DERIVED_SET = new Set(DERIVED);
  * carry that exact pair, quoted verbatim so a drift in any of them is a drift
  * from this line:
  *
- *   world `tools/mark-standing.mjs:91` / office `world2/tools/standing.mjs:376`
+ *   world `tools/mark-standing.mjs § markStanding` / office `world2/tools/standing.mjs § markStanding`
  *     if ((mark.by ?? mark.household) === TOWN && mark.tier === "constitution") return "constitution";
- *   world `tools/mark-lint.mjs:189` — the gate that refuses every other tier line
+ *   world `tools/mark-lint.mjs § an AUTHORED tier: is residue` — the gate that refuses every other tier line
  *     if (rawTier && rawTier !== "draft" && !(rec.by === TOWN && rawTier === "constitution"))
+ *     (the gate has since gained a second exemption, for a property: `&& !(rec.by === TOWN && isProperty)`)
  *
  * So the `by` half here is the reader's, not a selector of the door's own
  * invention (keying a grammar on authorship by itself was refused). On today's
@@ -226,8 +230,9 @@ const DERIVED_SET = new Set(DERIVED);
  * differentiate. I think that's fine"). The one writer of the object —
  * `world2/tools/backfill-register.mjs § backfillAdmission`, and it is one
  * writer, established by grepping every `data.source` / `->'source'` /
- * `'source'` in the repo — now stamps under `_source`, which line 283 below
- * refuses structurally because it begins with an underscore. The 146 rows
+ * `'source'` in the repo — now stamps under `_source`, which `markRecord` below
+ * refuses structurally (its `!k.startsWith("_")` filter) because it begins with
+ * an underscore. The 146 rows
  * already in the store move by `world2/schema/017_source_underscore.sql`, which
  * also gives `the-town/the-reach` its authored string back.
  *
@@ -242,6 +247,14 @@ export const EMITS = Object.freeze({
   tier: (v, record) => (record?.by ?? record?.household) === "the-town" && v === "constitution",
   source: (v) => !(v !== null && typeof v === "object"),
 });
+
+/**
+ * THE KIND A NEW FILE WRITES (LOGOS v2, W2's rename, settled on WLD-73 G10):
+ * a description is `kind: predicate`, never the old `predicated`; every
+ * other kind is written as declared. Readers take both spellings (world-grants
+ * § PREDICATE_KINDS); only what is newly written moves.
+ */
+export const recordKindOf = (kind) => (kind === "predicated" || kind === "predicate" ? "predicate" : kind);
 
 /**
  * A mark record's bytes: frontmatter, then the body, then one trailing newline.
@@ -293,14 +306,6 @@ export const EMITS = Object.freeze({
  * differ on that one mark, and only this one keeps the invariant. Same cost,
  * one fewer stated property broken.
  */
-/**
- * THE KIND A NEW FILE WRITES (LOGOS v2, W2's rename, settled on WLD-73 G10):
- * a description is `kind: predicate`, never the old `predicated`; every
- * other kind is written as declared. Readers take both spellings (world-grants
- * § PREDICATE_KINDS); only what is newly written moves.
- */
-export const recordKindOf = (kind) => (kind === "predicated" || kind === "predicate" ? "predicate" : kind);
-
 export function markRecord(record, body) {
   const written = (k) => record[k] !== undefined && record[k] !== null && record[k] !== ""
     && (!(k in EMITS) || EMITS[k](record[k], record));

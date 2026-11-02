@@ -71,11 +71,22 @@ export function placedCentreOfRow(row) {
 }
 
 /**
- * THE ONE ANSWER for one thing. `view` is `{ last, through, places, placed }`
- * (`viewOf` below); `mark` is the canon record. Returns
+ * THE ONE ANSWER for one thing. `view` is `{ last, from, through, places, placed }`
+ * (the fields of `viewOf` below that it reads); `mark` is the canon record.
+ * Returns
  *   `{ held_by }`                         in someone's hands (or a holder thing)
- *   `{ at, extent, source: "set-down" }`  set down past the last printout
- *   `null`                                canon's own answer stands
+ *   `{ at, extent?, source: "set-down" }` set down and not yet printed: past the
+ *                                         last printout, or from before the first
+ *                                         (that one, and any answer from a view
+ *                                         with no cutoffs, also carries
+ *                                         `before_printout: true`); `extent` is
+ *                                         left off when neither canon nor the
+ *                                         view has one
+ *   `null`                                canon's own answer stands: no view, no
+ *                                         row, a row that is neither a holding
+ *                                         nor a drop, a drop already printed
+ *                                         (and canon names no holder), or a drop
+ *                                         whose place the view does not have
  */
 export function placeOf(id, view, mark = null) {
   if (!view) return null;

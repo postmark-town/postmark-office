@@ -36,7 +36,7 @@
 //
 // ── WHAT "DECLARE" MEANS HERE, AND WHY IT IS NOT A NEW FIELD ─────────────────
 //
-// A mark never authors a `parent` — `leave-exec.mjs` ~313 says it outright: "a
+// A mark never authors a `parent` — `leave-exec.mjs § main` says it outright, in the comment above "build the record": "a
 // sited/parcel mark never authors a parent (geometry decides)". What an EXISTING
 // mark has instead is a FROZEN FILING PATH, and the path is where containment is
 // declared: `WORLD/filing-freeze.json` is the manifest, minted once on
