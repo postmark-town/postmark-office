@@ -368,17 +368,19 @@ for (const door of [
     officeUses(t, pool);
     // Hold the households SELECT at the door: it takes its rows now and hands them over when released.
     const query = pool.query;
-    let reached; const hasReached = new Promise((resolve) => { reached = resolve; });
     let release; const mayLeave = new Promise((resolve) => { release = resolve; });
     let held = false;
     pool.query = async (text, params) => {
       const out = await query(text, params);
-      if (!held && /^\s*SELECT slug, ord/.test(text)) { held = true; reached(); await mayLeave; }
+      if (!held && /^\s*SELECT slug, ord/.test(text)) { held = true; await mayLeave; }
       return out;
     };
 
     const inFlight = door.ask(pool);
-    await hasReached;
+    // The store is in memory, so by the next macrotask every step the read needs
+    // has run: it is held at the door, or no read was needed and none will be.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(held, "control: the read reached the store and is held at its door (a copy that answered it would leave no read in flight to test)");
     foundedElsewhere(pool, "founders-nest", { name: "Founders Nest", accounts: [{ login: "founder-login", id: 880001 }], residents: ["founder"] });
     __clearHouseCache();           // the ceremony's clear, landing while that read is still out
     release();
