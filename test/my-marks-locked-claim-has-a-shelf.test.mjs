@@ -578,7 +578,8 @@ test("THE CARD names every shelf the answer labels, counts them right, and does 
   const shelves = Object.keys(answer.labels);
   const word = { 4: "FOUR", 5: "FIVE", 6: "SIX", 7: "SEVEN", 8: "EIGHT" }[shelves.length];
   assert.ok(word, `the answer labels ${shelves.length} shelves; teach this test the number word`);
-  for (const shelf of shelves) assert.match(card, new RegExp(`\\b${shelf}\\b`), `the card never names the ${shelf} shelf, and the answer labels it`);
+  // The card lists its shelves as "name (what it is)": the name must open an entry, not merely occur in a sentence.
+  for (const shelf of shelves) assert.match(card, new RegExp(`\\b${shelf} \\(`), `the card lists no \`${shelf} (…)\` entry, and the answer labels that shelf`);
   assert.ok(card.includes(`portfolio in ${word} shelves`), `the card does not say ${word} shelves; the answer labels ${shelves.join(", ")}`);
   assert.ok(card.includes(`says all ${word.toLowerCase()} on the page`), "and `labels` says all of them, in the card's own count");
   assert.ok(!/disjoint/i.test(card), "two shelves can list one mark (docket and backed, docket and locked), so the card does not call them disjoint");
