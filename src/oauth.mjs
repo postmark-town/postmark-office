@@ -1047,7 +1047,7 @@ async function handleOauthRoute(req, res, ctx) {
       const firstLine = String(decl.card ?? "").split(/\r?\n/).find((l) => l.trim())?.slice(0, 160) ?? "";
       // The one settlement clause (declare.mjs § SETTLING_ASHORE, POS-70 row
       // 38), read where the page is built — declare.mjs imports FROM_TOWN from
-      // this module (declare.mjs:187), so this module reaches it on demand, the
+      // this module, so this module reaches it on demand, the
       // way the co-sign below does, and not through its static imports.
       const { SETTLING_ASHORE } = await import("./declare.mjs");
       return html(res, 200, page("Co-sign this residency?", `
