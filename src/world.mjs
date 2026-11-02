@@ -299,18 +299,76 @@ async function roomsOfInterior(w) {
   return out;
 }
 
+/** Whose marks are "yours": every resident the key holds, and the one standing. The owner rule and
+ *  the lens's note both ask this one question (POS-823), so they cannot come to differ. */
+export function ownersOf(handle, key = null) {
+  const who = String(handle ?? "").trim();
+  return new Set([...(key?.handles ?? []), ...(who ? [who] : [])]);
+}
+
 /** The pure half of sightFor, so a test can hand it the clone's verbs: the
  *  standpoint's stack becomes the occupancy the one function reads, and the
  *  key's own residents keep their marks, unless the read is the outsider lens. */
 export function sightedWorld(w, { verbs, handle = null, stack = [], key = null, lens = null } = {}) {
   if (typeof verbs?.standpointSight !== "function") return w;
   const who = String(handle ?? "").trim();
-  const own = new Set([...(key?.handles ?? []), ...(who ? [who] : [])]);
+  const own = ownersOf(who, key);
   return verbs.standpointSight(w, {
     occupancy: who ? new Map([[who, [...stack]]]) : null,
     handle: who || null,
     keep: isOutsiderLens(lens) ? null : (m) => own.has(m.by),
   });
+}
+
+// ── THE LENS SAYS WHY IT CHANGED NOTHING (POS-823; Darko, 2026-10-30 16:29 EDT, approving Wright's
+//    recommendation: "when the World's outsider view changes nothing for a household, say why") ──
+//
+// Errant's bug post: the toggle changed nothing, because their place was open and an open place has nothing
+// for the lens to hide. The engine hides a mark from a stranger only inside a closed place (a dungeon:
+// portals.mjs § hiddenFrom; LOGOS/classes.md, "A dungeon is opaque from outside"), and the lens only switches off the owner rule
+// that spares a household's own marks there. So the lens can move a household's view only when a mark of its
+// own is, or stands in, a closed place it has not entered. When it did not, a lens read says why in
+// `lens_note`. Said only when it is true, which is two questions, asked separately:
+//   1. did the lens move the household's view at all? Asked of the real sight with and without the lens, and
+//      never inferred from the second question; and
+//   2. is the reason the line gives true? ("nothing of yours is in a closed place"; a household that owns a
+//      closed place, or is standing inside its own, is told nothing though the lens moved nothing for it.)
+// "Closed place", not "door": `entry` (how a mark is entered, a door's `into` included) is a property of every
+// mark (the-town/mark-entry) and hides nothing; only the dungeon class closes a place, and only an admin
+// household may make one (LOGOS/classes.md § Admin households may make the passage classes). So the line
+// points nowhere: an entry added to an open place does not make the lens matter.
+// The wording is one constant, so a ruling that changes it changes it here and in its test.
+export const LENS_CHANGES_NOTHING = "Nothing here changes: nothing of yours is in a closed place, and a place that isn't closed is open to everyone.";
+
+/** Is a mark of `owners` itself a closed place, or does it stand in one (a predicate rides its parent)? Pure over
+ *  the engine's own `dungeonsOf` (portals.mjs). TRUE when the engine cannot say what a closed place is, so
+ *  an engine that predates the dungeon class never vouches for the line. */
+export function yoursAreInAClosedPlace(marks, owners, portals) {
+  if (typeof portals?.dungeonsOf !== "function") return true;
+  const list = Array.isArray(marks) ? marks : [];
+  return list.some((m) => owners.has(m?.by) && portals.dungeonsOf(m, list).length > 0);
+}
+
+/**
+ * The line for an outsider read, or null. Null when no household reads (nothing is anyone's to hide), when the
+ * lens moved the household's view, when a mark of the household's is in a closed place, and when anything
+ * could not be read: a read never fails for want of its footnote, and withholding is the safe way to fail.
+ * `sight` is the seam a test hands a different sight through; the door never passes it.
+ */
+export async function lensNoteFor(args = {}, key = null, { sight = sightFor } = {}) {
+  const choice = chooseStandpoint(args, key);
+  if (choice.bounce) return null;
+  const owners = ownersOf(choice.handle, key);
+  if (!owners.size) return null;
+  try {
+    const full = await world();
+    const yours = await sight(full, choice.handle, key);
+    const stranger = await sight(full, choice.handle, key, { lens: OUTSIDER_LENS });
+    // the lens only ever hides more, so equal counts are the same marks
+    if ((yours?.marks?.length ?? 0) !== (stranger?.marks?.length ?? 0)) return null;
+    const portals = await engineImport("portals.mjs");
+    return yoursAreInAClosedPlace((await heldPlaced(full))?.marks ?? [], owners, portals) ? null : LENS_CHANGES_NOTHING;
+  } catch { return null; }
 }
 
 // The Origin — {0,0}, where the ferry lands; the grid origin and the default

@@ -132,7 +132,9 @@ test("the lens hides something of the household's: no line (a closed place she h
   assert.ok(ids(own).includes("mason/the-hall") && ids(own).includes("mason/the-lamp"), "control: his own sight holds the hall and the lamp");
   assert.ok(!ids(r).includes("mason/the-hall") && !ids(r).includes("mason/the-lamp"), "control: the lens hides them, as it hides them from a stranger");
   assert.ok(ids(r).includes(TOWER), "control: the closed place itself stands, as it does for anyone");
-  // ⚑ THE FLIP: drop the sight comparison in lensNoteFor (treat the lens as always moving nothing) → mason is told "nothing changes" while two marks vanished; this reds
+  // No single flip reds this one: the sight comparison and the closed-place check each withhold the line for mason
+  // (he owns the closed place), so removing either alone leaves it green. Each has its own falsifier: the comparison's
+  // is the injected sight below, the check's is dan. Removing BOTH tells mason "nothing changes" over two vanished marks.
   assert.equal(r.lens_note, undefined, "the line must not appear where the view does hide something");
   // and bea, an ordinary household with one note inside someone else's closed place
   const beaOwn = await ownRead("bea");

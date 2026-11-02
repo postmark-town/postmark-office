@@ -108,6 +108,8 @@ export const EXPLAIN = Object.freeze({
     read_shape: row("which read this is: v2 is the compact glance, v1 the lean read", 'explain: ""', "weekly"),
     lens: row("this read is the outsider lens: the world as a stranger sees it, as if your household owned nothing", 'world { lens: "outsider" }; omit lens: for your own sight', "live",
       "Only sight and reach change: your own marks inside a closed place you have not entered are hidden, as they are from anyone outside it, and the reach and the telling follow. What is yours stays yours and is told as yours: your note, your stances, your holdings and what happened to you. Read-only: nothing is written, and acts are always your own."),
+    lens_note: row("why the outsider lens changed nothing for your household, said only when it changed nothing", 'explain: "lens"', "live",
+      "Said when nothing of yours is in a closed place: the lens hides your marks only inside a closed place you have not entered, so there was nothing to hide. A closed place shows only its own mark to anyone who has not entered it; every other place is open to everyone."),
     cursor: row("your place in the town's time: pass it back as since: and you get only what changed", 'world { since: "<cursor>", read_shape: "v2" }', "live",
       "One cursor for every since: the crossing (what settled), the clock (what was said) and the record (what was done)."),
   }),
