@@ -69,8 +69,9 @@ const MARKS = [
   parcel("cy", 1140, 120), parcel("dee", 1210, 120),
   // ivy and jo: ONE household (a key that holds both). ivy has the ground; jo has no mark and enters the tower in the ledger
   parcel("ivy", 1280, 80),
-  // hank: a lantern whose canon record stands inside the tower but is in somebody's hands (the hold record, handed in by the test)
-  parcel("hank", 1300, 160), sited("hank/the-lantern", "hank", 1222, 8, 2, 2),
+  // hank: a lantern whose canon record stands inside the tower but is in somebody's hands (the hold record, handed in by the test).
+  // The lantern is hank's ONLY mark (no parcel: hank is only ever asked through lensNoteFor), so a carried mark has to count as published
+  sited("hank/the-lantern", "hank", 1222, 8, 2, 2),
   // lou: exactly ONE published mark (a parcel), in the open: the control for a household that has some. zed is not
   // listed anywhere on purpose: zed has no published mark at all
   parcel("lou", -400, 0),
