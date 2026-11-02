@@ -311,8 +311,8 @@ const seatedBecause = (seats = [], grants = []) => {
 // 2026-11-02. On 2026-08-27 this comment said the consumer was not merged: it
 // sat on the site's `bday-pin` branch, absent from the site's `main`. That has
 // since landed. The consumer is `src/lib/world-cockpit.mjs` on the site's main
-// (and on its train): `rosterOf` reads `answer.actors`, and `actorsFor` returns
-// the door's roster untouched when it is there.
+// (and on its train): `rosterOf` reads `answer.actors`, and `actorsFor` passes
+// the door's roster through when it is there, tagging each row `from: "the door"`.
 //
 // The correction is worth its lines because it names which world you are in. A
 // contract on an unmerged branch and a contract in production fail differently
