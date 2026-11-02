@@ -59,7 +59,7 @@
 // writer counts them once against the ledger's newest instant and the snapshot
 // keeps both; a read adds the delta's own and says the same number.
 
-import { departureRecords, DEPARTURE_ACTIONS, DEPARTURE_ORDER_SQL, DEPARTURE_ORDER_KEYS } from "../world2/tools/live-reads.mjs";
+import { departureRecords, departureCensus as censusOf, DEPARTURE_ACTIONS, DEPARTURE_ORDER_SQL, DEPARTURE_ORDER_KEYS } from "../world2/tools/live-reads.mjs";
 
 /** Every departure act, both eras — what the 2.0 endpoints read, and what a snapshot reduces. */
 export const ALL_ERAS = `action = ANY($1)`;
@@ -196,13 +196,6 @@ export function composeSnapshot(snap, { atMs = null } = {}) {
     overlap: Number(header.overlap_count) + overlapOf(since, ledgerMsOf(header.ledger_newest_iso)),
     snapshot: { window, delta: since.length },
   };
-}
-
-/** `departureCensus` over records, in `departureRecords`' own key order. */
-function censusOf(records) {
-  const eras = { ledger: 0, journal: 0, "journal-line": 0, live: 0, "movement-store": 0 };
-  for (const r of records) eras[r.era] = (eras[r.era] ?? 0) + 1;
-  return eras;
 }
 
 /**
