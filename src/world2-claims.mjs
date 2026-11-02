@@ -77,12 +77,15 @@ export function __setPoolForTest(p) { state.pool = p; }
 // docket one answer.
 //
 // ONLY POSITIVE ANSWERS ARE CACHED, deliberately. A handle that has a household
-// key does not lose it, so caching that is safe. A MISS is the registry-lag case
+// key does not lose it within one registry copy: a resident who moves, or a house
+// that is renamed, is a change in the registry, and it is seen when the copy is
+// replaced, which takes every yes remembered from the old one with it (below).
+// So caching a yes is safe. A MISS is the registry-lag case
 // the fold's own comment describes — "registry lag never blocks a new resident, it
 // only leaves them ungrouped until the town knows them" — and it resolves the
-// moment law_ingester projects the new roster line. Caching the miss would keep
-// writing `solo:` for a resident the town had already learned, for as long as the
-// office stayed up.
+// moment law_ingester projects the new roster line. Caching the miss in a map that
+// outlived the copy would keep writing `solo:` for a resident the town had already
+// learned, for as long as the office stayed up.
 //
 // AND THE MEMO LIVES AND DIES WITH THE REGISTRY COPY IT WAS DRAWN FROM (POS-860).
 // It was one module-level Map that nothing ever emptied, so a resident who moved

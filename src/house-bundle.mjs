@@ -89,11 +89,12 @@ export function isoEvents(events = []) {
  * 503), never the printout's answer.
  *
  * FRESH, NOT THE THREAD'S COPY. `houseRows()` folds once per time-to-live
- * (`household-deriver.mjs § HOUSE_CACHE_TTL_MS`), and the ceremony, a writer IN
- * THAT PROCESS, clears it at once; the house read is served by read workers,
- * where no ceremony ever writes, so a copy there would answer with the town as
- * it stood up to a time-to-live ago. This read takes none. Three small reads
- * per call.
+ * (`household-deriver.mjs § HOUSE_CACHE_TTL_MS`). The ceremony's clear reaches
+ * only the thread that wrote (the main thread); every other thread, a read
+ * worker among them, sees a change by age alone, within the time-to-live. The
+ * house read is served by read workers, where no ceremony ever writes, so a
+ * copy there would answer with the town as it stood up to a time-to-live ago.
+ * This read takes none. Three small reads per call.
  */
 export async function registryFor(clone, readers = {}) {
   if (readers.registry) return { ...readers.registry, from: readers.registry.from ?? "injected" };
