@@ -547,8 +547,9 @@ export function planDeclaration(registry, pins, decl, { date = townDate(), gangw
     //
     // WHY THIS HAD TO GO RATHER THAN STAY AS A BELT: two writers producing the
     // same bytes is not redundancy, it is a race. This door has no serializer
-    // of its own: the sorted `serializePins` and `serializeRegistry` live in
-    // `src/residency.mjs`, and the drain is their one caller.
+    // of its own: `serializePins` (which sorts by handle) and
+    // `serializeRegistry` live in `src/residency.mjs`, and their one caller is
+    // `renderOf` in `src/registry-rows.mjs`, which the drain prints from.
     files: [
       { path: `HARBOR/berths/${handle}.md`, content: ashoreBerth?.content ?? berth },
       ...(settles ? buildJoinFiles(card) : []),
