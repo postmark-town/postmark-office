@@ -364,8 +364,8 @@ export async function hasRole(rdb, ghId, role = ROLE_SUBSCRIBER) {
 // which is every office today — `roleGatesOn()` is `false` and `roleGate` answers
 // null for every caller, every role, every door, without so much as opening
 // the database. Wiring a door therefore changes nothing for anybody until the
-// founder designates real gated surfaces. WHICH doors get gated for real is a product decision and is not
-// this module's, nor its author's, to make.
+// founder designates real gated surfaces. WHICH doors get gated for real is a
+// product decision and is not this module's, nor its author's, to make.
 
 export const roleGatesOn = () => process.env.OFFICE_ROLE_GATES === "1";
 
