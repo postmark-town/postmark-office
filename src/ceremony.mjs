@@ -380,7 +380,7 @@ export async function mintHousehold({
       // the borrowed nameplate standing rather than clearing it.
       name: name?.trim() || standingRow.name || null,
     }, env);
-    __clearHouseCache();   // the house's key moved (a `null` answer means a row moved under us: still no copy to trust)
+    __clearHouseCache();   // the house's key moved (on a `null` answer a row moved under us instead: no copy is to be trusted then either)
     // `null` = the record went out of reach between the read and the write, or
     // the row moved under us. Neither is a thing to paper over: the house did
     // not choose, and the ceremony says so in its own words.
@@ -451,7 +451,7 @@ export async function mintHousehold({
   // between the read above and this write, which is not a thing to paper over:
   // the house was not founded, and the ceremony says so in its own words.
   const written = await insertHousehold(row, env);
-  __clearHouseCache();   // a new house stands in the record
+  __clearHouseCache();   // a new house stands in the record (a `null` answer wrote nothing, and a clear then costs one re-read)
   if (written === null) throw refuse(REFUSALS.NO_RECORD);
   const drained = await drain({ env, ...drainOptions });
   logRefusedDrain(`mintHousehold(${key})`, drained);
