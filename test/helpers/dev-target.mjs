@@ -14,12 +14,11 @@
 // stub takes. A store that cannot start FAILS (embedded-store.mjs § NO_STORE).
 
 import { execFileSync, spawn } from "node:child_process";
-import { createServer } from "node:net";
 import { readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { startStore } from "./embedded-store.mjs";
+import { startStore, freePort } from "./embedded-store.mjs";
 import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
@@ -28,12 +27,9 @@ import { standinClone } from "./clone-sparse.mjs";
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }).trim();
 
-/** A port the OS says is free now. */
-export const freePort = () => new Promise((ok, no) => {
-  const s = createServer();
-  s.once("error", no);
-  s.listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); });
-});
+// A port the OS says is free now: embedded-store.mjs's probe, re-exported because
+// tools/sandbox.mjs and tools/read-eval/office.mjs import it from here.
+export { freePort };
 
 /**
  * A scratch clone with no remote, committing as the harness. SPARSE (POS-652): a stand-in
