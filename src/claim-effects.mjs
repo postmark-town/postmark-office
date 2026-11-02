@@ -41,7 +41,7 @@
 // lines up). Naming one and printing the other is the R4 finding.
 
 import { currentCrossing } from "./crossings.mjs";
-import { causeOf, refusalCheckOf, opposedLawOf } from "./mark-receipt.mjs";
+import { causeOf, refusalCheckOf, opposedLawOf, receiptFrom } from "./mark-receipt.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
 
 /** How many ferry crossings back the doorstep's `outcomes` and my-marks' `refused` look. */
@@ -375,14 +375,25 @@ export async function myMarksRefused(handles = [], { key = null, nowMs = Date.no
 //   · a locked AMEND of a mark canon already holds is not on the shelf (canon
 //     holds the id); it was invisible before and still is.
 //   · a locked claim whose mark was withdrawn or swept after the candle reads as
-//     waiting until the two crossings pass (the focused read says the same).
+//     waiting until the two crossings pass. On 1.0 the focused read says the same:
+//     `readMarkReceipt` never passes `settled_window`, so `receiptFrom`'s
+//     closed-candle branch ("it left after it was ruled") never fires there. The
+//     twin's own receipt does pass it, so on the twin the bare read and the
+//     focused read differ for those crossings. Left alone; the ruling is POS-865.
 //   · a mark that is also on `docket` (an amend put forward over a locked
 //     claim) or in `backed` (it carries stamps) is listed on both shelves; each
 //     shelf is true of a different claim, and none of the existing lists
 //     excludes the others but `published`.
 
-/** What a locked claim's row says: the focused read's own sentence (mark-receipt.mjs § receiptFrom), so the two reads cannot tell it two ways. */
-const lockedSays = (window) => `locked at candle ${window ?? "?"} — the candle ruled for it; it reaches the world at the settlement that carries that candle`;
+/**
+ * What a locked claim's row says: the focused read's own sentence, TAKEN FROM
+ * `receiptFrom` (its `locked` branch) and not copied beside it, so a change to
+ * that sentence changes this one and the two reads cannot tell it two ways. A
+ * locked claim with no canon and no settled window is exactly the case the
+ * shelf lists. A window the event does not carry reads "?"; `receiptFrom`
+ * would print "null".
+ */
+const lockedSays = (mark, window) => receiptFrom({ id: mark, claims: [{ slug: mark, status: "locked", window_id: window ?? "?" }] }).says;
 
 /**
  * The household's own `claim-locked` events that no settlement has carried, as
@@ -419,7 +430,7 @@ export function lockedRowsFrom(events = [], canonIds = new Set()) {
       by: String(e.mark).split("/")[0],
       window: e.window ?? null,
       locked_at: e.at ?? null,
-      says: lockedSays(e.window),
+      says: lockedSays(e.mark, e.window),
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }

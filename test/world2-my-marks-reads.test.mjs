@@ -379,11 +379,12 @@ test("`refused` is the one derivation, handed THIS door's own residents", async 
 //
 // RULED (Wright, 2026-11-02, on postmark-office#839): "The twin door gets the same
 // fix in this PR: the positive drafts split, the `locked` shelf, and `published` no
-// longer calling a locked, uncarried mark 'on the world'" — with the lane's standing
-// word that if that `published` repair needs more than the canon check, it STOPS on
-// that one piece and builds the rest. The split (above) and the shelf (here) are
-// built. The repair needs more than a canon check (src/world2-serve.mjs § THE LOCKED
-// SHELF says what), so it is held at the foot of this file as a SKIPPED acceptance.
+// longer calling a locked, uncarried mark 'on the world'". Beside it stood the
+// staffer's word in the lane's brief, which is not a ruling: if that `published`
+// repair needs more than the canon check, STOP on that one piece and build the rest.
+// The split (above) and the shelf (here) are built. The repair needs more than a
+// canon check (src/world2-serve.mjs § THE LOCKED SHELF says what), so it is held at
+// the foot of this file as a SKIPPED acceptance, and its ruling will land at POS-865.
 
 /** A `claim-locked` event as claim-effects.mjs § claimEffectsFrom makes it. */
 const lockedEvent = (mark, over = {}) => ({
@@ -454,9 +455,9 @@ test("the twin's `locked` label is the ruled one", () => {
 // settlement closed has not been carried. Reading it into `published` and into the
 // shelf's canon needs `settlements` and `marks.locked_window`, which this read does not
 // ask for: more than the canon check 1.0 uses, and a rule 1.0 does not (it decides by
-// canon alone), so it is a ruling. Held here, written to pass the day it is built, and
+// canon alone), so it is a ruling (POS-865). Held here, written to pass the day it is built, and
 // red against this head with MY_MARKS_TWIN_CARRIED=1.
-const TWIN_CARRIED_SKIPPED = "SKIPPED until ruled (#4014, STOPPED on the twin's `published` repair): the twin's canon is every standing mark, locked ones included, and what 'carried' means here is unruled; MY_MARKS_TWIN_CARRIED=1 runs it, red";
+const TWIN_CARRIED_SKIPPED = "SKIPPED until ruled (POS-865; bug post #4014, STOPPED on the twin's `published` repair): the twin's canon is every standing mark, locked ones included, and what 'carried' means here is unruled; MY_MARKS_TWIN_CARRIED=1 runs it, red";
 
 test("STOPPED PIECE (acceptance): a mark standing in `marks` whose lock no settlement has carried is not `published`, and is on `locked`", { skip: process.env.MY_MARKS_TWIN_CARRIED === "1" ? false : TWIN_CARRIED_SKIPPED }, async () => {
   const BOWL = "pos104-wright/the-locked-bowl";

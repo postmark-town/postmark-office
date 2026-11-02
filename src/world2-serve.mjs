@@ -295,10 +295,12 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   // standing marks, so a household's first claim is not invisible. The shelf's
   // rows, counts, pager, label and disclosure are 1.0's own.
   //
-  // ⚑ STOPPED, ON ONE PIECE (RULED, Wright, 2026-11-02: "If that `published`
-  // repair needs more than the canon check you already have, STOP on that one
-  // piece and build the rest"). What "canon" is, for the canon-absence rule, is
-  // the whole question here, and this door's answer is the one thing not built.
+  // ⚑ STOPPED, ON ONE PIECE. Not a ruling: Wright's word as this lane's staffer,
+  // 2026-11-02, on the STOP ("If that `published` repair needs more than the canon
+  // check you already have, STOP on that one piece and build the rest"). The
+  // ruling itself will land at POS-865. What "canon" is, for the canon-absence
+  // rule, is the whole question here, and this door's answer is the one thing not
+  // built.
   // 1.0's canon is the world at the newest blessing, so a locked claim is not in
   // it until a settlement carries it. THIS door's `marks` table is "Materialized
   // cleared state. Writer: clearing_job only, inside the window transaction"
@@ -318,9 +320,15 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
   // `locked_window` (a column PORTFOLIO_MARKS_SQL does not select), which is the
   // receipt's rule here ("newest claim LOCKED at a window beyond the newest
   // window a settlement closed") and not 1.0's, so the two doors would carry
-  // "not yet carried" differently. That is a ruling. When it lands, `carriedIds`
-  // replaces the `canonRows` ids below and both `published` and this shelf follow
-  // from it; test/world2-my-marks-reads.test.mjs holds the acceptance, skipped.
+  // "not yet carried" differently. That is a ruling (POS-865). When it lands,
+  // `carriedIds` replaces the `canonRows` ids below and both `published` and this
+  // shelf follow from it; test/world2-my-marks-reads.test.mjs holds the
+  // acceptance, skipped.
+  //
+  // Left alone for the same ruling: a mark locked, carried, then withdrawn inside
+  // the two crossings is retired in `marks`, so it leaves `canonRows` and its
+  // `claim-locked` event puts it back on this shelf, while this file's receipt
+  // (`carriedGone`) says it left after it was ruled.
   const lockedBlock = await lockedReader([...handles], { key, canonIds: new Set(canonRows.map((m) => m.id)) });
 
   const body = portfolio.portfolioAnswerFrom({

@@ -44,7 +44,9 @@
 //   SKETCHBOOK              a row with no claim status is still private
 //   KOGANE'S SHAPE          the acceptance: locked, uncarried, on `locked`, counted
 //   CARRIED IS NOT LOCKED   canon-absence is wired at the door, on real canon
-//   THE BOUND               a lock older than two crossings is not on the shelf
+//   THE WINDOW'S EDGES      the last three crossings are on the shelf (the long hold
+//                           included) and older ones are not, at any hour: the clock
+//                           pinned at the door, injected at the reader
 //   ONLY YOURS              another household's locked claim is not on the shelf
 //   NOTHING PUBLISHED       a household with no published mark still sees its first
 //   SLUGLESS                a claim with no slug neither throws nor appears
@@ -59,7 +61,7 @@
 // Run: WORLD_CLONE=<tree>/world-clone node --import ./test/helpers/sparse-guard.mjs \
 //        --test --test-concurrency=1 test/my-marks-locked-claim-has-a-shelf.test.mjs
 
-import test, { before, after } from "node:test";
+import test, { before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -70,7 +72,7 @@ import { __setPoolForTest as __setActsPool } from "../src/world2-acts.mjs";
 import { __clearHouseCache } from "../src/household-deriver.mjs";
 import { claimEffectsFrom, lockedRowsFrom, myMarksLocked, RULINGS_SINCE_CROSSINGS } from "../src/claim-effects.mjs";
 import { receiptFrom } from "../src/mark-receipt.mjs";
-import { CROSSING_MS } from "../src/crossings.mjs";
+import { CROSSING_EPOCH_UTC, CROSSING_MS, currentCrossing } from "../src/crossings.mjs";
 import { publishedState } from "../src/world-branches.mjs";
 import { LIVE_STATUSES } from "../world2/tools/guard-reads.mjs";
 import { PORTFOLIO_LABELS } from "../world2/tools/portfolio-reads.mjs";
@@ -114,15 +116,22 @@ const NOTHING = `${HANDLE}/a-row-with-no-claim-status`;
  * the effects window is the last two crossings of whatever "now" is.
  */
 let serial = 0;
-const claim = ({ id, status, stake = 0, window_id = 259, claimant = HANDLE, household = HOUSE, ago = 60e3, slug = id }) => ({
-  id: `00000000-0000-0000-0000-${String(++serial).padStart(12, "0")}`,
-  slug, class: "sited", claimant, household, status, body: `the body of ${id}`,
-  geometry: { slug: id, at: { x: 12, y: 34 }, extent: { w: 2, h: 2 } },
-  stake, data: { by: claimant, kind: "sited", date: "2026-10-19" },
-  window_id, submitted_at: new Date(Date.now() - ago - 3600e3),
-  decided_at: ["locked", "refused", "held_review"].includes(status) ? new Date(Date.now() - ago) : null,
-  refusal_check: status === "refused" ? "harm: a fixture refusal" : null, supersedes: null,
-});
+const claim = ({ id, status, stake = 0, window_id = 259, claimant = HANDLE, household = HOUSE, ago = 60e3, slug = id, decidedAt = null }) => {
+  // `decidedAt` is an explicit instant (ms); without it the ruling was `ago` ms before the clock.
+  const decided = decidedAt ?? Date.now() - ago;
+  return {
+    id: `00000000-0000-0000-0000-${String(++serial).padStart(12, "0")}`,
+    slug, class: "sited", claimant, household, status, body: `the body of ${id}`,
+    geometry: { slug: id, at: { x: 12, y: 34 }, extent: { w: 2, h: 2 } },
+    stake, data: { by: claimant, kind: "sited", date: "2026-10-19" },
+    window_id, submitted_at: new Date(decided - 3600e3),
+    decided_at: ["locked", "refused", "held_review"].includes(status) ? new Date(decided) : null,
+    refusal_check: status === "refused" ? "harm: a fixture refusal" : null, supersedes: null,
+  };
+};
+
+/** The middle of crossing `c`: an instant no boundary is near, so a fixture placed there is in `c` whatever the hour. */
+const midOf = (c) => CROSSING_EPOCH_UTC + (c + 0.5) * CROSSING_MS;
 
 const ms = (t) => (t == null ? NaN : t instanceof Date ? t.getTime() : Date.parse(String(t)));
 
@@ -290,8 +299,13 @@ test("KOGANE'S SHAPE (acceptance): a claim the candle locked, not yet carried, i
   const row = answer.locked[0];
   assert.deepEqual({ id: row.id, by: row.by, window: row.window }, { id: BOWL, by: HANDLE, window: 259 });
   assert.match(row.locked_at, /^\d{4}-\d\d-\d\dT/, "when the candle ruled, as an ISO instant");
+  // The sentence is taken FROM `receiptFrom` in the code (claim-effects.mjs § lockedSays), so this equality is
+  // the wiring check, and the law's own words are asserted beside it: kogane's report quotes the focused read as
+  // "the candle ruled for it; it reaches the world at the settlement that carries that candle".
   assert.equal(row.says, receiptFrom({ id: BOWL, claims: [{ slug: BOWL, status: "locked", window_id: 259 }] }).says,
-    "the row says what the focused read says about the same mark, derived from it and not copied");
+    "the row says what the focused read says about the same mark: its sentence is taken from `receiptFrom`, not kept beside it");
+  assert.match(row.says, /^locked at candle 259 — the candle ruled for it; it reaches the world at the settlement that carries that candle$/,
+    "and it is the sentence the bug post quotes the focused read as saying");
   assert.equal(answer.labels.locked, RULED_LOCKED_LABEL, "the shelf's label is the ruled one");
   assert.equal(answer.labels.locked, PORTFOLIO_LABELS.locked, "and the twin's is the same word for word");
   assert.ok(!("locked_unavailable" in answer));
@@ -328,17 +342,64 @@ test("CARRIED IS NOT LOCKED: a locked claim whose mark canon holds is `published
   assert.equal(answer.counts.locked, 1);
 });
 
-test("THE BOUND: a lock older than the two crossings the doorstep and `refused` look back over is not on the shelf", skipIfNoClone, async () => {
+// ── THE WINDOW, BOTH EDGES, AT ANY HOUR ──────────────────────────────────────
+//
+// The window is `refused`'s: the crossing the read is taken in and the two before
+// it. Its far edge keeps old locks off the shelf; its INNER edge is the long-hold
+// case ("about half an hour on an ordinary night, longer under a hold"): a claim
+// ruled for in an earlier crossing and still waiting must stay on the shelf. The
+// first cut of this file held only the far edge, with one fixture three crossings
+// and an hour back, so narrowing the window to the current crossing left every test
+// green (independent review of 56d8e57f, mutants `from = through` and
+// `from = through - 1`), and the widen-by-one mutant reddened only once the clock
+// was past the first hour of a crossing.
+//
+// So every fixture here is placed in a crossing by its INDEX, at that crossing's
+// middle (`midOf`), and the clock is pinned at the middle of the current one. The
+// door takes no clock, so `Date.now` is what is pinned (`myMarksLocked` reads it
+// for its default `nowMs`); the reader test below injects `nowMs` directly. With
+// the clock still and the fixtures by index, the outcome cannot depend on the hour
+// the suite runs, or on a boundary passing mid-test.
+const lockedInCrossing = (c, name) => claim({ id: `${HANDLE}/${name}`, status: "locked", decidedAt: midOf(c) });
+
+test("THE WINDOW'S EDGES, through the door: a lock in the last three crossings is on the shelf, one before them is not, at any hour", skipIfNoClone, async () => {
   assert.equal(RULINGS_SINCE_CROSSINGS, 2, "the window is `refused`'s, and the ruling says the same two crossings");
-  const OLD = `${HANDLE}/locked-a-long-time-ago`;
-  // Three crossings and an hour back: before the window opens, whatever instant "now" is.
-  const { answer } = await door([
-    claim({ id: BOWL, status: "locked" }),
-    claim({ id: OLD, status: "locked", ago: (RULINGS_SINCE_CROSSINGS + 1) * CROSSING_MS + 3600e3 }),
-  ]);
-  assert.deepEqual(shelvesHolding(answer, BOWL), ["locked"], "the control: the fresh lock is on the shelf, so the effects were read");
-  assert.deepEqual(shelvesHolding(answer, OLD), [], "and the old one, past the bound, is on no shelf");
-  assert.equal(answer.counts.locked, 1);
+  const here = currentCrossing(Date.now());
+  const pin = mock.method(Date, "now", () => midOf(here));
+  try {
+    const THIS = `${HANDLE}/locked-this-crossing`, ONE = `${HANDLE}/held-from-one-crossing-ago`, TWO = `${HANDLE}/held-from-two-crossings-ago`;
+    const THREE = `${HANDLE}/locked-three-crossings-ago`, LONG = `${HANDLE}/locked-ages-ago`;
+    const { answer } = await door([
+      lockedInCrossing(here, "locked-this-crossing"),
+      lockedInCrossing(here - 1, "held-from-one-crossing-ago"),      // the long-hold case: ruled for before the latest crossing
+      lockedInCrossing(here - 2, "held-from-two-crossings-ago"),     // the oldest crossing still inside the window
+      lockedInCrossing(here - 3, "locked-three-crossings-ago"),      // the first one outside it
+      lockedInCrossing(here - 9, "locked-ages-ago"),
+    ]);
+    assert.deepEqual(answer.locked.map((r) => r.id).sort(), [ONE, THIS, TWO].sort(),
+      `the shelf is this crossing and the two before it and nothing older; it holds ${JSON.stringify(answer.locked.map((r) => r.id))}`);
+    assert.deepEqual([shelvesHolding(answer, THREE), shelvesHolding(answer, LONG)], [[], []], "the two past the far edge are on no shelf");
+    assert.equal(answer.counts.locked, 3);
+  } finally { pin.mock.restore(); }
+});
+
+test("THE WINDOW'S EDGES, at the reader, with the clock injected: myMarksLocked reads the last three crossings and says so", async () => {
+  // `nowMs` is the reader's own clock seam, and it is the clock here: nothing is pinned.
+  const here = 400;
+  const rows = [
+    lockedInCrossing(here, "this"), lockedInCrossing(here - 1, "one-ago"), lockedInCrossing(here - 2, "two-ago"),
+    lockedInCrossing(here - 3, "three-ago"), lockedInCrossing(here - 9, "ages-ago"),
+  ];
+  const fake = store(rows);
+  __setClaimsPool(fake);
+  try {
+    const r = await myMarksLocked([HANDLE], { key: null, nowMs: midOf(here) });
+    assert.deepEqual(r.rows.map((row) => row.id).sort(), ["this", "one-ago", "two-ago"].map((n) => `${HANDLE}/${n}`).sort(),
+      "the reader reads this crossing and the two before it");
+    assert.deepEqual([r.since_crossing, r.through_crossing], [here - RULINGS_SINCE_CROSSINGS, here],
+      "and its own record of the window is those three crossings");
+    assert.equal(r.count, 3);
+  } finally { __setClaimsPool(null); }
 });
 
 test("ONLY YOURS: another household's locked claim is not on the shelf", skipIfNoClone, async () => {
@@ -481,7 +542,15 @@ test("lockedRowsFrom: a row is `id`-keyed like every shelf's, says the focused r
   assert.deepEqual(Object.keys(row).sort(), ["by", "id", "locked_at", "says", "window"]);
   assert.equal(row.by, "kogane");
   assert.equal(row.says, receiptFrom({ id: row.id, claims: [{ slug: row.id, status: "locked", window_id: 259 }] }).says,
-    "derived from `receiptFrom`, never copied: the bare read and the focused read cannot tell it two ways");
+    "the sentence is taken from `receiptFrom` (claim-effects.mjs § lockedSays), not kept beside it: the bare read and the focused read cannot tell it two ways");
+});
+
+test("lockedRowsFrom: a window the event does not carry reads '?', where `receiptFrom` alone would print 'null'", () => {
+  // `claims.window_id` is NOT NULL in the store, so this is a shape the events do not take today; the fallback is held
+  // because the sentence is derived through `receiptFrom`, which prints whatever it is handed.
+  const [row] = lockedRowsFrom([ev("a/b", { window: null })], new Set());
+  assert.equal(row.window, null, "the row carries what the event carried");
+  assert.match(row.says, /^locked at candle \? — the candle ruled for it;/, "and the sentence says '?', never 'null'");
 });
 
 test("lockedRowsFrom: a slugless claim names no mark, so the effects skip it and no row is made", () => {
