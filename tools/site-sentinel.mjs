@@ -117,11 +117,12 @@
 // 10. MEEPS     — the town's meeps on Letta are answering. Read from
 //                 /srv/postmark-sentinel/meeps.json, the record Wright's watcher
 //                 (G:/Wright-HQ/tools/meep-watch.mjs, on Darko's desktop, every 5
-//                 min) lands here by scp. A meep that is down, stuck, cut off,
-//                 missed a round or failed one is DOWN; a record older than 15
-//                 min, or none at all, is STALE: the watcher or the desktop has
-//                 stopped, and a silent watcher must not read as healthy meeps
-//                 (Darko 2026-10-10 13:27, POS-556).
+//                 min) lands here by scp. A record the watcher marks DOWN is
+//                 DOWN; one it marks DEGRADED is a WARN, which the board counts
+//                 and rolls up as DEGRADED, never as DOWN (POS-838). A record
+//                 older than 15 min, or none at all, is STALE: the watcher or
+//                 the desktop has stopped, and a silent watcher must not read
+//                 as healthy meeps (Darko 2026-10-10 13:27, POS-556).
 // 11. SETTLEMENT — the newest sweep receipt (/srv/postmark-harbor/settlement-
 //                 auto.json) settled within the hour: a publishing sweep whose
 //                 world the newest settlement/S<n> tag covers, peeled, by
@@ -1012,6 +1013,14 @@ export function classifyDisk({ usedPct = null, freeBytes = null, error = null, l
 // UNKNOWN would be a dead watcher read as silence on both of the routes this
 // file feeds. The watcher's `summary` is already the one line that names the
 // meep, the kind and the evidence, so it is the reason verbatim.
+//
+// DEGRADED IS A WARN, NOT DOWN (POS-838, Wright 2026-10-30 23:42, STAR-84 option
+// B). Until then both DEGRADED and DOWN were DOWN, so a lone missed round barked
+// as an outage: the Registrar's 559-second late fire of 10-31 was announced as a
+// meep down. Only the record's own DOWN is DOWN now. A WARN is counted and rolled
+// up by composeBoard as DEGRADED, never as DOWN. This trusts the watcher's
+// DEGRADED to mean "every problem is a warning"; a watcher whose DEGRADED also
+// covers a stuck or cut-off meep would have that meep read as a warning here.
 export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterMs = 15 * MINUTE, path = "the meeps record" } = {}) {
   const watcher = "the desktop watcher (meep-watch, every 5 min by scp)";
   if (raw == null) {
@@ -1032,7 +1041,8 @@ export function classifyMeeps({ raw = null, readError = null, nowMs, staleAfterM
   }
   const summary = String(rec.summary ?? "").trim() || "no summary in the record";
   if (rec.status === "OK") return { verdict: "OK", reason: summary, detail };
-  if (rec.status === "DEGRADED" || rec.status === "DOWN") return { verdict: "DOWN", reason: summary, detail };
+  if (rec.status === "DOWN") return { verdict: "DOWN", reason: summary, detail };
+  if (rec.status === "DEGRADED") return { verdict: "WARN", reason: summary, detail };
   return { verdict: "STALE", reason: `the meeps record's status is ${JSON.stringify(rec.status ?? null)}, which this probe does not read — unread is never healthy`, detail };
 }
 
@@ -1447,6 +1457,10 @@ export function judgeQuietRange(cmp) {
     : { covered: true, held: null, error: null };
 }
 
+// What alarms, reminds and recovers. WARN is deliberately not in it (POS-838): a
+// warning is not an outage, and every alert BAD makes is shaped like one. Until a
+// WARN has a post of its own, one is counted on the board and printed by a hand
+// run, and it raises no alert.
 export const BAD = new Set(["DOWN", "STALE"]);
 
 /**
@@ -1528,9 +1542,11 @@ export function composeMessage({ alerts, board, nowIso }) {
 // ── the board ───────────────────────────────────────────────────────────────
 
 export function composeBoard({ probes, nowIso, alerting }) {
-  const counts = { OK: 0, DOWN: 0, STALE: 0, INFO: 0, UNKNOWN: 0 };
+  const counts = { OK: 0, DOWN: 0, STALE: 0, INFO: 0, UNKNOWN: 0, WARN: 0 };
   for (const p of probes) counts[p.verdict] = (counts[p.verdict] ?? 0) + 1;
-  const worst = counts.DOWN ? "DOWN" : counts.STALE ? "STALE" : counts.UNKNOWN ? "DEGRADED" : "OK";
+  // A WARN degrades the board, as an unread probe does, and never takes it to DOWN
+  // (POS-838): it ranks below DOWN and STALE, and above OK.
+  const worst = counts.DOWN ? "DOWN" : counts.STALE ? "STALE" : (counts.UNKNOWN || counts.WARN) ? "DEGRADED" : "OK";
   // A PARKED PROBE IS COUNTED, NEVER ALARMED, AND NEVER SILENT. INFO is the
   // right verdict for a Stage-B watcher nobody has adopted and for dev's
   // healthy Access redirect — neither is a failure, and alarming on them trains
@@ -1540,10 +1556,15 @@ export function composeBoard({ probes, nowIso, alerting }) {
   // forever. That is the exact failure the Stage-A/Stage-B split exists to make
   // impossible, and the board was quietly underwriting it.
   const parked = counts.INFO ? ` ${counts.INFO} parked (see the board).` : "";
+  // A WARN is named in the line that gets read, whatever else is on the board
+  // (POS-838): a count the sentence leaves out is a warning the reader never sees.
+  // With no WARN, both sentences below are byte-for-byte what they were.
+  const warned = counts.WARN ? `${counts.WARN} warning${counts.WARN === 1 ? "" : "s"}` : "";
+  const unread = counts.UNKNOWN ? `${counts.UNKNOWN} could not be read` : "";
   const summary =
     worst === "OK" ? (counts.INFO ? `${counts.OK} green.${parked}` : `All ${counts.OK} probes green.`)
-      : worst === "DEGRADED" ? `${counts.OK} green, ${counts.UNKNOWN} could not be read.${parked}`
-        : `${counts.DOWN} down, ${counts.STALE} stale, ${counts.OK} green.${parked}`;
+      : worst === "DEGRADED" ? `${[`${counts.OK} green`, warned, unread].filter(Boolean).join(", ")}.${parked}`
+        : `${counts.DOWN} down, ${counts.STALE} stale, ${warned ? `${warned}, ` : ""}${counts.OK} green.${parked}`;
   return {
     schema: 1,
     generated_at: nowIso,

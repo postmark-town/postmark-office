@@ -1360,6 +1360,9 @@ const MEEPS_REC = (over = {}) => JSON.stringify({
   ...over,
 });
 const STUCK_SUMMARY = "STUCK Rei: an input in local-conv-333 at 13:06 EDT has had no reply for 26 min (summary: Thread in wright-starforge)";
+// The shape of the watcher's MISSED line (`<job> was due <time> and never fired (no entry in its run log)`): the kind
+// of record POS-838 stops from barking DOWN. The meep and the job are the town's own names; no resident data.
+const MISSED_SUMMARY = "MISSED Registrar: registrar-round was due 21:05 EDT and never fired (no entry in its run log)";
 
 test("§10 OK is OK, and the watcher's summary is the reason", () => {
   const r = classifyMeeps({ raw: MEEPS_REC(), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
@@ -1367,13 +1370,61 @@ test("§10 OK is OK, and the watcher's summary is the reason", () => {
   assert.match(r.reason, /all 9 meeps answering/);
 });
 
-test("§10 DEGRADED and DOWN are DOWN, and the reason is the record's one-line summary verbatim", () => {
-  for (const status of ["DEGRADED", "DOWN"]) {
-    const r = classifyMeeps({ raw: MEEPS_REC({ status, summary: STUCK_SUMMARY, problems: [{ kind: "STUCK", meep: "Rei" }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
-    assert.equal(r.verdict, "DOWN", status);
-    assert.equal(r.reason, STUCK_SUMMARY);
-    assert.equal(r.detail.problems, 1);
-  }
+// POS-838 (Wright 2026-10-30 23:42, Jetto's STAR-84 option B): the sentinel learns WARN. Until 2026-11-02 the next
+// test asserted that DEGRADED and DOWN were BOTH DOWN (POS-556, 10-10), so a lone missed round barked as an outage:
+// the Registrar's 559-second late fire of 10-31. Darko, 2026-11-01 22:59 EST, on the noise: "the spam is a bit too
+// much isn't it?".
+// LAW (POS-838): "`classifyMeeps`: DEGRADED becomes its own verdict, `WARN`, and DOWN stays DOWN."
+test("§10 DOWN is DOWN, and the reason is the record's one-line summary verbatim", () => {
+  const r = classifyMeeps({ raw: MEEPS_REC({ status: "DOWN", summary: STUCK_SUMMARY, problems: [{ kind: "STUCK", meep: "Rei" }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+  assert.equal(r.verdict, "DOWN", 'LAW (POS-838): "DOWN stays DOWN"');
+  assert.equal(r.reason, STUCK_SUMMARY);
+  assert.equal(r.detail.problems, 1);
+});
+
+test("§10 DEGRADED is a WARN, not DOWN, and the reason is the record's one-line summary verbatim (POS-838)", () => {
+  const r = classifyMeeps({ raw: MEEPS_REC({ status: "DEGRADED", summary: MISSED_SUMMARY, problems: [{ kind: "MISSED", meep: "Registrar" }] }), nowMs: T0, staleAfterMs: CONFIG.meeps.staleAfterMs });
+  assert.equal(r.verdict, "WARN", 'LAW (POS-838): "DEGRADED becomes its own verdict, `WARN`"');
+  assert.notEqual(r.verdict, "DOWN", "a warning never barks as an outage");
+  assert.equal(r.reason, MISSED_SUMMARY);
+  assert.equal(r.detail.status, "DEGRADED");
+  assert.equal(r.detail.problems, 1);
+});
+
+test("§10 a WARN alone rolls the board up to DEGRADED, never DOWN, and the headline names it (POS-838)", () => {
+  // LAW (POS-838): "a WARN counts toward DEGRADED, as UNKNOWN does, never toward DOWN. The headline ... names it,
+  // e.g. '1 warning'."
+  const ok = { key: "a", label: "home", verdict: "OK", reason: "HTTP 200" };
+  const warn = { key: "meeps", label: "the meeps", verdict: "WARN", reason: MISSED_SUMMARY };
+  const one = composeBoard({ probes: [ok, warn], nowIso: "2026-11-02T05:00:00Z", alerting: {} });
+  assert.equal(one.status, "DEGRADED", "a WARN alone is DEGRADED, as an UNKNOWN is");
+  assert.equal(one.counts.WARN, 1);
+  assert.equal(one.counts.DOWN, 0, "and it is not counted as down");
+  assert.equal(one.summary, "1 green, 1 warning.");
+  assert.equal(one.headline, "DEGRADED · 1 green, 1 warning. (2026-11-02T05:00:00Z)");
+
+  assert.equal(composeBoard({ probes: [ok, warn, { ...warn, key: "other" }], nowIso: "x", alerting: {} }).summary, "1 green, 2 warnings.");
+
+  // a warning and an unread probe are two different sentences, and the board says both
+  const both = composeBoard({ probes: [ok, warn, { key: "u", label: "u", verdict: "UNKNOWN", reason: "unread" }], nowIso: "x", alerting: {} });
+  assert.equal(both.status, "DEGRADED");
+  assert.equal(both.summary, "1 green, 1 warning, 1 could not be read.");
+
+  // CONTROL: a board with no WARN keeps its old sentences, byte for byte
+  assert.equal(composeBoard({ probes: [ok, { key: "u", verdict: "UNKNOWN" }], nowIso: "x", alerting: {} }).summary, "1 green, 1 could not be read.");
+  assert.equal(composeBoard({ probes: [ok, { key: "d", verdict: "DOWN" }], nowIso: "x", alerting: {} }).summary, "1 down, 0 stale, 1 green.");
+  assert.equal(composeBoard({ probes: [ok], nowIso: "x", alerting: {} }).summary, "All 1 probes green.");
+});
+
+test("§10 a WARN beside a DOWN rolls up to DOWN, and beside a STALE to STALE, and is still named (POS-838)", () => {
+  const ok = { key: "a", label: "home", verdict: "OK", reason: "HTTP 200" };
+  const warn = { key: "meeps", label: "the meeps", verdict: "WARN", reason: MISSED_SUMMARY };
+  const withDown = composeBoard({ probes: [ok, warn, { key: "d", label: "daily", verdict: "DOWN", reason: "HTTP 502" }], nowIso: "x", alerting: {} });
+  assert.equal(withDown.status, "DOWN", "LAW (POS-838): a WARN beside a DOWN rolls up to DOWN");
+  assert.equal(withDown.summary, "1 down, 0 stale, 1 warning, 1 green.");
+  const withStale = composeBoard({ probes: [ok, warn, { key: "s", label: "index", verdict: "STALE", reason: "frozen" }], nowIso: "x", alerting: {} });
+  assert.equal(withStale.status, "STALE", "a WARN does not outrank a STALE either");
+  assert.equal(withStale.summary, "0 down, 1 stale, 1 warning, 1 green.");
 });
 
 test("§10 a 16-minute-old record is STALE: the watcher or the desktop has stopped", () => {
@@ -1399,7 +1450,8 @@ test("§10 MISSING, UNPARSEABLE, UNDATED or an unread status is STALE, never UNK
 test("§10 the probe reaches the board as `meeps` and the sentinel's message carries a stuck meep; a missing record alarms too", async () => {
   const dir = tempDir("sentinel-meeps-");
   const path = join(dir, "meeps.json");
-  _wf(path, MEEPS_REC({ status: "DEGRADED", summary: STUCK_SUMMARY }));
+  // A stuck meep is a DOWN record. (Until 2026-11-02 this wrote DEGRADED, which was DOWN too; DEGRADED is a WARN now, POS-838.)
+  _wf(path, MEEPS_REC({ status: "DOWN", summary: STUCK_SUMMARY }));
   const cfg = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path } };
   const t1 = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
   const probe = t1.probes.find((p) => p.key === "meeps");
@@ -1415,6 +1467,28 @@ test("§10 the probe reaches the board as `meeps` and the sentinel's message car
   assert.equal(t2.probes.find((p) => p.key === "meeps").verdict, "STALE");
   assert.deepEqual(t2.alerts.map((a) => a.key), ["meeps"]);
   assert.equal(composeBoard({ probes: t2.probes, nowIso: t2.nowIso, alerting: {} }).status, "STALE");
+});
+
+test("§10 a DEGRADED record reaches the board as a WARN and never barks DOWN (POS-838)", async () => {
+  const dir = tempDir("sentinel-meeps-warn-");
+  const path = join(dir, "meeps.json");
+  _wf(path, MEEPS_REC({ status: "DEGRADED", summary: MISSED_SUMMARY, problems: [{ kind: "MISSED", meep: "Registrar" }] }));
+  const cfg = { ...FIXTURE_CONFIG, meeps: { ...CONFIG.meeps, path } };
+  const t1 = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: cfg, readDisk: GREEN_DISK });
+  const probe = t1.probes.find((p) => p.key === "meeps");
+  assert.equal(probe.verdict, "WARN");
+  assert.equal(probe.kind, "meeps");
+  assert.equal(probe.reason, MISSED_SUMMARY);
+  const board = composeBoard({ probes: t1.probes, nowIso: t1.nowIso, alerting: {} });
+  assert.equal(board.status, "DEGRADED", "an otherwise green town with one warning is DEGRADED, not DOWN");
+  assert.match(board.headline, /^DEGRADED · .*1 warning/);
+  assert.equal(t1.nextState.probes.meeps.verdict, "WARN", "the next tick reads WARN as the previous verdict");
+  // The point of POS-838: the old mapping barked this record as "DOWN — the meeps: MISSED Registrar: ...". How (and
+  // whether) a WARN is announced is the open half of POS-838 and is deliberately not pinned here; that it is never
+  // announced as DOWN is.
+  assert.ok(t1.alerts.every((a) => a.alert.verdict !== "DOWN"), "a warning raises no DOWN alert");
+  const msg = composeMessage({ alerts: t1.alerts, board, nowIso: t1.nowIso });
+  assert.ok(msg === null || !/DOWN/.test(msg), `a warning is never announced as DOWN, got: ${msg}`);
 });
 
 // ── §11: the settlement (Darko 2026-10-11) ──────────────────────────────────
