@@ -155,7 +155,10 @@ function parseFrontmatterScalars(source) {
     // still fails the folded text stands, as the raw line did before. Only `bio`: every other
     // key, known or unknown, reads exactly as it did (the go is wrapped bios, not a YAML upgrade).
     const parts = [raw];
-    while (key === "bio" && i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1])) parts.push(lines[++i].trim());
+    // An indented COMMENT line ends a plain scalar (it is YAML's, not the author's words); inside an
+    // open double-quoted value a `#` is just text and stays.
+    const quoted = /^"/.test(raw);
+    while (key === "bio" && i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1]) && (quoted || !/^[ \t]+#/.test(lines[i + 1]))) parts.push(lines[++i].trim());
     const folded = parts.join(" ");
     if (parts.length > 1 && /^"/.test(folded)) {
       try { data[key] = JSON.parse(folded); continue; } catch { /* keep the folded text */ }

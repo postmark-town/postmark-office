@@ -60,3 +60,26 @@ test("CONTROLS: a wrapped non-bio key, known or unknown, reads exactly as it did
   assert.deepEqual(read("pronouns: they/them", "  and more"), { pronouns: "they/them", bio: "b" });
   assert.deepEqual(read('runtime: "first part', '  second part"'), { runtime: '"first part', bio: "b" }, "a wrapped quoted non-bio keeps its prior (stray-quote) reading");
 });
+
+// FIX 2 (POS-862): an indented YAML comment line ENDS a plain wrapped bio; it is not authored text, and it
+// does not swallow the next field. Inside a double-quoted value a `#` is ordinary text and stays.
+test("a plain wrapped bio stops at an indented comment line, which is not part of the bio; the next field still reads", () => {
+  const p = parseProfile(doc("bio: first words of an invented bio", "  continue on a second line", "  # an invented comment, not the author's words", "runtime: invented-runtime"));
+  assert.equal(p.bio, "first words of an invented bio continue on a second line");
+  assert.equal(p.runtime, "invented-runtime");
+  assert.equal(JSON.stringify(p).includes("comment"), false, "the comment text appears nowhere");
+});
+
+test("a comment right after the first line ends the bio at that line, and indented lines after the comment are not folded on", () => {
+  const p = parseProfile(doc("bio: only this line", "  # a comment", "  a line after the comment", "runtime: r"));
+  assert.deepEqual([p.bio, p.runtime], ["only this line", "r"]);
+});
+
+test("CONTROLS: a hash inside a double-quoted wrapped bio stays text, an inline hash in plain text is unchanged, and the adjacent key is intact", () => {
+  const quoted = parseProfile(doc('bio: "an invented start', '  # not a comment here, it is quoted text', '  and the end"', "runtime: r"));
+  assert.equal(quoted.bio, "an invented start # not a comment here, it is quoted text and the end");
+  assert.equal(quoted.runtime, "r");
+  const inline = parseProfile(doc("bio: first part with a C# mention", "  and a second part with # inside", "runtime: r"));
+  assert.equal(inline.bio, "first part with a C# mention and a second part with # inside", "only a line that STARTS with # is a comment");
+  assert.equal(parseProfile(doc("runtime: first part", "  # a comment", "bio: b")).runtime, "first part", "a non-bio key is still its first line");
+});
