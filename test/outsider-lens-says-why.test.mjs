@@ -31,8 +31,12 @@ const REAL = worldClone();   // the pinned clone, read before WORLD_CLONE is poi
 const HAVE = !!REAL && existsSync(join(REAL, "tools", "portals.mjs"));
 const SKIP = !HAVE && (REAL ? `the world clone at ${REAL} predates WLD-5 (no tools/portals.mjs)` : NO_WORLD);
 
-// the exact line a resident or an agent reads (typed here on purpose: a test that imported it would pass any wording)
-const LINE = "Nothing here changes: nothing of yours is in a closed place, and a place that isn't closed is open to everyone.";
+// the exact line a resident or an agent reads (typed here on purpose: a test that imported it would pass any wording).
+// Until 2026-11-02 this asserted "Nothing here changes: nothing of yours is in a closed place, and a place that isn't
+// closed is open to everyone." The review (of 9726ffb1) found "open" reads as "anyone can go in", and that the World
+// page's lens changes more than the office sees (a draft drops out), so the settled line speaks of what strangers see
+// of your PUBLISHED marks, which is true on both surfaces (Wright's Settled line on POS-823).
+const LINE = "Strangers see your published marks just as you do: none of them is in a closed place.";
 
 const SCRATCH = mkdtempSync(join(tmpdir(), "pos823-"));
 const repo = join(SCRATCH, "world");
@@ -61,6 +65,18 @@ const MARKS = [
   // dan: owns a closed place with nothing of his own inside it; eve's chest stands in it
   parcel("dan", 0, 1200), sited(VAULT, "dan", 100, 1200, 50, 50, { class: "dungeon" }),
   parcel("eve", 400, 1200), sited("eve/the-chest", "eve", 105, 1205, 2, 2),
+  // cy and dee: ordinary households near mason's tower with nothing of their own in it; the ledger below has cy enter it, never dee
+  parcel("cy", 1140, 120), parcel("dee", 1210, 120),
+  // ivy and jo: ONE household (a key that holds both). ivy has the ground; jo has no mark and enters the tower in the ledger
+  parcel("ivy", 1280, 80),
+  // hank: a lantern whose canon record stands inside the tower but is in somebody's hands (the hold record, handed in by the test)
+  parcel("hank", 1300, 160), sited("hank/the-lantern", "hank", 1222, 8, 2, 2),
+];
+// REAL enters acts, in the ledger the doors fold (servedEnterExitLedger: the frozen era's file, plus the store's acts,
+// which this rig does not have). The grammar and the clock are the engine's: a ferry number in the past counts.
+const ENTERS = [
+  "- 2026-10-30T12:00:00.000Z · cy · enters mason/the-tower · ferry 270.0000 · word neutral",
+  "- 2026-10-30T12:05:00.000Z · jo · enters mason/the-tower · ferry 270.0100 · word neutral",
 ];
 
 before(() => {
@@ -69,6 +85,7 @@ before(() => {
   put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: MARKS, parcels: MARKS.filter((m) => m.kind === "parcel"), households: {}, determined: {}, vague: [], rivalries: [], portfolios: {}, terrain_weight: {}, errors: [] }));
   put("WORLD/skeleton.json", JSON.stringify({ features: [], physics_registry: {}, elevation: { fog_ceiling_m: 22 }, light: { dawn_pole_m: { x: 5000, y: -5000 }, dark_pole_m: { x: -5000, y: 5000 } }, far_features: [] }));
   put("WORLD/walk-ledger.md", "# Walk ledger\n");
+  put("WORLD/enter-exit-ledger-frozen.md", `${ENTERS.join("\n")}\n`);
   put("seeding/manifest.json", JSON.stringify({ homes: [] }));
   const git = (...a) => execFileSync("git", ["-C", repo, ...a], { stdio: ["ignore", "pipe", "pipe"] });
   git("init", "-q", "-b", "main"); git("add", "-A");
@@ -116,7 +133,7 @@ test("PRIMARY · an open place with no entry: the outsider read says why it chan
   assert.equal(typeof r.lens_note, "string");
 });
 
-test("an entry does not close a place: an open place that carries an entry is still open to everyone, and the read still says so", { skip: SKIP }, async () => {
+test("an entry does not make a place closed: a place that carries an entry is still seen by every stranger, and the read still says so", { skip: SKIP }, async () => {
   const gazebo = MARKS.find((m) => m.id === "fay/the-gazebo");
   assert.equal(gazebo.entry.word, "opposed", "fixture: the gazebo has an entry");
   const stranger = world.sightedWorld({ marks: MARKS }, { verbs, handle: "zed", stack: [], key: key("zed") });
@@ -151,6 +168,60 @@ test("one household, two residents: a mark of the OTHER resident inside a closed
   assert.ok(ids(own).includes("hal/the-note"), "control: the household's sight holds hal's note");
   assert.ok(!ids(r).includes("hal/the-note"), "control: the lens hides it");
   assert.equal(r.lens_note, undefined);
+});
+
+test("FINDING A · a resident who has entered a closed place gets no line, though nothing of hers is in it (a real enters act, through the real door)", { skip: SKIP }, async () => {
+  // cy has an `enters mason/the-tower` act in the ledger the doors fold, and nothing of hers inside it. The lens keeps
+  // the stack a standing resident holds, so it moves nothing for her: she sees inside with the lens or without it.
+  const own = await ownRead("cy");
+  const r = await lensRead("cy");
+  assert.ok(ids(own).includes("mason/the-hall"), "control: she has entered, so her own sight holds the hall (the sight reads the ledger's stack)");
+  assert.deepEqual(ids(r), ids(own), "control: the lens moved nothing for her, which is exactly the case the line used to be said over");
+  // ⚑ THE FLIP: drop the stacks from lensNoteFor's closed-place check → cy is told what strangers see of her marks from inside a closed place; this reds
+  assert.equal(r.lens_note, undefined, "she stands in a closed place, and strangers do not see what she sees there");
+  // the control, in the same ledger: dee has no act (the act is someone else's), the hall is hidden from her either way, and she still gets the line
+  const dee = await lensRead("dee");
+  assert.ok(!ids(dee).includes("mason/the-hall"), "control: dee has not entered, so the hall is hidden from her in both reads");
+  assert.deepEqual(ids(dee), ids(await ownRead("dee")), "control: the lens moved nothing for her either");
+  assert.equal(dee.lens_note, LINE, "an enters act by someone else does not touch her");
+});
+
+test("FINDING A · any resident of the household counts: jo has entered a closed place and ivy is the one reading", { skip: SKIP }, async () => {
+  const withJo = await lensRead("ivy", key("ivy", "jo"));
+  // ⚑ THE FLIP: ask the standing resident's stack alone, not the household's → ivy's stack is empty and she is told the line; this reds
+  assert.equal(withJo.lens_note, undefined, "jo is one of the household and stands in a closed place");
+  const alone = await lensRead("ivy", key("ivy"));
+  assert.equal(alone.lens_note, LINE, "control: the same ledger and the same ground, and the act is someone else's to this key");
+});
+
+test("a stack that holds a closed place, or a room in one, is in a closed place; a stack that holds an open place, or someone else's, is not", { skip: SKIP }, async () => {
+  const { yoursAreInAClosedPlace } = world;
+  const inClosed = (handles, stacks) => yoursAreInAClosedPlace(MARKS, new Set(handles), portals, new Map(Object.entries(stacks)));
+  assert.equal(inClosed(["cy"], { cy: [TOWER] }), true, "she has entered it");
+  assert.equal(inClosed(["cy"], { cy: [TOWER, "mason/the-hall"] }), true, "and its hall");
+  assert.equal(inClosed(["cy"], { cy: ["mason/the-hall"] }), true, "a room alone is in the closed place it stands in");
+  assert.equal(inClosed(["cy"], { cy: ["ann/the-annex"] }), false, "an open place she entered");
+  assert.equal(inClosed(["cy"], { jo: [TOWER] }), false, "someone else's stack");
+  assert.equal(inClosed(["cy", "jo"], { jo: [TOWER] }), true, "the household's other resident");
+  assert.equal(inClosed(["cy"], {}), false, "nobody holds anything");
+  // an engine that can say what a closed place is, but not who stands in one, cannot vouch for the line
+  assert.equal(yoursAreInAClosedPlace(MARKS, new Set(["cy"]), { dungeonsOf: portals.dungeonsOf }, new Map()), true, "no heldDungeon: not vouched for");
+  // and the old three-argument call, which asks of marks alone, is unchanged
+  assert.equal(yoursAreInAClosedPlace(MARKS, new Set(["cy"]), portals), false);
+});
+
+test("a carried mark is counted where the hold record puts it: unplaced, so not in the closed place its canon record names", { skip: SKIP }, async () => {
+  const { viewOf, unplaceHeld } = await import("../src/held.mjs");
+  const LANTERN = "hank/the-lantern";
+  // a real hold row (ann carries the lantern), through the real overlay; only the store read that would fetch the row is replaced
+  const take = { target: LANTERN, entity: "ann", policy: "cascade", act_id: "660", born_at: new Date(660 * 1000).toISOString() };
+  const view = viewOf({ record: { attachments: [take], places: new Map(), drops: new Map() } });
+  const placed = async (w) => unplaceHeld(w, view);
+  assert.equal(MARKS.find((m) => m.id === LANTERN).at.x, 1222, "fixture: canon puts the lantern inside the tower");
+  assert.equal((await placed({ marks: MARKS })).marks.find((m) => m.id === LANTERN).at, undefined, "control: the overlay takes its place");
+  assert.equal(await world.lensNoteFor({ handle: "hank" }, key("hank")), null, "control: with no hold record read, canon has the lantern in the tower, and the lens hides it from hank");
+  // ⚑ THE FLIP: read canon's world, not the world as the hold record places it, in lensNoteFor → hank is withheld a line that is true; this reds
+  assert.equal(await world.lensNoteFor({ handle: "hank" }, key("hank"), { placed }), LINE, "in somebody's hands the lantern is in no place, so nothing of his is in a closed place and nothing of his is hidden");
 });
 
 test("the owner of a closed place gets no line even where the lens moved nothing: the reason would be false for him", { skip: SKIP }, async () => {
@@ -235,4 +306,8 @@ test("explain: \"lens_note\" says what the line is, in the grammar's fixed shape
   assert.equal(e.explains, "lens_note");
   assert.match(e.what, /outsider lens changed nothing/);
   assert.match(e.detail, /closed place/);
+  assert.match(e.detail, /published marks/, "it speaks of what strangers see of your published marks, like the line");
+  assert.match(e.detail, /none of your residents stands in one/, "and says residents count");
+  // until 2026-11-02 this said every other place "is open to everyone"; open reads as "anyone can go in", and the lens governs sight
+  assert.doesNotMatch(e.detail, /open to everyone/);
 });
