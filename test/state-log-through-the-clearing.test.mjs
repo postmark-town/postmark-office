@@ -326,6 +326,24 @@ test("W9 · a clearing run by hand after a ferry sailed: the act filed past the 
   assert.equal(sourceOf(repo, 37950), null, "and the act after the clearing stays out");
 });
 
+test("W10 · a register that answers the window's row without its horizon REFUSES; it never falls back to the close", async () => {
+  // Unreachable on the real store (`closes_at` is NOT NULL, so the horizon
+  // always has a value); reachable from any register that does not speak
+  // WINDOW_ROW_SQL. Falling back to the close would put the WLD-137 gap back
+  // without a word, so the window door refuses instead, by name.
+  const mute = {
+    async query(sql, params) {
+      if (sql.includes("FROM windows")) return { rows: [{ id: params[0], opens_at: OPENS, closes_at: CLOSES, cleared_at: CLEARED }] };
+      throw new Error(`a window with no horizon must not reach a second query: ${sql.slice(0, 60)}`);
+    },
+  };
+  const w = await windowCrossings(mute, 283);
+  assert.equal(w.refused, "no-horizon", JSON.stringify(w));
+  assert.match(w.detail, /window 283/);
+  const out = await writeStateLogForWindow(mute, { world: world("w10"), window: 283, commit: false });
+  assert.equal(out.refused, "no-horizon", "and the write door passes the refusal through, writing nothing");
+});
+
 test("W8 · the box's own command line, over the real register: `state-log-write.mjs --window 283 --check` answers with the horizon and refuses nothing", async () => {
   // The CLI the crossing runs, connected the way the box connects it
   // (WORLD2_PG_URL as office_api), so the horizon's SQL is proved through the
