@@ -1021,8 +1021,8 @@ export function classifyDisk({ usedPct = null, freeBytes = null, error = null, l
 // A DEGRADED RECORD IS A WARN ONLY WHEN IT SAYS SO (POS-838, Wright 2026-10-30
 // 23:42, STAR-84 option B). Until then both DEGRADED and DOWN were DOWN, so a
 // lone missed round barked as an outage: the Registrar's 559-second late fire of
-// 10-31 was announced as a meep down. The watcher now gives every problem a
-// severity, "down" or "warn", and marks the record DOWN if any is "down". So a
+// 10-31 was announced as a meep down. The watcher's severity split gives every
+// problem a severity, "down" or "warn", and marks the record DOWN if any is "down". So a
 // DEGRADED record is a WARN when it lists problems and every one carries severity
 // "warn", and DOWN otherwise, which is what it always was. The failure is on the
 // safe side on purpose: the watcher that ran before the severity split marked

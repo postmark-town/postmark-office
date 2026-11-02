@@ -1383,7 +1383,7 @@ const UNSTAMPED_PROBLEM = { kind: "MISSED", meep: "Registrar" }; // as the watch
 // the Registrar's 559-second late fire of 10-31. Darko, 2026-11-01 22:59 EST, on the noise: "the spam is a bit too
 // much isn't it?".
 // LAW (POS-838): "`classifyMeeps`: DEGRADED becomes its own verdict, `WARN`, and DOWN stays DOWN."
-// LAW (POS-838, Wright's Settled comment of 2026-11-02, as relayed to the lane): "`classifyMeeps` reads WARN only when
+// LAW (POS-838, Wright's ruling on the issue, 2026-11-02): "`classifyMeeps` reads WARN only when
 // every problem in the record carries `severity: "warn"`, and DOWN otherwise. ... A record with no `severity` on any
 // problem (the running watcher) reads DOWN, today's behaviour."
 test("§10 DOWN is DOWN, and the reason is the record's one-line summary verbatim", () => {
@@ -1526,7 +1526,7 @@ test("§10 the probe reaches the board as `meeps` and the sentinel's message car
 
 // ── POS-838, the notice: a WARN is announced once, in its own words ──────────
 //
-// LAW (POS-838, Wright's Settled comment of 2026-11-02, as relayed to the lane): "A WARN posts once when the verdict
+// LAW (POS-838, Wright's ruling on the issue, 2026-11-02): "A WARN posts once when the verdict
 // enters WARN, never repeats, and clears silently. `BAD` stays {DOWN, STALE}, and 'INFO and UNKNOWN never alert' stays
 // true. The header reads 'a warning, as of <time>.' and the line is `the meeps: warning: <summary>.`" and "A DOWN or
 // STALE easing into WARN posts one closing line, e.g. 'the meeps: no longer down after 1h27m, still a warning:
@@ -1675,7 +1675,7 @@ const said = (t) => t.alerts.map((a) => `${a.key}:${a.alert.kind}`);
 const wordsOf = (t) => composeMessage({ alerts: t.alerts, board: composeBoard({ probes: t.probes, nowIso: t.nowIso, alerting: {} }), nowIso: t.nowIso });
 
 test("§10 THE TICK: a WARN episode posts once and clears without a DOWN post (POS-838)", async () => {
-  // LAW (POS-838, the brief's test): "A WARN episode posts once and clears without a DOWN post."
+  // LAW (POS-838, the issue's own test): "A WARN episode posts once and clears without a DOWN post."
   const path = join(tempDir("sentinel-meeps-warn-"), "meeps.json");
   const t1 = await meepsTick(path, DEGRADED_REC, {}, T0);
   const probe = t1.probes.find((p) => p.key === "meeps");
