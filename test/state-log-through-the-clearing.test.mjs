@@ -110,6 +110,8 @@ const CLAIMS = [
   // Ids the store cannot cast. A cast that threw would refuse the whole crossing.
   { slug: "sbx-bo/odd-one", claimant: "sbx-bo", status: "refused", data: { _act_id: "act:37315" } },
   { slug: "sbx-bo/huge-one", claimant: "sbx-bo", status: "refused", data: { _act_id: "99999999999999999999999" } },
+  { slug: "sbx-bo/odd-hold", claimant: "sbx-bo", status: "locked", data: { _held_through: "act:37398" } },
+  { slug: "sbx-bo/huge-hold", claimant: "sbx-bo", status: "locked", data: { _held_through: "99999999999999999999999" } },
 ];
 
 async function owner(fn) { const c = await store.connect("world2_owner"); try { return await fn(c); } finally { await c.end(); } }
@@ -244,7 +246,7 @@ test("W5 · CONTROLS: the next window's act stays out, an old act a printout kee
   await seed();
   const repo = world("w5");
   const out = await writeWindow(repo, 283);
-  assert.equal(out.refused, undefined, `the malformed and oversized _act_id values refused nothing: ${JSON.stringify(out)}`);
+  assert.equal(out.refused, undefined, `the malformed and oversized _act_id and _held_through values refused nothing: ${JSON.stringify(out)}`);
 
   // The boundary did not become "everything": 18:10Z is window 284's.
   assert.equal(sourceOf(repo, 37401), null, "act 37401, filed after the clearing, is not in window 283's photograph");
