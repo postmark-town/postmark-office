@@ -37,7 +37,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const SPARSE_FILE = join(OFFICE, "test", "clone-sparse.json");
 export const CLONES = Object.freeze(["town", "world"]);
 
 const git = (repo, args, input) => execFileSync("git", ["-C", repo, ...args],
@@ -52,11 +51,6 @@ export function readSparse(officeRoot = OFFICE) {
 export function patternsOf(which, spec = readSparse()) {
   if (!CLONES.includes(which)) throw new Error(`a clone is town or world, not ${which}`);
   return spec[which].patterns.map((p) => p.pattern);
-}
-
-/** The entries whose absence from a directory listing is measured safe, for one clone. */
-export function unlistedOf(which, spec = readSparse()) {
-  return (spec[which]?.unlisted ?? []).map((u) => u.entry);
 }
 
 /** A glob over one repo-relative path: `*` stays within a path segment. PURE. */
