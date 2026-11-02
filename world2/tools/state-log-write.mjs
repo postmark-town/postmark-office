@@ -98,7 +98,7 @@
 // window's write, twelve hours later, and the keeper held S142 and S143 for a
 // source act its journal did not hold.
 //
-// SO THE WINDOW'S HORIZON (`through`) IS THE LATEST OF THREE, read from the
+// SO THE WINDOW'S HORIZON (`through`) IS THE LATEST OF FOUR, read from the
 // store and never from a clock:
 //
 //   1. its recorded close, `closes_at` — today's boundary, kept as the floor:
@@ -112,6 +112,16 @@
 //      that held the candle while the clearing waited files an act dated after
 //      `cleared_at` whose claim the clearing still folds. No instant on the
 //      window's row covers that act; its claim names it.
+//   4. the latest hold act at or below the cutoff a hold printout's claim
+//      names (`claims.data._held_through`), once it has cleared. The printout
+//      (hold-through.mjs, the clearing's step 6.2) is a claim this window
+//      files, and its source is the hold record up to that cutoff. The hold
+//      doors take no candle lock and step 6.2 reads under READ COMMITTED, so a
+//      drop committed during the clearing's own transaction is printed while
+//      dated after `cleared_at`. The cutoff act's OWN instant is not the
+//      horizon: it can be the return the clearing wrote at its own `now()`,
+//      earlier than the drop it follows (a later id, an earlier instant). So
+//      the term is the latest instant among the hold acts up to the cutoff.
 //
 // A window not yet cleared keeps its recorded close: it has folded nothing.
 //
@@ -124,18 +134,8 @@
 //
 // The crossing set is still read off the window's own time range, (opens_at,
 // through]. An old act that a claim names — a hold printout keeps its author's
-// last leave-mark as `_act_id` — only ever LOWERS a max, so it raises nothing
-// and re-renders no old crossing's file.
-//
-// NAMED, NOT BUILT: a hold printout whose source hold act commits DURING the
-// clearing's own transaction. The hold doors take no candle lock, and the
-// clearing's step 6.2 reads the hold record through `HOLD_TOP_SQL` under READ
-// COMMITTED, so such an act can be printed while dated after `cleared_at`. Its
-// printout's claim names the cutoff (`_held_through`), but that cutoff can be an
-// act the clearing itself stamped at its own `now()`, which is earlier than the
-// act it follows: the cutoff's instant is not a sound horizon. The candidate
-// rule, for the class owner: the window's photograph also covers every hold act
-// with an id at or below the window's `receipts.hold_through`.
+// last leave-mark as `_act_id` — and the old hold acts below a cutoff only ever
+// sit under a max, so they raise nothing and re-render no old crossing's file.
 //
 // ── MY REVIEWER'S FINDING, AND IT WAS RIGHT ──────────────────────────────────
 //
@@ -225,7 +225,8 @@ export const WINDOW_BOUNDARY =
   "candle window N's acts are the `acts` rows whose `at` falls in (opens_at, through], read from "
   + "the `windows` row with id = N — never from any clock this process reads. `through` is the "
   + "window's recorded close until it clears; once cleared, the latest of its close, its recorded "
-  + "clearing (`cleared_at`) and every act a claim filed in it names (`claims.data._act_id`), "
+  + "clearing (`cleared_at`), every act a claim filed in it names (`claims.data._act_id`) and every "
+  + "hold act up to the cutoff a hold printout's claim names (`claims.data._held_through`), "
   + "because the clearing folds every claim filed before it ran, the ones filed after the close "
   + "included (WLD-137). Their FILES are named by each row's own `acts.crossing` value, the ferry "
   + "clock, because that is the drain's grouping and the photograph's key; one window therefore "
@@ -246,22 +247,26 @@ export const NO_HORIZON =
  * THE WINDOW'S ROW AND ITS HORIZON, ONE STATEMENT (WLD-137; see the header's
  * § THE PHOTOGRAPH ENDS AT THE CLEARING).
  *
- * `through` is the latest of the recorded close, the recorded clearing and the
- * instant of every act a claim filed in this window names, once the window has
- * cleared, and the recorded close until then. `through_from` says which term
- * set it: `close`, `clearing` or `claim`. Returned as UTC text to the
- * MICROSECOND, because the act the clearing writes at its own `now()` sits
- * exactly on `cleared_at`, and a JS Date would drop the digits that keep it
- * inside.
+ * `through` is, once the window has cleared, the latest of the recorded close,
+ * the recorded clearing, the instant of every act a claim filed in this window
+ * names, and the latest hold act at or below the cutoff a hold printout's
+ * claim names; until it clears, the recorded close. `through_from` says which
+ * term set it: `close`, `clearing` or `claim` (a folded claim's act or
+ * cutoff). Returned as UTC text to the MICROSECOND, because the act the
+ * clearing writes at its own `now()` sits exactly on `cleared_at`, and a JS
+ * Date would drop the digits that keep it inside.
  *
  * `_act_id` is the act's id as text (world2-claims.mjs § the identity
- * `_journal_seq` never was). Only an id Postgres can hold is cast, inside a
- * CASE, so the cast is never tried on anything else: a cast error here would
- * refuse the whole crossing for one odd claim. No status is filtered: a claim
- * the clearing refused, or one retracted before it, names an act filed before
- * the clearing too, so it can only lower the max; a private draft carries no
- * `_act_id` at all (world2-claims.mjs: "NULL for a private draft"), and the row
- * policy hides drafts from every runtime role besides (007_private_drafts.sql).
+ * `_journal_seq` never was); `_held_through` is the printout's cutoff, an act
+ * id as a number (hold-through.mjs). Only an id Postgres can hold is cast,
+ * inside a CASE, so the cast is never tried on anything else: a cast error here
+ * would refuse the whole crossing for one odd claim. No status is filtered: a
+ * claim the clearing refused, or one retracted before it, names an act filed
+ * before the clearing too, so it can only lower the max; a private draft
+ * carries no `_act_id` at all (world2-claims.mjs: "NULL for a private draft"),
+ * and the row policy hides drafts from every runtime role besides
+ * (007_private_drafts.sql). The hold record is the classes `HOLD_TOP_SQL` reads
+ * (`holding`, `legacy`), so the cutoff means here what it meant at the clearing.
  */
 export const WINDOW_ROW_SQL = `
 SELECT w.id, w.opens_at, w.closes_at, w.cleared_at,
@@ -279,7 +284,14 @@ SELECT w.id, w.opens_at, w.closes_at, w.cleared_at,
                      SELECT CASE WHEN c.data->>'_act_id' ~ '^[0-9]{1,18}$'
                                  THEN (c.data->>'_act_id')::bigint END
                        FROM claims c
-                      WHERE c.window_id = w.id)))
+                      WHERE c.window_id = w.id)), (
+                  SELECT max(h.at) FROM acts h
+                   WHERE h.class IN ('holding', 'legacy')
+                     AND h.id <= (
+                       SELECT max(CASE WHEN c.data->>'_held_through' ~ '^[0-9]{1,18}$'
+                                       THEN (c.data->>'_held_through')::bigint END)
+                         FROM claims c
+                        WHERE c.window_id = w.id)))
            END AS through) t
  WHERE w.id = $1`;
 

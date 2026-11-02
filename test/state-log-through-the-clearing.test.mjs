@@ -150,7 +150,10 @@ function world(name) {
 const files = (repo) => readdirSync(join(repo, "STATE", "log")).filter((n) => n.endsWith(".journal.jsonl")).sort();
 const lines = (repo, name) => readFileSync(join(repo, "STATE", "log", name), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
 const metaOf = (repo, crossing) => JSON.parse(readFileSync(join(repo, "STATE", "log", `${crossing}.journal.meta.json`), "utf8"));
-const actOf = (id) => [...ACTS, ...LATE_ACTS].find((a) => a.id === id);
+// W11's drop: committed 1.5 s into window 283's clearing, below the printout's cutoff.
+const HOLD_RACE_DROP = act(37397, "2026-10-31T18:00:35.927Z", "sbx-ana", "drop", "holding", {
+  object: "sbx-ana/tin-whistle", payload: { thing: "sbx-ana/tin-whistle", holder: null, policy: "detach" } });
+const actOf = (id) => [...ACTS, ...LATE_ACTS, HOLD_RACE_DROP].find((a) => a.id === id);
 
 /**
  * THE KEEPER'S QUESTION, asked of the files: is there a line for this act, in
@@ -324,6 +327,28 @@ test("W9 · a clearing run by hand after a ferry sailed: the act filed past the 
   assert.deepEqual(out.windows.map((w) => w.crossing), [286], "the crossing past the ferry is this window's to write");
   assert.equal(out.through_from, "clearing");
   assert.equal(sourceOf(repo, 37950), null, "and the act after the clearing stays out");
+});
+
+test("W11 · a hold printout's source drop, committed DURING the clearing's own transaction, is in it: the horizon reaches every hold act up to the cutoff a printout's claim names", async () => {
+  // The hold doors take no candle lock, and the clearing's step 6.2 reads the
+  // hold record under READ COMMITTED, so a drop committed 1.5 s into the
+  // clearing is printed there. The printout's claim names the cutoff
+  // (`_held_through: 37398`), and that cutoff is the clearing's OWN return act,
+  // stamped at its `now()`: a later id with an EARLIER instant than the drop.
+  // The cutoff's instant would leave the drop out; the latest hold act at or
+  // below the cutoff does not. Only the printout claim is seeded, so nothing
+  // else lifts the horizon.
+  await seed({
+    acts: [...ACTS, HOLD_RACE_DROP],
+    claims: [{ slug: "sbx-ana/tin-whistle", claimant: "sbx-ana", status: "locked", data: { _held_through: 37398 } }],
+  });
+  const repo = world("w11");
+  const out = await writeWindow(repo, 283);
+  assert.equal(out.refused, undefined, JSON.stringify(out));
+  assertIsTheAct(sourceOf(repo, 37397), 37397, "a drop committed during the clearing and printed by it, below the printout's cutoff");
+  assert.equal(out.through, "2026-10-31T18:00:35.927000Z", "the horizon is the latest hold act at or below the cutoff");
+  assert.equal(out.through_from, "claim");
+  assert.equal(sourceOf(repo, 37401), null, "and the act filed after the clearing still stays out");
 });
 
 test("W10 · a register that answers the window's row without its horizon REFUSES; it never falls back to the close", async () => {
