@@ -307,20 +307,17 @@ const seatedBecause = (seats = [], grants = []) => {
 // permission — silently, because `actorsFor` does not validate what it passes
 // through.
 //
-// ⚠ WHERE THAT CONSUMER ACTUALLY LIVES, corrected 2026-08-27. This comment said
-// the site "built its ACT-AS bar to it", in the past tense, which reads as an
-// integration already standing. IT IS NOT MERGED: the consumer is
-// `src/lib/world-cockpit.mjs` on the SITE'S `bday-pin` BRANCH — absent from the
-// site's `main` and from `origin/main`, verified rather than assumed — and the
-// integration lands the night of 2026-08-27.
+// ⚠ WHERE THAT CONSUMER ACTUALLY LIVES, corrected 2026-08-27 and again
+// 2026-11-02. On 2026-08-27 this comment said the consumer was not merged: it
+// sat on the site's `bday-pin` branch, absent from the site's `main`. That has
+// since landed. The consumer is `src/lib/world-cockpit.mjs` on the site's main
+// (and on its train): `rosterOf` reads `answer.actors`, and `actorsFor` returns
+// the door's roster untouched when it is there.
 //
-// The correction is worth its lines because the false half is the load-bearing
-// half. A contract on an unmerged branch and a contract in production fail
-// differently and are debugged differently: this door can be perfectly right
-// about the shape and still show a reader nothing, because the page that reads
-// it has not shipped. A comment that hides which of those two worlds you are in
-// sends the next reader looking for a rendering bug in a page that does not
-// exist yet.
+// The correction is worth its lines because it names which world you are in. A
+// contract on an unmerged branch and a contract in production fail differently
+// and are debugged differently. This is the production case: a roster this door
+// gets wrong shows up in a page that is live.
 export function actorRoster({ residents = [], humanGrants = [], humanHandle = null, humanToken = null, tokenDir = null, acting = null, seats = [] } = {}) {
   const roster = [...residents].filter(Boolean).map((h) => ({
     kind: "resident",
@@ -351,7 +348,7 @@ export function actorRoster({ residents = [], humanGrants = [], humanHandle = nu
     // walked, so `because` stopped existing and the human's face fell through to
     // the stand-in "where ground allows". The one row whose words were most
     // worth reading went quiet BY SUCCEEDING (site world-cockpit.mjs
-    // § humanWords, bday-pin).
+    // § humanWords).
     //
     // `says` is kept beside it and is not the same field. `says` is what this
     // face IS, in every case; `because` is why THIS ground lit it, and only when
