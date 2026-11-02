@@ -78,7 +78,7 @@ import { LIVE_STATUSES } from "../world2/tools/guard-reads.mjs";
 import { PORTFOLIO_LABELS } from "../world2/tools/portfolio-reads.mjs";
 // Imported HERE, before any test registers (world.mjs awaits the world graph
 // snapshot's load at import — see my-marks-refused.test.mjs).
-import { WORLD_CLONE, worldMyMarks } from "../src/world.mjs";
+import { WORLD_CLONE, WORLD_TOOLS, worldMyMarks } from "../src/world.mjs";
 
 const TOWN_CLONE = process.env.TOWN_CLONE ?? join(WORLD_CLONE, "..", "town-clone");
 const HAVE = existsSync(join(WORLD_CLONE, "WORLD", "world-state.json"))
@@ -566,6 +566,22 @@ test("lockedRowsFrom: a slugless claim names no mark, so the effects skip it and
   });
   assert.deepEqual(lockedRowsFrom(events, new Set()).map((r) => r.id), ["a/named"], "the named one is the control");
   assert.deepEqual(lockedRowsFrom([ev(null)], new Set()), [], "and an event that somehow names no mark makes no row either");
+});
+
+test("THE CARD names every shelf the answer labels, counts them right, and does not call them disjoint", skipIfNoClone, async () => {
+  // The `world_my_marks` card went on saying "FOUR disjoint shelves … `labels` says all four" after `locked`
+  // made five, while two pairs of its shelves can list one mark. A text pin is the weakest instrument
+  // (WIRING-AND-PINS), so this one reads no sentence: only the names and the count, against the answer's own
+  // `labels`. The roster page is rendered from this card (tools/mcp-roster.mjs).
+  const card = WORLD_TOOLS.find((t) => t.name === "world_my_marks").description;
+  const { answer } = await door([claim({ id: SHED, status: "draft" })]);
+  const shelves = Object.keys(answer.labels);
+  const word = { 4: "FOUR", 5: "FIVE", 6: "SIX", 7: "SEVEN", 8: "EIGHT" }[shelves.length];
+  assert.ok(word, `the answer labels ${shelves.length} shelves; teach this test the number word`);
+  for (const shelf of shelves) assert.match(card, new RegExp(`\\b${shelf}\\b`), `the card never names the ${shelf} shelf, and the answer labels it`);
+  assert.ok(card.includes(`portfolio in ${word} shelves`), `the card does not say ${word} shelves; the answer labels ${shelves.join(", ")}`);
+  assert.ok(card.includes(`says all ${word.toLowerCase()} on the page`), "and `labels` says all of them, in the card's own count");
+  assert.ok(!/disjoint/i.test(card), "two shelves can list one mark (docket and backed, docket and locked), so the card does not call them disjoint");
 });
 
 test("LABELS AND WORDS: the ruled label, on both doors", () => {
