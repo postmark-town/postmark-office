@@ -49,9 +49,10 @@ import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 /** The key spelling this town writes from the w40 ship onward. */
 export const keyOfSlug = (slug) => (slug ? `hh:${slug}` : null);
 
-/** A house's slug, as `slugFromName` in residency.mjs mints one. Kept in step
- *  with that function deliberately: a dot survives because a house may choose a
- *  domain for its name (cadaeic.space) and that IS the name someone picked. */
+/** A house's slug: the one slugger. residency.mjs only re-exports this
+ *  function (`export { slugFromName }`), so there is no second copy to keep in
+ *  step. A dot survives because a house may choose a domain for its name
+ *  (cadaeic.space) and that IS the name someone picked. */
 export function slugFromName(name) {
   return String(name ?? "").trim().toLowerCase()
     .replace(/['’]/g, "")
@@ -568,64 +569,41 @@ export function sessionKeysFor(key, registry, pins = {}) {
   return [key, ...keys.filter((k) => k !== key)];
 }
 
-// ── the loaded half ─────────────────────────────────────────────────────────
+// ── the module pool's fold, and the memo ────────────────────────────────────
 //
-// One registry read per request, and one answer per (request, x). The registry
-// is three tables and a fold; `householdKeyFor` is called once per journal row
-// and twice per guarded write, so an unmemoised deriver would put the whole
-// registry through `registryFromRows` on every line of a crossing.
+// The registry is three tables and a fold; `houseOfVia` is reached from
+// `householdKeyFor` (once per journal row, twice per guarded write), so an
+// unmemoised deriver would put the whole registry through `registryFromRows`
+// on every line of a crossing. Hence one fold per queryable (below) and one
+// answer per (queryable, x).
 //
-// THE CACHE IS EXPLICITLY DISPOSABLE. `__clearHouseCache()` is the seam a test
-// and a long-lived process both need: the office's own drain writes rows and
-// then reads them back in the same process, and a cache that outlived the write
-// would answer with the town from before the ceremony. Every writer in
-// `registry-store.mjs` clears it; so does `withRecordFrom` in the suites.
+// THE CACHE IS DISPOSABLE, BUT NOTHING IN PRODUCTION DISPOSES OF IT.
+// `__clearHouseCache()` is a seam for tests: `installActsPen` in
+// test/acts-pen-stub.mjs and the suites that write registry rows and read them
+// back through the same stub pool call it. No registry writer calls it, and
+// nothing in `src/` does either (docs/read-workers.md, "Unkept on either
+// thread"), so a fold lasts as long as its queryable, and the module pool's
+// lasts as long as the process. A house founded after a long-lived fold was
+// taken may therefore answer `unknown` until the process restarts.
 
 let loaded = null;       // { registry, pins } — the module pool's fold, once
-let answers = new Map(); // `${via}|${x}` -> { slug, via }
 let viaRows = new WeakMap();    // queryable -> { registry, pins }
 let viaAnswers = new WeakMap(); // queryable -> Map<memo, { slug, via }>
 
-/** Drop the memo. Called by every registry writer and by the test harness. */
+/** Drop the memo. Called by the test harness; no production path calls it. */
 export function __clearHouseCache() {
   loaded = null;
-  answers = new Map();
   viaRows = new WeakMap();
   viaAnswers = new WeakMap();
 }
 
-/** The registry and pins, folded once per process until something writes. */
+/** The registry and pins, folded once per process (until the test seam drops them). */
 export async function houseRows(env = process.env) {
   if (loaded) return loaded;
   const rows = await loadRegistryRows(env);
   if (rows === null) return null;          // the office is not pointed at the record
   loaded = { registry: registryFromRows(rows), pins: pinsFromRows(rows) };
   return loaded;
-}
-
-/**
- * "Which house is this?" — the one question, asked of the record.
- *
- * `{ slug: null, via: "unknown" }` when the record has never heard of `x`, and
- * the SAME answer when the office is not pointed at the record at all. Those
- * two are genuinely the same fact for every caller here — "I cannot name a
- * house for this" — and the callers that must tell them apart (the drain, the
- * seed) read `loadRegistry()` directly and get `null` for the second.
- */
-export async function houseOf(x, env = process.env, opts = {}) {
-  const rows = await houseRows(env);
-  if (!rows) return NO;
-  const memo = `${opts.via ? [].concat(opts.via).join("+") : "*"}|${typeof x === "object" ? JSON.stringify(x) : String(x)}`;
-  const was = answers.get(memo);
-  if (was) return was;
-  const out = resolveHouse(x, rows.registry, rows.pins, opts);
-  answers.set(memo, out);
-  return out;
-}
-
-/** The house's KEY, as the ship writes one: `hh:<slug>`, or null. */
-export async function houseKeyOf(x, env = process.env) {
-  return keyOfSlug((await houseOf(x, env)).slug);
 }
 
 // ── the queryable half ──────────────────────────────────────────────────────
@@ -668,12 +646,6 @@ export async function houseKeyOfVia(q, x) {
   return keyOfSlug((await houseOfVia(q, x)).slug);
 }
 
-/** Every spelling this house has carried, from the caller's own store. */
-export async function houseKeysOfVia(q, x) {
-  const rows = await houseRowsVia(q);
-  return houseKeysOf(x, rows.registry, rows.pins);
-}
-
 /** Every spelling → its house's live key, from the caller's own store. */
 export async function liveHouseOfVia(q) {
   const rows = await houseRowsVia(q);
@@ -696,14 +668,6 @@ export async function liveHouseOfVia(q) {
 export async function sessionKeysVia(q, key) {
   if (key == null || key === "") return [];
   const rows = await houseRowsVia(q);
-  return sessionKeysFor(key, rows.registry, rows.pins);
-}
-
-/** The same set, from the module pool's fold. */
-export async function sessionKeysOf(key, env = process.env) {
-  if (key == null || key === "") return [];
-  const rows = await houseRows(env);
-  if (!rows) return [key];
   return sessionKeysFor(key, rows.registry, rows.pins);
 }
 
