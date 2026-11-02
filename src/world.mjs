@@ -242,18 +242,21 @@ export async function heldPlaced(w, { pool = null, markRows = null } = {}) {
 // a stranger's. Read-only: nothing is written, and no act reads it.
 export const OUTSIDER_LENS = "outsider";
 export const isOutsiderLens = (lens) => String(lens ?? "").trim() === OUTSIDER_LENS;
+/** Everyone's enter-ledger stack now (who stands inside what), or an empty map when the law or the ledger cannot be
+ *  read. The fold the sight keeps a standing resident's stack from, asked in this one place so the sight and the
+ *  lens's note (POS-823) cannot read two different ones. */
+async function occupancyNow() {
+  const { crossingLaw } = await import("./world-crossings.mjs");
+  const { crossingDeps } = await import("./world-apex.mjs");
+  const law = await crossingLaw(WORLD_CLONE).catch(() => null);
+  return law?.thresholds ? await occupancyNowAll(law.thresholds, crossingDeps()).catch(() => new Map()) : new Map();
+}
 async function sightFor(w, handle, key = null, { lens = null } = {}) {
   w = await heldPlaced(w); // POS-688: a held thing is unplaced in every resident read, before sight
   const { verbs } = await mods();
   if (typeof verbs.standpointSight !== "function" || verbs.standpointSight(w, {}) === w) return w;
   const who = String(handle ?? "").trim();
-  let stack = [];
-  if (who) {
-    const { crossingLaw } = await import("./world-crossings.mjs");
-    const { crossingDeps } = await import("./world-apex.mjs");
-    const law = await crossingLaw(WORLD_CLONE).catch(() => null);
-    stack = law?.thresholds ? await occupiedNowBy(who, law.thresholds, crossingDeps()).catch(() => []) : [];
-  }
+  const stack = who ? [...((await occupancyNow()).get(who) ?? [])] : [];
   return sightedWorld(w, { verbs, handle: who, stack, key, lens });
 }
 
@@ -331,43 +334,59 @@ export function sightedWorld(w, { verbs, handle = null, stack = [], key = null, 
 // `lens_note`. Said only when it is true, which is two questions, asked separately:
 //   1. did the lens move the household's view at all? Asked of the real sight with and without the lens, and
 //      never inferred from the second question; and
-//   2. is the reason the line gives true? ("nothing of yours is in a closed place"; a household that owns a
-//      closed place, or is standing inside its own, is told nothing though the lens moved nothing for it.)
+//   2. is the reason the line gives true? ("none of your published marks is in a closed place"): no mark of the
+//      household's is a closed place or stands in one, AND no resident of the household stands in one. The lens
+//      keeps a standing resident's enter-ledger stack, so a resident who has entered a closed place sees the same
+//      inside with the lens or without it, which is no stranger's view (the review of 9726ffb1, finding A). A
+//      household that owns a closed place, or has a resident inside one, is told nothing though the lens moved
+//      nothing for it.
 // "Closed place", not "door": `entry` (how a mark is entered, a door's `into` included) is a property of every
 // mark (the-town/mark-entry) and hides nothing; only the dungeon class closes a place, and only an admin
 // household may make one (LOGOS/classes.md § Admin households may make the passage classes). So the line
 // points nowhere: an entry added to an open place does not make the lens matter.
-// The wording is one constant, so a ruling that changes it changes it here and in its test.
-export const LENS_CHANGES_NOTHING = "Nothing here changes: nothing of yours is in a closed place, and a place that isn't closed is open to everyone.";
+// The wording is one constant, so a ruling that changes it changes it here and in its test. It speaks of what
+// strangers see of your PUBLISHED marks because that is true on the World page too, where the lens also drops a
+// household's drafts and its own rows, which the office cannot see (Wright's Settled line on POS-823, 2026-11-02).
+export const LENS_CHANGES_NOTHING = "Strangers see your published marks just as you do: none of them is in a closed place.";
 
-/** Is a mark of `owners` itself a closed place, or does it stand in one (a predicate rides its parent)? Pure over
- *  the engine's own `dungeonsOf` (portals.mjs). TRUE when the engine cannot say what a closed place is, so
- *  an engine that predates the dungeon class never vouches for the line. */
-export function yoursAreInAClosedPlace(marks, owners, portals) {
+/** Is anything of `owners` in a closed place? A mark of theirs that is one, or stands in one (a predicate rides its
+ *  parent), or a resident of theirs whose enter-ledger stack holds one (`stacks`: Map(handle → stack), optional; the
+ *  engine's own `dungeonsOf` and `heldDungeon`, portals.mjs, are the whole rule). TRUE when the engine cannot say,
+ *  so an engine that predates the dungeon class, or cannot say who stands in one, never vouches for the line. */
+export function yoursAreInAClosedPlace(marks, owners, portals, stacks = null) {
   if (typeof portals?.dungeonsOf !== "function") return true;
   const list = Array.isArray(marks) ? marks : [];
-  return list.some((m) => owners.has(m?.by) && portals.dungeonsOf(m, list).length > 0);
+  if (list.some((m) => owners.has(m?.by) && portals.dungeonsOf(m, list).length > 0)) return true;
+  if (!stacks) return false;
+  if (typeof portals.heldDungeon !== "function") return true;
+  for (const who of owners) if (portals.heldDungeon([...(stacks.get(who) ?? [])], list)) return true;
+  return false;
 }
 
 /**
  * The line for an outsider read, or null. Null when no household reads (nothing is anyone's to hide), when the
- * lens moved the household's view, when a mark of the household's is in a closed place, and when anything
- * could not be read: a read never fails for want of its footnote, and withholding is the safe way to fail.
- * `sight` is the seam a test hands a different sight through; the door never passes it.
+ * lens moved the household's view, when a mark of the household's is in a closed place or a resident of the
+ * household stands in one, and when anything could not be read: a read never fails for want of its footnote,
+ * and withholding is the safe way to fail. `sight` and `placed` are the seams a test hands a different sight and
+ * a different hold record through; the door never passes them.
+ * The world is read ONCE, as the hold record places it (a carried mark is in no place), and that one world is what
+ * both the sight and the closed-place check read.
  */
-export async function lensNoteFor(args = {}, key = null, { sight = sightFor } = {}) {
+export async function lensNoteFor(args = {}, key = null, { sight = sightFor, placed = heldPlaced } = {}) {
   const choice = chooseStandpoint(args, key);
   if (choice.bounce) return null;
   const owners = ownersOf(choice.handle, key);
   if (!owners.size) return null;
   try {
-    const full = await world();
-    const yours = await sight(full, choice.handle, key);
-    const stranger = await sight(full, choice.handle, key, { lens: OUTSIDER_LENS });
+    const placedWorld = await placed(await world());
+    const yours = await sight(placedWorld, choice.handle, key);
+    const stranger = await sight(placedWorld, choice.handle, key, { lens: OUTSIDER_LENS });
     // the lens only ever hides more, so equal counts are the same marks
     if ((yours?.marks?.length ?? 0) !== (stranger?.marks?.length ?? 0)) return null;
     const portals = await engineImport("portals.mjs");
-    return yoursAreInAClosedPlace((await heldPlaced(full))?.marks ?? [], owners, portals) ? null : LENS_CHANGES_NOTHING;
+    const occupancy = await occupancyNow();
+    const stacks = new Map([...owners].map((who) => [who, occupancy.get(who) ?? []]));
+    return yoursAreInAClosedPlace(placedWorld?.marks ?? [], owners, portals, stacks) ? null : LENS_CHANGES_NOTHING;
   } catch { return null; }
 }
 
