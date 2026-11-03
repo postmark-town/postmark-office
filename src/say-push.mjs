@@ -52,7 +52,17 @@
 //
 // A WAITER HOLDS A CONSTANT AMOUNT OF WORK: the run in progress and one pending
 // slot (the newest snapshot). A standing read that never settles cannot grow a
-// queue, and the pending slot is taken up when the read resumes.
+// queue, and the pending slot is taken up when the read resumes. A run ends and
+// publishes idle in ONE synchronous step, so a request accepted at any moment is
+// either taken by the run or owns the next one; nothing cleans up later.
+//
+// WHAT IS ON THE BOOKS: every owner of heavy work (a stream still opening, a live
+// waiter, a waiter that has ended while a read it started is still out) holds a
+// reservation from admission until that work really ends, and the existing caps
+// (WAITERS_MAX, WAITERS_PER_HANDLE) count reservations. A waiter's end drops the
+// snapshots it owns; a read already under way still holds the one it was handed
+// until it settles (nothing here cancels a read). The fan-out's own snapshot, built
+// once per landed voice, is outside this accounting and is the base design's.
 //
 // It lives in the process that holds the voices log. A wait is a listen, but
 // it is woken by a say, so it must be served where the say lands — a reader
