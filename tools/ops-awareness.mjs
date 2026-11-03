@@ -26,7 +26,7 @@
 //   X         followers + views   BY HAND. The API needs a paid key.
 //
 // HOW ARRIVALS HEARD (POS-292): the office's keyless GET /ops/heard on the
-// box (OFFICE_DOOR, the unit's port, as office-tick.sh reads it). Counts
+// box (OFFICE_DOOR, else http://127.0.0.1:4380; see `args` below). Counts
 // only, and safe by construction: the store's own function folds any choice
 // answered fewer than 3 times in a week into one "fewer than 3" count, and
 // never returns a note. Every week's counts are re-read each run, so a late

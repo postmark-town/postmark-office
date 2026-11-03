@@ -68,7 +68,8 @@ export const TAKEN_IN_CAN = Object.freeze({ value: "show", ruled: "WLD-7/b, 2026
  */
 export function usablePairs({ actor, here, marks = [], residents = [], fold, attachments = [], view, householdOf = null, pointWithinMark = null, places = null, takenInCan = TAKEN_IN_CAN.value, made = null }) {
   const me = String(actor);
-  // THE HOLD ROWS, READ ONCE: the last row per thing decides who holds it (world-hold.mjs § liveHolder's rule)
+  // THE HOLD ROWS, READ ONCE: the last row per thing decides who holds it
+  // (world-hold.mjs § liveHolder)
   const last = new Map();
   for (const r of attachments) last.set(String(r.target), r);
   const heldByOf = (id) => { const r = last.get(String(id)); return r?.policy === "cascade" ? String(r.entity) : null; };
