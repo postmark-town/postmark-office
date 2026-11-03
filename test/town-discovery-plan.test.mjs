@@ -158,19 +158,25 @@ function workOf(plan) {
   return work;
 }
 
-// THE GATE. A text page reads at most pieces_per_page pieces and one probe past
-// them, and probes the roll at most once a piece; a common page seeks at most
-// candidates_per_page recipients and one past them, and probes the roll and the
-// second person once each. Two generation reads of town_meta's closed key set,
-// two existence probes. Nothing else is touched, nothing but town_meta is
-// scanned, and nothing larger than a page is sorted.
+// THE GATE, held to what the walk itself did (its rows, from the same
+// statement). A text page reads one piece a step and one probe past the last,
+// and probes the roll once per author it meets (an author's pieces are
+// contiguous in the walk's order, and the probe runs only when the author
+// changes); a common page seeks one recipient a step and one past the last, and
+// probes the roll and the second person at most once a step, plus the two
+// people. Two generation reads of town_meta's closed key set. Nothing else is
+// touched, nothing but town_meta is scanned, and nothing larger than a page is
+// sorted. Each cap is also inside the page's declared bound.
 const SLACK = 4;
-function gate(work, mode) {
+function gate(work, mode, walkRows) {
   const why = [];
   const meta = 2 * META_KEYS.length;
+  const steps = walkRows.filter((r) => r.step != null);
+  const authors = new Set(steps.map((r) => r.author)).size;
+  assert.ok(steps.length <= (mode === "text" ? L.pieces_per_page : L.candidates_per_page), "the walk kept to its declared bound");
   const cap = mode === "text"
-    ? { town_discovery_chunks: L.pieces_per_page + 1, town_residents: L.pieces_per_page, town_meta: meta, town_letter_edges: 0, town_letters: 0, town_homes: 0 }
-    : { town_letter_edges: 2 * L.candidates_per_page + 1, town_residents: L.candidates_per_page + 2, town_meta: meta, town_discovery_chunks: 0, town_letters: 0, town_homes: 0 };
+    ? { town_discovery_chunks: steps.length + 1, town_residents: authors, town_meta: meta, town_letter_edges: 0, town_letters: 0, town_homes: 0 }
+    : { town_letter_edges: 2 * steps.length + 1, town_residents: steps.length + 2, town_meta: meta, town_discovery_chunks: 0, town_letters: 0, town_homes: 0 };
   for (const [t, max] of Object.entries(cap)) if (work.rows[t] > max + SLACK) why.push(`${t}: ${work.rows[t]} rows handed to the plan, bound ${max}`);
   if (work.seqScans.length) why.push(`sequential scans: ${work.seqScans.join(", ")}`);
   const page = mode === "text" ? L.pieces_per_page : L.candidates_per_page;
@@ -198,10 +204,10 @@ test("on a small store the real statements pass the gate, and every counter-muta
   await smallStore();
   for (const [label, args] of ASKS) {
     const { page, walk } = await capture(args);
-    const { plan } = await explain(walk);
+    const { plan, rows } = await explain(walk);
     dump(`small ${label}`, plan);
     small[label] = { work: workOf(plan), page, walk };
-    assert.deepEqual(gate(small[label].work, args.mode), [], `${label} (small): ${JSON.stringify(small[label].work)}`);
+    assert.deepEqual(gate(small[label].work, args.mode, rows), [], `${label} (small): ${JSON.stringify(small[label].work)}`);
   }
   const text = small[ASKS[0][0]].walk;
   const common = small[ASKS[2][0]].walk;
@@ -220,8 +226,8 @@ test("on a small store the real statements pass the gate, and every counter-muta
     const bent = await explain(make(walk));
     dump(`mutant ${label}`, bent.plan);
     assert.deepEqual(strip(bent.rows), strip(real.rows), `${label}: the mutant must return the same rows, or it proves nothing`);
-    assert.deepEqual(gate(workOf(real.plan), mode), [], `${label}: the real statement passes`);
-    const why = gate(workOf(bent.plan), mode);
+    assert.deepEqual(gate(workOf(real.plan), mode, real.rows), [], `${label}: the real statement passes`);
+    const why = gate(workOf(bent.plan), mode, real.rows);
     assert.ok(why.length > 0, `${label}: the gate must red on the mutant (its work: ${JSON.stringify(workOf(bent.plan))})`);
     console.log(`# mutant red: ${label}: ${why.join("; ")}`);
   }
@@ -235,10 +241,10 @@ test("a page's work, measured in its plan, does not grow with the record: a gian
   const grewMs = await grow();
   for (const [label, args] of ASKS) {
     const { page, walk } = await capture(args);
-    const { plan } = await explain(walk);
+    const { plan, rows } = await explain(walk);
     dump(`grown ${label}`, plan);
     const work = workOf(plan);
-    assert.deepEqual(gate(work, args.mode), [], `${label} (grown): ${JSON.stringify(work)}`);
+    assert.deepEqual(gate(work, args.mode, rows), [], `${label} (grown): ${JSON.stringify(work)}`);
     const was = small[label].work;
     for (const tbl of TABLES)
       assert.ok(work.rows[tbl] <= was.rows[tbl] + SLACK, `${label}: ${tbl} handed ${work.rows[tbl]} rows grown, ${was.rows[tbl]} small: the work grew with the record`);

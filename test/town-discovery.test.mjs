@@ -149,24 +149,31 @@ test("the literal: ASCII letters match in either case and nothing else is folded
 
 // ── the seam ─────────────────────────────────────────────────────────────────
 
-test("a piece's seam loses nothing: every window of 256 bytes or less in a mixed-width text lies whole in one piece", () => {
-  // ASCII, two-, three- and four-byte codepoints, so seams fall at every width
-  const body = Array.from({ length: 900 }, (_, i) => ["a", "é", "語", "🦊", " "][i % 5] + String.fromCharCode(65 + (i % 26))).join("");
-  const pieces = piecesOf(body);
-  assert.ok(pieces.length >= 3, "the body spans several pieces");
-  for (const p of pieces) {
-    assert.ok(Buffer.byteLength(p) <= L.base_bytes + L.query_bytes - 1, "a piece is at most 1279 bytes");
-    assert.ok(body.includes(p), "a piece is the text's own, whole codepoints");
+test("a piece's seam loses nothing: every window of 256 bytes or less lies whole in one piece, in a mixed-width text and in an ASCII one where every window is exactly 256", () => {
+  // Each text counts as it goes, so no window repeats elsewhere: a window found is found where it is.
+  const bodies = [
+    // ASCII, two-, three- and four-byte codepoints, so seams fall at every width
+    Array.from({ length: 700 }, (_, i) => ["a", "é", "語", "🦊", " "][i % 5] + i.toString(36)).join(""),
+    // all one byte: the window that starts on a base's last byte is exactly 256 bytes, the overlap's whole need
+    Array.from({ length: 700 }, (_, i) => `${i.toString(36).padStart(3, "0")}|`).join(""),
+  ];
+  for (const body of bodies) {
+    const pieces = piecesOf(body);
+    assert.ok(pieces.length >= 3, "the body spans several pieces");
+    for (const p of pieces) {
+      assert.ok(Buffer.byteLength(p) <= L.base_bytes + L.query_bytes - 1, "a piece is at most 1279 bytes");
+      assert.ok(body.includes(p), "a piece is the text's own, whole codepoints");
+    }
+    const cps = Array.from(body);
+    let windows = 0;
+    for (let i = 0; i < cps.length; i++) {
+      let w = "";
+      for (let j = i; j < cps.length && Buffer.byteLength(w + cps[j]) <= L.query_bytes; j++) w += cps[j];
+      assert.ok(pieces.some((p) => p.includes(w)), `the ${Buffer.byteLength(w)}-byte window at codepoint ${i} is in no piece`);
+      windows++;
+    }
+    assert.equal(windows, cps.length);
   }
-  const cps = Array.from(body);
-  let windows = 0;
-  for (let i = 0; i < cps.length; i++) {
-    let w = "";
-    for (let j = i; j < cps.length && Buffer.byteLength(w + cps[j]) <= L.query_bytes; j++) w += cps[j];
-    assert.ok(pieces.some((p) => p.includes(w)), `the ${Buffer.byteLength(w)}-byte window at codepoint ${i} is in no piece`);
-    windows++;
-  }
-  assert.equal(windows, cps.length);
   assert.deepEqual(piecesOf("one\0two"), ["one", "two"], "a NUL ends a run");
 });
 
