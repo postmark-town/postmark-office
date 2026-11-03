@@ -89,9 +89,13 @@ function lawStore() {
 // ── the invented graph store ────────────────────────────────────────────────
 const GRAPH_STATEMENTS = new Set(Object.values(graph.GRAPH_SQLS));
 function graphStore() {
-  const s = { pin: null, builds: new Map(), pinAsks: 0, tableAsks: 0, failTables: false, hang: null };
+  const s = { pin: null, builds: new Map(), pinAsks: 0, tableAsks: 0, failTables: false, failPin: false, hang: null };
   const query = async (sql, params) => {
-    if (sql === graph.PIN_SQL) { s.pinAsks += 1; return { rows: s.pin ? [s.pin] : [] }; }
+    if (sql === graph.PIN_SQL) {
+      s.pinAsks += 1;
+      if (s.failPin) throw new Error("connect ECONNREFUSED (invented)");
+      return { rows: s.pin ? [s.pin] : [] };
+    }
     if (GRAPH_STATEMENTS.has(sql)) {
       s.tableAsks += 1;
       // the tables are read at the pin the refresh found, which the store still holds after it builds a newer one
@@ -504,8 +508,12 @@ test("14 · N2, the law: with the load cap full (graph loads hung), an act still
   try {
     await fillTheCap(() => graph.reloadWorldGraph({ query: G.query, force: true, deadlineMs: 20 }));
     assert.equal(graph.worldGraphBehind(), null, "the hung loads leave the graph current: only the law will move");
-    // the control: an unchanged law at the cap, and the act goes on (the cap alone refuses nothing)
+    // the controls: an unchanged law at the cap, and the act goes on (the cap alone refuses nothing);
+    // and a store that cannot be asked at all still refuses nothing at the cap (case 6's ruled fallback, kept)
     assert.equal(await ask(), null, "an act at the cap, on an unchanged law, was refused");
+    L.s.failPin = true;
+    assert.equal(await ask(), null, "at the cap, a store that could not be asked refused the act (G1 says it refuses nothing)");
+    L.s.failPin = false;
     L.bless(2, 7);
     const before = { pins: L.s.pinAsks, laws: L.s.lawAsks };
     const r = await ask();
@@ -560,6 +568,9 @@ test("16 · N2, the graph: with the load cap full (law loads hung), an act still
     await fillTheCap(() => law.reloadLawSnapshot({ query: L.query, force: true, deadlineMs: 20 }));
     assert.equal(law.lawBehind(), null, "the hung loads leave the law current: only the graph will move");
     assert.equal(await ask(), null, "an act at the cap, on an unchanged graph, was refused");
+    G.s.failPin = true;
+    assert.equal(await ask(), null, "at the cap, a graph store that could not be asked refused the act (G1 says it refuses nothing)");
+    G.s.failPin = false;
     G.build(2);
     const before = { pins: G.s.pinAsks, tables: G.s.tableAsks };
     const r = await ask();
