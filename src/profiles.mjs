@@ -135,7 +135,12 @@ function parseFrontmatterScalars(source) {
   const data = {};
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const m = /^([A-Za-z0-9_-]+):(?:[ \t]*(.*))?$/.exec(lines[i]);
+    // One quantifier after the colon, never two (POS-875). The old `(?:[ \t]*(.*))?$` let both
+    // halves take the same spaces, so a line `.` can't finish (a lone CR, U+2028 or U+2029,
+    // which split(/\r?\n/) keeps) tried every split of them: quadratic, 11.8 s for one
+    // 63,015-character line. The spaces `[ \t]*` used to drop, `.trim()` drops, so every answer
+    // is the same.
+    const m = /^([A-Za-z0-9_-]+):(.*)$/.exec(lines[i]);
     if (!m) continue;
     const key = m[1];
     const raw = (m[2] ?? "").trim();
