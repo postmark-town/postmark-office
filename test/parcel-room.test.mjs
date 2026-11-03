@@ -267,10 +267,13 @@ test("7 · room a resident can hold carries no heads-up (the control: only the r
   assert.equal("heads_up" in two.quote, false, "a resident each: nothing to warn about");
   const three = quote({ registry: withResidents(["ash", "birch", "cedar"]), entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] });
   assert.equal("heads_up" in three.quote, false, "three residents, the third room: a resident each");
-  // and a short purse is still refused for the stamps, past the residents or not: the warning never turns a short purse into a sale
+});
+
+test("7 · a short purse past the residents is refused for the stamps, never sold: the warning does not turn a short purse into a sale", () => {
   const short = quote({ registry: withResidents(["ash"]), entries: [GIFT("ash", 10)] });
-  assert.ok(short.error, "short of stamps: refused");
-  assert.match(`${short.error.defect} — ${short.error.hint}`, /room for a second parcel costs 50 stamps, and ash holds 10 liquid/);
+  assert.ok(short.error, `short of stamps: refused; it answered: ${JSON.stringify(short)}`);
+  assert.match(`${short.error.defect} — ${short.error.hint}`, /room for a second parcel costs 50 stamps, and ash holds 10 liquid/,
+    "refused for the price (until POS-849 it was refused for the residents first, and this house never reached the price)");
 });
 
 test("7 · the heads-up, as a pure sentence: nothing when a resident can hold the room or the counts are not a house's", () => {
