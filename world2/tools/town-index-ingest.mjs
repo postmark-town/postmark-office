@@ -440,6 +440,7 @@ async function writeThreads(client, town, tally, ids = null) {
 }
 
 export const LEDGER_PATH = "WHITE_PAGES/mail-ledger.md";
+const MAIL_LAW_PATH = "tools/mail-state.mjs"; // the town's mail law, which derives every mail_state row (POS-376)
 
 /**
  * THE APPEND PROOF (POS-523 G2): the mail ledger between head and sha, from
@@ -610,6 +611,11 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   const townHandles = new Set(town.residents.map((r) => r.handle));
   const storedMail = await storedDigests(client, "mail_state");
   for (const h of townHandles) if (!storedMail.has(JSON.stringify([h]))) parties.add(h);
+  // POS-376: the LAW moved. `tools/mail-state.mjs` is what derives every row, so when the delta
+  // changed it (the diff above is --no-renames: a rename or delete lists its old path too) every
+  // resident's row is re-derived by the same mailStateRows below; the stored digests then keep
+  // only the rows whose bytes actually moved. No law change keeps the sparse parties above.
+  if (changed.includes(MAIL_LAW_PATH)) for (const h of townHandles) parties.add(h);
   const scopeMail = new Set([...parties].map((h) => JSON.stringify([h])));
   for (const k of storedMail.keys()) if (!townHandles.has(JSON.parse(k)[0])) scopeMail.add(k);
   const mailCands = await mailStateRows(townRepo, town, { log, only: new Set([...parties].filter((h) => townHandles.has(h))) });
