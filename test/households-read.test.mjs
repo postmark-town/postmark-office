@@ -132,6 +132,61 @@ test("POS-726: /households sends only the named fields, whole and narrowed; the 
   assert.equal((await householdsRead({}, { rows: null })).status, 503, "an unread store is still a 503, never an empty answer or the printout");
 });
 
+// ── POS-726's FIX round: home_images and accounts hold their declared shapes, through the real fold ──
+//
+// LAW (Rivet's FIX brief on POS-726, 2026-11-03 17:58Z): "A named scalar is not a license for arbitrary
+// keys/objects below it; lists/nested fields keep their existing DECLARED shapes." `home_images` is URL text
+// under a resident's handle, on the house that resident stands in (registry-store.mjs § setHomeImage: "a
+// picture can only ever land on the house the resident stands in at that moment"; registry-rows.mjs §
+// homePictureIn: "Only an entry for one of THAT house's own residents counts, so a picture left behind when a
+// resident moved house reads as none"). An account is an object in a list, cut to `login` and `id`.
+//
+// The fold hands each bad entry over as it arrived (orderNested keeps jsonb's values whole). Invented houses,
+// handles, logins, ids and URLs; `gone-wren` lives in odd-shed and left a picture on fen-hollow. The two
+// numbers are sentinels too.
+
+const S_FIX = Object.freeze({ left: "SENT_P726_left_behind", alone: "SENT_P726_left_alone", list: "SENT_P726_image_list",
+  bare: "SENT_P726_bare_account", nested: "SENT_P726_nested_account", account: "SENT_P726_fix_account",
+  num: "72600931", numAccount: "72600932", human: "SENT_P726_fix_human" });
+const leaksFix = (x) => Object.entries(S_FIX).filter(([, s]) => JSON.stringify(x).includes(s)).map(([k]) => k).sort();
+const media = (name) => `https://media.postmark.town/media/p726/${name}.png`;
+const REG_FIX = { schema_version: 1, note: "invented for POS-726's FIX round", households: {
+  "fen-hollow": { name: "Fen Hollow", human: S_FIX.human,
+    accounts: [{ login: "fh-gh", id: 9821 }, S_FIX.bare, Number(S_FIX.numAccount), null, [{ login: S_FIX.nested, id: 9822 }],
+      { login: "fh2-gh", id: 9823, secret: S_FIX.account }],
+    residents: ["fen", "reed-b", "moss-c", "lark-d", "tern-e", "kit-f"], since: "2026-09-04", declared_by: "fen",
+    home_images: { fen: IMG, "gone-wren": media(S_FIX.left), "reed-b": Number(S_FIX.num), "moss-c": true, "lark-d": null, "tern-e": "",
+      "kit-f": [media(S_FIX.list)] } },
+  "odd-shed": { name: "Odd Shed", accounts: [{ login: "os-gh", id: 9825 }], residents: ["shed", "gone-wren"], since: "2026-09-06",
+    declared_by: "shed", home_images: { "moved-x": media(S_FIX.alone) } },
+} };
+const PINS_FIX = { fen: { login: "fh-gh", id: 9821, pinned: "2026-09-04" }, shed: { login: "os-gh", id: 9825 } };
+const PUBLIC_FEN = { name: "Fen Hollow", accounts: [{ login: "fh-gh", id: 9821 }, { login: "fh2-gh", id: 9823 }],
+  residents: ["fen", "reed-b", "moss-c", "lark-d", "tern-e", "kit-f"], since: "2026-09-04", declared_by: "fen", home_images: { fen: IMG } };
+const PUBLIC_SHED = { name: "Odd Shed", accounts: [{ login: "os-gh", id: 9825 }], residents: ["shed", "gone-wren"], since: "2026-09-06", declared_by: "shed" };
+
+test("POS-726 FIX: home_images keeps only this house's residents' URL text and accounts only their objects, whole and narrowed", async () => {
+  const rows = deepFreeze(rowsFromRegistry(REG_FIX, PINS_FIX));
+  const before = JSON.stringify(rows);
+  assert.deepEqual(leaksFix(registryFromRows(rows)), Object.keys(S_FIX).sort(),
+    "CONTROL: the store's fold carries every bad entry, and the human, to the read (the instrument can see them)");
+
+  const whole = await householdsRead({}, { rows });
+  assert.equal(whole.status, 200);
+  assert.deepEqual(leaksFix(whole.body), [], "whole: no bad entry reaches the public answer (the list names each one that does)");
+  assert.equal(JSON.stringify(whole.body.registry), JSON.stringify({ schema_version: 1, note: "invented for POS-726's FIX round",
+    households: { "fen-hollow": PUBLIC_FEN, "odd-shed": PUBLIC_SHED } }), "whole: the valid values survive, in order");
+  assert.equal(JSON.stringify(whole.body.pins), JSON.stringify(PINS_FIX), "whole: the pins as they were");
+
+  const some = await householdsRead({ h: "gone-wren" }, { rows });
+  assert.equal(some.status, 200);
+  assert.deepEqual(leaksFix(some.body), [], "narrowed: no bad entry either");
+  assert.deepEqual(some.body.registry.households, { "odd-shed": PUBLIC_SHED },
+    "narrowed: gone-wren stands in odd-shed; the picture it left on fen-hollow neither shows nor draws fen-hollow in");
+
+  assert.equal(JSON.stringify(rows), before, "the rows handed in are unchanged");
+});
+
 // ── over REST, public, on a real store ──────────────────────────────────────
 
 let ix, child, base, tmp;

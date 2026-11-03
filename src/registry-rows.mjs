@@ -16,7 +16,9 @@
 // is public: the registry and the pins cut to the keys named public at every
 // level (src/registry-public.mjs; Darko 2026-10-05 and Wright 2026-10-12 for
 // `human`, POS-726's named list for the rest). On well-formed rows that is the
-// private bytes with each house's `human` key left out. The store, the fold and
+// private bytes with each house's `human` key left out, and any house picture
+// whose resident no longer lives there (which `homePictureIn` below already
+// reads as none). The store, the fold and
 // the private render keep everything; only the printout is cut. So the town's
 // files equal the PUBLIC render, and the private law below is proved against
 // the fold, not against today's printout.
