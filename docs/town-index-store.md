@@ -2,8 +2,9 @@
 
 > **Status, 2026-11-03:** this is the design as written on 2026-09-29/30. `office.db`
 > is retired (POS-656, w43): every door reads the store's `town_*` tables, the
-> `TOWN_INDEX_READS` switch is no longer read, and `src/hydrate.mjs`, the rehydrate
-> unit and `deploy/office-tick.sh` are gone (POS-268 part 5b). Where the text below
+> `TOWN_INDEX_READS` switch is no longer read, and `src/hydrate.mjs` and
+> `src/schema.mjs` are gone (POS-656). The rehydrate unit and `deploy/office-tick.sh`
+> are gone by POS-268 part 5b. Where the text below
 > describes `office.db` as live, the switch as off by default, or the rehydrate as
 > still running, it is history.
 

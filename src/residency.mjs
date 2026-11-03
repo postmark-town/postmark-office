@@ -224,9 +224,9 @@ const houseLineOf = (registry, slug) => registry?.households?.[slug]?.name ?? sl
 
 // The plan for this join: the house it belongs to and `registry`, the record
 // folded forward with it (src/join-bind.mjs consumes that fold at the door and
-// binds the join in the store from it; no PR carries it), or null for a join this door cannot place in a house — no
-// household named and no login to key one by, or a name that slugs to nothing.
-// A null plan leaves the plain three-file join.
+// binds the join in the store from it; no PR carries it), or null for a join
+// this door cannot place in a house — no household named and no login to key
+// one by, or a name that slugs to nothing. A null plan leaves the plain three-file join.
 //
 //   vouched   the calling account is already one of the house's accounts — the
 //             key IS the vouch (B1, and B2 through a door the house already
@@ -636,9 +636,9 @@ async function openPRFor(pen, branch, title) {
 // office is not pointed at the record", and since admission became the bind
 // (Keemin, 2026-09-29) that is a refusal — a door that cannot read the record
 // cannot tell a vouched join from a held one. `requestResidency` refuses on it
-// for the registry. UNREADABLE
-// survives the move because of the case it was built for: Luminari (#2479,
-// 2026-09-04) named a house on her card; the registry read failed once,
+// for the registry. UNREADABLE survives the move because of the case it was
+// built for: Luminari (#2479, 2026-09-04) named a house on her card; the
+// registry read failed once,
 // SILENTLY, and the pen opened the three-file shape, which rule 2c merged with
 // nobody left to add the row. A read which fails quietly turns into a
 // household that does not exist, so a record this office cannot reach answers

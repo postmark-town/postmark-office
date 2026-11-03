@@ -1877,7 +1877,7 @@ export function stampsRosterPage({ minted, accounts, n, start }, balances) {
 // foldMintCount / foldStaked imported
 // live from the checkout. So `minted` and `liquid` here carry holo BY
 // DERIVATION the moment the town's folds credit it (postmark-town/postmark
-// #2811) and the box rehydrates — and adding a second credit here would pay the
+// #2811) and the box ingests — and adding a second credit here would pay the
 // payer twice.
 //
 // WHAT DID HAVE TO CHANGE is one sum the old law had made harmless. `ownership`

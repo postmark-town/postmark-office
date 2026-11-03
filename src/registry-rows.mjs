@@ -330,9 +330,9 @@ export function homePictureIn(registry, handle) {
 /**
  * The rows -> the registry OBJECT, in the file's own key order.
  *
- * This is the shape `src/declare-exec.mjs` and `src/declare.mjs` read off the
- * clone today — `{ schema_version, note, households: { <slug>: { … } } }` — so
- * a store read can be handed straight to `houseForAccount`, `houseForName`,
+ * This is the shape `src/declare.mjs` reads off the store (`loadRegistry`)
+ * today — `{ schema_version, note, households: { <slug>: { … } } }` — so a
+ * store read can be handed straight to `houseForAccount`, `houseForName`,
  * `conformance` and `planRegistryJoin` with nothing in between.
  *
  * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`

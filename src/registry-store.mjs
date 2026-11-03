@@ -338,7 +338,10 @@ export async function insertHousehold(row, env = process.env) {
   throw last;
 }
 
-/** The mint's hook (POS-158, src/ceremony.mjs): one house, EDITED in place — the place is the caller's. Never deletes. */
+/**
+ * The mint's hook (POS-158, src/ceremony.mjs): one house, EDITED in place —
+ * the place is the caller's. Never deletes.
+ */
 export async function upsertHousehold(row, env = process.env) {
   const set = COLUMNS.filter((c) => c !== "slug").map((c) => `${c} = EXCLUDED.${c}`).join(", ");
   return actsQuery(
