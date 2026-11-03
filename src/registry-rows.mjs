@@ -13,11 +13,13 @@
 // `renderRegistry` is the PRIVATE unfold: every column the store holds,
 // `human` included. It is the round trip below, and it stays exact.
 // `renderPublicRegistry` is what the drain PRINTS into the town repo, which
-// is public: the same bytes with each house's private `human` KEY left out
-// (src/registry-public.mjs; Darko 2026-10-05, Wright 2026-10-12). The store,
-// the fold and the private render keep the name; only the printout drops it.
-// So the town's files equal the PUBLIC render, and the private law below is
-// proved against the fold, not against today's printout.
+// is public: the registry and the pins cut to the keys named public at every
+// level (src/registry-public.mjs; Darko 2026-10-05 and Wright 2026-10-12 for
+// `human`, POS-726's named list for the rest). On well-formed rows that is the
+// private bytes with each house's `human` key left out. The store, the fold and
+// the private render keep everything; only the printout is cut. So the town's
+// files equal the PUBLIC render, and the private law below is proved against
+// the fold, not against today's printout.
 //
 // ── THE LAW THIS FILE EXISTS TO SATISFY ─────────────────────────────────────
 //
@@ -79,12 +81,14 @@
 // crossing); POS-158 removed it, so there is no second spelling to keep in step.
 
 import { serializeRegistry, serializePins } from "./residency.mjs";
-import { publicRegistry } from "./registry-public.mjs";
+import { publicRegistry, publicPins } from "./registry-public.mjs";
 
 // The two key templates, stated once. Every renderer below walks these in
 // order and skips what the row does not carry; every reader above checks its
 // input against them. They are the file's grammar, and they are the only place
-// that grammar is written down.
+// that grammar is written down. Grammar is not publication: a key added here
+// reaches the PRIVATE render, and the public printout and GET /households
+// carry it only once src/registry-public.mjs names it (POS-726).
 //
 // THE TAIL OF THIS TEMPLATE IS FIVE COLUMNS, and they are appended in the order
 // their migrations landed so that no standing key ever moves: `formerly`
@@ -224,9 +228,9 @@ const rendersAsAbsent = (key, v) =>
  * is running the seed and can add the column. Here the value came out of a
  * `jsonb` column that accepts any shape, on a drain that may be running at
  * 05:45 at a crossing — so an unrecognised account key renders in a stable
- * place and shows up as a diff a person reads, instead of vanishing from the
- * town's file. It will be in the wrong PLACE, and `--check` will say so; it
- * will not be missing.
+ * place in the PRIVATE render rather than vanishing from it. The town's file is
+ * the PUBLIC render, which carries only the nested keys src/registry-public.mjs
+ * names (POS-726), so there an unnamed key is left out on purpose.
  */
 const orderNested = (v, template) => {
   if (Array.isArray(v)) return v.map((x) => orderNested(x, template));
@@ -399,24 +403,25 @@ export function pinsFromRows(rows) {
  * the round-trip falsifier proves against the real files.
  */
 export function renderRegistry(rows) {
-  return renderOf(registryFromRows(rows), rows);
+  return renderOf(registryFromRows(rows), pinsFromRows(rows));
 }
 
 /**
- * The rows -> the two files as the town repo PRINTS them (POS-394): the
- * private render with each house's `human` key left out, every other byte the
- * same (pins exactly). What `registry-drain.mjs` checks against and writes.
+ * The rows -> the two files as the town repo PRINTS them (POS-394, POS-726):
+ * the registry and the pins each cut to the keys named public
+ * (src/registry-public.mjs), through the same two serializers. What
+ * `registry-drain.mjs` checks against and writes.
  */
 export function renderPublicRegistry(rows) {
-  return renderOf(publicRegistry(registryFromRows(rows)), rows);
+  return renderOf(publicRegistry(registryFromRows(rows)), publicPins(pinsFromRows(rows)));
 }
 
 // THE ONE PLACE THE TWO SERIALIZERS ARE CALLED (test/registry-no-file-writer
 // holds it): both renders go through here, so the bytes are made in one spot.
-function renderOf(registry, rows) {
+function renderOf(registry, pins) {
   return {
     households: serializeRegistry(registry),
-    pins: serializePins(pinsFromRows(rows)),
+    pins: serializePins(pins),
   };
 }
 

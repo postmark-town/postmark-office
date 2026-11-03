@@ -68,6 +68,70 @@ test("a store the office cannot read is a 503, never the printout", async () => 
   assert.match(body.hint, /not the record/);
 });
 
+// ── POS-726: the read sends the named list, at every level ──────────────────
+//
+// LAW (Darko's picker answer on POS-845, 2026-11-03 05:53Z): the public line is a "Named list".
+// Wright's hand-back on POS-726: only fields named public are sent; a new field is private until named.
+//
+// Every sentinel here reaches the read THROUGH THE REAL FOLD (`rowsFromRegistry` -> `registryFromRows`
+// / `pinsFromRows`, which hand a named column's value over as it arrived and keep unnamed jsonb keys):
+// a scalar registry meta key, an unnamed key in an account, a likeness answer and an invitation, an
+// object under a resident's handle in `home_images`, an object under the named house key `name`, and
+// an object under the named pin key `note`. Invented houses, handles, logins and ids throughout.
+
+const S726 = Object.freeze({
+  meta: "SENT_P726_meta", account: "SENT_P726_account", likeness: "SENT_P726_likeness", invite: "SENT_P726_invite",
+  image: "SENT_P726_image", underNamed: "SENT_P726_under_named", underPin: "SENT_P726_under_pin", human: "SENT_P726_human",
+});
+const leaks726 = (x) => Object.entries(S726).filter(([, s]) => JSON.stringify(x).includes(s)).map(([k]) => k).sort();
+const deepFreeze = (o) => {
+  if (o !== null && typeof o === "object" && !Object.isFrozen(o)) { Object.freeze(o); for (const v of Object.values(o)) deepFreeze(v); }
+  return o;
+};
+const IMG = "https://media.postmark.town/media/p726/pell.png";
+const REG_726 = { schema_version: 1, note: "invented for POS-726", extra_meta: S726.meta, households: {
+  "ember-loft": { name: "Ember Loft", human: S726.human, accounts: [{ login: "el-gh", id: 9811, secret: S726.account }],
+    residents: ["pell", "otter-q"], since: "2026-09-01", declared_by: "pell",
+    home_images: { pell: IMG, "otter-q": { url: IMG, secret: S726.image } },
+    likeness: { answer: "yes", at: "2026-10-20T00:00:00.000Z", by: "el-gh", gh_id: 9811, words: "v1", secret: S726.likeness },
+    invited_by: { by: "wren-c", named: "wren-c", at: "2026-09-01T00:00:00.000Z", secret: S726.invite } },
+  "tarn-yard": { name: { shown: "Tarn Yard", secret: S726.underNamed }, accounts: [{ login: "ty-gh", id: 9813 }],
+    residents: ["tarn"], since: "2026-09-02", declared_by: "tarn" },
+} };
+const PINS_726 = { pell: { login: "el-gh", id: 9811, pinned: "2026-09-01" }, "otter-q": { login: "el-gh", id: 9811 },
+  tarn: { login: "ty-gh", id: 9813, pinned: "2026-09-02", note: { text: "n", secret: S726.underPin } } };
+const PUBLIC_EMBER = { name: "Ember Loft", accounts: [{ login: "el-gh", id: 9811 }], residents: ["pell", "otter-q"],
+  since: "2026-09-01", declared_by: "pell", home_images: { pell: IMG },
+  likeness: { answer: "yes", at: "2026-10-20T00:00:00.000Z", by: "el-gh", gh_id: 9811, words: "v1" },
+  invited_by: { by: "wren-c", named: "wren-c", at: "2026-09-01T00:00:00.000Z" } };
+const PUBLIC_TARN = { accounts: [{ login: "ty-gh", id: 9813 }], residents: ["tarn"], since: "2026-09-02", declared_by: "tarn" };
+const PUBLIC_PINS_726 = { "otter-q": { login: "el-gh", id: 9811 }, pell: { login: "el-gh", id: 9811, pinned: "2026-09-01" },
+  tarn: { login: "ty-gh", id: 9813, pinned: "2026-09-02" } };
+
+test("POS-726: /households sends only the named fields, whole and narrowed; the store's fold still holds the rest", async () => {
+  const rows = deepFreeze(rowsFromRegistry(REG_726, PINS_726));
+  const before = JSON.stringify(rows);
+  assert.deepEqual(leaks726({ registry: registryFromRows(rows), pins: pinsFromRows(rows) }), Object.keys(S726).sort(),
+    "CONTROL: the store's fold carries every sentinel to the read (the instrument can see them)");
+
+  const whole = await householdsRead({}, { rows });
+  assert.equal(whole.status, 200);
+  assert.deepEqual(leaks726(whole.body), [], "whole: no sentinel reaches the public answer (the list names each one that does)");
+  assert.equal(JSON.stringify(whole.body.registry), JSON.stringify({ schema_version: 1, note: "invented for POS-726",
+    households: { "ember-loft": PUBLIC_EMBER, "tarn-yard": PUBLIC_TARN } }), "whole: exactly the named public values, in order");
+  assert.equal(JSON.stringify(whole.body.pins), JSON.stringify(PUBLIC_PINS_726), "whole: the pins' named values, in order");
+
+  const some = await householdsRead({ h: "tarn,otter-q" }, { rows });
+  assert.equal(some.status, 200);
+  assert.deepEqual(leaks726(some.body), [], "narrowed: no sentinel either");
+  assert.deepEqual(some.body.registry, { schema_version: 1, note: "invented for POS-726",
+    households: { "ember-loft": PUBLIC_EMBER, "tarn-yard": PUBLIC_TARN } }, "narrowed: the houses those handles stand in, named values only");
+  assert.deepEqual(some.body.pins, { "otter-q": PUBLIC_PINS_726["otter-q"], tarn: PUBLIC_PINS_726.tarn });
+
+  assert.equal(JSON.stringify(rows), before, "the rows handed in are unchanged");
+  assert.equal((await householdsRead({}, { rows: null })).status, 503, "an unread store is still a 503, never an empty answer or the printout");
+});
+
 // ── over REST, public, on a real store ──────────────────────────────────────
 
 let ix, child, base, tmp;

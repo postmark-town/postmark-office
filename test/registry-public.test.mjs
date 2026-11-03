@@ -8,12 +8,13 @@
 // name; the instrument is "does that string, or a `human` key, reach a public
 // payload", and the positive control is that the PRIVATE fold still holds it.
 //
-//   § 1  the projection: no human key, everything else kept in order, input untouched
+//   § 1  the projection: no human key, every named key kept in order, input untouched
 //   § 2  GET /households (pure): whole and ?h=, the private fold as control, 422/503 kept
 //   § 3  the per-resident household block: no human key, house and members kept
 //   § 4  the house bundle: name kept, no human
 //   § 5  a booted office on a real store: /households and a resident card over REST
 //   § 6  the residency plan's name, printed into the public join PR, is never the human
+//   § 7  the named list (POS-726): nothing unnamed rides, at any level, and the input is untouched
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 import { rowsFromRegistry, registryFromRows, pinsFromRows } from "../src/registry-rows.mjs";
-import { publicRegistry, publicHouse, PRIVATE_HOUSE_KEYS } from "../src/registry-public.mjs";
+import { publicRegistry, publicHouse, publicPins, PRIVATE_HOUSE_KEYS } from "../src/registry-public.mjs";
 import { householdsRead } from "../src/households-read.mjs";
 import { householdLookupOf } from "../src/households.mjs";
 import { houseBundle } from "../src/house-bundle.mjs";
@@ -63,7 +64,7 @@ const houseKeys = (registry) => Object.values(registry.households).flatMap((h) =
 
 // ── § 1 the projection ──────────────────────────────────────────────────────
 
-test("§ 1 the projection drops the human KEY and nothing else, in order, and never touches its input", () => {
+test("§ 1 the projection drops the human KEY, keeps every named key in order, and never touches its input", () => {
   assert.deepEqual(PRIVATE_HOUSE_KEYS, ["human"]);
   const priv = registryFromRows(ROWS);
   const before = JSON.stringify(priv);
@@ -78,11 +79,13 @@ test("§ 1 the projection drops the human KEY and nothing else, in order, and ne
   assert.equal(pub.households["lantern-row"].name, "Lantern Row");
   assert.deepEqual(pub.households["lantern-row"].residents, ["postmaster", "wick"]);
   assert.equal("name" in pub.households["unnamed-hall"], false, "a house with no display name gets none invented, and no human in its place");
-  // a null human, beside a consent-like opaque marker: the human KEY goes regardless of its value, every other key stays
+  // a null human, beside a consent-like opaque marker: the human KEY goes regardless of its value.
+  // Until 2026-11-03 these asserted the marker was "kept as given": POS-394's projection copied every key
+  // but `human`. POS-726's named list sends only the keys named public, so an unnamed marker is left out too.
   assert.deepEqual(publicHouse({ name: "Tidewater", human: null, human_shown: "opaque-marker-1", residents: ["a"] }),
-    { name: "Tidewater", human_shown: "opaque-marker-1", residents: ["a"] }, "a null human is still dropped as a key; the marker is kept as given");
+    { name: "Tidewater", residents: ["a"] }, "a null human is still dropped as a key, and the unnamed marker with it");
   assert.deepEqual(publicHouse({ human: PRIVATE_SENTINEL, human_shown: "opaque-marker-2", name: "Tidewater" }),
-    { human_shown: "opaque-marker-2", name: "Tidewater" }, "a marker never turns the human back on");
+    { name: "Tidewater" }, "a marker never turns the human back on, and is not public itself");
   assert.equal(publicHouse(null), null);
   assert.equal(publicRegistry(null), null);
 });
@@ -227,4 +230,93 @@ test("§ 6 a house with no display name: the join plan, the HOLD note and the PR
   assert.equal(leaks(joinBody({ ...who, handle: "tern" }, named)), false);
   assert.equal(JSON.stringify(registry), before, "the registry handed in is unchanged");
   assert.equal(leaks(registry), true, "CONTROL: the private record still holds the names");
+});
+
+// ── § 7 the named list (POS-726) ────────────────────────────────────────────
+//
+// LAW (Darko's picker answer on POS-845, 2026-11-03 05:53Z): the public line is a "Named list".
+// Wright's hand-back on POS-726: only fields named public are sent; a new field is private until named.
+//
+// Each sentinel sits where a field nobody named could arrive: a registry meta key; a house column a
+// later migration adds (what `registryFromRows` would hand over once HOUSEHOLD_KEYS grows; the fold
+// cannot carry one today, so this level is held here, on the function the door and the drain call); an
+// unnamed key inside an account, a likeness answer and an invitation; an object under a resident's
+// handle in `home_images`; an object put under a NAMED house key; a pin key, and an object under a
+// named pin key. Every house, handle, login and id is invented. The input is deep-frozen, so a
+// projection that wrote into it would throw here instead of quietly changing the private record.
+
+const S726 = Object.freeze({
+  meta: "SENT_P726_meta", house: "SENT_P726_house", account: "SENT_P726_account", likeness: "SENT_P726_likeness",
+  invite: "SENT_P726_invite", image: "SENT_P726_image", underNamed: "SENT_P726_under_named",
+  pin: "SENT_P726_pin", underPin: "SENT_P726_under_pin", human: PRIVATE_SENTINEL,
+});
+const leaks726 = (x) => Object.entries(S726).filter(([, s]) => JSON.stringify(x).includes(s)).map(([k]) => k).sort();
+const deepFreeze = (o) => {
+  if (o !== null && typeof o === "object" && !Object.isFrozen(o)) { Object.freeze(o); for (const v of Object.values(o)) deepFreeze(v); }
+  return o;
+};
+const IMG = "https://media.postmark.town/media/p726/pell.png";
+const IMG2 = "https://media.postmark.town/media/p726/otter.png";
+
+const PRIVATE_726 = () => ({ schema_version: 1, note: "invented for POS-726", extra_meta: S726.meta, households: {
+  "ember-loft": { name: "Ember Loft", human: S726.human,
+    accounts: [{ login: "el-gh", id: 9811, secret: S726.account }, { login: "el2-gh", id: 9812 }],
+    residents: ["pell", "otter-q"], since: "2026-09-01", member_of: "the-harbor", declared_by: "pell",
+    formerly: ["old-loft"], provisional: true,
+    home_images: { pell: IMG, "otter-q": { url: IMG2, secret: S726.image } },
+    likeness: { answer: "yes", at: "2026-10-20T00:00:00.000Z", by: "el-gh", gh_id: 9811, words: "v1", secret: S726.likeness },
+    invited_by: { by: "wren-c", named: "wren-c", at: "2026-09-01T00:00:00.000Z", secret: S726.invite },
+    a_later_column: S726.house },
+  "tarn-yard": { name: { shown: "Tarn Yard", secret: S726.underNamed }, accounts: [{ login: "ty-gh", id: 9813 }],
+    residents: ["tarn"], since: "2026-09-02", declared_by: "tarn" },
+} });
+
+// What the public read may show of it, written out by hand: every named key, in the record's own order.
+const PUBLIC_726 = { schema_version: 1, note: "invented for POS-726", households: {
+  "ember-loft": { name: "Ember Loft",
+    accounts: [{ login: "el-gh", id: 9811 }, { login: "el2-gh", id: 9812 }],
+    residents: ["pell", "otter-q"], since: "2026-09-01", member_of: "the-harbor", declared_by: "pell",
+    formerly: ["old-loft"], provisional: true,
+    home_images: { pell: IMG },
+    likeness: { answer: "yes", at: "2026-10-20T00:00:00.000Z", by: "el-gh", gh_id: 9811, words: "v1" },
+    invited_by: { by: "wren-c", named: "wren-c", at: "2026-09-01T00:00:00.000Z" } },
+  "tarn-yard": { accounts: [{ login: "ty-gh", id: 9813 }], residents: ["tarn"], since: "2026-09-02", declared_by: "tarn" },
+} };
+
+test("§ 7 the named list: nothing unnamed rides at any level of a house, every named value survives in order, the input is untouched", () => {
+  const priv = deepFreeze(PRIVATE_726());
+  const before = JSON.stringify(priv);
+  assert.deepEqual(leaks726(priv), ["account", "house", "human", "image", "invite", "likeness", "meta", "underNamed"],
+    "CONTROL: the private object carries every house-side sentinel (the instrument can see them)");
+  const pub = publicRegistry(priv);
+  assert.deepEqual(leaks726(pub), [], "no sentinel reaches the public face (the list names each one that does)");
+  assert.deepEqual(pub, PUBLIC_726, "exactly the named public values");
+  assert.equal(JSON.stringify(pub), JSON.stringify(PUBLIC_726), "in the record's own key order");
+  assert.equal(JSON.stringify(priv), before, "the private object is unchanged, byte for byte");
+  // the house projection alone, on the house a later column was added to
+  assert.deepEqual(publicHouse(priv.households["ember-loft"]), PUBLIC_726.households["ember-loft"]);
+});
+
+test("§ 7 the named list: a meta value that is not a single value has no named shape (the fold refuses one first)", () => {
+  const pub = publicRegistry(deepFreeze({ schema_version: 1, note: { text: "n", secret: S726.meta }, households: {} }));
+  assert.deepEqual(pub, { schema_version: 1, households: {} });
+});
+
+test("§ 7 the named list: pins carry their named keys holding single values; handles, order and input kept", () => {
+  const pins = deepFreeze({
+    "otter-q": { login: "el-gh", id: 9811, pinned: "2026-09-01", renamed: "a rename", note: "a pin note", retired: "2026-10-01", renamed_to: "otter-r" },
+    pell: { login: "el-gh", id: 9811, pinned: "2026-09-01", secret: S726.pin },
+    tarn: { login: "ty-gh", id: 9813, note: { text: "n", secret: S726.underPin } },
+  });
+  const before = JSON.stringify(pins);
+  assert.deepEqual(leaks726(pins), ["pin", "underPin"], "CONTROL: the private pins carry both pin sentinels");
+  const pub = publicPins(pins);
+  assert.deepEqual(leaks726(pub), [], "no pin sentinel is public");
+  assert.equal(JSON.stringify(pub), JSON.stringify({
+    "otter-q": { login: "el-gh", id: 9811, pinned: "2026-09-01", renamed: "a rename", note: "a pin note", retired: "2026-10-01", renamed_to: "otter-r" },
+    pell: { login: "el-gh", id: 9811, pinned: "2026-09-01" },
+    tarn: { login: "ty-gh", id: 9813 },
+  }), "every named pin value, in order; the unnamed key and the object under `note` are left out");
+  assert.equal(JSON.stringify(pins), before, "the pins handed in are unchanged");
+  assert.equal(publicPins(null), null);
 });
