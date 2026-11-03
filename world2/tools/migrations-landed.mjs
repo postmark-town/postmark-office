@@ -142,6 +142,8 @@ export const LANDED = {
   "086_arrival_sources.sql":       { probe: `${rel("arrival_sources")} AND ${rel("arrival_source_pending")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_source_land' AND prosecdef)` },
   // 085 (POS-576): who invited a household, a public credit on its row.
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
+  // 089 (POS-779): the voice-time partial index and the one function its predicate needs.
+  "089_voice_time_index.sql":      { probe: `to_regclass('public.acts_voice_at_idx') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'voice_payload_private' AND provolatile = 'i')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
