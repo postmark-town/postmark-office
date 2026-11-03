@@ -684,11 +684,13 @@ test("POS-887 RACES: a stream another look found empty is not served what the fa
   for (const at of ["batch", "reply"]) {
     const stays = await run({ at, leaves: false });
     assert.equal(stays.events.length, 2, `the admitting control (${at}): a reader who stayed IS served`);
+    assert.equal(stays.push.stats.woken, 1, at);
   }
   for (const at of ["batch", "reply"]) {
     const left = await run({ at, leaves: true });
     assert.ok(!JSON.stringify(left.events).includes("the fan-out is carrying"), `nothing is sent to a stream that ended while the fan-out held its ${at}`);
     assert.equal(left.events.length, 1, at);
+    assert.equal(left.push.stats.woken, 0, `and nothing is counted as woken (${at})`);
     assert.equal(left.push.open, 0, at);
   }
 });
@@ -751,6 +753,55 @@ test("POS-887 UNREADABLE: a reader the world can no longer place, or whose place
   assert.equal(push.open, 0);
   assert.equal(push.stats.timed_out, 0, "answered when the read failed, not at the deadline");
   assert.equal(timers.count, 0);
+});
+
+test("POS-887 UNREADABLE, in the open: a reader who was out in the open and can no longer be placed has the stream ended too", async () => {
+  const b = roomBench({ dan: { x: 2000, y: 2000 }, eve: { x: 2001, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const wire = await onWire(push, "eve");
+  b.tick(20_000);
+  await b.store.say("dan", "a word out in the open");
+  await push.settled();
+  assert.deepEqual(saidOn(wire.res), ["a word out in the open"], "the admitting control: a placed reader in the open IS served");
+  delete b.at.eve;
+  b.tick(20_000);
+  await b.store.say("dan", "a word eve cannot be placed to hear");
+  await push.settled();
+  assert.ok(!wire.res.body.includes("cannot be placed to hear"), "an unplaced reader is served nothing, in the open as in a room");
+  assert.equal(wire.res.ended, 1);
+  assert.equal(push.open, 0);
+});
+
+test("POS-887 THE BEAT, one look at a time: a beat still looking is not joined by another, and a beat that trips ends the stream", async () => {
+  let tick = null; // this test drives the interval by hand
+  const MARK = 62_000;
+  const [setIt, clearIt] = [globalThis.setInterval, globalThis.clearInterval];
+  globalThis.setInterval = (fn, ms, ...rest) => { if (ms !== MARK) return setIt(fn, ms, ...rest); tick = fn; return MARK; };
+  globalThis.clearInterval = (h) => { if (h !== MARK) return clearIt(h); tick = null; };
+  try {
+    const looks = { calls: 0, held: gate() };
+    const opened = { close: () => {}, onEnd: () => {}, beat: () => { looks.calls += 1; return looks.held.promise; } };
+    const res = fakeRes();
+    await serveSayStream(new EventEmitter(), res, async () => opened, { beatMs: MARK });
+    for (let i = 0; i < 5; i++) tick();
+    assert.equal(looks.calls, 1, "five ticks while one look is out make one look, not five");
+    looks.held.open(true);
+    await turns(2);
+    assert.ok(res.body.includes(": beat"), "the look that finished writes its beat");
+    tick();
+    assert.equal(looks.calls, 2, "and once it is done the next tick looks again");
+    // a look that trips ends the stream, rather than leaving a beat that fails every time
+    const tripped = new EventEmitter();
+    const res2 = fakeRes();
+    await serveSayStream(tripped, res2, async () => ({ close: () => {}, onEnd: () => {}, beat: () => Promise.reject(new Error("the look tripped")) }), { beatMs: MARK });
+    tick();
+    await turns(2);
+    assert.equal(res2.ended, 1);
+    assert.equal(tick, null, "and its beat was stopped");
+  } finally {
+    globalThis.setInterval = setIt;
+    globalThis.clearInterval = clearIt;
+  }
 });
 
 test("POS-887 THE BODY: the stream looks at the body it opened with, not at its own label — a human stands where a housemate stands", async () => {
