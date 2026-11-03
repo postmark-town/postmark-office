@@ -43,7 +43,6 @@
 //     node world2/tools/town-index-ingest.mjs --town-repo <checkout> --sha <sha> [--seed] [--snapshot] [--json]
 //   node world2/tools/town-index-ingest.mjs --town-repo <checkout> --seals-to <ref>
 
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -54,7 +53,10 @@ import { readTown, parseLedger } from "../../vendor/tools/lib/town.mjs";
 import {
   TOWN_TABLES, deriveTownIndex, readHistory, residentRows, letterRows, threadRows, bulletinRows, townDocsValue,
   ledgerLines, mailStateRows, stampFold, stampTipOf, fundingRows, questRows, atlasRows,
+  rowDigest, discoveryRevisionOf, discoverySourcesOf,
 } from "../../src/town-index.mjs";
+import { DISCOVERY_TABLES } from "../../src/town-tables.mjs";
+import { discoveryRowsOf, discoveryTablesIn, DISCOVERY_EPOCH, foldDigests, residentKeyRow } from "../../src/town-discovery.mjs";
 import { isResidentHandle } from "../../src/residency.mjs";
 import { writeMintInputs, keyBaseVia, takesKeyBase } from "../../src/mint-inputs.mjs";
 import { stampLinesOn, welcomeLinesVia } from "../../src/stamp-lines.mjs";
@@ -70,7 +72,7 @@ const quiet = { log() {}, warn() {} };
 const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
 const tableOf = (name) => `town_${name}`;
 const hasDigest = (name) => name !== "repo_log";
-export const digestOf = (row) => createHash("md5").update(JSON.stringify(row)).digest("hex");
+export const digestOf = rowDigest; // one change stamp, the derivation's (src/town-index.mjs § rowDigest): discovery's revision folds the same digests
 
 /** A row's key, as one string, from the table's own key (or seq) columns. */
 function keyOf(name) {
@@ -177,7 +179,9 @@ async function setHead(client, sha) {
 /** Each table's row count and content digest, computed in the store. */
 export async function tableFingerprints(client) {
   const counts = {}, digests = {};
+  const discovery = await discoveryTablesIn(client); // a store without 087 has neither of discovery's tables, and its snapshot names neither
   for (const name of Object.keys(TOWN_TABLES)) {
+    if (DISCOVERY_TABLES.has(name) && !discovery) continue;
     const t = tableOf(name);
     const q = hasDigest(name)
       ? `SELECT count(*)::int n, md5(coalesce(string_agg(digest, '' ORDER BY ${keyCols(name).map((c) => (c === "seq" ? c : `${c} COLLATE "C"`)).join(", ")}), '')) d FROM ${t}`
@@ -282,18 +286,92 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
   await mintInputs(client, townRepo, tally, { whole: true });
   const base = await questKeyBase(client, townRepo);
   const welcomeLines = await questWelcomeLines(client, log);
-  const { tables } = await deriveTownIndex(townRepo, { log, base, welcomeLines });
+  const { tables, discoverySkipped } = await deriveTownIndex(townRepo, { log, base, welcomeLines });
   ms.derive = Date.now() - t0; t0 = Date.now();
+  const discovery = await discoveryTablesIn(client);
+  if (!discovery) log.warn(DISCOVERY_ABSENT);
   for (const name of Object.keys(TOWN_TABLES)) {
+    if (DISCOVERY_TABLES.has(name) && !discovery) continue;
     const r = await client.query(`DELETE FROM ${tableOf(name)}`);
     tally[name] = { inserted: 0, deleted: r.rowCount };
-    await insertRows(client, name, tables[name], tally);
+    const rows = name === "meta" && !discovery ? tables.meta.filter(([k]) => !DISCOVERY_META.includes(k)) : tables[name];
+    await insertRows(client, name, rows, tally);
   }
   ms.write = Date.now() - t0; t0 = Date.now();
   const counts = await recordSnapshot(client, townRepo, sha, "seed");
   ms.snapshot = Date.now() - t0;
   await setHead(client, sha);
-  return { mode: "seed", head: null, sha, tally, counts, ms };
+  return { mode: "seed", head: null, sha, tally, counts, ms,
+    discovery: discovery ? { mode: "seed", skipped: discoverySkipped } : { mode: "absent" } };
+}
+
+// ── discovery (087, POS-497) ─────────────────────────────────────────────────
+//
+// Discovery's pieces and edges are derived from town_letters and town_homes
+// (src/town-discovery.mjs § discoveryRowsOf) and kept in this transaction, so
+// they never stand beside a letter or a home that has moved. A delta re-derives
+// only the letters and homes it touched (their old children are the scope: a
+// gone source's are deleted, a replaced one's replaced) and moves the revision
+// by exactly what it replaced, plus the resident keys that came or went. A
+// whole pass reads the store's own letters and homes: the first ingest after
+// 087 lands (no epoch yet), an epoch whose rule changed, and the seal's audit,
+// which counts what it repaired. A store without 087 skips all of it and says so.
+
+const DISCOVERY_META = ["discovery_epoch", "discovery_revision"];
+const DISCOVERY_ABSENT = "  discovery: 087_town_discovery.sql is not applied; its pieces, edges and generation were not written";
+
+/** Discovery's whole derivation from the store's own rows, written where it differs: its two meta rows and how many rows it moved. */
+async function discoveryWhole(client, tally) {
+  const sources = {
+    letters: (await client.query(`SELECT id, from_h AS "from", json FROM town_letters`)).rows,
+    homes: (await client.query("SELECT handle, json FROM town_homes")).rows,
+  };
+  const d = discoveryRowsOf(sources);
+  const moved = (await diffTable(client, "discovery_chunks", d.chunks, tally)).size + (await diffTable(client, "letter_edges", d.edges, tally)).size;
+  const handles = (await client.query("SELECT handle FROM town_residents")).rows.map((r) => r.handle);
+  return { revision: discoveryRevisionOf(d.chunks, d.edges, handles), moved,
+    work: { letters: sources.letters.length, homes: sources.homes.length, skipped: d.skipped } };
+}
+
+/**
+ * Discovery for one delta. `letters` and `homes` are the touched source keys and
+ * the rows the delta wrote for them (a touched key with no row went), and
+ * `residentKeys` the handles that joined or left the roll. Answers the meta rows
+ * to keep and what was done.
+ */
+async function writeDiscovery(client, { letters, homes, residentKeys, auditing, tally, log }) {
+  if (!(await discoveryTablesIn(client))) { log.warn(DISCOVERY_ABSENT); return { meta: [], work: { mode: "absent" } }; }
+  const held = new Map((await client.query("SELECT key, value FROM town_meta WHERE key = ANY($1::text[])", [DISCOVERY_META])).rows.map((r) => [r.key, r.value]));
+  if (held.get("discovery_epoch") !== DISCOVERY_EPOCH || !held.has("discovery_revision")) {
+    const w = await discoveryWhole(client, tally);
+    return { meta: [["discovery_epoch", DISCOVERY_EPOCH], ["discovery_revision", w.revision]], work: { mode: "whole", ...w.work } };
+  }
+  let revision = held.get("discovery_revision");
+  const work = { mode: "delta", letters: letters.ids.length, homes: homes.ids.length, residents: residentKeys.length };
+  if (letters.ids.length || homes.ids.length) {
+    const d = discoveryRowsOf(discoverySourcesOf(letters.rows, homes.rows));
+    const storedChunks = new Map();
+    for (const [kind, ids] of [["letter", letters.ids], ["home", homes.ids]]) {
+      if (!ids.length) continue;
+      for (const r of (await client.query("SELECT id, digest FROM town_discovery_chunks WHERE source_kind = $1 AND source_id = ANY($2::text[])", [kind, ids])).rows)
+        storedChunks.set(JSON.stringify([r.id]), r.digest);
+    }
+    const storedEdges = new Map(letters.ids.length
+      ? (await client.query("SELECT id, digest FROM town_letter_edges WHERE letter_id = ANY($1::text[])", [letters.ids])).rows.map((r) => [JSON.stringify([r.id]), r.digest])
+      : []);
+    await diffTable(client, "discovery_chunks", d.chunks, tally, { scope: new Set(storedChunks.keys()), stored: storedChunks });
+    await diffTable(client, "letter_edges", d.edges, tally, { scope: new Set(storedEdges.keys()), stored: storedEdges });
+    // what stood for these sources out, what stands now in: an unchanged row is in both, and cancels
+    revision = foldDigests(revision, [...storedChunks.values(), ...storedEdges.values(), ...d.chunks.map(rowDigest), ...d.edges.map(rowDigest)]);
+    work.skipped = d.skipped;
+  }
+  revision = foldDigests(revision, residentKeys.map((h) => rowDigest(residentKeyRow(h))));
+  if (auditing) {
+    const w = await discoveryWhole(client, tally);
+    work.audit = { repaired: w.moved, revision_was_true: w.revision === revision };
+    revision = w.revision;
+  }
+  return { meta: [["discovery_epoch", DISCOVERY_EPOCH], ["discovery_revision", revision]], work };
 }
 
 // ── the delta ────────────────────────────────────────────────────────────────
@@ -588,6 +666,9 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   const resCands = residentRows(townRepo, town, (h) => history.lastActive.get(h) ?? heldActive.get(h) ?? null,
     { log, only: new Set([...affected].filter((h) => nowHandles.has(h))) });
   await diffTable(client, "residents", resCands, tally, { scope: scopeResidents, stored: storedResidents });
+  // the handles that joined or left the roll: discovery's eligibility is the roll, so its generation moves with them (POS-497)
+  const onRoll = new Set(resCands.map(keyOf("residents")));
+  const residentKeys = [...scopeResidents].filter((k) => storedResidents.has(k) !== onRoll.has(k)).map((k) => JSON.parse(k)[0]);
   lap("residents");
 
   // mail_state: recomputed only for the parties of what moved — every letter
@@ -664,7 +745,27 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   lap("quests");
   await diffTable(client, "bulletin", bulletinRows(town), tally);
   const atlas = atlasRows(townRepo, town, { log });
-  if (atlas) { await diffTable(client, "regions", atlas.regions, tally); await diffTable(client, "homes", atlas.homes, tally); }
+  let homesTouched = new Set();
+  if (atlas) { await diffTable(client, "regions", atlas.regions, tally); homesTouched = await diffTable(client, "homes", atlas.homes, tally); }
+
+  // discovery (087, POS-497): the letters and homes this delta touched,
+  // re-derived (a later set's row wins: the audit's over the delta's), and the
+  // generation moved by what they replaced and by the roll's keys. Its own clock,
+  // kept out of the phase around it.
+  const discoveryAt = Date.now();
+  const lettersInPlay = new Map();
+  for (const s of letterSets) {
+    const touched = new Set(s.touched);
+    for (const k of touched) lettersInPlay.set(String(JSON.parse(k)[0]), null);
+    for (const r of s.cands) if (touched.has(letterKey(r))) lettersInPlay.set(String(r[0]), r);
+  }
+  const homeRowOf = new Map((atlas?.homes ?? []).map((r) => [keyOf("homes")(r), r]));
+  const discovery = await writeDiscovery(client, {
+    letters: { ids: [...lettersInPlay.keys()], rows: [...lettersInPlay.values()].filter(Boolean) },
+    homes: { ids: [...homesTouched].map((k) => String(JSON.parse(k)[0])), rows: [...homesTouched].map((k) => homeRowOf.get(k)).filter(Boolean) },
+    residentKeys, auditing, tally, log });
+  ms.discovery = Date.now() - discoveryAt;
+  t0 += ms.discovery;
 
   // meta, in the seed's order (src/town-index.mjs § deriveTownIndex)
   const metaRows = [
@@ -679,6 +780,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   ];
   if (hasStamps) metaRows.push(["stamps_minted", minted], ["stamps_tip", tip]);
   if (q) metaRows.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
+  metaRows.push(...discovery.meta); // none on a store without 087, so its two keys are dropped there
   await diffTable(client, "meta", metaRows, tally);
   lap("bulletin+atlas+meta");
 
@@ -687,7 +789,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   // delta" (the ms corroborate it). bytes: the two ledger blobs git read.
   const work = { letter_paths: letterPaths.size, letters: letters.derived, threads: threads.derived,
     threads_scanned: threads.scanned, threads_scan_ms: threads.scanMs, ledger: ledger.proof, ledger_bytes: ledger.bytes };
-  return { mode: "delta", head, sha, tally, commits, changed: changed.length, ms, work, ...(audit ? { audit } : {}) };
+  return { mode: "delta", head, sha, tally, commits, changed: changed.length, ms, work, ...(audit ? { audit } : {}), discovery: discovery.work };
 }
 
 /**
@@ -760,6 +862,7 @@ async function main() {
     console.log(`${out.mode} ${sha.slice(0, 12)}${out.head ? ` from ${out.head.slice(0, 12)} (${out.commits} commits)` : ""} in ${out.total_ms} ms — wrote ${writes}` +
       (out.counts && out.mode !== "seed" ? " · snapshot recorded" : "") +
       (out.audit ? ` · audit ${JSON.stringify(out.audit)}` : "") +
+      (out.discovery ? ` · discovery ${JSON.stringify(out.discovery)}` : "") +
       (out.ms ? ` · ms ${JSON.stringify(out.ms)}` : ""));
   } finally { await client.end(); }
 }

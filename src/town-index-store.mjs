@@ -43,6 +43,8 @@ import { isResidentHandle } from "./residency.mjs"; // the door's admission gram
 import { lastActiveFor } from "./last-active.mjs"; // a resident's newest act, from acts and town_letters (POS-481)
 import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
+import { discoveryAsk, readCursor, textBoundOf, discoveryPage, discoveryTablesIn, generationOf, DISCOVERY_LIMITS, PAST_EVERY_KEY,
+  NOT_INSTALLED, NOT_BUILT, noResident, resetNote } from "./town-discovery.mjs"; // POS-497: discovery's bounds, cursor and words
 
 import { freshnessFor, composeHome, composeFoundedHome } from "./paper-fresh.mjs"; // the freshness ladder, as home below uses it
 
@@ -954,6 +956,125 @@ export async function search(q, term, { limit, offset } = {}) {
   const letters = (await q.query(`SELECT ${LETTER_COLS} FROM town_letters WHERE ${like("id", "$1")} OR ${like("json", "$1")} ORDER BY ${NEWEST} LIMIT $2 OFFSET $3`,
     [pattern, n, start])).rows.map(excerpt);
   return searchPage({ q: term, n, start, lettersTotal, residentsTotal, residents, letters });
+}
+
+// ── DISCOVERY (POS-497, slice one) ───────────────────────────────────────────
+//
+// Two bounded walks over 087's tables, each ONE statement, so the generation it
+// is tagged with and the rows it read come from one snapshot (`BEGIN READ ONLY`
+// is READ COMMITTED: two statements could see two ingests). Each step of a walk
+// is one index seek that reads one row, and the walk stops at its bound, so a
+// page's work does not grow with the record: no count, no sort, no json read.
+//
+//   text     walks the pieces in (author, kind, source, ordinal) order, C
+//            collation. An author is emitted once, at their first piece that
+//            holds the literal, and the next seek jumps past the rest of their
+//            pieces; an author not on the roll is jumped past the same way, and
+//            a source kind the ask did not select by its group. `past` names
+//            which jump the row took, and the cursor carries it.
+//   common   walks the distinct recipients the first person writes to, C order,
+//            one seek each, so a run of a million letters to one resident is one
+//            step. Each is a hit when it is on the roll and the second person
+//            writes to it too (one probe each).
+
+const foldSql = (expr) => `translate(${expr}, '${UPPER}', '${LOWER}')`;
+const WALK_KEY = `t.author COLLATE "C", t.source_kind COLLATE "C", t.source_id COLLATE "C", t.ordinal`;
+const DISCOVERY_GEN = `SELECT (SELECT value FROM town_meta WHERE key = 'discovery_epoch') AS epoch,
+    (SELECT value FROM town_meta WHERE key = 'discovery_revision') AS revision`;
+
+const TEXT_WALK = `WITH RECURSIVE
+  gen AS (${DISCOVERY_GEN}),
+  walk AS (
+    SELECT 0 AS step, NULL::text AS author, NULL::text AS source_kind, NULL::text AS source_id, NULL::integer AS ordinal,
+           NULL::text AS piece, NULL::boolean AS eligible, false AS emitted, NULL::text AS past, 0 AS hits,
+           $3::text AS nb_author, $4::text AS nb_kind, $5::text AS nb_source, $6::integer AS nb_ordinal
+    UNION ALL
+    SELECT w.step + 1, n.author, n.source_kind, n.source_id, n.ordinal, n.piece, e.eligible, h.hit,
+           CASE WHEN h.hit OR NOT e.eligible THEN 'author' WHEN NOT s.selected THEN 'kind' ELSE 'row' END,
+           w.hits + h.hit::int,
+           n.author,
+           CASE WHEN h.hit OR NOT e.eligible THEN $9::text ELSE n.source_kind END,
+           CASE WHEN h.hit OR NOT e.eligible OR NOT s.selected THEN $9::text ELSE n.source_id END,
+           CASE WHEN h.hit OR NOT e.eligible OR NOT s.selected THEN 2147483647 ELSE n.ordinal END
+      FROM walk w
+      CROSS JOIN LATERAL (
+        SELECT t.author, t.source_kind, t.source_id, t.ordinal, t.piece FROM town_discovery_chunks t
+         WHERE (${WALK_KEY}) > (w.nb_author, w.nb_kind, w.nb_source, w.nb_ordinal)
+         ORDER BY ${WALK_KEY} LIMIT 1) n
+      CROSS JOIN LATERAL (SELECT CASE WHEN w.step > 0 AND n.author = w.author THEN w.eligible
+        ELSE EXISTS (SELECT 1 FROM town_residents r WHERE r.handle = n.author) END AS eligible) e
+      CROSS JOIN LATERAL (SELECT n.source_kind = ANY($2::text[]) AS selected) s
+      CROSS JOIN LATERAL (SELECT e.eligible AND s.selected AND strpos(${foldSql("n.piece")}, ${foldSql("$1::text")}) > 0 AS hit) h
+     WHERE w.step < $7 AND w.hits < $8
+  )
+  SELECT g.epoch, g.revision, w.step, w.author, w.source_kind, w.source_id, w.ordinal, w.emitted, w.past,
+         CASE WHEN w.emitted THEN w.piece END AS piece,
+         (SELECT EXISTS (SELECT 1 FROM town_discovery_chunks t WHERE (${WALK_KEY}) > (l.nb_author, l.nb_kind, l.nb_source, l.nb_ordinal))
+            FROM (SELECT * FROM walk ORDER BY step DESC LIMIT 1) l) AS more
+    FROM gen g LEFT JOIN walk w ON w.step > 0
+   ORDER BY w.step`;
+
+const COMMON_WALK = `WITH RECURSIVE
+  gen AS (${DISCOVERY_GEN}),
+  people AS (SELECT EXISTS (SELECT 1 FROM town_residents WHERE handle = $1::text) AS a,
+                    EXISTS (SELECT 1 FROM town_residents WHERE handle = $2::text) AS b),
+  walk AS (
+    SELECT 0 AS step, $3::text AS recipient, false AS emitted, 0 AS hits
+    UNION ALL
+    SELECT w.step + 1, n.recipient, c.common, w.hits + c.common::int
+      FROM walk w
+      CROSS JOIN LATERAL (
+        SELECT e.recipient FROM town_letter_edges e
+         WHERE e.sender COLLATE "C" = $1::text AND e.recipient COLLATE "C" > w.recipient
+         ORDER BY e.sender COLLATE "C", e.recipient COLLATE "C" LIMIT 1) n
+      CROSS JOIN LATERAL (SELECT EXISTS (SELECT 1 FROM town_residents r WHERE r.handle = n.recipient)
+        AND EXISTS (SELECT 1 FROM town_letter_edges b WHERE b.sender COLLATE "C" = $2::text AND b.recipient COLLATE "C" = n.recipient) AS common) c
+     WHERE w.step < $4 AND w.hits < $5
+  )
+  SELECT g.epoch, g.revision, p.a, p.b, w.step, w.recipient, w.emitted,
+         (SELECT EXISTS (SELECT 1 FROM town_letter_edges e WHERE e.sender COLLATE "C" = $1::text AND e.recipient COLLATE "C" > l.recipient)
+            FROM (SELECT recipient FROM walk ORDER BY step DESC LIMIT 1) l) AS more
+    FROM gen g CROSS JOIN people p LEFT JOIN walk w ON w.step > 0
+   ORDER BY w.step`;
+
+/** One page's walk, from `at` (null: the start): its generation, its rows in step order, and whether the record goes on past them. */
+async function discoveryWalk(q, ask, at) {
+  const L = DISCOVERY_LIMITS;
+  if (ask.mode === "text") {
+    const { rows } = await q.query(TEXT_WALK, [ask.q, ask.kinds, ...textBoundOf(at), L.pieces_per_page, ask.limit, PAST_EVERY_KEY]);
+    return { generation: generationOf(rows[0]?.epoch, rows[0]?.revision), more: rows[0]?.more === true,
+      rows: rows.filter((r) => r.step != null).map(({ author, source_kind, source_id, ordinal, emitted, past, piece }) => ({ author, source_kind, source_id, ordinal, emitted, past, piece })) };
+  }
+  const { rows } = await q.query(COMMON_WALK, [ask.people[0], ask.people[1], at ? at[0] : "", L.candidates_per_page, ask.limit]);
+  return { generation: generationOf(rows[0]?.epoch, rows[0]?.revision), more: rows[0]?.more === true,
+    missing: ask.people.filter((_, i) => rows[0]?.[i === 0 ? "a" : "b"] !== true),
+    rows: rows.filter((r) => r.step != null).map(({ recipient, emitted }) => ({ recipient, emitted })) };
+}
+
+/**
+ * town { read: "discover" } (MCP `discover_town`): one bounded page, or the
+ * door's refusal. A cursor from another generation is an explicit reset: the
+ * page starts the walk again and says so (`reset`), never a page stitched
+ * across two records.
+ */
+export async function discover(q, args = {}) {
+  const v = discoveryAsk(args);
+  if (v.bounce) return v.bounce;
+  const { ask } = v;
+  const c = readCursor(ask);
+  if (c.bounce) return c.bounce;
+  if (!(await discoveryTablesIn(q))) return NOT_INSTALLED;
+  let walked = await discoveryWalk(q, ask, c.at);
+  if (walked.generation == null) return NOT_BUILT;
+  if (walked.missing?.length) return noResident(walked.missing[0]);
+  let reset = null;
+  if (c.generation && c.generation !== walked.generation) {
+    walked = await discoveryWalk(q, ask, null);
+    if (walked.generation == null) return NOT_BUILT;
+    if (walked.missing?.length) return noResident(walked.missing[0]);
+    reset = resetNote(c.generation, walked.generation);
+  }
+  return discoveryPage(ask, { ...walked, reset, start: reset ? null : c.at });
 }
 
 /** The mail pulse from the ledger, letters and threads (queries.mjs § metricsMailOf). */

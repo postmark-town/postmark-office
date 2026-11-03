@@ -21,6 +21,7 @@
 // derivation costs at 213 residents, docs/town-index-store.md).
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -33,6 +34,21 @@ import { readWindowState } from "./panes.mjs"; // the pane's machine twin — on
 // The tables (town-tables.mjs, kept apart so the shape loads without the derivation).
 import { TOWN_TABLES } from "./town-tables.mjs";
 export { TOWN_TABLES };
+import { discoveryRowsOf, DISCOVERY_EPOCH, ZERO_REVISION, foldDigests, residentKeyRow } from "./town-discovery.mjs"; // POS-497: derived from the letters and homes below
+
+/** A row's change stamp, the `digest` every town_* table but repo_log keeps: the md5 of its columns as written (the ingest's digestOf). */
+export const rowDigest = (row) => createHash("md5").update(JSON.stringify(row)).digest("hex");
+
+/** discovery_revision, whole: every piece's and edge's digest and one per resident key, folded (town-discovery.mjs § the generation). */
+export const discoveryRevisionOf = (chunks, edges, residentHandles) =>
+  foldDigests(ZERO_REVISION, [...chunks.map(rowDigest), ...edges.map(rowDigest), ...residentHandles.map((h) => rowDigest(residentKeyRow(h)))]);
+
+const colOf = (table, col) => TOWN_TABLES[table].cols.indexOf(col);
+/** Discovery's sources from the derivation's own rows: the letters' (id, from_h, json) and the homes' (handle, json). */
+export const discoverySourcesOf = (letters, homes) => ({
+  letters: letters.map((r) => ({ id: r[colOf("letters", "id")], from: r[colOf("letters", "from_h")], json: r[colOf("letters", "json")] })),
+  homes: homes.map((r) => ({ handle: r[colOf("homes", "handle")], json: r[colOf("homes", "json")] })),
+});
 
 /** A keyed table's rows, last write wins at the FIRST write's position — sqlite's INSERT OR REPLACE, as an array. */
 function keyed(table) {
@@ -516,8 +532,17 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
   t.regions = atlas?.regions ?? [];
   t.homes = atlas?.homes ?? [];
 
+  // DISCOVERY (POS-497): its pieces and edges from the letters and homes just
+  // derived, and its generation, last in meta. The ingest skips all three on a
+  // store without 087 (world2/tools/town-index-ingest.mjs § discovery).
+  const disc = discoveryRowsOf(discoverySourcesOf(t.letters, t.homes));
+  t.discovery_chunks = disc.chunks;
+  t.letter_edges = disc.edges;
+  meta.push(["discovery_epoch", DISCOVERY_EPOCH],
+    ["discovery_revision", discoveryRevisionOf(disc.chunks, disc.edges, t.residents.map((r) => r[colOf("residents", "handle")]))]);
+
   const m = keyed("meta");
   for (const row of meta) m.put(row);
   t.meta = m.rows();
-  return { asOf, town, tables: t, stampEntries: fold?.entries ?? 0 };
+  return { asOf, town, tables: t, stampEntries: fold?.entries ?? 0, discoverySkipped: disc.skipped };
 }

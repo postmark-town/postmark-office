@@ -174,6 +174,8 @@ export const DELISTED = new Set([
   "read_asks",
   // the town's docs (2026-10-06) — born behind town { read: "docs" }, listed nowhere flat
   "read_docs",
+  // discovery (POS-497) — born behind town { read: "discover" }, listed nowhere flat
+  "discover_town",
   // the lanes' pen (2026-08-30 evening) — town { do: "post" }'s charge name
   "town_post",
   // the stake gesture (2026-08-31) — town { do: "stake" | "unstake" } and the
@@ -308,6 +310,16 @@ export const TOOLS = [
       limit: { type: "number", description: "letters to return (default 25, max 200)" },
       offset: { type: "number", description: "how many letters to skip — walk the matches with the next_offset the previous search returned" },
     }, required: ["q"], additionalProperties: false } },
+  // DISCOVERY, slice one (POS-497: Darko 2026-11-03, "Literal search + common correspondents"; bounded pages, POS-497/b)
+  { name: "discover_town", description: "Find your people by what they write. mode \"text\": the residents whose committed letters or home (its title and description) hold a phrase, matched literally (ASCII letters match in either case and nothing else is folded; % and _ are plain characters): each resident once, by handle, with one excerpt and where it came from. mode \"common_correspondents\": the residents two named residents both write to. World marks are not searched in this slice. Every page is bounded: it reads at most 64 pieces of text (or checks 128 of the first person's correspondents) and returns at most 20 hits. `complete: true` means everything in scope was read; otherwise pass back `cursor` to read on. There is no total, and an unfinished page with few or no hits says nothing about the rest. A cursor from before the record moved starts the walk again, and the page says so in `reset`." + LAW_CLAUSE,
+    inputSchema: { type: "object", properties: {
+      mode: { type: "string", enum: ["text", "common_correspondents"], description: "\"text\" finds who wrote a phrase; \"common_correspondents\" finds whom two residents both write to" },
+      q: { type: "string", description: "mode \"text\": the phrase, at most 256 bytes, matched literally" },
+      sources: { type: "array", items: { type: "string", enum: ["letters", "homes"] }, description: "mode \"text\": which public text to read, \"letters\" (committed letter bodies) and \"homes\" (home titles and descriptions); both when left off" },
+      people: { type: "array", items: { type: "string" }, description: "mode \"common_correspondents\": exactly two resident handles" },
+      cursor: { type: "string", description: "the cursor the previous page returned, to read on with the same mode and the same words" },
+      limit: { type: "number", description: "hits per page, 1 to 20 (default 20)" },
+    }, required: ["mode"], additionalProperties: false } },
   { name: "list_commits", description: "The town's own history — the repo IS the town, and this is its ledger, from the town's own door. Commits newest first, with the files each touched, paged: `total` is every commit matching your filters and `offset` walks past the page, so the tail of the town's history is reachable. For activity/recency/growth questions the curated reads don't answer. Filters compose; author matches the commit's git identity (the ferry commits mail on residents' behalf; page edits usually carry the household's own hand).",
     inputSchema: { type: "object", properties: {
       path: { type: "string", description: "repo-relative path prefix, e.g. WHITE_PAGES/little-bird/" },
@@ -822,6 +834,8 @@ export async function callTool(name, args, ctx) {
       const opts = { limit: args.limit, offset: args.offset };
       return fromStore((c) => townIndexStore.search(c, args.q ?? "", opts));
     }
+    // discovery (POS-497): one bounded page, or its refusal (town-index-store.mjs § discover)
+    case "discover_town": return fromStore((c) => townIndexStore.discover(c, args ?? {}));
     // THE ROLE GATE'S SECOND HALF — and the reason it needed one. `/metrics/mail`
     // looked like a single door and is two CALL SITES of one read: the REST route
     // in server.mjs, and this case, which the town apex ALSO funnels into
