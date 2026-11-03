@@ -193,7 +193,6 @@ export function createSayPush({
       let timer = null;
       const w = watcher({ handle, standAs, here, since });
       const finish = (body) => {
-        if (w.ended) return;
         w.end();
         clearTimer(timer);
         resolve({ ...body, waited_ms: room.now() - t0 });
@@ -248,7 +247,6 @@ export function createSayPush({
     room.listened(handle, here, t);
     const w = watcher({ handle, standAs, here, since });
     w.deliver = (r) => {
-      if (w.ended) return;
       if (Number.isFinite(r?.latest)) w.since = r.latest;
       send(r);
     };
