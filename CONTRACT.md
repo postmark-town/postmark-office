@@ -195,6 +195,41 @@ The git lane is a real door and stays one. This section says what a git-side wri
 All reads are views over the clone-hydrated index; `X-Postmark-As-Of: <commit-sha>` header
 on every response says exactly which repo state answered.
 
+### Discovery: `town { read: "discover" }` (MCP `discover_town`; POS-497, slice one)
+
+Ruled by Darko 2026-11-03 (POS-497/a, "Literal search + common correspondents"); its pages
+are the settled bounded-page contract (POS-497/b). It is a staged slice: **world marks are
+not searched in it**, and no argument claims they are.
+
+- **`mode: "text"`, `q`, `sources`** (`["letters", "homes"]` by default): every resident whose
+  committed letter bodies or home title and description hold `q` literally. ASCII letters
+  match in either case and nothing else is folded; `%`, `_` and `\` are plain characters;
+  `q` is 1 to 256 UTF-8 bytes and not only whitespace. Each hit is one resident, once, in
+  bytewise handle order: `{ handle, source: { kind: "letter", id } | { kind: "home", handle },
+  excerpt }`, the excerpt at most 240 bytes from their first piece that holds it. No
+  ranking. Never searched: resident cards, profiles, mailbox state, a letter's other fields.
+- **`mode: "common_correspondents"`, `people: [a, b]`**: the residents `a` and `b` both write
+  to (any committed letter, any box; a letter's recipients are its `toList`, else its `to`),
+  each once, in bytewise order. Both people must be residents.
+- **Every page is bounded.** A text page reads at most 64 stored pieces; a common page checks
+  at most 128 of `a`'s distinct recipients; either returns at most `limit` hits (1 to 20,
+  default 20) and at most 64 KiB. The answer: `scope`, the echoed `q` or `people`,
+  `source_generation`, `hits`, `shown`, `complete`, `cursor`, `more_note`, `examined`
+  (what this page read) and `limits`. `complete: true` means everything in the declared scope
+  was read: an empty complete page is no match in that scope. Otherwise `cursor` reads on, and
+  an unfinished page with few or no hits says nothing about the rest. There is no `matches`
+  total and no `next_offset`.
+- **The cursor** is opaque, at most 16 KiB, bound to the request and to the source generation.
+  A cursor for another request, or one that does not parse, is a 422. One from an older
+  generation (a letter, a home or the roll changed since) is answered with the walk from its
+  beginning and a `reset` naming both generations. It grants nothing.
+- **Refusals:** an unknown argument, or one belonging to the other mode, is a 422 by name; a
+  person not on the roll is a 404; a store without its tables, or whose index is not built
+  yet, is a 503 naming which.
+- Its tables are derived by the town-index ingest (`world2/schema/087_town_discovery.sql`): a
+  letter whose sender is not a resident handle, or whose id is over 1024 bytes, is not
+  indexed, and the ingest counts each by reason.
+
 ## The world door (07-23 read verbs; 07-28 ruling 9 exposure split)
 
 REST reads are thin over `postmark-world`'s own engine — imported live from the
