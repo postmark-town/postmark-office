@@ -31,7 +31,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { startStore } from "./helpers/embedded-store.mjs";
-import { DISCOVERY_LIMITS as L, DISCOVERY_EPOCH, ZERO_REVISION } from "../src/town-discovery.mjs";
+import { DISCOVERY_LIMITS as L, DISCOVERY_EPOCH, ZERO_REVISION, fingerprintAdd, fingerprintRemove, digestOfChunk } from "../src/town-discovery.mjs";
 import * as store from "../src/town-index-store.mjs";
 
 const DUPLICATES = Number(process.env.DISCOVERY_PLAN_DUPLICATES ?? 1_000_000);
@@ -77,6 +77,10 @@ async function smallStore() {
   await w.query("INSERT INTO town_residents (handle, json, digest) VALUES ('ada', '{}', 'x'), ('bex', '{}', 'x')");
   await RESIDENTS("m", 200);
   await AUTHORS("m", 200, 10, { needleLast: true });
+  // a rare word, in two pieces of two authors (the churn measurement's term, POS-497 FIX 5)
+  await w.query(`INSERT INTO town_discovery_chunks (id, author, source_kind, source_id, ordinal, piece, digest) VALUES
+    ('letter:10:m00100-l', 'm00100', 'letter', 'm00100-l', 10, 'a rare quokka appears here', 'x'),
+    ('letter:10:m00150-l', 'm00150', 'letter', 'm00150-l', 10, 'another quokka, rarer still', 'x')`);
   await RESIDENTS("c", 1000);
   await WRITES_TO("ada", "c", 1, 1000);
   await w.query(`INSERT INTO town_letter_edges (id, letter_id, sender, recipient, digest)
@@ -191,6 +195,93 @@ function mutate(walk, from, to) {
   return { text: parts.join(to), params: walk.params };
 }
 
+// ── the churn harness (POS-497 FIX 5) ────────────────────────────────────────
+//
+// LAW (Rivet's FIX packet): "walk a rare term to completion with stable source;
+// record pages, bytes, wall, candidate/heap/DB work. Repeat with a controlled
+// relevant public change during a walk and a repeated public-edit cadence;
+// record resets, forward progress/completion and honest starvation if it never
+// stabilizes. Private-only changes must not reset public cursor." And: "I accept
+// for slice1 that an exact CURRENT-generation walk has no eventual-completion
+// guarantee under continuous relevant edits."
+//
+// A walk is driven page by page through the real reader. A "public edit" moves
+// the generation the way the ingest's writeDiscovery moves it (one piece
+// replaced: its digest removed, the new one added, in one transaction, by the
+// real fingerprint functions), so the reader meets exactly the cursor-versus-
+// generation case a real ingest makes. The real ingest's own private-only and
+// public transitions are test/town-discovery-ingest.test.mjs; this file measures
+// what they cost a long walk.
+
+const EDIT_ID = "letter:0:zedit-l";
+const editRow = (n) => [EDIT_ID, "zedit", "letter", "zedit-l", 0, `an edit, number ${n}`];
+let editNumber = 0;
+/** A relevant public change: one piece replaced, the revision moved by its remove and its add. */
+async function publicEdit() {
+  const n = ++editNumber;
+  await w.query("BEGIN");
+  try {
+    let rev = (await w.query("SELECT value FROM town_meta WHERE key = 'discovery_revision'")).rows[0].value;
+    const old = (await w.query("SELECT id, author, source_kind, source_id, ordinal, piece FROM town_discovery_chunks WHERE id = $1", [EDIT_ID])).rows[0];
+    if (old) { rev = fingerprintRemove(rev, [digestOfChunk([old.id, old.author, old.source_kind, old.source_id, old.ordinal, old.piece])]); await w.query("DELETE FROM town_discovery_chunks WHERE id = $1", [EDIT_ID]); }
+    const row = editRow(n);
+    await w.query("INSERT INTO town_discovery_chunks (id, author, source_kind, source_id, ordinal, piece, digest) VALUES ($1, $2, $3, $4, $5, $6, 'x')", row);
+    rev = fingerprintAdd(rev, [digestOfChunk(row)]);
+    await w.query("DELETE FROM town_meta WHERE key = 'discovery_revision'");
+    await w.query("INSERT INTO town_meta (key, value, digest) VALUES ('discovery_revision', $1, 'x')", [rev]);
+    await w.query("COMMIT");
+    return true;
+  } catch (e) { await w.query("ROLLBACK").catch(() => {}); throw e; }
+}
+/** A private-only change: a resident's card. Discovery reads no card, so the revision must not move (the ingest test holds this through the real ingest). */
+let privateNumber = 0;
+const privateEdit = async () => { await owner.query("UPDATE town_residents SET json = $1 WHERE handle = 'ada'", [JSON.stringify({ private_edit: ++privateNumber })]); return true; };
+
+/**
+ * One ask walked page by page (to its end, or `maxPages`), through the real
+ * reader: what the walk cost, and what edits made to the record did to it.
+ * `edit` runs after every `editEvery` pages. `explainEvery` > 0 plans every
+ * Nth page's statement under EXPLAIN (ANALYZE, BUFFERS): those pages' buffers
+ * and rows handed to the plan are MEASURED; the walk's totals are then the
+ * sampled mean times its pages (an estimate, labelled so).
+ */
+async function walkOf(args, { maxPages = 100_000, editEvery = Infinity, edit = null, explainEvery = 0 } = {}) {
+  const m = { pages: 0, bytes: 0, examined: 0, resets: 0, completed: false, hits: [], run: 0, longestRun: 0, edits: 0, sampled: 0, buffers: 0, rowsHanded: 0, planMs: 0, wallMs: 0, maxPageBytes: 0, maxExamined: 0 };
+  let cursor = null, last = null, overhead = 0;
+  const q = { query: (text, params) => { if (/WITH RECURSIVE/.test(text)) last = { text, params }; return api.query(text, params); } };
+  const t0 = performance.now();
+  while (m.pages < maxPages) {
+    const page = await store.discover(q, { ...args, ...(cursor ? { cursor } : {}) });
+    assert.equal(page.error, undefined, JSON.stringify(page));
+    const bytes = Buffer.byteLength(JSON.stringify(page));
+    assert.ok(bytes <= L.response_bytes, "a page never weighs past its bound");
+    m.pages++; m.bytes += bytes; m.maxPageBytes = Math.max(m.maxPageBytes, bytes);
+    const read = page.examined.pieces ?? page.examined.candidates;
+    m.examined += read; m.maxExamined = Math.max(m.maxExamined, read);
+    for (const h of page.hits) m.hits.push(h.handle);
+    if (page.reset) { m.resets++; m.longestRun = Math.max(m.longestRun, m.run); m.run = 0; }
+    m.run++;
+    if (explainEvery && m.pages % explainEvery === 0 && last) {
+      const s0 = performance.now();
+      const { plan } = await explain(last);
+      const work = workOf(plan);
+      m.sampled++; m.buffers += work.buffers; m.rowsHanded += Object.values(work.rows).reduce((a, b) => a + b, 0); m.planMs += work.ms;
+      overhead += performance.now() - s0;
+    }
+    if (page.complete) { m.completed = true; break; }
+    cursor = page.cursor;
+    if (edit && m.pages % editEvery === 0 && await edit()) m.edits++;
+  }
+  m.longestRun = Math.max(m.longestRun, m.run);
+  m.wallMs = Math.round(performance.now() - t0 - overhead);
+  return m;
+}
+const brief = (label, m) => {
+  const per = m.sampled ? { buffers_per_page: +(m.buffers / m.sampled).toFixed(1), rows_handed_per_page: +(m.rowsHanded / m.sampled).toFixed(1), plan_ms_per_page: +(m.planMs / m.sampled).toFixed(2), sampled_pages: m.sampled } : {};
+  console.log(`# measured: walk ${label}: ${JSON.stringify({ pages: m.pages, completed: m.completed, bytes: m.bytes, max_page_bytes: m.maxPageBytes, examined: m.examined, max_examined: m.maxExamined, wall_ms: m.wallMs, resets: m.resets, edits: m.edits, longest_run_pages: m.longestRun, hits: m.hits.length, ...per })}`);
+};
+const walks = {};
+
 const ASKS = [
   ["text, a word only in last pieces, from the start", { mode: "text", q: "needle" }],
   ["text, a word in nothing", { mode: "text", q: "no such word anywhere" }],
@@ -231,6 +322,16 @@ test("on a small store the real statements pass the gate, and every counter-muta
     assert.ok(why.length > 0, `${label}: the gate must red on the mutant (its work: ${JSON.stringify(workOf(bent.plan))})`);
     console.log(`# mutant red: ${label}: ${why.join("; ")}`);
   }
+
+  // the baseline walks (POS-497 FIX 5): a rare word, and the common walk, each to its end on this small store, every page planned
+  walks.small = {
+    text: await walkOf({ mode: "text", q: "quokka" }, { explainEvery: 1 }),
+    common: await walkOf({ mode: "common_correspondents", people: ["ada", "bex"] }, { explainEvery: 1 }),
+  };
+  brief("text, a rare word, small store", walks.small.text);
+  brief("common, ada and bex, small store", walks.small.common);
+  assert.deepEqual([walks.small.text.completed, walks.small.text.hits], [true, ["m00100", "m00150"]]);
+  assert.deepEqual([walks.small.common.completed, walks.small.common.hits.length], [true, 30]);
 });
 
 const measured = {};
@@ -276,4 +377,88 @@ test("a page's work, measured in its plan, does not grow with the record: a gian
   assert.equal(common.reduce((n, p) => n + p.examined.candidates, 0), 20_000, "twenty thousand distinct recipients, each checked once, the duplicate run as one");
   assert.deepEqual(common.flatMap((p) => p.hits.map((h) => h.handle)),
     Array.from({ length: 30 }, (_, k) => `c${String(1 + 10 * k).padStart(5, "0")}`), "bex's thirty, once each, in C order");
+});
+
+// ── walk progress and churn on the grown store (POS-497 FIX 5) ───────────────
+//
+//   DISCOVERY_CHURN=full               also runs the text walk's churn scenarios to their ends (about 10,000 more pages)
+//   DISCOVERY_CHURN_EXPLAIN_EVERY=<n>  plans every nth page (default 20; 1 plans them all)
+//
+// What this holds, and what it only measures. HELD: a walk over a stable source
+// completes in the pages the record needs and no more; a relevant public change
+// resets it exactly once and the walk then starts again from its beginning; a
+// private-only change resets nothing; and a record that changes more often than
+// the walk is long never lets it finish (the accepted limit of slice one: the
+// reset is announced each time, nothing pretends the old pages still stand, and
+// nothing serves the old record). MEASURED (printed as `# measured:`): pages,
+// bytes, wall time, rows read and buffers, for the grown store.
+
+test("progress and churn on the grown store: a rare word walked to completion, then with a public change in the middle, a private one, and a steady cadence of public edits", async (t) => {
+  if (skip) return t.skip(skip);
+  if (!walks.small || !Object.keys(measured).length) return t.skip("the small and grown measurements did not complete");
+  const full = process.env.DISCOVERY_CHURN === "full";
+  const every = Number(process.env.DISCOVERY_CHURN_EXPLAIN_EVERY ?? 20);
+  const TEXT = { mode: "text", q: "quokka" }, COMMON = { mode: "common_correspondents", people: ["ada", "bex"] };
+  const pieces = (await w.query("SELECT count(*)::int n FROM town_discovery_chunks")).rows[0].n;
+  const near = (got, want, slack, what) => assert.ok(Math.abs(got - want) <= slack, `${what}: ${got}, expected ${want} (±${slack})`);
+  const once = () => { let done = false; return async () => (done ? false : (done = true, publicEdit())); };
+
+  // ── stable source: the walk to completion ──
+  const text = await walkOf(TEXT, { explainEvery: every });
+  brief(`text, a rare word, grown store (${pieces} pieces)`, text);
+  assert.deepEqual([text.completed, text.resets, text.hits], [true, 0, ["m00100", "m00150"]]);
+  near(text.pages, Math.ceil(pieces / L.pieces_per_page), 1, "a stable walk reads the record in bounded pages, no more");
+  assert.ok(text.maxExamined <= L.pieces_per_page);
+  near(text.pages / walks.small.text.pages, pieces / 2002, pieces / 2002 * 0.05, "and its length is the small walk's, scaled by the record");
+  const common = await walkOf(COMMON, { explainEvery: every });
+  brief("common, ada and bex, grown store", common);
+  assert.deepEqual([common.completed, common.resets, common.hits.length, common.examined], [true, 0, 30, 20_000], "twenty thousand distinct recipients checked once each, the million duplicates as one step");
+  near(common.pages, Math.ceil(20_000 / L.candidates_per_page), 1, "common pages");
+
+  // ── a private-only change: no reset, and the walk is no longer ──
+  const priv = await walkOf(COMMON, { editEvery: 50, edit: privateEdit });
+  brief("common, a private-only edit every 50 pages", priv);
+  assert.deepEqual([priv.completed, priv.resets, priv.pages, priv.edits >= 2], [true, 0, common.pages, true], "a private-only change resets nothing");
+  const privText = await walkOf(TEXT, { editEvery: 100, edit: privateEdit, maxPages: 250 });
+  brief("text, a private-only edit every 100 pages, first 250 pages", privText);
+  assert.deepEqual([privText.resets, privText.edits, privText.longestRun], [0, 2, 250]);
+
+  // ── one relevant public change in the middle: one reset, then a whole walk again ──
+  const gen0 = (await w.query("SELECT value FROM town_meta WHERE key = 'discovery_revision'")).rows[0].value;
+  const mid = await walkOf(COMMON, { editEvery: 60, edit: once() });
+  brief("common, one public edit at page 60", mid);
+  assert.deepEqual([mid.completed, mid.resets, mid.edits, mid.hits.length], [true, 1, 1, 60], "one reset; the walk starts again from its beginning and completes (bex's thirty are on the first pages, so they come twice: before the edit and again after it)");
+  near(mid.pages, 60 + common.pages, 1, "the 60 pages before the edit are spent; the walk after it is the whole walk");
+  near(mid.longestRun, common.pages, 1, "and the progress that counts is the final, whole run");
+  assert.notEqual((await w.query("SELECT value FROM town_meta WHERE key = 'discovery_revision'")).rows[0].value, gen0, "the edit moved the generation");
+  const midText = await walkOf(TEXT, { editEvery: 100, edit: once(), maxPages: full ? 100_000 : 110 });
+  brief(`text, one public edit at page 100${full ? "" : ", first 110 pages"}`, midText);
+  assert.equal(midText.resets, 1, "the page after the edit is a reset");
+  if (full) {
+    assert.deepEqual([midText.completed, midText.hits], [true, ["m00100", "m00150"]]);
+    near(midText.pages, 100 + text.pages, 2, "text: 100 pages spent, then the whole walk again");
+  } else assert.equal(midText.completed, false);
+
+  // ── a steady cadence of public edits: a walk of P pages completes if and only if the record holds still for P pages ──
+  const P = common.pages;
+  const late = await walkOf(COMMON, { editEvery: P + 1, edit: publicEdit, maxPages: 4 * P });
+  brief(`common, an edit every ${P + 1} pages (the walk is ${P})`, late);
+  assert.deepEqual([late.completed, late.resets, late.edits], [true, 0, 0], "an edit later than the walk's last page never comes");
+  const tight = await walkOf(COMMON, { editEvery: P - 1, edit: publicEdit, maxPages: 4 * P });
+  brief(`common, an edit every ${P - 1} pages (the walk is ${P}), 4x the walk's pages allowed`, tight);
+  assert.equal(tight.completed, false, "STARVATION: an edit one page before the walk would end resets it every time; it never finishes");
+  assert.deepEqual([tight.pages, tight.resets, tight.longestRun], [4 * P, tight.edits, P - 1], "each edit is followed by a reset, and the longest run of progress is the cadence");
+  assert.equal(tight.hits.length > 0, true, "(pages before each reset still returned their hits; none of them is a verdict on the walk)");
+  const half = await walkOf(COMMON, { editEvery: 50, edit: publicEdit, maxPages: 4 * P });
+  brief("common, an edit every 50 pages, 4x the walk's pages allowed", half);
+  assert.deepEqual([half.completed, half.resets, half.longestRun], [false, half.edits, 50]);
+  if (full) {
+    const Pt = text.pages;
+    const textHalf = await walkOf(TEXT, { editEvery: Math.floor(Pt / 2), edit: publicEdit, maxPages: Pt + Math.floor(Pt / 2) + 10 });
+    brief(`text, an edit every ${Math.floor(Pt / 2)} pages (the walk is ${Pt}), ${Pt + Math.floor(Pt / 2) + 10} pages allowed`, textHalf);
+    assert.deepEqual([textHalf.completed, textHalf.resets, textHalf.longestRun], [false, textHalf.edits, Math.floor(Pt / 2)], "text starves the same way");
+    const textLate = await walkOf(TEXT, { editEvery: Pt + 1, edit: publicEdit });
+    brief(`text, an edit every ${Pt + 1} pages`, textLate);
+    assert.deepEqual([textLate.completed, textLate.resets], [true, 0]);
+  }
 });
