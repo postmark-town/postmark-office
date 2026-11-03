@@ -9,7 +9,7 @@
 //   town_letters each invited house's first DELIVERED letter, any resident's;
 //   marks        each invited house's first parcel, at the close of the window
 //                that locked it (its home), under either spelling of its key;
-//   invite_holds the hands' holds (086). A store without 086 answers
+//   invite_holds the hands' holds (087). A store without 087 answers
 //                `holds: null`, and the plan's caller pays no inviter side on a
 //                hold it cannot read: it fails closed.
 // The queries are tools/invites.mjs's own, moved here unchanged so the report

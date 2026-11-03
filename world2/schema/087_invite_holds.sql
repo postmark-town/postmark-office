@@ -1,4 +1,5 @@
--- 086 — invite_holds: THE HANDS' HOLD ON AN INVITER'S PAYOUT (POS-816, w46)
+-- 087 — invite_holds: THE HANDS' HOLD ON AN INVITER'S PAYOUT (POS-816, w46)
+-- (Numbered 087 because postmark-office #754, POS-770, holds 086, arrival sources.)
 --
 -- RULED (Darko):
 --   2026-10-28 23:07  the invite mint is deterministic, with Little Bird holding
@@ -41,7 +42,7 @@
 -- ── IDEMPOTENT. APPLY AS `world2_owner` by the runbook's step-1 idiom ────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/086_invite_holds.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/087_invite_holds.sql
 --
 -- A second run is a no-op: `IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, and GRANT
 -- is idempotent. Until it lands, the hands' hold says it cannot look, and the

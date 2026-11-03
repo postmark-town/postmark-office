@@ -530,7 +530,7 @@ test("I9b · the read, run as the operator runs it, on the real store: it lists 
   assert.equal(r.status, 0, r.stderr);
   const read = JSON.parse(r.stdout);
   assert.equal(read.ledger_read, false, "no town clone: it says it did not read the ledger");
-  assert.equal(read.holds_read, true, "086 is in the store");
+  assert.equal(read.holds_read, true, "087 is in the store");
   assert.deepEqual(read.invitations.map((p) => [p.household, p.invited_by, p.named]), [
     ["new-hearth", "lantern-row", "wick"], ["lamplight-rooms", "rookery-row", "moth"], ["candlewick-den", "moth", "hh:moth"]]);
   assert.match(read.invitations[0].ashore ?? "", /^\d{4}-\d\d-\d\dT/, "when it came ashore, by the store's own record");

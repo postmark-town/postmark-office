@@ -140,8 +140,8 @@ export const LANDED = {
   "084_reports.sql":               { probe: `${rel("reports")} AND EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'reports' AND policyname = 'reports_move') AND NOT has_table_privilege('snapshot_reader', 'reports', 'SELECT')` },
   // 085 (POS-576): who invited a household, a public credit on its row.
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
-  // 086 (POS-816): the hands' hold on an inviter's payout, private, office_api its only reader.
-  "086_invite_holds.sql":          { probe: `${rel("invite_holds")} AND has_table_privilege('office_api', 'invite_holds', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'invite_holds', 'SELECT')` },
+  // 087 (POS-816): the hands' hold on an inviter's payout, private, office_api its only reader.
+  "087_invite_holds.sql":       { probe: `${rel("invite_holds")} AND has_table_privilege('office_api', 'invite_holds', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'invite_holds', 'SELECT')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

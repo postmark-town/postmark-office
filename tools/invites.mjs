@@ -5,7 +5,7 @@
 //
 //   env: WORLD2_PG_URL (or PG*), the office's own store; TOWN_CLONE stands in for
 //        --town. Reads households (085's invited_by), ashore (071),
-//        town_letters, marks/windows and invite_holds (086), and the town's
+//        town_letters, marks/windows and invite_holds (087), and the town's
 //        ledger; writes nothing.
 //
 // ── WHAT IT IS NOW ──────────────────────────────────────────────────────────
@@ -64,7 +64,7 @@ const SIDE = {
 export function printInvites(read) {
   const head = [
     read.ledger_read ? null : "NOT READ AGAINST THE LEDGER (no --town and no TOWN_CLONE): no side can read PAID, so OWED here may already be paid.",
-    read.holds_read ? null : "THE HOLDS COULD NOT BE READ (migration 086): no inviter side is paid by the pass until they can be.",
+    read.holds_read ? null : "THE HOLDS COULD NOT BE READ (migration 087): no inviter side is paid by the pass until they can be.",
   ].filter(Boolean);
   if (!read.invitations.length) return [...head, "no household has joined with an invitation in this range."].join("\n") + "\n";
   const lines = [...head];

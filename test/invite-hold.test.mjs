@@ -64,7 +64,7 @@ test("FALSIFIER: Little Bird holds an inviter's payout through the town door, wi
   assert.equal(row.state, "held");
   assert.equal(row.moves.length, 1);
   assert.deepEqual({ ...row.moves[0], at: "-" }, { from: "open", to: "held", note: "three joins in an hour naming castle", hand: "little-bird", at: "-" });
-  // PRIVATE: no export role reads it (086), and it is never an act
+  // PRIVATE: no export role reads it (087), and it is never an act
   const [g] = await asOwner("SELECT has_table_privilege('snapshot_reader', 'invite_holds', 'SELECT') AS snap, has_table_privilege('office_api', 'invite_holds', 'UPDATE') AS api");
   assert.deepEqual(g, { snap: false, api: true });
   assert.equal(Number((await asOwner("SELECT count(*)::int AS n FROM acts WHERE object = 'invite:keep'"))[0].n), 0, "never an act: acts are published");

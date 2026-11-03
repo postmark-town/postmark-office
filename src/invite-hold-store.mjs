@@ -19,7 +19,7 @@
 // MCP surface: "Hands-only verbs and fields never reach a resident"). Anyone who
 // is not a hand gets one answer whether or not the invitation exists.
 //
-// The hold lives in `invite_holds` (086), private, never an act. The evidence a
+// The hold lives in `invite_holds` (087), private, never an act. The evidence a
 // hand reads is src/invite-pay.mjs § planInvitePay's row for the invitation: the
 // household and its inviter, when it came ashore and what its welcome paid,
 // what activated it and when, when the inviter's 10 falls due, how many the
@@ -37,7 +37,7 @@ import { inviteStoreFacts, townInviteLedger } from "./invite-facts.mjs";
 
 const notYetLanded = (e) => e?.code === "42P01";
 const STORE_NOT_READY = () => refuse(503, "the invitations' holds are not open yet",
-  "the office's record does not hold them yet (migration 086); nothing was moved. Try again after it lands");
+  "the office's record does not hold them yet (migration 087); nothing was moved. Try again after it lands");
 /** One answer for an invitation a caller may not see, whether or not it exists. */
 export const INVITE_NOT_FOUND = (id) => refuse(404, `no post "${id}"`, "town { read: \"posts\", args: { class } } lists what you may read");
 
@@ -122,7 +122,7 @@ export async function invitesAtOffice(fields = {}, key = null, { env = process.e
     }
     return { ...base, pay_day: read.plan.pay_day, month: read.plan.month, states: HOLD_STATES, total: read.plan.invitations.length, invitations: read.plan.invitations };
   } catch (e) {
-    if (notYetLanded(e)) return { class: INVITE_CLASS, invitations: null, note: INVITE_PRIVATE_NOTE, unavailable: "the holds are not open on this office's record (migration 086)" };
+    if (notYetLanded(e)) return { class: INVITE_CLASS, invitations: null, note: INVITE_PRIVATE_NOTE, unavailable: "the holds are not open on this office's record (migration 087)" };
     throw e;
   }
 }

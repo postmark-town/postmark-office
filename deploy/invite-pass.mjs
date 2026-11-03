@@ -39,7 +39,7 @@
 //   · a store it cannot read, or a registry, or a key base the switch asks for:
 //     nothing planned, nothing paid (welcome-pass's rule);
 //   · a town clone with no invite grammar: nothing paid;
-//   · holds it cannot read (086 not landed): the inviter sides wait, because a
+//   · holds it cannot read (087 not landed): the inviter sides wait, because a
 //     hold it cannot see is never assumed absent. The invited sides do not wait
 //     on holds, so they are still paid.
 //
@@ -110,7 +110,7 @@ export async function main(argv = process.argv.slice(2), { store = undefined, re
   if (!holdsReadable) {
     const waiting = lines.filter((l) => l.side === "inviter").length;
     lines = lines.filter((l) => l.side !== "inviter");
-    if (waiting) err(`invite-pass: the hands' holds cannot be read (migration 086 has not landed), so ${waiting} inviter payout(s) wait — a hold it cannot see is never assumed absent`);
+    if (waiting) err(`invite-pass: the hands' holds cannot be read (migration 087 has not landed), so ${waiting} inviter payout(s) wait — a hold it cannot see is never assumed absent`);
   }
   if (!lines.length) { log(`[invite-pass] nothing owed — ${plan.invitations.length} invitation(s) on record`); return 0; }
   const date = arg("--date", argv) ?? townDay(now);

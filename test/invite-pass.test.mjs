@@ -16,7 +16,7 @@
 //   · the invited household's 5 more and its inviter's 10, each one line, green;
 //   · a second pass writes nothing (never twice);
 //   · a held invitation pays its 5 more and not its inviter's 10;
-//   · holds it cannot read (086 not landed) pay no inviter side.
+//   · holds it cannot read (087 not landed) pay no inviter side.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -138,7 +138,7 @@ test(`END TO END: the pass pays both sides through the town's own verb, each onc
 });
 
 test(`END TO END: a held invitation pays its 5 more and not its inviter's 10; holds it cannot read pay no inviter side ${E2E ? "(skipped: " + E2E + ")" : ""}`, { skip: E2E }, async () => {
-  for (const [why, holds] of [["held by Little Bird", new Map([["keep", { state: "held", moves: [{ from: "open", to: "held", note: "a second account?", hand: "little-bird", at: "2026-11-01T00:00:00.000Z" }] }]])], ["086 not landed", null]]) {
+  for (const [why, holds] of [["held by Little Bird", new Map([["keep", { state: "held", moves: [{ from: "open", to: "held", note: "a second account?", hand: "little-bird", at: "2026-11-01T00:00:00.000Z" }] }]])], ["087 not landed", null]]) {
     const { repo, keyFile, pub } = invitedTown();
     try {
       const q = quiet();

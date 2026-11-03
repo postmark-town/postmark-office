@@ -132,7 +132,7 @@ lawful AS (
     -- UPDATE (a move, with its note); no DELETE, because a report is kept.
     ('office_api',   'reports',          'INSERT'),
     ('office_api',   'reports',          'UPDATE'),
-    -- 086_invite_holds.sql (POS-816), the hands' hold on an inviter's payout.
+    -- 087_invite_holds.sql (POS-816), the hands' hold on an inviter's payout.
     -- INSERT places a hold's first move, UPDATE each later one (the moves are
     -- kept inline, with their reasons); no DELETE, because a hold is kept.
     ('office_api',   'invite_holds',     'INSERT'),
