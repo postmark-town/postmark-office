@@ -70,29 +70,50 @@ function makeUnionFind(n) {
 async function buildKd(idx, xs, ys, { due, tick }) {
   const order = Int32Array.from(idx);
   const axisOf = new Uint8Array(order.length);
+  // each node's bounding box of its whole subtree, kept at the node's own slot: a search skips a subtree whose
+  // box is farther than earshot from the query, which is what keeps two dense cells that do NOT chain cheap
+  const bx0 = new Float64Array(order.length), bx1 = new Float64Array(order.length);
+  const by0 = new Float64Array(order.length), by1 = new Float64Array(order.length);
   const todo = [0, order.length, 0];
   while (todo.length) {
     const axis = todo.pop(), hi = todo.pop(), lo = todo.pop();
-    if (hi - lo <= 1) continue;
+    if (hi <= lo) continue;
+    // the box of [lo, hi), taken before the sort (membership of the range is all it needs)
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let k = lo; k < hi; k++) {
+      const i = order[k];
+      if (xs[i] < x0) x0 = xs[i];
+      if (xs[i] > x1) x1 = xs[i];
+      if (ys[i] < y0) y0 = ys[i];
+      if (ys[i] > y1) y1 = ys[i];
+    }
+    const mid = (lo + hi) >> 1;
+    if (hi - lo <= 1) { bx0[mid] = x0; bx1[mid] = x1; by0[mid] = y0; by1[mid] = y1; continue; }
     const key = axis === 0 ? xs : ys;
     const slice = Array.from(order.subarray(lo, hi)).sort((p, q) => key[p] - key[q] || p - q);
     order.set(slice, lo);
-    const mid = (lo + hi) >> 1;
-    axisOf[mid] = axis;
-    todo.push(lo, mid, axis ^ 1, mid + 1, hi, axis ^ 1);
+    const m = (lo + hi) >> 1;
+    axisOf[m] = axis;
+    bx0[m] = x0; bx1[m] = x1; by0[m] = y0; by1[m] = y1;
+    todo.push(lo, m, axis ^ 1, m + 1, hi, axis ^ 1);
     if (due()) await tick();
   }
-  return { order, axisOf };
+  return { order, axisOf, bx0, bx1, by0, by1 };
 }
 
 function kdAny(tree, xs, ys, qx, qy, r, r2, counter) {
-  const { order, axisOf } = tree;
+  const { order, axisOf, bx0, bx1, by0, by1 } = tree;
   const stack = [0, order.length];
+  // a subtree is skipped only when its box is PROVABLY out of reach: the box distance is a lower bound of every
+  // point's distance, and the margin keeps a rounding difference between two hypots from ever deciding it
+  const reach = r * (1 + 1e-9) + 1e-9;
   while (stack.length) {
     const hi = stack.pop(), lo = stack.pop();
     if (hi <= lo) continue;
     counter.work += 1;
     const mid = (lo + hi) >> 1;
+    const gx = Math.max(0, bx0[mid] - qx, qx - bx1[mid]), gy = Math.max(0, by0[mid] - qy, qy - by1[mid]);
+    if (Math.hypot(gx, gy) > reach) continue;
     const i = order[mid];
     const dx = xs[i] - qx, dy = ys[i] - qy;
     counter.checks += 1;
@@ -221,7 +242,7 @@ export async function componentsOf(voices, { earshotM, fuse = 50_000_000, sliceM
             stats.work += 1;
             if (prune && Math.hypot(ex, ey) > E) continue;
             if (kdAny(big.tree, xs, ys, xs[i], ys[i], E, r2, stats)) { chained = true; break; }
-            if ((stats.work & 255) === 0) if (due()) await tick();
+            if (due()) await tick();
           }
           if (chained) union(a.idx[0], b.idx[0]);
           if (due()) await tick();

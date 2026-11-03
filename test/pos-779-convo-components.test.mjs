@@ -75,12 +75,33 @@ test("DENSE UNCONNECTED NEIGHBOURS: two big circles one cell apart that never ch
   const { want, got, stats } = await both(voices, 60, { probe: false, prune: false });
   assert.equal(got, want);
   assert.equal(want.split("\n").length, 2, "the control premise: they really are two threads");
-  assert.ok(stats.treesBuilt > 0 && stats.checks > 100, "the control: the tree path really ran (not skipped by the shortcuts)");
+  // Until the tree kept a bounding box per node this asserted `stats.checks > 100` (the search had to walk). Now the
+  // root's box is farther than earshot from every voice of the other disk, so the search ends there: the tree was
+  // BUILT and the search cost nothing, which is the point. The ring case below keeps a control that the search walks.
+  assert.ok(stats.treesBuilt > 0, "the control: the tree path really ran (not skipped by the shortcuts)");
   const allPairs = 1500 * 1500;
   assert.ok(stats.checks < allPairs / 8, `distance checks ${stats.checks} stay far under the ${allPairs} all-pairs cross checks (measured 186,004 at this size, and about n^1.5 as it grows)`);
   assert.ok(stats.work < allPairs / 8, `total work ${stats.work} is counted and small`);
   const defaults = await componentsOf(voices, { earshotM: 60 });
   assert.ok(defaults.stats.checks < 100, `and with the box-gap pruning on, the far-apart pair costs ${defaults.stats.checks} checks`);
+});
+
+test("DENSE UNCONNECTED RINGS: two concentric rings whose boxes overlap but whose voices are all more than earshot apart stay two components, and the search still walks the tree", async () => {
+  // radii 31 and 92.5: the nearest cross pair is 61.5 m > 60 m earshot, yet each cell's box is within reach of the other's.
+  // The pruning by box gap cannot help here, and neither can the root's box: only a per-node box can.
+  const ring = (n, radius, from) => Array.from({ length: n }, (_, k) => { const a = (2 * Math.PI * k) / n; return mk(from + k, 300 + radius * Math.cos(a), 300 + radius * Math.sin(a)); });
+  const voices = [...ring(600, 31, 0), ...ring(600, 92.5, 600)];
+  const { want, got, stats } = await both(voices, 60);
+  assert.equal(got, want);
+  assert.equal(want.split("\n").length, 2, "the control premise: two threads");
+  assert.ok(stats.treesBuilt > 0 && stats.checks > 100, `the control: the search really walked (${stats.checks} checks, ${stats.treesBuilt} trees)`);
+  const allPairs = 600 * 600;
+  assert.ok(stats.checks < allPairs / 4, `${stats.checks} checks against ${allPairs} all-pairs cross checks`);
+  // the same rings with one voice moved inside earshot: now ONE thread (the search must find a chaining pair, not just prune)
+  const joined = voices.map((v, i) => (i === 0 ? { ...v, x: 300 + 31 * 1 + 29, y: 300 } : v)); // ring-1 voice 0 moved out to radius 60 -> 32.5 from ring 2's nearest point
+  const j = await both(joined, 60);
+  assert.equal(j.got, j.want);
+  assert.equal(j.want.split("\n").length, 1, "one moved voice makes them one room");
 });
 
 test("a LATE BRIDGE: two circles that never chain are one thread once a voice between them is admitted; without it they stay two", async () => {
