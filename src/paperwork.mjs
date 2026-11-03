@@ -27,9 +27,9 @@
 // no rollback to the files after it, and an unswitched writer whose oauth.db is
 // missing refuses to boot while the store holds sign-ins (server.mjs, the boot
 // guard). The file road below is the unswitched office's (a suite, a dev
-// office), and a switched office never opens either file.
-// (static-keys-retire.mjs still writes its tombstones into the file itself, in
-// its own § THE FILE, SECOND; that step is not this module's.)
+// office), and a switched office never opens either file. Neither does
+// static-keys-retire, whose own replay into the file went in the same change
+// (its § NO FILE).
 //
 // ── ONE SPELLING OF THE SQL ─────────────────────────────────────────────────
 //

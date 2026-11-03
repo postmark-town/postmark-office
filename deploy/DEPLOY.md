@@ -916,13 +916,13 @@ back from `OFFICE_KEYS`.
 no key and no hash, on the command line or in the environment, and prints none.
 It needs the store switch like the import (`OFFICE_PAPERWORK_STORE=1`,
 `WORLD2_PG=1`, `WORLD2_PG_URL`), and runs as meepo with the office's own env file
-loaded, naming the office's own file:
+loaded. It never opens `oauth.db` (POS-271), so it names no file:
 
 ```sh
 # the dry run first: advisory, writes nothing, binds nothing
-sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h> --dry --oauth-db /srv/postmark-office/oauth.db'
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h> --dry'
 # then the same line without --dry
-sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h> --oauth-db /srv/postmark-office/oauth.db'
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h>'
 ```
 
 What it does, and what it will not:
@@ -950,26 +950,18 @@ What it does, and what it will not:
   measured 8.5 ms on a synthetic store, which is a measurement of that run and
   not a promise. If the table is busy for the whole 2 s, nothing was changed:
   exit 6, run it again.
-- Then, and only then, it replays the retirement into `oauth.db` (the temporary
-  mirror, `paperwork.mjs` ⚑) in its own transaction and reads it back. **A
-  missing file, a failed write or a wrong read-back is NOT a success**: exit 4,
-  "STORE COMMITTED ... the file is NOT verified", and the exact command to
-  repair it. Do not roll the office back to the file until that is repaired: the
-  file would still hold the live key. The repair writes nothing in the store:
-
-```sh
-... node tools/static-keys-retire.mjs --household <slug> --handle <h> --mirror-only --oauth-db /srv/postmark-office/oauth.db
-```
-
-  `--mirror-only` reads the recorded retirements for that household and handle,
-  never a `static` row (a new key for the same household and handle is counted
-  and left alone), and refuses when none is recorded. A plain rerun with no
-  static row left does not repair anything; it says so and names this command.
-- Exit status: 0 retired and the file verified (or repaired); 1 refused, nothing
-  written; 2 cannot run (usage, no store switch); 4 STORE COMMITTED, file not
-  verified; 5 COMMIT not acknowledged, so the store may or may not hold it (check
-  with `--dry`, then `--mirror-only` if it is recorded); 6 table busy, nothing
-  changed.
+- The store's `retired` row IS the retirement. The tool never opens `oauth.db`
+  (POS-271): the office's mirror is deleted and the file leaves the box (§ The
+  paperwork files leave the box), so nothing reads it. Until POS-271 it then
+  replayed the retirement into the file and treated a missing or unverified file
+  as exit 4 with a repair verb, `--mirror-only`. That verb is retired: it is
+  refused by name (exit 2, nothing written). `--oauth-db` is accepted and
+  ignored, with a note, so an old command line still runs. A plain rerun with no
+  static row left refuses and says the store already holds the retirement.
+- Exit status: 0 retired (the store holds it); 1 refused, nothing written; 2
+  cannot run (usage, the retired `--mirror-only`, no store switch); 5 COMMIT not
+  acknowledged, so the store may or may not hold it (check with `--dry`); 6
+  table busy, nothing changed.
 - There is no un-retire. A household that needs a key again is issued a NEW key
   (a new hash), which the retired row does not touch.
 
@@ -986,9 +978,8 @@ no row, so it has no hash to refuse and no selector to find: nothing here can
 tombstone it. Take its entry out of whatever `OFFICE_KEYS` text an import reads
 (including a backup copy of the env file) before the import runs. Production
 retirements, and shredding the backup copy that still holds every key, are the
-owner's. When the mirror is deleted with `oauth.db` and `roles.db`, this tool
-loses its file step in the same change; until then its exit 4 is the honest
-answer for a missing file.
+owner's. The tool's file step went with the office's mirror (POS-271), as
+planned: it never opens `oauth.db`, so a missing file changes nothing it answers.
 
 **Rollback.**
 
@@ -1083,14 +1074,8 @@ The backup's § 1b then reports `roles_status: in-store` with the store's
 compares both tables along with the rest of the dump. PROPOSED, not ruled: keep
 `/var/backups/postmark-paperwork/` for one week after the deletion, then remove
 the two files by name. They hold token hashes and the old role book, and
-nothing reads them.
-
-⚑ **`static-keys-retire` still writes the file** (§ Static keys leave the env
-file, "Retiring a static key"). It replays each retirement into `oauth.db` after the
-store commits it, and reads a missing file as a failure: once the files are
-gone, `--apply` retires the key in the store and then exits 4
-(`mirror_failed`), and `--mirror-only` cannot succeed. Until that step is
-ruled (POS-271), read the store's `retired` row rather than the exit code.
+nothing reads them. `static-keys-retire` needs neither: its retirement is the
+store's alone (§ Static keys leave the env file, "Retiring a static key").
 
 ### The world write pool (tier 1, 2026-08-05)
 
