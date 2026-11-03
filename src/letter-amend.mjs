@@ -41,8 +41,6 @@ import { nextCrossingForReceipt } from "./crossings.mjs";
 import { refuse } from "./events.mjs";
 import { recipientProbe } from "./send-at-door.mjs"; // the send's own recipient check, store-aware (POS-332)
 
-export { AMEND_ACT, WITHDRAW_ACT };
-
 /** The words a sender is told when town.lock stays held past the wait: it may be
  *  a crossing, the keep tick, or another whole-town write (a walk, a stake), so
  *  none of them is named as the cause. The lock not taken at all, and a section

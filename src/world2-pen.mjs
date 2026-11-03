@@ -125,6 +125,7 @@ export function lateCrossingGuard(row, { now = Date.now(), env = process.env, la
 
 const state = {
   pool: null,
+  starting: null, // the pool being built, shared by callers that arrive meanwhile (pool())
   // ONE queue for the shadow era's unified writes — the two old queues
   // (world2-acts / world2-claims) collapse onto this one so an act and its
   // claim can share a transaction while keeping journal order.
@@ -181,12 +182,23 @@ async function pool(env = process.env) {
   // that the cause now says "not pointed at a record" instead of ECONNREFUSED
   // against a port the operator never chose.
   if (!world2Enabled(env)) throw new NoRecordError();
-  const { default: pg } = await import("pg");
-  // POS-370: the acquire timeout and the server's idle-transaction limit ride
-  // every connection (store-pool.mjs § storePoolOptions), and an idle
-  // connection's failure is logged, never an unheard 'error' event.
-  state.pool = watchPoolErrors(new pg.Pool(storePoolOptions(env, { name: "pen", max: 3 })), "pen");
-  return state.pool;
+  // ONE POOL, WHOEVER ASKS FIRST (POS-821). `await import("pg")` yields, so two
+  // callers that arrive before the first has finished both used to pass the
+  // check above and each build a pool, the second replacing the first and
+  // leaving it, with its connections, to the process. Callers in that window
+  // now share one construction. A failed construction is forgotten, so the next
+  // caller builds afresh instead of inheriting the rejection.
+  state.starting ??= (async () => {
+    try {
+      const { default: pg } = await import("pg");
+      // POS-370: the acquire timeout and the server's idle-transaction limit ride
+      // every connection (store-pool.mjs § storePoolOptions), and an idle
+      // connection's failure is logged, never an unheard 'error' event.
+      state.pool = watchPoolErrors(new pg.Pool(storePoolOptions(env, { name: "pen", max: 3 })), "pen");
+      return state.pool;
+    } finally { state.starting = null; }
+  })();
+  return state.starting;
 }
 
 // ── the lane census ─────────────────────────────────────────────────────────
@@ -506,7 +518,7 @@ export function penStatus() {
     // `expires` and `lane_expiry` are GONE with the map that fed them (G1 /
     // POS-156). They were the reverse mirror's backstop dates, and the reverse
     // mirror is deleted -- `appendActFlipped` writes no sqlite row. Same
-    // removal, same reason, as `mirrorStatus()`.
+    // removal, same reason, as the acts mirror's status answer (since deleted).
   };
 }
 

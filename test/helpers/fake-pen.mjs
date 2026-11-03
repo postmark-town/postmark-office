@@ -79,12 +79,6 @@ export function theStore() {
   return store;
 }
 
-/** Statements issued on committed transactions only — what the record actually
- *  holds, as opposed to what was attempted. */
-export function committedLog() {
-  return store.log.filter((e) => e.committed).map((e) => e.text);
-}
-
 /**
  * `household = ANY($n)` — the predicate, modelled (POS-160 RULING 4).
  *

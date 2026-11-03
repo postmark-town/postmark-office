@@ -41,9 +41,8 @@ export const BALLOT_CLASS = "ballot";
 export const STATE_SUBMISSIONS = "submissions";
 export const STATE_STAKING = "staking";
 export const STATE_CLOSED = "closed";
-/** The class's lifecycle, in order, and the states it is finished in. */
+/** The class's lifecycle, in order. */
 export const BALLOT_STATES = Object.freeze([STATE_SUBMISSIONS, STATE_STAKING, STATE_CLOSED]);
-export const BALLOT_FINISHED = Object.freeze([STATE_CLOSED]);
 
 /** The town's own pen is every ballot's author, as it is every quest's. */
 export const BALLOT_AUTHOR = PEN_HANDLE;
@@ -59,7 +58,6 @@ export const ballotFileName = (topic) => `ballot-${topic}.json`;
 export const ballotFilePath = (topic) => `WHITE_PAGES/${ballotFileName(topic)}`;
 /** A ballot post's id: the pen's, by the file's name. */
 export const ballotPostId = (topic) => `${BALLOT_AUTHOR}/ballot-${topic}`;
-export const topicOfPostId = (id) => /^[^/]+\/ballot-([a-z0-9-]+)$/.exec(String(id ?? ""))?.[1] ?? null;
 
 /**
  * The post a ballot file says: `{ title, body, state, fields }`, or a refusal

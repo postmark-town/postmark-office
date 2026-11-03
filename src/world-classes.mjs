@@ -603,25 +603,13 @@ export function freeCellIn(placeId, seed) {
   }
 }
 
-/**
- * One class's `dials:` — its params, which are its response boundaries.
- *
- * "Every class param is a response boundary — the line where the town's
- * neutrality ends" (the-response-function.md). So a cap belongs HERE, on the
- * record, where it is addressable and contestable, and never as a constant in
- * this repo. The office reads the number; it does not hold one.
- *
- * `{}` when the class is unknown or the store is unreadable — a missing dial is
- * an absent boundary, which is neutrality, which is the law's own default. A
- * caller that needs a floor supplies it at the call site where the floor can be
- * read beside the thing it protects.
- */
 // The walker's stride, read off the record's own class. THE STRIDE RIDES THE
 // MOVER, NOT THE VERB (Keemin, 2026-08-22: "we can use this edge for ANYTHING
 // that departs. it should sit under resident") — so the dial lives on
 // `the-town/resident` (postmark-node/entity/resident), the vessel precedent
-// (its own 405) agreeing. History of the name:
-// 60 at this writing). On 2026-08-21 the founder clocked 650 m taking 30
+// (its own 405) agreeing. The dial is `pace_km_per_crossing` (60 when this was
+// written, 2026-08-21; the law owns the number, not this file). History of the
+// name: on 2026-08-21 the founder clocked 650 m taking 30
 // minutes: this lookup asked for "departure", a class that has never existed,
 // classDials answered {} (absence is neutrality), and every walker quietly
 // derived at the 15 km legacy constant — 4x slower than the law. The name
@@ -762,6 +750,19 @@ export function dialNode(className, slot) {
   } catch { return null; }
 }
 
+/**
+ * One class's `dials:` — its params, which are its response boundaries.
+ *
+ * "Every class param is a response boundary — the line where the town's
+ * neutrality ends" (the-response-function.md). So a cap belongs HERE, on the
+ * record, where it is addressable and contestable, and never as a constant in
+ * this repo. The office reads the number; it does not hold one.
+ *
+ * `{}` when the class is unknown or the store is unreadable — a missing dial is
+ * an absent boundary, which is neutrality, which is the law's own default. A
+ * caller that needs a floor supplies it at the call site where the floor can be
+ * read beside the thing it protects.
+ */
 export function classDials(name) {
   const law = lawFor();
   if (law) return dialsOf(law, name);

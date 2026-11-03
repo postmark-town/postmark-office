@@ -62,7 +62,7 @@ All reads are synchronous (`node:sqlite`).
 | `queries.mjs` `indexAsOf` | meta | `household-apex.mjs` (the as-of stamp) | **Partly.** `projection_heads['town']` is a town sha, but it is set by a different job on a different clock. |
 | `src/server.mjs` `:871`, `:981` | residents | POST paths that check that an address is a resident (`/letters` etc.) | **No.** It could be answered from `town_roll` at the head, but only once the roll's freshness is ruled equal to the index's. |
 | `src/write.mjs` `:130-173` | residents, letters | POST /letters (recipient and thread checks) | **No.** |
-| `src/residency.mjs:100`, `src/declare.mjs:188` | residents | declare, the address checks | Same as server.mjs. |
+| `src/residency.mjs` `validateResidencyRequest`, `src/declare.mjs` `handleTaken` | residents | declare, the address checks | Same as server.mjs. |
 | `src/mail-thread.mjs:106` | mail_state | the mail-thread read | **No.** |
 | `src/oauth.mjs:130-170` | residents (from the index handle, not oauth.db) | OAuth's handle validation | **No.** |
 | `src/declare-exec.mjs:50` | opens `OFFICE_DB` or `office.db`, read-only | the declare child process | **No** (it reads residents). |

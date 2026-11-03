@@ -8,9 +8,10 @@
 //
 //   1. REVERSE PARITY — every acts row on a flipped lane written since the
 //      flip has its journal twin. The forward parity falsifier
-//      (falsifier-acts-parity.mjs) iterates the JOURNAL, so it is structurally
-//      blind to an acts row whose reverse write failed — the same blindness,
-//      mirrored, that let the say gap stay green. This check iterates ACTS.
+//      (falsifier-acts-parity.mjs, deleted in POS-156) iterated the JOURNAL, so
+//      it was structurally blind to an acts row whose reverse write failed —
+//      the same blindness, mirrored, that let the say gap stay green. This
+//      check iterates ACTS.
 //      A missing twin is RED (the reverse mirror is behind — the loud
 //      console.error should already have said so), never silently excused.
 //
@@ -62,9 +63,9 @@
 // as 'flipped acts lacking twins'." The pairing key cannot separate a flipped
 // row from a pre-flip mirror row of the same lane; only the lane's own flip
 // moment can. Those moments are now DATA — `LANE_FLIPPED_AT` in
-// src/world2-acts.mjs, beside LANE_MIRROR, which is already the home for
-// per-lane truth about the shim — and `--since` defaults from that table, per
-// lane. A single bare `--since` still works and still means one clock for every
+// src/world2-acts.mjs, which sat beside LANE_MIRROR (then the home for
+// per-lane truth about the shim; deleted in POS-156) — and `--since` defaults
+// from that table, per lane. A single bare `--since` still works and still means one clock for every
 // named lane, because an operator asking "what happened after 18:58" deserves
 // that answer; the tool says out loud that it is using one clock, so nobody
 // reads the shape that produced the 81 false reds without being told.

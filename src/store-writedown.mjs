@@ -384,17 +384,6 @@ export function normalizeMark(m) {
 }
 
 /**
- * THE FOLD INPUT, VALIDATED LOUDLY.
- *
- * The brief's word is "refusing loudly when the store cannot answer", and the
- * distinction this function keeps is the one the receipt composer already keeps
- * for its own fields: an ABSENT answer and an EMPTY one are different states. A
- * missing `as_of.window` is a store that could not say which window it folded —
- * a refusal. A `marks: []` is a store that answered "nothing stands", which is a
- * lawful answer here and is refused one level up by the sweep's own loud-empty
- * guard, where that judgment belongs.
- */
-/**
  * ONE OWED WITHDRAWAL, as the write-down removes it: `{ id, by, slug, household }`.
  * `writeDownHousehold` finds the file by `slug` and `by` (world-drain.mjs §
  * findMarkPath), so a row missing either is refused rather than removing nothing.
@@ -411,6 +400,17 @@ export function normalizeWithdrawal(w) {
   return { id, by: w.by ?? id.slice(0, cut), slug: id.slice(cut + 1), household: w.household };
 }
 
+/**
+ * THE FOLD INPUT, VALIDATED LOUDLY.
+ *
+ * The brief's word is "refusing loudly when the store cannot answer", and the
+ * distinction this function keeps is the one the receipt composer already keeps
+ * for its own fields: an ABSENT answer and an EMPTY one are different states. A
+ * missing `as_of.window` is a store that could not say which window it folded —
+ * a refusal. A `marks: []` is a store that answered "nothing stands", which is a
+ * lawful answer here and is refused one level up by the sweep's own loud-empty
+ * guard, where that judgment belongs.
+ */
 export function normalizeFoldInput(input) {
   if (!input || typeof input !== "object") {
     throw new FoldInputRefusal("no-fold-input", "the store side returned nothing this crossing could read");

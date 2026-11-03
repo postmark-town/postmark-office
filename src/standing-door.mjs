@@ -13,8 +13,9 @@
 //
 // ── WHO MAY CALL IT ─────────────────────────────────────────────────────────
 //
-// The Registrar, with wright as backup: the list settle-join holds and for the
-// same reason (src/settle-join.mjs § WHO MAY CALL IT). An operator act, so it
+// The Registrar, with wright as backup: the list settle-join holds (the one
+// REGISTRAR_HANDS, named-hand.mjs) and for the same reason (src/settle-join.mjs
+// § WHO MAY CALL IT). An operator act, so it
 // is unlisted (household-apex.mjs § OPERATOR_ACTS): to any other key it answers
 // as a name the door has never heard of. `by:` on the line is the caller's own
 // handle from that list, never a field the caller supplies.
@@ -49,10 +50,10 @@ import {
 } from "./standing.mjs";
 import { standingForHandles, insertStandingActs } from "./standing-store.mjs";
 import { loadRegistryRows } from "./registry-store.mjs";
-import { holdsHand } from "./named-hand.mjs";
-import { trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { holdsHand, REGISTRAR_HANDS } from "./named-hand.mjs";
+import { refuse } from "./fault-words.mjs"; // a refusal from STANDING_REFUSALS, as the error the door sends
 
-export const STANDING_CALLERS = Object.freeze(["registrar", "wright"]);
+export const STANDING_CALLERS = REGISTRAR_HANDS;
 
 // The caller is the hand this credential is FOR, not a housemate it lists
 // (POS-389, named-hand.mjs): a resident's own key is its own handle only.
@@ -75,10 +76,6 @@ export const STANDING_REFUSALS = Object.freeze({
   NO_RECORD: { code: 503, defect: "the office cannot reach the town's record", hint: "nothing was written; a standing act is a row in the record, so it waits until the record answers" },
   UNPARSED: { code: 409, defect: "the town's standing ledger holds a line its grammar cannot read", hint: "the current standing is not knowable, so nothing was written — a person fixes the line first" },
   ROUND_TRIP: { code: 500, defect: "the line this act would write does not parse back to itself", hint: "nothing was written" },
-});
-
-const refuse = (r, detail = null) => Object.assign(new Error(r.defect), {
-  code: r.code, defect: r.defect, hint: detail ? `${detail} — ${r.hint}` : r.hint,
 });
 
 const clean = (s) => (s == null ? "" : String(s).replace(/[\r\n]+/g, " ").trim());
@@ -170,18 +167,8 @@ export async function standingUnderLock({ record, actor = null, clone, env = pro
 const EXEC = join(dirname(fileURLToPath(import.meta.url)), "standing-exec.mjs");
 
 async function runUnderTownLock(payload, { clone }) {
-  const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
-  let out;
-  try {
-    out = await execUnderTownLock(EXEC, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
-  } catch (e) {
-    if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
-    throw trippedError("the standing act tripped", e); // its stderr goes to the log (POS-578)
-  }
-  const result = JSON.parse(out.trim().split("\n").at(-1));
-  if (result.error)
-    throw Object.assign(new Error(result.error.defect), { code: result.error.code ?? 500, defect: result.error.defect, hint: result.error.hint });
-  return result;
+  const { runLockedExec } = await import("./town-lock.mjs");
+  return runLockedExec(EXEC, payload, { clone, tripped: "the standing act tripped" });
 }
 
 /**
