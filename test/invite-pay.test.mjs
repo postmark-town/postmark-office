@@ -18,7 +18,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  planInvitePay, owedLines, ledgerFacts, activationOf, inviterDueAt, settlementAtOrAfter, townDay,
+  planInvitePay, owedLines, ledgerFacts, activationOf, inviterDueAt, settlementAtOrAfter, townDay, townDayGap,
   judgeHoldMove, inviterRecipient, INVITE_HOLD_MS, INVITE_CAP_PER_MONTH, INVITE_HOLD_HANDS, INVITE_ID_RE,
 } from "../src/invite-pay.mjs";
 
@@ -101,6 +101,46 @@ test("the 30 days: the first letter or home within 30 days of the invitation act
   assert.equal(one(plan({ letters: new Map(), now: new Date("2026-11-20T00:00:00.000Z") })).inviter_side.status, "waiting", "the 30 days still running");
 });
 
+test("the 30 days across the March clock change: the office counts them as the town's judge does, by town day too", () => {
+  // POS-816 review, finding 2. Invited 2027-02-13T04:00Z (town day 02-12, 23:00 EST), activated exactly
+  // 30×24 hours later, 2027-03-15T04:00Z (town day 03-15, 00:00 EDT): inside the hours, but town day +31,
+  // which the town's judge refuses ("more than 30 days"). Until this fix the office planned it: a 10 refused every tick.
+  const at = "2027-02-13T04:00:00.000Z";
+  const edge = "2027-03-15T04:00:00.000Z";
+  assert.equal(Date.parse(edge) - Date.parse(at), 30 * 864e5, "exactly 30×24 hours");
+  assert.equal(townDayGap(at, edge), 31, "town day +31 across the March change");
+  assert.equal(activationOf({ at, letter: edge }).status, "late", "the office refuses what the judge refuses");
+  assert.equal(activationOf({ at, letter: "2027-03-15T03:59:59.000Z" }).status, "activated", "one second earlier is town day 03-14, +30");
+  // the control, a month with no clock change: the same 30×24 hours is town day +30, and activated
+  assert.equal(townDayGap("2027-01-10T04:00:00.000Z", "2027-02-09T04:00:00.000Z"), 30);
+  assert.equal(activationOf({ at: "2027-01-10T04:00:00.000Z", letter: "2027-02-09T04:00:00.000Z" }).status, "activated");
+});
+
+const INVITE_TOWN = process.env.INVITE_TOWN_CLONE || null;
+test(`the 30 days: across the March change, every activation the office plans is one the town's own judge accepts ${INVITE_TOWN ? "" : "(skipped: needs postmark#4424's judge: set INVITE_TOWN_CLONE)"}`,
+  { skip: INVITE_TOWN ? false : "needs postmark#4424's judge (unshipped): set INVITE_TOWN_CLONE" }, async () => {
+    const { pathToFileURL } = await import("node:url");
+    const { join } = await import("node:path");
+    const town = await import(pathToFileURL(join(INVITE_TOWN, "tools", "stamp-mint.mjs")).href);
+    let planned = 0, refusedByBoth = 0;
+    // every hour for 18 days before the change, each activated 1 minute to 3 hours inside its 30×24 hours
+    for (let h = 0; h < 18 * 24; h += 1) {
+      const at = new Date(Date.parse("2027-02-03T00:00:00.000Z") + h * 36e5).toISOString();
+      for (const before of [180, 60, 1, 0]) {
+        const act = new Date(Date.parse(at) + 30 * 864e5 - before * 6e4).toISOString();
+        const a = activationOf({ at, letter: act });
+        const line = town.inviteInviterLine({ date: townDay(inviterDueAt(act)), handle: "cleo", invited: "hh:keep", inviter: "hh:castle", activated: townDay(act) });
+        const why = town.judgeInviteLine(town.classifyEntry(line), {
+          canon: (k) => k, invitationOf: (k) => (k === "hh:keep" ? { by: "castle", named: "cleo", at } : null),
+          houseAt: () => "hh:castle", isMeep: () => false, state: town.inviteState(),
+        });
+        if (a.status === "activated") { planned += 1; assert.equal(why, null, `the office plans ${at} → ${act}, and the judge refuses: ${why}`); }
+        else { refusedByBoth += 1; assert.match(String(why), /more than 30 days after the invitation/, `${at} → ${act}: the office calls it ${a.status}`); }
+      }
+    }
+    assert.ok(planned > 1000 && refusedByBoth > 0, `both sides of the edge were met: ${planned} planned, ${refusedByBoth} refused by both`);
+  });
+
 // ── the week ────────────────────────────────────────────────────────────────
 
 test("the week: the inviter's 10 falls due at the first settlement a week after the activation, and not a moment before", () => {
@@ -174,6 +214,19 @@ test("the cap: at most 10 paid a month per inviting house, counted in the month 
   assert.equal(one(withHolds, "lodge11").inviter_side.status, "owed");
   // the cap is the inviter's only: every invited side is still owed (here, none has a welcome, so all wait)
   assert.ok(p.invitations.every((x) => x.invited_side.status === "waiting"));
+});
+
+test("the hold's evidence: every row carries the inviter's paid count for the month, the held and in-week rows too", () => {
+  // POS-816 review, finding 3. Little Bird's list (CORE-26 2026-10-29): "the inviter's paid-invite count for the month".
+  // castle has 3 paid in November; four invitations of its stand held, in their week, owed, and still waiting.
+  const three = Array.from({ length: 3 }, (_, i) => `- 2026-11-0${i + 1} · MINT → cleo · 10 · for: invite:hh:prior${i}/hh:castle/inviter/2026-10-20 · by: the-town`);
+  const r = ["a-held", "b-week", "c-owed", "d-waiting"].map((s) => invited(s, "castle", "cleo", "2026-10-27T12:00:00.000Z"));
+  const letters = new Map([["a-held", "2026-11-01T12:00:00.000Z"], ["b-week", "2026-11-18T12:00:00.000Z"], ["c-owed", "2026-11-02T12:00:00.000Z"]]);
+  const p = plan({ r, letters, ledger: ledgerOf(...three), holds: new Map([["a-held", { state: "held", moves: [] }]]), now: new Date("2026-11-20T12:00:00.000Z") });
+  assert.deepEqual(r.map((x) => one(p, x.slug).inviter_side.status), ["held", "in-week", "owed", "waiting"]);
+  for (const x of r) assert.deepEqual(one(p, x.slug).inviter_paid_this_month, { month: "2026-11", paid: 3 }, `${x.slug}: the count is on its row`);
+  // the control: an inviter with none paid this month reads 0, never a missing field
+  assert.deepEqual(one(plan(), "keep").inviter_paid_this_month, { month: "2026-11", paid: 0 });
 });
 
 // ── founders ────────────────────────────────────────────────────────────────

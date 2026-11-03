@@ -1,6 +1,7 @@
 // invite-hold.test.mjs — the hands' hold on an inviter's payout (POS-816), through the town door.
 //   node --import ./test/helpers/sparse-guard.mjs --test test/invite-hold.test.mjs
-//   INVITE_TOWN_CLONE=<a town checkout carrying --invite-mint> for the evidence read's ledger arm
+//   INVITE_TOWN_CLONE=<a town checkout carrying --invite-mint> for the arms that need the town's ledger:
+//   the evidence read, the pass through the real store read before 087, and a paid payout's refusal
 //
 // Darko, 2026-11-02 23:56 ("calls are good. continue with the calls as stated"):
 // an office act checked by account, the bug-stage hands' pattern, Little Bird's
@@ -11,10 +12,11 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
+import { REGISTRY, INVITE_TOWN_SKIP, invitedTown } from "./helpers/invite-town.mjs";
 
 const store = await startStore({ db: "invite_hold_test" });
 after(() => store.stop?.());
@@ -24,7 +26,7 @@ const asOwner = async (sql, params = []) => {
   try { return (await c.query(sql, params)).rows; } finally { await c.end(); }
 };
 
-let callTool, invitesAtOffice, inviteStoreFacts;
+let callTool, invitesAtOffice, inviteStoreFacts, advanceInvite, passMain;
 if (!skip) {
   await asOwner("TRUNCATE households, household_pins CASCADE");
   await asOwner(
@@ -37,8 +39,9 @@ if (!skip) {
   process.env.WORLD2_PG = "1";
   process.env.WORLD2_PG_URL = store.url("office_api");
   ({ callTool } = await import("../src/mcp.mjs"));
-  ({ invitesAtOffice } = await import("../src/invite-hold-store.mjs"));
+  ({ invitesAtOffice, advanceInvite } = await import("../src/invite-hold-store.mjs"));
   ({ inviteStoreFacts } = await import("../src/invite-facts.mjs"));
+  ({ main: passMain } = await import("../deploy/invite-pass.mjs"));
 }
 
 // the credentials: a human's own sign-in holds its house's handles; a resident's own key only its own
@@ -165,5 +168,79 @@ test(`the hand's read shows each invitation's evidence and both sides, against t
     assert.match(r.read_at, /^2026-11-01T/, "the reading's own time");
     const one = await invitesAtOffice({ post: "invite:keep" }, darko, { clone: repo, now: new Date("2026-11-01T00:00:00.000Z") });
     assert.equal(one.invitation.household, "keep");
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+// ── THE READ THAT FAILS CLOSED, WHERE IT DECIDES (POS-816 review, finding 1) ──
+// From the office tag until 087 lands on Darko's go, invite-facts.mjs's own
+// read of `invite_holds` is the one thing that stops the pass paying an
+// inviter's 10 nobody can hold. These drive that read itself, on a real store
+// whose table is set aside (renamed in this test's own database, and renamed
+// back), never a store handed in that already says `holds: null`.
+
+const readFacts = async () => {
+  const pg = (await import("pg")).default;
+  const c = new pg.Client({ connectionString: store.url("office_api") });
+  await c.connect();
+  try { return await inviteStoreFacts(async (sql, params) => (await c.query(sql, params)).rows); } finally { await c.end(); }
+};
+const without087 = async (fn) => {
+  await asOwner("ALTER TABLE invite_holds RENAME TO invite_holds_set_aside");
+  try { return await fn(); } finally { await asOwner("ALTER TABLE invite_holds_set_aside RENAME TO invite_holds"); }
+};
+
+test("the store read fails closed: invite_holds missing (087 not landed) reads as holds that cannot be read; any other refusal throws", { skip }, async () => {
+  await fresh();
+  assert.ok((await readFacts()).holds instanceof Map, "the control: with 087 in place the holds read");
+  await without087(async () => {
+    const facts = await readFacts();
+    assert.equal(facts.holds, null, "087 not landed: holds that cannot be read are null, never an empty map (an empty map reads as no hold)");
+    assert.deepEqual(facts.rows.map((r) => r.slug), ["keep"], "every other read still answers");
+  });
+  await asOwner("REVOKE SELECT ON invite_holds FROM office_api");
+  try {
+    await assert.rejects(readFacts(), (e) => e?.code === "42501", "a holds read refused for any other reason is not 'not landed': it throws, and the pass pays nothing");
+  } finally { await asOwner("GRANT SELECT, INSERT, UPDATE ON invite_holds TO office_api"); }
+  assert.ok((await readFacts()).holds instanceof Map, "put back");
+});
+
+test(`the pass, reading the real store before 087 lands, pays the 5 more and no inviter's 10; once 087 is back it pays the 10 ${INVITE_TOWN_SKIP ? "(skipped: " + INVITE_TOWN_SKIP + ")" : ""}`, { skip: skip || INVITE_TOWN_SKIP }, async () => {
+  await fresh();
+  // The Keep's first letter, delivered in the store: activated 2026-10-28, its week over by 2026-11-05
+  await asOwner(`INSERT INTO town_letters (id, from_h, to_h, date, box, json, delivered_at, digest)
+    VALUES ('letter-keep-first', 'dora', 'cleo', '2026-10-28', 'outbox', '{}', '2026-10-28T12:00:00.000Z', 'd') ON CONFLICT DO NOTHING`);
+  const { repo, keyFile } = invitedTown();
+  const env = { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api") };
+  const now = new Date("2026-11-05T00:00:00.000Z");
+  const amounts = () => readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").split("\n").filter((l) => l.includes("for: invite:")).map((l) => / · (\d+) · for:/.exec(l)[1]);
+  const out = [];
+  const io = { log: (s) => out.push(s), err: (s) => out.push(s) };
+  try {
+    // the pass reads the store itself (no `store` handed in): its own storeFacts, through actsQuery
+    await without087(() => passMain(["--town", repo, "--key", keyFile], { registry: REGISTRY, now, env, ...io }));
+    assert.deepEqual(amounts(), ["5"], `087 not landed: the 5 more only\n${out.join("\n")}`);
+    assert.match(out.join("\n"), /holds cannot be read \(migration 087 has not landed\), so 1 inviter payout\(s\) wait/);
+    // the control: the same pass on the same town, 087 back, pays the 10, once
+    assert.equal(await passMain(["--town", repo, "--key", keyFile], { registry: REGISTRY, now, env, ...io }), 0, out.join("\n"));
+    assert.deepEqual(amounts(), ["5", "10"]);
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+// ── A PAID PAYOUT IS NOT MOVED (POS-816 review, finding 4) ───────────────────
+test(`a payout already on the ledger is not held, lifted or cancelled ${INVITE_TOWN_SKIP ? "(skipped: " + INVITE_TOWN_SKIP + ")" : ""}`, { skip: skip || INVITE_TOWN_SKIP }, async () => {
+  await fresh();
+  const { repo, keyFile, mint } = invitedTown();
+  const at = { now: new Date("2026-11-05T00:00:00.000Z"), clone: repo };
+  const tryMove = (to) => advanceInvite({ post: "invite:keep", to, note: `${to}, by a hand`, handle: "little-bird" }, littleBird, "invite:keep", at);
+  try {
+    // the control: not yet paid, Little Bird holds it
+    assert.equal((await tryMove("held")).to, "held");
+    await fresh();
+    // the inviter's 10, paid through the town's own verb
+    mint(["--invite-mint", "cleo", "--side", "inviter", "--invited", "hh:keep", "--inviter", "hh:castle", "--activated", "2026-10-28", "--date", "2026-11-04", "--key", keyFile]);
+    for (const to of ["held", "lifted", "cancelled"]) {
+      await assert.rejects(tryMove(to), (e) => e?.code === 409 && /inviter was paid on 2026-11-04/.test(e.defect), `${to} after it was paid`);
+    }
+    assert.equal(await holdRow(), null, "nothing written beside a paid line");
   } finally { rmSync(repo, { recursive: true, force: true }); }
 });

@@ -50,6 +50,7 @@ export const inviteId = (slug) => `invite:${slug}`;
 export const INVITE_HOLD_HANDS = Object.freeze(["little-bird", "keemin"]);
 
 export const INVITE_WITHIN_MS = 30 * 864e5;         // the first letter or home "within 30 days" (POS-576/b)
+export const INVITE_WITHIN_DAYS = 30;               // and the town judge's own bound for it, by town day (stamp-mint.mjs § INVITE)
 export const INVITE_HOLD_MS = 7 * 864e5;            // "A week" (POS-816/a)
 export const INVITE_CAP_PER_MONTH = 10;             // "let's do 10 a month" (POS-576/c), in the month paid (POS-816/b)
 export const SETTLEMENT_HOURS_UTC = Object.freeze([6, 18]);
@@ -83,18 +84,30 @@ export function settlementAtOrAfter(at) {
  */
 export const inviterDueAt = (activatedAt) => settlementAtOrAfter(new Date(new Date(activatedAt).getTime() + INVITE_HOLD_MS));
 
+/** Whole town days from one instant's town day to another's: the town judge's own count. */
+export const townDayGap = (from, to) => Math.round((Date.parse(`${townDay(to)}T00:00:00Z`) - Date.parse(`${townDay(from)}T00:00:00Z`)) / 864e5);
+
 /**
  * The 30-day trigger for one invited household: its first delivered letter,
  * its first home, and what they make it. `status` is activated (the first of
  * the two came within 30 days of the invitation), late (it came after), waiting
  * (neither yet, the 30 days still running) or lapsed (neither, and the 30 days
  * are over).
+ *
+ * "WITHIN 30 DAYS" HOLDS BOTH BOUNDS (POS-816 review, finding 2): within 30×24
+ * hours of the invitation's instant, AND within 30 town days of its town day,
+ * which is exactly how the town's judge counts it (judgeInviteLine). Across the
+ * March clock change the two part: an invitation at 23:xx Eastern in the 30 days
+ * before it, activated in its last hour, is inside 30×24 hours and on town day
+ * +31. With the hours alone the office planned a 10 the judge refused, and asked
+ * again every tick. Now the office plans only what the judge accepts.
  */
 export function activationOf({ at, letter = null, home = null, now = new Date() }) {
   const by = new Date(new Date(at).getTime() + INVITE_WITHIN_MS).toISOString();
   const firstLetter = iso(letter), firstHome = iso(home);
   const first = [firstLetter, firstHome].filter(Boolean).sort()[0] ?? null;
-  const status = first ? (first <= by ? "activated" : "late") : (iso(now) > by ? "lapsed" : "waiting");
+  const within = (t) => t <= by && townDayGap(at, t) <= INVITE_WITHIN_DAYS;
+  const status = first ? (within(first) ? "activated" : "late") : (iso(now) > by ? "lapsed" : "waiting");
   return { first_letter: firstLetter, first_home: firstHome, by, status,
     ...(first ? { at: first, through: first === firstLetter ? "first letter" : "first home" } : {}) };
 }
@@ -191,6 +204,9 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
         invitation: inviteId(r.slug), household: r.slug, name: r.name ?? null, invited_by: inviter,
         ...(inviter !== r.invited_by.by ? { invited_by_was: r.invited_by.by } : {}),
         named: r.invited_by.named ?? null, at: r.at,
+        // the hold's evidence, on every row whatever its state (POS-816 review, finding 3;
+        // Little Bird's list: "the inviter's paid-invite count for the month")
+        inviter_paid_this_month: { month, paid: ledger.paidInMonth.get(`${inviter}|${month}`) ?? 0 },
         ashore: facts.ashore?.get(r.slug) ?? null,
         welcome: welcome ? { paid: welcome.date, to: welcome.handle } : null,
         activation: act,

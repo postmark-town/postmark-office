@@ -20,26 +20,16 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { main, inviteMintArgv } from "../deploy/invite-pass.mjs";
+import { HOUSEHOLDS, REGISTRY, INVITE_TOWN_SKIP, invitedTown } from "./helpers/invite-town.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PINNED_TOWN = join(ROOT, "town-clone");
-const INVITE_TOWN = process.env.INVITE_TOWN_CLONE || null;
 
-// ── the invented town ───────────────────────────────────────────────────────
-const INVITED_AT = "2026-10-27T20:39:04.552Z";
-const HOUSEHOLDS = {
-  keep: { residents: ["dora"], accounts: [{ id: 4 }], invited_by: { by: "castle", named: "cleo", at: INVITED_AT } },
-  castle: { residents: ["carl", "cleo"], accounts: [{ id: 5 }] },
-};
-const PINS = { dora: { id: 4 }, carl: { id: 5 }, cleo: { id: 5 } };
-const REGISTRY = { households: HOUSEHOLDS, pins: PINS };
+// ── the invented town (test/helpers/invite-town.mjs) ─────────────────────────
 const STORE = (holds = new Map()) => ({
   rows: [{ slug: "keep", name: "The Keep", residents: ["dora"], invited_by: HOUSEHOLDS.keep.invited_by }],
   houses: [{ slug: "keep", residents: ["dora"], formerly: [] }, { slug: "castle", residents: ["carl", "cleo"], formerly: [] }],
@@ -86,30 +76,7 @@ test("the verb's argv: the town's own tool by absolute path, the side, both hous
 
 // ── end to end (INVITE_TOWN_CLONE) ──────────────────────────────────────────
 
-const E2E = INVITE_TOWN ? false : "needs postmark#4424's --invite-mint (unshipped): set INVITE_TOWN_CLONE to a town checkout carrying it";
-
-function invitedTown() {
-  const repo = mkdtempSync(join(tmpdir(), "invite-pass-town-"));
-  mkdirSync(join(repo, "tools"), { recursive: true });
-  for (const f of ["stamp-mint.mjs", "stamp-verify.mjs", "registry-source.mjs"]) copyFileSync(join(INVITE_TOWN, "tools", f), join(repo, "tools", f));
-  writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(PINS));
-  writeFileSync(join(repo, "tools", "households.json"), JSON.stringify({ households: HOUSEHOLDS }));
-  for (const h of Object.keys(PINS)) {
-    mkdirSync(join(repo, "WHITE_PAGES", h), { recursive: true });
-    writeFileSync(join(repo, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n`);
-  }
-  writeFileSync(join(repo, "WHITE_PAGES", "mail-ledger.md"),
-    "# ledger\n\n- 2026-10-27 · a-1 · dora → carl · thread: new\n- 2026-10-27 · b-1 · carl → dora · thread: new\n");
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const pub = publicKey.export({ type: "spki", format: "pem" });
-  writeFileSync(join(repo, "tools", "stamp-pubkey.pem"), pub);
-  const keyFile = join(repo, "stamp-key.pem");
-  writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
-  const mint = (args) => execFileSync(process.execPath, [join(repo, "tools", "stamp-mint.mjs"), ...args, "--repo", repo], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  mint(["--append", "--key", keyFile]);
-  mint(["--welcome", "dora", "--household", "gh:4", "--date", "2026-10-28", "--key", keyFile]);
-  return { repo, keyFile, pub };
-}
+const E2E = INVITE_TOWN_SKIP;
 const inviteLines = (repo) => readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").split("\n").filter((l) => l.includes("for: invite:"));
 const verify = async (repo, pub) => (await import(pathToFileURL(join(repo, "tools", "stamp-verify.mjs")).href)).verifyStampLedger(repo, { pubkeyPem: pub });
 
