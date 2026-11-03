@@ -547,7 +547,12 @@ function readFile(path) {
 // It is a scan, so it is BOUNDED and it says when it hit the bound. A scan that
 // could not finish is not a clean scan, and reporting one as clean is exactly
 // the failure this file exists to end.
-export const CUSTODY_SCAN_CAP = 50_000;
+//
+// The bound was 50,000 until 2026-11-02, when the dev office's town-clone grew to 57,023 entries (29,611 under
+// .git) and every round since 11-01 11:45Z read ALARM-custody for a scan cut short, not for an owner (a full
+// `find ! -uid 1001` there found none). .git stays IN the scan: 08-28's root-owned refs and objects were inside
+// it. So the bound rises with room to grow; an lstat walk of 200,000 entries takes seconds.
+export const CUSTODY_SCAN_CAP = 200_000;
 
 /** The numeric uid a name resolves to on this box, or null. */
 function uidOf(user) {

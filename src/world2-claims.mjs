@@ -24,7 +24,7 @@
 
 import { boxOf } from "../world2/tools/seed-import.mjs";
 import { ringOf, ringBox, ringAgrees } from "./ring-box.mjs"; // POS-322: the bbox of a ringed mark is its ring's
-import { houseOfVia, sessionKeysVia, sessionKeyString, VIA } from "./household-deriver.mjs";
+import { houseOfVia, houseRowsVia, sessionKeysVia, sessionKeyString, VIA } from "./household-deriver.mjs";
 import { humanHandHouse } from "./households.mjs";
 import { DOOR_SHARES_THE_CANDLE } from "../world2/tools/candle-lock.mjs"; // POS-404: see § openWindowFor
 // Phase 5.6's deferred act is released through world2-pen's insertAct, INSIDE
@@ -77,13 +77,24 @@ export function __setPoolForTest(p) { state.pool = p; }
 // docket one answer.
 //
 // ONLY POSITIVE ANSWERS ARE CACHED, deliberately. A handle that has a household
-// key does not lose it, so caching that is safe. A MISS is the registry-lag case
+// key does not lose it within one registry copy: a resident who moves, or a house
+// that is renamed, is a change in the registry, and it is seen when the copy is
+// replaced, which takes every yes remembered from the old one with it (below).
+// So caching a yes is safe. A MISS is the registry-lag case
 // the fold's own comment describes — "registry lag never blocks a new resident, it
 // only leaves them ungrouped until the town knows them" — and it resolves the
-// moment law_ingester projects the new roster line. Caching the miss would keep
-// writing `solo:` for a resident the town had already learned, for as long as the
-// office stayed up.
-const householdKeys = new Map();
+// moment law_ingester projects the new roster line. Caching the miss in a map that
+// outlived the copy would keep writing `solo:` for a resident the town had already
+// learned, for as long as the office stayed up.
+//
+// AND THE MEMO LIVES AND DIES WITH THE REGISTRY COPY IT WAS DRAWN FROM (POS-860).
+// It was one module-level Map that nothing ever emptied, so a resident who moved
+// house, or a house renamed, kept the answer it had on the first day for the
+// life of the process. It is kept per copy of the deriver's registry
+// (`household-deriver.mjs § houseRowsVia`): when that copy ages out
+// (HOUSE_CACHE_TTL_MS) or is cleared, the copy it was drawn from is gone and so
+// is every yes remembered from it.
+const householdKeys = new WeakMap(); // the deriver's registry copy -> Map<handle, "hh:<slug>">, a yes only
 
 /**
  * THE ONE RESOLVER, called by BOTH halves of the private-draft lane.
@@ -215,8 +226,9 @@ export async function withKeyHousehold(p, key, fn) {
  * RESOLVED ON THE POOL, BEFORE `connect()`. `sessionKeysVia` reads the registry
  * through the queryable it is handed, and running it on the dedicated client
  * after BEGIN would put the registry fold inside every household transaction in
- * the office. On the pool it is folded once per process (`houseRowsVia`'s
- * WeakMap) and the transaction opens holding an array.
+ * the office. On the pool it is folded once per time-to-live
+ * (`household-deriver.mjs § HOUSE_CACHE_TTL_MS`) and the transaction opens
+ * holding an array.
  */
 export async function withHousehold(p, household, fn, { also = [] } = {}) {
   // `also`: the other houses a key's handles stand in (keyHouseholdOf's
@@ -304,16 +316,20 @@ export async function withHousehold(p, household, fn, { also = [] } = {}) {
  * never heard of this handle", which is a fact that changes the moment a join
  * lands — and a cached absence would keep a brand-new resident outside their
  * own house for the life of the process. A named house does not change under a
- * running request, so that one is remembered.
+ * running request, so that one is remembered, for as long as the registry copy
+ * it was drawn from (see the memo's note above).
  */
 export async function householdKeyFor(p, handle) {
   if (!handle) return null;
-  const hit = householdKeys.get(handle);
+  const copy = await houseRowsVia(p);
+  let yes = householdKeys.get(copy);
+  if (!yes) householdKeys.set(copy, (yes = new Map()));
+  const hit = yes.get(handle);
   if (hit) return hit;
   const { slug } = await houseOfVia(p, handle);
   if (!slug) return `solo:${handle}`;
   const key = `hh:${slug}`;
-  householdKeys.set(handle, key);
+  yes.set(handle, key);
   return key;
 }
 
