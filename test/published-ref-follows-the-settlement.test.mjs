@@ -11,7 +11,7 @@
 //    the DESCENDANT when the two disagree; a truly diverged pair falls to
 //    origin, because published truth is what the world can clone."
 //
-// and, on the ref the tick moves (`deploy/office-tick.sh:37-42`):
+// and, on the ref the tick moves (`deploy/office-keep.sh § under the lock`):
 //
 //   "The world clone gets FETCH, never pull: its checkout is the write pen's
 //    (ensureDraftCheckout reseats it per-write) … Reads only need origin refs
@@ -26,7 +26,7 @@
 // feature" for six hours, until the crossing-save's 12:02Z pull moved
 // `refs/heads/main`; and the SAME answer stamped `law.as_of_world` with the
 // newer sha, because `world.db` is hydrated `--ref origin/main`
-// (`deploy/office-tick.sh:73`). One object, two sources, and the fresh one
+// (`deploy/office-tick.sh:73`, then; deleted in POS-268 5b). One object, two sources, and the fresh one
 // certified the stale one. postmark-town/postmark#2526.
 //
 // Three readers of one fact is how they drift, so the last three tests here

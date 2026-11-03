@@ -19,7 +19,11 @@
 //
 // The deep shapes stay typed (Darko's 21:55 question): a member's typed row is
 // house-bundle.mjs § memberRow, the one the house read pages; this file only
-// says it in one line. v1 is untouched: nothing here runs without read_shape.
+// says it in one line. v1 is untouched, but the glance is not the only caller:
+// household-apex.mjs `householdGlance` runs this file under read_shape: "v2",
+// while `householdDeep` (the typed reads closer, correspondents, happened and
+// stamps' went) and `householdWaiting` (read: "waiting") call its helpers
+// without read_shape.
 
 import { memberRow } from "./house-bundle.mjs";
 import { HOUSEHOLD_LINES, usableActs } from "./door-read-shape.mjs";
@@ -156,13 +160,6 @@ export const needRow = (c) => ({
   since: c.date ?? null,
 });
 
-/**
- * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
- * marks over one place of yours is ONE row, `{ by, over, count, oldest,
- * newest, sample }`, the sample being the group's oldest body, whole. Groups
- * run oldest first, up to NEEDS_FIRST. `rows` is newest first, as the inbox
- * orders it.
- */
 /** The stance words the door takes (world-stance.mjs § the declare tool's enum). */
 export const STANCE_WORDS = "welcomed | neutral | opposed";
 /** How many of a group's mark ids the glance names, oldest first. */
@@ -182,6 +179,13 @@ export function groupAct({ by, over, count }, ids) {
   return `household { read: "stances", args: { ${only}, limit: ${STANCE_LIST_CAP} } }, then declare-stance-on { on: <ids>, stance: ${STANCE_WORDS} }${count > STANCE_LIST_CAP ? `, ${STANCE_LIST_CAP} a call` : ""}`;
 }
 
+/**
+ * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
+ * marks over one place of yours is ONE row, `{ by, over, count, oldest,
+ * newest, sample }`, the sample being the group's oldest body, whole. Groups
+ * run largest first, then oldest first (round 4, Darko 16:49), up to `max`
+ * (NEEDS_FIRST by default). `rows` is newest first, as the inbox orders it.
+ */
 export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   const groups = new Map();
   for (const c of rows) {
@@ -212,7 +216,7 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
 /**
  * The needs block from the inbox page (newest first, as stanceShadow orders it)
  * and needs-you's counts. `first` is the waiting marks grouped by author and
- * place, oldest group first. When more wait than the page holds, `tail` (the
+ * place, largest group first (needGroups' order). When more wait than the page holds, `tail` (the
  * inbox's last rows, read on their own) joins the page so the oldest are there.
  */
 export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {

@@ -249,7 +249,8 @@ export const CONFIG = {
   //               reach prod within an hour of being cut.
   //   town data : sync-atlas runs every ~30 min and Deploy follows it.
   //   office    : the keeping timer fires every 15 min (*:07,22,37,52; the
-  //               rehydrate timer it replaced fired at *:09,24,39,54).
+  //               retired rehydrate timer fired at *:09,24,39,54, DEPLOY.md
+  //               § Retiring the rehydrate).
   //               30m under the divergence anchor is TWO DEAD TICKS behind a
   //               known-newer tip (Keemin-tightened 2026-08-31, the same
   //               night the anchor was fixed). History of the number: 45m
