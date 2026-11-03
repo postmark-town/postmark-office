@@ -41,7 +41,7 @@
 //       (POS-697 G1a, Darko 2026-10-19 09:21, SUPERSEDES "without its fields").
 //   G10 the bands are the engine's own words.
 
-import { ONE_LINERS, fieldsTail, paceKmH } from "./world-read-shape.mjs";
+import { ONE_LINERS, fieldsTail, firstSentence, paceKmH } from "./world-read-shape.mjs";
 
 /** G2: a lifted mark is a landmark only at this weight or more (Darko, 2026-10-14). */
 export const LANDMARK_WEIGHT_FLOOR = 10;
@@ -132,9 +132,7 @@ function actSentence(entry, { pace = null } = {}) {
   const fixed = ONE_LINERS[entry.action];
   if (entry.action === "walk") return pace ? `Walk to a mark or a point, at about ${Math.round(pace * 10) / 10} km an hour.` : "Walk to a mark or a point.";
   if (fixed) return fixed.says;
-  const line = String(entry.blurb ?? "").split(/\r?\n/).find((l) => l.trim()) ?? "";
-  const m = /^(.*?[.!?])(\s|$)/.exec(line.trim());
-  return (m ? m[1] : line.trim()).slice(0, 160) || entry.action;
+  return firstSentence(entry.blurb) || entry.action;
 }
 
 /** What a resident in the crowd is doing, from presence's own flags. */
@@ -539,7 +537,6 @@ export function blockFields(block, f = {}) {
   const n = (v, d, max) => (Number.isFinite(Number(v)) ? Math.max(0, Math.min(max, Math.floor(Number(v)))) : d);
   if (block === "view") return { block, limit: Math.max(1, n(f.limit, 30, 60)) };
   if (block === "who") return { block, limit: Math.max(1, n(f.limit, 50, 200)), offset: n(f.offset, 0, 1e9) };
-  if (block === "happened") return { block };
   return { block };
 }
 
