@@ -209,6 +209,33 @@ test("the seed and every delta keep discovery equal to the whole derivation; the
   assert.deepEqual(await who("twice over"), [], "but cyd is off the roll, so the door never names them");
 });
 
+test("the real record's hidden surfaces: a card's frontmatter and a mailbox's bounce reason are held in the store and never found, while the same terms in a letter body are (POS-497 FIX 3)", async (tt) => {
+  if (skip) return tt.skip(skip);
+  // Both terms ride the town's own derivation: ADDRESS.md's frontmatter lands in the resident's
+  // card, and a ledger BOUNCE line's reason lands in the sender's mail_state (the town's
+  // mailState, `unplaced_bounces`). Neither is a letter body or a home's text.
+  const t = makeTown("hidden", ["ada", "bex", "cyd", "dee", "eve"]);
+  t.put("WHITE_PAGES/ada/ADDRESS.md", address("ada").replace("since: 2026-05-12", "since: 2026-05-12\nnote: CARDSENTINEL"));
+  t.put("WHITE_PAGES/mail-ledger.md", `${LEDGER_HEAD}- 2026-10-01 · BOUNCE · WHITE_PAGES/cyd/outbox/lost.md (from cyd): BOUNCESENTINEL, not delivered\n`);
+  // the admitting controls: the same terms as plain letter text, written by residents on the roll
+  t.put("WHITE_PAGES/bex/inbox/p1.md", letter("p1", "dee", "bex", "I wrote CARDSENTINEL in a letter."));
+  t.put("WHITE_PAGES/bex/inbox/p2.md", letter("p2", "eve", "bex", "And BOUNCESENTINEL in mine."));
+  await ingest(w, { townRepo: t.dir, sha: t.commit("seed"), seed: true, reseed: true });
+
+  const held = async (table, handle, term) => (await w.query(`SELECT count(*)::int n FROM ${table} WHERE handle = $1 AND json LIKE $2`, [handle, `%${term}%`])).rows[0].n;
+  const check = async (label) => {
+    assert.equal(await held("town_residents", "ada", "CARDSENTINEL"), 1, `${label}: ada's card holds CARDSENTINEL in the store`);
+    assert.equal(await held("town_mail_state", "cyd", "BOUNCESENTINEL"), 1, `${label}: cyd's mail_state holds BOUNCESENTINEL in the store`);
+    assert.deepEqual(await who("cardsentinel"), ["dee"], `${label}: a card's frontmatter is never discovery's text; the same word in dee's letter is`);
+    assert.deepEqual(await who("bouncesentinel"), ["eve"], `${label}: a mailbox's bounce reason is never discovery's text; the same word in eve's letter is`);
+  };
+  await check("the seed");
+  t.put("WHITE_PAGES/ada/ADDRESS.md", address("ada").replace("since: 2026-05-12", "since: 2026-05-12\nnote: CARDSENTINEL, edited"));
+  await ingest(w, { townRepo: t.dir, sha: t.commit("ada: card edited") });
+  await assertEqualToDerivation(t, "after the card edit");
+  await check("a delta");
+});
+
 test("a giant body rides one delta: its pieces are written in the ingest's own transaction, timed, and its far end is found", async (tt) => {
   if (skip) return tt.skip(skip);
   const t = makeTown("giant", ["ada", "bex"]);

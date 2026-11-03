@@ -98,10 +98,25 @@ const inC = (xs) => [...xs].sort(C);
 
 test("discover reads letter bodies and home titles and descriptions, never a card, a mailbox or a letter's other fields; search beside it still reads the json", async (t) => {
   if (skip) return t.skip(skip);
+  // Five invented terms, each held in a surface discover must never read: a letter's other json
+  // field, a resident's card, a mailbox's state row, a letter's path and a letter's id. Each
+  // gets its own admitting control: the same term, written as plain text where discover does
+  // read (a letter body, or a home's description) by a resident on the roll, in this same
+  // store, is found, and found alone. So an absence below is the boundary, never a query or
+  // a fixture that could not have found the term (POS-497 FIX 3).
   await seed({
-    residents: ["ada", "bex", "cyd"],
-    letters: [{ id: "ada-to-bex-1", from: "ada", to: "bex", body: "The LAMPLIGHT holds.", extra: { note: "META-SENTINEL" }, path: "WHITE_PAGES/bex/inbox/PATHSENTINEL.md" }],
-    homes: [{ handle: "bex", title: "Riverside TITLEWORD", description: "A HOMEWORD by the water." }],
+    residents: ["ada", "bex", "cyd", "dee", "eve", "fay", "gus", "hal"],
+    letters: [
+      { id: "ada-to-bex-1", from: "ada", to: "bex", body: "The LAMPLIGHT holds.", extra: { note: "META-SENTINEL" }, path: "WHITE_PAGES/bex/inbox/PATHSENTINEL.md" },
+      { id: "dee-1", from: "dee", to: "bex", body: "I once wrote META-SENTINEL in plain sight." },
+      { id: "eve-1", from: "eve", to: "bex", body: "PRIVATE-CARD-SENTINEL, said aloud in a letter." },
+      { id: "fay-1", from: "fay", to: "bex", body: "MAILSTATE-SENTINEL appears in my words." },
+      { id: "gus-1", from: "gus", to: "bex", body: "See PATHSENTINEL in the text." },
+    ],
+    homes: [
+      { handle: "bex", title: "Riverside TITLEWORD", description: "A HOMEWORD by the water." },
+      { handle: "hal", title: "Hal's house", description: "Keep a note of ada-to-bex-1 here." },
+    ],
     extra: (town) => put(town, "mail_state", { handle: "cyd", json: JSON.stringify({ handle: "cyd", note: "MAILSTATE-SENTINEL" }) }),
   });
   const one = async (q, extra = {}) => store.discover(api, { mode: "text", q, ...extra });
@@ -112,11 +127,22 @@ test("discover reads letter bodies and home titles and descriptions, never a car
   assert.deepEqual((await one("titleword")).hits.map((h) => [h.handle, h.source]), [["bex", { kind: "home", handle: "bex" }]]);
   assert.deepEqual((await one("homeword")).hits.map((h) => h.handle), ["bex"]);
 
-  for (const q of ["META-SENTINEL", "PRIVATE-CARD-SENTINEL", "MAILSTATE-SENTINEL", "PATHSENTINEL", "ada-to-bex-1"]) {
-    const p = await one(q);
-    assert.deepEqual([p.hits, p.complete], [[], true], `${q}: discover never reads it`);
+  // [the hidden surface, its term, where this store holds the term there, the resident whose public text carries the same term]
+  const hidden = (sql) => su.query(sql).then((r) => r.rows[0]?.v ?? null);
+  const SENTINELS = [
+    ["a letter's other json field", "META-SENTINEL", () => hidden("SELECT json::jsonb->>'note' AS v FROM town_letters WHERE id = 'ada-to-bex-1'"), "dee"],
+    ["a resident's card", "PRIVATE-CARD-SENTINEL", () => hidden("SELECT json::jsonb #>> '{address,data,note}' AS v FROM town_residents WHERE handle = 'ada'"), "eve"],
+    ["a mailbox's state row", "MAILSTATE-SENTINEL", () => hidden("SELECT json::jsonb->>'note' AS v FROM town_mail_state WHERE handle = 'cyd'"), "fay"],
+    ["a letter's path", "PATHSENTINEL", () => hidden("SELECT path AS v FROM town_letters WHERE id = 'ada-to-bex-1'").then((p) => p && p.split("/").pop().replace(/\.md$/, "")), "gus"],
+    ["a letter's id", "ada-to-bex-1", () => hidden("SELECT id AS v FROM town_letters WHERE id = 'ada-to-bex-1'"), "hal"],
+  ];
+  for (const [surface, term, heldAs, author] of SENTINELS) {
+    assert.equal(await heldAs(), term, `${surface}: this store holds "${term}" there, so its absence from discover is not an empty fixture`);
+    const p = await one(term);
+    assert.deepEqual([p.hits.map((h) => h.handle), p.complete], [[author], true],
+      `${surface}: "${term}" is found where it is public text (${author}'s) and only there; discover never reads it from ${surface}`);
   }
-  // the control: the same store holds the sentinel where search reads, so the absence above is discover's own
+  // the first sentinel's other control, from search: the same store holds it where search reads
   assert.ok((await store.search(api, "META-SENTINEL")).letters.some((l) => l.id === "ada-to-bex-1"), "search finds the sentinel in the letter's json");
 
   assert.deepEqual((await one("lamplight", { sources: ["homes"] })).hits, [], "letters only when asked for");
@@ -493,6 +519,13 @@ test("the cursor is read whole and grants nothing: another request's, a tampered
   assert.match(await refusedFor({ cursor: forge({ at: ["Not A Handle", "letter", "x", 0, "row"] }) }), /place in the walk/);
   assert.match(await refusedFor({ cursor: forge({ at: ["p1", "mark", "x", 0, "row"] }) }), /place in the walk/);
   assert.match(await refusedFor({ cursor: "A".repeat(L.cursor_bytes + 1) }), /longer than 16384 bytes/);
+  // the bound is UTF-8 bytes, checked before the cursor is decoded (POS-497 FIX 3): 16,384 bytes read on to the
+  // parser, 16,385 do not, and two-byte characters count twice: 8,192 pass the bound and 8,193 (16,386 bytes, but
+  // only 8,193 UTF-16 units) are refused for their length
+  assert.match(await refusedFor({ cursor: "A".repeat(L.cursor_bytes) }), /it is not one this door wrote/, "exactly 16384 bytes passes the length bound and fails as unreadable");
+  assert.match(await refusedFor({ cursor: "é".repeat(L.cursor_bytes / 2) }), /it is not one this door wrote/, "8192 two-byte characters are exactly 16384 bytes");
+  assert.match(await refusedFor({ cursor: "é".repeat(L.cursor_bytes / 2 + 1) }), /longer than 16384 bytes/, "8193 two-byte characters are 16386 bytes: refused for their length, though only 8193 UTF-16 units");
+  assert.match(await refusedFor({ cursor: "🦊".repeat(L.cursor_bytes / 4 + 1) }), /longer than 16384 bytes/, "four-byte characters count four times");
   assert.match(await refusedFor({ cursor: 7 }), /cursor must be the string/);
 
   // the record moves: a letter's words change, and with them the generation

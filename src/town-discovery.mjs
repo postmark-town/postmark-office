@@ -244,7 +244,8 @@ const sourceIdOk = (s) => typeof s === "string" && s !== "" && !s.includes("\0")
 export function readCursor(ask) {
   if (ask.cursor == null) return { at: null, generation: null };
   const no = (why) => bounce(422, `this cursor cannot be read: ${why}`, "pass back the cursor a previous discover page returned, with the same mode and the same words, or leave it off to start again");
-  if (ask.cursor.length > L.cursor_bytes) return no(`it is longer than ${L.cursor_bytes} bytes`);
+  // the bound is bytes, as the contract says: a string's .length counts UTF-16 units, so 8,193 two-byte characters would pass a unit bound of 16,384 while weighing 16,386 bytes
+  if (Buffer.byteLength(ask.cursor, "utf8") > L.cursor_bytes) return no(`it is longer than ${L.cursor_bytes} bytes`);
   let c;
   try { c = JSON.parse(Buffer.from(ask.cursor, "base64url").toString("utf8")); } catch { return no("it is not one this door wrote"); }
   if (c === null || typeof c !== "object" || c.v !== 1) return no("it is not one this door wrote");
