@@ -99,3 +99,68 @@ test("a completed quoted bio is not extended by indented lines after its closing
   const open = parseProfile(doc('bio: "first part', "  # still inside the open quote", '  end of it"', "  # real comment after", "runtime: r"));
   assert.deepEqual([open.bio, open.runtime], ["first part # still inside the open quote end of it", "r"]);
 });
+
+// COST (POS-862 security brief, Rivet 2026-11-02 06:04Z): "Remove repeated growing-prefix work while retaining
+// supported wrapped-quote completion, hashes/escaped quotes inside, post-close comment exclusion, adjacent fields
+// and all non-bio/control behavior." Fix 3 found a quoted bio's end by re-joining and JSON-parsing the whole fold
+// after every line (quadratic in the line count). The end is now found by one escape-aware scan and parsed once.
+// Each expected value below is what fix 3's parser (fe5dddb0) answered for the same invented text, measured then.
+test("a quoted bio's close is found escape-aware: an escaped quote, an escaped backslash and a \\u0022 each read as before", () => {
+  const escapedQuote = parseProfile(doc('bio: "an invented \\"quoted', '  phrase\\" here"', "  # a comment after the close", "runtime: r"));
+  assert.deepEqual([escapedQuote.bio, escapedQuote.runtime], ['an invented "quoted phrase" here', "r"], "an escaped quote does not close the bio; the real close does, and the comment after it is not the bio");
+  const escapedBackslash = parseProfile(doc('bio: "an invented path C:\\\\', '  folder\\\\"', "  # a comment after the close", "runtime: r"));
+  assert.deepEqual([escapedBackslash.bio, escapedBackslash.runtime], ["an invented path C:\\ folder\\", "r"], "a quote after an escaped backslash IS the close");
+  const unicodeQuote = parseProfile(doc('bio: "an invented \\u0022 inside', '  and the end"', "  # a comment after the close", "runtime: r"));
+  assert.deepEqual([unicodeQuote.bio, unicodeQuote.runtime], ['an invented " inside and the end', "r"], "a \\u0022 escape is text, not the close");
+});
+
+test("CONTROLS: a malformed quoted bio keeps fix 3's reading: the whole fold, quotes and comment included (pinned, not endorsed)", () => {
+  const cases = [
+    [['bio: "an invented bad \\x escape', '  ends here"'], '"an invented bad \\x escape ends here" # a comment'],
+    [['bio: "closed" then more', '  "quoted" words'], '"closed" then more "quoted" words # a comment'],
+    [['bio: "an invented trailing \\', '  then the end"'], '"an invented trailing \\ then the end" # a comment'],
+  ];
+  for (const [bioLines, expected] of cases) {
+    const p = parseProfile(doc(...bioLines, "  # a comment", "runtime: r"));
+    assert.deepEqual([p.bio, p.runtime], [expected, "r"], `fix 3 read ${JSON.stringify(bioLines)} this way`);
+  }
+});
+
+// A count, not a clock (no timing SLA): the characters this parse hands JSON.parse. The first line is parsed
+// once, and the fold at most twice (once where it may complete, once after), so the total stays within three
+// times the document however many lines the bio wraps over. Re-parsing the fold after every line costs about
+// lines x fold, hundreds of times this bound at 2,000 lines; so does parsing only lines that hold a quote, on
+// the quote-rich shapes below.
+const parseWork = (text) => {
+  const real = JSON.parse;
+  const seen = { calls: 0, chars: 0 };
+  JSON.parse = function (source, ...rest) { seen.calls++; seen.chars += String(source).length; return real.call(this, source, ...rest); };
+  try {
+    const profile = parseProfile(text);
+    return { profile, calls: seen.calls, chars: seen.chars };
+  } finally { JSON.parse = real; }
+};
+
+test("COST: a quoted bio wrapped over many lines (unterminated, quote-rich, escaped, closed late) is parsed in linear work, with the same answers", () => {
+  const N = 2000;
+  const shapes = [
+    ["unterminated, one-character lines", ['bio: "x', ...Array(N).fill("  x")], '"x' + " x".repeat(N)],
+    ["unterminated, every line an escaped quote", ['bio: "x', ...Array(N).fill('  \\"')], '"x' + ' \\"'.repeat(N)],
+    ["closed mid-line, every line quote-rich", ['bio: "x" y', ...Array(N).fill('  "z"')], '"x" y' + ' "z"'.repeat(N)],
+    ["closed on the last line, then a comment", ['bio: "x', ...Array(N - 1).fill("  x"), '  x"', "  # a comment after the close"], "x" + " x".repeat(N)],
+  ];
+  // Every shape's verdict is collected and the whole map compared, so a red names every shape that moved.
+  const verdicts = {}, work = {};
+  for (const [shape, bioLines, expected] of shapes) {
+    const text = doc(...bioLines, "runtime: r");
+    const { profile, calls, chars } = parseWork(text);
+    verdicts[shape] = {
+      sameAnswer: profile?.bio === expected && profile?.runtime === "r", // fix 3's answer, and the next field intact
+      countIsLive: calls > 0, // the count sees the parser's own JSON.parse
+      linearWork: chars <= 3 * text.length,
+    };
+    work[shape] = `${chars} characters parsed for a ${text.length}-character document`;
+  }
+  const want = Object.fromEntries(shapes.map(([shape]) => [shape, { sameAnswer: true, countIsLive: true, linearWork: true }]));
+  assert.deepEqual(verdicts, want, `the fold must not be re-parsed per line: ${JSON.stringify(work)}`);
+});

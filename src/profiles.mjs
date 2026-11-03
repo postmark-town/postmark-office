@@ -158,10 +158,27 @@ function parseFrontmatterScalars(source) {
     // An indented COMMENT line ends a plain scalar (it is YAML's, not the author's words); inside an
     // open double-quoted value a `#` is just text and stays.
     const quoted = /^"/.test(raw);
+    // A quoted value that reads as a complete JSON string is COMPLETE: what follows is not the bio. The fold
+    // can first read so only where its first unescaped `"` after the opening one is its last character, so
+    // the fold is scanned once, left to right (a backslash escapes the next character, the space each fold
+    // adds included), and parsed only there; past that quote no longer fold is one JSON string, and the
+    // scan stops. (Fix 3 re-joined and re-parsed the whole fold after every line: the same answers, at a
+    // cost quadratic in the line count. POS-862 security brief, 2026-11-02.)
+    let seeking = quoted, escaped = false, unscanned = raw.slice(1);
     while (key === "bio" && i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1]) && (quoted || !/^[ \t]+#/.test(lines[i + 1]))) {
       parts.push(lines[++i].trim());
-      // A quoted value that now reads as a complete JSON string is COMPLETE: what follows is not the bio.
-      if (quoted) { try { JSON.parse(parts.join(" ")); break; } catch { /* the quote is still open */ } }
+      if (!seeking) continue;
+      const text = `${unscanned} ${parts[parts.length - 1]}`;
+      unscanned = "";
+      let close = -1;
+      for (let c = 0; c < text.length && close < 0; c++) {
+        if (escaped) escaped = false;
+        else if (text[c] === "\\") escaped = true;
+        else if (text[c] === '"') close = c;
+      }
+      if (close < 0) continue;
+      seeking = false;
+      if (close === text.length - 1) { try { JSON.parse(parts.join(" ")); break; } catch { /* malformed before its close: the fold stands */ } }
     }
     const folded = parts.join(" ");
     if (parts.length > 1 && /^"/.test(folded)) {
