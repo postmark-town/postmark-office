@@ -21,6 +21,21 @@
 // `if (townOwned(mark)) return "constitution";` and the town's claim is refused
 // `escrow-absent` here.
 //
+// THE TOWN'S HAND ONLY, NEVER A TIER OR A LOOKALIKE. POS-696, Wright, 2026-10-19
+// 13:50Z: "Reading Darko's 'constitutional marks need no stake' as 'the town's
+// own marks need no stake', matching 1.0's townOwned exemption." So the same
+// clearing also judges three claims that must not ride it, each read alone:
+//   · a resident's ✦0 claim that writes `tier: constitution` is refused: an
+//     exemption by tier in markStanding locks it;
+//   · a claimant that only pads the town's handle is refused: materialize.mjs §
+//     ownerHouseholdFor trims it to the town's house, so it passes 5.4 and meets
+//     5.5, and a townOwned that trims too locks it;
+//   · a resident's claim on a mark somebody staked locks: the escrow gate itself
+//     is unchanged.
+// And the owner is the only field that names the town: a row with no owner is
+// never the town's through its household column, in the notary's read and in
+// the walk's own record (standing.mjs § recordOf).
+//
 // THE RIG is clearing-escrow-order.test.mjs's: a real Postgres
 // (test/helpers/embedded-store.mjs) and the real clearing as `clearing_job`.
 
@@ -42,7 +57,7 @@ after(() => store.stop());
 const skip = store.skip ?? false;
 
 const { townsOwn } = await import("../world2/tools/escrow-presence.mjs");
-const { townOwned } = await import("../world2/tools/standing.mjs");
+const { townOwned, markStanding, recordOf } = await import("../world2/tools/standing.mjs");
 
 const box = (at, ext) => `((${at.x - ext.w / 2},${at.y - ext.h / 2}),(${at.x + ext.w / 2},${at.y + ext.h / 2}))`;
 const ONE = { w: 1, h: 1 };
@@ -68,16 +83,34 @@ async function seed() {
     await c.query(
       `INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k)
        VALUES ($1, 'rei/a-staked-stone', 'rei', 'hh:starforge', 'hh:starforge', 1, 0)`, [TOWN_SHA]);
-    const claim = async (slug, claimant, household, at) => (await c.query(
+    const claim = async (slug, claimant, household, at, data = { date: "2026-10-26" }) => (await c.query(
       `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
-       VALUES ($1, 'sited', $2, $3, 'pending', $4, $5, $6::box, 0, '{"date":"2026-10-26"}', $7)
+       VALUES ($1, 'sited', $2, $3, 'pending', $4, $5, $6::box, 0, $7, $8)
        RETURNING id::text`,
-      [WIN, claimant, household, `${slug}.`, JSON.stringify({ slug, at, extent: ONE }), box(at, ONE), slug])).rows[0].id;
+      [WIN, claimant, household, `${slug}.`, JSON.stringify({ slug, at, extent: ONE }), box(at, ONE), JSON.stringify(data), slug])).rows[0].id;
     return {
       town: await claim("the-town/a-signpost", "the-town", "solo:the-town", { x: 7000, y: 7000 }),
       resident: await claim("rei/a-signpost", "rei", "hh:starforge", { x: 7010, y: 7000 }),
+      charter: await claim("rei/a-charter", "rei", "hh:starforge", { x: 7020, y: 7000 }, { date: "2026-10-26", tier: "constitution" }),
+      padded: await claim("the-town/a-padded-post", " the-town", "solo:the-town", { x: 7030, y: 7000 }),
+      staked: await claim("rei/a-staked-stone", "rei", "hh:starforge", { x: 7040, y: 7000 }),
     };
   } finally { await c.end(); }
+}
+
+// ONE CLEARING for every case below, so each assertion reads the same verdict
+// and a red in one never hides another.
+let cleared = null;
+async function clearedOnce() {
+  if (!cleared) {
+    const ids = await seed();
+    const r = spawnSync(process.execPath, [JOB, "--window", String(WIN)], {
+      cwd: ROOT, encoding: "utf8",
+      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
+    });
+    cleared = { ids, r, out: `${r.stdout}\n${r.stderr}` };
+  }
+  return cleared;
 }
 
 async function statusOf(id) {
@@ -89,19 +122,38 @@ async function statusOf(id) {
 }
 
 test("THE TOWN AT ✦0 · a claim by the-town on open ground locks; a resident's beside it is refused escrow-absent", { skip }, async () => {
-  const ids = await seed();
-  const r = spawnSync(process.execPath, [JOB, "--window", String(WIN)], {
-    cwd: ROOT, encoding: "utf8",
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WORLD2_CLEARING_URL: store.url("clearing_job") },
-  });
-  assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+  const { ids, r, out } = await clearedOnce();
+  assert.equal(r.status, 0, out);
   assert.equal(await statusOf(ids.town), "locked", "POS-701: the town's own marks need no stake, at the candle too");
   assert.match(await statusOf(ids.resident), /^refused: escrow-absent/, "the control: the same ground, a resident, nothing staked");
 });
 
+test("NO TIER EXEMPTION · a resident's ✦0 claim that writes tier: constitution is still refused escrow-absent", { skip }, async () => {
+  const { ids, out } = await clearedOnce();
+  assert.match(await statusOf(ids.charter), /^refused: escrow-absent/,
+    `POS-696: the exemption is the town's own hand, not a tier a resident can write\n${out}`);
+});
+
+test("NO LOOKALIKE · a claimant that only pads the town's handle reaches 5.5 and is refused escrow-absent", { skip }, async () => {
+  const { ids, out } = await clearedOnce();
+  assert.match(await statusOf(ids.padded), /^refused: escrow-absent/,
+    `townOwned matches the owner exactly; the house lookup's trim lends it the town's house, never its exemption\n${out}`);
+});
+
+test("NORMAL ESCROW · a resident's ✦0 claim on a mark somebody staked still locks", { skip }, async () => {
+  const { ids, out } = await clearedOnce();
+  assert.equal(await statusOf(ids.staked), "locked", `the gate asks for somebody's stamps, and these are there\n${out}`);
+});
+
 test("ONE PREDICATE · the notary's townsOwn answers exactly what the walk's townOwned answers for a row's owner", () => {
-  for (const owner of ["the-town", "rei", "the-town-crier", undefined])
-    assert.equal(townsOwn({ owner, tier: "market" }), townOwned({ by: owner }), `owner ${owner}`);
+  for (const owner of ["the-town", "rei", "the-town-crier", " the-town", "The-Town", null, undefined])
+    assert.equal(townsOwn({ owner, tier: "market" }), townOwned({ by: owner }), `owner ${JSON.stringify(owner)}`);
   assert.equal(townsOwn({ slug: "the-town/orient" }), false, "the slug is not the owner");
   assert.equal(townsOwn(null), false);
+});
+
+test("THE OWNER ONLY · a row with no owner is never the town's through its household column, in the notary or the walk", () => {
+  assert.equal(townsOwn({ owner: null, household: "the-town", tier: "market" }), false, "the notary reads marks.owner, nothing else");
+  const row = { id: null, slug: "someone/a-stone", kind: "sited", owner: null, household: "the-town", geometry: null, parent: null, data: {} };
+  assert.notEqual(markStanding(recordOf(row), new Map()), "constitution", "the walk's record carries the owner as `by`, and no household beside it");
 });
