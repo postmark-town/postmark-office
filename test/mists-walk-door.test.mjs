@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { worldClone, NO_WORLD } from "./fixture-paths.mjs";
+import { lastStandingCrossing } from "./helpers/mists-standing.mjs";
 
 const SOURCE = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
 const CLONE = worldClone();
@@ -62,7 +63,7 @@ test("THE ORDER: the Mists are read before the exits under DEC-5 and before the 
 const SKELETON = HAS_ROAD ? JSON.parse(readFileSync(join(CLONE, "WORLD", "skeleton.json"), "utf8")) : null;
 
 test("against the world clone: a road into the wall is refused, a road into the fringe slowed, a road clear of it untouched", { skip: !HAS_ROAD && WHY_NOT }, async () => {
-  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const last = lastStandingCrossing(SKELETON.mists);                // WLD-147: a withdrawn record's last keyframe has no Mists; the wall at its fullest is the crossing before
   const eng = await import(`file:///${ENGINE.replace(/\\/g, "/")}`);
   const face = eng.mistsAt(last, SKELETON.mists).clear.minY;
   const from = { x: 0, y: -2000 };
@@ -160,7 +161,7 @@ test("the signpost is findable: `find: \"old track\"` ranks the-town/the-old-tra
 test("against the world clone, once it carries the export: Sol's road is still refused, and is now told the track", { skip: !HAS_ROAD && WHY_NOT }, async (t) => {
   const eng = await import(pathToFileURL(ENGINE).href);
   if (!eng.KEPT_AIR) return t.skip("the pinned world engine predates the KEPT_AIR export (WLD-6 part 2); the pin moves to it with the world's merge");
-  const last = SKELETON.mists.schedule.at(-1).crossing;
+  const last = lastStandingCrossing(SKELETON.mists);
   const road = await mistsOnTheRoad(CLONE, SKELETON, { x: 3198.9, y: -2907.5 }, { x: 3735, y: -4065 }, last);
   assert.ok(road.refused, "who may walk where is unchanged: the diagonal is still refused");
   assert.equal(await mistsTrackHint(CLONE, road.refused, last), SENTENCE);
