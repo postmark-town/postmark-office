@@ -1725,7 +1725,9 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
 
     // the registry from the index this door reads: the store's town_meta (POS-268)
     const registry = JSON.parse((await ix.questRegistry()) ?? '{"quests":[]}');
-    // ── THE FACTS COME OFF THE FOLD THE REHYDRATE ALREADY WROTE (POS-167) ──
+    // ── THE FACTS COME OFF THE FOLD THE INGEST ALREADY WROTE (POS-167) ──
+    // (History: POS-167 titled this "the rehydrate"; the town-index ingest has
+    // done that fold since the office.db rehydrate was retired (POS-268 5b, POS-656).)
     //
     // This line was `tools.onboardingFactsFor(clone, handle)` with no options,
     // and on the SERVING path that is THREE parses of the 13k-line stamp ledger
@@ -1734,11 +1736,11 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     // and `welcomedHouseholds` once more. Every doorstep read paid it.
     //
     // THE FACTS WERE ALREADY IN THIS CALL. `standingRowsFromTown` folds the same
-    // six at every rehydrate into `quest_standing`, and `questBoardWith` below
+    // six at every ingest into `quest_standing`, and `questBoardWith` below
     // reads that row for its board — so this function was reading these six
     // facts TWICE, from two different clocks, and `composeNextSteps` then threw
     // the row's copy away ("the onboarding line is the voice for the six
-    // one-time rows"). Measured: a row folded at the last tick and a live fold
+    // one-time rows"). Measured: a row folded at the last ingest and a live fold
     // disagree on card / home / window, because `src/edit.mjs`'s pen lands those
     // three on the LIVE clone between snapshots while the row comes from the
     // town-index ingest's own clone, as of its last run
@@ -1746,13 +1748,13 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     //
     // So the live fold was the one field on this page FRESHER than the `as_of`
     // sha the page itself prints. Reading the row puts the checklist on the
-    // page's own clock, at the price of one tick: a paper act done through the
-    // office pen now leaves the list at the next rehydrate rather than at once.
+    // page's own clock, at the price of one ingest: a paper act done through the
+    // office pen now leaves the list at the next ingest rather than at once.
     //
     // THE FALLBACK IS TODAY'S BEHAVIOUR, NOT A NEW ROAD. The store's `standingFor`
     // answers null when the index holds no row for the handle — the case of an
     // index that predates the seam — and
-    // between a deploy and the first rehydrate that is every resident. Reading
+    // between a deploy and the first ingest that is every resident. Reading
     // an absent row as six false facts would print six finished chores back onto
     // the checklist of a resident who did them, which is #1864 in a new mouth.
     // Absent means ASK, exactly as before, at exactly the old cost, for exactly

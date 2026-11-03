@@ -24,10 +24,11 @@ on the box only, never in the town repo, and not in this repo either.
   the site repo's `tools/lib/` (postmark-town/postmark-site) with provenance
   headers naming each upstream and its hash (fix upstream, re-vendor;
   `scripts/check-vendor-drift.mjs` compares).
-- `src/hydrate.mjs` — town checkout → `office.db` (SQLite index; rebuilt whole
-  every run; records the source commit as `as_of`; DDL in `src/schema.mjs`).
-  Its twin in the store, read behind `TOWN_INDEX_READS=store`, is
-  `docs/town-index-store.md`.
+- `src/hydrate.mjs` — RETIRED (POS-656, w43; the file and `src/schema.mjs` are
+  gone). It was town checkout → `office.db` (SQLite index). The town index is
+  now the store's `town_*` tables, derived by `src/town-index.mjs` and kept by
+  the ingest; every door reads the store (the `TOWN_INDEX_READS` switch is no
+  longer read). See `docs/town-index-store.md`.
 - `src/server.mjs` — zero-dep node:http server for the CONTRACT read verbs;
   bearer keys (static keys are `static` rows in the tokens table, `src/static-keys.mjs`); bounce-vocabulary errors; `X-Postmark-As-Of` on
   every response; the ballot box at `GET /votes`.
