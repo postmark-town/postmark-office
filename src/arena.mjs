@@ -7,7 +7,7 @@
 // arena reads nothing and writes nothing, in dynamic.db, in world.db, or
 // anywhere else.
 //
-// WHAT WENT WITH IT: the encounter fold (encounter.mjs), the wheel's join and
+// WHAT WENT WITH IT: the arena's old encounter fold, the wheel's join and
 // leave on a crossing, the encounter, acting_blocked and loose floor on the
 // apex's read, the phase read that `loot`'s precondition asked, the loot shroud
 // at the hold door, the walk desk's placement clear of an adversary, and the
