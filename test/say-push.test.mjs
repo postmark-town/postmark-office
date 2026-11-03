@@ -1163,3 +1163,28 @@ test("POS-887 A CLIENT THAT GOES WHILE THE FIRST FRAME IS BEING BUILT: nothing i
   assert.equal(res.ended, 0, "the response is not ended by a stream that never opened (the client is the one that went)");
   assert.equal(push.open, 0, "and the ear it was about to register is gone");
 });
+
+test("POS-887 THE COST, pinned: fifty open waiters and one voice cost one standing read per waiter (plus the speaker's own), and one room", async () => {
+  const placed = { speaker: { x: 2000, y: 2000 } };
+  for (let i = 0; i < 50; i++) placed[`ear-${String(i).padStart(2, "0")}`] = { x: 2000 + (i % 10), y: 2001 + Math.floor(i / 10) };
+  const b = roomBench(placed, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const ears = Object.keys(placed).filter((h) => h !== "speaker");
+  const wires = [];
+  for (const h of ears) wires.push(await onWire(push, h));
+  assert.equal(push.open, 50);
+  b.tick(20_000);
+  const before = { standing: b.counted.standing, rooms: b.store.room.stats.rooms };
+  await b.store.say("speaker", "the whole room hears this");
+  await push.settled();
+  assert.equal(b.counted.standing - before.standing, 51, "50 waiters read where their readers stand, plus the speaker's own read (measured on the bench, not under production load)");
+  assert.equal(b.store.room.stats.rooms - before.rooms, 2, "and the room is still one for the speaker and one for all fifty");
+  assert.ok(wires.every((w) => saidOn(w.res).includes("the whole room hears this")), "the admitting control: every one of them is served");
+});
+
+test("POS-887 THE ROOM LOOKUP, world.mjs: a published world that cannot be read is a failure to the strict room read and the open to the ordinary one", async () => {
+  const world = await import("../src/world.mjs");
+  // this file points WORLD_CLONE at nothing, so the real read of the published world fails inside interiorIdsNow's own catch
+  await assert.rejects(world.roomOfNowStrict("ann"), /published world could not be read/, "the strict read says it cannot tell");
+  assert.equal(await world.roomOfNow("ann"), null, "the ordinary read keeps reading that as the open: it must never stop a call");
+});

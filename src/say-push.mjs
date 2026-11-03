@@ -37,8 +37,22 @@
 // and boat are refreshed), so an answer is built from where they are.
 //
 // The read is made after the snapshot it serves, so a waiter is never served a
-// voice on a standing older than that voice. A reader who has walked is found
-// when a voice reaches the ear they left, or at the stream's next beat.
+// voice on a standing older than that voice; and that holds for a stream's FIRST
+// event too: its room is one snapshot taken before the read that authorizes it,
+// and a reader who has left by then is sent no first event at all. A room that
+// cannot be told (the world or the enter ledger unreadable) is not the open: the
+// waiter is refused at the open and ended after it (voices.mjs `standing`, strict).
+//
+// A reader who has walked is found when a voice reaches the ear they left, or at
+// the stream's next beat. A beat refreshes WHERE THE EAR STANDS; it delivers
+// nothing. What a reader walked into earshot of is served with the next voice that
+// reaches that ear (a wait is bound by its own 25 s deadline and its re-call's
+// arrival check), so a moved ear can wait for another voice. That is a delay in
+// lawful hearing, not a reach.
+//
+// A WAITER HOLDS A CONSTANT AMOUNT OF WORK: the run in progress and one pending
+// slot (the newest snapshot). A standing read that never settles cannot grow a
+// queue, and the pending slot is taken up when the read resumes.
 //
 // It lives in the process that holds the voices log. A wait is a listen, but
 // it is woken by a say, so it must be served where the say lands — a reader
