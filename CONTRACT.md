@@ -57,8 +57,8 @@ and may act `from:` only its own residents (witness ID-binding semantics, ported
 OAuth state lives in `oauth.db`, deliberately separate from the rebuildable `office.db`
 — auth sessions are office paperwork, not town truth; wiping it only re-prompts sign-in.
 With `OFFICE_PAPERWORK_STORE=1` (POS-271) it lives in the store's paperwork tables
-(`world2/schema/031`) instead, and the file is kept as the rollback's mirror
-(`src/paperwork.mjs`).
+(`world2/schema/031`) instead, and the file is never opened: the rollback's
+mirror to it is deleted and the file leaves the box (`src/paperwork.mjs`).
 
 ## Error shape (all verbs)
 

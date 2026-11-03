@@ -827,7 +827,7 @@ default is the checkout's root. Its first line says which book it wrote.
 
 ```sh
 sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-import.mjs --dry --oauth-db /srv/postmark-office/oauth.db'
-#   book: the store (oauth_tokens), mirrored to /srv/postmark-office/oauth.db
+#   book: the store (oauth_tokens)
 #   OFFICE_KEYS: N keys          <- N is step 0's count; "malformed entries skipped" means a line to fix first
 #   would add N · would replace 0 · unchanged 0 · refused 0
 #   households: ...              <- every household you expect, and no other
@@ -900,7 +900,7 @@ printf %s "$ENTRY" | sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; \
   test "$OFFICE_PAPERWORK_STORE" = 1 && test "$WORLD2_PG" = 1 && test -n "$WORLD2_PG_URL" || { echo "the store switch is not in this env file: stop"; exit 1; }; \
   OFFICE_KEYS=$(cat); export OFFICE_KEYS; cd /srv/postmark-office && \
   exec runuser -u meepo -- node tools/static-keys-import.mjs --dry --oauth-db /srv/postmark-office/oauth.db'
-#   book: the store (oauth_tokens), mirrored to /srv/postmark-office/oauth.db   <- the store, or stop
+#   book: the store (oauth_tokens)   <- the store, or stop
 #   OFFICE_KEYS: 1 key · would add 1 · ... · static rows not in OFFICE_KEYS (left alone): N
 # then the same line without --dry, then step 4's /me with the new key
 unset ENTRY
