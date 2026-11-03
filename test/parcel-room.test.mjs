@@ -229,29 +229,29 @@ function withResidents(residents) {
 
 // The warning's exact words, typed here and not derived, so the words Darko reviews are the words pinned.
 const HEADS_UP_1_RESIDENT_2ND = "the-rowan has 1 resident, and a parcel is one per resident, so it can hold 1 parcel now. "
-  + "Room for a second parcel is 1 parcel past that: it stands empty until a second resident joins (household { do: \"add-resident\" }). "
+  + "Room for a second parcel stands empty until a second resident joins (household { do: \"add-resident\" }). "
   + "Stamps paid for room are never returned.";
 const HEADS_UP_2_RESIDENTS_3RD = "the-rowan has 2 residents, and a parcel is one per resident, so it can hold 2 parcels now. "
-  + "Room for a third parcel is 1 parcel past that: it stands empty until a third resident joins (household { do: \"add-resident\" }). "
+  + "Room for a third parcel stands empty until a third resident joins (household { do: \"add-resident\" }). "
   + "Stamps paid for room are never returned.";
 const HEADS_UP_1_RESIDENT_3RD = "the-rowan has 1 resident, and a parcel is one per resident, so it can hold 1 parcel now. "
-  + "Room for a third parcel is 2 parcels past that: it stands empty until 2 more residents join (household { do: \"add-resident\" }). "
+  + "Room for a third parcel stands empty until 2 more residents join (household { do: \"add-resident\" }). "
   + "Stamps paid for room are never returned.";
 
 // LAW (POS-849; Darko, 2026-10-31 22:31 EDT): "let's just let 757 through and then hotfix to warn and allow during the week."
 // Until POS-849 this test asserted POS-762/g "Refuse it" (Darko 2026-10-23 11:03 EDT): a one-resident house was refused the
 // 2nd room with "add the resident first", and nothing was burned. It is inverted, not deleted: the same fixtures, the opposite ruling.
-test("7 · room past the residents (POS-849): sold, with a heads-up that names the room and how far past it goes; the old refusal is gone", () => {
+test("7 · room past the residents (POS-849): sold, with a heads-up that names the room and what it waits for; the old refusal is gone", () => {
   const lone = quote({ registry: withResidents(["ash"]) });
   // the call is allowed: a quote, no refusal, the same price and the same town line as a house with a resident to spare
   assert.equal(lone.error, undefined, `"warn and allow" (LAW) must not refuse; it answered: ${JSON.stringify(lone.error)}`);
   assert.deepEqual([lone.quote.room, lone.quote.price, lone.quote.line],
     [{ now: 1, after: 2 }, 50, "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan"],
     "the room is sold at the price by the room already bought, whatever the residents");
-  // the warning: exact words, naming the room (the 2nd parcel's) and how far past the residents it goes (1 parcel past)
+  // the warning: exact words, naming the room (the 2nd parcel's) and what it waits for (a second resident)
   assert.equal(lone.quote.heads_up, HEADS_UP_1_RESIDENT_2ND, "LAW: \"warn\" says the room stands empty until a second resident joins");
   assert.doesNotMatch(JSON.stringify(lone), /add the resident first|needs a second resident to hold it|Nothing was burned/, "the old refusal's words are gone from the answer");
-  // two residents, room for two already: the third room is 1 past; and one resident with two rooms bought: 2 past
+  // two residents, room for two already: the third room waits for 1 resident; and one resident with two rooms bought: it waits for 2
   const third = quote({ entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] });
   assert.equal(third.error, undefined, JSON.stringify(third.error));
   assert.deepEqual([third.quote.room, third.quote.price, third.quote.heads_up], [{ now: 2, after: 3 }, 100, HEADS_UP_2_RESIDENTS_3RD]);

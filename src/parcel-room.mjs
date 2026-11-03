@@ -202,8 +202,8 @@ const ordinal = (n) => ({ 2: "second", 3: "third" })[n] ?? `${n}th`;
  * "Warn and allow", 2026-10-31 22:31 EDT "hotfix to warn and allow during the
  * week"). A parcel is one per resident, so a house with fewer residents than
  * the parcel it buys room for can hold no parcel in that room until more join.
- * The purchase is allowed and the answer says so, with how far past the
- * residents the room goes. PURE. → the sentence, or null when a resident can
+ * The purchase is allowed and the answer says so, with what the room waits
+ * for. PURE. → the sentence, or null when a resident can
  * hold the room (or the counts are not a house's).
  */
 export function roomPastResidentsHeadsUp({ slug, residents, nth }) {
@@ -211,7 +211,7 @@ export function roomPastResidentsHeadsUp({ slug, residents, nth }) {
   const past = nth - residents;
   const until = past === 1 ? `a ${ordinal(nth)} resident joins` : `${past} more residents join`;
   return `${slug} has ${residents} resident${residents === 1 ? "" : "s"}, and a parcel is one per resident, so it can hold ${residents} parcel${residents === 1 ? "" : "s"} now. `
-    + `Room for a ${ordinal(nth)} parcel is ${past} parcel${past === 1 ? "" : "s"} past that: it stands empty until ${until} (household { do: "add-resident" }). `
+    + `Room for a ${ordinal(nth)} parcel stands empty until ${until} (household { do: "add-resident" }). `
     + "Stamps paid for room are never returned.";
 }
 
