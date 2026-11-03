@@ -250,6 +250,7 @@ test("the epoch read repeats the index predicate, uses acts_voice_at_idx, filter
   assert.equal(scansAfter.reduce((a, n) => a + (n["Rows Removed by Filter"] ?? 0), 0), 0, "private rows are not in the index: nothing is filtered away");
   assert.equal(scansAfter.reduce((a, n) => a + (n["Actual Rows"] ?? 0), 0) >= 800, true);
   assert.ok(touched(after) <= touched(before) + 6, `older history and private backlog did not add blocks: ${touched(before)} -> ${touched(after)}`);
+  console.log(`[pos-779] epoch read plan (800 voices; then +12,000 older, +12,000 non-voice, +4,000 private): buffers ${touched(before)} -> ${touched(after)}, exec ${before["Execution Time"]} -> ${after["Execution Time"]} ms, rows removed by filter 0 (one run, this host, invented rows)`);
   // the aggregate is bounded by its LIMIT and reads no more than the epoch either
   const agg = await plan(SQL.saysAggregate(true), params);
   assert.ok(leafScans(agg).some((n) => n["Index Name"] === "acts_voice_at_idx") && !leafScans(agg).some((n) => n["Node Type"] === "Seq Scan"), "the aggregate also reads through the index, with no sequential scan");
