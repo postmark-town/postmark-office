@@ -253,9 +253,13 @@ export async function closePaperworkPools() {
   await Promise.all(all.map((p) => p.end().catch(() => {})));
 }
 
-/** A store paper on a pool the caller owns — the suite's seam, and the proof's. */
-export function paperOnPool(pool, { file = null, readOnly = false } = {}) {
-  return new Paper({ file, pool, readOnly });
+/**
+ * A store paper on a pool the caller owns — the suite's seam, and the proof's.
+ * It holds no file, as every store paper holds none since the mirror was
+ * deleted (POS-271): the option that could hand it one is gone, not just unused.
+ */
+export function paperOnPool(pool, { readOnly = false } = {}) {
+  return new Paper({ pool, readOnly });
 }
 
 /** The int8-as-Number types for a pool a caller builds (the suite, the proof). */

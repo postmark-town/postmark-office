@@ -1024,34 +1024,65 @@ is not file lag: stop there, and nothing is deleted.
 `--repair` only INSERTS into the files the rows only the store holds. It never
 deletes or overwrites, it refuses (exit 2, nothing written) if a row differs in
 content or only the file holds it, and its output is counts only. `--check`'s
-output is not: it prints each finding's key, and a sign-in row's key is its
-token hash. Keep that output on the box and paste only its counts.
+output is not: each finding is an indented line carrying the row's key, which
+can be a token hash, a live authorization code or a pending id. So the runner
+below writes every run's whole output to a root-only file on the box and shows
+only the summary lines (the per-table `equal` or `DRIFT` line, and the last
+line). Nothing a finding says is pasted anywhere.
+
+**No password is typed.** world2_owner's password is read inside the root shell
+from `/etc/postmark-world2-dev.env`, the way `deploy/world2-backup.sh` reads it
+(`w2_secret PG_WORLD2_OWNER_PASSWORD`), and exported as `PGPASSWORD` for that
+shell and the tool alone. The `--pg-url` names the store and the role and
+carries no password; node-postgres takes it from `PGPASSWORD`. So it is in no
+command line, no argv and no transcript. `runuser` keeps the environment, as §
+Static keys' steps rely on.
 
 From the staged tip of this change (it carries `--repair`; its node_modules
 has pg), as root, the tool running as meepo (the files are meepo's):
 
 ```sh
-CHECK='node world2/tools/paperwork-import.mjs --pg-url "<world2_owner on world2_dev>" --oauth-db /srv/postmark-office/oauth.db --roles-db /srv/postmark-office/roles.db'
+# The runner, set once in the operator's shell; it holds no secret, only commands
+# the root shell runs. Every run's whole output: /root/pos271-paperwork-<UTC>-<check|repair>.txt (mode 600).
+PAPER='set -uo pipefail; umask 077; cd <the staged tip> && . deploy/world2-lib.sh || exit 2
+export PGPASSWORD="$(w2_secret PG_WORLD2_OWNER_PASSWORD)"
+[ -n "$PGPASSWORD" ] || { echo "PG_WORLD2_OWNER_PASSWORD unreadable from $WORLD2_ENV_FILE: stop"; exit 2; }
+paper() { out="/root/pos271-paperwork-$(date -u +%Y%m%dT%H%M%SZ)-$1.txt"; rc=0
+  runuser -u meepo -- node world2/tools/paperwork-import.mjs "--$1" --pg-url "postgres://world2_owner@${WORLD2_PGHOST:-localhost}:${WORLD2_PGPORT:-5432}/$(w2_db)" --oauth-db /srv/postmark-office/oauth.db --roles-db /srv/postmark-office/roles.db > "$out" 2>&1 || rc=$?
+  grep -v "^  " "$out"; echo "exit $rc; the whole output is $out (root only: never paste it)"; return $rc; }'
 # 1. What the files lack or hold differently (read-only):
-sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --check"
-#   equal, exit 0; or DRIFT ... (n findings), exit 1   <- "in the store, not in the file" is file lag: steps 2-4. Anything else: stop
+sudo bash -c "$PAPER; paper check"
+#   equal/DRIFT per table, then exit 0 (equal) or exit 1 (DRIFT)   <- read the DRIFT tables' findings in the root-only file:
+#   "in the store, not in the file" is file lag: steps 2-4. Anything else: stop
 # 2. A copy of each file first, never cp of a live sqlite file:
 sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
 sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-repair.db`)'
 # 3. The repair: the rows only the store holds, inserted into the FILES (the store is only read;
 #    a row that differs, or one only the file holds, is a refusal, exit 2, nothing written: stop):
-sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --repair"
+sudo bash -c "$PAPER; paper repair"
 #   repaired  oauth_tokens  2 row(s) inserted into the file from the store   (counts only, never a key)
 #   repaired; the files now equal the store, exit 0
 # 4. Check again; repeat 3 and 4 until it reads equal (a mirror write racing the
 #    repair is flagged by the next check, and the next repair takes it):
-sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --check"
+sudo bash -c "$PAPER; paper check"
 #   checked; nothing written, exit 0   <- the gate. Only now: the merge, the release, the steps below
 ```
 
 **The steps (prod, after the release is live).** Every step is on the box. Do
 these only on an office whose env sets the switch (dev's paperwork is on the
-file unless its env sets it too):
+file unless its env sets it too).
+
+**In the same sitting as the deploy.** Run these steps (the switch check, the
+copies, the removal) as soon as `/api/release` names the release, in the same
+sitting, never on a later day. From the release nothing writes the files any
+more, but the boot guard keys on their being gone. Until they are, an office
+whose switch went off would boot on them, and they hold nothing since the
+release: every session minted since the release would answer 401 on that
+office, and every rotation or retirement made since (a refresh token, a
+household key, a static key) would be undone there. So until the files are
+gone the switch stays on, and nothing runs on the box without
+`/etc/postmark-office.env`: an unswitched tool that made an empty `oauth.db`
+would disarm the guard the same way.
 
 ```sh
 sudo grep -c '^OFFICE_PAPERWORK_STORE=1$' /etc/postmark-office.env       # 1, or stop: this office still reads the files
@@ -1072,9 +1103,10 @@ sudo ls /srv/postmark-office/oauth.db /srv/postmark-office/roles.db 2>&1 # "No s
 The backup's § 1b then reports `roles_status: in-store` with the store's
 `office_role_audit` and `office_roles` counts, and the restore rehearsal
 compares both tables along with the rest of the dump. PROPOSED, not ruled: keep
-`/var/backups/postmark-paperwork/` for one week after the deletion, then remove
-the two files by name. They hold token hashes and the old role book, and
-nothing reads them. `static-keys-retire` needs neither: its retirement is the
+`/var/backups/postmark-paperwork/` and the runner's
+`/root/pos271-paperwork-*.txt` outputs for one week after the deletion, then
+remove those files by name. They hold token hashes, codes and the old role
+book, and nothing reads them. `static-keys-retire` needs neither: its retirement is the
 store's alone (§ Static keys leave the env file, "Retiring a static key").
 
 ### The world write pool (tier 1, 2026-08-05)
