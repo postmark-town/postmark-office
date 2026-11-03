@@ -56,7 +56,6 @@ export const STATE_DEFAULT = "/srv/postmark-earpiece/state.json";
 // `failed` with this sentence and is not charged. The port is injected, so the
 // rules and the log are proved without a clone.
 export const MAIL_STOPPED = "no mail pen was handed to this run, so no letter was written";
-export const mailStopped = async () => ({ ok: false, detail: MAIL_STOPPED });
 
 // MAIL IS OFF (Keemin, 2026-09-27: "let's maximize the undone here -- can we just
 // have it not show up in the office and site as an option for now?"). Mail and

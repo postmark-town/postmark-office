@@ -47,7 +47,9 @@
 // (read off oauth.mjs, roles.mjs, media.mjs and town-journal.mjs). Two
 // statements that were SQLite-only (`INSERT OR REPLACE INTO meta`) are now
 // written as the upsert both engines speak. A statement the rename cannot carry
-// is a bug in that statement; test/paperwork.test.mjs holds each one.
+// is a bug in that statement; test/paperwork-store.test.mjs runs the office's
+// statements against a real Postgres (it skips without PAPERWORK_TEST_PG_*).
+// No test imports `toStoreSql` on its own.
 //
 // ── NUMBERS ─────────────────────────────────────────────────────────────────
 //
@@ -61,9 +63,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync } from "node:fs";
 
-// THIS MODULE IMPORTS NOTHING BUT NODE BUILTINS (and pg, lazily), ON PURPOSE:
+// THIS MODULE'S STATIC IMPORTS ARE NODE BUILTINS ONLY, ON PURPOSE:
 // roles.mjs reaches the store through it, and the registry's boundary is that
-// it has no edge into world code (test/roles.test.mjs § THE BOUNDARY). So the
+// it has no edge into world code (test/roles.test.mjs § THE BOUNDARY, which
+// pins that list). The store path adds two LAZY imports inside `storePool`,
+// `pg` and ./store-pool.mjs (the pool options; builtins only itself). So the
 // store's two switches are read here in world2-acts.mjs § world2Enabled's own
 // words rather than imported from it — one line of env, not a domain rule.
 const storeConfigured = (env) => env.WORLD2_PG === "1" && !!env.WORLD2_PG_URL;
@@ -71,7 +75,9 @@ const storeConfigured = (env) => env.WORLD2_PG === "1" && !!env.WORLD2_PG_URL;
 /** The switch. Off, every paper answers from its file, exactly as before. */
 export const paperworkStoreOn = (env = process.env) => env.OFFICE_PAPERWORK_STORE === "1";
 
-/** File table -> store table (031, 032). Exported for the import and the suite. */
+/** File table -> store table (031, 032). Used inside this file only: nothing
+ *  else imports it (the import tool keeps its own table pairs, and no test
+ *  reads it). The same holds for `toStoreSql` and `withIdColumn` below. */
 export const STORE_TABLES = Object.freeze({
   clients: "oauth_clients", pending: "oauth_pending", codes: "oauth_codes", tokens: "oauth_tokens",
   berths: "oauth_berths", key_claims: "oauth_key_claims",

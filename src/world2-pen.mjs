@@ -518,7 +518,7 @@ export function penStatus() {
     // `expires` and `lane_expiry` are GONE with the map that fed them (G1 /
     // POS-156). They were the reverse mirror's backstop dates, and the reverse
     // mirror is deleted -- `appendActFlipped` writes no sqlite row. Same
-    // removal, same reason, as `mirrorStatus()`.
+    // removal, same reason, as the acts mirror's status answer (since deleted).
   };
 }
 

@@ -89,8 +89,10 @@ None runs on a timer on prod except the drain inside settlement-auto.
 
 ## roles.db
 
-Opener: `src/roles.mjs § openRolesDb`, opened in `server.mjs` with
-`--roles-db`, default `roles.db`.
+Opener: `src/paperwork.mjs § openPaper` with `schema: rolesSchema` (from
+`src/roles.mjs`), opened in `server.mjs` with `--roles-db`, default `roles.db`
+(read-only in a read worker); `tools/roles.mjs` opens it the same way. `src/roles.mjs § openRolesDb`
+is the file-only opener and is called only from tests.
 
 | table | writer | readers | in the record? |
 |---|---|---|---|

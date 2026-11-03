@@ -182,10 +182,6 @@ export function threadsFrom(emissions, cls) {
   return clusterVoices(emissions.map(emissionToVoice), { earshotM, fadeMs: closeMs });
 }
 
-/** A partition of ids — the comparable shape. Ordering and naming cannot hide a disagreement in this. */
-export const partitionOf = (clusters, keyOf = (v) => v.id) =>
-  new Set(clusters.map((c) => c.voices.map(keyOf).sort().join("\u0000")));
-
 // ── the prune ────────────────────────────────────────────────────────────────
 
 /**
