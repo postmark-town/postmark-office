@@ -36,11 +36,13 @@ const ROOT = join(HERE, "..");
 //
 // Read ONCE, at module init, deliberately. departurePace reads per call and is
 // right to: one walk, one lookup. These are consulted inside the clustering
-// loop and on every spoken line, so a per-call read would put SQLite in the
-// speech path for numbers that move at a ruling. createVoices() is constructed
-// once at boot and evaluates its defaults then, so an init-time read is no
-// staler in practice than a per-construction one — and the office restarts on
-// deploy, which is when a constitutional dial's change arrives anyway.
+// loop and on every spoken line, so a per-call read would put a walk of the law
+// (`world-classes.mjs § dialNumber`: the law snapshot, or the world graph
+// snapshot behind it) in the speech path for numbers that move at a ruling.
+// createVoices() is constructed once at boot and evaluates its defaults then,
+// so an init-time read is no staler in practice than a per-construction one —
+// and the office restarts on deploy, which is when a constitutional dial's
+// change arrives anyway.
 //
 // THE DEPARTURE→DEPART LESSON, applied: a silent fallback is indistinguishable
 // from a good read, and that is exactly how every walker in the world moved at
@@ -205,8 +207,12 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
 // The thread derivation (spec, "a thread is a derivation, not an object").
 // Voices chain into one conversation when they chain with ANY voice already in
 // it and land within fadeMs of that cluster's latest voice; a cluster that goes
-// quiet for fadeMs is finished and never reopens — five silent minutes at the
-// same spot is a NEW conversation, not a continuation of the old one.
+// quiet for fadeMs is finished and never reopens — a silence that long at the
+// same spot is a NEW conversation, not a continuation of the old one. `fadeMs`
+// defaults to the display fade (5 minutes on the fallback), but every caller
+// passes a close window as `fadeMs`: `closeMs` in createVoices (the say class's
+// `conversation_lull_min`, 30 minutes on the fallback), and the sound class's
+// `thread_close_min` in `dynamic-emissions.mjs § threadsFrom`.
 export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
   const open = [];

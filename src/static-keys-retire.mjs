@@ -114,7 +114,6 @@ const num = (v) => (v == null ? null : Number(v));
 const byHash = (a, b) => (a.token_hash < b.token_hash ? -1 : a.token_hash > b.token_hash ? 1 : 0);
 const lockedColumns = "token_hash, kind, household, handles, gh_id, gh_login, expires, held_by, claimed_handle, created";
 
-/** Every result carries `status`; none carries a key or a hash. */
 /** An error's words with any "(column)=(value)" detail struck, so a driver message can never carry a hash. */
 const safe = (e, n = 160) => String(e?.message ?? e).replace(/\([^)]*\)=\([^)]*\)/g, "(…)").slice(0, n);
 
@@ -133,6 +132,7 @@ const targetFacts = (row, staticCount) => ({
   household_static_keys_now: staticCount, household_static_keys_left: staticCount - 1,
 });
 
+/** A refused result. Every result of this module carries `status`; none carries a key or a hash. */
 const refuse = (reason, extra = {}) => ({ status: "refused", reason, ...extra });
 
 /** What the registry says about THIS handle: its pinned account and the house of that account. */
@@ -144,7 +144,7 @@ function registryView(rows, household, handle) {
   return { registry, pinnedId: pinned == null ? null : Number(pinned), house };
 }
 
-/** The proof, over rows already read (on apply: read after the household lock). */
+/** The proof, over rows already read (on apply: read after the table lock). */
 function proveCover({ rows, target, household, handle, view, now }) {
   const others = rows.filter((r) => r.token_hash !== target.token_hash);
   const statics = others.filter((r) => r.kind === STATIC_KIND && r.household === household && handlesOf(r).includes(handle));
@@ -166,7 +166,7 @@ function proveCover({ rows, target, household, handle, view, now }) {
  * The selector over the household's static rows: exactly one row that holds
  * THIS handle and only this handle. A second exact row is ambiguous. A row that
  * holds this handle among others is never retired (that would widen past the
- * handle (that would widen past the handle named), but it is a cover for the exact row, so it is not ambiguity.
+ * handle named), but it is a cover for the exact row, so it is not ambiguity.
  *
  * `ghId` (POS-805) narrows ONLY the exact rows, and only when the operator gave
  * --gh-id: undefined = no flag (behaviour unchanged, ambiguity included); null =

@@ -167,8 +167,6 @@ export const needRow = (c) => ({
 export const STANCE_WORDS = "welcomed | neutral | opposed";
 /** How many of a group's mark ids the glance names, oldest first. */
 export const GROUP_IDS = 3;
-/** A ready-to-run answer to one waiting mark, as v1's rows carried it. */
-export const answerAct = (id) => `declare-stance-on { on: "${id}", stance: ${STANCE_WORDS} }`;
 /** How many ids one stance call takes (world-stance.mjs § STANCE_LIST_MAX). */
 export const STANCE_LIST_CAP = 100;
 /**

@@ -248,8 +248,8 @@ export const CONFIG = {
   //   site code : the release train is roughly weekly, but a cut tag should
   //               reach prod within an hour of being cut.
   //   town data : sync-atlas runs every ~30 min and Deploy follows it.
-  //   office    : the rehydrate timer fires every 15 min (*:09,24,39,54 since
-  //               the POS-268 split; *:07,22,37,52 on a pre-split box).
+  //   office    : the keeping timer fires every 15 min (*:07,22,37,52; the
+  //               rehydrate timer it replaced fired at *:09,24,39,54).
   //               30m under the divergence anchor is TWO DEAD TICKS behind a
   //               known-newer tip (Keemin-tightened 2026-08-31, the same
   //               night the anchor was fixed). History of the number: 45m
@@ -329,7 +329,7 @@ export const CONFIG = {
   //
   // `behindAfterMs` is not one sentinel interval, and that was measured, not
   // relaxed: this clone only moves when something pulls it — an office write,
-  // or the rehydrate tick at *:07,22,37,52 — so a town merge landing just after
+  // or the keeping tick at *:07,22,37,52 — so a town merge landing just after
   // a quiet tick leaves it honestly behind for up to fifteen minutes. Ten would
   // page on every such merge. Twenty-five is the tick's window plus one of
   // ours: past it, a tick has had its turn and did not land.
@@ -338,7 +338,7 @@ export const CONFIG = {
   // ensureDraftCheckout (src/world-branches.mjs) runs `reset --hard` and
   // `clean -fd` before every write and refuses a tree it could not clean, and
   // the tick only FETCHES it, because a pen branch diverged from origin is its
-  // normal state between writes (deploy/office-tick.sh). Dirt there cannot
+  // normal state between writes (deploy/office-keep.sh). Dirt there cannot
   // strand the next write, and "behind" there is the design.
   clones: [
     {
