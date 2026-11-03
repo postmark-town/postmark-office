@@ -81,12 +81,15 @@ const lawRows = (n, glow) => [
     data: { class: "test-lamp", parent: null, name: "glow", tier: "constitution", default: glow, id: "test/test-lamp-glow" } },
 ];
 function lawStore() {
-  const s = { newest: null, pinned: null, rows: new Map(), pinAsks: 0, lawAsks: 0, failLaw: false, failPin: false, hang: null, slow: false };
+  const s = { newest: null, pinned: null, rows: new Map(), pinAsks: 0, lawAsks: 0, failLaw: false, failPin: false, hang: null, slow: false, pinHold: null };
   const query = async (sql) => {
     if (sql === law.LAW_REFRESH_SQLS.pin) {
       s.pinAsks += 1;
       if (s.failPin) throw new Error("connect ECONNREFUSED (invented)");
-      return { rows: [{ newest: s.newest, pinned: s.pinned }] };
+      const at = { newest: s.newest, pinned: s.pinned }; // read as the statement began
+      // `pinHold`, once: the next pin answer waits on it (and fails if it rejects, as a cancelled statement does)
+      if (s.pinHold) { const hold = s.pinHold; s.pinHold = null; await hold; }
+      return { rows: [at] };
     }
     if (sql === law.LAW_REFRESH_SQLS.law) {
       s.lawAsks += 1;
@@ -105,12 +108,14 @@ function lawStore() {
 // ── the invented graph store ────────────────────────────────────────────────
 const GRAPH_STATEMENTS = new Set(Object.values(graph.GRAPH_SQLS));
 function graphStore() {
-  const s = { pin: null, builds: new Map(), pinAsks: 0, tableAsks: 0, failTables: false, failPin: false, hang: null };
+  const s = { pin: null, builds: new Map(), pinAsks: 0, tableAsks: 0, failTables: false, failPin: false, hang: null, pinHold: null };
   const query = async (sql, params) => {
     if (sql === graph.PIN_SQL) {
       s.pinAsks += 1;
       if (s.failPin) throw new Error("connect ECONNREFUSED (invented)");
-      return { rows: s.pin ? [s.pin] : [] };
+      const at = s.pin; // read as the statement began
+      if (s.pinHold) { const hold = s.pinHold; s.pinHold = null; await hold; }
+      return { rows: at ? [at] : [] };
     }
     if (GRAPH_STATEMENTS.has(sql)) {
       s.tableAsks += 1;
@@ -129,12 +134,17 @@ function graphStore() {
 const graphBuild = () => graph.worldGraphSnapshot()?.tables?.meta?.find((r) => r.key === "invented_build")?.value ?? null;
 const glowNow = () => law.lawSnapshot()?.properties?.get("test-lamp")?.get("glow")?.default ?? null;
 
-/** What every door's lawForAnAct() does, on the invented stores: the real lawForAnAct, freshLaw and freshGraph. */
+/** What every door's lawForAnAct() does, on the invented stores: the real lawForAnAct, askPins (the one shared pin question), freshLaw and freshGraph. */
 function asker(L, G, deadlineMs = 200) {
   const asked = { n: 0 };
-  const ask = () => { asked.n += 1; return actLaw.lawForAnAct({ law: () => law.freshLaw({ query: L.query, deadlineMs }), graph: () => graph.freshGraph({ query: G.query, deadlineMs }) }); };
-  const answer = () => actLaw.lawForAnAnswer({ law: () => law.freshLaw({ query: L.query, deadlineMs }), graph: () => graph.freshGraph({ query: G.query, deadlineMs }) });
-  return { ask, answer, asked };
+  const seams = {
+    pins: () => actLaw.askPins({ lawQuery: L.query, graphQuery: G.query, deadlineMs }),
+    law: (o) => law.freshLaw({ query: L.query, deadlineMs, ...o }),
+    graph: (o) => graph.freshGraph({ query: G.query, deadlineMs, ...o }),
+  };
+  const ask = () => { asked.n += 1; return actLaw.lawForAnAct(seams); };
+  const answer = () => actLaw.lawForAnAnswer(seams);
+  return { ask, answer, asked, seams };
 }
 /** S1 and G1 loaded by the refreshers' own tick (not by an act), as an office that has been up a while stands. */
 async function standing() {
@@ -517,31 +527,35 @@ async function fillTheCap(reload) {
   assert.equal(loadsStanding().running, loadsStanding().max, "the load cap is full");
 }
 
-test("14 · N2, the law: with the load cap full (graph loads hung), an act still asks the law's pin, and when the law moved it is refused, never admitted on S1", async () => {
+// Until 2026-11-03 (round 2, f4431ccff), 14 and 16 had an act at the full cap
+// ask the pin outside it, and admitted it when nothing had moved. Amended
+// (Wright's Settled on POS-680, 01:5x EST, the round-2 review's F3): "When the
+// cap is full, an act doesn't ask outside it. It gets the existing plain,
+// retryable 503 ... an act is never admitted on law or graph it hasn't
+// confirmed." So at the cap, moved or not, the act is refused and asks nothing.
+const AT_THE_CAP = /could not confirm the law and the world graph in force: \d+ store loads are already running \(the cap\)/;
+
+test("14 · N2, the law: with the load cap full (graph loads hung), an act does not ask outside the cap: it gets the plain 503, and is never admitted on law it has not confirmed", async () => {
   const { L, G, ask } = await standing();
   let release;
   G.s.hang = new Promise((r) => { release = r; });
   try {
     await fillTheCap(() => graph.reloadWorldGraph({ query: G.query, force: true, deadlineMs: 20 }));
     assert.equal(graph.worldGraphBehind(), null, "the hung loads leave the graph current: only the law will move");
-    // the controls: an unchanged law at the cap, and the act goes on (the cap alone refuses nothing);
-    // and a store that cannot be asked at all still refuses nothing at the cap (case 6's ruled fallback, kept)
-    assert.equal(await ask(), null, "an act at the cap, on an unchanged law, was refused");
-    L.s.failPin = true;
-    assert.equal(await ask(), null, "at the cap, a store that could not be asked refused the act (G1 says it refuses nothing)");
-    L.s.failPin = false;
-    L.bless(2, 7);
-    const before = { pins: L.s.pinAsks, laws: L.s.lawAsks };
-    const r = await ask();
-    assert.equal(r?.code, 503, `LAW: "every act asks the cheap pin question, even when the load cap is full ... otherwise, the existing plain 503 for law that moved but hasn't loaded" — the act at the cap was admitted on S1: ${JSON.stringify(r)}`);
-    assert.match(r.behind, /S2's, and this office has not loaded it yet \(it acts on S1's\)/);
-    assert.equal(L.s.pinAsks, before.pins + 1, "the act asked the law's pin itself");
-    assert.equal(L.s.lawAsks, before.laws, "at the cap the act loads nothing: it asks the pin only");
+    for (const [what, move] of [["an unchanged law", () => {}], ["a law that moved", () => L.bless(2, 7)]]) {
+      move();
+      const before = { pins: L.s.pinAsks, laws: L.s.lawAsks };
+      const r = await ask();
+      assert.equal(r?.code, 503, `${what}: LAW (amended): "When the cap is full, an act doesn't ask outside it. It gets the existing plain, retryable 503" — the act at the cap got ${JSON.stringify(r)}`);
+      assert.equal(r.defect, actLaw.LAW_MOVED.defect, `${what}: the existing refusal`);
+      assert.match(r.behind, AT_THE_CAP, `${what}: the refusal says why`);
+      assert.equal(L.s.pinAsks, before.pins, `${what}: the act asked the law's pin outside the cap`);
+      assert.equal(L.s.lawAsks, before.laws, `${what}: the act loaded the law outside the cap`);
+    }
     assert.equal(law.lawSnapshot().pin.settlement, 1, "reads keep what stands");
-    assert.match(law.lawRefreshStanding().behind ?? "", /S2's/, "and /release says the law is behind");
   } finally { release(); }
   for (let i = 0; i < 5; i++) await settle();
-  // once a load can run again, the next act loads S2 and goes on
+  // once a slot is free again, the next act asks, loads S2 and goes on
   assert.equal(loadsStanding().running, 0);
   assert.equal(await ask(), null);
   assert.equal(law.lawSnapshot().pin.settlement, 2);
@@ -576,26 +590,23 @@ test("15 · N3, the law: an act that finds a refresh in flight from before a ble
   assert.equal(law.lawSnapshot().pin.settlement, 3);
 });
 
-test("16 · N2, the graph: with the load cap full (law loads hung), an act still asks the graph's pin, and when the graph moved it is refused", async () => {
+test("16 · N2, the graph: with the load cap full (law loads hung), an act does not ask the graph's pin outside the cap: it gets the plain 503, and is never admitted on a graph it has not confirmed", async () => {
   const { L, G, ask } = await standing();
   let release;
   L.s.hang = new Promise((r) => { release = r; });
   try {
     await fillTheCap(() => law.reloadLawSnapshot({ query: L.query, force: true, deadlineMs: 20 }));
     assert.equal(law.lawBehind(), null, "the hung loads leave the law current: only the graph will move");
-    assert.equal(await ask(), null, "an act at the cap, on an unchanged graph, was refused");
-    G.s.failPin = true;
-    assert.equal(await ask(), null, "at the cap, a graph store that could not be asked refused the act (G1 says it refuses nothing)");
-    G.s.failPin = false;
-    G.build(2);
-    const before = { pins: G.s.pinAsks, tables: G.s.tableAsks };
-    const r = await ask();
-    assert.equal(r?.code, 503, `LAW: "every act asks the cheap pin question, even when the load cap is full" — the act at the cap was admitted on G1: ${JSON.stringify(r)}`);
-    assert.match(r.behind, /world graph/);
-    assert.equal(G.s.pinAsks, before.pins + 1, "the act asked the graph's pin itself");
-    assert.equal(G.s.tableAsks, before.tables, "at the cap the act loads nothing");
+    for (const [what, move] of [["an unchanged graph", () => {}], ["a graph that moved", () => G.build(2)]]) {
+      move();
+      const before = { pins: G.s.pinAsks, tables: G.s.tableAsks };
+      const r = await ask();
+      assert.equal(r?.code, 503, `${what}: LAW (amended): "When the cap is full, an act doesn't ask outside it" — the act at the cap got ${JSON.stringify(r)}`);
+      assert.match(r.behind, AT_THE_CAP, `${what}: the refusal says why`);
+      assert.equal(G.s.pinAsks, before.pins, `${what}: the act asked the graph's pin outside the cap`);
+      assert.equal(G.s.tableAsks, before.tables, `${what}: the act loaded the graph outside the cap`);
+    }
     assert.equal(graphBuild(), "G1", "reads keep what stands");
-    assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/, "and /release says the graph is behind");
   } finally { release(); }
   for (let i = 0; i < 5; i++) await settle();
   assert.equal(await ask(), null);
@@ -623,8 +634,235 @@ test("17 · N3, the graph: an act that finds a graph refresh in flight from befo
     assert.equal(G.s.pinAsks, pins + 1, "act B asked the graph's pin itself");
     assert.equal(graphBuild(), "G2", "A's refresh put G2 in force");
   } finally { release(); }
+  // A was told G2 before G3 was built, and its own refresh put G2 in force: the reuse rule admits it on the
+  // graph it was told. Unlike the law's (case 15), the graph's known key carries no settlement, so B's G3 does
+  // not overwrite a known G2 that is already ahead of what was in force (N6: never backwards).
   const ra = await a;
-  assert.equal(ra?.code, 503, `LAW (act-law.mjs § G1): "It is never judged under law the store has replaced" — act A: ${JSON.stringify(ra)}`);
+  assert.equal(ra, null, `act A, told G2, should stand on G2: ${JSON.stringify(ra)}`);
   assert.equal(await ask(), null);
   assert.equal(graphBuild(), "G3");
+});
+
+// ── 18–26 · one pin question at a time (round 3: the review's F3, N6, N7) ───
+//
+// LAW (Wright's Settled on POS-680, 2026-11-03, "C plus coalescing", decided on
+// Darko's behalf): "One shared pin session, single-flight. At most one pin
+// session is in flight at a time, across law and graph together. It holds one
+// slot of the existing cap of 2 ... Every act arriving while that session is
+// in flight awaits the same answer, within its own deadline. It never opens
+// its own ... No slot means the plain 503 ... The reuse rule stands."
+// N6 (the same Settled): "what the process knows about the pin only moves
+// forward (by settlement), so a late answer can't move it back."
+
+/** A hold a case opens (the held answer comes) or shuts (it fails, as a statement the store cancels does). */
+function holdable() {
+  let open, shut;
+  const p = new Promise((resolve, reject) => { open = resolve; shut = reject; });
+  p.catch(() => {});
+  return { p, open: () => open(), shut: () => shut(new Error("canceling statement due to statement timeout (invented)")) };
+}
+const NOT_IN_TIME = /could not confirm the law and the world graph in force: the store did not answer in time/;
+
+test("18 · a healthy store: twelve acts at once are all admitted on one shared pin question, two at once both, and one during a tick too", async () => {
+  const { L, G, ask } = await standing();
+  const before = { law: L.s.pinAsks, graph: G.s.pinAsks };
+  const twelve = await Promise.all(Array.from({ length: 12 }, ask));
+  assert.deepEqual(twelve, Array(12).fill(null), `LAW: "Twelve concurrent acts are one pin question" — and every one goes on; one got ${JSON.stringify(twelve.find(Boolean))}`);
+  assert.equal(L.s.pinAsks, before.law + 1, "twelve acts asked the law's pin once");
+  assert.equal(G.s.pinAsks, before.graph + 1, "twelve acts asked the graph's pin once");
+  for (let i = 0; i < 5; i++) await settle();
+  assert.deepEqual(await Promise.all([ask(), ask()]), [null, null], "two acts at once");
+  for (let i = 0; i < 5; i++) await settle();
+  const tick = law.reloadLawSnapshot({ query: L.query }); // the 60 s tick, in flight as the act arrives
+  assert.equal(await ask(), null, "an act during a tick goes on");
+  await tick;
+});
+
+test("19 · both ticks in flight hold the cap: an act gets the plain 503, never admitted on the law or graph they are replacing", async () => {
+  const { L, G, ask } = await standing();
+  let openL, openG;
+  L.s.hang = new Promise((r) => { openL = r; });
+  G.s.hang = new Promise((r) => { openG = r; });
+  L.bless(2, 7); G.build(2);
+  const ticks = [law.reloadLawSnapshot({ query: L.query }), graph.reloadWorldGraph({ query: G.query })]; // both loading, held
+  try {
+    assert.equal(loadsStanding().running, loadsStanding().max, "the two ticks hold the cap");
+    const r = await ask();
+    assert.equal(r?.code, 503, `LAW: "No slot means the plain 503" — the act during both ticks got ${JSON.stringify(r)}`);
+    assert.match(r.behind, AT_THE_CAP);
+    assert.equal(law.lawSnapshot().pin.settlement, 1);
+    assert.equal(graphBuild(), "G1");
+  } finally { openL(); openG(); }
+  await Promise.all(ticks);
+  assert.equal(await ask(), null, "once the ticks land, the next act goes on");
+  assert.equal(law.lawSnapshot().pin.settlement, 2);
+  assert.equal(graphBuild(), "G2");
+});
+
+test("20 · a hung pin: twelve acts share the one question (one slot, one ask) and are each refused at their deadline, never admitted on law they have not confirmed", async () => {
+  const { L, G, ask } = await standing();
+  const hold = holdable();
+  L.s.pinHold = hold.p;
+  L.bless(2, 7); // the store moved: an act admitted now would stand on S1
+  const before = { law: L.s.pinAsks, graph: G.s.pinAsks };
+  try {
+    const rs = await held(() => Promise.all(Array.from({ length: 12 }, ask)));
+    for (const r of rs) {
+      assert.equal(r?.code, 503, `LAW (amended): "an act is never admitted on law or graph it hasn't confirmed" — got ${JSON.stringify(r)}`);
+      assert.match(r.behind, NOT_IN_TIME);
+    }
+    assert.equal(L.s.pinAsks, before.law + 1, `LAW: "It never opens its own" — twelve acts asked the law's pin ${L.s.pinAsks - before.law} times`);
+    assert.equal(G.s.pinAsks, before.graph, "the graph's pin waits behind the law's, in the one session");
+    assert.equal(loadsStanding().running, 1, "the one session holds one slot until its question ends");
+    // an act after the session gave up, while its question is still held, is refused at once and opens nothing
+    const late = await ask();
+    assert.equal(late?.code, 503);
+    assert.equal(L.s.pinAsks, before.law + 1, "a later act opened a second session");
+  } finally { hold.open(); }
+  for (let i = 0; i < 5; i++) await settle();
+  assert.equal(loadsStanding().running, 0, "the slot comes back when the question ends");
+  assert.equal(await ask(), null, "the next act asks again, loads S2 and goes on");
+  assert.equal(law.lawSnapshot().pin.settlement, 2);
+});
+
+test("21 · an act waiting on the shared question answers at its own deadline, not the session's", async () => {
+  const { L, G } = await standing();
+  const opener = asker(L, G, 400), waiter = asker(L, G, 20);
+  const hold = holdable();
+  L.s.pinHold = hold.p;
+  try {
+    await held(async () => {
+      let marked = false;
+      const marker = setTimeout(() => { marked = true; }, 200);
+      const a = opener.ask(); // opens the session; it and the session give up at 400 ms
+      const b = waiter.ask(); // joins it; its own deadline is 20 ms
+      const rb = await b;
+      assert.equal(marked, false, `LAW: "awaits the same answer, within its own deadline" — the waiter with a 20 ms deadline answered after 200 ms`);
+      assert.equal(rb?.code, 503);
+      assert.match(rb.behind, NOT_IN_TIME);
+      assert.equal((await a)?.code, 503);
+      clearTimeout(marker);
+    });
+  } finally { hold.open(); }
+  for (let i = 0; i < 5; i++) await settle();
+});
+
+test("22 · a hung session gives up at its deadline: a statement the store ends later, in an error, is never read as \"the store could not be asked\"", async () => {
+  const { L, G } = await standing();
+  const opener = asker(L, G, 30), waiter = asker(L, G, 2000);
+  const hold = holdable();
+  L.s.pinHold = hold.p;
+  L.bless(2, 7); // the store moved: an act admitted now would stand on S1
+  await held(async () => {
+    const a = opener.ask(); // opens the session, whose deadline (30 ms) is its opener's
+    await settle();
+    const c = waiter.ask(); // joins it; its own deadline is long
+    assert.equal((await a)?.code, 503, "the opener gave up at its deadline");
+    hold.shut(); // the store ends the held statement with an error, as statement_timeout does
+    const rc = await c;
+    assert.equal(rc?.code, 503, `LAW (amended): "an act is never admitted on law ... it hasn't confirmed" — the waiter read the cancelled statement as "the store could not be asked" and got ${JSON.stringify(rc)}`);
+    assert.match(rc.behind, NOT_IN_TIME);
+  });
+  for (let i = 0; i < 5; i++) await settle();
+  assert.equal(loadsStanding().running, 0);
+});
+
+test("23 · N6, the law: a late, older pin answer never moves what the process knows back", async () => {
+  // fail-open (the round-2 review's R5): X's answer reads S1 and is held; a tick hears S2 but cannot load it
+  {
+    const { L, ask } = await standing();
+    const hold = holdable();
+    L.s.pinHold = hold.p;
+    const x = ask(); // X's shared question reads S1, held
+    for (let i = 0; i < 3; i++) await settle();
+    L.bless(2, 7); L.s.failLaw = true;
+    await law.reloadLawSnapshot({ query: L.query }); // the tick hears S2 and cannot load it
+    assert.match(law.lawBehind() ?? "", /S2's/);
+    hold.open(); // X's late answer, S1, lands
+    const rx = await x;
+    assert.equal(rx?.code, 503, `LAW (N6): "a late answer can't move it back" — X, told S1 late, was admitted on S1: ${JSON.stringify(rx)}`);
+    assert.match(law.lawRefreshStanding().behind ?? "", /S2's/, "and /release still says the law is behind");
+    L.s.failPin = true; // the store cannot be asked now: G1 stands on what the process knows
+    assert.equal((await ask())?.code, 503, "a later act, whose store could not be asked, was admitted on S1");
+    law.resetLawSnapshot(); graph.resetWorldGraph();
+  }
+  // fail-closed (R6): X's S1 lands after the tick has loaded S2: X stands on S2, with no false "behind"
+  {
+    const { L, ask } = await standing();
+    const hold = holdable();
+    L.s.pinHold = hold.p;
+    const x = ask();
+    for (let i = 0; i < 3; i++) await settle();
+    L.bless(2, 7);
+    await law.reloadLawSnapshot({ query: L.query }); // the tick loads S2
+    hold.open();
+    assert.equal(await x, null, "X, told S1 late, was refused though S2, newer, is in force");
+    assert.equal(law.lawSnapshot().pin.settlement, 2);
+    assert.equal(law.lawRefreshStanding().behind, undefined, "/release says behind after a late, older answer");
+  }
+});
+
+test("24 · N6, the graph: a late, older pin answer never moves what the process knows back", async () => {
+  {
+    const { G, ask } = await standing();
+    const hold = holdable();
+    G.s.pinHold = hold.p;
+    const x = ask(); // X's shared question: the law's pin, then the graph's, which reads G1 and is held
+    for (let i = 0; i < 5; i++) await settle();
+    G.build(2); G.s.failTables = true;
+    await graph.reloadWorldGraph({ query: G.query }); // the tick hears G2 and cannot load it
+    assert.match(graph.worldGraphBehind() ?? "", /world graph/);
+    hold.open();
+    const rx = await x;
+    assert.equal(rx?.code, 503, `LAW (N6): "a late answer can't move it back" — X, told G1 late, was admitted on G1: ${JSON.stringify(rx)}`);
+    assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/, "and /release still says the graph is behind");
+    law.resetLawSnapshot(); graph.resetWorldGraph();
+  }
+  {
+    const { G, ask } = await standing();
+    const hold = holdable();
+    G.s.pinHold = hold.p;
+    const x = ask();
+    for (let i = 0; i < 5; i++) await settle();
+    G.build(2);
+    await graph.reloadWorldGraph({ query: G.query }); // the tick loads G2
+    hold.open();
+    assert.equal(await x, null, "X, told G1 late, was refused though G2, newer, is in force");
+    assert.equal(graphBuild(), "G2");
+    assert.equal(graph.worldGraphRefreshStanding().behind, undefined, "/release says behind after a late, older answer");
+  }
+});
+
+test("25 · N7, the law: an act told S2 waits for a refresh in flight that is loading S2, and stands on it", async () => {
+  const { L, ask } = await standing();
+  let release;
+  L.s.hang = new Promise((r) => { release = r; });
+  L.bless(2, 7);
+  const laws = L.s.lawAsks;
+  const tick = law.reloadLawSnapshot({ query: L.query }); // told S2; loading S2's rows, held
+  await until(() => L.s.lawAsks === laws + 1, "the tick began loading S2");
+  const a = ask(); // the shared question tells it S2, the law the tick is loading
+  for (let i = 0; i < 5; i++) await settle();
+  release();
+  assert.equal(await a, null, `LAW: "An act reuses a refresh in flight only if what that refresh put in force matches the shared answer's pin" — it matched, and the act was refused`);
+  assert.equal(L.s.lawAsks, laws + 1, "the act loaded nothing itself: it stood on the tick's load");
+  assert.equal(law.lawSnapshot().pin.settlement, 2);
+  await tick;
+});
+
+test("26 · N7, the graph: an act told G2 waits for a refresh in flight that is loading G2, and stands on it", async () => {
+  const { G, ask } = await standing();
+  let release;
+  G.s.hang = new Promise((r) => { release = r; });
+  G.build(2);
+  const tables = G.s.tableAsks;
+  const tick = graph.reloadWorldGraph({ query: G.query }); // told G2; loading G2's tables, held
+  await until(() => G.s.tableAsks === tables + 1, "the tick began loading G2");
+  const a = ask();
+  for (let i = 0; i < 5; i++) await settle();
+  release();
+  assert.equal(await a, null, `LAW: "An act reuses a refresh in flight only if what that refresh put in force matches the shared answer's pin" — it matched, and the act was refused`);
+  assert.equal(graphBuild(), "G2");
+  await tick;
+  assert.equal(G.s.tableAsks, tables + 6, "the act loaded nothing itself: only the tick's six table reads");
 });

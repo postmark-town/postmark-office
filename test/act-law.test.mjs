@@ -68,8 +68,9 @@ async function bless(db, n, rows) {
 
 // the graph's half of an act's ask, held still: these cases are about the law
 const graphStill = async () => ({ snap: null, behind: null });
-/** The act's ask, against this store: what the door gate calls. */
-const ask = (query) => actLaw.lawForAnAct({ law: () => law.freshLaw({ query }), graph: graphStill });
+const noGraph = async () => ({ rows: [] }); // the graph's pin, asked in the shared question: no snapshot
+/** The act's ask, against this store: what the door gate calls (the one shared pin question, then the law). */
+const ask = (query) => actLaw.lawForAnAct({ pins: () => actLaw.askPins({ lawQuery: query, graphQuery: noGraph }), law: (o) => law.freshLaw({ query, ...o }), graph: graphStill });
 
 // ── the kind door, every collaborator injected ──────────────────────────────
 const ME = "sbx-cy", BOWL = "sbx-ana/the-bowl";
@@ -174,7 +175,7 @@ test("5 · a store that cannot be asked at all refuses nothing here: no law is k
   const down = async () => { throw new Error("connect ECONNREFUSED"); };
   assert.equal(await ask(down), null);
   // and a graph behind refuses like a law behind
-  const moved = await actLaw.lawForAnAct({ law: async () => ({ behind: null }), graph: async () => ({ behind: "the store's newest world graph is bbbb, and this office has not loaded it yet" }) });
+  const moved = await actLaw.lawForAnAct({ pins: async () => ({ law: {}, graph: { key: null, settlement: null } }), law: async () => ({ behind: null }), graph: async () => ({ behind: "the store's newest world graph is bbbb, and this office has not loaded it yet" }) });
   assert.equal(moved?.code, 503);
   assert.match(moved.behind, /world graph/);
 });

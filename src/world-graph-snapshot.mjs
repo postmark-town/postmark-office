@@ -32,13 +32,12 @@
 // transaction), and refreshes share one cap with the law's (snapshot-loads.mjs).
 // And every publish, from any path, is heard by the same listeners
 // (`onWorldGraphPublish`). An act asks first (`freshGraph()`, part 2), as
-// law-snapshot.mjs § AN ACT ASKS FIRST says for the law, and under contention
-// as § AN ACT'S PIN QUESTION, UNDER CONTENTION there says (Wright's Settled on
-// POS-680, 2026-11-03, amended 01:5x EST): with a refresh in flight the act
-// asks the pin on its own, under the same cap, and stands on that refresh only
-// if the graph it put in force is the one the pin named; with the cap full it
-// is behind (the door's plain 503). What the process knows of the pin moves
-// only forward, by settlement (N6).
+// law-snapshot.mjs § AN ACT ASKS FIRST says for the law, and settles against
+// the one shared pin answer as § AN ACT IS TOLD, THEN SETTLES there says
+// (act-law.mjs § ONE PIN QUESTION AT A TIME; Wright's Settled on POS-680,
+// 2026-11-03): it stands on a refresh in flight only if the graph it put in
+// force is the one the pin named, and loads a moved graph itself under the cap.
+// What the process knows of the pin moves only forward, by settlement (N6).
 
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
@@ -142,61 +141,31 @@ function graphBehindOf(key, settlement = null) {
   return `the store's newest world graph is ${String(key).slice(0, 12)}, and this office has not loaded it yet`;
 }
 
-/** Why an act was refused at the cap (law-snapshot.mjs § AN ACT'S PIN QUESTION, UNDER CONTENTION). */
-const GRAPH_AT_THE_CAP = `this office could not confirm the world graph in force: ${MAX_LOADS} store loads are already running (the cap)`;
+/** Why an act could not load a moved graph: no slot (law-snapshot.mjs § AN ACT IS TOLD, THEN SETTLES). */
+const GRAPH_AT_THE_CAP = `this office could not load the world graph in force: ${MAX_LOADS} store loads are already running (the cap)`;
 
 /**
- * The world graph as the store has it NOW, for an act: asks the pin, loads a
- * moved graph, answers `{ snap, behind }`; under contention, as the header
- * above says. Never throws.
+ * The world graph as the store has it NOW, for an act told the graph's pin
+ * (`told`, the shared answer's `{ key, settlement }`; null when the store could
+ * not be asked): stands, waits for a refresh in flight, or loads, and answers
+ * `{ snap, behind }`. A test's rows stand as before. Never throws.
  */
-export async function freshGraph({ query, deadlineMs } = {}) {
-  const opts = { ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
-  // Nothing in flight: the act's own refresh, which asks the pin first, under the cap.
-  if (!state.inflight) {
-    const own = await reloadWorldGraph(opts);
-    return { snap: state.snap, behind: own.busy ? GRAPH_AT_THE_CAP : worldGraphBehind() };
-  }
-  // A refresh in flight: the act asks the pin itself, under the same cap.
-  const told = await pinAlone(query ?? defaultQuery, deadlineMs === undefined ? WORLD_GRAPH_REFRESH_DEADLINE_MS : deadlineMs);
-  if (told?.busy) return { snap: state.snap, behind: GRAPH_AT_THE_CAP };
-  if (!told) return { snap: state.snap, behind: worldGraphBehind() }; // the store could not be asked: G1, as before
+export async function freshGraph({ query, deadlineMs, told } = {}) {
+  if ((query ?? defaultQuery) === defaultQuery && loadRowsFixture()) return { snap: state.snap, behind: worldGraphBehind() };
+  if (told === null) return { snap: state.snap, behind: worldGraphBehind() }; // the store could not be asked: G1, as before
+  const key = told?.key ?? null, settlement = told?.settlement ?? null;
   // N6: what the process knows moves only forward, by settlement. The known key carries no settlement,
   // so an act moves it only to a pin newer than the graph in force, and never while it is already ahead.
-  if (graphBehindOf(told.key, told.settlement) && (state.seenKey == null || state.seenKey === state.key)) state.seenKey = told.key;
-  // behind if what this act was told, or what the process knows, is newer than the graph in force;
+  if (graphBehindOf(key, settlement) && (state.seenKey == null || state.seenKey === state.key)) state.seenKey = key;
+  // behind if what this act was told, or what the process knows, is newer than the graph in force
+  if (!(graphBehindOf(key, settlement) ?? worldGraphBehind())) return { snap: state.snap, behind: null };
   // a refresh in flight is stood on only if, once it lands, neither is
-  if ((graphBehindOf(told.key, told.settlement) ?? worldGraphBehind()) && state.inflight) await state.inflight;
-  return { snap: state.snap, behind: graphBehindOf(told.key, told.settlement) ?? worldGraphBehind() };
-}
-
-/**
- * An act's own pin question: PIN_SQL alone, in its own timed session on the
- * store, under the refreshers' cap: it takes a slot, or answers `{ busy: true }`
- * at once, and holds the slot until the question has ended, even after the act
- * stops waiting at `deadlineMs`. Resolves `{ key, settlement }` (key null when
- * the store holds no snapshot), or null when the store could not be asked in time.
- */
-async function pinAlone(query, deadlineMs) {
-  if (!startLoad()) return { busy: true };
-  const asked = (async () => {
-    let session = null;
-    try {
-      if (query === storeQuery) session = await timedSession(await servePool());
-      const pin = (await (session ? session.query : query)(PIN_SQL)).rows[0] ?? null;
-      return { key: pin ? `${pin.tag_sha}/${pin.office_sha}` : null, settlement: pin?.settlement ?? null };
-    } catch (e) {
-      plainRefreshError(e, "an act's ask of the world graph's pin"); // the raw error to the log, once per change
-      return null;
-    } finally {
-      await session?.end();
-      endLoad();
-    }
-  })();
-  if (deadlineMs == null) return asked;
-  let timer = null;
-  const late = new Promise((resolve) => { timer = setTimeout(resolve, deadlineMs, null); timer.unref?.(); });
-  return Promise.race([asked, late]).finally(() => clearTimeout(timer));
+  if (state.inflight) {
+    await state.inflight;
+    return { snap: state.snap, behind: graphBehindOf(key, settlement) ?? worldGraphBehind() };
+  }
+  const own = await reloadWorldGraph({ ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
+  return { snap: state.snap, behind: own.busy ? GRAPH_AT_THE_CAP : graphBehindOf(key, settlement) ?? worldGraphBehind() };
 }
 
 // ── THE TEST FIXTURE SEAM (POS-270 lane W 3a, Keemin-ruled 2026-09-30) ──────
