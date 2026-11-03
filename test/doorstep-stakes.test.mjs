@@ -360,3 +360,86 @@ test("WLD-51 part 3 · every stakes row carries its mark's whole body (Darko, 20
   const bare = stakesRowsFrom({ handles: ["berthillon"], marks: [{ id: "berthillon/x", kind: "sited", by: "berthillon" }], registry: {}, byMark: new Map() });
   assert.equal(bare[0].body, null, "a mark the fold holds no body for says so: null, never a missing key");
 });
+
+// ── WLD-51 · A THING IN HANDS IS NOT AT RISK (POS-688's held veto, handed in) ──
+//
+// The sweep asks the verdict whether a mark is printed as held (`held_by`):
+// a thing in someone's hands is published but unplaced, never a candidate while
+// held (world unpublish-verdict.mjs, `held`). Until WLD-51 this page asked the
+// same function without that input, so a held thing at ✦0 read "at risk", with
+// a stake act, while the sweep kept it: postmark#3757's class, the warning and
+// the sweep disagreeing. Invented handles; the verdict is the pinned world's.
+//
+// THE FLIP: drop `held: heldBy(m) != null` from stakesRowsFrom's rule call, and
+// the first test below reds on the held row.
+
+const MARK_KIND = await import(pathToFileURL(join(WORLD_CLONE, "tools", "mark-kind.mjs")).href);
+const TINKER = "tinker-of-nowhere";
+const heldReaders = (marks, over = {}) => readers({
+  world: async () => ({ state: { marks }, ref: "origin/main" }),
+  registry: async () => Object.fromEntries(marks.map((m) => [m.id, { household: TINKER, path: `WORLD/marks/${m.id}/mark.md`, class: "commons" }])),
+  pathAt: async () => () => true,
+  escrow: async () => ({ townSha: HEAD, byMark: new Map(), reason: null }),
+  ...over,
+});
+const thing = (slug, extra = {}) => ({ id: `${TINKER}/${slug}`, kind: "sited", by: TINKER, household: TINKER, tier: "market", ...extra });
+
+test("WLD-51 · THE FALSIFIER: a held thing on a commons row at ✦0 is not at risk and asks no stake; the same thing set down is", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const placed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const seg = await stakesFor([TINKER], heldReaders([held, placed]));
+  const by = Object.fromEntries(seg.rows.map((r) => [r.mark, r]));
+  assert.equal(by[held.id].at_risk, false, "in someone's hands: the sweep keeps it, so the page does not warn");
+  assert.equal(by[held.id].act, undefined, "and no stake is asked for");
+  assert.equal(by[held.id].class, "commons", "the row still reads as the registry holds it");
+  assert.equal(by[placed.id].at_risk, true, "THE CONTROL: unheld, commons, ✦0, path on main — swept, and warned");
+  assert.equal(by[placed.id].act, stakeEnvelope(placed.id), "with the ordinary stake act");
+  assert.equal(seg.at_risk, 1);
+  // the page's answer IS the sweep's: the same function, asked with the held state the sweep reads
+  for (const m of [held, placed])
+    assert.equal(VERDICT.unpublishVerdict({ class: "commons", path: `WORLD/marks/${m.id}/mark.md` },
+      { escrow: 0, pathOnMain: true, standing: "market", held: MARK_KIND.isHeld(m) }).unpublish, by[m.id].at_risk, m.id);
+});
+
+test("WLD-51 · the held fact is the world's own reading of `held_by`: every printed shape reaches the verdict as the sweep reads it", () => {
+  const shapes = [
+    ["a-named-holder", { held_by: "some-other-house" }],
+    ["a-padded-holder", { held_by: "  some-other-house  " }],
+    ["a-holder-thing", { held_by: "some-other-house/a-chest" }],
+    ["a-blank-holder", { held_by: "   " }],
+    ["an-empty-holder", { held_by: "" }],
+    ["a-null-holder", { held_by: null }],
+    ["a-number-holder", { held_by: 7 }],
+    ["no-holder-at-all", {}],
+  ].map(([slug, extra]) => thing(slug, extra));
+  const asked = new Map();
+  const spy = (entry, args) => { asked.set(entry.path, args.held); return { unpublish: args.held ? false : true }; };
+  const reg = Object.fromEntries(shapes.map((m) => [m.id, { household: TINKER, path: m.id, class: "commons" }]));
+  const rows = stakesRowsFrom({ handles: [TINKER], marks: shapes, registry: reg, byMark: new Map(), rule: spy, pathOnMain: () => true });
+  assert.equal(asked.size, shapes.length, "the rule was asked of every row");
+  for (const m of shapes) {
+    assert.equal(asked.get(m.id), MARK_KIND.isHeld(m), `${m.id}: the page hands in what the sweep's isHeld reads`);
+    assert.equal(rows.find((r) => r.mark === m.id).at_risk, !MARK_KIND.isHeld(m), m.id);
+  }
+  assert.deepEqual(shapes.filter((m) => MARK_KIND.isHeld(m)).map((m) => m.id.split("/")[1]), ["a-named-holder", "a-padded-holder", "a-holder-thing"],
+    "held is a printed holder; a blank, empty, null or non-string field is a placed thing, as the sweep reads it");
+});
+
+test("WLD-51 · held changes nothing that was unknown, backed or never a candidate", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  // the projection refused: unknown, never safe, held or not
+  const refused = await stakesFor([TINKER], heldReaders([held], { escrow: async () => ({ townSha: null, byMark: null, reason: "no town head" }) }));
+  assert.equal(refused.rows[0].at_risk, null, "escrow unread is unjudged, held or not");
+  assert.equal(refused.at_risk, null);
+  // no rule in the engine: unjudged
+  const noRule = await stakesFor([TINKER], heldReaders([held], { rule: async () => null }));
+  assert.equal(noRule.rows[0].at_risk, null, "no rule, no judgment");
+  // backed: kept either way
+  const backed = await stakesFor([TINKER], heldReaders([held, thing("a-tin-kettle")], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[held.id, 2], [`${TINKER}/a-tin-kettle`, 2]]), reason: null }) }));
+  for (const r of backed.rows) assert.equal(r.at_risk, false, `${r.mark}: ✦2 behind it`);
+  // walks home, or no registry row: never at risk, held or not
+  const home = await stakesFor([TINKER], heldReaders([thing("a-hearth-stone", { tier: "home" })]));
+  assert.equal(home.rows[0].at_risk, false, "a mark that walks home is never swept");
+  const founding = stakesRowsFrom({ handles: [TINKER], marks: [held], registry: {}, byMark: new Map(), rule: VERDICT.unpublishVerdict, pathOnMain: () => true });
+  assert.equal(founding[0].at_risk, false, "no registry row: founding estate");
+});
