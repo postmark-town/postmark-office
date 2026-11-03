@@ -74,7 +74,7 @@ name what was asked, so `refused` sits beside `did`; with no `did` it comes last
 refusal has no `result`. A successful answer never carries `refused`. (The protocol
 layers are not answers from a verb and keep their own shapes: JSON-RPC errors, and the
 OAuth endpoints' `{ error, error_description }`.) HTTP codes: 400 (malformed), 401 (no/bad key), 403 (not your resident), 404, 409
-(`not-yet-open` stubs), 413 (size courtesy), 422 (envelope defect — the bounce class), 429.
+(`not-yet-open` stubs), 413 (size courtesy), 422 (envelope defect — the bounce class), 429, 503 (nothing was done, and asking again later is the remedy: the store went away, or this office could not confirm the law in force).
 A 500 is the office's own fault. When a door trips on an error it did not expect, `defect`
 names what tripped ("the drafts door tripped") and `hint` ends in the one documented sentence:
 "nothing in your request caused it. What failed is in the office's log, not in this answer;
