@@ -381,7 +381,7 @@ function roomBench(placed, rooms, { withNearby = true } = {}) {
     standpoint: async (h) => {
       counted.standing += 1;
       counted.by[h] = (counted.by[h] ?? 0) + 1; // standing reads, per reader
-      if (hold.standing && hold.standing.handle === h) { hold.standing.hit(); await hold.standing.promise; }
+      if (hold.standing && hold.standing.handle === h && (hold.standing.times ?? Infinity) > 0) { if (hold.standing.times) hold.standing.times -= 1; hold.standing.hit(); await hold.standing.promise; }
       if (broken.has(h)) throw new Error("the standpoint tripped");
       return at[h] ? { handle: h, placed: true, x: at[h].x, y: at[h].y } : { handle: h, placed: false };
     },
@@ -1193,34 +1193,162 @@ test("POS-887 THE ROOM LOOKUP, world.mjs: a published world that cannot be read 
 //
 // A run ends and publishes idle in ONE synchronous step, so a request accepted at any moment either is in the pending slot the run reads or finds the
 // waiter idle and starts a run of its own. The old cleanup ran a microtask LATER and cleared the slot, so a request accepted in that gap was erased and
-// the voice waited for ANOTHER voice to unstick it. The gap is a few microtasks wide and its place relative to the second voice's fan-out is not
-// something a test can name from outside, so the second fan-out is started D microtask hops after the voice lands, for every D in a range wide enough
-// to cover the gap with margin. With the handoff atomic every D delivers; with the old cleanup restored the D that lands in the gap does not (flip).
+// the voice waited for ANOTHER voice to unstick it. To put the second voice's fan-out at the run's end from outside, the test PARKS both: the first
+// run on its standing read, the second fan-out on its presence read (prepared, about to serve). It releases the run, and releases the fan-out D
+// microtask hops later, for every D in a range that spans the run's end: the second serve lands while the run is still working (coalesced into the
+// slot), in the gap, or after (a new run). With the handoff atomic every D delivers the second voice once; with the old cleanup restored the D that
+// lands in the gap does not (the flip recorded in the PR).
 test("POS-887 THE DRAIN HANDOFF: a voice whose fan-out reaches a stream exactly as its last run ends is delivered once, with no third voice to wake it", async () => {
   const hops = (d, fn) => queueMicrotask(() => { if (d <= 0) fn(); else hops(d - 1, fn); });
-  const outcomes = [];
-  for (let d = 0; d <= 70; d++) {
+  for (let d = 0; d <= 40; d++) {
     const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
-    let landed = 0;
-    const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany, defer: (fn) => { landed += 1; if (landed === 1) setImmediate(fn); else hops(d, fn); } });
+    const standHeld = gate("cy"), fanoutHeld = gate();
+    let batches = 0;
+    const nearbyMany = async (ears, t) => {
+      batches += 1;
+      if (batches === 1) { b.tick(16_000); void b.store.say("ann", "second voice"); } // lands while the first run is under way
+      if (batches === 2) { fanoutHeld.hit(); await fanoutHeld.promise; } // the second fan-out is prepared, and parked just before it serves
+      return b.nearbyMany(ears, t);
+    };
+    const push = createSayPush({ voices: b.store, nearbyMany });
     const wire = await onWire(push, "cy");
-    let armed = true;
-    wire.res.on("wrote", (chunk) => {
-      if (!armed || !String(chunk).includes("first voice")) return;
-      armed = false; // the first delta is being delivered right now, inside the run that is about to end: the second voice lands
-      b.tick(16_000);
-      void b.store.say("ann", "second voice");
-    });
     b.tick(20_000);
+    b.hold.standing = standHeld; // the first run parks on its standing read
     await b.store.say("ann", "first voice");
+    await standHeld.reached;
+    await fanoutHeld.reached;
+    b.hold.standing = null;
+    standHeld.open(); // release the run
+    hops(d, () => fanoutHeld.open()); // and the second fan-out, D hops later
     for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r));
     const said = saidOn(wire.res);
-    outcomes.push({ d, said: said.join("|") });
     assert.deepEqual(said, ["first voice", "second voice"], `D=${d}: both voices, each once, in order, with nothing else to wake the stream`);
     const cursors = framesOf(wire.res).map((f) => f.latest);
-    assert.deepEqual(cursors, [...cursors].sort((a, b2) => a - b2), `D=${d}: the cursor only moves forward`);
-    assert.equal(wire.res.ended, 0, `D=${d}: the stationary reader\x27s stream is still open (the admitting control)`);
+    assert.deepEqual(cursors, [...cursors].sort((a, c) => a - c), `D=${d}: the cursor only moves forward`);
+    assert.equal(wire.res.ended, 0, `D=${d}: the stationary reader's stream is still open (the admitting control)`);
     wire.req.emit("close");
   }
-  assert.ok(outcomes.length === 71);
+});
+
+// ── RETAINED WORK (POS-887, continued): the books and the references ─────────
+//
+// Two paths kept heavy work off the books: a stream still OPENING (a snapshot in hand while its authorizing read hangs) sat outside the live-waiter
+// caps, and a waiter that ENDED while a read it started was still out vanished from them. Every owner now holds a reservation from admission to the
+// real end of what it started, and the caps count reservations. A reservation is released once, when the waiter has ended and nothing it began is out.
+// These drive repeated openings, closes and hung reads at and past WAITERS_PER_HANDLE through the real stream, then release them.
+
+const asBounce = (r) => (r && r.error === "bounce" ? r : null);
+async function manualStream(push, handle) {
+  const req = new EventEmitter(), res = fakeRes();
+  let refused = null;
+  const serving = serveSayStream(req, res, (send) => push.stream(handle, {}, send), { onBounce: (b) => { refused = b; } });
+  return { req, res, serving, get refused() { return refused; } };
+}
+const openOne = async (push, handle) => { const m = await manualStream(push, handle); await Promise.race([m.serving, turns(8)]); return m; };
+
+test("POS-887 RETAINED WORK, openings: streams hung in their opening hold the caps, closing the connections does not free them, and the release is exact", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  await b.store.say("ann", "a line to be heard");
+  b.tick(20_000);
+  const gates = Array.from({ length: WAITERS_PER_HANDLE }, () => gate());
+  const openings = [];
+  for (const g of gates) { b.hold.heard.push(g); openings.push(await manualStream(push, "cy")); await g.reached; } // each one is hung inside its first snapshot
+  assert.equal(push.open, 0, "none of them has joined the live ears yet: they are all still opening");
+  const refused = await push.stream("cy", {}, () => assert.fail("nothing is sent to a refusal"));
+  assert.ok(asBounce(refused), "so the opening beyond the cap is refused, in the existing shape");
+  assert.match(refused.defect, new RegExp(`already has ${WAITERS_PER_HANDLE} open ears`));
+  for (const o of openings) { o.req.emit("close"); o.req.emit("close"); } // every client goes, twice
+  assert.ok(asBounce(await push.stream("cy", {}, () => {})), "the connections are gone but their reads are not: the books still hold all four");
+  for (const g of gates) g.open(); // the reads really finish
+  await Promise.all(openings.map((o) => o.serving));
+  await turns(5);
+  const reopened = [];
+  for (let i = 0; i < WAITERS_PER_HANDLE; i++) { const events = []; const s = await push.stream("cy", {}, (r) => events.push(r)); assert.ok(!asBounce(s), `slot ${i + 1} is free again`); reopened.push(s); }
+  assert.ok(asBounce(await push.stream("cy", {}, () => {})), "and exactly four, not more: no reservation was released twice");
+  for (const s of reopened) s.close();
+  assert.equal(push.open, 0);
+  assert.ok(!asBounce(await push.stream("cy", {}, () => {})), "closing them frees the books again");
+});
+
+test("POS-887 RETAINED WORK, an opening that throws releases its reservation once, and so does a connection that went", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const real = b.store.room.snapshot;
+  const hung = gate();
+  b.store.room.snapshot = async () => { hung.hit(); await hung.promise; throw new Error("the room tripped while hung"); };
+  const openings = [];
+  for (let i = 0; i < WAITERS_PER_HANDLE; i++) { const p = push.stream("cy", {}, () => {}).then(() => "opened", () => "threw"); openings.push(p); }
+  await hung.reached;
+  assert.ok(asBounce(await push.stream("cy", {}, () => {})), "hung openings hold the books");
+  hung.open();
+  assert.deepEqual(await Promise.all(openings), Array(WAITERS_PER_HANDLE).fill("threw"));
+  b.store.room.snapshot = real;
+  const again = [];
+  for (let i = 0; i < WAITERS_PER_HANDLE; i++) again.push(await push.stream("cy", {}, () => {}));
+  assert.ok(again.every((s) => !asBounce(s)), "every reservation was released after the throw");
+  assert.ok(asBounce(await push.stream("cy", {}, () => {})), "and none twice");
+  for (const s of again) s.close();
+});
+
+test("POS-887 RETAINED WORK, live runs: streams ended while their standing read still hangs stay on the books until it settles, and peers are served throughout", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 }, bo: { x: 2002, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const cys = [];
+  for (let i = 0; i < WAITERS_PER_HANDLE; i++) { const m = await manualStream(push, "cy"); await m.serving; cys.push(m); } // each opened and joined the live ears
+  const bo = await onWire(push, "bo");
+  assert.equal(push.open, WAITERS_PER_HANDLE + 1);
+  const g = gate("cy");
+  g.times = WAITERS_PER_HANDLE; // the four runs’ reads hang; a later read (the fifth opening’s) does not
+  b.hold.standing = g;
+  b.tick(20_000);
+  await b.store.say("ann", "a voice for everyone");
+  await g.reached; // the four cy runs are parked on their standing reads
+  await turns(5);
+  assert.deepEqual(saidOn(bo.res), ["a voice for everyone"], "the peer is served while cy’s reads hang");
+  for (const c of cys) c.req.emit("close"); // all four connections go; their runs are still out
+  assert.equal(push.open, 1, "the live ears are only the peer’s now");
+  assert.ok(asBounce(await push.stream("cy", {}, () => {})), "but the books still hold the four hung runs, so a fifth opening is refused (a live-only count would let it in)");
+  b.hold.standing = null;
+  g.open();
+  await turns(10);
+  const reopened = await push.stream("cy", {}, () => {});
+  assert.ok(!asBounce(reopened), "once the reads settle the reservations are released");
+  reopened.close();
+  assert.ok(cys.every((c) => !c.res.body.includes("a voice for everyone")), "nothing of that voice was written to the connections that had closed");
+});
+
+test("POS-887 RETAINED WORK, references and bytes: a closed stream whose read hangs keeps no snapshot alive, and the live holding is the run's and one pending slot (measured)", async () => {
+  const v8 = await import("node:v8");
+  const vm = await import("node:vm");
+  v8.setFlagsFromString("--expose-gc");
+  const gc = vm.runInNewContext("gc");
+  assert.equal(typeof gc, "function", "the collector is reachable for this measurement");
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const seen = [];
+  const realSnapshot = b.store.room.snapshot;
+  let bytes = 0;
+  b.store.room.snapshot = async (...a) => { const s = await realSnapshot(...a); seen.push(new WeakRef(s)); bytes = Math.max(bytes, v8.serialize(s).length); return s; };
+  const wire = await manualStream(push, "cy");
+  await wire.serving;
+  const alive = async () => { await new Promise((r) => setImmediate(r)); gc(); await new Promise((r) => setImmediate(r)); gc(); return seen.filter((r) => r.deref() !== undefined).length; };
+  const g = gate("cy");
+  b.hold.standing = g;
+  const FLOOD = 30;
+  b.tick(20_000);
+  await b.store.say("ann", "v0");
+  await g.reached;
+  for (let i = 1; i < FLOOD; i++) { b.tick(16_000); await b.store.say("ann", `v${i}`); await turns(); }
+  const made = seen.length;
+  const liveHeld = await alive();
+  assert.ok(made >= FLOOD, `${made} snapshots were built across the flood`);
+  assert.ok(liveHeld <= 2, `while the stream is live and its read hangs, at most the run's own and the one pending snapshot are held (measured ${liveHeld} of ${made})`);
+  wire.req.emit("close");
+  const afterClose = await alive();
+  assert.equal(afterClose, 0, `closed, with its read still hanging, the waiter holds NO snapshot (measured ${afterClose} of ${made})`);
+  assert.ok(bytes > 0 && bytes < 2_000_000, `one invented snapshot serializes to ${bytes} bytes, so a live waiter's holding is at most ${2 * bytes} bytes (2 x measured) and per handle at most ${2 * bytes * WAITERS_PER_HANDLE}`);
+  b.hold.standing = null;
+  g.open();
+  await turns(10);
 });
