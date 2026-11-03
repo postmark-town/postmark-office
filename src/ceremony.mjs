@@ -587,7 +587,8 @@ export async function joinHousehold({
 // follow `household-deriver.mjs § accountMatches`, but no test asserts that
 // (accountIs is not exported and no test names it), which is a gap. The two
 // differ in one corner: given a ghId and an account row with no id, accountIs
-// answers false where accountMatches falls through to the login.
+// answers false where accountMatches falls through to the login. They also
+// compare ids differently: accountIs as strings, accountMatches as numbers.
 function accountIs(account, ghId, ghLogin) {
   if (account?.id != null || ghId != null) {
     if (account?.id == null || ghId == null) return false;

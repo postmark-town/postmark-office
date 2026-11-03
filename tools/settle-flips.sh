@@ -6,8 +6,9 @@
 # precedent: tools/arena-flips.mjs, which was deleted in dd402ca1 on 2026-09-30,
 # and tools/birthday-flips.mjs). A flip named for a ticket is an orphan the week
 # that ticket closes — nobody remembers what it guards, and nobody dares delete
-# it. Its companion is tools/settle-anchored-berths.mjs, and a second settlement law that ever wants
-# a flip belongs in THIS file as another case rather than a new one beside it.
+# it. Its companion is tools/settle-anchored-berths.mjs, and a second
+# settlement law that ever wants a flip belongs in THIS file as another case
+# rather than a new one beside it.
 #
 # CASE 1 — SETTLE-AT-THE-DOOR (the law Keemin ruled 2026-09-21).
 #

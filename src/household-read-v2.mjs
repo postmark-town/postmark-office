@@ -31,7 +31,10 @@ import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
 
-/** How many groups of what waits the glance shows: the oldest first (they have waited longest). */
+/**
+ * How many groups of what waits the glance shows: the largest first, then the
+ * oldest of the rest (needGroups' order).
+ */
 export const NEEDS_FIRST = 2; // round 4 (Darko 15:06): two groups, paying for marks and posts
 /** With more waiting than a page holds, how many of the inbox's last rows are read on their own for the oldest groups. */
 export const TAIL_ROWS = 100;

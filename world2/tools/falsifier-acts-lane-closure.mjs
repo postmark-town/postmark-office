@@ -107,7 +107,8 @@ const LANE_OF = Object.freeze({
   // mirror — a beat still reaches `acts` the journalled way. Named
   // 2026-09-02, the first census run against an apex that dispatches them
   // (the C1 flip night); until then check 0 had never been asked.
-  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal", // strike: the encounter's now (below)
+  // strike: the encounter's now (below)
+  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal",
   // THE VEHICLE'S ACT (#2986, 2026-09-19). Which lane: journal. Which table:
   // `journal`, class `ride`. Which pen: `appendJournal`, which carries the
   // World 2.0 mirror into `acts` itself — the same path enter/exit take, so
