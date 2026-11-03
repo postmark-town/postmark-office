@@ -1188,3 +1188,39 @@ test("POS-887 THE ROOM LOOKUP, world.mjs: a published world that cannot be read 
   await assert.rejects(world.roomOfNowStrict("ann"), /published world could not be read/, "the strict read says it cannot tell");
   assert.equal(await world.roomOfNow("ann"), null, "the ordinary read keeps reading that as the open: it must never stop a call");
 });
+
+// ── THE DRAIN HANDOFF (POS-887, continued) ───────────────────────────────────
+//
+// A run ends and publishes idle in ONE synchronous step, so a request accepted at any moment either is in the pending slot the run reads or finds the
+// waiter idle and starts a run of its own. The old cleanup ran a microtask LATER and cleared the slot, so a request accepted in that gap was erased and
+// the voice waited for ANOTHER voice to unstick it. The gap is a few microtasks wide and its place relative to the second voice's fan-out is not
+// something a test can name from outside, so the second fan-out is started D microtask hops after the voice lands, for every D in a range wide enough
+// to cover the gap with margin. With the handoff atomic every D delivers; with the old cleanup restored the D that lands in the gap does not (flip).
+test("POS-887 THE DRAIN HANDOFF: a voice whose fan-out reaches a stream exactly as its last run ends is delivered once, with no third voice to wake it", async () => {
+  const hops = (d, fn) => queueMicrotask(() => { if (d <= 0) fn(); else hops(d - 1, fn); });
+  const outcomes = [];
+  for (let d = 0; d <= 70; d++) {
+    const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
+    let landed = 0;
+    const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany, defer: (fn) => { landed += 1; if (landed === 1) setImmediate(fn); else hops(d, fn); } });
+    const wire = await onWire(push, "cy");
+    let armed = true;
+    wire.res.on("wrote", (chunk) => {
+      if (!armed || !String(chunk).includes("first voice")) return;
+      armed = false; // the first delta is being delivered right now, inside the run that is about to end: the second voice lands
+      b.tick(16_000);
+      void b.store.say("ann", "second voice");
+    });
+    b.tick(20_000);
+    await b.store.say("ann", "first voice");
+    for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r));
+    const said = saidOn(wire.res);
+    outcomes.push({ d, said: said.join("|") });
+    assert.deepEqual(said, ["first voice", "second voice"], `D=${d}: both voices, each once, in order, with nothing else to wake the stream`);
+    const cursors = framesOf(wire.res).map((f) => f.latest);
+    assert.deepEqual(cursors, [...cursors].sort((a, b2) => a - b2), `D=${d}: the cursor only moves forward`);
+    assert.equal(wire.res.ended, 0, `D=${d}: the stationary reader\x27s stream is still open (the admitting control)`);
+    wire.req.emit("close");
+  }
+  assert.ok(outcomes.length === 71);
+});
