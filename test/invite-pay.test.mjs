@@ -142,7 +142,9 @@ test("the hold's moves: each needs a reason, cancelled is final, and only the na
   assert.match(judgeHoldMove({ to: "paid", note: "x" }, "open").defect, /is not a move/);
   assert.match(judgeHoldMove({ to: "held", note: "x".repeat(601) }, "open").defect, /over 600/);
   assert.deepEqual(INVITE_HOLD_HANDS, ["little-bird", "keemin"], "Little Bird, and Darko as her backup");
-  assert.ok(INVITE_ID_RE.test("invite/the-keep") && !INVITE_ID_RE.test("invite/../x") && !INVITE_ID_RE.test("report/12345678"));
+  assert.ok(INVITE_ID_RE.test("invite:the-keep") && !INVITE_ID_RE.test("invite:../x") && !INVITE_ID_RE.test("report/12345678"));
+  // A resident whose handle is "invite" posts as invite/<slug>: an ordinary post, never an invitation
+  assert.equal(INVITE_ID_RE.test("invite/the-keep"), false, "a resident's post id can never be routed to the hold");
 });
 
 // ── the cap ─────────────────────────────────────────────────────────────────

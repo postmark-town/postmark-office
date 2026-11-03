@@ -7,9 +7,9 @@
 // no place in the cap. And 2026-11-03 00:08: the inviter's 10 waits a week after
 // the trigger, which is the window a hold is placed in.
 //
-//   hold    town { do: "advance", args: { post: "invite/<slug>", to: "held", note } }        the hands only
-//   lift    town { do: "advance", args: { post: "invite/<slug>", to: "lifted", note } }      the hands only
-//   cancel  town { do: "advance", args: { post: "invite/<slug>", to: "cancelled", note } }   the hands only
+//   hold    town { do: "advance", args: { post: "invite:<slug>", to: "held", note } }        the hands only
+//   lift    town { do: "advance", args: { post: "invite:<slug>", to: "lifted", note } }      the hands only
+//   cancel  town { do: "advance", args: { post: "invite:<slug>", to: "cancelled", note } }   the hands only
 //   read    town { read: "posts", args: { class: "invite", post? } }                          the hands only
 //
 // THE BUG-STAGE HANDS' PATTERN: a bug moves by `advance`, by BUG_HANDS, checked
@@ -49,9 +49,9 @@ export function inviteHandOf(fields, key) {
 }
 
 const HOW = Object.freeze({
-  hold: `town { do: "advance", args: { post: "invite/<slug>", to: "held", note } }: the inviter's 10 waits until it is lifted`,
-  lift: `town { do: "advance", args: { post: "invite/<slug>", to: "lifted", note } }: it pays at the first settlement once its week is over`,
-  cancel: `town { do: "advance", args: { post: "invite/<slug>", to: "cancelled", note } }: it is never paid, and takes no place in the inviter's 10 a month`,
+  hold: `town { do: "advance", args: { post: "invite:<slug>", to: "held", note } }: the inviter's 10 waits until it is lifted`,
+  lift: `town { do: "advance", args: { post: "invite:<slug>", to: "lifted", note } }: it pays at the first settlement once its week is over`,
+  cancel: `town { do: "advance", args: { post: "invite:<slug>", to: "cancelled", note } }: it is never paid, and takes no place in the inviter's 10 a month`,
   note: "every move carries a reason, kept with it",
 });
 export const INVITE_PRIVATE_NOTE = "internal: the town's hands read this and move it (Little Bird, and Darko as her backup); no one else reads it, and nothing here is published";
@@ -73,11 +73,11 @@ async function readPlan({ env, clone, now }) {
   return { store, ledger, plan: ledger ? planInvitePay({ ...store, holds: store.holds ?? new Map(), ledger, now }) : null };
 }
 
-/** town { do: "advance", args: { post: "invite/<slug>", to, note } }, by the hands. */
+/** town { do: "advance", args: { post: "invite:<slug>", to, note } }, by the hands. */
 export async function advanceInvite(fields = {}, key = null, id, { now = Date.now(), env = process.env, clone = null } = {}) {
   const hand = inviteHandOf(fields, key);
   if (!hand || !INVITE_ID_RE.test(id)) throw INVITE_NOT_FOUND(id);
-  const slug = id.slice("invite/".length);
+  const slug = id.slice("invite:".length);
   const at = new Date(now).toISOString();
   try {
     // the invitation must be one the store records, and not yet paid to its inviter

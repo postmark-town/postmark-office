@@ -463,8 +463,8 @@ test("I9 · the read lists every invitation oldest first, names the inviter as i
   ], "every invitation under the inviter's name now; the 5 more is owed once its welcome is on the ledger");
   assert.equal(read.invitations[1].invited_side.to, "b-house-r", "to the welcome's own recipient");
   const printed = printInvites(read);
-  assert.match(printed, /invite\/a-house "a-house" · invited by lantern-row \(credited as old-lantern, renamed since\)/);
-  assert.match(printed, /invite\/b-house "b-house" · invited by lantern-row \(named wick\) · at 2026-10-22T07:00:00\.000Z · ashore 2026-10-22T07:00:05\.000Z/);
+  assert.match(printed, /invite:a-house "a-house" · invited by lantern-row \(credited as old-lantern, renamed since\)/);
+  assert.match(printed, /invite:b-house "b-house" · invited by lantern-row \(named wick\) · at 2026-10-22T07:00:00\.000Z · ashore 2026-10-22T07:00:05\.000Z/);
   assert.match(printed, /the invited side: OWED 5 to b-house-r/);
   assert.match(printed, /the invited side: WAITING: its welcome bundle is not on the ledger yet/);
   assert.deepEqual(readInvites(store, { ledger, since: "2026-10-22T02:00:00.000Z" }).invitations.map((p) => p.household), ["b-house"], "--since lists only the newer ones");
@@ -501,7 +501,7 @@ test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS PAYOUTS IN THE M
   assert.equal(readInvites({ rows, houses, facts: { letters }, holds: new Map() }, { ledger: paidOct, now: new Date("2026-11-20T12:00:00.000Z") })
     .invitations.filter((p) => p.inviter_side.status === "owed").length, 10, "a month already full counts against itself, never against the month paid");
   const printed = printInvites(read);
-  assert.match(printed, /invite\/h10[\s\S]*?the inviter side: OVER THE CAP: quill-hall has been paid 10 in 2026-11, at most 10 a month; it waits for a month with room/);
+  assert.match(printed, /invite:h10[\s\S]*?the inviter side: OVER THE CAP: quill-hall has been paid 10 in 2026-11, at most 10 a month; it waits for a month with room/);
   assert.match(printed, /first letter 2026-10-10T12:00:00\.000Z · first home none · ACTIVATED 2026-10-10T12:00:00\.000Z \(first letter\)/);
 });
 
@@ -522,7 +522,7 @@ test("I9e · the read shows a founders' row as REFUSED (founders): no place in t
   assert.equal(read.invitations.find((p) => p.household === "ordinary").inviter_side.nth_this_month, 1, "the founders' row did not take place 1");
   const printed = printInvites(read);
   assert.match(printed, /the invited side: REFUSED \(founders\): nothing is owed to either side; the invitee has the ordinary bundle/);
-  assert.doesNotMatch(printed.split("invite/by-hand")[1].split("invite/ordinary")[0], /OWED/, "no mint line for it");
+  assert.doesNotMatch(printed.split("invite:by-hand")[1].split("invite:ordinary")[0], /OWED/, "no mint line for it");
 });
 
 test("I9b · the read, run as the operator runs it, on the real store: it lists the households I8a and I8c invited and nothing it didn't", () => {

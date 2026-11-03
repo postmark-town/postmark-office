@@ -385,7 +385,7 @@ function bodyOf(fields) {
 async function classOf(fields, id, env) {
   // a report's id says its class (POS-757): report/<hex>, never a public row
   if (String(fields.class ?? "").trim() === REPORT_CLASS || REPORT_ID_RE.test(id)) return REPORT_CLASS;
-  // and an invitation's (POS-816): invite/<the invited household's slug>, never a public row
+  // and an invitation's (POS-816): invite:<the invited household's slug>, never a public row
   if (INVITE_ID_RE.test(id)) return INVITE_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;

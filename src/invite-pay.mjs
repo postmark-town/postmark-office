@@ -36,9 +36,15 @@
 // INVITE); this file decides only WHO is owed WHAT side, and WHEN.
 
 export const INVITE_CLASS = "invite";
-/** An invitation's id: `invite/<the invited household's slug>`. */
-export const INVITE_ID_RE = /^invite\/[a-z0-9][a-z0-9-]*$/;
-export const inviteId = (slug) => `invite/${slug}`;
+/**
+ * An invitation's id: `invite:<the invited household's slug>`. A colon, never a
+ * slash: `invite/<slug>` is the shape of an ordinary post id `<author>/<slug>`,
+ * and "invite" is no reserved handle, so a resident who took it would have had
+ * their own posts routed here. A handle carries no colon, so this id can be no
+ * resident's post.
+ */
+export const INVITE_ID_RE = /^invite:[a-z0-9][a-z0-9-]*$/;
+export const inviteId = (slug) => `invite:${slug}`;
 
 /** The hands that hold, lift and cancel (Little Bird, and Darko as her backup: POS-816, Little Bird 2026-10-30). */
 export const INVITE_HOLD_HANDS = Object.freeze(["little-bird", "keemin"]);
