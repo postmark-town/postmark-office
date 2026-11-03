@@ -2480,10 +2480,16 @@ export async function transportBlock(worldState, standpoint, { crossing = null }
 
 // The Mists stand from the first crossing on the world's schedule
 // (`skeleton.mists`, which reaches the assembled world as `terrain.mists`): the
-// engine's own rule, `mistsAt` is null before it. No schedule, no Mists.
+// engine's own rule, `mistsAt` is null before it. No schedule, no Mists. And they
+// stand only until the record's `withdrawn_from` (WLD-147; Darko, 2026-11-02 17:06
+// EST, "full removal for mists"): from that crossing `mistsAt` is null again and
+// there are no Mists, so no ferry line either. A finite number, as the engine and
+// the forecast read it (src/mists-forecast.mjs § withdrawnFrom).
 export function mistsStand(worldState, crossing) {
-  const first = worldState?.terrain?.mists?.schedule?.[0]?.crossing;
-  return Number.isFinite(first) && Number.isFinite(crossing) && crossing >= first;
+  const mists = worldState?.terrain?.mists;
+  const first = mists?.schedule?.[0]?.crossing;
+  const gone = Number.isFinite(mists?.withdrawn_from) ? mists.withdrawn_from : Infinity;
+  return Number.isFinite(first) && Number.isFinite(crossing) && crossing >= first && crossing < gone;
 }
 
 /**
