@@ -1,5 +1,13 @@
 # Read workers: every cache, and how a worker learns it moved (POS-266)
 
+> **Status, 2026-11-03:** `office.db` and `world.db` are retired (POS-656, POS-270;
+> `src/server.mjs` says "world.db is retired"). The rows below that name
+> `INDEX (office.db)` and the world.db caches (the `index` and `world-store`
+> message rows and the matching cache rows) describe the pre-retirement path:
+> `src/server.mjs` has no `INDEX` and `src/` has no `reloadIndex` or
+> `reloadWorldCaches` today. Read those rows as history. The rest of the doc has
+> not been re-audited here.
+
 `src/read-workers.mjs` hands admitted GET reads to N worker threads. Each worker
 runs `src/server.mjs` as a read-role office that never listens, so each holds a
 fresh copy of every module-level cache. There are three ways a worker's copy

@@ -444,7 +444,7 @@ export function residentOf(d, pages, handle, ctx) {
   // It was `if (out.profile == null) out.profile = profileOf(handle)` — a
   // read-time re-read of PROFILE.md, here because the index on the box is
   // already built and a fix that lands only at hydration waits for the next
-  // rehydrate. The freshness ladder does that same job one step further down,
+  // ingest. The freshness ladder does that same job one step further down,
   // from a NAMED clone and with a tense attached, so keeping both was not
   // belt-and-braces; the two actively fought.
   //
@@ -466,7 +466,7 @@ export function residentOf(d, pages, handle, ctx) {
   // What remains is the one thing the garnish also did and the compose does not
   // need a clone for: guaranteeing the key exists. The hydrated path writes an
   // explicit `profile: null` for a resident without one, so the door must too,
-  // or the same resident answers `null` after a rehydrate and no key at all
+  // or the same resident answers `null` after an ingest and no key at all
   // before it.
   if (out.profile === undefined) out.profile = null;
   // The ladder rides last, so it stamps the card the caller is actually handed
@@ -1725,7 +1725,9 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
 
     // the registry from the index this door reads: the store's town_meta (POS-268)
     const registry = JSON.parse((await ix.questRegistry()) ?? '{"quests":[]}');
-    // ── THE FACTS COME OFF THE FOLD THE REHYDRATE ALREADY WROTE (POS-167) ──
+    // ── THE FACTS COME OFF THE FOLD THE INGEST ALREADY WROTE (POS-167) ──
+    // (History: POS-167 titled this "the rehydrate"; the town-index ingest has
+    // done that fold since the office.db rehydrate was retired (POS-268 5b, POS-656).)
     //
     // This line was `tools.onboardingFactsFor(clone, handle)` with no options,
     // and on the SERVING path that is THREE parses of the 13k-line stamp ledger
@@ -1734,24 +1736,25 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     // and `welcomedHouseholds` once more. Every doorstep read paid it.
     //
     // THE FACTS WERE ALREADY IN THIS CALL. `standingRowsFromTown` folds the same
-    // six at every rehydrate into `quest_standing`, and `questBoardWith` below
+    // six at every ingest into `quest_standing`, and `questBoardWith` below
     // reads that row for its board — so this function was reading these six
     // facts TWICE, from two different clocks, and `composeNextSteps` then threw
     // the row's copy away ("the onboarding line is the voice for the six
-    // one-time rows"). Measured: a row folded at the last tick and a live fold
+    // one-time rows"). Measured: a row folded at the last ingest and a live fold
     // disagree on card / home / window, because `src/edit.mjs`'s pen lands those
     // three on the LIVE clone between snapshots while the row comes from the
-    // tick's frozen `git clone --local` (deploy/office-tick.sh).
+    // town-index ingest's own clone, as of its last run
+    // (deploy/town-index-ingest.sh, every 15 minutes; src/town-index.mjs folds it).
     //
     // So the live fold was the one field on this page FRESHER than the `as_of`
     // sha the page itself prints. Reading the row puts the checklist on the
-    // page's own clock, at the price of one tick: a paper act done through the
-    // office pen now leaves the list at the next rehydrate rather than at once.
+    // page's own clock, at the price of one ingest: a paper act done through the
+    // office pen now leaves the list at the next ingest rather than at once.
     //
     // THE FALLBACK IS TODAY'S BEHAVIOUR, NOT A NEW ROAD. The store's `standingFor`
     // answers null when the index holds no row for the handle — the case of an
     // index that predates the seam — and
-    // between a deploy and the first rehydrate that is every resident. Reading
+    // between a deploy and the first ingest that is every resident. Reading
     // an absent row as six false facts would print six finished chores back onto
     // the checklist of a resident who did them, which is #1864 in a new mouth.
     // Absent means ASK, exactly as before, at exactly the old cost, for exactly
@@ -1874,7 +1877,7 @@ export function stampsRosterPage({ minted, accounts, n, start }, balances) {
 // foldMintCount / foldStaked imported
 // live from the checkout. So `minted` and `liquid` here carry holo BY
 // DERIVATION the moment the town's folds credit it (postmark-town/postmark
-// #2811) and the box rehydrates — and adding a second credit here would pay the
+// #2811) and the box ingests — and adding a second credit here would pay the
 // payer twice.
 //
 // WHAT DID HAVE TO CHANGE is one sum the old law had made harmless. `ownership`
@@ -2124,8 +2127,8 @@ export function potBoardOf(rows, extraInvalid = []) {
 // quest-progress.mjs (imported live from the clone, cached) so there is one
 // source for the board shape and "today" — no second copy in the office. The
 // stored progress is for meta.quest_day; if TOWN_TZ has ticked over to a new day
-// since the last hydrate, we serve a clean zero board (the daily reset) until the
-// next rehydrate recomputes. Async: the tool import is awaited (then cached).
+// since the last ingest, we serve a clean zero board (the daily reset) until the
+// next ingest recomputes. Async: the tool import is awaited (then cached).
 let _questTools = null;
 async function questTools(clone) {
   if (_questTools) return _questTools;
@@ -2428,7 +2431,7 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
 }
 
 /**
- * The six onboarding facts, read off the standing row the rehydrate wrote — or
+ * The six onboarding facts, read off the standing row the ingest wrote — or
  * null when this index cannot answer them and the caller must ask the checkout.
  *
  * ONE OWNER OF THE ID MAP. The keys are `STANDING_FACT`'s own values, and those
@@ -2589,7 +2592,7 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
   // bounty files ON the quest board, so the board read carries them rather than
   // growing a new verb. Same section for every handle (a pot is the town's, not
   // yours). Guarded like mail_state: an index hydrated before the seam has no
-  // pots table and says so honestly until the next rehydrate.
+  // pots table and says so honestly until the next ingest.
   //
   // A pot's registry row is a BOARD POSTING, never a resident card (the town's
   // own word, seam/ledger-legs-aligned @ 3668881b): it carries subtype "bounty"
@@ -3009,4 +3012,3 @@ export function regionWhole(row) {
     residents_total: residents.length,
   };
 }
-
