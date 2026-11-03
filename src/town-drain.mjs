@@ -48,6 +48,7 @@ import {
 // this file, so there is no cycle to close.
 import { loadRegistry } from "./registry-store.mjs";
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
+import { landSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
 import {
   ensureTownJournal, pendingRows, rowIsSettleable, townDrainCursor, TOWN_DRAIN_CURSOR, SETTLE_THRESHOLD,
 } from "./town-journal.mjs";
@@ -330,7 +331,7 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
       // reach the record (`residency.mjs` warns and opens the PR anyway, on the
       // founder's 2026-08 call that a seam flicker must not turn anybody away).
       // That row founds its house here rather than never.
-      if (p.action === "created")
+      if (p.action === "created") {
         await mintHousehold({
           slug: p.slug,
           name: p.houseLine,
@@ -345,6 +346,12 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
           declaredBy: p.registry.households[p.slug].declared_by,
           drain: NO_DRAIN,
         });
+        // WHERE THEY CAME FROM (POS-770): the flicker road founds a house too, so the
+        // outreach tag parked against the founder's GitHub id lands as its came_from,
+        // privately, at the founding (as join-bind does it). Best-effort: it never
+        // stalls the row, and it appears in no printed file.
+        await landSource({ ghId: row.ghId, household: p.slug });
+      }
       // `chosen` TAKES THE SAME ROAD, AND FOR THE SAME ONE REASON (POS-197). A
       // provisional house's human chooses its key at the door, at the co-sign
       // (`requestResidency`), and by the time the Registrar merges, the record

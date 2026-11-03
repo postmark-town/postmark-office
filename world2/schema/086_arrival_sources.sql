@@ -1,4 +1,4 @@
--- 086 — WHERE A HOUSEHOLD CAME FROM, PRIVATELY (POS-770, w44 or w45)
+-- 086 — WHERE A HOUSEHOLD CAME FROM, PRIVATELY (POS-770)
 --
 -- Darko, 2026-10-22 23:03 EDT: "is there any way that we can track where people
 -- will be coming?" Outreach links carry `?from=<tag>` from a fixed list

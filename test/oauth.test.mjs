@@ -343,6 +343,10 @@ test("POS-770 · a consent submit with a bad `from` grants exactly as one withou
     const form = { pending_id: /name="pending_id" value="([^"]+)"/.exec(html)[1], nonce: /name="nonce" value="([^"]+)"/.exec(html)[1], decision: "approve", ...extra };
     const r = await fetch(`${BASE}/oauth/consent`, { method: "POST", redirect: "manual",
       headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(form) });
+    // THE STATUS FIRST (review N-1): a consent the `from` refused or changed answers something other than a 302 with
+    // no `location`, and parsing the missing header first read as `TypeError: Invalid URL` instead of the law. Now a
+    // changed grant reads as `{ consent: 400 }` against `{ consent: 302, … }`, and the deepEqual below names it.
+    if (r.status !== 302) return { consent: r.status };
     const back = new URL(r.headers.get("location"));
     const tok = await fetch(`${BASE}/oauth/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ grant_type: "authorization_code", code: back.searchParams.get("code"), client_id: clientId, redirect_uri: REDIRECT, code_verifier: verifier }) });

@@ -11,9 +11,12 @@
 //     input. Nothing is shown; a page with no keep sends nothing.
 //   · THE PARK. POST /oauth/consent parks a listed tag against the clicking
 //     human's GitHub id (086 § arrival_source_park), on an approve only.
-//   · THE LAND. declare-exec, which every road that founds a house walks with
-//     the declarer's GitHub id, lands the park as the new household's
-//     `came_from` (086 § arrival_source_land) after the commit, best-effort.
+//   · THE LAND. Every road that founds a house lands the park as the new
+//     household's `came_from` (086 § arrival_source_land), best-effort, with the
+//     founder's GitHub id: declare-exec (after the commit), and, at the founding
+//     mint itself, join-bind (request_residency), settle-join (a hand-written
+//     join PR) and town-drain (the flicker road). A rename (`chosen`) is not a
+//     founding and lands nothing. `mintHousehold` has these four callers.
 //
 // NEVER SHOWN, NEVER ECHOED TO AN AGENT, NEVER ON THE PUBLIC RECORD: no field
 // asks for it, no answer says it, and the store's functions never return it.

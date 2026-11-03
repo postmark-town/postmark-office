@@ -12,7 +12,13 @@
 //   A3  086 on a real store: park, land once, count; office_api reads neither table
 //   A4  THE REAL ROAD: declare-exec lands a parked tag on the new house, and it
 //       reaches no file, no commit and no answer
-//   (the consent POST's park is test/oauth.test.mjs § POS-770, on the real server)
+//   A6  the other three roads that found a house land it too, each run for real:
+//       request_residency (join-bind-exec), a hand-written join PR (settle-join-exec)
+//       and the crossing's flicker road (town-drain); a join into a standing
+//       house lands nothing
+//   (the consent POST's park is test/oauth.test.mjs § POS-770, on the real server;
+//    the co-sign page's carrier, approved through to a landed row, is
+//    test/arrival-source-cosign.test.mjs)
 //
 //   node --test test/arrival-source.test.mjs
 
@@ -30,6 +36,9 @@ import { FROM_TAGS, FROM_KEY, FROM_TTL_MS, SMALL_CELL, fromTag, fromCarrier, par
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { REGISTRY_PATH, PINS_PATH, serializeRegistry, serializePins } from "../src/residency.mjs";
+import { DatabaseSync } from "node:sqlite";
+import { ensureTownJournal, appendTownJournal } from "../src/town-journal.mjs";
+import { planTownDrain, writeTownDrain } from "../src/town-drain.mjs";
 
 delete process.env.TOWN_PUSH;
 delete process.env.TOWN_SINGLE_LOG;
@@ -55,6 +64,12 @@ test("A1 · the tag: the issue's fourteen, any case; anything else is nothing", 
 const FROM_TAGS_DIGEST = "0ddea6f74eb32801";
 test("A1b · the list's digest is the one the site's mirror pins (postmark-site test/join-source.test.mjs)", () => {
   assert.equal(createHash("sha256").update(FROM_TAGS.join(",")).digest("hex").slice(0, 16), FROM_TAGS_DIGEST);
+});
+
+test("A1c · the keep is 30 days, the number the issue rules, and the site pins the same one (postmark-site test/join-source.test.mjs)", () => {
+  // LAW POS-770 § build 1: "The join keeps ?from=<tag> ... for 30 days". A2's "older than 30 days" case
+  // is written with FROM_TTL_MS itself, so it holds for any value of the constant; this holds the value.
+  assert.equal(FROM_TTL_MS, 30 * 864e5, "the ruled 30 days: POS-770 § build 1, 'for 30 days'");
 });
 
 // ── A2 the carrier ──────────────────────────────────────────────────────────
@@ -251,8 +266,16 @@ test("A5 · the read: tagged page views and off-site referrers per day on Darko'
 });
 
 test("A5b · the read, run as the operator runs it, on the real store with a log piped in", async () => {
-  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-  const stamp = new Date();
+  // ONE CLOCK, NOT TWO (review N-2). Until 2026-11-03 this took `day` and the log line's time from the wall
+  // clock and expected A4's Lamp House, landed a moment earlier on the wall clock, in that day's cell: midnight
+  // Eastern between the two reddened it, as a dev-rehearsal run had that night. Now Lamp House's landing is
+  // moved to one fixed instant (noon UTC, three days back: inside the read's 60 days, and nowhere near a day
+  // boundary in New York), and `day` and the log line both come from that instant. Only the 60-day window
+  // still reads the wall clock, and it has days of margin either side.
+  const stamp = new Date(Math.floor((Date.now() - 3 * 864e5) / 864e5) * 864e5 + 12 * 36e5);
+  assert.equal((await asOwner("UPDATE arrival_sources SET recorded_at = $1 WHERE household = 'lamp-house' RETURNING household", [stamp.toISOString()])).length, 1,
+    "A4's Lamp House is the row moved");
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(stamp);
   const mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][stamp.getUTCMonth()];
   const p2 = (n) => String(n).padStart(2, "0");
   const t = `${p2(stamp.getUTCDate())}/${mon}/${stamp.getUTCFullYear()}:${p2(stamp.getUTCHours())}:${p2(stamp.getUTCMinutes())}:${p2(stamp.getUTCSeconds())} +0000`;
@@ -264,8 +287,101 @@ test("A5b · the read, run as the operator runs it, on the real store with a log
   const today = rows.find((x) => x.day === day);
   assert.deepEqual(today.visits, { mongoose: 1 });
   assert.deepEqual(today.referrers, { "example.org": 1 });
-  assert.equal(today.settled.mongoose, "<3", "A4's Lamp House landed today: one household, folded by the store");
+  assert.equal(today.settled.mongoose, "<3", "A4's Lamp House, landed on this same day: one household, folded by the store");
   const bad = spawnSync(process.execPath, [join(ROOT, "tools", "arrivals.mjs"), "--days", "0"], { encoding: "utf8", env: { ...process.env, WORLD2_PG_URL: "" } });
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /--days takes a whole number of days/);
+});
+
+// ── A6 the other roads that found a house (review F-2) ──────────────────────
+//
+// `mintHousehold` has four callers, and A4 ran one of them. The census, read off
+// the code on 2026-11-03: declare-exec (A4), join-bind (request_residency),
+// settle-join (a hand-written join PR) and town-drain (the crossing's flicker
+// road). Each is run here for real, on the real store and a real git clone, with
+// a tag parked against an invented GitHub id, and the founded house's private row
+// is read back. The tags differ per road so a landing is attributable, and none
+// is A5b's `mongoose`. LAW POS-770 § build 2: "The settled household records
+// `came_from: <tag>` privately".
+
+/** A town-writing exec, run as the office runs it: a child, the store in its env, the town clone, no push. */
+function execRoad(file, payload) {
+  const r = spawnSync(process.execPath, [join(ROOT, "src", file), JSON.stringify(payload)], {
+    encoding: "utf8",
+    env: { ...process.env, ...IX.env, TOWN_CLONE: clone, TOWN_PUSH: "", BOT_NAME: "Postmark Pen", BOT_EMAIL: "pen@test.invalid" },
+  });
+  assert.equal(r.status, 0, `${file} answers rather than trips: ${r.stderr}`);
+  return { out: JSON.parse(r.stdout.trim().split("\n").at(-1)), stdout: r.stdout };
+}
+const landedFor = (slug) => asOwner("SELECT tag FROM arrival_sources WHERE household = $1", [slug]);
+const waitingFor = (ghId) => asOwner("SELECT tag FROM arrival_source_pending WHERE gh_id = $1", [ghId]);
+
+test("A6a · request_residency founds a house through join-bind, and the parked tag lands on it privately", async () => {
+  await parkSource({ ghId: 6200, tag: "obend" });
+  const { out, stdout } = execRoad("join-bind-exec.mjs", {
+    args: { handle: "reedwarden", card: "I came by the river road.", household: "Reed House" },
+    key: { ghId: 6200, ghLogin: "reed-gh", handles: [] },
+  });
+  assert.equal(out.error, undefined, JSON.stringify(out.error));
+  assert.equal(out.household.action, "created", "this road founded the house");
+  assert.deepEqual(await landedFor("reed-house"), [{ tag: "obend" }], "the park landed as the new house's tag");
+  assert.deepEqual(await waitingFor(6200), [], "and it was taken from the waiting park, not copied");
+  assert.doesNotMatch(stdout, /obend|came_from/, "the answer never says it");
+  assert.doesNotMatch(everythingInTheTown(), /obend|came_from/, "no file and no commit carries it");
+
+  const plain = execRoad("join-bind-exec.mjs", {
+    args: { handle: "mossgrove", card: "Nobody sent me.", household: "Moss House" },
+    key: { ghId: 6201, ghLogin: "moss-gh", handles: [] },
+  });
+  assert.equal(plain.out.error, undefined, JSON.stringify(plain.out.error));
+  assert.equal(plain.out.household.action, "created");
+  assert.deepEqual(await landedFor("moss-house"), [], "no park, no row");
+});
+
+test("A6b · a join into a house that already stands lands nothing, and the park waits for the declaration that founds one", async () => {
+  await parkSource({ ghId: 9101, tag: "commons" });
+  const { out } = execRoad("join-bind-exec.mjs", {
+    args: { handle: "snuffer", card: "A second resident of the house." },
+    key: { ghId: 9101, ghLogin: "lr-gh", handles: ["wick"] },
+  });
+  assert.equal(out.error, undefined, JSON.stringify(out.error));
+  assert.equal(out.household.action, "appended", "this is a resident joining, not a founding");
+  assert.deepEqual(await landedFor("lantern-row"), [], "a house that already stood gets no source");
+  assert.deepEqual(await waitingFor(9101), [{ tag: "commons" }], "the park is still waiting");
+});
+
+test("A6c · a hand-written join PR that founds a house (settle-join) lands the parked tag on it", async () => {
+  const handle = "briarwood";
+  mkdirSync(join(clone, "WHITE_PAGES", handle), { recursive: true });
+  writeFileSync(join(clone, "WHITE_PAGES", handle, "ADDRESS.md"), `---\nhandle: ${handle}\ngithub: briar-gh\nhousehold: Briar House\n---\n\n# ${handle}\n`);
+  git(clone, "add", "-A");
+  git(clone, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "a hand-written join, merged");
+  await parkSource({ ghId: 6300, tag: "gsb" });
+  const { out, stdout } = execRoad("settle-join-exec.mjs", { handle, ghId: 6300, ghLogin: "briar-gh", pr: 9001, road: "hand", cardLogin: "briar-gh" });
+  assert.equal(out.error, undefined, JSON.stringify(out.error));
+  assert.equal(out.settled, true);
+  assert.equal(out.house.slug, "briar-house", "this road founded the house");
+  assert.deepEqual(await landedFor("briar-house"), [{ tag: "gsb" }]);
+  assert.deepEqual(await waitingFor(6300), []);
+  assert.doesNotMatch(stdout, /gsb|came_from/, "the answer never says it");
+  assert.doesNotMatch(everythingInTheTown(), /gsb|came_from/, "no file and no commit carries it");
+});
+
+test("A6d · the crossing's flicker road (town-drain) founds a house and lands the parked tag on it; a row with no park gets none", async () => {
+  const odb = new DatabaseSync(":memory:");
+  odb.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+  ensureTownJournal(odb);
+  const date = "2026-10-30";
+  await parkSource({ ghId: 6400, tag: "delve" });
+  for (const [handle, ghId, ghLogin, household] of [["driftwood", 6400, "drift-gh", "Drift House"], ["plainreed", 6401, "plain-gh", "Plain House"]])
+    await appendTownJournal(odb, { cls: "join", act: "request-residency", household: household.toLowerCase().replace(/ /g, "-"), handle, ghId, ghLogin,
+      payload: { household, card: "Came in on the tide." } });
+  const plan = await planTownDrain(odb, clone, { date });
+  assert.deepEqual(plan.plans.map(({ plan: p }) => p?.action), ["created", "created"], "both rows found a house at this crossing");
+  const touched = await writeTownDrain(clone, plan, { date });
+  assert.equal(touched.stalled, undefined, `no row stalled: ${JSON.stringify(touched.stalled)}`);
+  assert.deepEqual(await landedFor("drift-house"), [{ tag: "delve" }]);
+  assert.deepEqual(await landedFor("plain-house"), [], "no park, no row");
+  assert.deepEqual(await waitingFor(6400), []);
+  assert.doesNotMatch(everythingInTheTown() + touched.join("\n"), /delve|came_from/, "no printed file carries it");
 });
