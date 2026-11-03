@@ -490,7 +490,7 @@ test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS PAYOUTS IN THE M
   const houses = [{ slug: "quill-hall", residents: ["quill"], formerly: [] }];
   const read = readInvites({ rows, houses, facts: { letters }, holds: new Map() }, { ledger: EMPTY_LEDGER(), now: new Date("2026-11-20T12:00:00.000Z") });
   const by = (s) => read.invitations.find((p) => p.household === s).inviter_side;
-  assert.equal(by("h11").status, "waiting", "an invitation that never activated takes no place in the cap");
+  assert.equal(by("h11").status, "lapsed", "invited 10-03 and read 11-20, no letter or home: it never activated, and takes no place in the cap");
   const owed = read.invitations.filter((p) => p.inviter_side.status === "owed");
   assert.equal(owed.length, 10, "ten are paid in the month they are paid in");
   assert.deepEqual(owed.map((p) => p.inviter_side.nth_this_month).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
