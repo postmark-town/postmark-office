@@ -37,7 +37,7 @@ import { votesAvailable, voteList, voteView, stakeViaOffice } from "./votes.mjs"
 import { requestResidency } from "./residency.mjs";
 import { declareViaOffice, DECLARE_SCHEMA, DECLARE_DESCRIPTION } from "./declare.mjs";
 import { HOME_TITLE_MAX, PROFILE_FIELD_DOC, updateAddressBody, updateAddressFields, updateHomeAct, updateProfileAct, updateWindow } from "./edit.mjs";
-import { uploadMedia } from "./media.mjs";
+import { uploadMedia, retiredMediaArgs } from "./media.mjs";
 import { WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // a window starts with its human (POS-248) — one telling, shared with the window read
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { validateArgs } from "./validate-args.mjs"; // one owner for "does this door take that field" — re-exported below
@@ -1210,6 +1210,13 @@ async function handleMessage(msg, ctx) {
       }
       // Validate AFTER the auth gates: an unsigned call must still trigger the
       // 401 + WWW-Authenticate OAuth dance, even when its arguments are also bad.
+      // THE RETIRED FIELD ANSWERS FOR ITSELF FIRST (POS-818, postmark#3856): a
+      // stale connector still offers upload_media's pre-09-20 `image`, and the
+      // unknown-argument check below would call it unknown, which is true and
+      // useless. Scoped to that one tool and that one field — every other
+      // unknown name still meets the check unchanged.
+      const retired = name === "upload_media" ? retiredMediaArgs(args) : null;
+      if (retired) return refusal(msg.id, retired);
       const bad = validateArgs(tool, args);
       if (bad) return refusal(msg.id, bad);
       try {

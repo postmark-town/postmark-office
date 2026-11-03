@@ -53,7 +53,7 @@ import { execFileSync } from "node:child_process";
 // THREE CLOCKS WEAR THE WORD "CROSSING" and the walk found all three in one
 // sitting: the world's `since:` cursor counts 12h crossings from 00:00/12:00Z
 // (`crossings.mjs § CROSSING_DERIVATION`), the ferry sails the mail on the same
-// 00/12Z beat, and the keeper's SETTLEMENT runs at 05:45/17:45Z and numbers its
+// 00/12Z beat, and the keeper's SETTLEMENT runs at 06:00/18:00Z and numbers its
 // blessings S1, S2, … — "the number counts blessings, not beats"
 // (`settlements.mjs`), so it cannot be derived from any clock at all.
 //
@@ -61,7 +61,7 @@ import { execFileSync } from "node:child_process";
 // `window` is the candle's, and it is labelled as the candle's. Nothing here
 // re-uses the bare word "crossing" for either.
 export const RECEIPT_CLOCK =
-  "crossing = the SETTLEMENT epoch (S-number + the sha it blessed, 05:45/17:45Z) — not the ferry's 00:00/12:00Z crossing, and not candle N, the candle's own interval (LOGOS/classes.md § the register, crossing ③)";
+  "crossing = the SETTLEMENT epoch (S-number + the sha it blessed, 06:00/18:00Z) — not the ferry's 00:00/12:00Z crossing, and not candle N, the candle's own interval (LOGOS/classes.md § the register, crossing ③)";
 
 /**
  * The bulletin's own five words for why a mark did not ride.

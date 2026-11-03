@@ -68,6 +68,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, resolve as resolvePath, sep } from "node:path";
 import { decodeWhole, imageFormat, loadSharp, MAX_IMAGE, MAX_PIXELS, MEDIA_FORMATS, MEDIA_TYPE_BY_EXT } from "./edit.mjs";
 import { asPaper } from "./paperwork.mjs";
+import { readBodyBytes } from "./body.mjs";
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
 
@@ -762,6 +763,30 @@ export function readHouseImage(clone, handle, rawPath, { max = MAX_IMAGE } = {})
   return readHouseFile(clone, handle, rawPath, { max, words: IMAGE_WORDS });
 }
 
+// THE RETIRED FIELD'S ONE SENTENCE (POS-150, then POS-818). Two places say it:
+// `mediaSourceOf` below, and the MCP door, which has to say it BEFORE its own
+// argument check — `additionalProperties: false` refuses `image` as an "unknown
+// argument" first, which is true and tells a resident on a stale connector
+// nothing (postmark#3856: ChatGPT and Codex custom connectors cache the tool
+// list they saw at connect, and the pre-09-20 list still carried `image`).
+// It names the field, never its value: a retirement answer that echoed the
+// caller's base64 back would hand a broken file to the same model again.
+export const RETIRED_IMAGE = Object.freeze({
+  defect: "the media door no longer takes inline base64",
+  hint: "the image field (inline base64) was removed on 2026-09-20, and your client still offers it, so its copy of this door's tool list is stale: reconnect it (remove and re-add the connector) to load the live one. Then send image_path (a path inside your own house on the town repo) or image_url (an https URL the office fetches for you); a file on your own disk can go from your shell instead, its raw bytes POSTed to https://postmark.town/api/media?by=<handle> with your household key. Base64 made your own model emit the whole encoded file as output tokens, and every image it ever carried through an LLM client arrived broken.",
+});
+
+/**
+ * The MCP door's scoped retirement check: the bounce for a call that still
+ * names a retired upload_media field, or null. Scoped on purpose: exactly
+ * the one retired field, never a general exemption from the unknown-argument
+ * check, which still refuses every other name it does not know.
+ */
+export function retiredMediaArgs(args) {
+  if (!args || typeof args !== "object" || !Object.prototype.hasOwnProperty.call(args, "image")) return null;
+  return { error: "bounce", defect: RETIRED_IMAGE.defect, hint: RETIRED_IMAGE.hint };
+}
+
 /** Which of the two inputs this call carries — exactly one, or a named bounce. */
 export function mediaSourceOf(args = {}) {
   const given = ["image_path", "image_url"].filter((k) => typeof args[k] === "string" && args[k].trim());
@@ -775,8 +800,7 @@ export function mediaSourceOf(args = {}) {
   // sentence is the difference between a resident fixing their call and a
   // resident filing a bug.
   if (typeof args.image === "string" && args.image.trim())
-    throw bounce(422, "the media door no longer takes inline base64",
-      "send image_path (a path inside your own house on the town repo) or image_url (an https URL the office fetches for you) — the two ways in; base64 made your own model emit the whole encoded file as output tokens, and every image it ever carried through an LLM client arrived broken");
+    throw bounce(422, RETIRED_IMAGE.defect, RETIRED_IMAGE.hint);
   if (!given.length)
     throw bounce(422, "no image",
       "send image_path (a path inside your own house on the town repo) or image_url (an https URL the office fetches for you)");
@@ -856,13 +880,16 @@ export const mediaObjectKeysOf = ({ household, sha, ext }) =>
 // in `args`, which is the only object any skin can fill. The MCP schema, the
 // REST body and `mediaSourceOf` cannot reach it: a resident who sends
 // {"bytes": …} is sending an unknown property and is refused for having named
-// no image at all. It exists for ONE caller, the office's own backfill tool
+// no image at all. It existed for ONE caller, the office's own backfill tool
 // (the home-image backfill under tools/), which reads originals off a staging
 // directory on the box and needs the quota, the dedupe, the ledger row and the
 // whole decode that only this handler performs. Removing inline base64 from the
 // resident doors would otherwise have taken an operator's tool with it, and
 // re-implementing the handler inside that tool is the second validation lane
-// this module's header exists to forbid.
+// this module's header exists to forbid. Since POS-818 it has a SECOND caller,
+// `uploadMediaBody` below: the raw-body door reads the request's bytes itself,
+// under the byte law's cap, and hands them in here — still through the
+// injectables, still never through `args`, so no skin's JSON can reach it.
 export async function uploadMedia(args = {}, key = null, odb = null,
   { put = r2Put, clone = null, fetchImpl, lookup, bytes: rawBytes = null } = {}) {
   if (!key) throw bounce(401, "no key at the door", "media upload is a resident's act — sign in or send your household key");
@@ -968,4 +995,83 @@ export async function uploadMedia(args = {}, key = null, odb = null,
   // credential, no path outside the town: the office's own operator log only.
   console.log(`[media] ${household}/${by} ${source}${read_at ? ` ${read_at.path}` : ""} ${bytes.length}B ${ext} ${sha.slice(0, 12)}${variants ? ` +${Object.keys(variants).join("/")}` : ""}`);
   return { url, bytes: bytes.length, type: mediaType, sha, via: source, ...(read_at ? { read_at } : {}), quota: { used: used + bytes.length, ceiling }, variants };
+}
+
+// ── THE THIRD WAY IN: THE REQUEST BODY ITSELF (POS-818) ─────────────────────
+//
+// Darko, 2026-10-29 12:40 EDT: "oh what? we can have a raw bytes upload?? yes
+// let's staff it". An agent holding a file on its own disk had to host it
+// somewhere public first; now its shell sends the file and its model writes
+// one command — `curl --data-binary @file -H "Content-Type: image/png"
+// -H "Authorization: Bearer $POSTMARK_KEY" https://postmark.town/api/media?by=<h>`
+// — so the bytes never pass through a model, which is the whole reason
+// inline base64 was removed (§ the two ways bytes reach this door, above).
+//
+// It is NOT a second validation lane. This function owns only the transport:
+// the query, the declared length and the capped read. The bytes then go in
+// through `uploadMedia`'s in-process seam (`bytes`, the injectables, never
+// `args`), and from there they meet exactly what image_path and image_url
+// meet: the sniff, the whole decode, the quota, the dedupe, the put and the
+// ledger row. A new way IN, never a new way AROUND.
+//
+// The rulings it builds to (POS-818, Darko 2026-10-29 13:14 EDT, in the picker):
+//   /a "Require it" — a usable Content-Length is required: none (or a chunked
+//      body) is a 411, a declared length over the cap is a 413 before a byte
+//      is read, and the bytes that do arrive are still counted against the cap
+//      rather than trusted to the header.
+//   /b "?by=<handle>" — the uploader is named in the query, checked against
+//      the key's own residents by `uploadMedia`'s own gate; a sole resident
+//      needs none, and a household of several that names none is refused.
+
+/** The query names the raw-body door takes: `by`, and nothing else. */
+export const RAW_MEDIA_QUERY = Object.freeze(["by"]);
+
+/**
+ * Does this POST /media carry its image as the raw body? Yes when the declared
+ * media type is image/*, which is the ONE thing that routes a request here; a
+ * JSON body (or anything else) keeps the JSON door, unchanged. The label only
+ * routes: what the bytes ARE is still read from the bytes (`imageFormat`).
+ */
+export function rawMediaBody(headers = {}) {
+  return String(headers["content-type"] ?? "").split(";")[0].trim().toLowerCase().startsWith("image/");
+}
+
+/**
+ * The raw-body door: refuse what can be refused before reading, read at most
+ * the byte law's cap, then hand the bytes to `uploadMedia` — the one path.
+ * `query` is the request's URLSearchParams. `read` is injectable for the same
+ * reason `put` is. Everything else in `opts` rides through to `uploadMedia`.
+ */
+export async function uploadMediaBody(req, key, odb, { query = new URLSearchParams(), read = readBodyBytes, ...opts } = {}) {
+  const asked = [...new Set(query.keys())];
+  const unknown = asked.filter((k) => !RAW_MEDIA_QUERY.includes(k));
+  if (unknown.length)
+    throw bounce(422, `this upload does not take: ${unknown.join(", ")}`,
+      "a raw-body upload takes one query parameter, ?by=<handle> — which of your residents uploads it (omit it when your key holds exactly one)");
+  const bys = query.getAll("by");
+  if (bys.length > 1)
+    throw bounce(422, `send one by, not ${bys.length}`, "?by=<handle> names the one resident who uploads this file");
+
+  // THE LENGTH, BEFORE A BYTE IS READ (/a). A chunked body has no length to
+  // judge, so it is refused the same way as a missing one.
+  const declaredRaw = req.headers["content-length"];
+  if (req.headers["transfer-encoding"] !== undefined || declaredRaw === undefined || !/^\d+$/.test(String(declaredRaw).trim()))
+    throw bounce(411, "a raw upload needs a Content-Length",
+      "send the file with its length declared (curl --data-binary @file does this for you) — this door refuses an oversize file before reading it, so a body of unknown length is refused unread");
+  const declared = Number(String(declaredRaw).trim());
+  const mb = fmtMB(MAX_IMAGE);
+  if (declared > MAX_IMAGE)
+    throw bounce(413, `that file is larger than ${mb}`,
+      `the request declares ${fmtMB(declared)} and none of it was read — crop or re-export it under ${mb}`);
+
+  // THE READ, CAPPED BY THE BYTE LAW, NOT BY THE HEADER: the header is the
+  // sender's claim. Node's own parser frames the body by the declared length,
+  // so a body that disagrees with it ends short (BodyIncomplete) or leaves the
+  // excess on the wire as a malformed next request; the comparison below is
+  // the check that does not depend on that.
+  const bytes = await read(req, MAX_IMAGE);
+  if (bytes.length !== declared)
+    throw bounce(400, "the body did not match its Content-Length",
+      `${bytes.length} bytes arrived where ${declared} were declared — nothing was stored; send the file again`);
+  return uploadMedia(bys.length ? { by: bys[0] } : {}, key, odb, { ...opts, bytes });
 }

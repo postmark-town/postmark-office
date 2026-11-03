@@ -148,7 +148,9 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
     : `${townRepo ? (townHead?.sha ? `the town at the ingested sha ${String(townHead.sha).slice(0, 12)} could not be read` : "the store pins no town sha") : "no --town-repo was given"}, `
       + `so the households are ${households ? `the printed roster at law ${lawSha.slice(0, 12)}` : "unread and every handle is its own household"}: `
       + "a parcel over its household's cap can lock at this clearing, and the settlement's limit pass is the backstop";
-  const state = engine.fold({ marks: records, terrain: null, stakes: [], households });
+  // the houses' parcel facts (POS-762): with them the fold sizes each house's room;
+  // without them (no town at the ingested sha) every house keeps three, as before
+  const state = engine.fold({ marks: records, terrain: null, stakes: [], households, ...(grouped.houseFacts ? { houseFacts: grouped.houseFacts } : {}) });
   const bySlugCandidate = new Map(candidates.map((c) => [c.slug, c]));
   const opposed = limitOppositions(state)
     .filter((l) => bySlugCandidate.has(l.mark))

@@ -104,7 +104,7 @@ export const WORLD_CLONE = process.env.WORLD_CLONE
 // always read `currentCrossing` from `world.mjs` still does.
 export { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs";
 import { arrivesAt, CROSSING_DERIVATION, crossingSailsAt, currentCrossing } from "./crossings.mjs";
-import { myMarksRefused } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused
+import { myMarksRefused, myMarksLocked } from "./claim-effects.mjs"; // POS-241 part 5: my-marks hears what the candle refused; bug post #4014: and what it locked
 import { ringOf, ringBox, ringAgrees, ringMovedTo, RING_SHAPE_SENTENCE, RING_CLAIM_SENTENCE } from "./ring-box.mjs"; // POS-322: a mark's box is derived from its ring
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
@@ -242,18 +242,21 @@ export async function heldPlaced(w, { pool = null, markRows = null } = {}) {
 // a stranger's. Read-only: nothing is written, and no act reads it.
 export const OUTSIDER_LENS = "outsider";
 export const isOutsiderLens = (lens) => String(lens ?? "").trim() === OUTSIDER_LENS;
+/** Everyone's enter-ledger stack now (who stands inside what), or an empty map when the law or the ledger cannot be
+ *  read. The fold the sight keeps a standing resident's stack from, asked in this one place so the sight and the
+ *  lens's note (POS-823) cannot read two different ones. */
+async function occupancyNow() {
+  const { crossingLaw } = await import("./world-crossings.mjs");
+  const { crossingDeps } = await import("./world-apex.mjs");
+  const law = await crossingLaw(WORLD_CLONE).catch(() => null);
+  return law?.thresholds ? await occupancyNowAll(law.thresholds, crossingDeps()).catch(() => new Map()) : new Map();
+}
 async function sightFor(w, handle, key = null, { lens = null } = {}) {
   w = await heldPlaced(w); // POS-688: a held thing is unplaced in every resident read, before sight
   const { verbs } = await mods();
   if (typeof verbs.standpointSight !== "function" || verbs.standpointSight(w, {}) === w) return w;
   const who = String(handle ?? "").trim();
-  let stack = [];
-  if (who) {
-    const { crossingLaw } = await import("./world-crossings.mjs");
-    const { crossingDeps } = await import("./world-apex.mjs");
-    const law = await crossingLaw(WORLD_CLONE).catch(() => null);
-    stack = law?.thresholds ? await occupiedNowBy(who, law.thresholds, crossingDeps()).catch(() => []) : [];
-  }
+  const stack = who ? [...((await occupancyNow()).get(who) ?? [])] : [];
   return sightedWorld(w, { verbs, handle: who, stack, key, lens });
 }
 
@@ -299,18 +302,102 @@ async function roomsOfInterior(w) {
   return out;
 }
 
+/** Whose marks are "yours": every resident the key holds, and the one standing. The owner rule and
+ *  the lens's note both ask this one question (POS-823), so they cannot come to differ. */
+export function ownersOf(handle, key = null) {
+  const who = String(handle ?? "").trim();
+  return new Set([...(key?.handles ?? []), ...(who ? [who] : [])]);
+}
+
 /** The pure half of sightFor, so a test can hand it the clone's verbs: the
  *  standpoint's stack becomes the occupancy the one function reads, and the
  *  key's own residents keep their marks, unless the read is the outsider lens. */
 export function sightedWorld(w, { verbs, handle = null, stack = [], key = null, lens = null } = {}) {
   if (typeof verbs?.standpointSight !== "function") return w;
   const who = String(handle ?? "").trim();
-  const own = new Set([...(key?.handles ?? []), ...(who ? [who] : [])]);
+  const own = ownersOf(who, key);
   return verbs.standpointSight(w, {
     occupancy: who ? new Map([[who, [...stack]]]) : null,
     handle: who || null,
     keep: isOutsiderLens(lens) ? null : (m) => own.has(m.by),
   });
+}
+
+// ── THE LENS SAYS WHY IT CHANGED NOTHING (POS-823; Darko, 2026-10-30 16:29 EDT, approving Wright's
+//    recommendation: "when the World's outsider view changes nothing for a household, say why") ──
+//
+// Errant's bug post: the toggle changed nothing, because their place was open and an open place has nothing
+// for the lens to hide. The engine hides a mark from a stranger only inside a closed place (a dungeon:
+// portals.mjs § hiddenFrom; LOGOS/classes.md, "A dungeon is opaque from outside"), and the lens only switches off the owner rule
+// that spares a household's own marks there. So the lens can move a household's view only when a mark of its
+// own is, or stands in, a closed place it has not entered. When it did not, a lens read says why in
+// `lens_note`. Said only when it is true, which is three questions, asked separately:
+//   0. has the household any published mark at all? "Strangers see your published marks just as you do" is
+//      vacuous for one that has none, so it is told nothing (the re-review's note); a carried mark, a predicate and
+//      a second resident's mark all count;
+//   1. did the lens move the household's view at all? Asked of the real sight with and without the lens, and
+//      never inferred from the second question; and
+//   2. is the reason the line gives true? ("none of your published marks is in a closed place"): no mark of the
+//      household's is a closed place or stands in one, AND no resident of the household stands in one. The lens
+//      keeps a standing resident's enter-ledger stack, so a resident who has entered a closed place sees the same
+//      inside with the lens or without it, which is no stranger's view (the review of 9726ffb1, finding A). A
+//      household that owns a closed place, or has a resident inside one, is told nothing though the lens moved
+//      nothing for it.
+// "Closed place", not "door": `entry` (how a mark is entered, a door's `into` included) is a property of every
+// mark (the-town/mark-entry) and hides nothing; only the dungeon class closes a place, and only an admin
+// household may make one (LOGOS/classes.md § Admin households may make the passage classes). So the line
+// points nowhere: an entry added to an open place does not make the lens matter.
+// The wording is one constant, so a ruling that changes it changes it here and in its test. It speaks of what
+// strangers see of your PUBLISHED marks because that is true on the World page too, where the lens also drops a
+// household's drafts and its own rows, which the office cannot see (Wright's Settled line on POS-823, 2026-11-02).
+export const LENS_CHANGES_NOTHING = "Strangers see your published marks just as you do: none of them is in a closed place.";
+
+/** Does the household have any published mark? A mark of the world (the published world: a draft is not in it) that
+ *  names one of `owners`. A carried mark still counts (it is a mark, in somebody's hands), and so does a predicate. Pure. */
+export function hasPublishedMarks(marks, owners) {
+  return (Array.isArray(marks) ? marks : []).some((m) => owners.has(m?.by));
+}
+
+/** Is anything of `owners` in a closed place? A mark of theirs that is one, or stands in one (a predicate rides its
+ *  parent), or a resident of theirs whose enter-ledger stack holds one (`stacks`: Map(handle → stack), optional; the
+ *  engine's own `dungeonsOf` and `heldDungeon`, portals.mjs, are the whole rule). TRUE when the engine cannot say,
+ *  so an engine that predates the dungeon class, or cannot say who stands in one, never vouches for the line. */
+export function yoursAreInAClosedPlace(marks, owners, portals, stacks = null) {
+  if (typeof portals?.dungeonsOf !== "function") return true;
+  const list = Array.isArray(marks) ? marks : [];
+  if (list.some((m) => owners.has(m?.by) && portals.dungeonsOf(m, list).length > 0)) return true;
+  if (!stacks) return false;
+  if (typeof portals.heldDungeon !== "function") return true;
+  for (const who of owners) if (portals.heldDungeon([...(stacks.get(who) ?? [])], list)) return true;
+  return false;
+}
+
+/**
+ * The line for an outsider read, or null. Null when no household reads (nothing is anyone's to hide), when the
+ * household has no published mark (the sentence would be vacuous), when the lens moved the household's view, when a
+ * mark of the household's is in a closed place or a resident of the household stands in one, and when anything
+ * could not be read: a read never fails for want of its footnote, and withholding is the safe way to fail. `sight` and `placed` are the seams a test hands a different sight and
+ * a different hold record through; the door never passes them.
+ * The world is read ONCE, as the hold record places it (a carried mark is in no place), and that one world is what
+ * both the sight and the closed-place check read.
+ */
+export async function lensNoteFor(args = {}, key = null, { sight = sightFor, placed = heldPlaced } = {}) {
+  const choice = chooseStandpoint(args, key);
+  if (choice.bounce) return null;
+  const owners = ownersOf(choice.handle, key);
+  if (!owners.size) return null;
+  try {
+    const placedWorld = await placed(await world());
+    if (!hasPublishedMarks(placedWorld?.marks, owners)) return null;   // nothing published to speak of
+    const yours = await sight(placedWorld, choice.handle, key);
+    const stranger = await sight(placedWorld, choice.handle, key, { lens: OUTSIDER_LENS });
+    // the lens only ever hides more, so equal counts are the same marks
+    if ((yours?.marks?.length ?? 0) !== (stranger?.marks?.length ?? 0)) return null;
+    const portals = await engineImport("portals.mjs");
+    const occupancy = await occupancyNow();
+    const stacks = new Map([...owners].map((who) => [who, occupancy.get(who) ?? []]));
+    return yoursAreInAClosedPlace(placedWorld?.marks ?? [], owners, portals, stacks) ? null : LENS_CHANGES_NOTHING;
+  } catch { return null; }
 }
 
 // The Origin — {0,0}, where the ferry lands; the grid origin and the default
@@ -1666,9 +1753,60 @@ export async function mistsTrackHint(worldClone, at, crossing) {
 
 /** The refusal for a road into the wall, in plain words. `track` is mistsTrackHint's sentence, when there is one. */
 export function mistsRefusal(bounce, at, extra = {}, track = null) {
+  const { aboard = false, left = null, ...fields } = extra ?? {};
   return bounce(422, "the mist is too thick to walk into",
-    `this road runs into the wall of the Mists at (${at.x}, ${at.y}), and no road goes into the wall, ends on it or crosses it. Choose a point short of it: walking into the mist's edge is allowed, but the deeper a road goes the slower it walks, and at the wall it stops altogether.${track ? ` ${track}` : ""}`,
-    { law: "LOGOS/classes.md § The emission lines: the Mists (POS-466, POS-468)", wall_at: at, ...extra });
+    `this road runs into the wall of the Mists at (${at.x}, ${at.y}), and no road goes into the wall, ends on it or crosses it. Choose a point short of it: walking into the mist's edge is allowed, but the deeper a road goes the slower it walks, and at the wall it stops altogether.${track ? ` ${track}` : ""}${aboard ? ` ${ABOARD_TERMS}` : ""}${left ? ` You have already stepped off${left === true ? "" : ` at ${left}`}, so you stand ashore and the road from there meets the Mists; the exit stands on the record.` : ""}`,
+    { law: "LOGOS/classes.md § The emission lines: the Mists (POS-466, POS-468)", wall_at: at, ...fields });
+}
+
+/** THE ORDER OF A WALK DECLARED FROM WITHIN (WLD-139), with the office's two effects injected so a test can drive it.
+ *  1. A room is in the way (a vehicle AND a room left, no `exit: true`): the walk is DEC-5's 409, so it answers
+ *     `{ blocked }` BEFORE any road is read; a hull's road must never hide the 409 that says to pass `exit: true`.
+ *     (A walk that leaves only rooms is read and refused exactly as before.)
+ *  2. Otherwise the road is read from where the walker stands; a refusal there writes nothing.
+ *     A walk that deposits first skips that refusal, since the hull is not where they will start.
+ *  3. The exits run (`exitOne(markId)` -> the exit's answer); a recorded `set_down` becomes the new `from`.
+ *  4. After a deposit the target is aimed again from the deposit (`afterDeposit(from)`) and the road is read again
+ *     from it. A refusal now is `afterExit`: the exit act stands on the record. */
+export async function roadFromTheDeposit({ from, leaving = [], byId = new Map(), exit = false, readRoad, exitOne, afterDeposit = null }) {
+  const depositFirst = walkDepositsFirst(leaving, byId, exit);
+  const hasVehicle = leaving.some((id) => markClassOf(byId.get(id)) === "vehicle");
+  if (hasVehicle && !depositFirst) return { blocked: true, from, mistRoad: null };
+  let mistRoad = await readRoad(from);
+  if (mistRoad?.refused && !depositFirst) return { refused: mistRoad.refused, afterExit: false, from, mistRoad };
+  // DEC-5, restored (a95b866 lost it): a walk that would carry them out of a room without `exit: true` is the 409, before any exit is written.
+  if (leaving.length && exit !== true && !leaving.every((id) => markClassOf(byId.get(id)) === "vehicle")) return { blocked: true, from, mistRoad };
+  let exitedFirst = null, setDownFirst = null;
+  if (leaving.length) {
+    for (const markId of leaving) {
+      const stepped = await exitOne(markId);
+      if (stepped?.set_down?.recorded && Number.isFinite(stepped.set_down.x)) {
+        from = { x: stepped.set_down.x, y: stepped.set_down.y };
+        setDownFirst = { at: stepped.set_down.at, arrived: stepped.set_down.arrived, x: from.x, y: from.y };
+      }
+    }
+    exitedFirst = leaving;
+  }
+  if (setDownFirst || depositFirst) {
+    if (afterDeposit) afterDeposit(from);
+    mistRoad = await readRoad(from);
+    if (mistRoad?.refused) return { refused: mistRoad.refused, afterExit: true, from, mistRoad, exitedFirst, setDownFirst };
+  }
+  return { from, mistRoad, exitedFirst, setDownFirst };
+}
+
+/** What works inside a vehicle (WLD-139, Volt's report): the two acts, named where a refusal reaches a rider.
+ *  A walk's fields cannot ride, which is what Volt tried; `ride` and `exit` live on the world door. */
+export const ABOARD_TERMS = 'Aboard a vehicle, two acts work: world { do: "ride", args: { to: "<stop>" } } names a stop and starts its timer, and world { do: "exit" } sets you down (at the destination once the timer has run, otherwise at the stop you came in through).';
+
+/** Whether a walk declared from within a vehicle is the leaving itself (WLD-139; LOGOS/classes.md § The vehicle,
+ *  "A walk declared aboard is the choice to leave: the deposit, then the walk from it"). PURE over the marks the
+ *  walk would carry the walker out of: true when one is a vehicle and the walk goes on to exit (every one a
+ *  vehicle, or `exit: true`). Then the road is read from the DEPOSIT, never from the hull, which moves. */
+export function walkDepositsFirst(leaving = [], byId = new Map(), exit = false) {
+  if (!leaving.length) return false;
+  const vehicles = leaving.filter((id) => markClassOf(byId.get(id)) === "vehicle");
+  return vehicles.length > 0 && (vehicles.length === leaving.length || exit === true);
 }
 
 /** The leg's stride: the dial's pace, slowed by the Mists' factor when there is one.
@@ -2342,10 +2480,16 @@ export async function transportBlock(worldState, standpoint, { crossing = null }
 
 // The Mists stand from the first crossing on the world's schedule
 // (`skeleton.mists`, which reaches the assembled world as `terrain.mists`): the
-// engine's own rule, `mistsAt` is null before it. No schedule, no Mists.
+// engine's own rule, `mistsAt` is null before it. No schedule, no Mists. And they
+// stand only until the record's `withdrawn_from` (WLD-147; Darko, 2026-11-02 17:06
+// EST, "full removal for mists"): from that crossing `mistsAt` is null again and
+// there are no Mists, so no ferry line either. A finite number, as the engine and
+// the forecast read it (src/mists-forecast.mjs § withdrawnFrom).
 export function mistsStand(worldState, crossing) {
-  const first = worldState?.terrain?.mists?.schedule?.[0]?.crossing;
-  return Number.isFinite(first) && Number.isFinite(crossing) && crossing >= first;
+  const mists = worldState?.terrain?.mists;
+  const first = mists?.schedule?.[0]?.crossing;
+  const gone = Number.isFinite(mists?.withdrawn_from) ? mists.withdrawn_from : Infinity;
+  return Number.isFinite(first) && Number.isFinite(crossing) && crossing >= first && crossing < gone;
 }
 
 /**
@@ -3552,17 +3696,24 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
   // branch's half, which the guard's own header refuses to drop ("dropping it
   // would make a resident's existing work vanish from their own overlay on the
   // day the guard flipped"). It is private too, so it files under `drafts`.
-  // ⚠ `drafts` IS A NEGATIVE FILTER, AND IT IS CORRECT ONLY BECAUSE
-  // `LIVE_STATUSES` IS EXACTLY `["draft","pending"]` (noted 2026-09-07, on the
-  // reviewer's reading — a trap, not a defect today). The day a `locked`,
-  // `refused` or `held_review` row joins that constant, it lands HERE and is
-  // labelled "YOURS AND PRIVATE — on no docket, in no export, in no archive, in
-  // no public answer" about a row 007 makes public. If you are widening
-  // `LIVE_STATUSES` (world2/tools/guard-reads.mjs), make this filter positive
-  // first — `=== "draft" || m.claim_status == null` — and give the new status
-  // its own shelf and label.
+  // `drafts` IS A POSITIVE FILTER (bug post #4014): a draft by its own state, or a
+  // sketchbook row with no claim status, and nothing else. It was
+  // `!== "pending"`, correct only because `LIVE_STATUSES` is exactly
+  // `["draft","pending"]` (the trap noted 2026-09-07, on the reviewer's reading):
+  // the day a `locked`, `refused` or `held_review` row joined that constant it
+  // would have landed HERE, labelled "YOUR DRAFTS" about a row 007 makes public.
+  // A row with any other status files under no list here, which says nothing
+  // false.
+  //
+  // ⚑ THE LOCKED SHELF IS NOT FED FROM HERE, AND THIS SPLIT IS NOT WHY THE BOWL
+  // WAS MISSING. A locked claim never reaches these two lines: the overlay reads
+  // `claims` with `status = ANY(LIVE_STATUSES)` (guard-reads.mjs § pgLiveMarks),
+  // a constant the write-path guards read too, so it stays draft and pending. The
+  // `locked` shelf below comes from the claim effects instead, the way `refused`
+  // does (claim-effects.mjs § myMarksLocked). The measurement is
+  // test/my-marks-locked-claim-has-a-shelf.test.mjs.
   const live = delta.marks ?? [];
-  const drafts = live.filter((m) => m.claim_status !== "pending");
+  const drafts = live.filter((m) => m.claim_status === "draft" || m.claim_status == null);
   const docket = live.filter((m) => m.claim_status === "pending");
   const draftIds = new Set(live.map((mark) => mark.id).filter(Boolean));
   const backedIds = new Set(stake.backed.map((position) => position.id));
@@ -3618,6 +3769,36 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 
+  // ── THE LOCKED SHELF (bug post #4014) ────────────────────────────────────
+  //
+  // kogane, 2026-10-19: "Expected: the bare read shows the bowl on some shelf
+  // while it is locked and waiting for its settlement. … The bowl was on no
+  // shelf." A claim the candle has ruled for is not a draft and not pending, and
+  // no settlement has carried it into canon yet, so it stood on no shelf and not
+  // in `published` for the whole gap between the lock and the blessing that
+  // carries it: about half an hour on an ordinary night, longer under a hold.
+  //
+  // WHERE IT COMES FROM, AND WHERE IT DOES NOT. Not the overlay above: that reads
+  // draft and pending only, and `LIVE_STATUSES` is a constant the write-path
+  // guards read too (RULED, Wright, 2026-11-02, on postmark-office#839: "`LIVE_STATUSES`
+  // and the overlay reader stay as they are"). From the claim effects, the way
+  // `refused` does (claim-effects.mjs § myMarksLocked): the same two crossings,
+  // slugless claims skipped, and one function for both doors.
+  //
+  // "NOT YET CARRIED" IS CANON-ABSENCE, the focused read's own rule
+  // (mark-receipt.mjs § receiptFrom: canon holds it, so it is `published`, whatever
+  // the docket says about the claim behind it). `canonIds` is this door's canon.
+  //
+  // WHOSE: the residents `published` knows (authors with a mark on the world) AND
+  // the key's own handles. The first alone would leave a household's first claim
+  // invisible, which is the claim most worth seeing: `residents` is read off
+  // canon, and a household with nothing published has none.
+  //
+  // `held_review` is not on this shelf (RULED: "waits for its own ruling").
+  const canonIds = new Set((main.marks ?? []).map((mark) => mark.id));
+  const lockedBlock = await myMarksLocked([...new Set([...stake.residents, ...(key?.handles ?? [])])], { key, canonIds });
+  const locked = lockedBlock.rows;
+
   // ── THE COUNTS TRAP, CLOSED (2026-08-25) ────────────────────────────────
   //
   // `counts` has always carried these three numbers and they have always been
@@ -3635,14 +3816,16 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
   const counts = {
     drafts: drafts.length,
     docket: docket.length,
+    locked: locked.length,
     published: published.length,
     backed: stake.backed.length,
   };
   const d = markPage(drafts, offset);
   const k = markPage(docket, offset);
+  const lk = markPage(locked, offset);
   const p = markPage(published, offset);
   const b = markPage(stake.backed, offset);
-  const withheld = d.rest.length + k.rest.length + p.rest.length + b.rest.length;
+  const withheld = d.rest.length + k.rest.length + lk.rest.length + p.rest.length + b.rest.length;
   return {
     household: delta.household,
     // WHOSE HOUSEHOLD THIS IS, BY NAME (2026-09-07, #2556). The stake slice has
@@ -3662,6 +3845,7 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     draft: delta.draft,
     drafts: d.page,
     docket: k.page,
+    locked: lk.page,
     published: p.page,
     backed: b.page,
     // WHAT THE CANDLE REFUSED (POS-241 part 5): your own claims refused in the
@@ -3670,6 +3854,13 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     // silent about it. claim-effects.mjs § myMarksRefused is the one derivation
     // (the doorstep's `outcomes`, kept to yours), and the twin calls it too.
     refused: await myMarksRefused(stake.residents, { key }),
+    // AN UNREAD DOCKET IS NOT AN EMPTY SHELF (bug post #4014). `locked` comes from
+    // the same store `refused` does, and `refused` already says when that store
+    // could not be read; the shelf says it too, on the failing path only, so an
+    // empty `locked` beside it never reads as "nothing is waiting". Absent
+    // whenever the docket was read (`the-town/the-disclosure`: disclose an absent
+    // input, never quietly substitute).
+    ...(lockedBlock.unavailable ? { locked_unavailable: lockedBlock.unavailable } : {}),
     // THE TWO LABELS, on the page rather than in a doc nobody reads beside it.
     // The walk's sentence was "either the town leaks, or the word 'draft' means
     // something I was not told" — a resident who reads these two lines cannot
@@ -3677,11 +3868,13 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
     labels: {
       drafts: "YOUR DRAFTS — not the town's canon; they live only in your own reading of the world, on no docket. Staking one is what puts it forward, and that crosses once.",
       docket: "PUBLIC — staked and standing on the town's docket, where anyone may read it, waiting for a candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.",
+      // RULED (Wright, 2026-11-02, on postmark-office#839): "PUBLIC — the candle ruled for these and no settlement has carried them to the world yet; they reach it at the settlement that carries their candle." plus the receipt pointer.
+      locked: "PUBLIC — the candle ruled for these and no settlement has carried them to the world yet; they reach it at the settlement that carries their candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.",
       published: "ON THE WORLD — carried by a settlement; the record holds it.",
       backed: "YOUR STAMPS ON SOMEBODY'S MARK — `yours` says whether the mark itself is one of your residents'.",
     },
     counts,
-    shown: { drafts: d.page.length, docket: k.page.length, published: p.page.length, backed: b.page.length },
+    shown: { drafts: d.page.length, docket: k.page.length, locked: lk.page.length, published: p.page.length, backed: b.page.length },
     complete: withheld === 0,
     // Named, not dropped — the ids of every mark this page did not expand.
     // Each one is exactly what read: "leave-mark", args: { mark: <id> } takes.
@@ -3689,6 +3882,7 @@ export async function worldMyMarks(key = null, { offset = 0 } = {}) {
       offset: p.offset,
       withheld: { ...(d.rest.length ? { drafts: d.rest } : {}),
         ...(k.rest.length ? { docket: k.rest } : {}),
+        ...(lk.rest.length ? { locked: lk.rest } : {}),
         ...(p.rest.length ? { published: p.rest } : {}),
         ...(b.rest.length ? { backed: b.rest } : {}) },
       withheld_note: `${withheld} of your marks are named above by id rather than shown in full — counts is the whole of what you own, and world { read: "leave-mark", args: { mark: "<by>/<slug>" } } opens any one of them`,
@@ -5417,6 +5611,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   await discloseYourGround(result, clean);             // before the publish note, which strips _ground_min
   const verdictSeen = result?._verdict ?? null;        // postmark#3593: the note is redone below if the stake bounces
   await disclosePublishing(result, by);
+  await discloseParcelRoom(result, by, clean);                // POS-762: a claim past its household's parcel room, said at once
 
   // THE INLINE STAKE (founder-ruled 2026-08-19, same sitting as the publish
   // note): stamps: N stakes the new mark in the same act — mark and escrow
@@ -5769,6 +5964,36 @@ async function discloseYourGround(result, clean) {
     });
     if (note) Object.assign(result, note);
   } catch { /* a courtesy: never fail the act it rides on */ }
+}
+
+// PARCELS FROM 11-01 (POS-762): parcel-room.mjs § parcelRoomNoteOf's I/O half.
+// A parcel claim past its household's room is written (R11), and the answer
+// says at once, in the world fold's own sentence, that the crossing will oppose
+// it. What the household holds is its standing parcels and its residents' open
+// parcel claims, this one aside: the set the clearing will count. A courtesy:
+// it reads, never refuses, and never fails the act it rides on.
+const PARCELS_HELD_SQL = `
+  SELECT slug FROM marks WHERE kind = 'parcel' AND status = 'standing' AND owner = ANY($1)
+  UNION
+  SELECT slug FROM claims WHERE class = 'parcel' AND status IN ('draft', 'pending', 'held_review') AND claimant = ANY($1)`;
+async function discloseParcelRoom(result, by, clean = null) {
+  try {
+    if ((result?.kind ?? clean?.kind) !== "parcel" || !result?.id || result.amended || clean?.amend === true) return;
+    const houses = await householdLookup();
+    const house = houses?.(by);
+    if (!house?.residents?.length) return;
+    const { actsQuery } = await import("./world2-acts.mjs");
+    const rows = await actsQuery(PARCELS_HELD_SQL, [house.residents]);
+    if (rows === null) return;
+    const held = new Set(rows.map((r) => r.slug).filter((s) => s && s !== result.id)).size;
+    const { houseFactsNow, parcelRoomNoteOf } = await import("./parcel-room.mjs");
+    const facts = await houseFactsNow({ townClone: process.env.TOWN_CLONE ?? join(HERE, "..", "town-clone") });
+    if (facts === null) return;
+    const note = parcelRoomNoteOf({ kind: "parcel", held, fact: facts[house.key], engine: await foldConstants(), by });
+    if (note) result.parcel_room = note;
+  } catch (e) {
+    console.error(`[world] the parcel-room note tripped (${String(e?.message ?? e).slice(0, 160)}) — the claim stands`);
+  }
 }
 
 // The I/O half: a courtesy that must never fail the write it rides on.
@@ -6308,8 +6533,6 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
 
   // WHERE TO — ruling 2's order.
   let toward = null, targetExtent = null, targetMarkId = null, targetFrom = "";
-  let exitedFirst = null; // DEC-5: the marks exited on this walker's own `exit: true`, for the answer
-  let setDownFirst = null; // #2986: where a vehicle's deposit rule put this walker before the road began
   const px = Number(payload.x), py = Number(payload.y);
   if (payload.mark_id) {
     const id = String(payload.mark_id);
@@ -6387,9 +6610,15 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   // always sailed. The arena block below still runs after this and still wins
   // for a wheel-keeping ground, which is right: a ground that places its own
   // entrants has said something more specific than "somewhere on my ground".
+  // A closure, because a walk declared aboard a vehicle is aimed TWICE (WLD-139): the ring's near edge is
+  // chosen relative to where the walker STARTS, and a rider starts at the deposit, not on the moving hull.
+  // `aimAt(from)` runs once here, and again from the deposit point once the vehicle's exit has set them down.
+  const aim0 = { toward, targetExtent, targetFrom };
+  const aimAt = (fromPt) => {
+  toward = aim0.toward; targetExtent = aim0.targetExtent; targetFrom = aim0.targetFrom;
   if (targetMarkId && typeof walkTargetFor === "function") {
     const m = (w.marks ?? []).find((k) => k.id === targetMarkId);
-    const ringed = m ? walkTargetFor(m, from, forClone) : null;
+    const ringed = m ? walkTargetFor(m, fromPt, forClone) : null;
     if (ringed) {
       toward = ringed.toward;
       targetExtent = null;
@@ -6422,6 +6651,8 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
     toward = onGround.toward;
     targetFrom = onGround.targetFrom;
   }
+  };
+  aimAt(from);
 
   // THE WATER GATE IS OFF FOR v0 — Keemin's ruling: "walking on water is fine for
   // v0 lol". A leg across the channel is permitted, and no bounce is raised.
@@ -6474,67 +6705,47 @@ async function walkAct(worldClone, payload = {}, key = null, { approach = null }
   }
 
   // ── THE MISTS ON THIS ROAD (POS-468) ─────────────────────────────────────
-  // The stride falls the deeper a road goes into the fringe, to nothing at the
-  // wall's face. The world's engine reads the road once, here at the
+  // The stride falls the deeper a road goes into the fringe, to nothing at
+  // the wall's face. The world's engine reads the road once, here at the
   // declare: one that ends in the wall, on its face, crosses it or starts in it
   // is refused in plain words (no creeping in by short legs); one through the
   // fringe walks at an even, slowed stride, stamped on the leg as its pace below.
-  // Read BEFORE the exits under DEC-5 run, so a refused road writes no act at all,
-  // and AFTER its occupancy read, whose stack is the walker's shelter: an entered
+  // Read AFTER the occupancy read, whose stack is the walker's shelter: an entered
   // mark the road stays within is not slowed or stopped by the Mists (§ roadShelter).
   // No Mists this crossing, or a clone that predates them: null, and nothing here
   // changes.
+  //
+  // WHAT A REFUSED ROAD WRITES (WLD-139). For a walk that stays where it is, or
+  // that DEC-5 refuses, the road is read before any exit and a refusal writes no
+  // act. A walk declared from within a vehicle is the leaving itself: the road is
+  // read from the DEPOSIT, so the vehicle's exit act is written first, and a road
+  // from the stop that still meets the wall is refused AFTER that act, which then
+  // stands on the record (`exited_first` says so). § roadFromTheDeposit holds the order.
   const shelter = occupying ? roadShelter(law.verbs, occupying.w, occupying.stack, occupying.leaving) : null;
-  let mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at, { shelter });
-  if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, {}, await mistsTrackHint(worldClone, mistRoad.refused, at));
-
-  if (occupying) {
-    const { deps, stack, byId, leaving } = occupying;
-    // ── A WALK DECLARED ABOARD IS THE CHOICE TO GO ASHORE (#2986) ────────
-    //
-    // ENGINE.md has said since the timetable mechanic shipped that "a walk
-    // declared from her deck is the choice to go ashore", and the brief makes
-    // it one act: the walk handler, seeing occupancy within a vehicle-class
-    // mark, performs the exit under the deposit rule and then walks FROM THE
-    // DEPOSIT POINT. No refusal — DEC-5's refusal exists so that a resident
-    // cannot be carried out of a room without leaving it, and stepping off a
-    // boat you are aboard is not that: it is the leaving, declared.
-    //
-    // The narrowing matters. If the stack also holds a mark that is NOT a
-    // vehicle, the refusal stands exactly as it did: this only ever spares a
-    // caller the `exit: true` for a hull, never for a room.
-    const vehicleLeaving = leaving.filter((id) => markClassOf(byId.get(id)) === "vehicle");
-    const allVehicles = leaving.length > 0 && vehicleLeaving.length === leaving.length;
-    if (leaving.length) {
-      if (payload.exit !== true && !allVehicles) {
-        throw bounce(409, `you are within ${leaving[0]} — this walk would carry you out of it without leaving`,
-          `the-town/the-occupancy-invariant: "You occupy a mark only by entering, and only while your feet stand inside it; a walk that would carry you out is refused until you exit." Step out first — world { do: "exit"${leaving.length > 1 ? ", args: { mark }" : ""} } — or pass exit: true on this walk to exit (${leaving.join(" → ")}) and walk in one call.`,
-          { law: "the-town/the-occupancy-invariant (DEC-5, founder-ruled 2026-09-03)", within: stack, leaving });
-      }
-      for (const markId of leaving) {
-        const stepped = await exitViaOffice(worldClone, { handle: who, mark: markId }, key, deps);
-        if (stepped?.error) throw bounce(stepped.error.code ?? 409, `could not exit ${markId} before walking: ${stepped.error.defect ?? stepped.error}`, stepped.error.hint ?? "exit first, then walk");
-        // THE ROAD STARTS WHERE THE DEPOSIT PUT YOU. A rider's standpoint was
-        // the hull's, and the hull is not where they have just been set down
-        // — walking from it would draw a line across open water from a boat
-        // that is somewhere else entirely. The exit's own answer names the
-        // point, so there is no second derivation of it here.
-        if (stepped?.set_down?.recorded && Number.isFinite(stepped.set_down.x)) {
-          from = { x: stepped.set_down.x, y: stepped.set_down.y };
-          setDownFirst = { at: stepped.set_down.at, arrived: stepped.set_down.arrived, x: from.x, y: from.y };
-        }
-      }
-      // The exits stand as their own acts on the record; the walk below is the
-      // second act of one call. If the walk's pen refuses, the exits remain —
-      // said here and in the answer, never smoothed over.
-      exitedFirst = leaving;
-    }
+  const aboardNow = occupying ? occupying.stack.some((id) => markClassOf(occupying.byId.get(id)) === "vehicle") : false;
+  const roadRead = await roadFromTheDeposit({
+    from, leaving: occupying?.leaving ?? [], byId: occupying?.byId ?? new Map(), exit: payload.exit === true,
+    afterDeposit: (pt) => aimAt(pt),
+    readRoad: (pt) => mistsOnTheRoad(worldClone, skeleton, pt, toward, at, { shelter }),
+    exitOne: async (markId) => {
+      const stepped = await exitViaOffice(worldClone, { handle: who, mark: markId }, key, occupying.deps);
+      if (stepped?.error) throw bounce(stepped.error.code ?? 409, `could not exit ${markId} before walking: ${stepped.error.defect ?? stepped.error}`, stepped.error.hint ?? "exit first, then walk");
+      return stepped;
+    },
+  });
+  if (roadRead.blocked) {
+    const { stack, leaving } = occupying;
+    throw bounce(409, `you are within ${leaving[0]} — this walk would carry you out of it without leaving`,
+      `the-town/the-occupancy-invariant: "You occupy a mark only by entering, and only while your feet stand inside it; a walk that would carry you out is refused until you exit." Step out first — world { do: "exit"${leaving.length > 1 ? ", args: { mark }" : ""} } — or pass exit: true on this walk to exit (${leaving.join(" → ")}) and walk in one call.`,
+      { law: "the-town/the-occupancy-invariant (DEC-5, founder-ruled 2026-09-03)", within: stack, leaving });
   }
-  // stepping ashore moved the road's start: read the Mists again from where it now begins
-  if (setDownFirst) {
-    mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at, { shelter });
-    if (mistRoad?.refused) throw mistsRefusal(bounce, mistRoad.refused, { exited_first: exitedFirst }, await mistsTrackHint(worldClone, mistRoad.refused, at));
+  if (roadRead.refused) {
+    const fields = roadRead.afterExit ? { exited_first: roadRead.exitedFirst, left: roadRead.setDownFirst?.at ?? true } : (aboardNow ? { aboard: true } : {});
+    throw mistsRefusal(bounce, roadRead.refused, fields, await mistsTrackHint(worldClone, roadRead.refused, at));
   }
+  from = roadRead.from;
+  const { exitedFirst, setDownFirst } = roadRead;
+  const mistRoad = roadRead.mistRoad;
   const mistFactor = mistRoad && mistRoad.factor < 1 ? mistRoad.factor : null;
   const clean = { handle: who, from, toward, at, targetExtent, targetMarkId, ...(mistFactor ? { mistFactor } : {}) };
 
@@ -7078,7 +7289,7 @@ export const WORLD_TOOLS = [
       handle: { type: "string", description: "optional and ignored — this read answers the same for everyone; accepted so a call shaped like world's or household's is not refused" },
     }, required: ["mark"], additionalProperties: false } },
   { name: "world_my_marks",
-    description: "Your household portfolio in FOUR disjoint shelves, and the first two are the line between your drafts and the town's canon: drafts (not the town's canon — they live only in your own reading of the world, on no docket), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all four on the page. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours. Household is the exposure grain; resident remains the action/author grain. THREE DIFFERENT BACKING NUMBERS, deliberately named apart: a published mark's `stamps` is its raw escrow and its `weight` is the effective ✦ including everything fanning up, while a backed position's `holder_weight` is only that one holder's row — your own stake, never the mark's standing. A published mark's `weight_parts` breaks its ✦ down; null there means nothing to explain (zero escrow, zero weight), never unknown, except beside a nonzero `weight`, which means the world was folded before the breakdown existed. Each shelf renders up to 20 marks at a time; `counts` is always the WHOLE of what you own, and every mark a page did not expand is named by id under `withheld` — each one ready for read: \"leave-mark\", args: { mark }.",
+    description: "Your household portfolio in FIVE shelves, and the first two are the line between your drafts and the town's canon: drafts (not the town's canon — they live only in your own reading of the world, on no docket), docket (staked and standing PUBLICLY, where anyone may read them, waiting for a candle), locked (PUBLIC too: the candle ruled for them and no settlement has carried them to the world yet; kept to the last two crossings, and a claim held for review is on none of the shelves yet), published (carried by a settlement; the record holds them), and backed (open escrow positions you hold on somebody's mark). `labels` says all five on the page. A mark can stand on two shelves when two claims are true of it: docket and backed both list a mark you have staked, and docket and locked both list a mark you amended while an earlier claim of it was locked. A backed row's `yours` is computed from the mark's AUTHOR, so a mark of yours the world has not published yet is still yours. Household is the exposure grain; resident remains the action/author grain. THREE DIFFERENT BACKING NUMBERS, deliberately named apart: a published mark's `stamps` is its raw escrow and its `weight` is the effective ✦ including everything fanning up, while a backed position's `holder_weight` is only that one holder's row — your own stake, never the mark's standing. A published mark's `weight_parts` breaks its ✦ down; null there means nothing to explain (zero escrow, zero weight), never unknown, except beside a nonzero `weight`, which means the world was folded before the breakdown existed. Each shelf renders up to 20 marks at a time; `counts` is always the WHOLE of what you own, and every mark a page did not expand is named by id under `withheld` — each one ready for read: \"leave-mark\", args: { mark }.",
     inputSchema: { type: "object", properties: {
       offset: { type: "number", description: "how many marks to skip in each shelf — the shelves are long-lived and this walks them" },
     }, additionalProperties: false } },
@@ -7130,7 +7341,7 @@ export const WORLD_TOOLS = [
       portable: { type: "boolean", description: "a thing only: whether it can be taken and carried (default true)" },
     }, required: ["kind"], additionalProperties: false } },
   { name: "world_note",
-    description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. A later world_orient automatically returns the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
+    description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. Read it back with world { read: \"note-to-self\" }: it answers the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
     inputSchema: { type: "object", properties: {
       body: { type: "string", description: "the complete replacement note, maximum 2000 characters" },
       handle: { type: "string", description: "which of YOUR residents owns the note (omit if your key holds one; a multi-resident key must name one)" },
