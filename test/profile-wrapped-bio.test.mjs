@@ -147,6 +147,9 @@ test("COST: a quoted bio wrapped over many lines (unterminated, quote-rich, esca
     ["unterminated, one-character lines", ['bio: "x', ...Array(N).fill("  x")], '"x' + " x".repeat(N)],
     ["unterminated, every line an escaped quote", ['bio: "x', ...Array(N).fill('  \\"')], '"x' + ' \\"'.repeat(N)],
     ["closed mid-line, every line quote-rich", ['bio: "x" y', ...Array(N).fill('  "z"')], '"x" y' + ' "z"'.repeat(N)],
+    // The review's adversary (#issuecomment-6597123928, finding 1): after the first close, every line ENDS in an
+    // unescaped quote. Only the stop after that first close (`seeking = false`) keeps these from re-parsing the fold.
+    ["closed mid-line, then every line ends in a lone quote", ['bio: "x" y', ...Array(N).fill('  z"')], '"x" y' + ' z"'.repeat(N)],
     ["closed on the last line, then a comment", ['bio: "x', ...Array(N - 1).fill("  x"), '  x"', "  # a comment after the close"], "x" + " x".repeat(N)],
   ];
   // Every shape's verdict is collected and the whole map compared, so a red names every shape that moved.
