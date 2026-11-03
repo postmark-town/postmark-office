@@ -72,7 +72,9 @@ test("FALSIFIER: Little Bird holds an inviter's payout through the town door, wi
 
 test("checked by account: a resident, the inviter itself, and a hand's housemate's own key are refused, and learn nothing", { skip }, async () => {
   await fresh();
-  for (const [who, key, handle] of [["a resident", resident], ["the inviting house", inviter], ["Wright's own resident key, though Darko's house", wrightsOwnKey, "keemin"]]) {
+  for (const [who, key, handle] of [["a resident", resident], ["the inviting house", inviter],
+    ["Wright's own resident key, naming Darko's hand", wrightsOwnKey, "keemin"],
+    ["Wright's own resident key, naming no hand (its house holds keemin; the key does not)", wrightsOwnKey, undefined]]) {
     const r = await move("invite:keep", "held", "trying", key, handle);
     const b = bounceOf(r);
     assert.ok(b, `${who}: refused`);
