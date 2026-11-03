@@ -370,17 +370,24 @@ function roomBench(placed, rooms, { withNearby = true } = {}) {
   const clock = { t: T0 };
   const hold = { standing: null, nearby: null, one: null, heard: [] };
   const broken = new Set();
-  const counted = { nearbyMany: 0 };
+  // the handles whose ROOM lookup trips. The pair below is how world.mjs builds it: one resolver, which `roomOfStrict` is, and the
+  // ordinary `roomOf`, which swallows its failure as the open (a read that must never stop). Exercised, not stubbed at the top.
+  const roomFails = new Set();
+  const resolveRoom = async (h) => { if (roomFails.has(h)) throw new Error("the room lookup tripped"); return inRoom[h] ?? null; };
+  const counted = { nearbyMany: 0, standing: 0, by: {} };
   const within = (point, room) => Object.keys(at)
     .filter((h) => (inRoom[h] ?? null) === (room ?? null) && Math.hypot(at[h].x - point.x, at[h].y - point.y) <= EARSHOT_M).sort();
   const store = createVoices({
     standpoint: async (h) => {
+      counted.standing += 1;
+      counted.by[h] = (counted.by[h] ?? 0) + 1; // standing reads, per reader
       if (hold.standing && hold.standing.handle === h) { hold.standing.hit(); await hold.standing.promise; }
       if (broken.has(h)) throw new Error("the standpoint tripped");
       return at[h] ? { handle: h, placed: true, x: at[h].x, y: at[h].y } : { handle: h, placed: false };
     },
     place: async ({ x, y }) => `the ground at ${x},${y}`,
-    roomOf: async (h) => inRoom[h] ?? null,
+    roomOf: (h) => resolveRoom(h).catch(() => null),
+    roomOfStrict: resolveRoom,
     logPath: join(DIR, `voices-${++logN}.jsonl`),
     now: () => clock.t,
     hearingWindow: () => ({ since: T0 - 3_600_000, source: "bench", disclosure: null }),
@@ -401,7 +408,7 @@ function roomBench(placed, rooms, { withNearby = true } = {}) {
     if (hold.nearby) { hold.nearby.hit(); await hold.nearby.promise; }
     return ears.map(({ at: p, room = null }) => within(p, room));
   } : null;
-  return { store, clock, at, inRoom, hold, broken, counted, nearbyMany, tick: (ms) => { clock.t += ms; } };
+  return { store, clock, at, inRoom, hold, broken, roomFails, counted, nearbyMany, tick: (ms) => { clock.t += ms; } };
 }
 
 // A stream on the real wire (serveSayStream over a fake request and response), with the opened stream's own
@@ -889,4 +896,270 @@ test("POS-887 TWO READERS: one reader leaving its room ends only its own stream,
   assert.ok(!cy.res.body.includes("an open word"), "nor the open");
   assert.equal(cy.res.ended, 1);
   assert.equal(push.open, 1);
+});
+
+// ── THE 887 FIX: the first frame's snapshot, the waiter's bounded work, a room that cannot be told, a throw while opening ──
+//
+// Every case below runs through the real createVoices → createSayPush (→ serveSayStream) on invented residents at
+// fixed times. Each has an ADMITTING CONTROL in the same test (a reader who stays, a lookup that works, a peer who is
+// served) so an absence can only mean the thing under test.
+
+const HALL_AT = { x: 2000, y: 2000 };
+
+test("POS-887 THE FIRST FRAME: a voice spoken in the room after its reader left, while the first frame's room is being built, reaches nothing in the frame", async () => {
+  const run = async ({ leaves }) => {
+    const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, { ann: HALL, cy: HALL });
+    const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+    await b.store.say("ann", "said before the page opened");
+    b.tick(20_000);
+    const g = gate();
+    b.hold.heard.push(g); // the first snapshot's relocation of the first voice waits on the test: BEFORE that snapshot reads its record
+    const events = [];
+    const opening = push.stream("cy", {}, (r) => events.push(r));
+    await g.reached;
+    b.tick(20_000);
+    if (leaves) b.inRoom.cy = null; // the reader walks out of the hall...
+    await b.store.say("ann", "said after cy left the hall"); // ...and the hall speaks again (a NEW voice, in the old room)
+    g.open();
+    const s = await opening;
+    await turns();
+    return { events, push, s };
+  };
+  const stays = await run({ leaves: false });
+  assert.ok(stays.events.length >= 1, "the admitting control: a reader who stayed is sent a first frame");
+  assert.ok(JSON.stringify(stays.events).includes("said after cy left the hall"), "and it carries the hall's newer line: the same line a plain listen reads");
+  const left = await run({ leaves: true });
+  assert.deepEqual(left.events, [], "a reader who left gets NO first frame: nothing of the new voice (its text, the record, the count, the cursor) reaches them");
+  assert.equal(left.push.open, 0, "and no ear is left");
+  assert.equal(await left.s.beat(), false);
+  let told = false;
+  left.s.onEnd(() => { told = true; });
+  assert.equal(told, true, "the stream is ended");
+});
+
+test("POS-887 THE FIRST FRAME, on the wire: no frame at all when the reader left, and the connection ends once", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, { ann: HALL, cy: HALL });
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  await b.store.say("ann", "said before the page opened");
+  b.tick(20_000);
+  const g = gate();
+  b.hold.heard.push(g);
+  const opening = onWire(push, "cy");
+  await g.reached;
+  b.tick(20_000);
+  b.inRoom.cy = null;
+  await b.store.say("ann", "said after cy left the hall");
+  g.open();
+  const wire = await opening;
+  assert.ok(!wire.res.body.includes("said after cy left"), "no frame carries the new voice");
+  assert.deepEqual(framesOf(wire.res), [], "no event at all was sent");
+  assert.equal(wire.res.ended, 1, "the response ended exactly once");
+  assert.equal(push.open, 0);
+});
+
+test("POS-887 THE FIRST FRAME: a reader who cannot be placed, or whose room cannot be told, is given no frame", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, { ann: HALL });
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  await b.store.say("ann", "a line in the open");
+  b.tick(20_000);
+  // the control first: a lookup that works opens a stream in the open
+  const ok = [];
+  const open = await push.stream("cy", {}, (r) => ok.push(r));
+  assert.ok(ok.length === 1 && !open.error, "the admitting control: the open stream's first frame comes");
+  open.close();
+  // the room lookup trips only AFTER the opening standing: the first frame's authorizing read finds it
+  const g = gate();
+  b.hold.heard.push(g);
+  const events = [];
+  const opening = push.stream("cy", {}, (r) => events.push(r));
+  await g.reached;
+  b.roomFails.add("cy");
+  g.open();
+  const s = await opening;
+  assert.deepEqual(events, [], "a room that cannot be told at the authorizing read: no first frame");
+  assert.equal(await s.beat(), false);
+  assert.equal(push.open, 0);
+});
+
+test("POS-887 A ROOM THAT CANNOT BE TOLD is not the open: a stream or wait that opened in the open ends, serving nothing, when its reader's room lookup trips", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, { ann: null, cy: null });
+  const timers = handTimers();
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany, setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  await b.store.say("ann", "before");
+  const since = b.clock.t;
+  b.tick(20_000);
+  const stream = await onWire(push, "cy");
+  const waiting = push.wait("cy", { since, waitMs: 25_000 });
+  await turns();
+  // THE CONTROL: the lookup works and the reader is in the open, so an open voice reaches both
+  b.tick(20_000);
+  await b.store.say("ann", "an open word, lookup working");
+  await push.settled();
+  assert.deepEqual(saidOn(stream.res).slice(-1), ["an open word, lookup working"], "the admitting control: the stream is served the open");
+  assert.deepEqual((await waiting).voices.map((v) => v.said), ["an open word, lookup working"], "and so is the wait");
+  // THE PROBE: cy's body entered a room, and the lookup that would say so trips (the swallowing roomOf reads it as the open)
+  assert.equal(await b.store.room.standing("cy").then((s) => s.room ?? null), null, "the ordinary standing reads the failed lookup as the open, which is what it must keep doing");
+  b.roomFails.add("cy");
+  assert.equal((await b.store.room.standing("cy", { strict: true })).unavailable, true, "the strict one says it cannot tell");
+  const waiting2 = push.wait("cy", { since: b.clock.t, waitMs: 25_000 }); // refused at open: a bounce, no ear
+  const refused = await waiting2;
+  assert.equal(refused.error, "bounce");
+  assert.equal(refused.code, 503);
+  assert.ok(!JSON.stringify(refused).includes("tripped"), "and it names nothing about the room or the failure");
+  b.tick(20_000);
+  await b.store.say("ann", "an open word after the lookup tripped");
+  await push.settled();
+  assert.ok(!stream.res.body.includes("after the lookup tripped"), "the old open stream is NOT served open-air speech on a failed lookup");
+  assert.equal(stream.res.ended, 1, "it ends instead");
+  assert.equal(push.open, 0);
+  assert.equal(timers.count, 0);
+});
+
+test("POS-887 A ROOM THAT CANNOT BE TOLD, at the open: both a stream and a wait are refused with no ear, and a lookup that works opens", async () => {
+  const b = roomBench({ cy: { x: 2001, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  b.roomFails.add("cy");
+  const got = await push.stream("cy", {}, () => assert.fail("nothing is sent"));
+  assert.equal(got.error, "bounce");
+  assert.equal(got.code, 503);
+  assert.equal((await push.wait("cy", { since: 0, waitMs: 1000 })).code, 503);
+  assert.equal(push.open, 0, "no ear was kept");
+  b.roomFails.delete("cy");
+  const events = [];
+  const ok = await push.stream("cy", {}, (r) => events.push(r));
+  assert.ok(!ok.error && events.length === 1, "the admitting control: the same reader, lookup working, is opened and sent a frame");
+  ok.close();
+});
+
+test("POS-887 THE ROOM LOOKUP seam itself: an unreadable enter ledger is a failure to the strict reader and the open to every other, and a failure is never kept", async () => {
+  const sight = await import("../src/creature-sight.mjs");
+  sight.__setOccupancyForTest(null);
+  const folds0 = sight.folds.n;
+  // the REAL read, with no world clone to read the enter law from: it throws inside readOccupancy (the swallowed catch)
+  assert.equal((await sight.occupancyAll()).size, 0, "every ordinary reader still reads an unreadable ledger as nobody entered");
+  await assert.rejects(sight.occupancyAllStrict(), /the enter ledger could not be read/, "the strict reader is told it could not be read");
+  const afterFailures = sight.folds.n;
+  await assert.rejects(sight.occupancyAllStrict(), /could not be read/);
+  assert.ok(sight.folds.n > afterFailures, "a failed read is not kept: the next one reads again, it is not served as known-empty");
+  assert.ok(afterFailures > folds0);
+  // a VALID empty read stays distinguishable: known-empty resolves
+  sight.__setOccupancyReaderForTest(() => new Map());
+  try {
+    sight.forgetOccupancy();
+    assert.equal((await sight.occupancyAllStrict()).size, 0, "the admitting control: a ledger read that finds nobody is a success, not a failure");
+  } finally { sight.__setOccupancyReaderForTest(null); sight.forgetOccupancy(); }
+});
+
+test("POS-887 BOUNDED WORK: one standing read that never settles holds a constant amount however many voices land, peers are served, and the pending work is taken up on release", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 }, bo: { x: 2002, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const cy = await onWire(push, "cy"); // the reader whose read will hang
+  const bo = await onWire(push, "bo"); // a peer
+  const FLOOD = 40;
+  const g = gate("cy");
+  b.hold.standing = g;
+  const readsBefore = b.counted.by.cy ?? 0;
+  b.tick(20_000);
+  await b.store.say("ann", "v0");
+  await g.reached; // cy's one standing read is out and will not settle
+  for (let i = 1; i < FLOOD; i++) {
+    b.tick(16_000); // past the say class's own speak-every pace
+    await b.store.say("ann", `v${i}`);
+    await turns();
+  }
+  await turns(5);
+  const during = (b.counted.by.cy ?? 0) - readsBefore;
+  assert.equal(during, 1, `the hung reader started exactly ONE standing read across ${FLOOD} fan-outs (the rest are one coalesced slot, not ${FLOOD} queued jobs)`);
+  assert.deepEqual(saidOn(bo.res).slice(-3), ["v37", "v38", "v39"], "a peer is served through it, up to the newest voice");
+  assert.equal(new Set(saidOn(bo.res)).size, saidOn(bo.res).length, "and is never handed a voice twice");
+  const before = b.counted.by.cy;
+  b.hold.standing = null;
+  g.open(); // the read resumes
+  await turns(10);
+  const after = (b.counted.by.cy ?? 0) - before;
+  assert.ok(after <= 1, `on release the pending slot is taken up with at most ONE further standing read, not ${FLOOD - 1} (got ${after})`);
+  assert.equal(saidOn(cy.res).at(-1), "v39", "and the reader is carried to the newest voice without another voice to unstick it");
+  assert.equal(new Set(saidOn(cy.res)).size, saidOn(cy.res).length, "the cursor is monotone: nothing delivered twice");
+  assert.equal(push.open, 2);
+});
+
+test("POS-887 BOUNDED WORK, close: closing a stream with a hung read and pending work clears it, and nothing is sent after the end", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const cy = await onWire(push, "cy");
+  const g = gate("cy");
+  b.hold.standing = g;
+  b.tick(20_000);
+  await b.store.say("ann", "first");
+  await g.reached;
+  for (let i = 0; i < 5; i++) { b.tick(16_000); await b.store.say("ann", `more ${i}`); await turns(); }
+  cy.req.emit("close");
+  assert.equal(push.open, 0, "the ear is gone the moment the client is");
+  const reads = b.counted.by.cy;
+  b.hold.standing = null;
+  g.open();
+  await turns(10);
+  assert.equal(b.counted.by.cy, reads, "no further read is made for an ended stream: the pending slot was cleared");
+  assert.deepEqual(saidOn(cy.res), [], "and nothing was written to it");
+  assert.equal(cy.res.ended, 1);
+});
+
+test("POS-887 A THROW WHILE OPENING: a snapshot that throws after the ear registered removes it, once, for the stream and for the wait", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
+  const timers = handTimers();
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany, setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  await b.store.say("ann", "a line to catch up on");
+  b.tick(20_000);
+  const real = b.store.room.snapshot;
+  // THE ARRIVAL CHECK of a stream: the first frame's snapshot works, the next one throws
+  let n = 0;
+  b.store.room.snapshot = async (...a) => { n += 1; if (n === 2) throw new Error("the second room tripped"); return real(...a); };
+  const events = [];
+  const gap = gate();
+  b.hold.one = gap; // the first frame's own presence read waits, after its snapshot: a voice that lands now is newer than the frame
+  const opening = push.stream("cy", { since: 0 }, (r) => events.push(r));
+  const failed = assert.rejects(opening, /second room tripped/);
+  await gap.reached;
+  b.tick(20_000);
+  await b.store.say("ann", "lands during the first frame");
+  gap.open();
+  await failed;
+  assert.equal(events.length, 1, "the first frame was sent before the arrival check threw");
+  assert.equal(push.open, 0, "the stream's ear is not left registered");
+  // THE FIRST FRAME's own snapshot throws
+  b.store.room.snapshot = async () => { throw new Error("the room tripped"); };
+  await assert.rejects(push.stream("cy", {}, () => {}), /room tripped/);
+  assert.equal(push.open, 0);
+  // THE WAIT's arrival check throws: the wait ends with the error, its deadline cleared
+  const since = b.clock.t - 60_000;
+  await assert.rejects(push.wait("cy", { since, waitMs: 25_000 }), /room tripped/);
+  assert.equal(push.open, 0, "the wait's ear is gone");
+  assert.equal(timers.count, 0, "and its deadline cleared");
+  // THE CONTROL: with the room working again, the same reader opens and is served
+  b.store.room.snapshot = real;
+  const ok = [];
+  const s = await push.stream("cy", {}, (r) => ok.push(r));
+  assert.ok(!s.error && ok.length >= 1 && push.open === 1, "the admitting control: nothing was left broken");
+  s.close();
+  assert.equal(push.open, 0);
+});
+
+test("POS-887 A CLIENT THAT GOES WHILE THE FIRST FRAME IS BEING BUILT: nothing is written, the ear is removed, and a second close changes nothing", async () => {
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 } }, {});
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  await b.store.say("ann", "a line");
+  b.tick(20_000);
+  const g = gate();
+  b.hold.heard.push(g);
+  const req = new EventEmitter();
+  const res = fakeRes();
+  const serving = serveSayStream(req, res, (send) => push.stream("cy", {}, send), { onBounce: () => assert.fail("no bounce expected") });
+  await g.reached; // the first frame's room is being built, and the connection has not been answered yet
+  req.emit("close");
+  req.emit("close"); // twice
+  g.open();
+  await serving;
+  assert.equal(res.body, "", "nothing was written to a client that had gone");
+  assert.equal(res.ended, 0, "the response is not ended by a stream that never opened (the client is the one that went)");
+  assert.equal(push.open, 0, "and the ear it was about to register is gone");
 });

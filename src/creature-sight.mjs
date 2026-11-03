@@ -43,9 +43,18 @@ export function forgetOccupancy() { memo = null; }
 /** How many times the ledger has been folded since the process began (the load, measured). */
 export const folds = { n: 0 };
 
-/** Every resident's stack now: the enter ledger folded at the clock (shared for a second). An unreadable ledger is an empty Map. */
+/**
+ * Every resident's stack now: the enter ledger folded at the clock (shared for a second). An unreadable ledger is an empty Map, which is what
+ * every ordinary reader wants (it must never stop a read). A caller that must tell "nobody has entered anything" from "the ledger could not
+ * be read" asks `occupancyAllStrict`: the same read, shared the same way, that REJECTS on a failure.
+ */
 export async function occupancyAll() {
-  if (occupancySeam) return Promise.resolve(occupancySeam()).then((m) => (m instanceof Map ? m : new Map())).catch(() => new Map());
+  return occupancyAllStrict().catch(() => new Map());
+}
+
+/** The same shared fold, but an unreadable ledger rejects instead of reading as empty (POS-887: a long listener fails closed). A failure is never kept. */
+export async function occupancyAllStrict() {
+  if (occupancySeam) return Promise.resolve(occupancySeam()).then((m) => (m instanceof Map ? m : new Map()));
   const now = Date.now();
   if (memo && now - memo.at < OCCUPANCY_TTL_MS) return memo.p;
   const mine = { at: Infinity, p: readOccupancy() }; // valid while it is being read; its second starts when it lands
@@ -63,8 +72,8 @@ async function readOccupancy() {
     const [{ crossingLaw }, { crossingDeps }, { occupancyNowAll }] = await Promise.all([
       import("./world-crossings.mjs"), import("./world-apex.mjs"), import("./world.mjs")]);
     const law = await crossingLaw(WORLD_CLONE);
-    return law?.thresholds ? await occupancyNowAll(law.thresholds, crossingDeps()) : new Map();
-  } catch { return new Map(); }
+    return law?.thresholds ? await occupancyNowAll(law.thresholds, crossingDeps()) : new Map(); // no crossing law: a valid read of nobody entered
+  } catch (e) { throw new Error(`the enter ledger could not be read (${String(e?.message ?? e).slice(0, 80)})`); }
 }
 
 /** Does the set hold any creature in a room? When none does, nobody needs the ledger. */

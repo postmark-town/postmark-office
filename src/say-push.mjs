@@ -104,12 +104,23 @@ export function createSayPush({
    * its own on it). The caller adds `deliver(reply)` and `leave(standing)`.
    * `asked` counts the standing reads started and `applied` the newest one
    * kept, so a slow older read cannot overwrite a newer one.
+   *
+   * THE WORK A WAITER HOLDS IS BOUNDED (POS-887): `busy` is the one run in
+   * progress and `next` the ONE request that arrived meanwhile, the newest
+   * snapshot (an older one's voices are all in it). Nothing is queued per
+   * arrival, so a read that never settles holds a constant amount, and `end`
+   * clears it. `fail(e)` is what a throw while serving does: end the waiter.
    */
   function watcher({ handle, standAs, here, since }) {
-    const w = { handle, standAs, here, since, roomAt: here.room ?? null, ended: false, hooks: [], turn: Promise.resolve(), asked: 0, applied: 0 };
+    const w = { handle, standAs, here, since, roomAt: here.room ?? null, ended: false, hooks: [], busy: null, next: null, asked: 0, applied: 0 };
+    w.fail = (e) => {
+      console.error(`[say-push] serving a waiter tripped (${String(e?.message ?? e).slice(0, 160)}) — it is ended`);
+      w.end();
+    };
     w.end = () => {
       if (w.ended) return;
       w.ended = true;
+      w.next = null; // pending work is not kept past the end
       waiters.delete(w);
       for (const f of w.hooks.splice(0)) {
         try { f(); } catch { /* one hook failing must not strand the rest */ }
@@ -130,7 +141,7 @@ export function createSayPush({
     if (w.ended) return null;
     const mine = ++w.asked;
     let now = null;
-    try { now = await room.standing(w.standAs); } catch { now = null; }
+    try { now = await room.standing(w.standAs, { strict: true }); } catch { now = null; } // strict: a room that cannot be told ends it, it is never read as the open
     if (w.ended) return null; // ended while the read was out: a close, or another look that found the reader gone
     if (!now || now.bounce || (now.room ?? null) !== w.roomAt) { w.leave(now); return null; }
     if (mine > w.applied) { w.applied = mine; w.here = now; }
@@ -139,24 +150,38 @@ export function createSayPush({
 
   /**
    * One watcher's answer to the voices in `snap`, built from where its reader
-   * stands now. Watchers are served one batch at a time (`turn`), so overlapping
+   * stands now. A watcher is served one request at a time, so overlapping
    * fan-outs and the arrival check cannot both build from the same cursor and
-   * hand the same voice over twice, and the cursor only moves forward. `asked`
-   * is the batch's presence answer for the ear it was read for; it is used only
-   * while the reader still stands at that ear, else the reply reads its own.
+   * hand the same voice over twice, and the cursor only moves forward. A request
+   * that arrives while one is running is NOT queued: it replaces the one pending
+   * slot (the newest snapshot holds the older's voices), and the run takes it up
+   * when it finishes, so a voice that landed during a slow read is still
+   * considered without another voice having to unstick it. `asked` is the
+   * batch's presence answer for the ear it was read for; it is used only while
+   * the reader still stands at that ear, else the reply reads its own.
    */
+  async function attempt(w, { snap, t, asked }) {
+    const here = await stand(w);
+    if (!here || room.heard(here, snap, w.since).length === 0) return;
+    const sameEar = asked && asked.ear.at.x === here.at.x && asked.ear.at.y === here.at.y && asked.ear.aboard === Boolean(here.aboard);
+    const r = await room.reply(w.handle, here, t, w.since, { snap, ...(sameEar ? { presentIn: asked.list } : {}) });
+    if (w.ended) return; // closed while the reply was built: nothing is sent after the end
+    stats.woken += 1;
+    w.deliver(r);
+  }
+
   function serve(w, snap, t, asked = null) {
-    const job = async () => {
-      const here = await stand(w);
-      if (!here || room.heard(here, snap, w.since).length === 0) return;
-      const sameEar = asked && asked.ear.at.x === here.at.x && asked.ear.at.y === here.at.y && asked.ear.aboard === Boolean(here.aboard);
-      const r = await room.reply(w.handle, here, t, w.since, { snap, ...(sameEar ? { presentIn: asked.list } : {}) });
-      if (w.ended) return; // closed while the reply was built: nothing is sent after the end
-      stats.woken += 1;
-      w.deliver(r);
-    };
-    const run = w.turn.then(job);
-    w.turn = run.catch(() => {});
+    if (w.ended) return Promise.resolve();
+    if (w.busy) { w.next = { snap, t, asked: null }; return Promise.resolve(); } // coalesced into the one pending slot
+    const run = (async () => {
+      let req = { snap, t, asked };
+      while (req && !w.ended) {
+        try { await attempt(w, req); } catch (e) { w.fail(e); return; }
+        req = w.next;
+        w.next = null;
+      }
+    })().finally(() => { w.busy = null; w.next = null; });
+    w.busy = run;
     return run;
   }
 
@@ -184,12 +209,12 @@ export function createSayPush({
    */
   async function wait(handle, { standAs = handle, since, waitMs } = {}) {
     const t0 = room.now();
-    const here = await room.standing(standAs);
+    const here = await room.standing(standAs, { strict: true }); // a room that cannot be told refuses the wait, it does not open it in the open
     if (here.bounce) return here.bounce;
     const refused = admit(handle);
     if (refused) return refused;
     room.listened(handle, here, t0);
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let timer = null;
       const w = watcher({ handle, standAs, here, since });
       const finish = (body) => {
@@ -198,6 +223,7 @@ export function createSayPush({
         resolve({ ...body, waited_ms: room.now() - t0 });
       };
       w.deliver = finish;
+      w.fail = (e) => { w.end(); clearTimer(timer); reject(e); }; // a throw while serving ends the wait and is the caller's error, as a plain listen's would be
       w.leave = (now) => finish({
         where: whereOf(now?.at ? now : w.here), voices: [], spoke: false, latest: since,
         note: "you no longer stand where this listen began, or where you stand could not be read — call again with the same since (your cursor has not moved) to listen from where you stand now",
@@ -222,7 +248,7 @@ export function createSayPush({
           const t = room.now();
           const snap = await room.snapshot(t);
           if (!w.ended) await serve(w, snap, t);
-        })().catch(() => { /* the deadline still answers */ });
+        })().catch((e) => w.fail(e));
       }
     });
   }
@@ -240,7 +266,7 @@ export function createSayPush({
    */
   async function stream(handle, { standAs = handle, since = null } = {}, send) {
     const t = room.now();
-    const here = await room.standing(standAs);
+    const here = await room.standing(standAs, { strict: true }); // a room that cannot be told refuses the stream, it does not open it in the open
     if (here.bounce) return here.bounce;
     const refused = admit(handle);
     if (refused) return refused;
@@ -251,18 +277,41 @@ export function createSayPush({
       send(r);
     };
     w.leave = () => w.end();
-    // The first event is sent BEFORE the ear joins the fan-out, so a voice
-    // landing while it is read cannot overtake it and move the cursor back; a
-    // voice that landed in that gap is caught by the same arrival check the
-    // wait makes, which stands the reader again before it serves them.
-    const first = await room.reply(handle, here, t, since, {});
-    if (Number.isFinite(first?.latest)) w.since = first.latest;
-    send(first);
-    waiters.add(w);
-    if (room.latestAt() > w.since) {
-      const t1 = room.now();
-      const snap = await room.snapshot(t1);
-      if (!w.ended) await serve(w, snap, t1);
+    try {
+      // THE FIRST EVENT IS BUILT FROM ONE SNAPSHOT, TAKEN BEFORE THE READ THAT
+      // AUTHORIZES IT (POS-887). The snapshot is the room as it stands (voices,
+      // and the record's clusters, which are not bound by the instant); the
+      // standing read after it says whether this reader is still where the
+      // stream opened. Then the reply is dressed from THAT snapshot and no
+      // newer one, so no voice spoken after the reader left can reach it in its
+      // record, its count or its cursor. A reader who has left, cannot be placed
+      // or whose room cannot be told gets NO first event: the stream ends and
+      // they reconnect to the room they stand in. (This is a lawful snapshot
+      // read, not atomic delivery: a reader who leaves after the check is in the
+      // same position as one who leaves while a frame is on the wire.)
+      const tSnap = room.now();
+      const snap = await room.snapshot(tSnap);
+      const now = await stand(w);
+      if (now) {
+        const first = await room.reply(handle, now, tSnap, since, { snap });
+        if (!w.ended) {
+          if (Number.isFinite(first?.latest)) w.since = first.latest;
+          // The first event is sent BEFORE the ear joins the fan-out, so a voice
+          // landing while it is read cannot overtake it and move the cursor back;
+          // a voice that landed in that gap is caught by the arrival check below,
+          // which stands the reader again before it serves them.
+          send(first);
+          waiters.add(w);
+          if (room.latestAt() > w.since) {
+            const t1 = room.now();
+            const snap1 = await room.snapshot(t1);
+            if (!w.ended) await serve(w, snap1, t1);
+          }
+        }
+      }
+    } catch (e) {
+      w.end(); // nothing the stream registered outlives a throw while it opened
+      throw e;
     }
     return {
       close: () => w.end(),
