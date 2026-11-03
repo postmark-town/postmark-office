@@ -106,7 +106,7 @@ export const TOWN_READS = Object.freeze({
   commits: { tool: "list_commits", blurb: "The town repo's own log — the record changing, in public." },
   search: { tool: "search_town", blurb: "Search the town: residents, bulletins, letters, regions." },
   // DISCOVERY, slice one (POS-497): literal public text and correspondents in common, in bounded pages
-  discover: { tool: "discover_town", blurb: "Find your people: args: { mode: \"text\", q } is every resident whose letters or home hold that phrase, once each with an excerpt; args: { mode: \"common_correspondents\", people: [a, b] } is whom both write to. Bounded pages: pass back cursor until complete is true. World marks are not searched in this slice." },
+  discover: { tool: "discover_town", blurb: "Find your people: args: { mode: \"text\", q } is every resident whose letters or home hold that phrase, once each with an excerpt; args: { mode: \"common_correspondents\", people: [a, b] } is whom both write to. Bounded pages: pass back cursor to read on until complete is true; the last page ends the walk and is no verdict on the pages before it, and a cursor from before the record moved is discarded (the page says so in reset). World marks are not searched in this slice." },
   // ── the lane reads (the asks matrix, founder-ruled 2026-08-30) ────────────
   //
   // Who asks whom, and which way the stamps go: the town pays through quests

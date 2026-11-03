@@ -215,20 +215,31 @@ not searched in it**, and no argument claims they are.
   at most 128 of `a`'s distinct recipients; either returns at most `limit` hits (1 to 20,
   default 20) and at most 64 KiB. The answer: `scope`, the echoed `q` or `people`,
   `source_generation`, `hits`, `shown`, `complete`, `cursor`, `more_note`, `examined`
-  (what this page read) and `limits`. `complete: true` means everything in the declared scope
-  was read: an empty complete page is no match in that scope. Otherwise `cursor` reads on, and
-  an unfinished page with few or no hits says nothing about the rest. There is no `matches`
-  total and no `next_offset`.
-- **The cursor** is opaque, at most 16 KiB, bound to the request and to the source generation.
-  A cursor for another request, or one that does not parse, is a 422. One from an older
-  generation (a letter, a home or the roll changed since) is answered with the walk from its
-  beginning and a `reset` naming both generations. It grants nothing.
+  (what this page read) and `limits`. `complete: true` means this page ends the walk; it is
+  not a verdict on the pages before it. A page a cursor continued, with no hits, says "no
+  further matches on this page, and this is the end of this walk", and the hits on earlier
+  pages stand. Only a page that began the walk (no cursor, or a cursor a `reset` discarded)
+  may say that nothing matched, and then only within **this walk's scope**: the index's letters
+  and homes, for residents on the roll. Not searched: world marks, and what the index does not
+  hold (below). Otherwise `cursor` reads on, and an unfinished page with few or no hits says
+  nothing about the rest. There is no `matches` total and no `next_offset`.
+- **The cursor** is opaque, at most 16 KiB (UTF-8 bytes), bound to the request and to the
+  source generation. A cursor for another request, or one that does not parse, is a 422. One
+  from an older generation (a letter, a home or the roll changed since, or an older
+  fingerprint epoch) is discarded: the page is the walk from its beginning, with a `reset`
+  naming both generations. It grants nothing. **A walk is read against one generation:** on a
+  record that keeps changing, a long walk can restart again and again and never finish. Each
+  restart says so; no page pretends the earlier pages still stand, and none serves the old
+  record.
 - **Refusals:** an unknown argument, or one belonging to the other mode, is a 422 by name; a
   person not on the roll is a 404; a store without its tables, or whose index is not built
   yet, is a 503 naming which.
-- Its tables are derived by the town-index ingest (`world2/schema/088_town_discovery.sql`): a
-  letter whose sender is not a resident handle, or whose id is over 1024 bytes, is not
-  indexed, and the ingest counts each by reason.
+- Its tables are derived by the town-index ingest (`world2/schema/088_town_discovery.sql`).
+  **What the index does not hold,** and so no walk reads: a letter whose sender is not a
+  resident handle, whose id is over 1024 bytes or whose json does not parse; an edge to a
+  recipient that is not a handle; a home under a name that is not a handle. A resident off the
+  roll is never named. The ingest counts each of these by reason. So an empty complete first
+  page is a no-match in the index and the roll, never in "every letter".
 
 ## The world door (07-23 read verbs; 07-28 ruling 9 exposure split)
 

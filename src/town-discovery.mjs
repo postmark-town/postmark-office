@@ -288,18 +288,34 @@ export function excerptOf(piece, q) {
 
 const WORLD_MARKS = "not in this slice";
 
-/** The words a page closes on: what was read, and how to read on. */
-function moreNote(ask, { complete, shown, stoppedBy, examined }) {
+/**
+ * The words a page closes on: what was read, and how to read on. A page claims
+ * what it knows and no more (POS-497/b: "never treats an empty page as proof of
+ * no matches"). `continued` is true when a validated cursor began this page, so
+ * the walk's earlier pages are not this page's to speak for or against: its
+ * empty answer is "no further matches on this page", not "no match". A page
+ * that began the walk (no cursor, or a cursor a reset discarded) speaks for the
+ * walk, within the scope it names; the scope is the index and the roll, never
+ * "every letter" or "everyone".
+ */
+function moreNote(ask, { complete, shown, stoppedBy, examined, continued = false }) {
   const text = ask.mode === "text";
-  if (complete)
-    return text
-      ? (shown ? "Every letter and home in scope has been read: this is the end of the walk. World marks are not searched in this slice."
-        : "No resident's letters or home in scope hold this text: every one of them was read. World marks are not searched in this slice.")
-      : (shown ? `Every resident ${ask.people[0]} writes to has been checked: this is the end of the walk.`
-        : `${ask.people[0]} and ${ask.people[1]} write to no resident in common: everyone ${ask.people[0]} writes to was checked.`);
+  if (complete) {
+    const noun = text ? "matches" : "common correspondents";
+    if (continued)
+      return shown ? `This page ends the walk: no further ${noun} follow its hits. Hits on earlier pages stand.`
+        : `No further ${noun} on this page, and this is the end of this walk. Hits on earlier pages stand.`;
+    const scope = text ? "this walk's scope (the index's letters and homes, for residents on the roll)" : "this walk's scope (the index's letters, for residents on the roll)";
+    const [a, b] = ask.people ?? [];
+    if (text)
+      return shown ? `This page holds every match in ${scope}: this is the end of the walk. World marks are not searched in this slice.`
+        : `No match was found in ${scope}: this is the end of the walk. World marks, and letters or homes the index does not hold, are not searched.`;
+    return shown ? `This page holds every resident ${a} and ${b} both write to, in ${scope}: this is the end of the walk.`
+      : `No resident in common was found for ${a} and ${b} in ${scope}: this is the end of the walk. Letters the index does not hold are not searched.`;
+  }
   const unit = text ? "pieces of text" : "of the residents they write to";
   const why = stoppedBy === "bytes" ? `the page reached its size bound (${L.response_bytes} bytes) before its next hit`
-    : stoppedBy === "hits" ? `the page holds ${ask.limit} hits, its limit`
+    : stoppedBy === "hits" ? `the page holds ${ask.limit} ${ask.limit === 1 ? "hit" : "hits"}, its limit`
     : `the page read ${examined} ${unit}, its work bound`;
   return `This page is not the whole answer: ${why}. Pass cursor to read on. A page with few or no hits says nothing about what is left to read.`;
 }
@@ -310,6 +326,7 @@ function moreNote(ask, { complete, shown, stoppedBy, examined }) {
  * cursor then stands on the last row read before it, so it is read again.
  */
 export function discoveryPage(ask, { generation, rows, more, reset = null, start = null }) {
+  const continued = start != null; // the validated place a cursor resumed from; the store passes null after a reset, which makes this page the walk's first
   const hitsAt = rows.map((r, i) => (r.emitted ? i : -1)).filter((i) => i >= 0);
   const build = (k) => {
     const cut = k < hitsAt.length;
@@ -333,7 +350,7 @@ export function discoveryPage(ask, { generation, rows, more, reset = null, start
       shown: hits.length,
       complete,
       cursor: complete ? null : cursorFor(ask, generation, at),
-      more_note: moreNote(ask, { complete, shown: hits.length, stoppedBy, examined: read }),
+      more_note: moreNote(ask, { complete, shown: hits.length, stoppedBy, examined: read, continued }),
       examined: ask.mode === "text" ? { pieces: read } : { candidates: read },
       limits: ask.mode === "text"
         ? { pieces_per_page: L.pieces_per_page, hits_per_page: ask.limit, response_bytes: L.response_bytes, excerpt_bytes: L.excerpt_bytes, query_bytes: L.query_bytes }

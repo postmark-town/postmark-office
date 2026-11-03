@@ -283,6 +283,193 @@ test("common correspondents: each shared resident once, in C order, through a ru
   assert.match((await store.discover(api, { mode: "common_correspondents", people: ["ada"] })).defect, /exactly two resident handles/);
 });
 
+// ── the words a page closes on ───────────────────────────────────────────────
+//
+// LAW (Wright, POS-497/b): "never treats an empty page as proof of no matches."
+// A page's `more_note` claims what that page knows and no more: on a page the
+// walk began with, an empty complete answer is a no-match for the walk's scope;
+// on a page a cursor continued, it is "no further matches on this page, and the
+// end of this walk", and it takes nothing back from the hits earlier pages gave.
+// Each case below is read from the real reader, in both modes, with limit 1 so
+// the walk spans pages.
+
+// The claims no page of a continued walk may make, and no page may make beyond its scope.
+const OVERCLAIMS = [/no match was found/i, /every one of them was read/i, /write to no resident in common/i, /no resident in common was found/i, /was checked/i, /no resident'?s? letters/i];
+const noOverclaim = (note, label) => { for (const re of OVERCLAIMS) assert.doesNotMatch(note, re, `${label}: the note claims ${re}: "${note}"`); };
+const FRESH_WALK = /this walk's scope/;
+
+test("the closing words, text mode: a continued walk's empty last page is 'no further matches on this page', never 'no match'; a first page's empty answer is scoped; an unfinished page says it is unfinished", async (t) => {
+  if (skip) return t.skip(skip);
+  await seed({
+    residents: ["ada", "bex", "cyd"],
+    letters: [
+      { id: "a1", from: "ada", to: "bex", body: "The LAMPLIGHT holds, and so does the tide." },
+      { id: "b1", from: "bex", to: "ada", body: "Nothing of the sort here." },
+      { id: "c1", from: "cyd", to: "ada", body: "The tide, for the tide's sake." },
+    ],
+  });
+  const ask = (args) => store.discover(api, { mode: "text", ...args });
+
+  // first-page hit, then an empty terminal page (limit 1)
+  const first = await ask({ q: "lamplight", limit: 1 });
+  assert.deepEqual([first.hits.map((h) => h.handle), first.complete], [["ada"], false], "page one found ada and the walk goes on");
+  const last = await ask({ q: "lamplight", limit: 1, cursor: first.cursor });
+  assert.deepEqual([last.hits, last.complete, last.cursor, last.reset], [[], true, null, undefined]);
+  assert.match(last.more_note, /^No further matches on this page, and this is the end of this walk\./, "the last page speaks for itself and for the walk's end");
+  assert.match(last.more_note, /earlier pages stand/i, "and takes nothing back from the hit on page one");
+  noOverclaim(last.more_note, "text: a continued walk's empty terminal page");
+
+  // a terminal page that has hits
+  const both = await ask({ q: "the tide", limit: 1 });
+  assert.deepEqual([both.hits.map((h) => h.handle), both.complete], [["ada"], false]);
+  const end = await ask({ q: "the tide", limit: 1, cursor: both.cursor });
+  assert.deepEqual([end.hits.map((h) => h.handle), end.complete, end.cursor], [["cyd"], true, null], "cyd after ada: bex holds no tide");
+  assert.match(end.more_note, /^This page ends the walk: no further matches follow its hits\./);
+  assert.match(end.more_note, /earlier pages stand/i);
+  noOverclaim(end.more_note, "text: a continued walk's terminal page with a hit");
+
+  // a first page that finishes the walk: the scope is named, and a hit page says it holds every match in it
+  const whole = await ask({ q: "lamplight" });
+  assert.deepEqual([whole.hits.map((h) => h.handle), whole.complete], [["ada"], true]);
+  assert.match(whole.more_note, /^This page holds every match in this walk's scope \(the index's letters and homes, for residents on the roll\): this is the end of the walk\./);
+  assert.match(whole.more_note, /World marks are not searched/);
+
+  // the initial, truly empty, complete control: no overclaim about what the index does not hold
+  const none = await ask({ q: "a phrase nobody wrote" });
+  assert.deepEqual([none.hits, none.complete, none.cursor, none.reset], [[], true, null, undefined]);
+  assert.match(none.more_note, /^No match was found in this walk's scope \(the index's letters and homes, for residents on the roll\): this is the end of the walk\./);
+  assert.match(none.more_note, /World marks, and letters or homes the index does not hold, are not searched\./);
+  assert.doesNotMatch(none.more_note, /every one of them was read|no resident's letters/i, "it does not claim the whole record was read");
+
+  // an unfinished page with no hits: more remains, with a cursor, and nothing in its words is a no-match
+  const big = await (async () => {
+    await seed({
+      residents: ["ada", "bex"],
+      letters: [{ id: "long", from: "ada", to: "bex", body: "x".repeat(70 * L.base_bytes) }, { id: "b1", from: "bex", to: "ada", body: "FINDME is here." }],
+    });
+    return ask({ q: "findme" });
+  })();
+  assert.deepEqual([big.hits, big.complete, typeof big.cursor, big.examined.pieces], [[], false, "string", L.pieces_per_page]);
+  assert.match(big.more_note, /^This page is not the whole answer: the page read 64 pieces of text, its work bound\. Pass cursor to read on\./);
+  assert.match(big.more_note, /says nothing about what is left to read/);
+  noOverclaim(big.more_note, "text: an unfinished page with no hits");
+  assert.doesNotMatch(big.more_note, /no further matches|end of (the|this) walk/i, "an unfinished page does not say the walk ended");
+  const rest = await ask({ q: "findme", cursor: big.cursor });
+  assert.deepEqual([rest.hits.map((h) => h.handle), rest.complete], [["bex"], true], "and the walk it handed on does find bex");
+});
+
+test("the closing words: a page stopped by a limit of one hit says '1 hit', not '1 hits', in both modes", async (t) => {
+  if (skip) return t.skip(skip);
+  await seed({
+    residents: ["ada", "bex", "c01", "c02"],
+    letters: [{ id: "a1", from: "ada", to: "c01", body: "one word" }, { id: "b1", from: "bex", to: "c01", body: "one word" }, { id: "a2", from: "ada", to: "c02", body: "x" }, { id: "b2", from: "bex", to: "c02", body: "x" }],
+  });
+  for (const [mode, args] of [["text", { mode: "text", q: "one word", limit: 1 }], ["common", { mode: "common_correspondents", people: ["ada", "bex"], limit: 1 }]]) {
+    const p = await store.discover(api, args);
+    assert.deepEqual([p.shown, p.complete], [1, false], `${mode}: one hit and more to read`);
+    assert.match(p.more_note, /the page holds 1 hit, its limit\./, `${mode}: one hit is '1 hit'`);
+    const two = await store.discover(api, { ...args, limit: 2 });
+    assert.deepEqual([two.shown, two.complete], [2, true], `${mode}: both hits fit and the walk ends`);
+  }
+  const text = await store.discover(api, { mode: "text", q: "one word", limit: 1 });
+  assert.doesNotMatch(text.more_note, /\b1 hits\b/);
+});
+
+test("the closing words, text mode: after a reset the page is a first page again, so its empty complete answer is the scoped no-match, not 'no further matches'", async (t) => {
+  if (skip) return t.skip(skip);
+  const people = ["ada", "bex", "cyd"];
+  const spec = (body) => ({ residents: people, letters: people.map((h) => ({ id: `${h}-1`, from: h, to: "ada", body })) });
+  await seed(spec("a plain reset word"));
+  const first = await store.discover(api, { mode: "text", q: "reset word", limit: 1 });
+  assert.equal(first.complete, false);
+  await seed(spec("words that no longer match"));     // the record moves: the generation with it
+  const moved = await store.discover(api, { mode: "text", q: "reset word", limit: 1, cursor: first.cursor });
+  assert.deepEqual([moved.hits, moved.complete, moved.cursor], [[], true, null]);
+  assert.equal(moved.reset?.from, first.source_generation, "the cursor's walk was discarded: an explicit reset");
+  assert.match(moved.more_note, /^No match was found in this walk's scope/, "the reset page began the walk, so it speaks for the whole walk");
+  assert.doesNotMatch(moved.more_note, /No further matches on this page/, "it is not the continuation of a walk that no longer exists");
+  assert.match(moved.more_note, FRESH_WALK);
+});
+
+test("the closing words, common mode: a continued walk's empty last page is 'no further common correspondents on this page', never 'write to no resident in common'", async (t) => {
+  if (skip) return t.skip(skip);
+  // ada writes to c01, c02 and c03; bex to c01 and c03; dee to c01 alone
+  await seed({
+    residents: ["ada", "bex", "dee", "c01", "c02", "c03"],
+    letters: [
+      { id: "a-c01", from: "ada", to: "c01", body: "hello" }, { id: "a-c02", from: "ada", to: "c02", body: "hello" }, { id: "a-c03", from: "ada", to: "c03", body: "hello" },
+      { id: "b-c01", from: "bex", to: "c01", body: "hello" }, { id: "b-c03", from: "bex", to: "c03", body: "hello" },
+      { id: "d-c01", from: "dee", to: "c01", body: "hello" },
+    ],
+  });
+  const ask = (people, args = {}) => store.discover(api, { mode: "common_correspondents", people, ...args });
+
+  // first-page hit, then an empty terminal page (limit 1): ada and dee share c01 only, and ada's c02 and c03 follow it
+  const first = await ask(["ada", "dee"], { limit: 1 });
+  assert.deepEqual([first.hits.map((h) => h.handle), first.complete], [["c01"], false]);
+  const last = await ask(["ada", "dee"], { limit: 1, cursor: first.cursor });
+  assert.deepEqual([last.hits, last.complete, last.cursor, last.reset], [[], true, null, undefined]);
+  assert.match(last.more_note, /^No further common correspondents on this page, and this is the end of this walk\./);
+  assert.match(last.more_note, /earlier pages stand/i, "and takes nothing back from the hit on page one");
+  noOverclaim(last.more_note, "common: a continued walk's empty terminal page");
+
+  // a terminal page that has a hit: ada and bex share c01 and c03, and the cap lands on c03, the last of ada's
+  const p1 = await ask(["ada", "bex"], { limit: 1 });
+  assert.deepEqual([p1.hits.map((h) => h.handle), p1.complete], [["c01"], false]);
+  const p2 = await ask(["ada", "bex"], { limit: 1, cursor: p1.cursor });
+  assert.deepEqual([p2.hits.map((h) => h.handle), p2.complete, p2.cursor], [["c03"], true, null], "c02 is passed over and c03 ends the walk");
+  assert.match(p2.more_note, /^This page ends the walk: no further common correspondents follow its hits\. Hits on earlier pages stand\./);
+  noOverclaim(p2.more_note, "common: a continued walk's terminal page with a hit");
+
+  // a first page that finishes the walk: the scope is named
+  const whole = await ask(["ada", "bex"]);
+  assert.deepEqual([whole.hits.map((h) => h.handle), whole.complete], [["c01", "c03"], true]);
+  assert.match(whole.more_note, /^This page holds every resident ada and bex both write to, in this walk's scope \(the index's letters, for residents on the roll\): this is the end of the walk\./);
+
+  // the initial, truly empty, complete control
+  const none = await ask(["c01", "c02"]);
+  assert.deepEqual([none.hits, none.complete, none.cursor, none.reset], [[], true, null, undefined]);
+  assert.match(none.more_note, /^No resident in common was found for c01 and c02 in this walk's scope \(the index's letters, for residents on the roll\): this is the end of the walk\./);
+  assert.match(none.more_note, /Letters the index does not hold are not searched\./);
+  assert.doesNotMatch(none.more_note, /was checked|write to no resident/i);
+});
+
+test("the closing words, common mode: a terminal page with a hit ends the walk without a verdict on the earlier pages; an unfinished empty page carries its cursor; a reset page is a first page", async (t) => {
+  if (skip) return t.skip(skip);
+  const cs = Array.from({ length: 140 }, (_, i) => `d${String(i + 1).padStart(3, "0")}`);
+  await seed({
+    residents: ["ada", "bex", "cat", ...cs],
+    letters: [
+      ...cs.map((c) => ({ id: `ada-${c}`, from: "ada", to: c, body: "hello" })),
+      { id: "bex-d140", from: "bex", to: "d140", body: "hello" },
+      { id: "cat-d001", from: "cat", to: "d001", body: "hello" }, { id: "cat-d140", from: "cat", to: "d140", body: "hello" },
+    ],
+  });
+  const ask = (args) => store.discover(api, { mode: "common_correspondents", ...args });
+
+  // ada and bex share d140 only, 140 candidates, 128 a page: page one is unfinished and empty
+  const p1 = await ask({ people: ["ada", "bex"] });
+  assert.deepEqual([p1.hits, p1.complete, typeof p1.cursor, p1.examined.candidates], [[], false, "string", L.candidates_per_page]);
+  assert.match(p1.more_note, /^This page is not the whole answer: the page read 128 of the residents they write to, its work bound\. Pass cursor to read on\./);
+  noOverclaim(p1.more_note, "common: an unfinished page with no hits");
+  assert.doesNotMatch(p1.more_note, /no further common correspondents|end of (the|this) walk/i);
+  // page two is the terminal page, and it has the hit
+  const p2 = await ask({ people: ["ada", "bex"], cursor: p1.cursor });
+  assert.deepEqual([p2.hits.map((h) => h.handle), p2.complete, p2.cursor], [["d140"], true, null]);
+  assert.match(p2.more_note, /^This page ends the walk: no further common correspondents follow its hits\. Hits on earlier pages stand\./);
+  noOverclaim(p2.more_note, "common: a terminal page with a hit");
+
+  // a reset: the walk's first page again
+  const q1 = await ask({ people: ["ada", "cat"], limit: 1 });
+  assert.deepEqual([q1.hits.map((h) => h.handle), q1.complete], [["d001"], false]);
+  await seed({ residents: ["ada", "bex", "cat", ...cs, "newcomer"], letters: [{ id: "ada-d001", from: "ada", to: "d001", body: "hello" }] });   // the record moves: only ada writes now
+  const moved = await ask({ people: ["ada", "cat"], limit: 1, cursor: q1.cursor });
+  assert.equal(moved.reset?.from, q1.source_generation);
+  assert.deepEqual([moved.hits, moved.complete, moved.cursor], [[], true, null]);
+  assert.match(moved.more_note, /^No resident in common was found for ada and cat in this walk's scope/, "the reset page began the walk");
+  assert.doesNotMatch(moved.more_note, /No further common correspondents on this page/);
+});
+
 // ── the cursor ───────────────────────────────────────────────────────────────
 
 test("the cursor is read whole and grants nothing: another request's, a tampered one and an oversized one are refused; one from before the record moved is an explicit reset", async (t) => {
