@@ -2,13 +2,15 @@
 //
 // WHY THIS IS ITS OWN MODULE, and it is one line of history rather than a
 // preference. The island parser lived as a file-local `windowStateOf` inside
-// hydrate.mjs, where it was the only reader and that was correct. The freshness
-// ladder gave it a second reader (paper-fresh.mjs re-reads a pane the pen has
-// written since the last hydration), and a grammar with two readers and one
-// home is the shape standing.mjs names as its own named cost: "the GRAMMAR now
-// has two homes". Rather than pay that cost a second time, the parser moved out
-// here and hydrate imports it — the same move profiles.mjs made for PROFILE.md
-// and for the same reason.
+// hydrate.mjs (since retired, with the office.db rehydrate), where it was the
+// only reader and that was correct. The freshness ladder gave it a second reader
+// (paper-fresh.mjs re-reads a pane the pen has written since the last index
+// build), and a grammar with two readers and one home is the shape standing.mjs
+// names as its own named cost: "the GRAMMAR now has two homes". Rather than pay
+// that cost a second time, the parser moved out here and both readers import
+// it — today town-index.mjs (`residentRows`, the index ingest) and
+// paper-fresh.mjs — the same move profiles.mjs made for PROFILE.md and for the
+// same reason.
 //
 // The shape is profiles.mjs's exactly: `readWindowState(clone, handle)` takes
 // the checkout, and this module owns nothing about where the checkout is.

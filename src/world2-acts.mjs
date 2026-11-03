@@ -1,27 +1,41 @@
 // world2-acts.mjs — THE WORLD 2.0 SHADOW PEN (office_api's acts writer, dev era).
 //
 // Phase 3a of the World 2.0 gold plan (G:/Starstory/PULSE/gold-plans/
-// postmark-world-2/): every row appendJournal writes into the sqlite journal is
-// MIRRORED into Postgres `acts` — the permanent event log that replaces the
-// journal-truncate-drain-to-git cycle at cutover. During the shadow era the
-// sqlite journal remains the store the office READS; Postgres is the store
-// being proven. The parity falsifier (world2/tools/falsifier-acts-parity.mjs)
-// asserts every undrained journal row has its acts twin.
+// postmark-world-2/) built this file as the MIRROR: every row appendJournal
+// wrote into the sqlite journal was copied into Postgres `acts` — the permanent
+// event log that replaces the journal-truncate-drain-to-git cycle — while the
+// sqlite journal stayed the store the office READ.
 //
-// ── THIS IS A SHIM, AND IT SHIPS WITH ITS OWN DEATH (anti-rebake rule 5) ─────
-// The mirror exists so 1.0 and 2.0 can be A/B'd on the same live dev traffic
-// (phase 4). At cutover the journal INSERT dies, this file's mirror becomes the
-// door's ONE awaited write, and `acts.journal_seq` is dropped. The expiry
-// falsifiers red past a lane's own backstop (below) so the shim cannot become
-// furniture.
+// THAT ERA IS OVER (G1 / POS-156). `acts` is the record. `appendJournal` and
+// `appendActFlipped` (world-journal.mjs) write it themselves, awaited, through
+// `world2-pen.mjs § penWrite`, and throw `PenUnreachableError` when it cannot
+// be reached; they no longer call this file. There is no sqlite journal INSERT
+// left to mirror (`appendArenaRow` closed with the arena, 2026-09-30), and
+// `acts.journal_seq` is dropped (migration 025).
+//
+// WHAT THIS FILE STILL DOES:
+//   · `mirrorAct` — the fire-and-forget `acts` INSERT for a lane that keeps its
+//     own pen and so never reaches `appendJournal`. Its one live caller is the
+//     UNFLIPPED `say` arm: `world.mjs § mirrorVoiceAct` → `world-journal.mjs §
+//     mirrorLaneAct` → here. When `W2_PEN` names `say`, the flipped pen holds
+//     the act and `mirrorVoiceAct` returns before it reaches this file.
+//   · `actsQuery`, `world2Enabled`, `__setPoolForTest` and the exemption and
+//     flip-date tables below — the module the office reads `acts` through.
+//   · `stanceQuery` — `stance_reader`'s own credential, at the foot.
+//
+// ── THIS WAS A SHIM, AND THE WRITE LEG OF IT IS ITS LAST REMNANT ─────────────
+// (anti-rebake rule 5.) The sqlite INSERT it mirrored died with G1; what is
+// left is the queue below, which serves only the unflipped `say` arm.
 //
 // ── WRITE DISCIPLINE ─────────────────────────────────────────────────────────
-// appendJournal is synchronous; the mirror is an in-process serial queue —
-// fire-and-forget FOR THE CALLER, never for the operator: a failed mirror
-// write logs loudly, lands in `mirrorStatus().failed`, and the parity
-// falsifier turns red at the next check. That is acceptable ONLY because the
-// sqlite journal is still the SoT this era; the cutover rewrite awaits the
-// insert and refuses at the door instead.
+// `mirrorAct` is an in-process serial queue — fire-and-forget FOR THE CALLER,
+// never for the operator: a failed write logs loudly (`console.error`, "MIRROR
+// WRITE FAILED") and is counted in this module's state. Nothing reads that
+// count since `mirrorStatus` went, and no parity falsifier pairs the two stores
+// any more, so the console line is the only signal. That is acceptable ONLY
+// because the unflipped `say` arm is a second consumer of a fact the voices log
+// already holds as its durable record; the awaited, door-refusing write is the
+// flipped pen's.
 //
 // Env:
 //   WORLD2_PG=1        the mirror is on
@@ -200,11 +214,13 @@ async function pool(env = process.env) {
 }
 
 /**
- * Mirror one journal row into Postgres `acts`. `row` is the exact object
- * appendJournal built (post-normalization: witnesses/payload already JSON
+ * Copy one row into Postgres `acts` for a lane that keeps its own pen. `row`
+ * is `world-journal.mjs § normalizeRow`'s output, which is what
+ * `mirrorLaneAct` hands in (post-normalization: witnesses/payload already JSON
  * strings, at_anchor/at_dx/at_dy split, written_at an ISO string); `seq` is
- * the sqlite rowid it landed at. Fire-and-forget for the caller; serialized
- * so acts receives rows in journal order.
+ * `null` from that caller, since no sqlite row exists, and is only named in
+ * the failure line. Fire-and-forget for the caller; serialized so acts
+ * receives rows in the order they were queued.
  */
 export function mirrorAct(row, seq, env = process.env) {
   if (!world2Enabled(env)) return;
@@ -226,10 +242,10 @@ export function mirrorAct(row, seq, env = process.env) {
       const guarded = lateCrossingGuard(row, { env });
       const household = guarded.household == null ? null : await actHouseholdFor(p, guarded);
       // `acts.journal_seq` IS DROPPED (G1 / POS-156, migration 025). This path
-      // is the ARENA's now -- the one lane that still writes a sqlite row and
-      // so the one caller that still HAS a seq -- and even here the column has
-      // no job: nothing pairs the two stores any more, and the arena's seq is
-      // its identity inside its own fold, not a key into the record.
+      // carries the lanes that keep their own pen -- today the unflipped `say`
+      // arm -- and none of them has a sqlite row, so none has a seq to file:
+      // `mirrorLaneAct` passes `null`, and `actsInsert` has no column for it.
+      // Nothing pairs the two stores any more.
       const { text, values } = actsInsert(guarded, household);
       await p.query(text, values);
       state.written += 1;
@@ -241,21 +257,6 @@ export function mirrorAct(row, seq, env = process.env) {
     }
   });
   return state.queue;
-}
-
-/**
- * Status for the office's status answer.
- *
- * `expires` and `lane_expiry` are GONE with the map that fed them (G1). They
- * answered "when does this shim's backstop fire", and there is no shim: this
- * queue is the ARENA's path now, the one lane exempt by ruling, and an
- * exemption has no expiry by definition. A field left behind answering `null`
- * for every lane would read as "nothing is owed" rather than "nothing is
- * governed", which are different sentences.
- */
-export function mirrorStatus() {
-  const { written, failed, lastError } = state;
-  return { enabled: world2Enabled(), written, failed, lastError };
 }
 
 /** Await everything queued (tests + graceful shutdown). */

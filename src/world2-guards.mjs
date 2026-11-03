@@ -64,10 +64,11 @@
 // reached. This is not a new shape: THE HOLD SHELF'S READS below have run it
 // since POS-153 — "there is no `guardsFlipped()` branch here and no sqlite
 // fallback underneath" — on Everything Reads the Store's own sentence, that the
-// flag is the disease. `guardedAttachments` KEEPS its flag, and the difference
-// is the whole test: its fallback reads `dynamic.db/attachments`, a table G1
-// does not touch, so its 1.0 arm still answers from a store that is still
-// written.
+// flag is the disease. `guardedAttachments` kept its flag for a while, and the
+// difference was the whole test: its fallback read `dynamic.db/attachments`, a
+// table G1 did not touch, so its 1.0 arm still answered from a store that was
+// still written. POS-269 retired that file and the arm with it, so it now reads
+// the store unconditionally too, as the three do.
 //
 // Prod runs `W2_GUARDS=1`, so nothing live changes on the day this lands; what
 // goes is the ability to roll the read half back onto a store that no longer
@@ -180,8 +181,8 @@ let readerOverride = null;
 /**
  * Install a stand-in for `officeRead` and return the undo.
  *
- * `test/world2-guard-doors.test.mjs` hands in a hand-built client. Nothing in
- * `src/` calls this.
+ * `test/hold-wirings.test.mjs` (`withRecord`) hands in a hand-built client.
+ * Nothing in `src/` calls this.
  */
 export function useGuardReader(read) {
   const prev = readerOverride;
@@ -390,7 +391,7 @@ export async function guardedDraftsForKey(repo, key) {
 // target would change the answer, not just the cost."
 
 /**
- * 1.0's `readAttachments(db)`, answered from `acts` (both eras) under the flag.
+ * 1.0's `readAttachments(db)`, answered from `acts` (both eras).
  *
  * `strict: true` again, and here it is the sharpest of the three: the port's own
  * refusal text says a skipped holding act "would answer with the WRONG RESIDENT
@@ -461,45 +462,6 @@ export async function storeHoldingRows({ thing = null, since = null, until = nul
 }
 
 /**
- * THE SET-DOWNS WAITING ON A HOUSE'S WORD — the holding record's rows for the
- * things `handles` made, in ONE read-only transaction (POS-138, 2026-09-24).
- *
- * Answers `Map(thing -> { attachments, journal })`: exactly the envelope
- * `standsRowsFromStore` answers for one thing, so `world-stance.mjs §
- * setDownFor` reads it through its own `readRows` seam and stays the one place
- * that decides whether a set-down is a stranger's. This function decides
- * nothing: it enumerates.
- *
- * WHAT IT READS: the holding acts on things these handles made (one query,
- * `pgHoldingRows`' `madeBy` narrowing), then the attachment acts of each of
- * those things that has a drop on the record (one query per such thing). A
- * thing never set down costs no second query. Null when the office is not
- * pointed at the record, which is "I could not look", never "nothing waits".
- */
-export async function setDownRowsForMakers(handles) {
-  if (!world2Enabled()) return null;
-  const makers = [...new Set([...(handles ?? [])].map(String).filter(Boolean))].sort();
-  if (!makers.length) return new Map();
-  return reading(async (client) => {
-    const journal = await port.pgHoldingRows(client, { madeBy: makers });
-    const byThing = new Map();
-    for (const r of journal) {
-      const thing = String(r.object ?? r.payload?.thing ?? "");
-      if (!thing) continue;
-      if (!byThing.has(thing)) byThing.set(thing, []);
-      byThing.get(thing).push(r);
-    }
-    const out = new Map();
-    for (const [thing, rows] of [...byThing].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-      if (!rows.some((r) => r.action === "drop")) continue;
-      const held = await port.pgAttachmentsFor(client, { target: thing });
-      out.set(thing, { attachments: held.rows, journal: rows });
-    }
-    return out;
-  });
-}
-
-/**
  * `readAttachments(db)`, from the record — the whole town's edge, never
  * narrowed, for `pgAttachmentsFor`'s own reason: "narrowing it to one target
  * would change the answer, not just the cost."
@@ -510,10 +472,9 @@ export async function setDownRowsForMakers(handles) {
  * `[]`, so "you are holding nothing" would ship green. The unwrap is here, once,
  * rather than at each of the three call sites.
  *
- * `guardedAttachments` above still carries its flag: it is the WRITE guard, its
- * port is row 29 of the reader inventory and its flip is not this lane's. Both
- * call the same `pgAttachmentsFor` underneath, so there is one answer with two
- * doors to it, and the doors collapse when row 29 lands.
+ * `guardedAttachments` above is the WRITE guard's door to the same read (it has
+ * carried no flag since POS-269). Both call the same `pgAttachmentsFor`
+ * underneath, so there is one answer with two doors to it.
  */
 export async function storeAttachmentRows({ until = null, afterId = null } = {}) {
   const off = unconfigured("holder");
@@ -557,10 +518,10 @@ export async function storeAttachmentRows({ until = null, afterId = null } = {})
 // in its catch. An answer short by the rows nobody looks for is the one outcome
 // neither store is allowed to produce.
 //
-// ⚑ NO FLAG. `guardedAttachments` carries a `W2_GUARDS` branch because a GUARD
-// flipping is a thing an operator rolls back. This is a READ with one right
-// answer, and a switch here would be the office keeping two answers to one
-// question — the thing the project exists to stop.
+// ⚑ NO FLAG. `guardedAttachments` carried a `W2_GUARDS` branch until POS-269,
+// because a GUARD flipping is a thing an operator rolls back. This is a READ
+// with one right answer, and a switch here would be the office keeping two
+// answers to one question — the thing the project exists to stop.
 export async function storeDepartureRows() {
   const off = unconfigured("departures");
   if (off) throw off;
@@ -649,10 +610,10 @@ export async function storeDepartureHead(after = null) {
 // `attachments` table and the holding-class `journal`. The rows are in `acts`,
 // the ports exist, and this is the wire.
 //
-// ⚑ IT TAKES NO FLAG, AND THAT IS THE POINT. `guardedAttachments` above carries
-// a `W2_GUARDS` branch because a GUARD flipping is a thing an operator rolls
-// back by removing a flag. This is a READ with one right answer: the holding
-// record lives in `acts`, the sqlite journal truncates at every drain, and a
+// ⚑ IT TAKES NO FLAG, AND THAT IS THE POINT. `guardedAttachments` above carried
+// a `W2_GUARDS` branch until POS-269, because a GUARD flipping is a thing an
+// operator rolls back by removing a flag. This is a READ with one right
+// answer: the holding record lives in `acts`, the sqlite journal truncates at every drain, and a
 // switch here would be the office maintaining two answers to one question —
 // which is the thing the project exists to stop. Replace, never layer: there is
 // no sqlite fallback under this and a store that cannot be read is an ABSENT
@@ -715,9 +676,4 @@ export async function standsRowsFromStore(thingId) {
 export async function setDownAmendRows(thingId) {
   if (!world2Enabled()) return null;
   return reading(async (client) => port.pgSetDownAmends(client, { thing: String(thingId) }));
-}
-
-/** What the doors say about the read half, for the status surfaces. */
-export function guardStatus(env = process.env) {
-  return { flipped: guardsFlipped(env), flag: "W2_GUARDS", source: guardsFlipped(env) ? "postgres" : "sqlite" };
 }

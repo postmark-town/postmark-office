@@ -19,7 +19,10 @@
 //      10-31 holds one, the clearing's limit pass opposes the second, and a
 //      purchase makes room;
 //   7–9. buying room ahead: the quote, the door, and the exec end to end;
-//   10. a retry or a double click burns once (the 10-26 review's F1).
+//   10. a retry or a double click burns once (the 10-26 review's F1);
+//   12. room past the residents warns and is allowed (POS-849, which replaced
+//       POS-762/g's "Refuse it"): the quote, the preview, the act's burn and the
+//       double click's receipt all carry the heads-up.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
@@ -27,7 +30,7 @@ import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { houseKeyCanon, parcelBurnsOf, houseFactsOf, houseFactsAt, parcelRoomNoteOf, parcelRoomQuote, buyParcelRoomViaOffice } from "../src/parcel-room.mjs";
+import { houseKeyCanon, parcelBurnsOf, houseFactsOf, houseFactsAt, parcelRoomNoteOf, parcelRoomQuote, roomPastResidentsHeadsUp, buyParcelRoomViaOffice } from "../src/parcel-room.mjs";
 import { foldHouseholds } from "../src/world-snapshot.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -224,17 +227,64 @@ function withResidents(residents) {
   return { households: { ...registry.households, "the-rowan": { ...registry.households["the-rowan"], residents } } };
 }
 
-test("7 · no room past the residents (POS-762/g, \"Refuse it\"): add the resident first, then buy the room", () => {
-  const refused = (r, re) => { assert.ok(r.error, `sold: ${JSON.stringify(r.quote ?? r)}`); assert.match(`${r.error.defect} — ${r.error.hint}`, re); };
-  // two residents and room for two already: the third room has no resident to hold it
-  refused(quote({ entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] }),
-    /^the-rowan has 2 residents, and room for a third parcel needs a third resident to hold it — a parcel is one per resident: add the resident first \(household \{ do: "add-resident" \}\), then buy the room\. Nothing was burned$/);
-  // one resident: even the second room is refused
-  refused(quote({ registry: withResidents(["ash"]) }), /the-rowan has 1 resident, and room for a second parcel needs a second resident/);
-  // and it is the reason given before the price: short of stamps too, the step is still the resident
-  refused(quote({ registry: withResidents(["ash"]), entries: [GIFT("ash", 10)] }), /add the resident first/);
-  // a resident each: sold
-  assert.equal(quote({ registry: withResidents(["ash", "birch"]) }).quote.room.after, 2);
+// The warning's exact words, typed here and not derived, so the words Darko reviews are the words pinned.
+const HEADS_UP_1_RESIDENT_2ND = "the-rowan has 1 resident, and a parcel is one per resident, so it can hold 1 parcel now. "
+  + "Room for a second parcel stands empty until a second resident joins (household { do: \"add-resident\" }). "
+  + "Stamps paid for room are never returned.";
+const HEADS_UP_2_RESIDENTS_3RD = "the-rowan has 2 residents, and a parcel is one per resident, so it can hold 2 parcels now. "
+  + "Room for a third parcel stands empty until a third resident joins (household { do: \"add-resident\" }). "
+  + "Stamps paid for room are never returned.";
+const HEADS_UP_1_RESIDENT_3RD = "the-rowan has 1 resident, and a parcel is one per resident, so it can hold 1 parcel now. "
+  + "Room for a third parcel stands empty until 2 more residents join (household { do: \"add-resident\" }). "
+  + "Stamps paid for room are never returned.";
+
+// LAW (POS-849; Darko, 2026-10-31 22:31 EDT): "let's just let 757 through and then hotfix to warn and allow during the week."
+// Until POS-849 this test asserted POS-762/g "Refuse it" (Darko 2026-10-23 11:03 EDT): a one-resident house was refused the
+// 2nd room with "add the resident first", and nothing was burned. It is inverted, not deleted: the same fixtures, the opposite ruling.
+test("7 · room past the residents (POS-849): sold, with a heads-up that names the room and what it waits for; the old refusal is gone", () => {
+  const lone = quote({ registry: withResidents(["ash"]) });
+  // the call is allowed: a quote, no refusal, the same price and the same town line as a house with a resident to spare
+  assert.equal(lone.error, undefined, `"warn and allow" (LAW) must not refuse; it answered: ${JSON.stringify(lone.error)}`);
+  assert.deepEqual([lone.quote.room, lone.quote.price, lone.quote.line],
+    [{ now: 1, after: 2 }, 50, "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan"],
+    "the room is sold at the price by the room already bought, whatever the residents");
+  // the warning: exact words, naming the room (the 2nd parcel's) and what it waits for (a second resident)
+  assert.equal(lone.quote.heads_up, HEADS_UP_1_RESIDENT_2ND, "LAW: \"warn\" says the room stands empty until a second resident joins");
+  assert.doesNotMatch(JSON.stringify(lone), /add the resident first|needs a second resident to hold it|Nothing was burned/, "the old refusal's words are gone from the answer");
+  // two residents, room for two already: the third room waits for 1 resident; and one resident with two rooms bought: it waits for 2
+  const third = quote({ entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] });
+  assert.equal(third.error, undefined, JSON.stringify(third.error));
+  assert.deepEqual([third.quote.room, third.quote.price, third.quote.heads_up], [{ now: 2, after: 3 }, 100, HEADS_UP_2_RESIDENTS_3RD]);
+  const loneThird = quote({ registry: withResidents(["ash"]), entries: [GIFT("ash", 200), { canonical: BUY("ash", 2, "hh:the-rowan") }] });
+  assert.equal(loneThird.error, undefined, JSON.stringify(loneThird.error));
+  assert.deepEqual([loneThird.quote.room, loneThird.quote.price, loneThird.quote.heads_up], [{ now: 2, after: 3 }, 100, HEADS_UP_1_RESIDENT_3RD]);
+});
+
+test("7 · room a resident can hold carries no heads-up (the control: only the residents differ from the case above)", () => {
+  const two = quote({ registry: withResidents(["ash", "birch"]) });
+  assert.equal(two.error, undefined, JSON.stringify(two.error));
+  assert.equal(two.quote.room.after, 2);
+  assert.equal("heads_up" in two.quote, false, "a resident each: nothing to warn about");
+  const three = quote({ registry: withResidents(["ash", "birch", "cedar"]), entries: [GIFT("ash", 200), { canonical: BUY("birch", 2, "hh:the-rowan") }] });
+  assert.equal("heads_up" in three.quote, false, "three residents, the third room: a resident each");
+});
+
+test("7 · a short purse past the residents is refused for the stamps, never sold: the warning does not turn a short purse into a sale", () => {
+  const short = quote({ registry: withResidents(["ash"]), entries: [GIFT("ash", 10)] });
+  assert.ok(short.error, `short of stamps: refused; it answered: ${JSON.stringify(short)}`);
+  assert.match(`${short.error.defect} — ${short.error.hint}`, /room for a second parcel costs 50 stamps, and ash holds 10 liquid/,
+    "refused for the price (until POS-849 it was refused for the residents first, and this house never reached the price)");
+});
+
+test("7 · the heads-up, as a pure sentence: nothing when a resident can hold the room or the counts are not a house's", () => {
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: 1, nth: 2 }), HEADS_UP_1_RESIDENT_2ND);
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: 2, nth: 3 }), HEADS_UP_2_RESIDENTS_3RD);
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: 1, nth: 3 }), HEADS_UP_1_RESIDENT_3RD);
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: 2, nth: 2 }), null, "a resident each: no warning");
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: 3, nth: 2 }), null, "more residents than rooms: no warning");
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: 0, nth: 2 }), null, "a house with no residents is no house's count");
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: undefined, nth: 2 }), null);
+  assert.equal(roomPastResidentsHeadsUp({ slug: "the-rowan", residents: 1, nth: "2" }), null, "an nth the grammar never writes");
 });
 
 test("7 · the quote refuses, in plain words naming the price and the cutoff, and writes nothing", () => {
@@ -274,12 +324,14 @@ test("8 · the door: a preview quotes and writes nothing; a stranger or no payer
     assert.match(p.to_confirm, /household \{ do: "buy-parcel-room", args: \{ from: "ash" \} \} — the same call without preview: true/);
     assert.ok(p.nothing_written);
     assert.equal(readFileSync(ledger, "utf8"), before, "a preview writes nothing");
-    // POS-762/g: a preview quotes the same refusal for room past the residents, and writes nothing
+    // POS-849 (until then this asserted POS-762/g "Refuse it": a 409 "add the resident first"): a preview of room past
+    // the residents quotes the sale with the heads-up, and writes nothing
     writeFileSync(join(town, "tools", "households.json"), JSON.stringify(withResidents(["ash"])));
     const lone = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-11-03" });
-    assert.equal(lone.code, 409);
-    assert.match(`${lone.defect} — ${lone.hint}`, /needs a second resident to hold it — a parcel is one per resident: add the resident first/);
-    assert.equal(readFileSync(ledger, "utf8"), before, "the refused preview writes nothing");
+    assert.equal(lone.error, undefined, `the preview must quote, not refuse (POS-849): ${JSON.stringify(lone)}`);
+    assert.deepEqual([lone.preview, lone.did, lone.room, lone.price, lone.heads_up], [true, "buy-parcel-room", { now: 1, after: 2 }, 50, HEADS_UP_1_RESIDENT_2ND]);
+    assert.ok(lone.nothing_written);
+    assert.equal(readFileSync(ledger, "utf8"), before, "the preview writes nothing, warned or not");
     writeFileSync(join(town, "tools", "households.json"), JSON.stringify(registry));
     const early = await buyParcelRoomViaOffice(town, { from: "ash", preview: true }, KEY, { worldClone: LAW_WORLD, date: "2026-10-30" });
     assert.match(early.defect, /room is bought from 2026-11-01/);
@@ -591,4 +643,57 @@ test("11 · N1: a blessing whose engine can't be materialised refuses rather tha
     g("add", "-A"); g("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "the law, on main");
     await refusedBeforeBless(world, /settlement\/S1 \(its engine could not be read\)/);
   } finally { rmSync(world, { recursive: true, force: true }); }
+});
+
+// ── 12 · room past the residents warns and is allowed (POS-849) ──────────────
+// LAW (Darko, 2026-10-31 22:31 EDT): "let's just let 757 through and then hotfix to warn and allow during the week."
+// Until POS-849 the quote refused a house room for a parcel its residents could not hold ("Refuse it", POS-762/g), so
+// a lone resident's act burned nothing and answered 409. These run the real door and the real exec behind the
+// stand-in town: the burn is the ledger's own line, and the answer is what an agent reads.
+const LONE_BURN = "- 2026-11-03 · ash → BURN · 50 · for: parcel:2/hh:the-rowan";
+
+test("12 · the act past the residents: the burn goes through once, and the answer carries the heads-up (POS-849)", async () => {
+  const town = standInTown({ residents: ["ash"] });
+  try {
+    const r = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
+    assert.equal(r.error, undefined, `warn and allow (LAW) must not refuse; it answered: ${JSON.stringify(r)}`);
+    assert.deepEqual(burnsIn(town), [LONE_BURN], "the burn went through: one line, 50 stamps, for the 2nd parcel's room");
+    assert.deepEqual([r.did, r.duplicate, r.room, r.price, r.heads_up], ["buy-parcel-room", undefined, { now: 1, after: 2 }, 50, HEADS_UP_1_RESIDENT_2ND],
+      "and the answer says the room stands empty until a second resident joins");
+  } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+test("12 · control: a house with a resident for the room buys it with no heads-up, on the same door and the same exec", async () => {
+  const town = standInTown(); // ash, birch, cedar
+  try {
+    const r = await withExecEnv(town, {}, () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
+    assert.equal(r.error, undefined, JSON.stringify(r));
+    assert.deepEqual(burnsIn(town), [LONE_BURN], "the burn is the same line");
+    assert.equal("heads_up" in r, false, "nothing to warn about when a resident can hold the room");
+  } finally { rmSync(town, { recursive: true, force: true }); }
+});
+
+test("12 · a double click past the residents burns once, and the click that answers the receipt still carries the heads-up", async () => {
+  const town = standInTown({ residents: ["ash"] });
+  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  try {
+    const second = await withExecEnv(town, { [RACE]: LONE_BURN, [`${RACE}_MARK`]: join(markDir, "landed") },
+      () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
+    assert.ok(existsSync(join(markDir, "landed")), "the race hook fired inside the exec: the first click's line landed between this call's entry and its lock");
+    assert.deepEqual(burnsIn(town), [LONE_BURN], `one burn, not two. The second click answered: ${JSON.stringify(second)}`);
+    assert.equal(second.duplicate, true, "the second click answers the first purchase's receipt");
+    assert.equal(second.heads_up, HEADS_UP_1_RESIDENT_2ND, "and that receipt may be the only answer the agent reads, so it carries the warning");
+  } finally { rmSync(town, { recursive: true, force: true }); rmSync(markDir, { recursive: true, force: true }); }
+});
+
+test("12 · control: the same double click for a house with a resident each answers a receipt with no heads-up", async () => {
+  const town = standInTown();
+  const markDir = mkdtempSync(join(tmpdir(), "parcel-room-mark-"));
+  try {
+    const second = await withExecEnv(town, { [RACE]: LONE_BURN, [`${RACE}_MARK`]: join(markDir, "landed") },
+      () => buyParcelRoomViaOffice(town, { from: "ash" }, KEY3, { worldClone: LAW_WORLD, date: "2026-11-03" }));
+    assert.ok(existsSync(join(markDir, "landed")), "the race hook fired");
+    assert.equal(second.duplicate, true);
+    assert.equal("heads_up" in second, false);
+  } finally { rmSync(town, { recursive: true, force: true }); rmSync(markDir, { recursive: true, force: true }); }
 });
