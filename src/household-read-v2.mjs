@@ -32,8 +32,8 @@ import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
 
 /**
- * How many groups of what waits the glance shows: the largest first, then the
- * oldest of the rest (needGroups' order).
+ * How many groups of what waits the glance shows: the largest first, ties
+ * oldest first (needGroups' order).
  */
 export const NEEDS_FIRST = 2; // round 4 (Darko 15:06): two groups, paying for marks and posts
 /** With more waiting than a page holds, how many of the inbox's last rows are read on their own for the oldest groups. */
@@ -186,7 +186,7 @@ export function groupAct({ by, over, count }, ids) {
  * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
  * marks over one place of yours is ONE row, `{ by, over, count, oldest,
  * newest, sample }`, the sample being the group's oldest body, whole. Groups
- * run largest first, then oldest first (round 4, Darko 16:49), up to `max`
+ * run largest first, ties oldest first (round 4, Darko 16:49), up to `max`
  * (NEEDS_FIRST by default). `rows` is newest first, as the inbox orders it.
  */
 export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
@@ -204,7 +204,7 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   }
   // eval round 1: a group a reader can act on, its oldest ids; round 3: one act answers the whole group
   return [...groups.values()]
-    // after round 4 (Darko 16:49): the largest group first, then the oldest of the rest, so a cut never hides the biggest stream
+    // after round 4 (Darko 16:49): the largest group first, ties oldest first, so a cut never hides the biggest stream
     .sort((a, b) => (b.count - a.count) || String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
     .slice(0, max)
     .map((g) => {
@@ -219,8 +219,9 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
 /**
  * The needs block from the inbox page (newest first, as stanceShadow orders it)
  * and needs-you's counts. `first` is the waiting marks grouped by author and
- * place, largest group first (needGroups' order). When more wait than the page holds, `tail` (the
- * inbox's last rows, read on their own) joins the page so the oldest are there.
+ * place, largest group first, ties oldest first (needGroups' order). When more
+ * wait than the page holds, `tail` (the inbox's last rows, read on their own)
+ * joins the page so the oldest are there.
  */
 export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   const page = stances.awaiting ?? [];
