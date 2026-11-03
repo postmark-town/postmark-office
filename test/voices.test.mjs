@@ -1149,16 +1149,16 @@ test("POS-886 — hear: a voice spoken inside a room, wherever it falls between 
   assert.deepEqual([...joined.conversation.participants].sort(), ["a1", "a2", "b1", "b2", "pub"], "an open bridge joins them");
   assert.equal(joined.conversation.voice_count, 5);
 
-  // the same voice from inside a room: before the circles, between them, after them
+  // the same voice from inside a room: before the circles, between them, after them. Every verdict is collected, so one red
+  // does not hide the others.
+  const replies = [];
   for (const bridgeAfter of [-1, 1, 3]) {
     const w = roomBench({ ...RING_OF(circles), warden: BRIDGE_AT, rd: { x: 5, y: 0 } }, { warden: HALL });
     await speakCircles(w, circles, { bridge: "warden", bridgeAfter });
     w.tick(16_000);
-    const withRoom = await w.store.hear("rd");
-    assert.deepEqual(withRoom, without, `the room's voice after index ${bridgeAfter} changes nothing the outside reader is told`);
-    assert.equal(withRoom.conversation.voice_count, 2);
-    assert.ok(!withRoom.conversation.participants.includes("b1"), "circle B is not folded into their conversation");
+    replies.push(await w.store.hear("rd"));
   }
+  assert.deepEqual(replies, [without, without, without], "the room's voice, before, between or after the circles, changes nothing the outside reader is told");
 });
 
 test("POS-886 — say: the reply to an outside say is the same with or without a voice from a room between the circles", async () => {
@@ -1186,13 +1186,15 @@ test("POS-886 — a reader inside a room reads that room's conversation; a bridg
   assert.deepEqual(without.conversation.participants, ["h1", "h2"], "inside the room they read the room's own conversation");
   assert.equal(without.conversation.voice_count, 2);
 
-  // a voice from the open and a voice from another room, each between the hall's two circles
+  // a voice from the open and a voice from another room, each between the hall's two circles (every verdict collected)
+  const replies = [];
   for (const [handle, room] of [["out", null], ["keep", KEEP]]) {
     const w = roomBench({ ...RING_OF(circles), [handle]: BRIDGE_AT, hr: { x: 5, y: 0 } }, { ...inHall, hr: HALL, [handle]: room });
     await speakCircles(w, circles, { bridge: handle, bridgeAfter: 1 });
     w.tick(16_000);
-    assert.deepEqual(await w.store.hear("hr"), without, `a voice from ${room ?? "the open"} between the hall's circles changes nothing the hall reader is told`);
+    replies.push(await w.store.hear("hr"));
   }
+  assert.deepEqual(replies, [without, without], "a voice from the open, or from another room, between the hall's circles changes nothing the hall reader is told");
 
   // the admitting control: a bridge spoken inside their own room does join the two circles
   const own = roomBench({ ...RING_OF(circles), hb: BRIDGE_AT, hr: { x: 5, y: 0 } }, { ...inHall, hb: HALL, hr: HALL });
