@@ -67,7 +67,7 @@ import { probeOf } from "./index-probe.mjs";
 // it imports this module (and `src/ceremony.mjs`, which imports this module
 // too), so the edge back is taken dynamically inside `requestResidency`, where
 // it is needed.
-import { loadRegistry, loadPins } from "./registry-store.mjs";
+import { loadRegistry } from "./registry-store.mjs";
 import { resolveHouse, accountMatches, slugFromName, VIA } from "./household-deriver.mjs";
 
 const bounce = (code, defect, hint) => {
@@ -157,8 +157,10 @@ export const joinBranch = (handle) => `residency/${handle}`;
 // tools/github-ids.json are printed from it). A join the house already vouches
 // for is bound in the store at the door (src/join-bind.mjs); a held join's PR
 // carries the ADDRESS only, and is bound after its merge by settle-join.
-// Everything below is pure: it folds the registry the door just read into the
-// registry the join would leave behind.
+// The fold functions below (`houseForAccount`, `houseForName`, `planRegistryJoin`)
+// are pure: they fold the registry the door just read into the registry the
+// join would leave behind. The file is not pure throughout: `berthAshore` reads
+// a clone, and `readRegistry`, `openJoinPR` and the other PR openers do I/O.
 //
 // The office never invents a second answer to "whose house is this". The
 // predicate here — is this VERIFIED account already in the entry's accounts[] —
@@ -221,8 +223,8 @@ export function houseForName(registry, name) {
 const houseLineOf = (registry, slug) => registry?.households?.[slug]?.name ?? slug;
 
 // The plan for this join: the house it belongs to and `registry`, the record
-// folded forward with it (src/join-bind.mjs writes that fold at the door; no PR
-// carries it), or null for a join this door cannot place in a house — no
+// folded forward with it (src/join-bind.mjs consumes that fold at the door and
+// binds the join in the store from it; no PR carries it), or null for a join this door cannot place in a house — no
 // household named and no login to key one by, or a name that slugs to nothing.
 // A null plan leaves the plain three-file join.
 //
@@ -627,13 +629,14 @@ async function openPRFor(pen, branch, title) {
 // tree would silently revert every house declared since. Both are superseded by
 // a third answer that lags nothing — the registry is store-of-record
 // (019_households.sql), and `loadRegistry`/`loadPins` return exactly the
-// objects those fetches parsed to.
+// objects those fetches parsed to. (Only `loadRegistry` is read here: the pins
+// reader this file once carried had no caller and is gone.)
 //
 // The `UNREADABLE` distinction is KEPT: the store answers `null` for "this
 // office is not pointed at the record", and since admission became the bind
 // (Keemin, 2026-09-29) that is a refusal — a door that cannot read the record
 // cannot tell a vouched join from a held one. `requestResidency` refuses on it
-// for the registry; `readPins` has no caller in this file today. UNREADABLE
+// for the registry. UNREADABLE
 // survives the move because of the case it was built for: Luminari (#2479,
 // 2026-09-04) named a house on her card; the registry read failed once,
 // SILENTLY, and the pen opened the three-file shape, which rule 2c merged with
@@ -651,16 +654,13 @@ async function readRegistry(env = process.env) {
   if (r === null) { console.warn("[residency] the registry is unreadable at the door (this office is not pointed at the record) — the join is refused, try again"); return UNREADABLE; }
   return r;
 }
-async function readPins(env = process.env) {
-  const p = await loadPins(env);
-  if (p === null) { console.warn("[residency] the pin file is unreadable at the door (this office is not pointed at the record) — the join goes out saying so"); return UNREADABLE; }
-  return p;
-}
 
 // Opens the join PR. Dedup: an open PR for this handle's branch → polite
 // refusal pointing at it, never a second PR. The PR carries the three files of
 // `buildJoinFiles` and no registry diff (see below); a household plan reaches it
-// only as the registry paragraph of the body (`registryNote`).
+// as the registry paragraph of the body (`registryNote`) and, through
+// `plan.houseLine`, as the card's own `household:` line (set in
+// `requestResidency`).
 export async function openJoinPR(args, pen, plan) {
   const { handle } = args;
   const existing = await openPRFor(pen, joinBranch(handle), joinTitle(handle));

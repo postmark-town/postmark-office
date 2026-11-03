@@ -1,5 +1,11 @@
 # The write side's SQLite, inventoried (POS-269 / POS-271)
 
+> **Status, 2026-11-03:** `office.db`, `world.db` and `deploy/office-tick.sh` are
+> retired (`office.db` and its code path: POS-656, w43; `world.db`: POS-270, and
+> `src/server.mjs` says "world.db is retired"; `office-tick.sh`: POS-268 part 5b).
+> The tables below are the w41 snapshot (`60098fe`), partly updated since, and are
+> kept as history. Two rows are corrected in place (`attachments`, `roles.db`).
+
 Every open, write and read of `dynamic.db`, `roles.db` and `oauth.db` in this
 tree (base `60098fe`, train/2026-w41), each with its writer, its readers, and
 whether the record (Postgres `acts` and its projections) already carries the
@@ -52,7 +58,7 @@ is `WORLD_DYNAMIC_DB`, or `dynamic.db` beside the office.
 | table | writer today | readers today | in the record? |
 |---|---|---|---|
 | `journal` | `appendArenaRow` only (arena, P-143) | `arena.mjs` fold (`readJournal cls: arena-act`); `world-drain.mjs § drain` (settlement-auto, prod); `world-journal.mjs § draftsForKey` (mark rows, none since G1); `dynamicHealth` | arena beats reach `acts` through `mirrorAct` (fire-and-forget); every other class is written to `acts` only |
-| `attachments` | `world-hold.mjs § declareHolding` (every give/drop/take, inside `BEGIN IMMEDIATE` held across the Postgres pen); `tools/dynamic-rebuild`, `tools/arena-play` | `guardedAttachments` fallback (only when `W2_GUARDS` is off); `arena.mjs § weaponInHand` and the arena fold; `world-apex.mjs § portalBlockAt` (floor); `tools/crossing-save`, `crossing-replay-check` | **yes**: holding acts (`world2-guards § storeAttachmentRows / pgAttachmentsFor`), which prod's holder check already reads |
+| `attachments` | `world-hold.mjs § declareHolding` (every give/drop/take, inside `BEGIN IMMEDIATE` held across the Postgres pen); `tools/dynamic-rebuild`, `tools/arena-play` | `guardedAttachments` (no sqlite fallback and no `W2_GUARDS` branch since POS-269: it reads the record unconditionally); `arena.mjs § weaponInHand` and the arena fold; `world-apex.mjs § portalBlockAt` (floor); `tools/crossing-save`, `crossing-replay-check` | **yes**: holding acts (`world2-guards § storeAttachmentRows / pgAttachmentsFor`), which prod's holder check already reads |
 | `movements` | none since G1 (`declareMovement` removed) | `tools/ledger-freeze.mjs`; `dynamicHealth` | yes: walk acts |
 | `entities` | `refreshEntities` from `tools/crossing-save` and `tools/dynamic-rebuild` only | `dynamic-presence.mjs § readPresence` (behind `WORLD_PRESENCE`); `tools/crossing-replay-check` | yes: walk acts, and the positions projection (POS-264, `WORLD_POSITIONS`) |
 | `emissions` | `emissionFromVoice` on every say, behind `WORLD_EMISSIONS` | tools only: `crossing-save`, `state-to-r2`, `thread-parity`, `falsifier-live-equality`; `dynamicHealth` | yes: say acts (class voice) carry the words, the place and the instant |
@@ -91,7 +97,7 @@ None runs on a timer on prod except the drain inside settlement-auto.
 
 Opener: `src/paperwork.mjs § openPaper` with `schema: rolesSchema` (from
 `src/roles.mjs`), opened in `server.mjs` with `--roles-db`, default `roles.db`
-(read-only in a read worker); `tools/roles.mjs` opens it the same way. `src/roles.mjs § openRolesDb`
+(read-only in a read worker); `tools/roles.mjs` opens it through the same `openPaper` but read-write (no `readOnly`). `src/roles.mjs § openRolesDb`
 is the file-only opener and is called only from tests.
 
 | table | writer | readers | in the record? |

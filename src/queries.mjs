@@ -1741,7 +1741,8 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     // one-time rows"). Measured: a row folded at the last tick and a live fold
     // disagree on card / home / window, because `src/edit.mjs`'s pen lands those
     // three on the LIVE clone between snapshots while the row comes from the
-    // tick's frozen `git clone --local` (deploy/office-tick.sh).
+    // town-index ingest's own clone, as of its last run
+    // (deploy/town-index-ingest.sh, every 15 minutes; src/town-index.mjs folds it).
     //
     // So the live fold was the one field on this page FRESHER than the `as_of`
     // sha the page itself prints. Reading the row puts the checklist on the
@@ -3009,4 +3010,3 @@ export function regionWhole(row) {
     residents_total: residents.length,
   };
 }
-

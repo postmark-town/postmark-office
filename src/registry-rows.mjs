@@ -86,13 +86,15 @@ import { publicRegistry } from "./registry-public.mjs";
 // input against them. They are the file's grammar, and they are the only place
 // that grammar is written down.
 //
-// THE TAIL OF THIS TEMPLATE IS TWO COLUMNS THAT USUALLY RENDER NOTHING, and
-// they are appended in the order their migrations landed so that no standing
-// key ever moves: `formerly` (POS-158, migration 020) after `declared_by`, then
-// `provisional` (POS-159, migration 021) after that. 0/118 live rows carry
-// either — measured on the town's own files, twice, a day apart.
+// THE TAIL OF THIS TEMPLATE IS FIVE COLUMNS, and they are appended in the order
+// their migrations landed so that no standing key ever moves: `formerly`
+// (POS-158, migration 020) after `declared_by`, then `provisional` (POS-159,
+// migration 021) after that, then `home_images`, `likeness` and `invited_by`
+// (each described beside NESTED_KEYS below). The first two usually render
+// nothing: 0/118 live rows carried either — measured on the town's own files,
+// twice, a day apart, when they landed.
 //
-// Both are keys an ordinary value must NOT render, which is why `isAbsent`
+// Those two are keys an ordinary value must NOT render, which is why `isAbsent`
 // alone is not enough for this template. A house rendering `"formerly": []` or
 // `"provisional": false` would diff, and 118 of them would rewrite the whole
 // file on the first crossing. An empty alias list and a NULL are the same fact
@@ -136,9 +138,10 @@ export const PIN_KEYS = Object.freeze([
 export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 
 // Which household columns carry nested objects, and the template each one's
-// objects are ordered by. `accounts` is the only one: `residents` and
+// objects are ordered by. Four columns carry them (NESTED_KEYS below):
+// `accounts`, `home_images`, `likeness` and `invited_by`. `residents` and
 // `formerly` are `text[]` of strings (no keys to reorder) and every other
-// column is a scalar. If a later migration adds a second jsonb column, it
+// column is a scalar. If a later migration adds another jsonb column, it
 // arrives with its row here in the same commit, or the drain renders it in
 // Postgres's order and reds on the first crossing.
 //
@@ -307,19 +310,6 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
 }
 
 /**
- * The rows -> the registry OBJECT, in the file's own key order.
- *
- * This is the shape `src/declare-exec.mjs` and `src/declare.mjs` read off the
- * clone today — `{ schema_version, note, households: { <slug>: { … } } }` — so
- * a store read can be handed straight to `houseForAccount`, `houseForName`,
- * `conformance` and `planRegistryJoin` with nothing in between.
- *
- * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`
- * before the object is built, because a `SELECT` with no `ORDER BY` returns
- * whatever the planner liked that morning and the file's bytes would then
- * depend on the weather.
- */
-/**
  * The house picture a household's record keeps for one resident (POS-219,
  * migration 050), read off the registry OBJECT — the store's fold or the
  * town's rendered households.json, which are the same thing. Only an entry for
@@ -337,6 +327,19 @@ export function homePictureIn(registry, handle) {
   return null;
 }
 
+/**
+ * The rows -> the registry OBJECT, in the file's own key order.
+ *
+ * This is the shape `src/declare-exec.mjs` and `src/declare.mjs` read off the
+ * clone today — `{ schema_version, note, households: { <slug>: { … } } }` — so
+ * a store read can be handed straight to `houseForAccount`, `houseForName`,
+ * `conformance` and `planRegistryJoin` with nothing in between.
+ *
+ * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`
+ * before the object is built, because a `SELECT` with no `ORDER BY` returns
+ * whatever the planner liked that morning and the file's bytes would then
+ * depend on the weather.
+ */
 export function registryFromRows(rows) {
   const out = {};
   for (const [k, v] of Object.entries(rows?.meta ?? {})) {
