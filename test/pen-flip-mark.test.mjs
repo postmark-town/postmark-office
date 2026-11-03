@@ -178,7 +178,7 @@ test("(c) UNFLIPPED · a withdrawn private draft leaves NO docket row — its DE
   } finally { db.close(); unflip(); }
 });
 
-test("(c2) UNFLIPPED · both halves of one slug's life ride ONE queue — the ordering guarantee, named", async () => {
+test("(c2) UNFLIPPED · both halves of one slug's life go through ONE pen, in the caller's await order — the ordering guarantee, named", async () => {
   // The mechanism behind (c), asserted directly so a future refactor that
   // re-splits the queues reddens here with the reason rather than reddening
   // (c) as a puzzle. The compose and the withdrawal both go through the one

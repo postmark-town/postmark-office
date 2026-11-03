@@ -17,8 +17,9 @@
 //        of a FLIPPED lane, which committed before its sqlite write, and left
 //        a SHADOW lane as it was: sqlite first, Postgres queued, loud on
 //        failure, parity-falsified. G1 / POS-156 took the sqlite journal, and
-//        the shadow arm, `shadowWrite`, went with it: every act is now written
-//        by `penWrite`.)
+//        the shadow arm, `shadowWrite`, went with it: every journal act is now
+//        written by `penWrite`, and the few arms that insert into `acts`
+//        directly are listed at `penWrite`.)
 //
 // ── THE LANE FLAG (D1, per lane) ────────────────────────────────────────────
 // W2_PEN names the lanes whose pen is Postgres, comma-separated, or "all":
@@ -420,8 +421,12 @@ export function actsInsert(row, household, { provenance = null } = {}) {
 
 /**
  * THE WRITE (born THE FLIPPED WRITE) — Postgres first, awaited, refusable. Since
- * G1 / POS-156 every act is written here: `appendJournal` and `appendActFlipped`
- * both end in this function.
+ * G1 / POS-156 every journal act is written here: `appendJournal` and
+ * `appendActFlipped` both end in this function. A few arms still insert into
+ * `acts` themselves: `mirrorAct` (world2-acts.mjs, reached through
+ * world-journal's `mirrorLaneAct` from world.mjs § mirrorVoiceAct, the
+ * unflipped `say` arm), `holdTown` (creature-tick.mjs), the undo inserts of
+ * drop-recovery.mjs, and the adopt step of solo-adoption.mjs.
  *
  * `claimFn(client, actId, household)` is the candle half when the act is
  * mark-class: same client, same transaction (R1). Throws PenUnreachableError on

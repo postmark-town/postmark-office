@@ -330,8 +330,8 @@ export async function guardedLiveChildrenOf(db, id, { household = undefined, act
  * The `log` block keeps meaning what it meant — "what the journal contributes is
  * disclosed in its own `log` block rather than smuggled into a field that
  * already means a commit" — and gains `source`, the table of the one record the
- * journal half came from: `"claims"` when it answered, `"acts"` when it could
- * not (the failed read is the acts delta, below).
+ * journal half came from: `"claims"` on success; on failure `"acts"` names the
+ * read that failed (the acts delta, below), not the source of any answer.
  */
 export async function guardedDraftsForKey(repo, key) {
   const journal = await import("./world-journal.mjs");
