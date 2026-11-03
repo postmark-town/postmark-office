@@ -60,17 +60,26 @@
 // refreshers' cap (snapshot-loads.mjs § MAX_LOADS): a store that is slow is
 // never asked for the whole law once per act.
 //
-// ── EVERY ACT ASKS THE PIN, EVEN UNDER CONTENTION (POS-680) ──────────────────
+// ── AN ACT'S PIN QUESTION, UNDER CONTENTION (POS-680) ────────────────────────
 // Wright's Settled on POS-680 (2026-11-03 01:0x EST, adopting Rivet's
-// recommendation): "every act asks the cheap pin question, even when the load
-// cap is full; an act reuses a refresh in flight only if that refresh's pin
-// matches what it was just told; otherwise, the existing plain 503 for law that
-// moved but hasn't loaded." So when a refresh is in flight, or the cap is full,
-// `freshLaw()` asks the pin on its own (`pinAlone`: no load slot, nothing
-// loaded). The law in force is the one the pin names: the act goes on. A
-// refresh in flight is waited on, and stood on only if the law it put in force
-// is the one this act was told. Anything else is behind, and the door refuses.
-// A store that cannot be asked at all still refuses nothing (G1's fallback).
+// recommendation): "an act reuses a refresh in flight only if that refresh's
+// pin matches what it was just told; otherwise, the existing plain 503 for law
+// that moved but hasn't loaded." Amended (01:5x EST, the round-2 review's F3):
+// "The pin question counts against the existing load cap (two of three
+// connections, so a read always has one). When the cap is full, an act doesn't
+// ask outside it. It gets the existing plain, retryable 503." So:
+//   · nothing in flight: the act's own refresh, which asks the pin first;
+//   · a refresh in flight: the act asks the pin on its own (`pinAlone`), taking
+//     a slot under the cap like a refresh and holding it until the question
+//     has truly ended, even after the act stops waiting for it; the law in force
+//     is the one the pin names: the act goes on; a refresh in flight is waited
+//     on, and stood on only if what it put in force is the law this act was
+//     told; anything else is behind, and the door refuses;
+//   · the cap full, either way: behind (AT_THE_CAP), the door's plain 503;
+//   · a store that cannot be asked at all still refuses nothing (G1's fallback).
+// What the process knows of the pin moves only forward, by settlement (N6), so
+// a late, older answer never moves it back, and "behind" means the store's law
+// is newer than the one in force.
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
 import { startLoad, endLoad, loadsStanding, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
@@ -152,38 +161,54 @@ export function lawBehind() {
   return lawBehindOf(state.seenPinned);
 }
 
-/** The same sentence, for the settlement a pin named (`pinned`), against the law in force. */
+/**
+ * The same sentence, for the settlement a pin named (`pinned`), against the law
+ * in force: behind only when the store's law is newer, by settlement.
+ */
 function lawBehindOf(pinned) {
   const seen = pinned == null ? null : Number(pinned);
   const have = state.snap?.pin?.settlement == null ? null : Number(state.snap.pin.settlement);
-  if (seen == null || seen === have) return null;
+  if (seen == null || (have != null && seen <= have)) return null;
   return `the store's law is S${seen}'s, and this office has not loaded it yet (it acts on ${have == null ? "no law" : `S${have}'s`})`;
 }
+
+/** Why an act was refused at the cap (§ AN ACT'S PIN QUESTION, UNDER CONTENTION): it could not ask, so it could not confirm. */
+const LAW_AT_THE_CAP = `this office could not confirm the law in force: ${MAX_LOADS} store loads are already running (the cap)`;
 
 /**
  * The law as the store has it NOW, for an act: asks the pin, loads a moved law,
  * and answers `{ snap, behind }` (§ AN ACT ASKS FIRST; under contention,
- * § EVERY ACT ASKS THE PIN). Never throws.
+ * § AN ACT'S PIN QUESTION, UNDER CONTENTION). Never throws.
  */
 export async function freshLaw({ query, deadlineMs } = {}) {
   const opts = { ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
-  // Nothing in flight and room under the cap: the act's own refresh, which asks the pin first.
-  if (!state.inflight && !(await reloadLawSnapshot(opts)).busy) return { snap: state.snap, behind: lawBehind() };
+  // Nothing in flight: the act's own refresh, which asks the pin first, under the cap.
+  if (!state.inflight) {
+    const own = await reloadLawSnapshot(opts);
+    return { snap: state.snap, behind: own.busy ? LAW_AT_THE_CAP : lawBehind() };
+  }
+  // A refresh in flight: the act asks the pin itself, under the same cap.
   const told = await pinAlone(query ?? defaultQuery, deadlineMs === undefined ? LAW_REFRESH_DEADLINE_MS : deadlineMs);
+  if (told?.busy) return { snap: state.snap, behind: LAW_AT_THE_CAP };
   if (!told) return { snap: state.snap, behind: lawBehind() }; // the store could not be asked: G1, as before
-  state.seenPinned = told.pinned ?? null;
-  // a refresh in flight is stood on only if the law it put in force is the one this act was told
-  if (lawBehindOf(told.pinned) && state.inflight) await state.inflight;
-  return { snap: state.snap, behind: lawBehindOf(told.pinned) };
+  // N6: what the process knows moves only forward, by settlement; a late, older answer never moves it back
+  if (told.pinned != null && (state.seenPinned == null || Number(told.pinned) > Number(state.seenPinned))) state.seenPinned = told.pinned;
+  // behind if what this act was told, or what the process knows, is newer than the law in force;
+  // a refresh in flight is stood on only if, once it lands, neither is
+  if ((lawBehindOf(told.pinned) ?? lawBehind()) && state.inflight) await state.inflight;
+  return { snap: state.snap, behind: lawBehindOf(told.pinned) ?? lawBehind() };
 }
 
 /**
- * An act's own pin question (§ EVERY ACT ASKS THE PIN): PIN_SQL alone, with no
- * load slot (it loads nothing), in its own timed session on the store (the
- * store ends a statement that hangs), and given up at `deadlineMs` as a
- * refresh is. Resolves the pin's row, or null when the store could not be asked.
+ * An act's own pin question (§ AN ACT'S PIN QUESTION, UNDER CONTENTION):
+ * PIN_SQL alone, in its own timed session on the store (the store ends a
+ * statement that hangs), under the refreshers' cap: it takes a slot, or
+ * answers `{ busy: true }` at once, and holds the slot until the question has
+ * ended, even after the act stops waiting at `deadlineMs`. Resolves the pin's
+ * row, or null when the store could not be asked in time.
  */
 async function pinAlone(query, deadlineMs) {
+  if (!startLoad()) return { busy: true };
   const asked = (async () => {
     let session = null;
     try {
@@ -192,7 +217,10 @@ async function pinAlone(query, deadlineMs) {
     } catch (e) {
       plainRefreshError(e, "an act's ask of the law's pin"); // the raw error to the log, once per change
       return null;
-    } finally { await session?.end(); }
+    } finally {
+      await session?.end();
+      endLoad();
+    }
   })();
   if (deadlineMs == null) return asked;
   let timer = null;

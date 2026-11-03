@@ -32,11 +32,13 @@
 // transaction), and refreshes share one cap with the law's (snapshot-loads.mjs).
 // And every publish, from any path, is heard by the same listeners
 // (`onWorldGraphPublish`). An act asks first (`freshGraph()`, part 2), as
-// law-snapshot.mjs § AN ACT ASKS FIRST says for the law, and asks the pin even
-// under contention, as § EVERY ACT ASKS THE PIN there says (Wright's Settled
-// on POS-680, 2026-11-03): with a refresh in flight or the cap full, the act
-// asks the pin on its own, stands on a refresh in flight only if the graph it
-// put in force is the one the pin named, and is otherwise behind.
+// law-snapshot.mjs § AN ACT ASKS FIRST says for the law, and under contention
+// as § AN ACT'S PIN QUESTION, UNDER CONTENTION there says (Wright's Settled on
+// POS-680, 2026-11-03, amended 01:5x EST): with a refresh in flight the act
+// asks the pin on its own, under the same cap, and stands on that refresh only
+// if the graph it put in force is the one the pin named; with the cap full it
+// is behind (the door's plain 503). What the process knows of the pin moves
+// only forward, by settlement (N6).
 
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
@@ -129,47 +131,67 @@ export function worldGraphBehind() {
   return graphBehindOf(state.seenKey);
 }
 
-/** The same sentence, for the key a pin named, against the graph in force. */
-function graphBehindOf(key) {
+/**
+ * The same sentence, for the key a pin named, against the graph in force. A
+ * pin known to be older than the graph in force, by settlement, is not behind.
+ */
+function graphBehindOf(key, settlement = null) {
   if (key == null || key === state.key) return null;
+  const have = state.snap?.pin?.settlement;
+  if (settlement != null && have != null && Number(settlement) < Number(have)) return null;
   return `the store's newest world graph is ${String(key).slice(0, 12)}, and this office has not loaded it yet`;
 }
 
+/** Why an act was refused at the cap (law-snapshot.mjs § AN ACT'S PIN QUESTION, UNDER CONTENTION). */
+const GRAPH_AT_THE_CAP = `this office could not confirm the world graph in force: ${MAX_LOADS} store loads are already running (the cap)`;
+
 /**
  * The world graph as the store has it NOW, for an act: asks the pin, loads a
- * moved graph, answers `{ snap, behind }`; under contention, the pin is asked
- * on its own (the header above, and law-snapshot.mjs § EVERY ACT ASKS THE
- * PIN). Never throws.
+ * moved graph, answers `{ snap, behind }`; under contention, as the header
+ * above says. Never throws.
  */
 export async function freshGraph({ query, deadlineMs } = {}) {
   const opts = { ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
-  // Nothing in flight and room under the cap: the act's own refresh, which asks the pin first.
-  if (!state.inflight && !(await reloadWorldGraph(opts)).busy) return { snap: state.snap, behind: worldGraphBehind() };
+  // Nothing in flight: the act's own refresh, which asks the pin first, under the cap.
+  if (!state.inflight) {
+    const own = await reloadWorldGraph(opts);
+    return { snap: state.snap, behind: own.busy ? GRAPH_AT_THE_CAP : worldGraphBehind() };
+  }
+  // A refresh in flight: the act asks the pin itself, under the same cap.
   const told = await pinAlone(query ?? defaultQuery, deadlineMs === undefined ? WORLD_GRAPH_REFRESH_DEADLINE_MS : deadlineMs);
+  if (told?.busy) return { snap: state.snap, behind: GRAPH_AT_THE_CAP };
   if (!told) return { snap: state.snap, behind: worldGraphBehind() }; // the store could not be asked: G1, as before
-  if (told.key != null) state.seenKey = told.key;
-  // a refresh in flight is stood on only if the graph it put in force is the one this act was told
-  if (graphBehindOf(told.key) && state.inflight) await state.inflight;
-  return { snap: state.snap, behind: graphBehindOf(told.key) };
+  // N6: what the process knows moves only forward, by settlement. The known key carries no settlement,
+  // so an act moves it only to a pin newer than the graph in force, and never while it is already ahead.
+  if (graphBehindOf(told.key, told.settlement) && (state.seenKey == null || state.seenKey === state.key)) state.seenKey = told.key;
+  // behind if what this act was told, or what the process knows, is newer than the graph in force;
+  // a refresh in flight is stood on only if, once it lands, neither is
+  if ((graphBehindOf(told.key, told.settlement) ?? worldGraphBehind()) && state.inflight) await state.inflight;
+  return { snap: state.snap, behind: graphBehindOf(told.key, told.settlement) ?? worldGraphBehind() };
 }
 
 /**
- * An act's own pin question: PIN_SQL alone, with no load slot (it loads
- * nothing), in its own timed session on the store, and given up at
- * `deadlineMs` as a refresh is. Resolves `{ key }` (null when the store holds
- * no snapshot), or null when the store could not be asked.
+ * An act's own pin question: PIN_SQL alone, in its own timed session on the
+ * store, under the refreshers' cap: it takes a slot, or answers `{ busy: true }`
+ * at once, and holds the slot until the question has ended, even after the act
+ * stops waiting at `deadlineMs`. Resolves `{ key, settlement }` (key null when
+ * the store holds no snapshot), or null when the store could not be asked in time.
  */
 async function pinAlone(query, deadlineMs) {
+  if (!startLoad()) return { busy: true };
   const asked = (async () => {
     let session = null;
     try {
       if (query === storeQuery) session = await timedSession(await servePool());
       const pin = (await (session ? session.query : query)(PIN_SQL)).rows[0] ?? null;
-      return { key: pin ? `${pin.tag_sha}/${pin.office_sha}` : null };
+      return { key: pin ? `${pin.tag_sha}/${pin.office_sha}` : null, settlement: pin?.settlement ?? null };
     } catch (e) {
       plainRefreshError(e, "an act's ask of the world graph's pin"); // the raw error to the log, once per change
       return null;
-    } finally { await session?.end(); }
+    } finally {
+      await session?.end();
+      endLoad();
+    }
   })();
   if (deadlineMs == null) return asked;
   let timer = null;
