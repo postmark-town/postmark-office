@@ -462,14 +462,14 @@ export async function runTownDrain(odb, {
 
   // ── THE GANGWAY HOLDS THE CURSOR, NOT JUST THE ROWS ──────────────────────
   //
-  // planTownDrain now reads HARBOR/GANGWAY.md and files every join row under
-  // `waiting` while the gangway is up (see its § the gangway reaches the
-  // settlement road). That is half the fix. The other half is here, and without
-  // it the first half is worse than nothing: `waiting` is a pile in a REPORT,
-  // and this function advances the cursor to `head` — the last PENDING row —
-  // regardless of which pile a row landed in. A held join would be reported as
-  // waiting and then walked past forever, which is losing a household while
-  // printing the word that promises you did not.
+  // planTownDrain now reads the gangway state from the store and files every
+  // join row under `waiting` while the gangway is up (see its § the gangway
+  // reaches the settlement road). That is half the fix. The other half is here,
+  // and without it the first half is worse than nothing: `waiting` is a pile in
+  // a REPORT, and this function advances the cursor to `head` — the last
+  // PENDING row — regardless of which pile a row landed in. A held join would
+  // be reported as waiting and then walked past forever, which is losing a
+  // household while printing the word that promises you did not.
   //
   // So while the gangway holds at least one join row, the cursor does not move
   // at all. The rows stay pending, and the crossing after the gangway lowers
@@ -478,15 +478,18 @@ export async function runTownDrain(odb, {
   // WHAT THAT COSTS, stated because the next person to touch this needs it.
   // Letters and paper acts on the same crossing still drain (the scope call —
   // the gangway is the arrivals breaker), and with the cursor held they are
-  // read again on the next crossing. Paper acts replay to the same bytes and
-  // penCommit returns null for an empty diff. A letter whose outbox file still
-  // stands is caught by the resume check below (`already`). A letter the ferry
-  // has ALREADY DELIVERED is the one that is not: its outbox file is gone, so
-  // the drain writes it again — and the FERRY bounces it, because dedupe is
-  // rebuilt from WHITE_PAGES/mail-ledger.md at every crossing and `classify`
-  // answers "duplicate id". Bounced, never delivered twice. That is a backstop
-  // and not a design: the clean fix is per-row settlement rather than one
-  // scalar cursor, which is a bigger change than a breaker deserved.
+  // read again on the next crossing. A paper act that recorded the shas it
+  // landed (`payload.commits`) is caught by the resume check (`already`) once
+  // every sha is an ancestor of the clone's HEAD; one logged without them is
+  // replayed into the batch worktree, and the header (§ idempotence, #2302)
+  // says why that replay is not safe to assume harmless. A letter whose outbox
+  // file still stands is caught by the resume check below (`already`). A
+  // letter the ferry has ALREADY DELIVERED is the one that is not: its outbox
+  // file is gone, so the drain writes it again — and the FERRY bounces it,
+  // because dedupe is rebuilt from WHITE_PAGES/mail-ledger.md at every crossing
+  // and `classify` answers "duplicate id". Bounced, never delivered twice. That
+  // is a backstop and not a design: the clean fix is per-row settlement rather
+  // than one scalar cursor, which is a bigger change than a breaker deserved.
   const gangwayHold = plan.gangway.held > 0;
   const gangwayFields = gangwayHold
     ? { gangway: plan.gangway.state, gangway_held: plan.gangway.held }

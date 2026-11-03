@@ -43,9 +43,9 @@ import {
   buildJoinFiles, berthAshore, gangwayState, planRegistryJoin,
 } from "./residency.mjs";
 // The record's readers and the ceremony (POS-158). `ceremony.mjs` is safe to
-// import statically here: it reaches `residency.mjs` through
-// `tools/registry-drain.mjs`, and nothing in that graph reaches back to this
-// file, so there is no cycle to close.
+// import statically here: it imports `residency.mjs` itself and reaches it again
+// through `tools/registry-drain.mjs`, and nothing in that graph reaches back to
+// this file, so there is no cycle to close.
 import { loadRegistry } from "./registry-store.mjs";
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
 import {
@@ -57,18 +57,21 @@ import { signedRegistryLines } from "./ledger-pen.mjs";
 
 // ── THE GANGWAY REACHES THE SETTLEMENT ROAD ────────────────────────────────
 //
-// HARBOR/GANGWAY.md is the town's circuit breaker on ARRIVALS, and until this
-// it was wired only to the lane the cutover retires. tools/settle.mjs refuses
-// unless `state: open`, residency.mjs § requestResidency boards a berth instead
-// of joining while frozen — and this planner, the road that replaces both under
-// TOWN_SINGLE_LOG, never opened the file. So a founder could raise the gangway
-// and a crossing would settle join rows straight past it. The breaker was on
-// the old pipe.
+// The gangway is the town's circuit breaker on ARRIVALS, and until this it was
+// wired only to the lane the cutover retires. tools/settle.mjs refuses unless
+// `state: open`, residency.mjs § requestResidency boards a berth instead of
+// joining while frozen — and this planner, the road that replaces both under
+// TOWN_SINGLE_LOG, never asked for the state. So a founder could raise the
+// gangway and a crossing would settle join rows straight past it. The breaker
+// was on the old pipe.
 //
-// It is read from the SAME place, the same way, live per crossing: no cache, so
-// a founder commit flipping the state costs a pull and not a restart. Absent
-// file = open, which is residency.mjs's own answer — a town with no HARBOR has
-// no freeze.
+// It is read from the SAME place, the same way, live per crossing: the store's
+// state, through gangwayState (src/gangway.mjs, the newest gangway_acts row),
+// with no cache, so a change of state takes hold at the next crossing and not
+// at a restart. HARBOR/GANGWAY.md is only an export of that row, and a founder
+// commit to it reaches the store when the next gangway drain adopts it. No row,
+// or no store to ask (a test, a dev box), = open, which is gangway.mjs's own
+// answer — a town with no record of a freeze has no freeze.
 //
 // JOINS ONLY, AND THAT IS A CHOICE. The gangway is the ARRIVALS breaker: its
 // own law is about who comes ashore, and mail and paper have their own controls
@@ -112,10 +115,12 @@ export const UNREACHABLE_RECORD =
 /**
  * What this crossing WOULD settle, decided before anything is written.
  *
- * Split from the writing on purpose: the plan is pure and testable, and the
- * ferry can ask what a crossing would do without a clone that can be committed
- * to. Every row lands in exactly one of three piles, and the third is the one
- * the founder's tier line creates.
+ * Split from the writing on purpose: the plan is write-free (it reads the
+ * store's pending rows, registry and gangway state, and the clone's white pages,
+ * and writes nothing) and testable, and the ferry can ask what a crossing
+ * would do without a clone that can be committed to. Every row lands in
+ * exactly one of three piles, and the third is the one the founder's tier line
+ * creates.
  */
 export async function planTownDrain(odb, clone, { date }) {
   const rows = await pendingRows(odb);
@@ -446,20 +451,21 @@ export async function writeTownDrain(clone, plan, { date, drainWith = collecting
     // short list of touched paths that looks like an ordinary quiet crossing.
     if (drained?.refused) touched.refused = drained.refused;
     for (const rel of drained?.changed ?? []) touched.push(rel);
-    // and the ledger's appended lines — one per settled resident, dated, SIGNED
-    // (#2040: the bare append was the office's one unsigned ledger writer; the
-    // seal chain is the clone's own stamp-mint's, computed above, before any write).
+    // and the ledger's appended lines, dated and SIGNED (#2040: the bare append
+    // was the office's one unsigned ledger writer): up to one for each join that
+    // landed and up to one for each housemate re-key (src/house-key.mjs).
     //
-    // THE LINES OF THE ROWS THAT LANDED, AND ONLY THEIRS (POS-600). They were
-    // planned and judged again after the store loop (§ THE SECOND KEY
-    // DECISION): a `registry:` line for a resident the record does not hold
-    // would turn the replay red at the next crossing, and a house whose first
-    // planned join stalled still gets every housemate's re-key, through its
-    // first landed join. Each signature binds the whole prefix before it (the
-    // seal chain), so the batch is signed over the ledger as it stands.
-    // POS-600: the lines appended are exactly the batch the second decision
-    // above judged and signed, over the ledger as it stands — never a seq
-    // filter of the preflight's lines, never a different signed payload.
+    // THE LINES OF THE ROWS THAT LANDED, AND ONLY THEIRS (POS-600). The preflight
+    // above only proves the pen can sign, before any write. What is appended is
+    // `approved`: the batch planned and judged again after the store loop (§ THE
+    // SECOND KEY DECISION), from the joins that landed and the entry keys,
+    // signed before the first clone write. A `registry:` line for a resident the
+    // record does not hold would turn the replay red at the next crossing, and a
+    // house whose first planned join stalled still gets every housemate's
+    // re-key, through its first landed join. Each signature binds the whole
+    // prefix before it (the seal chain), so the batch is signed over the ledger
+    // as it stands — never a seq filter of the preflight's lines, never a
+    // different signed payload.
     if (appendHouseKey(clone, approved)) touched.push(ledgerRel);
   }
   // The stalled rows ride OUT, on the array, for the same reason `refused`
