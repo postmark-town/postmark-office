@@ -53,8 +53,10 @@
 // refuses a query string) and upstream guards it at the READ door
 // (`atTownMediaDoor`, which does not). Two guards, two answers, one field.
 //
-// WHAT DID CHANGE: hydrate.mjs still fills the residents row from `readProfile`
-// below, so the store keeps exactly one answer for this field — the vendored
+// WHAT DID CHANGE: the town index's `residentRows` (town-index.mjs; the old
+// hydrate.mjs was retired with the office.db rehydrate) still fills the
+// residents row from `readProfile` below, so the store keeps exactly one answer
+// for this field — the vendored
 // reader's `resident.profile` is computed and then dropped on the floor. One
 // resolver, as before; the second one is upstream's and unused.
 //
@@ -135,7 +137,12 @@ function parseFrontmatterScalars(source) {
   const data = {};
   const lines = source.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const m = /^([A-Za-z0-9_-]+):(?:[ \t]*(.*))?$/.exec(lines[i]);
+    // One quantifier after the colon, never two (POS-875). The old `(?:[ \t]*(.*))?$` let both
+    // halves take the same spaces, so a line `.` can't finish (a lone CR, U+2028 or U+2029,
+    // which split(/\r?\n/) keeps) tried every split of them: quadratic, 11.8 s for one
+    // 63,015-character line. The spaces `[ \t]*` used to drop, `.trim()` drops, so every answer
+    // is the same.
+    const m = /^([A-Za-z0-9_-]+):(.*)$/.exec(lines[i]);
     if (!m) continue;
     const key = m[1];
     const raw = (m[2] ?? "").trim();
@@ -249,7 +256,8 @@ export function readProfile(clone, handle) {
 // The rule this module now keeps whole: the read path takes the clone; only the
 // outermost door binds the ambient value.
 //
-// Why a read-time profile read exists at all, when hydrate already indexes it:
-// the index on the box is already built, so a fix that lands only at hydration
-// waits on the next rehydrate to take effect — the same reasoning queries.mjs
+// Why a read-time profile read exists at all, when the town index's ingest
+// already indexes it: the index in the store is already built, so a fix that
+// lands only at ingest waits on the next ingest run
+// (`postmark-town-index.timer`) to take effect — the same reasoning queries.mjs
 // spells out for the `_archived` handle filter, applied to the same row.

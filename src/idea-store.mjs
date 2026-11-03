@@ -22,8 +22,10 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { officeRead, officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
+import { officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
+import { rungWords } from "./post-words.mjs";
+import { apiUrl } from "./public-base.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import {
   refuse, applyPostAct, slugFromTitle, ACT_POST, ACT_AMEND_POST, ACT_ADVANCE, ACT_SIGN_UP, ACT_WITHDRAW_SIGN_UP,
@@ -62,12 +64,6 @@ export async function ideaRow(client, id) {
   return rowOf(rows[0]);
 }
 
-/** Is this id an idea post? For the class router; a store that cannot be read answers no. */
-export async function isIdeaPost(id, { env = process.env } = {}) {
-  try { return Boolean(await officeRead((client) => ideaRow(client, String(id)), { env })); }
-  catch { return false; }
-}
-
 function actRow({ action, actor, object, payload, now }) {
   return {
     written_at: new Date(now).toISOString(), crossing: currentCrossing(now),
@@ -78,7 +74,7 @@ function actRow({ action, actor, object, payload, now }) {
   };
 }
 
-const readHint = (id) => `town { read: "posts", args: { class: "idea", post: "${id}" } } — or GET /posts/${id}?class=idea`;
+const readHint = (id) => `town { read: "posts", args: { class: "idea", post: "${id}" } } — or GET ${apiUrl(`/posts/${id}?class=idea`)}`;
 const answerOf = (row) => ({ id: row.id, class: IDEA_CLASS, title: row.title, body: row.body, author: row.author,
   household: row.household ?? null, state: row.state, fields: row.fields });
 
@@ -189,7 +185,7 @@ export async function advanceIdea(fields, key, id, { now = Date.now(), env = pro
       { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
     await updatePost(client, row);
     const finished = IDEA_FINISHED.includes(j.to);
-    return { post: answerOf(row), act_id: actId, hand, stage: j.to, ...(j.credit ? { credit: j.credit } : {}),
+    return { post: answerOf(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand${j.credit ? `, crediting ${j.credit}` : ""}${j.link ? `; it points at ${j.link}` : ""}${j.to === STATE_DUPLICATE ? `; it repeats ${j.of}` : ""}. A stage pays nothing by itself: stamps are awarded by hand (town { do: "award" }).${finished ? " It is finished, and moves no further." : ""}`,
       read: readHint(id) };
   }, env);

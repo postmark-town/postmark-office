@@ -56,6 +56,7 @@ import { isSited, PREDICATE_KINDS } from "./world-grants.mjs"; // the kind rung 
 import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
 import { blessed, draftRefForKey, refExists } from "./world-branches.mjs";
 import { nextSettlementAttemptAt } from "./settlements.mjs";
+import { plainReason } from "./fault-words.mjs";
 
 // ── flags ────────────────────────────────────────────────────────────────────
 // Read from the environment on every call rather than latched at import: a test
@@ -87,19 +88,7 @@ const refused = (v) => Boolean(v && typeof v === "object" && v[CANNOT_ANSWER]);
 // sitting right beside it.
 
 let _snap = null;
-let _generation = 0;
-
-/**
- * How many times a snapshot has been loaded in this process. A caller that
- * caches derived answers watches this to know when its cache died.
- *
- * The fold's own place-word cache is cleared by `world()` rebuilding — but in
- * serve mode `world()` is never called, so a rehydration would otherwise leave
- * the office repeating place words from a store snapshot it no longer holds,
- * forever, with nothing to invalidate them. Zero until something loads, so an
- * office with the flags off never clears anything.
- */
-export const storeGeneration = () => _generation;
+let _generation = 0; // snapshots loaded (or reset) in this process; a caller reads it through `storeEpoch`
 
 /**
  * The generation a derived cache should key itself to — re-statting the store
@@ -216,13 +205,14 @@ const GEOMETRIC = (m, graph) => isSited(m, lineageIn(graph));
  *     bbox, so no answer changes outside one) and complete (both the point test
  *     and the nest's `marksContain` go analytic once no irregular mark is in
  *     range). This is the fall-through that actually fires; the honest fix is a
- *     hydrator that stores the ring, and that is Stage 1's next commit, not this
- *     one's.
+ *     hydrator that stores the ring, and that has not been built: the hydrator
+ *     still records only the vertex count.
  *
  *   equal-extent-tie  `containmentChain` sorts the containing marks by extent
  *     AREA and V8's sort is stable, so two containing marks of equal area leave
  *     the innermost decided by ITERATION ORDER. The fold's order is its loader's
- *     and the store's is SQLite's, and neither promises the other anything.
+ *     and the store's is the order its rows were stored in, and neither promises
+ *     the other anything.
  *
  *   nearest-tie  The place-word FALLBACK — the branch that runs only when
  *     nothing contains the point — picks the nearest sited mark with a strict
@@ -342,7 +332,7 @@ export function servedCanonSha(repo) { return blessed(repo).sha; }
  * May this read be answered from the store? Returns `{ ok, reason, snap, sha }`.
  *
  * RULING 9 FIRST. `draftRefForKey` returning a ref means the caller passed a
- * household key; world.db does not index sketchbooks, so the store is not
+ * household key; the world graph does not index sketchbooks, so the store is not
  * consulted — not even in shadow. Since §1c no read tier folds a sketchbook, so
  * this is a belt rather than a mirror (see the header): no live caller reaches
  * it, and it exists so that a keyed read added to this lane fails safe.
@@ -399,7 +389,7 @@ const RECENT = [];
 
 const fingerprintOf = (v) => createHash("sha256").update(stable(v)).digest("hex").slice(0, 16);
 function stable(v) {
-  if (v === undefined) return " undefined";
+  if (v === undefined) return "\u0000undefined";
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
   return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(",")}}`;
@@ -502,14 +492,21 @@ export async function servedRead(name, { fold, store, key = null, repo, detail =
 }
 
 // ── the operator's surface ───────────────────────────────────────────────────
+//
+// KEYLESS, SO PLAIN (POS-663). The ops graph's As-Of bar reads this from the
+// browser, which holds no operator key, so the door stays open, and what it
+// says is what anyone may read: shas, counts, hashes and the office's own
+// words. No path on the box (the clone, the shadow log) and no raw git error;
+// a main that cannot be read answers the plain reason, and the error itself
+// goes to the journal (fault-words.mjs § plainReason, the POS-657 rule).
 
 export function worldStoreHealth({ repo = null } = {}) {
   const mode = storeMode();
   const snap = storeSnapshot();
   const db = snap.error
-    ? { path: snap.dbPath, present: false, error: snap.error }
+    ? { present: false, error: snap.error }
     : {
-      path: snap.dbPath, present: true,
+      present: true,
       ...(snap.source ? { source: snap.source } : {}),
       as_of_world: snap.meta.as_of_world ?? null,
       as_of_office: snap.meta.as_of_office || null,
@@ -535,8 +532,8 @@ export function worldStoreHealth({ repo = null } = {}) {
         fresh: !snap.error && snap.asOfWorld === b.sha,
         ...(b.disclosed ? { disclosed: b.disclosed } : {}),
       };
-      main = { repo, sha: b.main_sha, ref: b.main_ref, ahead_of_blessed: b.candidate_ahead != null };
-    } catch (e) { main = { repo, error: String(e?.message ?? e) }; }
+      main = { sha: b.main_sha, ref: b.main_ref, ahead_of_blessed: b.candidate_ahead != null };
+    } catch (e) { main = { error: plainReason(e, "files", "the world clone's main, for GET /world/store") }; }
   }
 
   return {
@@ -546,7 +543,7 @@ export function worldStoreHealth({ repo = null } = {}) {
     eligibility: "blessed reads only — a resolved household folds its draft branch and is never served from the store (ruling 9); the store must also be hydrated at the exact sha the newest settlement tag blesses (main, when the clone has no settlement tag)",
     db, blessed: canon, main,
     counters: COUNT,
-    shadow_log: { path: shadowLogPath(), lines_written: LOG_STATE.lines, suppressed: LOG_STATE.suppressed, distinct_diffs: LOGGED.size },
+    shadow_log: { lines_written: LOG_STATE.lines, suppressed: LOG_STATE.suppressed, distinct_diffs: LOGGED.size },
     recent_diffs: RECENT.slice(-RECENT_MAX),
   };
 }

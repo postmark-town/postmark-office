@@ -799,7 +799,12 @@ export async function publishedMarkFrom(client) {
 // covenant is exactly the claim under test. `DISCLOSURES.holdings_source` says
 // this on every answer.
 
-export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", "give", "drop", "take"]);
+// `make`, `consume` and `set-down` (POS-766): a named thing made straight into hands or a
+// holder, one eaten from hand, and one set down as its maker's draft. All are hold-lane faces of
+// the one edge: a make is held from its first act; a consume and a set-down end the holding
+// (policy detach, with no place: the set-down's place is its draft's, never a hold row's).
+export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down"]);
+export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", ...HOLD_FACES]);
 
 /**
  * The ORDER clause every holder read must carry.
@@ -872,7 +877,7 @@ export function attachmentRowOf(act) {
 
   // ERA 2 — the live pen. world-hold.mjs `mirrorHoldingAct`'s payload, read with
   // `declareHolding`'s own expression for the entity (§ THE TWO ERAS above).
-  if (["give", "drop", "take"].includes(act.action)) {
+  if (HOLD_FACES.includes(act.action)) {
     if (!p.thing) {
       return { refused: true, reason: `act ${act.id} is a ${act.action} naming no thing` };
     }
@@ -1216,10 +1221,12 @@ export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
  *
  * `madeBy` (POS-138, 2026-09-24) narrows to the things a set of handles MADE —
  * the author is the `<by>` half of the thing's id, which is the same reading
- * `world-hold.mjs § whereThingStands` and `world-stance.mjs § setDownFor` make
- * (`id.split("/")[0]`). It is how the author's stances read finds the
- * set-downs waiting on its word without asking about every thing in town: the
- * rows it returns are the holding acts on the house's own things and no others.
+ * `world-hold.mjs § whereThingStands` and `ownership.mjs § makerOf` make
+ * (`id.split("/")[0]`). It was written so the author's stances read could find
+ * the set-downs waiting on its word without asking about every thing in town:
+ * the rows it returns are the holding acts on the house's own things and no
+ * others. No `src/` caller passes it now (that read folds the hold record,
+ * world-stance.mjs § wordsAwaiting); test/owners-word-at-the-door.test.mjs does.
  * Pushed AFTER `thing`, for the reason the `thing` clause gives.
  */
 export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {

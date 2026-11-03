@@ -9,7 +9,7 @@
 // the Registrar's door runs (`src/settle-join.mjs § settleUnderLock`).
 //
 // IT RUNS INSIDE THE TICK'S FLOCK, right after the pulls and BEFORE the mint
-// catch-up and the welcome pass (deploy/office-tick.sh). So it calls the
+// catch-up and the welcome pass (deploy/office-keep.sh). So it calls the
 // critical section directly: the lock is already held, and a nested
 // `flock town.lock` would wait on its own parent. The order is the point — a
 // handle bound before the welcome runs is paid under its GitHub id, and one

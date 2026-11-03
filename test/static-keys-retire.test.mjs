@@ -11,17 +11,17 @@
 //   § D  the cover: what counts and what fails closed
 //   § E  between dry and apply: the cover removed, the count wrong
 //   § F  the table lock: writers wait, readers do not, a second apply rechecks, a busy table times out
-//   § G  the file: failure, wrong read-back, missing, and --mirror-only
+//   § G  no file (POS-271): the tool never opens oauth.db, and --mirror-only is refused by name
 //   § H  the import: partial, foreign-kind rollback, dry parity
 //   § I  the CLIs: exit codes, no key and no hash in any output
-//   § K  Wright's review folds: the statement bound, the key's facts and created, the file's busy wait, the resident cover
+//   § K  Wright's review folds: the statement bound, the key's facts and created, a writer holding the file delays nothing (POS-271), the resident cover
 //   § J  the door: a real office on the store answers a static bearer, then refuses the SAME bearer once retired
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -30,7 +30,7 @@ import { DatabaseSync } from "node:sqlite";
 import { oauthSchema } from "../src/oauth.mjs";
 import { paperOnPool, paperworkPoolTypes, asPaper } from "../src/paperwork.mjs";
 import { staticLookup, importStaticKeys, RETIRED_KIND } from "../src/static-keys.mjs";
-import { planRetire, retireStaticKey, mirrorOnly, LOCK_TIMEOUT_MS, STATEMENT_TIMEOUT_MS } from "../src/static-keys-retire.mjs";
+import { planRetire, retireStaticKey, LOCK_TIMEOUT_MS, STATEMENT_TIMEOUT_MS } from "../src/static-keys-retire.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { indexStore } from "./helpers/office-under-test.mjs";
 import { fixtureTown } from "./fixture.mjs";
@@ -96,7 +96,7 @@ const fileRows = (path) => {
   try { return db.prepare("SELECT token_hash, kind, household, handles, gh_id FROM tokens ORDER BY token_hash").all(); }
   finally { db.close(); }
 };
-/** Put the same static rows in the file as the store holds (what the mirror keeps true). */
+/** Put the same static rows in a file as the store holds (what the box's oauth.db held while the office mirrored to it). */
 async function seedFile(path, spec) {
   const db = new DatabaseSync(path);
   try { await importStaticKeys(asPaper(db), spec); } finally { db.close(); }
@@ -136,12 +136,10 @@ async function threeKeys({ cover = true } = {}) {
 
 test("§ A import, retire, re-import: the retired entry is refused by name, the rest still import, minted rows byte-identical", async (t) => {
   const w = await threeKeys();
-  const file = fileDb();
-  await seedFile(file, w.spec);
   const mintedBefore = await minted();
   assert.equal(await resolves("sk-wren"), true);
 
-  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file });
+  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren });
   assert.equal(out.status, "retired", out.message ?? out.reason);
   assert.equal(typeof out.lock_held_ms, "number");
   t.diagnostic(`synthetic, one embedded Postgres, not a production latency guarantee: oauth_tokens write-locked ${out.lock_held_ms} ms for an unpaused successful retire`);
@@ -152,7 +150,9 @@ test("§ A import, retire, re-import: the retired entry is refused by name, the 
   assert.equal(tomb.household, w.slug);
   assert.equal(tomb.handles, JSON.stringify([w.wren]));
   assert.equal(tomb.expires, null);
-  assert.equal(fileKind(file, "sk-wren"), "retired", "and the file agrees");
+  // Until 2026-11-03 this asserted the file agreed (the tool replayed the
+  // retirement into oauth.db). POS-271 retired that step: § G holds that the
+  // tool never opens the file.
 
   // re-import from the same OFFICE_KEYS, plus a new entry
   const again = await importSpec(`${w.spec};sk-new=${w.slug}:newcomer`);
@@ -178,8 +178,8 @@ test("§ A2 the sweep keeps a tombstone, and retiring swaps one row for one (the
   await importSpec(`sk-cover=${w.slug}:${w.h("wren")},extra`);
   const countFor = async () => (await pool.query("SELECT kind FROM oauth_tokens WHERE gh_id = $1", [w.ghId])).rows;
   assert.equal((await countFor()).length, 1);
-  const out = await retireStaticKey(pool, { household: w.slug, handle: w.h("wren"), file: fileDb() });
-  assert.equal(out.status === "retired" || out.status === "mirror_failed", true, out.reason);
+  const out = await retireStaticKey(pool, { household: w.slug, handle: w.h("wren") });
+  assert.equal(out.status, "retired", out.reason);
   const rows = await countFor();
   assert.equal(rows.length, 1, "one row in, one row out: the rehearsal's count of tokens for a pinned account is unchanged");
   assert.equal(rows[0].kind, "retired");
@@ -189,16 +189,15 @@ test("§ A2 the sweep keeps a tombstone, and retiring swaps one row for one (the
 
 // ── § B dry ─────────────────────────────────────────────────────────────────
 
-test("§ B dry is advisory: it writes nothing to the store or the file, and says nothing secret", async () => {
+test("§ B dry is advisory: it writes nothing to the store, and says nothing secret", async () => {
   const w = await threeKeys();
-  const file = fileDb();
-  await seedFile(file, w.spec);
-  const before = [await snapshot(), fileRows(file)];
-  const out = await planRetire(pool, { household: w.slug, handle: w.wren, file });
+  const before = await snapshot();
+  const out = await planRetire(pool, { household: w.slug, handle: w.wren });
   assert.equal(out.status, "dry", JSON.stringify(out));
   assert.equal(out.matched, 1);
   assert.match(out.cover, /live household key/);
-  assert.deepEqual([await snapshot(), fileRows(file)], before, "nothing written anywhere");
+  assert.equal("file" in out, false, "the dry result names no file (POS-271; until 2026-11-03 it said whether oauth.db was found)");
+  assert.deepEqual(await snapshot(), before, "nothing written");
   assertNoSecret(out, ["sk-wren", "sk-moss"], "in the dry result");
 });
 
@@ -225,7 +224,7 @@ test("§ C no match, ambiguous and widened selectors write nothing; a wider row 
   // one exact row plus a wider one holding the same handle: the exact row is the target, the wider one the cover
   const w2 = await fresh(["dd", "ee"]);
   await importSpec(`sk-dd=${w2.slug}:${w2.h("dd")};sk-dd-ee=${w2.slug}:${w2.h("dd")},${w2.h("ee")}`);
-  const ok = await retireStaticKey(pool, { household: w2.slug, handle: w2.h("dd"), file: fileDb() });
+  const ok = await retireStaticKey(pool, { household: w2.slug, handle: w2.h("dd") });
   assert.notEqual(ok.status, "refused", ok.reason);
   assert.equal(await resolves("sk-dd"), false);
   assert.equal(await resolves("sk-dd-ee"), true, "the wider row, the cover, is untouched");
@@ -272,9 +271,9 @@ test("§ D the cover: only a proved, working key counts, and an unproved one fai
   // and the positive controls: a static cover passes, a live proved human key passes
   w = await fresh(["wren", "moss"]);
   await importSpec(`sk-wren=${w.slug}:${w.h("wren")};sk-wren-moss=${w.slug}:${w.h("wren")},${w.h("moss")}`);
-  assert.notEqual((await retireStaticKey(pool, { household: w.slug, handle: w.h("wren"), file: fileDb() })).status, "refused");
+  assert.notEqual((await retireStaticKey(pool, { household: w.slug, handle: w.h("wren") })).status, "refused");
   w = await threeKeys();
-  const ok = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb() });
+  const ok = await retireStaticKey(pool, { household: w.slug, handle: w.wren });
   assert.match(ok.cover ?? ok.message, /live household key|retired/);
 });
 
@@ -284,17 +283,15 @@ test("§ E the cover removed between dry and apply: the apply refuses and rolls 
   for (const how of ["deleted", "expired-by-time"]) {
     const w = await threeKeys({ cover: false });
     await importSpec(`sk-cover=${w.slug}:${w.wren},${w.moss}`);
-    const file = fileDb();
-    await seedFile(file, `${w.spec};sk-cover=${w.slug}:${w.wren},${w.moss}`);
-    const dry = await planRetire(pool, { household: w.slug, handle: w.wren, file });
+    const dry = await planRetire(pool, { household: w.slug, handle: w.wren });
     assert.equal(dry.status, "dry", how);
     if (how === "deleted") await pool.query("DELETE FROM oauth_tokens WHERE token_hash = $1", [sha("sk-cover")]);
     else { await pool.query("DELETE FROM oauth_tokens WHERE token_hash = $1", [sha("sk-cover")]); await mintedCover(w.ghId, { expires: NOW - 1 }); }
-    const before = [await snapshot(), fileRows(file)];
-    const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file });
+    const before = await snapshot();
+    const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren });
     assert.equal(out.status, "refused", how);
     assert.match(out.reason, /no other working key/);
-    assert.deepEqual([await snapshot(), fileRows(file)], before, `${how}: store and file untouched`);
+    assert.deepEqual(await snapshot(), before, `${how}: the store untouched`);
     assert.equal(await resolves("sk-wren"), true);
   }
 });
@@ -302,7 +299,7 @@ test("§ E the cover removed between dry and apply: the apply refuses and rolls 
 test("§ E2 a wrong count rolls back: the delete that removes 0 rows leaves the store as it was", async () => {
   const w = await threeKeys();
   const before = await snapshot();
-  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb(),
+  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren,
     hooks: { beforeDelete: (c) => c.query("DELETE FROM oauth_tokens WHERE token_hash = $1", [sha("sk-wren")]) } });
   assert.equal(out.status, "refused");
   assert.match(out.reason, /removed 0 rows, not 1/);
@@ -328,7 +325,7 @@ const gate = () => { let release; let seen; const open = new Promise((ok) => { r
 test("§ F the lock is the contract: office_api may take it, writers wait, readers do not", async () => {
   const w = await threeKeys();
   const g = gate();
-  const held = retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb(),
+  const held = retireStaticKey(pool, { household: w.slug, handle: w.wren,
     hooks: { afterLock: async () => { g.seen(); await g.open; } } });
   await g.reached;
   // a reader is not blocked: a bearer lookup answers while the table is write-locked
@@ -346,13 +343,13 @@ test("§ F the lock is the contract: office_api may take it, writers wait, reade
 test("§ F2 two applies: the second WAITS, then rechecks after the first, and refuses when the cover left meanwhile", async () => {
   const w = await threeKeys(); // wren and moss, one shared live human cover
   const g = gate();
-  const first = retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb(),
+  const first = retireStaticKey(pool, { household: w.slug, handle: w.wren,
     hooks: { afterDelete: async () => { g.seen(); await g.open; } } }); // proved and deleted, NOT yet committed
   await g.reached;
   // a hand DELETE of the cover queues behind the first, and the second apply queues behind it
   const revoke = pool.query("DELETE FROM oauth_tokens WHERE kind = 'household'");
   assert.equal(await waitTableWaiters(1), true, "the revocation waits for the retire");
-  const second = retireStaticKey(pool, { household: w.slug, handle: w.moss, file: fileDb() });
+  const second = retireStaticKey(pool, { household: w.slug, handle: w.moss });
   assert.equal(await waitTableWaiters(2), true, "and so does the second apply");
   g.release();
   const [a, b] = await Promise.all([first, second]);
@@ -367,10 +364,10 @@ test("§ F2 two applies: the second WAITS, then rechecks after the first, and re
 test("§ F3 two applies on the same selector: one retires, the other waits and finds it gone", async () => {
   const w = await threeKeys();
   const g = gate();
-  const first = retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb(),
+  const first = retireStaticKey(pool, { household: w.slug, handle: w.wren,
     hooks: { afterLock: async () => { g.seen(); await g.open; } } });
   await g.reached;
-  const second = retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb() });
+  const second = retireStaticKey(pool, { household: w.slug, handle: w.wren });
   assert.equal(await waitTableWaiters(1), true);
   g.release();
   const [a, b] = await Promise.all([first, second]);
@@ -381,109 +378,101 @@ test("§ F3 two applies on the same selector: one retires, the other waits and f
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM oauth_tokens WHERE kind = 'household'")).rows[0].n, 1, "the cover stands");
 });
 
-test("§ F4 a conflicting lock held elsewhere: a clean timeout, nothing written, a non-success receipt, no file touched", async () => {
+test("§ F4 a conflicting lock held elsewhere: a clean timeout, nothing written, a non-success receipt", async () => {
   const w = await threeKeys();
-  const file = fileDb();
-  await seedFile(file, w.spec);
-  const before = [await snapshot(), fileRows(file)];
+  const before = await snapshot();
   const blocker = await pool.connect();
   await blocker.query("BEGIN");
   await blocker.query("LOCK TABLE oauth_tokens IN ROW EXCLUSIVE MODE"); // what any writer holds; conflicts with SHARE ROW EXCLUSIVE
   try {
     const t0 = performance.now();
-    const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file, lockTimeoutMs: 400 });
+    const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, lockTimeoutMs: 400 });
     const took = performance.now() - t0;
     assert.equal(out.status, "busy");
     assert.match(out.message, /table busy/);
     assert.match(out.message, /Nothing changed\. Run it again/);
     assert.ok(took >= 350 && took < 5000, `it waited its bound and no longer (${Math.round(took)} ms)`);
   } finally { await blocker.query("ROLLBACK"); blocker.release(); }
-  assert.deepEqual([await snapshot(), fileRows(file)], before, "nothing written to the store or the file");
+  assert.deepEqual(await snapshot(), before, "nothing written to the store");
   assert.equal(await resolves("sk-wren"), true);
   assert.equal(LOCK_TIMEOUT_MS, 2000, "the shipped bound is the ruled 2 s");
   // and with the blocker gone the same call succeeds
-  assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.wren, file })).status, "retired");
+  assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.wren })).status, "retired");
 });
 
-// ── § G the file ────────────────────────────────────────────────────────────
+// ── § G no file (POS-271) ───────────────────────────────────────────────────
+//
+// Until 2026-11-03 § G held that a file that could not be written, read back
+// wrong or was missing was NON-success (`mirror_failed`, exit 4, "STORE
+// COMMITTED"), § G2 that --mirror-only repaired the file from the store's
+// tombstones, and § G3 that the repair left a fresh static key alone and refused
+// when no tombstone was recorded. POS-271 deleted the office's mirror and this
+// tool's file step with it, so the law is inverted: the tool never opens
+// oauth.db, and --mirror-only is refused by name. Both are driven through the
+// real CLI, the one place an operator can still hand the tool a file path.
 
-const failOnInsert = (path, sql) => { const db = new DatabaseSync(path); db.exec(sql); db.close(); };
+const cliEnv = () => ({ ...process.env, OFFICE_PAPERWORK_STORE: "1", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), OFFICE_KEYS: "" });
+const retireCli = (args) => spawnSync(process.execPath, [join(ROOT, "tools", "static-keys-retire.mjs"), ...args], { env: cliEnv(), encoding: "utf8" });
+const bytesOf = (path) => createHash("sha256").update(readFileSync(path)).digest("hex");
 
-test("§ G a file that cannot be written, reads back wrong, or is missing is NON-success; the store is committed", async () => {
-  for (const [how, setup] of [
-    ["write fails", (p) => failOnInsert(p, "CREATE TRIGGER nope BEFORE INSERT ON tokens WHEN NEW.kind = 'retired' BEGIN SELECT RAISE(ABORT, 'synthetic refusal'); END")],
-    ["reads back wrong", (p) => failOnInsert(p, "CREATE TRIGGER skew AFTER INSERT ON tokens WHEN NEW.kind = 'retired' BEGIN UPDATE tokens SET household = 'skewed' WHERE token_hash = NEW.token_hash; END")],
-    ["file missing", () => null],
+test("§ G the tool never opens oauth.db: a file holding the live key keeps its bytes, a file that is no database is never read, a missing path is never made", async () => {
+  for (const [how, make] of [
+    ["the box's file, holding the live key", async (w) => { const f = fileDb(); await seedFile(f, w.spec); return f; }],
+    // any open-and-read of this file throws ("file is not a database"), so a tool that so much as read it would not exit 0
+    ["a file that is no database", async () => { const f = join(TMP, `not-a-db-${++fileSeq}.db`); writeFileSync(f, "this is not a sqlite database\n".repeat(64)); return f; }],
+    ["a path where nothing is", async () => join(TMP, `absent-${++fileSeq}.db`)],
   ]) {
     const w = await threeKeys();
-    const file = how === "file missing" ? join(TMP, `absent-${++fileSeq}.db`) : fileDb();
-    if (how !== "file missing") { await seedFile(file, w.spec); setup(file); }
-    const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file });
-    assert.equal(out.status, "mirror_failed", how);
-    assert.match(out.message, /STORE COMMITTED/);
-    assert.match(out.message, /--mirror-only/);
-    assert.doesNotMatch(out.message, /rolled back|nothing was written/i, "it never implies the store rolled back");
+    const file = await make(w);
+    const had = existsSync(file);
+    const before = had ? bytesOf(file) : null;
+    const dry = retireCli(["--oauth-db", file, "--household", w.slug, "--handle", w.wren, "--dry"]);
+    assert.equal(dry.status, 0, `${how}: the dry run: ${dry.stderr}`);
+    const r = retireCli(["--oauth-db", file, "--household", w.slug, "--handle", w.wren]);
+    assert.equal(r.status, 0, `${how}: the retirement exits 0 whatever the file is: ${r.stderr}`);
+    assert.match(r.stderr, /--oauth-db is ignored/, `${how}: the flag is named as ignored`);
     assert.equal(await kindOf("sk-wren"), RETIRED_KIND, `${how}: the store holds the retirement`);
     assert.equal(await resolves("sk-wren"), false);
-    if (how === "write fails") assert.equal(fileKind(file, "sk-wren"), "static", "the file still holds the live key (the rollback hazard the message names)");
-    if (how === "reads back wrong") assert.equal(fileRows(file).find((r) => r.token_hash === sha("sk-wren")).household, "skewed", "the file committed a row that is not the retirement, and the tool said so");
-    assertNoSecret(out, ["sk-wren", "sk-moss"], how);
-    if (how === "file missing") assert.equal(existsSync(file), false, "the tool does not create the file");
+    if (had) assert.equal(bytesOf(file), before, `${how}: byte-for-byte as it was`);
+    else assert.equal(existsSync(file), false, `${how}: no file was made`);
+    assertNoSecret(dry.stdout + dry.stderr + r.stdout + r.stderr, ["sk-wren", "sk-moss"], how);
   }
 });
 
-test("§ G2 a plain rerun directs to --mirror-only; --mirror-only repairs the file and writes nothing in the store", async () => {
+test("§ G2 --mirror-only is retired: refused by name, exit 2, naming the store, writing nothing, whether a retirement is recorded or not", async () => {
   const w = await threeKeys();
   const file = fileDb();
   await seedFile(file, w.spec);
-  failOnInsert(file, "CREATE TRIGGER nope BEFORE INSERT ON tokens WHEN NEW.kind = 'retired' BEGIN SELECT RAISE(ABORT, 'synthetic refusal'); END");
-  assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.wren, file })).status, "mirror_failed");
-  failOnInsert(file, "DROP TRIGGER nope");
-
-  // a plain rerun does not repair: it refuses and names the repair
-  const storeBefore = await snapshot();
-  const plain = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file });
-  assert.equal(plain.status, "refused");
-  const plainDry = await planRetire(pool, { household: w.slug, handle: w.wren, file });
-  assert.match(plainDry.hint, /--mirror-only/);
-  assert.deepEqual(await snapshot(), storeBefore);
-
-  const fixed = await mirrorOnly(pool, { household: w.slug, handle: w.wren, file });
-  assert.equal(fixed.status, "repaired", fixed.reason ?? fixed.message);
-  assert.deepEqual(await snapshot(), storeBefore, "the store is byte-identical: --mirror-only writes nothing there");
-  assert.equal(fileKind(file, "sk-wren"), "retired");
-  assert.equal(fileKind(file, "sk-moss"), "static", "the other key in the file is untouched");
-  // idempotent
-  assert.equal((await mirrorOnly(pool, { household: w.slug, handle: w.wren, file })).status, "repaired");
-  assert.deepEqual(await snapshot(), storeBefore);
-});
-
-test("§ G3 --mirror-only with a fresh static key for the same household and handle leaves it alone; with no tombstone it refuses", async () => {
-  const w = await threeKeys();
-  const file = fileDb();
-  await seedFile(file, w.spec);
-  assert.equal((await mirrorOnly(pool, { household: w.slug, handle: w.wren, file })).status, "refused", "no tombstone recorded");
-  assert.equal(fileKind(file, "sk-wren"), "static", "refusal wrote nothing to the file");
-
-  await retireStaticKey(pool, { household: w.slug, handle: w.wren, file: join(TMP, "absent-for-g3.db") }); // store commits, file missing
-  await importSpec(`sk-fresh=${w.slug}:${w.wren}`);                                                           // a NEW key, same household and handle
-  await seedFile(file, `sk-fresh=${w.slug}:${w.wren}`);
-  const storeBefore = await snapshot();
-  const fixed = await mirrorOnly(pool, { household: w.slug, handle: w.wren, file });
-  assert.equal(fixed.status, "repaired");
-  assert.equal(fixed.newer_static_untouched, 1);
-  assert.deepEqual(await snapshot(), storeBefore);
+  const fileBefore = bytesOf(file);
+  for (const stage of ["no retirement recorded", "a retirement recorded, and a fresh key for the same household and handle"]) {
+    if (stage !== "no retirement recorded") {
+      assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.wren })).status, "retired");
+      await importSpec(`sk-fresh=${w.slug}:${w.wren}`); // a NEW key, same household and handle (§ G3's case until 2026-11-03)
+    }
+    const storeBefore = await snapshot();
+    for (const extra of [[], ["--json"], ["--dry"]]) {
+      const r = retireCli(["--oauth-db", file, "--household", w.slug, "--handle", w.wren, "--mirror-only", ...extra]);
+      assert.equal(r.status, 2, `${stage} ${extra.join(" ")}: ${r.stderr}`);
+      assert.match(r.stderr, /--mirror-only is retired \(POS-271\)/, "refused by name");
+      assert.match(r.stderr, /lives in the store alone/, "and the refusal names where a retirement lives");
+      assert.match(r.stderr, /Nothing was written\./);
+      assert.equal(r.stdout, "", "no result on stdout, not even with --json");
+    }
+    assert.deepEqual(await snapshot(), storeBefore, `${stage}: the store is untouched`);
+  }
   assert.equal(await resolves("sk-fresh"), true, "the fresh key still resolves");
-  assert.equal(await resolves("sk-wren"), false);
-  assert.equal(fileKind(file, "sk-fresh"), "static", "and is still a live row in the file");
-  assert.equal(fileKind(file, "sk-wren"), "retired");
+  assert.equal(bytesOf(file), fileBefore, "and the file is untouched");
+  // the refusal comes before anything else is asked: no household, no store in the environment
+  const bare = spawnSync(process.execPath, [join(ROOT, "tools", "static-keys-retire.mjs"), "--mirror-only"], { env: { ...process.env, OFFICE_PAPERWORK_STORE: "" }, encoding: "utf8" });
+  assert.equal(bare.status, 2);
+  assert.match(bare.stderr, /--mirror-only is retired/);
 });
 
 // ── § H the import ──────────────────────────────────────────────────────────
 
 test("§ H a foreign kind rolls back EVERYTHING, even when a retired entry is also named; dry says the same", async () => {
   const w = await threeKeys();
-  await retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb() });
+  await retireStaticKey(pool, { household: w.slug, handle: w.wren });
   await pool.query("INSERT INTO oauth_tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created) VALUES ($1, 'access', 7, 'someone', 'c', $2, $3)", [sha("sk-collides"), NOW + 1e6, NOW]);
   const before = await snapshot();
   const spec = `sk-wren=${w.slug}:${w.wren};sk-collides=${w.slug}:x;sk-brand-new=${w.slug}:newcomer`;
@@ -521,10 +510,11 @@ test("§ I the CLIs: exit codes, and no key or hash in any output", async () => 
   assert.equal(retire().status, 0, said.at(-1));
   assert.equal(await kindOf("sk-wren"), RETIRED_KIND);
   assert.equal(retire().status, 1, "retiring again: refused, nothing written");
-  assert.match(said.at(-1), /--mirror-only/);
-  assert.equal(retire("--mirror-only").status, 0);
-  assert.equal(retire("--mirror-only", "--json").status, 0);
-  assert.equal(run("static-keys-retire.mjs", ["--household", w.slug, "--handle", "nobody", "--mirror-only"]).status, 1, "no tombstone: refused");
+  assert.match(said.at(-1), /already retired: the store holds its retirement/, "and it says the store holds it (until 2026-11-03 it named --mirror-only, the file's repair)");
+  // --mirror-only is retired (POS-271; until 2026-11-03 it repaired the file, exit 0, and refused with no tombstone, exit 1)
+  assert.equal(retire("--mirror-only").status, 2);
+  assert.equal(retire("--mirror-only", "--json").status, 2);
+  assert.equal(run("static-keys-retire.mjs", ["--household", w.slug, "--handle", "nobody", "--mirror-only"]).status, 2);
 
   // usage, and no way to hand it a key
   assert.equal(run("static-keys-retire.mjs", ["--household", w.slug]).status, 2);
@@ -532,13 +522,15 @@ test("§ I the CLIs: exit codes, and no key or hash in any output", async () => 
   assert.equal(withKey.status, 2);
   assert.equal(run("static-keys-retire.mjs", ["--household", w.slug, "--handle", w.wren], { OFFICE_PAPERWORK_STORE: "" }).status, 2, "no store, no run");
 
-  // a mirror failure exits 4: the file is gone
+  // a missing file is no failure: the retirement exits 0 and no file is made
+  // (POS-271; until 2026-11-03 this exited 4, "STORE COMMITTED", the file not verified)
   const w2 = await threeKeys();
   const gone = join(TMP, `never-${++fileSeq}.db`);
-  const r4 = spawnSync(process.execPath, [join(ROOT, "tools", "static-keys-retire.mjs"), "--oauth-db", gone, "--household", w2.slug, "--handle", w2.wren], { env, encoding: "utf8" });
-  said.push(r4.stdout, r4.stderr);
-  assert.equal(r4.status, 4, r4.stderr);
-  assert.match(r4.stderr, /STORE COMMITTED/);
+  const r0 = spawnSync(process.execPath, [join(ROOT, "tools", "static-keys-retire.mjs"), "--oauth-db", gone, "--household", w2.slug, "--handle", w2.wren], { env, encoding: "utf8" });
+  said.push(r0.stdout, r0.stderr);
+  assert.equal(r0.status, 0, r0.stderr);
+  assert.equal(existsSync(gone), false, "no file was made");
+  assert.doesNotMatch(r0.stderr, /STORE COMMITTED/);
 
   // the import: partial exits 3 and names the entry; complete exits 0
   const spec = `sk-wren=${w.slug}:${w.wren};sk-moss=${w.slug}:${w.moss};sk-extra=${w.slug}:extra`;
@@ -574,9 +566,9 @@ test("§ J a booted office on the store: the static bearer authenticates, the SA
   const jpaper = paperOnPool(jpool);
   const spec = "sk-door-wren=doorhouse:dwren;sk-door-cover=doorhouse:dwren,dmoss";
   await importStaticKeys(jpaper, spec);
-  // a store-switched office opens the file only if it exists, so the mirror's file is made first
-  const oauthDb = fileDb("j");
-  await seedFile(oauthDb, spec);
+  // a store-switched office never opens its oauth.db (POS-271), so the path is only an argument
+  // (until 2026-11-03 the mirror's file was made and seeded here first, since the office opened it if it existed)
+  const oauthDb = join(TMP, "j-oauth.db");
   let said = "";
   const office = await bootOnFreePort((port) => { const c = spawn(process.execPath, [join(ROOT, "src", "server.mjs"),
     "--port", String(port), "--oauth-db", oauthDb, "--roles-db", join(TMP, "j-roles.db")], {
@@ -595,7 +587,7 @@ test("§ J a booted office on the store: the static bearer authenticates, the SA
   assert.deepEqual(JSON.parse(before.body).handles.includes("dwren"), true);
   assert.equal((await me("sk-door-cover")).status, 200, "and so does the covering key");
 
-  const out = await retireStaticKey(jpool, { household: "doorhouse", handle: "dwren", file: oauthDb });
+  const out = await retireStaticKey(jpool, { household: "doorhouse", handle: "dwren" });
   assert.equal(out.status, "retired", out.reason ?? out.message);
 
   const after = await me("sk-door-wren");
@@ -612,38 +604,32 @@ test("§ J a booted office on the store: the static bearer authenticates, the SA
 test("§ K1 a statement that outlasts the bound while the table is locked: cancelled, rolled back, nothing written", async () => {
   assert.equal(STATEMENT_TIMEOUT_MS, 5000, "the shipped bound is the ruled 5 s");
   const w = await threeKeys();
-  const file = fileDb();
-  await seedFile(file, w.spec);
-  const before = [await snapshot(), fileRows(file)];
-  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file, statementTimeoutMs: 300,
+  const before = await snapshot();
+  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, statementTimeoutMs: 300,
     hooks: { beforeDelete: (c) => c.query("SELECT pg_sleep(2)") } });
   assert.equal(out.status, "refused");
   assert.equal(out.timed_out, true);
   assert.match(out.reason, /outlasted the 300 ms bound \(statement_timeout\).*nothing was written/);
-  assert.deepEqual([await snapshot(), fileRows(file)], before, "store and file untouched");
+  assert.deepEqual(await snapshot(), before, "the store untouched");
   assert.equal(await resolves("sk-wren"), true);
   // and the lock is gone with it: a plain retire right after succeeds
-  assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.wren, file })).status, "retired");
+  assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.wren })).status, "retired");
 });
 
 test("§ K2 dry, apply and the tombstone carry the key's own created, whether it has a gh_id, and what is left", async () => {
   const w = await threeKeys();
-  const file = fileDb();
-  await seedFile(file, w.spec);
   const orig = Number((await pool.query("SELECT created FROM oauth_tokens WHERE token_hash = $1", [sha("sk-wren")])).rows[0].created);
   const iso = new Date(orig * 1000).toISOString();
-  const dry = await planRetire(pool, { household: w.slug, handle: w.wren, file });
+  const dry = await planRetire(pool, { household: w.slug, handle: w.wren });
   assert.deepEqual([dry.target_created, dry.target_has_gh_id, dry.household_static_keys_now, dry.household_static_keys_left], [iso, false, 2, 1]);
   const later = orig + 3600; // the retirement happens an hour after the import (inside the cover key's life)
-  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file, now: later });
+  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, now: later });
   assert.equal(out.status, "retired", out.reason ?? out.message);
   assert.deepEqual([out.target_created, out.target_has_gh_id, out.household_static_keys_left], [iso, false, 1]);
   assert.equal(out.retired_at, new Date(later * 1000).toISOString(), "the retirement's own instant is in the receipt");
   const tomb = (await pool.query("SELECT created FROM oauth_tokens WHERE token_hash = $1", [sha("sk-wren")])).rows[0];
   assert.equal(Number(tomb.created), orig, "the tombstone keeps the key's own created, not the retirement's");
-  const db = new DatabaseSync(file, { readOnly: true });
-  try { assert.equal(Number(db.prepare("SELECT created FROM tokens WHERE token_hash = ?").get(sha("sk-wren")).created), orig, "and so does the file"); }
-  finally { db.close(); }
+  // (until 2026-11-03 this also read the file's tombstone; POS-271 retired the file step, § G)
   assertNoSecret([dry, out], ["sk-wren", "sk-moss"], "in the receipts");
   // a key pinned to a gh_id says so (nonsecret: present or not, never the id's owner)
   const p = await fresh(["wren"]);
@@ -651,22 +637,36 @@ test("§ K2 dry, apply and the tombstone carry the key's own created, whether it
   assert.equal((await planRetire(pool, { household: p.slug, handle: p.h("wren") })).target_has_gh_id, true);
 });
 
-test("§ K3 the file's busy wait: a writer holding oauth.db for under 2 s is waited out, not failed", async () => {
+test("§ K3 a writer holding oauth.db delays nothing: the tool never opens the file (POS-271)", async () => {
+  // Until 2026-11-03 this asserted the file's busy wait: a writer holding oauth.db
+  // for under 2 s was waited out, not failed. The file step is retired, so the
+  // inverse holds: an EXCLUSIVE lock held far past that old 2 s wait (readers
+  // and writers both refused) does not slow the retirement or fail it.
   const w = await threeKeys();
   const file = fileDb();
   await seedFile(file, w.spec);
-  // another process holds the file's write lock for 800 ms (DatabaseSync is synchronous, so it must be another process)
+  const HOLD_MS = 20_000;
+  // another process holds the file (DatabaseSync is synchronous, so it must be another process)
   const holder = spawn(process.execPath, ["-e", `
     const { DatabaseSync } = require("node:sqlite");
     const db = new DatabaseSync(process.argv[1]);
-    db.exec("BEGIN IMMEDIATE"); console.log("locked");
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
+    db.exec("BEGIN EXCLUSIVE"); console.log("locked");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${HOLD_MS});
     db.exec("COMMIT"); db.close();`, file], { stdio: ["ignore", "pipe", "inherit"] });
+  CLEANUP.push(async () => { if (holder.exitCode === null && holder.signalCode === null) holder.kill(); });
   await new Promise((ok, no) => { holder.stdout.on("data", (d) => { if (String(d).includes("locked")) ok(); }); holder.on("exit", () => no(new Error("the holder exited before locking"))); });
-  const out = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file });
-  await new Promise((ok) => (holder.exitCode !== null ? ok() : holder.on("exit", ok)));
-  assert.equal(out.status, "retired", `waited out the holder: ${out.message ?? out.reason}`);
-  assert.equal(fileKind(file, "sk-wren"), "retired");
+  const t0 = performance.now();
+  const r = retireCli(["--oauth-db", file, "--household", w.slug, "--handle", w.wren]);
+  const took = performance.now() - t0;
+  await new Promise((ok) => setImmediate(ok));
+  const stillHeld = holder.exitCode === null && holder.signalCode === null;
+  holder.kill();
+  await new Promise((ok) => (holder.exitCode !== null || holder.signalCode !== null ? ok() : holder.on("exit", ok)));
+  assert.equal(r.status, 0, `the retirement ran under the file's lock: ${r.stderr}`);
+  assert.equal(stillHeld, true, "the holder still held oauth.db's EXCLUSIVE lock when the retirement finished");
+  assert.ok(took < HOLD_MS - 5_000, `it never waited on the file (${Math.round(took)} ms)`);
+  assert.equal(await kindOf("sk-wren"), RETIRED_KIND, "the store holds the retirement");
+  assert.equal(fileKind(file, "sk-wren"), "static", "and the file is as the holder left it");
 });
 
 test("§ K4 a resident-held key covers ONLY the exact claimed handle, with the registry's proof and a live expiry", async () => {
@@ -674,7 +674,7 @@ test("§ K4 a resident-held key covers ONLY the exact claimed handle, with the r
   let w = await threeKeys({ cover: false });
   await mintedCover(w.ghId, { heldBy: "resident", claimedHandle: w.wren });
   const mintedBefore = await minted();
-  const ok = await retireStaticKey(pool, { household: w.slug, handle: w.wren, file: fileDb() });
+  const ok = await retireStaticKey(pool, { household: w.slug, handle: w.wren });
   assert.equal(ok.status, "retired", ok.reason ?? ok.message);
   assert.match(ok.cover, /resident-held household key claimed for exactly this handle/);
   assert.deepEqual(await minted(), mintedBefore, "the minted rows are byte-identical");
@@ -705,4 +705,85 @@ test("§ K4 a resident-held key covers ONLY the exact claimed handle, with the r
     await mintedCover(h.ghId, { heldBy: "resident", claimedHandle: h.h("wren") });
     return { ...h, wren: h.h("wren") };
   }, "the exact claim, but the registry does not list the handle as the house's resident");
+});
+
+// ── § L --gh-id: two keys hold exactly one handle (POS-805) ──────────────────
+
+const GH_OLD = 4100700;
+async function twoExact() {
+  const w = await fresh(["aa", "bb"]);
+  // the old key carries a gh_id; its replacement carries none: same household, same exact handle
+  await importSpec(`sk-old=${w.slug}#${GH_OLD}:${w.h("aa")};sk-new=${w.slug}:${w.h("aa")};sk-bb=${w.slug}:${w.h("bb")}`);
+  return w;
+}
+
+test("§ L1 no flag: two exact rows still refuse as ambiguous; a flag that matches nothing refuses; neither writes", async () => {
+  const w = await twoExact();
+  const before = await snapshot();
+  const h = w.h("aa");
+  const amb = await retireStaticKey(pool, { household: w.slug, handle: h });
+  assert.equal(amb.status, "refused");
+  assert.match(amb.reason, /2 static rows hold exactly this handle \(ambiguous\)/);
+  const ambDry = await planRetire(pool, { household: w.slug, handle: h });
+  assert.match(ambDry.reason, /2 static rows hold exactly this handle \(ambiguous\)/);
+  for (const ghId of [999, 4100701]) {
+    const r = await retireStaticKey(pool, { household: w.slug, handle: h, ghId });
+    assert.equal(r.status, "refused");
+    assert.match(r.reason, /none of the 2 static rows holding exactly this handle has that gh_id/);
+    assert.equal((await planRetire(pool, { household: w.slug, handle: h, ghId })).status, "refused");
+  }
+  assert.deepEqual(await snapshot(), before, "no tombstone and no deletion for any refusal");
+});
+
+test("§ L2 --gh-id picks the old key (by its id) or the new key (none); the OTHER exact row is the cover; --dry honours it", async () => {
+  // the old key, by its gh_id
+  const w = await twoExact();
+  const dry = await planRetire(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD });
+  assert.equal(dry.status, "dry");
+  assert.equal(dry.cover, "another static key for this household and handle", "the new key is the cover; no minted key exists here");
+  assert.equal(dry.target_has_gh_id, true);
+  assert.equal(await kindOf("sk-old"), "static", "dry wrote nothing");
+  const done = await retireStaticKey(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD });
+  assert.equal(done.status, "retired", done.reason ?? done.message);
+  assert.equal(await kindOf("sk-old"), RETIRED_KIND);
+  assert.equal(await kindOf("sk-new"), "static", "the replacement stands");
+  assert.equal(await resolves("sk-old"), false);
+  assert.equal(await resolves("sk-new"), true);
+  // (until 2026-11-03 this also held the file side: the file's rows, and --mirror-only honouring the flag;
+  // POS-271 retired the file step and --mirror-only, § G and § G2)
+  // and the old key now gone, one exact row is left: no flag is needed, but the wrong flag still refuses
+  assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD })).status, "refused");
+
+  // the new key, by "none"
+  const w2 = await twoExact();
+  const r = await retireStaticKey(pool, { household: w2.slug, handle: w2.h("aa"), ghId: null });
+  assert.equal(r.status, "retired", r.reason ?? r.message);
+  assert.equal(await kindOf("sk-new"), RETIRED_KIND);
+  assert.equal(await kindOf("sk-old"), "static");
+  assertNoSecret([dry, done, r], ["sk-old", "sk-new", "sk-bb"], "in a --gh-id result");
+});
+
+test("§ L3 two exact rows with the SAME gh_id stay ambiguous under the flag; the CLI parses --gh-id and refuses a bad value", async () => {
+  const w = await fresh(["aa"]);
+  await importSpec(`sk-1=${w.slug}#${GH_OLD}:${w.h("aa")};sk-2=${w.slug}#${GH_OLD}:${w.h("aa")}`);
+  const r = await retireStaticKey(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD });
+  assert.equal(r.status, "refused");
+  assert.match(r.reason, /2 of the 2 static rows holding exactly this handle have that gh_id \(still ambiguous\)/);
+
+  const w2 = await twoExact();
+  const file = fileDb();
+  const env = { ...process.env, OFFICE_PAPERWORK_STORE: "1", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), OFFICE_KEYS: "" };
+  const run = (...a) => spawnSync(process.execPath, [join(ROOT, "tools", "static-keys-retire.mjs"), "--oauth-db", file, "--household", w2.slug, "--handle", w2.h("aa"), ...a], { env, encoding: "utf8" });
+  const said = [];
+  const go = (...a) => { const x = run(...a); said.push(x.stdout, x.stderr); return x; };
+  assert.equal(go("--dry").status, 1, "no flag: ambiguous, refused");
+  assert.equal(go("--dry", "--gh-id", "12").status, 1, "a flag that matches nothing");
+  assert.equal(go("--gh-id", "abc").status, 2, "not a number");
+  assert.equal(go("--gh-id").status, 2, "no value");
+  assert.equal(go("--gh-id", "--dry").status, 2, "a flag where the value goes");
+  assert.equal(go("--dry", "--gh-id", String(GH_OLD)).status, 0, said.at(-1));
+  assert.equal(await kindOf("sk-old"), "static", "dry wrote nothing");
+  assert.equal(go("--gh-id", String(GH_OLD)).status, 0, said.at(-1));
+  assert.equal(await kindOf("sk-old"), RETIRED_KIND);
+  assertNoSecret(said.join("\n"), ["sk-old", "sk-new", "sk-bb"], "in a --gh-id CLI's output");
 });

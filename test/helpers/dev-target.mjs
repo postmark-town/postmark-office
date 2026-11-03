@@ -14,12 +14,11 @@
 // stub takes. A store that cannot start FAILS (embedded-store.mjs § NO_STORE).
 
 import { execFileSync, spawn } from "node:child_process";
-import { createServer } from "node:net";
 import { readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { startStore } from "./embedded-store.mjs";
+import { startStore, freePort } from "./embedded-store.mjs";
 import { seedRegistry } from "./office-under-test.mjs";
 import { awaitListening } from "../spawn-office.mjs";
 import { tempDir } from "./temp-dir.mjs";
@@ -28,12 +27,9 @@ import { standinClone } from "./clone-sparse.mjs";
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const g = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }).trim();
 
-/** A port the OS says is free now. */
-export const freePort = () => new Promise((ok, no) => {
-  const s = createServer();
-  s.once("error", no);
-  s.listen(0, "127.0.0.1", () => { const { port } = s.address(); s.close(() => ok(port)); });
-});
+// A port the OS says is free now: embedded-store.mjs's probe, re-exported because
+// tools/sandbox.mjs and tools/read-eval/office.mjs import it from here.
+export { freePort };
 
 /**
  * A scratch clone with no remote, committing as the harness. SPARSE (POS-652): a stand-in
@@ -118,9 +114,14 @@ export async function localDevTarget({
       if (!schedule.length) throw new Error("the stand-in's world has no Mists schedule to move to its last keyframe");
       const { currentCrossing } = await import("../../src/crossings.mjs");
       const by = Math.max(0, schedule.at(-1).crossing - currentCrossing());
-      skeleton.mists.schedule = schedule.map((k) => ({ ...k, crossing: k.crossing - by }));
-      writeFileSync(path, JSON.stringify(skeleton, null, 2) + "\n");
-      g(world, "commit", "-qam", `harness: the Mists' schedule ${by} crossings earlier, so its last keyframe stands now`);
+      // Once the wall clock has reached the last keyframe (crossing 282, 2026-10-31), there is
+      // nothing to move: the schedule already stands at its last front, and an empty commit
+      // would fail. The harness tag below still blesses the stand-in's newest main.
+      if (by > 0) {
+        skeleton.mists.schedule = schedule.map((k) => ({ ...k, crossing: k.crossing - by }));
+        writeFileSync(path, JSON.stringify(skeleton, null, 2) + "\n");
+        g(world, "commit", "-qam", `harness: the Mists' schedule ${by} crossings earlier, so its last keyframe stands now`);
+      }
       const newest = Math.max(0, ...g(world, "tag", "-l", "settlement/S*").split("\n").map((t) => Number(t.slice(12))).filter(Number.isInteger));
       g(world, "tag", "-a", `settlement/S${newest + 1}`, "-m", `S${newest + 1} (the local stand-in's harness): the Mists at their last keyframe`);
       log(`world: the Mists' last keyframe (crossing ${schedule.at(-1).crossing}) stands from crossing ${schedule.at(-1).crossing - by}, blessed as S${newest + 1}`);

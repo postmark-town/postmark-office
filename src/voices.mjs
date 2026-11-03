@@ -36,11 +36,13 @@ const ROOT = join(HERE, "..");
 //
 // Read ONCE, at module init, deliberately. departurePace reads per call and is
 // right to: one walk, one lookup. These are consulted inside the clustering
-// loop and on every spoken line, so a per-call read would put SQLite in the
-// speech path for numbers that move at a ruling. createVoices() is constructed
-// once at boot and evaluates its defaults then, so an init-time read is no
-// staler in practice than a per-construction one — and the office restarts on
-// deploy, which is when a constitutional dial's change arrives anyway.
+// loop and on every spoken line, so a per-call read would put a walk of the law
+// (`world-classes.mjs § dialNumber`: the law snapshot, or the world graph
+// snapshot behind it) in the speech path for numbers that move at a ruling.
+// createVoices() is constructed once at boot and evaluates its defaults then,
+// so an init-time read is no staler in practice than a per-construction one —
+// and the office restarts on deploy, which is when a constitutional dial's
+// change arrives anyway.
 //
 // THE DEPARTURE→DEPART LESSON, applied: a silent fallback is indistinguishable
 // from a good read, and that is exactly how every walker in the world moved at
@@ -205,8 +207,12 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
 // The thread derivation (spec, "a thread is a derivation, not an object").
 // Voices chain into one conversation when they chain with ANY voice already in
 // it and land within fadeMs of that cluster's latest voice; a cluster that goes
-// quiet for fadeMs is finished and never reopens — five silent minutes at the
-// same spot is a NEW conversation, not a continuation of the old one.
+// quiet for fadeMs is finished and never reopens — a silence that long at the
+// same spot is a NEW conversation, not a continuation of the old one. `fadeMs`
+// defaults to the display fade (5 minutes on the fallback), but every caller
+// passes a close window as `fadeMs`: `closeMs` in createVoices (the say class's
+// `conversation_lull_min`, 30 minutes on the fallback), and the sound class's
+// `thread_close_min` in `dynamic-emissions.mjs § threadsFrom`.
 export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
   const open = [];
@@ -330,6 +336,9 @@ export function createVoices({
   // write (the unflipped town), and the say path is what it was.
   beforeSpoke = null,
   nearby = null,
+  // `roomOf(handle)` (WLD-74): the dungeon room a resident is entered in, or null. Hearing stops at a dungeon room's walls, both ways: a voice
+  // is heard only by an ear in the room it was spoken in (null is the open), and its record is shown only to readers in that room.
+  roomOf = null,
   vesselAt = null,
   heardFrom = null,
   structuralHearing = () => Boolean(heardFrom),
@@ -427,7 +436,7 @@ export function createVoices({
         const v = JSON.parse(line);
         const at = Date.parse(v.at);
         if (!v.handle || !Number.isFinite(at) || !Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
-        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard) });
+        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}) });
       } catch { /* a torn line is not a reason to lose the town's speech */ }
     }
     voices.sort((a, b) => a.at - b.at);
@@ -448,6 +457,7 @@ export function createVoices({
       y: voice.y,
       place: voice.place,
       aboard: voice.aboard,
+      ...(voice.room ? { room: voice.room } : {}),
     })}\n`;
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -565,6 +575,7 @@ export function createVoices({
     const ear = { x: here.at.x, y: here.at.y, aboard: Boolean(here.aboard) };
     const out = [];
     for (const a of snap.audible) {
+      if ((a.v.room ?? null) !== (here.room ?? null)) continue; // hearing stops at a dungeon room's walls, both ways (WLD-74)
       const hit = a.structural
         ? distM(a, ear) <= earshotM
         : chains({ x: a.x, y: a.y, aboard: a.v.aboard }, ear, earshotM);
@@ -581,11 +592,11 @@ export function createVoices({
   // this never does. `snapshot` is a carried earshot (earshotSnapshot below),
   // for a read answered off the main thread, where the voices window is not:
   // the main thread takes it at the call's admission and hands it over.
-  async function heardAt(at, { aboard = false, since = null, cap = hearMax, exclude = null, snapshot: carried = null } = {}) {
+  async function heardAt(at, { aboard = false, since = null, cap = hearMax, exclude = null, snapshot: carried = null, room: earRoom = null } = {}) {
     const t = carried?.t ?? now();
     const snap = carried ?? await snapshot(t);
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since) && v.handle !== exclude;
-    const heard = heardBy({ at, aboard }, snap).filter(fresh);
+    const heard = heardBy({ at, aboard, room: earRoom }, snap).filter(fresh);
     return heard.slice(-cap).map((v) => ({
       handle: v.handle, standing: standingOf(v.handle), said: v.text, ago: agoWords(t - v.at),
       distance: distanceWords(distM(v.heardFrom ?? v, at)), at_ms: v.at,
@@ -603,7 +614,7 @@ export function createVoices({
   function earshotSnapshot() {
     const t = now();
     if (memo && t - memo.t >= 0 && t - memo.t < EARSHOT_MEMO_MS) return memo.p;
-    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard) }, x, y, structural })) }));
+    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}) }, x, y, structural })) }));
     const mine = { t, p };
     memo = mine;
     p.catch(() => { if (memo === mine) memo = null; });
@@ -613,14 +624,15 @@ export function createVoices({
   // `how` is "spoke" or "listened" — the same touch either way, because the dial
   // says attention IS presence, but the derived names its source so a reader can
   // tell a word from an ear. It is the only field this map gained.
-  function touch(handle, at, t, how) {
-    presence.set(handle, { at: t, x: at.x, y: at.y, how });
+  function touch(handle, at, t, how, room = null) {
+    presence.set(handle, { at: t, x: at.x, y: at.y, how, room });
   }
 
-  function listenersAround(at, t) {
+  function listenersAround(at, t, room = null) {
     const here = [];
     for (const [handle, p] of presence) {
       if (t - p.at > presenceMs) { presence.delete(handle); continue; }
+      if ((p.room ?? null) !== (room ?? null)) continue; // WLD-74: only those in the same room (or all in the open)
       if (distM(p, at) <= earshotM) here.push(handle);
     }
     return here.sort();
@@ -635,14 +647,17 @@ export function createVoices({
     const here = await standpoint(handle);
     if (!here?.placed) return { bounce: unplaced(handle) };
     const words = await place({ x: here.x, y: here.y, aboard: Boolean(here.aboard), moving: Boolean(here.moving) });
-    return { at: { x: here.x, y: here.y }, aboard: Boolean(here.aboard), place: words ?? null };
+    const inRoom = roomOf ? await Promise.resolve(roomOf(handle)).catch(() => null) : null; // WLD-74: the dungeon room they are entered in, if any
+    return { at: { x: here.x, y: here.y }, aboard: Boolean(here.aboard), place: words ?? null, ...(inRoom ? { room: inRoom } : {}) };
   }
 
   // The OPEN conversation at a point — the room's record, as the page derives
   // it (Keemin, party night: an agent arriving mid-lull heard silence while the
   // page showed a twenty-voice thread; hearing was five minutes then, and a
   // conversation was longer than an ear). Chains exactly like the page: earshot or shared deck.
-  function openConversationAt(here, t, clusters) {
+  function openConversationAt(here, t, clusters0) {
+    // WLD-74: only the voices spoken in the reader's own room (the open, for one in no room) are the room's record they may read
+    const clusters = (clusters0 ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
     const mine = clusters.find((c) =>
       t - c.latest <= closeMs &&
       c.voices.some((v) => (v.aboard && here.aboard) || distM(v, here.at) <= earshotM));
@@ -676,7 +691,7 @@ export function createVoices({
   // standing there and paging. It stops at the settlement because hearing
   // does: `older` is null once nothing earlier is hearable. `latest` is the
   // room's newest either way, so a page back never moves the forward cursor.
-  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null } = {}) {
+  async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
     snap ??= await snapshot(t);
     const heard = heardBy(here, snap).filter(fresh);
@@ -705,12 +720,12 @@ export function createVoices({
     // home and listening. Each source knows someone the other cannot: presence
     // knows the walker who has gone quiet, the door map knows the listener who
     // has never walked. Being in earshot by either reckoning is being here.
-    const atTheDoor = listenersAround(here.at, t).filter((h) => h !== handle);
+    const atTheDoor = listenersAround(here.at, t, here.room ?? null).filter((h) => h !== handle);
     let present = null;
     if (presentIn !== undefined) present = presentIn;
     else if (nearby) {
       stats.nearby += 1;
-      try { present = await nearby(here.at, { aboard: Boolean(here.aboard) }); } catch { present = null; }
+      try { present = await nearby(here.at, { aboard: Boolean(here.aboard), room: here.room ?? null }); } catch { present = null; }
     }
     const here_ = present ? [...new Set([...present, ...atTheDoor])].filter((h) => h !== handle).sort() : atTheDoor;
     const out = {
@@ -737,6 +752,22 @@ export function createVoices({
     // (2026-08-09: seven-verity's client posted twice, got 200 twice, and said
     // nothing twice; his human spent the night relaying his words by hand.)
     out.spoke = Boolean(spoke);
+    // `spoke: true` means the words left you, not that anyone heard them
+    // (POS-806: newcomers read it as "heard"). So a say's receipt
+    // also counts who is within earshot of where it was spoken (the same set as
+    // `listeners`, counted BEFORE the delta below may drop the list), and when
+    // that is nobody it says so in plain words. Additive; absent on a listen.
+    // A duplicate receipt (a spent nonce) is the room as it stands NOW, not the original
+    // voice's audience, so it counts nobody (`counted: false`). The human's say stands
+    // WITH a housemate's body (standAs): that housemate is not an audience.
+    if (spoke && counted) {
+      const heardBy = here_.filter((h) => h !== standAs).length;
+      out.heard_by = heardBy;
+      if (!heardBy)
+        out.heard_note = present
+          ? `nobody is within earshot (${Math.round(earshotM)} m${here.room ? ", and you are inside a room, where only those in the room hear" : ""}), so no one has heard these words yet. They are on the record, and anyone who comes within earshot before the next settlement can still hear them`
+          : `no one who has spoken or listened lately is within earshot (${Math.round(earshotM)} m), so as far as this office can tell no one has heard these words yet. They are on the record, and anyone who comes within earshot before the next settlement can still hear them`;
+    }
     // The activity signal, kept but demoted to its own name. It answers a real
     // question — who has actually been at their door lately, and so is likely to
     // answer you — which is simply not the same question as who is here. Only
@@ -856,7 +887,7 @@ export function createVoices({
     const t = now();
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;
-    touch(handle, here.at, t, "listened"); // listening is presence: the room feels peopled between remarks
+    touch(handle, here.at, t, "listened", here.room ?? null); // listening is presence: the room feels peopled between remarks
     return reply(handle, here, t, false, since, { before });
   }
 
@@ -941,7 +972,7 @@ export function createVoices({
     }
     if (spentAt != null) {
       const here = await standing(standAs);
-      const room = here.bounce ? { spoke: true } : await reply(handle, here, t, true, since, { before });
+      const room = here.bounce ? { spoke: true } : await reply(handle, here, t, true, since, { before, counted: false });
       return { ...room, duplicate: true, nonce: key, spoken_at: new Date(spentAt).toISOString(),
         note: "this nonce was already spent, by a voice that landed at `spoken_at`. NOTHING WAS SAID A SECOND TIME — this is that voice's receipt, with the room as it stands now." };
     }
@@ -963,7 +994,7 @@ export function createVoices({
     }
     const here = await standing(standAs);
     if (here.bounce) return here.bounce;
-    const voice = { handle, text: body, at: t, x: here.at.x, y: here.at.y, place: here.place, aboard: here.aboard };
+    const voice = { handle, text: body, at: t, x: here.at.x, y: here.at.y, place: here.place, aboard: here.aboard, ...(here.room ? { room: here.room } : {}) };
     if (beforeSpoke) {
       // The pen first, refusable: a refusal here is the answer, and the log
       // never learns the voice existed (R2: nothing written anywhere else).
@@ -973,14 +1004,14 @@ export function createVoices({
       if (refused) return refused;
     }
     append(voice, { standAs, household, ...(nonce ? { nonce } : {}) });
-    touch(handle, here.at, t, "spoke");
-    if (!nonce) return reply(handle, here, t, true, since, { before });
+    touch(handle, here.at, t, "spoke", here.room ?? null);
+    if (!nonce) return reply(handle, here, t, true, since, { before, standAs });
     spentNonces.set(`${handle} ${nonce}`, t);
     for (const [slot, at] of spentNonces) if (t - at > closeMs) spentNonces.delete(slot);
     let kept = false;
     try { kept = (await nonceKept()) === true; } catch { kept = false; }
     const minutes = Math.round(closeMs / 60000);
-    return { ...(await reply(handle, here, t, true, since, { before })), nonce,
+    return { ...(await reply(handle, here, t, true, since, { before, standAs })), nonce,
       idempotent: kept
         ? `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes; the nonce is kept on this voice's act in the town's record, so an office restart does not forget it`
         : `retry this exact call with the same nonce and you will get this receipt back rather than a second voice — for the next ${minutes} minutes, while this office stays up` };
@@ -996,7 +1027,8 @@ export function createVoices({
     // closeMs lull (the deck ruling above); hearing keeps the settlement's.
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
     // page draws a voice. `hearable_since` beside it is where an ear's window opens.
-    const clusters = clusterVoices(hydrate(), { earshotM, fadeMs: closeMs });
+    // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
+    const clusters = clusterVoices(hydrate().filter((v) => !v.room), { earshotM, fadeMs: closeMs });
     const live = [];
     const closed = [];
     for (const c of clusters) (t - c.latest <= closeMs ? live : closed).push(c);
@@ -1050,7 +1082,7 @@ export function createVoices({
     /** A listen's reply, dressed from a snapshot already built (and `present`, when the push read it). */
     reply: (handle, here, t, since, opts) => reply(handle, here, t, false, since, opts),
     /** Listening is presence — a waiter is standing here while it waits. */
-    listened: (handle, here, t) => touch(handle, here.at, t, "listened"),
+    listened: (handle, here, t) => touch(handle, here.at, t, "listened", here.room ?? null),
     onLanded(fn) { landedListeners.add(fn); return () => landedListeners.delete(fn); },
     /** The newest voice's instant, or -Infinity — lets a waiter skip a room when nothing is newer than its cursor. */
     latestAt: () => { const v = hydrate(); return v.length ? v.at(-1).at : -Infinity; },

@@ -19,8 +19,10 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 // THE ADMISSION GRAMMAR, and it is now the office's ONE answer to "is this a
-// resident handle?" — exported because the question is asked in three places
-// and was being answered by three different rules.
+// resident handle?" — exported because the question is asked all over the
+// office (this door, the index and the roll readers, the households reader, the
+// fund door and the world2 ingest tools) and was once being answered by
+// several different rules.
 //
 // It is the door's rule: nothing that fails this could ever have been admitted
 // as a handle. So nothing that fails it can BE one, whatever a directory listing
@@ -61,10 +63,11 @@ export function isReservedHandle(name) { return RESERVED.has(String(name ?? "").
 import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
 import { BERTH_PREFIX } from "./speaker-standing.mjs"; // POS-739: a resident handle never wears a visitor's label
 import { probeOf } from "./index-probe.mjs";
-// The record's own readers (POS-158). `src/ceremony.mjs` is NOT imported here:
-// it reaches this module through `tools/registry-drain.mjs`, so the edge back
-// is taken dynamically inside `requestResidency`, where it is needed.
-import { loadRegistry, loadPins } from "./registry-store.mjs";
+// The record's own readers (POS-158). `src/join-bind.mjs` is NOT imported here:
+// it imports this module (and `src/ceremony.mjs`, which imports this module
+// too), so the edge back is taken dynamically inside `requestResidency`, where
+// it is needed.
+import { loadRegistry } from "./registry-store.mjs";
 import { resolveHouse, accountMatches, slugFromName, VIA } from "./household-deriver.mjs";
 
 const bounce = (code, defect, hint) => {
@@ -154,8 +157,10 @@ export const joinBranch = (handle) => `residency/${handle}`;
 // tools/github-ids.json are printed from it). A join the house already vouches
 // for is bound in the store at the door (src/join-bind.mjs); a held join's PR
 // carries the ADDRESS only, and is bound after its merge by settle-join.
-// Everything below is pure: it folds the registry the door just read into the
-// registry the join would leave behind.
+// The fold functions below (`houseForAccount`, `houseForName`, `planRegistryJoin`)
+// are pure: they fold the registry the door just read into the registry the
+// join would leave behind. The file is not pure throughout: `berthAshore` reads
+// a clone, and `readRegistry`, `openJoinPR` and the other PR openers do I/O.
 //
 // The office never invents a second answer to "whose house is this". The
 // predicate here — is this VERIFIED account already in the entry's accounts[] —
@@ -163,10 +168,12 @@ export const joinBranch = (handle) => `residency/${handle}`;
 // agree by construction.
 
 export const REGISTRY_PATH = "tools/households.json";
-// The join's own pin rides the PR (2026-09-04, the Luminari class): the body
-// had always asked "please pin <handle> when you merge" — of a person — and
-// since the witness certifies a pen join mechanically (rule 2c), nobody was
-// there to be asked. Four joins landed unpinned in one day, and the town clock
+// The printed pin register's path. No join PR carries a pin any more (POS-158):
+// the pin is a row in the record, and this file is printed from it by
+// `tools/registry-drain.mjs`. History, from when the join's own pin rode the PR
+// (2026-09-04, the Luminari class): the body had always asked "please pin
+// <handle> when you merge" — of a person — and since the witness certifies a
+// pen join mechanically (rule 2c), nobody was there to be asked. Four joins landed unpinned in one day, and the town clock
 // could not catch them: its tulip guard skips any handle with minted history,
 // and the welcome mint lands at the first crossing, hours before the clock.
 export const PINS_PATH = "tools/github-ids.json";
@@ -188,39 +195,11 @@ export const UNREADABLE = Symbol("unreadable at the door");
 // importing it from here; there is simply one of it now.
 export { slugFromName };
 
-/**
- * Does one registry `accounts[]` entry name this caller?
- *
- * THE RULE: ID FIRST, AND A LOGIN MATCHES ONLY WHERE NO ID IS ON RECORD.
- *
- * The old shape was `id === actorId || login === actorLogin` — an OR, not a
- * fallback, so a login match alone was sufficient EVEN WHEN both sides carried
- * ids that disagreed. **GitHub releases abandoned logins for re-registration.**
- * A stranger who claims a resident's old login therefore satisfied the login
- * half against a row that still listed that string, and was treated as the
- * account's owner. `tools/pin-github-ids.mjs` names this exact risk, and the
- * town's own `tools/witness.mjs § loadBindings` already states the law — *"a
- * pinned resident is deliberately NOT login-matchable: their old login may have
- * been abandoned and re-registered by a stranger, and their ADDRESS `github:`
- * string is display-only."* This is that law, applied at the places that decide.
- *
- * The row's pinned-ness is what decides, not the caller's: if the ROW carries an
- * id, only an id can match it. That is deliberate and slightly stricter than
- * "compare ids when both have them" — a caller with no verified id must not
- * reach a pinned account by naming it, which is precisely the recycled-login
- * attack. A legacy row with a login and no id keeps matching by login, so
- * nothing pinned breaks and nothing unpinned regresses.
- *
- * Vendored deliberately: the town repo carries the identical rule in
- * `tools/account-match.mjs`, and the two must move together. If this changes,
- * that changes in the same round.
- */
-// RE-EXPORTED, not re-implemented (POS-160). The body moved to
-// `household-deriver.mjs § accountMatches`, which is where the walk that uses
-// it now lives; this name stays because `ceremony.mjs` and the suites cite it
-// by this path, and because the town's `tools/account-match.mjs` is the twin
-// that must move with it and it is this file the town's header names.
-export { accountMatches };
+// `accountMatches` (id first; a login matches only where the row carries no id)
+// lives in `household-deriver.mjs § accountMatches` (POS-160), with its rule
+// and the recycled-login reason for it. This file imports it for the
+// known-account test in `planRegistryJoin` below and does not re-export it. Its
+// provenance (the town-side rule it was vendored from) is recorded there too.
 
 // The house this verified account already belongs to, by immutable id first and
 // login only where the row carries no id at all. null = unknown account.
@@ -243,8 +222,11 @@ export function houseForName(registry, name) {
 // discipline as `github:` (we write the frontmatter, they write the prose).
 const houseLineOf = (registry, slug) => registry?.households?.[slug]?.name ?? slug;
 
-// The registry diff this join carries, or null for a join that declares no
-// household (today's plain three-file PR, unchanged).
+// The plan for this join: the house it belongs to and `registry`, the record
+// folded forward with it (src/join-bind.mjs consumes that fold at the door and
+// binds the join in the store from it; no PR carries it), or null for a join
+// this door cannot place in a house — no household named and no login to key
+// one by, or a name that slugs to nothing. A null plan leaves the plain three-file join.
 //
 //   vouched   the calling account is already one of the house's accounts — the
 //             key IS the vouch (B1, and B2 through a door the house already
@@ -400,7 +382,7 @@ export function planRegistryJoin(registry, { handle, household, ghId, ghLogin, s
       declared_by: `admission of ${handle} through the office door (${date}) — a house of one, keyed by its account`,
     } };
     // `houseLine: null` is what makes the card read `(unstated — ask them)`:
-    // `buildJoinFiles` already falls through to that word on an empty household
+    // `buildJoinCard` already falls through to that word on an empty household
     // line, so the house exists in the registry while the card says, truthfully,
     // that nobody has said what it is called.
     return { slug: own, action: "created", vouched: true, addedAccount: true,
@@ -427,9 +409,11 @@ export function planRegistryJoin(registry, { handle, household, ghId, ghLogin, s
 }
 
 // Byte-fidelity, proved in test: the town's registry blob round-trips exactly
-// through JSON.stringify(…, 2) + "\n", so the diff a join carries is only the
-// lines it actually changed. (The blob is LF; the working tree's CRLF is git's
-// business, never ours — the pen writes blobs.)
+// through JSON.stringify(…, 2) + "\n", so the printed file differs from the
+// last print only in the lines the record actually changed. Its one caller in
+// src is src/registry-rows.mjs (`renderOf`), which `tools/registry-drain.mjs`
+// prints from; no join PR carries it. (The blob is LF; the working tree's CRLF
+// is git's business, never ours — the pen writes blobs.)
 export const serializeRegistry = (registry) => JSON.stringify(registry, null, 2) + "\n";
 
 // The registry paragraph the Registrar reads. A join the house already vouches
@@ -637,53 +621,46 @@ async function openPRFor(pen, branch, title) {
     : null;
 }
 
-// The declared registry as the base branch holds it RIGHT NOW — read through
-// the pen, not from the office's town clone. The clone lags its pull cron (it
-// was 200 lines behind the day this shipped), and a stale blob written back
-// over the tree would silently revert every house declared since. The base tree
-// this PR builds on comes from the same ref in the same breath, so the diff is
-// exactly what changed. Absent registry = a town with no registry: no diff.
 // ── THE REGISTERS COME FROM THE RECORD NOW (POS-158) ────────────────────────
 //
-// These two used to fetch the base branch's blobs through the pen, and the
-// paragraph above explains why the pen and not the office's clone: the clone
-// lags its pull cron. Both readers are superseded by a third answer that lags
-// nothing — the registry is store-of-record (019_households.sql), and
-// `loadRegistry`/`loadPins` return exactly the objects those fetches parsed to.
+// These two used to fetch the base branch's blobs through the pen, and not from
+// the office's town clone, because the clone lags its pull cron (it was 200
+// lines behind the day that shipped) and a stale blob written back over the
+// tree would silently revert every house declared since. Both are superseded by
+// a third answer that lags nothing — the registry is store-of-record
+// (019_households.sql), and `loadRegistry`/`loadPins` return exactly the
+// objects those fetches parsed to. (Only `loadRegistry` is read here: the pins
+// reader this file once carried had no caller and is gone.)
 //
 // The `UNREADABLE` distinction is KEPT: the store answers `null` for "this
 // office is not pointed at the record", and since admission became the bind
 // (Keemin, 2026-09-29) that is a refusal — a door that cannot read the record
-// cannot tell a vouched join from a held one. What is gone is the 404 case: a
-// town with no registry file is not a town with no registry any more, because
-// the registry is not a file.
+// cannot tell a vouched join from a held one. `requestResidency` refuses on it
+// for the registry. UNREADABLE survives the move because of the case it was
+// built for: Luminari (#2479, 2026-09-04) named a house on her card; the
+// registry read failed once,
+// SILENTLY, and the pen opened the three-file shape, which rule 2c merged with
+// nobody left to add the row. A read which fails quietly turns into a
+// household that does not exist, so a record this office cannot reach answers
+// UNREADABLE, loudly.
+//
+// What is gone is the 404 case: a town with no registry file is not a town with
+// no registry any more, because the registry is a table, not a file, and its
+// absence is a refusal rather than an emptiness. `readTownJson` (the pen-side
+// blob reader these two used) is deleted with it: nothing reads a register
+// through the GitHub contents API any more.
 async function readRegistry(env = process.env) {
   const r = await loadRegistry(env);
   if (r === null) { console.warn("[residency] the registry is unreadable at the door (this office is not pointed at the record) — the join is refused, try again"); return UNREADABLE; }
   return r;
 }
-async function readPins(env = process.env) {
-  const p = await loadPins(env);
-  if (p === null) { console.warn("[residency] the pin file is unreadable at the door (this office is not pointed at the record) — the join goes out saying so"); return UNREADABLE; }
-  return p;
-}
-
-// UNREADABLE survives the move to the record, and the case it was built for
-// is the reason. Luminari (#2479, 2026-09-04) named a house on her card; the
-// registry read failed once, SILENTLY, and the pen opened the three-file shape
-// which rule 2c merged with nobody left to add the row. A read which fails
-// quietly turns into a household that does not exist, so a record this office
-// cannot reach answers UNREADABLE, loudly, and the door refuses on it.
-//
-// The 404 case is gone with the fetch that produced it. A town with no
-// `tools/households.json` is no longer a town with no registry — the registry
-// is a table, and its absence is a refusal rather than an emptiness.
-// `readTownJson` (the pen-side blob reader these two used) is deleted with it:
-// nothing reads a register through the GitHub contents API any more.
 
 // Opens the join PR. Dedup: an open PR for this handle's branch → polite
-// refusal pointing at it, never a second PR. A household plan rides along as a
-// FOURTH file — the registry diff, in the same PR, so the merge is the whole act.
+// refusal pointing at it, never a second PR. The PR carries the three files of
+// `buildJoinFiles` and no registry diff (see below); a household plan reaches it
+// as the registry paragraph of the body (`registryNote`) and, through
+// `plan.houseLine`, as the card's own `household:` line (set in
+// `requestResidency`).
 export async function openJoinPR(args, pen, plan) {
   const { handle } = args;
   const existing = await openPRFor(pen, joinBranch(handle), joinTitle(handle));

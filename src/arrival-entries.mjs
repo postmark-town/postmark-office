@@ -438,6 +438,3 @@ export function startArrivalTick({ port, env = process.env, log = console, tick 
 
 /** Tests only: stop the timer. */
 export function stopArrivalTick() { if (timer.handle) clearInterval(timer.handle); Object.assign(timer, { handle: null, running: false, last: null }); }
-
-/** The tick's last run, for an operator. */
-export const arrivalTickLast = () => timer.last;

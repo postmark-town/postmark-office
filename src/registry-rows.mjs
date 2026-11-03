@@ -59,7 +59,7 @@
 // Nothing derives that order, so it is a column.
 //
 // The PIN order is derived: the file is sorted by handle, and the town's own
-// `serializePins` (residency.mjs:148) sorts on every write. A column for it
+// `serializePins` (src/residency.mjs) sorts on every write. A column for it
 // would be a second answer to a settled question.
 //
 // ── ONE SERIALIZER, NOT A SECOND ────────────────────────────────────────────
@@ -70,15 +70,13 @@
 // does not spell JSON. If the pen's spelling ever moves, the drain moves with
 // it in the same breath, because it is literally the same function.
 //
-// NOTE, FOR WHOEVER TOUCHES `serializePins` NEXT: there are two spellings of it
-// in this repo today and only one sorts. `src/residency.mjs:148` sorts;
-// `src/declare.mjs:455` does not, and `src/declare.mjs:411` is what the
-// declaration ceremony commits through. The live file IS sorted, so the sorted
-// spelling is the one that matches today's bytes and the one this module uses —
-// but a declaration landing through declare.mjs's unsorted writer would append
-// its new handle at the END of the file and `--check` would red on the next
-// crossing. That divergence is older than this lane and is named in the PR
-// rather than fixed in it.
+// NOTE, FOR WHOEVER TOUCHES `serializePins` NEXT: there is one spelling of it
+// in this repo now, and it sorts: `serializePins` in `src/residency.mjs`. The
+// live file IS sorted, so that is the spelling that matches today's bytes and
+// the one this module uses. `src/declare.mjs` once had a second, unsorted
+// `serializePins` (a declaration landing through it would have appended its new
+// handle at the END of the file, and `--check` would have redded on the next
+// crossing); POS-158 removed it, so there is no second spelling to keep in step.
 
 import { serializeRegistry, serializePins } from "./residency.mjs";
 import { publicRegistry } from "./registry-public.mjs";
@@ -88,13 +86,15 @@ import { publicRegistry } from "./registry-public.mjs";
 // input against them. They are the file's grammar, and they are the only place
 // that grammar is written down.
 //
-// THE TAIL OF THIS TEMPLATE IS TWO COLUMNS THAT USUALLY RENDER NOTHING, and
-// they are appended in the order their migrations landed so that no standing
-// key ever moves: `formerly` (POS-158, migration 020) after `declared_by`, then
-// `provisional` (POS-159, migration 021) after that. 0/118 live rows carry
-// either — measured on the town's own files, twice, a day apart.
+// THE TAIL OF THIS TEMPLATE IS FIVE COLUMNS, and they are appended in the order
+// their migrations landed so that no standing key ever moves: `formerly`
+// (POS-158, migration 020) after `declared_by`, then `provisional` (POS-159,
+// migration 021) after that, then `home_images`, `likeness` and `invited_by`
+// (each described beside NESTED_KEYS below). The first two usually render
+// nothing: 0/118 live rows carried either — measured on the town's own files,
+// twice, a day apart, when they landed.
 //
-// Both are keys an ordinary value must NOT render, which is why `isAbsent`
+// Those two are keys an ordinary value must NOT render, which is why `isAbsent`
 // alone is not enough for this template. A house rendering `"formerly": []` or
 // `"provisional": false` would diff, and 118 of them would rewrite the whole
 // file on the first crossing. An empty alias list and a NULL are the same fact
@@ -138,9 +138,10 @@ export const PIN_KEYS = Object.freeze([
 export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 
 // Which household columns carry nested objects, and the template each one's
-// objects are ordered by. `accounts` is the only one: `residents` and
+// objects are ordered by. Four columns carry them (NESTED_KEYS below):
+// `accounts`, `home_images`, `likeness` and `invited_by`. `residents` and
 // `formerly` are `text[]` of strings (no keys to reorder) and every other
-// column is a scalar. If a later migration adds a second jsonb column, it
+// column is a scalar. If a later migration adds another jsonb column, it
 // arrives with its row here in the same commit, or the drain renders it in
 // Postgres's order and reds on the first crossing.
 //
@@ -309,19 +310,6 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
 }
 
 /**
- * The rows -> the registry OBJECT, in the file's own key order.
- *
- * This is the shape `src/declare-exec.mjs` and `src/declare.mjs` read off the
- * clone today — `{ schema_version, note, households: { <slug>: { … } } }` — so
- * a store read can be handed straight to `houseForAccount`, `houseForName`,
- * `conformance` and `planRegistryJoin` with nothing in between.
- *
- * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`
- * before the object is built, because a `SELECT` with no `ORDER BY` returns
- * whatever the planner liked that morning and the file's bytes would then
- * depend on the weather.
- */
-/**
  * The house picture a household's record keeps for one resident (POS-219,
  * migration 050), read off the registry OBJECT — the store's fold or the
  * town's rendered households.json, which are the same thing. Only an entry for
@@ -339,6 +327,19 @@ export function homePictureIn(registry, handle) {
   return null;
 }
 
+/**
+ * The rows -> the registry OBJECT, in the file's own key order.
+ *
+ * This is the shape `src/declare.mjs` reads off the store (`loadRegistry`)
+ * today — `{ schema_version, note, households: { <slug>: { … } } }` — so a
+ * store read can be handed straight to `houseForAccount`, `houseForName`,
+ * `conformance` and `planRegistryJoin` with nothing in between.
+ *
+ * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`
+ * before the object is built, because a `SELECT` with no `ORDER BY` returns
+ * whatever the planner liked that morning and the file's bytes would then
+ * depend on the weather.
+ */
 export function registryFromRows(rows) {
   const out = {};
   for (const [k, v] of Object.entries(rows?.meta ?? {})) {

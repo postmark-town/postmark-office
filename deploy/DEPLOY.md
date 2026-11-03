@@ -827,7 +827,7 @@ default is the checkout's root. Its first line says which book it wrote.
 
 ```sh
 sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-import.mjs --dry --oauth-db /srv/postmark-office/oauth.db'
-#   book: the store (oauth_tokens), mirrored to /srv/postmark-office/oauth.db
+#   book: the store (oauth_tokens)
 #   OFFICE_KEYS: N keys          <- N is step 0's count; "malformed entries skipped" means a line to fix first
 #   would add N · would replace 0 · unchanged 0 · refused 0
 #   households: ...              <- every household you expect, and no other
@@ -900,7 +900,7 @@ printf %s "$ENTRY" | sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; \
   test "$OFFICE_PAPERWORK_STORE" = 1 && test "$WORLD2_PG" = 1 && test -n "$WORLD2_PG_URL" || { echo "the store switch is not in this env file: stop"; exit 1; }; \
   OFFICE_KEYS=$(cat); export OFFICE_KEYS; cd /srv/postmark-office && \
   exec runuser -u meepo -- node tools/static-keys-import.mjs --dry --oauth-db /srv/postmark-office/oauth.db'
-#   book: the store (oauth_tokens), mirrored to /srv/postmark-office/oauth.db   <- the store, or stop
+#   book: the store (oauth_tokens)   <- the store, or stop
 #   OFFICE_KEYS: 1 key · would add 1 · ... · static rows not in OFFICE_KEYS (left alone): N
 # then the same line without --dry, then step 4's /me with the new key
 unset ENTRY
@@ -916,13 +916,13 @@ back from `OFFICE_KEYS`.
 no key and no hash, on the command line or in the environment, and prints none.
 It needs the store switch like the import (`OFFICE_PAPERWORK_STORE=1`,
 `WORLD2_PG=1`, `WORLD2_PG_URL`), and runs as meepo with the office's own env file
-loaded, naming the office's own file:
+loaded. It never opens `oauth.db` (POS-271), so it names no file:
 
 ```sh
 # the dry run first: advisory, writes nothing, binds nothing
-sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h> --dry --oauth-db /srv/postmark-office/oauth.db'
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h> --dry'
 # then the same line without --dry
-sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h> --oauth-db /srv/postmark-office/oauth.db'
+sudo bash -c 'set -a; . /etc/postmark-office.env; set +a; cd <the staged tip> && exec runuser -u meepo -- node tools/static-keys-retire.mjs --household <slug> --handle <h>'
 ```
 
 What it does, and what it will not:
@@ -930,6 +930,9 @@ What it does, and what it will not:
 - It retires exactly one `static` row whose handles are exactly `[<h>]`. No match,
   two exact matches (ambiguous), or only a row that holds `<h>` among other
   handles (widened) are refused and write nothing.
+  When two keys hold exactly `<h>` (an old key and its replacement), add `--gh-id <n>`
+  (or `--gh-id none`) to pick the one whose stored gh_id is `<n>` (or null); zero or
+  several matches refuse, the other key stands as the cover, and it is never a key or a hash (POS-805).
 - ANOTHER working key must still cover THIS household and handle: another
   `static` row of the household that holds the handle, or a live human
   household key of the account the registry pins the handle to, where the
@@ -947,26 +950,18 @@ What it does, and what it will not:
   measured 8.5 ms on a synthetic store, which is a measurement of that run and
   not a promise. If the table is busy for the whole 2 s, nothing was changed:
   exit 6, run it again.
-- Then, and only then, it replays the retirement into `oauth.db` (the temporary
-  mirror, `paperwork.mjs` ⚑) in its own transaction and reads it back. **A
-  missing file, a failed write or a wrong read-back is NOT a success**: exit 4,
-  "STORE COMMITTED ... the file is NOT verified", and the exact command to
-  repair it. Do not roll the office back to the file until that is repaired: the
-  file would still hold the live key. The repair writes nothing in the store:
-
-```sh
-... node tools/static-keys-retire.mjs --household <slug> --handle <h> --mirror-only --oauth-db /srv/postmark-office/oauth.db
-```
-
-  `--mirror-only` reads the recorded retirements for that household and handle,
-  never a `static` row (a new key for the same household and handle is counted
-  and left alone), and refuses when none is recorded. A plain rerun with no
-  static row left does not repair anything; it says so and names this command.
-- Exit status: 0 retired and the file verified (or repaired); 1 refused, nothing
-  written; 2 cannot run (usage, no store switch); 4 STORE COMMITTED, file not
-  verified; 5 COMMIT not acknowledged, so the store may or may not hold it (check
-  with `--dry`, then `--mirror-only` if it is recorded); 6 table busy, nothing
-  changed.
+- The store's `retired` row IS the retirement. The tool never opens `oauth.db`
+  (POS-271): the office's mirror is deleted and the file leaves the box (§ The
+  paperwork files leave the box), so nothing reads it. Until POS-271 it then
+  replayed the retirement into the file and treated a missing or unverified file
+  as exit 4 with a repair verb, `--mirror-only`. That verb is retired: it is
+  refused by name (exit 2, nothing written). `--oauth-db` is accepted and
+  ignored, with a note, so an old command line still runs. A plain rerun with no
+  static row left refuses and says the store already holds the retirement.
+- Exit status: 0 retired (the store holds it); 1 refused, nothing written; 2
+  cannot run (usage, the retired `--mirror-only`, no store switch); 5 COMMIT not
+  acknowledged, so the store may or may not hold it (check with `--dry`); 6
+  table busy, nothing changed.
 - There is no un-retire. A household that needs a key again is issued a NEW key
   (a new hash), which the retired row does not touch.
 
@@ -983,9 +978,8 @@ no row, so it has no hash to refuse and no selector to find: nothing here can
 tombstone it. Take its entry out of whatever `OFFICE_KEYS` text an import reads
 (including a backup copy of the env file) before the import runs. Production
 retirements, and shredding the backup copy that still holds every key, are the
-owner's. When the mirror is deleted with `oauth.db` and `roles.db`, this tool
-loses its file step in the same change; until then its exit 4 is the honest
-answer for a missing file.
+owner's. The tool's file step went with the office's mirror (POS-271), as
+planned: it never opens `oauth.db`, so a missing file changes nothing it answers.
 
 **Rollback.**
 
@@ -1003,6 +997,117 @@ answer for a missing file.
   otherwise fine, fix forward instead: re-run step 2 sourcing the backup copy
   instead of `/etc/postmark-office.env` (it holds the switch and the line). An
   edited entry replaces its row.
+
+### The paperwork files leave the box (POS-271, the w46 ship)
+
+From the release that carries this, an office with `OFFICE_PAPERWORK_STORE=1`
+never opens `oauth.db` or `roles.db`. Sign-in, roles, the media ledger and the
+town log are the store's 031/032 tables only, and the rollback's mirror to the
+files is gone. **After this there is no rollback to the files.** An office
+whose switch is turned off would start on an empty `oauth.db` and sign the
+whole town out, so an unswitched writer whose `oauth.db` is missing refuses to
+boot (exit 78) while the store holds sign-ins, or when it cannot ask the store
+(`src/server.mjs`, the boot guard). The switch stays on.
+
+**The gate (before the merge).** Wright's go on POS-271 (2026-11-02), for the
+w46 ship Darko ruled on 2026-10-31: CI green on the head that merges,
+`paperwork-import --check` read on prod with any file-lag repair, and Darko's
+go, since auth and the box are on his before-merge list. The history behind
+the repair: prod's mirror logged `[paperwork] MIRROR FAILED` on 10-05
+(database is locked) and during the 10-09 disk-full outage. **Darko ruled
+(2026-10-09): repair, and keep the date.** The checks on 10-09 and 10-11 named
+only rows "in the store, not in the file": file lag, and the store is the
+record. Those receipts are history, not today's parity: read the check again
+before this merges. A row only the file holds, or one that differs in content,
+is not file lag: stop there, and nothing is deleted.
+
+`--repair` only INSERTS into the files the rows only the store holds. It never
+deletes or overwrites, it refuses (exit 2, nothing written) if a row differs in
+content or only the file holds it, and its output is counts only. `--check`'s
+output is not: each finding is an indented line carrying the row's key, which
+can be a token hash, a live authorization code or a pending id. So the runner
+below writes every run's whole output to a root-only file on the box and shows
+only the summary lines (the per-table `equal` or `DRIFT` line, and the last
+line). Nothing a finding says is pasted anywhere.
+
+**No password is typed.** world2_owner's password is read inside the root shell
+from `/etc/postmark-world2-dev.env`, the way `deploy/world2-backup.sh` reads it
+(`w2_secret PG_WORLD2_OWNER_PASSWORD`), and exported as `PGPASSWORD` for that
+shell and the tool alone. The `--pg-url` names the store and the role and
+carries no password; node-postgres takes it from `PGPASSWORD`. So it is in no
+command line, no argv and no transcript. `runuser` keeps the environment, as §
+Static keys' steps rely on.
+
+From the staged tip of this change (it carries `--repair`; its node_modules
+has pg), as root, the tool running as meepo (the files are meepo's):
+
+```sh
+# The runner, set once in the operator's shell; it holds no secret, only commands
+# the root shell runs. Every run's whole output: /root/pos271-paperwork-<UTC>-<check|repair>.txt (mode 600).
+PAPER='set -uo pipefail; umask 077; cd <the staged tip> && . deploy/world2-lib.sh || exit 2
+export PGPASSWORD="$(w2_secret PG_WORLD2_OWNER_PASSWORD)"
+[ -n "$PGPASSWORD" ] || { echo "PG_WORLD2_OWNER_PASSWORD unreadable from $WORLD2_ENV_FILE: stop"; exit 2; }
+paper() { out="/root/pos271-paperwork-$(date -u +%Y%m%dT%H%M%SZ)-$1.txt"; rc=0
+  runuser -u meepo -- node world2/tools/paperwork-import.mjs "--$1" --pg-url "postgres://world2_owner@${WORLD2_PGHOST:-localhost}:${WORLD2_PGPORT:-5432}/$(w2_db)" --oauth-db /srv/postmark-office/oauth.db --roles-db /srv/postmark-office/roles.db > "$out" 2>&1 || rc=$?
+  grep -v "^  " "$out"; echo "exit $rc; the whole output is $out (root only: never paste it)"; return $rc; }'
+# 1. What the files lack or hold differently (read-only):
+sudo bash -c "$PAPER; paper check"
+#   equal/DRIFT per table, then exit 0 (equal) or exit 1 (DRIFT)   <- read the DRIFT tables' findings in the root-only file:
+#   "in the store, not in the file" is file lag: steps 2-4. Anything else: stop
+# 2. A copy of each file first, never cp of a live sqlite file:
+sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
+sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-repair.db`)'
+# 3. The repair: the rows only the store holds, inserted into the FILES (the store is only read;
+#    a row that differs, or one only the file holds, is a refusal, exit 2, nothing written: stop):
+sudo bash -c "$PAPER; paper repair"
+#   repaired  oauth_tokens  2 row(s) inserted into the file from the store   (counts only, never a key)
+#   repaired; the files now equal the store, exit 0
+# 4. Check again; repeat 3 and 4 until it reads equal (a mirror write racing the
+#    repair is flagged by the next check, and the next repair takes it):
+sudo bash -c "$PAPER; paper check"
+#   checked; nothing written, exit 0   <- the gate. Only now: the merge, the release, the steps below
+```
+
+**The steps (prod, after the release is live).** Every step is on the box. Do
+these only on an office whose env sets the switch (dev's paperwork is on the
+file unless its env sets it too).
+
+**In the same sitting as the deploy.** Run these steps (the switch check, the
+copies, the removal) as soon as `/api/release` names the release, in the same
+sitting, never on a later day. From the release nothing writes the files any
+more, but the boot guard keys on their being gone. Until they are, an office
+whose switch went off would boot on them, and they hold nothing since the
+release: every session minted since the release would answer 401 on that
+office, and every rotation or retirement made since (a refresh token, a
+household key, a static key) would be undone there. So until the files are
+gone the switch stays on, and nothing runs on the box without
+`/etc/postmark-office.env`: an unswitched tool that made an empty `oauth.db`
+would disarm the guard the same way.
+
+```sh
+sudo grep -c '^OFFICE_PAPERWORK_STORE=1$' /etc/postmark-office.env       # 1, or stop: this office still reads the files
+curl -s https://postmark.town/api/release                                 # the release that carries POS-271
+# 1. A last copy of each file, out of every checkout (never cp a live sqlite file):
+sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
+sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-pos271.db`)'
+sudo chmod 600 /var/backups/postmark-paperwork/*.db
+# 2. The files, by name (nothing else in the directory):
+sudo ls -l /srv/postmark-office/oauth.db* /srv/postmark-office/roles.db*  # read what is there first
+sudo rm /srv/postmark-office/oauth.db /srv/postmark-office/roles.db
+# 3. The office is unchanged by the removal (it never opened them), and a
+#    signed-in connector keeps working; the files never come back:
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer <a test key, from a mode-600 header file>" https://postmark.town/api/me   # 200
+sudo ls /srv/postmark-office/oauth.db /srv/postmark-office/roles.db 2>&1 # "No such file", both, the next day too
+```
+
+The backup's § 1b then reports `roles_status: in-store` with the store's
+`office_role_audit` and `office_roles` counts, and the restore rehearsal
+compares both tables along with the rest of the dump. PROPOSED, not ruled: keep
+`/var/backups/postmark-paperwork/` and the runner's
+`/root/pos271-paperwork-*.txt` outputs for one week after the deletion, then
+remove those files by name. They hold token hashes, codes and the old role
+book, and nothing reads them. `static-keys-retire` needs neither: its retirement is the
+store's alone (§ Static keys leave the env file, "Retiring a static key").
 
 ### The world write pool (tier 1, 2026-08-05)
 

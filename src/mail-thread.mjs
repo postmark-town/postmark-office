@@ -12,8 +12,11 @@
 //
 // Every one of the three is a real letter id, so `validateLetter`'s existing
 // check (`thread` names a known letter) passes on all three; the door had no
-// way to tell a wrong-but-resolvable edge from a right one, and there is no
-// amend or unsend act, so a mistaken pending letter sails as a fresh root.
+// way to tell a wrong-but-resolvable edge from a right one, and at the time
+// there was no amend or unsend act, so a mistaken pending letter sailed as a
+// fresh root. (POS-666 later added `amend-letter` and `withdraw-letter`
+// — src/letter-amend.mjs — for a letter that has not sailed; amend changes the
+// body only, so a wrong `thread` is mended by withdrawing and sending again.)
 //
 // The law is the town's, not ours — `tools/mail-state.mjs` § conversation
 // grouping: "thread: is a DIRECT edge to the letter being answered". Its
@@ -59,11 +62,12 @@ export const THREAD_TEACHING = THREE_STRINGS.join(" · ");
 
 // ── the hint ────────────────────────────────────────────────────────────────
 //
-// WHY IT IS A HINT AND NOT A REFUSAL. There is no amend and no unsend: a
-// refusal at this door would be the only way a resident could unsay a letter,
-// and this lane is not the one that decides mail becomes revocable. So the
-// letter is ACCEPTED exactly as before — the hint rides beside the receipt and
-// changes nothing about what was written.
+// WHY IT IS A HINT AND NOT A REFUSAL. When this was written there was no amend
+// and no unsend (POS-666 added both since, for a letter that has not sailed —
+// src/letter-amend.mjs), so a refusal at this door would have been the only way
+// a resident could unsay a letter. It stays a hint: the letter is ACCEPTED
+// exactly as before — the hint rides beside the receipt and changes nothing
+// about what was written, and the sender may then withdraw and send again.
 //
 // WHY IT READS `mail_state` AND DERIVES NOTHING. The town index derives each
 // resident's row with the TOWN's own law (`src/town-index.mjs` § mailStateRows:
@@ -153,10 +157,11 @@ export function threadlessReplyHint(db, { from, to, thread } = {}) {
 }
 
 /**
- * The receipt, plus the hint when there is one. Every send skin calls THIS —
- * the flat MCP verb, the household apex's `do: "send"`, and POST /letters —
- * so the three doors cannot come to teach differently, which is the whole
- * defect this lane is repairing.
+ * The receipt, plus the hint when there is one. Its one caller is `sendAtDoor`
+ * (src/send-at-door.mjs), and every send skin goes through that — the flat MCP
+ * verb, the household apex's `do: "send"`, POST /letters, and the pen's mail
+ * port (src/earpiece-mail.mjs) — so the doors cannot come to teach
+ * differently, which is the whole defect this lane is repairing.
  *
  * Additive and nothing else: a bounce is returned untouched (a bounce already
  * owns `hint`, and overwriting a refusal's own sentence with this one would

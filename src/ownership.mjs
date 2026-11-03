@@ -69,7 +69,8 @@ export function answeredAct(payload) {
 export function ownershipEvents(holding = [], stances = []) {
   const out = [];
   for (const r of holding) {
-    if (!["take", "give", "drop"].includes(r?.action)) continue;
+    // a MAKE (POS-766) is its maker's give from nowhere: into a holder, the put-in is the maker's own
+    if (!["take", "give", "drop", "make"].includes(r?.action)) continue;
     const thing = r.object ?? r.payload?.thing;
     const seq = numOf(r.seq ?? r.id);
     if (!isMarkId(thing) || seq == null) continue;
@@ -92,8 +93,9 @@ const copyOf = (st) => ({ owner: st.owner, putIn: st.putIn, outing: st.outing ? 
  * (a `Map(thing → { owner, outing, putIn })`, copied, never mutated), so a kept
  * base and a window fold the same way a whole read does. PURE.
  *
- * `houseOf(handle)` → the handle's household key (sync); `opts.isHolder(id)`
- * says a holder id from a resident's handle (default: it is a mark id).
+ * `houseOf(handle)` → the handle's household key (sync; default: the handle
+ * itself). A holder id is told from a resident's handle by the module's own
+ * `isMarkId` (a string with a `/`) — not a parameter.
  */
 export function foldOwners(events = [], { houseOf = (h) => h, state = null } = {}) {
   const out = new Map(state ?? []);
@@ -120,7 +122,7 @@ export function foldOwners(events = [], { houseOf = (h) => h, state = null } = {
     // THE TOWN'S RETURN closes the outing: the thing is back in the owner's hands or on their ground
     if (p.returned) { st.outing = null; st.putIn = null; continue; }
     const into = p.holder == null ? null : String(p.holder);
-    if (e.action === "give") {
+    if (e.action === "give" || e.action === "make") {
       if (isMarkId(into)) { st.putIn = { holder: into, by: e.actor }; continue; } // into a holder: who put it there
       st.putIn = null;
       if (same(e.actor, st.owner) && into != null && !same(into, st.owner)) { st.owner = into; st.outing = null; continue; } // the owner's give

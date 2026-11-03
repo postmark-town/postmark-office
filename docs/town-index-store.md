@@ -1,10 +1,18 @@
 # office.db into the store: the shape (POS-268)
 
+> **Status, 2026-11-03:** this is the design as written on 2026-09-29/30. `office.db`
+> is retired (POS-656, w43): every door reads the store's `town_*` tables, the
+> `TOWN_INDEX_READS` switch is no longer read, and `src/hydrate.mjs` and
+> `src/schema.mjs` are gone (POS-656). The rehydrate unit and `deploy/office-tick.sh`
+> are gone by POS-268 part 5b. Where the text below
+> describes `office.db` as live, the switch as off by default, or the rehydrate as
+> still running, it is history.
+
 Plumb, 2026-09-29/30, lane `retire-sqlite-index`. **For Keemin's read before anything merges.** Nothing here touches the box.
 
 ## In one paragraph
 
-office.db's 21 tables move into Postgres as `town_*` tables, one for one, with each row's JSON kept as text so every door's answer stays byte-equal. A new ingest (`world2/tools/town-index-ingest.mjs`, the `law_ingester` pen) keeps them current. It seeds once from a full derivation. After that it only applies the town commits since its head. When those commits include a crossing, it stops at the crossing's seal commit and records a **snapshot** there, then applies the rest as the **delta**. Readers move to the store one door at a time behind `TOWN_INDEX_READS=store`, each with an equality test against office.db. hydrate.mjs, the rehydrate unit and the swap path go only once every reader has moved.
+office.db's 21 tables move into Postgres as `town_*` tables, one for one, with each row's JSON kept as text so every door's answer stays byte-equal. A new ingest (`world2/tools/town-index-ingest.mjs`, the `law_ingester` pen) keeps them current. It seeds once from a full derivation. After that it only applies the town commits since its head. When those commits include a crossing, it stops at the crossing's seal commit and records a **snapshot** there, then applies the rest as the **delta**. Readers move to the store one door at a time behind `TOWN_INDEX_READS=store` (history: every reader has moved, and no code reads the switch any more), each with an equality test against office.db. hydrate.mjs, the rehydrate unit and the swap path go only once every reader has moved.
 
 ## What I measured first (these change the brief's premise)
 
@@ -55,7 +63,7 @@ Every table states three things: what writes the **snapshot** (at the crossing's
 
 **A store reader only reads (POS-370).** A reader runs inside the pen's READ ONLY transaction on one of the pen's three connections, so it reads its rows and nothing else: no world read, no quest tools, nothing that might ask the pen for another connection. Whatever an answer needs beyond the index runs after the connection is back (`storeAnswer`'s `then`; the quest board is `questIndexRows` in the transaction, then `questBoardOfRows`). On 2026-10-04 the quest board composed inside its transaction, its world read waited on a second pen connection, and three boards per worker stalled the office for an hour. The pen now refuses a nested ask by name (`NestedStoreError`), every pool refuses a connection it cannot give within `WORLD2_PG_ACQUIRE_MS`, and the server ends a transaction left idle for 30 s.
 
-Behind `TOWN_INDEX_READS=store` (unset means office.db, as today). Rolling back means unsetting it; office.db and the rehydrate stay until the last reader has moved and a clean week has passed. Every store read is async, so each moved reader changes its signature at its callers, and those callers are named in the commit. The order goes from least entangled to most:
+(History: every reader has moved, and no code reads `TOWN_INDEX_READS` any more; the plan below is as written.) Behind `TOWN_INDEX_READS=store` (unset means office.db, as today). Rolling back means unsetting it; office.db and the rehydrate stay until the last reader has moved and a clean week has passed. Every store read is async, so each moved reader changes its signature at its callers, and those callers are named in the commit. The order goes from least entangled to most:
 
 1. **Moved (2026-09-30), at their own doors:**
    - `repoLog` (GET /repo/log, `list_commits`).

@@ -36,9 +36,9 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { freePort } from "./helpers/embedded-store.mjs"; // top level is constants only: nothing runs before the TEMP redirect below
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { tempDir } from "./helpers/temp-dir.mjs";
 
@@ -344,11 +344,7 @@ const withStore = (path, fn) => W.withWorld(path, fn);
 // which is the ordinary state of a worktree pool. The loser's office dies on
 // bind and this harness reports it as `office exited early (1)`, measured by
 // standing two offices on 43877 and watching the second one go.
-const freePort = () => new Promise((ok, no) => {
-  const probe = createServer();
-  probe.on("error", no);
-  probe.listen(0, "127.0.0.1", () => { const { port } = probe.address(); probe.close(() => ok(port)); });
-});
+// (freePort is test/helpers/embedded-store.mjs's, imported above.)
 
 let BASE = null; // set per office, since each one is handed a different port
 
@@ -2181,7 +2177,8 @@ test("O2 · do: leave-mark { kind, count, to } reaches the kind door through the
       const vehicle = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha" } }, KEY_ALPHA);
       assert.match(String(vehicle.defect), /"vehicle" is the town's to make/);
       const own = await worldApex({ do: "leave-mark", args: { kind: "vehicle", count: 1, to: "alpha", body: "mine" } }, KEY_ALPHA);
-      assert.match(String(own.defect), /carries no body/, "a count carries nothing of its own, said before the class law");
+      // a count beside a thing's own field: both forms named, said before the class law (POS-766)
+      assert.match(String(own.defect), /count makes that many alike, with nothing of their own, and body is one thing's own/, "a count carries nothing of its own, said before the class law");
     });
   } finally { resetLawSnapshot(); }
 });

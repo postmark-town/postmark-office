@@ -45,8 +45,10 @@
 //   · ORDER. The loader walks the directory tree, and the fold's `marks` array
 //     keeps that order. A mark's directory is its historical filing
 //     (`WORLD/filing-freeze.json`) and no row records it, so the rows fold's
-//     `marks` come out in slug order. `foldEquality` compares marks by id and
-//     names the order as the one difference it forgives.
+//     `marks` come out in slug order. `test/world2-fold-equality.test.mjs`
+//     compares marks by id, puts the rows into the published order
+//     (`inPublishedOrder`) first, and names the order as the one difference
+//     the rows are allowed to have.
 //   · `tier`. The seed stored the fold's DERIVED tier in `data.tier`, not the
 //     line the file carries. The fold reads a record's tier for one question
 //     only — is this the town's constitution (tools/mark-standing.mjs) — and the

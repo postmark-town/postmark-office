@@ -164,6 +164,7 @@ export async function liveUnitDeps() {
       if (p?.source === "set-down") return { holder: null, at: p.at, moved: true };
       return { holder: null, at: mark?.at ?? null, moved: false };
     },
+    reachable: async (id, actor) => { const r = await world.reachableBy(String(actor)); return !r || r(id); }, // WLD-74: a room inside a dungeon is out of reach of one who has not entered it
     standpoint: async (actor) => { const s = await world.residentStandpoint(String(actor)).catch(() => null); return s?.placed ? { x: s.x, y: s.y } : null; },
     householdOf: await (async () => { try { return await (await import("./households.mjs")).householdLookup(); } catch { return null; } })(),
     // `also`: further acts that commit in the SAME transaction as this one, or none of them do (O2; review-610 S4)
@@ -194,6 +195,8 @@ export async function liveUnitDeps() {
       return pen.officeWrite((c) => read(c, { mark, by }), { household: hh });
     },
     onActs: () => pen.laneFlipped("hold"),
+    // the things made straight into hands or a holder (POS-766): `Map(id → its mark)`, every make ever, from the kept record
+    made: async () => (await (await import("./world-kinds.mjs")).holdRecordNow())?.made ?? new Map(),
   };
 }
 

@@ -29,6 +29,9 @@ export function handsOf(key) {
   return held;
 }
 
+/** The hands the Registrar's operator acts (settle-join, standing) answer to: the Registrar, with wright as backup. */
+export const REGISTRAR_HANDS = Object.freeze(["registrar", "wright"]);
+
 /** Is `hand` this credential's own at a named gate? */
 export const holdsHand = (key, hand) => handsOf(key).has(hand);
 

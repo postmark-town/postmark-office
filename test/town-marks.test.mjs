@@ -89,6 +89,15 @@ test("COUNT FIRST, SLICE AFTER — a page never becomes the total", async () => 
     publishedMarksOf("errant", { repo }).map((m) => m.id), "the two pages rejoin whole");
 });
 
+test("A FRACTIONAL limit/offset PAGES AS ITS WHOLE NUMBER — the echo and the next cursor stay whole", async () => {
+  const a = await marksRead("errant", { repo, limit: 1.5, offset: 0.5, docketFor: docketWith([]), draftsFor: draftsWith([]) });
+  assert.equal(a.limit, 1, "limit 1.5 pages one");
+  assert.equal(a.offset, 0, "offset 0.5 starts at the top");
+  assert.equal(a.next_offset, 1, "the cursor is a whole number");
+  const b = await marksRead("errant", { repo, offset: 1e30, docketFor: docketWith([]), draftsFor: draftsWith([]) });
+  assert.equal(b.shown, 0, "past the end reads empty, not a throw");
+});
+
 test("AN UNREADABLE DOCKET ANSWERS null WITH A REASON — never zero", async () => {
   // This is the finding, not a nicety. "Nothing is pending" and "this office
   // cannot see the docket" are different facts, and the second wearing the

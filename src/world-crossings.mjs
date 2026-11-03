@@ -1,14 +1,21 @@
 // world-crossings.mjs — enter(mark) / exit(mark), the office's half.
 //
-// DEMO SLICE (step 5, `jetto/enter-exit-demo`). The law is the 2026-08-18
-// wind-down's: R14 (occupancy is a literal `contains` edge with an ENTITY
-// child; the handshake is one edge and two words), R15 (walk and entry are
-// fully decoupled axes — walking NEVER implies entry), R16 (the pair stays out
-// of production until the law is planted). Nothing here merges.
+// It began as a demo slice (step 5, `jetto/enter-exit-demo`) and is LIVE now:
+// the apex dispatches `enter` / `exit` through `enterViaOffice` /
+// `exitViaOffice` (world-apex.mjs § DISPATCH), world.mjs calls `crossingLaw`
+// and `exitViaOffice` (`enteredNow`, `exitWhatThisPointLeaves`, the walk's
+// enter-on-arrival), and the pen `CROSSING_EXEC` (crossing-exec.mjs) is run by
+// world-apex under the town lock. The law is the 2026-08-18 wind-down's: R14
+// (occupancy is a literal `contains` edge with an ENTITY child; the handshake
+// is one edge and two words), R15 (walk and entry are fully decoupled axes —
+// walking NEVER implies entry), R16 (the pair was to stay out of production
+// until the law was planted; it is in production now).
 //
 // THE DIVISION OF LABOUR, and it is the same one walk keeps:
-//   · the world clone owns the GRAMMAR and the DERIVATION (tools/thresholds.mjs
-//     — the acts' shape, the entry law's reading, occupancy from the acts) and
+//   · the world clone owns the GRAMMAR and the DERIVATION (tools/enter-exit.mjs
+//     — the acts' shape, the entry law's reading, occupancy from the acts; the
+//     retired name tools/thresholds.mjs is only a fallback in `crossingLaw`,
+//     for a clone one pull behind the rename) and
 //     the ADJUDICATION (tools/world-verbs.mjs — enter/exit/the chain/the scope);
 //   · this file owns WHO IS ACTING and refuses on that; the exec owns the pen.
 //
@@ -18,7 +25,8 @@
 // door that says it cannot read it.
 
 import { worldFreezeBounce } from "./freeze.mjs";
-import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
+import { forgetOccupancy } from "./creature-sight.mjs"; // WLD-74: a passage written is forgotten by the shared occupancy read
+import { perceived } from "./act-watch.mjs";
 import { standsWithin } from "./reach.mjs"; // the ONE "do you truly stand there" test — shared with the hold door (the-town/the-reach)
 import { anchorOfStop, arrivedNotice, depositAt, depositPointFor, isVehicleStop, rideStateFrom, stopsOfService, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
@@ -37,6 +45,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const bounce = (code, defect, hint, extra = {}) => {
   const e = new Error(defect); Object.assign(e, { code, defect, hint, ...extra }); return e;
 };
+// WLD-68: the one hint for an enter target that is missing, hidden or not in your room
+const ENTER_UNAVAILABLE_HINT = "That mark is not available to enter from here. Choose a doorway visible from where you stand. Nothing was recorded.";
 
 /** The clone's enter/exit law, or a named refusal. Never substituted.
  *
@@ -444,7 +454,7 @@ async function enterViaPortal(portal, { who, w, at, iso, occupancy, here, thresh
  * they are — the walk ledger's derivation, which this verb READS and never
  * writes), `ledger()` (the threshold ledger's text), `record(payload)` (the pen).
  */
-export async function enterViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => enterAct(worldClone, payload, key, deps)); }
+export async function enterViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => enterAct(worldClone, payload, key, deps).finally(forgetOccupancy)); }
 // POS-637 PR-B: the export above is this act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
@@ -504,6 +514,14 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
     if (answer.choose)
       throw bounce(422, answer.error, "name one of the portal's ways with into: <id>. Nothing was recorded",
         { choose: answer.choose });
+    // NOT AVAILABLE FROM HERE (WLD-68; wording settled by Bevel under Wright's
+    // 2026-10-26 delegation). The clone answers a mark a dungeon hides from you
+    // exactly as it answers an id that does not exist, so naming one learns
+    // nothing; this hint is that same answer for both, and names no room, no
+    // portal and no other way. Telling the walker a hidden portal "has no
+    // inside" was false: it has one, just not from where they stand.
+    if (answer.error === `no mark '${markId}' to enter`)
+      throw bounce(422, answer.error, ENTER_UNAVAILABLE_HINT);
     throw bounce(422, answer.error, "a mark you can step inside has a place and an extent; a point has no inside");
   }
 
@@ -896,7 +914,7 @@ async function leaveTheDungeon(answer, { who, at, markId, held, key, deps, fled 
 }
 
 /** exit(mark) — the walker nullifying his own side of the edge he authored. */
-export async function exitViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => exitAct(worldClone, payload, key, deps)); }
+export async function exitViaOffice(worldClone, payload = {}, key = null, deps = {}) { return perceived(() => exitAct(worldClone, payload, key, deps).finally(forgetOccupancy)); }
 // POS-637 PR-B: the export above is this act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
 async function exitAct(worldClone, payload = {}, key = null, deps = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }

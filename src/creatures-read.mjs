@@ -40,8 +40,8 @@ import { BARS_NOTE, HURL_ACTION, barsOf, isSetPiece, pieceOf } from "./set-piece
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WORLD_CLONE } from "./world-store.mjs";
-
-const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
+import { sightedFor } from "./creature-sight.mjs";
+import { lawReady, msOf } from "./creature-bits.mjs";
 
 // ── this process's creatures, for a read ────────────────────────────────────
 
@@ -53,7 +53,15 @@ export function __resetCreaturesReadForTest() { Object.assign(cache, { at: 0, re
  * before world#218) or no record here. The writer reuses the hook's set; a
  * read worker refreshes its own when it is older than REFRESH_MS.
  */
-export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: given = null, query = null } = {}) {
+export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: given = null, query = null, as = undefined, occupancy = null } = {}) {
+  const cur = await creaturesRaw({ nowMs, hook, law: given, query });
+  // `as`: a resident's read (WLD-74): the creatures in a room they have not entered do not exist for them (creature-sight.mjs).
+  // Left out, the whole set, which the law-only readers (is this law live?) use.
+  if (as === undefined || !cur?.living) return cur;
+  return { ...cur, living: await sightedFor(cur.living, as, { occupancy }) };
+}
+
+async function creaturesRaw({ nowMs, hook, law: given, query }) {
   try {
     const writer = hook ?? (await import("./creatures-hook.mjs")).creaturesNow();
     if (writer) return writer;
@@ -61,7 +69,7 @@ export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: g
     cache.inflight ??= (async () => {
       const law = given ?? await creatureLaw();
       if (!lawReady(law)) { cache.living = null; cache.ref = null; return; }
-      if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law }); }
+      if (law.ref !== cache.ref || !cache.living) { cache.ref = law.ref; cache.living = new LivingSet({ law, hideUnwarmed: true }); }
       const r = await cache.living.refresh({ ...(query ? { query } : {}), now: nowMs });
       if (!r.ok && !cache.living.booted) cache.living = null;
       // each creature's room, so its ring stops at the walls (world#268); a read without the marks keeps the circle
@@ -81,7 +89,6 @@ export async function creaturesForRead({ nowMs = Date.now(), hook = null, law: g
 
 // ── words ───────────────────────────────────────────────────────────────────
 
-const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 const point = (p) => (Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y)) ? { x: Number(p.x), y: Number(p.y) } : null);
 
 /** The reaction a creature's kind names, or null. */
@@ -339,15 +346,23 @@ export async function investigateCreature(id, { creatures, from = null, handle =
   const { living, law } = creatures ?? {};
   if (!living || !lawReady(law))
     return { kind: "creature", id, unavailable: "the creatures' law cannot be read at this office's blessed ref, so no creature can be looked at" };
+  // one in a room you have not entered is no creature to you: its record is not read either (WLD-74, creature-sight.mjs)
+  if (living.hidden?.has(id)) return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };
   // a row the tick wrote ahead of its arrival is not out yet, so it is not here to look at (livingNow)
   const held = living.byId.get(id);
   const c = held && held.spawned_at <= nowMs ? held : null;
   // and the save's row by the same rule: one the save carries ahead of now is not out yet either
   const saving = await Promise.resolve(saved(id)).catch(() => null);
   const snap = saving && !(msOf(saving.row?.spawned_at) > nowMs) ? saving : null;
-  if (!c && !snap)
+  // WHAT IT DID OUTLIVES ITS PLACE IN THE FOLD (POS-781): its reactions are acts rows, so they are read whether or not the fold
+  // still holds it. A creature that fled, or ended over an hour ago, has no fold row and may have no save, but it is not "no creature"
+  // while its record shows it did something
+  const got = await Promise.resolve(rows(id, REACTIONS_SHOWN)).catch(() => null);
+  if (!c && !snap && !(Array.isArray(got) && got.length))
     return { error: "bounce", code: 404, defect: `no creature "${id}"`, hint: 'investigate: takes a creature\'s id as who, find: "creature" and happening_here name it' };
-  const kind = c ? law.kindOf(c.kind) : null;
+  // the kind of one the fold no longer holds is the one its id names (`creature:wolf-270-1` is a wolf)
+  const kindName = c?.kind ?? snap?.row?.kind ?? String(id).slice("creature:".length).replace(/-\d.*$/, "");
+  const kind = law.kindOf(kindName) ?? null;
   const here = point(from);
   // A DISGUISE IS BROKEN BY A LOOK FROM INSIDE ITS RING (set-pieces.mjs): the first investigate by a resident
   // standing there breaks it for everyone, and this look already sees it as it is. `looker` is the key's own
@@ -378,12 +393,11 @@ export async function investigateCreature(id, { creatures, from = null, handle =
       : encounterRead({ living }, c, kind, { handle, now: nowMs }) ? { encounter: encounterRead({ living }, c, kind, { handle, now: nowMs }) } : {}),
     answered_by: "the record, as of now",
   } : { unavailable: "it is no longer held in this office's fold (it ended over an hour ago)" };
-  const got = await Promise.resolve(rows(id, REACTIONS_SHOWN)).catch(() => null);
   const reactions = got == null ? { unavailable: "its reactions could not be read this time" } : {
     shown: got.length,
     rows: got.map((r) => {
       const p = typeof r.payload === "string" ? JSON.parse(r.payload) : (r.payload ?? {});
-      const reaction = c ? reactionOf(law, c, p.reaction) : null;
+      const reaction = kind ? reactionOf(law, { kind: kindName }, p.reaction) : null;
       return { to: p.to, verb: p.verb, ...(p.moment ? { moment: p.moment } : {}), reaction: p.reaction,
         ...(reaction ? { line: lineOf(law, reaction, p.to, lineWords(p)) } : {}), roll: p.roll, judged_by: p.judged_by, ...(p.why ? { why: p.why } : {}),
         // whom a finishable creature pressed, and what each paid (encounter.mjs)
