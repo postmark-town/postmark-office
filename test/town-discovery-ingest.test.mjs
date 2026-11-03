@@ -265,9 +265,9 @@ test("a rule change costs one whole derivation, named and measured: another epoc
   const setMeta = (key, value) => owner.query("UPDATE town_meta SET value = $1, digest = $2 WHERE key = $3", [value, rowDigest([key, value]), key]);
   const bulletin = (n) => { t.put("TOWN_BULLETIN/welcome.md", `---\ntitle: welcome\n---\n\nBulletin ${n}.\n`); return t.commit(`bulletin ${n}`); };
 
-  // a store written under epoch 1 (a 128-bit revision): the next ingest re-derives whole, names why, and moves no row
+  // a store stamped with another epoch, its revision a well-formed 256-bit one: the epoch alone says the rule changed,
+  // so the next ingest re-derives whole, names why, and moves no row
   await setMeta("discovery_epoch", "1");
-  await setMeta("discovery_revision", "0".repeat(32));
   const viaEpoch = await ingest(w, { townRepo: t.dir, sha: bulletin(1) });
   assert.equal(viaEpoch.discovery.mode, "whole");
   assert.match(viaEpoch.discovery.reason, /epoch 1, not 2/);
@@ -286,13 +286,20 @@ test("a rule change costs one whole derivation, named and measured: another epoc
   await assertEqualToDerivation(t, "after the one-letter delta");
   console.log(`# measured: ${pieces} pieces, ${edges} edges, 400 letters: the whole derivation on an epoch change took ${viaEpoch.ms.discovery} ms; a one-letter delta took ${delta.ms.discovery} ms (removed ${delta.discovery.removed} rows, added ${delta.discovery.added})`);
 
-  // a revision that is not this epoch's width, under this epoch: the same whole pass, named differently
+  // a revision that is not this epoch's width, under this epoch (what epoch 1 wrote, 128 bits): the same whole pass, named differently
   await setMeta("discovery_revision", "0".repeat(32));
   const viaWidth = await ingest(w, { townRepo: t.dir, sha: bulletin(2) });
   assert.equal(viaWidth.discovery.mode, "whole");
   assert.match(viaWidth.discovery.reason, /not a fingerprint of this epoch's width/);
   await assertEqualToDerivation(t, "after the width repair");
   assert.match(await revision(), /^[0-9a-f]{64}$/);
+
+  // and a store with no epoch at all (the first fill) is named for what it is
+  await w.query("DELETE FROM town_meta WHERE key IN ('discovery_epoch', 'discovery_revision')");
+  const viaFirst = await ingest(w, { townRepo: t.dir, sha: bulletin(3) });
+  assert.equal(viaFirst.discovery.mode, "whole");
+  assert.match(viaFirst.discovery.reason, /first fill: no epoch yet/);
+  await assertEqualToDerivation(t, "after the first fill");
 });
 
 test("a giant body rides one delta: its pieces are written in the ingest's own transaction, timed, and its far end is found", async (tt) => {
