@@ -31,7 +31,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { startStore } from "./helpers/embedded-store.mjs";
-import { DISCOVERY_LIMITS as L, ZERO_REVISION } from "../src/town-discovery.mjs";
+import { DISCOVERY_LIMITS as L, DISCOVERY_EPOCH, ZERO_REVISION } from "../src/town-discovery.mjs";
 import * as store from "../src/town-index-store.mjs";
 
 const DUPLICATES = Number(process.env.DISCOVERY_PLAN_DUPLICATES ?? 1_000_000);
@@ -72,8 +72,8 @@ const WRITES_TO = (sender, prefix, from, to) => w.query(`
 const META_KEYS = ["as_of", "town_path", "hydrated_counts", "docs", "stamps_minted", "stamps_tip", "quest_day", "quest_registry", "discovery_epoch", "discovery_revision"];
 
 async function smallStore() {
-  await w.query("INSERT INTO town_meta (key, value, digest) SELECT k, CASE k WHEN 'discovery_epoch' THEN '1' WHEN 'discovery_revision' THEN $2 ELSE repeat('v', 200) END, 'x' FROM unnest($1::text[]) k",
-    [META_KEYS, ZERO_REVISION]);
+  await w.query("INSERT INTO town_meta (key, value, digest) SELECT k, CASE k WHEN 'discovery_epoch' THEN $3 WHEN 'discovery_revision' THEN $2 ELSE repeat('v', 200) END, 'x' FROM unnest($1::text[]) k",
+    [META_KEYS, ZERO_REVISION, DISCOVERY_EPOCH]);
   await w.query("INSERT INTO town_residents (handle, json, digest) VALUES ('ada', '{}', 'x'), ('bex', '{}', 'x')");
   await RESIDENTS("m", 200);
   await AUTHORS("m", 200, 10, { needleLast: true });

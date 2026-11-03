@@ -17,8 +17,13 @@
 import { createHash } from "node:crypto";
 import { isResidentHandle } from "./residency.mjs"; // the door's admission grammar: an author, sender or recipient is a handle it could admit
 
-/** The derivation's rule, by version. A change to how pieces or edges are cut is a new epoch: the next ingest replaces both tables whole. */
-export const DISCOVERY_EPOCH = "1";
+/**
+ * The derivation's rule, by version. A change to how pieces or edges are cut, or
+ * to how the generation is computed, is a new epoch: the next ingest re-derives
+ * both tables and the revision whole, once. Epoch 1 folded md5 row digests with
+ * XOR; epoch 2 (POS-497 FIX 4) is the additive SHA-256 fingerprint below.
+ */
+export const DISCOVERY_EPOCH = "2";
 
 /** The bounds, declared once: the derivation cuts by them, the reader walks by them, and every answer carries the ones it walked by. */
 export const DISCOVERY_LIMITS = Object.freeze({
@@ -126,30 +131,73 @@ function pushPieces(out, author, kind, sourceId, texts) {
 
 // ── the generation ───────────────────────────────────────────────────────────
 //
-// `discovery_revision` is the XOR of the digest of every row in both tables and
-// of one row per resident key, so it is the same whether a seed computes it
-// whole or a delta moves it by what it replaced, and it moves whenever a piece,
-// an edge or the resident set does. Unchanged rows cancel, which is what lets a
-// delta fold only what it touched.
+// `discovery_revision` is a MULTISET FINGERPRINT of what discovery reads: the
+// SUM, modulo 2^256, of one SHA-256 digest per row of both tables and per
+// resident key. A seed adds every row; a delta REMOVES the digests of the rows
+// it replaced and ADDS those of the rows that replaced them, so its work is the
+// touched rows and never the store; a whole pass (a first fill, an epoch change,
+// the seal's audit) adds them all once. Both reach the same number, and it moves
+// whenever a piece, an edge or the roll does and never for anything private.
+//
+// A sum, and not the XOR it replaces, because XOR cancels: the same digest twice
+// reads as none, and two row sets can fold to one value by pairing their changes
+// off. A sum counts a row once per time it is added, so adding twice is not
+// adding nothing. This is a change fingerprint and a cursor's version stamp. It
+// is unkeyed, so it is not authentication, and it is not collision-free: it
+// proves nothing against an adversary who chooses the rows, and a cursor grants
+// nothing either way. The source boundaries and the roll check are the authority.
 
-export const ZERO_REVISION = "0".repeat(32);
+/** Width of the fingerprint: 256 bits, 64 lowercase hex characters. */
+export const FINGERPRINT_HEX = 64;
+export const ZERO_REVISION = "0".repeat(FINGERPRINT_HEX);
+const MODULUS = 1n << BigInt(FINGERPRINT_HEX * 4);
+const FINGERPRINT = new RegExp(`^[0-9a-f]{${FINGERPRINT_HEX}}$`);
+export const isFingerprint = (s) => typeof s === "string" && FINGERPRINT.test(s);
 
-/** The row whose digest stands for one resident key in the revision. */
-export const residentKeyRow = (handle) => ["town_residents", String(handle)];
+// A row's digest names its domain and its table, so a digest made here stands for nothing else in the
+// codebase (the town tables' own change stamp, digestOf, is the md5 of the row alone) and a piece cannot
+// stand for an edge. The row is a JSON array of strings and integers, which has one reading.
+const FINGERPRINT_DOMAIN = "postmark.town-discovery.fingerprint/2";
+export const fingerprintDigest = (table, row) => createHash("sha256")
+  .update(FINGERPRINT_DOMAIN).update("\0").update(table).update("\0").update(JSON.stringify(row)).digest("hex");
+export const digestOfChunk = (row) => fingerprintDigest("discovery_chunks", row);
+export const digestOfEdge = (row) => fingerprintDigest("letter_edges", row);
+/** One resident key (a handle on the roll) stands in the revision by its own digest. */
+export const digestOfResident = (handle) => fingerprintDigest("residents", [String(handle)]);
 
-/** `acc` XOR every digest (32 hex characters each). */
-export function foldDigests(acc, digests) {
-  const out = Buffer.from(acc, "hex");
-  for (const d of digests) {
-    const b = Buffer.from(d, "hex");
-    for (let i = 0; i < out.length; i++) out[i] ^= b[i];
-  }
-  return out.toString("hex");
+const toNumber = (hex) => BigInt(`0x${hex}`);
+const toHex = (n) => n.toString(16).padStart(FINGERPRINT_HEX, "0");
+const asDigest = (d) => { if (!isFingerprint(d)) throw new TypeError(`a discovery digest is ${FINGERPRINT_HEX} lowercase hex characters`); return toNumber(d); };
+
+/** `acc` with each digest ADDED (a sum modulo 2^256). A multiset: a digest added twice counts twice. */
+export function fingerprintAdd(acc, digests) {
+  let n = asDigest(acc);
+  for (const d of digests) n = (n + asDigest(d)) % MODULUS;
+  return toHex(n);
 }
 
-/** A page's generation, as a cursor carries it and an answer names it. */
-export const generationOf = (epoch, revision) => (epoch && revision ? `${epoch}:${revision}` : null);
-const GENERATION = /^[0-9]+:[0-9a-f]{32}$/;
+/** `acc` with each digest REMOVED (a difference modulo 2^256): the exact inverse of adding it. */
+export function fingerprintRemove(acc, digests) {
+  let n = asDigest(acc);
+  for (const d of digests) n = (n - asDigest(d) + MODULUS) % MODULUS;
+  return toHex(n);
+}
+
+// A generation is `<epoch>:<revision>`, and the epoch says how wide its revision is. Epoch 1's was 128 bits
+// (XOR of md5 digests); it is recognised only so that a cursor from before the fingerprint is discarded with a
+// reset, never refused as garbage and never honoured. Any other epoch or width is not one this door writes.
+const REVISION_HEX = Object.freeze({ 1: 32, 2: FINGERPRINT_HEX });
+const GENERATION = /^([1-9][0-9]{0,2}):([0-9a-f]+)$/;
+
+/** `{ epoch, revision }` when `g` is a generation this door writes or once wrote, else null. */
+export function parseGeneration(g) {
+  const m = typeof g === "string" ? GENERATION.exec(g) : null;
+  if (!m || !Object.hasOwn(REVISION_HEX, m[1]) || m[2].length !== REVISION_HEX[m[1]]) return null;
+  return { epoch: m[1], revision: m[2] };
+}
+
+/** A page's generation, as a cursor carries it and an answer names it; null when the store holds none this door can name. */
+export const generationOf = (epoch, revision) => (parseGeneration(`${epoch}:${revision}`) ? `${epoch}:${revision}` : null);
 
 /** Does this store hold 088's two tables? */
 export async function discoveryTablesIn(client) {
@@ -250,7 +298,7 @@ export function readCursor(ask) {
   try { c = JSON.parse(Buffer.from(ask.cursor, "base64url").toString("utf8")); } catch { return no("it is not one this door wrote"); }
   if (c === null || typeof c !== "object" || c.v !== 1) return no("it is not one this door wrote");
   if (c.b !== bindOf(ask)) return no("it belongs to a different request (another mode, other words, other sources or other people)");
-  if (typeof c.g !== "string" || !GENERATION.test(c.g)) return no("its generation is not one this door writes");
+  if (!parseGeneration(c.g)) return no("its generation is not one this door writes");
   const at = c.at;
   if (ask.mode === "text") {
     const ok = Array.isArray(at) && at.length === 5 && isResidentHandle(at[0]) && (at[1] === "home" || at[1] === "letter")

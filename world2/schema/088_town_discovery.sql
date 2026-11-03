@@ -33,12 +33,17 @@
 -- ── THE GENERATION (town_meta) ──────────────────────────────────────────────
 --
 -- `discovery_epoch` names the derivation's rule; a rule change is a new epoch,
--- and the next ingest replaces both tables whole. `discovery_revision` is the
--- XOR of every row digest in both tables and one digest per resident key
--- (town_residents.handle): it moves in the same transaction as any derived row or
--- any resident joining or leaving, and it equals the whole derivation's, so the
--- town-index equality falsifiers hold it like any other row. A discovery cursor
--- carries both, and a moved generation is an explicit reset.
+-- and the next ingest re-derives both tables and the revision whole, once.
+-- `discovery_revision` is a multiset FINGERPRINT (epoch 2): the sum, modulo
+-- 2^256, of one domain-separated SHA-256 digest per row of both tables and per
+-- resident key (town_residents.handle), 64 lowercase hex characters. A delta
+-- REMOVES the digests of the rows it replaced and ADDS those of the rows that
+-- replaced them, in the same transaction, so its work is the touched rows; it
+-- equals the whole derivation's, so the town-index equality falsifiers hold it
+-- like any other row. It is a change stamp and a cursor's version, not
+-- authentication: it is unkeyed and not collision-free, and a cursor grants
+-- nothing. A discovery cursor carries epoch and revision, and a moved
+-- generation is an explicit reset.
 --
 -- ── KEYS AND ORDER ──────────────────────────────────────────────────────────
 --

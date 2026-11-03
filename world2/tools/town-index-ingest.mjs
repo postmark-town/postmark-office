@@ -56,7 +56,10 @@ import {
   rowDigest, discoveryRevisionOf, discoverySourcesOf,
 } from "../../src/town-index.mjs";
 import { DISCOVERY_TABLES } from "../../src/town-tables.mjs";
-import { discoveryRowsOf, discoveryTablesIn, DISCOVERY_EPOCH, foldDigests, residentKeyRow } from "../../src/town-discovery.mjs";
+import {
+  discoveryRowsOf, discoveryTablesIn, DISCOVERY_EPOCH, isFingerprint, fingerprintAdd, fingerprintRemove,
+  digestOfChunk, digestOfEdge, digestOfResident,
+} from "../../src/town-discovery.mjs";
 import { isResidentHandle } from "../../src/residency.mjs";
 import { writeMintInputs, keyBaseVia, takesKeyBase } from "../../src/mint-inputs.mjs";
 import { stampLinesOn, welcomeLinesVia } from "../../src/stamp-lines.mjs";
@@ -151,8 +154,10 @@ async function deleteKeys(client, name, keys, tally) {
  * `scope` (a Set of key strings), only those keys are in play: a stored key in
  * scope with no candidate is deleted, and nothing outside scope is read as gone.
  * Answers the keys whose row changed or went (the delta's "touched" set).
+ * `changes`, when given, is filled with `gone` (the keys deleted) and `put` (the
+ * rows inserted), for a caller that must account for exactly what moved.
  */
-async function diffTable(client, name, candidates, tally, { scope = null, stored = null } = {}) {
+async function diffTable(client, name, candidates, tally, { scope = null, stored = null, changes = null } = {}) {
   const key = keyOf(name);
   stored ??= await storedDigests(client, name);
   const want = new Map(candidates.map((r) => [key(r), r]));
@@ -167,6 +172,7 @@ async function diffTable(client, name, candidates, tally, { scope = null, stored
   await deleteKeys(client, name, gone, tally);
   await insertRows(client, name, put, tally);
   tally[name] ??= { inserted: 0, deleted: 0 };
+  if (changes) { changes.gone = gone; changes.put = put; }
   return new Set([...gone, ...put.map(key)]);
 }
 
@@ -311,11 +317,15 @@ export async function seed(client, { townRepo, sha, log = quiet }) {
 // (src/town-discovery.mjs § discoveryRowsOf) and kept in this transaction, so
 // they never stand beside a letter or a home that has moved. A delta re-derives
 // only the letters and homes it touched (their old children are the scope: a
-// gone source's are deleted, a replaced one's replaced) and moves the revision
-// by exactly what it replaced, plus the resident keys that came or went. A
-// whole pass reads the store's own letters and homes: the first ingest after
-// 088 lands (no epoch yet), an epoch whose rule changed, and the seal's audit,
-// which counts what it repaired. A store without 088 skips all of it and says so.
+// gone source's are deleted, a replaced one's replaced) and moves the revision,
+// a SHA-256 multiset fingerprint (src/town-discovery.mjs § the generation), by
+// exactly what it replaced: it REMOVES the digests of the rows that went and
+// ADDS those of the rows that arrived, plus the resident keys that joined or
+// left. That is work in the touched rows, never the store. A whole pass reads
+// the store's own letters and homes and adds every row once: the first ingest
+// after 088 lands (no epoch yet), an epoch whose rule changed, a revision that
+// is not a fingerprint of this epoch's width, and the seal's audit, which counts
+// what it repaired. A store without 088 skips all of it and says so.
 
 const DISCOVERY_META = ["discovery_epoch", "discovery_revision"];
 const DISCOVERY_ABSENT = "  discovery: 088_town_discovery.sql is not applied; its pieces, edges and generation were not written";
@@ -336,36 +346,49 @@ async function discoveryWhole(client, tally) {
 /**
  * Discovery for one delta. `letters` and `homes` are the touched source keys and
  * the rows the delta wrote for them (a touched key with no row went), and
- * `residentKeys` the handles that joined or left the roll. Answers the meta rows
- * to keep and what was done.
+ * `residents` the handles that `joined` or `left` the roll. Answers the meta
+ * rows to keep and what was done.
  */
-async function writeDiscovery(client, { letters, homes, residentKeys, auditing, tally, log }) {
+async function writeDiscovery(client, { letters, homes, residents, auditing, tally, log }) {
   if (!(await discoveryTablesIn(client))) { log.warn(DISCOVERY_ABSENT); return { meta: [], work: { mode: "absent" } }; }
   const held = new Map((await client.query("SELECT key, value FROM town_meta WHERE key = ANY($1::text[])", [DISCOVERY_META])).rows.map((r) => [r.key, r.value]));
-  if (held.get("discovery_epoch") !== DISCOVERY_EPOCH || !held.has("discovery_revision")) {
+  const heldEpoch = held.get("discovery_epoch"), heldRevision = held.get("discovery_revision");
+  if (heldEpoch !== DISCOVERY_EPOCH || !isFingerprint(heldRevision)) {
+    // the one whole derivation a rule change costs, named with its reason so it is counted where it is read
+    const reason = heldEpoch == null ? "first fill: no epoch yet"
+      : heldEpoch !== DISCOVERY_EPOCH ? `epoch ${heldEpoch}, not ${DISCOVERY_EPOCH}`
+      : "the revision is not a fingerprint of this epoch's width";
     const w = await discoveryWhole(client, tally);
-    return { meta: [["discovery_epoch", DISCOVERY_EPOCH], ["discovery_revision", w.revision]], work: { mode: "whole", ...w.work } };
+    return { meta: [["discovery_epoch", DISCOVERY_EPOCH], ["discovery_revision", w.revision]], work: { mode: "whole", reason, ...w.work } };
   }
-  let revision = held.get("discovery_revision");
-  const work = { mode: "delta", letters: letters.ids.length, homes: homes.ids.length, residents: residentKeys.length };
+  let revision = heldRevision;
+  const work = { mode: "delta", letters: letters.ids.length, homes: homes.ids.length, residents: residents.joined.length + residents.left.length };
   if (letters.ids.length || homes.ids.length) {
     const d = discoveryRowsOf(discoverySourcesOf(letters.rows, homes.rows));
-    const storedChunks = new Map();
+    // What stands in the store for these sources, whole rows: a removal's digest is over the columns the row held.
+    const chunkCols = TOWN_TABLES.discovery_chunks.cols, edgeCols = TOWN_TABLES.letter_edges.cols;
+    const storedChunks = new Map(), storedEdges = new Map();   // key -> { digest, row }
     for (const [kind, ids] of [["letter", letters.ids], ["home", homes.ids]]) {
       if (!ids.length) continue;
-      for (const r of (await client.query("SELECT id, digest FROM town_discovery_chunks WHERE source_kind = $1 AND source_id = ANY($2::text[])", [kind, ids])).rows)
-        storedChunks.set(JSON.stringify([r.id]), r.digest);
+      for (const r of (await client.query(`SELECT ${chunkCols.join(", ")}, digest FROM town_discovery_chunks WHERE source_kind = $1 AND source_id = ANY($2::text[])`, [kind, ids])).rows)
+        storedChunks.set(JSON.stringify([r.id]), { digest: r.digest, row: chunkCols.map((c) => r[c]) });
     }
-    const storedEdges = new Map(letters.ids.length
-      ? (await client.query("SELECT id, digest FROM town_letter_edges WHERE letter_id = ANY($1::text[])", [letters.ids])).rows.map((r) => [JSON.stringify([r.id]), r.digest])
-      : []);
-    await diffTable(client, "discovery_chunks", d.chunks, tally, { scope: new Set(storedChunks.keys()), stored: storedChunks });
-    await diffTable(client, "letter_edges", d.edges, tally, { scope: new Set(storedEdges.keys()), stored: storedEdges });
-    // what stood for these sources out, what stands now in: an unchanged row is in both, and cancels
-    revision = foldDigests(revision, [...storedChunks.values(), ...storedEdges.values(), ...d.chunks.map(rowDigest), ...d.edges.map(rowDigest)]);
+    if (letters.ids.length)
+      for (const r of (await client.query(`SELECT ${edgeCols.join(", ")}, digest FROM town_letter_edges WHERE letter_id = ANY($1::text[])`, [letters.ids])).rows)
+        storedEdges.set(JSON.stringify([r.id]), { digest: r.digest, row: edgeCols.map((c) => r[c]) });
+    const stamps = (m) => new Map([...m].map(([k, v]) => [k, v.digest]));
+    const chunks = {}, edges = {};
+    await diffTable(client, "discovery_chunks", d.chunks, tally, { scope: new Set(storedChunks.keys()), stored: stamps(storedChunks), changes: chunks });
+    await diffTable(client, "letter_edges", d.edges, tally, { scope: new Set(storedEdges.keys()), stored: stamps(storedEdges), changes: edges });
+    // out: the rows that went or were replaced, as the store held them; in: the rows that arrived. An unchanged row is in neither.
+    revision = fingerprintRemove(revision, [...chunks.gone.map((k) => digestOfChunk(storedChunks.get(k).row)), ...edges.gone.map((k) => digestOfEdge(storedEdges.get(k).row))]);
+    revision = fingerprintAdd(revision, [...chunks.put.map(digestOfChunk), ...edges.put.map(digestOfEdge)]);
     work.skipped = d.skipped;
+    work.removed = chunks.gone.length + edges.gone.length;
+    work.added = chunks.put.length + edges.put.length;
   }
-  revision = foldDigests(revision, residentKeys.map((h) => rowDigest(residentKeyRow(h))));
+  revision = fingerprintAdd(revision, residents.joined.map(digestOfResident));
+  revision = fingerprintRemove(revision, residents.left.map(digestOfResident));
   if (auditing) {
     const w = await discoveryWhole(client, tally);
     work.audit = { repaired: w.moved, revision_was_true: w.revision === revision };
@@ -668,7 +691,11 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   await diffTable(client, "residents", resCands, tally, { scope: scopeResidents, stored: storedResidents });
   // the handles that joined or left the roll: discovery's eligibility is the roll, so its generation moves with them (POS-497)
   const onRoll = new Set(resCands.map(keyOf("residents")));
-  const residentKeys = [...scopeResidents].filter((k) => storedResidents.has(k) !== onRoll.has(k)).map((k) => JSON.parse(k)[0]);
+  const handleOf = (k) => JSON.parse(k)[0];
+  const residentChange = {
+    joined: [...scopeResidents].filter((k) => !storedResidents.has(k) && onRoll.has(k)).map(handleOf),
+    left: [...scopeResidents].filter((k) => storedResidents.has(k) && !onRoll.has(k)).map(handleOf),
+  };
   lap("residents");
 
   // mail_state: recomputed only for the parties of what moved — every letter
@@ -763,7 +790,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   const discovery = await writeDiscovery(client, {
     letters: { ids: [...lettersInPlay.keys()], rows: [...lettersInPlay.values()].filter(Boolean) },
     homes: { ids: [...homesTouched].map((k) => String(JSON.parse(k)[0])), rows: [...homesTouched].map((k) => homeRowOf.get(k)).filter(Boolean) },
-    residentKeys, auditing, tally, log });
+    residents: residentChange, auditing, tally, log });
   ms.discovery = Date.now() - discoveryAt;
   t0 += ms.discovery;
 

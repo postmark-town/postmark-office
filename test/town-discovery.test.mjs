@@ -19,11 +19,15 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { emptyTown, put, putValues, setMeta } from "./fixture.mjs";
-import { discoveryRowsOf, piecesOf, DISCOVERY_EPOCH, DISCOVERY_LIMITS as L } from "../src/town-discovery.mjs";
+import {
+  discoveryRowsOf, piecesOf, DISCOVERY_EPOCH, DISCOVERY_LIMITS as L, ZERO_REVISION, FINGERPRINT_HEX,
+  fingerprintAdd, fingerprintRemove, fingerprintDigest, digestOfChunk, digestOfEdge, digestOfResident, isFingerprint, parseGeneration, generationOf,
+} from "../src/town-discovery.mjs";
 import { discoveryRevisionOf, discoverySourcesOf, TOWN_TABLES } from "../src/town-index.mjs";
 import * as store from "../src/town-index-store.mjs";
 
@@ -171,6 +175,85 @@ test("the literal: ASCII letters match in either case and nothing else is folded
   assert.deepEqual(await who("ÉCLAIR"), ["eve", "fay"], "É matches É, and the ASCII after it in either case");
   assert.deepEqual(await who("éclair"), ["eve"], "é is not folded to or from É");
   assert.deepEqual(await who("1000 WAYS"), ["bex"]);
+});
+
+// ── the generation: the fingerprint's laws (POS-497 FIX 4) ───────────────────
+//
+// LAW (Rivet's FIX packet): "explicit additive ADD/REMOVE operations (not XOR),
+// versioned epoch/width validation … Unit accumulation/removal laws and actual
+// derivation/reader controls; a restored same-width XOR combiner must fail the
+// discriminating check, not merely the format parser." The format (64 lowercase
+// hex characters) is what an XOR at the same width still satisfies, so the
+// check that bites is the multiset law: a digest added twice is not no digest.
+
+const digestN = (n) => fingerprintDigest("discovery_chunks", [`letter:0:l${n}`, "ada", "letter", `l${n}`, 0, `text ${n}`]);
+
+test("the fingerprint is a multiset sum: add and remove are exact inverses in any order, and a digest added twice is not none (an XOR would say it is)", () => {
+  const [a, b, c] = [digestN(1), digestN(2), digestN(3)];
+  const all = fingerprintAdd(ZERO_REVISION, [a, b, c]);
+  assert.ok(isFingerprint(all) && all.length === FINGERPRINT_HEX, "256 bits, 64 lowercase hex characters");
+  assert.equal(fingerprintAdd(ZERO_REVISION, [c, a, b]), all, "order never matters");
+  assert.equal(fingerprintRemove(all, [b]), fingerprintAdd(ZERO_REVISION, [a, c]), "removing one is the sum of the rest");
+  assert.equal(fingerprintRemove(fingerprintAdd(all, [b]), [b]), all, "remove undoes add");
+  assert.equal(fingerprintAdd(fingerprintRemove(all, [b]), [b]), all, "add undoes remove");
+  assert.equal(fingerprintRemove(all, [a, b, c]), ZERO_REVISION, "taking everything out is nothing");
+  assert.equal(fingerprintAdd(fingerprintRemove(all, [b]), [digestN(9)]), fingerprintAdd(ZERO_REVISION, [a, c, digestN(9)]), "a replacement is a remove and an add, and equals the new set whole");
+
+  // THE DISCRIMINATING LAW, which an XOR at the same width fails and its format check does not notice
+  const once = fingerprintAdd(ZERO_REVISION, [a]);
+  const twice = fingerprintAdd(ZERO_REVISION, [a, a]);
+  assert.notEqual(twice, ZERO_REVISION, "a digest added twice is not no digest");
+  assert.notEqual(twice, once, "and not the same as adding it once");
+  assert.equal(fingerprintRemove(twice, [a]), once, "removing one of two leaves one");
+  assert.ok(isFingerprint(twice), "(and it is still a well-formed fingerprint, so a format check alone proves nothing)");
+
+  // a sum modulo 2^256 wraps, both ways
+  assert.equal(fingerprintAdd("f".repeat(FINGERPRINT_HEX), [`${"0".repeat(FINGERPRINT_HEX - 1)}1`]), ZERO_REVISION);
+  assert.equal(fingerprintRemove(ZERO_REVISION, [`${"0".repeat(FINGERPRINT_HEX - 1)}1`]), "f".repeat(FINGERPRINT_HEX));
+});
+
+test("the fingerprint refuses what is not 256 bits of lowercase hex, and a row's digest names its table and its domain", () => {
+  const a = digestN(1);
+  for (const bad of ["0".repeat(32), "0".repeat(65), "A".repeat(FINGERPRINT_HEX), `${"0".repeat(63)}g`, "", null, undefined, 7])
+    for (const op of [fingerprintAdd, fingerprintRemove]) {
+      assert.throws(() => op(bad, [a]), /64 lowercase hex characters/, `${op.name}: an accumulator of ${JSON.stringify(bad)?.slice(0, 20)} is refused`);
+      assert.throws(() => op(ZERO_REVISION, [bad]), /64 lowercase hex characters/, `${op.name}: a digest of ${JSON.stringify(bad)?.slice(0, 20)} is refused`);
+    }
+  const row = ["id", "ada", "letter", "l1", 0, "text"];
+  assert.notEqual(digestOfChunk(row), digestOfEdge(row), "the same columns in two tables are two digests: a piece cannot stand for an edge");
+  assert.notEqual(digestOfChunk(row), createHash("sha256").update(JSON.stringify(row)).digest("hex"), "and neither is the bare hash of the row, so it stands for nothing else in the codebase");
+  assert.notEqual(fingerprintDigest("discovery_chunks", ["ab", "c"]), fingerprintDigest("discovery_chunks", ["a", "bc"]), "the encoding has one reading");
+  assert.notEqual(digestOfResident("ada"), digestOfResident("ade"));
+  assert.ok(isFingerprint(digestOfChunk(row)) && isFingerprint(digestOfEdge(row)) && isFingerprint(digestOfResident("ada")));
+});
+
+test("the revision is the fingerprint of the rows and the roll: a row twice is not nothing, and one byte, one edge or one resident moves it", () => {
+  const chunk = ["letter:0:l1", "ada", "letter", "l1", 0, "hello"];
+  const other = ["letter:0:l2", "bex", "letter", "l2", 0, "hello"];
+  const edge = ["ada:bex:l1", "l1", "ada", "bex"];
+  const rev = (chunks, edges = [], roll = []) => discoveryRevisionOf(chunks, edges, roll);
+  assert.equal(rev([]), ZERO_REVISION, "an empty record is the zero fingerprint");
+  assert.notEqual(rev([chunk, chunk]), ZERO_REVISION, "the same row twice is not nothing");
+  assert.notEqual(rev([chunk, chunk]), rev([chunk]));
+  assert.equal(rev([chunk, other, chunk]), rev([other, chunk, chunk]), "row order never matters");
+  assert.notEqual(rev([chunk]), rev([["letter:0:l1", "ada", "letter", "l1", 0, "hellp"]]), "one byte of a piece moves it");
+  assert.notEqual(rev([chunk], [edge]), rev([chunk]), "an edge moves it");
+  assert.notEqual(rev([chunk], [], ["ada"]), rev([chunk]), "a resident joining moves it");
+  assert.equal(fingerprintRemove(rev([chunk], [], ["ada", "bex"]), [digestOfResident("bex")]), rev([chunk], [], ["ada"]), "and the same resident leaving restores the revision");
+});
+
+test("a generation is `<epoch>:<revision>` and the epoch fixes the revision's width: epoch 2 is 64 hex, epoch 1's 32 is recognised only to be discarded, and nothing else is one this door writes", () => {
+  const sixtyFour = "a".repeat(64), thirtyTwo = "b".repeat(32);
+  assert.deepEqual(parseGeneration(`2:${sixtyFour}`), { epoch: "2", revision: sixtyFour });
+  assert.equal(parseGeneration(`2:${thirtyTwo}`), null, "a 128-bit revision under epoch 2 is not one this door writes");
+  assert.equal(parseGeneration(`1:${sixtyFour}`), null, "nor a 256-bit one under epoch 1");
+  assert.equal(parseGeneration(`1:${thirtyTwo}`)?.epoch, "1", "epoch 1 is recognised, so a cursor from before the fingerprint can be answered with a reset");
+  for (const bad of [`3:${sixtyFour}`, `0:${sixtyFour}`, `02:${sixtyFour}`, `2:${"A".repeat(64)}`, `2:${sixtyFour}0`, `2:`, "2", ":", "", null, undefined, 2, {}])
+    assert.equal(parseGeneration(bad), null, `${JSON.stringify(bad)} is no generation`);
+  assert.equal(DISCOVERY_EPOCH, "2");
+  assert.equal(generationOf("2", sixtyFour), `2:${sixtyFour}`);
+  for (const [e, r] of [["2", thirtyTwo], ["2", "x"], [undefined, sixtyFour], ["2", undefined], [null, null], ["3", sixtyFour]])
+    assert.equal(generationOf(e, r), null, `the store's epoch ${e} and revision ${r} name no generation, so the door says the index is not built`);
 });
 
 // ── the seam ─────────────────────────────────────────────────────────────────
@@ -538,6 +621,37 @@ test("the cursor is read whole and grants nothing: another request's, a tampered
   assert.equal(moved.reset?.to, moved.source_generation);
   assert.notEqual(moved.source_generation, second.source_generation);
   assert.deepEqual(moved.hits.map((h) => h.handle), ["p0", "p1"], "a reset page is the walk from its beginning, in the new generation");
+});
+
+test("an old generation is handled safely: a cursor from before the fingerprint (epoch 1, 128 bits) is discarded with a reset, one of a width or epoch this door does not write is refused, and a stored revision of the wrong width reads as not built", async (t) => {
+  if (skip) return t.skip(skip);
+  const people = ["p0", "p1", "p2"];
+  await seed({ residents: people, letters: people.map((h) => ({ id: `${h}-1`, from: h, to: "p0", body: "fingerprint word" })) });
+  const args = { mode: "text", q: "fingerprint word", limit: 1 };
+  const first = await store.discover(api, args);
+  assert.equal(first.complete, false);
+  const body = JSON.parse(Buffer.from(first.cursor, "base64url").toString("utf8"));
+  const forge = (g) => Buffer.from(JSON.stringify({ ...body, g }), "utf8").toString("base64url");
+
+  const oldCursor = `1:${"0".repeat(32)}`;
+  const reset = await store.discover(api, { ...args, cursor: forge(oldCursor) });
+  assert.equal(reset.error, undefined, "an old cursor is not refused as garbage");
+  assert.deepEqual(reset.reset, { ...reset.reset, from: oldCursor, to: first.source_generation }, "it is discarded, and the page names both generations");
+  assert.deepEqual(reset.hits.map((h) => h.handle), ["p0"], "the page is the walk from its beginning, in the current generation");
+  assert.equal(reset.source_generation, `${DISCOVERY_EPOCH}:${(await su.query("SELECT value FROM town_meta WHERE key = 'discovery_revision'")).rows[0].value}`, "and promises only the generation the store holds now");
+  const rest = await store.discover(api, { ...args, cursor: reset.cursor });
+  assert.equal(rest.reset, undefined, "the cursor the reset page handed on is current");
+  assert.deepEqual(rest.hits.map((h) => h.handle), ["p1"]);
+
+  for (const g of [`2:${"0".repeat(32)}`, `1:${"0".repeat(64)}`, `3:${"0".repeat(64)}`, `2:${"0".repeat(64)}0`, `2:${"G".repeat(64)}`])
+    assert.match((await store.discover(api, { ...args, cursor: forge(g) })).defect, /generation is not one this door writes/, `${g.slice(0, 6)}… is refused`);
+
+  // a stored revision that is not this epoch's width names no generation: the door says not built, and never names one it would then refuse in the cursor it hands back
+  await su.query("UPDATE town_meta SET value = $1 WHERE key = 'discovery_revision'", ["0".repeat(32)]);
+  try {
+    assert.equal((await store.discover(api, args)).defect, "discovery's index has not been built yet");
+  } finally { await seed({ residents: people, letters: people.map((h) => ({ id: `${h}-1`, from: h, to: "p0", body: "fingerprint word" })) }); }
+  assert.equal((await store.discover(api, args)).error, undefined, "and the real revision reads again");
 });
 
 test("a store without discovery's tables says it is not installed; one whose index is not built says that", async (t) => {

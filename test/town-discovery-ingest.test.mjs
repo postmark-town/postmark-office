@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { ingest, applyDelta, readHead, SEAL_SUBJECT } from "../world2/tools/town-index-ingest.mjs";
 import { TOWN_TABLES, rowDigest } from "../src/town-index.mjs";
+import { DISCOVERY_EPOCH } from "../src/town-discovery.mjs";
 import { LANDED } from "../world2/tools/migrations-landed.mjs";
 import * as store from "../src/town-index-store.mjs";
 
@@ -147,7 +148,8 @@ test("the seed and every delta keep discovery equal to the whole derivation; the
     [["cyd", "ada"], ["cyd", "bex"]], "a toList's repeated recipient is one edge");
   assert.deepEqual(await who("beeswax"), ["ada"]);
   let rev = await revision();
-  assert.match(rev, /^[0-9a-f]{32}$/);
+  assert.match(rev, /^[0-9a-f]{64}$/, "the revision is a 256-bit fingerprint, 64 hex characters");
+  assert.equal((await w.query("SELECT value FROM town_meta WHERE key = 'discovery_epoch'")).rows[0].value, DISCOVERY_EPOCH);
 
   const step = async (label, sha, { moves }) => {
     const out = await ingest(w, { townRepo: t.dir, sha });
@@ -230,10 +232,67 @@ test("the real record's hidden surfaces: a card's frontmatter and a mailbox's bo
     assert.deepEqual(await who("bouncesentinel"), ["eve"], `${label}: a mailbox's bounce reason is never discovery's text; the same word in eve's letter is`);
   };
   await check("the seed");
+  // a public cursor in hand, then a private-only edit: it must not rotate the generation or reset the cursor
+  const rev0 = await revision();
+  const page1 = await store.discover(api, { mode: "text", q: "sentinel", limit: 1 });
+  assert.deepEqual([page1.hits.map((h) => h.handle), page1.complete], [["dee"], false]);
   t.put("WHITE_PAGES/ada/ADDRESS.md", address("ada").replace("since: 2026-05-12", "since: 2026-05-12\nnote: CARDSENTINEL, edited"));
   await ingest(w, { townRepo: t.dir, sha: t.commit("ada: card edited") });
   await assertEqualToDerivation(t, "after the card edit");
   await check("a delta");
+  assert.equal(await revision(), rev0, "a private-only edit (a card's frontmatter) does not rotate the generation");
+  const page2 = await store.discover(api, { mode: "text", q: "sentinel", limit: 1, cursor: page1.cursor });
+  assert.equal(page2.reset, undefined, "and the public cursor from before it reads on, not reset");
+  assert.deepEqual(page2.hits.map((h) => h.handle), ["eve"]);
+});
+
+test("a rule change costs one whole derivation, named and measured: another epoch, or a revision that is not this epoch's width, is re-derived whole once; a reseed of the same content keeps its generation (POS-497 FIX 4)", async (tt) => {
+  if (skip) return tt.skip(skip);
+  const handles = Array.from({ length: 40 }, (_, i) => `r${String(i).padStart(2, "0")}`);
+  const t = makeTown("epoch", handles);
+  for (let i = 0; i < 400; i++)
+    t.put(`WHITE_PAGES/${handles[(i + 1) % 40]}/inbox/e${i}.md`, letter(`e${i}`, handles[i % 40], handles[(i + 1) % 40], `Letter ${i}. ${"The tide keeps its own counsel. ".repeat(60)}`));
+  const seedSha = t.commit("seed");
+  await ingest(w, { townRepo: t.dir, sha: seedSha, seed: true, reseed: true });
+  const rev = await revision();
+  const pieces = await count("town_discovery_chunks"), edges = await count("town_letter_edges");
+  assert.ok(pieces >= 400 && edges === 400, `${pieces} pieces and ${edges} edges`);
+
+  // byte-identical effective public content keeps its generation across a reseed
+  await ingest(w, { townRepo: t.dir, sha: seedSha, seed: true, reseed: true });
+  assert.equal(await revision(), rev, "a reseed of the same content does not rotate the generation");
+
+  const setMeta = (key, value) => owner.query("UPDATE town_meta SET value = $1, digest = $2 WHERE key = $3", [value, rowDigest([key, value]), key]);
+  const bulletin = (n) => { t.put("TOWN_BULLETIN/welcome.md", `---\ntitle: welcome\n---\n\nBulletin ${n}.\n`); return t.commit(`bulletin ${n}`); };
+
+  // a store written under epoch 1 (a 128-bit revision): the next ingest re-derives whole, names why, and moves no row
+  await setMeta("discovery_epoch", "1");
+  await setMeta("discovery_revision", "0".repeat(32));
+  const viaEpoch = await ingest(w, { townRepo: t.dir, sha: bulletin(1) });
+  assert.equal(viaEpoch.discovery.mode, "whole");
+  assert.match(viaEpoch.discovery.reason, /epoch 1, not 2/);
+  assert.equal(viaEpoch.discovery.letters, 400);
+  assert.equal(await revision(), rev, "the same rows fingerprint to the same revision");
+  assert.deepEqual([writes(viaEpoch, "discovery_chunks"), writes(viaEpoch, "letter_edges")], [{ inserted: 0, deleted: 0 }, { inserted: 0, deleted: 0 }], "only the stamp was old: no piece or edge moved");
+  assert.equal((await w.query("SELECT value FROM town_meta WHERE key = 'discovery_epoch'")).rows[0].value, DISCOVERY_EPOCH);
+  await assertEqualToDerivation(t, "after the epoch change");
+
+  // ... once: the next ingest is a delta again
+  t.put("WHITE_PAGES/r05/inbox/e4.md", letter("e4", "r04", "r05", "Letter 4, reworded. The tide turns."));
+  const delta = await ingest(w, { townRepo: t.dir, sha: t.commit("e4 reworded") });
+  assert.equal(delta.discovery.mode, "delta");
+  assert.deepEqual([delta.discovery.removed, delta.discovery.added].map((n) => n > 0), [true, true], "the delta removed the old rows' digests and added the new rows'");
+  assert.notEqual(await revision(), rev);
+  await assertEqualToDerivation(t, "after the one-letter delta");
+  console.log(`# measured: ${pieces} pieces, ${edges} edges, 400 letters: the whole derivation on an epoch change took ${viaEpoch.ms.discovery} ms; a one-letter delta took ${delta.ms.discovery} ms (removed ${delta.discovery.removed} rows, added ${delta.discovery.added})`);
+
+  // a revision that is not this epoch's width, under this epoch: the same whole pass, named differently
+  await setMeta("discovery_revision", "0".repeat(32));
+  const viaWidth = await ingest(w, { townRepo: t.dir, sha: bulletin(2) });
+  assert.equal(viaWidth.discovery.mode, "whole");
+  assert.match(viaWidth.discovery.reason, /not a fingerprint of this epoch's width/);
+  await assertEqualToDerivation(t, "after the width repair");
+  assert.match(await revision(), /^[0-9a-f]{64}$/);
 });
 
 test("a giant body rides one delta: its pieces are written in the ingest's own transaction, timed, and its far end is found", async (tt) => {
@@ -263,6 +322,22 @@ test("a giant body rides one delta: its pieces are written in the ingest's own t
   assert.deepEqual(pages.flatMap((p) => p.hits.map((h) => h.handle)), ["ada"]);
   assert.equal(pages.at(-1).complete, true);
   assert.ok(pages.length >= Math.floor(pieces / 64), `the walk took ${pages.length} bounded pages`);
+
+  // The giant body EDITED, which is the expensive delta: its old pieces are read back (a removal's digest is over
+  // the columns it held), removed from the fingerprint, and the new ones added. Work in the touched rows.
+  const before = await revision();
+  const edited = `${"another long letter, ".repeat(100_000)}THE LAST WORD`;
+  t.put("WHITE_PAGES/bex/inbox/giant.md", letter("giant", "ada", "bex", edited));
+  const rewriteSha = t.commit("ada -> bex: the giant, rewritten");
+  const t1 = Date.now();
+  const out2 = await ingest(w, { townRepo: t.dir, sha: rewriteSha });
+  const total2 = Date.now() - t1;
+  assert.equal(out2.discovery.mode, "delta");
+  assert.equal(out2.discovery.removed, pieces + 0, "every old piece of the body went (the edge stayed)");
+  assert.ok(out2.discovery.added > 1_000, `${out2.discovery.added} new rows came in`);
+  assert.notEqual(await revision(), before);
+  await assertEqualToDerivation(t, "after the giant is rewritten");
+  console.log(`# measured: the same giant letter rewritten (${Buffer.byteLength(edited)} bytes): discovery ${out2.ms.discovery} ms of a ${total2} ms delta; removed ${out2.discovery.removed} rows, added ${out2.discovery.added}`);
 });
 
 // ── without 088, then with it ────────────────────────────────────────────────
@@ -343,7 +418,7 @@ test("the seal's audit puts back discovery rows a delta cannot see, counts them,
   assert.equal(typeof snap.digests.letter_edges, "string", "and digests its edges");
 
   // a revision that drifted from its rows, written as a writer writes it (value and digest): the next seal finds it and makes it true again
-  const drifted = ["discovery_revision", "0".repeat(32)];
+  const drifted = ["discovery_revision", "0".repeat(64)];
   await owner.query("UPDATE town_meta SET value = $1, digest = $2 WHERE key = 'discovery_revision'", [drifted[1], rowDigest(drifted)]);
   t.put("PROJECTS/the-town-seal/seal.json", "{\"seal\":\"audit again\"}\n");
   const second = await ingest(w, { townRepo: t.dir, sha: t.commit(SEAL_SUBJECT), snapshot: true });
@@ -413,8 +488,8 @@ test("one statement per page: an ingest that commits right after the page's firs
   const page = await store.discover(q, { mode: "text", q: "firstword" });
   assert.equal(committed, true);
   assert.notEqual(await revision(), was, "the ingest did commit, mid-request");
-  assert.deepEqual([page.source_generation, page.hits.map((h) => h.handle)], [`1:${was}`, ["ada"]], "the old generation, and the old rows under it");
+  assert.deepEqual([page.source_generation, page.hits.map((h) => h.handle)], [`${DISCOVERY_EPOCH}:${was}`, ["ada"]], "the old generation, and the old rows under it");
   assert.equal(sent.filter(reads).length, 1, "one statement read the generation and the rows");
   const fresh = await store.discover(api, { mode: "text", q: "firstword" });
-  assert.deepEqual([fresh.source_generation, fresh.hits], [`1:${await revision()}`, []], "the next page reads the new generation, where the old word is gone");
+  assert.deepEqual([fresh.source_generation, fresh.hits], [`${DISCOVERY_EPOCH}:${await revision()}`, []], "the next page reads the new generation, where the old word is gone");
 });

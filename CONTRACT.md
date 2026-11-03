@@ -227,7 +227,10 @@ not searched in it**, and no argument claims they are.
   source generation. A cursor for another request, or one that does not parse, is a 422. One
   from an older generation (a letter, a home or the roll changed since, or an older
   fingerprint epoch) is discarded: the page is the walk from its beginning, with a `reset`
-  naming both generations. It grants nothing. **A walk is read against one generation:** on a
+  naming both generations. It grants nothing. `source_generation` is a change stamp,
+  `<epoch>:<64 hex characters>`, opaque to its reader: a SHA-256 fingerprint of the pieces,
+  edges and roll, which moves with any public change and never with a private one, and is no
+  authentication. **A walk is read against one generation:** on a
   record that keeps changing, a long walk can restart again and again and never finish. Each
   restart says so; no page pretends the earlier pages still stand, and none serves the old
   record.

@@ -34,14 +34,14 @@ import { readWindowState } from "./panes.mjs"; // the pane's machine twin — on
 // The tables (town-tables.mjs, kept apart so the shape loads without the derivation).
 import { TOWN_TABLES } from "./town-tables.mjs";
 export { TOWN_TABLES };
-import { discoveryRowsOf, DISCOVERY_EPOCH, ZERO_REVISION, foldDigests, residentKeyRow } from "./town-discovery.mjs"; // POS-497: derived from the letters and homes below
+import { discoveryRowsOf, DISCOVERY_EPOCH, ZERO_REVISION, fingerprintAdd, digestOfChunk, digestOfEdge, digestOfResident } from "./town-discovery.mjs"; // POS-497: derived from the letters and homes below
 
 /** A row's change stamp, the `digest` every town_* table but repo_log keeps: the md5 of its columns as written (the ingest's digestOf). */
 export const rowDigest = (row) => createHash("md5").update(JSON.stringify(row)).digest("hex");
 
-/** discovery_revision, whole: every piece's and edge's digest and one per resident key, folded (town-discovery.mjs § the generation). */
+/** discovery_revision, whole: the fingerprint of every piece, every edge and every resident key on the roll (town-discovery.mjs § the generation). */
 export const discoveryRevisionOf = (chunks, edges, residentHandles) =>
-  foldDigests(ZERO_REVISION, [...chunks.map(rowDigest), ...edges.map(rowDigest), ...residentHandles.map((h) => rowDigest(residentKeyRow(h)))]);
+  fingerprintAdd(ZERO_REVISION, [...chunks.map(digestOfChunk), ...edges.map(digestOfEdge), ...residentHandles.map(digestOfResident)]);
 
 const colOf = (table, col) => TOWN_TABLES[table].cols.indexOf(col);
 /** Discovery's sources from the derivation's own rows: the letters' (id, from_h, json) and the homes' (handle, json). */
