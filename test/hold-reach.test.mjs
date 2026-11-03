@@ -935,7 +935,7 @@ test("POS-806 — a 61 m refusal says walk 1 m; the walk it names always lands i
     ctx: ctxOf(top, { x: 0, y: 0 }),
   }));
   assert.ok(e);
-  assert.match(e.defect, /; walk 1 m N to be within 60 m of it/);
+  assert.match(e.defect, /; walk 1 m S to be within 60 m of it/);
   // falsifier for an off-by-rounding: walking exactly the named metres toward it must stand
   const after = { x: 0, y: 1 };
   assert.equal(standsWithin(after, top).stands, true);
