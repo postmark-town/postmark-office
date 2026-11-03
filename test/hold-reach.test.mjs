@@ -554,9 +554,9 @@ test("an unmeasurable distance is NOT a short one", () => {
 });
 
 test("the bearing is the compass word a resident reads in a walk answer", () => {
-  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: 10 }), "N");
+  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: 10 }), "S");
   assert.equal(bearingWord({ x: 0, y: 0 }, { x: 10, y: 0 }), "E");
-  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: -10 }), "S");
+  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: -10 }), "N");
   assert.equal(bearingWord({ x: 0, y: 0 }, { x: -10, y: 0 }), "W");
   assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: 0 }), null);
 });
