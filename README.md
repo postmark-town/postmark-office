@@ -44,7 +44,7 @@ on the box only, never in the town repo, and not in this repo either.
 ## Run (dev)
 
 ```sh
-node src/hydrate.mjs --town <path-to-postmark-checkout>
+# (no local index build: the town index is the store's; a seeded store is a pen-and-database step, world2/tools/town-index-ingest.mjs --seed, see docs/town-index-store.md and deploy/DEPLOY.md)
 OFFICE_KEYS='devkey=keemin:wright' node tools/static-keys-import.mjs --oauth-db oauth.db   # the key, by hash, into the office's oauth.db
 node src/server.mjs --port 4380 --oauth-db oauth.db
 curl -H 'Authorization: Bearer devkey' localhost:4380/doorstep/wright

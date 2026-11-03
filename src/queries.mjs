@@ -444,7 +444,7 @@ export function residentOf(d, pages, handle, ctx) {
   // It was `if (out.profile == null) out.profile = profileOf(handle)` — a
   // read-time re-read of PROFILE.md, here because the index on the box is
   // already built and a fix that lands only at hydration waits for the next
-  // rehydrate. The freshness ladder does that same job one step further down,
+  // ingest. The freshness ladder does that same job one step further down,
   // from a NAMED clone and with a tense attached, so keeping both was not
   // belt-and-braces; the two actively fought.
   //
@@ -466,7 +466,7 @@ export function residentOf(d, pages, handle, ctx) {
   // What remains is the one thing the garnish also did and the compose does not
   // need a clone for: guaranteeing the key exists. The hydrated path writes an
   // explicit `profile: null` for a resident without one, so the door must too,
-  // or the same resident answers `null` after a rehydrate and no key at all
+  // or the same resident answers `null` after an ingest and no key at all
   // before it.
   if (out.profile === undefined) out.profile = null;
   // The ladder rides last, so it stamps the card the caller is actually handed
@@ -2127,8 +2127,8 @@ export function potBoardOf(rows, extraInvalid = []) {
 // quest-progress.mjs (imported live from the clone, cached) so there is one
 // source for the board shape and "today" — no second copy in the office. The
 // stored progress is for meta.quest_day; if TOWN_TZ has ticked over to a new day
-// since the last hydrate, we serve a clean zero board (the daily reset) until the
-// next rehydrate recomputes. Async: the tool import is awaited (then cached).
+// since the last ingest, we serve a clean zero board (the daily reset) until the
+// next ingest recomputes. Async: the tool import is awaited (then cached).
 let _questTools = null;
 async function questTools(clone) {
   if (_questTools) return _questTools;
@@ -2431,7 +2431,7 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
 }
 
 /**
- * The six onboarding facts, read off the standing row the rehydrate wrote — or
+ * The six onboarding facts, read off the standing row the ingest wrote — or
  * null when this index cannot answer them and the caller must ask the checkout.
  *
  * ONE OWNER OF THE ID MAP. The keys are `STANDING_FACT`'s own values, and those
@@ -2592,7 +2592,7 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
   // bounty files ON the quest board, so the board read carries them rather than
   // growing a new verb. Same section for every handle (a pot is the town's, not
   // yours). Guarded like mail_state: an index hydrated before the seam has no
-  // pots table and says so honestly until the next rehydrate.
+  // pots table and says so honestly until the next ingest.
   //
   // A pot's registry row is a BOARD POSTING, never a resident card (the town's
   // own word, seam/ledger-legs-aligned @ 3668881b): it carries subtype "bounty"
