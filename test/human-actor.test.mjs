@@ -365,8 +365,8 @@ test("the class mark's own body is quoted verbatim, from the world record", () =
 
 test("the allowed human row carries the contract's own field names", async () => {
   // THE CONTRACT, verbatim from the consumer that declared it (site
-  // src/lib/world-cockpit.mjs § actorsFor, branch bday-pin — unmerged, and named
-  // as unmerged because a contract you cannot point at is a rumour):
+  // src/lib/world-cockpit.mjs § actorsFor, on the site's main — named, because
+  // a contract you cannot point at is a rumour):
   //
   //     answer.actors = [
   //       { kind: "resident", handle, label, allowed: true },

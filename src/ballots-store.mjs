@@ -51,7 +51,7 @@ import {
 import { POST_COLUMNS, rowOf, insertPost, updatePost } from "./events-store.mjs";
 import {
   BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, BALLOT_STATES, STATE_STAKING, STATE_CLOSED, STATE_SUBMISSIONS,
-  ballotPostId, ballotFromFile, changedTerms, headroomOf, tallyOf, TOPIC_RE,
+  ballotPostId, ballotFileName, ballotFilePath, ballotFromFile, changedTerms, headroomOf, tallyOf, TOPIC_RE,
 } from "./ballots.mjs";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { planStampedCommit, landPlannedVia } from "./stamp-lines.mjs";
@@ -132,8 +132,8 @@ export function readBallotFiles(clone) {
     .map((f) => /^ballot-([a-z0-9-]+)\.json$/.exec(f)?.[1])
     .filter(Boolean).sort()
     .map((topic) => {
-      try { return { topic, json: JSON.parse(readFileSync(join(dir, `ballot-${topic}.json`), "utf8")) }; }
-      catch (e) { return { topic, error: `WHITE_PAGES/ballot-${topic}.json: ${plainReason(e, "files", "a ballot file")}` }; }
+      try { return { topic, json: JSON.parse(readFileSync(join(dir, ballotFileName(topic)), "utf8")) }; }
+      catch (e) { return { topic, error: `${ballotFilePath(topic)}: ${plainReason(e, "files", "a ballot file")}` }; }
     });
 }
 

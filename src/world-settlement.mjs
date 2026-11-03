@@ -735,10 +735,11 @@ export async function settlementOrFile({ asked = null, fileAnswer, engaged, pool
 
 /**
  * THE GRAPH ON THE SETTLEMENT (POS-359, Wright's option A, 2026-10-07).
- * `/world/graph` draws world.db, which the tick hydrates from the tag's tree;
- * its mark nodes are narrowed to the marks the served settlement holds (minus
- * the opposed), so an opposed mark leaves the graph at once and `as_of` names
- * S<n>. A mark cleared after the hydration is not in world.db and stays absent
+ * `/world/graph` draws the world graph snapshot (hydrated from the tag's tree
+ * by the tick, copied into the store by the graph pen); its mark nodes are
+ * narrowed to the marks the served settlement holds (minus the opposed), so an
+ * opposed mark leaves the graph at once and `as_of` names S<n>. A mark cleared
+ * after the hydration is not in that snapshot and stays absent
  * until the graph is hydrated from the settlement itself (option B, a follow-up).
  * `{ ids, settlement, digest }`, null when there is no settlement to narrow to,
  * or `{ unread }`.

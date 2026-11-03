@@ -62,7 +62,7 @@
 // trigger, moment) inside its transaction, so the second finds the first's row.
 
 import {
-  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, publishedMarks, reactTo,
+  ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, publishedMarks, reactTo, warmRosters,
 } from "./creatures.mjs";
 import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
@@ -74,9 +74,9 @@ import { importEngineAt, publishedState } from "./world-branches.mjs";
 import { WORLD_CLONE } from "./world-store.mjs";
 import { departureRecordOf } from "../world2/tools/live-reads.mjs";
 import { PUBLIC_ACTS, activeOf, ago, hourZ, viewBlock, whoBlock } from "./world-read-v2.mjs";
+import { asPayload, isoOf, lawReady } from "./creature-bits.mjs";
 
 const state = { ref: null, living: null, running: false, last: null, testDeps: null };
-const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
 
 /** This process's creatures and their law, or null while the law cannot be read. Tests set it. */
 export const creaturesNow = () => (state.living ? { living: state.living, law: state.living.law } : null);
@@ -98,7 +98,7 @@ export async function refreshCreatures({ query = actsQuery, law: given = null, n
   }
   if (law.ref !== state.ref || !state.living) {
     state.ref = law.ref;
-    state.living = new LivingSet({ law });
+    state.living = new LivingSet({ law, hideUnwarmed: true }); // WLD-74: a creature whose room is not yet known is seen by no one
   }
   const r = await state.living.refresh({ query, now });
   // each creature's room, so its ring stops at the walls (world#268): once per creature per published sha
@@ -113,8 +113,6 @@ export async function refreshCreatures({ query = actsQuery, law: given = null, n
 // ── the act doors ───────────────────────────────────────────────────────────
 
 const ACT_ROW_SQL = `SELECT id::text AS id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE id = $1::bigint`;
-const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
-const isoOf = (t) => { const ms = t instanceof Date ? t.getTime() : Date.parse(t ?? ""); return Number.isFinite(ms) ? new Date(ms).toISOString() : null; };
 const pointOf = (p) => (Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y)) ? { x: Number(p.x), y: Number(p.y) } : null);
 
 // The marks' centres, for composing a row's witnessed point: read again at most
@@ -245,7 +243,7 @@ export const HEARD_WINDOW_MS = 30 * 60_000;
  */
 export async function creatureHeard(creature, act, { heardAt = null, nowMs = Date.now() } = {}) {
   const hear = heardAt ?? (await import("./world.mjs")).heardAt;
-  const rows = await hear({ x: creature.x, y: creature.y }, { cap: 3 });
+  const rows = await hear({ x: creature.x, y: creature.y }, { cap: 3, room: creature.room?.id ?? (typeof creature.room === "string" ? creature.room : null) });
   const fresh = (rows ?? []).filter((h) => Number.isFinite(h.at_ms) ? nowMs - h.at_ms <= HEARD_WINDOW_MS : true);
   const newest = fresh.at(-1);
   return newest ? heardWords(newest.said) : null;
@@ -281,7 +279,7 @@ export async function aroundCreature(creature, act, reads = {}) {
   const [oriented, heardRows, lastRows] = await Promise.all([
     part(() => w.worldOrient({ x: at.x, y: at.y }, null, { crowd: true })),
     // the shared ear (office#564): touching nobody, newest last, the actor's own words left out
-    part(() => w.heardAt(at, { cap: 3, exclude: act.actor })),
+    part(() => w.heardAt(at, { cap: 3, exclude: act.actor, room: creature.room?.id ?? (typeof creature.room === "string" ? creature.room : null) })), // a creature in a room hears that room
     part(() => query(ACTOR_LAST_SQL, [act.actor, Object.keys(PUBLIC_ACTS), String(act.actId)])),
   ]);
   const out = { hour: hourZ(new Date(nowMs).toISOString()) };
@@ -517,7 +515,7 @@ export function startCreatures({ port, env = process.env, log = console } = {}) 
       const a = r.ok ? await arrivalTick() : null;
       if (r.ok && state.living) await warmViews(state.living);
       // presence at each finishable creature's point, and the household lookup, kept for the acts (eval round 1, F1–F3)
-      if (r.ok && state.living) await (await import("./creatures.mjs")).warmRosters(state.living).catch((e) => faultLogged("the encounter's rings could not be read", e));
+      if (r.ok && state.living) await warmRosters(state.living).catch((e) => faultLogged("the encounter's rings could not be read", e));
       // an encounter's repair (encounter-verbs.mjs § encounterTick): a missed finish, a missed flee
       if (r.ok && state.living) await (await import("./encounter-verbs.mjs")).encounterTick({ living: state.living, law: state.living.law }).catch((e) => faultLogged("the encounter's tick tripped", e));
       state.last = { at: new Date().toISOString(), living: state.living?.living().length ?? 0, ...(r.ok ? {} : { why: r.why }), ...(a?.judged ? { arrivals: a } : {}) };
@@ -531,8 +529,3 @@ export function startCreatures({ port, env = process.env, log = console } = {}) 
   timer.unref?.();
   return true;
 }
-
-export function stopCreatures() { if (timer) clearInterval(timer); timer = null; }
-
-/** The tick's last run, for an operator. */
-export const creaturesTickLast = () => state.last;

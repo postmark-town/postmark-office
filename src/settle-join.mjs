@@ -62,8 +62,9 @@ import { HANDLE_RE, joinBranch, houseForName, houseForAccount, planRegistryJoin,
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
 import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
 import { penCommit, landOrRefuse } from "./write.mjs";
-import { holdsHand } from "./named-hand.mjs";
-import { trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { landSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
+import { holdsHand, REGISTRAR_HANDS } from "./named-hand.mjs";
+import { refuse } from "./fault-words.mjs"; // a refusal from SETTLE_REFUSALS, as the error the door sends
 
 // ── WHO MAY CALL IT ─────────────────────────────────────────────────────────
 //
@@ -72,8 +73,9 @@ import { trippedError } from "./fault-words.mjs"; // the office's own words for 
 // holds one of these handles", as world.mjs § ON_BEHALF_PLACERS checks its
 // placers. Both handles are pinned to the founder's account in his household,
 // so a founder's key standing as either is the founder's own hand — which is
-// why there is no separate founder entry.
-export const SETTLE_JOIN_CALLERS = Object.freeze(["registrar", "wright"]);
+// why there is no separate founder entry. The list is named-hand.mjs §
+// REGISTRAR_HANDS, which the standing door answers to as well.
+export const SETTLE_JOIN_CALLERS = REGISTRAR_HANDS;
 
 // The office pen's immutable GitHub id. The town's witness keys pen-opened
 // joins on the same number (town `tools/witness.mjs` § PEN_ID), and the
@@ -96,10 +98,6 @@ export const SETTLE_REFUSALS = Object.freeze({
   NO_ADDRESS: { code: 409, defect: "the handle has no ADDRESS on town main", hint: "settle-join binds a join the Registrar has merged; the card is what the merge put there" },
   NO_HOUSE: { code: 409, defect: "the card's household: names no house in the record", hint: "the join names the house it belongs to on its ADDRESS card; a house the record does not hold is a person's call" },
   NOT_VOUCHED: { code: 409, defect: "the house has never listed this account", hint: "the verified account is not one of that house's accounts, so nothing proves it speaks for the house — a person's call (a sibling vouches by letter)" },
-});
-
-const refuse = (r, detail = null) => Object.assign(new Error(r.defect), {
-  code: r.code, defect: r.defect, hint: detail ? `${detail} — ${r.hint}` : r.hint,
 });
 
 // The caller is the hand this credential is FOR, not a housemate it lists
@@ -310,7 +308,13 @@ export async function settleUnderLock({ handle, ghId, ghLogin, pr, road = "pen",
 
   // ONE COMMIT: the two printed registers and the ledger's key lines, the
   // join-bind shape. The drain collects instead of committing on its own.
-  if (mint) await mintHousehold(mint);
+  if (mint) {
+    await mintHousehold(mint);
+    // WHERE THEY CAME FROM (POS-770): a hand-written join PR that founds a house
+    // lands the outreach tag parked against its author's GitHub id, privately.
+    // At the founding, as join-bind does it. Best-effort, never in the answer.
+    await landSource({ ghId, household: mint.slug, env });
+  }
   const { drain, paths } = collectingDrain({ clone, env });
   const joined = await joinHousehold({
     slug, handle: h, coSign, pinnedOn: date, env, drain,
@@ -337,18 +341,8 @@ export async function settleUnderLock({ handle, ghId, ghLogin, pr, road = "pen",
 const EXEC = join(dirname(fileURLToPath(import.meta.url)), "settle-join-exec.mjs");
 
 async function runUnderTownLock(payload, { clone }) {
-  const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
-  let out;
-  try {
-    out = await execUnderTownLock(EXEC, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
-  } catch (e) {
-    if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
-    throw trippedError("the settle-join pass tripped", e); // its stderr goes to the log (POS-578)
-  }
-  const result = JSON.parse(out.trim().split("\n").at(-1));
-  if (result.error)
-    throw Object.assign(new Error(result.error.defect), { code: result.error.code ?? 500, defect: result.error.defect, hint: result.error.hint });
-  return result;
+  const { runLockedExec } = await import("./town-lock.mjs");
+  return runLockedExec(EXEC, payload, { clone, tripped: "the settle-join pass tripped" });
 }
 
 /**

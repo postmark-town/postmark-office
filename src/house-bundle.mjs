@@ -88,10 +88,13 @@ export function isoEvents(events = []) {
  * never held. A store this office cannot ask is now a refusal (houseMembers'
  * 503), never the printout's answer.
  *
- * FRESH, NOT THE PROCESS MEMO. `houseRows()` folds once per process until a
- * writer IN THAT PROCESS clears it; the house read is served by read workers,
- * where no ceremony ever writes, so a memo there would answer with the town
- * from boot for as long as the worker lived. Three small reads per call.
+ * FRESH, NOT THE THREAD'S COPY. `houseRows()` folds once per time-to-live
+ * (`household-deriver.mjs § HOUSE_CACHE_TTL_MS`). The ceremony's clear reaches
+ * only the thread that wrote (the main thread); every other thread, a read
+ * worker among them, sees a change by age alone, within the time-to-live. The
+ * house read is served by read workers, where no ceremony ever writes, so a
+ * copy there would answer with the town as it stood up to a time-to-live ago.
+ * This read takes none. Three small reads per call.
  */
 export async function registryFor(clone, readers = {}) {
   if (readers.registry) return { ...readers.registry, from: readers.registry.from ?? "injected" };

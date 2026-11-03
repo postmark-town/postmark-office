@@ -347,6 +347,69 @@ test("GET /letters filters: resident, since/until, region, exclude-office, combi
   assert.equal(paged.limit, 2);
 });
 
+test("an unreadable since/until is a 422, never an empty roll marked complete or a filter that was ignored", async () => {
+  // `since=yesterday` sorts after every digit (0 rows, complete: true);
+  // `since=10/01/2026` sorts before every digit (the filter vanishes).
+  for (const bad of ["yesterday", "10/01/2026", "2026-13-45", "2026-02-30", "2026-10-1", "2026-07-03T25:00:00Z", "2026-07-03T08:30:00+25:00", "2026-07-03Tnoon"]) {
+    for (const door of ["/letters?since=", "/letters?until=", "/mail/wright?since=", "/repo/log?until=", "/residents?since="]) {
+      const r = await get(door + encodeURIComponent(bad));
+      assert.equal(r.status, 422, `${door}${bad}`);
+      const b = await r.json();
+      assert.match(b.defect, /ISO date/, `${door}${bad}`);
+      assert.match(b.hint, /^send \?(since|until)=2026-10-01$/, "the hint says what to send over HTTP");
+    }
+  }
+  // what worked keeps working: a date, a Z timestamp, +00:00 (Python isoformat), a zoneless time (read as UTC), and an offset (converted to UTC)
+  const total = async (v) => (await (await get("/letters?limit=1&since=" + encodeURIComponent(v))).json()).total;
+  assert.equal(await total("2026-07-03T08:30:00+02:00"), await total("2026-07-03T06:30:00.000Z"), "an offset is converted to UTC");
+  assert.equal(await total("2026-07-03T06:30:00+00:00"), await total("2026-07-03T06:30:00Z"), "+00:00 reads as Z");
+  assert.equal(await total("2026-07-03T06:30"), await total("2026-07-03T06:30:00Z"), "a zoneless time reads as UTC");
+  // the raw form: curl ...?since=2026-07-03T08:30:00+02:00 unencoded, where the query string decodes `+` to a space
+  const rawTotal = async (v) => (await (await get("/letters?limit=1&since=" + v)).json()).total;
+  assert.equal(await rawTotal("2026-07-03T08:30:00+02:00"), await total("2026-07-03T06:30:00.000Z"), "a raw + offset is read as +");
+  assert.equal(await rawTotal("2026-07-03T06:30:00+00:00"), await total("2026-07-03T06:30:00Z"), "a raw +00:00 reads as Z");
+  assert.equal((await get("/letters?since=yesterday%2000:00")).status, 422, "a space that is not before an offset is still refused");
+  assert.equal((await get("/letters?since=2026-07-03%2008:30")).status, 422, "a date and a space is not a timestamp");
+  for (const ok of ["2026-07-03", "2026-07-03T08:30:00.000Z", "2026-07-03T08:30Z", "2026-07-03T08:30:00+00:00", "2026-07-03T08:30", "2026-07-03T08:30:00+02:00"]) {    assert.equal((await get("/letters?since=" + encodeURIComponent(ok))).status, 200, ok);
+  }
+  assert.equal((await get("/letters")).status, 200);
+});
+
+test("MCP: an unreadable since/until is a 422 bounce naming the field, on every list verb (the apex is in date-filter.test.mjs)", async () => {
+  const bounced = async (name, args) => {
+    const { body } = await rpc("tools/call", { name, arguments: args });
+    assert.equal(body.result.isError, true, `${name} ${JSON.stringify(args)}`);
+    return JSON.parse(body.result.content[0].text);
+  };
+  for (const [name, args, field] of [
+    ["list_letters", { since: "yesterday" }, "since"],
+    ["list_letters", { until: "10/01/2026" }, "until"],
+    ["list_mail", { handle: "wright", since: "yesterday" }, "since"],
+    ["list_commits", { until: "2026-02-30" }, "until"],
+    ["list_residents", { since: "yesterday" }, "since"],
+  ]) {
+    const b = await bounced(name, args);
+    assert.equal(b.code, 422, `${name}`);
+    assert.equal(b.field, field, `${name} names the field`);
+    assert.match(b.defect, new RegExp(`^${field} must be an ISO date`), `${name}`);
+    assert.equal(b.hint, `send ${field}: "2026-10-01"`, "the hint says what to send over MCP");
+  }
+  const ok = await rpc("tools/call", { name: "list_letters", arguments: { since: "2026-07-03" } });
+  assert.notEqual(ok.body.result.isError, true);
+});
+
+test("GET /residents?office= takes true or false and refuses the rest, instead of reading 1/yes as false", async () => {
+  for (const bad of ["1", "yes", "TRUE", ""]) {
+    const r = await get("/residents?office=" + bad);
+    assert.equal(r.status, 422, `office=${bad}`);
+    assert.equal((await r.json()).field, "office");
+  }
+  const offices = await (await get("/residents?office=true")).json();
+  const people = await (await get("/residents?office=false")).json();
+  const all = await (await get("/residents")).json();
+  assert.equal(offices.total + people.total, all.total);
+});
+
 test("GET /mail/{handle} answers a BARE ARRAY, honors since/until, and pages", async () => {
   // TRUED TO THE PANE CONTRACT, 2026-08-26, not deleted. This test asserted the
   // wrapper the 08-25 bounded-reads commit introduced, and that wrapper is what

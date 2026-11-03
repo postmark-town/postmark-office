@@ -128,8 +128,7 @@ export async function appendTownJournal(db, entry = {}) {
 
   ensureTownJournal(db);
   // `append`, not `run`: the seq is the store's (or the file's) to assign, and
-  // the mirror writes the file's copy of the row under the SAME seq, so the
-  // drain cursor names one row in both.
+  // the drain cursor names it.
   return asPaper(db).append(
     `INSERT INTO town_journal (class, act, household, handle, gh_id, gh_login, cosigned_gh_id, payload, written_at, channel)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

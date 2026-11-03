@@ -115,6 +115,7 @@ const ROSTER = {
   // src/
   "src/dynamic-store.mjs": { args: [], env: { WORLD_DYNAMIC_DB: NOWHERE_DB }, code: 0, needle: '"present": false' },
   "src/pot-stake-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
+  "src/parcel-room-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/store-writedown.mjs": { args: [], env: NO_PG, code: 2, needle: "--input <fold-input.json> is required" },
   "src/world-drain.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
   // world.db is retired (POS-270 lane W 3b): the world tails read the store's
@@ -159,6 +160,8 @@ const ROSTER = {
   // POS-576: Wright's read of invited households. A bad --since refuses before
   // any store is asked; NO_PG on top, so a regression that reached for a
   // connection fails on it.
+  // POS-770: the arrivals read. A bad --days refuses before any log or store is read.
+  "tools/arrivals.mjs": { args: ["--days", "0"], env: NO_PG, code: 2, needle: "--days takes a whole number of days" },
   "tools/invites.mjs": { args: ["--since", "not-a-date"], env: NO_PG, code: 2, needle: "--since takes an ISO instant" },
   "tools/hydrate-equivalence.mjs": { args: ["--a", NOWHERE, "--b", `${NOWHERE}-b`], code: 2, needle: "not a world checkout:" },
   "tools/ledger-freeze.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },

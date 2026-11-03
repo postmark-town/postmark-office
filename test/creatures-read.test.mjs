@@ -349,6 +349,24 @@ test("investigate: the creature as of now, its newest reactions with their odds 
   assert.equal(blind.presence.last_crossing.unavailable, "no crossing save holds this creature");
 });
 
+test("investigate: what a creature did is served from the acts, so a creature out of the fold still shows its history (POS-781)", async () => {
+  const GONE = "creature:wolf-270-5";
+  // fled: the fold holds no live row, no save holds it, but its reactions are on the record
+  const cur = fold(spawn(GONE), react(GONE, { to: "kai" }), withdraw(GONE));
+  const rows = async () => [{ id: "78", at: new Date(NOW - 120_000), object: "9002",
+    payload: { to: "kai", verb: "approach", reaction: "snarl", roll: 15, judged_by: "code", allowed: { watch: 0.5, snarl: 0.5 } } }];
+  const r = await investigateCreature(GONE, { creatures: { living: new LivingSet({ law: LAW }).fold([]), law: LAW }, nowMs: NOW, rows });
+  assert.equal(r.kind, "creature", "a creature with a record is not 'no creature': " + JSON.stringify(r).slice(0, 200));
+  assert.equal(r.name, "a grey wolf", "its kind is the one its id names");
+  assert.match(r.presence.now.unavailable, /no longer held/);
+  assert.deepEqual([r.reactions.rows[0].to, r.reactions.rows[0].verb, r.reactions.rows[0].reaction], ["kai", "approach", "snarl"]);
+  assert.equal(r.reactions.rows[0].line, "The wolf's lip curls back. It snarls at kai, low and steady.", "the line is read off the kind's law, not the fold's row");
+  assert.ok(cur.living, "(the fled fixture folds)");
+  // no fold row, no save and no record: still 404
+  assert.equal((await investigateCreature(GONE, { creatures: { living: new LivingSet({ law: LAW }).fold([]), law: LAW }, nowMs: NOW, rows: async () => [] })).code, 404);
+  // ⚑ THE FLIP: return the 404 on "no fold row and no save" alone → the first assert reds.
+});
+
 nodeTest("the crossing save's tier: STATE/snapshot/<newest>/creatures.json, as the world's creaturesSnapshot writes it", () => {
   const repo = mkdtempSync(join(tmpdir(), "creatures-saved-"));
   try {
