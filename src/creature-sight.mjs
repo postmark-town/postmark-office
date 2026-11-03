@@ -73,7 +73,7 @@ async function readOccupancy() {
       import("./world-crossings.mjs"), import("./world-apex.mjs"), import("./world.mjs")]);
     const law = await crossingLaw(WORLD_CLONE);
     return law?.thresholds ? await occupancyNowAll(law.thresholds, crossingDeps()) : new Map(); // no crossing law: a valid read of nobody entered
-  } catch (e) { throw new Error(`the enter ledger could not be read (${String(e?.message ?? e).slice(0, 80)})`); }
+  } catch { throw new Error("the enter ledger could not be read"); } // no detail, and no log line: every ordinary reader asks this on its own turn
 }
 
 /** Does the set hold any creature in a room? When none does, nobody needs the ledger. */
