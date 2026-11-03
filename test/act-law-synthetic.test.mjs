@@ -163,11 +163,16 @@ test("4 · the law moved and its load hangs past the deadline: refused, never ju
   L.s.hang = new Promise((r) => { release = r; });
   L.bless(2, 7);
   const { ask } = asker(L, G, 25);
+  // The deadline's timer is unref'd by design (a refresher never holds a process open); in the
+  // office its server holds the event loop. Here nothing else would, and on Node 22 the loop
+  // drained mid-wait and the runner cancelled this case and every one after it (CI, 2026-11-03).
+  // This interval stands in for the server while the deadline runs.
+  const server = setInterval(() => {}, 1000);
   try {
     const r = await ask();
     assert.equal(r?.code, 503, `LAW: "never judged under law the store has replaced" — got ${JSON.stringify(r)}`);
     assert.equal(law.lawSnapshot().pin.settlement, 1);
-  } finally { release(); }
+  } finally { clearInterval(server); release(); }
   for (let i = 0; i < 5; i++) await settle();
 });
 
