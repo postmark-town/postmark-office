@@ -43,6 +43,22 @@
 //   F5 world-apex.mjs: explainClassOr's ask not awaited → 13 red ("ask → store:G1 → explain:G1:S1")
 //   F5b world-apex.mjs: explainClassOr never asks → 13 red
 //   F6 server.mjs: the stake route answers the refusal and acts anyway → 9 red
+// Re-proved 2026-11-03 at 05ff1e2aa (Windows, Node 25), after the FIX round
+// reshaped freshLaw; F3, F5, F5b and F6 strike lines it did not touch and were
+// not re-run:
+//   F1 → 3, 4, 5, 9, 11, 14, 15, 16, 17 red
+//   F2 (freshLaw's first line returns what stands) → 1, 2, 3, 4, 7, 9, 10, 11, 12, 13, 14, 15 red
+//   F4 → 11, 12 red
+// The FIX round's own (2026-11-03 at 05ff1e2aa; each reds exactly the cases named):
+//   F7  mcp.mjs: the law refusal without `code` → 11 red
+//   F8  server.mjs: POST /world/apex asks the law above the standing gate again → 9 red
+//   F9  law-snapshot.mjs: at the cap, freshLaw answers what stands without asking the pin → 14 red
+//   F10 law-snapshot.mjs: an act joins a refresh in flight without asking the pin → 15 red
+//   F11 law-snapshot.mjs: an act stands on a refresh in flight whatever it put in force → 15 red
+//   F12 law-snapshot.mjs: the act's own pin is not recorded → 14 (/release), 15 (act A) red
+//   F13 law-snapshot.mjs: at the cap, a store that cannot be asked refuses → 14 red
+//   F14 law-snapshot.mjs: under contention, the verdict ignores the pin it was told → 14, 15 red
+//   F9g to F14g: the same six in world-graph-snapshot.mjs → 16; 17; 17; 16, 17; 16; 16, 17 red
 
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
