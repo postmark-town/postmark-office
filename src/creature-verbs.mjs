@@ -43,6 +43,7 @@ import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { CREATURE_CALLS, WHISPER_WORDS } from "./world-read-shape.mjs";
 import { DODGE_ACTION, PERSUADE_ACTION, isSetPiece, openHurls, persuadedThisWindow, pieceOf } from "./set-pieces.mjs";
 import { windowAt } from "./encounter.mjs";
+import { isoOf, nameOf, ringOf, theOf } from "./creature-bits.mjs";
 
 /** The six verbs this door answers (the world's AFFORDED_VERBS, as ruled). */
 export const CREATURE_VERBS = Object.freeze(["watch", "approach", "shoo", "call", "offer", "whisper"]);
@@ -83,9 +84,6 @@ const bounce = (code, defect, hint, extra = {}) => {
   return e;
 };
 
-const ringOf = (law, c) => Number(law?.kindOf?.(c.kind)?.ring_m) || 0;
-const nameOf = (law, c) => law?.kindOf?.(c.kind)?.name ?? `a ${c.kind}`;
-const theOf = (law, c) => nameOf(law, c).replace(/^an? /i, "the ");
 
 /**
  * Why `verb` cannot be aimed at creature `c` from `d` metres, or null when it
@@ -444,8 +442,6 @@ async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
     ...(others.length ? { creatures: others } : {}),
   };
 }
-
-const isoOf = (t) => { const ms = t instanceof Date ? t.getTime() : Date.parse(t ?? ""); return Number.isFinite(ms) ? new Date(ms).toISOString() : null; };
 
 /** The office's own collaborators, imported lazily; a test hands in its own. */
 async function liveDeps(given) {

@@ -69,11 +69,10 @@ const ALLOWED = {
   "media.mjs": [1, "a 502 quoting the fetch of the resident's own URL (Wright's G4: it stays)"],
   "media-sweep.mjs": [5, `${OPERATOR} (the sweep's and the takedown's reports on the box: a source's or storage's refusal, named for the operator who reads last.json)`],
   "oauth.mjs": [2, `${OWN}: SignInUnreadable's why, and the co-sign's unread berth place (POS-740), both of which go to the log`],
-  "paperwork.mjs": [1, `${OWN}: a status field`],
   "read-workers.mjs": [1, `${OWN}: a worker's exit cause, read by the pool`],
   "registry-store.mjs": [1, `${OWN}: a classifier`],
   "release.mjs": [1, `${OPERATOR} (the deploy receipt the auto-deploy probes)`],
-  "server.mjs": [3, `${OWN}: the boot refusal (a log), causeSaid (the log's reader), doorTripped's own refusal message (KEPT, POS-617: an integer HTTP code is only ever set by the office, and the 503 classes' messages are ruled sentences)`],
+  "server.mjs": [4, `${OWN}: the boot refusal (a log), the paperwork boot guard's refusal when the store cannot be asked (a log, then exit 78; POS-271), causeSaid (the log's reader), doorTripped's own refusal message (KEPT, POS-617: an integer HTTP code is only ever set by the office, and the 503 classes' messages are ruled sentences)`],
   "settle-join-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "standing-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "static-keys-retire.mjs": [1, `${OWN}: a tool's own printout`],
@@ -103,7 +102,7 @@ const ALLOWED = {
   "world-stance.mjs": [1, `${OWN}: PenUnreachableError's ruled sentence (x1: writeStanceAct, the one write behind the ground's word, the town's, and the owner's word on a thing, POS-688)`],
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
-  "world2-pen.mjs": [2, `${OWN}: status fields`],
+  "world2-pen.mjs": [1, `${OWN}: a status field (penWrite's lastError)`],
   "write.mjs": [1, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723)`],
 };
 

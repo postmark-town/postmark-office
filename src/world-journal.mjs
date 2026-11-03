@@ -74,7 +74,7 @@ import { singleLogEnabled } from "./dynamic-store.mjs";
 import { refShaFromDisk } from "./world-branches.mjs";
 import { mirrorAct, mirrorSettled, world2Enabled } from "./world2-acts.mjs";
 import { candleEnabled, claimEligible, claimHouseholdFor, claimTxFromJournal, docketSettled } from "./world2-claims.mjs";
-import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite, shadowWrite } from "./world2-pen.mjs";
+import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite } from "./world2-pen.mjs";
 
 /**
  * Is this row a PRIVATE compose, whose act must not reach the public `acts`
@@ -343,9 +343,9 @@ const ROW_COLUMNS = "crossing, actor, action, object, at_anchor, at_dx, at_dy, w
  * thing that made the fire-and-forget defensible. Two sentences in this repo
  * said so before the deletion existed, and they are the whole argument:
  *
- *   world2-pen.mjs § shadowWrite — the queue is "fire-and-forget for the
- *   caller … acceptable ONLY because the sqlite journal is still the SoT on an
- *   unflipped lane"
+ *   world2-pen.mjs § shadowWrite (the since-deleted shadowWrite) — the queue is
+ *   "fire-and-forget for the caller … acceptable ONLY because the sqlite journal
+ *   is still the SoT on an unflipped lane"
  *
  *   world2-acts.mjs § WRITE DISCIPLINE — "the cutover rewrite awaits the
  *   insert and refuses at the door instead"
@@ -396,7 +396,8 @@ export async function appendJournal(db, entry = {}, { guard = null } = {}) {
   // the world actually witnessed anything. The predicate is deliberately
   // narrow: ONLY an unstaked mark-class declaration defers.
   //
-  // ⚑ THE PRIVATE ARM RIDES THIS QUEUE, not a second one, and the reason is
+  // ⚑ THE PRIVATE ARM RIDES THIS PEN, not a second one (this said "queue" while
+  // one shared queue ordered it; the caller's await does now), and the reason is
   // measured rather than argued: it used to be its own pen on its own pool, and
   // an unstaked compose and its own withdrawal rode different queues with
   // nothing ordering them — the withdrawal's DELETE ran 113 ms ahead of the

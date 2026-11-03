@@ -178,20 +178,23 @@ test("(c) UNFLIPPED · a withdrawn private draft leaves NO docket row — its DE
   } finally { db.close(); unflip(); }
 });
 
-test("(c2) UNFLIPPED · both halves of one slug's life ride ONE queue — the ordering guarantee, named", async () => {
+test("(c2) UNFLIPPED · both halves of one slug's life go through ONE pen, in the caller's await order — the ordering guarantee, named", async () => {
   // The mechanism behind (c), asserted directly so a future refactor that
   // re-splits the queues reddens here with the reason rather than reddening
-  // (c) as a puzzle. `state.queue = state.queue.then(...)` is strict FIFO, so
-  // ONE queue IS the ordering; two is the absence of one.
+  // (c) as a puzzle. The compose and the withdrawal both go through the one
+  // `penWrite` and the caller's await orders them; a second pen is the absence
+  // of that order.
   candleOn(null);
   const db = freshDb();
   try {
-    // `world2-pen`'s `written` counts ONE PER QUEUED TRANSACTION, and on an
-    // unflipped lane `shadowWrite` is the only thing that increments it. So a
-    // delta of exactly 2 says both the compose and the withdrawal were
-    // serialized by that one queue — which IS the ordering guarantee, since
-    // `state.queue = state.queue.then(…)` is strict FIFO. A tree that gives the
-    // private arm its own queue reaches 1 here.
+    // `world2-pen`'s `written` counts ONE PER TRANSACTION, and on an unflipped
+    // lane `penWrite` (world2-pen.mjs § penWrite, reached through
+    // `appendJournal`) is the only thing that increments it. So a delta of
+    // exactly 2 says both the compose and the withdrawal went through that one
+    // pen, in the caller's await order (below). The strict-FIFO
+    // `state.queue = state.queue.then(…)` this once leaned on went with
+    // `shadowWrite`. A tree that gives the private arm its own queue reaches 1
+    // here.
     //
     // An earlier draft asked this by the identity of the promise `docketSettled()`
     // hands back. That probe is gone, and its removal is itself a finding:

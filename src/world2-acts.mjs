@@ -45,7 +45,7 @@
 // ── THE MIRROR'S EXPIRY MACHINERY IS GONE (G1 / POS-156, 2026-09-22) ─────
 //
 // `MIRROR_EXPIRES`, `LANE_MIRROR` and the five functions over them
-// (`mirrorExpiresFor`, `laneMirrorExpired`, `expiredLanes`, `exemptLanes`,
+// (`mirrorExpiresFor`, `laneMirrorExpired`, `expiredLanes`,
 // `mirrorExpiryLine`, `mirrorExpired`) were the pressure mechanism on a shim:
 // per-lane backstop dates that RED a falsifier if a lane was still mirroring
 // past them. DEC-2's own rule said what ends a lane's obligation -- "DELETING

@@ -34,6 +34,7 @@ import {
   nerveInStore, nerveOf, queueFlee, resolveAfter, resolveOf, strikesOn, windowAt, wornBy, hasResolve, isTempter, endingSaid,
 } from "./encounter.mjs";
 import { faultLogged } from "./fault-words.mjs";
+import { isoOf, nameOf, ringOf, theOf } from "./creature-bits.mjs";
 import { LINT_PER_TICK, TEMPTED_ACTION, jevLints, openTemptations, outcomeOf, outcomeRows, phaseOf, strikeDamage, talliesOf } from "./temptation.mjs";
 
 /** How long a verb's answer waits for the creatures (POS-672's W2, the same numbers). */
@@ -41,10 +42,6 @@ export const ENCOUNTER_WAIT_MS = 3000;
 export const ENCOUNTER_JEV_MS = 2500;
 
 const bounce = (code, defect, hint, extra = {}) => Object.assign(new Error(defect), { code, defect, hint, ...extra });
-const ringOf = (law, c) => Number(law?.kindOf?.(c.kind)?.ring_m) || 0;
-const nameOf = (law, c) => law?.kindOf?.(c.kind)?.name ?? `a ${c.kind}`;
-const theOf = (law, c) => nameOf(law, c).replace(/^an? /i, "the ");
-const isoOf = (t) => { const ms = t instanceof Date ? t.getTime() : Date.parse(t ?? ""); return Number.isFinite(ms) ? new Date(ms).toISOString() : null; };
 const nerveSaid = (n) => ({ left: n, of: encounterDial("nerve_max") });
 
 /** The finishable creatures whose rings hold `point` now, nearest first. */

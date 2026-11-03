@@ -4,6 +4,8 @@
 //
 //   node world2/tools/paperwork-import.mjs --pg-url <url> --oauth-db <file> --roles-db <file>
 //        [--check]     compare only; write nothing
+//        [--repair]    insert into the FILES the rows only the store holds, then
+//                      check again (the clean week's repair, below)
 //        [--replace]   empty the eleven tables first, in the same transaction
 //        [--json]      the receipt as JSON on stdout
 //
@@ -13,6 +15,21 @@
 //   this is a migration step, and office_api cannot TRUNCATE.
 //
 //   EXIT: 0 every row equal · 1 DRIFT (nothing was committed) · 2 cannot run.
+//
+// ── --repair: THE STORE IS THE RECORD (POS-271, Darko 2026-10-09) ───────────
+//
+// While the office is switched, the mirror writes every store write to the
+// files after the store. When a mirror write fails (10-05 "database is
+// locked"; 10-09 "database or disk is full"), the file lacks that row. Darko
+// ruled: repair, and keep the date. Prod's --check (Wright, 2026-10-09) named
+// only rows "in the store, not in the file" (two tokens, one town-log row), so
+// --repair does exactly that and nothing else: it INSERTS into the files the
+// rows only the store holds. It never deletes and never overwrites. A row that
+// differs in content, or one only the file holds, is not a missing write, so it
+// REFUSES (exit 2) before writing anything, and --check's findings are the thing
+// to read. The store is only read. Then it checks again; the exit is that second
+// check's. Only when it reads equal are the files deleted (deploy/DEPLOY.md §
+// The paperwork files leave the box).
 //
 // ── WHY A SIGNED-IN AGENT STAYS SIGNED IN ───────────────────────────────────
 //
@@ -144,6 +161,58 @@ export async function importPaperwork(client, files, { check = false, replace = 
   }
 }
 
+/**
+ * --repair: insert into the files the rows only the store holds (see above).
+ * Refuses, writing nothing, when any flagged row differs in content or is held
+ * only by the file. Reads the store; writes only the missing rows, one sqlite
+ * transaction per table. Answers `{ before, repaired, after, equal }`, where
+ * `before` and `after` are the two checks and `repaired` holds counts only.
+ */
+export async function repairFiles(client, files) {
+  const before = await importPaperwork(client, files, { check: true });
+  const repaired = [];
+  if (!before.equal) {
+    const sdbs = { oauth: new DatabaseSync(files.oauth), roles: new DatabaseSync(files.roles) };
+    try {
+      const plan = [];
+      const refusals = [];
+      for (const t of TABLES) {
+        if (!before.tables.find((r) => r.table === t.to)?.differ.length) continue;
+        const sdb = sdbs[t.db];
+        const columns = columnsOf(sdb, t.from);
+        if (!columns.length) throw Object.assign(new Error(`cannot repair ${t.to}: ${files[t.db]} has no table ${t.from}`), { exit: 2 });
+        if (before.tables.find((r) => r.table === t.to).differ.some((d) => d.endsWith(": the store has no such column")))
+          refusals.push(`${t.to}: the store lacks a column the file has`);
+        const file = new Map(sdb.prepare(`SELECT * FROM ${t.from}`).all().map((r) => [keyOf(r, t.key), r]));
+        const store = new Map((await client.query(`SELECT * FROM ${t.to}`)).rows.map((r) => [keyOf(r, t.key), r]));
+        const insert = [];
+        let differ = 0, fileOnly = 0;
+        for (const [k, sr] of store) {
+          const fr = file.get(k);
+          if (!fr) insert.push(sr);
+          else if (columns.some((c) => c in sr && norm(fr[c]) !== norm(sr[c]))) differ += 1;
+        }
+        for (const k of file.keys()) if (!store.has(k)) fileOnly += 1;
+        if (differ) refusals.push(`${t.to}: ${differ} row(s) differ in content`);
+        if (fileOnly) refusals.push(`${t.to}: ${fileOnly} row(s) are in the file and not in the store`);
+        plan.push({ t, sdb, columns, insert });
+      }
+      if (refusals.length)
+        throw Object.assign(new Error(`--repair only inserts the rows the files are missing, and refuses the rest, so nothing was written: ${refusals.join("; ")}. Read --check's findings.`), { exit: 2 });
+      for (const { t, sdb, columns, insert } of plan) {
+        if (!insert.length) continue;
+        const ins = sdb.prepare(`INSERT INTO ${t.from} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`);
+        sdb.exec("BEGIN");
+        try { for (const sr of insert) ins.run(...columns.map((c) => sr[c] ?? null)); sdb.exec("COMMIT"); }
+        catch (e) { try { sdb.exec("ROLLBACK"); } catch { /* already gone */ } throw e; }
+        repaired.push({ table: t.to, inserted: insert.length });
+      }
+    } finally { for (const x of Object.values(sdbs)) try { x.close(); } catch { /* closed */ } }
+  }
+  const after = await importPaperwork(client, files, { check: true });
+  return { before, repaired, after, equal: after.equal };
+}
+
 if (process.argv[1]?.endsWith("paperwork-import.mjs")) {
   const argv = process.argv.slice(2);
   const opt = (name) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : null; };
@@ -158,6 +227,21 @@ if (process.argv[1]?.endsWith("paperwork-import.mjs")) {
   let out;
   try {
     await client.connect();
+    if (flag("--repair")) {
+      const r = await repairFiles(client, { oauth, roles });
+      await client.end();
+      if (flag("--json")) console.log(JSON.stringify({ repaired: r.repaired, equal: r.equal,
+        before: r.before.tables.map((t) => ({ table: t.table, findings: t.differ.length })),
+        after: r.after.tables.map((t) => ({ table: t.table, findings: t.differ.length })) }, null, 2));
+      else {
+        // Counts only: a finding's key can be a token hash, and this output is pasted into reports.
+        for (const t of r.before.tables) if (t.differ.length) console.log(`before    ${t.table.padEnd(20)} ${t.differ.length} finding(s)`);
+        for (const t of r.repaired) console.log(`repaired  ${t.table.padEnd(20)} ${t.inserted} row(s) inserted into the file from the store`);
+        for (const t of r.after.tables) if (t.differ.length) console.log(`after     ${t.table.padEnd(20)} ${t.differ.length} finding(s)`);
+        console.log(r.equal ? "repaired; the files now equal the store" : "STILL DRIFT after the repair: run --check and read what it names");
+      }
+      process.exit(r.equal ? 0 : 1);
+    }
     out = await importPaperwork(client, { oauth, roles }, { check: flag("--check"), replace: flag("--replace") });
   } catch (e) {
     await client.end().catch(() => {});

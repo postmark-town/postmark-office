@@ -49,6 +49,32 @@
 // announcement to its read workers, and every kept read that is derived from
 // the law (restored-classes.mjs), so nothing derived outlives the law it was
 // read from.
+//
+// ── AN ACT ASKS FIRST (POS-680 part 2) ───────────────────────────────────────
+// The timer is how a READ learns the law moved; an ACT does not wait for it.
+// `freshLaw()` asks the pin (two index lookups) and, when it moved, loads the
+// new law before it answers, so the act stands on the law the store has at
+// that moment. When the store says it moved and the new law could not be
+// loaded in time, `behind` says so, and the act refuses rather than judge
+// under law the store has replaced (act-law.mjs). The loads share the
+// refreshers' cap (snapshot-loads.mjs § MAX_LOADS): a store that is slow is
+// never asked for the whole law once per act.
+//
+// ── AN ACT IS TOLD, THEN SETTLES (POS-680) ───────────────────────────────────
+// An act's pin question is the one shared question of act-law.mjs § ONE PIN
+// QUESTION AT A TIME (Wright's Settled on POS-680, 2026-11-03: single-flight,
+// one slot of the cap, law then graph). `freshLaw({ told })` settles the law
+// half against what that question was told:
+//   · the law in force is the one the pin names: the act goes on;
+//   · it moved, and a refresh is in flight: the act waits for it, and stands on
+//     it only if what it put in force is the law this act was told ("the reuse
+//     rule stands"); anything else is behind, and the door refuses;
+//   · it moved, and nothing is in flight: the act loads it with a refresh of
+//     its own, under the cap (the cap full: behind, the door's plain 503);
+//   · `told` null, the store could not be asked at all: what stands (G1).
+// What the process knows of the pin moves only forward, by settlement (N6), so
+// a late, older answer never moves it back, and "behind" means the store's law
+// is newer than the one in force.
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
 import { startLoad, endLoad, loadsStanding, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
@@ -80,6 +106,7 @@ const fresh = () => ({
   publishedAt: null,   // when the law in force was published (ISO)
   abandoned: 0,        // refreshes let go at the deadline, this process
   unhear: null,        // the refresher's own listener, removed by a reset
+  seenPinned: null,    // the settlement whose law the store last said is the newest ingested
 });
 const state = fresh();
 const listeners = new Set();
@@ -116,7 +143,53 @@ export function lawForRelease() {
  */
 export function lawRefreshStanding() {
   return { checked_at: state.checkedAt, published_at: state.publishedAt, abandoned: state.abandoned,
-    in_flight: Boolean(state.inflight), deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding() };
+    in_flight: Boolean(state.inflight), deadline_ms: LAW_REFRESH_DEADLINE_MS, error: state.lastError, loads: loadsStanding(),
+    ...(lawBehind() ? { behind: lawBehind() } : {}) };
+}
+
+/**
+ * Null when this process acts on the newest law the store has ingested (as far
+ * as the store last said), else the sentence: the store's law moved and this
+ * process has not loaded it.
+ */
+export function lawBehind() {
+  return lawBehindOf(state.seenPinned);
+}
+
+/**
+ * The same sentence, for the settlement a pin named (`pinned`), against the law
+ * in force: behind only when the store's law is newer, by settlement.
+ */
+function lawBehindOf(pinned) {
+  const seen = pinned == null ? null : Number(pinned);
+  const have = state.snap?.pin?.settlement == null ? null : Number(state.snap.pin.settlement);
+  if (seen == null || (have != null && seen <= have)) return null;
+  return `the store's law is S${seen}'s, and this office has not loaded it yet (it acts on ${have == null ? "no law" : `S${have}'s`})`;
+}
+
+/** Why an act could not load a moved law: no slot (§ AN ACT IS TOLD, THEN SETTLES). */
+const LAW_AT_THE_CAP = `this office could not load the law in force: ${MAX_LOADS} store loads are already running (the cap)`;
+
+/**
+ * The law as the store has it NOW, for an act told the law's pin (`told`, the
+ * shared answer's row; null when the store could not be asked): stands, waits
+ * for a refresh in flight, or loads, and answers `{ snap, behind }`
+ * (§ AN ACT ASKS FIRST, § AN ACT IS TOLD, THEN SETTLES). Never throws.
+ */
+export async function freshLaw({ query, deadlineMs, told } = {}) {
+  if (told === null) return { snap: state.snap, behind: lawBehind() }; // the store could not be asked: G1, as before
+  const pinned = told?.pinned ?? null;
+  // N6: what the process knows moves only forward, by settlement; a late, older answer never moves it back
+  if (pinned != null && (state.seenPinned == null || Number(pinned) > Number(state.seenPinned))) state.seenPinned = pinned;
+  // behind if what this act was told, or what the process knows, is newer than the law in force
+  if (!(lawBehindOf(pinned) ?? lawBehind())) return { snap: state.snap, behind: null };
+  // a refresh in flight is stood on only if, once it lands, neither is
+  if (state.inflight) {
+    await state.inflight;
+    return { snap: state.snap, behind: lawBehindOf(pinned) ?? lawBehind() };
+  }
+  const own = await reloadLawSnapshot({ ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
+  return { snap: state.snap, behind: own.busy ? LAW_AT_THE_CAP : lawBehindOf(pinned) ?? lawBehind() };
 }
 
 /**
@@ -170,6 +243,7 @@ export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlin
       const ask = session ? session.query : query;
       const pin = (await ask(PIN_SQL)).rows[0] ?? {};
       const key = `${pin.newest ?? "-"}/${pin.pinned ?? "-"}`;
+      if (newest() || n > state.publishedBy) state.seenPinned = pin.pinned ?? null;
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: lawStanding() };

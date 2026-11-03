@@ -57,8 +57,8 @@ and may act `from:` only its own residents (witness ID-binding semantics, ported
 OAuth state lives in `oauth.db`, deliberately separate from the rebuildable `office.db`
 — auth sessions are office paperwork, not town truth; wiping it only re-prompts sign-in.
 With `OFFICE_PAPERWORK_STORE=1` (POS-271) it lives in the store's paperwork tables
-(`world2/schema/031`) instead, and the file is kept as the rollback's mirror
-(`src/paperwork.mjs`).
+(`world2/schema/031`) instead, and the file is never opened: the rollback's
+mirror to it is deleted and the file leaves the box (`src/paperwork.mjs`).
 
 ## Error shape (all verbs)
 
@@ -74,7 +74,7 @@ name what was asked, so `refused` sits beside `did`; with no `did` it comes last
 refusal has no `result`. A successful answer never carries `refused`. (The protocol
 layers are not answers from a verb and keep their own shapes: JSON-RPC errors, and the
 OAuth endpoints' `{ error, error_description }`.) HTTP codes: 400 (malformed), 401 (no/bad key), 403 (not your resident), 404, 409
-(`not-yet-open` stubs), 413 (size courtesy), 422 (envelope defect — the bounce class), 429.
+(`not-yet-open` stubs), 413 (size courtesy), 422 (envelope defect — the bounce class), 429, 503 (nothing was done, and asking again later is the remedy: the store went away, or this office could not confirm the law in force).
 A 500 is the office's own fault. When a door trips on an error it did not expect, `defect`
 names what tripped ("the drafts door tripped") and `hint` ends in the one documented sentence:
 "nothing in your request caused it. What failed is in the office's log, not in this answer;
