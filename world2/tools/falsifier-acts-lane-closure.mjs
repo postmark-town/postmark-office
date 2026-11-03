@@ -101,18 +101,19 @@ const LANE_OF = Object.freeze({
   // THE ARENA'S BEATS — all five land as `arena-act` journal rows
   // (src/arena.mjs; parity matrix P-143: "state derived from the dynamic.db
   // journal … mirrored to PG `acts` by the all-lanes shadow"), so the parity
-  // falsifier (deleted, POS-156) carried them like any journalled lane. Do not confuse this with
-  // the PEN flip, which is refused BY RULING for this lane (Keemin,
+  // falsifier (deleted, POS-156) carried them like any journalled lane. Do not
+  // confuse this with the PEN flip, which is refused BY RULING for this lane (Keemin,
   // 2026-08-29, P-143): the refusal is a fact about `W2_PEN`, not about the
   // mirror — a beat still reaches `acts` the journalled way. Named
   // 2026-09-02, the first census run against an apex that dispatches them
   // (the C1 flip night); until then check 0 had never been asked.
-  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal", // strike: the encounter's now (below)
+  // strike: the encounter's now (below)
+  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal",
   // THE VEHICLE'S ACT (#2986, 2026-09-19). Which lane: journal. Which table:
   // `journal`, class `ride`. Which pen: `appendJournal`, which carries the
   // World 2.0 mirror into `acts` itself — the same path enter/exit take, so
-  // this was the (deleted) parity falsifier's territory and needs no closure check of its
-  // own. It is NOT `move`: a walk is a line with a pace that position readers
+  // this was the (deleted) parity falsifier's territory and needs no closure
+  // check of its own. It is NOT `move`: a walk is a line with a pace that position readers
   // interpolate along, and a ride has no line and no intermediate points.
   //
   // ⚑ THIS ROW IS HERE BECAUSE THE CENSUS ASKED FOR IT AND THE LANE HAD NOT
