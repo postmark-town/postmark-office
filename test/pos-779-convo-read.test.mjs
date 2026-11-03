@@ -255,6 +255,11 @@ test("the epoch read repeats the index predicate, uses acts_voice_at_idx, filter
   assert.ok(leafScans(agg).some((n) => n["Index Name"] === "acts_voice_at_idx") && !leafScans(agg).some((n) => n["Node Type"] === "Seq Scan"), "the aggregate also reads through the index, with no sequential scan");
   assert.ok(walk(agg.Plan).some((n) => n["Node Type"] === "Limit"), "the aggregate is bounded by a LIMIT node: it cannot count a whole history behind a short answer");
   assert.ok(agg.Plan["Shared Hit Blocks"] + agg.Plan["Shared Read Blocks"] <= touched(before) + 20, "and costs about what the epoch costs");
+  // an epoch past its budget stops being read at the fuse: with a 6-row fuse over this 800-row epoch the scan produces 6 rows, not 800
+  const fused = await plan(SQL.saysAggregate(true), [params[0], params[1], 6]);
+  const lim = walk(fused.Plan).find((n) => n["Node Type"] === "Limit");
+  assert.equal(lim["Actual Rows"], 6, "the LIMIT is the fuse");
+  assert.ok(leafScans(fused).every((n) => (n["Actual Rows"] ?? 0) <= 7), `the scan underneath stopped early: ${leafScans(fused).map((n) => n["Actual Rows"])}`);
   // the control: the same range WITHOUT the predicate cannot use the partial index at all
   const control = await plan("SELECT id FROM acts WHERE action = 'say' AND at >= $1::timestamptz AND at < $2::timestamptz LIMIT $3", params);
   assert.ok(!leafScans(control).some((n) => n["Index Name"] === "acts_voice_at_idx"), "a query that does not repeat the predicate does not get the index");
