@@ -57,7 +57,7 @@ test("the step list is the script's: 29 steps, 5 fatal and 24 soft, no step twic
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
-  assert.equal(STEPS[16], "snapshot");
+  assert.equal(STEPS[17], "snapshot", "after the fourteen locked soft steps (the invite pass among them since POS-816)");
   assert.deepEqual(STEPS.slice(-3), ["hhkeys_log", "world", "publish"]);
 });
 

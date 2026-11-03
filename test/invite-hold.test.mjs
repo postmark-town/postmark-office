@@ -77,7 +77,7 @@ test("checked by account: a resident, the inviter itself, and a hand's housemate
     const b = bounceOf(r);
     assert.ok(b, `${who}: refused`);
     assert.equal(b.code, 404, `${who}: the same answer as an invitation that does not exist`);
-    assert.match(b.defect, /no post "invite\/keep"/, who);
+    assert.match(b.defect, /no post "invite:keep"/, who);
   }
   assert.equal(await holdRow(), null, "nothing written");
   // the control: Darko's own sign-in, his backup, may
