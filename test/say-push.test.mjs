@@ -854,6 +854,25 @@ test("POS-887 THE EAR WALKS: in the same room a stream is served from where its 
   assert.deepEqual(events.at(-1).voices.map((v) => v.said), ["two", "three"]);
 });
 
+test("POS-887 THE EAR WALKS, to another speaker: once a beat has found where its reader stands, the stream is served the voices around that place", async () => {
+  const farY = 2000 + EARSHOT_M + 200;
+  const b = roomBench({ ann: { x: 2000, y: 2000 }, dee: { x: 2000, y: farY }, cy: { x: 2001, y: 2000 } }, { ann: HALL, dee: HALL, cy: HALL });
+  const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
+  const events = [];
+  const s = await push.stream("cy", {}, (r) => events.push(r));
+  b.tick(20_000);
+  await b.store.say("dee", "from the far end of the hall");
+  await push.settled();
+  assert.equal(events.length, 1, "the admitting control: out of earshot of where cy stands, the far end of the hall is not heard");
+  b.at.cy = { x: 2000, y: farY - 3 };
+  assert.equal(await s.beat(), true);
+  b.tick(20_000);
+  await b.store.say("dee", "again, now that cy stands beside dee");
+  await push.settled();
+  assert.deepEqual(events.at(-1)?.voices.map((v) => v.said), ["from the far end of the hall", "again, now that cy stands beside dee"],
+    "the stream is served from where its reader stands, with what it missed on the way");
+});
+
 test("POS-887 TWO READERS: one reader leaving its room ends only its own stream, and each is served only the room it stands in", async () => {
   const b = roomBench({ ann: { x: 2000, y: 2000 }, cy: { x: 2001, y: 2000 }, bo: { x: 2002, y: 2000 }, dee: { x: 2003, y: 2000 } }, { ann: HALL, cy: HALL });
   const push = createSayPush({ voices: b.store, nearbyMany: b.nearbyMany });
