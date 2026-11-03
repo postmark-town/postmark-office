@@ -1007,6 +1007,91 @@ answer for a missing file.
   instead of `/etc/postmark-office.env` (it holds the switch and the line). An
   edited entry replaces its row.
 
+### The paperwork files leave the box (POS-271, the w46 ship)
+
+From the release that carries this, an office with `OFFICE_PAPERWORK_STORE=1`
+never opens `oauth.db` or `roles.db`. Sign-in, roles, the media ledger and the
+town log are the store's 031/032 tables only, and the rollback's mirror to the
+files is gone. **After this there is no rollback to the files.** An office
+whose switch is turned off would start on an empty `oauth.db` and sign the
+whole town out, so an unswitched writer whose `oauth.db` is missing refuses to
+boot (exit 78) while the store holds sign-ins, or when it cannot ask the store
+(`src/server.mjs`, the boot guard). The switch stays on.
+
+**The gate (before the merge).** Wright's go on POS-271 (2026-11-02), for the
+w46 ship Darko ruled on 2026-10-31: CI green on the head that merges,
+`paperwork-import --check` read on prod with any file-lag repair, and Darko's
+go, since auth and the box are on his before-merge list. The history behind
+the repair: prod's mirror logged `[paperwork] MIRROR FAILED` on 10-05
+(database is locked) and during the 10-09 disk-full outage. **Darko ruled
+(2026-10-09): repair, and keep the date.** The checks on 10-09 and 10-11 named
+only rows "in the store, not in the file": file lag, and the store is the
+record. Those receipts are history, not today's parity: read the check again
+before this merges. A row only the file holds, or one that differs in content,
+is not file lag: stop there, and nothing is deleted.
+
+`--repair` only INSERTS into the files the rows only the store holds. It never
+deletes or overwrites, it refuses (exit 2, nothing written) if a row differs in
+content or only the file holds it, and its output is counts only. `--check`'s
+output is not: it prints each finding's key, and a sign-in row's key is its
+token hash. Keep that output on the box and paste only its counts.
+
+From the staged tip of this change (it carries `--repair`; its node_modules
+has pg), as root, the tool running as meepo (the files are meepo's):
+
+```sh
+CHECK='node world2/tools/paperwork-import.mjs --pg-url "<world2_owner on world2_dev>" --oauth-db /srv/postmark-office/oauth.db --roles-db /srv/postmark-office/roles.db'
+# 1. What the files lack or hold differently (read-only):
+sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --check"
+#   equal, exit 0; or DRIFT ... (n findings), exit 1   <- "in the store, not in the file" is file lag: steps 2-4. Anything else: stop
+# 2. A copy of each file first, never cp of a live sqlite file:
+sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
+sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-repair.db`)'
+# 3. The repair: the rows only the store holds, inserted into the FILES (the store is only read;
+#    a row that differs, or one only the file holds, is a refusal, exit 2, nothing written: stop):
+sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --repair"
+#   repaired  oauth_tokens  2 row(s) inserted into the file from the store   (counts only, never a key)
+#   repaired; the files now equal the store, exit 0
+# 4. Check again; repeat 3 and 4 until it reads equal (a mirror write racing the
+#    repair is flagged by the next check, and the next repair takes it):
+sudo bash -c "cd <the staged tip> && exec runuser -u meepo -- $CHECK --check"
+#   checked; nothing written, exit 0   <- the gate. Only now: the merge, the release, the steps below
+```
+
+**The steps (prod, after the release is live).** Every step is on the box. Do
+these only on an office whose env sets the switch (dev's paperwork is on the
+file unless its env sets it too):
+
+```sh
+sudo grep -c '^OFFICE_PAPERWORK_STORE=1$' /etc/postmark-office.env       # 1, or stop: this office still reads the files
+curl -s https://postmark.town/api/release                                 # the release that carries POS-271
+# 1. A last copy of each file, out of every checkout (never cp a live sqlite file):
+sudo install -d -m 700 -o meepo /var/backups/postmark-paperwork
+sudo runuser -u meepo -- node -e 'const {DatabaseSync}=require("node:sqlite"); for (const n of ["oauth","roles"]) new DatabaseSync(`/srv/postmark-office/${n}.db`,{readOnly:true}).prepare("VACUUM INTO ?").run(`/var/backups/postmark-paperwork/${n}-pre-pos271.db`)'
+sudo chmod 600 /var/backups/postmark-paperwork/*.db
+# 2. The files, by name (nothing else in the directory):
+sudo ls -l /srv/postmark-office/oauth.db* /srv/postmark-office/roles.db*  # read what is there first
+sudo rm /srv/postmark-office/oauth.db /srv/postmark-office/roles.db
+# 3. The office is unchanged by the removal (it never opened them), and a
+#    signed-in connector keeps working; the files never come back:
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer <a test key, from a mode-600 header file>" https://postmark.town/api/me   # 200
+sudo ls /srv/postmark-office/oauth.db /srv/postmark-office/roles.db 2>&1 # "No such file", both, the next day too
+```
+
+The backup's § 1b then reports `roles_status: in-store` with the store's
+`office_role_audit` and `office_roles` counts, and the restore rehearsal
+compares both tables along with the rest of the dump. PROPOSED, not ruled: keep
+`/var/backups/postmark-paperwork/` for one week after the deletion, then remove
+the two files by name. They hold token hashes and the old role book, and
+nothing reads them.
+
+⚑ **`static-keys-retire` still writes the file** (§ Static keys leave the env
+file, "Retiring a static key"). It replays each retirement into `oauth.db` after the
+store commits it, and reads a missing file as a failure: once the files are
+gone, `--apply` retires the key in the store and then exits 4
+(`mirror_failed`), and `--mirror-only` cannot succeed. Until that step is
+ruled (POS-271), read the store's `retired` row rather than the exit code.
+
 ### The world write pool (tier 1, 2026-08-05)
 
 The draft-branch write lane — `world_leave_mark` (and its withdrawal), which
