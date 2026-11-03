@@ -976,6 +976,13 @@ export async function search(q, term, { limit, offset } = {}) {
 //            one seek each, so a run of a million letters to one resident is one
 //            step. Each is a hit when it is on the roll and the second person
 //            writes to it too (one probe each).
+//
+// Two shapes here are load-bearing, measured in test/town-discovery-plan.test.mjs.
+// The probe for more past a page's last row is a scalar `ORDER BY … LIMIT 1`,
+// never an EXISTS: Postgres drops an EXISTS's ORDER BY and LIMIT and may answer
+// it with a sequential scan, which at the end of the record reads the whole
+// table. And the roll check and the match sit behind `OFFSET 0`, so each runs
+// once a step; flattened, every mention of them ran its own probe.
 
 const foldSql = (expr) => `translate(${expr}, '${UPPER}', '${LOWER}')`;
 const WALK_KEY = `t.author COLLATE "C", t.source_kind COLLATE "C", t.source_id COLLATE "C", t.ordinal`;
@@ -1002,14 +1009,15 @@ const TEXT_WALK = `WITH RECURSIVE
          WHERE (${WALK_KEY}) > (w.nb_author, w.nb_kind, w.nb_source, w.nb_ordinal)
          ORDER BY ${WALK_KEY} LIMIT 1) n
       CROSS JOIN LATERAL (SELECT CASE WHEN w.step > 0 AND n.author = w.author THEN w.eligible
-        ELSE EXISTS (SELECT 1 FROM town_residents r WHERE r.handle = n.author) END AS eligible) e
+        ELSE EXISTS (SELECT 1 FROM town_residents r WHERE r.handle = n.author) END AS eligible OFFSET 0) e
       CROSS JOIN LATERAL (SELECT n.source_kind = ANY($2::text[]) AS selected) s
-      CROSS JOIN LATERAL (SELECT e.eligible AND s.selected AND strpos(${foldSql("n.piece")}, ${foldSql("$1::text")}) > 0 AS hit) h
+      CROSS JOIN LATERAL (SELECT e.eligible AND s.selected AND strpos(${foldSql("n.piece")}, ${foldSql("$1::text")}) > 0 AS hit OFFSET 0) h
      WHERE w.step < $7 AND w.hits < $8
   )
   SELECT g.epoch, g.revision, w.step, w.author, w.source_kind, w.source_id, w.ordinal, w.emitted, w.past,
          CASE WHEN w.emitted THEN w.piece END AS piece,
-         (SELECT EXISTS (SELECT 1 FROM town_discovery_chunks t WHERE (${WALK_KEY}) > (l.nb_author, l.nb_kind, l.nb_source, l.nb_ordinal))
+         (SELECT (SELECT 1 FROM town_discovery_chunks t WHERE (${WALK_KEY}) > (l.nb_author, l.nb_kind, l.nb_source, l.nb_ordinal)
+                   ORDER BY ${WALK_KEY} LIMIT 1) IS NOT NULL
             FROM (SELECT * FROM walk ORDER BY step DESC LIMIT 1) l) AS more
     FROM gen g LEFT JOIN walk w ON w.step > 0
    ORDER BY w.step`;
@@ -1028,11 +1036,12 @@ const COMMON_WALK = `WITH RECURSIVE
          WHERE e.sender COLLATE "C" = $1::text AND e.recipient COLLATE "C" > w.recipient
          ORDER BY e.sender COLLATE "C", e.recipient COLLATE "C" LIMIT 1) n
       CROSS JOIN LATERAL (SELECT EXISTS (SELECT 1 FROM town_residents r WHERE r.handle = n.recipient)
-        AND EXISTS (SELECT 1 FROM town_letter_edges b WHERE b.sender COLLATE "C" = $2::text AND b.recipient COLLATE "C" = n.recipient) AS common) c
+        AND EXISTS (SELECT 1 FROM town_letter_edges b WHERE b.sender COLLATE "C" = $2::text AND b.recipient COLLATE "C" = n.recipient) AS common OFFSET 0) c
      WHERE w.step < $4 AND w.hits < $5
   )
   SELECT g.epoch, g.revision, p.a, p.b, w.step, w.recipient, w.emitted,
-         (SELECT EXISTS (SELECT 1 FROM town_letter_edges e WHERE e.sender COLLATE "C" = $1::text AND e.recipient COLLATE "C" > l.recipient)
+         (SELECT (SELECT 1 FROM town_letter_edges e WHERE e.sender COLLATE "C" = $1::text AND e.recipient COLLATE "C" > l.recipient
+                   ORDER BY e.sender COLLATE "C", e.recipient COLLATE "C" LIMIT 1) IS NOT NULL
             FROM (SELECT recipient FROM walk ORDER BY step DESC LIMIT 1) l) AS more
     FROM gen g CROSS JOIN people p LEFT JOIN walk w ON w.step > 0
    ORDER BY w.step`;
