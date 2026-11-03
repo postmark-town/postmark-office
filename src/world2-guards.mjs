@@ -9,22 +9,26 @@
 //
 // This module is the wire. It is the ONLY thing in `src/` that imports the port,
 // so the port keeps its own law — "pure over rows and a pg client, nothing from
-// `src/` is imported" — and the office keeps one place where the flag is read,
-// one place where the household spelling is resolved, and one place where an
-// unreachable guard turns into a refusal.
+// `src/` is imported" — and the office keeps one place where the household
+// spelling is resolved, and one place where an unreachable guard turns into a
+// refusal. (As born it also kept one place where the flag was read; see the
+// next section.)
 //
-// ── THE FLAG IS READ, NOT MERELY SET (the flip's own discipline) ─────────────
+// ── THE FLAG WAS READ, NOT MERELY SET (the flip's own discipline) ────────────
 //
-// The runbook's §1 sentence about the C-series governs this lane too: "A flag is
-// necessary and not sufficient … Every C-step is *wire the call site, then set
-// the flag* — two things, and the receipt must prove both." So `W2_GUARDS=1` is
-// read at each guard, through `guardsFlipped()`, and the receipt for this lane
-// is the same shape as `penFor`'s: a probe that shows the door taking the other
-// branch under the flag. A flag nothing reads is a state with no receipt.
+// B1 shipped behind `W2_GUARDS=1`, on the runbook's §1 sentence about the
+// C-series: "A flag is necessary and not sufficient … Every C-step is *wire the
+// call site, then set the flag* — two things, and the receipt must prove both." Each
+// guard was read through `guardsFlipped()`, and the receipt for this lane was
+// the same shape as `penFor`'s: a probe that showed the door taking the other
+// branch under the flag. G1 (below) and POS-269 retired every one of those
+// branches: the guarded reads in this file run unconditionally, whether or not
+// `W2_GUARDS` is set, and `guardsFlipped()` now gates one thing,
+// `hold-edge.mjs § holdEdgeOnActs`.
 //
-// It rides `world2Enabled` the way `laneFlipped` does, and for the same reason:
-// reading guards out of Postgres with no `WORLD2_PG_URL` is not a configuration,
-// it is a crash waiting for the first duplicate slug.
+// `guardsFlipped()` rides `world2Enabled` the way `laneFlipped` does, and for
+// the same reason: reading guards out of Postgres with no `WORLD2_PG_URL` is not
+// a configuration, it is a crash waiting for the first duplicate slug.
 //
 // ── AN UNREACHABLE GUARD REFUSES. IT NEVER PERMITS. ─────────────────────────
 //
@@ -151,7 +155,9 @@ export class GuardsUnreachableError extends Error {
 }
 
 /**
- * Is the read half flipped? `W2_GUARDS=1`, read here and nowhere else.
+ * Is the read half flipped? `W2_GUARDS=1`. Since POS-269 the guarded reads in
+ * this file no longer ask; the one caller is `hold-edge.mjs § holdEdgeOnActs`
+ * (dynamic-store.mjs reads the variable itself for its own roll-call).
  *
  * Exactly `"1"` — not truthiness. `W2_GUARDS=0` reading as ON is the class of
  * bug that makes a flag unreadable from the outside, and the roll-call's whole
@@ -264,7 +270,7 @@ async function scoped(name, fn) {
 // round trip per declaration, not one per predicate.
 
 /**
- * 1.0's `liveMarks(db, {household})`, answered from `claims` under the flag.
+ * 1.0's `liveMarks(db, {household})`, answered from `claims`.
  *
  * `strict: true` is the port's default and is kept: a claim this cannot read as
  * a mark THROWS rather than being skipped, and the throw becomes the refusal
@@ -284,7 +290,7 @@ export async function guardedLiveMarks(db, { household = undefined, actor = unde
  *
  * The port filters in JS rather than pushing `data->>'parent_id' = $n` into SQL,
  * "deliberately: the predicate must be the SAME predicate". Nothing here widens
- * that; this is the flag branch and the household resolution, and no more.
+ * that; this is the read and the household resolution, and no more.
  */
 export async function guardedLiveChildrenOf(db, id, { household = undefined, actor = undefined } = {}) {
   return refusing("live-children", async () =>
@@ -299,8 +305,8 @@ export async function guardedLiveChildrenOf(db, id, { household = undefined, act
 // ═════════════════════════════════════════════════════════════════════════════
 //
 // THE SKETCHBOOK HALF IS NOT REPLACED, and that is the whole shape of this one.
-// 1.0's `draftsForKey` is `gitDelta ∪ replayDrafts(journal)`; the flag swaps the
-// SECOND half only. `DISCLOSURES.sketchbook` says why the first cannot be
+// 1.0's `draftsForKey` is `gitDelta ∪ replayDrafts(journal)`; the record
+// replaces the SECOND half only. `DISCLOSURES.sketchbook` says why the first cannot be
 // swapped: `draft/<household>` "still holds every draft written before the
 // single-log flag … A resident with pre-flag sketches sees them in 1.0's answer
 // and not in this one." Dropping it would make a resident's existing work vanish
@@ -315,12 +321,12 @@ export async function guardedLiveChildrenOf(db, id, { household = undefined, act
 
 /**
  * 1.0's `draftsForKey(repo, key)`, with the journal half answered from `claims`
- * plus the withdraw acts under the flag.
+ * plus the withdraw acts.
  *
  * The `log` block keeps meaning what it meant — "what the journal contributes is
  * disclosed in its own `log` block rather than smuggled into a field that
  * already means a commit" — and gains `source`, so a reader can tell which store
- * answered without reading the flag.
+ * answered without having to know how the office is configured.
  */
 export async function guardedDraftsForKey(repo, key) {
   const journal = await import("./world-journal.mjs");
