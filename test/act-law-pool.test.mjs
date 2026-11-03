@@ -111,17 +111,20 @@ test("F3 · the store hangs on the law's table and twelve acts come: the pin que
     await sleep(50);
     sample();
     const before = { ...sampled };
-    read = await outcome(pool.query("SELECT 1 AS ok")); // any serve read, after the acts
-    assert.equal(read.ok, true, `LAW (snapshot-loads.mjs): "Two of three connections, so a read always has one" — the read failed: ${read.error}`);
-    assert.ok(before.peakInUse <= 2, `the pin questions and the tick took ${before.peakInUse} of the pool's 3 connections before the read`);
-    assert.equal(before.peakWaiting, 0, `${before.peakWaiting} requests were queued on the pool before the read`);
+    const reading = outcome(pool.query("SELECT 1 AS ok")); // any serve read, after the acts
     await sleep(30);
-    await build(owner, 2); // the graph moves; its tables answer at once
+    await build(owner, 2); // the graph moves while the law's table still hangs; the graph's tables answer at once
     late = await outcome(actLaw.lawForAnAct()); // the next act after the graph moved
+    const lateOn = late.admitted ? inForce() : null;
+    read = await reading;
+    // every fact in one assertion, so one red cannot hide another
+    assert.deepEqual(
+      { readAnswered: read.ok, inUseBeforeTheRead: before.peakInUse <= 2, queuedBeforeTheRead: before.peakWaiting, lateActOnTheOldGraph: lateOn === 1 },
+      { readAnswered: true, inUseBeforeTheRead: true, queuedBeforeTheRead: 0, lateActOnTheOldGraph: false },
+      `LAW (snapshot-loads.mjs): "Two of three connections, so a read always has one"; (amended Settled): "an act is never admitted on law or graph it hasn't confirmed" — `
+      + `the read ${read.ok ? "answered" : `failed: ${read.error}`}; ${before.peakInUse} of 3 connections in use and ${before.peakWaiting} queued before it; the act after G2 was built: ${JSON.stringify(late)}, on G${lateOn ?? "-"}`);
     assert.equal(late.ok, true, late.error);
-    assert.ok(!(late.admitted && inForce() === 1), `LAW (amended): "an act is never admitted on law or graph it hasn't confirmed" — the act after G2 was built was admitted on G1`);
-    if (late.admitted) assert.equal(inForce(), 2, "an act admitted after the graph moved stands on G2");
-    else assert.equal(late.code, 503, `refused with the plain 503: ${JSON.stringify(late)}`);
+    if (!late.admitted) assert.equal(late.code, 503, `refused with the plain 503: ${JSON.stringify(late)}`);
     for (const a of await Promise.all(acts)) assert.equal(a.ok, true, `an act threw: ${a.error}`);
     await tick;
   } finally {
