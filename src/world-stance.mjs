@@ -1548,7 +1548,8 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
           : "your ground opposes it — the crossing reads your veto when it judges",
     };
     // ── LANE ONE OF THE PEN FLIP (W2_PEN=stance; Keemin ruled the shape
-    // 2026-08-29 — D1 per lane, D2 refuse, D3 reverse mirror). The design's
+    // 2026-08-29 — D1 per lane, D2 refuse, D3 reverse mirror (D3 went with
+    // G1 / POS-156)). The design's
     // own pick for first: "the one door that has never had a second pen to
     // disagree with." The record is Postgres `acts`, committed and awaited
     // BEFORE anything else, and unreachable Postgres is the ruled refusal with

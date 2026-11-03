@@ -361,8 +361,8 @@ export function judgeForce(v) {
 /**
  * Judge an advance against the post's current state. Returns the payload's
  * judged parts: `{ to, credit, size?, critter?, grade?, of?, link?, earned? }`
- * (`earned`: what an earned stage's link names, for bug-credit.mjs). `reporter` is the post's
- * author, the credit a `confirmed` defaults to.
+ * (`earned`: what an earned stage's link names, for bug-credit.mjs). The credit
+ * a `confirmed` defaults to is `prev.author`, the reporter.
  */
 export function judgeAdvance(fields, prev, roll) {
   const to = typeof fields?.to === "string" ? fields.to.trim() : "";

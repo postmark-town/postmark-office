@@ -475,7 +475,8 @@ export async function roster(q) {
 }
 // THE ROLL'S HANDLES, HELD FOR THE SYNC READERS. The position doors
 // (server.mjs § townRoll) and the MCP roll (mcp.mjs § rollOf) ask for the roll
-// synchronously, on every call. With the switch on they read this: the store's
+// synchronously, on every call. They read this (every door reads the store; no
+// TOWN_INDEX_READS switch is left): the store's
 // roll as the office last loaded it, refreshed by the office's own reload poll
 // (refreshStoreRoll) and at boot. Null until the first load, and null is what
 // those readers already disclose as "the roll could not be read", never an
@@ -1021,11 +1022,11 @@ export async function readTownIndex(fn, { env = process.env, statementTimeoutMs 
 let _indexPoolForTest = null;
 export function __setTownIndexPoolForTest(pool) { _indexPoolForTest = pool; }
 
-/** The refusal a switched door gives when the store cannot answer. Fixed words, never the driver's message. */
+/** The refusal a door gives when the store cannot answer. Fixed words, never the driver's message. */
 export const UNREACHABLE = Object.freeze({ error: "bounce", defect: UNREACHABLE_DEFECT, hint: UNREACHABLE_HINT });
 
 /**
- * A switched door's answer: `{ out, asOf }` from the store, or `{ refused }`
+ * A door's answer: `{ out, asOf }` from the store, or `{ refused }`
  * (UNREACHABLE) when it cannot be read. Doors turn the refusal into their 503.
  */
 export async function storeAnswer(fn, { env = process.env, then = null, statementTimeoutMs = null } = {}) {

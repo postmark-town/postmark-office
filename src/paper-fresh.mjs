@@ -61,9 +61,10 @@
 //
 // The VALUE always comes from the checkout, parsed by the same readers the
 // town index's ingest uses (vendor/tools/lib/town.mjs's `parseFrontmatter`,
-// profiles.mjs, panes.mjs; town-index.mjs). It is never re-derived from a journal row's arguments. That is
-// town-updates.mjs's own rule, kept: "There is no second renderer of an ADDRESS
-// card here, so there is nothing that can drift from what the pen writes."
+// profiles.mjs, panes.mjs; town-index.mjs). It is never re-derived from a
+// journal row's arguments. That is town-updates.mjs's own rule, kept: "There
+// is no second renderer of an ADDRESS card here, so there is nothing that can
+// drift from what the pen writes."
 //
 // The journal supplies the TENSE, not the text. Today a pending row and a
 // written file always coincide, because the door writes both in one call — so

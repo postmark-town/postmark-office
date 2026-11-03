@@ -15,8 +15,8 @@
 // settled (only at a crossing's settlement) or weekly (with a release).
 // Explain never returns data, and read never returns docs.
 //
-// ONE TABLE, THREE DOORS. world-apex.mjs, household-apex.mjs and
-// town-apex.mjs each answer `explain:` from EXPLAIN below and from nothing
+// ONE TABLE, FOUR DOORS. world-apex.mjs, household-apex.mjs, doorstep-apex.mjs
+// and town-apex.mjs each answer `explain:` from EXPLAIN below and from nothing
 // else, so the docs live in one place. Like one-contract.mjs, this imports no
 // door: the doors import it.
 //

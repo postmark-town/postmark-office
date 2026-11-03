@@ -171,6 +171,12 @@ export function parcelRoomNoteOf({ kind, amending = false, held, fact, engine, b
 //      100, whatever is held; simpler, never cheaper by withdrawing a parcel
 //      first"
 //
+//   /g "Room past residents" (a house buying room for a parcel no resident can
+//      hold yet): "Refuse it" (10-23), then "Warn and allow" (10-27), then
+//      "let's just let 757 through and then hotfix to warn and allow during the
+//      week" (10-31 22:31 EDT; POS-849). The quote carries a `heads_up` and the
+//      burn goes through (roomPastResidentsHeadsUp).
+//
 // The act is `household { do: "buy-parcel-room", args: { from } }`. It writes
 // one line, the town's own, by the town's own builder and signer
 // (parcel-room-exec.mjs): `<from> → BURN · <price> · for: parcel:<nth>/hh:<slug>`.
@@ -190,6 +196,24 @@ export function townKeyAt(engine, clone, entries, handle, date) {
 
 const refuse = (code, defect, hint) => ({ error: { code, defect, hint } });
 const ordinal = (n) => ({ 2: "second", 3: "third" })[n] ?? `${n}th`;
+
+/**
+ * THE HEADS-UP FOR ROOM NO RESIDENT CAN HOLD YET (POS-849; Darko 2026-10-27
+ * "Warn and allow", 2026-10-31 22:31 EDT "hotfix to warn and allow during the
+ * week"). A parcel is one per resident, so a house with fewer residents than
+ * the parcel it buys room for can hold no parcel in that room until more join.
+ * The purchase is allowed and the answer says so, with what the room waits
+ * for. PURE. → the sentence, or null when a resident can
+ * hold the room (or the counts are not a house's).
+ */
+export function roomPastResidentsHeadsUp({ slug, residents, nth }) {
+  if (!Number.isInteger(residents) || !Number.isInteger(nth) || residents < 1 || nth <= residents) return null;
+  const past = nth - residents;
+  const until = past === 1 ? `a ${ordinal(nth)} resident joins` : `${past} more residents join`;
+  return `${slug} has ${residents} resident${residents === 1 ? "" : "s"}, and a parcel is one per resident, so it can hold ${residents} parcel${residents === 1 ? "" : "s"} now. `
+    + `Room for a ${ordinal(nth)} parcel stands empty until ${until} (household { do: "add-resident" }). `
+    + "Stamps paid for room are never returned.";
+}
 
 /**
  * THE QUOTE: what buying one more parcel of room would cost `handle`'s
@@ -221,13 +245,15 @@ export function parcelRoomQuote({ handle, date, registry, entries, engine, townK
   const bought = houseFactsOf({ registry, burns: parcelBurnsOf(entries.map((e) => e.canonical), engine.classifyEntry) })[house]?.bought ?? 0;
   const room = 1 + bought;
   if (room >= 3) return refuse(409, `${slug} already has room for three parcels`, "three is the cap, one per resident; there is no more room to buy");
-  // NO ROOM PAST THE RESIDENTS (Darko 2026-10-23 11:04 EDT, POS-762/g "Refuse it"):
-  // a parcel is one per resident, so room no resident can hold is refused,
-  // never sold; the house adds the resident first, then buys the room.
-  const residents = (houses[slug].residents ?? []).length;
-  if (room + 1 > residents)
-    return refuse(409, `${slug} has ${residents} resident${residents === 1 ? "" : "s"}, and room for a ${ordinal(room + 1)} parcel needs a ${ordinal(room + 1)} resident to hold it`,
-      `a parcel is one per resident: add the resident first (household { do: "add-resident" }), then buy the room. Nothing was burned`);
+  // ROOM PAST THE RESIDENTS WARNS AND IS ALLOWED (POS-762/g; POS-849). Before
+  // POS-849 this refused the purchase ("Refuse it", Darko 2026-10-23 11:03
+  // EDT, shipped in w45 by office #757). He then ruled "Warn and allow"
+  // (2026-10-27 11:00 EDT) and, with #757 let through, "hotfix to warn and
+  // allow during the week" (2026-10-31 22:31 EDT). So the room is sold, the
+  // answer carries a heads_up (roomPastResidentsHeadsUp), and the house's next
+  // resident is what makes the room hold a parcel. The world's law is untouched:
+  // its room never counted residents, and the town's verifier checks none.
+  const headsUp = roomPastResidentsHeadsUp({ slug, residents: (houses[slug].residents ?? []).length, nth: room + 1 });
   const price = price1 * room;
   const liquid = engine.foldBalances(entries).get(handle) ?? 0;
   if (liquid < price)
@@ -241,6 +267,7 @@ export function parcelRoomQuote({ handle, date, registry, entries, engine, townK
       price_says: `${price1} stamps × the room ${slug} already has (${room}), whatever it holds; paid to the town, burned and never returned; a claim then costs nothing`,
       stamps: { liquid_now: liquid, liquid_after: liquid - price },
       line: engine.parcelBurnLine({ date, handle, n: price, nth: room + 1, household: house }),
+      ...(headsUp ? { heads_up: headsUp } : {}),
     },
   };
 }
@@ -268,8 +295,13 @@ export function parcelRoomBought({ registry, entries, engine, household, nth }) 
   const b = parcelBurnsOf((entries ?? []).map((e) => e.canonical), engine?.classifyEntry)
     .find((x) => x.nth === nth && canon(x.household) === house);
   if (!b) return null;
+  // The click that answers the receipt may be the only answer the agent reads,
+  // so the heads-up the purchase carried rides it too (POS-849), counted on the
+  // residents the house has now.
+  const headsUp = roomPastResidentsHeadsUp({ slug: household, residents: (registry?.households?.[household]?.residents ?? []).length, nth });
   return { handle: b.handle, household, date: b.date, room: { now: nth - 1, after: nth }, price: b.n,
-    ...(typeof engine?.parcelBurnLine === "function" ? { line: engine.parcelBurnLine({ date: b.date, handle: b.handle, n: b.n, nth, household: b.household }) } : {}) };
+    ...(typeof engine?.parcelBurnLine === "function" ? { line: engine.parcelBurnLine({ date: b.date, handle: b.handle, n: b.n, nth, household: b.household }) } : {}),
+    ...(headsUp ? { heads_up: headsUp } : {}) };
 }
 
 /**
