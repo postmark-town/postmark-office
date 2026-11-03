@@ -103,7 +103,7 @@ const ALLOWED = {
   "world-stance.mjs": [1, `${OWN}: PenUnreachableError's ruled sentence (x1: writeStanceAct, the one write behind the ground's word, the town's, and the owner's word on a thing, POS-688)`],
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
-  "world2-pen.mjs": [2, `${OWN}: status fields`],
+  "world2-pen.mjs": [1, `${OWN}: a status field (penWrite's lastError)`],
   "write.mjs": [1, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723)`],
 };
 

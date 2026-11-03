@@ -66,8 +66,9 @@ async function withStore(file, fn) {
 //
 // The three readers below read `acts` now, not the sqlite journal, so a probe
 // that writes a journal row and asks for it back is asking the wrong store.
-// `useGuardReader` is the seam world2-guards.mjs already exposes for exactly
-// this ("test/world2-guard-doors.test.mjs hands in a hand-built client"), and
+// `useGuardReader` is the seam world2-guards.mjs § useGuardReader already
+// exposes for exactly this (test/hold-edge-on-acts.test.mjs hands in a
+// hand-built client the same way), and
 // it stands in for `officeRead` — so nothing here dials Postgres, and the road
 // under test is the real one from `storeHoldingRows` down to the port's SQL.
 
