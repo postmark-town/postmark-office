@@ -753,16 +753,18 @@ test("22 · a hung session gives up at its deadline: a statement the store ends 
   const hold = holdable();
   L.s.pinHold = hold.p;
   L.bless(2, 7); // the store moved: an act admitted now would stand on S1
-  await held(async () => {
-    const a = opener.ask(); // opens the session, whose deadline (30 ms) is its opener's
-    await settle();
-    const c = waiter.ask(); // joins it; its own deadline is long
-    assert.equal((await a)?.code, 503, "the opener gave up at its deadline");
-    hold.shut(); // the store ends the held statement with an error, as statement_timeout does
-    const rc = await c;
-    assert.equal(rc?.code, 503, `LAW (amended): "an act is never admitted on law ... it hasn't confirmed" — the waiter read the cancelled statement as "the store could not be asked" and got ${JSON.stringify(rc)}`);
-    assert.match(rc.behind, NOT_IN_TIME);
-  });
+  try {
+    await held(async () => {
+      const a = opener.ask(); // opens the session, whose deadline (30 ms) is its opener's
+      await settle();
+      const c = waiter.ask(); // joins it; its own deadline is long
+      assert.equal((await a)?.code, 503, "the opener gave up at its deadline");
+      hold.shut(); // the store ends the held statement with an error, as statement_timeout does
+      const rc = await c;
+      assert.equal(rc?.code, 503, `LAW (amended): "an act is never admitted on law ... it hasn't confirmed" — the waiter read the cancelled statement as "the store could not be asked" and got ${JSON.stringify(rc)}`);
+      assert.match(rc.behind, NOT_IN_TIME);
+    });
+  } finally { hold.shut(); } // a held session never outlives its case
   for (let i = 0; i < 5; i++) await settle();
   assert.equal(loadsStanding().running, 0);
 });
@@ -773,17 +775,20 @@ test("23 · N6, the law: a late, older pin answer never moves what the process k
     const { L, ask } = await standing();
     const hold = holdable();
     L.s.pinHold = hold.p;
-    const x = ask(); // X's shared question reads S1, held
-    for (let i = 0; i < 3; i++) await settle();
-    L.bless(2, 7); L.s.failLaw = true;
-    await law.reloadLawSnapshot({ query: L.query }); // the tick hears S2 and cannot load it
-    assert.match(law.lawBehind() ?? "", /S2's/);
-    hold.open(); // X's late answer, S1, lands
-    const rx = await x;
-    assert.equal(rx?.code, 503, `LAW (N6): "a late answer can't move it back" — X, told S1 late, was admitted on S1: ${JSON.stringify(rx)}`);
-    assert.match(law.lawRefreshStanding().behind ?? "", /S2's/, "and /release still says the law is behind");
-    L.s.failPin = true; // the store cannot be asked now: G1 stands on what the process knows
-    assert.equal((await ask())?.code, 503, "a later act, whose store could not be asked, was admitted on S1");
+    try {
+      const x = ask(); // X's shared question reads S1, held
+      for (let i = 0; i < 3; i++) await settle();
+      L.bless(2, 7); L.s.failLaw = true;
+      await law.reloadLawSnapshot({ query: L.query }); // the tick hears S2 and cannot load it
+      assert.match(law.lawBehind() ?? "", /S2's/);
+      hold.open(); // X's late answer, S1, lands
+      const rx = await x;
+      assert.equal(rx?.code, 503, `LAW (N6): "a late answer can't move it back" — X, told S1 late, was admitted on S1: ${JSON.stringify(rx)}`);
+      assert.match(law.lawRefreshStanding().behind ?? "", /S2's/, "and /release still says the law is behind");
+      L.s.failPin = true; // the store cannot be asked now: G1 stands on what the process knows
+      assert.equal((await ask())?.code, 503, "a later act, whose store could not be asked, was admitted on S1");
+    } finally { hold.open(); }
+    for (let i = 0; i < 5; i++) await settle();
     law.resetLawSnapshot(); graph.resetWorldGraph();
   }
   // fail-closed (R6): X's S1 lands after the tick has loaded S2: X stands on S2, with no false "behind"
@@ -791,14 +796,16 @@ test("23 · N6, the law: a late, older pin answer never moves what the process k
     const { L, ask } = await standing();
     const hold = holdable();
     L.s.pinHold = hold.p;
-    const x = ask();
-    for (let i = 0; i < 3; i++) await settle();
-    L.bless(2, 7);
-    await law.reloadLawSnapshot({ query: L.query }); // the tick loads S2
-    hold.open();
-    assert.equal(await x, null, "X, told S1 late, was refused though S2, newer, is in force");
-    assert.equal(law.lawSnapshot().pin.settlement, 2);
-    assert.equal(law.lawRefreshStanding().behind, undefined, "/release says behind after a late, older answer");
+    try {
+      const x = ask();
+      for (let i = 0; i < 3; i++) await settle();
+      L.bless(2, 7);
+      await law.reloadLawSnapshot({ query: L.query }); // the tick loads S2
+      hold.open();
+      assert.equal(await x, null, "X, told S1 late, was refused though S2, newer, is in force");
+      assert.equal(law.lawSnapshot().pin.settlement, 2);
+      assert.equal(law.lawRefreshStanding().behind, undefined, "/release says behind after a late, older answer");
+    } finally { hold.open(); }
   }
 });
 
@@ -807,29 +814,34 @@ test("24 · N6, the graph: a late, older pin answer never moves what the process
     const { G, ask } = await standing();
     const hold = holdable();
     G.s.pinHold = hold.p;
-    const x = ask(); // X's shared question: the law's pin, then the graph's, which reads G1 and is held
+    try {
+      const x = ask(); // X's shared question: the law's pin, then the graph's, which reads G1 and is held
+      for (let i = 0; i < 5; i++) await settle();
+      G.build(2); G.s.failTables = true;
+      await graph.reloadWorldGraph({ query: G.query }); // the tick hears G2 and cannot load it
+      assert.match(graph.worldGraphBehind() ?? "", /world graph/);
+      hold.open();
+      const rx = await x;
+      assert.equal(rx?.code, 503, `LAW (N6): "a late answer can't move it back" — X, told G1 late, was admitted on G1: ${JSON.stringify(rx)}`);
+      assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/, "and /release still says the graph is behind");
+    } finally { hold.open(); }
     for (let i = 0; i < 5; i++) await settle();
-    G.build(2); G.s.failTables = true;
-    await graph.reloadWorldGraph({ query: G.query }); // the tick hears G2 and cannot load it
-    assert.match(graph.worldGraphBehind() ?? "", /world graph/);
-    hold.open();
-    const rx = await x;
-    assert.equal(rx?.code, 503, `LAW (N6): "a late answer can't move it back" — X, told G1 late, was admitted on G1: ${JSON.stringify(rx)}`);
-    assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/, "and /release still says the graph is behind");
     law.resetLawSnapshot(); graph.resetWorldGraph();
   }
   {
     const { G, ask } = await standing();
     const hold = holdable();
     G.s.pinHold = hold.p;
-    const x = ask();
-    for (let i = 0; i < 5; i++) await settle();
-    G.build(2);
-    await graph.reloadWorldGraph({ query: G.query }); // the tick loads G2
-    hold.open();
-    assert.equal(await x, null, "X, told G1 late, was refused though G2, newer, is in force");
-    assert.equal(graphBuild(), "G2");
-    assert.equal(graph.worldGraphRefreshStanding().behind, undefined, "/release says behind after a late, older answer");
+    try {
+      const x = ask();
+      for (let i = 0; i < 5; i++) await settle();
+      G.build(2);
+      await graph.reloadWorldGraph({ query: G.query }); // the tick loads G2
+      hold.open();
+      assert.equal(await x, null, "X, told G1 late, was refused though G2, newer, is in force");
+      assert.equal(graphBuild(), "G2");
+      assert.equal(graph.worldGraphRefreshStanding().behind, undefined, "/release says behind after a late, older answer");
+    } finally { hold.open(); }
   }
 });
 
@@ -840,13 +852,15 @@ test("25 · N7, the law: an act told S2 waits for a refresh in flight that is lo
   L.bless(2, 7);
   const laws = L.s.lawAsks;
   const tick = law.reloadLawSnapshot({ query: L.query }); // told S2; loading S2's rows, held
-  await until(() => L.s.lawAsks === laws + 1, "the tick began loading S2");
-  const a = ask(); // the shared question tells it S2, the law the tick is loading
-  for (let i = 0; i < 5; i++) await settle();
-  release();
-  assert.equal(await a, null, `LAW: "An act reuses a refresh in flight only if what that refresh put in force matches the shared answer's pin" — it matched, and the act was refused`);
-  assert.equal(L.s.lawAsks, laws + 1, "the act loaded nothing itself: it stood on the tick's load");
-  assert.equal(law.lawSnapshot().pin.settlement, 2);
+  try {
+    await until(() => L.s.lawAsks === laws + 1, "the tick began loading S2");
+    const a = ask(); // the shared question tells it S2, the law the tick is loading
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    assert.equal(await a, null, `LAW: "An act reuses a refresh in flight only if what that refresh put in force matches the shared answer's pin" — it matched, and the act was refused`);
+    assert.equal(L.s.lawAsks, laws + 1, "the act loaded nothing itself: it stood on the tick's load");
+    assert.equal(law.lawSnapshot().pin.settlement, 2);
+  } finally { release(); }
   await tick;
 });
 
@@ -857,12 +871,14 @@ test("26 · N7, the graph: an act told G2 waits for a refresh in flight that is 
   G.build(2);
   const tables = G.s.tableAsks;
   const tick = graph.reloadWorldGraph({ query: G.query }); // told G2; loading G2's tables, held
-  await until(() => G.s.tableAsks === tables + 1, "the tick began loading G2");
-  const a = ask();
-  for (let i = 0; i < 5; i++) await settle();
-  release();
-  assert.equal(await a, null, `LAW: "An act reuses a refresh in flight only if what that refresh put in force matches the shared answer's pin" — it matched, and the act was refused`);
-  assert.equal(graphBuild(), "G2");
+  try {
+    await until(() => G.s.tableAsks === tables + 1, "the tick began loading G2");
+    const a = ask();
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    assert.equal(await a, null, `LAW: "An act reuses a refresh in flight only if what that refresh put in force matches the shared answer's pin" — it matched, and the act was refused`);
+    assert.equal(graphBuild(), "G2");
+  } finally { release(); }
   await tick;
   assert.equal(G.s.tableAsks, tables + 6, "the act loaded nothing itself: only the tick's six table reads");
 });
