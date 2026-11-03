@@ -90,7 +90,8 @@ export const STEPS = [
   { kind: "refusal", title: "Advance to fixed without a critter", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn", size: "M" } } },
   { kind: "step", title: "Advance: fixed (M), the critter its fixer named", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "fixed", credit: "finn", size: "M", critter: "Hinge Nibbler", link: "https://github.com/postmark-town/postmark-office/pull/258" } }, note: "finn fixed it and chose the name, and told the hands in the PR; the post keeps it as fields.critter, with fields.named_by = finn." },
   { kind: "refusal", title: "Close a bug", who: WRIGHT, env: { do: "close", args: { post: ID } } },
-  { kind: "step", title: "Advance: shipped", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "shipped" } } },
+  { kind: "refusal", title: "Ship without the tag that holds the fix", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "shipped" } }, note: "The stage guard: shipped waits for a release tag, commit or settlement tag that holds the fix's merge, and the bounce says so." },
+  { kind: "step", title: "Advance: shipped, pointing at the tag", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "shipped", link: "https://github.com/postmark-town/postmark-office/releases/tag/release/2026-w45" } } },
   { kind: "refusal", title: "Advance a finished bug", who: WRIGHT, env: { do: "advance", args: { post: ID, to: "shipped" } } },
   { kind: "refusal", title: "A hand jumps a bug: reported → diagnosed", who: WRIGHT, env: { do: "advance", args: { post: "ada/the-map-drifts", to: "diagnosed", credit: "finn", link: "https://github.com/postmark-town/postmark-office/issues/257#issuecomment-3" } }, note: "POS-713: an advance moves one rung. A stage no one earned is skipped on the record, never jumped." },
   { kind: "refusal", title: "Skip without a reason", who: WRIGHT, env: { do: "advance", args: { post: "ada/the-map-drifts", skip: "confirmed" } } },
@@ -176,7 +177,10 @@ const GITHUB_WORK = {
   "/repos/postmark-town/postmark-office/issues/comments/1": { id: 1, issue_url: onIssue(256), user: FINN_GH },
   "/repos/postmark-town/postmark-office/issues/comments/2": { id: 2, issue_url: onIssue(256), user: FINN_GH },
   "/repos/postmark-town/postmark-office/issues/comments/3": { id: 3, issue_url: onIssue(257), user: FINN_GH },
-  "/repos/postmark-town/postmark-office/pulls/258": { number: 258, user: FINN_GH },
+  "/repos/postmark-town/postmark-office/pulls/258": { number: 258, user: FINN_GH, state: "closed", merged: true, merge_commit_sha: "a".repeat(40) },
+  // the stage guard: the tag exists and holds the merge
+  "/repos/postmark-town/postmark-office/git/ref/tags/release/2026-w45": { ref: "refs/tags/release/2026-w45" },
+  [`/repos/postmark-town/postmark-office/compare/${"a".repeat(40)}...refs/tags/release/2026-w45?per_page=1`]: { status: "ahead" },
   "/repos/postmark-town/postmark-office/pulls/259": { number: 259, user: { login: "wright-starforge", id: 306351151 } },
 };
 

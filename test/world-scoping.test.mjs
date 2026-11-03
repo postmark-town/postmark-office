@@ -188,9 +188,16 @@ test("ruling 9 scopes reads by household and every write lands off main", async 
   // to arrive under the word `drafts`. This fixture's one live mark is a
   // sketchbook row with no claim status, so it stays private and the docket is
   // empty — which is the assertion, not an accident of the fixture.
-  assert.deepEqual(portfolio.counts, { drafts: 1, docket: 0, published: 1, backed: 1 });
+  //
+  // `locked` joined the shape 2026-11-02 (bug post #4014, RULED by Wright on
+  // postmark-office#839: "`locked` joins `counts`, `shown`, `withheld` and
+  // `labels`"). Until then this asserted `{ drafts: 1, docket: 0, published: 1,
+  // backed: 1 }`. This office keeps no docket store, so no claim was ever ruled
+  // on and the shelf is empty: that is the assertion, not an accident either.
+  assert.deepEqual(portfolio.counts, { drafts: 1, docket: 0, locked: 0, published: 1, backed: 1 });
   assert.deepEqual(portfolio.drafts.map((mark) => mark.id), ["alpha/private-note"]);
   assert.deepEqual(portfolio.docket, [], "nothing here has been staked onto the public docket");
+  assert.deepEqual(portfolio.locked, [], "and no candle has ruled for anything, so nothing is waiting for a settlement");
   assert.deepEqual(portfolio.published.map((mark) => mark.id), ["alpha/published-note"]);
   assert.deepEqual(portfolio.backed.map((position) => ({
     id: position.id,

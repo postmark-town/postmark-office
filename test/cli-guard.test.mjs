@@ -115,6 +115,7 @@ const ROSTER = {
   // src/
   "src/dynamic-store.mjs": { args: [], env: { WORLD_DYNAMIC_DB: NOWHERE_DB }, code: 0, needle: '"present": false' },
   "src/pot-stake-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
+  "src/parcel-room-exec.mjs": { args: ["{}"], env: { STAMP_KEY: NOWHERE, TOWN_CLONE: NOWHERE }, code: 0, needle: "not-yet-open" },
   "src/store-writedown.mjs": { args: [], env: NO_PG, code: 2, needle: "--input <fold-input.json> is required" },
   "src/world-drain.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
   // world.db is retired (POS-270 lane W 3b): the world tails read the store's

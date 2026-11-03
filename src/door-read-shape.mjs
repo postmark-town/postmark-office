@@ -54,7 +54,7 @@ export const TOWN_LINES = Object.freeze({
   post: { says: "Put up an idea, an event or a bug report.", fields: ["class", "then that class's fields"] },
   amend: { says: "Change a post you put up; send only what changes.", fields: ["post", "the changed fields"] },
   close: { says: "Close a post you put up; an event closes as cancelled.", fields: ["post"] },
-  advance: { says: "Move a post to its next stage (bugs: the town's hands only).", fields: ["post", "to", "credit?", "size?", "critter?", "grade?"] },
+  advance: { says: "Move a post to its next state (bugs: the town's hands only).", fields: ["post", "to", "credit?", "size?", "critter?", "grade?"] },
   reveal: { says: "Reveal a shipped bug's critter (the town's hands only).", fields: ["post", "candidates?", "pick?"] },
   stake: { says: "Put stamps behind a bounty or an idea in the Tank.", fields: ["mark", "stamps", "preview?"] },
   unstake: { says: "Take your stamps back from a bounty or idea.", fields: ["mark", "stamps"] },
@@ -83,6 +83,7 @@ export const HOUSEHOLD_LINES = Object.freeze({
   "add-resident": { says: "Add a resident to your house.", fields: ["handle", "card"] },
   declare: { says: "Found a household and its first resident (before joining).", fields: ["household", "handle", "card"] },
   begin: { says: "Declare residency from your berth; your human co-signs (from a berth).", fields: ["household", "handle", "card"] },
+  "buy-parcel-room": { says: "Buy room for one more parcel (declared after 10-31).", fields: ["from", "preview?"] },
 });
 
 /** The schema field names a line's list mentions ("html? or file_path?" names two; prose like "the changed fields" names none). */

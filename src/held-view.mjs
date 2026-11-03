@@ -64,8 +64,8 @@ export function __resetHeldViewForTest() { kept = { key: null, at: 0, from: null
 export async function heldViewFrom(p, { markRows = null } = {}) {
   if (!p) return null;
   try {
-    const [port, { composeAnchor }, { placedCentreOfRow }] = await Promise.all([
-      import("../world2/tools/guard-reads.mjs"), import("./world-journal.mjs"), import("./held.mjs"),
+    const [port, { composeAnchor }, { placedCentreOfRow }, { foldMade }] = await Promise.all([
+      import("../world2/tools/guard-reads.mjs"), import("./world-journal.mjs"), import("./held.mjs"), import("./named-making.mjs"),
     ]);
     const client = { query: (text, args) => p.query(text, args) };
     const [atts, holding, cut, rows] = await Promise.all([
@@ -84,7 +84,8 @@ export async function heldViewFrom(p, { markRows = null } = {}) {
     }
     const placed = new Map([...bySlug].map(([s, r]) => [s, (typeof r.data === "string" ? JSON.parse(r.data) : r.data)?.[PLACED]]).filter(([, v]) => v));
     const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
-    return viewOf({ record: { attachments: atts.rows ?? [], drops, places }, from: num(cut?.[0]?.from), through: num(cut?.[0]?.through), placed });
+    // the things made in hand (POS-766/d): the twin lays them in from its own store, as the office does
+    return viewOf({ record: { attachments: atts.rows ?? [], drops, places, made: foldMade(holding) }, from: num(cut?.[0]?.from), through: num(cut?.[0]?.through), placed });
   } catch { return null; }
 }
 

@@ -8,7 +8,8 @@ stays true:
 - **STAMP.** The cache is keyed on something the worker reads for itself: a
   file's mtime, a ref file, a table's count, a sha. A write on the main thread
   changes that thing on disk or in the database, and the worker's next read sees
-  the new stamp. Nothing is sent.
+  the new stamp. Nothing is sent. A time-to-live is a stamp too: the copy's own
+  age, read from the clock.
 - **MESSAGE.** The cache is main-thread RAM that a write moves in place. The
   write announces what moved (`announce(kind, payload)`), and the worker applies
   it (`onAnnounce(kind, fn)`). An announcement and the reads handed over after
@@ -63,7 +64,8 @@ read, or a departure from outside that commits under an id already passed.
 | `world-stance.mjs` | `TEACH_CACHE`, `PHOTO_CACHE` | path, then the file's size and mtime |
 | `household-posts.mjs` | `backingCache` (the ideas' backing, POS-293) | the town clone's path, then the stamp ledger's mtime and size |
 | `dynamic-entities.mjs` | `_toolModules` | repo + file, re-checked against `freshestMainRef` after a TTL |
-| `world2-claims.mjs` | `householdKeys` | positive answers only, learned by each thread from the store |
+| `household-deriver.mjs` | `loaded` / `viaRows`: a copy of the registry per queryable, with the answers drawn from it, misses included (POS-860) | the copy's own age. Older than `HOUSE_CACHE_TTL_MS` (60 s) it is re-read on the thread that asks, and its answers go with it. The join ceremony also drops the main thread's copies at once, after each registry write (`__clearHouseCache`; founding runs inside the office: `declare-exec.mjs` and `join-bind.mjs` through `ceremony.mjs`). A worker hears no message and a tool outside the office tells nobody, so each is seen by age |
+| `world2-claims.mjs` | `householdKeys` | positive answers only, one map per copy of the deriver's registry: it goes when that copy goes |
 
 ## Unkept on either thread (same staleness on main as on a worker)
 
@@ -73,9 +75,6 @@ fresh as the main thread:
 - `world.mjs _walkClock`, `_mods`, `_where`, `_geom`; `votes.mjs engineCache`;
   `town-mail.mjs engines`; `world2-serve.mjs _engine`; `enter-exit-ledger.mjs
   _header`: engine modules imported once per process.
-- `household-deriver.mjs loaded / answers / viaRows`: its header says every
-  registry writer clears it, and nothing in `src/` calls `__clearHouseCache`.
-  The registry's writers are outside the office, so the fold is per process.
 - `world-journal.mjs _frozen / _pathIndex`: the frozen era.
 - Static tables: `mcp.mjs _flat*`, `world-apex.mjs` schemas, `queries.mjs
   _questTools`, `bouncer.mjs formatters`.

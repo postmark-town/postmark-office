@@ -70,6 +70,10 @@ const STORE_REPORT = {
   supplied_bytes_only: 0,
   sketchbooks_cleared: { removed_remote: 40, removed_local: 0 },
   wall: { sketchbooks: 84, bound: 52, unbound: [] },
+  held_unbound: [{ id: "the-town/a-new-thing", household_key: "solo:the-town" }],
+  held_unbound_count: 1,
+  town_hand_offs: ["the-town/a-given-thing"],
+  town_hand_off_store_additions: { "the-town/a-given-thing": ["tier"] },
   households: [{ household: "alpha", changed: true }, { household: "beta", changed: false }],
 };
 
@@ -141,6 +145,10 @@ test("entry, rehearsal and wall all ARRIVE on the receipt — the reader check o
     "a crossing folded by a rehearsal instrument must be legible as one in the history file, weeks later, with nothing but these receipts");
   assert.deepEqual(withProvenance.store.wall, { sketchbooks: 84, bound: 52, unbound: [] },
     "and the wall's reach, because its failure mode is silence: an unbindable sketchbook is left alone, not refused");
+  assert.deepEqual(withProvenance.store.town_hand_offs, ["the-town/a-given-thing"],
+    "and the town-signed things let through for their hand-off alone, beside the ones held out (WLD-5)");
+  assert.equal(withProvenance.store.held_unbound_count, 1);
+  assert.deepEqual(withProvenance.store.town_hand_off_store_additions, { "the-town/a-given-thing": ["tier"] });
 });
 
 test("`selection` reaches the receipt, and says the fold chose by DOCKET with its window", () => {

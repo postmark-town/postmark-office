@@ -17,6 +17,7 @@
 // tokens table since POS-352: OFFICE_KEYS='devkey1=keemin:wright,postmaster'
 // node tools/static-keys-import.mjs writes it (src/static-keys.mjs).
 
+import { dateFilterDefect } from "./date-filter.mjs";
 import { createServer } from "node:http";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,12 +32,12 @@ import { judgeRoute, withRenamed, PATCH_PAPER_DOORS, markRefused } from "./one-c
 import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS, householdDispatchToolFor } from "./household-apex.mjs"; // the third door (2026-08-15)
-import { readBody, isBodyTooLarge, refuseTooLarge } from "./body.mjs";
+import { readBody, isBodyTooLarge, refuseTooLarge, BodyIncomplete } from "./body.mjs";
 import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, arrivalsReader, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
 import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
-import { uploadMedia, useMediaLedger } from "./media.mjs";
+import { uploadMedia, useMediaLedger, rawMediaBody, uploadMediaBody } from "./media.mjs";
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { VISITOR_RULES, useRulesRecorder } from "./visitor-rules.mjs"; // POS-300
 import { standingBounce, standingOf, isSuspended, bounceSentence, STANDING_BOUNCE_CODE, STANDING_UNREADABLE } from "./standing.mjs";
@@ -62,7 +63,9 @@ import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worl
 import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
-import { rowsFixtureActive } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
+import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
+import { lawForRelease } from "./law-snapshot.mjs"; // POS-680: which law this process acts on, on its receipt
+import { restoredStanding } from "./restored-classes.mjs"; // POS-680: whether the restored keep was read against the law in force
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
 import { graphOnSettlement, settledMarkIds, settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
@@ -338,16 +341,26 @@ const RELOAD_POLL_MS = msEnv("OFFICE_RELOAD_POLL_MS", 5_000);        // the inge
 const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 
 // ONE STORE READ IN FLIGHT, AND NEVER FOREVER (POS-639; store-refresh.mjs says
-// why): a tick that finds the last roll+probe pair still reading skips. Each
-// read carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a
-// read that runs past the bound, and the guard is freed only when the pair has
-// settled: the poll holds at most the pair's two of the thread's three pen
-// connections (world2-pen.mjs § pool), whatever the store does.
+// why): a tick that finds the last refresh still reading skips. Each read
+// carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a read that
+// runs past the bound, and the guard is freed only when the refresh has settled.
+//
+// THE PROBE, THEN THE ROLL (POS-815; Darko 2026-10-29: "Serialize them",
+// "Probe first"). The two reads used to run side by side and held two of the
+// thread's pen connections at once (the pen is three per pool instance,
+// world2-pen.mjs § pool); one after the other, the refresh holds ONE, whatever
+// the store does. The probe goes first: it
+// carries the as-of and the write path's sign-in and resident checks, and the
+// roll behind the position doors waits for it. Each is still its own
+// transaction, published on its own success and refused on its own: a refused
+// probe still reads the roll, and a refused roll leaves the probe it followed.
+// Under a slow store the roll is therefore later than it was (accepted, the
+// same ruling). Boot reads through this same tick, below.
 const storeTick = storeRefresher({
-  read: () => Promise.all([
-    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-  ]),
+  read: async () => {
+    await townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {});
+    await townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {});
+  },
   onRead: () => {
     const was = AS_OF;
     AS_OF = storeAsOf();
@@ -362,16 +375,20 @@ setInterval(() => {
   // a throw from onRead must never become an unhandled rejection that ends the process
   storeTick.tick().catch((e) => faultLogged("the store poll's tick tripped", e));
 }, RELOAD_POLL_MS).unref();
-// AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
-// probe are loaded first, so the first ask is never answered by a process that
-// has not read its index yet (a berth or a sign-in a moment after a restart was
-// a 503 or an anonymous key). Bounded: a store that does not answer within 10 s
-// leaves both unloaded, the checks answer the store's 503 and the poll retries.
+// AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the probe and the roll are
+// loaded first, so the first ask is never answered by a process that has not
+// read its index yet (a berth or a sign-in a moment after a restart was a 503
+// or an anonymous key). Bounded: a store that does not answer within 10 s lets
+// the office listen with whichever reader has not finished still unavailable
+// (the probe refusing with the store's 503, the roll absent) and what has
+// finished kept, and the poll retries.
+// THROUGH THE POLL'S OWN TICK (POS-815): the boot read used to run beside the
+// guard, so a boot read still waiting when the first tick came started a second
+// pair. Now it IS the first tick: the bound returns the boot and lets the office
+// listen, the read goes on holding the guard, and the interval's ticks skip
+// until it settles.
 await Promise.race([
-  Promise.all([
-    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-  ]),
+  storeTick.tick().catch((e) => faultLogged("the store poll's boot read tripped", e)),
   new Promise((ok) => setTimeout(ok, STORE_READ_BOUND_MS).unref()),
 ]);
 AS_OF = storeAsOf();
@@ -972,6 +989,14 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       ...roleDisclosure(ROLE, WRITER_URL),
       write_grant: PEN.token !== "",
       ...(readPool ? { read_workers: readPool.disclose() } : {}),
+      // POS-680: which settlement's law and world graph THIS process answers
+      // from, and whether its refreshers are keeping up: when each last asked
+      // the store, when it last published, how many refreshes were let go at
+      // their deadline, and the last error, in plain words (a keyless page:
+      // no store text, role or path). A refresher that stopped keeping up
+      // shows here, per process, instead of only after a restart.
+      law: { ...lawForRelease(), restored: restoredStanding() },
+      world_graph: worldGraphForRelease(),
     });
   }
   if (path === "/ops/loop-lag" && req.method === "GET") return j(res, 200, loopLag.read()); // POS-267 (src/loop-lag.mjs)
@@ -1358,6 +1383,18 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       worldWriteBudget: (household) => bouncer.worldWriteBudget(household),
       rateResponse,
     });
+  }
+
+  // GET /ops/set-down-strands (POS-766/e; #760 review): a set-down that could not be undone,
+  // newest first (src/set-down-strands.mjs). It names things and residents, so unlike the
+  // keyless numbers beside /ops/loop-lag it answers the principal only, by the role registry
+  // asked now (principalNow, /ops/gift's own wall): no key is 401, another key 403. The
+  // morning round reads it through the roll-call, which reads the file on the box.
+  if (path === "/ops/set-down-strands") {
+    if (req.method !== "GET") return bounce(res, 405, "GET only", "GET /ops/set-down-strands reads the stranded set-downs");
+    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "the stranded set-downs name things and residents; this read is the principal's"); }
+    if (!(await principalNow(rdb, key))) return bounce(res, 403, "the stranded set-downs are the principal's", "this read names things and residents, so it answers only the principal's GitHub sign-in");
+    return j(res, 200, (await import("./set-down-strands.mjs")).readStrands());
   }
 
   // GET /me — the one read that needs a credential: your OWN resolved identity
@@ -1860,6 +1897,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           since: url.searchParams.get("since") ?? undefined,
           office: url.searchParams.has("office") ? url.searchParams.get("office") === "true" : undefined,
         };
+        { const bad = dateFilterDefect(opts, ["since"]); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
+        // `office=1` / `office=yes` used to read as false: the people-only roll, the opposite of the ask
+        if (url.searchParams.has("office") && !["true", "false"].includes(url.searchParams.get("office")))
+          return bounce(res, 422, `office must be true or false, not "${url.searchParams.get("office").slice(0, 20)}"`, "GET /residents?office=true (the offices) or ?office=false (the people)", "office");
         // last_active is the newest act of their own, one store read for the
         // page (last-active.mjs, POS-481), on the client the read already holds.
         // ?cards=1 (Darko 2026-10-13): the page's cards beside it, one per row
@@ -1927,6 +1968,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           // this every offset served page one and echoed offset: 0
           offset: p.get("offset") ?? undefined,
         };
+        { const bad = dateFilterDefect(opts); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
         return fromTownIndex(res, (c) => townIndexStore.repoLog(c, opts));
       }
 
@@ -1967,10 +2009,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if (path === "/posts" || (m = /^\/posts\/([^/]+\/[^/]+)$/.exec(path))) {
         const post = path === "/posts" ? undefined : decodeURIComponent(m[1]);
         const cls = url.searchParams.get("class") ?? undefined;
+        // POS-778: an unknown parameter is a 400 naming the nearest known one, never a silent 200
+        const stray = import("./town-posts.mjs").then(({ unknownPostsParam }) => unknownPostsParam(url.searchParams.keys()));
+        // state= filters the list (comma is OR); stage= is its permanent alias and filters the same way
+        const stateQ = url.searchParams.get("state") ?? undefined;
+        const stageQ = url.searchParams.get("stage") ?? undefined;
         // the bug class pages (POS-558): limit and offset ride as on every paged read
         const limit = url.searchParams.get("limit") ?? undefined;
         const offset = url.searchParams.get("offset") ?? undefined;
-        return import("./town-posts.mjs").then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset }))
+        return stray.then((bad) => { if (bad) throw bad; return import("./town-posts.mjs"); })
+          .then(({ postsAtOffice }) => postsAtOffice({ class: cls, post, limit, offset, state: stateQ, stage: stageQ }))
           .then((r) => j(res, 200, r))
           .catch((e) => e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint, undefined, e)
             : bounceFault(res, "the posts tripped", e));
@@ -2007,6 +2055,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: p.get("limit") ?? undefined,
           offset: p.get("offset") ?? undefined,
         };
+        { const bad = dateFilterDefect(opts); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
         if (opts.ids && (!opts.ids.length || opts.ids.length > LETTER_IDS_MAX))
           return bounce(res, 400, `name 1 to ${LETTER_IDS_MAX} letter ids`, `GET /letters?full=1&ids=a,b,c (at most ${LETTER_IDS_MAX})`);
         return fromTownIndex(res, (c) => townIndexStore.letterList(c, opts));
@@ -2046,6 +2095,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           limit: url.searchParams.get("limit") ?? undefined,
           offset: url.searchParams.get("offset") ?? undefined,
         };
+        { const bad = dateFilterDefect(opts); if (bad) return bounce(res, bad.code, bad.defect, bad.hint, bad.field); }
         return fromTownIndex(res, async (c) => (await townIndexStore.mailList(c, handle, box, opts)).letters);
       }
 
@@ -2555,6 +2605,23 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // deliberately: shrinking it is a separate act with its own blast radius.
     if (req.method === "POST" && path === "/media") {
       if (!key) return bounce(res, 401, "an upload needs a key", "media upload is a resident's act — send your household key as a Bearer token");
+      // THE THIRD WAY IN (POS-818): a body declared image/* IS the image — a
+      // file sent from a shell (`curl --data-binary @file`) or a browser's
+      // fetch, never through a model. Routed by the declared type only; the
+      // JSON door below is untouched. media.mjs § uploadMediaBody owns the
+      // length rule and the capped read, then hands the bytes to the same
+      // uploadMedia every other way in reaches.
+      if (rawMediaBody(req.headers)) {
+        uploadMediaBody(req, key, odb, { clone: TOWN_CLONE, query: url.searchParams })
+          .then((result) => j(res, 200, result))
+          .catch((e) => {
+            if (isBodyTooLarge(e)) return bodyTooLarge(res, e);
+            if (e instanceof BodyIncomplete) return bounce(res, 400, "could not read the body", "the upload ended before its declared length arrived; nothing was stored — send the file again");
+            if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
+            return bounceFault(res, "the office tripped", e);
+          });
+        return;
+      }
       readJsonBody(req, 3_000_000).then(async (raw) => {
         try {
           const judged = judgeOrBounce(res, "POST /media", JSON.parse(raw || "{}"));

@@ -67,6 +67,8 @@ export const CREATURE_CALLS = Object.freeze({
   call: 'world { do: "call", args: { creature: "<its id>", words: "<optional, heard like a say>" } }',
   offer: 'world { do: "offer", args: { creature: "<its id>", kind: "<a consumable kind you carry>" } }',
   whisper: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
+  dodge: 'world { do: "dodge", args: { creature: "<its id>" } }',
+  persuade: 'world { do: "persuade", args: { creature: "<its id>", words: "<your words to it>" } }',
 });
 
 // ── the one-liners (Darko-approved wording, 2026-10-09) ─────────────────────
@@ -82,7 +84,7 @@ export const ONE_LINERS = Object.freeze({
   say: { says: "Speak aloud where you stand; anyone within earshot hears it.", fields: ["text"] },
   enter: { says: "Go inside a place whose door you're standing at.", fields: ["mark"] },
   exit: { says: "Step back out to the place that holds this one.", fields: ["mark?"] },
-  "leave-mark": { says: "Place a mark where you stand; it's free on your own ground, and elsewhere you stake 1✦. Or make things by kind, live, into your own hands or a holder you're at.", fields: ["kind", "slug", "body (≤150)", "at", "extent", "stamps?", "preview?", "count?", "to?"] },
+  "leave-mark": { says: "Place a mark where you stand; it's free on your own ground, and elsewhere you stake 1✦. Or make into your own hands or a holder you're at, live and free: many by kind and count, or one thing of your own by slug and body.", fields: ["kind", "slug", "body (≤150)", "at", "extent", "stamps?", "preview?", "count?", "to?"] },
   withdraw: { says: "Take one of your marks out of the world at the next crossing.", fields: ["mark"] },
   stake: { says: "Put ✦ behind any mark to back it.", fields: ["mark", "stamps"] },
   unstake: { says: "Take back ✦ you staked.", fields: ["mark", "stamps"] },
@@ -90,7 +92,7 @@ export const ONE_LINERS = Object.freeze({
   take: { says: "Pick up a thing where you stand, or take from a holder: by kind, or pot luck with no kind.", fields: ["thing or from", "kind?", "count?"] },
   drop: { says: "Set down a thing you carry, here.", fields: ["thing"] },
   // LOGOS v2 part 2 (the playground's QA): the lines name making by count, taking from and giving into a holder
-  consume: { says: "Use up one consumable you carry, by kind.", fields: ["kind"] },
+  consume: { says: "Use up one consumable you carry, by kind, or the one you made by naming it.", fields: ["kind or thing"] },
   refill: { says: "Make things by kind into a holder you made, at it or carrying it, when its class affords refill (the Halloween Candy Bowl).", fields: ["thing", "kind", "count"] },
   ride: { says: "Aboard the Post Office, name your next stop.", fields: ["to"] },
   "note-to-self": { says: "Write a private note only your household can read.", fields: ["body"] },

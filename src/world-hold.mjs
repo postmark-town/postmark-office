@@ -59,6 +59,7 @@
 // grows an explicit terminal column — at which point `liveHolder` below is the
 // one function that changes.
 
+import { wholeNumber } from "./whole-number.mjs";
 import { worldFreezeBounce } from "./freeze.mjs";
 import { readAttachments, declareAttachment } from "./dynamic-entities.mjs";
 import { holdEdgeOnActs } from "./hold-edge.mjs";
@@ -249,7 +250,7 @@ export function declareHolding({ db, thing, to = null, actor, roster = null, gro
 
 export const HOLD_TOOLS = [
   { name: "world_hold",
-    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): a take is a threshold act — you stand within the thing's extent to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a draft is not the town's canon (it is on no docket and lives only in its own household's reading of the world), so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution. COUNTED UNITS (candy): one edge per label, holder to label. Take from a chest with from: (and label: when it holds several, else the refusal lists them), give with to: a resident or a chest, set ONE unit down with label: alone (it becomes a sited mark under the standard one-stamp rule), take a set-down unit back by naming its mark as thing:, use one up with act: \"consume\", and — as a label's creator — top a chest up with act: \"refill\". Every unit carried is one slot of the thing class's carry_cap; a portable chest is one slot whatever it holds, and a fixed one is not carried.",
+    description: "Declare who holds a thing — the one act behind give, drop and take. Name a thing and, to hand it over, the resident who takes it; omit `to` and you either SET IT DOWN where you stand (if you are holding it) or PICK IT UP (if it is standing on the ground). Which of the three happens is read off the thing's current holder, not from what you call it — and a `to:` on a thing you are NOT holding is refused by name rather than performed as something else. THE REACH OF A HOLD (the-town/the-reach): a take is a threshold act — you stand within the thing's extent, or within 60 m of its point, to take it, exactly as an entry stands at a threshold you truly stand before, and a take from further off is refused naming the distance and the walk that closes it. A set-down stands where you stood: the act carries your standpoint and the thing stands there, not where it was last folded. A give is a take at arm's length — giver and receiver within earshot of each other. And only what stands on the world changes hands: a draft is not the town's canon (it is on no docket and lives only in its own household's reading of the world), so nobody outside its author's household can take it or be given it until it publishes. WHO MADE IT IS NOT WHO HOLDS IT: authorship is the mark's `by` and never moves; holding is this edge and moves freely; where it stands is a third answer again, derived from the holder, then from the set-down, then from canon's fold. BY LAW, taking from another household's ground also answers to that ground's word; the door does not yet resolve which ground you are standing on, so today it does not enforce that — what it does instead is RECORD every take with the resident who made it, so a ground-holder who objects has the record to point at. The enforcement lands with ground resolution. COUNTED UNITS (candy): one edge per label, holder to label. Take from a chest with from: (and label: when it holds several, else the refusal lists them), give with to: a resident or a chest, set ONE unit down with label: alone (it becomes a sited mark under the standard one-stamp rule), take a set-down unit back by naming its mark as thing:, use one up with act: \"consume\", and — as a label's creator — top a chest up with act: \"refill\". Every unit carried is one slot of the thing class's carry_cap; a portable chest is one slot whatever it holds, and a fixed one is not carried.",
     inputSchema: { type: "object", properties: {
       thing: { type: "string", description: "the thing's mark id, <by>/<slug> — as ids appear in the telling. A unit that was set down is a mark too: name it to take it back, or with act: \"consume\" to eat it where it stands" },
       to: { type: "string", description: "the resident who takes it (a give), or a chest's id to put counted units into it. Omit to set it down where you stand, or to pick up a thing standing on the ground" },
@@ -348,7 +349,24 @@ const byWhat = (h) => (h.how === "household"
 
 /** The distance sentence a refusal opens with, in the enter refusal's grammar. */
 const standsOff = (id, reach) =>
-  `${id} stands ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you`;
+  `${id} stands ${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""} of you${walkToReach(reach)}`;
+
+/**
+ * HOW FAR TO WALK, not only how far you are (POS-806). A take stands within the
+ * thing's extent or within `earshot_m` of it (reach.mjs § standsWithin), so the
+ * walk that closes it is the distance less that margin, rounded UP so the walk
+ * lands inside. Said in the refusal's own grammar: "; walk 476 m NE to be within
+ * 60 m of it". Empty when the distance could not be measured. The thing's extent
+ * may let you in sooner; the sentence promises only the margin leg, which is
+ * always enough.
+ */
+const walkToReach = (reach) => {
+  if (reach?.distance_m == null || reach?.earshot_m == null) return ""; // unmeasured is not 0 m
+  const d = Number(reach.distance_m), margin = Number(reach.earshot_m);
+  if (!Number.isFinite(d) || !Number.isFinite(margin)) return "";
+  const walk = Math.max(1, Math.ceil(d - margin));
+  return `; walk ${walk} m${reach.bearing ? ` ${reach.bearing}` : ""} to be within ${Math.round(margin)} m of it`;
+};
 
 /**
  * Up to three ids from `ids` within a typo's distance of `id`, nearest first —
@@ -386,10 +404,13 @@ export function nearestIds(id, ids) {
  */
 export async function reachContext(thing, actor, { key = null } = {}) {
   try {
-    const [{ worldMarkById, pointWithinMarkFn, residentStandpoint }, { standsWithin }] = await Promise.all([
+    const [{ worldMarkById, pointWithinMarkFn, residentStandpoint, reachableBy }, { standsWithin }] = await Promise.all([
       import("./world.mjs"), import("./reach.mjs"),
     ]);
-    const { mark, canon_marks } = await worldMarkById(thing);
+    const { mark: found, canon_marks } = await worldMarkById(thing);
+    // WLD-74: a thing in a room inside a dungeon is no mark to one whose stack does not hold the room (the one sight function, world.mjs § reachableBy)
+    const reachable = found ? await reachableBy(actor, key) : null;
+    const mark = found && reachable && !reachable(found.id) ? null : found;
     const within = await pointWithinMarkFn();
     const standing = await residentStandpoint(actor).catch(() => null);
     // The town's own household map, for clause 4's unit. Lazily imported like
@@ -556,7 +577,7 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
     const reach = standsWithin(here, mark, { pointWithinMark: within });
     if (!reach.stands)
       throw bounce(409, `you are not standing where ${thing} stands — ${standsOff(thing, reach)}`,
-        `a take is a threshold act (the-town/the-reach): you stand within a thing's extent to take it, exactly as an entry stands at a threshold you truly stand before. Walk to it and take it there — world { do: "walk", args: { mark_id: "${thing}", mode: "center" } } — then world { do: "take", args: { thing: "${thing}" } }. Nothing was recorded.`);
+        `a take is a threshold act (the-town/the-reach): you stand within a thing's extent, or within ${reach.earshot_m ?? 60} m of its point, to take it, exactly as an entry stands at a threshold you truly stand before. Walk to it and take it there — world { do: "walk", args: { mark_id: "${thing}", mode: "center" } } — then world { do: "take", args: { thing: "${thing}" } }. Nothing was recorded.`);
     return { reach };
   }
 
@@ -619,7 +640,7 @@ export function refuseGiveOfUnheld({ thing, to, actor, holder }) {
     ? `you are not holding ${thing} — nobody is`
     : `you are not holding ${thing} — ${holder} is`,
     holder === null
-      ? `a give hands over what is in your hands. Take it first (you must be standing within its extent to do that: world { do: "walk", args: { mark_id: "${thing}", mode: "center" } }, then world { do: "take", args: { thing: "${thing}" } }), then give it. Nothing was recorded, and no take was made in your name.`
+      ? `a give hands over what is in your hands. Take it first (you must be standing within its extent, or within 60 m of its point, to do that: world { do: "walk", args: { mark_id: "${thing}", mode: "center" } }, then world { do: "take", args: { thing: "${thing}" } }), then give it. Nothing was recorded, and no take was made in your name.`
       : `a give hands over what is in your hands, and ${holder} is holding this one. Nothing was recorded.`);
 }
 
@@ -1368,6 +1389,85 @@ async function ownerNow(thing) {
 }
 
 // POS-637 PR-B: the act, perceived by any creature whose ring holds it (act-watch.mjs § perceived).
+/** The mark a thing made in hand was made as (POS-766), or null: not one, or the hold record could not be read. */
+async function madeThing(id) {
+  try { return (await (await import("./world-kinds.mjs")).holdRecordNow())?.made?.get(String(id)) ?? null; } catch { return null; }
+}
+
+/**
+ * SETTING DOWN A THING MADE IN HAND (POS-766/e; P2-a..e, the lead's word 2026-10-23).
+ * It becomes a sited draft keeping its maker's id, where the dropper stands, and
+ * the hold face `set-down` ends the holding. In order, each refusal writing nothing:
+ *   · the maker's house only (P2-a): the key must act for its maker;
+ *   · a holder is set down empty (P2-d), and a candy is never set down (POS-692);
+ *   · the stake, exactly as a published thing's set-down asks it (P2-b,
+ *     dropStakeTerms): free on the maker's own ground, else ✦1 from the dropper,
+ *     terms first and accept: true;
+ *   · the draft, judged and filed by leave-mark itself (P2-c), sited at the
+ *     dropper's standpoint with the thing default extent;
+ *   · then the set-down act. If that act cannot be written, the draft is
+ *     withdrawn again, so the thing is never both in hand and on the ground.
+ * After it the made record lets it go (named-making § foldMade): it is a draft
+ * like any other, and the draft rules apply (P2-e).
+ */
+async function setDownMade({ made, args, key, actor }) {
+  const nm = await import("./named-making.mjs");
+  const id = String(made.id), maker = String(made.by);
+  const refuse = (r) => bounce(r.code, r.defect, r.hint);
+  if (!key?.handles?.has(maker)) throw refuse(nm.setDownNotByMaker(id, maker));
+  const { liveUnitDeps, thingHoldingEntry } = await import("./world-units.mjs");
+  const deps = await liveUnitDeps();
+  {
+    const { units, attachments } = await deps.readRows();
+    const { foldUnits, totalOf } = await import("./world-stacks.mjs");
+    const n = holdingsOf(attachments, id).length + totalOf(foldUnits(units), id);
+    if (n > 0) throw refuse(nm.setDownHolding(id, n));
+  }
+  const { lineageOf } = await import("./world-grants.mjs");
+  const { classExtendsOf } = await import("./world-classes.mjs");
+  if (lineageOf(String(made.kind), classExtendsOf()).includes("candy")) throw refuse(nm.setDownCandy(id, made.kind));
+  const stood = await standpointOfActor(actor);
+  if (!stood) throw bounce(409, "the record does not place you anywhere",
+    `a thing is set down where you stand, and the walk ledger has no position for ${actor}: walk somewhere first. Nothing was changed.`);
+  const dropStake = await dropStakeTerms({ thing: id, actor, stood, accept: args.accept === true, owner: maker }, { extentOf: async () => nm.SET_DOWN_EXTENT });
+  if (dropStake?.terms) return dropStake.terms;
+  const { leaveMarkViaOffice } = await import("./world.mjs");
+  const { WORLD_CLONE } = await import("./world-store.mjs");
+  const draft = await leaveMarkViaOffice(WORLD_CLONE, nm.setDownDraftOf(made, { at: stood, free: !dropStake?.stake }), key, { fromHand: true });
+  if (draft?.error) return draft;
+  try {
+    await holdTurn(async () => {
+      const { attachments } = await deps.readRows();
+      if (liveHolder(attachments, id) !== String(actor)) throw bounce(409, `you are not holding ${id} any more`, "Nothing was changed.");
+      const { entry } = await thingHoldingEntry(deps, key, actor, attachments, { did: nm.SET_DOWN_FACE, thing: id, holder: null, previous: String(actor), madeBy: maker });
+      entry.payload.policy = "detach"; // its place is its draft's: no hold row carries one
+      entry.payload.set_down = { at: stood, draft: id };
+      entry.effect = `${actor} set ${id} down where they stood, as ${maker}'s draft`;
+      await deps.append(entry, {});
+    });
+  } catch (e) {
+    // NEVER IN HAND AND ON THE GROUND AT ONCE: the draft goes back out through the withdraw door
+    // (its own pen, whichever files drafts here), and the refusal is the answer
+    let undone = null;
+    try {
+      const w = await (await import("./world.mjs")).withdrawMarkViaOffice(WORLD_CLONE, { mark: id }, key);
+      if (w?.error) undone = w;
+    } catch (w) { undone = w; }
+    if (undone) {
+      // BOTH FAILED: stranded in hand and on the ground. Said loudly, where an operator looks (set-down-strands.mjs)
+      const { plainReason } = await import("./fault-words.mjs");
+      const { recordStrand } = await import("./set-down-strands.mjs");
+      recordStrand({ thing: id, maker, actor, why: plainReason(e, "record", `the set-down act for ${id}`),
+        undo: undone instanceof Error ? plainReason(undone, "record", `the withdrawal of ${id}'s draft`) : String(undone.defect ?? "the withdraw door refused") });
+    }
+    throw e;
+  }
+  const staked = dropStake?.stake ? await stakeTheDrop({ thing: id, actor, key, n: dropStake.stake }) : null;
+  return { did: "set-down", thing: id, at: stood, draft: id, ...(staked ?? {}),
+    stands_note: nm.setDownWords({ id, maker, stake: !dropStake?.stake ? "free" : staked?.stake_bounce ? "bounced" : "staked" }),
+    leave: draft };
+}
+
 export async function callHoldTool(name, args = {}, key = null, { verb = null } = {}) { return perceived(() => holdAct(name, args, key, verb)); }
 async function holdAct(name, args = {}, key = null, verb = null) {
   if (name === "world_hold") { const fz = worldFreezeBounce(); if (fz) return fz; }
@@ -1421,8 +1521,8 @@ async function holdAct(name, args = {}, key = null, verb = null) {
       //
       // `count` was already here and already the true number; what it lacked
       // was a bound to be a count AGAINST. Count first, slice after.
-      const n = Math.min(Math.max(Number(args.limit) || HOLDINGS_PAGE, 1), 200);
-      const start = Math.max(Number(args.offset) || 0, 0);
+      const n = Math.min(Math.max(wholeNumber(args.limit) || HOLDINGS_PAGE, 1), 200);
+      const start = Math.max(wholeNumber(args.offset) || 0, 0);
       const page = held.slice(start, start + n);
       const next = start + page.length;
       return {
@@ -1477,6 +1577,15 @@ async function holdAct(name, args = {}, key = null, verb = null) {
     // kind (world-kinds.mjs). A `label:` is #499's door, below.
     {
       const { kindRouteOf, callKinds } = await import("./world-kinds.mjs");
+      // A THING MADE IN HAND (POS-766): eating it is the kind door's consume { thing }, and
+      // setting it down is part 2 of its change (POS-766/e), refused by name until it lands
+      const made = args.thing != null ? await madeThing(String(args.thing)) : null;
+      if (made && String(args.act ?? "") === "consume")
+        return await callKinds("consume", args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
+      if (made && args.act == null && args.to == null && args.from == null && verb !== "take") {
+        const { guardedAttachments: rowsNow } = await import("./world2-guards.mjs");
+        if (liveHolder(await rowsNow(), String(args.thing)) === String(actor)) return await setDownMade({ made, args, key, actor });
+      }
       const route = kindRouteOf(args, verb);
       if (route) return await callKinds(route, args, key, actor, await (await import("./world-units.mjs")).liveUnitDeps());
     }

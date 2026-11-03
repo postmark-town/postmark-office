@@ -19,6 +19,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, findGround, githubStub, mistsSafeBox, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { lastStandingCrossing, standingKeyframes } from "./helpers/mists-standing.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -239,8 +240,10 @@ test("ground chosen at crossing 244 is still clear of the wall and its fringe at
   const { skeleton } = publishedSkeleton(WORLD);
   assert.ok(skeleton?.mists?.schedule?.length, "the pinned world's blessed skeleton carries the Mists (POS-466)");
   const safe = mistsSafeBox(skeleton.mists, mistsAt);
-  assert.deepEqual(safe.keyframes, skeleton.mists.schedule.map((k) => k.crossing));
-  const last = skeleton.mists.schedule.at(-1).crossing;
+  // WLD-147: mistsSafeBox skips a keyframe the engine answers null at (the withdrawal's own), so the safe box is the
+  // standing keyframes'; with no `withdrawn_from` on the record these are all of them, as before
+  assert.deepEqual(safe.keyframes, standingKeyframes(skeleton.mists));
+  const last = lastStandingCrossing(skeleton.mists);
   // the old ground, the control: behind the wall from the first keyframe on
   assert.equal(mistsHere({ x: 30000, y: 30000 }, mistsAt(244, skeleton.mists)).inWall, true);
   // many runs' ground, the run id's walk from several starts, every corner of all four footprints

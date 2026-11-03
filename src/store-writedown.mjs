@@ -107,6 +107,140 @@ const isTheTown = (household) => {
   return k === TOWN || k.slice(k.indexOf(":") + 1) === TOWN;
 };
 
+// ── A HAND-OFF ON A TOWN-SIGNED THING IS NOT THE TOWN AUTHORING IT (WLD-5) ───
+//
+// The hold-out below keeps the town's own record out of every sketchbook. That
+// stays. What it must not do is stop a town-signed thing that was GIVEN INTO a
+// holder from printing where it now is: holding a thing is not authoring it, and
+// the world's sweep already lets exactly that change land (world `mark-kind.mjs §
+// handOffOnly`). This is the same predicate, asked of two rendered files instead
+// of two parsed records, so the office decides what to write down by the rule the
+// sweep decides what to publish by.
+//
+// The hand-off fields are `held_by`, `owned_by`, and the place (`at`, `extent`,
+// `points`), the place moving only as the thing goes into hands (it leaves) or
+// comes out of them (a fresh one is printed). Every other field, and the words,
+// must read as canon holds them. Anything else about a town-signed mark is still
+// held out exactly as before.
+const HAND_FIELDS = new Set(["held_by", "owned_by", "at", "extent", "points"]);
+const PLACE_FIELDS = ["at", "extent", "points"];
+
+/**
+ * A frontmatter VALUE as the thing it says, not the spelling it was typed in: a
+ * hand-written file and `markRecord`'s render of the same record must compare
+ * equal. Quotes come off a plain string; a number is a number; a flow map
+ * (`{ w: 2, h: 1 }`) is compared by its pairs, whatever their order; a JSON
+ * array is compared as JSON. Anything else is its trimmed text. A value this
+ * cannot read as one of those is its raw text, so it fails CLOSED, never open.
+ */
+function valueOf(raw) {
+  const v = String(raw).trim();
+  if (/^-?\d+(\.\d+)?$/.test(v)) return `n:${Number(v)}`;
+  if ((v.startsWith('"') && v.endsWith('"') && v.length >= 2) || (v.startsWith("'") && v.endsWith("'") && v.length >= 2)) {
+    try { return `s:${v.startsWith('"') ? JSON.parse(v) : v.slice(1, -1)}`; } catch { return `r:${v}`; }
+  }
+  if (v.startsWith("{") && v.endsWith("}")) {
+    const pairs = v.slice(1, -1).split(",").map((x) => x.trim()).filter(Boolean).map((x) => {
+      const k = x.indexOf(":");
+      return k > 0 ? [x.slice(0, k).trim(), valueOf(x.slice(k + 1))] : null;
+    });
+    if (pairs.every(Boolean)) return `m:${JSON.stringify(pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)))}`;
+    return `r:${v}`;
+  }
+  if (v.startsWith("[")) { try { return `j:${JSON.stringify(JSON.parse(v))}`; } catch { return `r:${v}`; } }
+  return `s:${v}`;
+}
+
+/**
+ * A mark file as { fields, body }, fields compared by VALUE (see valueOf). STRICT:
+ * every frontmatter line must be a plain top-level `key: value`. A blank line, a
+ * comment, an indented continuation, a list item, a line with no key, or a key
+ * that repeats is a file this does not understand, and it answers null, so the
+ * caller holds the mark out as it always did.
+ */
+function splitMarkFile(text) {
+  const t = String(text ?? "").replace(/\r\n/g, "\n");
+  const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(t);
+  if (!m) return null;
+  const fields = new Map();
+  const lines = [];
+  for (const line of m[1].split(/\n/)) {
+    const k = /^([A-Za-z_][A-Za-z0-9_-]*):(?:[ \t]+(.*))?$/.exec(line);
+    if (!k || fields.has(k[1])) return null;
+    const v = valueOf(k[2] ?? "");
+    fields.set(k[1], v === "s:" ? undefined : v); // an empty value is no value (the world reads held_by "" as not held)
+    lines.push([k[1], line]);
+  }
+  return { fields, lines, rest: m[2], body: m[2].trim() };
+}
+
+/**
+ * THE HOLD PRINT FOR A TOWN-SIGNED THING: canon's OWN file with only the hand-off
+ * lines replaced (WLD-5). PURE. Answers { bytes, ignored } or null.
+ *
+ * Two files, canon's and the store's render of the same mark, and the question is
+ * whether the render differs from canon ONLY by a hand-off. Fields compare by
+ * value, never by spelling (valueOf). The answer is null (the mark is held out
+ * as it always was) when:
+ *   · either file is not a plain mark file (splitMarkFile),
+ *   · the words differ,
+ *   · a field canon HAS reads differently in the render (or is missing from it),
+ *   · nothing about the hands moved, or the mark is not about holding at all,
+ *   · the place moves while the thing stays on the ground (the author's move).
+ *
+ * A FIELD THE RENDER HAS AND CANON DOES NOT IS THE STORE'S ADDITION, NOT A CHANGE.
+ * The store derives lines a hand-written file never carried: `tier: constitution`
+ * on every town-signed row (mark-record.mjs § EMITS) was the one that blocked the
+ * first run-through, and the next one nobody has thought of is the same shape.
+ * They are named in `ignored` and they cannot ride into the print, because...
+ *
+ * THE PRINT IS BUILT FROM CANON, not from the render: canon's lines, minus the
+ * hand-off fields, plus the render's `held_by` / `owned_by` (and, only when the
+ * thing comes out of hands, the render's place lines). Whatever else the store
+ * says about the mark never reaches the file, so the print differs from canon by
+ * a hand-off and by nothing else, and the sweep's own `handOffOnly` (world
+ * `mark-kind.mjs`) reads it as exactly that. That is the "hold-through prints
+ * against canon's file, not the store row" hardening the held-print notes named.
+ *
+ * `opts.nested`: the filing is frame-relative, so a place line taken from the
+ * render (the thing coming back to the ground) is a world number in a file frame
+ * and is NOT written; that case answers null and stays held out.
+ */
+export function handOffPrint(canonBytes, nextBytes, opts = {}) {
+  const a = splitMarkFile(canonBytes), b = splitMarkFile(nextBytes);
+  if (!a || !b || a.body !== b.body) return null;
+  const ignored = [];
+  for (const k of b.fields.keys()) if (!a.fields.has(k) && !HAND_FIELDS.has(k) && b.fields.get(k) !== undefined) ignored.push(k);
+  for (const k of a.fields.keys()) {
+    if (HAND_FIELDS.has(k)) continue;
+    if ((a.fields.get(k) ?? null) !== (b.fields.get(k) ?? null)) return null;
+  }
+  const get = (f, k) => f.get(k) ?? null;
+  const heldA = !!get(a.fields, "held_by"), heldB = !!get(b.fields, "held_by");
+  const ownedMoved = get(a.fields, "owned_by") !== get(b.fields, "owned_by");
+  if (!ownedMoved && get(a.fields, "held_by") === get(b.fields, "held_by") && get(a.fields, "at") === get(b.fields, "at")) return null; // no hand moved
+  if (!(heldA || heldB || ownedMoved)) return null;      // not about holding at all
+  const returning = heldA && !heldB;                     // out of hands: a fresh place is printed
+  if (heldA === heldB && !PLACE_FIELDS.every((k) => get(a.fields, k) === get(b.fields, k))) return null; // a place that moves on the ground
+  const nextPlace = b.lines.filter(([k]) => PLACE_FIELDS.includes(k));
+  if (returning && nextPlace.length && opts.nested) return null;
+
+  const out = [];
+  for (const [k, line] of a.lines) {
+    if (k === "held_by" || k === "owned_by") continue;                  // re-added below from the render
+    if (PLACE_FIELDS.includes(k) && (heldB || returning)) continue;      // into hands: the place leaves; out of them: the render's replaces it
+    out.push(line);
+  }
+  for (const [k, line] of b.lines) {
+    if (k === "held_by" || k === "owned_by") out.push(line);
+    else if (returning && PLACE_FIELDS.includes(k)) out.push(line);
+  }
+  return { bytes: `---\n${out.join("\n")}\n---\n${a.rest}`, ignored };
+}
+
+/** Does the render differ from canon ONLY by a hand-off? (handOffPrint answered.) */
+export const handOffOnlyBytes = (canonBytes, nextBytes, opts) => handOffPrint(canonBytes, nextBytes, opts) !== null;
+
 /** A refusal that names itself, so the chain can put the reason in the receipt verbatim. */
 export class FoldInputRefusal extends Error {
   constructor(reason, detail) {
@@ -1201,8 +1335,30 @@ export function storeWriteDown({
   // receipt.
   const held = [];
   const carried = [];
+  const handOffs = [];
+  const handOffAdditions = {};
+  // Canon's own bytes for a mark, wherever canon files it: its frozen filing,
+  // else the path the supplier named, else the id's own directory.
+  const canonOf = (m) => {
+    for (const p of [publishedPathOf(m.id), m.plannedPath, `WORLD/marks/${m.id}/mark.md`]) {
+      const b = p ? canonBytesAt(p) : null;
+      if (b !== null) return { bytes: b, path: p };
+    }
+    return null;
+  };
   for (const m of normalized.marks) {
     if (isTheTown(m.household) || m.by === TOWN) {
+      // A hand-off on a thing canon already holds goes through, as CANON'S OWN FILE with
+      // the hand-off lines replaced; see handOffPrint. The render's bytes never ride in.
+      const canon = canonOf(m);
+      const print = canon ? handOffPrint(canon.bytes, m.bytes, { nested: isNestedFiling(canon.path) }) : null;
+      if (print) {
+        handOffs.push(m.id);
+        if (print.ignored.length) handOffAdditions[m.id] = print.ignored;
+        // canon's numbers are the FILE's own frame; the plan frames nothing it is told is `file`
+        carried.push({ ...m, bytes: print.bytes, fileRec: null, body: null, at_frame: "file", plannedPath: m.plannedPath ?? canon.path });
+        continue;
+      }
       held.push({
         id: m.id,
         household_key: m.household,
@@ -1312,6 +1468,10 @@ export function storeWriteDown({
     // can tell a law node from a household whose registry row is missing.
     held_unbound: held,
     held_unbound_count: held.length,
+    // The town-signed things let through because ONLY their hands changed.
+    town_hand_offs: handOffs,
+    // the lines the store rendered for those marks that canon does not carry (tier, and what no one has thought of): named, never written
+    town_hand_off_store_additions: handOffAdditions,
     households: households.map(({ household, household_key, branch, base, base_from, commit, changed, touched }) =>
       ({ household, household_key, branch, base, base_from, commit, changed, touched })),
     main: mainSha,

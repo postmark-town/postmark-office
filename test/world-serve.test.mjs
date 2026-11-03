@@ -34,6 +34,8 @@ const repo = mkdtempSync(join(tmpdir(), "postmark-world-serve-"));
 after(() => rmSync(repo, { recursive: true, force: true }));
 const dbPath = join(repo, "fixture-world.db");
 const logPath = join(repo, "shadow.jsonl");
+// A path as it reads INSIDE a JSON answer (a Windows path's backslashes are doubled there).
+const asJson = (p) => JSON.stringify(p).slice(1, -1);
 
 process.env.WORLD_CLONE = repo;
 // The world is the rows (test/helpers/world-rows.mjs, POS-270 lane W 3a):
@@ -488,7 +490,29 @@ test("the health surface names the mode, the shas, and whether the store is fres
   assert.equal(h.main.ahead_of_blessed, false);
   assert.equal(h.counters.compared, 1);
   assert.equal(h.db.ring_carrying_marks, 1);
-  assert.equal(h.shadow_log.path, logPath);
+  // keyless, so no path on the box is named (POS-663)
+  assert.equal("path" in h.shadow_log, false, "the shadow log's path stays off the keyless panel");
+  assert.equal("repo" in h.main, false, "the world clone's path stays off the keyless panel");
+  assert.equal("path" in h.db, false);
+  assert.equal(JSON.stringify(h).includes(asJson(repo)), false, "no path under the clone anywhere in the answer");
+});
+
+test("a main the office cannot read answers the plain reason, never git's own words (POS-663)", () => {
+  // A directory with no git in it: blessed() throws, and the throw is git's
+  // "fatal: not a git repository", the raw text the keyless panel used to carry.
+  const notAClone = mkdtempSync(join(tmpdir(), "postmark-world-serve-noclone-"));
+  const said = [];
+  const was = console.error;
+  console.error = (...a) => said.push(a.join(" "));
+  let h;
+  try { h = serve.worldStoreHealth({ repo: notAClone }); }
+  finally { console.error = was; rmSync(notAClone, { recursive: true, force: true }); }
+  assert.deepEqual(h.main, { error: "the world's files could not be read" });
+  const body = JSON.stringify(h);
+  assert.equal(/fatal|not a git repository/i.test(body), false, `the raw git error leaked: ${body.slice(0, 200)}`);
+  assert.equal(body.includes(asJson(notAClone)), false, "the clone's path leaked");
+  // and the raw error is not lost: it went to the journal
+  assert.ok(said.some((l) => /not a git repository/i.test(l)), `expected the raw error logged, got ${JSON.stringify(said)}`);
 });
 
 test("the health surface reports a stale store as not fresh", () => {

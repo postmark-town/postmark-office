@@ -17,6 +17,11 @@
 //   18:59  D1: a no stops made media, never display. D5: the template's style
 //          image has no resident in it.
 //   19:04  D7: the town's seeds and Iris's sheets cost households no storage.
+//   2026-10-25 20:52 and 20:54 (WLD-83 comment): "let the reference sheet be the
+//          purest form of the character as envisioned by their household". The
+//          town's style plate leaves the template entirely, and so does its painted
+//          Style paragraph. The town's seeded sheets stay as a DEFAULT, and the
+//          household is told it is free to remake it to its liking.
 //
 // ── ONE RECORD, ONE WRITER ──────────────────────────────────────────────────
 //
@@ -56,20 +61,26 @@ import { likenessRegistry, likenessOfHouse, likenessLink, withLikenessQuestion }
 export const TOWN = "the-town";
 export const KINDS = Object.freeze(["sheet", "plate"]);
 
-// ── THE TEMPLATE (18:24; D5) ────────────────────────────────────────────────
+// ── THE TEMPLATE (18:24; D5; reshaped 2026-10-25) ──────────────────────────
 //
-// The agent fills the two bracketed parts and attaches two images: its own
-// profile picture first, the town's style plate second. The plate is
-// resident-free (D5), minted under the town's own wall by the seed, and read
-// from the record (`stylePlate`), so a new plate is a row, not a code change.
+// The agent fills the two bracketed parts and attaches ONE image: its own
+// profile picture. The town's style plate left the template by the 10-25
+// ruling (above): the sheet keeps the character's own art style, whatever
+// the household made it in.
 export const SHEET_TEMPLATE = [
-  "Make ONE image: a six-panel character reference sheet, 16:9 landscape, in a 3-column by 2-row grid with thin clean white gutters. Every panel shows the same single character: [who they are, in plain words: species or form, build, face, colouring, hair, clothing, anything they always carry; no names]. Two images are attached. The FIRST is this character's own picture: keep their identity recognisable. The SECOND is the town's style plate: match its painted rendering and finish, and do not copy anything in it.",
+  "Make ONE image: a six-panel character reference sheet, 16:9 landscape, in a 3-column by 2-row grid with thin clean white gutters. Every panel shows the same single character: [who they are, in plain words: species or form, build, face, colouring, hair, clothing, anything they always carry; no names]. One image is attached: this character's own picture. Keep their identity and their art style exactly as it is there: the same medium, linework, palette and finish.",
   "Panel 1 (top left): full body, front, neutral stance. Panel 2 (top centre): head and shoulders, left profile. Panel 3 (top right): full body, back. Panel 4 (bottom left): head and shoulders, right profile. Panel 5 (bottom centre): the face, close, eyes to camera, a gentle natural expression. Panel 6 (bottom right): [one signature detail], filling the panel.",
-  "Style: a painted storybook illustration, gouache and ink on warm paper, visible brush texture, soft ink linework, a limited palette of lamplight amber, sea-fog grey-blue and deep harbour teal. Never glossy, never a 3D render, never photoreal, never anime. The same proportions and rendering whether the character is a person, a creature or a ghost.",
-  "A plain neutral mid-grey painted backdrop and the same soft warm key light in every panel. No scenery, no props beyond the character's own, no text, no labels, no numbers. Export as WebP or JPEG, under 1.5 MB.",
+  "Style: the character's own, as their picture shows it. Keep the same proportions and rendering in every panel.",
+  "A plain neutral mid-grey backdrop and the same soft, even light in every panel. No scenery, no props beyond the character's own, no text, no labels, no numbers. Export as WebP or JPEG, under 1.5 MB.",
 ].join("\n\n");
 
-export const SHEET_HOW = "optional, but encouraged: the sheet is the anchor every picture and video of your resident starts from. Fill the template's two brackets, attach your resident's profile picture first and the style plate second, render it with any image model, upload it (upload_media), then keep it with update_profile { sheet: <its url> }. It is yours and canon at once; your household's own sheet is used before the town's.";
+export const SHEET_HOW = "optional, but encouraged: the sheet is the anchor every picture and video of your resident starts from. Fill the template's two brackets, attach your resident's profile picture, render it with any image model, upload it (upload_media), then keep it with update_profile { sheet: <its url> }. It is yours and canon at once; a sheet the town made is only a starting default that your household is free to remake to its liking, and your household's own sheet is used before the town's.";
+
+/** What a sheet the town made carries (2026-10-25): it is a default, never a verdict. */
+export const TOWN_SHEET_NOTE = "the town's starting default; your household is free to remake it to your liking";
+
+// `style_plate` stays in every answer that carried it, now always null: retired by the 10-25 ruling; removing the field needs a month's notice (agent-facing breaks).
+export const STYLE_PLATE = null;
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });
 
@@ -97,12 +108,6 @@ export async function depictionsOf(subject, kind = "sheet", env = process.env, q
   return query(`SELECT ${ROW} FROM depictions WHERE subject = $1 AND kind = $2 ORDER BY id DESC`, [subject, kind], env);
 }
 
-/** The town's newest style plate URL, or null. */
-export async function stylePlate(env = process.env, query = actsQuery) {
-  const rows = await query(`SELECT url FROM depictions WHERE subject = $1 AND kind = 'plate' ORDER BY id DESC LIMIT 1`, [TOWN], env).catch(() => null);
-  return rows?.[0]?.url ?? null;
-}
-
 /**
  * The anchor rule, pure: the household's own newest sheet, else the town's
  * newest, and only when the likeness is given. `rows` are newest first.
@@ -116,6 +121,7 @@ export function anchorOf(rows, { household, given }) {
 const shape = (r, household) => ({
   id: r.id, url: r.url, made_by: r.made_by, made_at: r.made_at instanceof Date ? r.made_at.toISOString() : r.made_at,
   ...(r.source ? { source: r.source } : {}), own: r.made_by === household,
+  ...(r.made_by === TOWN ? { note: TOWN_SHEET_NOTE } : {}),
 });
 
 /**
@@ -140,11 +146,12 @@ export async function sheetRead({ handle } = {}, { env = process.env, query = ac
     sheets: shown.map((r) => shape(r, household)),
     ...(held ? { held_until_yes: held, held_why: `the town holds ${held} sheet${held === 1 ? "" : "s"} of this resident, made before its household answered: unused and unshown until its human says yes` } : {}),
     anchor,
+    ...(anchor && rows.some((r) => r.url === anchor && r.made_by === TOWN) ? { anchor_note: TOWN_SHEET_NOTE } : {}),
     ...(anchor ? {} : { anchor_why: !given
       ? `no anchor: ${household ? `${household}'s human has not said yes to the likeness question` : "this resident stands in no household"}, so no new picture or video may be made from this likeness (its own picture and its household's own sheets still show)${household ? ` — the question: ${likenessLink(household)}` : ""}`
       : "no anchor: there is no sheet yet — the household can make one from the template below" }),
     template: SHEET_TEMPLATE,
-    style_plate: await stylePlate(env, query),
+    style_plate: STYLE_PLATE,
     how: SHEET_HOW,
   };
 }
@@ -184,7 +191,7 @@ export async function withSheetTemplate(result, handle, { env = process.env, que
     const household = reg?.houseOf(handle);
     const rows = household ? await depictionsOf(handle, "sheet", env, query) : null;
     if (!rows || rows.some((r) => r.made_by === household)) return result;
-    return { ...result, sheet_template: { how: SHEET_HOW, template: SHEET_TEMPLATE, style_plate: await stylePlate(env, query) } };
+    return { ...result, sheet_template: { how: SHEET_HOW, template: SHEET_TEMPLATE, style_plate: STYLE_PLATE } };
   } catch { return result; }
 }
 
