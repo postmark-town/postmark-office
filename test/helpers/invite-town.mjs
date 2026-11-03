@@ -23,14 +23,21 @@ export const HOUSEHOLDS = Object.freeze({
 export const PINS = Object.freeze({ dora: { id: 4 }, carl: { id: 5 }, cleo: { id: 5 } });
 export const REGISTRY = Object.freeze({ households: HOUSEHOLDS, pins: PINS });
 
-/** The town, founded and with The Keep welcomed. `{ repo, keyFile, pub }`. */
-export function invitedTown(src = INVITE_TOWN) {
+/**
+ * The town, founded and with The Keep welcomed. `{ repo, keyFile, pub }`.
+ *
+ * `households`, `pins`, `welcomes` ([[handle, "gh:<id>"], ...]) and `meeps` (handles the town's
+ * law names, declared on the ledger) default to The Keep's town, so a caller that names none gets
+ * exactly the town it always did. The founders' arm names its own (POS-816/d): a Starforge
+ * household that lists a meep, which the town's meep law must keep from being paid.
+ */
+export function invitedTown(src = INVITE_TOWN, { households = HOUSEHOLDS, pins = PINS, welcomes = [["dora", "gh:4"]], meeps = [] } = {}) {
   const repo = mkdtempSync(join(tmpdir(), "invite-town-"));
   mkdirSync(join(repo, "tools"), { recursive: true });
   for (const f of ["stamp-mint.mjs", "stamp-verify.mjs", "registry-source.mjs"]) copyFileSync(join(src, "tools", f), join(repo, "tools", f));
-  writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(PINS));
-  writeFileSync(join(repo, "tools", "households.json"), JSON.stringify({ households: HOUSEHOLDS }));
-  for (const h of Object.keys(PINS)) {
+  writeFileSync(join(repo, "tools", "github-ids.json"), JSON.stringify(pins));
+  writeFileSync(join(repo, "tools", "households.json"), JSON.stringify({ households }));
+  for (const h of Object.keys(pins)) {
     mkdirSync(join(repo, "WHITE_PAGES", h), { recursive: true });
     writeFileSync(join(repo, "WHITE_PAGES", h, "ADDRESS.md"), `---\nhandle: ${h}\n---\n`);
   }
@@ -43,6 +50,8 @@ export function invitedTown(src = INVITE_TOWN) {
   writeFileSync(keyFile, privateKey.export({ type: "pkcs8", format: "pem" }));
   const mint = (args) => execFileSync(process.execPath, [join(repo, "tools", "stamp-mint.mjs"), ...args, "--repo", repo], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   mint(["--append", "--key", keyFile]);
-  mint(["--welcome", "dora", "--household", "gh:4", "--date", "2026-10-28", "--key", keyFile]);
+  // a law is forward-dated, never retroactive: the day after the last delivery (2026-10-27), the day the welcomes are paid
+  if (meeps.length) mint(["--declare-rules", "stamps-v2", "--meeps", meeps.join(","), "--date", "2026-10-28", "--key", keyFile]);
+  for (const [handle, household] of welcomes) mint(["--welcome", handle, "--household", household, "--date", "2026-10-28", "--key", keyFile]);
   return { repo, keyFile, pub, mint };
 }

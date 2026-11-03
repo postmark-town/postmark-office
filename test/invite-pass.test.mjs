@@ -16,7 +16,9 @@
 //   · the invited household's 5 more and its inviter's 10, each one line, green;
 //   · a second pass writes nothing (never twice);
 //   · a held invitation pays its 5 more and not its inviter's 10;
-//   · holds it cannot read (087 not landed) pay no inviter side.
+//   · holds it cannot read (087 not landed) pay no inviter side;
+//   · THE FOUNDERS' household pays both sides like any other (POS-816/d), and the
+//     town's meep law keeps its meeps from being the recipient.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -24,7 +26,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { main, inviteMintArgv } from "../deploy/invite-pass.mjs";
-import { HOUSEHOLDS, REGISTRY, INVITE_TOWN_SKIP, invitedTown } from "./helpers/invite-town.mjs";
+import { HOUSEHOLDS, PINS, INVITED_AT, REGISTRY, INVITE_TOWN_SKIP, invitedTown } from "./helpers/invite-town.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PINNED_TOWN = join(ROOT, "town-clone");
@@ -123,5 +125,52 @@ test(`END TO END: a held invitation pays its 5 more and not its inviter's 10; ho
     const q = quiet();
     await main(["--town", repo, "--key", keyFile], { store: STORE(), registry: REGISTRY, now: new Date("2026-11-04T17:00:00.000Z"), env: {}, ...q });
     assert.deepEqual(inviteLines(repo).map((l) => / · (\d+) · /.exec(l)[1]), ["5"], "in its week: the 10 waits for the settlement");
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});
+
+// ── the founders' household pays like any other (POS-816/d) ─────────────────
+//
+// LAW POS-816/d (Darko 2026-11-03 09:31 EDT): "this should pay like any other under the new NOMOS".
+// Until 2026-11-03 an invitation naming starforge paid neither side (POS-576/e, "No, never"). Two
+// houses are invited by it, both invented: nook names the house whole ("hh:starforge"), hall names
+// a resident ("wren"). The Starforge household lists a meep FIRST, as the live one does
+// (architect), and the town's law names it: POS-655, "meeps are credited, not paid".
+const FOUNDERS_HOUSES = Object.freeze({
+  ...HOUSEHOLDS,
+  starforge: { residents: ["architect", "wren"], accounts: [{ id: 7 }] },
+  nook: { residents: ["nell"], accounts: [{ id: 6 }], invited_by: { by: "starforge", named: "hh:starforge", at: INVITED_AT } },
+  hall: { residents: ["hal"], accounts: [{ id: 8 }], invited_by: { by: "starforge", named: "wren", at: INVITED_AT } },
+});
+const FOUNDERS_PINS = Object.freeze({ ...PINS, nell: { id: 6 }, architect: { id: 7 }, wren: { id: 7 }, hal: { id: 8 } });
+const FOUNDERS_REGISTRY = Object.freeze({ households: FOUNDERS_HOUSES, pins: FOUNDERS_PINS });
+const FOUNDERS_TOWN = Object.freeze({ households: FOUNDERS_HOUSES, pins: FOUNDERS_PINS, welcomes: [["dora", "gh:4"], ["nell", "gh:6"], ["hal", "gh:8"]], meeps: ["architect"] });
+const FOUNDERS_STORE = () => ({
+  rows: ["nook", "hall"].map((slug) => ({ slug, name: slug, residents: FOUNDERS_HOUSES[slug].residents, invited_by: FOUNDERS_HOUSES[slug].invited_by })),
+  houses: Object.entries(FOUNDERS_HOUSES).map(([slug, h]) => ({ slug, residents: h.residents, formerly: [] })),
+  facts: { letters: new Map([["nook", "2026-10-28T12:00:00.000Z"], ["hall", "2026-10-28T12:00:00.000Z"]]), homes: new Map(), ashore: new Map() },
+  holds: new Map(),
+});
+
+test(`END TO END: an invitation from the founders' household pays both sides through the town's own verb, and a house named whole pays a resident who is no meep ${E2E ? "(skipped: " + E2E + ")" : ""}`, { skip: E2E }, async () => {
+  const { repo, keyFile, pub } = invitedTown(undefined, FOUNDERS_TOWN);
+  try {
+    const q = quiet();
+    const r = await main(["--town", repo, "--key", keyFile], { store: FOUNDERS_STORE(), registry: FOUNDERS_REGISTRY, now: NOW, env: {}, ...q });
+    assert.equal(r, 0, `every owed line was written, none refused: ${q.out.join("\n")}`);
+    const lines = inviteLines(repo);
+    // both sides of both invitations: the 5 more to each welcome's own recipient, then the 10 to wren,
+    // never to architect, the Starforge household's first resident and a meep of the town's law
+    assert.deepEqual(lines.map((l) => /^- (\S+) · MINT → (\S+) · (\d+) · for: (invite:\S+) · by: the-town · sig: /.exec(l)?.slice(1)), [
+      ["2026-11-04", "hal", "5", "invite:hh:hall/hh:starforge/invited"],
+      ["2026-11-04", "nell", "5", "invite:hh:nook/hh:starforge/invited"],
+      ["2026-11-04", "wren", "10", "invite:hh:hall/hh:starforge/inviter/2026-10-28"],
+      ["2026-11-04", "wren", "10", "invite:hh:nook/hh:starforge/inviter/2026-10-28"],
+    ], q.out.join("\n"));
+    const v = await verify(repo, pub);
+    assert.equal(v.ok, true, v.problems.join("\n"));
+    // never twice, the founders' lines included
+    const again = quiet();
+    assert.equal(await main(["--town", repo, "--key", keyFile], { store: FOUNDERS_STORE(), registry: FOUNDERS_REGISTRY, spawn: noSpawn, now: NOW, env: {}, ...again }), 0, again.out.join("\n"));
+    assert.equal(inviteLines(repo).length, 4);
   } finally { rmSync(repo, { recursive: true, force: true }); }
 });

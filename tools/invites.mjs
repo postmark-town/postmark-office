@@ -45,7 +45,7 @@ const SIDE = {
     paid: `PAID 5 to ${s.to} on ${s.on}`,
     owed: `OWED 5 to ${s.to}, its welcome's own recipient: the next tick pays it`,
     waiting: `WAITING: ${s.why}`,
-    refused: "REFUSED (founders): nothing is owed to either side; the invitee has the ordinary bundle",
+    refused: "REFUSED (the town's own house): nothing is owed to either side; the invitee has the ordinary bundle",
   }[s.status]),
   inviter: (s, p) => ({
     paid: `PAID 10 to ${s.to} on ${s.on}`,
@@ -57,7 +57,7 @@ const SIDE = {
     waiting: s.due ? `WAITING: ${s.why}` : "WAITING: no first letter and no home yet, the 30 days still running",
     late: "LATE: the first letter or home came after the 30 days: nothing is owed",
     lapsed: "LAPSED: no first letter and no home within the 30 days: nothing is owed",
-    refused: "REFUSED (founders): nothing is owed",
+    refused: "REFUSED (the town's own house): nothing is owed",
   }[s.status]),
 };
 

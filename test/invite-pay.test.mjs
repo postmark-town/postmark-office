@@ -13,7 +13,10 @@
 //   POS-816/a "A week": the inviter's 10 waits a week after that trigger;
 //   POS-816 (2026-11-02 23:56): a held payout waits until lifted; cancelled is
 //     never paid and takes no place in the cap; every move carries a reason;
-//   POS-576/e "No, never": the founders' household and the town pay neither side.
+//   POS-576/e "No, never": the town's own house pays neither side. The founders'
+//     household did too until POS-816/d (Darko 2026-11-03 09:31 EDT: "this should pay
+//     like any other under the new NOMOS"): it pays both sides now, like any other;
+//   POS-655 "meeps are credited, not paid": a meep is never the recipient.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -262,26 +265,58 @@ test("the hold's evidence: every row carries the inviter's paid count for the mo
   assert.deepEqual(one(plan(), "keep").inviter_paid_this_month, { month: "2026-11", paid: 0 });
 });
 
-// ── founders ────────────────────────────────────────────────────────────────
+// ── the founders pay like any other; the town's own house does not ──────────
 
-test("founders: an invitation from the founders' household or the town's own pays neither side", () => {
-  // LAW POS-576/e (Darko 2026-10-22 22:06): "No, never".
+test("founders: an invitation from the founders' household pays both sides like any other's, cap included; the town's own house still pays neither", () => {
+  // LAW POS-816/d (Darko 2026-11-03 09:31 EDT): "this should pay like any other under the new NOMOS".
+  // Until 2026-11-03 this asserted POS-576/e ("No, never", 2026-10-22 22:06): an invitation from
+  // starforge read refused "founders" on both sides and owed nothing.
   const r = [invited("nook", "starforge", "wren")];
   const ledger = ledgerOf("- 2026-10-28 · MINT → nell · 5 · for: welcome:hh:nook · by: the-town");
-  const p = plan({ r, ledger, letters: new Map([["nook", ACTIVATED]]) });
-  assert.equal(one(p, "nook").refused, "founders");
-  assert.deepEqual([one(p, "nook").invited_side.status, one(p, "nook").inviter_side.status], ["refused", "refused"]);
-  assert.deepEqual(owedLines(p), []);
-  assert.deepEqual(owedLines(plan({ r: [invited("hall", "the-town", "pen")], ledger: ledgerOf("- 2026-10-28 · MINT → hall-r · 5 · for: welcome:hh:hall · by: the-town") })), []);
+  const letters = new Map([["nook", ACTIVATED]]);
+  const p = plan({ r, ledger, letters });
+  assert.equal(one(p, "nook").refused, undefined, "no refusal: starforge is a household like another");
+  assert.deepEqual(one(p, "nook").invited_side, { status: "owed", to: "nell", amount: 5,
+    line: { side: "invited", handle: "nell", invited: "hh:nook", inviter: "hh:starforge" } });
+  assert.deepEqual(one(p, "nook").inviter_side, { status: "owed", due: DUE, to: "wren", amount: 10, nth_this_month: 1,
+    line: { side: "inviter", handle: "wren", invited: "hh:nook", inviter: "hh:starforge", activated: "2026-10-28" } });
+  assert.deepEqual(owedLines(p).map((l) => [l.side, l.handle, l.inviter]), [["invited", "nell", "hh:starforge"], ["inviter", "wren", "hh:starforge"]],
+    "both sides, asked for exactly as an ordinary house's are");
+  // like any other includes the cap: starforge with ten paid in November waits for a month with room
+  const ten = ledgerOf("- 2026-10-28 · MINT → nell · 5 · for: welcome:hh:nook · by: the-town",
+    ...Array.from({ length: 10 }, (_, i) => `- 2026-11-0${i % 9 + 1} · MINT → wren · 10 · for: invite:hh:old${i}/hh:starforge/inviter/2026-10-20 · by: the-town`));
+  assert.equal(one(plan({ r, ledger: ten, letters }), "nook").inviter_side.status, "over-cap", "the founders' house is held to the 10 a month like any other");
+  // the town's own house still pays neither side (it is the town's, not a household's)
+  const hall = plan({ r: [invited("hall", "the-town", "pen")], ledger: ledgerOf("- 2026-10-28 · MINT → hall-r · 5 · for: welcome:hh:hall · by: the-town"), letters: new Map([["hall", ACTIVATED]]) });
+  assert.equal(one(hall, "hall").refused, "town");
+  assert.deepEqual([one(hall, "hall").invited_side, one(hall, "hall").inviter_side], [{ status: "refused", why: "town" }, { status: "refused", why: "town" }]);
+  assert.deepEqual(owedLines(hall), []);
   // the control: the same invitation from an ordinary house asks for both
-  assert.equal(owedLines(plan({ r: [invited("nook", "castle", "cleo")], ledger, letters: new Map([["nook", ACTIVATED]]) })).length, 2);
+  assert.equal(owedLines(plan({ r: [invited("nook", "castle", "cleo")], ledger, letters })).length, 2);
 });
 
-test("the recipient: the inviter's resident the join named, else that house's first", () => {
+test("the recipient: the inviter's resident the join named, else that house's first, and never a meep", () => {
   assert.equal(inviterRecipient("cleo", ["carl", "cleo"]), "cleo");
   assert.equal(inviterRecipient("hh:castle", ["carl", "cleo"]), "carl", "a house named: its first resident");
   assert.equal(inviterRecipient("stranger", ["carl", "cleo"]), "carl");
   assert.equal(inviterRecipient("x", []), null);
+  // POS-655 (meeps are credited, not paid) beside POS-816/d: with the founders' half repealed a join can name
+  // the Starforge household whole, which lists meeps first (live: architect, illuminator, ...). The 10 goes
+  // to the first resident who is not one, or to nobody: the town's judge would refuse a meep on every tick.
+  const isMeep = (h) => ["architect", "registrar"].includes(h);
+  assert.equal(inviterRecipient("hh:starforge", ["architect", "registrar", "wren", "wick"], isMeep), "wren", "a house named whole: its first resident who is not a meep");
+  assert.equal(inviterRecipient("wick", ["architect", "registrar", "wren", "wick"], isMeep), "wick", "a resident the join named is paid when they are not one");
+  assert.equal(inviterRecipient("hh:starforge", ["architect", "registrar"], isMeep), null, "a house of nothing but meeps receives nothing");
+  assert.equal(inviterRecipient("hh:starforge", ["architect", "wren"]), "architect", "the control: with no law handed in, nobody is a meep here (the town's judge still holds it)");
+  // through the plan, where the town's meep law rides the ledger the plan reads (invite-facts.mjs § townInviteLedger)
+  const sfHouses = houses.map((h) => (h.slug === "starforge" ? { ...h, residents: ["architect", "wren"] } : h));
+  const nookLedger = (...extra) => ledgerOf("- 2026-10-28 · MINT → nell · 5 · for: welcome:hh:nook · by: the-town", ...extra);
+  const planWith = (ledger) => planInvitePay({ rows: [invited("nook", "starforge", "hh:starforge")], houses: sfHouses,
+    facts: { letters: new Map([["nook", ACTIVATED]]) }, ledger, holds: new Map(), now: new Date("2026-11-05T00:00:00.000Z") });
+  const lawful = Object.assign(nookLedger(), { isMeep: (h) => h === "architect" });
+  assert.equal(one(planWith(lawful), "nook").inviter_side.to, "wren", "the plan skips the meep");
+  assert.deepEqual(owedLines(planWith(lawful)).map((l) => l.handle), ["nell", "wren"]);
+  assert.equal(one(planWith(nookLedger()), "nook").inviter_side.to, "architect", "the control: without the law the first resident is chosen, which is what the law moves");
   const nobody = planInvitePay({ rows, houses: houses.map((h) => (h.slug === "castle" ? { ...h, residents: [] } : h)), facts: { letters: new Map([["keep", ACTIVATED]]) }, ledger: ledgerOf(WELCOME), holds: new Map(), now: new Date("2026-11-05T00:00:00.000Z") });
   assert.equal(one(nobody).inviter_side.status, "waiting", "a house with no resident on record receives nothing yet");
 });

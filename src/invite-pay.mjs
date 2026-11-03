@@ -9,7 +9,10 @@
 //     claims its home, "within 30 days" ("inviter when real");
 //   · at most 10 paid invitations per household a month ("let's do 10 a month");
 //   · the founders' household and the town earn none ("No, never"); meeps
-//     can't be named.
+//     can't be named. THE FOUNDERS' HALF IS REPEALED (POS-816/d, Darko
+//     2026-11-03 09:31 EDT: "this should pay like any other under the new
+//     NOMOS"): the Starforge household pays both sides like any other. The
+//     town's own house still earns none, and meeps still earn nothing.
 // POS-816 (Darko 2026-10-28 23:07 "otherwise little bird will drown";
 // 2026-11-02 23:56 "calls are good. continue with the calls as stated";
 // 2026-11-03 00:08 EDT in the picker):
@@ -54,9 +57,8 @@ export const INVITE_HOLD_MS = 7 * 864e5;            // "A week" (POS-816/a)
 export const INVITE_CAP_PER_MONTH = 10;             // "let's do 10 a month" (POS-576/c), in the month paid (POS-816/b)
 export const SETTLEMENT_HOURS_UTC = Object.freeze([6, 18]);
 
-/** The founders' household and the town's own (POS-576/e); arrival-invite.mjs § FOUNDERS is the one list. */
-export { FOUNDERS } from "./arrival-invite.mjs";
-import { FOUNDERS } from "./arrival-invite.mjs";
+/** The town's own house earns none (POS-576/e); arrival-invite.mjs § TOWN_HOUSE is the one name. */
+import { TOWN_HOUSE } from "./arrival-invite.mjs";
 
 const TZ = () => process.env.TOWN_TZ ?? "America/New_York";
 const iso = (v) => { const t = v == null ? NaN : new Date(v).getTime(); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
@@ -179,10 +181,20 @@ export function ledgerFacts(entries, { engine, canon = (k) => k }) {
   return { welcomes, invitedPaid, inviterPaid, paidInMonth };
 }
 
-/** Who in the inviting house is paid: the resident the join named when it is one of that house's, else the house's first. */
-export function inviterRecipient(named, residents = []) {
+/**
+ * Who in the inviting house is paid: the resident the join named when it is one
+ * of that house's, else the house's first. NEVER A MEEP (POS-655): the Starforge
+ * household lists meeps among its residents, and with the founders' half
+ * repealed (POS-816/d) a join can name that house whole, whose first resident
+ * is a meep the town's judge refuses on every tick. So the house's first
+ * resident who is not one. `isMeep(handle)` is the town's meep law as the plan's
+ * ledger carries it (invite-facts.mjs § townInviteLedger); absent, nobody is one
+ * here, and the town's judge still holds the law again at the verb.
+ */
+export function inviterRecipient(named, residents = [], isMeep = () => false) {
   const n = String(named ?? "").replace(/^hh:/, "");
-  return residents.includes(n) ? n : (residents[0] ?? null);
+  const payable = residents.filter((h) => !isMeep(h));
+  return payable.includes(n) ? n : (payable[0] ?? null);
 }
 
 /**
@@ -206,12 +218,13 @@ export function inviterRecipient(named, residents = []) {
  * 10 this town month. Over the cap, it waits for a month with room, oldest due
  * first (Rivet's 10-29 reading of "Month paid": "enforce the cap in the payment
  * month, with deterministic oldest-eligible ordering").
- * FOUNDERS: an invitation into the founders' household or the town's own pays
- * neither side.
+ * THE TOWN'S OWN HOUSE: an invitation naming it pays neither side. The
+ * founders' household pays like any other (POS-816/d).
  */
 export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, holds = new Map(), now = new Date() }) {
   const current = currentSlugOf(houses);
   const residentsOf = new Map(houses.map((h) => [h.slug, h.residents ?? []]));
+  const isMeep = typeof ledger?.isMeep === "function" ? ledger.isMeep : () => false;
   const payDay = townDay(now);
   const month = payDay.slice(0, 7);
   const nowIso = iso(now);
@@ -221,7 +234,7 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
     .sort((a, b) => a.at.localeCompare(b.at) || a.slug.localeCompare(b.slug))
     .map((r) => {
       const inviter = current(r.invited_by.by);
-      const founders = FOUNDERS.includes(inviter);
+      const townOwn = inviter === TOWN_HOUSE;
       const welcome = ledger.welcomes.get(r.slug) ?? null;
       const act = activationOf({ at: r.at, letter: facts.letters?.get(r.slug) ?? null, home: facts.homes?.get(r.slug) ?? null, now });
       const hold = holds.get(r.slug) ?? null;
@@ -236,18 +249,18 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
         welcome: welcome ? { paid: welcome.date, to: welcome.handle } : null,
         activation: act,
         hold: hold ? { state: hold.state, moves: hold.moves ?? [] } : null,
-        ...(founders ? { refused: "founders" } : {}),
+        ...(townOwn ? { refused: "town" } : {}),
       };
       // ── the invited side ──
       const paidInvited = ledger.invitedPaid.get(r.slug);
-      row.invited_side = founders ? { status: "refused", why: "founders" }
+      row.invited_side = townOwn ? { status: "refused", why: "town" }
         : paidInvited ? { status: "paid", to: paidInvited.handle, on: paidInvited.date }
           : welcome ? { status: "owed", to: welcome.handle, amount: 5, line: { side: "invited", handle: welcome.handle, invited: `hh:${r.slug}`, inviter: `hh:${inviter}` } }
             : { status: "waiting", why: "its welcome bundle is not on the ledger yet" };
       // ── the inviter side, before the cap ──
       const paidInviter = ledger.inviterPaid.get(r.slug);
       const due = act.status === "activated" ? inviterDueAt(act.at) : null;
-      row.inviter_side = founders ? { status: "refused", why: "founders" }
+      row.inviter_side = townOwn ? { status: "refused", why: "town" }
         : paidInviter ? { status: "paid", to: paidInviter.handle, on: paidInviter.date }
           : act.status !== "activated" ? { status: act.status }
             : hold?.state === "cancelled" ? { status: "cancelled", due }
@@ -263,7 +276,7 @@ export function planInvitePay({ rows = [], houses = [], facts = {}, ledger, hold
     const before = (ledger.paidInMonth.get(k) ?? 0) + (placed.get(k) ?? 0);
     if (before >= INVITE_CAP_PER_MONTH) { row.inviter_side = { status: "over-cap", due: row.inviter_side.due, month, paid_this_month: before }; continue; }
     placed.set(k, (placed.get(k) ?? 0) + 1);
-    const to = inviterRecipient(row.named, residentsOf.get(row.invited_by) ?? []);
+    const to = inviterRecipient(row.named, residentsOf.get(row.invited_by) ?? [], isMeep);
     row.inviter_side = to
       ? { status: "owed", due: row.inviter_side.due, to, amount: 10, nth_this_month: before + 1,
         line: { side: "inviter", handle: to, invited: `hh:${row.household}`, inviter: `hh:${row.invited_by}`, activated: townDay(row.activation.at) } }

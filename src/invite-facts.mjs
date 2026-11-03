@@ -24,6 +24,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ledgerFacts } from "./invite-pay.mjs";
+import { meepLawOf } from "./fund-holder.mjs";
 
 const iso = (v) => { const t = v == null ? NaN : new Date(v).getTime(); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
 const missing = (e) => e?.code === "42P01"; // undefined_table: a migration that has not landed
@@ -69,7 +70,7 @@ export async function inviteStoreFacts(q) {
  * missing, when the clone's stamp-mint.mjs carries no invite grammar: then the
  * plan cannot see what is already paid, and nothing may be paid twice.
  */
-export async function townInviteLedger(town, registryHouseholds) {
+export async function townInviteLedger(town, registryHouseholds, { on = new Date() } = {}) {
   const tool = join(town, "tools", "stamp-mint.mjs");
   if (!existsSync(tool)) throw new Error(`invite: no tools/stamp-mint.mjs in ${town} — the town clone is named wrong`);
   const engine = await import(pathToFileURL(tool).href);
@@ -78,5 +79,9 @@ export async function townInviteLedger(town, registryHouseholds) {
   const ledgerFile = join(town, "WHITE_PAGES", "stamp-ledger.md");
   const entries = existsSync(ledgerFile) ? engine.parseStampLedger(readFileSync(ledgerFile, "utf8")) : [];
   const canon = engine.houseCanonOf(registryHouseholds ?? {});
-  return { engine, entries, ledger: ledgerFacts(entries, { engine, canon }) };
+  // The town's meep law, for the plan's choice of a house's resident to pay (invite-pay.mjs § inviterRecipient).
+  // The lenient read (fund-holder.mjs § meepLawOf): an unreadable law answers "nobody is a meep" here, which
+  // can only plan a line the town's judge refuses (it holds the same law again at the verb), never pay a meep.
+  const isMeep = meepLawOf(engine, entries, new Date(on).toISOString().slice(0, 10));
+  return { engine, entries, ledger: { ...ledgerFacts(entries, { engine, canon }), isMeep } };
 }

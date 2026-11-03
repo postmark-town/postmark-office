@@ -68,7 +68,7 @@ async function readPlan({ env, clone, now }) {
   const { registryFromRows } = await import("./registry-rows.mjs");
   const regRows = await loadRegistryRows(env);
   const households = regRows ? (registryFromRows(regRows).households ?? {}) : {};
-  const town = clone ? await townInviteLedger(clone, households) : null;
+  const town = clone ? await townInviteLedger(clone, households, { on: now }) : null;
   const ledger = town?.ledger ?? null;
   return { store, ledger, plan: ledger ? planInvitePay({ ...store, holds: store.holds ?? new Map(), ledger, now }) : null };
 }
@@ -86,7 +86,7 @@ export async function advanceInvite(fields = {}, key = null, id, { now = Date.no
       ?? (read?.store?.rows.some((r) => r.slug === slug) ? { household: slug, inviter_side: { status: "unknown" } } : null);
     if (!row) throw INVITE_NOT_FOUND(id);
     if (row.inviter_side?.status === "paid") throw refuse(409, `${id}'s inviter was paid on ${row.inviter_side.on}`, "a payout already on the ledger is not held, lifted or cancelled; the ledger is append-only");
-    if (row.inviter_side?.status === "refused") throw refuse(409, `${id} pays neither side (the founders' household or the town's own)`, "there is no payout to hold");
+    if (row.inviter_side?.status === "refused") throw refuse(409, `${id} pays neither side (it names the town's own house)`, "there is no payout to hold");
     return await officeWrite(async (c) => {
       const { rows: [prev] } = await c.query("SELECT * FROM invite_holds WHERE household = $1 FOR UPDATE", [slug]);
       const from = prev?.state ?? "open";

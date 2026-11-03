@@ -99,7 +99,7 @@ export async function main(argv = process.argv.slice(2), { store = undefined, re
     facts = store === undefined ? await storeFacts(env) : store;
     if (!facts) throw new Error("the office is not pointed at its record (WORLD2_PG_URL)");
     base = await storeKeyBase(town, { env, base: keyBase });
-    town_ = await townInviteLedger(town, registry.households);
+    town_ = await townInviteLedger(town, registry.households, { on: now });
   } catch (e) {
     err(`invite-pass: ${e?.message ?? e} — nothing planned, nothing paid; every invitation keeps its claim for the next tick`);
     return 1;
