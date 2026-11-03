@@ -573,8 +573,9 @@ export const TOOLS = [
 //   serves the identical full list it served before the apex existed — the
 //   rollback story stays one environment variable.
 //
-//   ONE FLAT REMAINS. world_note stays listed by ruling; the five read flats
-//   delisted when `read:` landed to answer for them (same day, hours later).
+//   TWO FLATS REMAIN. world_note stays listed by ruling, and world_investigate
+//   was un-delisted 2026-08-23 (see DELISTED); the five read flats delisted
+//   when `read:` landed to answer for them (same day, hours later).
 //
 // ROUND FOUR (POS-54, 2026-08-25) finishes the shape the first round started.
 // With mail folded under household, four public reads added to town and two
