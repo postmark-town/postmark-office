@@ -56,9 +56,21 @@
 // new law before it answers, so the act stands on the law the store has at
 // that moment. When the store says it moved and the new law could not be
 // loaded in time, `behind` says so, and the act refuses rather than judge
-// under law the store has replaced (act-law.mjs). The asks share the
+// under law the store has replaced (act-law.mjs). The loads share the
 // refreshers' cap (snapshot-loads.mjs § MAX_LOADS): a store that is slow is
 // never asked for the whole law once per act.
+//
+// ── EVERY ACT ASKS THE PIN, EVEN UNDER CONTENTION (POS-680) ──────────────────
+// Wright's Settled on POS-680 (2026-11-03 01:0x EST, adopting Rivet's
+// recommendation): "every act asks the cheap pin question, even when the load
+// cap is full; an act reuses a refresh in flight only if that refresh's pin
+// matches what it was just told; otherwise, the existing plain 503 for law that
+// moved but hasn't loaded." So when a refresh is in flight, or the cap is full,
+// `freshLaw()` asks the pin on its own (`pinAlone`: no load slot, nothing
+// loaded). The law in force is the one the pin names: the act goes on. A
+// refresh in flight is waited on, and stood on only if the law it put in force
+// is the one this act was told. Anything else is behind, and the door refuses.
+// A store that cannot be asked at all still refuses nothing (G1's fallback).
 
 import { LAW_AT_BLESSING_SQL, lawSnapshotFromRows } from "./law-classes.mjs";
 import { startLoad, endLoad, loadsStanding, timedSession, servePool, plainRefreshError, MAX_LOADS } from "./snapshot-loads.mjs";
@@ -137,7 +149,12 @@ export function lawRefreshStanding() {
  * process has not loaded it.
  */
 export function lawBehind() {
-  const seen = state.seenPinned == null ? null : Number(state.seenPinned);
+  return lawBehindOf(state.seenPinned);
+}
+
+/** The same sentence, for the settlement a pin named (`pinned`), against the law in force. */
+function lawBehindOf(pinned) {
+  const seen = pinned == null ? null : Number(pinned);
   const have = state.snap?.pin?.settlement == null ? null : Number(state.snap.pin.settlement);
   if (seen == null || seen === have) return null;
   return `the store's law is S${seen}'s, and this office has not loaded it yet (it acts on ${have == null ? "no law" : `S${have}'s`})`;
@@ -145,11 +162,42 @@ export function lawBehind() {
 
 /**
  * The law as the store has it NOW, for an act: asks the pin, loads a moved law,
- * and answers `{ snap, behind }` (§ AN ACT ASKS FIRST). Never throws.
+ * and answers `{ snap, behind }` (§ AN ACT ASKS FIRST; under contention,
+ * § EVERY ACT ASKS THE PIN). Never throws.
  */
 export async function freshLaw({ query, deadlineMs } = {}) {
-  await reloadLawSnapshot({ ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
-  return { snap: state.snap, behind: lawBehind() };
+  const opts = { ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
+  // Nothing in flight and room under the cap: the act's own refresh, which asks the pin first.
+  if (!state.inflight && !(await reloadLawSnapshot(opts)).busy) return { snap: state.snap, behind: lawBehind() };
+  const told = await pinAlone(query ?? defaultQuery, deadlineMs === undefined ? LAW_REFRESH_DEADLINE_MS : deadlineMs);
+  if (!told) return { snap: state.snap, behind: lawBehind() }; // the store could not be asked: G1, as before
+  state.seenPinned = told.pinned ?? null;
+  // a refresh in flight is stood on only if the law it put in force is the one this act was told
+  if (lawBehindOf(told.pinned) && state.inflight) await state.inflight;
+  return { snap: state.snap, behind: lawBehindOf(told.pinned) };
+}
+
+/**
+ * An act's own pin question (§ EVERY ACT ASKS THE PIN): PIN_SQL alone, with no
+ * load slot (it loads nothing), in its own timed session on the store (the
+ * store ends a statement that hangs), and given up at `deadlineMs` as a
+ * refresh is. Resolves the pin's row, or null when the store could not be asked.
+ */
+async function pinAlone(query, deadlineMs) {
+  const asked = (async () => {
+    let session = null;
+    try {
+      if (query === defaultQuery) session = await timedSession(await servePool());
+      return (await (session ? session.query : query)(PIN_SQL)).rows[0] ?? {};
+    } catch (e) {
+      plainRefreshError(e, "an act's ask of the law's pin"); // the raw error to the log, once per change
+      return null;
+    } finally { await session?.end(); }
+  })();
+  if (deadlineMs == null) return asked;
+  let timer = null;
+  const late = new Promise((resolve) => { timer = setTimeout(resolve, deadlineMs, null); timer.unref?.(); });
+  return Promise.race([asked, late]).finally(() => clearTimeout(timer));
 }
 
 /**

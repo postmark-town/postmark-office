@@ -2663,9 +2663,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
             // and the standing gate, inside the `do:` branch for the same
             // reason the harbor's is: the bare and `read:` shapes of this route
             // are reads, and reads are never suspended.
-            if (await lawMovedRefused(res)) return;
             const st = await standingBounce(key);
             if (st) return bounce(res, st.code, st.defect, st.hint);
+            // Then the law (POS-680 part 2), below the gates that refuse a
+            // caller for who they are, as at the MCP door and the flat routes.
+            if (await lawMovedRefused(res)) return;
           }
           // The SAME validator the MCP door runs, against the SAME tool schema —
           // charge-then-validate in the MCP door's own order. Unknown top-level

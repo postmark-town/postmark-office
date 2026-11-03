@@ -32,7 +32,11 @@
 // transaction), and refreshes share one cap with the law's (snapshot-loads.mjs).
 // And every publish, from any path, is heard by the same listeners
 // (`onWorldGraphPublish`). An act asks first (`freshGraph()`, part 2), as
-// law-snapshot.mjs § AN ACT ASKS FIRST says for the law.
+// law-snapshot.mjs § AN ACT ASKS FIRST says for the law, and asks the pin even
+// under contention, as § EVERY ACT ASKS THE PIN there says (Wright's Settled
+// on POS-680, 2026-11-03): with a refresh in flight or the cap full, the act
+// asks the pin on its own, stands on a refresh in flight only if the graph it
+// put in force is the one the pin named, and is otherwise behind.
 
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
@@ -122,14 +126,55 @@ export function worldGraphRefreshStanding() {
 
 /** Null when this process holds the newest graph the store last named, else the sentence. */
 export function worldGraphBehind() {
-  if (state.seenKey == null || state.seenKey === state.key) return null;
-  return `the store's newest world graph is ${String(state.seenKey).slice(0, 12)}, and this office has not loaded it yet`;
+  return graphBehindOf(state.seenKey);
 }
 
-/** The world graph as the store has it NOW, for an act: asks the pin, loads a moved graph, answers `{ snap, behind }`. Never throws. */
+/** The same sentence, for the key a pin named, against the graph in force. */
+function graphBehindOf(key) {
+  if (key == null || key === state.key) return null;
+  return `the store's newest world graph is ${String(key).slice(0, 12)}, and this office has not loaded it yet`;
+}
+
+/**
+ * The world graph as the store has it NOW, for an act: asks the pin, loads a
+ * moved graph, answers `{ snap, behind }`; under contention, the pin is asked
+ * on its own (the header above, and law-snapshot.mjs § EVERY ACT ASKS THE
+ * PIN). Never throws.
+ */
 export async function freshGraph({ query, deadlineMs } = {}) {
-  await reloadWorldGraph({ ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
-  return { snap: state.snap, behind: worldGraphBehind() };
+  const opts = { ...(query ? { query } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
+  // Nothing in flight and room under the cap: the act's own refresh, which asks the pin first.
+  if (!state.inflight && !(await reloadWorldGraph(opts)).busy) return { snap: state.snap, behind: worldGraphBehind() };
+  const told = await pinAlone(query ?? defaultQuery, deadlineMs === undefined ? WORLD_GRAPH_REFRESH_DEADLINE_MS : deadlineMs);
+  if (!told) return { snap: state.snap, behind: worldGraphBehind() }; // the store could not be asked: G1, as before
+  if (told.key != null) state.seenKey = told.key;
+  // a refresh in flight is stood on only if the graph it put in force is the one this act was told
+  if (graphBehindOf(told.key) && state.inflight) await state.inflight;
+  return { snap: state.snap, behind: graphBehindOf(told.key) };
+}
+
+/**
+ * An act's own pin question: PIN_SQL alone, with no load slot (it loads
+ * nothing), in its own timed session on the store, and given up at
+ * `deadlineMs` as a refresh is. Resolves `{ key }` (null when the store holds
+ * no snapshot), or null when the store could not be asked.
+ */
+async function pinAlone(query, deadlineMs) {
+  const asked = (async () => {
+    let session = null;
+    try {
+      if (query === storeQuery) session = await timedSession(await servePool());
+      const pin = (await (session ? session.query : query)(PIN_SQL)).rows[0] ?? null;
+      return { key: pin ? `${pin.tag_sha}/${pin.office_sha}` : null };
+    } catch (e) {
+      plainRefreshError(e, "an act's ask of the world graph's pin"); // the raw error to the log, once per change
+      return null;
+    } finally { await session?.end(); }
+  })();
+  if (deadlineMs == null) return asked;
+  let timer = null;
+  const late = new Promise((resolve) => { timer = setTimeout(resolve, deadlineMs, null); timer.unref?.(); });
+  return Promise.race([asked, late]).finally(() => clearTimeout(timer));
 }
 
 // ── THE TEST FIXTURE SEAM (POS-270 lane W 3a, Keemin-ruled 2026-09-30) ──────

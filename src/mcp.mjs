@@ -1201,7 +1201,7 @@ async function handleMessage(msg, ctx) {
       // (act-law.mjs). Below the gates that refuse a caller for who they are.
       if (writeShaped(name, args) && ctx.key && (name === "world" || String(name).startsWith("world_"))) {
         const moved = await lawForAnAct();
-        if (moved) return refusal(msg.id, { error: "bounce", defect: moved.defect, hint: moved.hint, behind: moved.behind });
+        if (moved) return refusal(msg.id, { error: "bounce", code: moved.code, defect: moved.defect, hint: moved.hint, behind: moved.behind });
       }
       // Visitor scope: a signed-in account with no household reads the whole town
       // and may declare_household or request_residency — but no other write acts
