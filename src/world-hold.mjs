@@ -68,7 +68,6 @@ import { classDials, classProperty } from "./world-classes.mjs";
 import { holdingOf } from "./holding-law.mjs"; // the resident's capacity, read from the class tree (LOGOS v2, O1)
 import { perceived } from "./act-watch.mjs"; // POS-637 PR-B: every act door perceives creatures
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
-import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { heldBy } from "./held.mjs"; // POS-688: a held thing is published but unplaced
 
 /** The thing class's own params, read from the record every time (never cached here). */
@@ -754,10 +753,10 @@ export function latestDrop(rows, thingId) {
 }
 
 /** A commons mark publishes only with escrow behind it: the ground's minimum off your own parcel (`world.mjs § groundMinimumStake`). */
-export const COMMONS_MIN_STAKE = 1;
+const COMMONS_MIN_STAKE = 1;
 
 /** The docket's amend filed from THIS drop (pending or locked), or null. PURE. */
-export function setDownAmendOf(amends, thingId, dropSeq) {
+function setDownAmendOf(amends, thingId, dropSeq) {
   if (!Array.isArray(amends) || dropSeq == null) return null;
   const hit = amends.find((a) => (a.thing == null || String(a.thing) === String(thingId))
     && String(a.act_id) === String(dropSeq) && (a.status === "pending" || a.status === "locked"));
@@ -1194,7 +1193,7 @@ const placeText = (p) => `(${Number(p.x)}, ${Number(p.y)})`;
 // THE FORM IT IS WRITTEN IN). `holder` and `open` are a thing's holder word,
 // which the door re-declares (kind-holding § holderWordOf; O2, review-610 S8).
 export const AMEND_CARRIES = Object.freeze(["kind", "extent", "points", "body", "slot", "value", "class", "ask", "reward", "status", "image", "capacity", "portable", "welcome", "holder", "open"]);
-export const AMEND_LEAVES = Object.freeze([
+const AMEND_LEAVES = Object.freeze([
   "id", "by", "at", "tier", "sovereign", "placementParent", "household", "declared_household",
   "stamps", "weight", "weight_parts", "ledger_weight", "date", "signal",
 ]);
@@ -1205,7 +1204,7 @@ const LEAVES = new Set(AMEND_LEAVES), CARRIES = new Set(AMEND_CARRIES);
  *
  * @returns {{ payload, setDown } | { refused: string }}
  */
-export function setDownAmend({ thing, mark, stood, actor, actId = null, writtenAt = null }) {
+function setDownAmend({ thing, mark, stood, actor, actId = null, writtenAt = null }) {
   const id = String(thing);
   const cut = id.indexOf("/");
   const madeBy = id.slice(0, cut), slug = id.slice(cut + 1);
@@ -1321,7 +1320,7 @@ async function ownLiveClaim(thing, key, actor) {
  * carried into the amend.
  */
 const LIVE_ONLY = Object.freeze(["slug", "seq", "put_forward", "claim_id", "claim_status", "amend"]);
-export function draftRecordOf(live) {
+function draftRecordOf(live) {
   return Object.fromEntries(Object.entries(live ?? {}).filter(([k]) => !LIVE_ONLY.includes(k)));
 }
 
@@ -1371,7 +1370,7 @@ export function setDownAnswer({ stances = [], thing, dropSeq, madeBy, householdO
  * owner's house, it is lent, and the owner's house may still ask for it back.
  * `setDown` is `{ by, owner, whose }`; null says the first clause alone.
  */
-export function setDownNote(setDown) {
+function setDownNote(setDown) {
   const lead = "it stands where you stood when you set it down, and the act carries that place";
   if (!setDown) return `${lead}.`;
   if (setDown.whose === "another household's")

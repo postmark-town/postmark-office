@@ -23,7 +23,7 @@ import { stopsOfService, straightLineM } from "./world-ride.mjs";
 import { classFieldOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 
 export const FIND_CAP = 10;
-export const FIND_MAX = 50;
+const FIND_MAX = 50;
 
 const SMALL_WORDS = new Set(["the", "of", "at", "on", "by", "and", "a", "an", "in", "to"]);
 // The same derivation `world.mjs § prettyName` uses for a mark with no naming
@@ -47,7 +47,7 @@ const bare = (s) => s.replace(/^the[\s-]+/, "");
 
 /** The rung a mark sits on for this query, or null when it does not match.
  *  0 an exact id · 1 a name or slug that starts with q · 2 one that contains it. */
-export function rungOf(mark, name, q) {
+function rungOf(mark, name, q) {
   const id = norm(mark.id), slug = norm(String(mark.id).split("/").at(-1));
   const n = norm(name), qn = norm(q), qd = dashed(q);
   if (id === qn) return 0;
@@ -71,7 +71,7 @@ const nearest = (stops, p) => {
  *  when one stop serves both ends; otherwise board at the stop nearest you and
  *  ride to: the stop nearest the mark. A spectator stands nowhere, so has no
  *  boarding stop — but is still told where to get off. */
-export function routeTo(markAt, readerAt, stops, distanceM) {
+function routeTo(markAt, readerAt, stops, distanceM) {
   if (!stops.length) return { by: null, note: "no vehicle runs in this world — walk" };
   const alight = nearest(stops, markAt);
   if (!readerAt) return { by: null, board: null, alight, note: "a spectator stands nowhere — board at whichever stop is nearest you and ride to: the alight stop" };

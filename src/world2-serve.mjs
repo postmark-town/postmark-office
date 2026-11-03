@@ -45,34 +45,6 @@ import { pathToFileURL } from "node:url";
 import { readDraftClaims, keyHouseholdOf, withHousehold, claimRowsForSlug, lastAmendedRow } from "./world2-claims.mjs";
 import { receiptFrom } from "./mark-receipt.mjs";
 import { sessionKeysVia, resolveHouse, houseRowsVia } from "./household-deriver.mjs";
-
-/**
- * HOW MANY HOUSES the roster knows — counted as HOUSES, through the deriver.
- *
- * `identities` is one row per HANDLE. Its `household` column used to carry
- * whichever spelling the world repo's copy held when the row landed (measured
- * 2026-09-22: 173 of 190 `gh:<id>`, 17 `hh:<slug>`, umbraliminalis both at
- * once); since 055 (POS-350) it is the registry's view and answers `hh:<slug>`
- * or `solo:<handle>`, so the deriver below names each by its slug. This figure used to be `idRows.length`, which is the handle count
- * wearing a household's name — 190 where the town has 118 houses — and
- * `DISCLOSURES` has nothing to say about a number that is simply a different
- * quantity under the wrong word.
- *
- * A row the deriver cannot name counts as its OWN house, by its raw string. It
- * is a roster line for somebody, and folding it into nothing would undercount
- * the town; naming it a house it might not be is the fabricated household the
- * deriver refuses to invent.
- */
-export function housesKnown(idRows, rows) {
-  const houses = new Set();
-  for (const r of idRows ?? []) {
-    const hh = r?.household ?? null;
-    if (hh == null) continue;
-    const slug = rows ? resolveHouse(hh, rows.registry, rows.pins).slug : null;
-    houses.add(slug ? `hh:${slug}` : String(hh));
-  }
-  return houses.size;
-}
 import * as live from "../world2/tools/live-reads.mjs";
 import { snapshotRead, composeSnapshot } from "./position-snapshot.mjs";
 // ── THE GROUNDLESS STANDPOINT, AT THE 2.0 DOOR (#2900, ruled 2026-09-17) ─────
@@ -112,6 +84,34 @@ import { stopDepartures } from "./world-movement.mjs";
 import { readHouseholdActivity, litOf, lightsUnknownWhy } from "./household-activity.mjs";
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { standingOf } from "./speaker-standing.mjs"; // POS-739: every heard say carries its speaker's standing
+
+/**
+ * HOW MANY HOUSES the roster knows — counted as HOUSES, through the deriver.
+ *
+ * `identities` is one row per HANDLE. Its `household` column used to carry
+ * whichever spelling the world repo's copy held when the row landed (measured
+ * 2026-09-22: 173 of 190 `gh:<id>`, 17 `hh:<slug>`, umbraliminalis both at
+ * once); since 055 (POS-350) it is the registry's view and answers `hh:<slug>`
+ * or `solo:<handle>`, so the deriver below names each by its slug. This figure used to be `idRows.length`, which is the handle count
+ * wearing a household's name — 190 where the town has 118 houses — and
+ * `DISCLOSURES` has nothing to say about a number that is simply a different
+ * quantity under the wrong word.
+ *
+ * A row the deriver cannot name counts as its OWN house, by its raw string. It
+ * is a roster line for somebody, and folding it into nothing would undercount
+ * the town; naming it a house it might not be is the fabricated household the
+ * deriver refuses to invent.
+ */
+export function housesKnown(idRows, rows) {
+  const houses = new Set();
+  for (const r of idRows ?? []) {
+    const hh = r?.household ?? null;
+    if (hh == null) continue;
+    const slug = rows ? resolveHouse(hh, rows.registry, rows.pins).slug : null;
+    houses.add(slug ? `hh:${slug}` : String(hh));
+  }
+  return houses.size;
+}
 
 const state = { pool: null };
 
@@ -592,6 +592,8 @@ export function docketRow(row = {}, { byMark = null } = {}) {
 // beyond the newest window a settlement closed has not been carried yet, and
 // its receipt says `locked`, as 1.0's does.
 
+// The whole-second UTC form, with no milliseconds: byte-equal to `%cI` for a
+// commit whose committer sat on UTC, the same instant for one who did not.
 const isoZ = (t) => (t == null ? null : new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z"));
 
 /** The store's settlements, in 1.0's own shape, plus the newest window one closed. */
@@ -704,16 +706,6 @@ export const SAY_LOOKBACK_MS = 13 * 3600 * 1000;
 export const SAY_READ_SQL = `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
                 WHERE crossing >= $2 AND action = ANY($1) AND at >= $3::timestamptz ${talk.VOICE_ORDER_SQL}`;
 
-/**
- * Route a GET under /world2/*. Returns null when the path is not ours
- * (server.mjs falls through), else { code, body }.
- *
- * `{ p }` injects the connection, exactly as `world2Apex` below already takes
- * it, so a door's own shape can be exercised against canned `acts` rows without
- * a Postgres. It is a test seam and nothing else: the env gate above still
- * decides whether these doors exist at all, and every caller in `src/` passes
- * no pool and gets the real one.
- */
 // THE LAW BEFORE THE HEIGHT DIALS (WLD-97). Since postmark-world#295 the engine
 // reads every height from the skeleton (region anchors, the river's fall) and
 // refuses a skeleton without them, with code HEIGHTS_UNREAD. The engine here is
@@ -764,6 +756,16 @@ export const spokenInRoom = (row) => {
 };
 const interiorBounce = (hint) => ({ code: 503, body: { error: "bounce", defect: "the marks cannot be sorted into inside and outside just now", hint } });
 
+/**
+ * Route a GET under /world2/*. Returns null when the path is not ours
+ * (server.mjs falls through), else { code, body }.
+ *
+ * `{ p }` injects the connection, exactly as `world2Apex` below already takes
+ * it, so a door's own shape can be exercised against canned `acts` rows without
+ * a Postgres. It is a test seam and nothing else: the env gate above still
+ * decides whether these doors exist at all, and every caller in `src/` passes
+ * no pool and gets the real one.
+ */
 export async function world2Serve(path, searchParams, { p: injected = null, hearingWindow = hearingWindowAt, eng: injectedEngine = null } = {}) {
   if (!world2ServeEnabled()) return null;
   const p = injected ?? await pool();
@@ -873,22 +875,15 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
   // FRESHNESS NAMES ITS SOURCE. A row exists once `settlements-backfill.mjs
   // --apply` ran after the tag landed, and the office's tick runs it every
   // 15 minutes right after the world fetch that carries the tag in
-  // (deploy/office-tick.sh § settlements-on-tick, Wright-ruled 2026-09-17 on
+  // (deploy/office-keep.sh § settlements-on-tick, Wright-ruled 2026-09-17 on
   // postmark#2897). So `current.n` is at most one tick behind a bless — the
   // same freshness 1.0's own tag read has always had — and `what` says so.
   if (path === "/world2/settlements") {
-    const { rows } = await p.query(
-      `SELECT number, tag_sha, published_at, window_id, blessed_at
-       FROM settlements ORDER BY number DESC`);
-    // The whole-second UTC form, with no milliseconds: byte-equal to `%cI` for
-    // a commit whose committer sat on UTC, the same instant for one who did not.
-    const isoZ = (t) => (t == null ? null : new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z"));
+    const { rows, current, recent } = await storeSettlements(p);
     const extra = new Map(rows.map((r) => [Number(r.number), {
       window: r.window_id == null ? null : Number(r.window_id),
       blessed_at: isoZ(r.blessed_at),
     }]));
-    const lines = rows.map((r) => ({ tag: `settlement/S${r.number}`, sha: r.tag_sha, date: isoZ(r.published_at) }));
-    const { current, recent } = settlementsFrom(lines);
     const withStore = (s) => (s == null ? null : { ...s, ...extra.get(s.n) });
     return { code: 200, body: {
       what: "which settlements have actually LANDED, from the store's `settlements` table — one row per "
@@ -1701,51 +1696,6 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
 }
 
 /**
- * `present`, in the apex's own shape.
- *
- * 1.0's apex reads this from `presentNear` -> `near()` (src/dynamic-presence.mjs),
- * which renders the position union against a radius and a cap. The UNION is
- * already ported (`live-reads.everyonePlaced`, on trial at /world2/present);
- * what is composed here is the RENDER — bearing, band, distance — out of the
- * engine's own vocabulary, "because a resident and a hill are described the
- * same way, in the same words".
- *
- * TWO FIELDS ARE NOT ANSWERED, and they are ABSENT rather than guessed:
- * `standing` and `aboard`. Both come from the FRAME fold (who is aboard the
- * vessel), which live-reads.mjs explicitly REFUSED to port — "the FRAME half is
- * refused, see § What is NOT here". A `false` in either would be a claim this
- * store cannot make, and it would be wrong on exactly the day somebody sails.
- *
- * ── ⚑ THE ROSTER, AND WHY THE DEFAULT IS THE NARROWER ONE ───────────────────
- *
- * `positionRoster` is a union of three terms — walk records, parcel households,
- * and THE TOWN ROLL — and the third is Keemin's 2026-08-29 ruling, because a
- * narrower roster "does not answer wrongly, it leaves residents unasked about"
- * (#1864). `/world2/present` passes it.
- *
- * 1.0's APEX DOES NOT. `world.mjs § worldOrient` calls
- * `presentNear(at, { place, exclude, repo: WORLD_CLONE, world: w })` — no
- * `roll:` — so `near()` takes its `roll = []` default and the apex's presence
- * block is the two-term union. The standalone `GET /world/present` gets the
- * roll (server.mjs passes `townRoll()`); the apex block does not. Measured at
- * the quay 2026-09-03: 1 resident with the apex's roster, 49 with the roll,
- * because every roll handle with no walk and no parcel falls to the PORCH and
- * the porch IS the quay.
- *
- * That is a 1.0 inconsistency, not a 2.0 choice, and this door is additive: its
- * GO is being field-for-field equal to `GET /world/apex`. So the default
- * REPRODUCES 1.0's roster and `?roster=roll` serves the ruling's wider one,
- * with the answer saying which it used. Baking the wider roster into the
- * default would have made the new door disagree with the old one by 48
- * residents at the town's front door and called it a fix.
- */
-// EXPORTED for the reason `world2Apex` itself gives one screen up — "the
-// equality falsifier compares ANSWERS, and making it go through HTTP would put
-// a server between the two derivations it is trying to hold to each other". The
-// apex route refuses without a law projection, which is correct and is not what
-// #2900's cross-tier equality is about; a law fixture built only to reach this
-// block would be scaffolding the check could pass against instead of the thing.
-/**
  * THE DEPARTURE RECORD FOR THE 2.0 ENDPOINTS (POS-302 PR 3): the newest
  * clearing's snapshot plus every act since, as `{ records, eras, snapshot }` in
  * `departureRecords`' shape — each handle's governing record, then the delta,
@@ -1777,6 +1727,48 @@ export async function departuresForEndpoints(p) {
 /** The discard, said the way the projection says it. */
 const discardedOf = (dep) => (dep.discarded ? [`positions-snapshot-discarded: ${dep.discarded} — the whole record served`] : []);
 
+/**
+ * `present`, in the apex's own shape.
+ *
+ * 1.0's apex reads this from `presentNear` -> `near()` (src/dynamic-presence.mjs),
+ * which renders the position union against a radius and a cap. The UNION is
+ * already ported (`live-reads.everyonePlaced`, on trial at /world2/present);
+ * what is composed here is the RENDER — bearing, band, distance — out of the
+ * engine's own vocabulary, "because a resident and a hill are described the
+ * same way, in the same words".
+ *
+ * TWO FIELDS ARE NOT ANSWERED, and they are ABSENT rather than guessed:
+ * `standing` and `aboard`. Both come from the FRAME fold (who is aboard the
+ * vessel), which live-reads.mjs explicitly REFUSED to port — "the FRAME half is
+ * refused, see § What is NOT here". A `false` in either would be a claim this
+ * store cannot make, and it would be wrong on exactly the day somebody sails.
+ *
+ * ── ⚑ THE ROSTER, AND WHICH ONE IS THE DEFAULT ──────────────────────────────
+ *
+ * `positionRoster` is a union of three terms — walk records, parcel households,
+ * and THE TOWN ROLL — and the third is Keemin's 2026-08-29 ruling, because a
+ * narrower roster "does not answer wrongly, it leaves residents unasked about"
+ * (#1864). `/world2/present` passes it.
+ *
+ * The default here is the roll too (`roster = "roll"`; DEC-11, founder-ruled
+ * 2026-09-03). 1.0's apex began without it: `world.mjs § worldOrient` called
+ * `presentNear` with no `roll:`, so `near()` took its `roll = []` default and
+ * the apex's presence block was the two-term union (measured at the quay
+ * 2026-09-03: 1 resident with that roster, 49 with the roll, because every roll
+ * handle with no walk and no parcel falls to the PORCH and the porch IS the
+ * quay). 1.0's apex now passes the roll (`worldOrient` takes `{ roll }`, and
+ * world-apex.mjs hands it `ctx.roll`), so this door's default keeps it
+ * field-for-field equal to `GET /world/apex`.
+ *
+ * `?roster=apex` serves the older two-term union, named, for anyone comparing
+ * against a pre-DEC-11 answer; the answer's `roster` field says which it used.
+ */
+// EXPORTED for the reason `world2Apex` itself gives above — "the
+// equality falsifier compares ANSWERS, and making it go through HTTP would put
+// a server between the two derivations it is trying to hold to each other". The
+// apex route refuses without a law projection, which is correct and is not what
+// #2900's cross-tier equality is about; a law fixture built only to reach this
+// block would be scaffolding the check could pass against instead of the thing.
 export async function apexPresent(p, { world, at, engine: eng, roster = "roll", markRows = null }) {
   const { bearingDeg, quantizeBearing, distanceBand } = eng.engine;
   const [dep, { rows: rollRows }] = await Promise.all([

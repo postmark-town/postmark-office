@@ -53,7 +53,7 @@ import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
 // whichever output it was asked for (--to-store, --rows-out; --db is retired and
 // refused). One spelling of the location, on the writer's
 // side, read back here — never a second guess about where a file "probably" is.
-export const GEXF_VIEWS = {
+const GEXF_VIEWS = {
   full: "world-graph.gexf",
   static: "world-graph-static.gexf",
 };

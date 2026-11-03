@@ -1,10 +1,10 @@
 // world-crossings.test.mjs — the office's half of enter/exit(mark).
-// DEMO SLICE (step 5, jetto/enter-exit-demo). Run: node --test test/world-crossings.test.mjs
+// Enter/exit is live (it began as a demo slice). Run: node --test test/world-crossings.test.mjs
 //
 // What is under test here is exactly the office's OWN half — who is acting, what
 // is refused before any law is read, what reaches the pen and what deliberately
 // does not. The grammar, the adjudication and the derivation belong to the world
-// clone and are tested there (postmark-world tools/thresholds.test.mjs); this
+// clone and are tested there (postmark-world tools/enter-exit.test.mjs, renamed from thresholds.test.mjs in e14a0bd7); this
 // file leans on the real clone rather than a fake, so a drift between the two
 // repos fails here rather than in front of a resident.
 

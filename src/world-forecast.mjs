@@ -77,7 +77,7 @@ export function settlementAtOrBefore(t = new Date()) {
 // The town's own derive — the artifact a crossing hands the fold, read live. The
 // office never learns the ledger grammar; it asks the module that owns it, the
 // same way world_stake_read already does for escrow and retirement.
-export async function pendingStakeRows(townClone) {
+async function pendingStakeRows(townClone) {
   const engine = join(townClone, "tools", "world-stake.mjs");
   if (!existsSync(engine)) return null;
   const mod = await import(pathToFileURL(engine));

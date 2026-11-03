@@ -28,7 +28,7 @@ import { worldFreezeBounce } from "./freeze.mjs";
 import { forgetOccupancy } from "./creature-sight.mjs"; // WLD-74: a passage written is forgotten by the shared occupancy read
 import { perceived } from "./act-watch.mjs";
 import { standsWithin } from "./reach.mjs"; // the ONE "do you truly stand there" test — shared with the hold door (the-town/the-reach)
-import { anchorOfStop, arrivedNotice, depositAt, depositPointFor, isVehicleStop, rideStateFrom, stopsOfService, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
+import { arrivedNotice, depositAt, depositPointFor, isVehicleStop, rideStateFrom, vehicleGroundExtras, vesselIdOf } from "./world-ride.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
 import { fractionalCrossing, CROSSING_EPOCH_UTC, CROSSING_MS } from "../world2/tools/live-reads.mjs"; // the ferry's clock: the engine's epoch and cadence
 import { nextSettlement } from "./world-forecast.mjs"; // the ONE settlement clock, 06:00/18:00Z (WLD-5's exit lock reads it)

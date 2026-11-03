@@ -37,7 +37,7 @@ import { lawSnapshot } from "./law-snapshot.mjs";
 // statement has a twin at the end of this file, held equal to its SQL). Before
 // one has loaded there is nothing to open: world.db is retired (3b), and each
 // reader stands on its floor and says so.
-import { byId, classRosterGate, classRosterGateValue, jx, openWorldStore, registerTwin, sqlCompare, HYDRATION_STATUS, NO_WORLD } from "./world-graph-db.mjs";
+import { classRosterGate, classRosterGateValue, jx, openWorldStore, registerTwin, sqlCompare, HYDRATION_STATUS, NO_WORLD } from "./world-graph-db.mjs";
 import { rosterOf, dialsOf, predicatesOf, predicateNodeOf, propertiesOf, snapProperty } from "./law-classes.mjs";
 import { lineageOf, propertyValue } from "./world-grants.mjs"; // the kind rung's lineage walk (LOGOS v2, O1)
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log

@@ -35,7 +35,7 @@
 // read. Ferry noticing the boat went without you stays Ferry noticing.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { WORLD_CLONE } from "./world-store.mjs";
@@ -127,14 +127,6 @@ export async function liveLines({ afterId = null, sinceMs = null, query, centreO
     console.error(`[world] the live lines could not be read (${String(e?.message ?? e).slice(0, 160)}); happened reads the crossing log alone`);
     return null;
   }
-}
-
-/** The newest crossing the log actually holds — the cursor's ceiling. */
-export function latestSavedCrossing(worldClone) {
-  const dir = join(worldClone, "STATE", "log");
-  if (!existsSync(dir)) return null;
-  const ns = readdirSync(dir).map((f) => /^(\d+)\.jsonl$/.exec(f)?.[1]).filter(Boolean).map(Number);
-  return ns.length ? Math.max(...ns) : null;
 }
 
 /**

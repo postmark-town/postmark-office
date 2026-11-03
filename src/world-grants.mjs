@@ -104,7 +104,7 @@ export function classOfInstance(row) {
 // migration can land after the readers instead of with them.
 
 /** The old form's standings: a `kind` with one of these names how a mark stands, not its class. */
-export const STANDING_KINDS = Object.freeze(["sited", "predicated"]);
+const STANDING_KINDS = Object.freeze(["sited", "predicated"]);
 /** The predicate family, in either form (naming is a predicate whose claim is a name). */
 export const PREDICATE_KINDS = new Set(["predicated", "predicate", "naming"]);
 /** Class-space nodes: a declaration, never an instance. */

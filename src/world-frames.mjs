@@ -46,7 +46,7 @@ import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
 export const WORLD_FRAME = Object.freeze({ carrier: null, at: { x: 0, y: 0 } });
 
 /** The mobilities that make a class a CARRIER. `settled` and `fade` never carry. */
-export const CARRYING_MOBILITIES = new Set(["derived", "free"]);
+const CARRYING_MOBILITIES = new Set(["derived", "free"]);
 
 // A mobility-declaring class either IS the moving body or NAMES it. The
 // timetable class names it (`timetable.vessel` — the wheelhouse holds the

@@ -76,7 +76,7 @@ const state = fresh();
 const listeners = new Set();
 
 /** Hear every publish, from any path; `fn(standing)` runs once the new graph is in force. Returns the way to stop. */
-export function onWorldGraphPublish(fn) {
+function onWorldGraphPublish(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
 }
