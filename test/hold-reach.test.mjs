@@ -907,3 +907,46 @@ test("THE DOOR REFUSES AN AUTHOR GIVING THEIR OWN PRIVATE DRAFT AWAY — walk #1
     assert.equal(rec.pen.rows().length, 1, "the take is the one act in the record; the give never landed");
   } finally { rec.restore(); }
 });
+
+// ── POS-806 · the take refusal says how far to WALK, not only how far you are ──
+
+test("POS-806 — a take from ~544 m says to walk the distance less the 60 m reach, in the compass word the distance used", async () => {
+  const track = { x: -1850, y: -2650 };
+  const top = thingAt("wright/a-trued-spinning-top-for-little-m", -1365, -2403);
+  const e = await refusal(() => refuseOutOfReach({
+    thing: top.id, to: null, actor: "little-m-of-garrison", act: "take", holder: null,
+    ctx: ctxOf(top, track),
+  }));
+  assert.ok(e);
+  const dist = Number(e.defect.match(/stands (\d+) m/)[1]);
+  const walk = Number(e.defect.match(/; walk (\d+) m/)[1]);
+  assert.ok(walk >= dist - EARSHOT_M && walk <= dist - EARSHOT_M + 1, `the walk (${walk}) is the distance (${dist}) less the reach margin, rounded up`);
+  assert.match(e.defect, new RegExp(`; walk ${walk} m [NESW]+ to be within ${EARSHOT_M} m of it`));
+  // the bearing in the walk clause is the bearing the distance clause names
+  const bearings = [...e.defect.matchAll(/ m ([NESW]+)\b/g)].map((m) => m[1]);
+  assert.equal(bearings.length, 2);
+  assert.equal(bearings[0], bearings[1]);
+});
+
+test("POS-806 — a 61 m refusal says walk 1 m; the walk it names always lands inside the reach", async () => {
+  const top = thingAt("wright/a-nearby-thing", 0, 61);
+  const e = await refusal(() => refuseOutOfReach({
+    thing: top.id, to: null, actor: "rei", act: "take", holder: null,
+    ctx: ctxOf(top, { x: 0, y: 0 }),
+  }));
+  assert.ok(e);
+  assert.match(e.defect, /; walk 1 m N to be within 60 m of it/);
+  // falsifier for an off-by-rounding: walking exactly the named metres toward it must stand
+  const after = { x: 0, y: 1 };
+  assert.equal(standsWithin(after, top).stands, true);
+});
+
+test("POS-806 — an unmeasured distance (no anchor) adds no walk clause: null is not 0 m", async () => {
+  const ghost = thingAt("wright/a-thing-at-no-number", NaN, NaN); // an anchor the distance cannot be measured to
+  const e = await refusal(() => refuseOutOfReach({
+    thing: ghost.id, to: null, actor: "rei", act: "take", holder: null,
+    ctx: ctxOf(ghost, { x: 0, y: 0 }),
+  }));
+  assert.ok(e);
+  assert.doesNotMatch(e.defect, /; walk /, "no walk is named when the distance could not be measured");
+});

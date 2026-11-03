@@ -180,7 +180,11 @@ export function markRecordOf(row, { parentSlug = null } = {}) {
     ...(g?.points ? { points: g.points } : {}),
     body: row.body ?? "",
     tier: d.tier ?? null,
-    class: d.class ?? null,
+    // THE DUNGEON READS AS ONE IN EITHER FORM (WLD-74). The engine takes a record's class from `class:` when that key is there at all, and from `kind:`
+    // only when it is not (world mark-kind.mjs § instanceClassOf), so a `class: null` here made a W2 `kind: dungeon` row read as the class "null":
+    // no dungeon to the sight function, and every store route listed what is inside it. Only the dungeon is spelled from its kind; any other
+    // kind keeps the null it always had (its own lane, if it wants the fold's reading).
+    class: d.class ?? (row?.kind === "dungeon" ? "dungeon" : null),
     // `parent` is the AUTHORED continuation edge — the `parent:` line a
     // predicated or naming mark carries, which is what the fold publishes under
     // this name (marks-fold.mjs § the published mark: `parent: mk.parent`) and

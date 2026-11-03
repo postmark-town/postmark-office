@@ -58,9 +58,22 @@ after(() => sweep(scratch));
 // the `pg` driver's `+00:00` and the journal's `Z` are the same instant spelled
 // two ways and a string compare would order them wrong.
 
+// THE HORIZON (`WINDOW_ROW_SQL`, WLD-137) is answered here only for a window
+// that has not cleared, where it is the recorded close, in the register's own
+// microsecond spelling. Every fixture below is one. A cleared window's horizon
+// reaches its clearing and the acts its claims name; answering that here would
+// be a second copy of the rule, so this fake refuses it, and
+// test/state-log-through-the-clearing.test.mjs asks a real register instead.
+const horizonOf = (w) => {
+  if (w.cleared_at != null) {
+    throw new Error("this fake answers no cleared window's horizon — test/state-log-through-the-clearing.test.mjs asks a real register");
+  }
+  return { through: new Date(Date.parse(w.closes_at)).toISOString().replace("Z", "000Z"), through_from: "close" };
+};
+
 const register = (acts, windows) => ({
   async query(sql, params) {
-    if (sql.includes("FROM windows")) return { rows: windows.filter((w) => w.id === params[0]) };
+    if (sql.includes("FROM windows")) return { rows: windows.filter((w) => w.id === params[0]).map((w) => ({ ...w, ...horizonOf(w) })) };
     if (sql.includes("SELECT DISTINCT crossing")) {
       const lo = Date.parse(params[0]), hi = Date.parse(params[1]);
       const seen = [...new Set(acts

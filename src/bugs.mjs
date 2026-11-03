@@ -30,6 +30,19 @@
 // from where a post stands, so a post already past a gap before this rule
 // (27 shipped bugs on 2026-10-20) is grandfathered as it is, never back-filled.
 //
+// ── FIXED WAITS FOR THE MERGE, SHIPPED WAITS FOR THE TAG (the stage guard) ──
+//
+// Darko, 2026-10-28 ("Staff now, ship w45"). A stage's credit is paid on the
+// advance and cannot be taken back (POS-649, the 10-15 mis-mint), and the Bug
+// Catcher now runs the whole ladder. So the two stages that say "the work is
+// done" are checked against the work, on GitHub, before the act is written
+// (bug-stage-guard.mjs): fixed needs its linked pull request MERGED, and
+// shipped needs a link to a release tag, commit or settlement that CONTAINS
+// that merge. Every other stage is untouched. A doubt refuses and writes
+// nothing (GitHub unreachable included). The founders' door past it is
+// `force: "<why>"`, wright or keemin only, and the reason and what it
+// went past are written on the act.
+//
 // ── THE ADVANCE RECORDS; IT MINTS NOTHING ───────────────────────────────────
 //
 // Each advance act names the stage and whom it credits (`credit`), and at
@@ -332,6 +345,19 @@ export function judgeBugHand(fields, key, { act }) {
   return hand;
 }
 
+/** The founders' door past the stage guard: only they may force, and a force always says why. */
+export const FORCE_HANDS = Object.freeze(["wright", "keemin"]);
+export const GUARDED_STAGES = Object.freeze([STATE_FIXED, STATE_SHIPPED]);
+const FORCE_HOW = `force: "<why>" — wright or keemin only, at fixed or shipped; the reason is written on the bug's history`;
+
+/** A force's reason: text, one to BODY_MAX characters. */
+export function judgeForce(v) {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) throw refuse(422, "a force says why", FORCE_HOW, { field: "force" });
+  if (s.length > BODY_MAX) throw refuse(422, `a force's reason is at most ${BODY_MAX} characters`, `this one is ${s.length}`, { field: "force" });
+  return s;
+}
+
 /**
  * Judge an advance against the post's current state. Returns the payload's
  * judged parts: `{ to, credit, size?, critter?, grade?, of?, link?, earned? }`
@@ -356,6 +382,10 @@ export function judgeAdvance(fields, prev, roll) {
   }
   if (fields.reason !== undefined) throw refuse(422, "reason is a skip's", `an advance says what was earned, not why nothing was; ${SKIP_HOW}`, { field: "reason" });
   const out = { to };
+  if (fields.force !== undefined) {
+    if (!GUARDED_STAGES.includes(to)) throw refuse(422, `force is for ${GUARDED_STAGES.join(" and ")} only`, FORCE_HOW, { field: "force" });
+    out.force = judgeForce(fields.force);
+  }
   const paid = Boolean(BUG_LADDER[to]);
   if (fields.credit !== undefined && !paid)
     throw refuse(422, `${to} pays nothing and credits no one`, "leave credit off", { field: "credit" });
@@ -403,7 +433,7 @@ export function judgeAdvance(fields, prev, roll) {
 export const SKIP_STAGES = PAID_STAGES;
 export const SKIP_REASON_MAX = BODY_MAX;
 const SKIP_HOW = 'a stage no one earned is skipped with town { do: "advance", args: { post, skip: "<stage>", reason } }, one stage per call, in order; it credits no one and pays nothing';
-const SKIP_TAKES_NO = Object.freeze(["to", "credit", "size", "grade", "critter", "link", "of", "recredit", "note"]);
+const SKIP_TAKES_NO = Object.freeze(["to", "credit", "size", "grade", "critter", "link", "of", "recredit", "note", "force"]);
 
 /** The bounce for a rung not yet recorded: it names the stage and both ways forward. */
 function unrecorded(prev, gap, field = "to") {
@@ -463,7 +493,7 @@ export function judgeRecreditFields(fields, roll) {
   const to = typeof fields.to === "string" ? fields.to.trim() : "";
   if (!EARNED_STAGES.includes(to))
     throw refuse(422, `only ${EARNED_STAGES.join(", ")} are re-credited`, `to: the stage whose credit was wrong — ${RECREDIT_HOW}`, { field: "to" });
-  for (const k of ["size", "grade", "critter", "of"])
+  for (const k of ["size", "grade", "critter", "of", "force"])
     if (fields[k] !== undefined)
       throw refuse(422, `a recredit takes no ${k}`, `it pays the stage again at exactly what the stage paid — ${RECREDIT_HOW}`, { field: k });
   if (fields.credit === undefined)
@@ -658,7 +688,9 @@ export function bugHistoryOf(acts, paid = []) {
     const row = a.action === ACT_POST
       ? { stage: STATE_REPORTED, at, hand: p.hand ?? null, credit: a.actor ?? null, link: null, stamps_paid: null }
       : { stage: p.to, at, hand: p.hand ?? a.actor ?? null, credit: p.credit ?? null,
-        link: p.fields?.links?.[p.to] ?? null, stamps_paid: paid.get(`${post}/${p.to}`) ?? null };
+        link: p.fields?.links?.[p.to] ?? null, stamps_paid: paid.get(`${post}/${p.to}`) ?? null,
+        // A founder's force past the stage guard: why, and what it went past.
+        ...(p.forced ? { forced: p.forced } : {}) };
     rows.push(row);
     out.set(post, rows);
   }

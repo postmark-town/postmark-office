@@ -35,6 +35,8 @@ import { householdKeyFor } from "./world2-claims.mjs";
 import { holdsHand } from "./named-hand.mjs";
 import { sessionKeysVia } from "./household-deriver.mjs";
 import { currentCrossing } from "./crossings.mjs";
+import { rungWords } from "./post-words.mjs";
+import { apiUrl } from "./public-base.mjs";
 import { wakesNote, earpieceEnabled } from "./earpiece.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import {
@@ -44,9 +46,10 @@ import {
 import {
   BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
-  RECREDIT_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
+  RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
+import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
 import {
@@ -63,8 +66,8 @@ import {
 // are read-only views for the readers that have not moved (the earpiece, the
 // pinned board); nothing here reads or writes them.
 export const POST_COLUMNS = "id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act";
-const READ_HINT = (id) => `town { read: "calendar", args: { event: "${id}" } } — or GET /calendar/${id}`;
-const POST_READ_HINT = (id) => `town { read: "event", args: { post: "${id}" } } — or GET /calendar/${id}`;
+const READ_HINT = (id) => `town { read: "calendar", args: { event: "${id}" } } — or GET ${apiUrl(`/calendar/${id}`)}`;
+const POST_READ_HINT = (id) => `town { read: "event", args: { post: "${id}" } } — or GET ${apiUrl(`/calendar/${id}`)}`;
 
 const isRefusal = (e) => e && typeof e.code === "number" && typeof e.defect === "string";
 
@@ -466,7 +469,7 @@ function questActRow({ action, object, payload, now }) {
   };
 }
 
-const questReadHint = (id) => `town { read: "posts", args: { class: "quest", post: "${id}" } } — or GET /posts/${id}`;
+const questReadHint = (id) => `town { read: "posts", args: { class: "quest", post: "${id}" } } — or GET ${apiUrl(`/posts/${id}`)}`;
 const questAnswer = (row) => ({ id: row.id, class: QUEST_CLASS, author: row.author, household: row.household ?? null, state: row.state, fields: row.fields });
 
 /** Put a registry quest up as the town's post: one `post` act, one `posts` row. */
@@ -560,7 +563,7 @@ function bugActRow({ action, actor, object, payload, now }) {
   };
 }
 
-const bugReadHint = (id) => `town { read: "posts", args: { class: "bug", post: "${id}" } } — or GET /posts/${id}?class=bug`;
+const bugReadHint = (id) => `town { read: "posts", args: { class: "bug", post: "${id}" } } — or GET ${apiUrl(`/posts/${id}?class=bug`)}`;
 const bugAnswer = (row) => ({ id: row.id, class: BUG_CLASS, title: row.title, body: row.body, author: row.author,
   household: row.household ?? null, state: row.state, fields: row.fields });
 
@@ -682,7 +685,7 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     await judgeEarnedCreditVia(client, r, gh);
     const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
-    return { post: id, act_id: actId, hand, stage: r.to, recredit: true, was, credit: r.credit, stamps: n, link: r.link,
+    return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
       receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. `
         + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
         + `If the ledger holds no such line paid to ${was}, or ${was} no longer holds its amount in liquid stamps, the pass holds the correction and says why.`,
@@ -699,7 +702,20 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
   // POS-649: who wrote an earned stage's linked work is read from GitHub before
   // the write's transaction opens, so no store connection waits on the network.
   const before = await read((c) => bugRow(c, id), env);
-  const gh = before ? await githubAuthorOf(judgeAdvance(fields, before, roll), { env }) : null;
+  const first = before ? judgeAdvance(fields, before, roll) : null;
+  // The stage guard (bug-stage-guard.mjs): fixed waits for its PR's merge, shipped for a tag holding it.
+  // Only a founder's force goes past a refusal, and the act keeps why and what it went past.
+  if (first?.force && !FORCE_HANDS.includes(hand))
+    throw refuse(403, `only ${FORCE_HANDS.join(" and ")} force a stage past the guard`, `${hand} advances ${first.to} when the work is there: ${first.to === "fixed" ? "its PR merged" : "a tag holding the merge"}`, { field: "force" });
+  let forced = null;
+  if (first) {
+    try { await stageProofOf(first, before, { env }); }
+    catch (e) {
+      if (!first.force || !e?.defect) throw e;
+      forced = { reason: first.force, past: e.defect };
+    }
+  }
+  const gh = first ? await githubAuthorOf(first, { env }) : null;
   return write(async (client) => {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
@@ -713,7 +729,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       // The link is kept per stage; the act carries the post's whole map after it, as the reveal does.
       ...(j.link ? { links: { ...(prev.fields?.links ?? {}), [j.to]: j.link } } : {}) };
     const payload = { post: id, from: prev.state, to: j.to, ...(j.credit ? { credit: j.credit } : {}),
-      ...(Object.keys(set).length ? { fields: set } : {}), hand };
+      ...(Object.keys(set).length ? { fields: set } : {}), ...(forced ? { forced } : {}), hand };
     const actId = await insertAct(client, bugActRow({ action: ACT_ADVANCE, actor: hand, object: id, payload, now }));
     const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
       { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
@@ -722,9 +738,10 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     const pays = BUG_LADDER[j.to]
       ? `the ladder owes ${j.credit} ${n} stamps for ${j.to}, paid by the reviewed stage pass (not by this act), subject to the town's meep law and, at confirmed, three paid reports per household a week`
       : `${j.to} pays nothing`;
-    return { post: bugAnswer(row), act_id: actId, hand, stage: j.to, ...(j.credit ? { credit: j.credit } : {}), stamps: n,
-      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}),
-      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
+    return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
+      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
+      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
       read: bugReadHint(id) };
   }, env);
 }
@@ -746,7 +763,7 @@ async function skipBug(fields, key, id, { now, env }) {
       { id: actId, action: ACT_SKIP, actor: hand, object: id, payload, household: prev.household });
     await updatePost(client, row);
     const next = BUG_STAGES[BUG_STAGES.indexOf(s.to) + 1];
-    return { post: bugAnswer(row), act_id: actId, hand, stage: s.to, skipped: true, reason: s.reason, stamps: 0,
+    return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(s.to), skipped: true, reason: s.reason, stamps: 0,
       receipt: `skipped: ${id} ${prev.state} → ${s.to} by ${hand}'s hand, because ${s.reason}; a skipped stage credits no one and pays nothing, and the bug's history keeps it as skipped. Next: ${next}`,
       read: bugReadHint(id) };
   }, env);

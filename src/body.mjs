@@ -55,12 +55,22 @@ const noop = () => {};
  * rejects a TypeError before a byte is read.
  */
 export function readBody(req, cap) {
+  return readBodyBytes(req, cap, "readBody").then((bytes) => bytes.toString("utf8"));
+}
+
+/**
+ * The same reader, answering the BYTES undecoded (POS-818: the media door's
+ * raw-body way in, where the body is an image and UTF-8 would destroy it).
+ * One reader, two answers: `readBody` is this plus one decode at the end, so
+ * the cap, the drain and the settle-once rules cannot drift between them.
+ */
+export function readBodyBytes(req, cap, who = "readBodyBytes") {
   return new Promise((resolve, reject) => {
     if (!Number.isSafeInteger(cap) || cap < 0) {
-      reject(new TypeError(`readBody: cap must be a non-negative integer, got ${String(cap)}`));
+      reject(new TypeError(`${who}: cap must be a non-negative integer, got ${String(cap)}`));
       return;
     }
-    if (req.readableEnded) { resolve(""); return; }
+    if (req.readableEnded) { resolve(Buffer.alloc(0)); return; }
     if (req.destroyed) { reject(new BodyIncomplete("the request was already closed")); return; }
 
     const chunks = [];
@@ -94,7 +104,7 @@ export function readBody(req, cap) {
       }
       chunks.push(b);
     }
-    function onEnd() { settle(resolve, Buffer.concat(chunks, bytes).toString("utf8")); }
+    function onEnd() { settle(resolve, Buffer.concat(chunks, bytes)); }
     function onError(e) { settle(reject, e); }
     function onAborted() { settle(reject, new BodyIncomplete("aborted")); }
     function onClose() { if (!req.readableEnded) settle(reject, new BodyIncomplete("closed before the end")); }

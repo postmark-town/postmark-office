@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 import {
-  keepDepiction, depictionsOf, sheetRead, keepSheet, withSheetTemplate, missingSheets, anchorOf, stylePlate,
+  keepDepiction, depictionsOf, sheetRead, keepSheet, withSheetTemplate, missingSheets, anchorOf, STYLE_PLATE, SHEET_HOW, TOWN_SHEET_NOTE,
   SHEET_TEMPLATE, TOWN,
 } from "../src/depictions.mjs";
 import { seedSheets, toWebp } from "../tools/seed-sheets.mjs";
@@ -91,16 +91,19 @@ test("the sheet read: the household's own sheets always show; the town's wait on
     assert.match(blind.anchor_why, /has not said yes to the likeness question/);
     assert.match(blind.anchor_why, /oauth\/likeness\?household=lantern-row/);
     assert.equal(blind.template, SHEET_TEMPLATE);
-    assert.equal(blind.style_plate, `${M}/the-town/plate.webp`);
-    assert.equal(await stylePlate(env, query), `${M}/the-town/plate.webp`);
+    assert.equal(blind.style_plate, null, "the plate is retired (10-25): the field stays, always null");
 
     const said = await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": yes }) });
     assert.equal(said.anchor, `${M}/the-town/seed.webp`, "a yes makes the seed the anchor");
     assert.deepEqual(said.sheets.map((r) => [r.url, r.own]), [[`${M}/the-town/seed.webp`, false]], "and shows it");
+    assert.equal(said.sheets[0].note, TOWN_SHEET_NOTE, "a town-made sheet says it is a default the household may remake");
+    assert.equal(said.anchor_note, TOWN_SHEET_NOTE, "and so does the anchor when the town made it");
     assert.equal("held_until_yes" in said, false);
     await keepDepiction({ subject: "wick", url: `${M}/lantern-row/own.webp`, made_by: "lantern-row" }, env, query);
-    assert.equal((await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": yes }) })).anchor,
-      `${M}/lantern-row/own.webp`, "the household's own is canon over the town's");
+    const owned = await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": yes }) });
+    assert.equal(owned.anchor, `${M}/lantern-row/own.webp`, "the household's own is canon over the town's");
+    assert.equal("anchor_note" in owned, false, "no default note on a household's own anchor");
+    assert.equal(owned.sheets.find((r) => r.own).note, undefined);
     const refused = await sheetRead({ handle: "wick" }, { env, query, registry: registry({ "lantern-row": no }) });
     assert.equal(refused.anchor, null, "a no takes it back");
     assert.deepEqual(refused.sheets.map((r) => r.url), [`${M}/lantern-row/own.webp`], "the household's own sheet still shows on a no (D1); the town's does not");
@@ -111,11 +114,13 @@ test("the sheet read: the household's own sheets always show; the town's wait on
   });
 });
 
-test("the template asks for the two images, the resident-free plate second, and stays in the media door's bound", () => {
+test("the template asks for one image, the character's own, carries no town style plate, and stays in the media door's bound", () => {
   assert.match(SHEET_TEMPLATE, /six-panel character reference sheet/);
-  assert.match(SHEET_TEMPLATE, /FIRST is this character's own picture/);
-  assert.match(SHEET_TEMPLATE, /SECOND is the town's style plate/);
-  assert.match(SHEET_TEMPLATE, /do not copy anything in it/);
+  assert.match(SHEET_TEMPLATE, /One image is attached: this character's own picture/);
+  assert.match(SHEET_TEMPLATE, /Style: the character's own, as their picture shows it/);
+  assert.doesNotMatch(SHEET_TEMPLATE + SHEET_HOW, /style plate|painted|gouache|warm key|SECOND/i);
+  assert.match(SHEET_HOW, /free to remake/);
+  assert.equal(STYLE_PLATE, null);
   assert.match(SHEET_TEMPLATE, /under 1\.5 MB/);
   assert.equal((SHEET_TEMPLATE.match(/\[/g) ?? []).length, 2, "two brackets for the agent to fill");
 });
@@ -180,7 +185,7 @@ test("the template rides a picture's answer until the household keeps its own sh
     await keepDepiction({ subject: "wick", url: `${M}/the-town/seed.webp`, made_by: TOWN }, env, query);
     const handed = await withSheetTemplate({ updated: "wick" }, "wick", { env, query, registry: registry() });
     assert.equal(handed.sheet_template.template, SHEET_TEMPLATE);
-    assert.equal(handed.sheet_template.style_plate, `${M}/the-town/plate.webp`);
+    assert.equal(handed.sheet_template.style_plate, null);
     assert.match(handed.sheet_template.how, /update_profile \{ sheet/);
     await keepDepiction({ subject: "wick", url: `${M}/lantern-row/own.webp`, made_by: "lantern-row" }, env, query);
     assert.deepEqual(await withSheetTemplate({ updated: "wick" }, "wick", { env, query, registry: registry() }), { updated: "wick" },

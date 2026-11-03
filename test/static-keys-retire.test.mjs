@@ -706,3 +706,89 @@ test("§ K4 a resident-held key covers ONLY the exact claimed handle, with the r
     return { ...h, wren: h.h("wren") };
   }, "the exact claim, but the registry does not list the handle as the house's resident");
 });
+
+// ── § L --gh-id: two keys hold exactly one handle (POS-805) ──────────────────
+
+const GH_OLD = 4100700;
+async function twoExact() {
+  const w = await fresh(["aa", "bb"]);
+  // the old key carries a gh_id; its replacement carries none: same household, same exact handle
+  await importSpec(`sk-old=${w.slug}#${GH_OLD}:${w.h("aa")};sk-new=${w.slug}:${w.h("aa")};sk-bb=${w.slug}:${w.h("bb")}`);
+  return w;
+}
+
+test("§ L1 no flag: two exact rows still refuse as ambiguous; a flag that matches nothing refuses; neither writes", async () => {
+  const w = await twoExact();
+  const before = await snapshot();
+  const h = w.h("aa");
+  const amb = await retireStaticKey(pool, { household: w.slug, handle: h });
+  assert.equal(amb.status, "refused");
+  assert.match(amb.reason, /2 static rows hold exactly this handle \(ambiguous\)/);
+  const ambDry = await planRetire(pool, { household: w.slug, handle: h });
+  assert.match(ambDry.reason, /2 static rows hold exactly this handle \(ambiguous\)/);
+  for (const ghId of [999, 4100701]) {
+    const r = await retireStaticKey(pool, { household: w.slug, handle: h, ghId });
+    assert.equal(r.status, "refused");
+    assert.match(r.reason, /none of the 2 static rows holding exactly this handle has that gh_id/);
+    assert.equal((await planRetire(pool, { household: w.slug, handle: h, ghId })).status, "refused");
+  }
+  assert.deepEqual(await snapshot(), before, "no tombstone and no deletion for any refusal");
+});
+
+test("§ L2 --gh-id picks the old key (by its id) or the new key (none); the OTHER exact row is the cover; --dry and --mirror-only honour it", async () => {
+  // the old key, by its gh_id
+  const w = await twoExact();
+  const file = fileDb();
+  await seedFile(file, `sk-old=${w.slug}#${GH_OLD}:${w.h("aa")};sk-new=${w.slug}:${w.h("aa")};sk-bb=${w.slug}:${w.h("bb")}`);
+  const dry = await planRetire(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD, file });
+  assert.equal(dry.status, "dry");
+  assert.equal(dry.cover, "another static key for this household and handle", "the new key is the cover; no minted key exists here");
+  assert.equal(dry.target_has_gh_id, true);
+  assert.equal(await kindOf("sk-old"), "static", "dry wrote nothing");
+  const done = await retireStaticKey(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD, file });
+  assert.equal(done.status, "retired", done.reason ?? done.message);
+  assert.equal(await kindOf("sk-old"), RETIRED_KIND);
+  assert.equal(await kindOf("sk-new"), "static", "the replacement stands");
+  assert.equal(await resolves("sk-old"), false);
+  assert.equal(await resolves("sk-new"), true);
+  assert.equal(fileKind(file, "sk-old"), RETIRED_KIND);
+  assert.equal(fileKind(file, "sk-new"), "static");
+  // the file side honours the flag: a repair for the OTHER gh_id finds no tombstone, the right one repairs
+  assert.equal((await mirrorOnly(pool, { household: w.slug, handle: w.h("aa"), ghId: null, file })).status, "refused");
+  assert.equal((await mirrorOnly(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD, file })).status, "repaired");
+  // and the old key now gone, one exact row is left: no flag is needed, but the wrong flag still refuses
+  assert.equal((await retireStaticKey(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD })).status, "refused");
+
+  // the new key, by "none"
+  const w2 = await twoExact();
+  const r = await retireStaticKey(pool, { household: w2.slug, handle: w2.h("aa"), ghId: null, file: fileDb() });
+  assert.equal(r.status, "retired", r.reason ?? r.message);
+  assert.equal(await kindOf("sk-new"), RETIRED_KIND);
+  assert.equal(await kindOf("sk-old"), "static");
+  assertNoSecret([dry, done, r], ["sk-old", "sk-new", "sk-bb"], "in a --gh-id result");
+});
+
+test("§ L3 two exact rows with the SAME gh_id stay ambiguous under the flag; the CLI parses --gh-id and refuses a bad value", async () => {
+  const w = await fresh(["aa"]);
+  await importSpec(`sk-1=${w.slug}#${GH_OLD}:${w.h("aa")};sk-2=${w.slug}#${GH_OLD}:${w.h("aa")}`);
+  const r = await retireStaticKey(pool, { household: w.slug, handle: w.h("aa"), ghId: GH_OLD });
+  assert.equal(r.status, "refused");
+  assert.match(r.reason, /2 of the 2 static rows holding exactly this handle have that gh_id \(still ambiguous\)/);
+
+  const w2 = await twoExact();
+  const file = fileDb();
+  const env = { ...process.env, OFFICE_PAPERWORK_STORE: "1", WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), OFFICE_KEYS: "" };
+  const run = (...a) => spawnSync(process.execPath, [join(ROOT, "tools", "static-keys-retire.mjs"), "--oauth-db", file, "--household", w2.slug, "--handle", w2.h("aa"), ...a], { env, encoding: "utf8" });
+  const said = [];
+  const go = (...a) => { const x = run(...a); said.push(x.stdout, x.stderr); return x; };
+  assert.equal(go("--dry").status, 1, "no flag: ambiguous, refused");
+  assert.equal(go("--dry", "--gh-id", "12").status, 1, "a flag that matches nothing");
+  assert.equal(go("--gh-id", "abc").status, 2, "not a number");
+  assert.equal(go("--gh-id").status, 2, "no value");
+  assert.equal(go("--gh-id", "--dry").status, 2, "a flag where the value goes");
+  assert.equal(go("--dry", "--gh-id", String(GH_OLD)).status, 0, said.at(-1));
+  assert.equal(await kindOf("sk-old"), "static", "dry wrote nothing");
+  assert.equal(go("--gh-id", String(GH_OLD)).status, 0, said.at(-1));
+  assert.equal(await kindOf("sk-old"), RETIRED_KIND);
+  assertNoSecret(said.join("\n"), ["sk-old", "sk-new", "sk-bb"], "in a --gh-id CLI's output");
+});

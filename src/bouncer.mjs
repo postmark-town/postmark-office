@@ -5,6 +5,7 @@
 // provisional, telemetry-before-tuning limits.
 
 import { createHash } from "node:crypto";
+import { wholeNumber } from "./whole-number.mjs";
 
 const positiveInt = (name, fallback) => {
   const raw = process.env[name];
@@ -216,12 +217,12 @@ export const listParam = (params, name) =>
 export const bulkCost = (path, params) => {
   // residentPageOf's own clamp: 50 by default, 200 at most
   if (path === "/residents" && params.get("cards") === "1")
-    return Math.min(Math.max(Number(params.get("limit")) || 50, 1), 200);
+    return Math.min(Math.max(wholeNumber(params.get("limit")) || 50, 1), 200);
   if (path === "/doorsteps") return Math.max(1, Math.min(listParam(params, "handles").length, DOORSTEPS_PER_READ));
   // a digest page shapes every letter it names, so it costs the full pages of
   // 200 it stands for: 25 at queries.mjs LETTER_DIGEST_PAGE's 5000 (50 by default)
   if (path === "/letters" && params.get("digests") === "1")
-    return Math.ceil(Math.min(Math.max(Number(params.get("limit")) || 50, 1), 5000) / 200);
+    return Math.ceil(Math.min(Math.max(wholeNumber(params.get("limit")) || 50, 1), 5000) / 200);
   return 1;
 };
 

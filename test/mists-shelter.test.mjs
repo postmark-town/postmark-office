@@ -49,12 +49,11 @@ test("mistsOnTheRoad hands the walker's shelter to the engine, and an older engi
 test("the walk reads the Mists after DEC-5's occupancy read and before its exits, with the walker's shelter", () => {
   const walk = SOURCE.slice(SOURCE.indexOf("export async function walkViaOffice"));
   const occ = walk.indexOf("const stack = await occupiedNowBy(who, law.thresholds, deps);");
-  const road = walk.indexOf("let mistRoad = await mistsOnTheRoad(worldClone, skeleton, from, toward, at, { shelter });");
-  const exits = walk.indexOf("await exitViaOffice(worldClone, { handle: who, mark: markId }, key, deps)");
+  const road = walk.indexOf("readRoad: (pt) => mistsOnTheRoad(worldClone, skeleton, pt, toward, at, { shelter }),");
+  const exits = walk.indexOf("await exitViaOffice(worldClone, { handle: who, mark: markId }, key, occupying.deps)");
   assert.ok(occ > 0 && road > occ && exits > road, `order: occupancy ${occ}, road ${road}, exits ${exits}`);
   assert.match(walk, /const shelter = occupying \? roadShelter\(law\.verbs, occupying\.w, occupying\.stack, occupying\.leaving\) : null;/);
-  assert.match(walk, /if \(setDownFirst\) \{\n    mistRoad = await mistsOnTheRoad\(worldClone, skeleton, from, toward, at, \{ shelter \}\);/,
-    "stepping ashore re-reads the road with the same shelter");
+  // stepping ashore re-reads the road through the same readRoad, so with the same shelter (roadFromTheDeposit's tests drive it)
 });
 
 test("the eyes and the air read with the reader's enter stack; a look from coordinates carries none", () => {

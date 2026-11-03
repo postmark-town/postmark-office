@@ -118,9 +118,14 @@ export async function localDevTarget({
       if (!schedule.length) throw new Error("the stand-in's world has no Mists schedule to move to its last keyframe");
       const { currentCrossing } = await import("../../src/crossings.mjs");
       const by = Math.max(0, schedule.at(-1).crossing - currentCrossing());
-      skeleton.mists.schedule = schedule.map((k) => ({ ...k, crossing: k.crossing - by }));
-      writeFileSync(path, JSON.stringify(skeleton, null, 2) + "\n");
-      g(world, "commit", "-qam", `harness: the Mists' schedule ${by} crossings earlier, so its last keyframe stands now`);
+      // Once the wall clock has reached the last keyframe (crossing 282, 2026-10-31), there is
+      // nothing to move: the schedule already stands at its last front, and an empty commit
+      // would fail. The harness tag below still blesses the stand-in's newest main.
+      if (by > 0) {
+        skeleton.mists.schedule = schedule.map((k) => ({ ...k, crossing: k.crossing - by }));
+        writeFileSync(path, JSON.stringify(skeleton, null, 2) + "\n");
+        g(world, "commit", "-qam", `harness: the Mists' schedule ${by} crossings earlier, so its last keyframe stands now`);
+      }
       const newest = Math.max(0, ...g(world, "tag", "-l", "settlement/S*").split("\n").map((t) => Number(t.slice(12))).filter(Number.isInteger));
       g(world, "tag", "-a", `settlement/S${newest + 1}`, "-m", `S${newest + 1} (the local stand-in's harness): the Mists at their last keyframe`);
       log(`world: the Mists' last keyframe (crossing ${schedule.at(-1).crossing}) stands from crossing ${schedule.at(-1).crossing - by}, blessed as S${newest + 1}`);
