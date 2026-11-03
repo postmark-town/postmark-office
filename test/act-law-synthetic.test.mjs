@@ -6,6 +6,17 @@
 // plain 503 and nothing is done. It is never judged under law the store has
 // replaced."
 //
+// LAW, CONTENTION (Wright, Settled on POS-680, 2026-11-03 01:0x EST, adopting
+// Rivet's recommendation): "No stale admission ... every act asks the cheap pin
+// question, even when the load cap is full; an act reuses a refresh in flight
+// only if that refresh's pin matches what it was just told; otherwise, the
+// existing plain 503 for law that moved but hasn't loaded." Cases 14 to 17 (the
+// review's N2 and N3, for the law and for the graph).
+//
+// LAW, THE MCP REFUSAL'S CODE (CONTRACT.md § Error shape): "`code` is the HTTP
+// status, in the body as well as the status line ... so a REST body and an MCP
+// answer carry the same fields." Case 11.
+//
 // INVENTED INPUTS ONLY (the security brief on POS-680, Rivet 2026-11-03): no
 // store, no clone, no town or world record, no endpoint, and nothing the test
 // relies on from the environment. "The store" here is a function that answers
@@ -63,10 +74,11 @@ function lawStore() {
     }
     if (sql === law.LAW_REFRESH_SQLS.law) {
       s.lawAsks += 1;
+      const at = s.pinned; // a statement reads the store as it stood when it began, as Postgres does
       if (s.failLaw) throw new Error("the connection was reset (invented)");
       if (s.hang) await s.hang;
       if (s.slow) await settle();
-      return { rows: s.rows.get(s.pinned) ?? [] };
+      return { rows: s.rows.get(at) ?? [] };
     }
     throw new Error(`the invented law store was asked a statement it does not hold: ${String(sql).trim().slice(0, 60)}`);
   };
@@ -77,18 +89,21 @@ function lawStore() {
 // ── the invented graph store ────────────────────────────────────────────────
 const GRAPH_STATEMENTS = new Set(Object.values(graph.GRAPH_SQLS));
 function graphStore() {
-  const s = { pin: null, tableAsks: 0, failTables: false };
+  const s = { pin: null, builds: new Map(), pinAsks: 0, tableAsks: 0, failTables: false, hang: null };
   const query = async (sql, params) => {
-    if (sql === graph.PIN_SQL) return { rows: s.pin ? [s.pin] : [] };
+    if (sql === graph.PIN_SQL) { s.pinAsks += 1; return { rows: s.pin ? [s.pin] : [] }; }
     if (GRAPH_STATEMENTS.has(sql)) {
       s.tableAsks += 1;
+      // the tables are read at the pin the refresh found, which the store still holds after it builds a newer one
+      const at = s.builds.get(params?.[0]);
       if (s.failTables) throw new Error("the connection was reset (invented)");
-      assert.deepEqual(params, [s.pin.tag_sha, s.pin.office_sha], "the graph's tables are read at the pin it found");
-      return { rows: sql === graph.GRAPH_SQLS.meta ? [{ key: "invented_build", value: `G${s.pin.settlement}` }] : [] };
+      if (s.hang) await s.hang;
+      assert.ok(at && params[1] === at.office_sha, `the graph's tables are read at a pin the store built (${JSON.stringify(params)})`);
+      return { rows: sql === graph.GRAPH_SQLS.meta ? [{ key: "invented_build", value: `G${at.settlement}` }] : [] };
     }
     throw new Error(`the invented graph store was asked a statement it does not hold: ${String(sql).trim().slice(0, 60)}`);
   };
-  const build = (n) => { s.pin = { tag_sha: SHA(n, "c"), office_sha: SHA(n, "d"), settlement: n, built_at: `2026-11-0${n}T00:00:00Z` }; };
+  const build = (n) => { s.pin = { tag_sha: SHA(n, "c"), office_sha: SHA(n, "d"), settlement: n, built_at: `2026-11-0${n}T00:00:00Z` }; s.builds.set(s.pin.tag_sha, s.pin); };
   return { s, query, build };
 }
 const graphBuild = () => graph.worldGraphSnapshot()?.tables?.meta?.find((r) => r.key === "invented_build")?.value ?? null;
@@ -308,7 +323,10 @@ test("9 · REST: when the law moved and will not load, every world act route ans
       assert.equal(r.payload.defect, actLaw.LAW_MOVED.defect, `POST ${path}`);
       assert.match(r.payload.behind, /S2's/, `POST ${path}: the refusal names the law it waits on`);
       assert.deepEqual(r.acts, [], `POST ${path}: ${actName} ran under replaced law`);
-      if (path === "/world/apex") assert.equal(r.standingAsked, 0, "the apex refuses before anything below it runs");
+      // Until 2026-11-03 this asserted standingAsked 0 ("the apex refuses before anything below it runs").
+      // FIX F2 (the review of 94da8f368; Rivet's verdict, 05:20Z): the law is asked below the gates that refuse
+      // a caller for who they are, as at the MCP door and the flat routes, so the standing gate runs first.
+      if (path === "/world/apex") assert.equal(r.standingAsked, 1, "POST /world/apex: the law was asked before the standing gate (mcp.mjs: \"Below the gates that refuse a caller for who they are\")");
       law.resetLawSnapshot(); graph.resetWorldGraph();
     }
   }
@@ -380,6 +398,7 @@ test("11 · MCP: a world act (the apex's do:, or a flat world_* write) is refuse
     const r = await mcpGate(name, args, KEY, ask);
     assert.equal(asked.n, before + 1, `${name}: the gate did not ask`);
     assert.equal(r?.refused?.defect, actLaw.LAW_MOVED.defect, `${name}: LAW: "refused ... and nothing is done" — got ${JSON.stringify(r)}`);
+    assert.equal(r.refused.code, 503, `${name}: LAW (CONTRACT § Error shape): "\`code\` is the HTTP status, in the body ... so a REST body and an MCP answer carry the same fields" — the MCP refusal carried ${JSON.stringify(r.refused)}`);
     assert.match(r.refused.behind, /S2's/);
     law.resetLawSnapshot(); graph.resetWorldGraph();
   }
@@ -451,4 +470,134 @@ test("13 · explain asks the law and the graph first, and answers from the graph
   const again = await explainVia(answer);
   assert.deepEqual(again.r, { class: "test-lamp" });
   assert.deepEqual(again.events, ["ask", "asked", "store:G2", "explain:G2:S2"]);
+});
+
+// ── 14–17 · contention: the load cap full (N2), a refresh in flight (N3) ─────
+//
+// The review of 94da8f368 probed both gaps real: at the cap an act's ask came
+// back `busy` without reading the pin (N2), and an act that found a refresh in
+// flight joined it and stood on whatever it loaded (N3). Each case below was
+// red at 94da8f368's source.
+
+/** Wait a turn at a time until `cond` holds (at most 50 turns). */
+async function until(cond, what) {
+  for (let i = 0; i < 50 && !cond(); i++) await settle();
+  assert.ok(cond(), what);
+}
+/** The refreshers' deadline timers are unref'd by design; while a case waits on one, this holds the loop open (see case 4). */
+async function held(fn) {
+  const server = setInterval(() => {}, 1000);
+  try { return await fn(); } finally { clearInterval(server); }
+}
+/** Fill the load cap with forced reloads whose loads hang, each let go at its deadline (so `inflight` is clear and the slot stays taken). */
+async function fillTheCap(reload) {
+  await held(async () => {
+    for (let i = 0; i < 8 && loadsStanding().running < loadsStanding().max; i++) assert.equal((await reload()).abandoned, true, "a forced reload was let go at its deadline");
+  });
+  assert.equal(loadsStanding().running, loadsStanding().max, "the load cap is full");
+}
+
+test("14 · N2, the law: with the load cap full (graph loads hung), an act still asks the law's pin, and when the law moved it is refused, never admitted on S1", async () => {
+  const { L, G, ask } = await standing();
+  let release;
+  G.s.hang = new Promise((r) => { release = r; });
+  try {
+    await fillTheCap(() => graph.reloadWorldGraph({ query: G.query, force: true, deadlineMs: 20 }));
+    assert.equal(graph.worldGraphBehind(), null, "the hung loads leave the graph current: only the law will move");
+    // the control: an unchanged law at the cap, and the act goes on (the cap alone refuses nothing)
+    assert.equal(await ask(), null, "an act at the cap, on an unchanged law, was refused");
+    L.bless(2, 7);
+    const before = { pins: L.s.pinAsks, laws: L.s.lawAsks };
+    const r = await ask();
+    assert.equal(r?.code, 503, `LAW: "every act asks the cheap pin question, even when the load cap is full ... otherwise, the existing plain 503 for law that moved but hasn't loaded" — the act at the cap was admitted on S1: ${JSON.stringify(r)}`);
+    assert.match(r.behind, /S2's, and this office has not loaded it yet \(it acts on S1's\)/);
+    assert.equal(L.s.pinAsks, before.pins + 1, "the act asked the law's pin itself");
+    assert.equal(L.s.lawAsks, before.laws, "at the cap the act loads nothing: it asks the pin only");
+    assert.equal(law.lawSnapshot().pin.settlement, 1, "reads keep what stands");
+    assert.match(law.lawRefreshStanding().behind ?? "", /S2's/, "and /release says the law is behind");
+  } finally { release(); }
+  for (let i = 0; i < 5; i++) await settle();
+  // once a load can run again, the next act loads S2 and goes on
+  assert.equal(loadsStanding().running, 0);
+  assert.equal(await ask(), null);
+  assert.equal(law.lawSnapshot().pin.settlement, 2);
+});
+
+test("15 · N3, the law: an act that finds a refresh in flight from before a bless asks the pin itself, and is not admitted on the law that refresh loads", async () => {
+  const { L, ask } = await standing();
+  let release;
+  L.s.hang = new Promise((r) => { release = r; });
+  let a = null;
+  try {
+    L.bless(2, 7);
+    const laws = L.s.lawAsks;
+    a = ask(); // act A: its own refresh is told S2 and begins loading S2's rows, held
+    await until(() => L.s.lawAsks === laws + 1, "act A's refresh began loading S2");
+    L.bless(3, 9); // the store moves on while A's load is held
+    const pins = L.s.pinAsks;
+    const b = ask(); // act B arrives after S3's bless, with A's refresh in flight
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    const rb = await b;
+    assert.equal(rb?.code, 503, `LAW: "an act reuses a refresh in flight only if that refresh's pin matches what it was just told" — act B stood on S2's load: ${JSON.stringify(rb)}`);
+    assert.match(rb.behind, /S3's, and this office has not loaded it yet \(it acts on S2's\)/);
+    assert.equal(L.s.pinAsks, pins + 1, "act B asked the pin itself");
+    assert.equal(law.lawSnapshot().pin.settlement, 2, "A's refresh put S2 in force");
+  } finally { release(); }
+  // A asked before S3's bless, but its load landed after B had heard S3 from the store
+  const ra = await a;
+  assert.equal(ra?.code, 503, `LAW (act-law.mjs § G1): "It is never judged under law the store has replaced" — act A: ${JSON.stringify(ra)}`);
+  // the next act, with nothing in flight, loads S3 and goes on
+  assert.equal(await ask(), null);
+  assert.equal(law.lawSnapshot().pin.settlement, 3);
+});
+
+test("16 · N2, the graph: with the load cap full (law loads hung), an act still asks the graph's pin, and when the graph moved it is refused", async () => {
+  const { L, G, ask } = await standing();
+  let release;
+  L.s.hang = new Promise((r) => { release = r; });
+  try {
+    await fillTheCap(() => law.reloadLawSnapshot({ query: L.query, force: true, deadlineMs: 20 }));
+    assert.equal(law.lawBehind(), null, "the hung loads leave the law current: only the graph will move");
+    assert.equal(await ask(), null, "an act at the cap, on an unchanged graph, was refused");
+    G.build(2);
+    const before = { pins: G.s.pinAsks, tables: G.s.tableAsks };
+    const r = await ask();
+    assert.equal(r?.code, 503, `LAW: "every act asks the cheap pin question, even when the load cap is full" — the act at the cap was admitted on G1: ${JSON.stringify(r)}`);
+    assert.match(r.behind, /world graph/);
+    assert.equal(G.s.pinAsks, before.pins + 1, "the act asked the graph's pin itself");
+    assert.equal(G.s.tableAsks, before.tables, "at the cap the act loads nothing");
+    assert.equal(graphBuild(), "G1", "reads keep what stands");
+    assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/, "and /release says the graph is behind");
+  } finally { release(); }
+  for (let i = 0; i < 5; i++) await settle();
+  assert.equal(await ask(), null);
+  assert.equal(graphBuild(), "G2");
+});
+
+test("17 · N3, the graph: an act that finds a graph refresh in flight from before a build asks the graph's pin itself, and is not admitted on what that refresh loads", async () => {
+  const { G, ask } = await standing();
+  let release;
+  G.s.hang = new Promise((r) => { release = r; });
+  let a = null;
+  try {
+    G.build(2);
+    const tables = G.s.tableAsks;
+    a = ask(); // act A: its own graph refresh is told G2 and begins loading G2's tables, held
+    await until(() => G.s.tableAsks === tables + 1, "act A's refresh began loading G2");
+    G.build(3);
+    const pins = G.s.pinAsks;
+    const b = ask(); // act B arrives after G3 was built, with A's refresh in flight
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    const rb = await b;
+    assert.equal(rb?.code, 503, `LAW: "an act reuses a refresh in flight only if that refresh's pin matches what it was just told" — act B stood on G2's load: ${JSON.stringify(rb)}`);
+    assert.match(rb.behind, /world graph/);
+    assert.equal(G.s.pinAsks, pins + 1, "act B asked the graph's pin itself");
+    assert.equal(graphBuild(), "G2", "A's refresh put G2 in force");
+  } finally { release(); }
+  const ra = await a;
+  assert.equal(ra?.code, 503, `LAW (act-law.mjs § G1): "It is never judged under law the store has replaced" — act A: ${JSON.stringify(ra)}`);
+  assert.equal(await ask(), null);
+  assert.equal(graphBuild(), "G3");
 });
