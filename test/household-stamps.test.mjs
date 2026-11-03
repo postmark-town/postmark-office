@@ -167,7 +167,7 @@ test("a keeping stake refuses what the law refuses, in the law's own words", () 
   assert.equal(at({ n: 1.5 }).error.code, 422);
   assert.equal(at({ pot: "nope" }).error.code, 404, "a pot the town does not post");
   assert.equal(at({ pot: "shut" }).error.code, 409, "a pot that is not open takes neither dollars nor stakes");
-  // stamps-v2: meeps neither mint nor stake — the same refusal clipApply gives,
+  // stamps-v2: meeps neither mint nor stake — the same refusal stakeInStore gives,
   // because it is the same law and not a second copy of it.
   assert.equal(at({ handle: "ferry" }).error.code, 403);
   assert.match(at({ handle: "ferry" }).error.defect, /meep accounts cannot stake/);
