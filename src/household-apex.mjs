@@ -2458,7 +2458,7 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
       + "The reads — "
       + HOUSEHOLD_READABLE.map((r) => `${r} (${HOUSEHOLD_READS[r]})`).join("; ")
       + ". Never rides with do:" },
-    // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
+    // POS-632: the read grammar's second move. One table for four doors (read-grammar.mjs).
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"papers\" or \"next\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
     args: { type: "object", description: "the act's or read's own fields — household { do: \"send\", args: { from: \"…\", to: \"…\", title: \"…\", body: \"…\" } }. Unknown fields bounce by name. On do: \"send\" and the five paper acts (address, address-fields, home, profile, window) it also takes an optional `nonce`: a retry key of your own choosing — make the same call twice with the same nonce and the second returns the FIRST call's receipt rather than acting twice.", additionalProperties: true },
     handle: { type: "string", description: "which of YOUR residents (defaults to your only one where it can)" },

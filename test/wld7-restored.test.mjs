@@ -5,12 +5,15 @@
 // at 14:52). When the dial went on is read from the law: the bless of the earliest
 // settlement in the newest unbroken run that says stolen. src/restored-classes.mjs.
 //
-// THE CAN-FAIL FLIPS (each reds a case below): ignore `restored` in stolenRefusal;
+// THE CAN-FAIL FLIPS (each reds a case below): keep a read taken against the old law
+// after a publish (POS-680); ignore `restored` in stolenRefusal;
 // count a restore from before the run began; let a non-town restore count.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { restoredSince, stolenSinceOf, readRestored, restoredClass, KEEP_MS, __setRestoredForTest, RESTORE_ROWS_SQL, CLASS_RUN_SQL } from "../src/restored-classes.mjs";
+import { restoredSince, stolenSinceOf, readRestored, restoredClass, KEEP_MS, __setRestoredForTest, RESTORE_ROWS_SQL, CLASS_RUN_SQL,
+  refreshRestored, restoredStanding } from "../src/restored-classes.mjs";
+import { reloadLawSnapshot, resetLawSnapshot, PIN_SQL } from "../src/law-snapshot.mjs";
 import { classViewOf } from "../src/world-units.mjs";
 import { stolenClassRefusal } from "../src/world-stacks.mjs";
 import { lawSnapshotFromRows } from "../src/law-classes.mjs";
@@ -78,4 +81,36 @@ test("a failed read keeps what stood for the same 30 s: one retry a window, neve
   ask(t0 + KEEP_MS); await settle();
   assert.equal(asked, 2, "once the keep is out, the next act asks again");
   __setRestoredForTest(null);
+});
+
+test("a read started against the old law and finishing after a publish never replaces the keep or clears stale (POS-680)", async () => {
+  __setRestoredForTest({ trinket: { since: "2026-10-26T06:30:00.000Z", restored: true } });
+  const settle = () => new Promise((r) => setImmediate(r));
+  // the store: the first read (against the old law) is held on its way back, and would say "not restored";
+  // every ask after it finds the store down
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  const query = async (sql) => {
+    calls += 1;
+    if (calls > 2) throw new Error("ECONNREFUSED");
+    if (calls === 1) await gate;
+    return sql === RESTORE_ROWS_SQL ? { rows: [] } : { rows: [{ number: 130, blessed_at: "2026-10-26T06:30:00Z", data: { dials: { stolen: true } } }] };
+  };
+  const oldRead = refreshRestored({ query, classes: ["trinket"] });
+  await settle();
+  // a new law is published while that read is out (the trinket still taken): the keep goes stale, and no
+  // second read starts beside the first
+  const published = await reloadLawSnapshot({ query: async (sql) => (sql === PIN_SQL ? { rows: [{ newest: 131, pinned: 131 }] }
+    : { rows: [{ number: 131, tag_sha: "d".repeat(40), newest: 131, kind: "class", key: "trinket", data: { class: "trinket", dials: { stolen: true } } }] }) });
+  assert.equal(published.changed, true);
+  assert.equal(restoredStanding().stale, true);
+  release();
+  await oldRead;
+  for (let i = 0; i < 5; i++) await settle();   // and the re-ask against the new law, which finds the store down
+  assert.equal(restoredClass("trinket", { now: Date.now(), query }), true, "the old-law read replaced the keep");
+  assert.equal(restoredStanding().stale, true, "the old-law read cleared stale: the keep would claim the new law's answer");
+  assert.ok(calls >= 3, "the read thrown away was asked again, against the new law");
+  __setRestoredForTest(null);
+  resetLawSnapshot();
 });

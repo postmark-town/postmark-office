@@ -62,6 +62,7 @@ import { HANDLE_RE, joinBranch, houseForName, houseForAccount, planRegistryJoin,
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
 import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
 import { penCommit, landOrRefuse } from "./write.mjs";
+import { landSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
 import { holdsHand, REGISTRAR_HANDS } from "./named-hand.mjs";
 import { refuse } from "./fault-words.mjs"; // a refusal from SETTLE_REFUSALS, as the error the door sends
 
@@ -307,7 +308,13 @@ export async function settleUnderLock({ handle, ghId, ghLogin, pr, road = "pen",
 
   // ONE COMMIT: the two printed registers and the ledger's key lines, the
   // join-bind shape. The drain collects instead of committing on its own.
-  if (mint) await mintHousehold(mint);
+  if (mint) {
+    await mintHousehold(mint);
+    // WHERE THEY CAME FROM (POS-770): a hand-written join PR that founds a house
+    // lands the outreach tag parked against its author's GitHub id, privately.
+    // At the founding, as join-bind does it. Best-effort, never in the answer.
+    await landSource({ ghId, household: mint.slug, env });
+  }
   const { drain, paths } = collectingDrain({ clone, env });
   const joined = await joinHousehold({
     slug, handle: h, coSign, pinnedOn: date, env, drain,

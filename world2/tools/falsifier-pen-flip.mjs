@@ -65,10 +65,11 @@
 // moment can. Those moments are now DATA — `LANE_FLIPPED_AT` in
 // src/world2-acts.mjs, which sat beside LANE_MIRROR (then the home for
 // per-lane truth about the shim; deleted in POS-156) — and `--since` defaults
-// from that table, per lane. A single bare `--since` still works and still means one clock for every
-// named lane, because an operator asking "what happened after 18:58" deserves
-// that answer; the tool says out loud that it is using one clock, so nobody
-// reads the shape that produced the 81 false reds without being told.
+// from that table, per lane. A single bare `--since` still works and still
+// means one clock for every named lane, because an operator asking "what
+// happened after 18:58" deserves that answer; the tool says out loud that it
+// is using one clock, so nobody reads the shape that produced the 81 false reds
+// without being told.
 //
 // Run ON THE BOX:
 //   WORLD2_PG_URL=... WORLD_CLONE=/path/to/postmark-world \

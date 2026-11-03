@@ -26,10 +26,10 @@
 // once at the merge.
 //
 // "BEFORE ANY API KEY" IS NOT LAW THIS WEEK. The brief carried a clause putting
-// the mint before the key desk; measured, that path's key is issued at
-// `src/server.mjs:1721` BEFORE the house is even named, and the ruling retired
-// the clause rather than bending the desk. The key desk is untouched by this
-// file.
+// the mint before the key desk; measured, that path's key is issued by the
+// `POST /keys` route in `src/server.mjs` (§ "POST /keys — the key desk")
+// BEFORE the house is even named, and the ruling retired the clause rather
+// than bending the desk. The key desk is untouched by this file.
 //
 // ── WHAT THIS FILE OWES ITS CALLERS ─────────────────────────────────────────
 //
@@ -583,8 +583,12 @@ export async function joinHousehold({
 }
 
 // The account matcher, in this file's own words for the same reason the
-// alphabet is: id first, login only where no id is on record. Asserted equal to
-// `household-deriver.mjs § accountMatches`'s behaviour in test.
+// alphabet is: id first, login only where no id is on record. It is meant to
+// follow `household-deriver.mjs § accountMatches`, but no test asserts that
+// (accountIs is not exported and no test names it), which is a gap. The two
+// differ in one corner: given a ghId and an account row with no id, accountIs
+// answers false where accountMatches falls through to the login. They also
+// compare ids differently: accountIs as strings, accountMatches as numbers.
 function accountIs(account, ghId, ghLogin) {
   if (account?.id != null || ghId != null) {
     if (account?.id == null || ghId == null) return false;
