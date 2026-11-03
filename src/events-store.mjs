@@ -52,6 +52,7 @@ import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
+import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -384,6 +385,8 @@ function bodyOf(fields) {
 async function classOf(fields, id, env) {
   // a report's id says its class (POS-757): report/<hex>, never a public row
   if (String(fields.class ?? "").trim() === REPORT_CLASS || REPORT_ID_RE.test(id)) return REPORT_CLASS;
+  // and an invitation's (POS-816): invite/<the invited household's slug>, never a public row
+  if (INVITE_ID_RE.test(id)) return INVITE_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
   const { ideaRow } = await ideaPen();
@@ -432,10 +435,12 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
  * `close`. A quest's one move is `close` too. A bug advances (bugs.mjs), by
  * the town's hands, and so does an idea (ideas.mjs), to any named stage.
  */
-export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
+export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null, clone = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) return (await import("./report-store.mjs")).advanceReport(fields, key, id, { now, env });
+  // POS-816: the hands hold, lift or cancel an inviter's payout (invite-hold-store.mjs); anyone else learns nothing
+  if (cls === INVITE_CLASS) return (await import("./invite-hold-store.mjs")).advanceInvite(fields, key, id, { now, env, clone });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.

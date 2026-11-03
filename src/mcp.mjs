@@ -257,7 +257,7 @@ export const TOOLS = [
     }, additionalProperties: false } },
   { name: "read_posts", description: "THE TOWN'S POSTS, BY CLASS — one read that takes a class (the Posts project, phase 1): every post of it as the general row (class, id, title, author, household, state, latest {act, at}, responses), and the class's `finished` states beside the list. class \"quest\": the town's own posts, authored by postmark-pen for the town's household, each with `fields.quest` (its quest-registry id) and `terms` (title, source, reward, cadence, target) read live from the registry — progress is not here; it is derived from the letters (town { read: \"quests\" }). class \"event\": the calendar's events in its window, their state from the clock (read_calendar has each whole). class \"bug\": every bug post, its stage as its state and its own fields (issue, steps, record, and the size, grade or duplicate its advances set); finished at shipped, duplicate or not-a-bug. The bugs are paged (limit, offset; `total`, `shown`, `complete`, and `next_offset` while there is more), and every page carries `catchers`: each credited handle's stamps paid and bugs credited over the whole record, the Bug Catchers' Hall of Fame. class \"idea\" (POS-290): every idea post, its stage as its state (posted, in-conversation, ruled-in, building, built; finished at shipped, declined or duplicate), with its body, its links, the awards recorded on it (and what each has paid), its backing (for, against, net) and its sign-ups (who is building which part); the Think Tank's marks are read at town { read: \"ideas\" }. Every row carries its history: one row per act that moved the post, oldest first. THE WORD IS STATE: every post's rung is its `state` (a bug's: reported, confirmed, reproduced, diagnosed, briefed, fixed, shipped, duplicate, not-a-bug); `stage` is a permanent alias of it. args: { class, post } opens one; args: { class, state: \"confirmed,reproduced\" } keeps only those states (comma is OR; `total` counts what matched, and `counts_by_state` counts the whole class)." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: {
-      class: { type: "string", enum: ["event", "quest", "bug", "idea", "report"], description: "which class's posts — \"quest\", \"event\", \"bug\", \"idea\" or \"report\" (yours only, signed in)" },
+      class: { type: "string", enum: ["event", "quest", "bug", "idea", "report", "invite"], description: "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"report\" (yours only, signed in) or \"invite\" (the town's hands only)" },
       post: { type: "string", description: "one post's id, <author>/<slug> — leave it off for the whole class" },
       limit: { type: "number", description: "class \"bug\" only: bugs to return (default 50, max 200)" },
       offset: { type: "number", description: "class \"bug\" only: how many to skip — walk the bugs with the next_offset the previous page returned" },
@@ -773,6 +773,12 @@ export async function callTool(name, args, ctx) {
         try { return await reportsAtOffice(args ?? {}, key); }
         catch (e) { if (e?.code && e?.defect) return { error: "bounce", code: e.code, defect: e.defect, hint: e.hint }; throw e; }
       }
+      // an invitation's payout review is the hands' (POS-816): read with the caller's key, never the public read
+      if (String(args?.class ?? "").trim() === "invite") {
+        const { invitesAtOffice } = await import("./invite-hold-store.mjs");
+        try { return await invitesAtOffice(args ?? {}, key, { clone }); }
+        catch (e) { if (e?.code && e?.defect) return { error: "bounce", code: e.code, defect: e.defect, hint: e.hint }; throw e; }
+      }
       const { postsAtOffice } = await import("./town-posts.mjs");
       try { return await postsAtOffice(args ?? {}); }
       catch (e) { if (e?.code && e?.defect) return { error: "bounce", code: e.code, defect: e.defect, hint: e.hint }; throw e; }
@@ -935,7 +941,7 @@ export async function callTool(name, args, ctx) {
       return callTownStakeTool(name, args, key);
     case "town_amend": case "town_close": case "town_advance": case "town_reveal":
     case "town_sign_up": case "town_answer_sign_up": case "town_award":
-      return callTownPostTool(name, args, key, { roll: rollOf() });
+      return callTownPostTool(name, args, key, { roll: rollOf(), clone });
     case "read_ideas": return {
       ...ideasTank(),
       // The idea POSTS (POS-290) beside the marks: present only when the store

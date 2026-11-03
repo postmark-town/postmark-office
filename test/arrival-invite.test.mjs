@@ -427,8 +427,18 @@ test("I8b · a refused invite lands the join with no credit and says why; no inv
 
 // ── I9 Wright's read ────────────────────────────────────────────────────────
 
-test("I9 · the read groups invited households by the sweep that closes their window, and names the inviter as it is called now", async () => {
-  const { windowOf, planInvites, printInvites, currentSlugOf } = await import("../tools/invites.mjs");
+// THE READ IS THE PASS'S PLAN NOW (POS-816, Darko 2026-10-28 and 2026-11-03):
+// tools/invites.mjs prints src/invite-pay.mjs § planInvitePay, the plan
+// deploy/invite-pass.mjs pays from, read against the town's ledger. Until
+// 2026-11-03 these tests pinned the hand-mint list (a window per sweep, "the
+// invitee's 10 is due" on an ashore record, the cap counted in the month each
+// inviter's 10 fell due by becoming real, the eleventh "not owed"). The rows,
+// the rename, the 30 days and the founders keep their tests below; the cap's
+// month is Darko's "Month paid" (POS-816/b).
+const EMPTY_LEDGER = () => ({ welcomes: new Map(), invitedPaid: new Map(), inviterPaid: new Map(), paidInMonth: new Map() });
+
+test("I9 · the read lists every invitation oldest first, names the inviter as it is called now, and reads each side off the ledger", async () => {
+  const { windowOf, readInvites, printInvites, currentSlugOf } = await import("../tools/invites.mjs");
   assert.equal(windowOf("2026-10-22T05:59:59.000Z"), "2026-10-22T06:00:00.000Z");
   assert.equal(windowOf("2026-10-22T06:00:00.000Z"), "2026-10-22T06:00:00.000Z", "a sweep's own instant is in its window");
   assert.equal(windowOf("2026-10-22T06:00:01.000Z"), "2026-10-22T18:00:00.000Z");
@@ -437,92 +447,94 @@ test("I9 · the read groups invited households by the sweep that closes their wi
   const rows = [
     row("b-house", "lantern-row", "2026-10-22T07:00:00.000Z", "wick"),
     row("a-house", "old-lantern", "2026-10-22T01:00:00.000Z"),
-    { slug: "plain", residents: ["p"], invited_by: null },
   ];
   // THE INVITER RENAMED: lantern-row was old-lantern when a-house named it
-  const current = currentSlugOf([{ slug: "lantern-row", formerly: ["old-lantern"] }, { slug: "quill-hall", formerly: [] }]);
+  const houses = [{ slug: "lantern-row", residents: ["wick"], formerly: ["old-lantern"] }, { slug: "quill-hall", residents: ["quill"], formerly: [] }];
+  const current = currentSlugOf(houses);
   assert.equal(current("old-lantern"), "lantern-row");
-  assert.equal(current("quill-hall"), "quill-hall");
   assert.equal(current("gone-house"), "gone-house", "a name the registry never held stays as written");
-  const plan = planInvites(rows, { current, ashore: new Map([["b-house-r", "2026-10-22T07:00:05.000Z"]]), rolled: new Set(["a-house-r"]) });
-  assert.deepEqual(plan.map((p) => [p.household, p.window, p.invited_by, p.invited_by_was ?? null]), [
-    ["a-house", "2026-10-22T06:00:00.000Z", "lantern-row", "old-lantern"],
-    ["b-house", "2026-10-22T18:00:00.000Z", "lantern-row", null],
-  ], "every invited household, not the plain one, under the inviter's name now");
-  // SETTLED is the invitee's own 10: the store's ashore record, else an address in the roll
-  assert.deepEqual(plan[0].settled, { yes: true, at: null, by: "an address in the town's roll" });
-  assert.deepEqual(plan[1].settled, { yes: true, at: "2026-10-22T07:00:05.000Z", by: "the store's ashore record" });
-  assert.deepEqual(planInvites([row("c-house", "quill-hall", "2026-10-22T09:00:00.000Z")])[0].settled, { yes: false });
-  const printed = printInvites(plan);
-  assert.match(printed, /a-house "a-house" · invited by lantern-row \(credited as old-lantern, renamed since\)/);
-  assert.match(printed, /b-house "b-house" · invited by lantern-row \(named wick\)/);
-  assert.match(printed, /SETTLED 2026-10-22T07:00:05\.000Z \(the store's ashore record\): the invitee's 10 is due/);
-  assert.match(printInvites(planInvites([row("c-house", "quill-hall", "2026-10-22T09:00:00.000Z")])), /NOT SETTLED .*: the invitee's 10 waits/);
-  assert.deepEqual(planInvites(rows, { current }, { since: "2026-10-22T02:00:00.000Z" }).map((p) => p.household), ["b-house"], "--since lists only the newer ones");
-  assert.match(printInvites([]), /no household has joined with an invitation/);
+  const ledger = EMPTY_LEDGER();
+  ledger.welcomes.set("b-house", { handle: "b-house-r", key: "hh:b-house", date: "2026-10-22" });
+  const store = { rows, houses, facts: { ashore: new Map([["b-house", "2026-10-22T07:00:05.000Z"]]) }, holds: new Map() };
+  const read = readInvites(store, { ledger, now: new Date("2026-10-23T00:00:00.000Z") });
+  assert.deepEqual(read.invitations.map((p) => [p.household, p.invited_by, p.invited_by_was ?? null, p.invited_side.status]), [
+    ["a-house", "lantern-row", "old-lantern", "waiting"],
+    ["b-house", "lantern-row", null, "owed"],
+  ], "every invitation under the inviter's name now; the 5 more is owed once its welcome is on the ledger");
+  assert.equal(read.invitations[1].invited_side.to, "b-house-r", "to the welcome's own recipient");
+  const printed = printInvites(read);
+  assert.match(printed, /invite\/a-house "a-house" · invited by lantern-row \(credited as old-lantern, renamed since\)/);
+  assert.match(printed, /invite\/b-house "b-house" · invited by lantern-row \(named wick\) · at 2026-10-22T07:00:00\.000Z · ashore 2026-10-22T07:00:05\.000Z/);
+  assert.match(printed, /the invited side: OWED 5 to b-house-r/);
+  assert.match(printed, /the invited side: WAITING: its welcome bundle is not on the ledger yet/);
+  assert.deepEqual(readInvites(store, { ledger, since: "2026-10-22T02:00:00.000Z" }).invitations.map((p) => p.household), ["b-house"], "--since lists only the newer ones");
+  assert.match(printInvites(readInvites({ rows: [], houses, facts: {}, holds: new Map() })), /NOT READ AGAINST THE LEDGER[\s\S]*no household has joined with an invitation/);
 });
 
-test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS REAL INVITES ONLY, in the month each 10 falls due on Darko's clock", async () => {
-  const { realOf, planInvites, printInvites, monthET } = await import("../tools/invites.mjs");
+test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS PAYOUTS IN THE MONTH THEY ARE PAID (POS-816/b, \"Month paid\")", async () => {
+  const { activationOf, readInvites, printInvites } = await import("../tools/invites.mjs");
   const at = "2026-10-01T12:00:00.000Z";
   const now = new Date("2026-10-20T00:00:00.000Z");
-  assert.deepEqual(realOf({ at, letter: "2026-10-05T00:00:00.000Z", home: "2026-10-03T00:00:00.000Z", now }),
-    { first_letter: "2026-10-05T00:00:00.000Z", first_home: "2026-10-03T00:00:00.000Z", by: "2026-10-31T12:00:00.000Z", status: "real", at: "2026-10-03T00:00:00.000Z" },
+  assert.deepEqual(activationOf({ at, letter: "2026-10-05T00:00:00.000Z", home: "2026-10-03T00:00:00.000Z", now }),
+    { first_letter: "2026-10-05T00:00:00.000Z", first_home: "2026-10-03T00:00:00.000Z", by: "2026-10-31T12:00:00.000Z", status: "activated", at: "2026-10-03T00:00:00.000Z", through: "first home" },
     "the earlier of the two decides");
-  assert.equal(realOf({ at, letter: "2026-10-31T12:00:00.000Z", now }).status, "real", "the 30th day's own instant is within");
-  assert.equal(realOf({ at, letter: "2026-10-31T12:00:01.000Z", now }).status, "late");
-  assert.equal(realOf({ at, now }).status, "waiting", "neither yet, the 30 days still running");
-  assert.equal(realOf({ at, now: new Date("2026-11-01T00:00:00.000Z") }).status, "lapsed");
-  // US-EASTERN: 2026-11-01T03:00Z is still October 31 in New York
-  assert.equal(monthET("2026-11-01T03:00:00.000Z"), "2026-10");
-  assert.equal(monthET("2026-11-01T05:00:00.000Z"), "2026-11");
-  // twelve invited by quill-hall: eleven become real in October (ET), one never does
+  assert.equal(activationOf({ at, letter: "2026-10-31T12:00:00.000Z", now }).status, "activated", "the 30th day's own instant is within");
+  assert.equal(activationOf({ at, letter: "2026-10-31T12:00:01.000Z", now }).status, "late");
+  assert.equal(activationOf({ at, now }).status, "waiting", "neither yet, the 30 days still running");
+  assert.equal(activationOf({ at, now: new Date("2026-11-01T00:00:00.000Z") }).status, "lapsed");
+  // twelve invited by quill-hall: eleven activate in October, one never does;
+  // read on 2026-11-20 every week has passed, so all eleven are due in November.
   const rows = Array.from({ length: 12 }, (_, i) => ({ slug: `h${String(i).padStart(2, "0")}`, residents: [`r${i}`],
     invited_by: { by: "quill-hall", named: "quill", at: `2026-10-0${1 + (i % 9)}T12:00:00.000Z` } }));
   const letters = new Map(rows.slice(0, 11).map((r, i) => [r.slug, `2026-10-${String(10 + i).padStart(2, "0")}T12:00:00.000Z`]));
-  letters.set("h10", "2026-11-01T03:00:00.000Z"); // the eleventh real one: October 31 in New York
-  const plan = planInvites(rows, { letters }, { now });
-  const never = plan.find((p) => p.household === "h11");
-  assert.equal(never.real.status, "waiting");
-  assert.equal(never.paid, null, "an invite that is not real takes no place in the cap");
-  const paid = plan.filter((p) => p.paid).sort((a, b) => a.paid.nth - b.paid.nth);
-  assert.deepEqual(paid.map((p) => p.paid.nth), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-  assert.ok(paid.every((p) => p.paid.month === "2026-10"), "all eleven fall due in October, ET");
-  assert.equal(paid.at(-1).household, "h10");
-  assert.equal(paid.at(-1).paid.over_cap, true, "the eleventh REAL one is over the cap");
-  assert.ok(paid.slice(0, 10).every((p) => !p.paid.over_cap));
-  const printed = printInvites(plan);
-  assert.match(printed, /h10 "?.*REAL: the inviter's 10 is owed, quill-hall's paid invite 11 in 2026-10 \(ET\), OVER the 10-a-month cap: not owed/s);
-  assert.match(printed, /first letter 2026-10-10T12:00:00\.000Z · first home none · REAL: the inviter's 10 is owed, quill-hall's paid invite 1 in 2026-10 \(ET\)\n/);
+  const houses = [{ slug: "quill-hall", residents: ["quill"], formerly: [] }];
+  const read = readInvites({ rows, houses, facts: { letters }, holds: new Map() }, { ledger: EMPTY_LEDGER(), now: new Date("2026-11-20T12:00:00.000Z") });
+  const by = (s) => read.invitations.find((p) => p.household === s).inviter_side;
+  assert.equal(by("h11").status, "waiting", "an invitation that never activated takes no place in the cap");
+  const owed = read.invitations.filter((p) => p.inviter_side.status === "owed");
+  assert.equal(owed.length, 10, "ten are paid in the month they are paid in");
+  assert.deepEqual(owed.map((p) => p.inviter_side.nth_this_month).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(by("h10").status, "over-cap", "the eleventh, due last, waits for a month with room");
+  assert.equal(by("h10").month, "2026-11");
+  // the same eleven when October's ten are already on the ledger: November has room for all of them again
+  const paidOct = EMPTY_LEDGER(); paidOct.paidInMonth.set("quill-hall|2026-10", 10);
+  assert.equal(readInvites({ rows, houses, facts: { letters }, holds: new Map() }, { ledger: paidOct, now: new Date("2026-11-20T12:00:00.000Z") })
+    .invitations.filter((p) => p.inviter_side.status === "owed").length, 10, "a month already full counts against itself, never against the month paid");
+  const printed = printInvites(read);
+  assert.match(printed, /invite\/h10[\s\S]*?the inviter side: OVER THE CAP: quill-hall has been paid 10 in 2026-11, at most 10 a month; it waits for a month with room/);
+  assert.match(printed, /first letter 2026-10-10T12:00:00\.000Z · first home none · ACTIVATED 2026-10-10T12:00:00\.000Z \(first letter\)/);
 });
 
 test("I9e · the read shows a founders' row as REFUSED (founders): no place in the cap, nothing owed to either side", async () => {
-  const { planInvites, printInvites, currentSlugOf } = await import("../tools/invites.mjs");
-  const now = new Date("2026-10-20T00:00:00.000Z");
+  const { readInvites, printInvites } = await import("../tools/invites.mjs");
   const rows = [
     { slug: "by-hand", residents: ["bh"], invited_by: { by: "starforge", named: "wright", at: "2026-10-02T12:00:00.000Z" } },
     { slug: "ordinary", residents: ["or"], invited_by: { by: "quill-hall", named: "quill", at: "2026-10-03T12:00:00.000Z" } },
   ];
   const letters = new Map([["by-hand", "2026-10-04T00:00:00.000Z"], ["ordinary", "2026-10-05T00:00:00.000Z"]]);
-  const plan = planInvites(rows, { letters, current: currentSlugOf([{ slug: "starforge", formerly: [] }]) }, { now });
-  const founders = plan.find((p) => p.household === "by-hand");
+  const ledger = EMPTY_LEDGER();
+  ledger.welcomes.set("by-hand", { handle: "bh", key: "hh:by-hand", date: "2026-10-02" });
+  const read = readInvites({ rows, houses: [{ slug: "starforge", residents: ["wright"] }, { slug: "quill-hall", residents: ["quill"] }], facts: { letters }, holds: new Map() },
+    { ledger, now: new Date("2026-10-20T00:00:00.000Z") });
+  const founders = read.invitations.find((p) => p.household === "by-hand");
   assert.equal(founders.refused, "founders");
-  assert.equal(founders.paid, null, "never a place in the cap, even with a letter in time");
-  assert.equal(plan.find((p) => p.household === "ordinary").paid.nth, 1, "the founders' row did not take place 1");
-  const printed = printInvites(plan);
-  assert.match(printed, /REFUSED \(founders\): starforge never earns invitation stamps \(POS-576\/e\)\. Nothing is owed to either side/);
-  assert.doesNotMatch(printed.split("by-hand")[1].split("ordinary")[0], /owed, |due/, "no mint line for it");
+  assert.deepEqual([founders.invited_side.status, founders.inviter_side.status], ["refused", "refused"], "neither side, even with its welcome paid and a letter in time");
+  assert.equal(read.invitations.find((p) => p.household === "ordinary").inviter_side.nth_this_month, 1, "the founders' row did not take place 1");
+  const printed = printInvites(read);
+  assert.match(printed, /the invited side: REFUSED \(founders\): nothing is owed to either side; the invitee has the ordinary bundle/);
+  assert.doesNotMatch(printed.split("invite/by-hand")[1].split("invite/ordinary")[0], /OWED/, "no mint line for it");
 });
 
-test("I9b · the read, run as Wright runs it, on the real store: it lists the households I8a and I8c invited and nothing it didn't", () => {
-  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env } });
+test("I9b · the read, run as the operator runs it, on the real store: it lists the households I8a and I8c invited and nothing it didn't", () => {
+  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env, TOWN_CLONE: "" } });
   assert.equal(r.status, 0, r.stderr);
-  const plan = JSON.parse(r.stdout);
-  assert.deepEqual(plan.map((p) => [p.household, p.invited_by, p.named, p.first_resident]), [
-    ["new-hearth", "lantern-row", "wick", "kindling"], ["lamplight-rooms", "rookery-row", "moth", "lamplight"], ["candlewick-den", "moth", "hh:moth", "candlewick"]]);
-  assert.equal(plan[0].settled.yes, true);
-  assert.match(plan[0].settled.at ?? "", /^\d{4}-\d\d-\d\dT/, "and when it came ashore, by the store's own record");
-  assert.equal(plan[0].real.status, "waiting", "no letter and no home yet");
+  const read = JSON.parse(r.stdout);
+  assert.equal(read.ledger_read, false, "no town clone: it says it did not read the ledger");
+  assert.equal(read.holds_read, true, "086 is in the store");
+  assert.deepEqual(read.invitations.map((p) => [p.household, p.invited_by, p.named]), [
+    ["new-hearth", "lantern-row", "wick"], ["lamplight-rooms", "rookery-row", "moth"], ["candlewick-den", "moth", "hh:moth"]]);
+  assert.match(read.invitations[0].ashore ?? "", /^\d{4}-\d\d-\d\dT/, "when it came ashore, by the store's own record");
+  assert.equal(read.invitations[0].activation.status, "waiting", "no letter and no home yet");
 });
 
 test("I9d · the read's 30-day facts come from the store: a delivered letter by any resident, and a parcel locked in the house's name", async () => {
@@ -539,11 +551,11 @@ test("I9d · the read's 30-day facts come from the store: a delivered letter by 
     await c.query(`INSERT INTO marks (id, slug, kind, owner, household, geometry, bbox, locked_window)
       VALUES (gen_random_uuid(), 'kindling/hearth-ground', 'parcel', 'kindling', 'hh:new-hearth', '{}', box(point(9000,9000), point(9010,9010)), 9901)`);
   } finally { await c.end(); }
-  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env } });
+  const r = spawnSync(process.execPath, [join(ROOT, "tools", "invites.mjs"), "--json"], { encoding: "utf8", env: { ...process.env, ...IX.env, TOWN_CLONE: "" } });
   assert.equal(r.status, 0, r.stderr);
-  const [p] = JSON.parse(r.stdout);
-  assert.equal(p.real.first_letter, later, "the delivered letter counts; the undelivered one does not");
-  assert.equal(p.real.first_home, soon, "the parcel's home is the close of the window that locked it");
-  assert.equal(p.real.at, soon, "the earlier of the two");
-  assert.equal(p.real.status, "real");
+  const [p] = JSON.parse(r.stdout).invitations;
+  assert.equal(p.activation.first_letter, later, "the delivered letter counts; the undelivered one does not");
+  assert.equal(p.activation.first_home, soon, "the parcel's home is the close of the window that locked it");
+  assert.equal(p.activation.at, soon, "the earlier of the two");
+  assert.equal(p.activation.status, "activated");
 });
