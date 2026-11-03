@@ -396,7 +396,8 @@ export async function appendJournal(db, entry = {}, { guard = null } = {}) {
   // the world actually witnessed anything. The predicate is deliberately
   // narrow: ONLY an unstaked mark-class declaration defers.
   //
-  // ⚑ THE PRIVATE ARM RIDES THIS QUEUE, not a second one, and the reason is
+  // ⚑ THE PRIVATE ARM RIDES THIS PEN, not a second one (this said "queue" while
+  // one shared queue ordered it; the caller's await does now), and the reason is
   // measured rather than argued: it used to be its own pen on its own pool, and
   // an unstaked compose and its own withdrawal rode different queues with
   // nothing ordering them — the withdrawal's DELETE ran 113 ms ahead of the

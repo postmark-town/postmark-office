@@ -454,9 +454,9 @@ export async function openWindowFor(client, dark) {
  * (2026-08-29): this used to be the body of a second queue on a second pool,
  * which is the two-pens disease reproduced inside Postgres (DESIGN §2 R1).
  * The caller (world2-pen's `penWrite` via world-journal; it was also the
- * since-deleted `shadowWrite`) holds
- * the transaction and has already declared `app.household`; every query here
- * rides that client, so the act and its claim commit or vanish TOGETHER.
+ * since-deleted `shadowWrite`) holds the transaction and has already declared
+ * `app.household`; every query here rides that client, so the act and its claim
+ * commit or vanish TOGETHER.
  *
  * All the shadow-era semantics below are unchanged — only the plumbing moved.
  *
@@ -704,7 +704,7 @@ export async function claimTxFromJournal(client, row, seq, { household, actId = 
 // The private arm then rode `shadowWrite(row, seq, { act: false, … })` in both
 // eras. That function is since deleted (G1 / POS-156); the arm is now
 // `penWrite(row, { act: false, … })`, called from src/world-journal.mjs §
-// appendJournal (its "THE PRIVATE ARM RIDES THIS QUEUE" note) and
+// appendJournal (its "THE PRIVATE ARM RIDES THIS PEN" note) and
 // appendActFlipped. It keeps the privacy law's shape — nothing about a private
 // compose touches `acts` — while putting a compose and its withdrawal in one
 // order.

@@ -419,20 +419,23 @@ export function actsInsert(row, household, { provenance = null } = {}) {
 }
 
 /**
- * THE FLIPPED WRITE — Postgres first, awaited, refusable.
+ * THE WRITE (born THE FLIPPED WRITE) — Postgres first, awaited, refusable. Since
+ * G1 / POS-156 every act is written here: `appendJournal` and `appendActFlipped`
+ * both end in this function.
  *
  * `claimFn(client, actId, household)` is the candle half when the act is
  * mark-class: same client, same transaction (R1). Throws PenUnreachableError on
  * any failure to reach or commit — by which point NOTHING is written: the
- * transaction rolled back, and the sqlite reverse mirror has not run because
- * the caller only runs it after this returns.
+ * transaction rolled back. (When this was born the caller then ran the sqlite
+ * reverse mirror, only after this returned; that mirror was deleted in G1.)
  *
  * ── THREE ARGUMENTS, NOT TWO (the mark lane, 2026-09-04) ────────────────────
  *
  * `claimFn` is handed the household as its third argument, which is the shape
- * the shadow arm (`shadowWrite`, since deleted) always used. Before the mark lane needed this path the two
- * spellings could differ unnoticed, because the only claimFn in the tree rode
- * the shadow arm; the flipped arm's two-argument call would have handed
+ * the shadow arm (`shadowWrite`, since deleted) always used. Before the mark
+ * lane needed this path the two spellings could differ unnoticed, because the
+ * only claimFn in the tree rode the shadow arm; the flipped arm's two-argument
+ * call would have handed
  * `claimTxFromJournal` an `undefined` household and written a draft row scoped
  * to nobody — which 007's `claims_insert` WITH CHECK refuses outright, so the
  * first live private draft on a flipped lane would have bounced. One spelling,
@@ -454,8 +457,10 @@ export function actsInsert(row, household, { provenance = null } = {}) {
  * meant to remove, five times out of five on fresh stores, leaving the
  * resident's withdrawn draft standing on the docket with its slug still taken
  * (jetto-b1-guards-report 2026-09-03 § Finding 1). `act: false` is what lets
- * the private arm ride THIS queue and THIS transaction, so a compose and its
- * own withdrawal cannot overtake each other in either era.
+ * the private arm ride THIS pen and THIS transaction, so a compose and its own
+ * withdrawal cannot overtake each other. (At the time that was said of one
+ * shared queue, in either era; G1 removed the queue and the second era, and the
+ * caller's await is the order now: test/pen-flip-mark.test.mjs (c2).)
  */
 // `guard(client)` (WLD-27, chest-lock.mjs): a check that must hold INSIDE this
 // write's transaction — it takes its own lock and reads there, and a refusal it

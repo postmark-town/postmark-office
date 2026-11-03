@@ -26,9 +26,13 @@
 // `W2_GUARDS` is set, and `guardsFlipped()` now gates one thing,
 // `hold-edge.mjs § holdEdgeOnActs`.
 //
-// `guardsFlipped()` rides `world2Enabled` the way `laneFlipped` does, and for
-// the same reason: reading guards out of Postgres with no `WORLD2_PG_URL` is not
-// a configuration, it is a crash waiting for the first duplicate slug.
+// `guardsFlipped()` rides `world2Enabled` the way `laneFlipped` does: a flag
+// with no record behind it reads as off, so `holdEdgeOnActs` (which asks both)
+// never puts the hold edge on `acts` for an office with no `WORLD2_PG_URL`. It
+// was written for the guard reads, where "reading guards out of Postgres with no
+// `WORLD2_PG_URL`" was "a crash waiting for the first duplicate slug"; those
+// reads no longer ask it, and an office with no record, like one whose record
+// cannot be reached, gets the refusal below.
 //
 // ── AN UNREACHABLE GUARD REFUSES. IT NEVER PERMITS. ─────────────────────────
 //
@@ -325,8 +329,9 @@ export async function guardedLiveChildrenOf(db, id, { household = undefined, act
  *
  * The `log` block keeps meaning what it meant — "what the journal contributes is
  * disclosed in its own `log` block rather than smuggled into a field that
- * already means a commit" — and gains `source`, so a reader can tell which store
- * answered without having to know how the office is configured.
+ * already means a commit" — and gains `source`, the table of the one record the
+ * journal half came from: `"claims"` when it answered, `"acts"` when it could
+ * not (the failed read is the acts delta, below).
  */
 export async function guardedDraftsForKey(repo, key) {
   const journal = await import("./world-journal.mjs");
