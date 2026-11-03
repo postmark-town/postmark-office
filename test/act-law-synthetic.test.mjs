@@ -7,11 +7,17 @@
 // replaced."
 //
 // LAW, CONTENTION (Wright, Settled on POS-680, 2026-11-03 01:0x EST, adopting
-// Rivet's recommendation): "No stale admission ... every act asks the cheap pin
-// question, even when the load cap is full; an act reuses a refresh in flight
-// only if that refresh's pin matches what it was just told; otherwise, the
-// existing plain 503 for law that moved but hasn't loaded." Cases 14 to 17 (the
-// review's N2 and N3, for the law and for the graph).
+// Rivet's recommendation): "No stale admission ... an act reuses a refresh in
+// flight only if that refresh's pin matches what it was just told; otherwise,
+// the existing plain 503 for law that moved but hasn't loaded." Its line "every
+// act asks the cheap pin question, even when the load cap is full" was replaced
+// (01:5x EST, the round-2 review's F3): "When the cap is full, an act doesn't
+// ask outside it. It gets the existing plain, retryable 503 ... an act is never
+// admitted on law or graph it hasn't confirmed." And how the pin is asked
+// (Wright, 2026-11-03, "C plus coalescing"): "One shared pin session,
+// single-flight ... It holds one slot of the existing cap of 2 ... Every act
+// arriving while that session is in flight awaits the same answer, within its
+// own deadline." Cases 14 to 17 (the review's N2 and N3) and 18 to 26.
 //
 // LAW, THE MCP REFUSAL'S CODE (CONTRACT.md § Error shape): "`code` is the HTTP
 // status, in the body as well as the status line ... so a REST body and an MCP
@@ -59,6 +65,27 @@
 //   F13 law-snapshot.mjs: at the cap, a store that cannot be asked refuses → 14 red
 //   F14 law-snapshot.mjs: under contention, the verdict ignores the pin it was told → 14, 15 red
 //   F9g to F14g: the same six in world-graph-snapshot.mjs → 16; 17; 17; 16, 17; 16; 16, 17 red
+// Round 3 (2026-11-03 at 4320f347a, Windows, Node 25). F9 to F14g struck code
+// round 3 removed (the per-act pin question) and are retired; F2 is replaced by
+// F2r. F7, F8, F1 and F4 were re-run; F3, F5, F5b and F6 strike untouched lines:
+//   F7 → 11 red; F8 → 9 red; F4 → 11, 12 red
+//   F1 → 3, 4, 5, 9, 11, 15, 17, 23, 24 red
+//   F2r act-law.mjs: the shared question never asks the law's pin → 1–4, 7, 9–15, 18, 20–23 red
+//   S1  act-law.mjs: every act opens its own session (no single-flight) → 18, 20, 21, 22 red
+//   S2  act-law.mjs: a waiter ignores its own deadline → 21 red
+//   S3  act-law.mjs: the session never gives up at its deadline → 22 red
+//   S4  act-law.mjs: the session asks outside the cap → 14, 16, 19 red
+//   S5  act-law.mjs: an answer that did not come in time admits → 20, 21, 22 red
+//   S6  law-snapshot.mjs: a store that cannot be asked refuses (G1 retired) → 6 red
+//   N6a law-snapshot.mjs: an act's pin written even when older → 23 red
+//   N6b law-snapshot.mjs: "behind" is any difference, not newer by settlement → 23 red
+//   N6c world-graph-snapshot.mjs: an act's key written even when older or already ahead → 17, 24 red
+//   N6d world-graph-snapshot.mjs: a pin older than the graph in force counts as behind → 24 red
+//   U1  law-snapshot.mjs: a refresh in flight is never stood on, even when it matches → 15, 25 red
+//   U1g world-graph-snapshot.mjs: the same → 17, 26 red
+// act-law-pool.test.mjs (the real-Postgres F3 falsifier) is graded across
+// versions instead: 2/3 at 94da8f368, 1/3 at f4431ccff, 2/3 at c86cea70d (F3
+// as first ruled), 3/3 at round 3's head.
 
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
