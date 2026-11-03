@@ -960,7 +960,7 @@ export async function search(q, term, { limit, offset } = {}) {
 
 // ── DISCOVERY (POS-497, slice one) ───────────────────────────────────────────
 //
-// Two bounded walks over 087's tables, each ONE statement, so the generation it
+// Two bounded walks over 088's tables, each ONE statement, so the generation it
 // is tagged with and the rows it read come from one snapshot (`BEGIN READ ONLY`
 // is READ COMMITTED: two statements could see two ingests). Each step of a walk
 // is one index seek that reads one row, and the walk stops at its bound, so a

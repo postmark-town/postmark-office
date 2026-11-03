@@ -86,9 +86,9 @@ Each door's gate is equality: the store is seeded from the fixture's office.db, 
 
 **Retiring hydrate.mjs, the rehydrate unit and the swap path waits for the last reader.** Everything in groups 2–5 above still reads office.db, and so does every doorstep segment.
 
-## Discovery's two tables (087, POS-497)
+## Discovery's two tables (088, POS-497)
 
-`town_discovery_chunks` and `town_letter_edges` are derived from `town_letters` and `town_homes` (src/town-discovery.mjs § discoveryRowsOf), so they are TOWN_TABLES like the rest and held to the full derivation by the same gates. The seed writes them; a delta re-derives only the letters and homes it touched, in the same transaction, and moves `discovery_revision` (town_meta) by exactly the rows it replaced and the resident keys that joined or left; a whole pass reads the store's own letters and homes at the first ingest after 087 lands, at an epoch whose rule changed, and at the seal's audit (counted in the result's `discovery.audit`, not in `audit`). A store without 087 skips both tables and both meta keys and says so in the log, and the door answers that discovery is not installed. Applying, proving and rolling back 087 is in the file's header. The door (`town { read: "discover" }`) reads them in one statement per page: CONTRACT.md § Discovery.
+`town_discovery_chunks` and `town_letter_edges` are derived from `town_letters` and `town_homes` (src/town-discovery.mjs § discoveryRowsOf), so they are TOWN_TABLES like the rest and held to the full derivation by the same gates. The seed writes them; a delta re-derives only the letters and homes it touched, in the same transaction, and moves `discovery_revision` (town_meta) by exactly the rows it replaced and the resident keys that joined or left; a whole pass reads the store's own letters and homes at the first ingest after 088 lands, at an epoch whose rule changed, and at the seal's audit (counted in the result's `discovery.audit`, not in `audit`). A store without 088 skips both tables and both meta keys and says so in the log, and the door answers that discovery is not installed. Applying, proving and rolling back 088 is in the file's header. The door (`town { read: "discover" }`) reads them in one statement per page: CONTRACT.md § Discovery.
 
 ## Gates
 

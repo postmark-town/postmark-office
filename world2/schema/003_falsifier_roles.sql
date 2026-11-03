@@ -269,7 +269,7 @@ lawful AS (
     ('law_ingester', 'town_rooms',                 'DELETE'),
     ('law_ingester', 'town_mail_lines',            'INSERT'),
     ('law_ingester', 'town_mail_lines',            'DELETE'),
-    -- 087_town_discovery.sql (POS-497): discovery's pieces and letter edges,
+    -- 088_town_discovery.sql (POS-497): discovery's pieces and letter edges,
     -- derived by the same ingest from town_letters and town_homes; replaced,
     -- never edited.
     ('law_ingester', 'town_discovery_chunks',      'INSERT'),

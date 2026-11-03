@@ -1,7 +1,7 @@
 // town-discovery.mjs — discovery, slice one (POS-497): its derivation, its
 // bounds, its cursor and its words. The SQL is the store's
 // (town-index-store.mjs § discover), and the rows are written by the town-index
-// ingest beside the rows they come from (087_town_discovery.sql).
+// ingest beside the rows they come from (088_town_discovery.sql).
 //
 // THE RULINGS. Darko, 2026-11-03 09:22 EDT (POS-497/a): "Literal search +
 // common correspondents". Wright, 2026-11-03 (POS-497/b, settled): bounded
@@ -24,7 +24,7 @@ export const DISCOVERY_EPOCH = "1";
 export const DISCOVERY_LIMITS = Object.freeze({
   base_bytes: 1024,          // a piece's own text, before the overlap
   query_bytes: 256,          // the longest literal a text read takes
-  source_id_bytes: 1024,     // the longest letter id the index keeps (087's CHECK)
+  source_id_bytes: 1024,     // the longest letter id the index keeps (088's CHECK)
   pieces_per_page: 64,       // stored pieces one text page reads, at most
   candidates_per_page: 128,  // distinct recipients one common page checks, at most
   hits_per_page: 20,         // the most a page returns, and the default
@@ -151,7 +151,7 @@ export function foldDigests(acc, digests) {
 export const generationOf = (epoch, revision) => (epoch && revision ? `${epoch}:${revision}` : null);
 const GENERATION = /^[0-9]+:[0-9a-f]{32}$/;
 
-/** Does this store hold 087's two tables? */
+/** Does this store hold 088's two tables? */
 export async function discoveryTablesIn(client) {
   const r = (await client.query(
     "SELECT to_regclass('town_discovery_chunks') IS NOT NULL AND to_regclass('town_letter_edges') IS NOT NULL AS present")).rows[0];
@@ -225,7 +225,7 @@ export function discoveryAsk(args = {}) {
 // walk stopped, the generation it stopped in, and a binding to the request. It
 // grants nothing and is no count; every value in it reaches SQL as a parameter.
 
-/** Past every key the index can hold: U+10FFFF sorts last bytewise, and 257 of them (1028 bytes) outrun 087's 1024-byte bound on a source id. */
+/** Past every key the index can hold: U+10FFFF sorts last bytewise, and 257 of them (1028 bytes) outrun 088's 1024-byte bound on a source id. */
 export const PAST_EVERY_KEY = "\u{10FFFF}".repeat(257);
 const LAST_ORDINAL = 2147483647;
 
@@ -351,7 +351,7 @@ export function discoveryPage(ask, { generation, rows, more, reset = null, start
 // ── the refusals ─────────────────────────────────────────────────────────────
 
 export const NOT_INSTALLED = Object.freeze({ error: "bounce", code: 503, defect: "discovery is not installed in this store yet",
-  hint: "its tables arrive with a store migration (087); until then town { read: \"search\" } matches letters and residents by substring" });
+  hint: "its tables arrive with a store migration (088); until then town { read: \"search\" } matches letters and residents by substring" });
 export const NOT_BUILT = Object.freeze({ error: "bounce", code: 503, defect: "discovery's index has not been built yet",
   hint: "the town-index ingest builds it on its next run, within about fifteen minutes; town { read: \"search\" } answers meanwhile" });
 export const noResident = (handle) => ({ error: "bounce", code: 404, defect: `no resident "${handle}"`, hint: "people names two residents of the town; town { read: \"residents\" } is the roll" });

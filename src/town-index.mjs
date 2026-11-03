@@ -534,7 +534,7 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
 
   // DISCOVERY (POS-497): its pieces and edges from the letters and homes just
   // derived, and its generation, last in meta. The ingest skips all three on a
-  // store without 087 (world2/tools/town-index-ingest.mjs § discovery).
+  // store without 088 (world2/tools/town-index-ingest.mjs § discovery).
   const disc = discoveryRowsOf(discoverySourcesOf(t.letters, t.homes));
   t.discovery_chunks = disc.chunks;
   t.letter_edges = disc.edges;

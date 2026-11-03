@@ -226,7 +226,7 @@ not searched in it**, and no argument claims they are.
 - **Refusals:** an unknown argument, or one belonging to the other mode, is a 422 by name; a
   person not on the roll is a 404; a store without its tables, or whose index is not built
   yet, is a 503 naming which.
-- Its tables are derived by the town-index ingest (`world2/schema/087_town_discovery.sql`): a
+- Its tables are derived by the town-index ingest (`world2/schema/088_town_discovery.sql`): a
   letter whose sender is not a resident handle, or whose id is over 1024 bytes, is not
   indexed, and the ingest counts each by reason.
 

@@ -1,4 +1,4 @@
--- 087 — discovery's two derived tables: literal public text, and who writes to whom (POS-497)
+-- 088 — discovery's two derived tables: literal public text, and who writes to whom (POS-497)
 --
 -- RULED (Darko, 2026-11-03 09:22 EDT, POS-497/a): "Literal search + common
 -- correspondents". SETTLED (Wright, 2026-11-03, POS-497/b): bounded pages: a
@@ -55,11 +55,11 @@
 -- ── IDEMPOTENT. APPLY AS `world2_owner` by the runbook's step-1 idiom ────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
---     -c "SET ROLE world2_owner;" -f world2/schema/087_town_discovery.sql
+--     -c "SET ROLE world2_owner;" -f world2/schema/088_town_discovery.sql
 --
--- ORDER: code first is safe. Until 087 lands the ingest skips both tables and
+-- ORDER: code first is safe. Until 088 lands the ingest skips both tables and
 -- both meta keys and says so in its log, and the discover door answers that
--- discovery is not installed. The first ingest after 087 lands finds no
+-- discovery is not installed. The first ingest after 088 lands finds no
 -- `discovery_epoch` and fills both tables whole from the stored letters and
 -- homes, in its own transaction.
 --

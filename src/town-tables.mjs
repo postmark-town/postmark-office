@@ -31,11 +31,11 @@ export const TOWN_TABLES = Object.freeze({
   pot_escrow:           { cols: ["pot", "staked"], key: ["pot"] },
   pot_stakers:          { cols: ["pot", "handle", "staked"], key: ["pot", "handle"] },
   funding_invalid:      { cols: ["seq", "row_kind", "line", "reason"], seq: true },
-  // discovery's two (087_town_discovery.sql, POS-497): derived from `letters` and
+  // discovery's two (088_town_discovery.sql, POS-497): derived from `letters` and
   // `homes` above, never from the checkout (src/town-discovery.mjs § discoveryRowsOf)
   discovery_chunks:     { cols: ["id", "author", "source_kind", "source_id", "ordinal", "piece"], key: ["id"] },
   letter_edges:         { cols: ["id", "letter_id", "sender", "recipient"], key: ["id"] },
 });
 
-/** The tables 087 adds: a store without it holds neither, and the ingest skips both by name. */
+/** The tables 088 adds: a store without it holds neither, and the ingest skips both by name. */
 export const DISCOVERY_TABLES = Object.freeze(new Set(["discovery_chunks", "letter_edges"]));
