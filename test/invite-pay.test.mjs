@@ -87,58 +87,91 @@ test("never twice: a side the ledger already pays reads paid, and asks for nothi
 
 // ── the 30 days ─────────────────────────────────────────────────────────────
 
-test("the 30 days: the first letter or home within 30 days of the invitation activates it; after, nothing is owed", () => {
-  // LAW POS-576/b: "its first letter or its home within 30 days".
-  const at = INVITED_AT;
+test("the 30 days: the first letter or home within 30 town days of the invitation's town day activates it; after, nothing is owed", () => {
+  // LAW POS-576/b: "its first letter or its home within 30 days", counted as the town's judge counts it
+  // (Wright, on Darko's behalf, 2026-11-03: "the town's judge is the law, so the office's 30 days must be exactly the judge's").
+  // Until 2026-11-03 this asserted the 30 days as 30×24 hours of the invitation's instant: one second past them read late,
+  // and 2026-11-27T00:00Z read lapsed. Both are still the 30th town day, and the judge pays them.
+  const at = INVITED_AT; // town day 2026-10-27; the 30th town day after it is 2026-11-26
   const day30 = new Date(Date.parse(at) + 30 * 864e5).toISOString();
   assert.equal(activationOf({ at, letter: day30 }).status, "activated", "the 30th day's own instant is within");
-  assert.equal(activationOf({ at, letter: new Date(Date.parse(day30) + 1000).toISOString() }).status, "late");
+  assert.equal(activationOf({ at, letter: new Date(Date.parse(day30) + 1000).toISOString() }).status, "activated", "a second past 30×24 hours is still the 30th town day");
+  const end = "2026-11-27T05:00:00.000Z"; // the first instant of town day 2026-11-27, midnight EST
+  assert.equal(activationOf({ at }).by, end, "the 30 days end where the 31st town day begins");
+  assert.equal(activationOf({ at, letter: "2026-11-27T04:59:59.999Z" }).status, "activated", "the 30th town day's last instant");
+  assert.equal(activationOf({ at, letter: end }).status, "late", "the 31st town day's first instant");
   assert.equal(activationOf({ at, home: "2026-10-29T06:00:00.000Z", letter: "2026-10-30T00:00:00.000Z" }).through, "first home", "the earlier of the two");
-  const late = plan({ letters: new Map([["keep", new Date(Date.parse(day30) + 1000).toISOString()]]), now: new Date("2026-12-30T00:00:00.000Z") });
-  assert.equal(one(late).inviter_side.status, "late");
-  const lapsed = plan({ letters: new Map(), now: new Date("2026-11-27T00:00:00.000Z") });
-  assert.equal(one(lapsed).inviter_side.status, "lapsed");
+  assert.equal(one(plan({ letters: new Map([["keep", end]]), now: new Date("2026-12-30T00:00:00.000Z") })).inviter_side.status, "late");
+  assert.equal(one(plan({ letters: new Map(), now: new Date(end) })).inviter_side.status, "lapsed", "lapsed when the 30 days end, not before");
+  assert.equal(one(plan({ letters: new Map(), now: new Date("2026-11-27T04:59:59.999Z") })).inviter_side.status, "waiting", "still waiting on the 30th town day's last instant");
   assert.equal(one(plan({ letters: new Map(), now: new Date("2026-11-20T00:00:00.000Z") })).inviter_side.status, "waiting", "the 30 days still running");
 });
 
-test("the 30 days across the March clock change: the office counts them as the town's judge does, by town day too", () => {
-  // POS-816 review, finding 2. Invited 2027-02-13T04:00Z (town day 02-12, 23:00 EST), activated exactly
-  // 30×24 hours later, 2027-03-15T04:00Z (town day 03-15, 00:00 EDT): inside the hours, but town day +31,
-  // which the town's judge refuses ("more than 30 days"). Until this fix the office planned it: a 10 refused every tick.
+test("the 30 days are town days, across both clock changes and in an ordinary month, and the shown deadline is the enforced one", () => {
+  // The review's March case (finding 2): invited 2027-02-13T04:00Z (town day 02-12, 23:00 EST), activated exactly
+  // 30×24 hours later, 2027-03-15T04:00Z (town day 03-15, 00:00 EDT): town day +31, refused by the judge and so here.
   const at = "2027-02-13T04:00:00.000Z";
   const edge = "2027-03-15T04:00:00.000Z";
   assert.equal(Date.parse(edge) - Date.parse(at), 30 * 864e5, "exactly 30×24 hours");
   assert.equal(townDayGap(at, edge), 31, "town day +31 across the March change");
   assert.equal(activationOf({ at, letter: edge }).status, "late", "the office refuses what the judge refuses");
-  assert.equal(activationOf({ at, letter: "2027-03-15T03:59:59.000Z" }).status, "activated", "one second earlier is town day 03-14, +30");
-  // the control, a month with no clock change: the same 30×24 hours is town day +30, and activated
-  assert.equal(townDayGap("2027-01-10T04:00:00.000Z", "2027-02-09T04:00:00.000Z"), 30);
-  assert.equal(activationOf({ at: "2027-01-10T04:00:00.000Z", letter: "2027-02-09T04:00:00.000Z" }).status, "activated");
+  assert.equal(activationOf({ at, letter: "2027-03-15T03:59:59.999Z" }).status, "activated", "a millisecond earlier is town day 03-14, +30");
+  // The case the ruling turns on (round 2's question 2): an ordinary month, the 30th town day, later in the day
+  // than the invitation's clock time, so past 30×24 hours. The judge pays it; until 2026-11-03 the office read it late.
+  const jan = "2027-01-10T15:00:00.000Z";                                 // town day 01-10, 10:00 EST
+  const pastHours = "2027-02-09T23:00:00.000Z";                           // town day 02-09 (+30), 18:00 EST: 30×24 hours + 8
+  assert.ok(Date.parse(pastHours) - Date.parse(jan) > 30 * 864e5);
+  assert.equal(townDayGap(jan, pastHours), 30);
+  assert.equal(activationOf({ at: jan, letter: pastHours }).status, "activated", "the 30th town day, whatever its hour");
+  // the shown deadline (round 2's note 1): invited 2027-02-13T04:30Z (02-12, 23:30 EST), nothing yet. The 30 days end at
+  // 2027-03-15T04:00Z (midnight EDT); at 04:10Z the row is lapsed, exactly as a letter then is late.
+  const lateNight = "2027-02-13T04:30:00.000Z";
+  assert.equal(activationOf({ at: lateNight }).by, "2027-03-15T04:00:00.000Z");
+  assert.equal(activationOf({ at: lateNight, now: new Date("2027-03-15T04:10:00.000Z") }).status, "lapsed");
+  assert.equal(activationOf({ at: lateNight, letter: "2027-03-15T04:10:00.000Z" }).status, "late");
+  assert.equal(activationOf({ at: lateNight, now: new Date("2027-03-15T03:59:59.999Z") }).status, "waiting");
+  // November: invited on town day 2026-10-02, the 31st town day is 11-02, the day after the change, so it begins at midnight EST
+  assert.equal(activationOf({ at: "2026-10-02T12:00:00.000Z" }).by, "2026-11-02T05:00:00.000Z");
 });
 
 const INVITE_TOWN = process.env.INVITE_TOWN_CLONE || null;
-test(`the 30 days: across the March change, every activation the office plans is one the town's own judge accepts ${INVITE_TOWN ? "" : "(skipped: needs postmark#4424's judge: set INVITE_TOWN_CLONE)"}`,
+test(`the 30 days are exactly the town judge's: identical results across 2026-11-01, 2027-03-14 and an ordinary month ${INVITE_TOWN ? "" : "(skipped: needs postmark#4424's judge: set INVITE_TOWN_CLONE)"}`,
   { skip: INVITE_TOWN ? false : "needs postmark#4424's judge (unshipped): set INVITE_TOWN_CLONE" }, async () => {
+    // Wright, on Darko's behalf, after round 2: "the town's judge is the law, so the office's 30 days must be exactly the judge's".
     const { pathToFileURL } = await import("node:url");
     const { join } = await import("node:path");
     const town = await import(pathToFileURL(join(INVITE_TOWN, "tools", "stamp-mint.mjs")).href);
-    let planned = 0, refusedByBoth = 0;
-    // every hour for 18 days before the change, each activated 1 minute to 3 hours inside its 30×24 hours
-    for (let h = 0; h < 18 * 24; h += 1) {
-      const at = new Date(Date.parse("2027-02-03T00:00:00.000Z") + h * 36e5).toISOString();
-      for (const before of [180, 60, 1, 0]) {
-        const act = new Date(Date.parse(at) + 30 * 864e5 - before * 6e4).toISOString();
-        const a = activationOf({ at, letter: act });
-        const line = town.inviteInviterLine({ date: townDay(inviterDueAt(act)), handle: "cleo", invited: "hh:keep", inviter: "hh:castle", activated: townDay(act) });
-        const why = town.judgeInviteLine(town.classifyEntry(line), {
-          canon: (k) => k, invitationOf: (k) => (k === "hh:keep" ? { by: "castle", named: "cleo", at } : null),
-          houseAt: () => "hh:castle", isMeep: () => false, state: town.inviteState(),
-        });
-        if (a.status === "activated") { planned += 1; assert.equal(why, null, `the office plans ${at} → ${act}, and the judge refuses: ${why}`); }
-        else { refusedByBoth += 1; assert.match(String(why), /more than 30 days after the invitation/, `${at} → ${act}: the office calls it ${a.status}`); }
+    const { townDayStart, addTownDays } = await import("../src/invite-pay.mjs");
+    const judged = (at, act) => {
+      const line = town.inviteInviterLine({ date: townDay(inviterDueAt(act)), handle: "cleo", invited: "hh:keep", inviter: "hh:castle", activated: townDay(act) });
+      return town.judgeInviteLine(town.classifyEntry(line), {
+        canon: (k) => k, invitationOf: (k) => (k === "hh:keep" ? { by: "castle", named: "cleo", at } : null),
+        houseAt: () => "hh:castle", isMeep: () => false, state: town.inviteState(),
+      });
+    };
+    // three windows of invitations, every 61 minutes, whose 30th town day falls across the change (or no change)
+    const windows = { "2026-11-01": ["2026-09-28", "2026-10-05"], "2027-03-14": ["2027-02-08", "2027-02-15"], "ordinary 2027-01": ["2027-01-05", "2027-01-09"] };
+    for (const [name, [from, to]] of Object.entries(windows)) {
+      let paid = 0, refused = 0;
+      for (let t = Date.parse(`${from}T00:00:00Z`); t < Date.parse(`${to}T00:00:00Z`); t += 61 * 6e4) {
+        const at = new Date(t).toISOString();
+        const day = townDay(at);
+        const s30 = Date.parse(townDayStart(addTownDays(day, 30))), s31 = Date.parse(townDayStart(addTownDays(day, 31)));
+        const hours = t + 30 * 864e5;
+        const s0 = Date.parse(townDayStart(day)); // the day before the invitation's is refused by both (the floor)
+        const acts = [s0 - 1, s0, s30 - 1, s30, s31 - 1, s31, s31 + 1, hours - 1000, hours, hours + 1000];
+        for (let a = s30 - 12 * 36e5; a < s31 + 12 * 36e5; a += 2 * 36e5) acts.push(a);
+        for (const ms of acts) {
+          const act = new Date(ms).toISOString();
+          const office = activationOf({ at, letter: act }).status === "activated";
+          const why = judged(at, act);
+          assert.equal(office, why === null, `${name}: ${at} → ${act}: the office says ${office ? "pay" : "late"}, the judge ${why ?? "pays"}`);
+          if (why !== null) assert.match(why, /more than 30 days after the invitation|before the invitation/, `${name}: the judge refuses only for the 30 days`);
+          office ? (paid += 1) : (refused += 1);
+        }
       }
+      assert.ok(paid > 500 && refused > 500, `${name}: both sides of the edge met (${paid} paid by both, ${refused} refused by both)`);
     }
-    assert.ok(planned > 1000 && refusedByBoth > 0, `both sides of the edge were met: ${planned} planned, ${refusedByBoth} refused by both`);
   });
 
 // ── the week ────────────────────────────────────────────────────────────────

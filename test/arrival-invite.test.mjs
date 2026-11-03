@@ -476,12 +476,16 @@ test("I9c · the 30-day check (Wright's G5), and THE CAP COUNTS PAYOUTS IN THE M
   const at = "2026-10-01T12:00:00.000Z";
   const now = new Date("2026-10-20T00:00:00.000Z");
   assert.deepEqual(activationOf({ at, letter: "2026-10-05T00:00:00.000Z", home: "2026-10-03T00:00:00.000Z", now }),
-    { first_letter: "2026-10-05T00:00:00.000Z", first_home: "2026-10-03T00:00:00.000Z", by: "2026-10-31T12:00:00.000Z", status: "activated", at: "2026-10-03T00:00:00.000Z", through: "first home" },
-    "the earlier of the two decides");
+    { first_letter: "2026-10-05T00:00:00.000Z", first_home: "2026-10-03T00:00:00.000Z", by: "2026-11-01T04:00:00.000Z", status: "activated", at: "2026-10-03T00:00:00.000Z", through: "first home" },
+    "the earlier of the two decides; the 30 days end where the 31st town day (11-01) begins, midnight EDT");
+  // THE 30 DAYS ARE TOWN DAYS, the town judge's own count (Wright, on Darko's behalf, 2026-11-03). Until 2026-11-03 this
+  // asserted 30×24 hours: 10-31T12:00:01Z read late and 2026-11-01T00:00Z read lapsed. Both are town day 10-31, the 30th.
   assert.equal(activationOf({ at, letter: "2026-10-31T12:00:00.000Z", now }).status, "activated", "the 30th day's own instant is within");
-  assert.equal(activationOf({ at, letter: "2026-10-31T12:00:01.000Z", now }).status, "late");
+  assert.equal(activationOf({ at, letter: "2026-10-31T12:00:01.000Z", now }).status, "activated", "still the 30th town day");
+  assert.equal(activationOf({ at, letter: "2026-11-01T04:00:00.000Z", now }).status, "late", "the 31st town day's first instant");
   assert.equal(activationOf({ at, now }).status, "waiting", "neither yet, the 30 days still running");
-  assert.equal(activationOf({ at, now: new Date("2026-11-01T00:00:00.000Z") }).status, "lapsed");
+  assert.equal(activationOf({ at, now: new Date("2026-11-01T00:00:00.000Z") }).status, "waiting", "still town day 10-31");
+  assert.equal(activationOf({ at, now: new Date("2026-11-01T04:00:00.000Z") }).status, "lapsed");
   // twelve invited by quill-hall: eleven activate in October, one never does;
   // read on 2026-11-20 every week has passed, so all eleven are due in November.
   const rows = Array.from({ length: 12 }, (_, i) => ({ slug: `h${String(i).padStart(2, "0")}`, residents: [`r${i}`],

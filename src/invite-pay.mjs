@@ -49,8 +49,7 @@ export const inviteId = (slug) => `invite:${slug}`;
 /** The hands that hold, lift and cancel (Little Bird, and Darko as her backup: POS-816, Little Bird 2026-10-30). */
 export const INVITE_HOLD_HANDS = Object.freeze(["little-bird", "keemin"]);
 
-export const INVITE_WITHIN_MS = 30 * 864e5;         // the first letter or home "within 30 days" (POS-576/b)
-export const INVITE_WITHIN_DAYS = 30;               // and the town judge's own bound for it, by town day (stamp-mint.mjs § INVITE)
+export const INVITE_WITHIN_DAYS = 30;               // the first letter or home "within 30 days" (POS-576/b), by town day, as the town's judge counts it
 export const INVITE_HOLD_MS = 7 * 864e5;            // "A week" (POS-816/a)
 export const INVITE_CAP_PER_MONTH = 10;             // "let's do 10 a month" (POS-576/c), in the month paid (POS-816/b)
 export const SETTLEMENT_HOURS_UTC = Object.freeze([6, 18]);
@@ -62,8 +61,25 @@ import { FOUNDERS } from "./arrival-invite.mjs";
 const TZ = () => process.env.TOWN_TZ ?? "America/New_York";
 const iso = (v) => { const t = v == null ? NaN : new Date(v).getTime(); return Number.isFinite(t) ? new Date(t).toISOString() : null; };
 
+const dayFormats = new Map();
 /** The town day an instant falls on: the clock the town's ledger dates its lines on. */
-export const townDay = (at, tz = TZ()) => new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(at));
+export const townDay = (at, tz = TZ()) => {
+  if (!dayFormats.has(tz)) dayFormats.set(tz, new Intl.DateTimeFormat("en-CA", { timeZone: tz }));
+  return dayFormats.get(tz).format(new Date(at));
+};
+/** A town day `n` days after another (`YYYY-MM-DD`, calendar arithmetic, no clock). */
+export const addTownDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+/**
+ * The first instant of a town day, on the town's clock: the smallest instant
+ * whose town day is that day. A day starts within a day either side of its own
+ * UTC midnight, and the town day only moves forward with the instant, so a
+ * search between the two finds it to the millisecond, clock changes included.
+ */
+export function townDayStart(day, tz = TZ()) {
+  let lo = Date.parse(`${day}T00:00:00Z`) - 864e5, hi = lo + 2 * 864e5; // townDay(lo) < day <= townDay(hi)
+  while (hi - lo > 1) { const mid = Math.floor((lo + hi) / 2); if (townDay(mid, tz) >= day) hi = mid; else lo = mid; }
+  return new Date(hi).toISOString();
+}
 
 /** The first settlement (06:00 or 18:00 UTC) at or after an instant. */
 export function settlementAtOrAfter(at) {
@@ -94,20 +110,29 @@ export const townDayGap = (from, to) => Math.round((Date.parse(`${townDay(to)}T0
  * (neither yet, the 30 days still running) or lapsed (neither, and the 30 days
  * are over).
  *
- * "WITHIN 30 DAYS" HOLDS BOTH BOUNDS (POS-816 review, finding 2): within 30×24
- * hours of the invitation's instant, AND within 30 town days of its town day,
- * which is exactly how the town's judge counts it (judgeInviteLine). Across the
- * March clock change the two part: an invitation at 23:xx Eastern in the 30 days
- * before it, activated in its last hour, is inside 30×24 hours and on town day
- * +31. With the hours alone the office planned a 10 the judge refused, and asked
- * again every tick. Now the office plans only what the judge accepts.
+ * "WITHIN 30 DAYS" IS THE TOWN JUDGE'S OWN COUNT, EXACTLY (POS-816, Wright on
+ * Darko's behalf after round 2 of the review: "the town's judge is the law, so
+ * the office's 30 days must be exactly the judge's"). The judge
+ * (stamp-mint.mjs § judgeInviteLine) counts town days: the activation's town day
+ * no earlier than the invitation's, and no more than 30 after it. So does this,
+ * and nothing else. Until 2026-11-03 the office held 30×24 hours of the
+ * invitation's instant (alone, then beside the town days): an activation on the
+ * 30th town day, later in its day than the invitation's clock time, read late
+ * here while the town would pay it, and across the March clock change the hours
+ * alone planned a 10 the judge refused every tick.
+ *
+ * `by` is when the 30 days end: the first instant of the 31st town day. The
+ * hands' view and tools/invites.mjs show it as "waiting until", and waiting
+ * turns lapsed at that same instant, so the shown deadline is the enforced one.
  */
 export function activationOf({ at, letter = null, home = null, now = new Date() }) {
-  const by = new Date(new Date(at).getTime() + INVITE_WITHIN_MS).toISOString();
+  const invitedDay = townDay(at);
+  const lastDay = addTownDays(invitedDay, INVITE_WITHIN_DAYS);
+  const by = townDayStart(addTownDays(lastDay, 1));
   const firstLetter = iso(letter), firstHome = iso(home);
   const first = [firstLetter, firstHome].filter(Boolean).sort()[0] ?? null;
-  const within = (t) => t <= by && townDayGap(at, t) <= INVITE_WITHIN_DAYS;
-  const status = first ? (within(first) ? "activated" : "late") : (iso(now) > by ? "lapsed" : "waiting");
+  const within = (t) => { const d = townDay(t); return d >= invitedDay && d <= lastDay; };
+  const status = first ? (within(first) ? "activated" : "late") : (iso(now) >= by ? "lapsed" : "waiting");
   return { first_letter: firstLetter, first_home: firstHome, by, status,
     ...(first ? { at: first, through: first === firstLetter ? "first letter" : "first home" } : {}) };
 }
