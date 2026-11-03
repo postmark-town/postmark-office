@@ -879,9 +879,11 @@ export async function callTool(name, args, ctx) {
       // here rather than twelve hours at the crossing.
       // Flag-off this branch is not reached and the door is byte-identical.
       // THE HINT RIDES BOTH PENS AND CHANGES NEITHER (POS-101). A threadless
-      // send with an unanswered letter from this recipient still TAKES — there
-      // is no amend and no unsend, so a refusal here would be the only way to
-      // unsay a letter, and that is not this lane's call. `withThreadlessHint`
+      // send with an unanswered letter from this recipient still TAKES: the
+      // hint teaches and does not gate, and the sender can still amend or
+      // withdraw the taken letter until it sails (POS-666, src/letter-amend.mjs
+      // § amendLetterAtOffice and § withdrawLetterAtOffice), so turning the
+      // hint into a refusal is not this lane's call. `withThreadlessHint`
       // is the one owner all three send skins call, so the doors cannot come to
       // teach differently; it returns a bounce untouched.
       // ONE SEND FOR THREE DOORS since POS-70 (src/send-at-door.mjs): this

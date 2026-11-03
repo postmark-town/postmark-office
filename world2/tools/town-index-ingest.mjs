@@ -33,9 +33,9 @@
 //
 // ── ONE DERIVATION ───────────────────────────────────────────────────────────
 //
-// Every row comes from src/town-index.mjs, the same code hydrate.mjs writes
-// office.db from. This file decides only WHICH rows to re-derive and which to
-// write.
+// Every row comes from src/town-index.mjs (office.db's hydrate.mjs, which once
+// wrote from it too, was retired by POS-656). This file decides only WHICH rows
+// to re-derive and which to write.
 //
 // ── USAGE ────────────────────────────────────────────────────────────────────
 //
@@ -356,7 +356,7 @@ async function writeLetters(client, town, history, tally, ids = null) {
     .filter((r) => r.delivered_at).map((r) => [r.path, r.delivered_at]));
   // A path the store never held a row for (a duplicate copy that has just come
   // to win) and the delta never added: its first add is in the store's own
-  // history, which the seed walked whole (hydrate's oldest add, by its path index).
+  // history, which the seed walked whole (the oldest add, as the history pass keeps it).
   const unheld = pick.map((l) => l.path).filter((p) => p && !heldAt.has(p) && !history.deliveredAt.has(p));
   const firstAdd = new Map(unheld.length ? (await client.query(
     "SELECT path, min(committed_at) AS at FROM town_repo_log WHERE op = 'A' AND path = ANY($1::text[]) GROUP BY path", [unheld])).rows
@@ -666,7 +666,7 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   const atlas = atlasRows(townRepo, town, { log });
   if (atlas) { await diffTable(client, "regions", atlas.regions, tally); await diffTable(client, "homes", atlas.homes, tally); }
 
-  // meta, in hydrate's order
+  // meta, in the seed's order (src/town-index.mjs § deriveTownIndex)
   const metaRows = [
     ["as_of", sha],
     ["town_path", resolve(townRepo)],

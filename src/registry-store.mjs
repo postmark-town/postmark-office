@@ -32,7 +32,7 @@
 // tools/registry-drain.mjs.
 
 import { actsQuery } from "./world2-acts.mjs";
-import { registryFromRows, pinsFromRows, HOUSEHOLD_KEYS, PIN_KEYS } from "./registry-rows.mjs";
+import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 
 // ORDER BY `ord`, always. The file's 118 keys are in declaration order and
 // nothing derives it (measured 2026-09-22: not sorted, and `since` runs
@@ -490,7 +490,3 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
   if (r === null) return null;
   return { slug: r.length ? r[0].slug : null };
 }
-
-// Re-exported so a future reader importing "the registry's grammar" gets it
-// from one place whether it is reading the file or the table.
-export { HOUSEHOLD_KEYS, PIN_KEYS };

@@ -267,6 +267,43 @@ export async function enterExitLedgerText(repo, rows) {
   });
 }
 
+// ── READ ONCE PER PASSAGE, NOT ONCE PER CALL (POS-272) ──────────────────────
+//
+// Every say pays this read: `residentStandpoint`'s aboard-by-occupancy branch
+// folds occupancy out of the served ledger, and the crossing doors ask again.
+// The rows change only when a passage lands, so the read is kept under the
+// passage set's HIGH-WATER MARK — `max(id)` and `count(*)` over exactly the
+// rows the read returns — and re-read when either moves.
+//
+// THE COUNT IS THE EXACT HALF. `acts` is append-only (the `acts_append_only`
+// trigger refuses UPDATE and DELETE), so the row set changes only by growing
+// and the count moves with every change. `max(id)` alone would miss a passage
+// whose identity was drawn before a later one but committed after it: the
+// later id is already the maximum when the earlier row appears.
+//
+// Scoped to the passage rows, not to every act: keyed on the whole table, each
+// say (the commonest act by far) would throw the memo away.
+//
+// A mark that cannot be read is no memo, never a stale answer: the full read
+// runs as before, and its own failure is still named below.
+let _passages = null;   // { mark, rows }
+
+/** Forget the kept passages — for suites that swap the record under the office. */
+export function __forgetPassages() { _passages = null; }
+
+/** The passage set's high-water mark (the key of the block above): `max(id)`
+ *  and `count(*)` over the rows `livePassageRows` returns, joined with the
+ *  record's URL. `null` when the record cannot be asked. */
+async function passageMark(live, env) {
+  const got = await actsQuery(
+    `SELECT max(id) AS hw, count(*) AS n FROM acts
+      WHERE action = ANY($1) AND payload->>'_ledger' IS NULL`,
+    [live.PASSAGE_ACTIONS], env);
+  const r = got?.[0];
+  if (!r || r.n == null) return null;
+  return `${env.WORLD2_PG_URL}|${r.hw ?? "none"}|${r.n}`;
+}
+
 /**
  * THE ONE I/O SEAM over the record, so the door and the save read the same rows
  * by the same route.
@@ -334,40 +371,6 @@ export async function enterExitLedgerText(repo, rows) {
  * ⚑ RENAMED from `liveJournalRows`, which named a source it no longer has. No
  * caller outside this module and its suite ever held the old name.
  */
-// ── READ ONCE PER PASSAGE, NOT ONCE PER CALL (POS-272) ──────────────────────
-//
-// Every say pays this read: `residentStandpoint`'s aboard-by-occupancy branch
-// folds occupancy out of the served ledger, and the crossing doors ask again.
-// The rows change only when a passage lands, so the read is kept under the
-// passage set's HIGH-WATER MARK — `max(id)` and `count(*)` over exactly the
-// rows the read returns — and re-read when either moves.
-//
-// THE COUNT IS THE EXACT HALF. `acts` is append-only (the `acts_append_only`
-// trigger refuses UPDATE and DELETE), so the row set changes only by growing
-// and the count moves with every change. `max(id)` alone would miss a passage
-// whose identity was drawn before a later one but committed after it: the
-// later id is already the maximum when the earlier row appears.
-//
-// Scoped to the passage rows, not to every act: keyed on the whole table, each
-// say (the commonest act by far) would throw the memo away.
-//
-// A mark that cannot be read is no memo, never a stale answer: the full read
-// runs as before, and its own failure is still named below.
-let _passages = null;   // { mark, rows }
-
-/** Forget the kept passages — for suites that swap the record under the office. */
-export function __forgetPassages() { _passages = null; }
-
-async function passageMark(live, env) {
-  const got = await actsQuery(
-    `SELECT max(id) AS hw, count(*) AS n FROM acts
-      WHERE action = ANY($1) AND payload->>'_ledger' IS NULL`,
-    [live.PASSAGE_ACTIONS], env);
-  const r = got?.[0];
-  if (!r || r.n == null) return null;
-  return `${env.WORLD2_PG_URL}|${r.hw ?? "none"}|${r.n}`;
-}
-
 export async function livePassageRows({ env = process.env } = {}) {
   try {
     const live = await import("../world2/tools/live-reads.mjs");

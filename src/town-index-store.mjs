@@ -267,8 +267,8 @@ async function questMeta(q) {
 //
 // So the store half is ONLY reads: every row the board can ask for, read in the
 // caller's transaction (questIndexRows), and the board is composed from those
-// rows once the connection is back (questBoardOfRows). questBoardAnswer is the
-// two together, for a door.
+// rows once the connection is back (questBoardOfRows). A door runs the two
+// together itself (server.mjs /quests/:handle, mcp.mjs read_quests).
 
 const PROGRESS_SQL = "SELECT handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from FROM town_quest_progress WHERE handle = $1";
 
@@ -317,11 +317,6 @@ function heldQuestSource(rows) {
  */
 export async function questBoardOfRows(rows, clone, opts = {}) {
   return questBoardWith(heldQuestSource(rows), rows.meta, rows.handle, clone, opts);
-}
-
-/** A door's quest board from the store: storeAnswer's `{ out, asOf }` or `{ refused }`, the board composed after the connection is back. */
-export function questBoardAnswer(handle, clone, opts = {}, { env = process.env } = {}) {
-  return storeAnswer((c) => questIndexRows(c, handle), { env, then: (rows) => questBoardOfRows(rows, clone, opts) });
 }
 
 /**

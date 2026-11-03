@@ -14,7 +14,7 @@
 // Everything in this file is a function of its arguments: no store, no clock
 // of its own, no network. The pen and the reads (src/events-store.mjs) and the
 // rebuild (world2/tools/events-rebuild.mjs) all call it, and that is the point.
-// `applyEventAct` is the ONE place an act becomes a row, so the row the pen
+// `applyPostAct` is the ONE place an act becomes a row, so the row the pen
 // writes beside an act and the row a rebuild derives from that act cannot come
 // to disagree. `phaseAt` is the ONE place a phase is decided, so no surface
 // works out its own.
@@ -138,16 +138,15 @@ export function refuse(code, defect, hint, extra = {}) {
 
 // ── THE ID ──────────────────────────────────────────────────────────────────
 //
+// A MARK id is judged more loosely than an event's slug: a handle may carry a dot
+// (`victor-b.-rose-e.` is a live one), and a mark's owner is a handle.
+export const MARK_ID_RE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._/-]*$/;
 // MEASURED: a mark does not mint its slug from a title. `world_leave_mark`
 // takes the slug from the caller and judges it (world.mjs: "slug must be
 // kebab-case ... lowercase letters, digits, single hyphens"). The office's one
 // title-to-slug minting is the letter's (write.mjs § slugify). So an event's
 // slug is minted from its title with that letter's rule, and the result obeys
 // the mark's rule, so an event id reads like a mark id.
-export const EVENT_ID_RE = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/;
-// A MARK id is judged more loosely than an event's: a handle may carry a dot
-// (`victor-b.-rose-e.` is a live one), and a mark's owner is a handle.
-export const MARK_ID_RE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._/-]*$/;
 export function slugFromTitle(title) {
   return String(title ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60).replace(/-+$/, "");
 }
@@ -400,7 +399,6 @@ export function harnessPlan(existing, harness) {
 // It mutates `state` and returns the row it wrote, so the pen can write exactly
 // that row and the rebuild can fold a whole log with the same call.
 export const responseKey = (post, handle, kind = RESPONSE_RSVP) => `${post} ${handle} ${kind}`;
-export const rsvpKey = (post, handle) => responseKey(post, handle, RESPONSE_RSVP);
 
 const placeCols = (place) => ({
   place_mark: place?.mark ?? null,

@@ -64,48 +64,6 @@ export const RECEIPT_CLOCK =
   "crossing = the SETTLEMENT epoch (S-number + the sha it blessed, 06:00/18:00Z) — not the ferry's 00:00/12:00Z crossing, and not candle N, the candle's own interval (LOGOS/classes.md § the register, crossing ③)";
 
 /**
- * The bulletin's own five words for why a mark did not ride.
- *
- * A refusal names a CHECK (`claims.refusal_check`, "refused always names its
- * failing check — attributable by construction", 001_tables.sql) and a resident
- * was promised one of FIVE WORDS. This is the only place the two vocabularies
- * meet, and it is a map rather than a rename: `cause` is the promised word and
- * `cause_row` always carries the record it came from, so nothing is lost in the
- * translation and a reader can go check.
- *
- * ⚑ AN UNMAPPED CHECK IS NOT "malformed". It answers `null` with the raw check
- * beside it, because guessing one of five promised words for a refusal nobody
- * has classified would be the town keeping its promise in appearance only.
- *
- * ── THE COLUMN HOLDS `<name>: <detail>`, AND THE FIRST MAP READ THE WHOLE
- *    STRING (repaired 2026-09-07, reviewer-measured) ─────────────────────────
- *
- * The first version of this map was built from the SWEEP's channel names and
- * never measured against the writers that actually fill the column. Every one
- * of them — `world2/tools/clearing-job.mjs` at 129, 131, 141, 158, 176, 190-191
- * and `world2/tools/review-rule.mjs` at 247-248 — writes `<name>: <detail>`:
- *
- *     duplicate: a standing mark already carries this slug
- *     superseded: a later claim in this candle amends this one
- *     insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c
- *     parcel-overlap: standing parcel "k-of-garrison/the-long-field"
- *     counterclaim: collides with 77 — a mind rules (census D2)
- *     review-ruling: wright refused this contest — <because>
- *
- * A map keyed on whole strings matched **0 of 8**. So every refusal the town
- * can currently produce answered `cause: null` — the `null`-rather-than-guess
- * discipline is the only reason that was an honest silence rather than a lie,
- * and it is the reason this was a repair and not an incident.
- *
- * THE CHECK IS THE PREFIX. Split on the FIRST colon: the detail carries commas,
- * quotes, em-dashes and its own colons ("review-ruling: wright refused this:
- * it collides"), and only the segment before the first one is a check name.
- *
- * `test/mark-receipt.test.mjs § REAL_REFUSAL_CHECKS` holds all eight verbatim
- * with the line each came from. A ninth prefix is not guessed at — it answers
- * `null` and says so, which is asserted there too.
- */
-/**
  * ⚑ `unpublished` IS THE SIXTH WORD, RULED BY KEEMIN 2026-09-08 (postmark#2594).
  *
  * The bulletin's published sentence promises four — "held, contested, unbacked,
@@ -138,6 +96,52 @@ export const RECEIPT_CLOCK =
  */
 export const CAUSE_WORDS = Object.freeze(["held", "contested", "unbacked", "malformed", "quarantined", "unpublished", "opposed"]);
 
+/**
+ * The bulletin's own five words for why a mark did not ride.
+ *
+ * A refusal names a CHECK (`claims.refusal_check`, "refused always names its
+ * failing check — attributable by construction", 001_tables.sql) and a resident
+ * was promised one of FIVE WORDS (`CAUSE_WORDS` has since gained a sixth and a
+ * seventh — the two notes above it). This is the only place the two vocabularies
+ * meet, and it is a map rather than a rename: `cause` is the promised word and
+ * `cause_row` always carries the record it came from, so nothing is lost in the
+ * translation and a reader can go check.
+ *
+ * ⚑ AN UNMAPPED CHECK IS NOT "malformed". It answers `null` with the raw check
+ * beside it, because guessing one of five promised words for a refusal nobody
+ * has classified would be the town keeping its promise in appearance only.
+ *
+ * ── THE COLUMN HOLDS `<name>: <detail>`, AND THE FIRST MAP READ THE WHOLE
+ *    STRING (repaired 2026-09-07, reviewer-measured) ─────────────────────────
+ *
+ * The first version of this map was built from the SWEEP's channel names and
+ * never measured against the writers that actually fill the column. Every one
+ * of them — `world2/tools/clearing-job.mjs` (steps 1 duplicate, 2 supersession,
+ * 4 parcel overlap and 5 counterclaim write their own text there; step 3, escrow
+ * sufficiency, takes its `insufficient-stamps:` text from
+ * `escrow-presence.mjs § unbackedStakesAmong`) and
+ * `world2/tools/review-rule.mjs § main` — writes `<name>: <detail>`:
+ *
+ *     duplicate: a standing mark already carries this slug
+ *     superseded: a later claim in this candle amends this one
+ *     insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c
+ *     parcel-overlap: standing parcel "k-of-garrison/the-long-field"
+ *     counterclaim: collides with 77 — a mind rules (census D2)
+ *     review-ruling: wright refused this contest — <because>
+ *
+ * A map keyed on whole strings matched **0 of 8**. So every refusal the town
+ * can currently produce answered `cause: null` — the `null`-rather-than-guess
+ * discipline is the only reason that was an honest silence rather than a lie,
+ * and it is the reason this was a repair and not an incident.
+ *
+ * THE CHECK IS THE PREFIX. Split on the FIRST colon: the detail carries commas,
+ * quotes, em-dashes and its own colons ("review-ruling: wright refused this:
+ * it collides"), and only the segment before the first one is a check name.
+ *
+ * `test/mark-receipt.test.mjs § REAL_REFUSAL_CHECKS` holds all eight verbatim
+ * with the line each came from. A ninth prefix is not guessed at — it answers
+ * `null` and says so, which is asserted there too.
+ */
 const CAUSE_OF_CHECK = Object.freeze({
   // ── the CANDLE's writers (world2/tools/clearing-job.mjs) ──────────────────
   // A slug already standing, or a claim a later one amends: two claims for one
@@ -178,7 +182,7 @@ const CAUSE_OF_CHECK = Object.freeze({
   // ⚑ `contested`, NOT `held` (repaired 2026-09-07, reviewer-found — and it is
   // the SAME MISTAKE AS THE 0-of-8, one level deeper). The first mapping read
   // the writer's NAME — "a mind ruled, so: held" — instead of the STATE that
-  // writer leaves the row in. `review-rule.mjs:245-248` is explicit:
+  // writer leaves the row in. `review-rule.mjs § main` is explicit:
   //
   //     const check = next !== "refused" ? null
   //       : kind === "refuse" ? `review-ruling: ${by} refused this contest — …`
