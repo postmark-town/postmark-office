@@ -155,6 +155,25 @@ jobs:
           bash .github/scripts/guard-falsifier-floor.sh world2_dev
           bash .github/scripts/guard-falsifier-floor.sh world2_guards_lane
 
+      # ── 090'S LANDED PROBE, ON 16 (POS-721 B) ────────────────────────────
+      # 090's probe compares Postgres's own deparse of its nonce index; the
+      # office suite asks it on 18, the box runs 16. So it is asked HERE, on
+      # the clean floor before anything is seeded or planted: the real query,
+      # through `landedIn`, must answer landed on a 16 server or the step
+      # fails. Then the same script must fail on the service's own `postgres`
+      # database (no 090 there: exit 1) and on a database that is not there
+      # (exit 2), so neither a false nor an error can read green.
+      - name: 090's landed probe on PostgreSQL 16
+        run: |
+          node .github/scripts/probe-090-landed.mjs world2_dev
+          set +e
+          node .github/scripts/probe-090-landed.mjs postgres; missing=$?
+          node .github/scripts/probe-090-landed.mjs probe_090_no_such_database; cannot=$?
+          set -e
+          [ "$missing" -eq 1 ] || { echo "::error::without 090 the probe script exited $missing, not 1"; exit 1; }
+          [ "$cannot" -eq 2 ] || { echo "::error::on no database the probe script exited $cannot, not 2"; exit 1; }
+          echo "can fail: missing → exit 1, cannot run → exit 2"
+
       # G5's port side. The genesis pen, at the checkout's own sha, with the
       # legacy acts (`--with-acts` is what writes `legacy:attachment`). ~3 s.
       - name: Seed world2_dev from the world checkout
