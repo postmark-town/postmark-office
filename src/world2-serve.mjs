@@ -97,6 +97,8 @@ import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
 import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, heldPlaced } from "./world.mjs";
 import { hearable } from "./hearing-window.mjs";
+import { publishedEdges } from "../world2/tools/convo-edges.mjs"; // POS-779: where a conversation splits
+import { createConversationsDoor } from "../world2/tools/convo-door.mjs"; // POS-779: the durable conversations read
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
 // § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
@@ -132,6 +134,18 @@ async function pool(env = process.env) {
 
 /** The store's pool, for a door that reads rows outside this file (world2-fold.mjs). */
 export const world2Pool = (env = process.env) => pool(env);
+
+// ── `GET /world/conversations` FROM THE RECORD (POS-779) ─────────────────────
+// The page's door, answered from `acts` through world2/tools/convo-door.mjs when the store is engaged. One door per
+// process (it keeps the bounded memo); the real `spokenInRoom` is the eligibility guard, the reader's published
+// sweeps are where a thread splits. Main-thread only, like the legacy read (read-workers MAIN_ONLY_READS).
+let conversationsDoor = null;
+export async function world2Conversations(searchParams) {
+  conversationsDoor ??= createConversationsDoor({ pool: await pool(), isPrivate: spokenInRoom, settlements: settlementsKnown, hearingWindow: hearingWindowAt });
+  return conversationsDoor.handle(searchParams);
+}
+/** Tests only: stand the door's pieces, or drop it. */
+export function __setConversationsDoorForTest(door) { conversationsDoor = door; }
 
 // ── THE ENGINE, AND WHY IT IS THE ONE THING NOT IN THE STORE ────────────────
 //
@@ -1388,34 +1402,24 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     const rows = allVoices.filter((row) => !spokenInRoom(row)); // WLD-74: a say spoken inside a dungeon room is not on a keyless read
     const centres = talk.anchorCentres(markRows);
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
-    // WHERE A THREAD SPLITS (POS-779): the settlements the office knows, plus the
-    // window open at the instant asked. A settlement is the ONLY edge a thread has.
-    // Every settlement the STORE holds (its settlements table: the published
-    // instants), the live reader's sweeps, the window open at the instant asked,
-    // and, for history older than the oldest of those, the 06:00/18:00Z heartbeats.
-    const settlementEdges = async (ms, firstVoiceMs) => {
-      let list = [];
-      try { list = settlements() ?? []; } catch { list = []; }
-      try {
-        const { rows: srows } = await p.query("SELECT published_at FROM settlements WHERE published_at IS NOT NULL");
-        list = [...list, ...srows.map((r) => Date.parse(r.published_at)).filter(Number.isFinite)];
-      } catch { /* a store with no settlements table answers from what the reader keeps */ }
-      let since = null;
-      try { since = hearingWindow(ms)?.since ?? null; } catch { since = null; }
-      const known = [...new Set([...list, ...(Number.isFinite(since) ? [since] : [])])].filter((m) => m <= ms);
-      const oldest = known.length ? Math.min(...known) : ms;
-      return [...new Set([...talk.heartbeatEdges(firstVoiceMs, oldest - 1), ...known])];
-    };
+    // WHERE A THREAD SPLITS (POS-779): the published sweeps this office has read, plus the window open at
+    // the instant asked (world2/tools/convo-edges.mjs). Never a nominal heartbeat, never only the blessed tags.
     let derived;
     try { derived = talk.voiceRecords(rows, { centreOf: (id) => centres.get(id) ?? null }); }
     catch (e) { return { code: 500, body: { error: "bounce", defect: "a voice act matches no known era", hint: faultLogged("a voice act matches no known era", e) } }; }
-    const body = talk.conversationsOf(derived.voices, {
+    const edges = publishedEdges({ settlements, hearingWindow, ms: at.ms });
+    // a voice older than the oldest edge sits in an epoch whose start is unknown: it is left out and said, not grouped
+    const { grouped, ungrouped, oldest } = talk.groupable(derived.voices, edges.list, at.ms);
+    const body = talk.conversationsOf(grouped, {
       now: at.ms,
       earshotM: dials.earshot_m.value,
-      boundaries: await settlementEdges(at.ms, derived.voices.length ? Math.min(...derived.voices.map((v) => v.at)) : at.ms),
+      boundaries: edges.list,
       fadeMs: dials.fade_min.ms,
-      closedMax: n("closed", 40), voiceCap: n("voices", 200),
+      closedMax: n("closed", 40), voiceCap: n("voices", 80),
     });
+    const ungroupedLine = ungrouped
+      ? `${ungrouped} of the ${derived.voices.length} voices come ${oldest == null ? "when no settlement could be read" : `before the oldest settlement this office has read (${new Date(oldest).toISOString()})`}, so their epoch is unknown and they are not grouped`
+      : null;
     const fellBack = talk.sayDialsDisclosure(dials);
     const unplacedLine = talk.unplacedDisclosure(derived.unplaced);
     return { code: 200, body: {
@@ -1427,7 +1431,7 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
       ...(unplacedLine ? { unplaced_says: { count: derived.unplaced.length,
         example: { act_id: derived.unplaced[0].act_id, anchor: derived.unplaced[0].anchor } } } : {}),
       disclosed: [talk.DISCLOSURES.eras, talk.DISCLOSURES.presence, talk.DISCLOSURES.no_window,
-        ...(fellBack ? [fellBack] : []), ...(unplacedLine ? [unplacedLine] : [])],
+        ...(fellBack ? [fellBack] : []), ...(unplacedLine ? [unplacedLine] : []), ...(ungroupedLine ? [ungroupedLine] : [])],
     } };
   }
 

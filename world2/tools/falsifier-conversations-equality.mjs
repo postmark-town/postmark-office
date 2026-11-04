@@ -250,7 +250,7 @@ export function c3Page(oracleBody, portBody) {
         `      1.0:  …${a.slice(Math.max(0, d - 70), d + 70)}…\n      port: …${b.slice(Math.max(0, d - 70), d + 70)}…`);
     }
   }
-  for (const k of ["earshot_m", "fade_minutes", "settlement_since"]) {
+  for (const k of ["earshot_m", "fade_minutes", "close_minutes"]) {
     if (oracleBody[k] !== portBody[k]) findings.push(`C3 the body's ${k} is ${oracleBody[k]} in 1.0 and ${portBody[k]} in the port`);
     else compared++;
   }
@@ -312,11 +312,14 @@ async function main() {
 
     const dials = talk.sayDials(markRows.filter((m) => m.status === "standing"));
     const earshotM = dials.earshot_m.value;
-    // POS-779: a thread splits at the settlement and nowhere else. The falsifier
-    // stands the settlements at the published heartbeat (06:00Z and 18:00Z), across
-    // the span the record covers, because the comparison is about the derivation.
-    const boundaries = derived.voices.length
-      ? talk.heartbeatEdges(Math.min(...derived.voices.map((v) => v.at)), Math.max(...derived.voices.map((v) => v.at))) : [];
+    // POS-779: a thread splits at the settlement and nowhere else. The comparison is about the
+    // derivation, so both sides are handed the SAME edges: the store's blessed settlements (a
+    // real list of real instants). They are an input here, not the door's rule, which reads the
+    // published sweeps (world2/tools/convo-edges.mjs). A voice older than the oldest edge has no
+    // epoch on either side (`groupable`), so it is left out of both.
+    const { rows: edgeRows } = await client.query("SELECT published_at FROM settlements WHERE published_at IS NOT NULL").catch(() => ({ rows: [] }));
+    const boundaries = edgeRows.map((r) => Date.parse(r.published_at)).filter(Number.isFinite).sort((a, b) => a - b);
+    const placed = talk.groupable(derived.voices, boundaries).grouped;
     const fadeMs = dials.fade_min.ms;
 
     // 1.0's own reader over the same log file, with its own clock pinned so both
@@ -342,12 +345,12 @@ async function main() {
     // derivations rather than about the two records agreeing — which is C1's
     // question and is asked separately. (The live lane's lesson: a break fed to
     // both sides of an equality proves nothing.)
-    const c2 = c2Vendor(derived.voices, voicesMod.clusterVoices, { earshotM, boundaries });
+    const c2 = c2Vendor(placed, voicesMod.clusterVoices, { earshotM, boundaries });
 
     // The page, both ways, over ONE voice list at ONE instant. 1.0's side runs
     // its whole pipeline — its `hydrate`, its `clusterVoices`, its private
     // `threadOf` — over a temp log carrying exactly the voices `acts` yielded.
-    const portBody = talk.conversationsOf(derived.voices, { now: nowMs, earshotM, boundaries, fadeMs });
+    const portBody = talk.conversationsOf(placed, { now: nowMs, earshotM, boundaries, fadeMs });
     const scratch = mkdtempSync(join(tmpdir(), "world2-conv-"));
     let oracleBody;
     try {
@@ -449,12 +452,12 @@ async function main() {
       proof("the record split on a lull (the retired fade) instead of the settlement", () => {
         // a boundary at the first voice of every lull-split cluster is the lull rule, spelled as edges
         const lulled = talk.clusterVoices(derived.voices, { earshotM, fadeMs });
-        const bent = talk.conversationsOf(derived.voices, { now: nowMs, earshotM, boundaries: [...boundaries, ...lulled.map((c) => c.voices[0].at)], fadeMs });
+        const bent = talk.conversationsOf(placed, { now: nowMs, earshotM, boundaries: [...boundaries, ...lulled.map((c) => c.voices[0].at)], fadeMs });
         return { bit: derived.voices.length, findings: c3Page(oracleBody, bent).findings };
       });
       // 5 · THE EARSHOT WIDENED — the town as one room.
       proof("the earshot widened to the whole town", () => {
-        const bent = talk.conversationsOf(derived.voices, { now: nowMs, earshotM: 1e9, boundaries, fadeMs });
+        const bent = talk.conversationsOf(placed, { now: nowMs, earshotM: 1e9, boundaries, fadeMs });
         return { bit: derived.voices.length, findings: c3Page(oracleBody, bent).findings };
       });
       // 6 · A REFUSAL SWALLOWED — an act shape no era explains, skipped instead

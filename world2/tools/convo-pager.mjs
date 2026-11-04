@@ -102,7 +102,7 @@ export async function buildView(source, { fuse, sliceMs } = {}) {
   });
   // newest first; a tie on the instant is broken by the first act id, so the order is total
   const order = threads.map((_, i) => i).sort((a, b) => (threads[b].latest_ms - threads[a].latest_ms) || compareIds(threads[b].first_act_id, threads[a].first_act_id));
-  return { epoch: source.epoch, edges_version: source.edges_version ?? "", earshotM: source.earshotM, key: source.key,
+  return { epoch: source.epoch, edges_version: source.edges_version ?? "", earshotM: source.earshotM, dials: source.dials ?? null, key: source.key,
     voices: V, threads, order, byAct, stats, eras: source.eras, unplaced: source.unplaced,
     non_sound_emissions: source.non_sound_emissions, source: source.source, anchors: source.anchors };
 }
@@ -119,15 +119,19 @@ export function voiceOut(v) {
 /** A thread's summary: the vendored `threadOf` plus the pager's fields. `voices` is the newest `voiceCap`. */
 export function threadSummary(view, t, { live = true, voiceCap = PAGE.defaultVoiceCap } = {}) {
   const members = Array.from(t.members, (i) => view.voices[i]);
-  const base = threadOf({ voices: members }, { live, voiceCap });
-  const shown = members.slice(-voiceCap);
+  // voiceCap 0 is the LEAN summary: the thread without its lines. (`slice(-0)` is the whole array, so it is
+  // asked for one line and the lines are dropped.) A lean thread carries no `earlier` at all: it has shown
+  // nothing, so it cannot say where the lines it did not show begin.
+  const lean = !(voiceCap > 0);
+  const base = threadOf({ voices: members }, { live, voiceCap: lean ? 1 : voiceCap });
+  const shown = lean ? [] : members.slice(-voiceCap);
   return {
     ...base,
-    voices: base.voices.map((bv, i) => ({ ...bv, act_id: shown[i].act_id })),
+    voices: lean ? [] : base.voices.map((bv, i) => ({ ...bv, act_id: shown[i].act_id })),
     epoch: { since: view.epoch.since, next: view.epoch.next },
     thread_of: t.first_act_id,
     generation: t.generation,
-    earlier: members.length > shown.length ? cursorOf(shown[0]) : null,
+    ...(lean ? {} : { earlier: members.length > shown.length ? cursorOf(shown[0]) : null }),
   };
 }
 
@@ -217,7 +221,7 @@ export function earlierPage(view, req, { voiceCap = PAGE.defaultVoiceCap } = {})
  *   { status: "regenerated", ... }   the cursor was made from another view: start again from the first page
  * `list.epoch_threads` counts this epoch's threads in this view (exact for the view, not a global total).
  */
-export function threadList(view, req, { live = view.epoch.next === null, voiceCap = PAGE.defaultVoiceCap } = {}) {
+export function threadList(view, req, { live = view.epoch.next === null, voiceCap = PAGE.defaultVoiceCap, voiceBudget = Infinity } = {}) {
   const stamp = view.key.slice(0, 16);
   let start = 0;
   if (req.after) {
@@ -228,7 +232,18 @@ export function threadList(view, req, { live = view.epoch.next === null, voiceCa
     while (lo < hi) { const mid = (lo + hi) >> 1; if (past(view.threads[view.order[mid]])) hi = mid; else lo = mid + 1; }
     start = lo;
   }
-  const slice = view.order.slice(start, start + req.limit);
+  // the page holds at most `req.limit` threads AND at most `voiceBudget` lines (the first thread always comes, so a
+  // page is never empty): a thread the budget leaves out is not hidden, the cursor goes on from the last one shown
+  let slice = view.order.slice(start, start + req.limit);
+  if (Number.isFinite(voiceBudget)) {
+    let spent = 0, keep = 0;
+    for (const i of slice) {
+      const lines = voiceCap > 0 ? Math.min(voiceCap, view.threads[i].count) : 0;
+      if (keep > 0 && spent + lines > voiceBudget) break;
+      spent += lines; keep += 1;
+    }
+    slice = slice.slice(0, keep);
+  }
   const threads = slice.map((i) => threadSummary(view, view.threads[i], { live, voiceCap }));
   const more = start + slice.length < view.order.length;
   const last = slice.length ? view.threads[slice[slice.length - 1]] : null;

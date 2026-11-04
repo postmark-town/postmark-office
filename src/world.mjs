@@ -2411,8 +2411,10 @@ export function withNoticeBoard(r, t = Date.now(), events = null, withinFn = nul
 // same commit, and — like the door — only while the office is actually keeping
 // the record. `record` is a field the page can render; the two doors do not get
 // to disagree about what the town does with speech.
-export function worldConversations() {
-  const base = { pinned: activeNotices(), ...voices.conversations() };
+// `page` is the durable door's page body (world2/tools/convo-door.mjs) when the store is engaged; absent, the
+// in-memory legacy read answers and says so (`incomplete_legacy`).
+export function worldConversations(page = null) {
+  const base = { pinned: activeNotices(), ...(page ?? voices.conversations()) };
   return emissionsEnabled()
     ? { ...base, record: "Presence fades; occurrence is history. A voice stays hearable within earshot until the next settlement; the words themselves — with who spoke them, where, and when — are written into Postmark's public record at every crossing and kept. The town does not secretly log its residents; it openly remembers them." }
     : base;

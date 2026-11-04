@@ -443,11 +443,13 @@ export function unplacedDisclosure(unplaced = []) {
  * ONE THREAD PER PLACE PER SETTLEMENT (POS-779, Darko 2026-10-24): the same
  * earshot grouping, the time-lull split gone. `boundaries` are the settlements
  * (ms) at or before `now`; LIVE is the newest settlement's threads, CLOSED the
- * earlier ones'. No boundary known: one epoch, everything live, said in
- * `settlement_disclosed`. (The sailing night's lull ruling is superseded by this
- * one: a four-hour party is one thread because nothing splits it but a settlement.)
+ * earlier ones'. The caller hands in only voices an epoch can be named for (see
+ * `groupable`): nothing here groups the record as if it began at its oldest voice.
+ * (The sailing night's lull ruling is superseded by this one: a four-hour party is
+ * one thread because nothing splits it but a settlement.) `close_minutes` is the
+ * retired lull, kept as null.
  */
-export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 200, fadeMs }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs }) {
   const t = now;
   const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
   const since = marks.length ? marks[marks.length - 1] : -Infinity;
@@ -460,27 +462,24 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
     earshot_m: earshotM,
     fade_minutes: Math.round(fadeMs / 60000),
     close_minutes: null,
-    close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
-    settlement_since: marks.length ? new Date(since).toISOString() : null,
-    ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
     live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
     closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
   };
 }
 
 /**
- * The published heartbeat edges (06:00Z and 18:00Z, deploy/settlement-auto.sh), in
- * [fromMs, toMs]. THE FALLBACK FOR HISTORY OLDER THAN THE KNOWN SETTLEMENTS
- * (POS-779): the store knows a blessing only once its tag exists and the live
- * reader keeps about sixty sweeps; every voice older than that would otherwise
- * collapse into one never-closing thread per place. A heartbeat the gate refused
- * is an edge that never was, so this over-splits by a thread at worst, never merges.
+ * Which voices an epoch can be named for (POS-779). The settlements the office
+ * knows are the published sweeps it has read; a voice older than the oldest of them
+ * sits in an epoch whose START is unknown, and with no settlement known at all no
+ * voice has one. Those are NOT grouped: grouping them would present the record as
+ * beginning there, a false certainty. `ungrouped` is how many were left out and
+ * `oldest` the first edge, for the caller to say so.
  */
-export function heartbeatEdges(fromMs, toMs) {
-  const H = 12 * 3600_000, O = 6 * 3600_000, out = [];
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return out;
-  for (let m = Math.ceil((fromMs - O) / H) * H + O; m <= toMs; m += H) out.push(m);
-  return out;
+export function groupable(voices, boundaries, now = Infinity) {
+  const marks = (boundaries ?? []).filter((m) => Number.isFinite(m) && m <= now).sort((a, b) => a - b);
+  const oldest = marks.length ? marks[0] : null;
+  const grouped = oldest == null ? [] : voices.filter((v) => v.at >= oldest);
+  return { grouped, ungrouped: voices.length - grouped.length, oldest };
 }
 
 /** What this door says about what it could not do. */

@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   voiceOf, voiceRecords, sayDials, sayDialsDisclosure, composeAnchor,
-  conversationsOf, clusterVoices, heartbeatEdges, SAY_DIAL_SPEC,
+  conversationsOf, clusterVoices, groupable, SAY_DIAL_SPEC,
 } from "../world2/tools/conversations.mjs";
 
 const emission = (over = {}) => ({
@@ -134,21 +134,27 @@ test("the RECORD has no lull: a long silence inside a settlement is one thread, 
   const same = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [-hour], fadeMs: 5 * 60 * 1000 });
   assert.equal(same.live.length + same.closed.length, 1, "one conversation across five hours of silence");
   assert.equal(same.close_minutes, null);
-  assert.match(same.close_minutes_deprecated, /settlement_since/);
+  for (const k of ["close_minutes_deprecated", "settlement_since", "settlement_disclosed"]) assert.equal(k in same, false, `${k} is not a declared field`);
   const split = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [-hour, 2 * hour], fadeMs: 5 * 60 * 1000 });
   assert.equal(split.live.length, 1, "the newest settlement's thread is live");
   assert.equal(split.closed.length, 1, "the earlier settlement's is closed");
-  assert.equal(split.settlement_since, new Date(2 * hour).toISOString());
-  const unknown = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [], fadeMs: 5 * 60 * 1000 });
-  assert.equal(unknown.live.length, 1);
-  assert.match(unknown.settlement_disclosed, /ONE settlement/);
 });
 
-test("heartbeatEdges: 06:00Z and 18:00Z inside the span, for history older than the known settlements (POS-779)", () => {
-  const edges = heartbeatEdges(Date.UTC(2026, 9, 1, 0), Date.UTC(2026, 9, 2, 12));
-  assert.deepEqual(edges.map((m) => new Date(m).toISOString()),
-    ["2026-10-01T06:00:00.000Z", "2026-10-01T18:00:00.000Z", "2026-10-02T06:00:00.000Z"]);
-  assert.deepEqual(heartbeatEdges(NaN, 5), []);
+test("groupable: a voice older than the oldest settlement has no epoch and is left out; with none known, none are grouped (POS-779)", () => {
+  const hour = 60 * 60 * 1000;
+  const voices = [v(-3 * hour, 0), v(0, 0), v(5 * hour, 0)];
+  const known = groupable(voices, [-hour, 2 * hour], 6 * hour);
+  assert.deepEqual([known.grouped.length, known.ungrouped, known.oldest], [2, 1, -hour]);
+  const none = groupable(voices, [], 6 * hour);
+  assert.deepEqual([none.grouped.length, none.ungrouped, none.oldest], [0, 3, null]);
+  const future = groupable(voices, [-hour, 9 * hour], 6 * hour);
+  assert.equal(future.ungrouped, 1, "an edge after the asked instant is not an edge yet");
+});
+
+test("conversationsOf defaults to the established 80 lines a thread (POS-779)", () => {
+  const voices = Array.from({ length: 90 }, (_, i) => v(i * 1000, 0));
+  const t = conversationsOf(voices, { now: 1e6, earshotM: 60, boundaries: [-1], fadeMs: 5 * 60 * 1000 }).live[0];
+  assert.deepEqual([t.voice_count, t.voices.length], [90, 80]);
 });
 
 test("boundaries given, the lull (fadeMs) is ignored; absent, the lull path is the sound class's own", () => {

@@ -32,6 +32,8 @@ let logN = 0;
 // `settle()` publishes one now.
 function bench(at, { log = null, nearby = null, vesselAt = null, ...more } = {}) {
   const clock = { t: T0, settledAt: T0 - 60 * MIN };
+  // the settlements this office has read, as the hearing reader keeps them: the published sweeps, oldest first (POS-779)
+  const edges = [clock.settledAt];
   const path = log ?? join(DIR, `voices-${++logN}.jsonl`);
   const where = (handle) => (typeof at[handle] === "function" ? at[handle](clock.t) : at[handle]);
   const store = createVoices({
@@ -43,6 +45,7 @@ function bench(at, { log = null, nearby = null, vesselAt = null, ...more } = {})
     logPath: path,
     now: () => clock.t,
     hearingWindow: () => ({ since: clock.settledAt, source: "the bench's settlement", disclosure: null }),
+    settlements: () => edges,
     nearby, vesselAt,
     ...more,
   });
@@ -51,7 +54,7 @@ function bench(at, { log = null, nearby = null, vesselAt = null, ...more } = {})
   const byPosition = async (point) => Object.keys(at)
     .filter((h) => { const p = where(h); return p && Math.hypot(p.x - point.x, p.y - point.y) <= EARSHOT_M; })
     .sort();
-  return { store, clock, path, byPosition, tick: (ms) => { clock.t += ms; }, settle: () => { clock.settledAt = clock.t; } };
+  return { store, clock, path, byPosition, tick: (ms) => { clock.t += ms; }, settle: () => { clock.settledAt = clock.t; edges.push(clock.t); } };
 }
 
 // ── earshot geometry ─────────────────────────────────────────────────────────
@@ -198,8 +201,9 @@ test("no lull inside a settlement: hours of silence at one spot are still ONE co
   assert.equal(c.live.length, 1, "one conversation across five silent hours");
   assert.equal(c.closed.length, 0);
   assert.deepEqual(c.live[0].voices.map((v) => v.said), ["the first remark", "five hours later, same room"]);
-  assert.equal(c.close_minutes, null, "the retired lull is null, kept a month for notice (POS-779)");
-  assert.match(c.close_minutes_deprecated, /settlement_since/);
+  assert.equal(c.close_minutes, null, "the retired lull stays as a null key: never a duration a reader could take for an expiry (POS-779)");
+  for (const k of ["close_minutes_deprecated", "settlement_since", "settlement_disclosed"]) assert.equal(k in c, false, `${k} is not a declared field of this body`);
+  assert.equal(typeof c.incomplete_legacy, "string", "the in-memory read says it is the legacy read");
 });
 
 test("a settlement splits the thread — the same edge hearing has (POS-779)", async () => {
@@ -217,7 +221,6 @@ test("a settlement splits the thread — the same edge hearing has (POS-779)", a
   assert.deepEqual(c.live[0].voices.map((v) => v.said), ["after the settlement"]);
   assert.deepEqual(c.closed[0].voices.map((v) => v.said), ["the first remark"]);
   assert.notEqual(c.live[0].id, c.closed[0].id);
-  assert.equal(c.settlement_since, new Date(T0 + 3 * MIN).toISOString());
 });
 
 test("the settlements the office keeps split a thread too, not only the newest (POS-779)", async () => {
@@ -233,14 +236,17 @@ test("the settlements the office keeps split a thread too, not only the newest (
   assert.deepEqual(c.live.map((t) => t.voices[0].said), ["epoch two"]);
 });
 
-test("hear before the settlements are read says so, rather than reading every conversation as open (POS-779)", async () => {
-  const { store } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } }, { hearingWindow: () => null });
+test("hear before the settlements are read says so through the window's own disclosure, with no new field (POS-779)", async () => {
+  const { store } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } }, { hearingWindow: () => null, settlements: () => null });
   await store.say("rei", "before git answered");
   const heard = await store.hear("wright");
-  assert.match(heard.conversation.settlement_disclosed, /settlements not yet read/);
+  assert.match(heard.hearing_disclosed, /last settlement could not be read/);
+  assert.equal("settlement_disclosed" in heard.conversation, false);
   const known = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
   await known.store.say("rei", "with a settlement known");
-  assert.equal((await known.store.hear("wright")).conversation.settlement_disclosed, undefined);
+  const knownHeard = await known.store.hear("wright");
+  assert.equal(knownHeard.hearing_disclosed, undefined);
+  assert.equal("settlement_disclosed" in knownHeard.conversation, false);
 });
 
 test("the SAY card tells agents a conversation is open since the last settlement, not for half an hour (POS-779)", async () => {
@@ -249,15 +255,34 @@ test("the SAY card tells agents a conversation is open since the last settlement
   assert.doesNotMatch(SAY_DESCRIPTION, /half hour/);
 });
 
-test("no settlement known: the record is ONE epoch and says so (POS-779)", async () => {
-  const { store, tick } = bench({ rei: { x: 0, y: 0 } }, { hearingWindow: () => null });
+test("no settlement known: nothing can be grouped, and the legacy read says so rather than calling the record one epoch (POS-779)", async () => {
+  const { store, tick } = bench({ rei: { x: 0, y: 0 } }, { hearingWindow: () => null, settlements: () => null });
   await store.say("rei", "one");
   tick(48 * 60 * MIN);
   await store.say("rei", "two");
   const c = store.conversations();
-  assert.equal(c.live.length, 1);
-  assert.equal(c.settlement_since, null);
-  assert.match(c.settlement_disclosed, /ONE settlement/);
+  assert.deepEqual([c.live, c.closed], [[], []], "no edge, no epoch, so no thread is drawn");
+  assert.match(c.incomplete_legacy, /2 of those voices come before the oldest settlement this office has read/);
+  assert.match(c.incomplete_legacy, /no settlement could be read yet/);
+});
+
+test("a voice older than the oldest settlement read is left out and counted, never grouped as the start of the record (POS-779)", async () => {
+  const edge = T0 + 10 * MIN;
+  const { store, tick } = bench({ rei: { x: 0, y: 0 } }, { settlements: () => [edge], hearingWindow: () => ({ since: edge, source: "the bench's settlement", disclosure: null }) });
+  await store.say("rei", "before the oldest edge this office has read");
+  tick(20 * MIN);
+  await store.say("rei", "after it");
+  const c = store.conversations();
+  assert.deepEqual(c.live.flatMap((t) => t.voices.map((v) => v.said)), ["after it"]);
+  assert.match(c.incomplete_legacy, /1 of those voices come before the oldest settlement/);
+});
+
+test("conversations() defaults to the established 80 lines a thread, not 200 (POS-779)", async () => {
+  const { store, tick } = bench({ rei: { x: 0, y: 0 } });
+  for (let i = 0; i < 90; i++) { await store.say("rei", `line ${i}`); tick(20_000); }
+  const t = store.conversations().live[0];
+  assert.equal(t.voice_count, 90);
+  assert.equal(t.voices.length, 80);
 });
 
 test("different places in one settlement are different threads: the grouping is the earshot's, only the time split is gone (POS-779)", async () => {

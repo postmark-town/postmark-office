@@ -429,12 +429,35 @@ export function createVoices({
   // THE MEMORY CAP CAN CUT INTO THE WINDOW, AND SAYS SO (POS-226). `cutAt` is
   // the newest instant a trim dropped; a reply whose window opens before it
   // names the cut rather than passing a short page off as the whole window.
+  //
+  // TWO CAPS, NOT ONE (POS-779, source-review P2). The memory used to be one list
+  // trimmed across every room, so a flood spoken inside a room could push public
+  // speech out of memory, and the cut it left (`cutAt`) then rode every public
+  // reply's `hearing_disclosed`: private speech moved a public reader's record. Now
+  // the public voices (no `room`) are capped at `memoryMax` on their own and the
+  // room voices at `memoryMax` on their own, so the whole memory holds at most
+  // 2 x `memoryMax` entries, and `cutAt` is the PUBLIC cut only. `cutAtRoom` is the
+  // room list's, told only to a reader who is in a room. One list for all rooms is
+  // still shared among them: a flood in one room can displace another room's
+  // record. That is not claimed away here; it is bounded, not isolated.
   let cutAt = null;
+  let cutAtRoom = null;
   function trimmed(list) {
     if (list.length <= memoryMax) return list;
-    const cut = list.length - memoryMax;
-    cutAt = list[cut - 1].at;
-    return list.slice(cut);
+    const open = [], inRoom = [];
+    for (const v of list) (v.room ? inRoom : open).push(v);
+    if (open.length <= memoryMax && inRoom.length <= memoryMax) return list;
+    // the OLDEST of each class go, and the list keeps its order (equal instants stay as they were spoken)
+    let dropOpen = Math.max(0, open.length - memoryMax), dropRoom = Math.max(0, inRoom.length - memoryMax);
+    if (dropOpen) cutAt = open[dropOpen - 1].at;
+    if (dropRoom) cutAtRoom = inRoom[dropRoom - 1].at;
+    const kept = [];
+    for (const v of list) {
+      if (v.room) { if (dropRoom > 0) { dropRoom -= 1; continue; } }
+      else if (dropOpen > 0) { dropOpen -= 1; continue; }
+      kept.push(v);
+    }
+    return kept;
   }
 
   // The window at `t`, never throwing: a reader that trips hears as if nothing
@@ -736,7 +759,6 @@ export function createVoices({
     const participants = [];
     for (const v of voices) if (!participants.includes(v.handle)) participants.push(v.handle);
     return {
-      ...(boundaries.length ? {} : { settlement_disclosed: "settlements not yet read: until this office has read the last settlement from the world repo, every conversation here reads as open" }),
       started: agoWords(t - voices[0].at).replace(/^just now$/, "moments ago") + " (" + new Date(voices[0].at).toISOString() + ")",
       participants,
       voice_count: voices.length,
@@ -867,9 +889,11 @@ export function createVoices({
     out.older = page.length > within.length ? within[0].at : null;
     // where the window opens, so a reader can see how far back `older` can go
     out.hearable_since = snap.window?.since != null ? new Date(snap.window.since).toISOString() : null;
+    // the cut this reader can be told of: the public list's, and the room list's only for a reader standing in a room
+    const cut = here.room ? Math.max(cutAt ?? -Infinity, cutAtRoom ?? -Infinity) : (cutAt ?? -Infinity);
     const told = [snap.window?.disclosure,
-      cutAt != null && snap.window?.since != null && cutAt >= snap.window.since
-        ? `this office keeps at most ${memoryMax} voices in memory, and more than that have been said since the settlement — voices before ${new Date(cutAt).toISOString()} are no longer hearable (the conversations page keeps them)`
+      Number.isFinite(cut) && snap.window?.since != null && cut >= snap.window.since
+        ? `this office keeps at most ${memoryMax} voices in memory${here.room ? " for the open and as many for rooms" : ""}, and more than that have been said since the settlement — voices before ${new Date(cut).toISOString()} are no longer hearable (the conversations page keeps them)`
         : null].filter(Boolean);
     if (told.length) out.hearing_disclosed = told.join("; ");
     if (out.voices.length === 0 && !Number.isFinite(since) && !Number.isFinite(before))
@@ -1097,16 +1121,29 @@ export function createVoices({
   // earshot grouping as ever, with the time-lull split gone: a conversation does
   // not expire inside a settlement, and splits only at one, the edge hearing has.
   // LIVE is the newest settlement's threads; CLOSED are the earlier settlements'.
-  // `close_minutes` stays as null for a month (agent-facing breaks get notice, Darko):
-  // it named the retired lull, and `settlement_since` names the edge instead.
-  function conversations({ closedMax = 40, voiceCap = 200 } = {}) {
+  // `close_minutes` is the retired lull: it stays in the body as null (an obsolete
+  // key kept truthfully, never a duration a reader could take for an expiry).
+  //
+  // THIS IS THE LEGACY, IN-MEMORY READ, AND IT SAYS SO (POS-779). Where the durable
+  // store is engaged the door reads the record itself (world2/tools/convo-door.mjs);
+  // this path is what answers without one. It holds only the newest `memoryMax`
+  // public voices, so it carries NO stable ids, cursors or totals, and
+  // `incomplete_legacy` names that. Only the settlements this office has read split
+  // a thread: a voice older than the oldest of them sits in an epoch whose start is
+  // unknown, so it is left out and counted in that sentence, never grouped as if the
+  // record began there; with no settlement read at all nothing can be grouped.
+  function conversations({ closedMax = 40, voiceCap = 80 } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
     // page draws a voice. `hearable_since` beside it is where an ear's window opens.
     const boundaries = boundariesAt(t);
     const since = liveSince(boundaries);
     // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
-    const clusters = clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries });
+    const open = hydrate().filter((v) => !v.room);
+    const oldest = boundaries.length ? boundaries[0] : null;
+    const grouped = oldest == null ? [] : open.filter((v) => v.at >= oldest);
+    const ungrouped = open.length - grouped.length;
+    const clusters = clusterVoices(grouped, { earshotM, boundaries });
     const live = [];
     const closed = [];
     for (const c of clusters) (c.latest >= since ? live : closed).push(c);
@@ -1116,9 +1153,7 @@ export function createVoices({
       fade_minutes: Math.round(fadeMs / 60000),
       hearable_since: ((w) => (w.since != null ? new Date(w.since).toISOString() : null))(windowOf(t)),
       close_minutes: null,
-      close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
-      settlement_since: boundaries.length ? new Date(since).toISOString() : null,
-      ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
+      incomplete_legacy: `this is the office's in-memory record (at most the newest ${memoryMax} public voices since it started), not the durable one: its threads carry no stable ids, no earlier pages and no totals${ungrouped ? `; ${ungrouped} of those voices come before the oldest settlement this office has read, so they are not grouped${oldest == null ? " (no settlement could be read yet)" : ""}` : ""}`,
       live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
       closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
     };

@@ -60,7 +60,7 @@ import { logAccess } from "./telemetry.mjs";
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
 import { settlements } from "./settlements.mjs";
 import { worldSummary, worldOrient, worldEyes, worldInvestigate, worldFind, worldDialsPage, worldLights, worldStateRaw, worldSkeletonRaw, worldMyMarks, leaveMarkViaOffice, walkViaOffice, worldNoteViaOffice, worldWalkers, worldPresent, worldConversations, worldSay, worldSayHuman, worldSayStream, serveSayStream, whoami, earshotSnapshot, worldBlockForHandle, WORLD_CLONE, MISTS_UNREADABLE, MISTS_RETRY_AFTER_S, heldPlaced } from "./world.mjs";
-import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled } from "./world2-serve.mjs";
+import { world2MyDrafts, world2MyMarks, world2Pool, world2Serve, world2ServeEnabled, world2Conversations } from "./world2-serve.mjs";
 import { isStoreLostCode, isStoreUnreachable } from "./store-pool.mjs"; // POS-544: a store lost mid-request answers 503, not 500
 import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, isHttpStatus, foreignAnswer, faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault, one owner (POS-568, POS-573/578)
 import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
@@ -1780,9 +1780,15 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // first, closed ones still browsable. Keyless like the rest of the world's
       // read tier: speech is public the way street conversation is, and world_say
       // says so before anyone speaks. This is what the town's conversations page reads.
+      // POS-779: where the world store is engaged the page is read from the record (bounded, in one snapshot, settlement
+      // edges from the published sweeps); without it the in-memory read answers and says `incomplete_legacy`.
       if (path === "/world/conversations") {
-        try { return j(res, 200, worldConversations()); }
-        catch (e) { return bounceFault(res, "the world door tripped", e); }
+        try {
+          if (!world2ServeEnabled()) return j(res, 200, worldConversations());
+          const r = await world2Conversations(url.searchParams);
+          if (r.code !== 200) return bounce(res, r.code, r.body.defect, r.body.hint);
+          return j(res, 200, r.body.live ? worldConversations(r.body) : r.body);
+        } catch (e) { return bounceFault(res, "the world door tripped", e); }
       }
       // GET /world/settlements — which settlements have actually LANDED, from
       // the world clone's own `settlement/S<n>` tags. The number counts
