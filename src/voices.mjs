@@ -567,8 +567,32 @@ export function createVoices({
     }
     stats.clusters += 1;
     // The ear alone needs no clusters (POS-632 W4's carried earshot skips them).
-    const clusters = wantClusters ? clusterVoices(hydrate(), { earshotM, fadeMs: closeMs }) : null;
+    const clusters = wantClusters ? clusterByRoom(hydrate()) : null;
     return { t, audible, clusters, window };
+  }
+
+  // THE RECORD, CLUSTERED ROOM BY ROOM (POS-886).
+  //
+  // Whether a voice joins a conversation is decided by who it chains with, so the
+  // voices a reader may not read cannot be allowed into the grouping at all: a
+  // voice spoken inside a dungeon room (WLD-74) that sat between two open
+  // circles used to merge them in an outside reader's record, and filtering the
+  // clusters afterwards left the merge standing. So the eligibility comes
+  // FIRST — each room (null: the open) is clustered from its own voices only,
+  // the same order `conversations()` keeps when it drops `v.room` before it
+  // clusters. A Map keyed by the room, read once, from the same `hydrate()` the
+  // snapshot is built on; `openConversationAt` takes the reader's own key and
+  // never another's.
+  function clusterByRoom(list) {
+    const byRoom = new Map();
+    for (const v of list) {
+      const key = v.room ?? null;
+      if (!byRoom.has(key)) byRoom.set(key, []);
+      byRoom.get(key).push(v);
+    }
+    const clusters = new Map();
+    for (const [key, spoken] of byRoom) clusters.set(key, clusterVoices(spoken, { earshotM, fadeMs: closeMs }));
+    return clusters;
   }
 
   function heardBy(here, snap) {
@@ -656,8 +680,10 @@ export function createVoices({
   // page showed a twenty-voice thread; hearing was five minutes then, and a
   // conversation was longer than an ear). Chains exactly like the page: earshot or shared deck.
   function openConversationAt(here, t, clusters0) {
-    // WLD-74: only the voices spoken in the reader's own room (the open, for one in no room) are the room's record they may read
-    const clusters = (clusters0 ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
+    // WLD-74: only the voices spoken in the reader's own room (the open, for one in no room) are the room's record they may read.
+    // POS-886: `clusters0` is the snapshot's record clustered room by room (`clusterByRoom`), so the reader takes their own room's
+    // clusters, which were grouped from that room's voices alone. The filter after it cannot change them; it stays as the WLD-74 guard.
+    const clusters = (clusters0?.get(here.room ?? null) ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
     const mine = clusters.find((c) =>
       t - c.latest <= closeMs &&
       c.voices.some((v) => (v.aboard && here.aboard) || distM(v, here.at) <= earshotM));
