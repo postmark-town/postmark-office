@@ -16,7 +16,7 @@ import { threadOf, clusterVoices } from "../world2/tools/conversations.mjs";
 import { compareVoices, compareIds } from "../world2/tools/convo-read.mjs";
 import {
   buildView, threadSummary, voiceOut, earlierPage, threadList, parseEarlierRequest, parseListRequest, loadEpochView,
-  cursorOf, PAGE,
+  cursorOf, PAGE, viewBytes,
 } from "../world2/tools/convo-pager.mjs";
 import { createEpochMemo } from "../world2/tools/convo-memo.mjs";
 
@@ -384,4 +384,95 @@ test("32,000 voices in one dense circle: one thread, finite counted work, and th
   }
   assert.equal(total, 32_000);
   console.log(`[pos-779] 32k dense: load ${wall.toFixed(0)} ms wall (read + exact components + generations), component work ${out.view.stats.work}, longest sync slice ${out.view.stats.maxSliceMs.toFixed(1)} ms, ${pages} pages of 200 back to the first voice (one run, invented rows, this host)`);
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// the memo charges what the view RETAINS (POS-779 stage fix)
+// ═════════════════════════════════════════════════════════════════════
+//
+// `viewBytes` is an ACCOUNTED ESTIMATE of the decoded material a built view keeps, not exact JS heap or RSS.
+// Its floor, checked independently here: every retained string at two bytes per UTF-16 unit. The OLD charge was
+// the source's STORED bytes plus 256 per voice; `oldCharge` below is that formula, kept to show it undercounts.
+
+const oldCharge = (src) => (src.source?.says?.bytes ?? 0) + (src.source?.emissions?.bytes ?? 0) + 256 * (src.voices?.length ?? 0);
+/** Independent floor: two bytes per UTF-16 unit of every string a voice retains (what the view cannot do without). */
+const contentFloor = (view) => view.voices.reduce((n, v) => n + 2 * (String(v.text).length + String(v.handle).length + String(v.place ?? "").length + String(v.act_id).length), 0);
+/** n voices of `len`-unit texts in tight places (many threads or few), with a stored size as small as a compressed row's. */
+function bigSource(n, len, { ch = "q", spread = 40, tag = "" } = {}) {
+  const vs = [];
+  for (let i = 0; i < n; i++) vs.push(V(E0 + 1000 + i * 1000, (i % spread) * 500, Math.floor(i / spread) * 500, { text: ch.repeat(len), handle: `h${tag}${i % 7}` }));
+  const src = source(vs);
+  src.source.says.bytes = n * 30;       // what a compressed stored size looks like for repetitive text
+  return src;
+}
+
+test("viewBytes covers the retained decoded content (ASCII, two-byte and astral text); the OLD charge does not", async () => {
+  for (const [ch, len] of [["q", 4000], ["€", 3000], ["😀", 1500], ["x", 20]]) {
+    const src = bigSource(300, len, { ch });
+    const view = await buildView(src);
+    const est = viewBytes(view), floor = contentFloor(view);
+    assert.ok(est >= floor, `${ch}x${len}: estimate ${est} must be at least the content floor ${floor}`);
+    if (len >= 1500) assert.ok(oldCharge(src) < floor, `${ch}x${len}: the old charge ${oldCharge(src)} undercounts the retained ${floor} (the defect)`);
+  }
+  assert.equal(viewBytes({ voices: [] }), Infinity, "a shape it cannot charge answers Infinity");
+  assert.equal(viewBytes(null), Infinity);
+  const empty = await buildView(source([]));
+  assert.ok(viewBytes(empty) > 0 && Number.isFinite(viewBytes(empty)));
+});
+
+test("memo accounting over several epochs: near-boundary fit, LRU eviction, replacement, and a too-large view refused with no quota drift", async () => {
+  const views = [];
+  for (const [i, len] of [[0, 800], [1, 800], [2, 800], [3, 800]]) views.push(await buildView(bigSource(200, len, { tag: String(i) })));
+  const est = views.map(viewBytes);
+  const one = est[0];
+  const memo = createEpochMemo({ maxEntries: 10, maxBytes: Math.floor(2.5 * one) });
+  const put = (id, i) => memo.set(id, { key: `k${id}`, bytes: viewBytes(views[i]), anchors: [], value: views[i] });
+  assert.equal(put("a", 0), true); assert.equal(put("b", 1), true);
+  assert.equal(memo.stats().bytes, est[0] + est[1], "the memo's total is the sum of the charges, nothing else");
+  assert.equal(put("c", 2), true, "a third overflows 2.5 views: admitted, and the least recently used goes");
+  assert.deepEqual([memo.lookup("a", "ka") === null, memo.lookup("b", "kb") === views[1], memo.lookup("c", "kc") === views[2]], [true, true, true]);
+  assert.equal(memo.stats().bytes, est[1] + est[2]);
+  assert.equal(memo.stats().evicted, 1);
+  memo.lookup("b", "kb"); // b most recent
+  put("d", 3);
+  assert.deepEqual([memo.lookup("c", "kc"), memo.lookup("b", "kb") === views[1], memo.lookup("d", "kd") === views[3]], [null, true, true], "c was the least recently used");
+  assert.ok(memo.stats().bytes <= memo.stats().maxBytes);
+  // replacement: a smaller view for the same epoch lowers the total, the old key no longer serves
+  const small = await buildView(bigSource(20, 100));
+  memo.set("b", { key: "kb2", bytes: viewBytes(small), value: small });
+  assert.equal(memo.lookup("b", "kb"), null);
+  assert.equal(memo.stats().bytes, viewBytes(small) + est[3]);
+  // a view larger than the whole bound: refused, never truncated, not under another key, and the epoch's old entry is gone, not stale
+  const huge = await buildView(bigSource(1500, 800, { tag: "H" }));
+  assert.ok(viewBytes(huge) > memo.stats().maxBytes);
+  assert.equal(memo.set("b", { key: "kh", bytes: viewBytes(huge), value: huge }), false);
+  assert.deepEqual([memo.lookup("b", "kh"), memo.lookup("b", "kb2"), memo.stats().refused], [null, null, 1]);
+  assert.equal(memo.stats().bytes, est[3], "no quota drift after a refusal");
+  // an unaccountable charge is refused, never counted as 1 byte
+  for (const bad of [Infinity, NaN, 0, -5, undefined, "x"]) assert.equal(memo.set("z", { key: "kz", bytes: bad, value: 1 }), false, `bytes ${String(bad)}`);
+  assert.equal(memo.stats().bytes, est[3]);
+  memo.clear();
+  assert.equal(memo.stats().bytes, 0);
+});
+
+test("on the composed path: a compressible view too big for the memo is served but not cached; one that fits is cached and reused", async (t) => {
+  if (skip) return t.skip(skip);
+  const e0 = E0 + 500 * 3600_000, e1 = e0 + 12 * 3600_000;
+  for (let i = 0; i < 6; i++) await say(iso(e0 + i * 1000), "w" + (i % 2), i * 500, 0, { text: "q".repeat(4000) }); // legacy/dial-raised, compressible
+  const small = createEpochMemo({ maxEntries: 4, maxBytes: 20_000 });
+  const a = await loadEpochView(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, memo: small });
+  assert.equal(a.status, "ok");
+  assert.equal(a.view.voices.length, 6, "the view is returned whole, never truncated for the memo");
+  const need = viewBytes(a.view);
+  assert.ok(need > 20_000, `premise: the honest charge ${need} exceeds the memo`);
+  assert.ok(a.view.source.says.stored_bytes + 256 * 6 < 20_000, "premise: the OLD charge would have admitted it");
+  assert.deepEqual([small.stats().entries, small.stats().refused, small.stats().bytes], [0, 1, 0], "refused, not cached, nothing leaked into the quota");
+  const again = await loadEpochView(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, memo: small });
+  assert.equal(again.from, "store", "nothing was cached, so the second read is a store read");
+  const roomy = createEpochMemo({ maxEntries: 4, maxBytes: need * 2 });
+  const b = await loadEpochView(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, memo: roomy });
+  const c = await loadEpochView(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, memo: roomy });
+  assert.deepEqual([b.from, c.from, c.view === b.view], ["store", "memo", true], "under budget: cached and reused");
+  assert.equal(roomy.stats().bytes, need);
+  assert.ok(roomy.stats().bytes >= contentFloor(b.view));
 });

@@ -524,3 +524,116 @@ test("an act no era explains is a refusal by name, not a conversation with a hol
   assert.match(refused.example, /emission with no inner payload/);
   assert.equal(refused.voices, undefined);
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// the byte fuse is DECODED UTF-8 JSON, measured before bodies (POS-779 stage fix)
+// ═════════════════════════════════════════════════════════════════════
+//
+// UNIT: `bytes` = sum(octet_length(payload::text)) over the epoch's eligible rows; the payload column only.
+// `stored_bytes` = sum(pg_column_size(payload)) is a diagnostic and is never compared with a budget.
+// Producer facts (src/world.mjs voiceEntry, src/voices.mjs SAY_DIAL_SPEC): a say's text is clipped to the
+// `text_max` dial, 500 TODAY and settable by a mark with no ceiling, so 500 is a default, not a historical or
+// dial-independent maximum. The 500-char cases below are "producer-shaped at today's default"; the 5k/100k-char
+// cases are labelled legacy/dial-raised, NOT producer-valid output at today's dial. Storage settings are not
+// touched: TOAST compresses a value only when its row passes ~2 KB, so a 500-char say is stored uncompressed
+// (ratio ~1) and only an oversized compressible payload has a stored size far below its decoded size.
+
+const bodiesRead = (sp) => sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q));
+/** The bytes the driver would receive for these rows' payloads, measured independently in JS from the wire text. */
+async function wireBytes(where, params) {
+  const { rows } = await api.query(`SELECT payload::text AS t FROM acts WHERE ${where}`, params);
+  return rows.reduce((n, r) => n + Buffer.byteLength(r.t, "utf8"), 0);
+}
+async function storedBytes(where, params) {
+  const { rows: [r] } = await api.query(`SELECT coalesce(sum(pg_column_size(payload)),0)::bigint AS s FROM acts WHERE ${where}`, params);
+  return Number(r.s);
+}
+const inEpoch = (e0, e1) => [`action = 'say' AND at >= $1::timestamptz AND at < $2::timestamptz AND NOT voice_payload_private(payload)`, [iso(e0), iso(e1)]];
+
+test("DECODED admission: a compressible payload far over the budget is refused BEFORE any body, though its stored size fits", async (t) => {
+  if (skip) return t.skip(skip);
+  const e0 = T0 + 4000 * H, e1 = e0 + 12 * H;
+  for (let i = 0; i < 20; i++) await say(iso(e0 + i * 10), "w" + (i % 3), i, 0, { text: "a".repeat(100_000) }); // legacy / dial-raised, compressible
+  const [w, p] = inEpoch(e0, e1);
+  const decoded = await wireBytes(w, p), stored = await storedBytes(w, p);
+  const limit = 512 * 1024;
+  console.log(`[pos-779] compressible 20 x 100k-char says: decoded ${decoded} B, stored ${stored} B, ratio ${(decoded / stored).toFixed(0)}x`);
+  assert.ok(stored < limit && decoded > 2 * limit, "premise: stored fits the budget, decoded is over it");
+  const sp = spy(pool);
+  const out = await readEpoch(sp, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { maxBytes: limit } });
+  assert.deepEqual([out.status, out.reason, out.what, out.limit], ["unavailable", "over-budget", "bytes", limit], "refused on DECODED size (a stored-size fuse admits this)");
+  assert.equal(out.measured, decoded, "the measure is exactly the UTF-8 wire text of the payloads");
+  assert.equal(bodiesRead(sp), false, "bodies transferred before the refusal: 0 rows");
+  assert.equal(sp.log.connects, 1, "one client, one snapshot");
+  // admitted when the budget covers the decoded size; then exactly the rows come, and the diagnostic is reported apart
+  const sp2 = spy(pool);
+  const ok = await readEpoch(sp2, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { maxBytes: decoded } });
+  assert.equal(ok.status, "ok");
+  assert.equal(bodiesRead(sp2), true);
+  assert.equal(ok.voices.length, 20, "bodies transferred after admission: all 20 rows");
+  assert.equal(ok.source.says.bytes, decoded);
+  assert.equal(ok.source.says.stored_bytes, stored);
+  assert.ok(ok.source.says.stored_bytes < ok.source.says.bytes, "stored is only a diagnostic and is smaller");
+});
+
+test("DECODED unit: ASCII, multibyte, jsonb-string and emission payloads each equal their UTF-8 wire text; producer-shaped at today's default", async (t) => {
+  if (skip) return t.skip(skip);
+  const e0 = T0 + 4100 * H, e1 = e0 + 12 * H;
+  await say(iso(e0 + 1), "ascii", 1, 0, { text: "a".repeat(500), place: "the quay" });               // today's default text_max
+  await say(iso(e0 + 2), "euro", 2, 0, { text: "€".repeat(500), place: "the quay" });                  // 3 UTF-8 bytes per unit
+  await say(iso(e0 + 3), "astral", 3, 0, { text: "😀".repeat(250), place: "the quay" });                // 4 bytes per code point, 2 UTF-16 units
+  await api.query(sayInsert, [iso(e0 + 4), "str", JSON.stringify(JSON.stringify({ text: "é".repeat(100) })), "world", 4, 0]); // jsonb STRING payload
+  const [w, p] = inEpoch(e0, e1);
+  const out = await readEpoch(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom });
+  assert.equal(out.status, "ok");
+  const wire = await wireBytes(w, p);
+  assert.equal(out.source.says.bytes, wire, "says: the aggregate equals the independently measured UTF-8 wire text");
+  assert.ok(wire > 500 + 1500 + 1000 + 200, `multibyte counted in bytes, not characters (${wire})`);
+  assert.equal(out.source.says.strings, 1, "the jsonb string payload is counted and measured");
+  // today's default, uncompressed: stored is about decoded (ratio ~1), the case the old fuse was calibrated on
+  assert.ok(out.source.says.stored_bytes > out.source.says.bytes * 0.5, "a 500-char say is not compressed by TOAST: stored ~ decoded");
+  // emissions: measured on the closed set, same unit
+  await emission(iso(e0 + 5), emissionRow({ text: "b".repeat(300_000), x: 1, y: 1 }, iso(e0 + 5)));
+  const { rows: [em] } = await api.query(`SELECT coalesce(sum(octet_length(payload::text)),0)::bigint AS d, coalesce(sum(pg_column_size(payload)),0)::bigint AS s FROM acts WHERE action IN ('legacy:emission','emission') AND NOT voice_payload_private(payload)`);
+  const sp = spy(pool);
+  const limit = Math.floor((Number(em.d) + Number(em.s)) / 2);
+  assert.ok(Number(em.s) < limit && limit < Number(em.d), "premise: emission stored size fits, decoded size does not");
+  const red = await readEpoch(sp, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { maxEmissionBytes: limit } });
+  assert.deepEqual([red.reason, red.what, red.limit, red.measured], ["over-budget", "emission bytes", limit, Number(em.d)]);
+  assert.equal(sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q)), false, "no emission body shipped");
+});
+
+test("DECODED measure counts only the epoch's eligible says: older history, private rows and other actions scale separately without moving it", async (t) => {
+  if (skip) return t.skip(skip);
+  const e0 = T0 + 4200 * H, e1 = e0 + 12 * H;
+  for (let i = 0; i < 5; i++) await say(iso(e0 + i), "w", i, 0, { text: "s".repeat(1000) });
+  const base = await readEpoch(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom });
+  assert.equal(base.status, "ok");
+  for (let i = 0; i < 6; i++) await say(iso(e0 - 3 * H + i), "old", i, 0, { text: "o".repeat(200_000) });             // older history
+  for (let i = 0; i < 6; i++) await say(iso(e0 + 100 + i), "priv", i, 0, { text: "p".repeat(200_000), room: "r1" });   // private flood
+  await api.query(`INSERT INTO acts (at, crossing, actor, action, class, payload) SELECT $1::timestamptz, 0, 'w', 'walk', 'move', jsonb_build_object('pad', repeat('f', 200000)) FROM generate_series(1, 6)`, [iso(e0 + 200)]); // filler
+  const after = await readEpoch(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom });
+  assert.equal(after.status, "ok");
+  assert.equal(after.source.says.bytes, base.source.says.bytes, "older, private and filler rows add nothing to the epoch's decoded bytes");
+  assert.equal(after.source.says.rows, 5);
+});
+
+test("DECODED measure and bodies share ONE snapshot: a row committed after the aggregate is in neither", async (t) => {
+  if (skip) return t.skip(skip);
+  const e0 = T0 + 4300 * H, e1 = e0 + 12 * H;
+  for (let i = 0; i < 4; i++) await say(iso(e0 + i), "w", i, 0, { text: "x".repeat(2000) });
+  let injected = false;
+  const sp = spy(pool, { after: async (text) => {
+    if (!injected && /^SELECT count\(\*\)::int AS n/.test(String(text).trim()) && /action = 'say'/.test(text)) {
+      injected = true;
+      await say(iso(e0 + 50), "late", 9, 0, { text: "z".repeat(50_000) });
+    }
+  } });
+  const out = await readEpoch(sp, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom });
+  assert.equal(injected, true, "the late row was committed between the aggregate and the bodies");
+  assert.equal(out.status, "ok");
+  assert.equal(out.voices.length, out.source.says.rows, "bodies = what was measured");
+  assert.equal(out.voices.length, 4);
+  const q = sp.log.queries;
+  assert.ok(q[0].startsWith("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY") && q[1].startsWith("SET LOCAL statement_timeout"), "snapshot then the timeout, before any measure");
+});
