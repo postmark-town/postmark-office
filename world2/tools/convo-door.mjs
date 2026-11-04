@@ -58,7 +58,7 @@ const bad = (what) => bounce(422, `bad ${what}`, `the ${what} parameter is not i
 const NOT_AVAILABLE = () => bounce(404, "that conversation is not available", "it may have ended, moved to another settlement or never been public; read the list again");
 const UNAVAILABLE = (reason) => bounce(503, "the conversations cannot be read just now", `try again shortly (${reason})`);
 
-const SAFE_REASON = { "over-budget": "too-large", timeout: "timeout", "edges-moved": "settlement-moved", "unreadable-acts": "unreadable", "unsupported-geometry": "unreadable" };
+const SAFE_REASON = { "settlements-unknown": "settlements-unknown", "over-budget": "too-large", timeout: "timeout", "edges-moved": "settlement-moved", "unreadable-acts": "unreadable", "unsupported-geometry": "unreadable" };
 
 class Unavailable extends Error { constructor(reason) { super(reason); this.reason = SAFE_REASON[reason] ?? "unreadable"; this.moved = reason === "edges-moved"; } }
 
@@ -101,10 +101,13 @@ export function createConversationsDoor({ pool, isPrivate, settlements, hearingW
   const shared = (id, epoch, ctx) => {
     if (inflight.has(id)) return inflight.get(id);
     const p = (async () => {
+      // THE FENCE. The epochs of this request were drawn from `ctx.edges`; the read asks for the edges' version
+      // twice, before its snapshot (it must be the very edges the epoch came from) and after it (read afresh). A sweep
+      // published in between answers `edges-moved`, and the request is made once more on the new edges.
+      let asked = 0;
       const out = await loadEpochView(pool, {
         epoch, isPrivate, memo, budgets, fuse, sliceMs,
-        // the fence: the published sweeps are read again after the snapshot; a different version is `edges-moved`
-        edgesOf: () => publishedEdges({ settlements, hearingWindow, ms: ctx.ms }),
+        edgesOf: () => (asked++ === 0 ? ctx.edges : publishedEdges({ settlements, hearingWindow, ms: ctx.ms })),
       });
       if (out.status !== "ok") throw new Unavailable(out.reason);
       return out;
@@ -167,7 +170,9 @@ export function createConversationsDoor({ pool, isPrivate, settlements, hearingW
       const sentinel = after.view === NO_VIEW;
       const idx = epochAt(epochs, sentinel ? after.latest_ms - 1 : after.latest_ms);
       if (idx < 0) return NOT_AVAILABLE();
-      const out = await stream(ctx, epochs, idx, sentinel ? null : after, { limit: req.value.limit, voiceCap, voiceBudget: DOOR.voiceBudget, maxEpochs: DOOR.closedEpochs });
+      // a cursor into the LIVE epoch continues the live list only; one into an earlier settlement continues the closed
+      // list, on through still older settlements. The two lists are the page's two sections, each with its own cursor.
+      const out = await stream(ctx, idx === 0 ? epochs.slice(0, 1) : epochs, idx, sentinel ? null : after, { limit: req.value.limit, voiceCap, voiceBudget: DOOR.voiceBudget, maxEpochs: DOOR.closedEpochs });
       if (out.regenerated) return { code: 200, body: { now: new Date(ms).toISOString(), regenerated: true, reason: out.regenerated, threads: [], next_threads: null } };
       return { code: 200, body: { now: new Date(ms).toISOString(), threads: out.threads, next_threads: out.next_threads,
         list: { complete: out.next_threads === null, returned: out.threads.length, history_from: historyFrom } } };
