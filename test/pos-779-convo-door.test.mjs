@@ -357,3 +357,62 @@ test("a page never carries more lines than the response budget: a thread the bud
   assert.equal(r.list.live.threads, 40, "the list still says how many threads the settlement has");
   assert.equal(r.list.complete, false);
 });
+
+// ── HIDDEN WORK, MEASURED AT THE CALLER ──────────────────────────────────────
+// The rows the store hands back for one page, counted at the pool the door reads through, with older history and a private
+// backlog scaled separately: the page of an epoch must cost the same however much sits outside it.
+
+/** A pool-shaped wrapper that counts the rows every query returns. */
+function countingPool(real) {
+  const tally = { rows: 0, queries: 0, bodyRows: 0 };
+  return {
+    tally,
+    async connect() {
+      const c = await real.connect();
+      return {
+        on: (...a) => c.on(...a), removeListener: (...a) => c.removeListener(...a), release: (...a) => c.release(...a),
+        async query(text, params) {
+          const out = await c.query(text, params);
+          tally.queries += 1; tally.rows += out.rowCount ?? 0;
+          if (/^SELECT id, at, actor, action/.test(String(text).trim())) tally.bodyRows += out.rowCount ?? 0;
+          return out;
+        },
+      };
+    },
+  };
+}
+
+test("rows read for a page do not grow with older history or a private backlog: each scaled alone, then together", async (t) => {
+  const w = await world("convo_door_hidden");
+  if (w.skip) return t.skip(w.skip);
+  const page = async () => {
+    const cp = countingPool(w.pool);
+    const door = doorOver(w, { pool: cp });
+    const r = await door.handle(q());
+    assert.equal(r.code, 200);
+    return { cp, body: r.body };
+  };
+  const rows = [];
+  for (let i = 0; i < 300; i++) rows.push({ at: iso(E3 + H + i * 1000), actor: `u${i % 9}`, x: (i % 4) * 500, y: 0, payload: { text: `u${i}`, place: "the quay", aboard: false } });
+  await w.manySays(rows);
+  const base = await page();
+  assert.equal(base.cp.tally.bodyRows, 300, "the epoch's voices, each once");
+  const sig = (p) => JSON.stringify(p.body.live.map((x) => [x.thread_of, x.generation, x.voice_count]));
+
+  // older history ten times the epoch, before every edge and between the older edges
+  const old = [];
+  for (let i = 0; i < 3000; i++) old.push({ at: iso(E1 - 5 * H + i * 1000), actor: `old${i % 11}`, x: (i % 5) * 500, y: 0, payload: { text: "old", place: "the quay", aboard: false } });
+  await w.manySays(old);
+  const aged = await page();
+  assert.equal(aged.cp.tally.bodyRows, 300, "ten times the older history, the same rows read");
+  assert.equal(sig(aged), sig(base));
+
+  // a private backlog thirteen times the epoch, spread across it
+  const priv = [];
+  for (let i = 0; i < 4000; i++) priv.push({ at: iso(E3 + H + (i % 300) * 1000 + 1), actor: `pv${i % 13}`, x: (i % 4) * 500, y: 0, payload: { text: "psst", room: "cellar" } });
+  await w.manySays(priv);
+  const haunted = await page();
+  assert.equal(haunted.cp.tally.bodyRows, 300, "a private backlog thirteen times the epoch reads no more bodies");
+  assert.equal(sig(haunted), sig(base));
+  assert.ok(haunted.cp.tally.rows <= base.cp.tally.rows + 4, `no hidden scan: ${haunted.cp.tally.rows} rows returned against ${base.cp.tally.rows}`);
+});
