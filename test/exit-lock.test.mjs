@@ -201,3 +201,95 @@ test("the doors' own words say it: world_exit and world_enter name the lock", ()
   assert.match(exit, /Leaving a dungeon by exit closes it to you until the next settlement \(06:00 or 18:00Z\); walking out through a door costs nothing\./);
   assert.match(enter, /A dungeon you left by exit stays closed to you until the next settlement/);
 });
+
+// ── WLD-132 · Yew's phantom exit: a flee's re-entry refusal says why ─────────────────────────────────
+//
+// A resident whose nerve ran out in a creature's ring is moved out by the office's own exit (encounter.mjs §
+// queueFlee), which records `fled: "nerve"` on the exit act beside the lock. The refusal used to read that exit as
+// one the resident made ("You left the Spire by exit…"). The office's half is to carry the cause the act already
+// recorded from the store to the clone's passage (world-apex § dungeonLocksOf, world-crossings § locksInForce);
+// the words are the clone's (postmark-world tools/portals.mjs § lockedOutWords). Nothing about who is locked out,
+// until when, or what an exit costs moves.
+//
+// The creature is NOT in the refusal: the exit act records the cause and no creature, and its ring's name lives on
+// the creature's separate nerve rows. Saying it would take a new field on the exit act or a new store read.
+//
+// The paired World words skip, saying why, on a clone that predates them (the pinned clone until the pin moves):
+// the carrying below runs on every clone, the words only where the clone has them.
+// Asked of the engine the doors LOAD (the newest blessing's portals.mjs, world-branches.mjs § importEngineAt), not of the
+// clone's working tree: a candidate World commit is invisible to the doors until a settlement blesses it.
+const HAVE_FLED_WORDS = await (async () => {
+  if (SKIP) return false;
+  try {
+    const { importEngineAt } = await import("../src/world-branches.mjs");
+    const portals = await importEngineAt(CLONE, "portals.mjs");
+    return !/by exit/.test(portals.lockedOutWords({ dungeon: SPIRE, until: "2026-10-19T18:00:00.000Z", fled: "nerve" }));
+  } catch { return false; }
+})();
+const FLED_SKIP = SKIP || (!HAVE_FLED_WORDS && `the engine the doors load from the world clone at ${CLONE} (its newest blessing) predates WLD-132's fled words (lockedOutWords ignores \`fled\`): the refusal still reads "by exit" there until a blessed World commit carries them`);
+const FLED_LOCK = { ...LOCK, fled: "nerve" };
+const FLED_LINE = "Your nerve ran out at 17:12Z, so you fled the Spire and can't come back in until the next settlement (18:00Z). Nothing was recorded.";
+const enterLocked = async (locks, nowIso = "2026-10-19T17:30:00.000Z", mark = "spire/doors-outside", standing = { x: 845, y: 1000 }) => {
+  const o = await officeWith({ standing, ledger: onTheGrounds(), locks, nowIso });
+  return { o, e: await enterViaOffice(CLONE, { mark }, key("ann"), o.deps).catch((x) => x) };
+};
+
+test("WLD-132 · A FLEE SAYS WHY: the cause the exit act recorded reaches the refusal, with the same 403, extras and instant", { skip: FLED_SKIP }, async () => {
+  const { o, e } = await enterLocked([FLED_LOCK]);
+  assert.equal(e.code, 403);
+  assert.equal(e.defect, FLED_LINE, "the whole line is the defect: the World page prints only that");
+  assert.deepEqual(bounceExtras(e), { dungeon: SPIRE, law: "the-town/dungeon (WLD-5)", locked_until: "2026-10-19T18:00:00.000Z" }, "no new field on the envelope");
+  assert.equal(o.records.length, 0);
+  assert.equal(o.lands.length, 0);
+  assert.equal((await enterLocked([FLED_LOCK], "2026-10-19T17:30:00.000Z", SPIRE, { x: 1100, y: 1100 })).e.defect, FLED_LINE, "the dungeon from its outline says the same");
+});
+
+test("WLD-132 · AN EXIT THE RESIDENT MADE, AND EVERY LOCK WITHOUT A CAUSE, KEEP THEIR WORDS BYTE FOR BYTE", { skip: SKIP }, async () => {
+  for (const [label, lock] of [["no fled column (a lock written before this change)", LOCK], ["fled null (the store's answer for an exit the resident made)", { ...LOCK, fled: null }],
+    ["fled empty", { ...LOCK, fled: "" }]]) {
+    const { e } = await enterLocked([lock]);
+    assert.equal(e.defect, LOCKED_LINE, label);
+  }
+});
+
+test("WLD-132 · AN UNKNOWN CAUSE IS NOT GUESSED: the ordinary line, never an invented reason", { skip: FLED_SKIP }, async () => {
+  assert.equal((await enterLocked([{ ...LOCK, fled: "hunger" }])).e.defect, LOCKED_LINE);
+});
+
+test("WLD-132 · THE LOCK LIFTS AT THE SAME INSTANT A FLEE OR AN EXIT: a millisecond before it refuses, at it the passage goes through; another dungeon is never locked", { skip: SKIP }, async () => {
+  for (const lock of [FLED_LOCK, LOCK]) {
+    assert.equal((await enterLocked([lock], "2026-10-19T17:59:59.999Z")).e.code, 403);
+    const at = await enterLocked([lock], "2026-10-19T18:00:00.000Z");
+    assert.ok(at.e.entered?.includes(SPIRE), "at the settlement it goes through");
+  }
+  assert.ok((await enterLocked([{ ...FLED_LOCK, dungeon: "elsewhere/crypt" }])).e.entered?.includes(SPIRE), "a flee from another dungeon locks nothing here");
+});
+
+test("WLD-132 · THE REAL SEAM, end to end: the office's own flee writes the cause, the store's projection carries it, the refusal says it", { skip: FLED_SKIP }, async () => {
+  // 1. the producer: a flee at 0 nerve, through the real exit act, writes the lock and the cause on its record
+  const fleeing = await officeWith({ standing: { x: 880, y: 1000 }, ledger: inTheVestibule(), acts: [ENTERED_BY_THE_DOORS], nowIso: "2026-10-19T17:12:30.000Z" });
+  await exitViaOffice(CLONE, { handle: "ann", confirm: true }, key("ann"), { ...fleeing.deps, flee: true });
+  const written = fleeing.records[0];
+  assert.equal(written.fled, "nerve");
+  // 2. the projection: world-apex § dungeonLocksOf over a stand-in store that answers as the store's SELECT would,
+  //    from the record just written (payload keys to columns). The SQL is NOT executed (there is no lab store); its text is pinned below.
+  const { __setPoolForTest } = await import("../src/world2-acts.mjs");
+  const { crossingDeps } = await import("../src/world-apex.mjs");
+  const asked = [];
+  const hadPg = [process.env.WORLD2_PG, process.env.WORLD2_PG_URL];
+  process.env.WORLD2_PG = "1"; process.env.WORLD2_PG_URL = "postgres://stand-in.invalid/none";
+  __setPoolForTest({ query: async (text, params) => { asked.push({ text, params });
+    return { rows: [{ dungeon: written.dungeon, locked_until: written.locked_until, left_at: written.left_at, fled: written.fled ?? null }] }; } });
+  let projected;
+  try { projected = await crossingDeps().dungeonLocks("ann"); }
+  finally { __setPoolForTest(null); [process.env.WORLD2_PG, process.env.WORLD2_PG_URL] = hadPg.map((v) => v); if (hadPg[0] === undefined) delete process.env.WORLD2_PG; if (hadPg[1] === undefined) delete process.env.WORLD2_PG_URL; }
+  assert.deepEqual(projected, [{ dungeon: SPIRE, locked_until: "2026-10-19T18:00:00.000Z", left_at: "2026-10-19T17:12:30.000Z", fled: "nerve" }]);
+  // [text pin, labelled: the weakest instrument here] the query selects the recorded cause beside the lock, from exit acts only, for this actor
+  assert.match(asked[0].text, /payload->>'fled' AS fled/);
+  assert.match(asked[0].text, /action = 'exit' AND payload \? 'locked_until'/);
+  assert.deepEqual(asked[0].params, ["ann"]);
+  // 3. the consumer: the enter door, handed what the projection returned, refuses in the flee's words
+  const o = await officeWith({ standing: { x: 845, y: 1000 }, ledger: onTheGrounds(), nowIso: "2026-10-19T17:30:00.000Z" });
+  const e = await enterViaOffice(CLONE, { mark: "spire/doors-outside" }, key("ann"), { ...o.deps, dungeonLocks: async () => projected }).catch((x) => x);
+  assert.equal(e.defect, FLED_LINE);
+});

@@ -273,7 +273,8 @@ async function actsOfActor(who) {
 
 /**
  * THE EXIT LOCKS A WALKER'S OWN ACTS HOLD (WLD-5 A): for each dungeon, the newest
- * exit act that recorded one, `{ dungeon, locked_until, left_at }`. Read from the
+ * exit act that recorded one, `{ dungeon, locked_until, left_at, fled }` (`fled` is
+ * the exit act's own recorded cause, null for an exit the resident made). Read from the
  * STORE, the record, on the actor index. Unlike `actsOfActor` it does NOT fail
  * open: an unreachable store throws, and the enter door refuses with a 503 rather
  * than letting a locked-out walker in (Wright, W1). `null` from actsQuery means
@@ -282,7 +283,8 @@ async function actsOfActor(who) {
 async function dungeonLocksOf(who) {
   const { actsQuery } = await import("./world2-acts.mjs");
   const rows = await actsQuery(
-    `SELECT DISTINCT ON (payload->>'dungeon') payload->>'dungeon' AS dungeon, payload->>'locked_until' AS locked_until, payload->>'left_at' AS left_at
+    `SELECT DISTINCT ON (payload->>'dungeon') payload->>'dungeon' AS dungeon, payload->>'locked_until' AS locked_until, payload->>'left_at' AS left_at,
+            payload->>'fled' AS fled
        FROM acts WHERE actor = $1 AND action = 'exit' AND payload ? 'locked_until'
       ORDER BY payload->>'dungeon', id DESC`, [String(who)]);
   return Array.isArray(rows) ? rows : [];
