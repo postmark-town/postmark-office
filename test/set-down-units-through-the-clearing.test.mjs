@@ -193,26 +193,216 @@ test("F2 · COUNTED UNITS IN A MADE HOLDER, set down at the real door and publis
   assert.ok((await q("SELECT count(*)::int AS n FROM acts"))[0].n >= actsBefore);
 });
 
-test("LIMIT, measured · a full holder set down on the COMMONS with no stamp that lands is REFUSED by the clearing: it does not publish, its contents stay keyed to it, and its maker's withdrawal is refused BY NAME rather than answering 'withdrawn' over contents no door reaches (outside the ruled return, which is the withdrawal of a draft or pending claim)", { skip }, async () => {
-  await seedClearing();
-  const NO = keyOf("sbx-no");
-  await owner((c) => c.query("INSERT INTO households (slug, ord, name, residents, since, declared_by) VALUES ('sbx-no', 7, 'sbx-no', ARRAY['sbx-no'], '2026-08-01', 'sbx-no') ON CONFLICT DO NOTHING"));
-  const { bag } = await fullBag("commons-bag", { who: "sbx-no", slips: 1, units: 3 });
-  const sd = await setDown(bag, NO);
-  assert.match(sd.stands_note, /but the stamp did not land: it publishes only with one behind it .*holding 1 whole thing and 3 units/, sd.stands_note);
-  // the candle the set-down went forward on (301, opened by the last clearing), closed now so it can clear
+// ── A CLAIM THE CLEARING REFUSED (Wright, AUTHORITY 2026-11-04T21:57:51.368Z) ──────────────────────────
+// "A refused full holder is never stranded. Its dropper gets it back, holder and contents together, by withdrawing
+// it." HISTORY, kept: this file's LIMIT test measured the hole at 17662581 — refused at the clearing, its units
+// keyed to it, and its withdrawal answered 409 "(it is refused now)". The same fixture now proves the return; the
+// old answer is a flip's red (the guard without `refused`). MEASURED BEFORE BUILDING: refusal is final. No pen may
+// move a `refused` row (007_private_drafts.sql § the transition guard), and the stake door cannot see a refused
+// mark (404 below), so the withdrawal is the one way home and no stake can race it for the refused claim.
+
+/** The open candle closed and cleared by the real clearing (a window must last a second: the candle tiles time). */
+const clearOpen = async () => {
+  await new Promise((r) => setTimeout(r, 1100));
   const [{ id: win }] = await q("SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
   await owner((c) => c.query("UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1", [win]));
   const r = clear(win);
   assert.equal(r.code, 0, r.out);
-  const status = (await q("SELECT status FROM claims WHERE slug = $1 ORDER BY submitted_at DESC LIMIT 1", [bag]))[0]?.status;
-  assert.equal(status, "refused", r.out);
-  assert.equal(await unitsIn(bag), 3, "the units are still the holder's, by its id");
-  await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, NO), (e) => {
+  return r;
+};
+const house = (who, ord) => owner((c) => c.query("INSERT INTO households (slug, ord, name, residents, since, declared_by) VALUES ($1, $2, $1, ARRAY[$1], '2026-08-01', $1) ON CONFLICT DO NOTHING", [who, ord]));
+/** A full holder set down where its maker does not own the ground (sbx-mo's parcel, at the Origin), no stamp behind it. */
+async function setDownUnbacked(who, ord, slug, { slips = 1, units = 3 } = {}) {
+  await seedClearing();
+  await house(who, ord);
+  const b = await fullBag(slug, { who, slips, units });
+  const sd = await setDown(b.bag, b.key);
+  assert.match(sd.stands_note, /but the stamp did not land: it publishes only with one behind it/, sd.stands_note);
+  return b;
+}
+/** ... and refused by the real clearing. */
+async function refusedBag(who, ord, slug, opts) {
+  const b = await setDownUnbacked(who, ord, slug, opts);
+  const r = await clearOpen();
+  assert.equal(await claimOf(b.bag), "refused", r.out);
+  return b;
+}
+const claimRows = (bag) => q("SELECT status, refusal_check FROM claims WHERE slug = $1 ORDER BY submitted_at", [bag]);
+
+test("REFUSED, then WITHDRAWN · a full holder (1 named slip, 3 counted units) the clearing refused comes back WHOLE to its maker's hands, once: the same id, record and contents, every take path reaches them; a second withdrawal writes nothing", { skip }, async () => {
+  const { bag, slips, key } = await refusedBag("sbx-no", 7, "commons-bag", { slips: 1, units: 3 });
+  assert.equal(await unitsIn(bag), 3, "refused: the units are still the holder's, by its id");
+  const before = await claimRows(bag);
+  const w = await withdrawMarkViaOffice(repo, { mark: bag }, key);
+  assert.equal(w.put_back, 1, JSON.stringify(w).slice(0, 400));
+  assert.match(w.put_back_note, /its claim refused at the clearing, so sbx-no\/commons-bag came back to sbx-no, whole, with 3 units and 1 whole thing inside/);
+  const rows = await holdRows([bag]);
+  assert.deepEqual(rows.map((r) => r.action), ["make", "set-down", "put-back"]);
+  assert.equal(rows[2].nonce, `put-back:${rows[1].id}`);
+  assert.deepEqual(rows[2].payload.made, rows[0].payload.made, "the make's own record, whole");
+  assert.deepEqual(await claimRows(bag), before, "the refused claim is as the clearing left it: nothing on the clearing side writes");
+  assert.equal((await worldMarkById(bag)).mark?.held_by, "sbx-no", "in its maker's hands again");
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, bag, "the slip is still the bag's");
+  assert.equal(await unitsIn(bag), 3, "the 3 units are still the bag's, never loose");
+  assert.equal(await unitsIn("sbx-no"), 0);
+  // every take path reaches what it holds
+  await callHoldTool("world_hold", { from: bag, kind: "pocket-comet", count: 2 }, key);
+  assert.equal(await unitsIn(bag), 1);
+  assert.equal(await unitsIn("sbx-no"), 2, "counted units taken out of it into hand");
+  await callHoldTool("world_hold", { thing: slips[0] }, key, { verb: "take" });
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, "sbx-no", "the named slip taken out of it into hand");
+  const made = await leaveMarkViaOffice(repo, { slug: "commons-bag-slip-2", body: "Slip 2.", to: bag }, key);
+  assert.equal(made.did, "make", JSON.stringify(made).slice(0, 300));
+  assert.equal((await worldMarkById("sbx-no/commons-bag-slip-2")).mark?.held_by, bag, "and a thing made into it lands: its room is not 'withdrawn'");
+  // exactly once
+  const actsBefore = (await q("SELECT count(*)::int AS n FROM acts"))[0].n;
+  const again = await withdrawMarkViaOffice(repo, { mark: bag }, key);
+  assert.equal(again.already, true, JSON.stringify(again).slice(0, 300));
+  assert.equal(again.put_back, 0);
+  assert.equal((await q("SELECT count(*)::int AS n FROM acts"))[0].n, actsBefore, "the second withdrawal writes nothing");
+  assert.deepEqual((await holdRows([bag])).map((r) => r.action).filter((a) => a === "put-back"), ["put-back"]);
+});
+
+test("REFUSED · THE CONTROLS on a mixed holder (2 slips, 3 units): another house 403, a later guard rolls the put-back back, a lane with no transaction refuses by name, full hands 409 — each writes nothing and leaves the refused claim as it was; with room, it comes back once", { skip }, async () => {
+  const who = "sbx-np", key = keyOf("sbx-np");
+  const { bag, slips } = await refusedBag(who, 8, "mixed-commons-bag", { slips: 2, units: 3 });
+  const before = await claimRows(bag);
+  const unchanged = async (why) => {
+    assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down"], `${why}: no put-back`);
+    assert.deepEqual(await claimRows(bag), before, `${why}: the claim as it was`);
+    assert.equal((await worldMarkById(slips[1])).mark?.held_by, bag, `${why}: the contents inside`);
+    assert.equal(await unitsIn(bag), 3, why);
+  };
+  await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, DEE), (e) => e.code === 403 && /only the hand that left a mark may withdraw it/.test(e.defect));
+  await unchanged("another house");
+  await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, key, { escrowOf: async () => 2 }), (e) => e.code === 409 && /escrow/.test(e.defect));
+  await unchanged("the escrow guard, later in the same write");
+  process.env.WORLD_SINGLE_LOG = "";
+  try {
+    await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, key), (e) => e.code === 409 && e.reason === "set-down-holder-withdraw-store-only");
+  } finally { process.env.WORLD_SINGLE_LOG = "1"; }
+  await unchanged("the git lane");
+  const { holdingsOf } = await import("../src/world-hold.mjs");
+  const { guardedAttachments } = await import("../src/world2-guards.mjs");
+  const inHand = holdingsOf(await guardedAttachments(), who).length + await unitsIn(who);
+  for (let i = inHand; i < 24; i += 1) await leaveMarkViaOffice(repo, { slug: `np-pebble-${i}`, body: "A pebble.", to: who }, key);
+  await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, key), (e) => {
     assert.equal(e.code, 409, `${e.defect} — ${e.hint}`);
-    assert.match(e.defect, /is a holder set down full, and it cannot be withdrawn now/);
-    assert.match(e.hint, /\(it is refused now\)\. Nothing was withdrawn and nothing was recorded/);
+    assert.match(e.defect, /sbx-np's hands are full \(24\/24\) — the holder this mark is would come back to them, whole/);
     return true;
   });
-  assert.deepEqual((await holdRows([bag])).map((x) => x.action), ["make", "set-down"], "no put-back: the ruled return is not this case");
+  await unchanged("full hands");
+  await callHoldTool("world_hold", { thing: `${who}/np-pebble-23`, to: "sbx-dee" }, key);
+  const w = await withdrawMarkViaOffice(repo, { mark: bag }, key);
+  assert.equal(w.put_back, 1, JSON.stringify(w).slice(0, 300));
+  for (const s of slips) assert.equal((await worldMarkById(s)).mark?.held_by, bag);
+  assert.equal(await unitsIn(bag), 3);
+  assert.equal((await worldMarkById(bag)).mark?.held_by, who);
+});
+
+test("REFUSED · STAKE and WITHDRAW at once on one refused claim, at the real doors: exactly one wins — the withdrawal; the stake door cannot see a refused mark, so it moves nothing and files nothing (refusal is final)", { skip }, async () => {
+  const who = "sbx-nq", key = keyOf("sbx-nq");
+  const { bag } = await refusedBag(who, 9, "raced-bag", { slips: 1, units: 2 });
+  const { worldStakeViaOffice } = await import("../src/world-stake.mjs");
+  const before = await claimRows(bag);
+  const [stake, withdrawal] = await Promise.allSettled([worldStakeViaOffice({ mark: bag, stamps: 1 }, key), withdrawMarkViaOffice(repo, { mark: bag }, key)]);
+  assert.equal(withdrawal.status, "fulfilled", String(withdrawal.reason?.defect ?? withdrawal.reason));
+  assert.equal(withdrawal.value.put_back, 1);
+  const s = stake.status === "fulfilled" ? stake.value : stake.reason;
+  assert.equal(s.code, 404, JSON.stringify(s).slice(0, 300));
+  assert.match(s.defect, /no mark "sbx-nq\/raced-bag" in the world you can see/);
+  assert.deepEqual(await claimRows(bag), before, "nothing filed, nothing put forward: one refused row, as the clearing left it");
+  assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down", "put-back"], "one return");
+  // and in the other order, the stake first: it still moves nothing, so the withdrawal it precedes is the only act
+  const other = await refusedBag("sbx-nu", 13, "staked-first-bag", { slips: 1, units: 1 });
+  const s2 = await worldStakeViaOffice({ mark: other.bag, stamps: 1 }, other.key);
+  assert.equal(s2.code, 404, JSON.stringify(s2).slice(0, 300));
+  assert.equal((await withdrawMarkViaOffice(repo, { mark: other.bag }, other.key)).put_back, 1);
+});
+
+test("HELD FOR REVIEW · not withdrawn while the review is open, and its maker's read says it waits; the review refuses it (the real review-rule tool), and then the withdrawal brings it back whole", { skip }, async () => {
+  const who = "sbx-nr", key = keyOf("sbx-nr");
+  const { bag, slips } = await setDownUnbacked(who, 10, "held-bag", { slips: 1, units: 2 });
+  // THE ONE FIXTURE STEP, disclosed: the clearing holds only PARCEL claims that collide (clearing-job.mjs step 5),
+  // and a set-down's claim is a thing's, so no door brings it to `held_review`. The state is written by the pen
+  // that alone writes it (clearing_job), as step 5 would, with step 5's own words.
+  const cj = await store.connect("clearing_job");
+  try { await cj.query("UPDATE claims SET status = 'held_review', refusal_check = 'counterclaim: a fixture contest — a mind rules (census D2)', decided_at = now() WHERE slug = $1 AND status = 'pending'", [bag]); }
+  finally { await cj.end(); }
+  await clearOpen(); // the candle closes over it; a held claim is not the clearing's to move
+  assert.equal(await claimOf(bag), "held_review");
+  await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, key), (e) => {
+    assert.equal(e.code, 409, `${e.defect} — ${e.hint}`);
+    assert.match(e.defect, /is a holder set down full, and its claim is held for review/);
+    assert.match(e.hint, /not stranded, only waiting.*It cannot be withdrawn while the review is open\. Nothing was withdrawn and nothing was recorded/);
+    return true;
+  });
+  assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down"]);
+  const { worldInvestigate } = await import("../src/world.mjs");
+  const held = await worldInvestigate({ mark: bag }, key);
+  assert.equal(held.receipt?.status, "held_review", JSON.stringify(held.receipt).slice(0, 400));
+  assert.match(held.receipt?.next ?? "", /not stranded, only waiting.*It cannot be withdrawn while the review is open/);
+  assert.doesNotMatch(held.receipt?.next ?? "", /world_withdraw_mark/, "no forbidden withdrawal offered");
+  // the outcome: the review refuses it, through the tool that writes rulings
+  const [{ id }] = await q("SELECT id::text FROM claims WHERE slug = $1 AND status = 'held_review'", [bag]);
+  const RULE = join(dirname(fileURLToPath(import.meta.url)), "..", "world2", "tools", "review-rule.mjs");
+  const ruled = spawnSync(process.execPath, [RULE, "--claim", id, "--rule", "refuse", "--by", "sbx-reviewer", "--because", "an invented contest, refused for the test"],
+    { cwd: join(dirname(fileURLToPath(import.meta.url)), ".."), encoding: "utf8", env: { PATH: process.env.PATH, WORLD2_CLEARING_URL: store.url("clearing_job"), WORLD2_OFFICE_URL: store.url("office_api") } });
+  assert.equal(ruled.status, 0, `${ruled.stdout}\n${ruled.stderr}`);
+  assert.equal(await claimOf(bag), "refused");
+  const w = await withdrawMarkViaOffice(repo, { mark: bag }, key);
+  assert.equal(w.put_back, 1, JSON.stringify(w).slice(0, 300));
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, bag);
+  assert.equal(await unitsIn(bag), 2);
+  assert.equal((await worldMarkById(bag)).mark?.held_by, who);
+});
+
+test("F3 · THE HONEST READ of a refused full holder: its maker is told it was not set down, why, what it holds, and the one way that works — withdraw it; a stake is never offered, and another house's read adds nothing", { skip }, async () => {
+  const who = "sbx-ns", key = keyOf("sbx-ns");
+  const { bag } = await refusedBag(who, 11, "told-bag", { slips: 1, units: 3 });
+  const { worldInvestigate } = await import("../src/world.mjs");
+  const look = await worldInvestigate({ mark: bag }, key);
+  assert.equal(look.receipt?.status, "refused", JSON.stringify(look.receipt).slice(0, 400));
+  const next = look.receipt?.next ?? "";
+  assert.match(next, /^it was not set down: the clearing refused its claim \(unbacked: a mark on ground that is not its maker's publishes only with a stamp behind it\)/);
+  assert.match(next, /a refused claim does not go back on the docket, so staking it now puts nothing forward/);
+  assert.match(next, /It still holds 3 units and 1 whole thing, inside it and keyed to it: withdraw it \(world_withdraw_mark \{ mark: "sbx-ns\/told-bag" \}\) and it comes back whole to sbx-ns's hands/);
+  assert.match(look.receipt?.says ?? "", /refused at candle \d+ — unbacked.*withdraw it/);
+  const theirs = await worldInvestigate({ mark: bag }, keyOf("sbx-dee")).catch((e) => ({ error: e }));
+  assert.doesNotMatch(JSON.stringify(theirs?.receipt ?? {}), /world_withdraw_mark/, "only its maker's household is told how to take it back");
+  // and the way it names works
+  assert.equal((await withdrawMarkViaOffice(repo, { mark: bag }, key)).put_back, 1);
+});
+
+test("REFUSED · TWO WITHDRAWALS AT ONCE: exactly one return and one withdrawal deed; the other writes nothing", { skip }, async () => {
+  const who = "sbx-nt", key = keyOf("sbx-nt");
+  const { bag } = await refusedBag(who, 12, "twice-at-once-bag", { slips: 1, units: 2 });
+  const both = await Promise.allSettled([withdrawMarkViaOffice(repo, { mark: bag }, key), withdrawMarkViaOffice(repo, { mark: bag }, key)]);
+  const won = both.filter((r) => r.status === "fulfilled" && r.value.put_back === 1);
+  assert.equal(won.length, 1, JSON.stringify(both.map((r) => r.value ?? { code: r.reason?.code, defect: r.reason?.defect })).slice(0, 600));
+  const lost = both.find((r) => r !== won[0]);
+  assert.ok(lost.status === "fulfilled" ? lost.value.already === true && lost.value.put_back === 0
+    : lost.reason?.code === 409 && /already came back whole/.test(lost.reason.defect), JSON.stringify(lost.value ?? lost.reason?.defect));
+  assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down", "put-back"]);
+  assert.equal((await q("SELECT count(*)::int AS n FROM acts WHERE class = 'mark' AND action = 'withdraw' AND object = $1", [bag]))[0].n, 1, "one withdrawal deed");
+  assert.equal(await unitsIn(bag), 2);
+});
+
+test("REFUSED · THE SAME NAME LEFT AGAIN (measured): a fresh leave-mark of the slug files a NEW draft beside the refused claim, and the withdrawal then takes that draft off and brings the holder back once; after the return, the name is the thing's in hand", { skip }, async () => {
+  const who = "sbx-nv", key = keyOf("sbx-nv");
+  const { bag, slips } = await refusedBag(who, 14, "named-again-bag", { slips: 1, units: 2 });
+  const again = await leaveMarkViaOffice(repo, { slug: "named-again-bag", body: "Again.", kind: "sited", at: { x: 500, y: 500 }, extent: { w: 1, h: 1 } }, key);
+  assert.equal(again.put_forward, false, JSON.stringify(again).slice(0, 300));
+  assert.deepEqual((await claimRows(bag)).map((c) => c.status), ["refused", "draft"], "a new draft: the refused claim itself is untouched");
+  const w = await withdrawMarkViaOffice(repo, { mark: bag }, key);
+  assert.equal(w.put_back, 1, JSON.stringify(w).slice(0, 300));
+  assert.deepEqual((await claimRows(bag)).map((c) => c.status), ["refused"], "the new draft went with the withdrawal");
+  assert.equal((await worldMarkById(bag)).mark?.held_by, who);
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, bag);
+  assert.equal(await unitsIn(bag), 2);
+  const after = await leaveMarkViaOffice(repo, { slug: "named-again-bag", body: "Again.", kind: "sited", at: { x: 500, y: 500 }, extent: { w: 1, h: 1 } }, key)
+    .then((r) => ({ ok: r }), (e) => ({ code: e.code, defect: e.defect }));
+  assert.equal(after.code, 409, `after the return the name is the thing's in hand, so a fresh leave-mark of it is refused: ${JSON.stringify(after).slice(0, 300)}`);
+  assert.match(after.defect, /is a thing made in hand, and its name is taken for good/);
+  assert.deepEqual((await claimRows(bag)).map((c) => c.status), ["refused"]);
 });

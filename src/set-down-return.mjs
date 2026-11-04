@@ -28,6 +28,15 @@
 // row for the id is a `set-down` naming this draft, by its maker, and the holder
 // holds at least one unit or whole thing. Any other mark (an empty set-down, a
 // published one, a mark never made in hand) withdraws exactly as before.
+//
+// A CLAIM THE CLEARING REFUSED (Wright, AUTHORITY 2026-11-04T21:57:51.368Z):
+// "the 12:01 rule covers a clearing-refused claim … Its dropper gets it back,
+// holder and contents together, by withdrawing it." The same face and the same
+// writer: the withdrawal's guard accepts a refused claim beside a draft or a
+// pending one, and the clearing still only refuses. Measured, not assumed:
+// refusal is final (no pen may move a `refused` row, 007's transition guard; the
+// stake door cannot see a refused mark), so the withdrawal is the one way home.
+// A claim held for review is not stranded but waiting, and is not withdrawn.
 
 import { MAKE_FACE, SET_DOWN_FACE, PUT_BACK_FACE } from "./named-making.mjs";
 
@@ -99,22 +108,39 @@ export async function setDownHolderOf(client, { mark, by }) {
 
 /** Holds anything: a unit of any label, or a whole thing. An empty set-down withdraws as before. */
 export const holdsAnything = (h) => Boolean(h) && (Number(h.contents?.units) > 0 || Number(h.contents?.things) > 0);
-/** Before publication: its draft, or its pending claim on the open window (the unit return's own predicate). */
+/**
+ * Not published, and the withdrawal is its way home: its draft, its pending claim on the open window (the unit
+ * return's own predicate), or its claim the clearing REFUSED. Wright, AUTHORITY 2026-11-04T21:57:51.368Z: "a
+ * refused full holder is never stranded. Its dropper gets it back, holder and contents together, by withdrawing
+ * it" — the withdrawal's guard accepts a refused claim, and nothing on the clearing side writes. Refusal is final
+ * in the code (007_private_drafts.sql § the transition guard: no transition leaves `refused`, and the stake door
+ * cannot see a refused mark), so no stake can race this return for the refused claim. A held claim (`held_review`)
+ * is not here: it awaits its outcome.
+ */
 export const unpublished = (h) => Boolean(h) && !h.published
-  && (h.status === "draft" || (h.status === "pending" && h.open != null && Number(h.window) === Number(h.open)));
+  && (h.status === "draft" || h.status === "refused" || (h.status === "pending" && h.open != null && Number(h.window) === Number(h.open)));
 
 async function docketHalfRemoves(client, h, by) {
   if (h.status === "draft") {
     const { declaredKeys } = await import("./world2-claims.mjs");
     return (await client.query(REMOVED_DRAFT_SQL, [h.mark, String(by), await declaredKeys(client, null)])).rows.length > 0;
   }
+  // refused, read under the candle and the holder's lock: the docket already holds it off the world, and no pen
+  // may move it (007), so the withdrawal has nothing to take off the docket and nothing can put it back on
+  if (h.status === "refused") return true;
   return h.open != null && (await client.query(RETRACTED_PENDING_SQL, [h.open, h.mark, String(by)])).rows.length > 0;
 }
 
-const notNow = (h) => bounce(409, `"${h.mark}" is a holder set down full, and it cannot be withdrawn now`,
-  `it holds ${describe(h.contents)}, and withdrawn it comes back whole to the hands it was set down from, with all it holds; ` +
-  `that return can only be written while its draft is still a draft or pending on the open candle${h.status ? ` (it is ${h.status} now)` : ""}. ` +
-  `Nothing was withdrawn and nothing was recorded.`);
+const notNow = (h) => h.status === "held_review"
+  ? bounce(409, `"${h.mark}" is a holder set down full, and its claim is held for review`,
+    `it holds ${describe(h.contents)}, and it is not stranded, only waiting: a mind rules on it. Published, it prints with all it holds inside it; ` +
+    `refused, withdrawing it then brings it back whole to the hands it was set down from. It cannot be withdrawn while the review is open. ` +
+    `Nothing was withdrawn and nothing was recorded.`)
+  : bounce(409, `"${h.mark}" is a holder set down full, and it cannot be withdrawn now`,
+    `it holds ${describe(h.contents)}, and withdrawn it comes back whole to the hands it was set down from, with all it holds; ` +
+    `that return can only be written while its draft is still a draft, pending on the open candle, or refused by the clearing${h.status ? ` (it is ${h.status} now)` : ""}. ` +
+    `Nothing was withdrawn and nothing was recorded.`);
+const howUnpublished = (h) => (h.status === "refused" ? "its claim refused at the clearing" : `withdrawn before it was published (${h.status})`);
 const describe = ({ units = 0, things = 0 } = {}) => [units ? `${units} unit${units === 1 ? "" : "s"}` : null,
   things ? `${things} whole thing${things === 1 ? "" : "s"}` : null].filter(Boolean).join(" and ") || "nothing";
 
@@ -127,12 +153,18 @@ const describe = ({ units = 0, things = 0 } = {}) => [units ? `${units} unit${un
  * else that is a full set-down holder → refused, so the draft never goes
  * without it. `out` receives what happened, for the receipt.
  */
-export const putBackGuard = ({ mark, by, household, crossing = null, withdrawnBy = null, out = {} }) => async (client) => {
+export const putBackGuard = ({ mark, by, household, crossing = null, withdrawnBy = null, expect = false, out = {} }) => async (client) => {
   const { DOOR_SHARES_THE_CANDLE } = await import("../world2/tools/candle-lock.mjs");
   await client.query(DOOR_SHARES_THE_CANDLE);
   await client.query(LOCK_SQL, [`wld138-put-back:${String(mark)}`]);
   const h = await setDownHolderOf(client, { mark, by }); // read under the locks: this is the answer
-  if (!h || h.done || !holdsAnything(h)) { out.put_back = 0; return; }
+  if (!h || h.done || !holdsAnything(h)) {
+    // `expect`: the door read a full set-down holder and asked for its return, so this write is the return or
+    // nothing — a withdrawal that raced it here and lost writes no second deed (exactly once)
+    if (expect) throw bounce(409, h?.done ? `"${mark}" already came back whole (act ${h.done.act})` : `"${mark}" is no longer a holder set down full`,
+      "another withdrawal of it landed first. Nothing was withdrawn now and nothing was recorded.");
+    out.put_back = 0; return;
+  }
   if (!unpublished(h) || !(await docketHalfRemoves(client, h, by))) throw notNow(h);
   if (!h.from) throw bounce(409, `"${h.mark}" was set down from no one's hands`, "there is no hold to put it back in. Nothing was withdrawn and nothing was recorded.");
   const [{ insertAct }, { normalizeRow }] = await Promise.all([import("./world2-pen.mjs"), import("./world-journal.mjs")]);
@@ -142,7 +174,9 @@ export const putBackGuard = ({ mark, by, household, crossing = null, withdrawnBy
   };
   const row = normalizeRow({
     crossing, actor: String(by), action: PUT_BACK_FACE, object: h.mark, cls: "holding", household, nonce: putBackNonce(h.setDown), payload,
-    effect: `${h.mark} was withdrawn before it was published, so it came back to ${h.from}, whole, with ${describe(h.contents)} inside`,
+    effect: h.status === "refused"
+      ? `${h.mark}'s claim was refused at the clearing and its maker withdrew it, so it came back to ${h.from}, whole, with ${describe(h.contents)} inside`
+      : `${h.mark} was withdrawn before it was published, so it came back to ${h.from}, whole, with ${describe(h.contents)} inside`,
   });
   out.put_back = 1;
   out.act = String(await insertAct(client, row));
@@ -187,13 +221,33 @@ export async function withdrawSetDownHolder({ mark, by, household, key, caller =
         { carried: e.carried, cap: e.cap });
     }
     const out = {};
-    const back = putBackGuard({ mark, by, household, crossing: deps.crossing(), withdrawnBy: caller, out });
+    const back = putBackGuard({ mark, by, household, crossing: deps.crossing(), withdrawnBy: caller, expect: true, out });
     const both = guard ? async (c) => { await back(c); await guard(c); } : back;
-    const r = await withdraw({ guard: both, holderReturns: true });
+    const r = await withdraw({ guard: both, holderReturns: true, refused: h.status === "refused" });
     return { ...r, put_back: out.put_back ?? 0,
       ...(out.put_back ? { holder: { thing: String(mark), to: out.holder.from, act: out.act, holds: out.holder.contents },
-        put_back_note: `withdrawn before it was published (${out.holder.status}), so ${mark} came back to ${out.holder.from}, whole, with ${describe(out.holder.contents)} inside` } : {}) };
+        put_back_note: `${howUnpublished(out.holder)}, so ${mark} came back to ${out.holder.from}, whole, with ${describe(out.holder.contents)} inside` } : {}) };
   });
+}
+
+/**
+ * THE MAKER'S READ of a full set-down holder whose claim the clearing refused or holds (Wright 21:57:51, "the
+ * honest read"): the words for the receipt's `next`, or null for any other mark. Only what works is offered:
+ * refusal is final, so a refused holder is pointed at its withdrawal, never at a stake; a held one waits.
+ * `cause` is the receipt's own word for the refusal (mark-receipt.mjs § causeOf).
+ */
+export async function setDownHolderNext({ mark, by, household, cause = null }, deps) {
+  const h = await deps.setDownHolder({ mark, by, household });
+  if (!h || h.done || !holdsAnything(h) || h.published) return null;
+  if (h.status === "refused") {
+    const why = cause === "unbacked" ? " (unbacked: a mark on ground that is not its maker's publishes only with a stamp behind it)" : "";
+    return `it was not set down: the clearing refused its claim${why}, and a refused claim does not go back on the docket, so staking it now puts nothing forward. ` +
+      `It still holds ${describe(h.contents)}, inside it and keyed to it: withdraw it (world_withdraw_mark { mark: "${h.mark}" }) and it comes back whole to ${h.from}'s hands, with all it holds, if they have room`;
+  }
+  if (h.status === "held_review")
+    return `it holds ${describe(h.contents)} and is not stranded, only waiting: a mind rules on its claim. Published, it prints with all it holds inside it; ` +
+      `refused, withdrawing it then brings it back whole. It cannot be withdrawn while the review is open`;
+  return null;
 }
 
 /**

@@ -3467,6 +3467,14 @@ async function markReceipt(id, key, w, { terrain = false } = {}) {
             : `made in hand by ${made.by}, and eaten: used up and gone. Its name stays taken` };
       }
     }
+    // A FULL HOLDER SET DOWN, ITS CLAIM REFUSED OR HELD (WLD-138 B, Wright 2026-11-04T21:57:51Z): its maker's read
+    // names what it holds and the one way that works (set-down-return.mjs § setDownHolderNext).
+    const by = String(id).split("/")[0];
+    if ((receipt.status === "refused" || receipt.status === "held_review") && key?.handles?.has(by)) {
+      const [{ setDownHolderNext }, { liveUnitDeps }] = await Promise.all([import("./set-down-return.mjs"), import("./world-units.mjs")]);
+      const next = await setDownHolderNext({ mark: id, by, household: key.household, cause: receipt.cause ?? null }, await liveUnitDeps()).catch(() => null);
+      if (next) receipt = { ...receipt, next: receipt.next ? `${receipt.next}; ${next}` : next, says: `${receipt.says}: ${next}` };
+    }
     let disclosed = [];
     try {
       const { storeSnapshot } = await import("./world-serve.mjs");
@@ -4833,7 +4841,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
 }
 
 /** withdraw, as one later entry. The terminal supersession (edit-law § withdraw) — nothing is deleted, a row says it ended. */
-export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false }, { crossing = currentCrossing() } = {}) {
+export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false, refusedHolder = false }, { crossing = currentCrossing() } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${by}/${slug}`;
   const canon = canonForGuards();
@@ -4842,7 +4850,10 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // stranding check both read the live layer (runbook §4 B1).
     const live = await guardedLiveMarks(null, { household, actor: by });
     const wasPublished = canon.ids.has(id);
-    if (!live.some((m) => m.id === id) && !wasPublished) {
+    // A FULL HOLDER WHOSE CLAIM THE CLEARING REFUSED (WLD-138 B, Wright 21:57:51) is in no live layer and not in
+    // canon, and its withdrawal is its way home: `refusedHolder` is passed only with the put-back guard that proves
+    // it in this write (set-down-return.mjs § putBackGuard, `expect`), which refuses unless it writes the return.
+    if (!refusedHolder && !live.some((m) => m.id === id) && !wasPublished) {
       // A retired mark is named as one (POS-241 phase 1), not as a mark that never was.
       const { markStandingStatus, withdrawRetiredRefusal } = await import("./world2-claims.mjs");
       const retired = withdrawRetiredRefusal(id, await markStandingStatus({ slug: id }).catch(() => null));
@@ -5754,7 +5765,7 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
       // own transaction (set-down-return.mjs). Any other mark: null, and on as before.
       const { withdrawSetDownHolder } = await import("./set-down-return.mjs");
       const viaHolder = await withdrawSetDownHolder({ mark, by, household, key, caller: by, guard,
-        withdraw: ({ guard: g, holderReturns }) => journalWithdraw({ by, slug, household, guard: g, contentsKept: holderReturns === true }) }, units?.setDownHolder ? units : await liveUnitDeps());
+        withdraw: ({ guard: g, holderReturns, refused }) => journalWithdraw({ by, slug, household, guard: g, contentsKept: holderReturns === true, refusedHolder: refused === true }) }, units?.setDownHolder ? units : await liveUnitDeps());
       if (viaHolder) return viaHolder;
       return await journalWithdraw({ by, slug, household, guard });
     }

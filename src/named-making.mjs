@@ -187,7 +187,7 @@ export function setDownDraftOf(made, { at, free }) {
 export function setDownWords({ id, maker, stake, holds = null }) {
   // WLD-138 F3: a holder set down FULL says what it holds and what that means while it is pending (Darko, "Yes,
   // at settlement": its contents stay inside it and print with it; Wright 12:01, withdrawn first, it comes back whole)
-  const inside = holds ? `, holding ${holds}: they stay inside it and publish with it; until then nothing goes in or comes out, and withdrawing the draft first brings it back whole to the hands it was set down from, if they have room` : "";
+  const inside = holds ? `, holding ${holds}: they stay inside it and publish with it; until then nothing goes in or comes out, and withdrawing it before it publishes, or once the clearing refuses it, brings it back whole to the hands it was set down from, if they have room` : "";
   if (stake === "staked") return `${id} is set down where you stood, as ${maker}'s draft, with your stamp behind it: it publishes at the next settlement${inside}`;
   if (stake === "bounced") return `${id} is set down where you stood, as ${maker}'s draft, but the stamp did not land: it publishes only with one behind it (stake_bounce has the call)${inside}`;
   return `${id} is set down where you stood, as ${maker}'s draft, on its own ground, free: it publishes at the next settlement${inside}`;
