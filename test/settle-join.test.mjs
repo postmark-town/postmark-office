@@ -534,9 +534,14 @@ test("POS-884 · the tick's pass: pen and hand joins for each reserved prefix ar
   users = { "commander-and-chief": 334016343 };
   const clone = town({ cards: Object.fromEntries(handles.map((h) => [h, "house-of-many-doors"])) });
   const cursorPath = join(tempDir("settle-cursor-"), "cursor");
-  let pool;
+  const seed = git(clone, "rev-parse", "HEAD");
+  let pool, before;
   const lines = [];
-  const out = await withRecordFrom(clone, (p) => { pool = p; return settlePass({ town: clone, cursorPath, pen: PEN, env: RECORD_ON, now: PASS_NOW, log: (l) => lines.push(l) }); });
+  const out = await withRecordFrom(clone, (p) => {
+    pool = p;
+    before = { pins: p.state.pins.map((x) => x.handle).sort(), residents: p.state.households.map((x) => [x.slug, [...(x.residents ?? [])]]) };
+    return settlePass({ town: clone, cursorPath, pen: PEN, env: RECORD_ON, now: PASS_NOW, log: (l) => lines.push(l) });
+  });
   assert.deepEqual(out.settled.sort(), ["inv-fern", "inv-moss"], lines.join("\n"));
   assert.deepEqual(out.refused.sort(), reserved.map((r) => r.pr.number).sort(), lines.join("\n"));
   for (const r of reserved) {
@@ -545,4 +550,15 @@ test("POS-884 · the tick's pass: pen and hand joins for each reserved prefix ar
     assert.match(line.slice(line.indexOf(" (") + 2), ruleSentence(r.h, r.prefix));
     nothingFor(pool, clone, r.h);
   }
+  // THE PASS'S OWN EFFECTS, whole: every pin, membership and commit it made is a control's.
+  assert.deepEqual(pool.state.pins.map((x) => x.handle).sort(), [...before.pins, "inv-fern", "inv-moss"].sort(), "the only new pins are the two controls'");
+  assert.deepEqual(pool.state.households.map((x) => [x.slug, [...(x.residents ?? [])]]),
+    before.residents.map(([slug, rs]) => [slug, slug === "house-of-many-doors" ? [...rs, "inv-moss", "inv-fern"] : rs]),
+    "the only new memberships are the two controls', and no house was minted");
+  const made = git(clone, "log", "--format=%s", `${seed}..HEAD`).split("\n").filter(Boolean);
+  assert.equal(made.length, 2, made.join("\n"));
+  assert.ok(made.every((m) => /^address: inv-(moss|fern) settled /.test(m)), `every commit is a control's: ${made.join(" | ")}`);
+  const printed = JSON.parse(readFileSync(join(clone, PINS_PATH), "utf8"));
+  for (const r of reserved) assert.equal(printed[r.h], undefined, `${r.road} ${r.h}: not in the printed pins`);
+  assert.ok(printed["inv-moss"] && printed["inv-fern"], "the controls are");
 });
