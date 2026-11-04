@@ -73,6 +73,7 @@ export const ELIGIBILITY_VERSION = "pos779-e1";
  *   maxStringPayloadRows  payloads stored as a JSON string. The SQL port parses them, so these are rare; the
  *                   cap bounds the JS re-check of a source that is mostly such rows.
  *   statementTimeoutMs  the poll's own per-statement bound (server.mjs STORE_READ_BOUND_MS = 10 s).
+ *   fetchChunk       rows per FETCH of the bodies (2,000: about 8 ms of driver parsing a fetch, measured; not a row cap, a chunk size)
  */
 export const BUDGETS = Object.freeze({
   maxRows: 64_000,
@@ -81,6 +82,7 @@ export const BUDGETS = Object.freeze({
   maxEmissionBytes: 16 * 1024 * 1024,
   maxStringPayloadRows: 512,
   statementTimeoutMs: 10_000,
+  fetchChunk: 2_000,
 });
 
 /** The predicate 089's index carries. A query uses the index only when it repeats this text. */
@@ -99,13 +101,14 @@ const AGGREGATE = (where, limitParam) => `
          coalesce(max(id), 0)::text AS max_id,
          md5(coalesce(string_agg(${DIGEST_ITEM}, ',' ORDER BY at, id), '')) AS digest
     FROM (SELECT id, at, payload FROM acts WHERE ${where} LIMIT ${limitParam}) s`;
-const ROWS = (where, limitParam) =>
-  `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE ${where} LIMIT ${limitParam}`;
+const ROWS = (where, limitParam, order = "") =>
+  `SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts WHERE ${where}${order} LIMIT ${limitParam}`;
 
 /** The queries, exported so a test can EXPLAIN exactly what is sent. */
 export const SQL = Object.freeze({
   saysAggregate: (bounded) => AGGREGATE(sayWhere(bounded), bounded ? "$3::int" : "$2::int"),
-  saysRows: (bounded) => ROWS(sayWhere(bounded), bounded ? "$3::int" : "$2::int"),
+  // ORDER BY at, id is the index's own order for a say range (action, at, id): no sort node, and the interpreter below can merge instead of sorting 32k voices
+  saysRows: (bounded) => ROWS(sayWhere(bounded), bounded ? "$3::int" : "$2::int", " ORDER BY at, id"),
   emissionsAggregate: AGGREGATE(EMISSION_WHERE, "$1::int"),
   emissionsRows: ROWS(EMISSION_WHERE, "$1::int"),
   anchors: "SELECT slug, status, geometry, data FROM marks WHERE slug = ANY($1::text[])",
@@ -216,11 +219,12 @@ const unavailable = (reason, detail = {}) => ({ status: "unavailable", reason, .
  *              and a different version answers `edges-moved` (the caller refreshes), never a mixed answer
  *   memo       optional { lookup(epochId, key), peek(epochId) } — see convo-memo.mjs
  *   budgets    overrides of BUDGETS
+ *   slice      { ms, now, yieldFn }: how long the interpretation of the rows may hold the event loop before it gives it back
  *
  * Answers `{ status: "ok", ... }` or `{ status: "unavailable", reason }`, reason one of:
  *   over-budget (with `what`, `measured`, `limit`), timeout, edges-moved, unreadable-acts, store-unreadable.
  */
-export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {} } = {}) {
+export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {}, slice = {} } = {}) {
   if (typeof isPrivate !== "function") throw new TypeError("readEpoch needs the JS eligibility guard (spokenInRoom) — the SQL port is a prefilter, not the rule");
   const B = { ...BUDGETS, ...budgets };
   const since = Number(epoch?.since);
@@ -268,40 +272,19 @@ export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo =
         if (hit) return { status: "ok", from: "memo", key, epoch: { since, next }, earshotM, dials: dialsView, value: hit };
       }
 
-      // 3 · the bodies
-      const { rows: sayRows } = await q(SQL.saysRows(bounded), [...sayParams, B.maxRows + 1]);
-      const { rows: emiRows } = emi.n ? await q(SQL.emissionsRows, [B.maxEmissionRows + 1]) : { rows: [] };
+      // 3 · the bodies, fetched in chunks from a cursor in THIS snapshot (same client, same transaction, same statement
+      //     timeout per fetch, the same LIMIT as the aggregate): one 32,000-row result parsed in one go is a 60-70 ms
+      //     stretch of the event loop in the driver; sixteen fetches of 2,000 are not.
+      const sayRows = await fetchChunked(client, "convo_says", SQL.saysRows(bounded), [...sayParams, B.maxRows + 1], B.fetchChunk);
+      const emiRows = emi.n ? await fetchChunked(client, "convo_emissions", SQL.emissionsRows, [B.maxEmissionRows + 1], B.fetchChunk) : [];
 
       // 4 · only the anchors the says reference
       const anchors = [...new Set(sayRows.map((r) => r.at_anchor).filter((a) => a && a !== "world"))];
       const { centres, digest: anchorsDigest } = await centreDigest(anchors);
       const key = sha(...base, anchorsDigest);
-
-      // 5 · JS eligibility on every raw row, then the one mapping
-      const voices = [];
-      const refusals = [];
-      const unplaced = [];
-      const eras = { crystallized: 0, live: 0 };
-      let nonSound = 0, jsPrivate = 0;
-      const place = (row) => {
-        if (isPrivate(row)) { jsPrivate += 1; return; }
-        const r = exactVoiceOf(row, (id) => centres.get(id) ?? null);
-        if (r.skip) { nonSound += 1; return; }
-        if (r.refused) { refusals.push(r.reason); return; }
-        if (r.unplaced) { unplaced.push({ act_id: r.act_id, anchor: r.anchor }); return; }
-        if (!(r.voice.at >= since && (next === null || r.voice.at < next))) return;
-        eras[r.era] += 1;
-        voices.push({ ...r.voice, era: r.era });
-      };
-      for (const row of sayRows) place(row);
-      for (const row of emiRows) place(row);
-      if (refusals.length) return unavailable("unreadable-acts", { count: refusals.length, example: refusals[0] });
-      voices.sort(compareVoices);
-      return { status: "ok", from: "store", key, edges_version: edgesBefore, epoch: { since, next }, earshotM, dials: dialsView, anchors,
-        voices, eras, unplaced, non_sound_emissions: nonSound, js_private_dropped: jsPrivate,
-        source: { says: { rows: say.n, bytes: Number(say.bytes), stored_bytes: Number(say.stored_bytes), strings: say.strings },
-          emissions: { rows: emi.n, bytes: Number(emi.bytes), stored_bytes: Number(emi.stored_bytes), strings: emi.strings } } };
+      return { status: "rows", key, anchors, centres, sayRows, emiRows, earshotM, dialsView, say, emi };
     }, { statementTimeoutMs: B.statementTimeoutMs });
+    if (result.status === "rows") result = await interpret(result);
   } catch (e) {
     if (e?.code === "57014") return unavailable("timeout", { limit_ms: B.statementTimeoutMs });
     return unavailable("store-unreadable", { code: e?.code ?? null });
@@ -311,4 +294,72 @@ export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo =
     if (edgesAfter !== edgesBefore) return unavailable("edges-moved", { from: edgesBefore, to: edgesAfter });
   }
   return result;
+
+  // 5 · AFTER the snapshot is released: JS eligibility on every raw row, then the one mapping, a slice at a time
+  async function interpret({ key, anchors, centres, sayRows, emiRows, earshotM, dialsView, say, emi }) {
+    const refusals = [];
+    const unplaced = [];
+    const eras = { crystallized: 0, live: 0 };
+    let nonSound = 0, jsPrivate = 0;
+    const place = (row, into) => {
+      if (isPrivate(row)) { jsPrivate += 1; return; }
+      const r = exactVoiceOf(row, (id) => centres.get(id) ?? null);
+      if (r.skip) { nonSound += 1; return; }
+      if (r.refused) { refusals.push(r.reason); return; }
+      if (r.unplaced) { unplaced.push({ act_id: r.act_id, anchor: r.anchor }); return; }
+      if (!(r.voice.at >= since && (next === null || r.voice.at < next))) return;
+      eras[r.era] += 1;
+      into.push({ ...r.voice, era: r.era });
+    };
+    const slicer = makeSlicer(slice);
+    const sayVoices = [], emiVoices = [];
+    for (let i = 0; i < sayRows.length; i++) { place(sayRows[i], sayVoices); if ((i & 31) === 31) await slicer.maybeYield(); }
+    for (let i = 0; i < emiRows.length; i++) { place(emiRows[i], emiVoices); if ((i & 31) === 31) await slicer.maybeYield(); }
+    if (refusals.length) return unavailable("unreadable-acts", { count: refusals.length, example: refusals[0] });
+    // The says came in (at, id) order and an emission's logical instant is its own, so: sort the (few) emissions, CHECK that
+    // the says really are in the order the comparator wants (the index's order, but the proof is the check), and MERGE. A
+    // list that fails the check is sorted whole, so a plan that did not hand back the index order costs time, never order.
+    if (!(await isSorted(sayVoices, slicer))) sayVoices.sort(compareVoices);
+    emiVoices.sort(compareVoices);
+    const voices = [];
+    for (let a = 0, b = 0; a < sayVoices.length || b < emiVoices.length; ) {
+      if (b >= emiVoices.length || (a < sayVoices.length && compareVoices(sayVoices[a], emiVoices[b]) <= 0)) voices.push(sayVoices[a++]); else voices.push(emiVoices[b++]);
+      if ((voices.length & 255) === 0) await slicer.maybeYield();
+    }
+    return { status: "ok", from: "store", key, edges_version: edgesBefore, epoch: { since, next }, earshotM, dials: dialsView, anchors,
+      voices, eras, unplaced, non_sound_emissions: nonSound, js_private_dropped: jsPrivate,
+      source: { says: { rows: say.n, bytes: Number(say.bytes), stored_bytes: Number(say.stored_bytes), strings: say.strings },
+        emissions: { rows: emi.n, bytes: Number(emi.bytes), stored_bytes: Number(emi.stored_bytes), strings: emi.strings } } };
+  }
+}
+
+/**
+ * The bodies of one bounded query, in chunks, from a cursor on the snapshot's own client. A cursor is declared and
+ * fetched inside the open transaction, so every chunk sees the snapshot the aggregate measured, and the query keeps the
+ * very LIMIT that made the aggregate a fuse. Each `FETCH` is its own statement under the transaction's statement timeout.
+ */
+async function fetchChunked(client, name, text, params, chunk) {
+  await client.query(`DECLARE ${name} NO SCROLL CURSOR FOR ${text}`, params);
+  const rows = [];
+  for (;;) {
+    const { rows: part } = await client.query(`FETCH FORWARD ${chunk} FROM ${name}`);
+    for (let i = 0; i < part.length; i++) rows.push(part[i]);
+    if (part.length < chunk) break;
+  }
+  await client.query(`CLOSE ${name}`);
+  return rows;
+}
+
+/** A cooperative slice: after `ms` of synchronous work, give the event loop a turn (the injected clock and yield make it testable). */
+function makeSlicer({ ms = 4, now = () => performance.now(), yieldFn = () => new Promise((r) => setImmediate(r)) } = {}) {
+  let start = now();
+  return { async maybeYield() { if (now() - start >= ms) { await yieldFn(); start = now(); } } };
+}
+
+async function isSorted(list, slicer) {
+  for (let i = 1; i < list.length; i++) {
+    if (compareVoices(list[i - 1], list[i]) > 0) return false;
+    if ((i & 1023) === 0) await slicer.maybeYield();
+  }
+  return true;
 }

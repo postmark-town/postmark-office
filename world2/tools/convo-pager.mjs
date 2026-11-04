@@ -261,8 +261,8 @@ export function threadList(view, req, { live = view.epoch.next === null, voiceCa
  * else read, build and keep. `unavailable` is passed through whole; a build that overruns its work fuse
  * is `unavailable`, never a partial partition.
  */
-export async function loadEpochView(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {}, fuse, sliceMs } = {}) {
-  const src = await readEpoch(pool, { epoch, isPrivate, edgesOf, memo, budgets });
+export async function loadEpochView(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {}, fuse, sliceMs, readSlice } = {}) {
+  const src = await readEpoch(pool, { epoch, isPrivate, edgesOf, memo, budgets, ...(readSlice ? { slice: readSlice } : {}) });
   if (src.status !== "ok") return src;
   if (src.from === "memo") return { status: "ok", from: "memo", view: src.value };
   let view;

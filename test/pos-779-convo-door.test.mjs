@@ -374,7 +374,7 @@ function countingPool(real) {
         async query(text, params) {
           const out = await c.query(text, params);
           tally.queries += 1; tally.rows += out.rowCount ?? 0;
-          if (/^SELECT id, at, actor, action/.test(String(text).trim())) tally.bodyRows += out.rowCount ?? 0;
+          if (/^(DECLARE convo_(says|emissions) NO SCROLL CURSOR FOR SELECT id, at, actor, action|FETCH FORWARD)/.test(String(text).trim())) tally.bodyRows += out.rowCount ?? 0;
           return out;
         },
       };

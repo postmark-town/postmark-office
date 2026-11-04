@@ -337,7 +337,7 @@ test("a budget is a refusal, never a short answer: rows, bytes and string payloa
   if (skip) return t.skip(skip);
   const e0 = T0 + 700 * H, e1 = e0 + 12 * H;
   for (let i = 0; i < 12; i++) await say(iso(e0 + i * 10), "w" + (i % 3), i, 0, { text: "x".repeat(40) });
-  const bodiesRead = (sp) => sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q));
+  const bodiesRead = (sp) => sp.log.queries.some((q) => /^(DECLARE convo_(says|emissions) NO SCROLL CURSOR FOR SELECT id, at, actor, action|FETCH FORWARD)/.test(q));
   let sp = spy(pool);
   let out = await readEpoch(sp, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { maxRows: 11 } });
   assert.deepEqual([out.status, out.reason, out.what, out.limit], ["unavailable", "over-budget", "rows", 11]);
@@ -403,7 +403,7 @@ test("the edges are fenced: a published-sweep version that moves during the read
 test("failures are honest: a statement timeout, an unreadable store and a bad epoch are 'unavailable' with a reason", async (t) => {
   if (skip) return t.skip(skip);
   const e0 = T0 + 1100 * H, e1 = e0 + 12 * H;
-  const timeout = spy(pool, { failOn: Object.assign((text) => /^\s*SELECT id, at, actor, action/.test(text), { code: "57014" }) });
+  const timeout = spy(pool, { failOn: Object.assign((text) => /^\s*(DECLARE convo_(says|emissions) NO SCROLL CURSOR FOR SELECT id, at, actor, action|FETCH FORWARD)/.test(text), { code: "57014" }) });
   await say(iso(e0 + 1000), "a", 0, 0);
   const t1 = await readEpoch(timeout, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom });
   assert.deepEqual([t1.status, t1.reason, t1.limit_ms], ["unavailable", "timeout", BUDGETS.statementTimeoutMs]);
@@ -475,7 +475,7 @@ test("a memo hit needs the same fingerprint in THIS snapshot, and ships no body;
   let sp = spy(pool);
   const hit = await readEpoch(sp, opts());
   assert.deepEqual([hit.status, hit.from, hit.value], ["ok", "memo", { marker: "view-1" }]);
-  assert.equal(sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q)), false, "a hit reads aggregates only");
+  assert.equal(sp.log.queries.some((q) => /^(DECLARE convo_(says|emissions) NO SCROLL CURSOR FOR SELECT id, at, actor, action|FETCH FORWARD)/.test(q)), false, "a hit reads aggregates only");
   // a new voice, a changed edge version, an unreadable store: each is a miss or an unavailable, never the old view
   await say(iso(e0 + 2000), "b", 1, 1);
   assert.equal((await readEpoch(pool, opts())).from, "store");
@@ -538,7 +538,7 @@ test("an act no era explains is a refusal by name, not a conversation with a hol
 // touched: TOAST compresses a value only when its row passes ~2 KB, so a 500-char say is stored uncompressed
 // (ratio ~1) and only an oversized compressible payload has a stored size far below its decoded size.
 
-const bodiesRead = (sp) => sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q));
+const bodiesRead = (sp) => sp.log.queries.some((q) => /^(DECLARE convo_(says|emissions) NO SCROLL CURSOR FOR SELECT id, at, actor, action|FETCH FORWARD)/.test(q));
 // These tests read emissions, which are global to the store; an earlier test here leaves a deliberately
 // unreadable emission behind (acts is append-only), so they run in a store of their own.
 let fresh = null;
@@ -617,7 +617,7 @@ test("DECODED unit: ASCII, multibyte, jsonb-string and emission payloads each eq
   assert.ok(Number(em.s) < limit && limit < Number(em.d), "premise: emission stored size fits, decoded size does not");
   const red = await readEpoch(sp, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { maxEmissionBytes: limit } });
   assert.deepEqual([red.reason, red.what, red.limit, red.measured], ["over-budget", "emission bytes", limit, Number(em.d)]);
-  assert.equal(sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q)), false, "no emission body shipped");
+  assert.equal(sp.log.queries.some((q) => /^(DECLARE convo_(says|emissions) NO SCROLL CURSOR FOR SELECT id, at, actor, action|FETCH FORWARD)/.test(q)), false, "no emission body shipped");
   });
 });
 
@@ -655,5 +655,60 @@ test("DECODED measure and bodies share ONE snapshot: a row committed after the a
   assert.equal(out.voices.length, 4);
   const q = sp.log.queries;
   assert.ok(q[0].startsWith("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY") && q[1].startsWith("SET LOCAL statement_timeout"), "snapshot then the timeout, before any measure");
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// the bodies come in CHUNKS from a cursor in the one snapshot, and are interpreted a SLICE at a time (POS-779 integration)
+// ═════════════════════════════════════════════════════════════════════
+//
+// Measured at the caller on a 32,000-voice epoch before this: the driver parsing the bodies held the event loop for 58-75 ms
+// twice, and the interpretation of the rows (eligibility, the one mapping, the sort) for 74-111 ms. The stalls are chopped,
+// not the semantics: the same rows, the same LIMIT, the same snapshot, the same order. These controls are structural: they
+// count statements and yields on an injected clock, never milliseconds.
+
+test("CHUNKED bodies: ceil(n / chunk) fetches on ONE client in ONE snapshot, the same voices as one big fetch, and a row committed between two fetches is in neither", async (t) => {
+  return inFreshStore(t, async () => {
+    const e0 = T0 + 5000 * H, e1 = e0 + 12 * H;
+    const rows = Array.from({ length: 10 }, (_, i) => ({ at: iso(e0 + 1000 + i * 1000), actor: `k${i % 3}`, x: i * 10, y: 0, payload: { text: `k${i}`, place: "the quay", aboard: false } }));
+    await api.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy)
+      SELECT (r->>'at')::timestamptz, 0, r->>'actor', 'say', 'voice', r->'payload', 'world', (r->>'x')::float, (r->>'y')::float FROM jsonb_array_elements($1::jsonb) AS r`, [JSON.stringify(rows)]);
+    const whole = await readEpoch(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { fetchChunk: 1_000_000 } });
+    assert.equal(whole.status, "ok");
+    assert.equal(whole.voices.length, 10);
+    let injected = 0;
+    const sp = spy(pool, { after: async (text) => {
+      if (/^FETCH FORWARD 4 FROM convo_says/.test(String(text).trim()) && !injected) {
+        injected = 1;
+        await api.query(sayInsert, [iso(e0 + 2500), "late", JSON.stringify({ text: "late", place: "the quay", aboard: false }), "world", 1, 1]);
+      }
+    } });
+    const chunked = await readEpoch(sp, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { fetchChunk: 4 } });
+    assert.equal(injected, 1, "the late row was committed between two fetches");
+    assert.equal(chunked.status, "ok");
+    assert.deepEqual(chunked.voices.map((v) => v.act_id), whole.voices.map((v) => v.act_id), "the same voices in the same order, and not the late one");
+    const fetches = sp.log.queries.filter((q) => /^FETCH FORWARD 4 FROM convo_says/.test(q));
+    assert.equal(fetches.length, 3, "10 rows at 4 a fetch: 4, 4, 2");
+    assert.equal(sp.log.connects, 1, "one client");
+    const idx = (re) => sp.log.queries.findIndex((q) => re.test(q));
+    assert.ok(idx(/^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY/) < idx(/^DECLARE convo_says/) && idx(/^DECLARE convo_says/) < idx(/^FETCH FORWARD 4 FROM convo_says/) && idx(/^CLOSE convo_says/) < idx(/^ROLLBACK/), "declared, fetched and closed inside the transaction");
+  });
+});
+
+test("SLICED interpretation: the rows are mapped a slice at a time on an injected clock, the answer is the unsliced one", async (t) => {
+  return inFreshStore(t, async () => {
+    const e0 = T0 + 5100 * H, e1 = e0 + 12 * H;
+    const rows = Array.from({ length: 600 }, (_, i) => ({ at: iso(e0 + 1000 + i * 50), actor: `m${i % 9}`, x: (i % 5) * 400, y: 0, payload: { text: `m${i}`, place: "the quay", aboard: false } }));
+    await api.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy)
+      SELECT (r->>'at')::timestamptz, 0, r->>'actor', 'say', 'voice', r->'payload', 'world', (r->>'x')::float, (r->>'y')::float FROM jsonb_array_elements($1::jsonb) AS r`, [JSON.stringify(rows)]);
+    const plain = await readEpoch(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom });
+    let tnow = 0, yields = 0;
+    const sliced = await readEpoch(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom,
+      slice: { ms: 3, now: () => (tnow += 1), yieldFn: async () => { yields += 1; } } });
+    assert.deepEqual(sliced.voices, plain.voices);
+    assert.equal(sliced.key, plain.key);
+    // 600 rows, a clock read every 32 rows that moves 1 per read, a yield at 3: about one yield per 3 reads (96 rows)
+    assert.ok(yields >= 600 / 32 / 3 - 1 && yields > 0, `${yields} yields across 600 rows`);
+    assert.ok(yields <= 600 / 32 + 2, "and never more than one per clock read");
   });
 });

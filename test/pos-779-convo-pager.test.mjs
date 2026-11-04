@@ -343,7 +343,7 @@ test("the memo skips the read of bodies and the component build while the finger
   const two = await load();
   assert.equal(two.from, "memo");
   assert.strictEqual(two.view, one.view, "the same view object: no rebuild");
-  assert.equal(calls.some((q) => /^SELECT id, at, actor, action/.test(q)), false, "no body read on a hit");
+  assert.equal(calls.some((q) => /^(DECLARE convo_(says|emissions) NO SCROLL CURSOR FOR SELECT id, at, actor, action|FETCH FORWARD)/.test(q)), false, "no body read on a hit");
   await say(iso(e0 + 5000), "late", 1, 1);
   const three = await load();
   assert.equal(three.from, "store");
