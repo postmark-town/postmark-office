@@ -4833,7 +4833,7 @@ async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = n
 }
 
 /** withdraw, as one later entry. The terminal supersession (edit-law § withdraw) — nothing is deleted, a row says it ended. */
-export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null }, { crossing = currentCrossing() } = {}) {
+export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false }, { crossing = currentCrossing() } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${by}/${slug}`;
   const canon = canonForGuards();
@@ -4896,7 +4896,11 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // (chest-lock.mjs § chestEmptyGuard), so no give or stock can slip contents
     // in behind the decision. Any other mark withdraws exactly as before.
     // ANY HOLDER, by the holder property (LOGOS v2, O2; review-610 B2), not a class named chest
-    const isChest = (await import("./kind-holding.mjs")).isHolderMark(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id), classProperty);
+    // `contentsKept` (WLD-138 B): this holder is not withdrawn empty, because what it holds is not stranded,
+    // and `asked` carries the guard that proves it in this transaction: a full set-down holder comes back
+    // whole (set-down-return.mjs § putBackGuard), or a set-down that never landed leaves it in hand
+    // (§ stillInHandGuard). Only those two callers pass it.
+    const isChest = !contentsKept && (await import("./kind-holding.mjs")).isHolderMark(live.find((m) => m.id === id) ?? canon.marks.find((m) => m.id === id), classProperty);
     const chestGuard = isChest ? (await import("./chest-lock.mjs")).chestEmptyGuard({ chest: id }) : null;
     // `asked` (WLD-27 A): the door's own check that must hold in this same
     // transaction — the public withdrawal's escrow, read under the mark's lock.
@@ -5663,7 +5667,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
 // exec cannot: WHOSE hand (the mark's by must be on your key — only the hand
 // that left a mark may withdraw it) and the LEDGER (escrow anchors a mark; the
 // stake ledger lives town-side, so the check runs here before anything spawns).
-export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null } = {}) {
+export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const mark = String(args.mark ?? "").trim();
@@ -5729,6 +5733,14 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
     // ledger read fail and hand in the class law; the office passes neither.
     const guard = withdrawEscrowGuard({ mark, escrow: escrowOf ?? ((m) => ledgerEscrowOf(m)) });
     try {
+      // A SET-DOWN THAT DID NOT LAND (setDownMade's own undo, `undoSetDown`, never a resident's call): the
+      // thing and all it holds are still in hand, so its draft goes without the empty-holder guard, under the
+      // guard that proves it (WLD-138; set-down-return.mjs § stillInHandGuard)
+      if (undoSetDown) {
+        const { stillInHandGuard } = await import("./set-down-return.mjs");
+        const inHand = stillInHandGuard({ mark });
+        return await journalWithdraw({ by, slug, household, guard: async (c) => { await inHand(c); await guard(c); }, contentsKept: true });
+      }
       // A SET-DOWN UNIT'S MARK (WLD-27 D): withdrawn before publication, the
       // unit comes back to its dropper — an add, judged against the carry cap
       // in the hold queue — in the withdrawal's own transaction; published, it
@@ -5737,6 +5749,13 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
       const viaUnit = await withdrawDroppedUnit({ mark, by, household, caller: by, guard,
         withdraw: ({ guard: g }) => journalWithdraw({ by, slug, household, guard: g }) }, units ?? await liveUnitDeps());
       if (viaUnit) return viaUnit;
+      // A FULL HOLDER SET DOWN (WLD-138 B): withdrawn before it published, it comes back whole to the
+      // hands it was set down from, with all it holds — an add under the carry cap, in this withdrawal's
+      // own transaction (set-down-return.mjs). Any other mark: null, and on as before.
+      const { withdrawSetDownHolder } = await import("./set-down-return.mjs");
+      const viaHolder = await withdrawSetDownHolder({ mark, by, household, key, caller: by, guard,
+        withdraw: ({ guard: g, holderReturns }) => journalWithdraw({ by, slug, household, guard: g, contentsKept: holderReturns === true }) }, units?.setDownHolder ? units : await liveUnitDeps());
+      if (viaHolder) return viaHolder;
       return await journalWithdraw({ by, slug, household, guard });
     }
     catch (e) { if (e?.code) throw e; throw bounce(500, "the withdrawal tripped", faultLogged("the withdrawal tripped", e)); } // its error goes to the log (POS-578)
@@ -5752,6 +5771,10 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
     const { droppedUnitOnGitLane } = await import("./world-units.mjs");
     const refusal = await droppedUnitOnGitLane({ mark, by, household }, units ?? null);
     if (refusal) throw Object.assign(bounce(refusal.code, refusal.defect, refusal.hint), { reason: refusal.reason });
+    // nor a full set-down holder (WLD-138 B): its return is written only in the store's withdrawal transaction
+    const { setDownHolderOnGitLane } = await import("./set-down-return.mjs");
+    const held = await setDownHolderOnGitLane({ mark, by, household }, units?.setDownHolder ? units : null);
+    if (held) throw Object.assign(bounce(held.code, held.defect, held.hint), { reason: held.reason });
   }
   try {
     result = await draftWrite(worldClone, exec, JSON.stringify({ op: "withdraw", by, slug, household }), household, mark);

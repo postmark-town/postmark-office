@@ -38,6 +38,14 @@ export const MAKE_FACE = "make";
 export const CONSUME_FACE = "consume";
 /** The hold face that sets one down: the holding ends, and its draft carries the place (POS-766/e). */
 export const SET_DOWN_FACE = "set-down";
+/**
+ * The hold face that puts a set-down holder back (WLD-138 B, Wright 2026-11-04T16:00:21Z): its
+ * draft withdrawn before it published, the same thing is held again where it was set down from,
+ * with its original id, record and contents. Restoration only: never a second make, never a name
+ * taken, never an act or stamp of the resident's own. Its one writer is the withdrawal's own
+ * transaction (set-down-return.mjs § putBackGuard).
+ */
+export const PUT_BACK_FACE = "put-back";
 
 /**
  * What makes a `to:` call the NAMED form: any field of the mark's own. `kind`
@@ -112,13 +120,16 @@ const isMarkId = (v) => typeof v === "string" && v.includes("/");
  * `base` (copied, never mutated), so a kept base and its window fold alike.
  * Every make ever is kept, eaten ones too: an id is never reused (G2). A thing
  * SET DOWN leaves it (/e): it is a draft of its maker's now, and the docket and
- * canon carry its name from that act.
+ * canon carry its name from that act. A thing PUT BACK (WLD-138 B) is in it
+ * again, as the record its put-back carries: the make's own, copied whole when
+ * the put-back was written, so it folds alike whether the make sits in the kept
+ * base, in the window, or before either.
  */
 export function foldMade(holding = [], base = null) {
   const out = new Map(base ?? []);
   for (const r of holding ?? []) {
     if (r?.action === SET_DOWN_FACE) { const id = r.object ?? r.payload?.thing; if (id != null) out.delete(String(id)); continue; }
-    if (r?.action !== MAKE_FACE) continue;
+    if (r?.action !== MAKE_FACE && r?.action !== PUT_BACK_FACE) continue;
     const m = r.payload?.made;
     const id = r.object ?? r.payload?.thing;
     if (!m || typeof m !== "object" || !isMarkId(id) || m.id !== id) continue;
@@ -173,10 +184,19 @@ export function setDownDraftOf(made, { at, free }) {
  * "staked" (the dropper's stamp stands behind it) or "bounced" (asked, and the
  * stake did not land: the answer's `stake_bounce` carries the call that does).
  */
-export function setDownWords({ id, maker, stake }) {
-  if (stake === "staked") return `${id} is set down where you stood, as ${maker}'s draft, with your stamp behind it: it publishes at the next settlement`;
-  if (stake === "bounced") return `${id} is set down where you stood, as ${maker}'s draft, but the stamp did not land: it publishes only with one behind it (stake_bounce has the call)`;
-  return `${id} is set down where you stood, as ${maker}'s draft, on its own ground, free: it publishes at the next settlement`;
+export function setDownWords({ id, maker, stake, holds = null }) {
+  // WLD-138 F3: a holder set down FULL says what it holds and what that means while it is pending (Darko, "Yes,
+  // at settlement": its contents stay inside it and print with it; Wright 12:01, withdrawn first, it comes back whole)
+  const inside = holds ? `, holding ${holds}: they stay inside it and publish with it; until then nothing goes in or comes out, and withdrawing the draft first brings it back whole to the hands it was set down from, if they have room` : "";
+  if (stake === "staked") return `${id} is set down where you stood, as ${maker}'s draft, with your stamp behind it: it publishes at the next settlement${inside}`;
+  if (stake === "bounced") return `${id} is set down where you stood, as ${maker}'s draft, but the stamp did not land: it publishes only with one behind it (stake_bounce has the call)${inside}`;
+  return `${id} is set down where you stood, as ${maker}'s draft, on its own ground, free: it publishes at the next settlement${inside}`;
+}
+
+/** What a holder holds, in the words a set-down says it with: "2 whole things and 5 units", or null when it holds nothing. */
+export function holdsWords({ things = 0, units = 0 } = {}) {
+  const parts = [things ? `${things} whole thing${things === 1 ? "" : "s"}` : null, units ? `${units} unit${units === 1 ? "" : "s"}` : null].filter(Boolean);
+  return parts.length ? parts.join(" and ") : null;
 }
 
 /**
@@ -200,12 +220,13 @@ export async function madeNamesRead({ ids, edgeOn, query, reasonOf = () => "the 
 
 /**
  * THE ONE READ the made names are asked by, at a door that writes: the hold
- * lane's makes and set-downs naming these ids, oldest first (a set-down lets the
- * name go to its draft, foldMade's own rule). Narrow on purpose (an index
- * step on class, then the ids), and in the shape every reader of `acts` uses.
+ * lane's makes, set-downs and put-backs naming these ids, oldest first (a set-down
+ * lets the name go to its draft and a put-back takes it back, foldMade's own rule).
+ * Narrow on purpose (an index step on class, then the ids), and in the shape
+ * every reader of `acts` uses.
  */
 export const MADE_NAMES_SQL = "SELECT id, action, object, payload FROM acts WHERE class = $1 AND action = ANY($2) AND object = ANY($3) ORDER BY id";
-export const madeNamesParams = (ids) => ["holding", [MAKE_FACE, SET_DOWN_FACE], ids];
+export const madeNamesParams = (ids) => ["holding", [MAKE_FACE, SET_DOWN_FACE, PUT_BACK_FACE], ids];
 
 /** The refusal when the made names could not be read: nothing written, try again. */
 export function madeNamesUnread(unread) {

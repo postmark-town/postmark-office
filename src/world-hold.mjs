@@ -977,7 +977,9 @@ export function holdEffectsFrom({ rows = [], handles = [], sinceCrossing, nowCro
         ? `${r.actor} set ${thing} down`
         : action === "take"
           ? `${r.actor} took up ${thing}`
-          : `${r.actor} handed ${thing} to ${p.holder ?? "somebody"}`,
+          : action === "put-back" // WLD-138 B: withdrawn before it published, back whole where it was set down from
+            ? `${thing} came back to ${p.holder ?? "somebody"}, whole, its draft withdrawn before it published`
+            : `${r.actor} handed ${thing} to ${p.holder ?? "somebody"}`,
       read_it: `world { mark: "${thing}" }`,
     });
   }
@@ -1431,10 +1433,14 @@ async function setDownMade({ made, args, key, actor }) {
   const { WORLD_CLONE } = await import("./world-store.mjs");
   const draft = await leaveMarkViaOffice(WORLD_CLONE, nm.setDownDraftOf(made, { at: stood, free: !dropStake?.stake }), key, { fromHand: true });
   if (draft?.error) return draft;
+  let holds = null;
   try {
     await holdTurn(async () => {
-      const { attachments } = await deps.readRows();
+      const { units, attachments } = await deps.readRows();
       if (liveHolder(attachments, id) !== String(actor)) throw bounce(409, `you are not holding ${id} any more`, "Nothing was changed.");
+      // what it holds, for the words (WLD-138 F3): whole things by their hold rows, counted units by the holder
+      const { foldUnits, totalOf } = await import("./world-stacks.mjs");
+      holds = nm.holdsWords({ things: holdingsOf(attachments, id).length, units: totalOf(foldUnits(units), id) });
       const { entry } = await thingHoldingEntry(deps, key, actor, attachments, { did: nm.SET_DOWN_FACE, thing: id, holder: null, previous: String(actor), madeBy: maker });
       entry.payload.policy = "detach"; // its place is its draft's: no hold row carries one
       entry.payload.set_down = { at: stood, draft: id };
@@ -1446,7 +1452,7 @@ async function setDownMade({ made, args, key, actor }) {
     // (its own pen, whichever files drafts here), and the refusal is the answer
     let undone = null;
     try {
-      const w = await (await import("./world.mjs")).withdrawMarkViaOffice(WORLD_CLONE, { mark: id }, key);
+      const w = await (await import("./world.mjs")).withdrawMarkViaOffice(WORLD_CLONE, { mark: id }, key, { undoSetDown: true });
       if (w?.error) undone = w;
     } catch (w) { undone = w; }
     if (undone) {
@@ -1460,7 +1466,7 @@ async function setDownMade({ made, args, key, actor }) {
   }
   const staked = dropStake?.stake ? await stakeTheDrop({ thing: id, actor, key, n: dropStake.stake }) : null;
   return { did: "set-down", thing: id, at: stood, draft: id, ...(staked ?? {}),
-    stands_note: nm.setDownWords({ id, maker, stake: !dropStake?.stake ? "free" : staked?.stake_bounce ? "bounced" : "staked" }),
+    stands_note: nm.setDownWords({ id, maker, stake: !dropStake?.stake ? "free" : staked?.stake_bounce ? "bounced" : "staked", holds }),
     leave: draft };
 }
 

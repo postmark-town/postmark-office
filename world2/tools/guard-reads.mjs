@@ -803,7 +803,11 @@ export async function publishedMarkFrom(client) {
 // holder, one eaten from hand, and one set down as its maker's draft. All are hold-lane faces of
 // the one edge: a make is held from its first act; a consume and a set-down end the holding
 // (policy detach, with no place: the set-down's place is its draft's, never a hold row's).
-export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down"]);
+// `put-back` (WLD-138 B, Wright 2026-11-04T16:00:21Z): a full holder set down and withdrawn
+// before it published, back in the hold it came from. Restoration only: its one writer is the
+// withdrawal's own transaction (src/set-down-return.mjs § putBackGuard); it carries the make's
+// own record (`made`, so the made fold re-registers it), and the holder is held again (cascade).
+export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down", "put-back"]);
 export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", ...HOLD_FACES]);
 
 /**
