@@ -517,3 +517,113 @@ test("a thread's generation is the SAME sha256 whether the member bytes are stre
     assert.equal(t.generation, h.digest("hex").slice(0, 32));
   }
 });
+
+// ── POS-779 whole-carrier review F1: a shared build is joined ONLY by an equal fingerprint, never by the epoch's name ──
+// Request A is parked inside its interpretation (its slice yields to a gate the test holds). Request B then reads its own
+// snapshot and either finds the SAME source (it joins A's build: one view, one memo set) or a DIFFERENT one because a row
+// was committed between the two snapshots (it builds its own). Keying the shared build by the epoch alone would hand B
+// A's view of the older source: the second case goes red.
+function gatedLoad(p, over) {
+  let parked; const parkedP = new Promise((r) => { parked = r; });
+  let release; const gate = new Promise((r) => { release = r; });
+  let yielded = 0;
+  const done = loadEpochView(p, { isPrivate: spokenInRoom, readSlice: { ms: -1, yieldFn: () => { yielded += 1; parked(); return gate; } }, ...over });
+  return { done, parkedP, release, yields: () => yielded };
+}
+function rollbackSpy(real) {
+  let seen; const ended = new Promise((r) => { seen = r; });
+  return { ended, pool: { connect: async () => { const c = await real.connect(); return { on: (...a) => c.on(...a), removeListener: (...a) => c.removeListener(...a), release: (...a) => c.release(...a),
+    query: async (q, p) => { const out = await c.query(q, p); if (/^ROLLBACK/.test(String(q).trim())) seen(); return out; } }; } } };
+}
+
+test("a build is joined by a request whose snapshot read the same fingerprint: one view, one memo set, the joiner interprets nothing", async (t) => {
+  if (skip) return t.skip(skip);
+  const e0 = E0 + 5000 * 3600_000, e1 = e0 + 12 * 3600_000;
+  for (let i = 0; i < 70; i++) await say(iso(e0 + 1000 + i * 100), "j" + (i % 7), (i % 10) * 500, Math.floor(i / 10) * 500);
+  const memo = createEpochMemo(), inflight = new Map();
+  const epoch = { since: e0, next: e1 };
+  const a = gatedLoad(pool, { epoch, memo, inflight });
+  await a.parkedP;
+  assert.equal(inflight.size, 1, "A's build is in flight");
+  const spy = rollbackSpy(pool);
+  let bYields = 0;
+  const b = loadEpochView(spy.pool, { epoch, isPrivate: spokenInRoom, memo, inflight, readSlice: { ms: -1, yieldFn: () => { bYields += 1; return Promise.resolve(); } } });
+  await spy.ended; await new Promise((r) => setImmediate(r)); // B has read its own snapshot and is waiting on A's build
+  a.release();
+  const [ra, rb] = await Promise.all([a.done, b]);
+  assert.equal(ra.status, "ok"); assert.equal(rb.status, "ok");
+  assert.strictEqual(rb.view, ra.view, "one build served both");
+  assert.equal(bYields, 0, "B interpreted none of the rows");
+  assert.equal(memo.stats().sets, 1);
+  assert.equal(inflight.size, 0, "nothing left in flight");
+});
+
+test("a build is NOT joined by a request whose snapshot read another source: a row committed between the two snapshots", async (t) => {
+  if (skip) return t.skip(skip);
+  const e0 = E0 + 6000 * 3600_000, e1 = e0 + 12 * 3600_000;
+  for (let i = 0; i < 70; i++) await say(iso(e0 + 1000 + i * 100), "k" + (i % 7), (i % 10) * 500, Math.floor(i / 10) * 500);
+  const memo = createEpochMemo(), inflight = new Map();
+  const epoch = { since: e0, next: e1 };
+  const a = gatedLoad(pool, { epoch, memo, inflight });
+  await a.parkedP;                                   // A's snapshot is behind it
+  const planted = await say(iso(e0 + 9000), "late", 9000, 9000); // committed after A's snapshot, before B's
+  const spy = rollbackSpy(pool);
+  let bYields = 0;
+  const b = loadEpochView(spy.pool, { epoch, isPrivate: spokenInRoom, memo, inflight, readSlice: { ms: -1, yieldFn: () => { bYields += 1; return Promise.resolve(); } } });
+  // B builds its own: it does not wait on A's parked build (a B that joined A's would be waiting on A's gate)
+  const rb = await Promise.race([b, new Promise((r) => setTimeout(() => r("waiting on A's build"), 4000))]);
+  assert.notEqual(rb, "waiting on A's build", "B joined A's build although its snapshot read another source");
+  assert.equal(rb.status, "ok");
+  assert.ok(bYields > 0, "B interpreted its own rows");
+  assert.equal(rb.view.voices.length, 71, "B's snapshot has the late row");
+  assert.ok(rb.view.byAct.has(planted));
+  a.release();
+  const ra = await a.done;
+  assert.equal(ra.view.voices.length, 70, "A's snapshot did not");
+  assert.equal(ra.view.byAct.has(planted), false);
+  assert.notStrictEqual(ra.view, rb.view);
+  assert.notEqual(ra.view.key, rb.view.key);
+  assert.equal(memo.stats().sets, 2, "two sources, two builds");
+});
+
+// ── POS-779 whole-carrier review CPU: per-thread work is made when it is asked for, never for every thread of the epoch ──
+// A page names a few dozen threads and a show-earlier request one; an epoch can hold 32,000. A short thread's digest is made
+// the first time its generation is read (same bytes, same value); a long thread's is made in the build, in slices; the act-id
+// index is made, in slices, by the first show-earlier request. What is charged to the memo does not depend on which of them
+// exist yet, so no view is ever admitted on an undercount.
+test("generations and the act-id index are made when asked for, with the very values the eager walk made", async () => {
+  const { createHash } = await import("node:crypto");
+  const { ensureByAct } = await import("../world2/tools/convo-pager.mjs");
+  // 40 singleton threads (far apart), one thread of 70 (eager), one of 5 (lazy)
+  const vs = [];
+  for (let i = 0; i < 40; i++) vs.push(V(E0 + i * 1000, 10_000 * (i + 1), 0));
+  for (let i = 0; i < 70; i++) vs.push(V(E0 + 50_000 + i * 1000, -1000 + (i % 7) * 10, 5000));
+  for (let i = 0; i < 5; i++) vs.push(V(E0 + 130_000 + i * 1000, -9000 + i * 10, 9000));
+  const src = source(vs);
+  const view = await buildView(src);
+  assert.equal(view.threads.length, 42);
+  const long = view.threads.find((t) => t.count === 70), short = view.threads.find((t) => t.count === 5), lone = view.threads.find((t) => t.count === 1);
+  assert.notEqual(long._gen, null, "a long thread's digest was made in the build");
+  assert.equal(short._gen, null, "a short thread's digest waits for a reader");
+  assert.equal(lone._gen, null);
+  assert.equal(view._byAct, null, "the act-id index waits for a show-earlier request");
+  const bytesBefore = viewBytes(view);
+  assert.equal(short._gen, null, "charging the memo makes neither");
+  assert.equal(view._byAct, null);
+  const head = ["pos779-e1", E0, E1, "e1", 60].join("|");
+  const expect = (t) => { const h = createHash("sha256").update(head); for (const k of t.members) { const v = view.voices[k]; h.update(`;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`); } return h.digest("hex").slice(0, 32); };
+  for (const t of [long, short, lone]) assert.equal(t.generation, expect(t), "the same digest, made lazily or in the build");
+  assert.equal(short._gen, short.generation, "and kept");
+  assert.equal(viewBytes(view), bytesBefore, "the memo's charge is the same before and after");
+  // the index: built by the sliced builder, equal to the one a plain read makes
+  const clock = (() => { let t = 0, yields = 0; return { now: () => (t += 1), yieldFn: async () => { yields += 1; }, yields: () => yields }; })();
+  const sliced = await ensureByAct(view, { sliceMs: 1, now: clock.now, yieldFn: clock.yieldFn });
+  assert.ok(clock.yields() >= 1, "the index walk yielded");
+  const plain = await buildView(src);
+  assert.deepEqual([...sliced], [...plain.byAct]);
+  assert.strictEqual(view.byAct, sliced, "the view serves the index it was given");
+  assert.strictEqual(await ensureByAct(view), sliced, "asked twice, built once");
+  // a page names the same generations whichever way they were made
+  const pageOf = (v) => threadList(v, parseListRequest({}).value).threads.map((x) => [x.thread_of, x.generation, x.voice_count]);
+  assert.deepEqual(pageOf(view), pageOf(plain));
+});

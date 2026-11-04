@@ -1,7 +1,6 @@
 // convo-read.mjs — ONE SETTLEMENT'S PUBLIC VOICES, READ EXACTLY AND WITH A WORK BOUND (POS-779).
 //
-// STATUS: UNWIRED. Nothing in src/ imports this yet. It is the durable read the conversation page will stand on
-// once the doors are switched to it; this phase builds and proves it on invented data only.
+// It is the durable read the conversations door (convo-door.mjs, wired in src/world2-serve.mjs) stands on.
 //
 // WHAT IT ANSWERS. Given the edges of one settlement (`since` and `next`, both ms, `next` null for the open
 // one), it returns every PUBLIC voice whose logical instant lies in [since, next), as voice records the
@@ -12,6 +11,9 @@
 // Rows, emissions, anchors and dials are read on ONE pooled client in ONE `REPEATABLE READ READ ONLY`
 // transaction, under `SET LOCAL statement_timeout`. (`Promise.all` over two pool connections is two snapshots.)
 // A timeout is an honest "unavailable", not a short answer.
+// A REQUEST that reads several epochs (the conversations page: the live one and up to three closed ones) holds ONE
+// such snapshot for all of them (`openSnapshot`, convo-door.mjs) and passes its client to `readEpoch`/`loadEpochView`;
+// an epoch read alone (no `client`) takes its own.
 //
 // ── LOGICAL TIME ────────────────────────────────────────────────────────────
 // A voice's instant, in whole milliseconds:
@@ -193,36 +195,139 @@ export function epochFor(edges, atMs) {
 // ═════════════════════════════════════════════════════════════════════
 
 /**
- * Run `fn(client)` on ONE checked-out client inside `REPEATABLE READ READ ONLY`, with a statement timeout, and
- * hand the client back on every path. A failed ROLLBACK discards the connection (store-pool.mjs § onPenClient's
- * rule) and the client has its own 'error' listener while it is out.
+ * Open ONE snapshot: a checked-out client inside `REPEATABLE READ READ ONLY` with a statement timeout. The caller
+ * ends it with `closeSnapshot`, on every path. A client has its own 'error' listener while it is out.
+ * `withSnapshot` is the callback form of the pair; the conversations door holds ONE snapshot for a whole request
+ * (convo-door.mjs), every epoch of the request read on it.
  */
-export async function withSnapshot(pool, fn, { statementTimeoutMs = BUDGETS.statementTimeoutMs } = {}) {
+export async function openSnapshot(pool, { statementTimeoutMs = BUDGETS.statementTimeoutMs } = {}) {
   const client = await pool.connect();
-  let discard = false;
-  const heard = () => { discard = true; };
-  client.on?.("error", heard);
+  const snap = { client, discard: false, heard: null, closed: false };
+  snap.heard = () => { snap.discard = true; };
+  client.on?.("error", snap.heard);
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
     await client.query(`SET LOCAL statement_timeout = '${Math.max(1, Math.trunc(Number(statementTimeoutMs)))}ms'`);
-    const out = await fn(client);
-    await client.query("ROLLBACK");
-    return out;
   } catch (e) {
-    try { await client.query("ROLLBACK"); } catch { discard = true; }
+    await closeSnapshot(snap);
     throw e;
+  }
+  return snap;
+}
+
+/**
+ * End a snapshot and hand the client back: ROLLBACK the read-only transaction (a failed read leaves it aborted and
+ * the ROLLBACK ends it all the same). A failed ROLLBACK, or an 'error' the client reported while out, discards the
+ * connection (store-pool.mjs § onPenClient's rule). Safe to call twice.
+ */
+export async function closeSnapshot(snap) {
+  if (!snap || snap.closed) return;
+  snap.closed = true;
+  const { client } = snap;
+  try { await client.query("ROLLBACK"); } catch { snap.discard = true; }
+  client.removeListener?.("error", snap.heard);
+  client.release(snap.discard ? true : undefined);
+}
+
+/**
+ * Run `fn(client)` on ONE checked-out client inside `REPEATABLE READ READ ONLY`, with a statement timeout, and
+ * hand the client back on every path.
+ */
+export async function withSnapshot(pool, fn, { statementTimeoutMs = BUDGETS.statementTimeoutMs } = {}) {
+  const snap = await openSnapshot(pool, { statementTimeoutMs });
+  try {
+    return await fn(snap.client);
   } finally {
-    client.removeListener?.("error", heard);
-    client.release(discard ? true : undefined);
+    await closeSnapshot(snap);
   }
 }
 
 const unavailable = (reason, detail = {}) => ({ status: "unavailable", reason, ...detail });
+export const epochOk = (epoch) => {
+  const since = Number(epoch?.since), next = epoch?.next == null ? null : Number(epoch.next);
+  return Number.isFinite(since) && (next === null || (Number.isFinite(next) && next > since));
+};
+
+/**
+ * The reads of ONE epoch, on a client that is already inside a snapshot (phase A: nothing here opens or ends one).
+ * Measures before any body is shipped, keys the memo, and fetches the bodies. Answers
+ *   { status: "unavailable", reason, ... }                        over a budget
+ *   { status: "ok", from: "memo", key, epoch, earshotM, dials, value }   the memo held a view under an equal fingerprint
+ *   { status: "rows", key, anchors, centres, sayRows, emiRows, earshotM, dialsView, say, emi }   interpret these
+ * A statement that fails throws; `guardRead` turns that into `unavailable`.
+ */
+export async function readEpochRows(client, { epoch, edgesBefore = "", memo = null, budgets = {} } = {}) {
+  const B = { ...BUDGETS, ...budgets };
+  if (!epochOk(epoch)) return unavailable("bad-epoch");
+  const since = Number(epoch.since);
+  const next = epoch.next == null ? null : Number(epoch.next);
+  const bounded = next !== null;
+  const epochId = `${since}:${next ?? "open"}`;
+  const q = (text, params) => client.query(text, params);
+  const { rows: [{ db }] } = await q(SQL.database);
+
+  // 1 · measure, before any body is shipped
+  const sayParams = bounded ? [new Date(since).toISOString(), new Date(next).toISOString()] : [new Date(since).toISOString()];
+  const { rows: [say] } = await q(SQL.saysAggregate(bounded), [...sayParams, B.maxRows + 1]);
+  if (say.n > B.maxRows) return unavailable("over-budget", { what: "rows", measured: say.n, limit: B.maxRows });
+  if (Number(say.bytes) > B.maxBytes) return unavailable("over-budget", { what: "bytes", measured: Number(say.bytes), limit: B.maxBytes });
+  if (say.strings > B.maxStringPayloadRows) return unavailable("over-budget", { what: "string-payload rows", measured: say.strings, limit: B.maxStringPayloadRows });
+  const { rows: [emi] } = await q(SQL.emissionsAggregate, [B.maxEmissionRows + 1]);
+  if (emi.n > B.maxEmissionRows) return unavailable("over-budget", { what: "emission rows", measured: emi.n, limit: B.maxEmissionRows });
+  if (Number(emi.bytes) > B.maxEmissionBytes) return unavailable("over-budget", { what: "emission bytes", measured: Number(emi.bytes), limit: B.maxEmissionBytes });
+  if (emi.strings > B.maxStringPayloadRows) return unavailable("over-budget", { what: "emission string-payload rows", measured: emi.strings, limit: B.maxStringPayloadRows });
+
+  // 2 · the dials and the anchors the memoized epoch referenced, for the memo's key
+  const { rows: dialRows } = await q(SQL.dials);
+  const dials = sayDials(dialRows);
+  const earshotM = dials.earshot_m.value;
+  const dialsView = Object.fromEntries(Object.entries(dials).map(([k, d]) => [k, { value: d.value, source: d.source }]));
+  const base = [ELIGIBILITY_VERSION, db, since, next, edgesBefore, earshotM, dialsView,
+    say.n, say.bytes, say.max_id, say.digest, emi.n, emi.bytes, emi.max_id, emi.digest];
+  const centreDigest = async (slugs) => {
+    const sorted = [...new Set(slugs)].sort();
+    const { rows } = sorted.length ? await q(SQL.anchors, [sorted]) : { rows: [] };
+    const centres = anchorCentres(rows);
+    return { centres, digest: sha(sorted.map((s) => [s, centres.get(s) ?? null])) };
+  };
+  const prior = memo?.peek?.(epochId) ?? null;
+  if (prior) {
+    const { digest } = await centreDigest(prior.anchors);
+    const key = sha(...base, digest);
+    const hit = memo.lookup(epochId, key);
+    if (hit) return { status: "ok", from: "memo", key, epoch: { since, next }, earshotM, dials: dialsView, value: hit };
+  }
+
+  // 3 · the bodies, fetched in chunks from a cursor in THIS snapshot (same client, same transaction, same statement
+  //     timeout per fetch, the same LIMIT as the aggregate): one 32,000-row result parsed in one go is a 60-70 ms
+  //     stretch of the event loop in the driver; sixteen fetches of 2,000 are not.
+  const sayRows = await fetchChunked(client, "convo_says", SQL.saysRows(bounded), [...sayParams, B.maxRows + 1], B.fetchChunk);
+  const emiRows = emi.n ? await fetchChunked(client, "convo_emissions", SQL.emissionsRows, [B.maxEmissionRows + 1], B.fetchChunk) : [];
+
+  // 4 · only the anchors the says reference
+  const anchors = [...new Set(sayRows.map((r) => r.at_anchor).filter((a) => a && a !== "world"))];
+  const { centres, digest: anchorsDigest } = await centreDigest(anchors);
+  const key = sha(...base, anchorsDigest);
+  return { status: "rows", key, anchors, centres, sayRows, emiRows, earshotM, dialsView, say, emi };
+}
+
+/** A failed read as an answer: a statement timeout is `timeout`, anything else `store-unreadable`. */
+export async function guardRead(run, B = BUDGETS) {
+  try { return await run(); }
+  catch (e) {
+    if (e?.code === "57014") return unavailable("timeout", { limit_ms: B.statementTimeoutMs });
+    return unavailable("store-unreadable", { code: e?.code ?? null });
+  }
+}
 
 /**
  * Read one epoch.
  *
- *   pool       the serve pool (`connect()`); one client is taken
+ *   pool       the serve pool (`connect()`); one client is taken for this epoch alone. A caller that reads several
+ *              epochs for one request passes `client` instead.
+ *   client     a client already inside ONE `REPEATABLE READ READ ONLY` snapshot (`openSnapshot`): the epoch is read on
+ *              it and the caller ends the snapshot. This is how one request reads its live epoch and its closed ones
+ *              from one backend in one snapshot (convo-door.mjs).
  *   epoch      { since, next }  ms; next null = the open epoch
  *   isPrivate  the real `spokenInRoom` (row => boolean): required, never copied here
  *   edgesOf    () => { version: string }  the caller's published-sweep view; read before AND after the snapshot,
@@ -234,114 +339,68 @@ const unavailable = (reason, detail = {}) => ({ status: "unavailable", reason, .
  * Answers `{ status: "ok", ... }` or `{ status: "unavailable", reason }`, reason one of:
  *   over-budget (with `what`, `measured`, `limit`), timeout, edges-moved, unreadable-acts, store-unreadable.
  */
-export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {}, slice = {} } = {}) {
+export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {}, slice = {}, client = null } = {}) {
   if (typeof isPrivate !== "function") throw new TypeError("readEpoch needs the JS eligibility guard (spokenInRoom) — the SQL port is a prefilter, not the rule");
   const B = { ...BUDGETS, ...budgets };
-  const since = Number(epoch?.since);
-  const next = epoch?.next == null ? null : Number(epoch.next);
-  if (!Number.isFinite(since) || (next !== null && !(Number.isFinite(next) && next > since))) return unavailable("bad-epoch");
-  const bounded = next !== null;
-  const epochId = `${since}:${next ?? "open"}`;
+  if (!epochOk(epoch)) return unavailable("bad-epoch");
   const edgesBefore = edgesOf ? String(edgesOf()?.version ?? "") : "";
+  const rows = await guardRead(() => (client
+    ? readEpochRows(client, { epoch, edgesBefore, memo, budgets })
+    : withSnapshot(pool, (c) => readEpochRows(c, { epoch, edgesBefore, memo, budgets }), { statementTimeoutMs: B.statementTimeoutMs })), B);
+  if (rows.status !== "rows") return fenced(rows, edgesOf, edgesBefore);
+  return fenced(await interpretEpoch(rows, { epoch, isPrivate, edgesBefore, slice }), edgesOf, edgesBefore);
+}
 
-  let result;
-  try {
-    result = await withSnapshot(pool, async (client) => {
-      const q = (text, params) => client.query(text, params);
-      const { rows: [{ db }] } = await q(SQL.database);
-
-      // 1 · measure, before any body is shipped
-      const sayParams = bounded ? [new Date(since).toISOString(), new Date(next).toISOString()] : [new Date(since).toISOString()];
-      const { rows: [say] } = await q(SQL.saysAggregate(bounded), [...sayParams, B.maxRows + 1]);
-      if (say.n > B.maxRows) return unavailable("over-budget", { what: "rows", measured: say.n, limit: B.maxRows });
-      if (Number(say.bytes) > B.maxBytes) return unavailable("over-budget", { what: "bytes", measured: Number(say.bytes), limit: B.maxBytes });
-      if (say.strings > B.maxStringPayloadRows) return unavailable("over-budget", { what: "string-payload rows", measured: say.strings, limit: B.maxStringPayloadRows });
-      const { rows: [emi] } = await q(SQL.emissionsAggregate, [B.maxEmissionRows + 1]);
-      if (emi.n > B.maxEmissionRows) return unavailable("over-budget", { what: "emission rows", measured: emi.n, limit: B.maxEmissionRows });
-      if (Number(emi.bytes) > B.maxEmissionBytes) return unavailable("over-budget", { what: "emission bytes", measured: Number(emi.bytes), limit: B.maxEmissionBytes });
-      if (emi.strings > B.maxStringPayloadRows) return unavailable("over-budget", { what: "emission string-payload rows", measured: emi.strings, limit: B.maxStringPayloadRows });
-
-      // 2 · the dials and the anchors the memoized epoch referenced, for the memo's key
-      const { rows: dialRows } = await q(SQL.dials);
-      const dials = sayDials(dialRows);
-      const earshotM = dials.earshot_m.value;
-      const dialsView = Object.fromEntries(Object.entries(dials).map(([k, d]) => [k, { value: d.value, source: d.source }]));
-      const base = [ELIGIBILITY_VERSION, db, since, next, edgesBefore, earshotM, dialsView,
-        say.n, say.bytes, say.max_id, say.digest, emi.n, emi.bytes, emi.max_id, emi.digest];
-      const centreDigest = async (slugs) => {
-        const sorted = [...new Set(slugs)].sort();
-        const { rows } = sorted.length ? await q(SQL.anchors, [sorted]) : { rows: [] };
-        const centres = anchorCentres(rows);
-        return { centres, digest: sha(sorted.map((s) => [s, centres.get(s) ?? null])) };
-      };
-      const prior = memo?.peek?.(epochId) ?? null;
-      if (prior) {
-        const { digest } = await centreDigest(prior.anchors);
-        const key = sha(...base, digest);
-        const hit = memo.lookup(epochId, key);
-        if (hit) return { status: "ok", from: "memo", key, epoch: { since, next }, earshotM, dials: dialsView, value: hit };
-      }
-
-      // 3 · the bodies, fetched in chunks from a cursor in THIS snapshot (same client, same transaction, same statement
-      //     timeout per fetch, the same LIMIT as the aggregate): one 32,000-row result parsed in one go is a 60-70 ms
-      //     stretch of the event loop in the driver; sixteen fetches of 2,000 are not.
-      const sayRows = await fetchChunked(client, "convo_says", SQL.saysRows(bounded), [...sayParams, B.maxRows + 1], B.fetchChunk);
-      const emiRows = emi.n ? await fetchChunked(client, "convo_emissions", SQL.emissionsRows, [B.maxEmissionRows + 1], B.fetchChunk) : [];
-
-      // 4 · only the anchors the says reference
-      const anchors = [...new Set(sayRows.map((r) => r.at_anchor).filter((a) => a && a !== "world"))];
-      const { centres, digest: anchorsDigest } = await centreDigest(anchors);
-      const key = sha(...base, anchorsDigest);
-      return { status: "rows", key, anchors, centres, sayRows, emiRows, earshotM, dialsView, say, emi };
-    }, { statementTimeoutMs: B.statementTimeoutMs });
-    if (result.status === "rows") result = await interpret(result);
-  } catch (e) {
-    if (e?.code === "57014") return unavailable("timeout", { limit_ms: B.statementTimeoutMs });
-    return unavailable("store-unreadable", { code: e?.code ?? null });
-  }
+/** A result whose edges moved under it is `edges-moved`, never a mixed answer. */
+export function fenced(result, edgesOf, edgesBefore) {
   if (result.status === "ok" && edgesOf) {
     const edgesAfter = String(edgesOf()?.version ?? "");
     if (edgesAfter !== edgesBefore) return unavailable("edges-moved", { from: edgesBefore, to: edgesAfter });
   }
   return result;
+}
 
-  // 5 · AFTER the snapshot is released: JS eligibility on every raw row, then the one mapping, a slice at a time
-  async function interpret({ key, anchors, centres, sayRows, emiRows, earshotM, dialsView, say, emi }) {
-    const refusals = [];
-    const unplaced = [];
-    const eras = { crystallized: 0, live: 0 };
-    let nonSound = 0, jsPrivate = 0;
-    const place = (row, into) => {
-      if (isPrivate(row)) { jsPrivate += 1; return; }
-      const r = exactVoiceOf(row, (id) => centres.get(id) ?? null);
-      if (r.skip) { nonSound += 1; return; }
-      if (r.refused) { refusals.push(r.reason); return; }
-      if (r.unplaced) { unplaced.push({ act_id: r.act_id, anchor: r.anchor }); return; }
-      if (!(r.voice.at >= since && (next === null || r.voice.at < next))) return;
-      eras[r.era] += 1;
-      r.voice.era = r.era; // the voice is this call's own fresh object: no copy per voice
-      into.push(r.voice);
-    };
-    const slicer = makeSlicer(slice);
-    const sayVoices = [], emiVoices = [];
-    for (let i = 0; i < sayRows.length; i++) { place(sayRows[i], sayVoices); if ((i & 31) === 31) await slicer.maybeYield(); }
-    for (let i = 0; i < emiRows.length; i++) { place(emiRows[i], emiVoices); if ((i & 31) === 31) await slicer.maybeYield(); }
-    if (refusals.length) return unavailable("unreadable-acts", { count: refusals.length, example: refusals[0] });
-    // The says came in (at, id) order and an emission's logical instant is its own, so: sort the (few) emissions, CHECK that
-    // the says really are in the order the comparator wants (the index's order, but the proof is the check), and MERGE. A
-    // list that fails the check is sorted whole, so a plan that did not hand back the index order costs time, never order.
-    if (!(await isSorted(sayVoices, slicer))) sayVoices.sort(compareVoices);
-    emiVoices.sort(compareVoices);
-    const voices = [];
-    for (let a = 0, b = 0; a < sayVoices.length || b < emiVoices.length; ) {
-      if (b >= emiVoices.length || (a < sayVoices.length && compareVoices(sayVoices[a], emiVoices[b]) <= 0)) voices.push(sayVoices[a++]); else voices.push(emiVoices[b++]);
-      if ((voices.length & 255) === 0) await slicer.maybeYield();
-    }
-    return { status: "ok", from: "store", key, edges_version: edgesBefore, epoch: { since, next }, earshotM, dials: dialsView, anchors,
-      voices, eras, unplaced, non_sound_emissions: nonSound, js_private_dropped: jsPrivate,
-      source: { says: { rows: say.n, bytes: Number(say.bytes), stored_bytes: Number(say.stored_bytes), strings: say.strings },
-        emissions: { rows: emi.n, bytes: Number(emi.bytes), stored_bytes: Number(emi.stored_bytes), strings: emi.strings } } };
+/**
+ * Phase B, AFTER the rows are read and with no database in it: JS eligibility on every raw row, then the one mapping,
+ * a slice at a time. `rows` is a `readEpochRows` answer with `status: "rows"`.
+ */
+export async function interpretEpoch({ key, anchors, centres, sayRows, emiRows, earshotM, dialsView, say, emi }, { epoch, isPrivate, edgesBefore = "", slice = {} } = {}) {
+  const since = Number(epoch.since);
+  const next = epoch.next == null ? null : Number(epoch.next);
+  const refusals = [];
+  const unplaced = [];
+  const eras = { crystallized: 0, live: 0 };
+  let nonSound = 0, jsPrivate = 0;
+  const place = (row, into) => {
+    if (isPrivate(row)) { jsPrivate += 1; return; }
+    const r = exactVoiceOf(row, (id) => centres.get(id) ?? null);
+    if (r.skip) { nonSound += 1; return; }
+    if (r.refused) { refusals.push(r.reason); return; }
+    if (r.unplaced) { unplaced.push({ act_id: r.act_id, anchor: r.anchor }); return; }
+    if (!(r.voice.at >= since && (next === null || r.voice.at < next))) return;
+    eras[r.era] += 1;
+    r.voice.era = r.era; // the voice is this call's own fresh object: no copy per voice
+    into.push(r.voice);
+  };
+  const slicer = makeSlicer(slice);
+  const sayVoices = [], emiVoices = [];
+  for (let i = 0; i < sayRows.length; i++) { place(sayRows[i], sayVoices); if ((i & 31) === 31) await slicer.maybeYield(); }
+  for (let i = 0; i < emiRows.length; i++) { place(emiRows[i], emiVoices); if ((i & 31) === 31) await slicer.maybeYield(); }
+  if (refusals.length) return unavailable("unreadable-acts", { count: refusals.length, example: refusals[0] });
+  // The says came in (at, id) order and an emission's logical instant is its own, so: sort the (few) emissions, CHECK that
+  // the says really are in the order the comparator wants (the index's order, but the proof is the check), and MERGE. A
+  // list that fails the check is sorted whole, so a plan that did not hand back the index order costs time, never order.
+  if (!(await isSorted(sayVoices, slicer))) sayVoices.sort(compareVoices);
+  emiVoices.sort(compareVoices);
+  const voices = [];
+  for (let a = 0, b = 0; a < sayVoices.length || b < emiVoices.length; ) {
+    if (b >= emiVoices.length || (a < sayVoices.length && compareVoices(sayVoices[a], emiVoices[b]) <= 0)) voices.push(sayVoices[a++]); else voices.push(emiVoices[b++]);
+    if ((voices.length & 255) === 0) await slicer.maybeYield();
   }
+  return { status: "ok", from: "store", key, edges_version: edgesBefore, epoch: { since, next }, earshotM, dials: dialsView, anchors,
+    voices, eras, unplaced, non_sound_emissions: nonSound, js_private_dropped: jsPrivate,
+    source: { says: { rows: say.n, bytes: Number(say.bytes), stored_bytes: Number(say.stored_bytes), strings: say.strings },
+      emissions: { rows: emi.n, bytes: Number(emi.bytes), stored_bytes: Number(emi.stored_bytes), strings: emi.strings } } };
 }
 
 /**

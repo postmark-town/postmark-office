@@ -27,8 +27,9 @@
 // ── WHAT IS PORTED, AND FROM WHERE ──────────────────────────────────────────
 //
 // office `207cdaa52314ffc4ab16109c10dddbead1c92bdd` (the original port). RE-PINNED for POS-779 after the carrier's last
-// edit to voices.mjs: `VENDOR.voices` below names blob `ac36c4ff…` at office commit `50452393…`, the voices.mjs whose
-// `clusterVoices({ boundaries })` and `threadOf` this copy holds. test/pos-779-vendor-equality.test.mjs holds the copy to
+// edit to voices.mjs: `VENDOR.voices` below names blob `011fea12…` at office commit `db4bf081…` (this branch's merge of the
+// train, after POS-887 changed `createVoices`' room parameters and `standing`: nothing of `chains`, `clusterVoices`, `threadOf`,
+// `conversations` or `composeAnchor`), the voices.mjs whose `clusterVoices({ boundaries })` and `threadOf` this copy holds. test/pos-779-vendor-equality.test.mjs holds the copy to
 // that producer (seeded clouds, and the whole page against voices.mjs's own `conversations()`) and holds the pin to the
 // checkout. `VENDOR.journal` is NOT re-pinned: it names a world-journal.mjs older than the tree's, as it did on the base,
 // and `composeAnchor` is not touched by POS-779; the mismatch is disclosed in that test, not repaired here.
@@ -77,7 +78,7 @@ import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every h
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "ac36c4ffdb064bacd690b2174d19c38d7a743b29", at: "50452393707d042572c20253ad3ae88f0aa2f63d" },
+            blob: "011fea12cbd0c843557d2ec8fdd7f23f97f75957", at: "db4bf0811d04036dea69eee0fc2ae18fd84731a9" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });

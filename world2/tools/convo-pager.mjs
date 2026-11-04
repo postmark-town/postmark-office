@@ -1,7 +1,6 @@
 // convo-pager.mjs — A SETTLEMENT'S THREADS, AND THE PAGES BACK THROUGH ONE (POS-779).
 //
-// STATUS: UNWIRED (see convo-read.mjs). Pure over a view except `loadEpochView`, which composes the read, the
-// exact component builder and the memo.
+// Pure over a view except `loadEpochView`, which composes the read, the exact component builder and the memo.
 //
 // THE VIEW. One settlement's public voices (convo-read.mjs), their exact connected components (convo-components.mjs,
 // held to the vendored fold by its own test), and per thread: its members, its latest instant, and a GENERATION.
@@ -30,7 +29,7 @@ import { componentsOf, OverBudget, UnsupportedGeometry } from "./convo-component
 import { makeSlicer } from "./convo-slice.mjs";
 import { threadOf } from "./conversations.mjs";
 import { standingOf } from "../../src/speaker-standing.mjs";
-import { readEpoch, compareVoices, compareIds, ELIGIBILITY_VERSION } from "./convo-read.mjs";
+import { readEpochRows, interpretEpoch, guardRead, fenced, withSnapshot, epochOk, BUDGETS, compareVoices, compareIds, ELIGIBILITY_VERSION } from "./convo-read.mjs";
 
 export const PAGE = Object.freeze({ defaultLimit: 80, maxLimit: 200, defaultVoiceCap: 80, defaultListLimit: 40, maxListLimit: 100 });
 /**
@@ -74,11 +73,77 @@ export function viewBytes(view) {
   const str = (s) => (s == null ? 0 : C.string + C.charBytes * String(s).length);
   let n = C.base;
   for (const v of view.voices) n += C.voice + str(v.handle) + str(v.text) + str(v.place) + str(v.act_id) + str(v.era);
-  for (const t of view.threads) n += C.thread + C.member * (t.members?.length ?? 0) + str(t.first_act_id) + str(t.generation);
-  n += C.byActEntry * (view.byAct?.size ?? 0);
+  // a generation is always 32 hex characters, so it is charged as such without making it; the act-id index, once built, holds one
+  // entry per voice, so it is charged at that size whether or not a show-earlier request has built it yet
+  const generation = C.string + C.charBytes * 32;
+  for (const t of view.threads) n += C.thread + C.member * (t.count ?? 0) + str(t.first_act_id) + generation;
+  n += C.byActEntry * view.voices.length;
   for (const u of view.unplaced ?? []) n += C.unplaced + str(u.act_id) + str(u.anchor);
   for (const a of view.anchors ?? []) n += str(a);
   return n;
+}
+
+/**
+ * A thread, as the view keeps it. Its members are a window of the view's ONE flat `Int32Array` (no array per thread),
+ * and its generation is the digest below, made the first time something asks for it (`generation`) rather than for every
+ * thread of the epoch: a page names a few dozen threads and a show-earlier request one, while an epoch can hold 32,000.
+ * A thread of EAGER_MEMBERS or more has its digest made in the build, a slice at a time, so no single request ever hashes
+ * a long thread in one stretch. The value is the same either way: it is a function of the thread and the view's head.
+ */
+const EAGER_MEMBERS = 64;
+
+class Thread {
+  constructor(shared, start, count, first, last) {
+    this.shared = shared; this.start = start; this.count = count;
+    this.first_act_id = first.act_id; this.first_ms = first.at; this.latest_ms = last.at;
+    this._gen = null;
+  }
+  /** The member voice indexes, ascending, as a view onto the flat array. */
+  get members() { return this.shared.flat.subarray(this.start, this.start + this.count); }
+  get generation() { return (this._gen ??= generationOf(this)); }
+}
+
+/** The text a thread's generation hashes: the view's head, then one `;act:at:x:y:aboard` per member in order. */
+function generationOf(t) {
+  const { V, head, flat } = t.shared;
+  let text = head;
+  for (let k = t.start, end = t.start + t.count; k < end; k++) {
+    const v = V[flat[k]];
+    text += `;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`;
+  }
+  // one-shot digest over head + members: the same bytes a streamed update would hash, without a Hash object per thread
+  return hash("sha256", text, "hex").slice(0, 32);
+}
+
+/** The act-id index of a view: voice act id -> the index of its thread. Built when a show-earlier request needs it. */
+function buildByAct(view) {
+  const byAct = new Map();
+  const { V, flat } = view.shared;
+  for (let i = 0; i < view.threads.length; i++) {
+    const t = view.threads[i];
+    for (let k = t.start, end = t.start + t.count; k < end; k++) byAct.set(V[flat[k]].act_id, i);
+  }
+  return byAct;
+}
+
+/**
+ * The act-id index, made a slice at a time before a show-earlier request reads it. `view.byAct` makes it on first read if
+ * nobody has asked for it this way (a test, a caller that does not slice).
+ */
+export async function ensureByAct(view, { sliceMs, now, yieldFn } = {}) {
+  if (view._byAct) return view._byAct;
+  const slicer = makeSlicer({ ms: sliceMs ?? 4, ...(now ? { now } : {}), ...(yieldFn ? { yieldFn } : {}) });
+  const byAct = new Map();
+  const { V, flat } = view.shared;
+  let walked = 0;
+  for (let i = 0; i < view.threads.length; i++) {
+    const t = view.threads[i];
+    for (let k = t.start, end = t.start + t.count; k < end; k++) {
+      byAct.set(V[flat[k]].act_id, i);
+      if ((++walked & 63) === 0) await slicer.maybeYield();
+    }
+  }
+  return (view._byAct ??= byAct);
 }
 
 /**
@@ -88,31 +153,39 @@ export function viewBytes(view) {
 export async function buildView(source, { fuse, sliceMs, now, yieldFn } = {}) {
   const V = source.voices;
   const { components, stats } = await componentsOf(V, { earshotM: source.earshotM, ...(fuse ? { fuse } : {}), ...(sliceMs ? { sliceMs } : {}), ...(now ? { now } : {}), ...(yieldFn ? { yieldFn } : {}) });
-  // the generation digests and the act-id index walk every voice once more; on the main thread that is a slice at a time too
+  // what is left to do walks every voice at most once more (the members into one flat array, and the long threads'
+  // digests); on the main thread that is a slice at a time too
   const slicer = makeSlicer({ ms: sliceMs ?? 4, ...(now ? { now } : {}), ...(yieldFn ? { yieldFn } : {}) });
   const head = [ELIGIBILITY_VERSION, source.epoch.since, source.epoch.next ?? "open", source.edges_version ?? "", source.earshotM].join("|");
-  const byAct = new Map();
-  const threads = [];
-  let walked = 0;
+  let total = 0;
+  for (let i = 0; i < components.length; i++) total += components[i].length;
+  const flat = new Int32Array(total);
+  const shared = { V, head, flat };
+  const threads = new Array(components.length);
+  let pos = 0, walked = 0;
   for (let i = 0; i < components.length; i++) {
-    const members = Int32Array.from(components[i]);
-    // one-shot digest over head + members: the same bytes a streamed update would hash, without a Hash object per thread
-    // (32,000 singleton threads made that the largest cost of the walk)
-    let text = head;
-    for (const k of members) {
-      const v = V[k];
-      text += `;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`;
-      byAct.set(v.act_id, i);
-      if ((++walked & 63) === 0) await slicer.maybeYield();
-    }
-    const first = V[members[0]], last = V[members[members.length - 1]];
-    threads.push({ members, first_act_id: first.act_id, first_ms: first.at, latest_ms: last.at, count: members.length, generation: hash("sha256", text, "hex").slice(0, 32) });
+    const c = components[i], n = c.length, start = pos;
+    for (let k = 0; k < n; k++) flat[pos++] = c[k];
+    const t = new Thread(shared, start, n, V[c[0]], V[c[n - 1]]);
+    threads[i] = t;
+    if (n >= EAGER_MEMBERS) {
+      // a long thread's digest now, in slices, so that no request hashes it in one stretch
+      let text = head;
+      for (let k = start; k < pos; k++) {
+        const v = V[flat[k]];
+        text += `;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`;
+        if ((++walked & 63) === 0) await slicer.maybeYield();
+      }
+      t._gen = hash("sha256", text, "hex").slice(0, 32);
+    } else if ((walked += n) >= 1024) { walked = 0; await slicer.maybeYield(); }
   }
   // newest first; a tie on the instant is broken by the first act id, so the order is total
   const order = threads.map((_, i) => i).sort((a, b) => (threads[b].latest_ms - threads[a].latest_ms) || compareIds(threads[b].first_act_id, threads[a].first_act_id));
-  return { epoch: source.epoch, edges_version: source.edges_version ?? "", earshotM: source.earshotM, dials: source.dials ?? null, key: source.key,
-    voices: V, threads, order, byAct, stats, eras: source.eras, unplaced: source.unplaced,
+  const view = { epoch: source.epoch, edges_version: source.edges_version ?? "", earshotM: source.earshotM, dials: source.dials ?? null, key: source.key,
+    voices: V, threads, order, shared, _byAct: null, stats, eras: source.eras, unplaced: source.unplaced,
     non_sound_emissions: source.non_sound_emissions, source: source.source, anchors: source.anchors };
+  Object.defineProperty(view, "byAct", { enumerable: true, get() { return (this._byAct ??= buildByAct(this)); } });
+  return view;
 }
 
 /** One voice as the page renders it (threadOf's own shape plus the exact id). */
@@ -215,11 +288,12 @@ export function earlierPage(view, req, { voiceCap = PAGE.defaultVoiceCap } = {})
   const t = view.threads[ti];
   if (req.generation !== t.generation) return { status: "regenerated", thread: threadSummary(view, t, { live: view.epoch.next === null, voiceCap }) };
   // the first member at or after the cursor: everything before it is "earlier"
-  let lo = 0, hi = t.members.length;
+  const members = t.members;
+  let lo = 0, hi = members.length;
   const cmp = (v) => (v.at - req.before.at_ms) || compareIds(v.act_id, req.before.act_id);
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (cmp(view.voices[t.members[mid]]) < 0) lo = mid + 1; else hi = mid; }
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (cmp(view.voices[members[mid]]) < 0) lo = mid + 1; else hi = mid; }
   const from = Math.max(0, lo - req.limit);
-  const page = Array.from(t.members.subarray(from, lo), (i) => view.voices[i]);
+  const page = Array.from(members.subarray(from, lo), (i) => view.voices[i]);
   return { status: "ok", voices: page.map(voiceOut), earlier: from > 0 ? cursorOf(page[0]) : null };
 }
 
@@ -268,18 +342,51 @@ export function threadList(view, req, { live = view.epoch.next === null, voiceCa
  * The view of one epoch: from the memo when the fingerprint read in this snapshot equals the stored one,
  * else read, build and keep. `unavailable` is passed through whole; a build that overruns its work fuse
  * is `unavailable`, never a partial partition.
+ *
+ *   client    a client already inside ONE read-only repeatable snapshot (`openSnapshot`): the epoch is read on it and
+ *             the caller ends the snapshot. Without it the epoch takes its own snapshot from `pool` (a single-epoch caller).
+ *   inflight  an optional Map shared by the requests of one door. A build is joined ONLY by a request whose own
+ *             snapshot read the SAME FINGERPRINT (`key`: epoch, edges version, dials, source counts/bytes/ids/digests,
+ *             anchor geometry), that is, the same source: a request whose snapshot saw a different source (a row
+ *             committed between the two snapshots) has a different key and builds its own. The key is never the epoch's
+ *             name alone.
  */
-export async function loadEpochView(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {}, fuse, sliceMs, readSlice } = {}) {
-  const src = await readEpoch(pool, { epoch, isPrivate, edgesOf, memo, budgets, ...(readSlice ? { slice: readSlice } : {}) });
-  if (src.status !== "ok") return src;
-  if (src.from === "memo") return { status: "ok", from: "memo", view: src.value };
-  let view;
-  try { view = await buildView(src, { fuse, sliceMs }); }
-  catch (e) {
-    if (e instanceof OverBudget) return { status: "unavailable", reason: "over-budget", what: "component work", ...e.detail };
-    if (e instanceof UnsupportedGeometry) return { status: "unavailable", reason: "unsupported-geometry" };
-    return { status: "unavailable", reason: "build-failed" };
+export async function loadEpochView(pool, { epoch, isPrivate, edgesOf = null, memo = null, budgets = {}, fuse, sliceMs, readSlice, client = null, inflight = null } = {}) {
+  if (typeof isPrivate !== "function") throw new TypeError("loadEpochView needs the JS eligibility guard (spokenInRoom) — the SQL port is a prefilter, not the rule");
+  const B = { ...BUDGETS, ...budgets };
+  if (!epochOk(epoch)) return { status: "unavailable", reason: "bad-epoch" };
+  const edgesBefore = edgesOf ? String(edgesOf()?.version ?? "") : "";
+  const rows = await guardRead(() => (client
+    ? readEpochRows(client, { epoch, edgesBefore, memo, budgets })
+    : withSnapshot(pool, (c) => readEpochRows(c, { epoch, edgesBefore, memo, budgets }), { statementTimeoutMs: B.statementTimeoutMs })), B);
+  if (rows.status === "unavailable") return fenced(rows, edgesOf, edgesBefore);
+  if (rows.status === "ok") { // the memo held it under an equal fingerprint
+    const f = fenced(rows, edgesOf, edgesBefore);
+    return f.status === "ok" ? { status: "ok", from: "memo", view: f.value } : f;
   }
-  memo?.set(`${src.epoch.since}:${src.epoch.next ?? "open"}`, { key: src.key, bytes: viewBytes(view), anchors: src.anchors, value: view });
-  return { status: "ok", from: "store", view };
+  const run = async () => {
+    const src = await interpretEpoch(rows, { epoch, isPrivate, edgesBefore, slice: readSlice ?? {} });
+    if (src.status !== "ok") return src;
+    let view;
+    try { view = await buildView(src, { fuse, sliceMs }); }
+    catch (e) {
+      if (e instanceof OverBudget) return { status: "unavailable", reason: "over-budget", what: "component work", ...e.detail };
+      if (e instanceof UnsupportedGeometry) return { status: "unavailable", reason: "unsupported-geometry" };
+      return { status: "unavailable", reason: "build-failed" };
+    }
+    memo?.set(`${src.epoch.since}:${src.epoch.next ?? "open"}`, { key: src.key, bytes: viewBytes(view), anchors: src.anchors, value: view });
+    return { status: "ok", from: "store", view, edges_version: src.edges_version };
+  };
+  let built;
+  if (inflight) {
+    built = inflight.get(rows.key);
+    if (!built) {
+      built = run().finally(() => { if (inflight.get(rows.key) === built) inflight.delete(rows.key); });
+      inflight.set(rows.key, built);
+    }
+  } else built = run();
+  const out = await built;
+  if (out.status !== "ok") return out;
+  const f = fenced({ status: "ok" }, edgesOf, edgesBefore);
+  return f.status === "ok" ? out : f;
 }

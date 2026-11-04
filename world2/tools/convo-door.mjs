@@ -4,7 +4,7 @@
 // from `acts` through the bounded pieces that sit beside this file, instead of from the newest 2,000 voices in RAM:
 //
 //   convo-edges.mjs   the published sweeps this office has read: where a thread splits (never a heartbeat)
-//   convo-read.mjs    one epoch's public voices, in ONE repeatable-read snapshot, measured before bodies
+//   convo-read.mjs    one epoch's public voices, read on a snapshot the caller holds, measured before bodies
 //   convo-components  the exact connected components (the producer's `chains` rule), counted work, a fuse
 //   convo-memo.mjs    the last view of a few epochs, served only under an equal fingerprint
 //   convo-pager.mjs   the threads, their generations and the pages back through a thread
@@ -27,9 +27,10 @@
 
 import { publishedEdges, epochsOf } from "./convo-edges.mjs";
 import {
-  loadEpochView, threadList, earlierPage, parseEarlierRequest, parseListRequest, PAGE,
+  loadEpochView, threadList, earlierPage, ensureByAct, parseEarlierRequest, parseListRequest, PAGE,
 } from "./convo-pager.mjs";
 import { createEpochMemo } from "./convo-memo.mjs";
+import { openSnapshot, closeSnapshot, BUDGETS } from "./convo-read.mjs";
 
 /**
  * The door's own bounds, with their reasons. Engineering bounds, not law.
@@ -77,7 +78,8 @@ const epochAt = (epochs, ms) => epochs.findIndex((e) => e.since <= ms && (e.next
 
 /**
  * The door. Everything it reads comes in through the arguments, so a test can stand each one.
- *   pool          the serve pool (`connect()`): one client per epoch read
+ *   pool          the serve pool (`connect()`): ONE client per REQUEST, in ONE read-only repeatable snapshot, held
+ *                 until the request is answered; the live epoch and every closed epoch the request reads come from it
  *   isPrivate     the REAL `spokenInRoom` (row => boolean)
  *   settlements   () => ms[]            the published sweeps the reader keeps
  *   hearingWindow (ms) => { since }     the window open at ms
@@ -88,32 +90,38 @@ const epochAt = (epochs, ms) => epochs.findIndex((e) => e.since <= ms && (e.next
  */
 export function createConversationsDoor({ pool, isPrivate, settlements, hearingWindow, now = () => Date.now(), memo = createEpochMemo(), budgets = {}, fuse, sliceMs } = {}) {
   if (!pool || typeof isPrivate !== "function") throw new TypeError("the conversations door needs the pool and the real spokenInRoom guard");
-  const inflight = new Map(); // one build per epoch and edges version, shared by the requests that arrive together
+  // Builds shared by requests that arrive together, keyed by the FINGERPRINT each request's own snapshot read (the
+  // source's identity), never by the epoch's name: a request whose snapshot saw other rows has another key and builds
+  // its own (convo-pager.mjs § loadEpochView).
+  const inflight = new Map();
+
+  // ONE snapshot per REQUEST. The first epoch the request needs opens it; every other epoch of the request is read on
+  // the same client in the same transaction, so the live epoch, up to three closed ones, their rows, anchors and dials
+  // are one picture. It is ended in `attempt`'s finally, on every path. A request that retries (the edges moved)
+  // makes a second attempt that opens its own snapshot; an answer is only ever made from one attempt.
+  const snapshotOf = (ctx) => (ctx.snap ??= openSnapshot(pool, { statementTimeoutMs: { ...BUDGETS, ...budgets }.statementTimeoutMs }));
 
   const viewOf = (epoch, ctx) => {
     const id = `${epoch.since}:${epoch.next ?? "open"}|${ctx.edges.version}`;
     // one request reads an epoch once, however many sections ask for it
     if (ctx.views.has(id)) return ctx.views.get(id);
-    const asked = shared(id, epoch, ctx);
+    // and its reads are one after another: a client runs one statement at a time, and the cursors are named
+    const asked = (ctx.chain = ctx.chain.catch(() => {}).then(() => load(epoch, ctx)));
     ctx.views.set(id, asked);
     return asked;
   };
-  const shared = (id, epoch, ctx) => {
-    if (inflight.has(id)) return inflight.get(id);
-    const p = (async () => {
-      // THE FENCE. The epochs of this request were drawn from `ctx.edges`; the read asks for the edges' version
-      // twice, before its snapshot (it must be the very edges the epoch came from) and after it (read afresh). A sweep
-      // published in between answers `edges-moved`, and the request is made once more on the new edges.
-      let asked = 0;
-      const out = await loadEpochView(pool, {
-        epoch, isPrivate, memo, budgets, fuse, sliceMs,
-        edgesOf: () => (asked++ === 0 ? ctx.edges : publishedEdges({ settlements, hearingWindow, ms: ctx.ms })),
-      });
-      if (out.status !== "ok") throw new Unavailable(out.reason);
-      return out;
-    })().finally(() => inflight.delete(id));
-    inflight.set(id, p);
-    return p;
+  const load = async (epoch, ctx) => {
+    const { client } = await snapshotOf(ctx);
+    // THE FENCE. The epochs of this request were drawn from `ctx.edges`; the read asks for the edges' version
+    // twice, before its read (it must be the very edges the epoch came from) and after it (read afresh). A sweep
+    // published in between answers `edges-moved`, and the request is made once more on the new edges.
+    let asked = 0;
+    const out = await loadEpochView(pool, {
+      epoch, isPrivate, memo, budgets, fuse, sliceMs, client, inflight,
+      edgesOf: () => (asked++ === 0 ? ctx.edges : publishedEdges({ settlements, hearingWindow, ms: ctx.ms })),
+    });
+    if (out.status !== "ok") throw new Unavailable(out.reason);
+    return out;
   };
 
   /** Threads newest first across `epochs[startIdx..]`, from `after`, within a thread count, a line budget and an epoch count. */
@@ -136,11 +144,17 @@ export function createConversationsDoor({ pool, isPrivate, settlements, hearingW
   }
 
   async function attempt(searchParams) {
-    const ms = now();
+    const ctx = { ms: now(), edges: null, views: new Map(), snap: null, chain: Promise.resolve() };
+    try { return await answer(searchParams, ctx); }
+    finally { if (ctx.snap) await closeSnapshot(await ctx.snap.catch(() => null)); }
+  }
+
+  async function answer(searchParams, ctx) {
+    const { ms } = ctx;
     const edges = publishedEdges({ settlements, hearingWindow, ms });
     if (!edges.list.length) throw new Unavailable("settlements-unknown");
     const epochs = epochsOf(edges.list);
-    const ctx = { ms, edges, views: new Map() };
+    ctx.edges = edges;
     const historyFrom = new Date(edges.list[0]).toISOString();
 
     // ── SHOW EARLIER ─────────────────────────────────────────────────────────
@@ -151,6 +165,7 @@ export function createConversationsDoor({ pool, isPrivate, settlements, hearingW
       const idx = epochs.findIndex((e) => e.since === req.value.epoch.since);
       if (idx < 0) return NOT_AVAILABLE();
       const { view } = await viewOf(epochs[idx], ctx);
+      await ensureByAct(view, { ...(sliceMs ? { sliceMs } : {}) }); // the act-id index, a slice at a time, once per view
       const r = earlierPage(view, req.value, { voiceCap: PAGE.defaultVoiceCap });
       if (r.status === "unavailable") return NOT_AVAILABLE();
       if (r.status === "regenerated") return { code: 200, body: { now: new Date(ms).toISOString(), regenerated: true, thread: r.thread } };

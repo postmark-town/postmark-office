@@ -416,3 +416,116 @@ test("rows read for a page do not grow with older history or a private backlog: 
   assert.equal(sig(haunted), sig(base));
   assert.ok(haunted.cp.tally.rows <= base.cp.tally.rows + 4, `no hidden scan: ${haunted.cp.tally.rows} rows returned against ${base.cp.tally.rows}`);
 });
+
+// ── ONE SNAPSHOT PER REQUEST (POS-779 whole-carrier review F1; Wright 2026-11-03 19:16: "one read-only snapshot per request") ──
+// The live epoch and every closed epoch a page reads come from ONE pooled client in ONE read-only repeatable-read
+// transaction. Measured at the caller (the pool), and by what the database itself says: the backend pid and the
+// transaction's snapshot at the start of every epoch's read.
+
+/** A pool-shaped spy: counts the lifecycle of every client, and probes the backend and the snapshot at each epoch's first statement. */
+function snapshotSpyPool(real, { beforeEpochRead = null } = {}) {
+  const log = { connects: 0, begins: 0, rollbacks: 0, releases: 0, epochReads: 0, probes: [] };
+  return {
+    log,
+    async connect() {
+      log.connects += 1;
+      const c = await real.connect();
+      return {
+        on: (...a) => c.on(...a), removeListener: (...a) => c.removeListener(...a),
+        release: (...a) => { log.releases += 1; return c.release(...a); },
+        async query(text, params) {
+          const sql = String(text).trim();
+          if (/^BEGIN/.test(sql)) log.begins += 1;
+          if (/^ROLLBACK/.test(sql)) log.rollbacks += 1;
+          const epochStart = sql === "SELECT current_database() AS db";
+          // BEFORE the statement: in a snapshot taken per epoch this is the statement that would fix the snapshot
+          if (epochStart) { await beforeEpochRead?.(log.epochReads); log.epochReads += 1; }
+          const out = await c.query(text, params);
+          if (epochStart) log.probes.push((await c.query("SELECT pg_backend_pid() AS pid, pg_current_snapshot()::text AS snap")).rows[0]);
+          return out;
+        },
+      };
+    },
+  };
+}
+
+async function fourEpochs(name) {
+  const w = await world(name);
+  if (w.skip) return w;
+  const E0 = E1 - 12 * H;
+  const rows = [];
+  const add = (at, actor, x, y) => rows.push({ at: iso(at), actor, x, y, payload: { text: `${actor} ${at}`, place: "the quay", aboard: false } });
+  for (let i = 0; i < 3; i++) add(E3 + H + i * 60_000, `l${i}`, 0, 0);       // live
+  for (let i = 0; i < 2; i++) add(E2 + H + i * 60_000, `m${i}`, 1000, 0);    // closed 1
+  for (let i = 0; i < 2; i++) add(E1 + H + i * 60_000, `n${i}`, 2000, 0);    // closed 2
+  for (let i = 0; i < 2; i++) add(E0 + H + i * 60_000, `o${i}`, 3000, 0);    // closed 3
+  await w.manySays(rows);
+  w.edges = [E0, E1, E2, E3];
+  return w;
+}
+const fourDoor = (w, over = {}) => doorOver(w, { settlements: () => w.edges, hearingWindow: (ms) => ({ since: [...w.edges].reverse().find((e) => e <= ms) ?? null }), ...over });
+
+test("ONE REQUEST, ONE SNAPSHOT: the live epoch and three closed epochs are read on one client, in one transaction, in one database snapshot", async (t) => {
+  const w = await fourEpochs("convo_door_one_snapshot");
+  if (w.skip) return t.skip(w.skip);
+  const spy = snapshotSpyPool(w.pool);
+  const r = await fourDoor(w, { pool: spy }).handle(q());
+  assert.equal(r.code, 200);
+  assert.equal(r.body.live.length, 1);
+  assert.equal(r.body.closed.length, 3, "one thread from each of the three closed epochs");
+  assert.equal(spy.log.epochReads, 4, "the live epoch and the three closed ones were each read");
+  assert.equal(spy.log.connects, 1, "one pooled client for the request");
+  assert.equal(spy.log.begins, 1, "one transaction");
+  assert.equal(spy.log.rollbacks, 1);
+  assert.equal(spy.log.releases, 1, "handed back once");
+  assert.equal(new Set(spy.log.probes.map((p) => p.pid)).size, 1, "every epoch read on the same backend");
+  assert.equal(new Set(spy.log.probes.map((p) => p.snap)).size, 1, `every epoch read in the same snapshot (${spy.log.probes.map((p) => p.snap).join(" | ")})`);
+});
+
+test("a row committed BETWEEN two epoch reads of one request is not in that request, and is in the next (the race control)", async (t) => {
+  const w = await fourEpochs("convo_door_one_snapshot_race");
+  if (w.skip) return t.skip(w.skip);
+  let planted = null;
+  // before the SECOND epoch's first statement, another connection commits a public voice into that epoch's range
+  const spy = snapshotSpyPool(w.pool, { beforeEpochRead: async (k) => { if (k === 1) planted = await w.say(E2 + 2 * H, "late", 1000, 0); } });
+  const during = await fourDoor(w, { pool: spy }).handle(q());
+  assert.equal(during.code, 200);
+  assert.ok(planted, "the row was committed while the request was running");
+  const second = during.body.closed.find((x) => x.voices.some((v) => v.handle === "m0"));
+  assert.equal(second.voice_count, 2, "the second epoch is read as the first epoch's snapshot saw it: without the late row");
+  const everyId = [...during.body.live, ...during.body.closed].flatMap((x) => x.voices.map((v) => v.act_id));
+  assert.equal(everyId.includes(planted), false, "the late voice is nowhere in the answer");
+  assert.equal(new Set(spy.log.probes.map((p) => p.snap)).size, 1);
+  // control: the next request's snapshot has it, so the plant was real and the fixture can tell
+  const spy2 = snapshotSpyPool(w.pool);
+  const after = await fourDoor(w, { pool: spy2 }).handle(q());
+  assert.equal(after.body.closed.find((x) => x.voices.some((v) => v.handle === "m0")).voice_count, 3, "the next request sees the committed row");
+  assert.notEqual(spy2.log.probes[0].snap, spy.log.probes[0].snap, "and it is a different snapshot");
+});
+
+test("the one snapshot is ended on every path: an over-budget epoch, an unreadable one, a bad parameter and a thrown guard", async (t) => {
+  const w = await fourEpochs("convo_door_one_snapshot_ends");
+  if (w.skip) return t.skip(w.skip);
+  // a budget refusal inside the held snapshot
+  const a = snapshotSpyPool(w.pool);
+  const over = await fourDoor(w, { pool: a, budgets: { maxRows: 1 } }).handle(q());
+  assert.equal(over.code, 503);
+  assert.deepEqual([a.log.connects, a.log.begins, a.log.rollbacks, a.log.releases], [1, 1, 1, 1], "refused inside the snapshot, still ended once");
+  // a statement that fails
+  const b = snapshotSpyPool({ connect: async () => {
+    const c = await w.pool.connect();
+    return { on: (...x) => c.on(...x), removeListener: (...x) => c.removeListener(...x), release: (...x) => c.release(...x),
+      query: (text, p) => (/^SELECT slug, status, geometry, data FROM marks WHERE status = 'standing'/.test(String(text).trim()) ? Promise.reject(Object.assign(new Error("boom"), { code: "XX000" })) : c.query(text, p)) };
+  } });
+  const bad = await fourDoor(w, { pool: b }).handle(q());
+  assert.equal(bad.code, 503);
+  assert.deepEqual([b.log.connects, b.log.rollbacks, b.log.releases], [1, 1, 1]);
+  // a request that fails its parameters opens no snapshot at all
+  const c = snapshotSpyPool(w.pool);
+  const nope = await fourDoor(w, { pool: c }).handle(q({ voices: "9999" }));
+  assert.equal(nope.code, 422);
+  assert.equal(c.log.connects, 0, "no client taken for a request the door refuses on its parameters");
+  // and the pool is whole afterwards: every client came back
+  assert.equal(w.pool.idleCount, w.pool.totalCount, "every client is back in the pool");
+  assert.equal(w.pool.waitingCount, 0);
+});

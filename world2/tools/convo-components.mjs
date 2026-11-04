@@ -216,11 +216,11 @@ export async function componentsOf(voices, { earshotM, fuse = 50_000_000, sliceM
     for (const a of cellList) {
       // a cell with no neighbour in the window reaches no checkpoint below: 32,000 lonely cells are 1.5M lookups, a slice at a time
       if ((++visited & 127) === 0 && due()) await tick();
-      for (let dx = -WINDOW; dx <= WINDOW; dx++) {
-        for (let dy = -WINDOW; dy <= WINDOW; dy++) {
-          if (dx === 0 && dy === 0) continue;
-          if (dx < 0 || (dx === 0 && dy < 0)) continue; // each unordered pair once
-          const b = cols.get(a.cx + dx)?.get(a.cy + dy);
+      for (let dx = 0; dx <= WINDOW; dx++) { // each unordered pair once: the window's later half (dx > 0, or dx = 0 with dy > 0)
+        const col = cols.get(a.cx + dx); // one column lookup per dx, not one per cell of the window
+        if (!col) continue;
+        for (let dy = dx === 0 ? 1 : -WINDOW; dy <= WINDOW; dy++) {
+          const b = col.get(a.cy + dy);
           if (!b) continue;
           stats.cellPairs += 1;
           stats.work += 1;
