@@ -1399,7 +1399,9 @@ async function madeThing(id) {
  * It becomes a sited draft keeping its maker's id, where the dropper stands, and
  * the hold face `set-down` ends the holding. In order, each refusal writing nothing:
  *   · the maker's house only (P2-a): the key must act for its maker;
- *   · a holder is set down empty (P2-d), and a candy is never set down (POS-692);
+ *   · a candy is never set down (POS-692). A holder may be set down full (WLD-138; Darko
+ *     2026-11-03 "Yes, at settlement", replacing P2-d): what it holds stays held by its id,
+ *     and holder and contents appear together at the next settlement;
  *   · the stake, exactly as a published thing's set-down asks it (P2-b,
  *     dropStakeTerms): free on the maker's own ground, else ✦1 from the dropper,
  *     terms first and accept: true;
@@ -1417,12 +1419,6 @@ async function setDownMade({ made, args, key, actor }) {
   if (!key?.handles?.has(maker)) throw refuse(nm.setDownNotByMaker(id, maker));
   const { liveUnitDeps, thingHoldingEntry } = await import("./world-units.mjs");
   const deps = await liveUnitDeps();
-  {
-    const { units, attachments } = await deps.readRows();
-    const { foldUnits, totalOf } = await import("./world-stacks.mjs");
-    const n = holdingsOf(attachments, id).length + totalOf(foldUnits(units), id);
-    if (n > 0) throw refuse(nm.setDownHolding(id, n));
-  }
   const { lineageOf } = await import("./world-grants.mjs");
   const { classExtendsOf } = await import("./world-classes.mjs");
   if (lineageOf(String(made.kind), classExtendsOf()).includes("candy")) throw refuse(nm.setDownCandy(id, made.kind));

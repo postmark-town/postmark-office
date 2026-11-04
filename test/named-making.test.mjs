@@ -22,7 +22,7 @@ import { foldOwners, ownershipEvents, takeOwns } from "../src/ownership.mjs";
 import { holdRecordKeeper } from "../src/hold-record.mjs";
 import {
   isNamedForm, namedFormRefusal, madeRecordOf, foldMade, madeIdTaken, MAKE_FACE, CONSUME_FACE, SET_DOWN_FACE,
-  setDownNotByMaker, setDownHolding, setDownCandy, setDownDraftOf, setDownWords, SET_DOWN_EXTENT,
+  setDownNotByMaker, setDownCandy, setDownDraftOf, setDownWords, SET_DOWN_EXTENT,
 } from "../src/named-making.mjs";
 
 const SHA = "e".repeat(40);
@@ -352,7 +352,6 @@ test("part 2 · the refusals say what can be done instead", () => {
   const a = setDownNotByMaker(`${LB}/x`, LB);
   assert.equal(a.code, 403);
   assert.match(a.hint, /Give it back to its maker's house to set down, or keep, give or eat it/);
-  assert.match(setDownHolding(`${LB}/bag`, 2).defect, /holds 2 things, and a holder is set down empty/);
   assert.ok(setDownCandy(`${LB}/c`, "pocket-comet").hint.includes(`eat it (consume { thing: "${LB}/c" }), give it, or give it into a bowl`));
 });
 

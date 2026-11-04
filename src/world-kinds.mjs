@@ -130,7 +130,7 @@ async function shownIn(fold, holder, attachments, view, deps, { sharp = false } 
 /** A published holder, or the refusal: a draft holds nothing yet; a mark that does not hold, says so. */
 async function holderOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a draft holds nothing yet. Nothing was changed.");
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a draft holds nothing yet, and a holder set down with things in it gives them up when it publishes at the next settlement. Nothing was changed.");
   const law = holderLawOf({ holder: id, mark, view });
   if (!law.holder) throw bounce(422, `${id} holds nothing`, `it is ${law.className ? `a ${law.className}` : "a mark of no thing class"} whose holder is false; a holder is a thing its maker made with holder: true. Nothing was changed.`);
   if (law.capacity_refused) throw bounce(422, `${id}'s own capacity is refused`, `${law.capacity_refused}; until its maker sets one within them, nothing goes in or comes out by count. Nothing was changed.`);

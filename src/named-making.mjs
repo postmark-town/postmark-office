@@ -150,12 +150,6 @@ export function setDownNotByMaker(id, maker) {
     hint: `it becomes ${maker}'s own draft where it is set down, so only ${maker}'s house files it. Give it back to its maker's house to set down, or keep, give or eat it (consume { thing: "${id}" }, if it is a consumable). Nothing was changed.` };
 }
 
-/** P2-d: a draft holds nothing until it publishes, so a holder is set down empty. */
-export function setDownHolding(id, n) {
-  return { code: 409, defect: `${id} holds ${n} ${n === 1 ? "thing" : "things"}, and a holder is set down empty`,
-    hint: `set down, it is a draft until the next settlement, and a draft holds nothing. Take out what it holds first (take { from: "${id}" }), then set it down. Nothing was changed.` };
-}
-
 /** A candy on the ground is a proved set-down unit's (POS-692, drop-provenance): a named candy is eaten or given, not set down. */
 export function setDownCandy(id, kind) {
   return { code: 422, defect: `${id} is a ${kind}, a kind of candy, and candy is not set down on the ground`,
