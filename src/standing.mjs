@@ -115,12 +115,20 @@ export function foldStanding(text) {
       if (looksLikeAct(line)) unparsed.push(line);
       continue;
     }
-    standing.set(rec.handle, {
-      state: rec.act === "lift" ? "clear" : rec.act === "revoke" ? "revoked" : "quarantined",
-      since: rec.date, by: rec.by, reason: rec.reason, founderWord: rec.founderWord, line: rec.line,
-    });
+    standing.set(rec.handle, standingOfRecord(rec));
   }
   return { standing, unparsed };
+}
+
+/**
+ * One act's record → the standing it leaves its handle in. The one build, for
+ * the file fold above and the store fold (src/standing-store.mjs § foldRecords).
+ */
+export function standingOfRecord(rec) {
+  return {
+    state: rec.act === "lift" ? "clear" : rec.act === "revoke" ? "revoked" : "quarantined",
+    since: rec.date, by: rec.by, reason: rec.reason, founderWord: rec.founderWord, line: rec.line,
+  };
 }
 
 /** Suspended = the write doors are shut. `clear` and "never mentioned" are both open. */

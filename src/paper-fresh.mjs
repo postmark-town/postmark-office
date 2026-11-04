@@ -10,13 +10,16 @@
 //
 // ── THE THREE RUNGS, and what each one actually means ──────────────────────
 //
-//   settled  — the office's read index holds it. The index is rebuilt from a
-//              town checkout by the rehydrate tick, and every response already
-//              carries the commit it was built from (X-Postmark-As-Of), so
-//              "settled" is a sha a reader can go and look at.
+//   settled  — the office's read index holds it. On a switched office the index
+//              is the store's town index, kept from the town record by
+//              `postmark-town-index.timer` (deploy/town-index-ingest.sh; see
+//              deploy/DEPLOY.md), and every response already carries the commit
+//              it was built from (X-Postmark-As-Of), so "settled" is a sha a
+//              reader can go and look at. (When this was written the index was
+//              office.db, rebuilt by the rehydrate tick, since retired.)
 //   written  — the pen has committed it to the town record since that index was
 //              built. True of every paper edit made through this office in the
-//              window between the edit and the next tick.
+//              window between the edit and the next index ingest.
 //   pending  — the town log holds an un-drained row for it: the act is in the
 //              office's own bookkeeping and the ferry has not settled it.
 //
@@ -37,13 +40,16 @@
 // letters are the class the crossing genuinely paces.
 //
 // So the crossing has never been what paces paper publicly, before the cutover
-// or after it. What paces it is the REHYDRATE TICK — the office's read index.
-// Nominally every fifteen minutes (deploy/postmark-office-rehydrate.timer,
-// `*:07,22,37,52`); measured on the live box on 2026-08-25 at three hours and
-// eighteen minutes behind the town tip. That gap is the whole latency a
-// resident actually feels, and `written` is the rung that closes it: the office
-// re-reads the file the pen wrote, from the same checkout the pen wrote it into,
-// with the same parser the hydration uses.
+// or after it. What paces it is the office's READ INDEX. When this was written
+// that was office.db, rebuilt by the rehydrate tick (nominally every fifteen
+// minutes; the timer is retired, deploy/DEPLOY.md § Retiring the rehydrate);
+// measured on the live box on 2026-08-25 at three hours and eighteen minutes
+// behind the town tip. Today it is the store's town index, which
+// `postmark-town-index.timer` keeps on a fifteen-minute cadence. That gap is the
+// whole latency a resident actually feels, and `written` is the rung that
+// closes it: the office re-reads the file the pen wrote, from the same checkout
+// the pen wrote it into, with the same parsers the index ingest reads with
+// (town-index.mjs).
 //
 // A compose built on the journal alone would have been byte-identical to the
 // settled read on the live box today and for the whole flag-off era — a
@@ -54,10 +60,11 @@
 // ── ONE READER, NEVER A SECOND RENDERER ────────────────────────────────────
 //
 // The VALUE always comes from the checkout, parsed by the same readers the
-// hydration uses (vendor/tools/lib/town.mjs's `parseFrontmatter`, profiles.mjs,
-// panes.mjs). It is never re-derived from a journal row's arguments. That is
-// town-updates.mjs's own rule, kept: "There is no second renderer of an ADDRESS
-// card here, so there is nothing that can drift from what the pen writes."
+// town index's ingest uses (vendor/tools/lib/town.mjs's `parseFrontmatter`,
+// profiles.mjs, panes.mjs; town-index.mjs). It is never re-derived from a
+// journal row's arguments. That is town-updates.mjs's own rule, kept: "There
+// is no second renderer of an ADDRESS card here, so there is nothing that can
+// drift from what the pen writes."
 //
 // The journal supplies the TENSE, not the text. Today a pending row and a
 // written file always coincide, because the door writes both in one call — so
@@ -114,7 +121,7 @@ export const LADDER_NOTE =
   + "written = the pen has committed it to the record since that index; "
   + "pending = an act in the town log the ferry has not settled yet";
 
-// ── the live readers: one per paper file, each the hydration's own ──────────
+// ── the live readers: one per paper file, each the index ingest's own parser ─
 
 /** ADDRESS.md as the checkout currently holds it: `{ data, body }` or null. */
 export function readAddress(clone, handle) {
@@ -125,9 +132,10 @@ export function readAddress(clone, handle) {
   } catch { return null; }
 }
 
-// The image set the atlas hydration derives, re-derived here from the same
-// declared `assets:` line and by the same rule: the door lets the resident
-// declare and the parser never infers (#865, Keemin 2026-07-29).
+// The extensions `readHomeImages` counts as pictures when it lists HOME/. The
+// vendored reader keeps its own, shorter IMAGE_RE for the settled card's
+// `homeImages` (vendor/tools/lib/town.mjs: png, jpg, jpeg, webp, gif), so an
+// .avif or .svg under HOME/ is listed here and not by the settled read.
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|avif|svg)$/i;
 
 /**
@@ -145,7 +153,11 @@ export function addressTextIn(ctx, handle) {
   } catch { return null; }
 }
 
-/** HOME/HOME.md as the checkout currently holds it: `{ data, body, images }`. */
+/** HOME/HOME.md as the checkout currently holds it: `{ data, body, images }`.
+ *  `images` is the set the atlas derives (town-index.mjs, `atlasRows`'
+ *  `homeAssets`), from the same declared `assets:` line and by the same rule:
+ *  the door lets the resident declare and the parser never infers (#865,
+ *  Keemin 2026-07-29). */
 export function readHomeFile(clone, handle) {
   try {
     const file = join(clone, "WHITE_PAGES", handle, "HOME", "HOME.md");
@@ -158,7 +170,7 @@ export function readHomeFile(clone, handle) {
 
 /** The house's picture as the clone's households.json keeps it (POS-219), or
  *  null. The drain renders that file in the same act that keeps a picture, so
- *  this is the record a moment ago rather than at the last hydrate. */
+ *  this is the record a moment ago rather than at the last index ingest. */
 export function readHomePicture(clone, handle) {
   try { return homePictureIn(JSON.parse(readFileSync(join(clone, REGISTRY_PATH), "utf8")), handle); }
   catch { return null; }
@@ -184,15 +196,6 @@ const same = (a, b) => {
   catch { return false; }
 };
 
-/**
- * The context every composer needs, built once per read.
- *
- * GARNISH DISCIPLINE THROUGHOUT. No configured clone, an unreadable checkout, a
- * missing standing ledger, a town log that is not there: every one of them
- * answers "no overlay" and the read falls back to the settled index. This must
- * never be the reason a public read 500s — a freshness stamp is worth less than
- * the answer it decorates.
- */
 // THE PENDING ROWS ARE READ BY THE DOOR, BEFORE THE READ (POS-271). The town log
 // is a paper now (paperwork.mjs) and answers with a promise, while the composed
 // reads this context feeds (queries.mjs § resident, home, windowRead, doorstep)
@@ -217,6 +220,15 @@ export async function freshFor(handle, { odb = null, clone = null, asOf = null }
   return { clone, asOf, pendingRows, suspended };
 }
 
+/**
+ * The context every composer needs, built once per read.
+ *
+ * GARNISH DISCIPLINE THROUGHOUT. No configured clone, an unreadable checkout, a
+ * missing standing ledger, a town log that is not there: every one of them
+ * answers "no overlay" and the read falls back to the settled index. This must
+ * never be the reason a public read 500s — a freshness stamp is worth less than
+ * the answer it decorates.
+ */
 export function freshnessFor(handle, { clone = null, asOf = null, pendingRows = [], suspended = false } = {}) {
   const ctx = { handle, clone: null, asOf: asOf ?? null, suspended: false, pending: new Map() };
   if (!handle) return ctx;

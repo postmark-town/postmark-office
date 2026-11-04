@@ -71,7 +71,8 @@ const bounce = (code, defect, hint, extra = {}) => {
  * carrier through the CLASS marks' `mobility:` field — and `WORLD/world-state.json`
  * (the fold this office reads) drops `class:` and `mobility:`, which that file's
  * own header says out loud. Against world main `5beca99a` it answers `[]` from
- * the fold and needs the hydrated `world.db` to answer at all. `servicesFromFold`
+ * the fold and needs the hydrated world graph to answer at all (it was `world.db`
+ * when this was measured; it is the store's snapshot now). `servicesFromFold`
  * reads `mechanic: timetable` off the mark itself and answers from the fold
  * alone, which is the only input a door can count on. One question, the reader
  * that can actually answer it.

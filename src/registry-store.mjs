@@ -32,7 +32,7 @@
 // tools/registry-drain.mjs.
 
 import { actsQuery } from "./world2-acts.mjs";
-import { registryFromRows, pinsFromRows, HOUSEHOLD_KEYS, PIN_KEYS } from "./registry-rows.mjs";
+import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 
 // ORDER BY `ord`, always. The file's 118 keys are in declaration order and
 // nothing derives it (measured 2026-09-22: not sorted, and `since` runs
@@ -208,9 +208,11 @@ export async function loadPins(env = process.env) {
 //
 // `office_api` holds INSERT and UPDATE on all three tables (019_households.sql)
 // and no DELETE anywhere. `insertRegistryRows` is the SEED's one-time fill.
-// `upsertHousehold` and `upsertPin` are the hooks POS-158's mint calls, in its
-// own transaction, before it calls `drainRegistry()` — they are exported and
-// falsified here so that lane inherits a writer rather than inventing one.
+// `upsertHousehold` and `upsertPin` are the hooks POS-158's mint calls
+// (src/ceremony.mjs) before it calls `drainRegistry()`, and that the drain's own
+// `--ingest-missing` path calls to adopt a row the store lacks
+// (tools/registry-drain.mjs). They are falsified here, so the mint inherited a
+// writer rather than inventing one.
 
 const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly", "provisional"];
 // `home_images` (050, POS-219) is NOT in COLUMNS, on purpose: COLUMNS is what
@@ -336,7 +338,10 @@ export async function insertHousehold(row, env = process.env) {
   throw last;
 }
 
-/** POS-158's hook: one house, EDITED in place — the place is the caller's. Never deletes. */
+/**
+ * The mint's hook (POS-158, src/ceremony.mjs): one house, EDITED in place —
+ * the place is the caller's. Never deletes.
+ */
 export async function upsertHousehold(row, env = process.env) {
   const set = COLUMNS.filter((c) => c !== "slug").map((c) => `${c} = EXCLUDED.${c}`).join(", ");
   return actsQuery(
@@ -344,7 +349,7 @@ export async function upsertHousehold(row, env = process.env) {
        ON CONFLICT (slug) DO UPDATE SET ${set}`, valuesOf(row, COLUMNS), env);
 }
 
-/** POS-158's hook: one pin, inserted or edited in place. Never deletes. */
+/** The mint's hook (POS-158, src/ceremony.mjs): one pin, inserted or edited in place. Never deletes. */
 export async function upsertPin(row, env = process.env) {
   const set = PIN_COLUMNS.filter((c) => c !== "handle").map((c) => `${c} = EXCLUDED.${c}`).join(", ");
   return actsQuery(
@@ -490,7 +495,3 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
   if (r === null) return null;
   return { slug: r.length ? r[0].slug : null };
 }
-
-// Re-exported so a future reader importing "the registry's grammar" gets it
-// from one place whether it is reading the file or the table.
-export { HOUSEHOLD_KEYS, PIN_KEYS };

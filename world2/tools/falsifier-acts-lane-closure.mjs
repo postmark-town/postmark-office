@@ -12,11 +12,11 @@
 // And the migration meta-rule, gold §3, verbatim: "every change answers WHICH
 // LANE, WHICH TABLE, WHICH PEN — or it is refused."
 //
-// ── WHY THIS EXISTS BESIDE falsifier-acts-parity ─────────────────────────────
+// ── WHY THIS EXISTS BESIDE falsifier-acts-parity (DELETED, POS-156) ──────────
 //
-// The parity falsifier asserts: every undrained sqlite JOURNAL row has its
-// `acts` twin. That is a complete check of the lanes that write a journal row,
-// and it is BLIND BY CONSTRUCTION to the lanes that do not — it iterates the
+// The parity falsifier asserted: every undrained sqlite JOURNAL row has its
+// `acts` twin. That was a complete check of the lanes that write a journal row,
+// and it was BLIND BY CONSTRUCTION to the lanes that do not — it iterated the
 // journal, so a lane with no journal row is a lane it never asks about.
 //
 // That blindness is what hid the say gap. Speech is named in the first sentence
@@ -61,9 +61,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
 // LAW (parity matrix P-143, verbatim): "The 09-30 reverse-mirror expiry does NOT
-// apply to an unflipped lane." The dates live PER LANE in `LANE_MIRROR`
-// (src/world2-acts.mjs) since DEC-2 was ruled; this file's expiry gate names the
-// lanes it reds on and never counts one exempt by ruling.
+// apply to an unflipped lane." The dates lived PER LANE in `LANE_MIRROR`
+// (src/world2-acts.mjs) from DEC-2 on, and this file's expiry gate named the
+// lanes it reddened on and never counted one exempt by ruling.
 // The mirror-expiry imports are GONE (G1 / POS-156): `LANE_MIRROR` and the
 // functions over it were deleted with the journal INSERT they were pressuring,
 // which is what DEC-2 said ends a lane's obligation -- removing the row, ports
@@ -82,14 +82,15 @@ const has = (name) => process.argv.includes(name);
 // are the only ones that exist:
 //
 //   "journal"  the lane writes a sqlite journal row; `appendJournal`'s mirror
-//              carries it, and falsifier-acts-parity is what checks it.
+//              carries it, and falsifier-acts-parity (deleted, POS-156) was
+//              what checked it.
 //   "lane"     the lane keeps its own pen and calls `mirrorLaneAct`; THIS file
 //              checks it, in the numbered check named beside it.
 //   "none"     the lane deliberately does not reach `acts`, WITH ITS REASON.
 //              A "none" is a ruling, not a gap, and every one of them is a
 //              sentence somebody has to defend.
 const LANE_OF = Object.freeze({
-  // journalled — parity falsifier's territory
+  // journalled — the (deleted) parity falsifier's territory
   "leave-mark": "journal", withdraw: "journal", enter: "journal", exit: "journal",
   // `declare-stance-on`, NOT `declare-stance` — the apex's own spelling
   // (world-stance.mjs § ACTION_STANCE). Written as a literal rather than
@@ -100,18 +101,19 @@ const LANE_OF = Object.freeze({
   // THE ARENA'S BEATS — all five land as `arena-act` journal rows
   // (src/arena.mjs; parity matrix P-143: "state derived from the dynamic.db
   // journal … mirrored to PG `acts` by the all-lanes shadow"), so the parity
-  // falsifier carries them like any journalled lane. Do not confuse this with
-  // the PEN flip, which is refused BY RULING for this lane (Keemin,
+  // falsifier (deleted, POS-156) carried them like any journalled lane. Do not
+  // confuse this with the PEN flip, which is refused BY RULING for this lane (Keemin,
   // 2026-08-29, P-143): the refusal is a fact about `W2_PEN`, not about the
   // mirror — a beat still reaches `acts` the journalled way. Named
   // 2026-09-02, the first census run against an apex that dispatches them
   // (the C1 flip night); until then check 0 had never been asked.
-  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal", // strike: the encounter's now (below)
+  // strike: the encounter's now (below)
+  strike: "lane", cast: "journal", guard: "journal", lift: "journal", loot: "journal",
   // THE VEHICLE'S ACT (#2986, 2026-09-19). Which lane: journal. Which table:
   // `journal`, class `ride`. Which pen: `appendJournal`, which carries the
   // World 2.0 mirror into `acts` itself — the same path enter/exit take, so
-  // this is the parity falsifier's territory and needs no closure check of its
-  // own. It is NOT `move`: a walk is a line with a pace that position readers
+  // this was the (deleted) parity falsifier's territory and needs no closure
+  // check of its own. It is NOT `move`: a walk is a line with a pace that position readers
   // interpolate along, and a ride has no line and no intermediate points.
   //
   // ⚑ THIS ROW IS HERE BECAUSE THE CENSUS ASKED FOR IT AND THE LANE HAD NOT

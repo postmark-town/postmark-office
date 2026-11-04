@@ -13,7 +13,6 @@ import { isPrincipal } from "./ops.mjs";
 import { pronounsOf } from "./profiles.mjs"; // WLD-83: pronouns, profile first
 import { householdOf, giverLookup } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
-import { isResidentHandle } from "./residency.mjs"; // the door's own admission grammar — one definition of what a handle is
 import { dialNumber, ideasTank } from "./world-classes.mjs"; // the doorstep's own dials, read off the record — never held here; the tank is the first-idea fact (firstIdeaStanding)
 import { freshnessFor, freshFor, addressTextIn, composeResidentCard, composeWindow } from "./paper-fresh.mjs"; // the freshness ladder
 import { readPane, paneRelPath, WINDOW_PURPOSE, WINDOW_STEP_ONE, WINDOW_POINTER } from "./panes.mjs"; // the pane's frame — one owner, read by this door and by the act
@@ -181,11 +180,6 @@ export const excerpt = (row) => ({
   first_line: letterExcerpt(JSON.parse(row.json).body),
 });
 
-// newest-first, with real timestamps winning over bare day-stamps on the same
-// day (delivered_at is UTC ISO, so string order IS time order; a bare `date`
-// sorts as that day's midnight, before any timestamped same-day letter).
-const NEWEST = "COALESCE(delivered_at, date) DESC, id";
-
 // A resident is a town office (postmaster/illuminator etc.) when their
 // ADDRESS.md carries `office: true`. The index's derivation (town-index.mjs §
 // residentRows) normalizes that onto the stored json as is_office; this reads
@@ -222,10 +216,11 @@ export const TOWN_OFFICES_CAP = 25;
 // the answer now SAYS when it stopped listing.
 // ── ONE ROLL, AND THIS READ NO LONGER KEEPS A SECOND ONE (#1981) ────────────
 //
-// `counts.residents` came out of `meta.hydrated_counts` — a snapshot stamped at
-// hydration from the VENDORED roll, which enumerates WHITE_PAGES with a name
-// list (`vendor/tools/lib/town.mjs`: `n !== "TEMPLATE"`). A name list is not a rule, so
-// the second non-resident directory the town grew walked straight through it,
+// `counts.residents` came out of `meta.hydrated_counts` — a snapshot stamped
+// when the index was built, from the VENDORED roll, which enumerates
+// WHITE_PAGES with a name list (`vendor/tools/lib/town.mjs`:
+// `n !== "TEMPLATE"`). A name list is not a rule, so the second non-resident
+// directory the town grew walked straight through it,
 // and this door published 166 residents while `/metrics/mail` and `/residents`
 // — both counting the admitted table — published 165.
 //
@@ -243,10 +238,10 @@ export const TOWN_OFFICES_CAP = 25;
 // rows it claims to count is a claim nobody can check.
 //
 // ⚑ WHY NOT FIX THE STAMP INSTEAD, which is the other half of the choice. A
-// snapshot corrected at hydration is right only from the next rehydrate — and
-// it would leave two counters in the office, agreeing only for as long as
-// somebody keeps their predicates in step. That is the arrangement that has now
-// produced this bug twice. The other counts in `hydrated_counts` are left
+// snapshot corrected when the index is built is right only from the next
+// rebuild — and it would leave two counters in the office, agreeing only for as
+// long as somebody keeps their predicates in step. That is the arrangement that
+// has now produced this bug twice. The other counts in `hydrated_counts` are left
 // exactly as they are: they are not what this issue is about, and widening the
 // derivation to them is a change nobody has asked for.
 
@@ -290,9 +285,6 @@ export const rollEntry = (handle, d) => {
   return { handle, display: d.display ?? d.name ?? handle, github: d.github ?? d.address?.data?.github ?? null, is_office: isOffice(d), joined: d.address?.data?.joined ?? null,
     ...(pronouns ? { pronouns } : {}) };
 };
-
-/** Is a card an office's? queries.mjs's one reading of the flag, exported; nothing imports it today (rollEntry reads the flag itself). */
-export const isOfficeCard = (d) => isOffice(d);
 
 // The roster the DOOR serves — bounded, counted, walkable, and filterable.
 //
@@ -346,12 +338,12 @@ export const CARD_MAIL = 5;
 // `fresh` is the optional third argument the three paper reads take — the
 // store's resident, windowRead and home (town-index-store.mjs), which hand its
 // context to residentOf and windowReadOf below, and to paper-fresh.mjs §
-// composeHome: `{ odb, clone, asOf }`. Given it, the read composes what the pen has written
-// since the index was built, and stamps every composable field with which
-// tense it is in (src/paper-fresh.mjs carries the ladder and its reasoning).
-// Given nothing, the read answers exactly as it always has plus a block saying
-// every field is settled — which is the truth for an office with no checkout,
-// and is deliberately not the same shape as no block at all.
+// composeHome: `{ odb, clone, asOf }`. Given it, the read composes what the
+// pen has written since the index was built, and stamps every composable field
+// with which tense it is in (src/paper-fresh.mjs carries the ladder and its
+// reasoning). Given nothing, the read answers exactly as it always has plus a
+// block saying every field is settled — which is the truth for an office with
+// no checkout, and is deliberately not the same shape as no block at all.
 //
 // It is composed HERE, in the shared shapers the store's readers call, for the
 // same reason the household garnish is: every door — the flat MCP tools, the
@@ -360,13 +352,14 @@ export const CARD_MAIL = 5;
 // reviewer would then have to diff.
 //
 // ⚠ IT DELIBERATELY DOES NOT FALL BACK TO `process.env.TOWN_CLONE` (2026-08-25,
-// Wright's review). Every production call site (counted then at five, more
-// now) passes a clone explicitly — the flats, both apexes, and the REST
-// doors (server.mjs) — so an ambient
-// default would be dead in production and alive only in tests, where it is the
-// exact thing that makes a suite pass or fail on the shell it was launched
-// from. The rule this module now keeps is profiles.mjs's own: the READ PATH
-// takes the clone; only the outermost door binds the ambient value.
+// Wright's review). Every production call site (counted then at five; at least
+// a dozen `freshFor` calls today, in the doorstep and house bundles, the
+// household apex, this file, the flats and the REST doors) passes a clone
+// explicitly, so an ambient default would be dead in production and alive only
+// in tests, where it is the exact thing that makes a suite pass or fail on the
+// shell it was launched from. The rule this module now keeps is profiles.mjs's
+// own: the READ PATH takes the clone; only the outermost door binds the ambient
+// value.
 
 /**
  * The composed address card from the stored card, the newest CARD_MAIL of each
@@ -451,7 +444,7 @@ export function residentOf(d, pages, handle, ctx) {
   // It was `if (out.profile == null) out.profile = profileOf(handle)` — a
   // read-time re-read of PROFILE.md, here because the index on the box is
   // already built and a fix that lands only at hydration waits for the next
-  // rehydrate. The freshness ladder does that same job one step further down,
+  // ingest. The freshness ladder does that same job one step further down,
   // from a NAMED clone and with a tense attached, so keeping both was not
   // belt-and-braces; the two actively fought.
   //
@@ -473,7 +466,7 @@ export function residentOf(d, pages, handle, ctx) {
   // What remains is the one thing the garnish also did and the compose does not
   // need a clone for: guaranteeing the key exists. The hydrated path writes an
   // explicit `profile: null` for a resident without one, so the door must too,
-  // or the same resident answers `null` after a rehydrate and no key at all
+  // or the same resident answers `null` after an ingest and no key at all
   // before it.
   if (out.profile === undefined) out.profile = null;
   // The ladder rides last, so it stamps the card the caller is actually handed
@@ -809,15 +802,15 @@ export function correspondentsOf(rows, handle, { limit, offset } = {}) {
     }
     const parties = [r.from_h, ...recipients].filter(Boolean);
     if (!parties.includes(handle)) continue;
-    // The ledger's own tense, and the same one `NEWEST` orders every other mail
-    // read by: a delivery date where the record has one, the letter's own day
-    // where it does not.
+    // The ledger's own tense, and the same one the store's `NEWEST`
+    // (town-index-store.mjs) orders every other mail read by: a delivery date
+    // where the record has one, the letter's own day where it does not.
     const at = r.delivered_at ?? r.date ?? null;
     for (const other of new Set(parties)) {
       if (other === handle) continue;
       const cur = byOther.get(other) ?? { count: 0, last: null };
       cur.count += 1;
-      // Ties break on id, exactly as `NEWEST` does, so the "last word" cannot
+      // Ties break on id, as the store's `NEWEST` does, so the "last word" cannot
       // flip between two calls over an unchanged index.
       if (!cur.last || String(at) > String(cur.last.at)
           || (String(at) === String(cur.last.at) && r.id > cur.last.id)) {
@@ -1274,8 +1267,8 @@ const DOORSTEP_PULSE_DAYS = 7;
 const DOORSTEP_INBOX_SLIM = 10;
 const DOORSTEP_AWAITING_SLIM = 5;
 
-/** The six the OFFICE INDEX answers, synchronously, from the checkout it has
- *  already hydrated. `doorstep()` fills these. */
+/** The six the town index answers: the store's `doorstep` (town-index-store.mjs)
+ *  reads each from its own tables, and `doorstepOf` composes them. */
 export const INDEX_SEGMENTS = Object.freeze(["mail", "awaiting", "stamps", "bulletin", "town_pulse", "window"]);
 
 /** The bundle's own segment order — the reading order of a morning, and the
@@ -1535,18 +1528,6 @@ function slimStamps(s) {
   return out;
 }
 
-// `nowMs` is injected only so the PSA window is testable against a fixed day —
-// the doorstep is a page generated fresh each morning, so its default clock is
-// the wall clock, exactly as "the last week" reads.
-// `fresh` rides through to the window segment for one reason and it is a hard
-// one: the bundle falsifier dispatches every segment's `serves` pointer through
-// the real apex and deep-equals the answer. A window composed at
-// `household read: "window"` and not composed here would fail that test — which
-// is the falsifier doing exactly its job, and the reason to thread the context
-// rather than to compose at the doors.
-// `slim` is the CONNECTOR SKIN's bound and only mcp.mjs passes it — see the
-// bounds note above, and the three helpers directly overhead.
-
 /** The doorstep sizes the store's doorstep reader (town-index-store.mjs) reads its segments at, as doorstepOf does. */
 export const DOORSTEP_SIZES = Object.freeze({ get inbox() { return DOORSTEP_INBOX; }, get inboxSlim() { return DOORSTEP_INBOX_SLIM; }, get bulletin() { return DOORSTEP_BULLETIN; }, get pulseDays() { return DOORSTEP_PULSE_DAYS; } });
 
@@ -1676,27 +1657,6 @@ export function doorstepOf(parts, handle, asOf, { conversationsOffset = 0, slim 
 }
 
 /**
- * The doorstep's `next_steps` — the half of the `doorstep` class node that read
- * "The morning page the town writes for a reader — their state, THEIR NEXT
- * STEPS, the day; generated fresh by the town's own hand."
- *
- * NOT A SECOND LAW. Every sentence here comes from the TOWN's own
- * tools/quest-progress.mjs, imported live from the checkout the same way
- * questBoardWith already imports boardForHandle — the office contributes only
- * the two facts the town checkout cannot see for itself: the world block, and
- * the household-apex paper gaps. A gap the town's onboarding line already
- * speaks for is dropped by id inside composeNextSteps, so one obligation gets
- * one voice. (HAL, July 30: "one town gives three answers." Not again.)
- *
- * Async, and attached by the two doors rather than returned from `doorstep()`
- * itself — the same idiom the `settling_in` and `votes` garnishes already use,
- * because the REST router is synchronous and paperGaps has been async since it
- * started awaiting the world.
- *
- * Degrades rather than throws: a checkout too old to carry the onboarding fold
- * yields a null, and the doorstep simply carries no next-steps block.
- */
-/**
  * The owner's onboarding facts with the record's evidence folded in (POS-603):
  * a COPY of the indexed facts in which only card, home and window may move,
  * and only from "not done" to "done".
@@ -1729,6 +1689,27 @@ function ownerFacts(facts, { handle, tools, paperRows, ctx, clone }) {
   return out;
 }
 
+/**
+ * The doorstep's `next_steps` — the half of the `doorstep` class node that read
+ * "The morning page the town writes for a reader — their state, THEIR NEXT
+ * STEPS, the day; generated fresh by the town's own hand."
+ *
+ * NOT A SECOND LAW. Every sentence here comes from the TOWN's own
+ * tools/quest-progress.mjs, imported live from the checkout the same way
+ * questBoardWith already imports boardForHandle — the office contributes only
+ * the two facts the town checkout cannot see for itself: the world block, and
+ * the household-apex paper gaps. A gap the town's onboarding line already
+ * speaks for is dropped by id inside composeNextSteps, so one obligation gets
+ * one voice. (HAL, July 30: "one town gives three answers." Not again.)
+ *
+ * Async, and attached by the two doors rather than returned from `doorstep()`
+ * itself — the same idiom the `settling_in` and `votes` garnishes already use,
+ * because the REST router is synchronous and paperGaps has been async since it
+ * started awaiting the world.
+ *
+ * Degrades rather than throws: a checkout too old to carry the onboarding fold
+ * yields a null, and the doorstep simply carries no next-steps block.
+ */
 export async function nextStepsFor(handle, clone, { own = false, worldBlock: injected, key = null, ix = null, odb = null, asOf = null } = {}) {
   try {
     ix ??= (await import("./town-index-store.mjs")).storeIndexPooled(clone);
@@ -1744,7 +1725,9 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
 
     // the registry from the index this door reads: the store's town_meta (POS-268)
     const registry = JSON.parse((await ix.questRegistry()) ?? '{"quests":[]}');
-    // ── THE FACTS COME OFF THE FOLD THE REHYDRATE ALREADY WROTE (POS-167) ──
+    // ── THE FACTS COME OFF THE FOLD THE INGEST ALREADY WROTE (POS-167) ──
+    // (History: POS-167 titled this "the rehydrate"; the town-index ingest has
+    // done that fold since the office.db rehydrate was retired (POS-268 5b, POS-656).)
     //
     // This line was `tools.onboardingFactsFor(clone, handle)` with no options,
     // and on the SERVING path that is THREE parses of the 13k-line stamp ledger
@@ -1753,24 +1736,25 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
     // and `welcomedHouseholds` once more. Every doorstep read paid it.
     //
     // THE FACTS WERE ALREADY IN THIS CALL. `standingRowsFromTown` folds the same
-    // six at every rehydrate into `quest_standing`, and `questBoardWith` below
+    // six at every ingest into `quest_standing`, and `questBoardWith` below
     // reads that row for its board — so this function was reading these six
     // facts TWICE, from two different clocks, and `composeNextSteps` then threw
     // the row's copy away ("the onboarding line is the voice for the six
-    // one-time rows"). Measured: a row folded at the last tick and a live fold
+    // one-time rows"). Measured: a row folded at the last ingest and a live fold
     // disagree on card / home / window, because `src/edit.mjs`'s pen lands those
     // three on the LIVE clone between snapshots while the row comes from the
-    // tick's frozen `git clone --local` (deploy/office-tick.sh).
+    // town-index ingest's own clone, as of its last run
+    // (deploy/town-index-ingest.sh, every 15 minutes; src/town-index.mjs folds it).
     //
     // So the live fold was the one field on this page FRESHER than the `as_of`
     // sha the page itself prints. Reading the row puts the checklist on the
-    // page's own clock, at the price of one tick: a paper act done through the
-    // office pen now leaves the list at the next rehydrate rather than at once.
+    // page's own clock, at the price of one ingest: a paper act done through the
+    // office pen now leaves the list at the next ingest rather than at once.
     //
     // THE FALLBACK IS TODAY'S BEHAVIOUR, NOT A NEW ROAD. The store's `standingFor`
     // answers null when the index holds no row for the handle — the case of an
     // index that predates the seam — and
-    // between a deploy and the first rehydrate that is every resident. Reading
+    // between a deploy and the first ingest that is every resident. Reading
     // an absent row as six false facts would print six finished chores back onto
     // the checklist of a resident who did them, which is #1864 in a new mouth.
     // Absent means ASK, exactly as before, at exactly the old cost, for exactly
@@ -1855,10 +1839,6 @@ export async function nextStepsFor(handle, clone, { own = false, worldBlock: inj
   } catch { return null; }
 }
 
-// The roster page. ✎ A proposal: the top of the table is what a roster read is
-// for, and the whole table is 256 rows today (more than the town's 131 people,
-// because escrow accounts are rows too) and grows with every household.
-
 /** /stamps's page around its balances. Called by the store's stampsRoster (town-index-store.mjs). */
 export function stampsRosterPage({ minted, accounts, n, start }, balances) {
   const next = start + balances.length;
@@ -1897,7 +1877,7 @@ export function stampsRosterPage({ minted, accounts, n, start }, balances) {
 // foldMintCount / foldStaked imported
 // live from the checkout. So `minted` and `liquid` here carry holo BY
 // DERIVATION the moment the town's folds credit it (postmark-town/postmark
-// #2811) and the box rehydrates — and adding a second credit here would pay the
+// #2811) and the box ingests — and adding a second credit here would pay the
 // payer twice.
 //
 // WHAT DID HAVE TO CHANGE is one sum the old law had made harmless. `ownership`
@@ -2044,17 +2024,16 @@ export function potBoardOf(rows, extraInvalid = []) {
   const pots = rows.pots.map((r) => {
     const d = JSON.parse(r.json);
     const { roll, receipts, staked } = r;
-    // WHO holds that escrow. Sorted by size and then by handle, so the order is
-    // total (two stakers at the same size would otherwise ride on SQLite's
-    // rowid order, which is a hydrate detail no reader should be able to see).
+    // WHO holds that escrow. The store's potBoardRows hands them over by size and
+    // then by handle (bytewise), so the order is total (two stakers at the same
+    // size would otherwise come back in whatever order Postgres happened to scan
+    // the rows, which no reader should be able to see).
     // Not sliced: the stakers of a pot are bounded by the town's residents, not
     // by the receipts a pot accumulates forever — the two lists above are
     // capped because they grow per payment, and this one does not.
-    // Re-shaped into ordinary objects rather than handed out as they arrive:
-    // node:sqlite returns rows with a NULL PROTOTYPE, which serializes the same
-    // and compares differently, so a caller's deepStrictEqual against a plain
-    // literal fails on two lists that are identical in every value. A door's
-    // answer should not carry that surprise across the wire.
+    // Re-shaped to exactly the two fields the board shows, rather than handed
+    // out as the store's rows arrive: a column added to town_pot_stakers later
+    // must not ride into a door's answer unannounced.
     const stakers = r.stakers.map((s) => ({ handle: s.handle, staked: s.staked }));
     return {
       id: r.id,
@@ -2148,8 +2127,8 @@ export function potBoardOf(rows, extraInvalid = []) {
 // quest-progress.mjs (imported live from the clone, cached) so there is one
 // source for the board shape and "today" — no second copy in the office. The
 // stored progress is for meta.quest_day; if TOWN_TZ has ticked over to a new day
-// since the last hydrate, we serve a clean zero board (the daily reset) until the
-// next rehydrate recomputes. Async: the tool import is awaited (then cached).
+// since the last ingest, we serve a clean zero board (the daily reset) until the
+// next ingest recomputes. Async: the tool import is awaited (then cached).
 let _questTools = null;
 async function questTools(clone) {
   if (_questTools) return _questTools;
@@ -2452,7 +2431,7 @@ export function standingJoin(q, standing, { idea = null, worldSited = null } = {
 }
 
 /**
- * The six onboarding facts, read off the standing row the rehydrate wrote — or
+ * The six onboarding facts, read off the standing row the ingest wrote — or
  * null when this index cannot answer them and the caller must ask the checkout.
  *
  * ONE OWNER OF THE ID MAP. The keys are `STANDING_FACT`'s own values, and those
@@ -2486,7 +2465,8 @@ export function onboardingFactsFromStanding(standing) {
 // ── THE BARE TOWN READ (postmark#2760, sophia 2026-09-13) ───────────────────
 //
 // `town { read: "quests" }` with no handle answered "the office tripped —
-// Provided value cannot be bound to SQLite parameter 1." The undefined handle
+// Provided value cannot be bound to SQLite parameter 1." (the index was
+// office.db's SQLite then, since retired for Postgres). The undefined handle
 // went straight into `WHERE handle = ?` and SQLite refused to bind it. The
 // household door closed the same hole on 2026-09-06 by bouncing and naming the
 // residents it holds; the town door has no key to infer from, so a bounce there
@@ -2612,7 +2592,7 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
   // bounty files ON the quest board, so the board read carries them rather than
   // growing a new verb. Same section for every handle (a pot is the town's, not
   // yours). Guarded like mail_state: an index hydrated before the seam has no
-  // pots table and says so honestly until the next rehydrate.
+  // pots table and says so honestly until the next ingest.
   //
   // A pot's registry row is a BOARD POSTING, never a resident card (the town's
   // own word, seam/ledger-legs-aligned @ 3668881b): it carries subtype "bounty"
@@ -3032,12 +3012,3 @@ export function regionWhole(row) {
     residents_total: residents.length,
   };
 }
-
-// The residents of a region (by slug or display name) — the region= filter.
-
-// One resident's home: description body, region, image paths (repo-relative).
-//
-// `region` is deliberately NOT composed. Placement is the atlas ledger's — a
-// social act in the town, never a door parameter (edit.mjs § the home founds
-// UNPLACED) — so no paper act can move it and there is no pen for it to be
-// ahead of. Composing it would invent a tense for a field that has none.

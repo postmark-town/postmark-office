@@ -705,7 +705,7 @@ export async function runLints({ store, sources = null, engineText = null, treeP
     const exposed = new Map(); // "action␟for" -> { action, for, ids }
     for (const { id, attr } of nodesWhere(graph, isClassMark))
       for (const e of actionEntriesOf(attr)) {
-        const k = `${e.action}${e.for}`;
+        const k = `${e.action}\u001f${e.for}`;
         if (!exposed.has(k)) exposed.set(k, { action: e.action, for: e.for, ids: [] });
         exposed.get(k).ids.push(id);
       }

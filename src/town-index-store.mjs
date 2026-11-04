@@ -172,6 +172,10 @@ export async function bulletinEntry(q, slug) {
   return row ? bulletinEntryOf(row.json) : null;
 }
 
+// The stamps roster page a caller who names no size gets. ✎ A proposal: the top
+// of the table is what a roster read is for, and the whole table was 256 rows
+// when this was first written (more than the town's 131 people then, because
+// escrow accounts are rows too) and grows with every household.
 const STAMPS_PAGE = 50;
 
 /** The stamps roster, richest first, paged; the minted total is the store's own meta. */
@@ -263,8 +267,8 @@ async function questMeta(q) {
 //
 // So the store half is ONLY reads: every row the board can ask for, read in the
 // caller's transaction (questIndexRows), and the board is composed from those
-// rows once the connection is back (questBoardOfRows). questBoardAnswer is the
-// two together, for a door.
+// rows once the connection is back (questBoardOfRows). A door runs the two
+// together itself (server.mjs /quests/:handle, mcp.mjs read_quests).
 
 const PROGRESS_SQL = "SELECT handle, send, receive, house_size, house_send, house_receive, sent_to, heard_from FROM town_quest_progress WHERE handle = $1";
 
@@ -313,11 +317,6 @@ function heldQuestSource(rows) {
  */
 export async function questBoardOfRows(rows, clone, opts = {}) {
   return questBoardWith(heldQuestSource(rows), rows.meta, rows.handle, clone, opts);
-}
-
-/** A door's quest board from the store: storeAnswer's `{ out, asOf }` or `{ refused }`, the board composed after the connection is back. */
-export function questBoardAnswer(handle, clone, opts = {}, { env = process.env } = {}) {
-  return storeAnswer((c) => questIndexRows(c, handle), { env, then: (rows) => questBoardOfRows(rows, clone, opts) });
 }
 
 /**
@@ -400,6 +399,9 @@ export function storeIndexPooled(clone, { env = process.env } = {}) {
 const LETTER_COLS = "id, from_h, to_h, date, thread, box, owner, path, json, delivered_at";
 // Newest first, bytewise: real timestamps (delivered_at) win over a bare same-day date.
 const NEWEST = `COALESCE(delivered_at, date) COLLATE "C" DESC, id COLLATE "C"`;
+// (NEWEST above: delivered_at is UTC ISO, so bytewise string order IS time
+// order, and a bare `date` sorts as that day's midnight, before any timestamped
+// same-day letter. Ties break on id.)
 const count = async (q, sql, params = []) => Number((await q.query(sql, params)).rows[0].n);
 
 /** One letter whole, or null. */
@@ -473,7 +475,8 @@ export async function roster(q) {
 }
 // THE ROLL'S HANDLES, HELD FOR THE SYNC READERS. The position doors
 // (server.mjs § townRoll) and the MCP roll (mcp.mjs § rollOf) ask for the roll
-// synchronously, on every call. With the switch on they read this: the store's
+// synchronously, on every call. They read this (every door reads the store; no
+// TOWN_INDEX_READS switch is left): the store's
 // roll as the office last loaded it, refreshed by the office's own reload poll
 // (refreshStoreRoll) and at boot. Null until the first load, and null is what
 // those readers already disclose as "the roll could not be read", never an
@@ -782,6 +785,18 @@ export async function deliveredTo(q, handle) {
  * whatever the caller passes: the segments came from this index.
  */
 export async function doorstep(q, handle, _asOf, opts = {}) {
+  // `nowMs` is injected only so the PSA window is testable against a fixed day —
+  // the doorstep is a page generated fresh each morning, so its default clock is
+  // the wall clock, exactly as "the last week" reads.
+  // `fresh` rides through to the window segment for one reason and it is a hard
+  // one: the bundle falsifier dispatches every segment's `serves` pointer through
+  // the real apex and deep-equals the answer. A window composed at
+  // `household read: "window"` and not composed here would fail that test — which
+  // is the falsifier doing exactly its job, and the reason to thread the context
+  // rather than to compose at the doors.
+  // `slim` is the CONNECTOR SKIN's bound and only mcp.mjs passes it — see
+  // queries.mjs's bounds note above DOORSTEP_INBOX_SLIM, and its slimAwaiting,
+  // slimPsa and slimStamps helpers.
   const { nowMs = Date.now(), conversationsOffset = 0, fresh = null, slim = false, standing = null } = opts;
   if (!(await hasResident(q, handle))) return null;
   const asOf = await townIndexAsOf(q);
@@ -977,6 +992,12 @@ export async function home(q, handle, fresh = null) {
     return composeFoundedHome(handle, freshnessFor(handle, { ...fresh, asOf: await townIndexAsOf(q) }));
   }
   const asOf = await townIndexAsOf(q);
+  // One resident's home: description body, region, image paths (repo-relative).
+  // `region` is deliberately NOT composed (composeHome leaves it as stored).
+  // Placement is the atlas ledger's — a social act in the town, never a door
+  // parameter (edit.mjs § the home founds UNPLACED) — so no paper act can move
+  // it and there is no pen for it to be ahead of. Composing it would invent a
+  // tense for a field that has none.
   return composeHome(JSON.parse(row.json), freshnessFor(handle, { ...fresh, asOf }));
 }
 
@@ -1001,11 +1022,11 @@ export async function readTownIndex(fn, { env = process.env, statementTimeoutMs 
 let _indexPoolForTest = null;
 export function __setTownIndexPoolForTest(pool) { _indexPoolForTest = pool; }
 
-/** The refusal a switched door gives when the store cannot answer. Fixed words, never the driver's message. */
+/** The refusal a door gives when the store cannot answer. Fixed words, never the driver's message. */
 export const UNREACHABLE = Object.freeze({ error: "bounce", defect: UNREACHABLE_DEFECT, hint: UNREACHABLE_HINT });
 
 /**
- * A switched door's answer: `{ out, asOf }` from the store, or `{ refused }`
+ * A door's answer: `{ out, asOf }` from the store, or `{ refused }`
  * (UNREACHABLE) when it cannot be read. Doors turn the refusal into their 503.
  */
 export async function storeAnswer(fn, { env = process.env, then = null, statementTimeoutMs = null } = {}) {
