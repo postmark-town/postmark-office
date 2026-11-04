@@ -4086,7 +4086,8 @@ async function draftWrite(worldClone, exec, payload, household, subject) {
 // three-source model from §0 with source 2 folded in at the save.
 
 /** Published canon as the guards want it, plus the ids the replay needs to tell an addition from a modification. */
-function canonForGuards() {
+// Exported for tools/town-signpost-amend.mjs (POS-606): its exact-record check reads the canon the guards read.
+export function canonForGuards() {
   const state = publishedState(WORLD_CLONE).state ?? {};
   const marks = state.marks ?? [];
   return { marks, byId: new Map(marks.map((m) => [m.id, m])), ids: new Set(marks.map((m) => m.id)) };
@@ -4488,7 +4489,9 @@ export async function markStandsOnOwnGround(clean, canon = null) {
  * the same fields the exec answers with — `branch` and `commit` become `seq`,
  * because under the flag the receipt for a write is its line in the log.
  */
-async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null } = {}) {
+// Exported for tools/town-signpost-amend.mjs (POS-606), the one reviewed amend written as the town: it runs this
+// insert and every guard in it, never a door. journalWithdraw is exported the same way.
+export async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${clean.by}/${clean.slug}`;
   const canon = canonForGuards();
