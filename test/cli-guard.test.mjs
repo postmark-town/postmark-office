@@ -231,6 +231,7 @@ const ROSTER = {
   "deploy/registry-file.mjs": { args: [], code: 2, needle: "usage: registry-file.mjs <path>" },
   "deploy/keep-history.mjs": { args: [], code: 2, needle: "usage: keep-history.mjs write" },
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
+  "deploy/invite-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
