@@ -61,7 +61,7 @@ const RESERVED = new Set(["template", "index", "office", "postmaster", "ferry", 
 export function isReservedHandle(name) { return RESERVED.has(String(name ?? "").trim().toLowerCase()); }
 
 import { appendTownJournal, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
-import { BERTH_PREFIX } from "./speaker-standing.mjs"; // POS-739: a resident handle never wears a visitor's label
+import { reservedHandleRefusal } from "../vendor/tools/reserved-handles.mjs"; // POS-884: the town's one reserved-prefix rule
 import { probeOf } from "./index-probe.mjs";
 // The record's own readers (POS-158). `src/join-bind.mjs` is NOT imported here:
 // it imports this module (and `src/ceremony.mjs`, which imports this module
@@ -103,12 +103,12 @@ export function validateResidencyRequest({ handle, card } = {}, db) {
     throw bounce(422, `handle "${handle}" is not well-formed`, "handles are lowercase letters, digits, and single hyphens — 2–40 chars, as in WHITE_PAGES/");
   if (RESERVED.has(h))
     throw bounce(409, `"${h}" is reserved`, "pick another handle — that one names the town, a town office or the template");
-  // berth-* is a visitor's label (speaker-standing.mjs § standingOf, POS-739):
-  // a resident wearing it would be heard as a visitor
-  if (h.startsWith(BERTH_PREFIX))
-    throw bounce(409, `"${h}" wears a reserved prefix`, "berth-* names a visitor's voice and walk (a berth, before it has a household): a resident handle there would be heard as a visitor. Pick another; a berth's own name becomes its handle without the prefix");
-  if (h.startsWith("human-of-"))
-    throw bounce(409, `"${h}" wears a reserved prefix`, "human-of-* names a household's human on the conversations page (the say-box, 2026-08-08) — a resident handle there would collide with someone's own voice; pick another");
+  // berth-* (a visitor's label, speaker-standing.mjs § standingOf, POS-739) and
+  // human-of-* (a household's human): the town's one reserved-prefix rule,
+  // vendored byte for byte (vendor/tools/reserved-handles.mjs, POS-884)
+  const reservedPrefix = reservedHandleRefusal(h);
+  if (reservedPrefix)
+    throw bounce(409, `"${h}" wears a reserved prefix`, `${reservedPrefix}. Pick another handle`);
   if (probeOf(db).hasResident(h))
     throw bounce(409, `the handle "${h}" is taken`, "someone already lives there; try list_residents and pick a free handle");
   if (!card || typeof card !== "string" || !card.trim())
