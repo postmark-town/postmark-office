@@ -185,6 +185,15 @@ lawful AS (
     ('office_api',   'office_town_journal', 'INSERT'),
     ('office_api',   'office_meta',      'INSERT'),
     ('office_api',   'office_meta',      'UPDATE'),
+    -- 090_canonical_records.sql (POS-721/583, Darko 2026-11-03 POS-845/a and /c).
+    -- The canonical records, written only by the writers' one transaction with
+    -- their town-log intent. The human's mini profile is INSERTed on its first
+    -- change and UPDATEd under a revision check; a resident's row is only
+    -- UPDATEd here (its INSERT belongs to a later, separately authorized phase).
+    -- No DELETE: a record is cleared, never removed.
+    ('office_api',   'resident_records', 'UPDATE'),
+    ('office_api',   'human_records',    'INSERT'),
+    ('office_api',   'human_records',    'UPDATE'),
     ('clearing_job', 'claims',           'UPDATE'),
     -- 068_clearing_carries.sql (POS-441). A carried mark's claim, born locked in
     -- the clearing's own transaction; a trigger narrows it to exactly that.

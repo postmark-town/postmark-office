@@ -142,6 +142,8 @@ export const LANDED = {
   "086_arrival_sources.sql":       { probe: `${rel("arrival_sources")} AND ${rel("arrival_source_pending")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_source_land' AND prosecdef)` },
   // 085 (POS-576): who invited a household, a public credit on its row.
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
+  // 090 (POS-721/583, inert): the canonical resident and human records, and the town log's one canonical-intent nonce index.
+  "090_canonical_records.sql":     { probe: `${rel("resident_records")} AND ${rel("human_records")} AND EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'office_town_journal' AND indexname = 'office_town_journal_canonical_nonce')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
