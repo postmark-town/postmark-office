@@ -151,3 +151,20 @@ w2_state() {
 w2_json_escape() {
   python3 -c 'import json,sys; sys.stdout.write(json.dumps(sys.stdin.read().strip()[-600:]))'
 }
+
+# Ship one night's files to S3 (STAR-118; Darko 2026-11-04 09:03: "the real solution is 2", an S3 bucket in the
+# box's own account, written by the instance's role, which can put and get but never delete; versioning keeps an
+# overwritten object, and the bucket's lifecycle trims, so the box holds no delete right at all).
+# Usage: w2_ship_s3 <bucket> <prefix> <file>...  each existing file goes to s3://<bucket>/<prefix>/<its name>; a
+# missing file is skipped. Prints how many went; returns 3 with no aws CLI, 1 on the first failed upload.
+w2_ship_s3() {
+  local bucket="$1" prefix="$2"; shift 2
+  command -v aws >/dev/null 2>&1 || { echo "no aws CLI on this box" >&2; return 3; }
+  local n=0 f
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    aws s3 cp --only-show-errors --no-progress "$f" "s3://$bucket/$prefix/$(basename "$f")" || return 1
+    n=$((n + 1))
+  done
+  echo "$n"
+}
