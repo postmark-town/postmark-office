@@ -11,9 +11,10 @@
 --
 -- INERT. This file makes two tables, one partial unique index on the existing
 -- town log and their grants. Nothing in the office reads or writes them until
--- a later, separately authorized phase wires a door; an operator applies this
--- file and nothing changes for anyone. The writers' transaction core is
--- `src/canonical-records.mjs`, unwired.
+-- a later, separately authorized phase wires a door; once applied, no data
+-- anyone reads has changed. The APPLY is not free: it locks two live tables
+-- until its COMMIT (WHAT THE APPLY LOCKS, below). The writers' transaction
+-- core is `src/canonical-records.mjs`, unwired.
 --
 --   resident_records  one row per resident, keyed by an opaque stable
 --                     `subject_id`; the resident's handle is unique; the
@@ -34,21 +35,58 @@
 -- render intent and a private receipt (the nonce and the normalized request)
 -- used only to answer a retried write. The index below is the database's
 -- guarantee that one subject's nonce is spent once: it keys the full nonce
--- (at most NONCE_MAX, 200, characters; never truncated or hashed) beside
--- the subject's household and handle, and covers ONLY `canonical-profile`
--- rows, so no existing row is indexed or constrained. The journal's TEXT
--- shape, row policy and SELECT+INSERT-only grant are unchanged.
+-- (at most NONCE_MAX, 200 UTF-8 bytes, as the core counts it; never
+-- truncated or hashed) beside the subject's household and handle, and covers
+-- ONLY `canonical-profile` rows, so no existing row is indexed or
+-- constrained (though every existing row is READ to build it, below). The
+-- journal's TEXT shape, row policy and SELECT+INSERT-only grant are unchanged.
 --
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
 --
 --   sudo -n -u postgres psql -v ON_ERROR_STOP=1 -d world2_dev \
 --     -c "SET ROLE world2_owner;" -f world2/schema/090_canonical_records.sql
 --
+-- ── WHAT THE APPLY LOCKS (measured on a dev store, PG 18.4) ─────────────────
+--
+-- The file is ONE transaction, so every lock below is held until its COMMIT,
+-- not released when its statement ends. In file order:
+--   1. `CREATE TABLE resident_records … REFERENCES households` takes SHARE ROW
+--      EXCLUSIVE on `households`: from here to COMMIT, every INSERT, UPDATE and
+--      DELETE on households waits. Reads go on.
+--   2. `CREATE UNIQUE INDEX … ON office_town_journal` takes SHARE on the
+--      journal and reads the WHOLE table (dead rows too) to build an index of
+--      no rows: from here to COMMIT every journal INSERT waits, so every
+--      office write that appends to the town log waits. Reads go on. The
+--      households lock from step 1 is still held through this scan.
+-- How long that lasts depends on the journal's size on the store applied to;
+-- no duration is claimed here. Read the size first (for one,
+-- `SELECT pg_size_pretty(pg_table_size('office_town_journal'))`) and apply
+-- at a quiet time. An operator who wants to
+-- avoid step 2's lock may build the SAME index (the definition in HOW TO
+-- PROVE IT LANDED) with CREATE UNIQUE INDEX CONCURRENTLY first, OUTSIDE any
+-- transaction, as their own separately owned act; this file then skips it,
+-- and the landed query must answer true before anyone relies on it.
+--
+-- IF NOT EXISTS IS NOT A REPAIR. If an index of this name already exists,
+-- this file keeps it, whatever it is: non-unique, other keys or predicate, or
+-- INVALID (what an interrupted CONCURRENTLY build leaves). Such an index is
+-- NOT 090 landed, and the query below says so; re-applying this file does not
+-- fix it. Dropping and rebuilding it is an operator's decision, never this
+-- file's or a runner's.
+--
 -- ── HOW TO PROVE IT LANDED ──────────────────────────────────────────────────
 --
---   SELECT to_regclass('resident_records'), to_regclass('human_records');    -- both named
---   SELECT indexname FROM pg_indexes
---    WHERE tablename = 'office_town_journal' AND indexname = 'office_town_journal_canonical_nonce';  -- one row
+-- The same query as world2/tools/migrations-landed.mjs's 090 probe: the two
+-- tables, and the nonce index by what it IS (a unique, valid, ready, live
+-- index on public.office_town_journal whose definition, as Postgres deparses
+-- it, is exactly this file's), never by its name alone:
+--
+--   SELECT to_regclass('public.resident_records') IS NOT NULL AND to_regclass('public.human_records') IS NOT NULL
+--     AND EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+--       WHERE n.nspname = 'public' AND c.relname = 'office_town_journal_canonical_nonce' AND i.indrelid = to_regclass('public.office_town_journal')
+--       AND i.indisunique AND i.indisvalid AND i.indisready AND i.indislive AND i.indnkeyatts = 3 AND i.indnatts = 3
+--       AND pg_get_indexdef(i.indexrelid) = 'CREATE UNIQUE INDEX office_town_journal_canonical_nonce ON public.office_town_journal USING btree (household, COALESCE(handle, ''''::text), (((payload)::jsonb #>> ''{receipt,nonce}''::text[]))) WHERE ((class = ''update''::text) AND (act = ''canonical-profile''::text))')
+--     AS landed;                                                                 -- true
 --   SELECT count(*) FROM resident_records;  SELECT count(*) FROM human_records;  -- 0 and 0: nothing writes them yet
 BEGIN;
 CREATE TABLE IF NOT EXISTS resident_records (
