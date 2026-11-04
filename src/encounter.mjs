@@ -344,17 +344,22 @@ const fleeing = new Map(); // handle -> the flee in flight
  * household as the arrival tick's enter is (arrival-entries.mjs §
  * enterAtArrival). Outside a dungeon nothing is written (D5: spent, not fled).
  * One flight per resident at a time; a fault is logged and the tick tries again.
+ * `creature` (WLD-132) is the id of the creature whose encounter took the nerve to 0, taken from
+ * the encounter in hand when this is called and carried on the exit act as `fled_by`; a caller with
+ * no encounter in hand (the repair sweep) passes none, and the exit records none. It is read here,
+ * before any await, so a later encounter cannot change whom it names.
  */
-export function queueFlee(handle, { household = null, exit = null } = {}) {
+export function queueFlee(handle, { household = null, exit = null, creature = null } = {}) {
   if (fleeing.has(handle)) return fleeing.get(handle);
+  const fledBy = typeof creature === "string" && creature ? creature : null;
   const run = (async () => {
     try {
-      const go = exit ?? (async (h, hh) => {
+      const go = exit ?? (async (h, hh, by) => {
         const [{ exitViaOffice }, { crossingDeps }, { WORLD_CLONE }] = await Promise.all([
           import("./world-crossings.mjs"), import("./world-apex.mjs"), import("./world.mjs")]);
-        return exitViaOffice(WORLD_CLONE, { handle: h, confirm: true }, { handles: new Set([h]), household: hh }, { ...crossingDeps(), flee: true });
+        return exitViaOffice(WORLD_CLONE, { handle: h, confirm: true }, { handles: new Set([h]), household: hh }, { ...crossingDeps(), flee: true, ...(by ? { fledBy: by } : {}) });
       });
-      return await go(handle, household);
+      return await go(handle, household, fledBy);
     } catch (e) {
       faultLogged(`a resident at 0 nerve could not be set outside (${handle}); the tick tries again`, e);
       return null;
