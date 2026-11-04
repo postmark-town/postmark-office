@@ -539,6 +539,22 @@ test("an act no era explains is a refusal by name, not a conversation with a hol
 // (ratio ~1) and only an oversized compressible payload has a stored size far below its decoded size.
 
 const bodiesRead = (sp) => sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q));
+// These tests read emissions, which are global to the store; an earlier test here leaves a deliberately
+// unreadable emission behind (acts is append-only), so they run in a store of their own.
+let fresh = null;
+async function inFreshStore(t, fn) {
+  if (skip) return t.skip(skip);
+  const saved = { api, pool };
+  try {
+    fresh ??= await startStore({ db: "convo_read_decoded" });
+    if (fresh.skip) return t.skip(fresh.skip);
+    if (!fresh.pool) { fresh.api = await fresh.connect("office_api"); fresh.pool = new pg.Pool({ connectionString: fresh.url("office_api"), max: 3 }); fresh.pool.on("error", () => {}); }
+    api = fresh.api; pool = fresh.pool;
+    await fn();
+  } finally { api = saved.api; pool = saved.pool; }
+}
+after(async () => { await fresh?.pool?.end().catch(() => {}); await fresh?.api?.end().catch(() => {}); await fresh?.stop?.(); });
+
 /** The bytes the driver would receive for these rows' payloads, measured independently in JS from the wire text. */
 async function wireBytes(where, params) {
   const { rows } = await api.query(`SELECT payload::text AS t FROM acts WHERE ${where}`, params);
@@ -551,7 +567,7 @@ async function storedBytes(where, params) {
 const inEpoch = (e0, e1) => [`action = 'say' AND at >= $1::timestamptz AND at < $2::timestamptz AND NOT voice_payload_private(payload)`, [iso(e0), iso(e1)]];
 
 test("DECODED admission: a compressible payload far over the budget is refused BEFORE any body, though its stored size fits", async (t) => {
-  if (skip) return t.skip(skip);
+  return inFreshStore(t, async () => {
   const e0 = T0 + 4000 * H, e1 = e0 + 12 * H;
   for (let i = 0; i < 20; i++) await say(iso(e0 + i * 10), "w" + (i % 3), i, 0, { text: "a".repeat(100_000) }); // legacy / dial-raised, compressible
   const [w, p] = inEpoch(e0, e1);
@@ -574,10 +590,11 @@ test("DECODED admission: a compressible payload far over the budget is refused B
   assert.equal(ok.source.says.bytes, decoded);
   assert.equal(ok.source.says.stored_bytes, stored);
   assert.ok(ok.source.says.stored_bytes < ok.source.says.bytes, "stored is only a diagnostic and is smaller");
+  });
 });
 
 test("DECODED unit: ASCII, multibyte, jsonb-string and emission payloads each equal their UTF-8 wire text; producer-shaped at today's default", async (t) => {
-  if (skip) return t.skip(skip);
+  return inFreshStore(t, async () => {
   const e0 = T0 + 4100 * H, e1 = e0 + 12 * H;
   await say(iso(e0 + 1), "ascii", 1, 0, { text: "a".repeat(500), place: "the quay" });               // today's default text_max
   await say(iso(e0 + 2), "euro", 2, 0, { text: "€".repeat(500), place: "the quay" });                  // 3 UTF-8 bytes per unit
@@ -601,10 +618,11 @@ test("DECODED unit: ASCII, multibyte, jsonb-string and emission payloads each eq
   const red = await readEpoch(sp, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom, budgets: { maxEmissionBytes: limit } });
   assert.deepEqual([red.reason, red.what, red.limit, red.measured], ["over-budget", "emission bytes", limit, Number(em.d)]);
   assert.equal(sp.log.queries.some((q) => /^SELECT id, at, actor, action/.test(q)), false, "no emission body shipped");
+  });
 });
 
 test("DECODED measure counts only the epoch's eligible says: older history, private rows and other actions scale separately without moving it", async (t) => {
-  if (skip) return t.skip(skip);
+  return inFreshStore(t, async () => {
   const e0 = T0 + 4200 * H, e1 = e0 + 12 * H;
   for (let i = 0; i < 5; i++) await say(iso(e0 + i), "w", i, 0, { text: "s".repeat(1000) });
   const base = await readEpoch(pool, { epoch: { since: e0, next: e1 }, isPrivate: spokenInRoom });
@@ -616,10 +634,11 @@ test("DECODED measure counts only the epoch's eligible says: older history, priv
   assert.equal(after.status, "ok");
   assert.equal(after.source.says.bytes, base.source.says.bytes, "older, private and filler rows add nothing to the epoch's decoded bytes");
   assert.equal(after.source.says.rows, 5);
+  });
 });
 
 test("DECODED measure and bodies share ONE snapshot: a row committed after the aggregate is in neither", async (t) => {
-  if (skip) return t.skip(skip);
+  return inFreshStore(t, async () => {
   const e0 = T0 + 4300 * H, e1 = e0 + 12 * H;
   for (let i = 0; i < 4; i++) await say(iso(e0 + i), "w", i, 0, { text: "x".repeat(2000) });
   let injected = false;
@@ -636,4 +655,5 @@ test("DECODED measure and bodies share ONE snapshot: a row committed after the a
   assert.equal(out.voices.length, 4);
   const q = sp.log.queries;
   assert.ok(q[0].startsWith("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY") && q[1].startsWith("SET LOCAL statement_timeout"), "snapshot then the timeout, before any measure");
+  });
 });
