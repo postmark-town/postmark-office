@@ -46,7 +46,7 @@ read, or a departure from outside that commits under an id already passed.
 
 | Read | RAM |
 |---|---|
-| `GET /world/conversations` | `voices.mjs`: the voices window. A worker's copy hydrates the log once and never re-reads it. Teaching the window to take a message is a change to voices.mjs, which belongs to O1. |
+| `GET /world/conversations` | Two RAMs, both main-thread only. WITHOUT the store: `voices.mjs`, the voices window (a worker's copy hydrates the log once and never re-reads it; teaching the window to take a message is a change to voices.mjs, which belongs to O1), answered as `incomplete_legacy`. WITH the store engaged (POS-779): `world2/tools/convo-door.mjs`, which reads one settlement's public voices from `acts` in a repeatable-read snapshot and keeps the last views of up to four epochs in `convo-memo.mjs` (an accounted 64 MB estimate, per process, served only under an equal fingerprint). That memo is why it stays on the main thread: a worker would hold its own copy and rebuild it. The exact-component build yields to the event loop every few milliseconds of work, so the main thread is not held for a settlement's build. |
 | `GET /world/apex?read=say` | the voices window again: the listen is kept home by its query (`read-workers.mjs § listensToVoices`), as the MCP `world { read: "say" }` is by `mcpWorkerTakes`. The apex's other reads go to workers. |
 | `GET /world/dynamic` | `channel.mjs`: `acts_by_channel`, counted per act |
 | `GET /household` | the standing read's `world_writes`, the bouncer's live budget |
