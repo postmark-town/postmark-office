@@ -339,6 +339,9 @@ export function createVoices({
   // `roomOf(handle)` (WLD-74): the dungeon room a resident is entered in, or null. Hearing stops at a dungeon room's walls, both ways: a voice
   // is heard only by an ear in the room it was spoken in (null is the open), and its record is shown only to readers in that room.
   roomOf = null,
+  // `roomOfStrict(handle)` (POS-887): the same answer, but it REJECTS where it cannot tell (an unreadable world or enter ledger) instead of reading the failure as the open.
+  // Only the long listeners ask it, through `standing(handle, { strict: true })`; every other caller keeps `roomOf`, which must never stop a read.
+  roomOfStrict = null,
   vesselAt = null,
   heardFrom = null,
   structuralHearing = () => Boolean(heardFrom),
@@ -667,11 +670,19 @@ export function createVoices({
     "a voice is spoken from a place — walk somewhere (world_walk), or settle your household's ground, and the world will have a point to speak from",
   );
 
-  async function standing(handle) {
+  // A room that cannot be told is a refusal in its own words, never a place and never the open. It names nothing about the room or why.
+  const roomUnavailable = () => ({ ...bounce("the room you stand in could not be read just now",
+    "listen again in a moment — nothing was served from a room this office could not confirm you are in"), code: 503 });
+
+  async function standing(handle, { strict = false } = {}) {
     const here = await standpoint(handle);
     if (!here?.placed) return { bounce: unplaced(handle) };
     const words = await place({ x: here.x, y: here.y, aboard: Boolean(here.aboard), moving: Boolean(here.moving) });
-    const inRoom = roomOf ? await Promise.resolve(roomOf(handle)).catch(() => null) : null; // WLD-74: the dungeon room they are entered in, if any
+    let inRoom = null; // WLD-74: the dungeon room they are entered in, if any
+    if (strict) {
+      const ask = roomOfStrict ?? roomOf;
+      if (ask) { try { inRoom = await ask(handle); } catch { return { bounce: roomUnavailable(), unavailable: true }; } }
+    } else inRoom = roomOf ? await Promise.resolve(roomOf(handle)).catch(() => null) : null;
     return { at: { x: here.x, y: here.y }, aboard: Boolean(here.aboard), place: words ?? null, ...(inRoom ? { room: inRoom } : {}) };
   }
 
@@ -1102,6 +1113,7 @@ export function createVoices({
   // derivation: the push dresses its answers with this module's own `reply`.
   const room = {
     snapshot,
+    /** Where a reader stands now. `strict: true` (the long listeners) answers `{ bounce, unavailable }` when the room cannot be told, never the open. */
     standing,
     /** The voices this ear hears in `snap`, newer than `since` — the waiter's "is there news". */
     heard: (here, snap, since = null) => heardBy(here, snap).filter((v) => !(Number.isFinite(since) && v.at <= since)),

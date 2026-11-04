@@ -440,6 +440,7 @@ async function writeThreads(client, town, tally, ids = null) {
 }
 
 export const LEDGER_PATH = "WHITE_PAGES/mail-ledger.md";
+const MAIL_LAW_PATH = "tools/mail-state.mjs"; // the town's mail law, which derives every mail_state row (POS-376)
 
 /**
  * THE APPEND PROOF (POS-523 G2): the mail ledger between head and sha, from
@@ -610,9 +611,30 @@ export async function applyDelta(client, { townRepo, head, sha, log = quiet, aud
   const townHandles = new Set(town.residents.map((r) => r.handle));
   const storedMail = await storedDigests(client, "mail_state");
   for (const h of townHandles) if (!storedMail.has(JSON.stringify([h]))) parties.add(h);
+  // POS-376: the LAW moved. `tools/mail-state.mjs` is what derives every row, so when the delta
+  // changed it (the diff above is --no-renames: a rename or delete lists its old path too) every
+  // resident's row is re-derived by the same mailStateRows below; the stored digests then keep
+  // only the rows whose bytes actually moved. No law change keeps the sparse parties above.
+  const lawMoved = changed.includes(MAIL_LAW_PATH);
+  if (lawMoved) for (const h of townHandles) parties.add(h);
   const scopeMail = new Set([...parties].map((h) => JSON.stringify([h])));
   for (const k of storedMail.keys()) if (!townHandles.has(JSON.parse(k)[0])) scopeMail.add(k);
-  const mailCands = await mailStateRows(townRepo, town, { log, only: new Set([...parties].filter((h) => townHandles.has(h))) });
+  const mailOnly = new Set([...parties].filter((h) => townHandles.has(h)));
+  const mailCands = await mailStateRows(townRepo, town, { log, only: mailOnly });
+  // POS-376: on the law-changed full recompute, a resident whose derivation FAILED is omitted by
+  // mailStateRows (it logs and moves on), and diffTable reads an in-scope missing candidate as a
+  // deletion, which would erase that resident's last good row because the new law could not run on
+  // it. A failure of the source is not evidence the resident went, so every requested resident must
+  // be covered BY IDENTITY (not by count) before the diff, or the ingest throws and the caller's
+  // ROLLBACK leaves the index as it was. A null (law file absent, already warned) is untouched, and
+  // so is every sparse (no law change) ingest.
+  if (lawMoved && mailCands) {
+    const mailKey = keyOf("mail_state");
+    const covered = new Set(mailCands.map(mailKey));
+    const uncovered = [...mailOnly].filter((h) => !covered.has(JSON.stringify([h])));
+    if (uncovered.length) throw new Error(`the town's mail law changed and ${uncovered.length} of ${mailOnly.size} residents could not be re-derived by it: ` +
+      `their stored mail state is not replaced and not deleted. Nothing was written.`);
+  }
   if (mailCands) await diffTable(client, "mail_state", mailCands, tally, { scope: scopeMail, stored: storedMail });
   lap("mail_state");
 
