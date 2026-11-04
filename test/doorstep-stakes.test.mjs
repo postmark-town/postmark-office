@@ -146,7 +146,7 @@ test("an office with no docket store configured says so, through the doorstep's 
 test("a quiet page says so, and an empty one points at the portfolio", async () => {
   const quiet = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: HEAD, byMark: new Map([["berthillon/the-orchard-bench", 1], ["berthillon/cone-coing", 2]]), reason: null }) }));
   assert.equal(quiet.at_risk, 0);
-  assert.match(quiet.note, /nothing of yours is at risk at the next settlement/);
+  assert.match(quiet.note, /^nothing of yours is at risk as of the town head named above\. /);
   const empty = await stakesFor(["nobody"], readers());
   assert.equal(empty.count, 0);
   assert.match(empty.note, /no published mark of yours stands on world main/);
@@ -470,4 +470,61 @@ test("WLD-51 · held changes nothing that was unknown, backed or never a candida
   assert.equal(home.rows[0].at_risk, false, "a mark that walks home is never swept");
   const founding = stakesRowsFrom({ handles: [TINKER], marks: [held], registry: {}, byMark: new Map(), rule: VERDICT.unpublishVerdict, pathOnMain: () => true });
   assert.equal(founding[0].at_risk, false, "no registry row: founding estate");
+});
+
+// ── WLD-51 · the quiet note tells the truth about a commons row with no stamps behind it (Wright 2026-11-04T17:06:41.928Z) ──
+//
+// The quiet note used to say "every commons mark you hold has stamps behind it". A held commons row at ✦0 exists (the sweep
+// keeps it, so the page does not warn) and has NO stamps; the sentence was false on exactly that page. The approved fix is the
+// one existing note sentence, neutral: "nothing of yours is at risk as of the town head named above." and the frame, unchanged.
+// These run the real exported `stakesFor` over the world's own rule and `isHeld` (heldBy → stakesRowsFrom → the note); the
+// sentence is spelled here, not imported. Counted commons ROWS remain on the page; their STAMPS are zero.
+const SAFE_NOTE = `nothing of yours is at risk as of the town head named above. ${FRAME}`;
+const OLD_CLAIMS = [/every commons mark you hold/, /has stamps behind it/, /at the next settlement —/];
+const commonsAtZero = (seg) => seg.rows.filter((r) => r.class === "commons" && r.escrow === 0 && r.at_risk === false);
+
+test("WLD-51 · A HELD COMMONS ROW AT ✦0 (own maker): the page has a commons row with no stamps, nothing is at risk, and the note does not claim stamps", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const seg = await stakesFor([TINKER], heldReaders([held]));
+  assert.equal(seg.count, 1, "the commons row is on the page");
+  assert.equal(commonsAtZero(seg).length, 1, "a commons row, escrow 0, at_risk false: stamps zero is the case the old sentence denied");
+  assert.equal(seg.rows[0].id ?? seg.rows[0].mark, held.id);
+  assert.equal(seg.at_risk, 0);
+  assert.equal(seg.note, SAFE_NOTE, "the approved neutral sentence and the exact frame");
+  for (const re of OLD_CLAIMS) assert.doesNotMatch(seg.note, re, "the old false cause is gone");
+  assert.equal(seg.note.slice(-FRAME.length), FRAME);
+  assert.equal(FRAME.length, 113, "the frame is the 113 characters");
+});
+
+test("WLD-51 · MIXED: a held commons row at ✦0 beside a backed one (✦2): the page is quiet, one row has no stamps, and the note stays true", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const backed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const seg = await stakesFor([TINKER], heldReaders([held, backed], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[backed.id, 2]]), reason: null }) }));
+  assert.equal(seg.count, 2);
+  assert.equal(seg.at_risk, 0);
+  assert.deepEqual(commonsAtZero(seg).map((r) => r.mark), [held.id], "exactly the held row is a commons row with no stamps");
+  assert.equal(seg.rows.find((r) => r.mark === backed.id).escrow, 2);
+  assert.equal(seg.note, SAFE_NOTE);
+  for (const re of OLD_CLAIMS) assert.doesNotMatch(seg.note, re);
+});
+
+test("WLD-51 · THE CONTROLS the note must not touch: an unheld ✦0 commons row warns and carries no quiet note; backed-only, a home row, founding estate and an empty page keep their reads", async () => {
+  const placed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const risky = await stakesFor([TINKER], heldReaders([placed]));
+  assert.equal(risky.at_risk, 1, "unheld, commons, ✦0, path on main: still at risk");
+  assert.equal(risky.rows[0].act, stakeEnvelope(placed.id));
+  assert.equal(risky.note, undefined, "and no quiet note beside a warning");
+  const backedOnly = await stakesFor([TINKER], heldReaders([placed], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[placed.id, 2]]), reason: null }) }));
+  assert.equal(backedOnly.at_risk, 0);
+  assert.equal(backedOnly.note, SAFE_NOTE, "backed-only: quiet, in the same words");
+  const home = await stakesFor([TINKER], heldReaders([thing("a-hearth-stone", { tier: "home" })]));
+  assert.equal(home.at_risk, 0);
+  assert.equal(home.note, SAFE_NOTE, "a mark that walks home is never swept: quiet");
+  const founding = await stakesFor([TINKER], heldReaders([thing("a-founders-lamp")], { registry: async () => ({}) }));
+  assert.equal(founding.at_risk, 0, "no registry row: founding estate stays published");
+  assert.equal(founding.note, SAFE_NOTE);
+  const empty = await stakesFor(["nobody-at-all"], heldReaders([placed]));
+  assert.equal(empty.count, 0);
+  assert.match(empty.note, /^no published mark of yours stands on world main/, "an empty page keeps its own note");
+  assert.ok(!empty.note.includes(FRAME), "and carries no frame");
 });

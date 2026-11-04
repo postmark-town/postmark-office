@@ -243,7 +243,7 @@ export async function stakesFor(handles, {
     count: rows.length,
     at_risk: atRisk,
     ...(measured && atRisk === 0 && unjudged === 0 && rows.length
-      ? { note: "nothing of yours is at risk at the next settlement — every commons mark you hold has stamps behind it, as of the town head named above. " + SNAPSHOT_LIMIT } : {}),
+      ? { note: "nothing of yours is at risk as of the town head named above. " + SNAPSHOT_LIMIT } : {}),
     ...(rows.length === 0 ? { note: "no published mark of yours stands on world main — drafts and the docket are at world { read: \"leave-mark\" }" } : {}),
     read_the_rest: 'world { read: "leave-mark" } is the whole portfolio — drafts, the docket, what you have backed; world { read: "stake", args: { mark: "<by>/<slug>" } } is one mark\'s escrow with its holders',
     rows,
