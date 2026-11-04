@@ -164,6 +164,82 @@ test("SLICES: the work yields to the event loop and the longest synchronous stre
   assert.equal(partitionKey(mine.components, (i) => voices[i].act_id), oracle.map((c) => c.voices.map(ids).sort().join("|")).sort().join("\n"), "yielding does not change the answer");
 });
 
+// ── THE PER-QUERY YIELD CHECKPOINT ───────────────────────────────────────────────────────────────────
+//
+// WHAT IS PINNED. After each k-d query the build asks `if (due()) await tick()` (convo-components.mjs). The
+// cadence it replaced was `if ((stats.work & 255) === 0) if (due()) ...`: a query adds an uneven amount to
+// `stats.work` (one unit per voice plus one per tree node it visits), so the modulo can skip for thousands of
+// queries, and a stretch of queries ran without the clock being consulted. The generic SLICES test above
+// passes under the old gate (its grid has no k-d queries at all), so it does not pin this.
+//
+// WHAT THE FAKE CLOCK AND COUNTERS MEASURE. Nothing about elapsed time or CPU. `now` is call-driven: it counts how
+// many times the build consulted the clock (`due()`), and each call returns a value that moves 1 unit, so
+// sliceMs = 2 means "yield on every second consultation". The build's three phases are told apart by an
+// instrument that is not production code: a temporary `Math.hypot` counter (restored in `finally`). The tree is
+// built without `Math.hypot`, so the FIRST hypot is the first query, and the LAST hypot is the last query's
+// own work; consultations between those two points are the per-query checkpoints. The build's own consultations
+// (buildKd), the probe (switched off) and the end-of-loop consultations all fall outside that window. Q is
+// the number of queries, known from the fixture: the smaller cell's voices, with `prune: false` so every one
+// reaches `kdAny`, and no chaining pair so none breaks out early.
+async function yieldTrace(voices, { sliceMs = 2 } = {}) {
+  const realHypot = Math.hypot;
+  const trace = [];            // 'n' = the clock was consulted, 'h' = a Math.hypot, 'y' = the build yielded
+  let t = 0;
+  Math.hypot = (...a) => { trace.push("h"); return realHypot(...a); };
+  try {
+    const out = await componentsOf(voices, {
+      earshotM: 60, sliceMs, probe: false, prune: false,
+      now: () => { trace.push("n"); return (t += 1); },
+      yieldFn: async () => { trace.push("y"); },
+    });
+    return { out, trace: trace.join("") };
+  } finally { Math.hypot = realHypot; }
+}
+/** The fixture: a small cell A and a big cell B three cells apart (WINDOW), no voice of A within earshot of any of B. */
+function twoCells(q, bigN, seed = 5) {
+  const r = rng(seed);
+  const voices = [];
+  // A: dense, one component. Four voices in five sit at x in [0, 5) (the root box of B is out of their reach: one
+  // node, pruned); one in five sits at x in [6.8, 7.4], y in [0, 1], which brings B's ROOT BOX within reach.
+  for (let i = 0; i < q; i++) voices.push(i % 5 === 0 ? mk(i, 6.8 + r() * 0.6, r()) : mk(i, r() * 5, r() * 30));
+  // B: random points at x >= 67.5 plus two corner outliers, (89, 2) and (66.6, 29.9). The outlier stretches the root
+  // box to x = 66.6, so a voice of A at x in [6.8, 7.4] is within 60 of the BOX yet farther than 60 from every B
+  // POINT (dx >= 60.1 to the random points, dy >= 28 to the outlier): that query must walk down the path to the
+  // outlier's subtree, the others stop at the root. UNEVEN work per query, and nothing chains.
+  voices.push(mk(q, 89, 2));
+  voices.push(mk(q + 1, 66.6, 29.9));
+  for (let k = 2; k < bigN; k++) voices.push(mk(q + k, 67.5 + r() * 21.5, 2 + r() * 27.9));
+  return voices;
+}
+
+test("PER-QUERY YIELD: the clock is consulted after every k-d query, the slices stay short, and the partition is still the oracle's", async () => {
+  const Q = 3000, BIG = 3100;
+  const voices = twoCells(Q, BIG);
+  const oracle = clusterVoices(voices, { earshotM: 60, fadeMs: Infinity, boundaries: [] });
+  const { out, trace } = await yieldTrace(voices);
+  // premises of the fixture, so a changed fixture cannot silently stop forcing the path
+  assert.equal(out.stats.treesBuilt, 1, "one k-d tree, over the big cell");
+  assert.equal(out.stats.cellPairs >= 1, true);
+  assert.equal(oracle.length, 2, "A and B never chain: two threads");
+  assert.equal(partitionKey(out.components, (i) => voices[i].act_id), oracle.map((c) => c.voices.map(ids).sort().join("|")).sort().join("\n"), "the oracle partition is unchanged");
+  const first = trace.indexOf("h"), last = trace.lastIndexOf("h");
+  const queryWindow = trace.slice(first, last);
+  const consults = (queryWindow.match(/n/g) ?? []).length;
+  const hypots = (queryWindow.match(/h/g) ?? []).length;
+  assert.ok(hypots >= Q - 1, `the window holds the queries (${hypots} hypots for ${Q} queries)`);
+  assert.ok(hypots > Q, `queries cost UNEVEN work: some descend (${hypots} hypots over ${Q} queries is more than one each)`);
+  // THE CLAIM: one consultation per query. (The last query's checkpoint falls after the last hypot, hence Q - 1.)
+  assert.ok(consults >= Q - 1, `the clock was consulted ${consults} times across ${Q} queries; every query must reach the checkpoint`);
+  // THE SLICE MECHANISM, on the same trace: with sliceMs = 2 and a clock that moves 1 per consultation, the slice
+  // ages by two consultations, and a yield costs three more clock reads that are not checkpoints (the slice start
+  // taken after the previous yield, `tick`'s own re-check, and its maxSliceMs read). So between two yields there
+  // are at most sliceMs + 3 = 5 reads, whatever the queries cost; and since every query adds a read (above), the
+  // number of queries between yields is bounded by that, not by how the work happens to add up.
+  const perSlice = queryWindow.split("y").map((s) => (s.match(/n/g) ?? []).length);
+  assert.ok(Math.max(...perSlice) <= 2 + 3, `at most sliceMs + 3 clock reads between yields (longest stretch ${Math.max(...perSlice)})`);
+  assert.ok(out.stats.slices >= Math.floor((Q - 1) / 2) - 1, `so at least one yield per two queries (${out.stats.slices} yields for ${Q} queries)`);
+});
+
 test("an empty epoch is no components", async () => {
   assert.deepEqual((await componentsOf([], { earshotM: 60 })).components, []);
 });
