@@ -60,6 +60,19 @@
 -- `DROP FUNCTION voice_payload_private(jsonb);` and revert the code that reads through them (a read that
 -- omits the predicate still works, at the old price).
 --
+-- `IF NOT EXISTS` IS NOT A REPAIR. It looks at a NAME. If a hand-run CREATE INDEX CONCURRENTLY was interrupted
+-- (a cancel, a timeout, a lost session) it leaves an INVALID index under this name; if someone built an index
+-- with this name and another key list or predicate, that stays too. In both cases the statement above is a
+-- silent no-op and the store has no usable index. The "landed" probe (world2/tools/migrations-landed.mjs
+-- § VOICE_INDEX_PROBE) therefore checks the DEFINITION, not the name, and answers "missing" for an invalid,
+-- not-ready, differently keyed or differently predicated index and for a function that is not this one.
+-- The operator then, by hand and in this order: (1) inspect what is there (`\d+ acts`; `SELECT indexrelid::regclass,
+-- indisvalid, indisready, pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid = 'acts_voice_at_idx'::regclass;`
+-- and the owner and `prosrc` of the function), (2) decide it is theirs to replace, (3) `DROP INDEX CONCURRENTLY
+-- acts_voice_at_idx;`, (4) build again as above, (5) re-run the probe until it says landed. No worker script drops
+-- or rebuilds an index it did not create, and this file never does. Nothing in this paragraph has been executed by
+-- the lane that wrote it.
+--
 -- NO NEW GRANT. `office_api` reads `acts` already (002), and a function is executable by PUBLIC by default.
 --
 -- ── IDEMPOTENT. APPLY AS `world2_owner`, 019's idiom ────────────────────────
@@ -69,6 +82,7 @@
 --
 -- ── HOW TO PROVE IT LANDED, and that it is CHOSEN rather than merely present ─
 --
+--   node world2/tools/migrations-landed.mjs  (the 089 line must say landed: valid, ready, exact keys and predicate)
 --   SELECT indexdef FROM pg_indexes WHERE indexname = 'acts_voice_at_idx';
 --   SELECT voice_payload_private('{"room":"x"}'), voice_payload_private('{"room":false}');   -- t, f
 --   EXPLAIN (ANALYZE, BUFFERS) SELECT id FROM acts

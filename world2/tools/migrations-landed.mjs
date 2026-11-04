@@ -35,6 +35,61 @@ const trig = (name, extra = "") => `EXISTS (SELECT 1 FROM pg_trigger WHERE tgnam
 const policy = (name, extra = "") =>
   `EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'claims' AND policyname = '${name}'${extra})`;
 
+// ── 089: LANDED MEANS THE INTENDED ARTIFACT, NOT A NAME (POS-779) ────────────────────────────────────────
+//
+// An interrupted hand-run `CREATE INDEX CONCURRENTLY` leaves an INVALID index under the intended name, and a
+// name-only probe called that landed (the file's `IF NOT EXISTS` is then a no-op too). So this probe resolves
+// the index and the function by their public names AND checks what they are:
+//   index    on public.acts, btree, VALID and READY and live, not unique, no expression columns, keys exactly
+//            (action, at, id) in that order, all ascending (indoption 0 0 0), and the predicate, compared as the server's own deparse with literals untouched (see below) and tied by pg_depend to THE public function.
+//   function public.voice_payload_private(jsonb): plpgsql, returns boolean, IMMUTABLE, PARALLEL UNSAFE, not
+//            SECURITY DEFINER, not STRICT, search_path pinned to pg_catalog, owned by the role that owns `acts`,
+//            and its body is the body this file's migration wrote (md5 of `prosrc`; a test holds the constant to
+//            the .sql file, so editing the body without this constant is a red).
+// A same-named function in another schema, a different key order, a different predicate or an invalid index
+// each read as not landed. Operators: `IF NOT EXISTS` is NOT a repair of any of those; see 089's header.
+export const VOICE_FN_PROSRC_MD5 = "27f5ff9068890e321a70fef828b98cd6";
+// The predicate is compared as the server's own deparse, byte for byte: literals are never normalized, so
+// 's a y' or 'say::text' cannot pass for 'say'. The function name is qualified or not by the reader's
+// search_path, hence two spellings; a differing server deparse fails toward "inspect". The pg_depend row
+// ties the predicate to THE public function, not a same-named one elsewhere.
+const VOICE_PRED_DEPARSE =
+  "((action = ANY (ARRAY['say'::text, 'legacy:emission'::text, 'emission'::text])) AND (NOT voice_payload_private(payload)))";
+const VOICE_PRED_DEPARSE_PUBLIC = VOICE_PRED_DEPARSE.replace("NOT voice_", "NOT public.voice_");
+const sqlLit = (t) => `'${t.replaceAll("'", "''")}'`;
+const VOICE_INDEX_PROBE = String.raw`
+  EXISTS (
+    SELECT 1 FROM pg_index i
+      JOIN pg_class ic ON ic.oid = i.indexrelid
+      JOIN pg_am am ON am.oid = ic.relam
+     WHERE i.indexrelid = to_regclass('public.acts_voice_at_idx')
+       AND i.indrelid = to_regclass('public.acts')
+       AND am.amname = 'btree'
+       AND i.indisvalid AND i.indisready AND i.indislive AND NOT i.indisunique
+       AND i.indnatts = 3 AND i.indnkeyatts = 3 AND i.indexprs IS NULL
+       AND i.indoption::text = '0 0 0'
+       AND i.indkey::text = (SELECT string_agg(a.attnum::text, ' ' ORDER BY k.n)
+                               FROM unnest(ARRAY['action','at','id']) WITH ORDINALITY AS k(name, n)
+                               JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attname = k.name)
+       AND pg_get_expr(i.indpred, i.indrelid) IN (${sqlLit(VOICE_PRED_DEPARSE)}, ${sqlLit(VOICE_PRED_DEPARSE_PUBLIC)})
+       AND EXISTS (SELECT 1 FROM pg_depend d
+                    WHERE d.classid = 'pg_class'::regclass AND d.objid = i.indexrelid
+                      AND d.refclassid = 'pg_proc'::regclass
+                      AND d.refobjid = to_regprocedure('public.voice_payload_private(jsonb)'))
+  )
+  AND EXISTS (
+    SELECT 1 FROM pg_proc p
+      JOIN pg_language l ON l.oid = p.prolang
+     WHERE p.oid = to_regprocedure('public.voice_payload_private(jsonb)')
+       AND l.lanname = 'plpgsql'
+       AND p.prorettype = 'boolean'::regtype AND NOT p.proretset
+       AND p.provolatile = 'i' AND p.proparallel = 'u'
+       AND NOT p.prosecdef AND NOT p.proisstrict AND NOT p.proleakproof
+       AND p.proconfig = ARRAY['search_path=pg_catalog']
+       AND p.proowner = (SELECT relowner FROM pg_class WHERE oid = to_regclass('public.acts'))
+       AND md5(p.prosrc) = '${VOICE_FN_PROSRC_MD5}'
+  )`;
+
 export const LANDED = {
   "001_tables.sql":                { probe: rel("acts") },
   "002_grants.sql":                { probe: trig("acts_append_only") },
@@ -142,8 +197,8 @@ export const LANDED = {
   "086_arrival_sources.sql":       { probe: `${rel("arrival_sources")} AND ${rel("arrival_source_pending")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_source_land' AND prosecdef)` },
   // 085 (POS-576): who invited a household, a public credit on its row.
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
-  // 089 (POS-779): the voice-time partial index and the one function its predicate needs.
-  "089_voice_time_index.sql":      { probe: `to_regclass('public.acts_voice_at_idx') IS NOT NULL AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'voice_payload_private' AND provolatile = 'i')` },
+  // 089 (POS-779): the voice-time partial index and the one function its predicate needs, as DEFINED, not as named.
+  "089_voice_time_index.sql":      { probe: VOICE_INDEX_PROBE },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
