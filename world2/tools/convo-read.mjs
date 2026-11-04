@@ -55,6 +55,7 @@
 
 import { createHash } from "node:crypto";
 import { voiceOf, sayDials, anchorCentres } from "./conversations.mjs";
+import { makeSlicer } from "./convo-slice.mjs";
 
 /** Bump when the SQL predicate, the JS guard contract or the row→voice decoding changes. Part of every fingerprint. */
 export const ELIGIBILITY_VERSION = "pos779-e1";
@@ -348,12 +349,6 @@ async function fetchChunked(client, name, text, params, chunk) {
   }
   await client.query(`CLOSE ${name}`);
   return rows;
-}
-
-/** A cooperative slice: after `ms` of synchronous work, give the event loop a turn (the injected clock and yield make it testable). */
-function makeSlicer({ ms = 4, now = () => performance.now(), yieldFn = () => new Promise((r) => setImmediate(r)) } = {}) {
-  let start = now();
-  return { async maybeYield() { if (now() - start >= ms) { await yieldFn(); start = now(); } } };
 }
 
 async function isSorted(list, slicer) {

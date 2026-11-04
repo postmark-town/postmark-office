@@ -27,6 +27,7 @@
 
 import { createHash } from "node:crypto";
 import { componentsOf, OverBudget, UnsupportedGeometry } from "./convo-components.mjs";
+import { makeSlicer } from "./convo-slice.mjs";
 import { threadOf } from "./conversations.mjs";
 import { standingOf } from "../../src/speaker-standing.mjs";
 import { readEpoch, compareVoices, compareIds, ELIGIBILITY_VERSION } from "./convo-read.mjs";
@@ -84,22 +85,27 @@ export function viewBytes(view) {
  * The view of a read epoch: its exact components, a generation per thread, and the indexes a request needs.
  * Throws OverBudget / UnsupportedGeometry from the component builder; the caller answers "unavailable".
  */
-export async function buildView(source, { fuse, sliceMs } = {}) {
+export async function buildView(source, { fuse, sliceMs, now, yieldFn } = {}) {
   const V = source.voices;
-  const { components, stats } = await componentsOf(V, { earshotM: source.earshotM, ...(fuse ? { fuse } : {}), ...(sliceMs ? { sliceMs } : {}) });
+  const { components, stats } = await componentsOf(V, { earshotM: source.earshotM, ...(fuse ? { fuse } : {}), ...(sliceMs ? { sliceMs } : {}), ...(now ? { now } : {}), ...(yieldFn ? { yieldFn } : {}) });
+  // the generation digests and the act-id index walk every voice once more; on the main thread that is a slice at a time too
+  const slicer = makeSlicer({ ms: sliceMs ?? 4, ...(now ? { now } : {}), ...(yieldFn ? { yieldFn } : {}) });
   const head = [ELIGIBILITY_VERSION, source.epoch.since, source.epoch.next ?? "open", source.edges_version ?? "", source.earshotM].join("|");
   const byAct = new Map();
-  const threads = components.map((idx, i) => {
-    const members = Int32Array.from(idx);
+  const threads = [];
+  let walked = 0;
+  for (let i = 0; i < components.length; i++) {
+    const members = Int32Array.from(components[i]);
     const h = createHash("sha256").update(head);
     for (const k of members) {
       const v = V[k];
       h.update(`;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`);
       byAct.set(v.act_id, i);
+      if ((++walked & 63) === 0) await slicer.maybeYield();
     }
     const first = V[members[0]], last = V[members[members.length - 1]];
-    return { members, first_act_id: first.act_id, first_ms: first.at, latest_ms: last.at, count: members.length, generation: h.digest("hex").slice(0, 32) };
-  });
+    threads.push({ members, first_act_id: first.act_id, first_ms: first.at, latest_ms: last.at, count: members.length, generation: h.digest("hex").slice(0, 32) });
+  }
   // newest first; a tie on the instant is broken by the first act id, so the order is total
   const order = threads.map((_, i) => i).sort((a, b) => (threads[b].latest_ms - threads[a].latest_ms) || compareIds(threads[b].first_act_id, threads[a].first_act_id));
   return { epoch: source.epoch, edges_version: source.edges_version ?? "", earshotM: source.earshotM, dials: source.dials ?? null, key: source.key,

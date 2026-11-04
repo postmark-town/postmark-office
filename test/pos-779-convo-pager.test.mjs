@@ -476,3 +476,28 @@ test("on the composed path: a compressible view too big for the memo is served b
   assert.equal(roomy.stats().bytes, need);
   assert.ok(roomy.stats().bytes >= contentFloor(b.view));
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// the generation walk after the components is sliced too (POS-779 integration)
+// ═════════════════════════════════════════════════════════════════════
+//
+// Measured at the caller on a 32,000-voice epoch, the stretch AFTER the components (a digest line per member and the
+// act-id index) held the event loop for 37-85 ms. It now walks a slice at a time. The control is structural and isolates
+// that walk: on a call-driven clock, the yields of buildView MINUS the yields of the component builder alone on the same
+// voices are the walk's.
+
+test("buildView's walk after the components yields a slice at a time; the view is the unsliced one", async () => {
+  const { componentsOf } = await import("../world2/tools/convo-components.mjs");
+  const vs = Array.from({ length: 1500 }, (_, i) => V(E0 + i * 1000, (i % 40) * 10, 0)); // one dense thread, a few cells
+  const src = source(vs);
+  const clock = () => { let t = 0, yields = 0; return { now: () => (t += 1), yieldFn: async () => { yields += 1; }, yields: () => yields }; };
+  const c0 = clock();
+  await componentsOf(src.voices, { earshotM: src.earshotM, sliceMs: 2, now: c0.now, yieldFn: c0.yieldFn });
+  const c1 = clock();
+  const view = await buildView(src, { sliceMs: 2, now: c1.now, yieldFn: c1.yieldFn });
+  const tail = c1.yields() - c0.yields();
+  assert.ok(tail >= 1500 / 64 / 3 - 1 && tail > 3, `the walk over 1,500 members yielded ${tail} times beyond the components' ${c0.yields()}`);
+  const plain = await buildView(src);
+  assert.deepEqual(view.threads.map((t) => [t.generation, t.count, t.first_act_id]), plain.threads.map((t) => [t.generation, t.count, t.first_act_id]));
+  assert.deepEqual([...view.byAct], [...plain.byAct]);
+});
