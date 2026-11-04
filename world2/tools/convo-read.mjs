@@ -32,9 +32,18 @@
 // drops `room`.
 //
 // ── WORK AND BYTES ARE MEASURED BEFORE BODIES ARE SHIPPED ────────────────────
-// An aggregate (row count, STORED payload bytes, string-payload count, max id, a digest of the ids and
-// instants) is read first, over at most `limit + 1` rows. If it passes a budget the answer is `over-budget`
-// and no body is read. `pg_column_size` is the stored size: it does not decompress.
+// An aggregate (row count, DECODED payload bytes, string-payload count, max id, a digest of the ids and
+// instants) is read first, over at most `limit + 1` rows, in the same REPEATABLE READ snapshot and inside the
+// statement timeout. If it passes a budget the answer is `over-budget` and no body is read.
+//
+// UNIT of `bytes`: `octet_length(payload::text)`, the UTF-8 length of the jsonb text Postgres sends for that
+// column, which is the text node-pg then parses. It is computed server-side, so the server detoasts and
+// decompresses at most `limit + 1` payloads to measure them (bounded by the row cap and the timeout) and ships
+// none. It counts the payload column only: the other columns of a row are short fixed-role strings and are not
+// in the unit. It is NOT a heap or RSS bound for the server or for JS.
+// `stored_bytes` (`pg_column_size`) is the stored, possibly compressed size. It is a labelled DIAGNOSTIC only
+// (reported in `source`, never compared with a budget, never in the fingerprint): a compressible payload is a
+// fraction of its decoded size, so a stored-size fuse would admit a read far over the budget.
 //
 // ── THE FINGERPRINT ─────────────────────────────────────────────────────────
 // Everything that can change a membership or a rendering, read in the same snapshot: the epoch, the edges
@@ -55,8 +64,10 @@ export const ELIGIBILITY_VERSION = "pos779-e1";
  * environment switch.
  *   maxRows         eligible say rows per epoch. The reported 32,000-voice invented epochs are the target;
  *                   64,000 is twice that. Reading them is one index range (measured 20-26 ms at 32k).
- *   maxBytes        STORED payload bytes of those rows. 32k invented says are ~7 MB as JSON; 48 MB covers
- *                   64k rows at the 500-character text limit with room to spare.
+ *   maxBytes        DECODED payload bytes (octet_length of the jsonb text) of those rows, not stored size.
+ *                   32k invented says are ~7 MB as JSON; 48 MB covers 64k rows at about 750 bytes each. A payload
+ *                   the producer's text dial lets reach ~2 KB each would NOT fit 64k rows: that read is refused,
+ *                   by design, rather than shipped.
  *   maxEmissionRows the crystallized set is closed (1,630 rows at the seed). 20,000 is >12x that; past it the
  *   maxEmissionBytes read says so instead of reading on.
  *   maxStringPayloadRows  payloads stored as a JSON string. The SQL port parses them, so these are rare; the
@@ -82,7 +93,8 @@ const sayWhere = (bounded) =>
 const DIGEST_ITEM = "id::text || '@' || to_char(at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')";
 const AGGREGATE = (where, limitParam) => `
   SELECT count(*)::int AS n,
-         coalesce(sum(pg_column_size(payload)), 0)::bigint AS bytes,
+         coalesce(sum(octet_length(payload::text)), 0)::bigint AS bytes,
+         coalesce(sum(pg_column_size(payload)), 0)::bigint AS stored_bytes,
          (count(*) FILTER (WHERE jsonb_typeof(payload) = 'string'))::int AS strings,
          coalesce(max(id), 0)::text AS max_id,
          md5(coalesce(string_agg(${DIGEST_ITEM}, ',' ORDER BY at, id), '')) AS digest
@@ -287,7 +299,8 @@ export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo =
       voices.sort(compareVoices);
       return { status: "ok", from: "store", key, edges_version: edgesBefore, epoch: { since, next }, earshotM, dials: dialsView, anchors,
         voices, eras, unplaced, non_sound_emissions: nonSound, js_private_dropped: jsPrivate,
-        source: { says: { rows: say.n, bytes: Number(say.bytes), strings: say.strings }, emissions: { rows: emi.n, bytes: Number(emi.bytes), strings: emi.strings } } };
+        source: { says: { rows: say.n, bytes: Number(say.bytes), stored_bytes: Number(say.stored_bytes), strings: say.strings },
+          emissions: { rows: emi.n, bytes: Number(emi.bytes), stored_bytes: Number(emi.stored_bytes), strings: emi.strings } } };
     }, { statementTimeoutMs: B.statementTimeoutMs });
   } catch (e) {
     if (e?.code === "57014") return unavailable("timeout", { limit_ms: B.statementTimeoutMs });

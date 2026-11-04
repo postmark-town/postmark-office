@@ -32,8 +32,21 @@ import { standingOf } from "../../src/speaker-standing.mjs";
 import { readEpoch, compareVoices, compareIds, ELIGIBILITY_VERSION } from "./convo-read.mjs";
 
 export const PAGE = Object.freeze({ defaultLimit: 80, maxLimit: 200, defaultVoiceCap: 80, defaultListLimit: 40, maxListLimit: 100 });
-/** A bound on what one retained view costs, for the memo: stored source bytes plus this much per voice. */
-export const VIEW_BYTES_PER_VOICE = 256;
+/**
+ * The memo's charge for one retained view is an ACCOUNTED ESTIMATE of the decoded material the view keeps
+ * (below), in bytes. It is not exact JS heap or RSS and no guarantee of either: V8's real layout varies by
+ * version, string representation (one-byte, two-byte, sliced, cons) and sharing.
+ */
+export const VIEW_COST = Object.freeze({
+  base: 4096,        // the envelope: epoch, dials, source counts, key, stats, eras
+  string: 16,        // per string: header
+  charBytes: 2,      // per UTF-16 unit: assume two-byte storage (one-byte strings are half; this errs high)
+  voice: 192,        // per retained voice object: header + eight fields + two boxed numbers + array slot
+  thread: 256,       // per thread object, its Int32Array header, its `order` slot
+  member: 4,         // per Int32Array member
+  byActEntry: 96,    // per Map entry (act id -> thread): hash bucket + entry, key string shared with its voice
+  unplaced: 128,     // per unplaced record, plus its strings
+});
 
 const sha = (parts) => createHash("sha256").update(parts.join("|")).digest("hex");
 
@@ -45,9 +58,26 @@ const MAX_MS = 8.64e15;
 // the view
 // ═════════════════════════════════════════════════════════════════════
 
-/** What a retained view costs, as the memo counts it. */
-export function viewBytes(source) {
-  return (source.source?.says?.bytes ?? 0) + (source.source?.emissions?.bytes ?? 0) + VIEW_BYTES_PER_VOICE * (source.voices?.length ?? 0);
+/**
+ * What a retained VIEW (the result of buildView) costs, as the memo counts it: an accounted estimate of the
+ * decoded material it retains, from the view's own contents, not the bytes read from the store (which are
+ * compressed or JSON-encoded, a different thing). Charged: every voice object and each of its strings at two
+ * bytes per UTF-16 unit, every thread with its member array, the act-id index, the unplaced list and the anchor
+ * names. Not charged: the transient source rows (dropped after the build), V8 over-allocation, string sharing
+ * (never assumed), and other threads' memory. A shape it cannot charge (no voices array, or no threads) answers
+ * Infinity, which the memo refuses: a view is never admitted on an undercount.
+ */
+export function viewBytes(view) {
+  const C = VIEW_COST;
+  if (!Array.isArray(view?.voices) || !Array.isArray(view?.threads)) return Infinity;
+  const str = (s) => (s == null ? 0 : C.string + C.charBytes * String(s).length);
+  let n = C.base;
+  for (const v of view.voices) n += C.voice + str(v.handle) + str(v.text) + str(v.place) + str(v.act_id) + str(v.era);
+  for (const t of view.threads) n += C.thread + C.member * (t.members?.length ?? 0) + str(t.first_act_id) + str(t.generation);
+  n += C.byActEntry * (view.byAct?.size ?? 0);
+  for (const u of view.unplaced ?? []) n += C.unplaced + str(u.act_id) + str(u.anchor);
+  for (const a of view.anchors ?? []) n += str(a);
+  return n;
 }
 
 /**
@@ -227,6 +257,6 @@ export async function loadEpochView(pool, { epoch, isPrivate, edgesOf = null, me
     if (e instanceof UnsupportedGeometry) return { status: "unavailable", reason: "unsupported-geometry" };
     return { status: "unavailable", reason: "build-failed" };
   }
-  memo?.set(`${src.epoch.since}:${src.epoch.next ?? "open"}`, { key: src.key, bytes: viewBytes(src), anchors: src.anchors, value: view });
+  memo?.set(`${src.epoch.since}:${src.epoch.next ?? "open"}`, { key: src.key, bytes: viewBytes(view), anchors: src.anchors, value: view });
   return { status: "ok", from: "store", view };
 }
