@@ -1507,7 +1507,7 @@ async function householdMarks(f, key, ctx) {
   const { currentCrossing: crossingAt } = await import("./crossings.mjs");
   const nowCrossing = crossingAt(nowMs);
   const effects = ashore.length ? await readClaimEffects({ key, handles: ashore, sinceCrossing: Math.max(0, nowCrossing - RULINGS_SINCE_CROSSINGS), nowCrossing }) : { events: [] };
-  const { stakesFor } = await import("./doorstep-stakes.mjs");
+  const { stakesFor, SNAPSHOT_LIMIT } = await import("./doorstep-stakes.mjs");
   const stakes = ashore.length ? await stakesFor(ashore, { now: new Date(nowMs) }) : { rows: [] };
   return {
     read: "marks", residents: ashore,
@@ -1517,7 +1517,7 @@ async function householdMarks(f, key, ctx) {
     at_risk: { next_settlement: stakes.next_settlement ?? null, rows: (stakes.rows ?? []).filter((r) => r.at_risk === true),
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     ...(Object.keys(unread).length ? { unread } : {}),
-    note: "drafts are your residents' own; pending is on the public docket; standing is published on world main. One mark whole: world { investigate: \"<id>\" }",
+    note: "drafts are your residents' own; pending is on the public docket; standing is published on world main. One mark whole: world { investigate: \"<id>\" }. at_risk: " + SNAPSHOT_LIMIT,
   };
 }
 

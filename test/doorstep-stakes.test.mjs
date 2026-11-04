@@ -153,6 +153,30 @@ test("a quiet page says so, and an empty one points at the portfolio", async () 
   assert.match(empty.read_the_rest, /world \{ read: "leave-mark" \}/, "the portfolio's own grammar");
 });
 
+// WLD-51 (Wright, 2026-11-03 19:25 EST): the warning states the frame it was read in. The words are spelled here, not
+// imported, so a changed sentence or a surface that stops saying it reds on this assertion. SWEEP_RULE is the verbatim
+// ruling and does not carry it; the existing optional prose does, and no field is added.
+const FRAME = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
+const KNOWN_KEYS = new Set(["next_settlement", "clock", "rule", "unavailable", "registry_unavailable", "escrow_at_town_sha", "escrow_ingested_at",
+  "catches_up_at", "later_stakes", "count", "at_risk", "note", "read_the_rest", "rows"]);
+
+test("WLD-51 · the at-risk segment states its frame in existing prose, with the at-risk row, the quiet note and the unmeasured read alike", async () => {
+  const risky = await stakesFor(["berthillon"], readers());
+  assert.equal(risky.at_risk, 1, "the warning is live on this page");
+  assert.ok(risky.later_stakes.endsWith(`shows it now. ${FRAME}`), `later_stakes: ${risky.later_stakes}`);
+  assert.ok(risky.later_stakes.startsWith("a stake or unstake made after escrow_ingested_at shows here at catches_up_at"), "and keeps its own words");
+  assert.equal(risky.rule, SWEEP_RULE, "the sweep's rule is the ruling verbatim and does not carry the frame");
+  assert.ok(!risky.rule.includes("last settlement"));
+  const quiet = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: HEAD, byMark: new Map([["berthillon/the-orchard-bench", 1], ["berthillon/cone-coing", 2]]), reason: null }) }));
+  assert.equal(quiet.at_risk, 0);
+  assert.ok(quiet.note.endsWith(`as of the town head named above. ${FRAME}`), `the "nothing at risk" note: ${quiet.note}`);
+  const blind = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: null, byMark: null, reason: "no town head" }) }));
+  assert.equal(blind.at_risk, null);
+  assert.ok(blind.later_stakes.endsWith(FRAME));
+  for (const seg of [risky, quiet, blind]) for (const k of Object.keys(seg)) assert.ok(KNOWN_KEYS.has(k), `no new field: ${k}`);
+  assert.deepEqual(risky.rows[0].act, stakeEnvelope("berthillon/the-orchard-bench"), "the row's act is untouched by prose");
+});
+
 test("scope is the stances/rulings grammar: a named handle is one resident, bare is the whole house the key holds", async () => {
   const marks = [...MARKS, { id: "antoine/the-cellar", kind: "sited", by: "antoine", household: "berthillon" }];
   const cellar = "WORLD/marks/antoine/the-cellar/mark.md";
@@ -241,9 +265,13 @@ test("the finished doorstep carries the segment, always — serves, args, and th
         assert.equal(d.stakes.read_the_rest, undefined);
         assert.match(d.stakes.teach_at, /household \{ read: "stakes" \}/);
         assert.match(d.stakes.abridged, /drops `rule` and `read_the_rest`/);
+        // WLD-51: this skin strips `later_stakes`, so the frame rides the cut's own words, which stay on the page
+        assert.equal(d.stakes.later_stakes, undefined);
+        assert.ok(d.stakes.abridged.endsWith(`answers it whole. ${FRAME}`), `the slim skin's abridged states the frame: ${d.stakes.abridged}`);
       } else {
         assert.match(d.stakes.rule, /a commons mark with no stamps behind it leaves the world/, "REST answers the read whole — the bundle law");
         assert.equal(d.stakes.teach_at, undefined);
+        assert.ok(d.stakes.later_stakes.endsWith(FRAME), `the full skin's later_stakes states the frame: ${d.stakes.later_stakes}`); // WLD-51
       }
     }
   } finally { await restore(); await ix.stop(); }
