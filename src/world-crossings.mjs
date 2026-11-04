@@ -100,7 +100,7 @@ export function passageInstant(thresholds, deps = {}) {
 
 /**
  * THE EXIT LOCKS IN FORCE FOR THIS WALKER (WLD-5 A; Darko, Sitting B 2026-10-18
- * 20:22 and 20:27): `{ <dungeon>: { until, left_at, fled?, fled_by? } }`, read from the walker's own
+ * 20:22 and 20:27): `{ <dungeon>: { until, left_at, fled? } }`, read from the walker's own
  * exit acts (`deps.dungeonLocks`, the store), keeping only the locks whose
  * settlement has not come by `judgedMs`. Asked only when the world has a dungeon.
  * A store that cannot be read REFUSES (503): a lock that fails open lets the
@@ -120,7 +120,7 @@ async function locksInForce(who, w, verbs, judgedMs, deps) {
     if (!r?.dungeon || !Number.isFinite(until) || until <= judgedMs) continue;
     // `fled` is the exit act's own recorded cause (an exit the office made at 0 nerve); an exit the resident made carries none,
     // so its lock is the object it always was and the clone says "by exit" exactly as before
-    if (!live[r.dungeon] || Date.parse(live[r.dungeon].until) < until) live[r.dungeon] = { until: new Date(until).toISOString(), left_at: r.left_at ?? null, ...(r.fled ? { fled: String(r.fled), ...(r.fled_by ? { fled_by: String(r.fled_by) } : {}) } : {}) };
+    if (!live[r.dungeon] || Date.parse(live[r.dungeon].until) < until) live[r.dungeon] = { until: new Date(until).toISOString(), left_at: r.left_at ?? null, ...(r.fled ? { fled: String(r.fled) } : {}) };
   }
   return Object.keys(live).length ? live : null;
 }

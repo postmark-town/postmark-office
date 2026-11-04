@@ -211,11 +211,11 @@ test("the doors' own words say it: world_exit and world_enter name the lock", ()
 // the words are the clone's (postmark-world tools/portals.mjs § lockedOutWords). Nothing about who is locked out,
 // until when, or what an exit costs moves.
 //
-// THE CREATURE (Wright's exact word, 2026-11-04 12:01Z): the office's flee carries ONE optional creature id, `fled_by`,
-// taken from the encounter in hand when the nerve reached 0 (creatures.mjs § fleeTheSpent, encounter-verbs.mjs →
-// encounter.mjs § queueFlee → the exit act), and the same lock path carries it to the clone's words, which name that
-// kind's ring through the naming the dungeon is named by. An exit the resident made records none; a lock written
-// before this change has none and says only that nerve ran out; nothing is looked up or guessed.
+// THE CREATURE (Wright 2026-11-04 12:01Z, then A/generic 13:42Z and 14:06Z): the office's flee carries ONE optional creature id,
+// `fled_by`, taken from the encounter in hand when the nerve reached 0 (creatures.mjs § fleeTheSpent, encounter-verbs.mjs →
+// encounter.mjs § queueFlee → the exit act), STORES it on the exit act, and the same lock path carries it to the clone. The refusal
+// does NOT name a creature: it says the cause, the known time and the return. An exit the resident made records no id; a lock
+// written before this change has none; nothing is looked up or guessed.
 //
 // The paired World words skip, saying why, on a clone that predates them (the pinned clone until the pin moves):
 // the carrying below runs on every clone, the words only where the clone has them.
@@ -307,40 +307,24 @@ const KINDS = [
 ];
 const CREATURE_A = "creature:wolf-291-3";
 const CREATURE_B = "creature:bat-291-7";
-const RING_LINE_A = "Your nerve ran out in the Wolf's ring at 17:12Z, so you fled the Spire and can't come back in until the next settlement (18:00Z). Nothing was recorded.";
-const HAVE_RING = await (async () => {
-  if (SKIP) return false;
-  try {
-    const { importEngineAt } = await import("../src/world-branches.mjs");
-    const portals = await importEngineAt(CLONE, "portals.mjs");
-    return portals.lockedOutWords({ dungeon: SPIRE, until: "2026-10-19T18:00:00.000Z", fled: "nerve", fled_by: CREATURE_A, marks: KINDS }).includes("Wolf's ring");
-  } catch { return false; }
-})();
-const RING_SKIP = SKIP || (!HAVE_RING && `the engine the doors load from the world clone at ${CLONE} predates WLD-132's named ring (lockedOutWords ignores \`fled_by\`): a flee reads as "nerve ran out" there until a blessed World commit carries it`);
+// (Wright 2026-11-04 14:06Z: the refusal says the cause, the time and the return; it names no creature, whatever id was recorded.)
 const NEUTRAL_HINT = /^this dungeon is closed to you until the next settlement \(06:00 or 18:00Z\), whether you stepped out of it or were set outside it; walking out through a door costs nothing\./;
 const enterLockedK = async (locks, kinds = KINDS) => {
   const o = await officeWith({ standing: { x: 845, y: 1000 }, ledger: onTheGrounds(), locks, nowIso: "2026-10-19T17:30:00.000Z", kinds });
   return { o, e: await enterViaOffice(CLONE, { mark: "spire/doors-outside" }, key("ann"), o.deps).catch((x) => x) };
 };
 
-test("WLD-132 · THE RECORDED CREATURE IS NAMED: A's ring for A, never B's; the 403, extras and instant are unchanged", { skip: RING_SKIP }, async () => {
-  const { o, e } = await enterLockedK([{ ...FLED_LOCK, fled_by: CREATURE_A }]);
-  assert.equal(e.code, 403);
-  assert.equal(e.defect, RING_LINE_A);
-  assert.deepEqual(bounceExtras(e), { dungeon: SPIRE, law: "the-town/dungeon (WLD-5)", locked_until: "2026-10-19T18:00:00.000Z" }, "no new field on the envelope");
-  assert.equal(o.records.length, 0);
-  const b = (await enterLockedK([{ ...FLED_LOCK, fled_by: CREATURE_B }])).e.defect;
-  assert.equal(b, RING_LINE_A.replace("Wolf's", "Bat's"), "B's id names B's ring");
-  assert.ok(!b.includes("Wolf"), "and nothing of A");
-});
-
-test("WLD-132 · WHAT THE RECORD CANNOT PLACE IS NOT GUESSED: no id, a null or empty id, a creature of no declared kind, a non-creature id", { skip: FLED_SKIP }, async () => {
-  for (const [label, lock] of [["no fled_by (a flee written before this change)", FLED_LOCK], ["fled_by null", { ...FLED_LOCK, fled_by: null }],
-    ["fled_by empty", { ...FLED_LOCK, fled_by: "" }], ["a kind nobody declares", { ...FLED_LOCK, fled_by: "creature:hound-291-1" }],
-    ["not a creature id", { ...FLED_LOCK, fled_by: "ann" }]]) {
-    assert.equal((await enterLockedK([lock])).e.defect, FLED_LINE, label);
+test("WLD-132 · A RECORDED CREATURE IS CARRIED, NOT NAMED: the refusal is the generic cause, time and return for any id, with or without kind marks in the world; the 403, extras and instant are unchanged", { skip: FLED_SKIP }, async () => {
+  for (const kinds of [KINDS, []]) {
+    for (const [label, by] of [["creature A", CREATURE_A], ["creature B", CREATURE_B], ["a kind nobody declares", "creature:hound-291-1"], ["not a creature id", "ann"], ["null", null], ["empty", ""], ["none", undefined]]) {
+      const { o, e } = await enterLockedK([{ ...FLED_LOCK, ...(by === undefined ? {} : { fled_by: by }) }], kinds);
+      assert.equal(e.code, 403, label);
+      assert.equal(e.defect, FLED_LINE, `${label}: the generic line`);
+      assert.ok(!/wolf|bat|hound|creature|ring/i.test(e.defect), `${label}: no creature name`);
+      assert.deepEqual(bounceExtras(e), { dungeon: SPIRE, law: "the-town/dungeon (WLD-5)", locked_until: "2026-10-19T18:00:00.000Z" }, "no new field on the envelope");
+      assert.equal(o.records.length, 0);
+    }
   }
-  assert.equal((await enterLockedK([{ ...FLED_LOCK, fled_by: CREATURE_A }], [])).e.defect, FLED_LINE, "the kind's class mark is not in this world: the ring is not named");
 });
 
 test("WLD-132 · A CREATURE ID WITHOUT A FLED CAUSE NAMES NOTHING: an exit the resident made keeps its words, whatever else the row holds", { skip: SKIP }, async () => {
@@ -376,7 +360,7 @@ test("WLD-132 · THE EXIT ACT RECORDS THE CREATURE ONLY FOR THE OFFICE'S OWN FLE
   assert.equal((await flee({}, { handle: "ann", confirm: true, fled_by: CREATURE_B, fledBy: CREATURE_B, fled: "nerve" })).fled_by, undefined, "a caller's own arguments are not the fact");
 });
 
-test("WLD-132 · THE REAL SEAM WITH THE CREATURE: queueFlee carries the encounter's id through the exit act, the projection and the refusal; B, which spent last, is never named", { skip: RING_SKIP }, async () => {
+test("WLD-132 · THE REAL SEAM WITH THE CREATURE: queueFlee stores the encounter's id (not B, which spent last) on the exit act and the projection carries it; the refusal is the generic line", { skip: FLED_SKIP }, async () => {
   const { queueFlee } = await import("../src/encounter.mjs");
   const fleeing = await officeWith({ standing: { x: 880, y: 1000 }, ledger: inTheVestibule(), acts: [ENTERED_BY_THE_DOORS], nowIso: "2026-10-19T17:12:30.000Z" });
   const exit = (h, hh, by) => exitViaOffice(CLONE, { handle: h, confirm: true }, key(h), { ...fleeing.deps, flee: true, ...(by ? { fledBy: by } : {}) });
@@ -392,13 +376,13 @@ test("WLD-132 · THE REAL SEAM WITH THE CREATURE: queueFlee carries the encounte
   process.env.WORLD2_PG = "1"; process.env.WORLD2_PG_URL = "postgres://stand-in.invalid/none";
   // a stand-in pool answering as the store's SELECT would from the record just written (payload keys to columns); NOT executed SQL
   __setPoolForTest({ query: async (text, params) => { asked.push({ text, params });
-    return { rows: [{ dungeon: written.dungeon, locked_until: written.locked_until, left_at: written.left_at, fled: written.fled ?? null, fled_by: written.fled_by ?? null }] }; } });
+    return { rows: [{ dungeon: written.dungeon, locked_until: written.locked_until, left_at: written.left_at, fled: written.fled ?? null }] }; } });
   let projected;
   try { projected = await crossingDeps().dungeonLocks("ann"); }
   finally { __setPoolForTest(null); [process.env.WORLD2_PG, process.env.WORLD2_PG_URL] = hadPg.map((v) => v); if (hadPg[0] === undefined) delete process.env.WORLD2_PG; if (hadPg[1] === undefined) delete process.env.WORLD2_PG_URL; }
-  assert.deepEqual(projected, [{ dungeon: SPIRE, locked_until: "2026-10-19T18:00:00.000Z", left_at: "2026-10-19T17:12:30.000Z", fled: "nerve", fled_by: CREATURE_A }]);
-  assert.match(asked[0].text, /payload->>'fled_by' AS fled_by/, "[text pin, the weakest instrument here] the SELECT reads the recorded creature beside the cause");
+  assert.deepEqual(projected, [{ dungeon: SPIRE, locked_until: "2026-10-19T18:00:00.000Z", left_at: "2026-10-19T17:12:30.000Z", fled: "nerve" }]);
+  assert.doesNotMatch(asked[0].text, /fled_by/, "[text pin] the lock read does not carry the creature id: the refusal does not use it");
   const { e } = await enterLockedK(projected.map((r) => ({ ...r, who: "ann" }))); // the door is handed what the projection returned
-  assert.equal(e.defect, RING_LINE_A);
-  assert.ok(!e.defect.includes("Bat"), "never the creature that spent last");
+  assert.equal(e.defect, FLED_LINE, "the refusal carries the cause, the time and the return");
+  assert.ok(!/wolf|bat|creature|ring/i.test(e.defect), "and names no creature, though the record holds the encounter's id");
 });
