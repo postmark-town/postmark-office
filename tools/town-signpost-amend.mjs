@@ -109,6 +109,6 @@ async function main(argv) {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href || process.argv[1]?.endsWith("town-signpost-amend.mjs")) {
   main(process.argv.slice(2)).then((c) => process.exit(c), (e) => { console.error(`town-signpost-amend: ${e?.defect ?? e?.message ?? e}`); process.exit(1); });
 }
