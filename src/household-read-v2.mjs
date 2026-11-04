@@ -264,7 +264,7 @@ export const MARKS_KEY = 'pending: on the docket · standing: published · keep:
 // round 4 (Wright's look): a refusal's cause is said whole, on one line, never cut mid-sentence
 const oneLine = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
 /** One at-risk mark, what happens and why; the keeping call is the key's `keep:`. */
-export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, unpublished at the next settlement unless staked`;
+export const riskLine = (r) => `${r.mark ?? r.id}: ✦${Number(r.escrow) || 0}, last-settlement risk; stake to keep`;
 // the call that keeps one is named once, in MARKS_KEY's `keep:` (world-stake.mjs § world_stake: mark, stamps, preview;
 // Darko 18:04, a line per mark carried it first)
 
