@@ -38,9 +38,18 @@ const MIGRATION = join(ROOT, "world2", "schema", "090_canonical_records.sql");
 let store, pool, paper, owner, failAfter = null;
 
 // A fault AFTER a statement the store took: `failAfter` names a statement
-// (by regex) on a transaction's client; once it has run, the caller sees an
-// error instead of its answer, so the rest of that transaction must roll back.
+// (by regex); once it has run, on a transaction's client OR on the pool's own
+// autocommit road, the caller sees an error instead of its answer. A write
+// whose two halves share the transaction rolls back whole; one that took
+// the pool's road for a half leaves that half committed, and is seen.
 function faultable(p) {
+  const fault = (sql, answer) => {
+    const text = typeof sql === "string" ? sql : sql?.text ?? "";
+    if (failAfter && failAfter.test(text)) { failAfter = null; throw Object.assign(new Error("injected fault after the statement ran"), { injected: true }); }
+    return answer;
+  };
+  const pq = p.query.bind(p);
+  p.query = async (sql, args) => fault(sql, await pq(sql, args));
   const connect = p.connect.bind(p);
   p.connect = (cb) => {
     if (typeof cb === "function") return connect(cb);
@@ -49,11 +58,7 @@ function faultable(p) {
         const q = client.query.bind(client);
         client.query = (sql, args, cb2) => {
           if (typeof cb2 === "function" || typeof args === "function") return q(sql, args, cb2);
-          return q(sql, args).then((answer) => {
-            const text = typeof sql === "string" ? sql : sql?.text ?? "";
-            if (failAfter && failAfter.test(text)) { failAfter = null; throw Object.assign(new Error("injected fault after the statement ran"), { injected: true }); }
-            return answer;
-          });
+          return q(sql, args).then((answer) => fault(sql, answer));
         };
         client.__faultable = true;
       }
@@ -144,17 +149,21 @@ test("the human's first change: revision 1, one opaque subject, one intent row, 
 
 test("THE FIRST BOUNDARY: the intent's append fails after the record changed, and BOTH roll back", async () => {
   // a first create, then an update, each failing after the journal INSERT itself ran
-  failAfter = /INSERT INTO office_town_journal/;
-  await assert.rejects(humanWrite("inv-birch", { town_name: "Birch" }, 0, "birch-1"), (e) => e.injected === true);
-  assert.equal(await human("inv-birch"), null, "no record");
+  try {
+    failAfter = /INSERT INTO office_town_journal/;
+    await assert.rejects(humanWrite("inv-birch", { town_name: "Birch" }, 0, "birch-1"), (e) => e.injected === true);
+  } finally { failAfter = null; }
   assert.deepEqual(await intents("inv-birch"), [], "no intent");
+  assert.equal(await human("inv-birch"), null, "no record");
   // the control: the same write with no fault commits both
   assert.equal((await humanWrite("inv-birch", { town_name: "Birch" }, 0, "birch-1")).applied, true);
-  failAfter = /INSERT INTO office_town_journal/;
-  await assert.rejects(humanWrite("inv-birch", { town_name: "Birch Hollow" }, 1, "birch-2"), (e) => e.injected === true);
+  try {
+    failAfter = /INSERT INTO office_town_journal/;
+    await assert.rejects(humanWrite("inv-birch", { town_name: "Birch Hollow" }, 1, "birch-2"), (e) => e.injected === true);
+  } finally { failAfter = null; }
+  assert.equal((await intents("inv-birch")).length, 1, "only the control's intent");
   const row = await human("inv-birch");
   assert.deepEqual([row.town_name, Number(row.revision)], ["Birch", 1], "the update rolled back with its intent");
-  assert.equal((await intents("inv-birch")).length, 1, "only the control's intent");
 });
 
 test("THE SECOND BOUNDARY: the record's write fails after the intent was appended, and BOTH roll back", async () => {
@@ -183,10 +192,16 @@ async function race(asks, lockTable) {
     const runs = asks.map((ask, i) => new Promise((ok, no) => {
       const child = spawn(process.execPath, [CHILD, JSON.stringify({ ...ask, url: store.url("office_api"), appName: `canonical-race-${i}` })], { env, stdio: ["ignore", "pipe", "pipe"] });
       let out = "", err = "";
+      // a writer that hangs (a nested pool checkout, a lost lock) is a red, not a wait
+      const kill = setTimeout(() => child.kill("SIGKILL"), 30_000);
       child.stdout.on("data", (d) => { out += d; });
       child.stderr.on("data", (d) => { err += d; });
       child.on("error", no);
-      child.on("close", (code) => (code === 0 ? ok(JSON.parse(out.trim().split("\n").pop())) : no(new Error(`child exited ${code}: ${err.slice(0, 400)}`))));
+      child.on("close", (code, signal) => {
+        clearTimeout(kill);
+        if (code === 0) ok(JSON.parse(out.trim().split("\n").pop()));
+        else no(new Error(`writer ${i} ${signal ? `killed (${signal}) after 30 s` : `exited ${code}`}: ${err.slice(0, 400)}`));
+      });
     }));
     const deadline = Date.now() + 20_000;
     for (;;) {
