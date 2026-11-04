@@ -149,11 +149,18 @@ export function standinPatterns(which, source, { before = null } = {}) {
 }
 
 /**
- * A stand-in clone of `source` at `dest`: `git clone --local --no-checkout`, its
- * stand-in patterns, then the checkout. Answers `dest`, on the source's HEAD.
+ * A stand-in clone of `source` at `dest`: `git clone --no-checkout` of the local path,
+ * its stand-in patterns, then the checkout. Answers `dest`, on the source's HEAD.
+ *
+ * NOT `--local` (POS-726, office#895, 2026-11-04). A local path already clones by
+ * hardlinking the objects, and where it can't (`dest` on another filesystem than
+ * `source`) git copies them instead. An explicit `--local` turns that fallback into
+ * "fatal: failed to create link …: Invalid cross-device link": on CI runners whose
+ * /tmp is not the workspace's filesystem, every dev-rehearsal-local test went red
+ * in its first hook (office#895 twice, train d6937297, main 4238e557).
  */
 export function standinClone(which, source, dest, { before } = {}) {
-  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, dest], { windowsHide: true });
+  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, dest], { windowsHide: true });
   applySparse(dest, standinPatterns(which, source, { before }), `standin-${which}`);
   git(dest, ["-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "HEAD"]);
   return dest;
