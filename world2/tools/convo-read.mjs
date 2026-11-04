@@ -144,7 +144,16 @@ export function logicalMsOf(row) {
 
 /** `voiceOf`'s result with the exact millisecond: the one say→voice mapping, never a second. */
 export function exactVoiceOf(row, centreOf = null) {
-  const r = voiceOf(row, centreOf);
+  // `voiceOf` reads a say's instant with Date.parse(row.at); handed a Date that is a round trip through the long locale
+  // string (the slowest line of the interpretation at 32k). Its result is overwritten with the exact millisecond below,
+  // so for a say with a valid Date it is handed the same instant as ISO text for the duration of the call, and the row
+  // is put back. Any other row (an invalid Date included) takes the original road unchanged.
+  const at = row?.at;
+  let r;
+  if (at instanceof Date && row.action === "say" && Number.isFinite(at.getTime())) {
+    row.at = at.toISOString();
+    try { r = voiceOf(row, centreOf); } finally { row.at = at; }
+  } else r = voiceOf(row, centreOf);
   if (r.voice) {
     const ms = logicalMsOf(row);
     if (Number.isFinite(ms)) r.voice.at = ms;
@@ -310,7 +319,8 @@ export async function readEpoch(pool, { epoch, isPrivate, edgesOf = null, memo =
       if (r.unplaced) { unplaced.push({ act_id: r.act_id, anchor: r.anchor }); return; }
       if (!(r.voice.at >= since && (next === null || r.voice.at < next))) return;
       eras[r.era] += 1;
-      into.push({ ...r.voice, era: r.era });
+      r.voice.era = r.era; // the voice is this call's own fresh object: no copy per voice
+      into.push(r.voice);
     };
     const slicer = makeSlicer(slice);
     const sayVoices = [], emiVoices = [];

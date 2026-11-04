@@ -243,3 +243,32 @@ test("PER-QUERY YIELD: the clock is consulted after every k-d query, the slices 
 test("an empty epoch is no components", async () => {
   assert.deepEqual((await componentsOf([], { earshotM: 60 })).components, []);
 });
+
+// ── POS-779 consumer/cost fix: the grouping pass and the lonely-cell walk are sliced, and the two-level cell index is the same index ──
+
+test("components come out ascending within, ordered by first index, for every fuzz shape (the grouping no longer sorts)", async () => {
+  for (let seed = 200; seed < 230; seed++) {
+    const r = rng(seed);
+    const voices = Array.from({ length: 60 }, (_, i) => mk(i, (r() - 0.5) * 300, (r() - 0.5) * 300, r() < 0.05));
+    const { components } = await componentsOf(voices, { earshotM: 60 });
+    for (const c of components) assert.deepEqual(c, [...c].sort((a, b) => a - b), "members ascending");
+    assert.deepEqual(components.map((c) => c[0]), components.map((c) => c[0]).slice().sort((a, b) => a - b), "components ordered by first member");
+    assert.equal(components.reduce((n, c) => n + c.length, 0), voices.length, "every voice in exactly one component");
+  }
+});
+
+test("negative, zero and fractional cell indices meet their neighbours through the two-level index (-0 included)", async () => {
+  const voices = [mk(0, -0, -0), mk(1, -29, 0), mk(2, 29, 0), mk(3, 0, -29), mk(4, 0, 29), mk(5, -400.5, -400.5), mk(6, -440.5, -400.5)];
+  const { want, got } = await both(voices, 60);
+  assert.equal(got, want);
+});
+
+test("6,000 lonely cells: the clock is consulted inside the neighbour walk, not only after it", async () => {
+  // every voice alone in its own cell, nobody within reach: the walk reaches none of the checkpoints below the cell loop
+  const voices = Array.from({ length: 6000 }, (_, i) => mk(i, (i % 100) * 1000, Math.floor(i / 100) * 1000));
+  let reads = 0, yields = 0;
+  const out = await componentsOf(voices, { earshotM: 60, sliceMs: 2, now: () => (reads += 1), yieldFn: async () => { yields += 1; } });
+  assert.equal(out.components.length, 6000);
+  assert.ok(yields >= 6000 / 128 / 3, `the walk over 6000 lonely cells yielded ${yields} times; it must yield between cells`);
+  assert.ok(out.stats.slices >= yields - 1);
+});

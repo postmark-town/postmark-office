@@ -501,3 +501,19 @@ test("buildView's walk after the components yields a slice at a time; the view i
   assert.deepEqual(view.threads.map((t) => [t.generation, t.count, t.first_act_id]), plain.threads.map((t) => [t.generation, t.count, t.first_act_id]));
   assert.deepEqual([...view.byAct], [...plain.byAct]);
 });
+
+// ── POS-779 consumer/cost fix: the one-shot digest is the streamed digest ──
+test("a thread's generation is the SAME sha256 whether the member bytes are streamed or hashed in one shot", async () => {
+  const { createHash } = await import("node:crypto");
+  const { buildView } = await import("../world2/tools/convo-pager.mjs");
+  const V = Array.from({ length: 300 }, (_, i) => ({ act_id: String(1000 + i), at: 5_000_000 + i * 7, x: (i % 17) * 11.5, y: Math.floor(i / 17) * 3.25, aboard: i % 29 === 0, handle: "h" + (i % 5), text: "t" + i, place: "p", era: "live" }));
+  const source = { voices: V, epoch: { since: 1, next: null }, edges_version: "ev", earshotM: 60, dials: null, key: "k".repeat(64), anchors: [], eras: {}, unplaced: [], source: {} };
+  const view = await buildView(source, {});
+  const head = ["pos779-e1", 1, "open", "ev", 60].join("|");
+  assert.ok(view.threads.length >= 1);
+  for (const t of view.threads) {
+    const h = createHash("sha256").update(head);
+    for (const k of t.members) { const v = V[k]; h.update(`;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`); }
+    assert.equal(t.generation, h.digest("hex").slice(0, 32));
+  }
+});

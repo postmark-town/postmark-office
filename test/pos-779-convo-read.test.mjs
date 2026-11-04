@@ -712,3 +712,25 @@ test("SLICED interpretation: the rows are mapped a slice at a time on an injecte
     assert.ok(yields <= 600 / 32 + 2, "and never more than one per clock read");
   });
 });
+
+// ── POS-779 consumer/cost fix: exactVoiceOf hands voiceOf the instant as ISO text, and the row is put back ──
+test("exactVoiceOf: the Date fast road gives the voice the original road gave, for odd and edge instants, and restores the row", async () => {
+  const { exactVoiceOf, instantMs } = await import("../world2/tools/convo-read.mjs");
+  const ats = ["2026-06-01T06:00:00.000Z", "2026-06-01T06:00:00.999Z", "1970-01-01T00:00:00.001Z", "0100-03-04T05:06:07.008Z", "2999-12-31T23:59:59.999Z", "2026-11-04T08:09:10.011Z"];
+  for (const iso of ats) {
+    const at = new Date(iso);
+    const mkRow = (a) => ({ id: "7", at: a, actor: "ann", action: "say", at_anchor: "world", at_dx: 3, at_dy: 4, payload: { text: "hi", place: "quay", aboard: false } });
+    const fast = mkRow(at);
+    const got = exactVoiceOf(fast);
+    assert.equal(fast.at, at, "the row's own Date is put back (same object)");
+    // the original road: voiceOf over the row, then the exact millisecond put on it
+    const slow = voiceOf(mkRow(at));
+    slow.voice.at = instantMs(at);
+    assert.deepEqual(got, slow, iso);
+  }
+  // not a say, a string instant, and an invalid Date take the original road unchanged
+  const bad = { id: "8", at: new Date(NaN), actor: "ann", action: "say", at_anchor: "world", at_dx: 0, at_dy: 0, payload: {} };
+  assert.deepEqual(exactVoiceOf(bad), voiceOf(bad));
+  const str = { id: "9", at: "2026-06-01T06:00:00.250Z", actor: "ann", action: "say", at_anchor: "world", at_dx: 0, at_dy: 0, payload: { text: "x" } };
+  assert.equal(exactVoiceOf(str).voice.at, Date.parse("2026-06-01T06:00:00.250Z"));
+});

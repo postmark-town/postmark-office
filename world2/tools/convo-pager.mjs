@@ -25,7 +25,7 @@
 // (latest instant, first act id) bound to the view's fingerprint, so every summary is reachable exactly once
 // from one view and a changed view says so instead of skipping or repeating.
 
-import { createHash } from "node:crypto";
+import { createHash, hash } from "node:crypto";
 import { componentsOf, OverBudget, UnsupportedGeometry } from "./convo-components.mjs";
 import { makeSlicer } from "./convo-slice.mjs";
 import { threadOf } from "./conversations.mjs";
@@ -96,15 +96,17 @@ export async function buildView(source, { fuse, sliceMs, now, yieldFn } = {}) {
   let walked = 0;
   for (let i = 0; i < components.length; i++) {
     const members = Int32Array.from(components[i]);
-    const h = createHash("sha256").update(head);
+    // one-shot digest over head + members: the same bytes a streamed update would hash, without a Hash object per thread
+    // (32,000 singleton threads made that the largest cost of the walk)
+    let text = head;
     for (const k of members) {
       const v = V[k];
-      h.update(`;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`);
+      text += `;${v.act_id}:${v.at}:${v.x}:${v.y}:${v.aboard ? 1 : 0}`;
       byAct.set(v.act_id, i);
       if ((++walked & 63) === 0) await slicer.maybeYield();
     }
     const first = V[members[0]], last = V[members[members.length - 1]];
-    threads.push({ members, first_act_id: first.act_id, first_ms: first.at, latest_ms: last.at, count: members.length, generation: h.digest("hex").slice(0, 32) });
+    threads.push({ members, first_act_id: first.act_id, first_ms: first.at, latest_ms: last.at, count: members.length, generation: hash("sha256", text, "hex").slice(0, 32) });
   }
   // newest first; a tie on the instant is broken by the first act id, so the order is total
   const order = threads.map((_, i) => i).sort((a, b) => (threads[b].latest_ms - threads[a].latest_ms) || compareIds(threads[b].first_act_id, threads[a].first_act_id));

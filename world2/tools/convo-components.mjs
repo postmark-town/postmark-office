@@ -188,13 +188,17 @@ export async function componentsOf(voices, { earshotM, fuse = 50_000_000, sliceM
     const side = E / 2;
     // refuse geometry whose cell indices cannot be told apart in doubles (the neighbour window would be wrong)
     const SAFE = 2 ** 50;
-    const cells = new Map();
+    // cells by (cx, cy) in two levels of Map: no key string per voice and per neighbour lookup (cx and cy are integers below
+    // 2^50, so each is its own exact key); `cellList` keeps the first-seen order a single Map of strings kept
+    const cols = new Map();
+    const cellList = [];
     for (const i of placed) {
       const cx = Math.floor(xs[i] / side), cy = Math.floor(ys[i] / side);
       if (!(Math.abs(cx) < SAFE) || !(Math.abs(cy) < SAFE)) throw new UnsupportedGeometry("a voice lies so far from the origin, relative to earshot, that its grid cell cannot be named exactly");
-      const key = `${cx},${cy}`;
-      let c = cells.get(key);
-      if (!c) cells.set(key, c = { cx, cy, idx: [], minx: Infinity, maxx: -Infinity, miny: Infinity, maxy: -Infinity, tree: null });
+      let col = cols.get(cx);
+      if (!col) cols.set(cx, col = new Map());
+      let c = col.get(cy);
+      if (!c) { col.set(cy, c = { cx, cy, idx: [], minx: Infinity, maxx: -Infinity, miny: Infinity, maxy: -Infinity, tree: null }); cellList.push(c); }
       c.idx.push(i);
       if (xs[i] < c.minx) c.minx = xs[i];
       if (xs[i] > c.maxx) c.maxx = xs[i];
@@ -203,17 +207,20 @@ export async function componentsOf(voices, { earshotM, fuse = 50_000_000, sliceM
       stats.work += 1;
       if ((stats.work & 1023) === 0) if (due()) await tick();
     }
-    stats.cells = cells.size;
+    stats.cells = cellList.length;
     // 2. a cell is one component
-    for (const c of cells.values()) for (let k = 1; k < c.idx.length; k++) union(c.idx[k], c.idx[0]);
+    for (const c of cellList) for (let k = 1; k < c.idx.length; k++) union(c.idx[k], c.idx[0]);
     // 3. neighbouring cells: one ordered pair at a time
     const r2 = E * E;
-    for (const a of cells.values()) {
+    let visited = 0;
+    for (const a of cellList) {
+      // a cell with no neighbour in the window reaches no checkpoint below: 32,000 lonely cells are 1.5M lookups, a slice at a time
+      if ((++visited & 127) === 0 && due()) await tick();
       for (let dx = -WINDOW; dx <= WINDOW; dx++) {
         for (let dy = -WINDOW; dy <= WINDOW; dy++) {
           if (dx === 0 && dy === 0) continue;
           if (dx < 0 || (dx === 0 && dy < 0)) continue; // each unordered pair once
-          const b = cells.get(`${a.cx + dx},${a.cy + dy}`);
+          const b = cols.get(a.cx + dx)?.get(a.cy + dy);
           if (!b) continue;
           stats.cellPairs += 1;
           stats.work += 1;
@@ -254,15 +261,17 @@ export async function componentsOf(voices, { earshotM, fuse = 50_000_000, sliceM
   }
 
   if (due()) await tick();
-  stats.maxSliceMs = Math.max(stats.maxSliceMs, now() - sliceStart);
-  const byRoot = new Map();
+  // The root of a set is its smallest index (`union` keeps the earlier voice as the root), so a component is born at the
+  // index that is its own root, in increasing order of first index, and its members arrive ascending: no map, no sort, and a
+  // slice at a time (32,000 singleton threads made the old map-and-sort one 30-40 ms stretch).
+  const slot = new Int32Array(n);
+  const components = [];
   for (let i = 0; i < n; i++) {
     const r = find(i);
-    let list = byRoot.get(r);
-    if (!list) byRoot.set(r, list = []);
-    list.push(i);
+    if (r === i) { slot[i] = components.length; components.push([i]); } else components[slot[r]].push(i);
+    if ((i & 1023) === 1023 && due()) await tick();
   }
-  const components = [...byRoot.values()].sort((p, q) => p[0] - q[0]);
+  stats.maxSliceMs = Math.max(stats.maxSliceMs, now() - sliceStart);
   return { components, stats };
 }
 
