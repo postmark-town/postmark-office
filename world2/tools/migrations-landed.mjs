@@ -35,6 +35,24 @@ const trig = (name, extra = "") => `EXISTS (SELECT 1 FROM pg_trigger WHERE tgnam
 const policy = (name, extra = "") =>
   `EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'claims' AND policyname = '${name}'${extra})`;
 
+// 090's nonce index is judged by what it IS, not by its name. 090 makes it with
+// `CREATE UNIQUE INDEX IF NOT EXISTS`, which keeps ANY index already holding the
+// name: a non-unique one, other keys or predicate, or an INVALID one that an
+// interrupted CONCURRENTLY build left. A name-only probe called each of those
+// landed. So: on public.office_town_journal; unique, valid, ready and live;
+// three key columns and nothing included; and Postgres's own deparse of the
+// whole definition (pg_get_indexdef, measured on 18.4) equal to 090's. A
+// same-named index that differs reads as MISSING, and re-applying 090 does not
+// repair it (IF NOT EXISTS skips it): that is an operator's, never this file's.
+// 090's header carries this same query as its HOW-TO.
+const CANONICAL_NONCE_INDEX_DEF =
+  "CREATE UNIQUE INDEX office_town_journal_canonical_nonce ON public.office_town_journal USING btree (household, COALESCE(handle, ''::text), (((payload)::jsonb #>> '{receipt,nonce}'::text[]))) WHERE ((class = 'update'::text) AND (act = 'canonical-profile'::text))";
+const canonicalNonceIndex =
+  "EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace" +
+  " WHERE n.nspname = 'public' AND c.relname = 'office_town_journal_canonical_nonce' AND i.indrelid = to_regclass('public.office_town_journal')" +
+  " AND i.indisunique AND i.indisvalid AND i.indisready AND i.indislive AND i.indnkeyatts = 3 AND i.indnatts = 3" +
+  ` AND pg_get_indexdef(i.indexrelid) = '${CANONICAL_NONCE_INDEX_DEF.replaceAll("'", "''")}')`;
+
 export const LANDED = {
   "001_tables.sql":                { probe: rel("acts") },
   "002_grants.sql":                { probe: trig("acts_append_only") },
@@ -142,6 +160,8 @@ export const LANDED = {
   "086_arrival_sources.sql":       { probe: `${rel("arrival_sources")} AND ${rel("arrival_source_pending")} AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'arrival_source_land' AND prosecdef)` },
   // 085 (POS-576): who invited a household, a public credit on its row.
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
+  // 090 (POS-721/583, inert): the canonical resident and human records, and the town log's one canonical-intent nonce index, exactly (above).
+  "090_canonical_records.sql":     { probe: `${rel("resident_records")} AND ${rel("human_records")} AND ${canonicalNonceIndex}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

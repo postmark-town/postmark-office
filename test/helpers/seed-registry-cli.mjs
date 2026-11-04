@@ -28,7 +28,7 @@ const insert = async (table, row) => {
 };
 try {
   await c.query("BEGIN");
-  await c.query("TRUNCATE household_pins, households, registry_meta");
+  await c.query("TRUNCATE household_pins, households, registry_meta CASCADE");
   for (const [key, value] of Object.entries(rows.meta)) await c.query("INSERT INTO registry_meta (key, value) VALUES ($1, $2)", [key, JSON.stringify(value)]);
   for (const r of rows.households) await insert("households", r);
   for (const r of rows.pins) await insert("household_pins", r);
