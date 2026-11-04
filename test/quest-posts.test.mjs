@@ -31,6 +31,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
+import { INVITE_TOWN } from "./helpers/invite-town.mjs";
 
 const REAL_TOWN = process.env.TOWN_CLONE ?? join(OFFICE_ROOT, "town-clone");
 const DIR = mkdtempSync(join(tmpdir(), "pm-quest-posts-"));
@@ -193,6 +194,45 @@ test("2b · a pot, an unknown quest, a repeat and a stray field are each refused
   const stray = await townPostEvent({ class: "quest", quest: "first-idea", title: "mine" }, WRIGHT);
   assert.equal(stray.code, 422);
   assert.match(stray.defect, /a quest does not take: title/);
+  assert.equal(pen.rows().length, 1);
+});
+
+// ── 2c · POS-816/g: the monthly cadence ─────────────────────────────────────
+// Darko 2026-11-03 09:42 EST: "if it's easier to just make a monthly cadence and keep things flat that's fine
+// with me." Until 2026-11-03 Bring a neighbour wore the pots' "ongoing", and judgeQuestEntry refused it as "a
+// funding pot, not a quest post" (Truey, postmark#4424 finding 1). `monthly` is a quest cadence now; `ongoing`
+// stays the pots'.
+const MONTHLY_REGISTRY = () => ({ quests: [
+  { id: "bring-a-neighbour", title: "Bring a neighbour", cadence: "monthly", validation: "automatic", source: "Invite someone you'd like to have in town.", reward: "10 stamps", target: 10 },
+  { id: "keeping-pot", title: "A pot", cadence: "ongoing", subtype: "bounty", validation: "needs-review", target: 200 },
+  { id: "fortnightly-thing", title: "A cadence nobody named", cadence: "fortnightly" },
+] });
+
+test("2c · a monthly row is a quest post, a pot's ongoing is still refused, and a cadence nobody named is not a quest's", async () => {
+  const { pen, posts } = setup();
+  const { judgeQuestEntry, QUEST_CADENCES, POT_CADENCE } = await import("../src/quests.mjs");
+  const reg = MONTHLY_REGISTRY();
+  assert.ok(QUEST_CADENCES.includes("monthly"));
+  assert.equal(QUEST_CADENCES.includes(POT_CADENCE), false, "ongoing is the pots', not a quest cadence");
+  assert.deepEqual(questEntries(reg).map((q) => q.id), ["bring-a-neighbour"], "the board's quests: the monthly row, not the pot, not the cadence nobody named");
+  assert.equal(judgeQuestEntry(reg, "bring-a-neighbour").cadence, "monthly");
+  const posted = await postAtTown({ class: "quest", quest: "bring-a-neighbour" }, WRIGHT, { now: NOW, registry: reg });
+  assert.equal(posted.post.id, "postmark-pen/bring-a-neighbour");
+  assert.equal(posts.get("postmark-pen/bring-a-neighbour").state, "open", "put up, as the town's post");
+  assert.equal(pen.rows().length, 1);
+  await refusedWith(postAtTown({ class: "quest", quest: "keeping-pot" }, WRIGHT, { now: NOW, registry: reg }), 422, /funding pot.*POS-291/);
+  await refusedWith(postAtTown({ class: "quest", quest: "fortnightly-thing" }, WRIGHT, { now: NOW, registry: reg }), 422, /cadence "fortnightly", which is not a quest's.*daily, monthly, milestone, one-time/);
+  assert.equal(pen.rows().length, 1, "a refused post wrote an act");
+});
+
+test("2c · the town's own bring-a-neighbour row is a quest post, once the town carries it (INVITE_TOWN_CLONE)", { skip: INVITE_TOWN ? false : "needs postmark#4424's quest-registry.json row: set INVITE_TOWN_CLONE to a town checkout carrying it" }, async () => {
+  const { pen } = setup();
+  const real = readQuestRegistry(INVITE_TOWN);
+  const row = real.quests.find((q) => q.id === "bring-a-neighbour");
+  assert.equal(row?.cadence, "monthly", "the town's row is the monthly one");
+  assert.ok(questEntries(real).some((q) => q.id === "bring-a-neighbour"), "the board's quests include it");
+  const posted = await postAtTown({ class: "quest", quest: "bring-a-neighbour" }, WRIGHT, { now: NOW, registry: real });
+  assert.equal(posted.post.id, "postmark-pen/bring-a-neighbour");
   assert.equal(pen.rows().length, 1);
 });
 

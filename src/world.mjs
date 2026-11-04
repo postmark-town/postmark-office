@@ -1271,6 +1271,21 @@ async function dungeonRoomOf() {
 }
 export async function roomOfNow(handle) { const of = await dungeonRoomOf(); return of ? of(handle) : null; }
 /**
+ * The same answer, for a LONG listener that must fail closed (POS-887, say-push): the room, null (the open: the world holds no dungeon, or the
+ * reader stands in none), or a REJECTION when it cannot be told: the published world cannot be read, or the enter ledger cannot. `roomOfNow`
+ * keeps reading a failure as the open, which is right for every call that must not stop; a stream or a wait that opened in the open must not
+ * go on serving open-air speech to a reader whose room it could not look up. The shared ledger fold, its second of sharing and the enter and
+ * exit doors' forgetting are the same ones (creature-sight.mjs § occupancyAllStrict).
+ */
+export async function roomOfNowStrict(handle) {
+  const interior = await interiorIdsNow();
+  if (interior === null) throw new Error("the published world could not be read, so a room cannot be ruled out");
+  if (!interior.size) return null; // a world with no dungeon: nobody is in a room
+  const { occupancyAllStrict } = await import("./creature-sight.mjs");
+  const occ = await occupancyAllStrict();
+  return [...(occ.get(String(handle ?? "")) ?? [])].reverse().find((m) => interior.has(m)) ?? null;
+}
+/**
  * HEARING STOPS AT A DUNGEON ROOM'S WALLS, BOTH WAYS (WLD-74): who is NOT within earshot of a voice spoken in `room` (null: the open) — every
  * resident not in that same room. A predicate over a handle, or null when the world has no dungeon (nobody is left out).
  */
@@ -2040,6 +2055,7 @@ export const hearingWindowAt = (at) => hearing.read(at);
 
 const voices = createVoices({
   roomOf: roomOfNow, // WLD-74: the dungeon room a speaker or an ear is entered in
+  roomOfStrict: roomOfNowStrict, // POS-887: the same, rejecting where it cannot tell (the long listeners ask this one)
   // the record sentence rides the conversation only while the office keeps
   // the record — the say card's own rule (dial 6, SAY_RECORD_DISCLOSURE)
   recordKept: emissionsEnabled,
@@ -4070,7 +4086,8 @@ async function draftWrite(worldClone, exec, payload, household, subject) {
 // three-source model from §0 with source 2 folded in at the save.
 
 /** Published canon as the guards want it, plus the ids the replay needs to tell an addition from a modification. */
-function canonForGuards() {
+// Exported for tools/town-signpost-amend.mjs (POS-606): its exact-record check reads the canon the guards read.
+export function canonForGuards() {
   const state = publishedState(WORLD_CLONE).state ?? {};
   const marks = state.marks ?? [];
   return { marks, byId: new Map(marks.map((m) => [m.id, m])), ids: new Set(marks.map((m) => m.id)) };
@@ -4472,7 +4489,9 @@ export async function markStandsOnOwnGround(clean, canon = null) {
  * the same fields the exec answers with — `branch` and `commit` become `seq`,
  * because under the flag the receipt for a write is its line in the log.
  */
-async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null } = {}) {
+// Exported for tools/town-signpost-amend.mjs (POS-606), the one reviewed amend written as the town: it runs this
+// insert and every guard in it, never a door. journalWithdraw is exported the same way.
+export async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${clean.by}/${clean.slug}`;
   const canon = canonForGuards();

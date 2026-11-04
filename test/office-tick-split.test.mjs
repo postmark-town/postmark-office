@@ -29,6 +29,7 @@ const KEEPING = [
   ["stamp-mint-run.mjs --append", "the mint catch-up (STAMP_LINES=store, POS-341)"],
   ["[ \"${STAMP_LINES:-}\" = store ]", "the STAMP_LINES switch"],
   ["deploy/welcome-pass.mjs", "the welcome pass"],
+  ["deploy/invite-pass.mjs", "the invite pass (POS-816: Bring a neighbour, paid by rule)"],
   ["/srv/postmark-office/tools/bug-stage-plan.mjs", "the bug stage pass (Darko, 2026-10-07: payment rides the acceptance)"],
   ["--apply --quiet --key /srv/postmark-office/stamp-key.pem", "the bug stage pass's apply, quiet, with the box's stamp key"],
   ["settlements-backfill.mjs --apply", "the settlements row"],
