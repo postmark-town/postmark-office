@@ -53,8 +53,17 @@ export const QUEST_AUTHOR = PEN_HANDLE;
 // the postmaster) is Keemin's later call, not a default.
 export const QUEST_HANDS = Object.freeze(["wright", "keemin"]);
 
-/** The registry cadences that are quests; `ongoing` is the pots' (POS-291). */
-export const QUEST_CADENCES = Object.freeze(["daily", "milestone", "one-time"]);
+/**
+ * The registry cadences that are quests; `ongoing` is the pots' (POS-291).
+ *
+ * `monthly` is Bring a neighbour's (POS-816/g, Darko 2026-11-03 09:42 EST: "if
+ * it's easier to just make a monthly cadence and keep things flat that's fine
+ * with me"). Flat on purpose: his intended shape is `ongoing` as the parent of
+ * daily, weekly, monthly, quarterly and yearly, and "don't have to seed them all
+ * now; just the intent". That reshape, and a new name for the pots' `bounty`
+ * tag, are their own issue. Until then `ongoing` keeps meaning the pots.
+ */
+export const QUEST_CADENCES = Object.freeze(["daily", "monthly", "milestone", "one-time"]);
 export const POT_CADENCE = "ongoing";
 
 export const QUEST_REGISTRY_FILE = "quest-registry.json";
