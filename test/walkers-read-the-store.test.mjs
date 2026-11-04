@@ -14,7 +14,8 @@
 // ── WHY A FIXTURE STORE AND NOT A REAL ONE ──────────────────────────────────
 //
 // `useGuardReader` installs a stand-in for `officeRead` — the seam
-// `test/world2-guard-doors.test.mjs` already uses, and the reason is the same:
+// (world2-guards.mjs § useGuardReader) that `test/hold-edge-on-acts.test.mjs`
+// already uses, and the reason is the same:
 // the port's own equality falsifier needs Postgres, a world checkout and a
 // scratch database, so it can only ever run on the box; the BEHAVIOUR of the
 // reader has to be provable anywhere or it is proven once and never again.

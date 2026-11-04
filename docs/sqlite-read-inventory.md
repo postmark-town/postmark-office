@@ -1,5 +1,11 @@
 # The office's sqlite reads: an inventory (POS-268 / POS-270, step 1)
 
+> **Status, 2026-11-03:** `office.db`, `world.db` and `deploy/office-tick.sh` are
+> retired (`office.db` and its code path: POS-656, w43; `world.db`: POS-270, and
+> `src/server.mjs` says "world.db is retired"; `office-tick.sh`: POS-268 part 5b).
+> The tables below are the w41 snapshot (`60098fe`) and are kept as history; they
+> do not describe what the office opens today.
+
 This lists every place the office opens or reads `office.db` (the read index of the
 TOWN repo) and `world.db` (the index of the WORLD repo). For each one it names the
 reader, the doors that consume it, and whether the Postgres store (the acts and

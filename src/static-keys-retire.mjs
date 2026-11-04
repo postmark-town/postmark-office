@@ -17,7 +17,7 @@
 // The operator names a household and a handle. The tool finds the row; it is
 // never handed a key or a hash and it never prints one. Dry runs and receipts
 // say counts, households, handles and the KIND of cover found. A hash is held in
-// memory between the DELETE's RETURNING and the tombstone INSERT and the mirror.
+// memory between the DELETE's RETURNING and the tombstone INSERT.
 //
 // ── THE STORE FIRST: ONE TRANSACTION, UNDER A TABLE LOCK ────────────────────
 //
@@ -85,26 +85,22 @@
 // A static household string that is not a registry slug can be covered only by
 // another static row.
 //
-// ── THE FILE, SECOND, EXPLICITLY ────────────────────────────────────────────
+// ── NO FILE (POS-271) ───────────────────────────────────────────────────────
 //
-// The mirror (paperwork.mjs ⚑ THE MIRROR IS TEMPORARY) is the rollback's bridge:
-// a file that still holds the live static row would let a rolled-back office let
-// the retired key back in. So the retirement is replayed into the file here, in
-// the tool's own sqlite transaction with sqlite statements, and READ BACK. A
-// file that is missing, a write that fails, or a read-back that differs is NOT a
-// success: the result says the store committed and the file is not verified, and
-// names the command that repairs it (`--mirror-only`). When the mirror is deleted
-// with oauth.db, this step goes in the same change.
-//
-// `--mirror-only` reads the recorded tombstones for the household and handle and
-// replays them into the file. It writes and deletes NOTHING in the store, never
-// selects a `static` row (a fresh key for the same household and handle, added
-// since, is counted and left alone), and refuses when no tombstone is recorded.
+// The store's tombstone IS the retirement, and this module never opens
+// oauth.db. Until POS-271 the retirement was then replayed into the file and
+// read back, because the file was the office's rollback (a rolled-back office
+// reading a file that still held the live static row would let the retired key
+// back in), and a file it could not verify was a non-success (`mirror_failed`,
+// exit 4) with a repair verb, `--mirror-only`. The office's mirror is deleted
+// and oauth.db and roles.db leave the box (paperwork.mjs; deploy/DEPLOY.md §
+// The paperwork files leave the box), and an unswitched office refuses to boot
+// on a missing file while the store holds sign-ins (server.mjs, the boot
+// guard), so no rollback reads the file. This step went in the same change, as
+// its own header said it would: `--mirror-only` is retired, and the CLI
+// refuses it by name.
 
-import { existsSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
-import { RETIRED_KIND, STATIC_KIND } from "./static-keys.mjs";
-import { oauthSchema } from "./oauth.mjs";
+import { STATIC_KIND } from "./static-keys.mjs";
 import { registryRowsVia } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { resolveHouse, VIA } from "./household-deriver.mjs";
@@ -196,14 +192,14 @@ async function registryOrNull(q) {
 }
 
 /** A retire that writes nothing: what apply would try, from the store as it is now. ADVISORY. */
-export async function planRetire(pool, { household, handle, ghId = undefined, now = Math.floor(Date.now() / 1000), file = null }) {
+export async function planRetire(pool, { household, handle, ghId = undefined, now = Math.floor(Date.now() / 1000) }) {
   const statics = (await pool.query(`SELECT ${lockedColumns} FROM oauth_tokens WHERE kind = 'static' AND household = $1 ORDER BY token_hash`, [household])).rows;
   const sel = selectorOf(statics, handle, ghId);
   const tombstones = (await pool.query(`SELECT ${lockedColumns} FROM oauth_tokens WHERE kind = 'retired' AND household = $1 ORDER BY token_hash`, [household])).rows
     .filter((r) => handlesOf(r).includes(handle));
   if (!sel.ok) {
     const hint = sel.reason === "no matching static row" && tombstones.length
-      ? "already retired; use --mirror-only to repair the file" : null;
+      ? "already retired: the store holds its retirement" : null;
     return refuse(sel.reason, { dry: true, retired_recorded: tombstones.length, ...(hint ? { hint } : {}) });
   }
   const rows = await registryOrNull(pool);
@@ -215,59 +211,20 @@ export async function planRetire(pool, { household, handle, ghId = undefined, no
   if (!cover.ok) return refuse(`no other working key covers ${household}/${handle}: ${cover.why}`, { dry: true });
   return { status: "dry", dry: true, household, handle, matched: 1, cover: cover.by, cover_count: cover.count,
     ...targetFacts(sel.row, statics.length),
-    retired_recorded: tombstones.length, file: file == null ? "not named" : existsSync(file) ? "found" : "MISSING (an apply would exit 4)" };
+    retired_recorded: tombstones.length };
 }
-
-// ── the file side ───────────────────────────────────────────────────────────
-
-/** The retired row the file must hold, replayed in its own sqlite transaction and read back. */
-function mirrorTombstone(filePath, t) {
-  if (!filePath || !existsSync(filePath)) return { ok: false, why: "the oauth.db file is missing" };
-  let db;
-  try {
-    db = new DatabaseSync(filePath);
-    db.exec("PRAGMA busy_timeout = 2000"); // a writer holding the file waits us up to 2 s, not an instant SQLITE_BUSY
-    oauthSchema(db); // the writer's additive columns (household, handles); no data is touched
-    const held = db.prepare("SELECT kind FROM tokens WHERE token_hash = ?").get(t.token_hash);
-    if (held && held.kind !== STATIC_KIND && held.kind !== RETIRED_KIND)
-      return { ok: false, why: "the file holds that credential as another kind of token, so it was left alone" };
-    db.exec("BEGIN");
-    try {
-      db.prepare("DELETE FROM tokens WHERE token_hash = ? AND kind IN ('static', 'retired')").run(t.token_hash);
-      db.prepare("INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created, household, handles)"
-        + " VALUES (?, 'retired', ?, NULL, NULL, NULL, ?, ?, ?)")
-        .run(t.token_hash, num(t.gh_id), num(t.created), t.household, t.handles);
-      db.exec("COMMIT");
-    } catch (e) { try { db.exec("ROLLBACK"); } catch { /* gone */ } throw e; }
-    const back = db.prepare("SELECT kind, household, handles, gh_id, created FROM tokens WHERE token_hash = ?").get(t.token_hash);
-    const same = back && back.kind === RETIRED_KIND && back.household === t.household && back.handles === t.handles
-      && num(back.gh_id) === num(t.gh_id) && num(back.created) === num(t.created);
-    return same ? { ok: true } : { ok: false, why: "the file's row does not read back as the retirement" };
-  } catch (e) {
-    return { ok: false, why: `the file write failed: ${safe(e)}` };
-  } finally { try { db?.close(); } catch { /* already closed */ } }
-}
-
-const REPAIR = (household, handle) => `rerun with --mirror-only: static-keys-retire --household ${household} --handle ${handle} --mirror-only`;
-
-const mirrorFailure = (household, handle, why, extra = {}) => ({
-  status: "mirror_failed", household, handle, why,
-  repair: REPAIR(household, handle),
-  message: `STORE COMMITTED: ${household}/${handle} is retired in the store. The file is NOT verified (${why}). Until the file is repaired a rollback to the file would let the key back in. Repair: ${REPAIR(household, handle)}`,
-  ...extra,
-});
 
 // ── apply ───────────────────────────────────────────────────────────────────
 
 /**
- * Retire the one static key for `household`/`handle`.
+ * Retire the one static key for `household`/`handle`, in the store alone (no
+ * file: § NO FILE above).
  *   pool   a pg Pool (or anything with .connect()) as office_api
- *   file   the oauth.db path to mirror into (a missing file is NON-success)
  *   hooks  { afterLock(client), beforeDelete(client), afterDelete(client) }: the suite's seams, not the CLI's
  *          (afterLock: holding the table lock, nothing read yet; afterDelete: proved and deleted, not committed)
  *   lockTimeoutMs  how long to wait for the table lock (default LOCK_TIMEOUT_MS = 2000)
  */
-export async function retireStaticKey(pool, { household, handle, ghId = undefined, file, now = Math.floor(Date.now() / 1000), hooks = {},
+export async function retireStaticKey(pool, { household, handle, ghId = undefined, now = Math.floor(Date.now() / 1000), hooks = {},
   lockTimeoutMs = LOCK_TIMEOUT_MS, statementTimeoutMs = STATEMENT_TIMEOUT_MS }) {
   const client = await pool.connect();
   let discard = false;
@@ -299,12 +256,12 @@ export async function retireStaticKey(pool, { household, handle, ghId = undefine
     // 3. the selector and the cover, proved over the rows just read
     const sel = selectorOf(rowsNow.filter((r) => r.kind === STATIC_KIND && r.household === household), handle, ghId);
     if (!sel.ok) {
-      // no static row but a recorded retirement: say where the repair is (the file may be what is behind)
+      // no static row but a recorded retirement: say so, since the store's row is the whole of it
       const recorded = sel.reason === "no matching static row"
         && (await client.query("SELECT handles FROM oauth_tokens WHERE kind = 'retired' AND household = $1", [household])).rows
           .some((r) => handlesOf(r).includes(handle));
       await client.query("ROLLBACK");
-      return refuse(sel.reason, recorded ? { hint: `already retired; to repair the file: ${REPAIR(household, handle)}` } : {});
+      return refuse(sel.reason, recorded ? { hint: "already retired: the store holds its retirement" } : {});
     }
     const cover = proveCover({ rows: rowsNow, target: sel.row, household, handle, view, now });
     if (!cover.ok) { await client.query("ROLLBACK"); return refuse(`no other working key covers ${household}/${handle}: ${cover.why}`); }
@@ -331,7 +288,7 @@ export async function retireStaticKey(pool, { household, handle, ghId = undefine
     catch (e) {
       discard = true;
       return { status: "commit_unknown", household, handle,
-        message: `COMMIT was not acknowledged (${safe(e, 120)}): the store may or may not hold the retirement of ${household}/${handle}. Check with --dry, then rerun --mirror-only if it is recorded.` };
+        message: `COMMIT was not acknowledged (${safe(e, 120)}): the store may or may not hold the retirement of ${household}/${handle}. Check with --dry.` };
     }
   } catch (e) {
     if (began) { try { await client.query("ROLLBACK"); } catch { discard = true; } }
@@ -340,27 +297,6 @@ export async function retireStaticKey(pool, { household, handle, ghId = undefine
     return refuse(`an error before commit, so nothing was committed: ${safe(e)}`);
   } finally { client.release(discard ? true : undefined); }
 
-  const m = mirrorTombstone(file, tomb);
   const receipt = { ...facts, retired_at: iso(now), lock_held_ms: heldMs };
-  if (!m.ok) return mirrorFailure(household, handle, m.why, receipt);
-  return { status: "retired", household, handle, cover: coverBy, ...receipt, message: `retired ${household}/${handle}: the store and the file agree.` };
-}
-
-// ── repair ──────────────────────────────────────────────────────────────────
-
-/** `--mirror-only`: make the file match the store's recorded retirements. Never writes the store. */
-export async function mirrorOnly(pool, { household, handle, ghId = undefined, file }) {
-  const tombs = (await pool.query(`SELECT ${lockedColumns} FROM oauth_tokens WHERE kind = 'retired' AND household = $1 ORDER BY token_hash`, [household])).rows
-    .filter((r) => handlesOf(r).includes(handle))
-    .filter((r) => ghId === undefined || num(r.gh_id) === ghId); // --gh-id (POS-805) picks among the recorded tombstones
-  if (!tombs.length) return refuse(`no retirement is recorded for ${household}/${handle}${ghId === undefined ? "" : ghId === null ? " with no gh_id" : " with that gh_id"}`);
-  const statics = (await pool.query("SELECT handles FROM oauth_tokens WHERE kind = 'static' AND household = $1", [household])).rows
-    .filter((r) => handlesOf(r).includes(handle)).length;
-  for (const t of tombs) {
-    const m = mirrorTombstone(file, { ...t, gh_id: num(t.gh_id), created: num(t.created) });
-    if (!m.ok) return mirrorFailure(household, handle, m.why, { newer_static_untouched: statics });
-  }
-  return { status: "repaired", household, handle, repaired: tombs.length, newer_static_untouched: statics,
-    message: `the file now matches the store for ${household}/${handle} (${tombs.length} recorded retirement${tombs.length === 1 ? "" : "s"})`
-      + (statics ? `; ${statics} newer static key${statics === 1 ? "" : "s"} for the same household and handle ${statics === 1 ? "exists" : "exist"} and ${statics === 1 ? "was" : "were"} not touched` : "") };
+  return { status: "retired", household, handle, cover: coverBy, ...receipt, message: `retired ${household}/${handle} in the store.` };
 }

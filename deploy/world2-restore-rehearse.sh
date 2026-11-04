@@ -179,7 +179,7 @@ NODE
     bad=$((bad + 1))
   else
     printf '   %-26s %10s %10s  %s\n' table restored live verdict
-    if [ "${RA_LIVE:--1}" -lt 0 ]; then v="live registry absent — nothing to compare against"
+    if [ "${RA_LIVE:--1}" -lt 0 ]; then v="live registry absent — nothing to compare against (since POS-271 the registry is the store's office_roles and office_role_audit, compared with the dump's other tables above)"
     elif [ "$RA_COPY" -eq "$RA_LIVE" ]; then v="match"
     elif [ "$RA_COPY" -lt "$RA_LIVE" ]; then v="live +$((RA_LIVE - RA_COPY)) (grants since the copy — expected)"
     else v="COPY HAS MORE (+$((RA_COPY - RA_LIVE))) — THE REGISTRY LOST ROWS IT ONCE HAD"; bad=$((bad + 1)); fi
