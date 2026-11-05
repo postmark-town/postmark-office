@@ -26,11 +26,12 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
+import { INVITE_TOWN } from "./helpers/invite-town.mjs";
 
 const REAL_TOWN = process.env.TOWN_CLONE ?? join(OFFICE_ROOT, "town-clone");
 const DIR = mkdtempSync(join(tmpdir(), "pm-quest-posts-"));
@@ -196,6 +197,45 @@ test("2b · a pot, an unknown quest, a repeat and a stray field are each refused
   assert.equal(pen.rows().length, 1);
 });
 
+// ── 2c · POS-816/g: the monthly cadence ─────────────────────────────────────
+// Darko 2026-11-03 09:42 EST: "if it's easier to just make a monthly cadence and keep things flat that's fine
+// with me." Until 2026-11-03 Bring a neighbour wore the pots' "ongoing", and judgeQuestEntry refused it as "a
+// funding pot, not a quest post" (Truey, postmark#4424 finding 1). `monthly` is a quest cadence now; `ongoing`
+// stays the pots'.
+const MONTHLY_REGISTRY = () => ({ quests: [
+  { id: "bring-a-neighbour", title: "Bring a neighbour", cadence: "monthly", validation: "automatic", source: "Invite someone you'd like to have in town.", reward: "10 stamps", target: 10 },
+  { id: "keeping-pot", title: "A pot", cadence: "ongoing", subtype: "bounty", validation: "needs-review", target: 200 },
+  { id: "fortnightly-thing", title: "A cadence nobody named", cadence: "fortnightly" },
+] });
+
+test("2c · a monthly row is a quest post, a pot's ongoing is still refused, and a cadence nobody named is not a quest's", async () => {
+  const { pen, posts } = setup();
+  const { judgeQuestEntry, QUEST_CADENCES, POT_CADENCE } = await import("../src/quests.mjs");
+  const reg = MONTHLY_REGISTRY();
+  assert.ok(QUEST_CADENCES.includes("monthly"));
+  assert.equal(QUEST_CADENCES.includes(POT_CADENCE), false, "ongoing is the pots', not a quest cadence");
+  assert.deepEqual(questEntries(reg).map((q) => q.id), ["bring-a-neighbour"], "the board's quests: the monthly row, not the pot, not the cadence nobody named");
+  assert.equal(judgeQuestEntry(reg, "bring-a-neighbour").cadence, "monthly");
+  const posted = await postAtTown({ class: "quest", quest: "bring-a-neighbour" }, WRIGHT, { now: NOW, registry: reg });
+  assert.equal(posted.post.id, "postmark-pen/bring-a-neighbour");
+  assert.equal(posts.get("postmark-pen/bring-a-neighbour").state, "open", "put up, as the town's post");
+  assert.equal(pen.rows().length, 1);
+  await refusedWith(postAtTown({ class: "quest", quest: "keeping-pot" }, WRIGHT, { now: NOW, registry: reg }), 422, /funding pot.*POS-291/);
+  await refusedWith(postAtTown({ class: "quest", quest: "fortnightly-thing" }, WRIGHT, { now: NOW, registry: reg }), 422, /cadence "fortnightly", which is not a quest's.*daily, monthly, milestone, one-time/);
+  assert.equal(pen.rows().length, 1, "a refused post wrote an act");
+});
+
+test("2c · the town's own bring-a-neighbour row is a quest post, once the town carries it (INVITE_TOWN_CLONE)", { skip: INVITE_TOWN ? false : "needs postmark#4424's quest-registry.json row: set INVITE_TOWN_CLONE to a town checkout carrying it" }, async () => {
+  const { pen } = setup();
+  const real = readQuestRegistry(INVITE_TOWN);
+  const row = real.quests.find((q) => q.id === "bring-a-neighbour");
+  assert.equal(row?.cadence, "monthly", "the town's row is the monthly one");
+  assert.ok(questEntries(real).some((q) => q.id === "bring-a-neighbour"), "the board's quests include it");
+  const posted = await postAtTown({ class: "quest", quest: "bring-a-neighbour" }, WRIGHT, { now: NOW, registry: real });
+  assert.equal(posted.post.id, "postmark-pen/bring-a-neighbour");
+  assert.equal(pen.rows().length, 1);
+});
+
 // ── 3 ───────────────────────────────────────────────────────────────────────
 
 test("3 · closing a quest is an act that names its hand; it stays, closed, and the seeding never puts it back", async () => {
@@ -268,6 +308,36 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   const blind = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: join(DIR, "nowhere") });
   assert.match(blind.unavailable, /registry could not be read/);
   assert.equal(blind.posts[0].terms, null);
+});
+
+// ── 5b (POS-857) ────────────────────────────────────────────────────────────
+//
+// LAW (Wright on Darko's behalf, 2026-11-01): "An optional registry `ends`, holding the
+// existing inclusive cutoff ... The post's own state and act history stay as they are: no
+// invented 'closed-by-window' state and no close act." So the terms carry `ends` as a fact
+// for the offer surfaces, an open post stays open and an explicitly closed one stays closed.
+
+test("5b · a registry row's ends rides the quest post's terms, and the post's state and history are untouched", async () => {
+  const { pen, posts } = setup();
+  const SYN = join(DIR, "synthetic-town");
+  mkdirSync(SYN, { recursive: true });
+  const row = (id, extra = {}) => ({ id, title: `An invented ${id}`, cadence: "milestone", validation: "automatic", source: "s", target: 1, reward: "r", ...extra });
+  const synthetic = { quests: [row("window", { ends: "2026-03-15" }), row("lasting"), row("shut", { ends: "2026-03-15" }), row("daily-one", { cadence: "daily" })] };
+  writeFileSync(join(SYN, "quest-registry.json"), JSON.stringify(synthetic));
+  await seedQuestPosts({ hand: "wright", registry: synthetic, now: NOW });
+  await closeAtTown({ post: "postmark-pen/shut" }, WRIGHT, { now: NOW });
+  const actsBefore = pen.rows().length;
+  const stateBefore = JSON.stringify([...posts.values()].map((r) => [r.id, r.state, r.last_act]));
+
+  const r = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: SYN });
+  const by = Object.fromEntries(r.posts.map((p) => [p.fields.quest, p]));
+  assert.equal(by.window.terms.ends, "2026-03-15", "the ended-window row's terms carry its last offered day");
+  assert.equal("ends" in by.lasting.terms, false, "no ends in the registry: no key, as before");
+  assert.equal("ends" in by["daily-one"].terms, false, "cadence is not an end");
+  assert.deepEqual([by.window.state, by.shut.state], ["open", "closed"], "no state was invented or reopened");
+  assert.deepEqual(by.window.history.map(({ at, ...h }) => h), [{ stage: "open", state: "open", hand: "wright" }], "an open post gains no act");
+  assert.equal(pen.rows().length, actsBefore, "the read wrote no act");
+  assert.equal(JSON.stringify([...posts.values()].map((p) => [p.id, p.state, p.last_act])), stateBefore, "the stored rows are as they were");
 });
 
 // ── 6 ───────────────────────────────────────────────────────────────────────

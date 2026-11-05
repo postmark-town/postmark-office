@@ -55,6 +55,7 @@ import {
 import { asPaper } from "./paperwork.mjs";
 import { currentKeysOf, houseKeyLines, appendHouseKey, judgeHouseKey } from "./house-key.mjs";
 import { signedRegistryLines } from "./ledger-pen.mjs";
+import { reservedHandleRefusal } from "../vendor/tools/reserved-handles.mjs"; // POS-884: the town's one reserved-prefix rule
 
 // ── THE GANGWAY REACHES THE SETTLEMENT ROAD ────────────────────────────────
 //
@@ -174,6 +175,11 @@ export async function planTownDrain(odb, clone, { date }) {
     // fourth register, declare.mjs § handleTaken) so this should be
     // unreachable — and it is checked anyway, because "should be unreachable"
     // is exactly the assumption a drain must not make about its own input.
+    // berth-* and human-of-*: the town's one reserved-prefix rule, vendored
+    // (vendor/tools/reserved-handles.mjs, POS-884). Judged and done: no address,
+    // no row, no house; the sentence is the skip's reason.
+    const reservedPrefix = reservedHandleRefusal(row.handle);
+    if (reservedPrefix) { skipped.push({ row, why: reservedPrefix }); continue; }
     if (claimed.has(row.handle)) { skipped.push({ row, why: `"${row.handle}" was claimed earlier in this same crossing` }); continue; }
     if (existsSync(join(clone, "WHITE_PAGES", row.handle, "ADDRESS.md"))) { skipped.push({ row, why: `"${row.handle}" already stands in the white pages` }); continue; }
 
