@@ -19,7 +19,9 @@
 //     candidates;
 //   · the stakes handed to the crossing hold NO open stamps on it
 //     (`(escrow.get(id) ?? 0) > 0` keeps it);
-//   · its registered path is on main.
+//   · its registered path is on main;
+//   · it is not printed as held (`held_by`, POS-688): a thing in someone's
+//     hands is published but unplaced, and never a candidate while held.
 //
 // THE RULE IS THE SWEEP'S OWN FUNCTION, NOT A COPY OF IT (postmark#3757). This
 // file asked the first two of those three and not the third, so kinofire's
@@ -72,6 +74,7 @@
 // `rulings` segment takes with claim-effects.mjs.
 import { nextSettlement, SETTLEMENT_CLOCK } from "./world-forecast.mjs";
 import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+import { heldBy } from "./held.mjs"; // POS-688: the printed `held_by`, the world's own spelling (pure, no I/O)
 
 const defaultWorld = async () => {
   const [{ publishedState }, { WORLD_CLONE }] = await Promise.all([import("./world-branches.mjs"), import("./world.mjs")]);
@@ -103,6 +106,15 @@ export const REGISTRY_PATH = "WORLD/settlement-publications.json";
 export const SWEEP_RULE = "At each settlement, a commons mark with no stamps behind it leaves the world. A mark standing on your household's ground or the town's never does, whatever it was first filed as.";
 
 /**
+ * THE FRAME OF EVERY AT-RISK WORD (WLD-51, Wright 2026-11-03 19:25 EST). Whether a
+ * mark is held, and how much stands behind it, are read from the last settlement's
+ * print, so a thing set down since then is not in it. The warning says what it knows
+ * and when it knew it. Wright's words, plain; said wherever the warning or `at_risk`
+ * is shown, in a prose slot that already exists.
+ */
+export const SNAPSHOT_LIMIT = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
+
+/**
  * A STAKE MADE SINCE THE COPY IS NOT HERE YET, AND THE READ SAYS SO (POS-412).
  *
  * Mari, 2026-10-05: staked ✦1 on mari/marigold-house at 17:17Z, read this
@@ -115,7 +127,7 @@ export const SWEEP_RULE = "At each settlement, a commons mark with no stamps beh
  * adds no reader. Making the copy current inside the act is POS-341 (the
  * ledger's lines in the store, appended in the act's own transaction).
  */
-export const LATER_STAKES = 'a stake or unstake made after escrow_ingested_at shows here at catches_up_at, the next clearing; world { read: "stake", args: { mark } } shows it now';
+export const LATER_STAKES = 'a stake or unstake made after escrow_ingested_at shows here at catches_up_at, the next clearing; world { read: "stake", args: { mark } } shows it now. ' + SNAPSHOT_LIMIT;
 
 /** The act that takes a mark off the at-risk list — the stake envelope, by name. */
 export const stakeEnvelope = (mark) => `world { do: "stake", args: { mark: "${mark}", stamps: 1 } }`;
@@ -152,10 +164,14 @@ export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark
     // Founding estate (no row) is never swept; a row is the rule's to judge,
     // with the mark's standing as the fold walked it (`tier`), which the
     // sweep asks too: a mark that walks home is never taken (the safety half).
+    // And whether it is printed as held, which the sweep asks too: a thing in
+    // someone's hands is published but unplaced, never taken while held
+    // (POS-688; WLD-51). Until this was handed in, a held thing at ✦0 read as
+    // at risk here while the sweep kept it.
     const atRisk = escrow === null ? null
       : !entry ? false
       : typeof rule !== "function" ? null
-      : rule(entry, { escrow, pathOnMain: () => pathOnMain(entry.path), standing: m.tier ?? null }).unpublish;
+      : rule(entry, { escrow, pathOnMain: () => pathOnMain(entry.path), standing: m.tier ?? null, held: heldBy(m) != null }).unpublish;
     rows.push({
       mark: m.id, kind: m.kind ?? null, body: m.body ?? null, class: cls, escrow, at_risk: atRisk,
       ...(atRisk ? { act: stakeEnvelope(m.id) } : {}),
@@ -227,7 +243,7 @@ export async function stakesFor(handles, {
     count: rows.length,
     at_risk: atRisk,
     ...(measured && atRisk === 0 && unjudged === 0 && rows.length
-      ? { note: "nothing of yours is at risk at the next settlement — every commons mark you hold has stamps behind it, as of the town head named above" } : {}),
+      ? { note: "nothing of yours is at risk as of the town head named above. " + SNAPSHOT_LIMIT } : {}),
     ...(rows.length === 0 ? { note: "no published mark of yours stands on world main — drafts and the docket are at world { read: \"leave-mark\" }" } : {}),
     read_the_rest: 'world { read: "leave-mark" } is the whole portfolio — drafts, the docket, what you have backed; world { read: "stake", args: { mark: "<by>/<slug>" } } is one mark\'s escrow with its holders',
     rows,
