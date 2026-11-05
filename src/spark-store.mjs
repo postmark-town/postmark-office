@@ -130,8 +130,10 @@ export async function placeAtTo(handle, toIso) {
   // WHAT THEY WERE INSIDE AT `to` (Root's S2, 2026-11-05), by the record of who entered what, read whatever today's
   // world holds. Inside anything, the walk is the wrong witness: a rider's walk ends at the wharf while the hull sails
   // on, and today's world cannot say what a mark was then (a vehicle retired or reclassified since reads as nothing,
-  // or as a room). So an entry standing at `to` leaves the place unknown, and the reason names it and what today's
-  // world says of it, which decides nothing. Only a body inside nothing is placed by its walk.
+  // or as a room). So an entry standing at `to` leaves the place unknown, and the reason says they were inside
+  // something and what today's world says of it, which decides nothing. It does not name the mark: the reason is
+  // public (the post's fields, the act log, the read), "a plain reason" (Wright, 09:33) needs no id, and a name the
+  // office wrote by itself is not the sparker's to have chosen to publish. Only a body inside nothing is placed by its walk.
   let stack;
   try {
     const { crossingLaw } = await import("./world-crossings.mjs");
@@ -144,7 +146,7 @@ export async function placeAtTo(handle, toIso) {
   if (inner) {
     const today = (world.marks ?? []).find((m) => m.id === inner);
     const now = !today ? "the world no longer holds it" : markClassOf(today) === VEHICLE_CLASS ? "a vehicle today" : "not a vehicle today";
-    return unknown(`inside ${inner} at the moment's end (${now}): what it was then, and so where they were, is not on the record`);
+    return unknown(`inside something at the moment's end (${now}): what it was then, and so where they were, is not on the record`);
   }
 
   const dep = walk.currentDeparture(departures, handle);

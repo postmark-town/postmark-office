@@ -346,6 +346,38 @@ test("THE ID MINT, RACED: two sparks with one title by one sparker at once leave
 const rowOf = async (id) => owner(async (c) => (await c.query("SELECT place_x, place_y, fields FROM posts WHERE id = $1", [id])).rows[0]);
 const fieldsOf = (r) => (typeof r.fields === "string" ? JSON.parse(r.fields) : r.fields ?? {});
 
+// A PLAIN REASON NAMES NO ENTERED MARK (POS-780 FIX 3, Root's S2-L2 on the 287d5e73 review). LAW (Wright, AUTHORITY
+// 2026-11-05T09:33:28Z): "`place: null`, with a plain reason (for example `place_unknown: "no stamped walk at the
+// moment's end"`)". The reason the office writes by itself is public: the post's stored fields, the act log's payload
+// and the posts read all carry it. Until 2026-11-05 this file asserted `^inside <the entered mark's id> at the moment's
+// end ...`, which pinned the id into that public sentence. The reason still says they were inside something and what
+// today's class of it is; it no longer says which mark. This reads the reason from every place it is persisted or served,
+// and says nothing about anything the sparker wrote (the title and note are theirs).
+async function publishedReasons(id) {
+  const out = [];
+  const stored = fieldsOf(await rowOf(id)).place_unknown;
+  if (typeof stored === "string") out.push({ source: "row", text: stored });
+  for (const a of (await sparkActs()).filter((x) => x.object === id)) {
+    const p = typeof a.payload === "string" ? JSON.parse(a.payload) : a.payload;
+    if (typeof p?.fields?.place_unknown === "string") out.push({ source: "act", text: p.fields.place_unknown });
+  }
+  const served = (await postsAtOffice({ class: "spark" })).posts.find((x) => x.id === id);
+  if (typeof served?.place_unknown === "string") out.push({ source: "read", text: served.place_unknown });
+  return out;
+}
+/** `entered` is the mark's id as the record holds it (`<by>/<slug>`); its two halves are kept apart so a half alone cannot leak either. */
+async function assertPlainReason(id, entered, { today = null } = {}) {
+  const got = await publishedReasons(id);
+  assert.deepEqual([...new Set(got.map((g) => g.source))].sort(), ["act", "read", "row"], `the control: the reason was found where it is stored, logged and served (${JSON.stringify(got)})`);
+  for (const g of got) {
+    assert.ok(g.text.length > 0 && /\binside\b/.test(g.text) && /at the moment's end/.test(g.text), `${g.source}: the reason still says why the place is unknown: ${JSON.stringify(g.text)}`);
+    if (today) assert.match(g.text, today, `${g.source}: and still words what today's world says of the mark`);
+  }
+  const names = [entered, ...entered.split("/")];
+  const leaks = got.filter((g) => names.some((n) => g.text.includes(n))).map((g) => g.source);
+  assert.deepEqual(leaks, [], `LAW (09:33): "a plain reason" needs no id, and the office wrote one by itself into a public field — ${JSON.stringify(got.find((g) => leaks.includes(g.source))?.text)}`);
+}
+
 test("UNKNOWN IS ACCEPTED, NEVER SUBSTITUTED: mo has a home in today's world and no walk, una walked with no stamped stride, and each spark stands with place: null, its reason and where it was pressed from; kai's landing places kai; and the grant still decides first", { skip }, async () => {
   const now = Date.now();
   await seed(now);
@@ -410,7 +442,7 @@ test("A RIDER IS NOT AT THE WHARF: tam walked to W and boarded the boat; a momen
   assert.deepEqual([Number(ashore.place_x), Number(ashore.place_y)], [W.x, W.y], "before boarding the walk is the record: W");
   const aboard = await rowOf("sbx-tam/tam-aboard");
   assert.deepEqual([aboard.place_x, aboard.place_y], [null, null], "aboard at `to`: NOT the wharf, though the last walk ends there");
-  assert.match(fieldsOf(aboard).place_unknown, /^inside sbx-wharf\/the-boat at the moment's end \(a vehicle today\)/);
+  await assertPlainReason("sbx-tam/tam-aboard", BOAT, { today: /\(a vehicle today\)/ });
   const pressed = fieldsOf(ashore).sparked_from;
   assert.ok(pressed, "where it was pressed from is recorded");
 
@@ -418,7 +450,7 @@ test("A RIDER IS NOT AT THE WHARF: tam walked to W and boarded the boat; a momen
   assert.ok(!out.error, JSON.stringify(out));
   let r = await rowOf(id);
   assert.deepEqual([r.place_x, r.place_y], [null, null], "known → unknown: the old place is cleared");
-  assert.match(fieldsOf(r).place_unknown, /^inside sbx-wharf\/the-boat/);
+  await assertPlainReason(id, BOAT, { today: /\(a vehicle today\)/ });   // the amend act's reason, stored and served, names no mark either
   assert.deepEqual(fieldsOf(r).sparked_from, pressed, "where it was pressed from does not move");
   const back = await callTownPostTool("town_amend", { post: id, to: iso(before) }, TAM);
   assert.ok(!back.error, JSON.stringify(back));
@@ -468,8 +500,7 @@ for (const [name, today, word] of [
       });
       const aboard = await rowOf("sbx-tam/tam-aboard-then");
       assert.deepEqual([aboard.place_x, aboard.place_y], [null, null], "aboard at `to`: unknown, NOT the wharf the walk ends at");
-      assert.match(fieldsOf(aboard).place_unknown, /^inside sbx-wharf\/the-boat at the moment's end/);
-      assert.match(fieldsOf(aboard).place_unknown, word);
+      await assertPlainReason("sbx-tam/tam-aboard-then", BOAT, { today: word });
       const ashore = await rowOf("sbx-tam/tam-on-the-wharf-then");
       assert.deepEqual([Number(ashore.place_x), Number(ashore.place_y)], [W.x, W.y], "the matched ashore control: inside nothing, the stamped walk places W");
       assert.equal(fieldsOf(ashore).place_unknown, undefined);
