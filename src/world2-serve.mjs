@@ -1564,8 +1564,13 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
   // This door assembled the whole world and read it from any point, so it listed a room's contents to anyone standing near it.
   if (typeof eng.verbs.standpointSight === "function") world = eng.verbs.standpointSight(world, {});
   const state = { x: near.x, y: near.y };
-  const oriented = eng.verbs.orient(state, world, { crossing: n });
-  const seen = eng.verbs.openYourEyes(state, world, { crossing: n });
+  // THE CLASS LAW THE ENGINE ASKS A THING'S LINEAGE OF (WLD-74 K1, Wright 2026-11-05 04:48): a keyed world carries the
+  // town's class marks, and these rows carry none (marks-ingest skips kind: class), so a halloween-candy-bowl would not
+  // read as a thing here. The accepted class law at this pin (law-ingest's declarations) is handed to the two readers,
+  // as the class marks it is; the marks the law half and the nearby rows read are left as they were.
+  const eyesWorld = { ...world, marks: [...world.marks, ...lawRows.filter((r) => r.kind === "class").map((r) => ({ ...r.data, kind: "class", by: r.data?.by ?? "the-town", class: r.data?.class ?? r.key }))] };
+  const oriented = eng.verbs.orient(state, eyesWorld, { crossing: n });
+  const seen = eng.verbs.openYourEyes(state, eyesWorld, { crossing: n });
 
   const spine = oriented.you?.within ?? [];
   const markById = new Map(world.marks.map((m) => [m.id, m]));

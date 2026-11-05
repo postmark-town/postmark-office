@@ -1630,15 +1630,27 @@ export function enterStackMatters(inPlay = {}) {
 
 /** What a resident is within now (DEC-5's read), for the eyes and the air; null
  *  when the stack matters to nothing (enterStackMatters), the clone carries no
- *  enter/exit law or the ledger will not read. */
+ *  enter/exit law or the ledger will not read.
+ *  AN UNREADABLE ENTER LEDGER FAILS CLOSED, AND IS LOGGED (WLD-74 E2/E3, Wright
+ *  2026-11-05 04:48): the ledger is read once, in full, or the read stands as one who
+ *  has entered nothing and the office's log says why. An unread passage era derives
+ *  the fossil (enter-exit-ledger.mjs § served), which could still hold a thing
+ *  someone has since stepped out of, so it counts as unread: never let a thing's
+ *  inside show because the record could not be read. */
 async function enteredNow(handle, inPlay) {
   if (!handle || !enterStackMatters(inPlay)) return null;
   try {
     const { crossingLaw } = await import("./world-crossings.mjs");
     const { crossingDeps } = await import("./world-apex.mjs");
+    const { servedEnterExitLedger } = await import("./enter-exit-ledger.mjs");
     const law = await crossingLaw(WORLD_CLONE);
-    return await occupiedNowBy(handle, law.thresholds, crossingDeps());
-  } catch { return null; }
+    const served = await servedEnterExitLedger(WORLD_CLONE);
+    if (served?.derived?.incomplete) throw new Error(`the passages since the cutover could not be read (${served.derived.journal_unread})`);
+    return await occupiedNowBy(handle, law.thresholds, { ...crossingDeps(), ledger: async () => served.ledger });
+  } catch (e) {
+    faultLogged(`the enter record could not be read in full for ${handle}, so the read stands as one who has entered nothing`, e);
+    return null;
+  }
 }
 
 /** How near a refused road's wall point must be to the old track for the refusal to name it (WLD-6). */
