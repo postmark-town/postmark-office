@@ -54,6 +54,7 @@ const PACE = 60;
 
 let worldApex, callWorldTool, townPostEvent, callTownPostTool, postAtTown, advanceAtTown, postsAtOffice, residentStandpoint, walkMod, walkEntry, normalizeRow;
 let landEntry, enterViaOffice, crossingDeps, postSpark;
+let STATE0 = null;   // the published world-state this file starts from (a test that changes today's world restores it)
 if (!skip) {
   mkdirSync(join(repo, "tools"), { recursive: true });
   for (const f of readdirSync(join(WORLD, "tools")).filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs")))
@@ -66,9 +67,10 @@ if (!skip) {
   const boat = { id: BOAT, by: "sbx-wharf", slug: "the-boat", kind: "sited", class: "vehicle", at: W, extent: { w: 20, h: 10 } };
   put(`WORLD/marks/${MO_HOME}/mark.md`, markRecord(home, "mo's home ground."));
   put(`WORLD/marks/${BOAT}/mark.md`, markRecord(boat, "A little boat at the wharf."));
-  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, households: { "sbx-mo": "sbx-mo" },
+  STATE0 = { tick: 0, dials: {}, households: { "sbx-mo": "sbx-mo" },
     parcels: [{ id: MO_HOME, household: "sbx-mo", at: HOME_AT, extent: { w: 25, h: 25 } }],
-    marks: [{ ...root, body: "Synthetic world frame." }, { ...home, body: "mo's home ground." }, { ...boat, body: "A little boat at the wharf." }] }));
+    marks: [{ ...root, body: "Synthetic world frame." }, { ...home, body: "mo's home ground." }, { ...boat, body: "A little boat at the wharf." }] };
+  put("WORLD/world-state.json", JSON.stringify(STATE0));
   put("WORLD/walk-ledger.md", "# Walk ledger\n");
   copyFileSync(join(WORLD, "WORLD", "skeleton.json"), join(repo, "WORLD", "skeleton.json"));
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
@@ -408,7 +410,7 @@ test("A RIDER IS NOT AT THE WHARF: tam walked to W and boarded the boat; a momen
   assert.deepEqual([Number(ashore.place_x), Number(ashore.place_y)], [W.x, W.y], "before boarding the walk is the record: W");
   const aboard = await rowOf("sbx-tam/tam-aboard");
   assert.deepEqual([aboard.place_x, aboard.place_y], [null, null], "aboard at `to`: NOT the wharf, though the last walk ends there");
-  assert.match(fieldsOf(aboard).place_unknown, /aboard sbx-wharf\/the-boat/);
+  assert.match(fieldsOf(aboard).place_unknown, /^inside sbx-wharf\/the-boat at the moment's end \(a vehicle today\)/);
   const pressed = fieldsOf(ashore).sparked_from;
   assert.ok(pressed, "where it was pressed from is recorded");
 
@@ -416,7 +418,7 @@ test("A RIDER IS NOT AT THE WHARF: tam walked to W and boarded the boat; a momen
   assert.ok(!out.error, JSON.stringify(out));
   let r = await rowOf(id);
   assert.deepEqual([r.place_x, r.place_y], [null, null], "known → unknown: the old place is cleared");
-  assert.match(fieldsOf(r).place_unknown, /aboard/);
+  assert.match(fieldsOf(r).place_unknown, /^inside sbx-wharf\/the-boat/);
   assert.deepEqual(fieldsOf(r).sparked_from, pressed, "where it was pressed from does not move");
   const back = await callTownPostTool("town_amend", { post: id, to: iso(before) }, TAM);
   assert.ok(!back.error, JSON.stringify(back));
@@ -424,6 +426,83 @@ test("A RIDER IS NOT AT THE WHARF: tam walked to W and boarded the boat; a momen
   assert.deepEqual([Number(r.place_x), Number(r.place_y)], [W.x, W.y], "unknown → known: placed again");
   assert.equal(fieldsOf(r).place_unknown, null, "and the stale reason is cleared");
   assert.deepEqual(fieldsOf(r).sparked_from, pressed);
+});
+
+// TODAY'S WORLD CHANGES UNDER AN OLD MOMENT (Root's S2): the boat is retired, or reclassified while another vehicle
+// sails, by a later settlement (a new commit of the published state). Tam's boarding stays in the record of who entered
+// what, and an old aboard moment must stay unknown, never become a walk to the wharf.
+function worldNow(marks) {
+  put("WORLD/world-state.json", JSON.stringify({ ...STATE0, marks }));
+  execFileSync("git", ["-C", repo, "add", "WORLD/world-state.json"]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qm", "a later settlement"]);
+}
+async function tamBoards(now) {
+  const TAM = { household: "sbx-tam", handles: new Set(["sbx-tam"]) };
+  await walkAt("sbx-tam", now - HOUR, O, W);
+  const e = await enterViaOffice(repo, { mark: BOAT }, TAM, crossingDeps());
+  assert.ok(!e?.error && (e.entered ?? []).includes(BOAT), `tam boards the boat while she is a vehicle: ${JSON.stringify(e).slice(0, 300)}`);
+  return TAM;
+}
+const FERRY = { id: "sbx-wharf/the-ferry", by: "sbx-wharf", slug: "the-ferry", kind: "sited", class: "vehicle", at: { x: -900, y: 900 }, extent: { w: 30, h: 12 }, body: "A ferry on another run." };
+
+for (const [name, today, word] of [
+  ["RETIRED", () => STATE0.marks.filter((m) => m.id !== BOAT), /the world no longer holds it/],
+  ["RECLASSIFIED, ANOTHER VEHICLE SAILING", () => [...STATE0.marks.map((m) => (m.id === BOAT ? { ...m, class: "thing" } : m)), FERRY], /not a vehicle today/],
+]) {
+  test(`A RIDER STAYS A RIDER WHEN THE BOAT IS ${name}: an old aboard moment is unknown, named, never the wharf; a moment before boarding is still W`, { skip }, async () => {
+    const now = Date.now();
+    await seed(now);
+    const before = now - 30 * 60_000;
+    const TAM = await tamBoards(now);
+    worldNow(today());
+    try {
+      const raw = await (await import("../src/world.mjs")).worldStateRaw();
+      const { worldHasVehicle } = await import("../src/world-movement.mjs");
+      assert.equal(raw.marks.some((m) => m.id === BOAT && m.class === "vehicle"), false, "the control: today's world holds no vehicle boat");
+      assert.equal(worldHasVehicle(raw), name !== "RETIRED", name === "RETIRED" ? "and no vehicle at all" : "while another vehicle sails today");
+      await withLaw({ spark: true }, async () => {
+        for (const [to, title] of [[iso(Date.now()), "Tam aboard, then"], [iso(before), "Tam on the wharf, then"]]) {
+          const r = await spark(TAM, { from: iso(now - 50 * 60_000), to, title });
+          assert.ok(!r.error, `${title}: accepted, ${JSON.stringify(r).slice(0, 300)}`);
+        }
+      });
+      const aboard = await rowOf("sbx-tam/tam-aboard-then");
+      assert.deepEqual([aboard.place_x, aboard.place_y], [null, null], "aboard at `to`: unknown, NOT the wharf the walk ends at");
+      assert.match(fieldsOf(aboard).place_unknown, /^inside sbx-wharf\/the-boat at the moment's end/);
+      assert.match(fieldsOf(aboard).place_unknown, word);
+      const ashore = await rowOf("sbx-tam/tam-on-the-wharf-then");
+      assert.deepEqual([Number(ashore.place_x), Number(ashore.place_y)], [W.x, W.y], "the matched ashore control: inside nothing, the stamped walk places W");
+      assert.equal(fieldsOf(ashore).place_unknown, undefined);
+    } finally { worldNow(STATE0.marks); }
+  });
+}
+
+// ONE RESIDENT IS JUDGED AND WRITTEN (Root's S1): a key that holds two residents gates the world door as the one it
+// names at the top; an envelope naming the other would be a spark that resident never had judged.
+test("ONE ACTOR: a two-resident key sparks as the resident it names, at the top or matched in args or by the flat name; a contradictory args handle reaches the writer and is refused there, writing nothing", { skip }, async () => {
+  const now = Date.now();
+  await seed(now);
+  const DUO = { household: "sbx-duo", handles: new Set(["sbx-ash", "sbx-bea"]) };
+  const args = (title, extra = {}) => ({ from: iso(now - 90 * 60_000), to: iso(now - HOUR), title, ...extra });
+  await withLaw({ spark: true }, async () => {
+    const top = await spark(DUO, args("Ash at the top"), { handle: "sbx-ash" });
+    assert.ok(!top.error, JSON.stringify(top).slice(0, 300));
+    const matched = await spark(DUO, args("Ash matched", { handle: "sbx-ash" }), { handle: "sbx-ash" });
+    assert.ok(!matched.error, JSON.stringify(matched).slice(0, 300));
+    const flat = await callWorldTool("world_spark", { ...args("Bea by the flat name"), handle: "sbx-bea" }, DUO);
+    assert.ok(!flat.error, JSON.stringify(flat).slice(0, 300));
+    const before = (await sparkActs()).length;
+    const contra = await spark(DUO, args("Bea in ash's coat", { handle: "sbx-bea" }), { handle: "sbx-ash" });
+    assert.equal(contra.error, "bounce", `refused: ${JSON.stringify(contra).slice(0, 300)}`);
+    assert.match(String(contra.defect), /this spark was judged for sbx-ash and names sbx-bea/, "refused by the writer, after the gate judged ash");
+    const unnamed = await spark(DUO, args("Bea, judged for no one", { handle: "sbx-bea" }));
+    assert.equal(unnamed.error, "bounce", `an args handle with nobody named at the top is not judged for bea: ${JSON.stringify(unnamed).slice(0, 300)}`);
+    assert.equal((await sparkActs()).length, before, "neither refusal wrote an act");
+  });
+  const rows = await sparkRows();
+  assert.deepEqual(rows.map((r) => [r.id, r.author]), [["sbx-ash/ash-at-the-top", "sbx-ash"], ["sbx-ash/ash-matched", "sbx-ash"], ["sbx-bea/bea-by-the-flat-name", "sbx-bea"]]);
+  const acts = await sparkActs();
+  assert.deepEqual(acts.map((a) => a.actor), ["sbx-ash", "sbx-ash", "sbx-bea"], "each act's actor is the resident it was judged for");
 });
 
 test("A LATE TITLE OR NOTE AMEND MOVES NOTHING: lio's spark keeps its place and where it was pressed from after lio's record moves on", { skip }, async () => {

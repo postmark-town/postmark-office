@@ -64,7 +64,7 @@ import { currentCrossing } from "./crossings.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import { importEngineAt } from "./world-branches.mjs";
 import { markClassOf } from "./world-grants.mjs";
-import { VEHICLE_CLASS, worldHasVehicle } from "./world-movement.mjs";
+import { VEHICLE_CLASS } from "./world-movement.mjs";
 import { servedEnterExitLedger } from "./enter-exit-ledger.mjs";
 import { refuse, applyPostAct, slugFromTitle, anchorForPlace, ACT_POST, ACT_AMEND_POST, ACT_CLOSE } from "./events.mjs";
 import { POST_COLUMNS, rowOf, insertPost, updatePost, standpointHandle } from "./events-store.mjs";
@@ -127,19 +127,24 @@ export async function placeAtTo(handle, toIso) {
   catch { return unknown("the world's walk arithmetic could not be read"); }
   const fc = walk.fractionalCrossing(atMs);
 
-  // a rider at `to` stands where the vehicle stood, and no record here keeps that
-  if (worldHasVehicle(world)) {
-    let stack;
-    try {
-      const { crossingLaw } = await import("./world-crossings.mjs");
-      const { thresholds } = await crossingLaw(WORLD_CLONE);
-      const served = await servedEnterExitLedger(WORLD_CLONE);
-      if (served?.derived?.incomplete) return unknown("who was aboard what at the moment's end could not be read in full");
-      stack = thresholds.occupancyAt(thresholds.parseEnterExitLedger(served.ledger).acts, thresholds.stampAt(fc)).get(handle) ?? [];
-    } catch { return unknown("who was aboard what at the moment's end could not be read"); }
-    const byId = new Map((world.marks ?? []).map((m) => [m.id, m]));
-    const vehicle = [...stack].reverse().find((id) => byId.has(id) && markClassOf(byId.get(id)) === VEHICLE_CLASS);
-    if (vehicle) return unknown(`aboard ${vehicle} at the moment's end, and where it was then is not on the record`);
+  // WHAT THEY WERE INSIDE AT `to` (Root's S2, 2026-11-05), by the record of who entered what, read whatever today's
+  // world holds. Inside anything, the walk is the wrong witness: a rider's walk ends at the wharf while the hull sails
+  // on, and today's world cannot say what a mark was then (a vehicle retired or reclassified since reads as nothing,
+  // or as a room). So an entry standing at `to` leaves the place unknown, and the reason names it and what today's
+  // world says of it, which decides nothing. Only a body inside nothing is placed by its walk.
+  let stack;
+  try {
+    const { crossingLaw } = await import("./world-crossings.mjs");
+    const { thresholds } = await crossingLaw(WORLD_CLONE);
+    const served = await servedEnterExitLedger(WORLD_CLONE);
+    if (served?.derived?.incomplete) return unknown("who was inside what at the moment's end could not be read in full");
+    stack = thresholds.occupancyAt(thresholds.parseEnterExitLedger(served.ledger).acts, thresholds.stampAt(fc)).get(handle) ?? [];
+  } catch { return unknown("who was inside what at the moment's end could not be read"); }
+  const inner = stack.at(-1);
+  if (inner) {
+    const today = (world.marks ?? []).find((m) => m.id === inner);
+    const now = !today ? "the world no longer holds it" : markClassOf(today) === VEHICLE_CLASS ? "a vehicle today" : "not a vehicle today";
+    return unknown(`inside ${inner} at the moment's end (${now}): what it was then, and so where they were, is not on the record`);
   }
 
   const dep = walk.currentDeparture(departures, handle);
@@ -204,9 +209,15 @@ function strays(fields, allowed) {
 // ── post: world { do: "spark" } ─────────────────────────────────────────────
 
 /** Mark a moment: one `post` act, one `posts` row, sparked, placed as the record establishes, labelled where it was pressed. */
-export async function postSpark(fields, key, { now = Date.now(), env = process.env } = {}) {
+export async function postSpark(fields, key, { now = Date.now(), env = process.env, gatedFor } = {}) {
   strays(fields, [...SPARK_FIELDS, "handle"]);
   const sparker = standpointHandle(fields, key);
+  // ONE RESIDENT IS JUDGED AND WRITTEN (Root's S1, 2026-11-05): the world door judged the grant for `gatedFor` (its
+  // standing handle, top-level), and the fields it hands on merge the envelope over the top. An envelope naming another
+  // of the key's residents would be a spark that resident never had judged, so the two must be one.
+  if (gatedFor !== undefined && sparker !== gatedFor)
+    throw refuse(422, gatedFor ? `this spark was judged for ${gatedFor} and names ${sparker}` : `this spark names ${sparker}, and the world door judged it for no one resident`,
+      "name one resident, once: world { do: \"spark\", handle: \"<resident>\", args: { title, from, to } }", { field: "handle" });
   const text = judgeSparkText({ title: fields.title, note: fields.note });
   const window = judgeWindow({ from: fields.from, to: fields.to }, now);
   const [where, pressed] = await Promise.all([placeAtTo(sparker, window.to), sparkedFrom(sparker)]);

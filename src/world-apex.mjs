@@ -823,7 +823,7 @@ const DISPATCH = {
   // where they stood when the moment ended (spark-store.mjs). The resident class
   // grants it; this row is its only door (world.mjs § world_spark sends the flat
   // name here, so the flat call meets the same grant).
-  spark: { tool: "world_spark", run: async (args, key) => (await import("./spark-store.mjs")).postSpark(args, key) },
+  spark: { tool: "world_spark", run: async (args, key, ctx) => (await import("./spark-store.mjs")).postSpark(args, key, { gatedFor: ctx?.handle ?? null }) },
   // THREE ACTIONS, ONE TOOL. give / drop / take are one act — declare the
   // holding — and which one happens is read off the thing's current holder
   // rather than from the word the caller used (world-hold.mjs § the act). They
