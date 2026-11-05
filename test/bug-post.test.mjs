@@ -98,6 +98,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { holdMedia } from "./helpers/media-ledger.mjs";
@@ -2069,4 +2070,84 @@ test("18 · only fixed reads a carry: a PR linked at diagnosed is judged by its 
   const ok = await recredit(carrierOf(9196, carried.n).link);
   assert.deepEqual([ok.recredit, ok.was, ok.credit], [true, "finn", "ada"]);
   assert.match(ok.receipt, /; postmark-office#9196 carries postmark-office#9194, so ada's credit was judged against its author, GitHub account harbor-human \(id 1001\), on the same patch-id and the same changed bytes\. /);
+});
+
+// ── 19 · POS-912, Wright's 20:38:59Z word: the location limit is NAMED, beside the body-mutability one ──────────────────────────
+//
+// LAW (Wright, settled 2026-11-05 20:38:59Z): "Yes, keep whole patch-id, context included ... a carry whose context drifted beyond
+// whitespace refuses, fails closed, and a founder handles it by hand." And: "Two identical edits in two identical windows of one file
+// share a patch-id and changed bytes, because hunk coordinates aren't compared. With whole patch-id, that needs the context to match
+// too, so it only happens with truly duplicated code ... Name it in the ladder's docs and the advance answer as an explicit limit,
+// beside the body-mutability one from 17:51Z, so Darko sees both at his money look."
+//
+// WORDS ONLY: nothing here changes what credits. The surfaces that carry the words are read where a caller reads them: the advance
+// answer's receipt and the recredit's (through the real door), the fixed stage's own help (the refusal that teaches what earns it),
+// and the contract's carried-fix bullet (a TEXT PIN, labelled: it reads a doc, not behaviour). Each clause is its own regex,
+// independent of any sentence, and each surface's verdict is compared as one map, so a red names the missing clause. The question is
+// not called open and the meaning is not called proved: the words state a limit, nothing more.
+const LOCATION_CLAUSES = {
+  repeatedWindows: /\brepeated\b[^.;]*\bwindows?\b/i,                              // identical changes in identical repeated windows of one file
+  differentLocations: /\bdifferent (?:locations|places)\b/i,                        // ... can match at different locations
+  coordinatesNotCompared: /\bcoordinates\b[^.;]*\bnot compared\b|\bnot compared\b[^.;]*\bcoordinates\b/i, // because hunk coordinates are not compared
+  contextKept: /\bcontext\b[^.;]*\bpatch-id\b|\bpatch-id\b[^.;]*\bcontext\b/i,       // whole patch-id, context included, stays
+};
+const BY_HAND_CLAUSE = { founderByHand: /\bfounder\b[^.;]*\bby hand\b/i };          // a refused carry is handled by a founder by hand
+const MUTABILITY_CLAUSE = { bodyEditedAfter: /\b(?:edited|changed) afterwards?\b/i }; // the body's declaration can be edited afterwards (17:51Z, kept)
+const allTrue = (clauses) => Object.fromEntries(Object.keys(clauses).map((k) => [k, true]));
+const verdictOfText = (text, clauses) => Object.fromEntries(Object.entries(clauses).map(([k, re]) => [k, re.test(String(text))]));
+const NOT_CLAIMED = /\b(?:proves?|proved|guarantees?|verifies|verified) (?:the |that the )?(?:location|locations)\b/i;
+
+test("19 · the advance answer for a carried fix names the location limit beside the body-mutability one, and the carry still credits the same way", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  // the limit as it happens: the carried PR edits the window at line 1, the carrier makes the byte-identical edit in another window of the file
+  const carried = adaFix(9201, { diff: greeting("a b", { at: 1 }) });
+  const carrier = carrierOf(9202, carried.n, { diff: greeting("a b", { at: 40, index: "6666666..2222222" }) });
+  const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "ada", link: carrier.link }) }, WRIGHT, at17);
+  // nothing that credits moved: the stage, the credit, the link, the stamps, and the act's keys
+  assert.deepEqual([ok.stage, ok.credit, ok.link, ok.stamps], ["fixed", "ada", carrier.link, 25]);
+  assert.deepEqual(Object.keys(JSON.parse(pen.rows().at(-1).payload)).sort(), ["credit", "fields", "from", "hand", "post", "to"]);
+  assert.equal(posts.get(ID).fields.links.fixed, carrier.link);
+  // the kept teaching: whose work, and on what comparison
+  assert.match(ok.receipt, new RegExp(`${esc(carrier.ref)} carries ${esc(carried.ref)}, so ada's credit was judged against its author, GitHub account harbor-human \\(id 1001\\), on the same patch-id and the same changed bytes`));
+  const want = { ...LOCATION_CLAUSES, ...BY_HAND_CLAUSE, ...MUTABILITY_CLAUSE };
+  assert.deepEqual(verdictOfText(ok.receipt, want), allTrue(want),
+    `LAW (POS-912, 20:38Z): the location limit is named in the advance answer, beside the body-mutability one — the receipt was: ${ok.receipt}`);
+  assert.doesNotMatch(ok.receipt, NOT_CLAIMED, "and the words claim no proof of location");
+});
+
+test("19 · the recredit's answer names the same two limits", async () => {
+  setup();
+  await toBriefed();
+  await advanceAtTown({ post: ID, ...FIX({ link: pull("finn", { n: 9203 }) }) }, WRIGHT, at17);
+  const carried = adaFix(9204, { diff: greeting("a b", { at: 1 }) });
+  const carrier = carrierOf(9205, carried.n, { diff: greeting("a b", { at: 40, index: "6666666..2222222" }) });
+  const ok = await advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "ada", link: carrier.link, note: "the fix was the harbor's, carried onto a hotfix" }, WRIGHT, at17);
+  assert.deepEqual([ok.recredit, ok.was, ok.credit], [true, "finn", "ada"]);
+  assert.match(ok.receipt, /on the same patch-id and the same changed bytes\. /, "the kept teaching, and the receipt's next sentence");
+  const want = { ...LOCATION_CLAUSES, ...BY_HAND_CLAUSE, ...MUTABILITY_CLAUSE };
+  assert.deepEqual(verdictOfText(ok.receipt, want), allTrue(want),
+    `LAW (POS-912, 20:38Z): the recredit answer names the two limits too — the receipt was: ${ok.receipt}`);
+  assert.match(ok.receipt, /The reviewed stage pass reads the town's ledger/, "and the sentence after it is kept");
+});
+
+test("19 · the fixed stage's own help (the refusal that teaches what earns it) does not promise more than the comparison proves: it names the location limit", async () => {
+  setup();
+  await toBriefed();
+  let said = "";
+  await assert.rejects(advanceAtTown({ post: ID, ...FIX({ credit: "ada" }) }, WRIGHT, at17), (e) => { said = `${e.defect} ${e.hint}`; return e.code === 422; });
+  assert.match(said, /^fixed needs a link to the work that earned it fixed is earned by the fix: link its pull request/, "the kept opening of the help");
+  assert.deepEqual(verdictOfText(said, LOCATION_CLAUSES), allTrue(LOCATION_CLAUSES),
+    `LAW (POS-912, 20:38Z): EARNED_BY.fixed must not promise more than the comparison proves — the help was: ${said}`);
+  assert.doesNotMatch(said, NOT_CLAIMED);
+});
+
+test("19 · (a text pin, labelled: it reads the doc, not behaviour) the contract's carried-fix bullet names the location limit beside the body-mutability one", () => {
+  const doc = readFileSync(new URL("../docs/posts-contract.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const bullets = doc.split("\n").filter((l) => l.startsWith("  - **A carried fix credits the carried PR's author"));
+  assert.equal(bullets.length, 1, "the contract has exactly one carried-fix bullet");
+  const want = { ...LOCATION_CLAUSES, ...BY_HAND_CLAUSE, ...MUTABILITY_CLAUSE };
+  assert.deepEqual(verdictOfText(bullets[0], want), allTrue(want),
+    `LAW (POS-912, 20:38Z): the ladder's docs name the location limit beside the body-mutability one`);
+  assert.doesNotMatch(bullets[0], NOT_CLAIMED);
 });
