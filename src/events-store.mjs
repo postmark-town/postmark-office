@@ -693,7 +693,7 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
       receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}`
         // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
-        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${r.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes` : "")
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${r.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + ". "
         + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
         + `If the ledger holds no such line paid to ${was}, or ${was} no longer holds its amount in liquid stamps, the pass holds the correction and says why.`,
@@ -750,7 +750,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
         // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
-        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes` : "")
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
       read: bugReadHint(id) };
   }, env);

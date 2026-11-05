@@ -1841,7 +1841,7 @@ test("18 · a merged founder carrier that declares carries: credits the carried 
   assert.deepEqual([ok.stage, ok.credit, ok.link, ok.stamps], ["fixed", "ada", carrier.link, 25]);
   // the advance answer says whose work earned it, in plain words (the ruling: "the advance answer say so")
   assert.match(ok.receipt, new RegExp(`; fixed points at ${esc(carrier.link)}; ${esc(carrier.ref)} carries ${esc(carried.ref)}, `
-    + `so ada's credit was judged against its author, GitHub account harbor-human \\(id 1001\\), on the same patch-id and the same changed bytes$`));
+    + `so ada's credit was judged against its author, GitHub account harbor-human \\(id 1001\\), on the same patch-id and the same changed bytes\\. `)); // POS-912 20:38Z: was anchored at the end (bytes$); the receipt now goes on to name its limits (group 19)
   assert.equal(posts.get(ID).fields.links.fixed, carrier.link, "the fixed link is the merged carrier");
   const act = JSON.parse(pen.rows().at(-1).payload);
   assert.deepEqual(Object.keys(act).sort(), ["credit", "fields", "from", "hand", "post", "to"], "no new field on the act: the body's declaration is not recorded");

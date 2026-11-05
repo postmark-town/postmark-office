@@ -198,7 +198,7 @@ export const EARNED_BY = Object.freeze({
   [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, the letter, or the resident's own pull request that names it; its author is who's credited, and a founder's pull request never earns it",
   [STATE_BRIEFED]: "briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it",
   // POS-912 W2 (Wright, settled 2026-11-05 17:51:47Z): a carried fix links its merged carrier (bug-credit.mjs § A CARRIED FIX)
-  [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited. A fix carried onto another pull request links the merged carrier, whose body declares \"carries: <repo>#<n>\" on a line of its own: the carried pull request's author is who's credited, when the two make the same change by patch-id and byte for byte",
+  [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited. A fix carried onto another pull request links the merged carrier, whose body declares \"carries: <repo>#<n>\" on a line of its own: the carried pull request's author is who's credited, when the two make the same change by whole patch-id (context included) and byte for byte in the changed lines. Hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations",
 });
 const EARNED_SHAPES = Object.freeze({
   [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", or a letter\'s id',
