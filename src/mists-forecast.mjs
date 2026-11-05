@@ -277,20 +277,30 @@ export function footprintState(eng, m, poly) {
 const scheduleOf = (mists) => (Array.isArray(mists?.schedule) ? mists.schedule : [])
   .map((k) => Number(k?.crossing)).filter(Number.isInteger).sort((a, b) => a - b);
 
+// THE WITHDRAWAL (WLD-147; Darko, 2026-11-02 17:06 EST, "full removal for mists"). A record that
+// names `withdrawn_from` has NO MISTS AT ALL from that crossing on, and the engine's `mistsAt`
+// answers null there on purpose. It is the engine's own test, so it is read as the engine reads
+// it: a finite number, or no withdrawal (Infinity).
+const withdrawnFrom = (mists) => (Number.isFinite(mists?.withdrawn_from) ? mists.withdrawn_from : Infinity);
+
 /**
  * The first crossing, from `now` on, at which the fringe and the wall reach
  * this footprint — `null` for each that never does within the authored
  * schedule (after its last keyframe the front holds, so nothing changes). A
  * reach at or before `now` is the present, not a future arrival. The engine
  * must answer every crossing in the schedule: a null state there is a record
- * it cannot read (a missing border, say), and throws — never a clear.
+ * it cannot read (a missing border, say), and throws — never a clear. The one
+ * null that is an answer is the withdrawal's (`withdrawn_from`, above): the
+ * walk stops there, because from it on there is nothing left to reach.
  */
 export function reachOf(eng, mists, poly, now) {
   const keys = scheduleOf(mists);
   if (!keys.length) throw new Error("the Mists record carries no schedule the engine can read");
   const last = keys[keys.length - 1];
+  const gone = withdrawnFrom(mists);
   let fringe = null, wall = null;
   for (let c = Math.max(now, keys[0]); c <= Math.max(last, now); c += 1) {
+    if (c >= gone) break;                                // WLD-147: the Mists are withdrawn from here on
     const m = eng.mistsAt(c, mists);
     if (!m) throw ownWordsError(`the engine gives no Mists state for crossing ${c}`);
     const st = footprintState(eng, m, poly);
@@ -337,7 +347,10 @@ export async function mistsEngine(worldClone) {
  *   · `{ as_of: { crossing, date }, season_ends: N, reaches: [...] }` — every
  *     footprint the fringe or the wall reaches within the schedule, earliest
  *     crossings first. An empty `reaches` is a forecast that read and found
- *     nothing, which is different from no forecast.
+ *     nothing, which is different from no forecast. `season_ends` is the last
+ *     keyframe, or, once the record withdraws the Mists (`withdrawn_from`,
+ *     WLD-147), the crossing they are withdrawn from; at and after it
+ *     `reaches` is empty.
  */
 export async function forecastMists({ engine, skeleton, footprints = [], nowMs = Date.now() }) {
   // ONLY a readable skeleton that carries no `mists` is "no season". Nothing
@@ -349,10 +362,12 @@ export async function forecastMists({ engine, skeleton, footprints = [], nowMs =
   const keys = scheduleOf(skeleton.mists);
   if (!keys.length) return unavailable("the Mists record carries no schedule the engine can read");
   const now = currentCrossing(nowMs);
+  const gone = withdrawnFrom(skeleton.mists);
   const reaches = [];
   try {
     // the engine must give a state for the season's own first crossing, footprints or none
-    if (!eng.mistsAt(keys[0], skeleton.mists)) throw ownWordsError(`the engine gives no Mists state for crossing ${keys[0]}`);
+    // (a record withdrawn at or before it never had a season: its null is the withdrawal's)
+    if (keys[0] < gone && !eng.mistsAt(keys[0], skeleton.mists)) throw ownWordsError(`the engine gives no Mists state for crossing ${keys[0]}`);
     for (const f of footprints) {
       const r = reachOf(eng, skeleton.mists, f.ring ?? [], now);
       if (r.fringe == null && r.wall == null) continue;
@@ -363,7 +378,7 @@ export async function forecastMists({ engine, skeleton, footprints = [], nowMs =
     return unavailable(`the engine could not answer (${plainReason(e, "files", "the Mists forecast's engine")})`);
   }
   reaches.sort((a, b) => (a.fringe?.crossing ?? a.wall?.crossing) - (b.fringe?.crossing ?? b.wall?.crossing) || String(a.mark).localeCompare(String(b.mark)));
-  return { as_of: { crossing: now, date: day(now) }, season_ends: keys[keys.length - 1], reaches };
+  return { as_of: { crossing: now, date: day(now) }, season_ends: gone === Infinity ? keys[keys.length - 1] : gone, reaches };
 }
 
 // ── THE HOUSEHOLD'S DOORSTEP ────────────────────────────────────────────────

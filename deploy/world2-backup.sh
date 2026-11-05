@@ -104,6 +104,7 @@ WAL="${W2_WAL_ARCHIVE:-/srv/world2-wal}"
 REPO="$WORLD2_LAB/backup-repo"
 KEEP_DUMPS="${W2_KEEP_DUMPS:-14}"          # in the working tree; history keeps all
 KEEP_BASE="${W2_KEEP_BASE:-3}"
+PART_BYTES="${W2_PART_BYTES:-90M}"         # each shipped part stays under GitHub's 100 MB file limit (STAR-118)
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DB="$(w2_db)"
 
@@ -221,6 +222,20 @@ NODE
   [ -n "$ROLES_AUDIT" ] && [ -n "$ROLES_BYTES" ] || fail "roles.db copy returned no counts: $ROLES_JSON" roles
   chmod 600 "$ROLES_COPY"
   ROLES_STATUS=copied
+elif STORE_ROLES="$(PGPASSWORD="$OWNER_PW" psql --host "${WORLD2_PGHOST:-localhost}" --port "${WORLD2_PGPORT:-5432}" \
+    --username world2_owner --dbname "$DB" -tAc \
+    "SELECT (SELECT count(*) FROM office_role_audit) || ' ' || (SELECT count(*) FROM office_roles)" 2>/dev/null)" \
+    && [ -n "$STORE_ROLES" ]; then
+  # IN THE STORE (POS-271). Since the paperwork switch the registry is the
+  # store's office_roles and office_role_audit (031), and they ride the pg_dump
+  # above; roles.db leaves the box once the rollback's mirror is deleted
+  # (DEPLOY.md § The paperwork files leave the box). So with no file, the
+  # receipt counts the store's rows rather than reporting `absent` with zero,
+  # which would read as "no role was ever granted". The restore rehearsal
+  # compares both tables with every other table of the dump.
+  ROLES_AUDIT="${STORE_ROLES% *}"; ROLES_GRANTS="${STORE_ROLES#* }"
+  ROLES_SRC="the store: office_roles and office_role_audit, inside the dump"
+  ROLES_STATUS=in-store
 fi
 rm -f "$ROLES_ERR"
 
@@ -323,7 +338,19 @@ fi
 git -C "$REPO" fetch -q origin main   || fail "backup repo fetch failed (deploy key? network?)" ship
 git -C "$REPO" reset -q --hard origin/main
 mkdir -p "$REPO/dumps"
-cp "$DUMP" "$REPO/dumps/"
+# IN PARTS UNDER GITHUB'S 100 MB FILE LIMIT (STAR-118, 2026-11-04). The dump
+# grows about 2 MB a night and crossed 100 MB on 11-04 (101.40 MB), and GitHub
+# refuses any single file past 100 MB, so that night's push failed and the dump
+# stayed on the box alone. It ships as `<dump>.part-NN` of PART_BYTES each, with
+# `<dump>.sha256` of the WHOLE dump beside them: the restore line cats the parts
+# back in order and checks that sum before pg_restore reads a byte. A dump
+# under the part size ships as one part, so there is one shape every night.
+# This is a bridge, not the destination: history keeps every night's ~100 MB,
+# and a git host is the wrong home for that (STAR-118's call for Darko).
+DUMP_NAME="$(basename "$DUMP")"
+( cd "$DUMPS" && sha256sum "$DUMP_NAME" ) > "$REPO/dumps/$DUMP_NAME.sha256" || fail "could not sum $DUMP" ship
+split -b "$PART_BYTES" -d -a 2 "$DUMP" "$REPO/dumps/$DUMP_NAME.part-" || fail "could not split $DUMP into parts" ship
+DUMP_PARTS=$(ls -1 "$REPO/dumps/$DUMP_NAME".part-* | wc -l)
 # roles.db rides in the SAME commit as the dump it is filed beside, so a clone
 # on the one night anybody clones it carries who paid as well as what happened.
 # Its own directory: a reader who finds this repo must not have to tell a 3 MB
@@ -367,7 +394,15 @@ fi
 # Working-tree retention. History keeps every dump forever — that is the point
 # of a git destination — but the tree stays small so a clone is quick when it
 # matters, which is the one night anybody clones it.
-ls -1 "$REPO/dumps"  2>/dev/null | sort | head -n -"$KEEP_DUMPS" | while read -r f; do git -C "$REPO" rm -q --cached "dumps/$f" >/dev/null 2>&1; rm -f "$REPO/dumps/$f"; done
+# Kept by NIGHT, not by file (STAR-118): a night is its dump's stem, whatever
+# it ships as (one whole .dump before 11-04; parts and a .sha256 after), so
+# KEEP_DUMPS still means fourteen nights.
+ls -1 "$REPO/dumps" 2>/dev/null | sed -E 's/\.dump(\.part-[0-9]+|\.sha256)?$//' | sort -u | head -n -"$KEEP_DUMPS" | while read -r n; do
+  for f in "$REPO/dumps/$n".dump "$REPO/dumps/$n".dump.part-* "$REPO/dumps/$n".dump.sha256; do
+    [ -e "$f" ] || continue
+    git -C "$REPO" rm -q --cached "dumps/$(basename "$f")" >/dev/null 2>&1; rm -f "$f"
+  done
+done
 ls -1 "$REPO/roles"  2>/dev/null | sort | head -n -"$KEEP_DUMPS" | while read -r f; do git -C "$REPO" rm -q --cached "roles/$f" >/dev/null 2>&1; rm -f "$REPO/roles/$f"; done
 # NO retention pass over $REPO/notary any more, and its absence is deliberate:
 # nothing adds to that directory now, so a count-based prune would only ever
@@ -382,6 +417,8 @@ cat > "$REPO/LATEST.json" <<JSON
   "at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "database": "$DB",
   "dump": "dumps/$(basename "$DUMP")",
+  "dump_parts": $DUMP_PARTS,
+  "dump_shipped_as": "dumps/$(basename "$DUMP").part-00 … in order, and dumps/$(basename "$DUMP").sha256 for the whole",
   "dump_bytes": $DUMP_BYTES,
   "dump_toc_entries": $TOC_ENTRIES,
   "notary": {
@@ -411,7 +448,7 @@ cat > "$REPO/LATEST.json" <<JSON
   },
   "intake": {$INTAKE_STATUS},
   "intake_why": "POS-346: wallet registrations and each rail's seen-but-unwitnessed payments exist on the box and nowhere else until they become store rows",
-  "restore": "pg_restore --clean --if-exists --no-owner --no-acl -d <db> dumps/<file>",
+  "restore": "cat dumps/<file>.part-* > <file> && sha256sum -c dumps/<file>.sha256 && pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file> (before 2026-11-04 a night shipped whole: dumps/<file>)",
   "restore_roles": "cp roles/<file> /srv/postmark-office/roles.db (the office opens it at boot; it is a whole database, not a delta)",
   "restore_intake": "cp intake/<name>-<file> back to the source path named under intake (each watcher reads its file whole on its next tick)"
 }

@@ -4,12 +4,16 @@
 //
 // ── WHAT 1.0 DOES, AND OUT OF WHAT ──────────────────────────────────────────
 //
-// `src/world.mjs § worldMyMarks` composes four lists from three readers:
+// `src/world.mjs § worldMyMarks` composes five lists from four readers:
 //
 //   drafts/docket  `guardedDraftsForKey(WORLD_CLONE, key)` — the overlay. Its
 //                  live half is ALREADY ported (`guard-reads.mjs §
 //                  pgDraftsForKey`); its git half is a draft BRANCH in the
 //                  world clone.
+//   locked         `claim-effects.mjs § myMarksLocked` (bug post #4014) — the
+//                  claim effects, the way `refused` is read, NOT the overlay:
+//                  a locked claim is not a live status. Both doors call that one
+//                  function, so this composer takes the rows already read.
 //   published      `publishedState(WORLD_CLONE).state.marks` — the folded
 //                  `WORLD/world-state.json` at the clone's main ref.
 //   backed         `worldPortfolioStakeSlice` → the town clone's
@@ -82,6 +86,10 @@ export const HOUSEHOLD_HANDLES_SQL =
 export const PORTFOLIO_LABELS = Object.freeze({
   drafts: "YOURS AND PRIVATE — your household's compose space. On no docket, in no export, in no archive, in no public answer. Staking one is what puts it forward, and that crosses once.",
   docket: "PUBLIC — staked and standing on the town's docket, where anyone may read it, waiting for a candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.",
+  // Bug post #4014, RULED (Wright, 2026-11-02, on postmark-office#839). 1.0's words
+  // (world.mjs § worldMyMarks `labels.locked`), verbatim; test/my-marks-locked-claim-has-a-shelf
+  // holds the two equal.
+  locked: "PUBLIC — the candle ruled for these and no settlement has carried them to the world yet; they reach it at the settlement that carries their candle. `world { read: \"leave-mark\", args: { mark: \"<by>/<slug>\" } }` carries its receipt.",
   published: "ON THE WORLD — carried by a settlement; the record holds it.",
   backed: "YOUR STAMPS ON SOMEBODY'S MARK — `yours` says whether the mark itself is one of your residents'.",
 });
@@ -124,21 +132,24 @@ export function publishedRowOf(row = {}, { stampsOf = () => 0 } = {}) {
 /**
  * THE TWO LISTS, TWO LABELS SPLIT — `world.mjs § R3`, ported.
  *
- * ⚑ THE NEGATIVE FILTER RIDES ACROSS, AND SO DOES ITS TRAP. 1.0's own warning,
- * carried because the condition it warns about is a constant in THIS tree:
- * "`drafts` IS A NEGATIVE FILTER, AND IT IS CORRECT ONLY BECAUSE
- * `LIVE_STATUSES` IS EXACTLY `['draft','pending']` … The day a `locked`,
- * `refused` or `held_review` row joins that constant, it lands HERE and is
- * labelled 'YOURS AND PRIVATE' about a row 007 makes public."
+ * ⚑ THE FILTER IS POSITIVE (bug post #4014, 2026-11-02), as 1.0's is. It was a
+ * negative one that carried 1.0's own warning across: "`drafts` IS A NEGATIVE
+ * FILTER, AND IT IS CORRECT ONLY BECAUSE `LIVE_STATUSES` IS EXACTLY
+ * `['draft','pending']` … The day a `locked`, `refused` or `held_review` row
+ * joins that constant, it lands HERE and is labelled 'YOURS AND PRIVATE' about a
+ * row 007 makes public." `LIVE_STATUSES` is `guard-reads.mjs`'s, and
+ * `pgDraftsForKey` is what fills `live` here, so widening it would have widened
+ * the old filter silently, at both doors. 1.0's door made the same repair the
+ * same day, as its comment asked.
  *
- * `LIVE_STATUSES` is `guard-reads.mjs`'s, and `pgDraftsForKey` is what fills
- * `live` here — so widening it widens this filter too, at both doors, silently.
- * The 1.0 door says "make this filter positive first". The same repair applies
- * to this line on the same day.
+ * A draft by its own state, or a sketchbook row with no claim status (private
+ * too), is `drafts`; a pending claim is `docket`; a row with any other status
+ * files under neither, which says nothing false. The locked claims are not in
+ * `live` at all: `claim-effects.mjs § myMarksLocked` supplies that shelf.
  */
 export function splitLive(live = []) {
   return {
-    drafts: live.filter((m) => m.claim_status !== "pending"),
+    drafts: live.filter((m) => m.claim_status === "draft" || m.claim_status == null),
     docket: live.filter((m) => m.claim_status === "pending"),
   };
 }
@@ -152,7 +163,7 @@ export function splitLive(live = []) {
  * stays free of `src/` and the falsifier can hold the port to the ORIGINAL
  * function rather than to a copy of it.
  */
-export function portfolioAnswerFrom({ household, residents = [], live = [], published = [], backed = [], offset = 0, pager }) {
+export function portfolioAnswerFrom({ household, residents = [], live = [], locked = [], published = [], backed = [], offset = 0, pager }) {
   if (typeof pager !== "function") throw new Error("portfolioAnswerFrom: pass 1.0's markPage as `pager` — a second pager is a second page bound");
   const { drafts, docket } = splitLive(live);
 
@@ -161,30 +172,34 @@ export function portfolioAnswerFrom({ household, residents = [], live = [], publ
   const counts = {
     drafts: drafts.length,
     docket: docket.length,
+    locked: locked.length,
     published: published.length,
     backed: backed.length,
   };
   const d = pager(drafts, offset);
   const k = pager(docket, offset);
+  const lk = pager(locked, offset);
   const p = pager(published, offset);
   const b = pager(backed, offset);
-  const withheld = d.rest.length + k.rest.length + p.rest.length + b.rest.length;
+  const withheld = d.rest.length + k.rest.length + lk.rest.length + p.rest.length + b.rest.length;
 
   return {
     household,
     residents,
     drafts: d.page,
     docket: k.page,
+    locked: lk.page,
     published: p.page,
     backed: b.page,
     labels: PORTFOLIO_LABELS,
     counts,
-    shown: { drafts: d.page.length, docket: k.page.length, published: p.page.length, backed: b.page.length },
+    shown: { drafts: d.page.length, docket: k.page.length, locked: lk.page.length, published: p.page.length, backed: b.page.length },
     complete: withheld === 0,
     ...(withheld === 0 ? {} : {
       offset: p.offset,
       withheld: { ...(d.rest.length ? { drafts: d.rest } : {}),
         ...(k.rest.length ? { docket: k.rest } : {}),
+        ...(lk.rest.length ? { locked: lk.rest } : {}),
         ...(p.rest.length ? { published: p.rest } : {}),
         ...(b.rest.length ? { backed: b.rest } : {}) },
       withheld_note: `${withheld} of your marks are named above by id rather than shown in full — counts is the whole of what you own, and world { read: "leave-mark", args: { mark: "<by>/<slug>" } } opens any one of them`,

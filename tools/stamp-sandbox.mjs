@@ -118,23 +118,42 @@ function pgEnv(sb, role) {
 // ── the ledger, re-signed under the sandbox key ──────────────────────────────
 
 /**
- * Every signed line of `text` re-signed with `keyPem`, the seals unchanged.
- * Uses the town's own sealChain / signSeal (`engine` is the clone's
+ * Every signed line of `text` re-signed with `keyPem`. The seals do not move,
+ * with ONE exception: a line whose text NAMES an earlier line by that line's
+ * signature. A bug-post correction burn does (`for: correction:<sig of the stage
+ * mint it burns>`, POS-649), and the town's verifier demands the burn's sig be
+ * the sig of the line it corrects. Re-signing changes that earlier sig, so the
+ * naming line is rewritten to the new sig, which changes its text and so every
+ * seal from it on: the walk below is sequential, each seal taken from the lines
+ * as they now stand. Nothing here knows the correction grammar: any 86-character
+ * token that is an earlier line's old signature is carried to its new one.
+ * Uses the town's own sealChain / signSeal / sha256hex (`engine` is the clone's
  * tools/stamp-mint.mjs). Lines that carried no signature stay unsigned, so
  * the verifier judges the copy exactly as it judges the original.
  */
 export function resignLedger(text, keyPem, engine) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const entries = engine.parseStampLedger(text);
-  const seals = engine.sealChain(entries.map((e) => e.canonical));
+  const oldToNew = new Map(); // an earlier line's old signature -> its signature under keyPem
+  const canonicals = [];
+  const seals = [];
   let i = 0;
   const out = lines.map((raw) => {
     if (!raw.startsWith("- ")) return raw;
     const e = entries[i];
-    const seal = seals[i++];
-    return e.sig ? `${e.canonical} · sig: ${engine.signSeal(seal, keyPem)}` : raw;
+    let canonical = e.canonical;
+    for (const tok of new Set(canonical.match(/[A-Za-z0-9_-]{86}/g) ?? [])) if (oldToNew.has(tok)) canonical = canonical.split(tok).join(oldToNew.get(tok));
+    // the town's chain is seal = sha256hex(previous seal + text), from sealChain's own first seal; the end of this walk checks it against sealChain whole
+    const seal = i === 0 ? engine.sealChain([canonical])[0] : engine.sha256hex(seals[i - 1] + canonical);
+    canonicals.push(canonical); seals.push(seal); i++;
+    if (!e.sig) return canonical === e.canonical ? raw : canonical;
+    const sig = engine.signSeal(seal, keyPem);
+    oldToNew.set(e.sig, sig);
+    return `${canonical} · sig: ${sig}`;
   });
   if (i !== entries.length) throw new Error(`re-sign walked ${i} entries of ${entries.length}`);
+  const whole = engine.sealChain(canonicals);
+  if (whole.some((s, k) => s !== seals[k])) throw new Error("re-sign: the seals walked line by line are not the town's sealChain over the same lines");
   return out.join("\n");
 }
 

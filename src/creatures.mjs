@@ -88,20 +88,20 @@ import { normalizeRow, WORLD_ANCHOR } from "./world-journal.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { scopeSecret, sealedItem } from "./sealed.mjs";
 import { settlementAtOrBefore } from "./world-forecast.mjs";
+import { enteredBy, occupancyIfRoomed, roomUnknown, sightedLiving, stackedAt } from "./creature-sight.mjs";
+import { asPayload, lawReady, msOf } from "./creature-bits.mjs";
 import {
   ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
-  easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt,
+  easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt, endingSaid, liveShieldOn,
 } from "./encounter.mjs";
 import {
   ANSWER_OPTIONS, TALLY_ACTION, TEMPT_ACTION, isTempting, openTemptations, phaseOf, plainHouses, plainScore, helpScore,
-  temptPayload, temptTarget, temptationsFor, talliesOf,
+  temptPayload, temptTarget, temptationsFor,
 } from "./temptation.mjs";
-import { endingSaid } from "./encounter.mjs";
 import {
   BARS_NOTE, FLINCH_VERBS, HURLED_ACTION, HURL_ACTION, LINE_ACTION, PERSUADE_ACTION, PHASE_ACTION, PRIOR_HURLED_SQL, PRIOR_PHASE_SQL, PRIOR_UNMASKED_SQL, SANITY_ACTION, UNMASKED_ACTION,
   answerOf as feintAnswer, barsOf, earlierPersuades, feintTarget, hurlAnswered, hurlSaid, isDisguised, isSetPiece, nextPiece, persuadeQuestion, persuadeScore, pieceOf, repeats, sanityOf, writeOnce,
 } from "./set-pieces.mjs";
-import { liveShieldOn } from "./encounter.mjs";
 
 export const CREATURE_CLASS = "creature";
 export const REACT_ACTION = "react";
@@ -260,7 +260,6 @@ export async function creatureLaw({ repo = WORLD_CLONE, refOf = blessedRef, load
   return lawCache.promise;
 }
 export function __resetCreatureLawForTest() { lawCache = { ref: null, promise: null, settled: null }; }
-const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
 
 /** A dial whose value waits on Darko's word: the lane's recommendation, and the call that rules it. */
 const pending = (value, call) => Object.freeze({ value, pending: call });
@@ -343,6 +342,8 @@ export function judgeMode(env = process.env) {
 export function ringHolds(law, creature, point) {
   const ring = Number(law?.kindOf?.(creature.kind)?.ring_m);
   if (!(ring > 0) || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false;
+  // a point that carries its resident's entered stack (creature-sight.mjs § stackedAt) is held only if they entered the creature's room (WLD-74)
+  if (point.stack !== undefined && !enteredBy(creature, point.stack)) return false;
   if (creature.room && typeof law?.inCreatureRing === "function") return law.inCreatureRing(point, creature, ring, creature.room);
   return distanceM(point, creature) <= ring;
 }
@@ -354,6 +355,7 @@ export function ringHolds(law, creature, point) {
  */
 export function seesCreature(law, creature, point, radius) {
   if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return false;
+  if (point.stack !== undefined && !enteredBy(creature, point.stack)) return false;
   if (creature.room && typeof law?.inCreatureRing === "function") return law.inCreatureRing(point, creature, radius, creature.room);
   return distanceM(point, creature) <= radius;
 }
@@ -386,7 +388,13 @@ export function sampleWith(roll, probabilities) {
   return { picked: (cdf.find((c) => u < c.upto) ?? cdf[cdf.length - 1]).option, u, cdf };
 }
 
-/** C2 (pending): code's answer is a flat distribution over the reactions whose `when` holds. */
+/**
+ * Code's answer: a flat distribution over the reactions whose `when` holds. It
+ * answers when Jev cannot (judgmentFor: a timeout, a fault, an unreadable
+ * answer, one possible reaction, or CREATURE_JUDGE=code). C2 was ruled 2026-10-16 17:50 EDT (see
+ * CREATURE_DIALS), and the per-creature cap that once sent a creature to code
+ * is gone.
+ */
 export const codeDistribution = (allowed) =>
   Object.fromEntries(allowed.map((r) => [r.name, 1 / allowed.length]));
 
@@ -405,8 +413,6 @@ export function approachingOf(point, toward, creature) {
 
 // ── the living set: a fold of acts (W3) ─────────────────────────────────────
 
-const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
-
 /**
  * C1 (RULED 2026-10-15): a walk is perceived when it is declared AND when it
  * lands. Both answer the same walk act, so a reaction is keyed by the trigger
@@ -422,7 +428,6 @@ export const ARRIVAL = "arrival";
 export const ENTRY = "entry";
 const MOMENTS = Object.freeze([ARRIVAL, ENTRY]);
 export const triggerKey = (actId, moment = null) => (MOMENTS.includes(moment) ? `${actId}@${moment}` : String(actId));
-const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 
 // ORDER BY acts.id, the bigint, never the `id::text` the row answers with: ordered as
 // text, "10" comes before "2", the cursor then skips every id it passed (found by the
@@ -481,8 +486,9 @@ export const NEVER_FADES = "never: it stays out until something frightens it bac
  * `law` is `loadCreatureLaw`'s answer: its kinds, its town and its despawn reasons.
  */
 export class LivingSet {
-  constructor({ law } = {}) {
+  constructor({ law, hideUnwarmed = false } = {}) {
     this.law = law;
+    this.hideUnwarmed = hideUnwarmed; // the office's own sets: a creature whose room is not yet looked up is hidden from every resident (creature-sight.mjs § roomUnknown)
     this.kindOf = law?.kindOf ?? (() => null);
     this.skipped = []; // spawn rows the fold would not take, and why (logged)
     this.byId = new Map();
@@ -648,6 +654,7 @@ export class LivingSet {
    */
   warmRooms(marks, key) {
     if (typeof this.law?.ringRoomOf !== "function" || !Array.isArray(marks)) return 0;
+    this.lastMarks = marks; this.lastKey = key; // the published marks as last read: a creature just out is placed in them at once (creature-sight.mjs § settleRooms)
     let n = 0;
     for (const c of this.byId.values()) {
       if (c.gone || c.roomKey === key) continue;
@@ -1295,6 +1302,14 @@ export const PRIOR_REACTION_SQL = `SELECT id::text AS id, at, payload FROM acts
 export const TRIGGER_SQL = `SELECT 1 AS here FROM acts WHERE id = $1::bigint`;
 export const NO_TRIGGER = "its trigger act is not on the record";
 
+/** A feint's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
+async function writeHurledOnce(client, row, insertAct) {
+  const p = asPayload(row.payload);
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-hurled:${p.hurl}`]);
+  const { rows: before } = await client.query(PRIOR_HURLED_SQL, [row.actor, String(p.hurl)]);
+  return before.length ? null : insertAct(client, row);
+}
+
 /**
  * W4: write the rows in one transaction, unless this creature already answered
  * this act at this moment (a retried act, an arrival judged twice). Answers
@@ -1306,14 +1321,6 @@ export const NO_TRIGGER = "its trigger act is not on the record";
  * lock on (creature, trigger, moment) before it asks, so the second waits for
  * the first and then finds its row: one reaction, never two.
  */
-/** A feint's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
-async function writeHurledOnce(client, row, insertAct) {
-  const p = asPayload(row.payload);
-  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-hurled:${p.hurl}`]);
-  const { rows: before } = await client.query(PRIOR_HURLED_SQL, [row.actor, String(p.hurl)]);
-  return before.length ? null : insertAct(client, row);
-}
-
 export async function writeReaction(rows, { officeWrite: ow = null, insertAct: ins = null } = {}) {
   const pen = ow && ins ? null : await import("./world2-pen.mjs");
   const officeWrite = ow ?? pen.officeWrite;
@@ -1422,7 +1429,12 @@ export async function reactTo(act, deps = {}) {
   if (aimed) {
     if (!(law.kindMod.AFFORDED_VERBS ?? []).includes(act?.verb) && !encounterVerbs.includes(act?.verb)) return [];
   } else if (!law.kindMod.RING_VERBS.includes(act?.verb) && !encounterVerbs.includes(act?.verb)) return [];
-  const living = deps.living;
+  // WLD-74: a creature in a room exists for this actor only if they entered it. The ledger is read once for the act, and every
+  // creature's turn (its ring, roster, press and cost) judges the residents by the same read
+  const occupancy = deps.occupancy ?? await occupancyIfRoomed(deps.living);
+  const living = occupancy ? sightedLiving(deps.living, occupancy.get(String(act?.actor ?? "")) ?? []) : deps.living;
+  if (occupancy) deps = { ...deps, living, occupancy };
+  if (aimed && occupancy && (roomUnknown(aimed, deps.living) || !enteredBy(aimed, occupancy.get(String(act?.actor ?? "")) ?? []))) return [];
   if (!living?.byId?.size || !act?.point || !Number.isFinite(act.point.x) || !Number.isFinite(act.point.y)) return [];
   if (act.actId == null || !Number.isFinite(Date.parse(act.atIso ?? ""))) return []; // no instant, no d20 (carry 2)
   const now = deps.now ?? Date.now();
@@ -1807,14 +1819,16 @@ async function encounterOf(creature, kind, act, distance_m, deps) {
     ?? await within((deps.present ?? presentAt)(creature, ring), Math.min(AROUND_WAIT_MS, deadline - clock() - JEV_MIN_MS - WRITE_RESERVE_MS));
   const lookup = await within((deps.households ?? householdsNow)(), AROUND_WAIT_MS);
   // who the ring holds: its walls too (world#268), where presence says where each stands
-  const holds = (r) => (r.at ? ringHolds(deps.law, creature, r.at) : r.distance_m <= ring);
+  // and, in a room, only those who entered it (WLD-74: the resident's stack rides the point; no point, the distance AND the stack)
+  const occ = deps.occupancy ?? await occupancyIfRoomed(living);
+  const holds = (r) => (r.at ? ringHolds(deps.law, creature, stackedAt(r.at, r.handle, occ)) : r.distance_m <= ring && (!occ || enteredBy(creature, occ.get(String(r.handle)) ?? [])));
   const inside = ringHolds(deps.law, creature, act.point);
   let roster = ringRoster(present ?? { residents: [] }, { ring, lookup, living, now, holds });
   // the actor stands where the act said, whatever presence read
   if (inside && !roster.some((r) => r.handle === act.actor))
     roster = [...roster, ...ringRoster({ residents: [{ handle: act.actor, distance_m }] }, { ring, lookup, living, now })].sort((a, b) => a.distance_m - b.distance_m);
   // and a steady's or a shield's friend, whom its door found in the same ring (F3: a kept roster may predate them)
-  if (act.target && act.targetAt && !roster.some((r) => r.handle === act.target) && ringHolds(deps.law, creature, act.targetAt))
+  if (act.target && act.targetAt && !roster.some((r) => r.handle === act.target) && ringHolds(deps.law, creature, stackedAt(act.targetAt, act.target, occ)))
     roster = [...roster, ...ringRoster({ residents: [{ handle: String(act.target), distance_m: distanceM(act.targetAt, creature) }] }, { ring, lookup, living, now })]
       .sort((a, b) => a.distance_m - b.distance_m);
   const household = roster.find((r) => r.handle === act.actor)?.household ?? `solo:${act.actor}`;
@@ -1841,8 +1855,9 @@ async function encounterOf(creature, kind, act, distance_m, deps) {
 /** Who stands in a creature's ring now (its walls too), as an encounter reads it: the resolver's split of an obeyed cost. */
 export async function ringRosterNow(creature, { law, living, now = Date.now(), present = presentAt, households = householdsNow } = {}) {
   const ring = Number(law.kindOf(creature.kind)?.ring_m);
-  const [p, lookup] = await Promise.all([present(creature, ring), households()]);
-  return ringRoster(p ?? { residents: [] }, { ring, lookup, living, now, holds: (r) => (r.at ? ringHolds(law, creature, r.at) : r.distance_m <= ring) });
+  const [p, lookup, occ] = await Promise.all([present(creature, ring), households(), occupancyIfRoomed({ byId: new Map([[creature.id, creature]]) })]);
+  // WLD-74: the residents it holds are those who entered its room
+  return ringRoster(p ?? { residents: [] }, { ring, lookup, living, now, holds: (r) => (r.at ? ringHolds(law, creature, stackedAt(r.at, r.handle, occ)) : r.distance_m <= ring && (!occ || enteredBy(creature, occ.get(String(r.handle)) ?? []))) });
 }
 
 /**
@@ -1960,22 +1975,4 @@ async function chargeOnly(creature, act, enc, deps, answered = []) {
 function fleeTheSpent(rows, enc, deps, now) {
   for (const h of new Set(rows.filter((r) => r.action === NERVE_ACTION).map((r) => r.object)))
     if (nerveOf(deps.living, h, now) === 0) (deps.flee ?? queueFlee)(h, { household: enc.roster.find((r) => r.handle === h)?.slug ?? null });
-}
-
-
-// ── the refresh tick (the writer process) ───────────────────────────────────
-
-let timer = null;
-/** Keep `living` caught up every REFRESH_MS. PR-B starts it beside the arrival tick. */
-export function startLivingRefresh(living, { query = actsQuery, everyMs = REFRESH_MS } = {}) {
-  if (timer) return timer;
-  const run = () => living.refresh({ query }).catch(() => {});
-  run();
-  timer = setInterval(run, everyMs);
-  timer.unref?.();
-  return timer;
-}
-export function stopLivingRefresh() {
-  if (timer) clearInterval(timer);
-  timer = null;
 }

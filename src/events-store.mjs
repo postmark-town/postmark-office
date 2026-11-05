@@ -44,13 +44,15 @@ import {
   QUEST_NO_AMEND, QUEST_NO_ADVANCE,
 } from "./quests.mjs";
 import {
-  BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
+  BUG_CLASS, BUG_FIELDS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
-  RECREDIT_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
+  RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
 import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
+import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
+import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -383,6 +385,8 @@ function bodyOf(fields) {
 async function classOf(fields, id, env) {
   // a report's id says its class (POS-757): report/<hex>, never a public row
   if (String(fields.class ?? "").trim() === REPORT_CLASS || REPORT_ID_RE.test(id)) return REPORT_CLASS;
+  // and an invitation's (POS-816): invite:<the invited household's slug>, never a public row
+  if (INVITE_ID_RE.test(id)) return INVITE_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
   const { ideaRow } = await ideaPen();
@@ -431,10 +435,12 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
  * `close`. A quest's one move is `close` too. A bug advances (bugs.mjs), by
  * the town's hands, and so does an idea (ideas.mjs), to any named stage.
  */
-export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
+export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null, clone = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) return (await import("./report-store.mjs")).advanceReport(fields, key, id, { now, env });
+  // POS-816: the hands hold, lift or cancel an inviter's payout (invite-hold-store.mjs); anyone else learns nothing
+  if (cls === INVITE_CLASS) return (await import("./invite-hold-store.mjs")).advanceInvite(fields, key, id, { now, env, clone });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
@@ -630,7 +636,7 @@ async function amendBug(fields, key, id, { now, env }) {
         `a reporter amends until the bug is confirmed; tell ${BUG_HANDS.join(", ")} what changed, by letter`);
     const now_ = { title: text.title ?? prev.title, body: text.body ?? prev.body, ...prev.fields, ...text.fields };
     const was = { title: prev.title, body: prev.body, ...prev.fields };
-    const changed = ["title", "body", "issue", "steps", "record"].filter((k) => k in now_ && now_[k] !== was[k]);
+    const changed = ["title", "body", ...BUG_FIELDS].filter((k) => k in now_ && now_[k] !== was[k]);
     if (!changed.length) throw refuse(422, "nothing to amend", `every field you sent already stands on "${id}"`);
     const payload = { post: id, changed };
     for (const k of changed) {
@@ -701,7 +707,20 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
   // POS-649: who wrote an earned stage's linked work is read from GitHub before
   // the write's transaction opens, so no store connection waits on the network.
   const before = await read((c) => bugRow(c, id), env);
-  const gh = before ? await githubAuthorOf(judgeAdvance(fields, before, roll), { env }) : null;
+  const first = before ? judgeAdvance(fields, before, roll) : null;
+  // The stage guard (bug-stage-guard.mjs): fixed waits for its PR's merge, shipped for a tag holding it.
+  // Only a founder's force goes past a refusal, and the act keeps why and what it went past.
+  if (first?.force && !FORCE_HANDS.includes(hand))
+    throw refuse(403, `only ${FORCE_HANDS.join(" and ")} force a stage past the guard`, `${hand} advances ${first.to} when the work is there: ${first.to === "fixed" ? "its PR merged" : "a tag holding the merge"}`, { field: "force" });
+  let forced = null;
+  if (first) {
+    try { await stageProofOf(first, before, { env }); }
+    catch (e) {
+      if (!first.force || !e?.defect) throw e;
+      forced = { reason: first.force, past: e.defect };
+    }
+  }
+  const gh = first ? await githubAuthorOf(first, { env }) : null;
   return write(async (client) => {
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
@@ -715,7 +734,7 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       // The link is kept per stage; the act carries the post's whole map after it, as the reveal does.
       ...(j.link ? { links: { ...(prev.fields?.links ?? {}), [j.to]: j.link } } : {}) };
     const payload = { post: id, from: prev.state, to: j.to, ...(j.credit ? { credit: j.credit } : {}),
-      ...(Object.keys(set).length ? { fields: set } : {}), hand };
+      ...(Object.keys(set).length ? { fields: set } : {}), ...(forced ? { forced } : {}), hand };
     const actId = await insertAct(client, bugActRow({ action: ACT_ADVANCE, actor: hand, object: id, payload, now }));
     const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() },
       { id: actId, action: ACT_ADVANCE, actor: hand, object: id, payload, household: prev.household });
@@ -725,8 +744,9 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
       ? `the ladder owes ${j.credit} ${n} stamps for ${j.to}, paid by the reviewed stage pass (not by this act), subject to the town's meep law and, at confirmed, three paid reports per household a week`
       : `${j.to} pays nothing`;
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
-      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}),
-      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`,
+      ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
+      receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
       read: bugReadHint(id) };
   }, env);
 }

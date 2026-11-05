@@ -28,6 +28,14 @@ import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { PSA_SLUG } from "../src/queries.mjs";
 import * as store from "../src/town-index-store.mjs";
+import { openOauthDb } from "../src/oauth.mjs";
+
+// THE OFFICE'S SIGN-IN FILE EXISTS before it boots (POS-271's boot guard): an
+// unswitched office whose oauth.db is missing asks the store whether it holds
+// the town's sign-ins, and refuses to boot when it cannot ask. The cut-off
+// office's store is dead on purpose, so its file is made first, as every
+// office past its first boot has one. This file is about the index, not sign-in.
+const existingOauthDb = (path) => { openOauthDb(path).close(); return path; };
 
 // WLD-27's chest and candy doors ship dark (chests-candy.mjs), so these offices run dark, and the doorstep
 // answer whose record is read with its `holds` stripped is named here (helpers/twin-golden.mjs § withoutHolds).
@@ -61,7 +69,7 @@ before(async () => {
   for (const [name, env] of [["switched", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }],
     ["cut-off", { WORLD2_PG: "1", WORLD2_PG_URL: "postgres://office_api:x@127.0.0.1:9/none" }]]) {
     const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
-      "--oauth-db", join(tmp, `${name}-oauth.db`), "--roles-db", join(tmp, `${name}-roles.db`)], {
+      "--oauth-db", existingOauthDb(join(tmp, `${name}-oauth.db`)), "--roles-db", join(tmp, `${name}-roles.db`)], {
       env: { ...process.env, TOWN_CLONE: join(tmp, "no-clone-here"), WORLD_CLONE: join(tmp, "no-world-clone"), VOICES_LOG: join(tmp, `${name}-voices.jsonl`),
         TOWN_PUSH: "", WORLD_STORE_DB: join(tmp, "no-world.db"), OFFICE_READ_WORKERS: "0",
         WORLD2_PG: undefined, WORLD2_PG_URL: undefined, ...env },

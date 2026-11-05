@@ -67,6 +67,8 @@ export const CREATURE_CALLS = Object.freeze({
   call: 'world { do: "call", args: { creature: "<its id>", words: "<optional, heard like a say>" } }',
   offer: 'world { do: "offer", args: { creature: "<its id>", kind: "<a consumable kind you carry>" } }',
   whisper: 'world { do: "whisper", args: { creature: "<its id>", words: "<optional: only it hears them, and they stay on the public record>" } }',
+  dodge: 'world { do: "dodge", args: { creature: "<its id>" } }',
+  persuade: 'world { do: "persuade", args: { creature: "<its id>", words: "<your words to it>" } }',
 });
 
 // ── the one-liners (Darko-approved wording, 2026-10-09) ─────────────────────
@@ -106,7 +108,7 @@ export const ONE_LINERS = Object.freeze({
 /** The field names a one-liner's list mentions ("mark_id or to_x + to_y" names three; "body (≤150)" names body). */
 export const namedFields = (list) => list.flatMap((f) => f.replace(/\(.*?\)/g, "").replace(/\?/g, "").split(/\s+(?:or|\+)\s+/)).map((s) => s.trim()).filter(Boolean);
 
-const firstSentence = (s) => {
+export const firstSentence = (s) => {
   const line = String(s ?? "").split(/\r?\n/).find((l) => l.trim()) ?? "";
   const m = /^(.*?[.!?])(\s|$)/.exec(line.trim());
   return (m ? m[1] : line.trim()).slice(0, 160);

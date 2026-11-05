@@ -1,5 +1,11 @@
 # The office's sqlite reads: an inventory (POS-268 / POS-270, step 1)
 
+> **Status, 2026-11-03:** `office.db`, `world.db` and `deploy/office-tick.sh` are
+> retired (`office.db` and its code path: POS-656, w43; `world.db`: POS-270, and
+> `src/server.mjs` says "world.db is retired"; `office-tick.sh`: POS-268 part 5b).
+> The tables below are the w41 snapshot (`60098fe`) and are kept as history; they
+> do not describe what the office opens today.
+
 This lists every place the office opens or reads `office.db` (the read index of the
 TOWN repo) and `world.db` (the index of the WORLD repo). For each one it names the
 reader, the doors that consume it, and whether the Postgres store (the acts and
@@ -62,7 +68,7 @@ All reads are synchronous (`node:sqlite`).
 | `queries.mjs` `indexAsOf` | meta | `household-apex.mjs` (the as-of stamp) | **Partly.** `projection_heads['town']` is a town sha, but it is set by a different job on a different clock. |
 | `src/server.mjs` `:871`, `:981` | residents | POST paths that check that an address is a resident (`/letters` etc.) | **No.** It could be answered from `town_roll` at the head, but only once the roll's freshness is ruled equal to the index's. |
 | `src/write.mjs` `:130-173` | residents, letters | POST /letters (recipient and thread checks) | **No.** |
-| `src/residency.mjs:100`, `src/declare.mjs:188` | residents | declare, the address checks | Same as server.mjs. |
+| `src/residency.mjs` `validateResidencyRequest`, `src/declare.mjs` `handleTaken` | residents | declare, the address checks | Same as server.mjs. |
 | `src/mail-thread.mjs:106` | mail_state | the mail-thread read | **No.** |
 | `src/oauth.mjs:130-170` | residents (from the index handle, not oauth.db) | OAuth's handle validation | **No.** |
 | `src/declare-exec.mjs:50` | opens `OFFICE_DB` or `office.db`, read-only | the declare child process | **No** (it reads residents). |

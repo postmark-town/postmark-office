@@ -140,6 +140,10 @@ CHANGED["MCP household {}"].push(
   [`{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}}]`,
     `{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}},{"act":"amend-letter","teaches":"Amend a letter of yours before it sails; only the last version sails.","fields":{"id":{"required":true},"body":{"required":true}}},{"act":"withdraw-letter","teaches":"Withdraw a letter of yours before it sails.","fields":{"id":{"required":true}}},{"act":"block","teaches":"Block a household's mail, both ways, privately.","fields":{"household":{"required":true}}},{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`],
   [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`]);
+// AND PARCEL ROOM BOUGHT AHEAD (POS-762/e, Darko 2026-10-23): the act joins the index after unblock.
+CHANGED["MCP household {}"].push(
+  [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,
+    `{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}},{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}}]`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",

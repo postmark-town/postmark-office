@@ -28,7 +28,7 @@
 // between the two transports is who carries the file set to the town: a PR the
 // pen opens, or a commit the pen makes. Same bytes either way, proven in test.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 // THE HARBOR-ONLY LAW IS REPEALED FOR ANCHORED ARRIVALS (Keemin, 2026-09-21).
 // This import block used to say: "Note what is NOT imported: `buildJoinCard`
@@ -59,6 +59,11 @@ import {
 import { loadRegistry, loadPins } from "./registry-store.mjs";
 import { probeOf } from "./index-probe.mjs";
 import { REFUSALS, refuse, slugIsWellFormed } from "./ceremony.mjs";
+import { appendTownJournal, pendingHandles, townLogEnabled } from "./town-journal.mjs";
+import { HEARD_FIELDS } from "./arrival-heard.mjs";
+import { INVITE_FIELDS } from "./arrival-invite.mjs";
+import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { FROM_TOWN } from "./oauth.mjs";
 
 // A SECOND SPELLING OF THE PIN FILE'S PATH, KEPT ONLY AS A RE-EXPORT (POS-158).
 // This door no longer writes either register, so it has no use for the path —
@@ -180,12 +185,6 @@ export const DECLARE_DESCRIPTION =
 // A bounce carries the exact FIELD it is about — the ruled requirement is that
 // nonconforming params are named at action time, not described in prose. `field`
 // is additive to the office's existing { code, defect, hint } shape.
-import { appendTownJournal, pendingHandles, SETTLE_THRESHOLD, townLogEnabled } from "./town-journal.mjs";
-import { HEARD_FIELDS } from "./arrival-heard.mjs";
-import { INVITE_FIELDS } from "./arrival-invite.mjs";
-import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
-import { FROM_TOWN } from "./oauth.mjs";
-
 const bounce = (code, field, defect, hint) => {
   const e = new Error(defect);
   return Object.assign(e, { code, field, defect, hint });
@@ -195,9 +194,9 @@ const townDate = () =>
   new Intl.DateTimeFormat("en-CA", { timeZone: process.env.TOWN_TZ ?? "America/New_York" }).format(new Date());
 
 // ── the bounce list (compiled opposition) ───────────────────────────────────
-// Twelve checks, every one machine-decidable. Checks 1-4 and 6-7 are delegated
-// to the PR lane's own validator so the two doors share one grammar; the rest
-// are the declaration lane's own.
+// Every check (numbered in `conformance`) is machine-decidable. Checks 1-4 and
+// 6-7 are delegated to the PR lane's own validator so the two doors share one
+// grammar; the rest are the declaration lane's own.
 
 // ── the taken handle that is your own ───────────────────────────────────────
 // Both taken-handle refusals below are correct and both stay. What neither could
@@ -216,9 +215,10 @@ export const OWN_HANDLE_HINT =
   "request_residency (a house adding its own) or a join PR, and never this door.";
 
 // Is this handle free EVERYWHERE a handle can be spoken for: the built index
-// (residents), the ship's manifest (berths — a passenger holds their name), and
-// the declared registry (a household may list a resident the index hasn't seen
-// yet). Three places, because a name taken in any of them is taken.
+// (residents), the town log's un-drained rows, the ship's manifest (berths — a
+// passenger holds their name), the clone's white pages, and the declared
+// registry (a household may list a resident the index hasn't seen yet). Every
+// one is checked, because a name taken in any of them is taken.
 export function handleTaken(handle, { db, registry, clone, pending = null }) {
   if (probeOf(db)?.hasResident(handle)) return "the town";
   // ── THE FOURTH REGISTER: names spoken for but not yet drained ──────────
@@ -227,7 +227,7 @@ export function handleTaken(handle, { db, registry, clone, pending = null }) {
   // handle-free check reads un-drained journal rows too (two joins in one
   // epoch must not collide at the drain)".
   //
-  // The three registers below are all projections of THE RECORD, and between
+  // The other registers checked here are all projections of THE RECORD, and between
   // a join being written at the door and the ferry draining it at 00:00 or
   // 12:00 UTC the record does not know the name yet. So a second declare for
   // the same handle conforms, both rows sit in the log, and they collide
@@ -315,7 +315,7 @@ export function conformance(args = {}, { db, registry, clone, key, pending = nul
     throw bounce(e.code, field, e.defect, e.hint);
   }
 
-  // 5 — global uniqueness, all three registers
+  // 5 — global uniqueness, in every register handleTaken reads
   const taken = handleTaken(handle, { db, registry, clone, pending });
   if (taken)
     throw bounce(409, "handle", `the handle "${handle}" is taken`,
@@ -546,12 +546,10 @@ export function planDeclaration(registry, pins, decl, { date = townDate(), gangw
     // than folded here, and `tools/registry-drain.mjs` is their one writer.
     //
     // WHY THIS HAD TO GO RATHER THAN STAY AS A BELT: two writers producing the
-    // same bytes is not redundancy, it is a race. `serializePins` in THIS file
-    // (:455) does not sort and `residency.mjs:148` does, so the two spellings
-    // disagreed about where a new handle lands in the file — a divergence named
-    // in `src/registry-rows.mjs`'s header as older than that lane and left for
-    // this one. Deleting this door's writer is what settles it: there is one
-    // serializer now, the sorted one, reached through the drain.
+    // same bytes is not redundancy, it is a race. This door has no serializer
+    // of its own: `serializePins` (which sorts by handle) and
+    // `serializeRegistry` live in `src/residency.mjs`, and their one caller is
+    // `renderOf` in `src/registry-rows.mjs`, which the drain prints from.
     files: [
       { path: `HARBOR/berths/${handle}.md`, content: ashoreBerth?.content ?? berth },
       ...(settles ? buildJoinFiles(card) : []),
@@ -621,23 +619,6 @@ export const SETTLING_WHAT = `Settling ashore grants ${SETTLEMENT_LAW.grants}. I
 
 export const SETTLING_ASHORE = "since 2026-09-21 an anchored household settles AT THE DECLARATION DOOR, in the same act (declare_household), and anyone still at a berth comes ashore at the ferry's next crossing once they anchor";
 
-// ── THE UNSORTED SERIALIZER IS GONE (POS-158) ───────────────────────────────
-//
-// This file used to export its own `serializePins`, and it did NOT sort, while
-// `src/residency.mjs:148`'s does. The live file IS sorted, so the two spellings
-// disagreed about where a new handle lands — a declaration landing through this
-// one would have appended its handle at the END of the file and the drain's
-// `--check` would have redded on the next crossing. `src/registry-rows.mjs`'s
-// header named that divergence ("older than this lane and named in the PR
-// rather than fixed in it") and left it for this lane.
-//
-// It is fixed by DELETION rather than by sorting it: this door no longer
-// serializes pins at all, so a second spelling of the town's bytes has nothing
-// left to be a second spelling of. `tools/registry-drain.mjs` renders both
-// files, through `residency.mjs`'s sorted writers, and nothing else does.
-// Two fixture-writing tests that reached for this export now reach for that
-// one, which is the spelling the town actually holds.
-
 // ── reading the town's two registers FROM THE RECORD (POS-158) ──────────────
 //
 // This door used to read both registers off the clone's JSON files, and the
@@ -657,13 +638,6 @@ export const SETTLING_ASHORE = "since 2026-09-21 an anchored household settles A
 // duplicate over a live row and hand out a second key for a house that already
 // stands. The store answers `null` for "I could not look", and this door
 // refuses on it rather than founding anything.
-//
-// `readJson` stays exported because `handleTaken` and the exec still read
-// GANGWAY.md-adjacent things off the clone, and two tests use it as a fixture
-// reader. It no longer reads either registry.
-export const readJson = (clone, rel) => {
-  try { return JSON.parse(readFileSync(join(clone, rel), "utf8")); } catch { return null; }
-};
 
 /**
  * Both registers, from the record, refusing rather than defaulting on null.

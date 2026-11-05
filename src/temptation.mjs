@@ -75,7 +75,6 @@ export const temptDial = (name) => TEMPT_DIALS[name].value;
 /** What each phase rewards, by its place in the menu's order. */
 export const ECHOES = Object.freeze(["short", "record", "houses"]);
 
-const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const idCmp = (a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0);
 
@@ -312,16 +311,6 @@ export function outcomeRows(tempt, outcome, { roster = [], phase = null, now = D
     for (const m of mates) rows.push({ action: NERVE_ACTION, object: m.handle, payload: { by: -1, why: "obeyed", act: String(outcome.by ?? tempt.id), creature: tempt.actor, window, split_of: heavy } });
   }
   return rows;
-}
-
-/** Everyone it answered or tallied this window, for the ending's names (beside the record's took-part). */
-export function talliedResidents(living, creature, now = Date.now()) {
-  const set = new Set();
-  for (const r of rowsOf(living, creature.id, now)) {
-    if (r.action === TALLY_ACTION) set.add(r.object);
-    if (r.action === STRIKE_ACTION && r.object === creature.id) set.add(r.actor);
-  }
-  return [...set];
 }
 
 // ── whisper-lint's second check: Jev's (settled, Wright 2026-10-21) ──────────

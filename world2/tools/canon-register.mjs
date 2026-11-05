@@ -123,7 +123,7 @@ export const CANON_ABSENT_CHECK = "canon-absent";
  * word reaches a resident through the receipt when the read names their mark.
  *
  * The sha is SHORT here, matching the siblings' grammar
- * (`insufficient-stamps: staked 3, liquid 1 at town 9f2a1b0c`); the full sha is
+ * (`insufficient-stamps: staked 3, held 0, liquid 1 at town 9f2a1b0c`); the full sha is
  * on the read's own output and its history line.
  */
 export const canonAbsentCheck = (slug, sha) =>

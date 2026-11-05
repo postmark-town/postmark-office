@@ -336,7 +336,7 @@ test("W9: the creature's read is the resident read's own blocks at the creature'
   const out = await aroundCreature(wolf, { actor: "kai", actId: "31" }, { world, query, nowMs: NOW });
   assert.equal(asked.filter((a) => a[0] === "eyes").length, 0, "no line of sight on the act's path");
   assert.deepEqual(asked[0].slice(1), [{ x: 5, y: 7 }, null, { crowd: true }], "orient at the creature's point, nobody's key");
-  assert.deepEqual(asked[1][2], { cap: 3, exclude: "kai" }, "the shared ear, the actor's own words left out");
+  assert.deepEqual(asked[1][2], { cap: 3, exclude: "kai", room: null }, "the shared ear, the actor's own words left out, in the creature's own room (none: the open)");
   assert.equal(asked[2][1][0], "kai");
   assert.equal(asked[2][1][2], "31", "the actor's last acts leave out this act itself");
   assert.deepEqual(out.heard.map((h) => h.who), ["h2", "h3", "h4"], "rows come newest last: the newest three, handle as who");
