@@ -174,6 +174,8 @@ test("WHO SPARKED IT is the authenticated resident: a handle the key does not ho
     assert.ok(r.error, `lio's key cannot spark as ren: ${JSON.stringify(r).slice(0, 300)}`);
   });
   const flatTown = await townPostEvent({ class: "spark", title: "From the town door", starts: args.from, ends: args.to }, LIO);
+  // null would hand the call on to the flat door's other lane: an answer is owed here, and it is a refusal
+  assert.ok(flatTown != null, "the town's post door answers class spark itself, and never hands it on");
   assert.equal(flatTown.error, "bounce");
   assert.equal(flatTown.code, 422);
   assert.equal(flatTown.field, "class");
