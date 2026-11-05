@@ -5175,7 +5175,22 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   if (payload.count !== undefined) throw bounce(422, "count is for making into a holder", "add to: (yourself, or a holder's id) to make that many of a kind; a mark of your own is one mark");
   const handles = [...(key?.handles ?? [])];
-  const by = payload.by ?? (handles.length === 1 ? handles[0] : undefined);
+  // WHO LEAVES IT is the top-level handle, as for a make above (postmark#4441,
+  // the one-actor contract of POS-692): it wins over a key's count, and a `by`
+  // naming another of this key's residents is two actors, refused. The handle
+  // is read only as the actor, so it must be one of this key's own residents.
+  // A `by` this key does not hold is left exactly as it was before the handle
+  // was read: a placer's placement on a resident's behalf (placingOnBehalf), or
+  // the 403 below. Whether a handle should ever speak to that road is Darko's.
+  const named = payload.handle != null && String(payload.handle).trim() !== "" ? String(payload.handle).trim() : null;
+  const byOther = payload.by != null && !key?.handles?.has(payload.by);
+  if (named && !byOther) {
+    if (!key?.handles?.has(named)) throw bounce(403, `"${named}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+    if (payload.by != null && String(payload.by).trim() !== named)
+      throw bounce(422, `two residents named: handle "${named}" and by "${payload.by}"`,
+        `a mark is one resident's act: the top-level handle is who leaves it. Leave by: off, or name the same resident. Nothing was written.`);
+  }
+  const by = byOther ? payload.by : named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
   if (!by) throw bounce(422, "which resident is leaving this mark?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
   const onBehalf = key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
   if (!key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
