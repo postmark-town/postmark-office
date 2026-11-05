@@ -74,7 +74,20 @@ if [ "$FROM_REMOTE" = true ]; then
   say "   git clone --depth 1 git@github.com:wright-starforge/postmark-world2-backups.git $TMPCLONE"
   git clone -q --depth 1 git@github.com:wright-starforge/postmark-world2-backups.git "$TMPCLONE" || {
     echo "clone failed — the off-box copy could not be retrieved, which IS the finding" >&2; exit 1; }
-  DUMP="$(ls -1t "$TMPCLONE"/dumps/*.dump 2>/dev/null | head -n1)"
+  # The newest NIGHT by its stamped name (a clone gives every file the same
+  # mtime). Since 2026-11-04 (STAR-118) a night ships as parts under GitHub's
+  # 100 MB limit with a sum of the whole: cat them back in order and check the
+  # sum before pg_restore reads a byte. An older night shipped whole.
+  NEWEST="$(ls -1 "$TMPCLONE"/dumps 2>/dev/null | grep -E '^world2-.*\.dump(\.sha256)?$' | sed -E 's/\.sha256$//' | sort -u | tail -n1)"
+  if [ -n "$NEWEST" ] && [ -f "$TMPCLONE/dumps/$NEWEST.sha256" ]; then
+    say "   reassembling $NEWEST from $(ls -1 "$TMPCLONE/dumps/$NEWEST".part-* | wc -l) part(s)"
+    cat "$TMPCLONE/dumps/$NEWEST".part-* > "$TMPCLONE/$NEWEST" || { echo "could not reassemble $NEWEST from its parts" >&2; exit 1; }
+    ( cd "$TMPCLONE" && sha256sum -c --quiet "dumps/$NEWEST.sha256" ) || {
+      echo "the reassembled $NEWEST does not match its sum — the off-box copy is not whole, which IS the finding" >&2; exit 1; }
+    DUMP="$TMPCLONE/$NEWEST"
+  elif [ -n "$NEWEST" ]; then
+    DUMP="$TMPCLONE/dumps/$NEWEST"
+  fi
   say "   remote tip: $(git -C "$TMPCLONE" rev-parse HEAD)"
 else
   DUMP="$(ls -1t "$WORLD2_LAB"/private-dumps/world2-*.dump 2>/dev/null | head -n1)"
@@ -179,7 +192,7 @@ NODE
     bad=$((bad + 1))
   else
     printf '   %-26s %10s %10s  %s\n' table restored live verdict
-    if [ "${RA_LIVE:--1}" -lt 0 ]; then v="live registry absent — nothing to compare against"
+    if [ "${RA_LIVE:--1}" -lt 0 ]; then v="live registry absent — nothing to compare against (since POS-271 the registry is the store's office_roles and office_role_audit, compared with the dump's other tables above)"
     elif [ "$RA_COPY" -eq "$RA_LIVE" ]; then v="match"
     elif [ "$RA_COPY" -lt "$RA_LIVE" ]; then v="live +$((RA_LIVE - RA_COPY)) (grants since the copy — expected)"
     else v="COPY HAS MORE (+$((RA_COPY - RA_LIVE))) — THE REGISTRY LOST ROWS IT ONCE HAD"; bad=$((bad + 1)); fi

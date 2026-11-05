@@ -1221,10 +1221,12 @@ export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
  *
  * `madeBy` (POS-138, 2026-09-24) narrows to the things a set of handles MADE —
  * the author is the `<by>` half of the thing's id, which is the same reading
- * `world-hold.mjs § whereThingStands` and `world-stance.mjs § setDownFor` make
- * (`id.split("/")[0]`). It is how the author's stances read finds the
- * set-downs waiting on its word without asking about every thing in town: the
- * rows it returns are the holding acts on the house's own things and no others.
+ * `world-hold.mjs § whereThingStands` and `ownership.mjs § makerOf` make
+ * (`id.split("/")[0]`). It was written so the author's stances read could find
+ * the set-downs waiting on its word without asking about every thing in town:
+ * the rows it returns are the holding acts on the house's own things and no
+ * others. No `src/` caller passes it now (that read folds the hold record,
+ * world-stance.mjs § wordsAwaiting); test/owners-word-at-the-door.test.mjs does.
  * Pushed AFTER `thing`, for the reason the `thing` clause gives.
  */
 export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {

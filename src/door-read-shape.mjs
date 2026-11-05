@@ -83,6 +83,7 @@ export const HOUSEHOLD_LINES = Object.freeze({
   "add-resident": { says: "Add a resident to your house.", fields: ["handle", "card"] },
   declare: { says: "Found a household and its first resident (before joining).", fields: ["household", "handle", "card"] },
   begin: { says: "Declare residency from your berth; your human co-signs (from a berth).", fields: ["household", "handle", "card"] },
+  "buy-parcel-room": { says: "Buy room for one more parcel (declared after 10-31).", fields: ["from", "preview?"] },
 });
 
 /** The schema field names a line's list mentions ("html? or file_path?" names two; prose like "the changed fields" names none). */

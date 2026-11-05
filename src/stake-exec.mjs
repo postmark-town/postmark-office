@@ -18,7 +18,7 @@
 // answer); exit 1 only when the machinery itself trips.
 
 import { readFileSync, existsSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";

@@ -1,14 +1,21 @@
 // world-crossings.mjs — enter(mark) / exit(mark), the office's half.
 //
-// DEMO SLICE (step 5, `jetto/enter-exit-demo`). The law is the 2026-08-18
-// wind-down's: R14 (occupancy is a literal `contains` edge with an ENTITY
-// child; the handshake is one edge and two words), R15 (walk and entry are
-// fully decoupled axes — walking NEVER implies entry), R16 (the pair stays out
-// of production until the law is planted). Nothing here merges.
+// It began as a demo slice (step 5, `jetto/enter-exit-demo`) and is LIVE now:
+// the apex dispatches `enter` / `exit` through `enterViaOffice` /
+// `exitViaOffice` (world-apex.mjs § DISPATCH), world.mjs calls `crossingLaw`
+// and `exitViaOffice` (`enteredNow`, `exitWhatThisPointLeaves`, the walk's
+// enter-on-arrival), and the pen `CROSSING_EXEC` (crossing-exec.mjs) is run by
+// world-apex under the town lock. The law is the 2026-08-18 wind-down's: R14
+// (occupancy is a literal `contains` edge with an ENTITY child; the handshake
+// is one edge and two words), R15 (walk and entry are fully decoupled axes —
+// walking NEVER implies entry), R16 (the pair was to stay out of production
+// until the law was planted; it is in production now).
 //
 // THE DIVISION OF LABOUR, and it is the same one walk keeps:
-//   · the world clone owns the GRAMMAR and the DERIVATION (tools/thresholds.mjs
-//     — the acts' shape, the entry law's reading, occupancy from the acts) and
+//   · the world clone owns the GRAMMAR and the DERIVATION (tools/enter-exit.mjs
+//     — the acts' shape, the entry law's reading, occupancy from the acts; the
+//     retired name tools/thresholds.mjs is only a fallback in `crossingLaw`,
+//     for a clone one pull behind the rename) and
 //     the ADJUDICATION (tools/world-verbs.mjs — enter/exit/the chain/the scope);
 //   · this file owns WHO IS ACTING and refuses on that; the exec owns the pen.
 //
@@ -38,6 +45,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const bounce = (code, defect, hint, extra = {}) => {
   const e = new Error(defect); Object.assign(e, { code, defect, hint, ...extra }); return e;
 };
+// WLD-68: the one hint for an enter target that is missing, hidden or not in your room
+const ENTER_UNAVAILABLE_HINT = "That mark is not available to enter from here. Choose a doorway visible from where you stand. Nothing was recorded.";
 
 /** The clone's enter/exit law, or a named refusal. Never substituted.
  *
@@ -505,6 +514,14 @@ async function enterAct(worldClone, payload = {}, key = null, deps = {}) {
     if (answer.choose)
       throw bounce(422, answer.error, "name one of the portal's ways with into: <id>. Nothing was recorded",
         { choose: answer.choose });
+    // NOT AVAILABLE FROM HERE (WLD-68; wording settled by Bevel under Wright's
+    // 2026-10-26 delegation). The clone answers a mark a dungeon hides from you
+    // exactly as it answers an id that does not exist, so naming one learns
+    // nothing; this hint is that same answer for both, and names no room, no
+    // portal and no other way. Telling the walker a hidden portal "has no
+    // inside" was false: it has one, just not from where they stand.
+    if (answer.error === `no mark '${markId}' to enter`)
+      throw bounce(422, answer.error, ENTER_UNAVAILABLE_HINT);
     throw bounce(422, answer.error, "a mark you can step inside has a place and an extent; a point has no inside");
   }
 

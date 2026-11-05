@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 process.env.WORLD_CLONE = join(tmpdir(), "postmark-no-world-clone-xyz");
-const { createVoices, EARSHOT_M, HEAR_MAX } = await import("../src/voices.mjs");
+const { createVoices, EARSHOT_M, HEAR_MAX, CLOSE_MS } = await import("../src/voices.mjs");
 const { WORLD_TOOLS, worldSay } = await import("../src/world.mjs");
 
 const DIR = mkdtempSync(join(tmpdir(), "postmark-voices-"));
@@ -1029,4 +1029,227 @@ test("earshotSnapshot: a burst that lands before the first walk resolves shares 
   const burst = await Promise.all([store.earshotSnapshot(), store.earshotSnapshot(), store.earshotSnapshot()]);
   assert.equal(store.room.stats.rooms - rooms, 1, "three handed reads at once walk the window once");
   assert.ok(burst.every((s) => s === burst[0]), "and hear the same snapshot");
+});
+
+// ── POS-806 · `spoke: true` means the words left you; heard_by says who got them ──
+
+// presence derived by position, as the office runs it (WORLD_PRESENCE on)
+const byPos = (at) => async (p) => Object.entries(at).filter(([, q]) => Math.hypot(q.x - p.x, q.y - p.y) <= EARSHOT_M).map(([h]) => h).sort();
+
+test("POS-806 — a say to an empty room: spoke true, heard_by 0, and plain words that nobody heard", async () => {
+  const at = { rei: { x: 0, y: 0 }, far: { x: 0, y: EARSHOT_M + 5 } };
+  const { store } = bench(at, { nearby: byPos(at) });
+  const said = await store.say("rei", "is anyone there?");
+  assert.equal(said.spoke, true);
+  assert.equal(said.heard_by, 0);
+  assert.match(said.heard_note, /nobody is within earshot \(60 m\)/);
+  assert.match(said.heard_note, /no one has heard these words yet/);
+  assert.match(said.heard_note, /on the record/);
+  assert.equal("heard_by" in (await store.hear("rei")), false, "a listen is not a say: no count, no note");
+});
+
+test("POS-806 — a say with listeners within earshot counts them and carries no note; one past earshot is not counted", async () => {
+  const { store } = bench({ rei: { x: 0, y: 0 }, a: { x: 0, y: 10 }, b: { x: EARSHOT_M, y: 0 }, far: { x: 0, y: EARSHOT_M + 1 } });
+  // the bench's nearby is off, so listeners come from the door's own activity: each listens once
+  await store.hear("a"); await store.hear("b"); await store.hear("far");
+  const said = await store.say("rei", "hello");
+  assert.deepEqual(said.listeners, ["a", "b"]);
+  assert.equal(said.heard_by, 2);
+  assert.equal("heard_note" in said, false, "the note is only for the none case");
+});
+
+test("POS-806 — heard_by rides a say that passes `since` too, even where the listeners list is held back as unchanged", async () => {
+  const { store, tick } = bench({ rei: { x: 0, y: 0 }, a: { x: 0, y: 10 } });
+  await store.hear("a");
+  const first = await store.say("rei", "one");
+  tick(15000);
+  const again = await store.say("rei", "two", { since: first.latest });
+  assert.equal(again.heard_by, 1);
+  assert.equal(again.listener_count, 1);
+});
+
+test("POS-806 — with no presence layer the zero note only claims what the office can see, never 'nobody is within earshot'", async () => {
+  const { store } = bench({ rei: { x: 0, y: 0 } });
+  const said = await store.say("rei", "hello?");
+  assert.equal(said.heard_by, 0);
+  assert.match(said.heard_note, /no one who has spoken or listened lately is within earshot/);
+  assert.doesNotMatch(said.heard_note, /^nobody is within earshot/);
+});
+
+test("POS-806 — a duplicate nonce receipt is the room as it stands now, so it counts nobody and says nothing of who heard", async () => {
+  const at = { caelan: { x: 0, y: 0 }, a: { x: 0, y: 10 } };
+  const { store, tick } = bench(at, { nearby: byPos(at) });
+  const first = await store.say("caelan", "an entrance", { nonce: "enter-9" });
+  assert.equal(first.heard_by, 1);
+  tick(3 * MIN);
+  const again = await store.say("caelan", "an entrance", { nonce: "enter-9" });
+  assert.equal(again.duplicate, true);
+  assert.equal("heard_by" in again, false);
+  assert.equal("heard_note" in again, false);
+});
+
+test("POS-806 — the human's say stands WITH a housemate's body: that housemate is not counted as hearing it", async () => {
+  const at = { vex: { x: 0, y: 0 } };
+  const { store } = bench(at, { nearby: byPos(at) });
+  const said = await store.say("human-of-the-drift", "we made it", { standAs: "vex" });
+  assert.equal(said.spoke, true);
+  assert.equal(said.heard_by, 0, "the only body in earshot is the one the human stands with");
+});
+
+// ── POS-886 · the conversation a reader reads is grouped from their own room's voices ──
+//
+// LAW (WLD-74, createVoices' `roomOf`): "Hearing stops at a dungeon room's walls, both ways: a voice is heard only by an ear in the
+// room it was spoken in (null is the open), and its record is shown only to readers in that room."
+//
+// A voice chains into a conversation with any voice within earshot of it, so a voice from another room that sits between two circles
+// would join them in a reader's record unless it is left out BEFORE the grouping. These drive the real createVoices (say and hear),
+// with invented residents, and compare the reader's WHOLE reply across worlds that differ only in the voice that is not theirs to read.
+
+const HALL = "the-great-room";
+const KEEP = "the-keep";
+const RING_OF = (names) => Object.fromEntries(names.map((n, i) => [n, [
+  { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 2 * EARSHOT_M - 10, y: 0 }, { x: 2 * EARSHOT_M - 15, y: 0 },
+][i]]));
+const BRIDGE_AT = { x: EARSHOT_M, y: 0 }; // within earshot of the near edge of each circle, which are out of earshot of each other
+const roomBench = (at, rooms, more = {}) => bench(at, { roomOf: async (h) => rooms[h] ?? null, ...more });
+
+/**
+ * Speak a circle pair in order, a voice every 16 s. `bridge` speaks from BRIDGE_AT right after the voice at index `bridgeAfter`
+ * (-1: before them all). A bridge that is not the reader's to read does not advance the clock, so the readable voices keep the
+ * very instants they have in the world without it; a readable one does.
+ */
+async function speakCircles({ store, tick }, names, { bridge = null, bridgeAfter = 1, readable = false } = {}) {
+  for (let i = -1; i < names.length; i++) {
+    if (i >= 0) { await store.say(names[i], `${names[i]} speaks`); tick(16_000); }
+    if (bridge && i === bridgeAfter) { await store.say(bridge, `${bridge} speaks`); if (readable) tick(16_000); }
+  }
+}
+
+test("POS-886 — the geometry the tests stand on: two circles out of earshot of each other, one voice between them in earshot of both", () => {
+  const ring = RING_OF(["a1", "a2", "b1", "b2"]);
+  const d = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  for (const a of ["a1", "a2"]) for (const b of ["b1", "b2"]) assert.ok(d(ring[a], ring[b]) > EARSHOT_M, `${a} and ${b} are out of earshot`);
+  assert.ok(d(ring.a2, BRIDGE_AT) <= EARSHOT_M && d(ring.b2, BRIDGE_AT) <= EARSHOT_M && d(ring.b1, BRIDGE_AT) <= EARSHOT_M, "the bridge reaches both");
+});
+
+test("POS-886 — hear: a voice spoken inside a room, wherever it falls between two open circles, leaves an outside reader's whole reply unchanged", async () => {
+  const circles = ["a1", "a2", "b1", "b2"];
+  const alone = roomBench({ ...RING_OF(circles), rd: { x: 5, y: 0 } }, {});
+  await speakCircles(alone, circles);
+  alone.tick(16_000);
+  const without = await alone.store.hear("rd");
+  assert.deepEqual(without.conversation.participants, ["a1", "a2"], "the reader's conversation is circle A alone");
+  assert.equal(without.conversation.voice_count, 2);
+
+  // the admitting control: a voice that IS the reader's to read, in the same spot, does join the two circles
+  const open = roomBench({ ...RING_OF(circles), pub: BRIDGE_AT, rd: { x: 5, y: 0 } }, {});
+  await speakCircles(open, circles, { bridge: "pub", readable: true });
+  open.tick(16_000);
+  const joined = await open.store.hear("rd");
+  assert.deepEqual([...joined.conversation.participants].sort(), ["a1", "a2", "b1", "b2", "pub"], "an open bridge joins them");
+  assert.equal(joined.conversation.voice_count, 5);
+
+  // the same voice from inside a room: before the circles, between them, after them. Every verdict is collected, so one red
+  // does not hide the others.
+  const replies = [];
+  for (const bridgeAfter of [-1, 1, 3]) {
+    const w = roomBench({ ...RING_OF(circles), warden: BRIDGE_AT, rd: { x: 5, y: 0 } }, { warden: HALL });
+    await speakCircles(w, circles, { bridge: "warden", bridgeAfter });
+    w.tick(16_000);
+    replies.push(await w.store.hear("rd"));
+  }
+  assert.deepEqual(replies, [without, without, without], "the room's voice, before, between or after the circles, changes nothing the outside reader is told");
+});
+
+test("POS-886 — say: the reply to an outside say is the same with or without a voice from a room between the circles", async () => {
+  const circles = ["a1", "a2", "b1", "b2"];
+  const reply = async (extraAt, rooms, bridge) => {
+    const w = roomBench({ ...RING_OF(circles), ...extraAt, rd: { x: 5, y: 0 } }, rooms);
+    await speakCircles(w, circles, bridge ? { bridge, bridgeAfter: 1 } : {});
+    w.tick(16_000);
+    return w.store.say("rd", "a word from beside circle A");
+  };
+  const without = await reply({}, {}, null);
+  assert.equal(without.spoke, true);
+  assert.deepEqual(without.conversation.participants, ["a1", "a2", "rd"], "the speaker joins circle A and nobody else");
+  const withRoom = await reply({ warden: BRIDGE_AT }, { warden: HALL }, "warden");
+  assert.deepEqual(withRoom, without, "the say reply carries no trace of the room's voice");
+});
+
+test("POS-886 — a reader inside a room reads that room's conversation; a bridge from the open or from another room does not join it; one from their own room does", async () => {
+  const circles = ["h1", "h2", "h3", "h4"];
+  const inHall = Object.fromEntries(circles.map((h) => [h, HALL]));
+  const alone = roomBench({ ...RING_OF(circles), hr: { x: 5, y: 0 } }, { ...inHall, hr: HALL });
+  await speakCircles(alone, circles);
+  alone.tick(16_000);
+  const without = await alone.store.hear("hr");
+  assert.deepEqual(without.conversation.participants, ["h1", "h2"], "inside the room they read the room's own conversation");
+  assert.equal(without.conversation.voice_count, 2);
+
+  // a voice from the open and a voice from another room, each between the hall's two circles (every verdict collected)
+  const replies = [];
+  for (const [handle, room] of [["out", null], ["keep", KEEP]]) {
+    const w = roomBench({ ...RING_OF(circles), [handle]: BRIDGE_AT, hr: { x: 5, y: 0 } }, { ...inHall, hr: HALL, [handle]: room });
+    await speakCircles(w, circles, { bridge: handle, bridgeAfter: 1 });
+    w.tick(16_000);
+    replies.push(await w.store.hear("hr"));
+  }
+  assert.deepEqual(replies, [without, without], "a voice from the open, or from another room, between the hall's circles changes nothing the hall reader is told");
+
+  // the admitting control: a bridge spoken inside their own room does join the two circles
+  const own = roomBench({ ...RING_OF(circles), hb: BRIDGE_AT, hr: { x: 5, y: 0 } }, { ...inHall, hb: HALL, hr: HALL });
+  await speakCircles(own, circles, { bridge: "hb", bridgeAfter: 1, readable: true });
+  own.tick(16_000);
+  const joined = await own.store.hear("hr");
+  assert.equal(joined.conversation.voice_count, 5, "a bridge from their own room joins the room's two circles");
+  assert.deepEqual([...joined.conversation.participants].sort(), ["h1", "h2", "h3", "h4", "hb"]);
+});
+
+test("POS-886 — one snapshot, two readers: the outside reader and the room's reader each read their own conversation, in either order", async () => {
+  const at = { a1: { x: 0, y: 0 }, a2: { x: 10, y: 0 }, h1: { x: 0, y: 0 }, h2: { x: 10, y: 0 }, rd: { x: 5, y: 0 }, hr: { x: 5, y: 0 } };
+  const { store, tick } = roomBench(at, { h1: HALL, h2: HALL, hr: HALL });
+  for (const h of ["a1", "h1", "a2", "h2"]) { await store.say(h, `${h} speaks`); tick(16_000); }
+  const t = store.room.now();
+  const hereOut = await store.room.standing("rd");
+  const hereHall = await store.room.standing("hr");
+  assert.equal(hereOut.room, undefined);
+  assert.equal(hereHall.room, HALL);
+  // each order gets its own snapshot, and every reader reads from it twice or once, so a reply built from another reader's
+  // clusters, or from whoever read first, shows up as a difference between two replies that must be equal
+  const read = async (order) => {
+    const snap = await store.room.snapshot(t);
+    const replies = [];
+    for (const who of order) replies.push(await store.room.reply(who, who === "rd" ? hereOut : hereHall, t, null, { snap }));
+    return replies;
+  };
+  const [outA, hallA, outB] = await read(["rd", "hr", "rd"]);
+  const [hallC, outC, hallD] = await read(["hr", "rd", "hr"]);
+  for (const out of [outA, outB, outC]) assert.deepEqual(out.conversation.participants, ["a1", "a2"], "the outside reader reads the open conversation, not the room's");
+  for (const hall of [hallA, hallC, hallD]) assert.deepEqual(hall.conversation.participants, ["h1", "h2"], "the room's reader reads the room's, not the open one");
+  assert.deepEqual([outB, outC], [outA, outA], "who reads first from a snapshot changes no outside answer");
+  assert.deepEqual([hallC, hallD], [hallA, hallA], "and no room answer");
+
+  // the ear alone needs no clusters (POS-632 W4): a snapshot taken without them hands a reply no conversation
+  const bare = await store.room.reply("rd", hereOut, t, null, { snap: await store.room.snapshot(t, { clusters: false }) });
+  assert.equal("conversation" in bare, false, "the no-cluster path stays skipped");
+  assert.equal(bare.voices.length, 2, "and the ear still hears");
+});
+
+test("POS-886 — speech from a room later than the open voices does not keep a quiet open conversation open", async () => {
+  const circles = ["a1", "a2"];
+  const lull = MIN * Math.round(CLOSE_MS / MIN);
+  const run = async (who, rooms) => {
+    const w = roomBench({ ...RING_OF(circles), ...(who ? { [who]: { x: 20, y: 0 } } : {}), rd: { x: 5, y: 0 } }, rooms);
+    await speakCircles(w, circles);
+    w.tick(lull - 5 * MIN - 32_000); // five minutes short of the close, counted from the last open voice
+    if (who) await w.store.say(who, `${who} speaks`);
+    w.tick(6 * MIN); // now six minutes past the close for the open voices
+    return w.store.hear("rd");
+  };
+  const without = await run(null, {});
+  assert.equal(without.conversation, undefined, "the open conversation is closed");
+  assert.deepEqual(without.voices.map((v) => v.handle), ["a1", "a2"], "and its voices are still hearable");
+  assert.deepEqual(await run("warden", { warden: HALL }), without, "a later voice from a room does not reopen it");
+  const later = await run("pub", {});
+  assert.deepEqual(later.conversation.participants, ["a1", "a2", "pub"], "the admitting control: a later open voice keeps it open");
 });

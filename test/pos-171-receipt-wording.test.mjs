@@ -202,7 +202,7 @@ git("-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit"
 process.env.WORLD_CLONE = repo;
 process.env.WORLD_POOL_DIR = pool;
 process.env.WORLD_POOL_SIZE = "2";
-const { walkEntryReceipt, walkViaOffice, WORLD_TOOLS } = await import("../src/world.mjs");
+const { walkEntryReceipt, walkViaOffice, outsideNote, WORLD_TOOLS } = await import("../src/world.mjs");
 const houseA ={ household: "house-a", handles: new Set(["alpha"]) };
 
 // ── leg 1: the receipt Kogane should have been handed ───────────────────────
@@ -374,4 +374,38 @@ test("leg 5c — the receipt's arrives_at and read: walk's, for one leg, name th
     remaining_m: remaining, eta_crossings: Math.round((remaining / 405) * 100) / 100 }], [{ handle: "alpha", pace: null }], engine);
   const { walkers } = walkDomain({ at: t, walkers: rows }, {}, { standpoint: { x: rows[0].x, y: rows[0].y } }); // read where she is: the near block is a radius
   assert.equal(walkers.walkers[0].arrives_at, walk.arrives_at, "the receipt and the read agree to the second");
+});
+
+// ── POS-806 · walking somewhere is not being inside it ─────────────────────
+
+test("POS-806 — a walk to a mark with an inside, without enter_on_arrival, says you will arrive outside it and names the one-call way", async () => {
+  const walk = await walkViaOffice(repo, { handle: "alpha", mark_id: FAR }, houseA);
+  assert.equal(walk.position.arrived, false);
+  assert.match(walk.outside_note, /walking to finn[/]the-far-post, not into it/);
+  assert.match(walk.outside_note, /arriving does not enter it/);
+  assert.match(walk.outside_note, /what you see and hear is what is inside it/);
+  assert.match(walk.outside_note, /enter_on_arrival: true/);
+  assert.equal("entry" in walk, false, "no entry block: nothing was asked to be entered");
+});
+
+test("POS-806 — falsifiers: enter_on_arrival speaks through its own entry block, a coordinate has no inside, a mark with no extent has none either", async () => {
+  const asked = await walkViaOffice(repo, { handle: "alpha", mark_id: FAR, enter_on_arrival: true }, houseA);
+  assert.equal("outside_note" in asked, false, "the walker asked to go in; the note would contradict the entry block");
+  assert.ok(asked.entry, "the entry block is what speaks");
+
+  const coords = await walkViaOffice(repo, { handle: "alpha", x: 400, y: 5000 }, houseA);
+  assert.equal("outside_note" in coords, false, "a coordinate has no inside");
+
+  assert.deepEqual(outsideNote("a/b", { w: 0, h: 0 }, false), {});
+  assert.deepEqual(outsideNote("a/b", null, false), {});
+  assert.deepEqual(outsideNote(null, { w: 9, h: 9 }, false), {});
+  assert.deepEqual(Object.keys(outsideNote("a/b", { w: 9, h: 9 }, false)), ["outside_note"]);
+});
+
+test("POS-806 — no note when it would mislead: a walk HOME (no mark named; enter_on_arrival would bounce) and a zero-length walk to where you already stand", async () => {
+  const home = await walkViaOffice(repo, { handle: "alpha" }, houseA);
+  assert.equal("outside_note" in home, false, "a walk home names no mark, and the one-call way it would suggest bounces");
+  const here = await walkViaOffice(repo, { handle: "alpha", mark_id: HOME }, houseA);
+  assert.equal(here.position.arrived, true, "the bottle's zero-length leg is arrived");
+  assert.equal("outside_note" in here, false, "you already stand there: 'arriving does not enter it' would be beside the point");
 });

@@ -76,7 +76,7 @@ export function householdNamerFor(worldRoot) {
  * and the second half is the one that decides what the exit means.
  *
  * A governed-exempt lane's absence is EXPECTED — the arena is never mirrored by
- * ruling (`LANE_MIRROR.arena`, P-143), so its rows cannot be in the register and
+ * ruling (`EXEMPT_LANES` in src/world2-acts.mjs, P-143), so its rows cannot be in the register and
  * a red that fires on that is a red nobody reads. Anything else is a finding.
  *
  * `lanes` and `laneOf` are injected with the real ones as defaults, so a test

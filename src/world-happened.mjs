@@ -40,8 +40,9 @@ import { join } from "node:path";
 
 import { WORLD_CLONE } from "./world-store.mjs";
 // The READ tier's published-main ref. `world-branches.mjs` imports node builtins
-// only, so this closes no cycle, and it is the one place that decision lives —
-// see its § freshestMainRef "IT IS ALSO THE CANON READER".
+// plus `settlements.mjs` and `world-refresher.mjs`, and neither of those imports
+// this file, so this closes no cycle, and it is the one place that decision
+// lives — see its § freshestMainRef "IT IS ALSO THE CANON READER".
 import { blessedRef } from "./world-branches.mjs";
 
 /** Around-you and town shelves are windows. These are their sills. */

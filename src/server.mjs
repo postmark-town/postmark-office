@@ -32,17 +32,17 @@ import { judgeRoute, withRenamed, PATCH_PAPER_DOORS, markRefused } from "./one-c
 import { sendAtDoor } from "./send-at-door.mjs";
 import { TOWN_TOOL, townDispatchToolFor } from "./town-apex.mjs";
 import { householdApex, APEX_ONLY_FIELDS, householdDispatchToolFor } from "./household-apex.mjs"; // the third door (2026-08-15)
-import { readBody, isBodyTooLarge, refuseTooLarge } from "./body.mjs";
+import { readBody, isBodyTooLarge, refuseTooLarge, BodyIncomplete } from "./body.mjs";
 import { handleOauth, oauthLookup, oauthSchema, mintHouseholdKey, keyLookup, mintBerth, arrivalsReader, berthLookup, berthTaken, acknowledgeVisitorRules, BERTH_SLUG, FROM_TOWN, mintClaim, claimLookup, claimState, claimCosignUrlFor, claimStateUrlFor, sweepClaims, SignInUnreadable } from "./oauth.mjs";
 import { staticLookup, staticKeyCount } from "./static-keys.mjs"; // POS-352: an operator's static key is a store row, no longer an env var
 import { requestResidency, isReservedHandle } from "./residency.mjs";
 import { declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
-import { uploadMedia, useMediaLedger } from "./media.mjs";
+import { uploadMedia, useMediaLedger, rawMediaBody, uploadMediaBody } from "./media.mjs";
 import { harborGated, HARBOR_BOUNCE, visitorGated, visitorBounceFor } from "./harbor-gate.mjs";
 import { VISITOR_RULES, useRulesRecorder } from "./visitor-rules.mjs"; // POS-300
 import { standingBounce, standingOf, isSuspended, bounceSentence, STANDING_BOUNCE_CODE, STANDING_UNREADABLE } from "./standing.mjs";
 import { rolesSchema, roleGate, roleGatesOn, ROLE_SUBSCRIBER } from "./roles.mjs";
-import { openPaper, paperworkStoreOn } from "./paperwork.mjs"; // POS-271: sign-in, roles, the media ledger and the town log, one door
+import { openPaper, paperworkStoreOn, storeSignInCount } from "./paperwork.mjs"; // POS-271: sign-in, roles, the media ledger and the town log, one door
 import { arrivalPage } from "./arrival.mjs";
 import { LETTER_IDS_MAX, identityOf } from "./queries.mjs";
 import { householdsFor, withHouseholdBlock } from "./households.mjs";
@@ -66,6 +66,7 @@ import { STORE_LOST, READ_RETRY, ACT_RETRY, FAULT_LOGGED, STORE_RETRY_AFTER_S, i
 import { rowsFixtureActive, worldGraphForRelease } from "./world-graph-snapshot.mjs"; // POS-270 lane W 3b: the world graph's switch
 import { lawForRelease } from "./law-snapshot.mjs"; // POS-680: which law this process acts on, on its receipt
 import { restoredStanding } from "./restored-classes.mjs"; // POS-680: whether the restored keep was read against the law in force
+import { lawForAnAct } from "./act-law.mjs"; // POS-680 part 2: a world act stands on the law the store has now
 import { blessedSha } from "./world-branches.mjs";
 import { officeStoreFold, storeFingerprint, worldStateServed } from "./world2-fold.mjs"; // POS-142: /world/state from the store's rows, behind W2_FOLD
 import { graphOnSettlement, settledMarkIds, settlementOrFile } from "./world-settlement.mjs"; // POS-359: /world/state serves the newest settlement minus the opposed
@@ -88,7 +89,7 @@ import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any offi
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
 import { withLastActiveOn } from "./last-active.mjs"; // the roster's and the card's last_active, from the store's acts (POS-481)
-import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: read-only workers behind nginx
+import { roleFrom, workerSafe, writerAddressFrom, readRoleBounce, penTokenFor, roleDisclosure } from "./role.mjs"; // DEC-4/G3: the read role's three refusals (the workers are threads, POS-266)
 import { IN_READ_WORKER, announce, mcpWorkerTakes, onAnnounce, readWorkerCount, serveReadsInWorker, startReadPool, workerTakes, wantsEarshot } from "./read-workers.mjs"; // POS-266: reads on the other cores
 import { readShape } from "./world-read-shape.mjs"; // POS-632 W4: the office's default shape decides whether a handover carries earshot
 import { heardDoor } from "./arrival-heard.mjs"; // POS-292: how arrivals heard, weekly counts only
@@ -188,16 +189,37 @@ if (READ_ONLY_ROLE && !paperworkStoreOn() && !existsSync(OAUTH_DB_PATH)) {
     "Start the writer first (it creates and owns the schema), or point --oauth-db at the writer's file.",
     "Booting anyway would leave this worker answering 401 to every signed-in reader while nginx kept sending it traffic.");
 }
+// ⚑ THE SWITCH OFF IS NO ROLLBACK ONCE THE FILES ARE GONE (POS-271, Wright
+// 2026-10-09). Once the paperwork files are deleted, an unswitched office
+// would create an empty oauth.db and sign the whole town out without a word.
+// So the writer refuses to boot when its switch is off, its oauth.db is missing,
+// and the store holds sign-ins: that is the deleted box, never a new office
+// (whose store holds none) or a suite's fresh file. A store it cannot ask is a
+// refusal too, since it then cannot tell which of the two it is.
+const ROLES_DB_PATH = resolve(ROOT, arg("--roles-db", "roles.db"));
+if (!READ_ONLY_ROLE && !paperworkStoreOn() && !existsSync(OAUTH_DB_PATH)) {
+  const missing = [OAUTH_DB_PATH, ...(existsSync(ROLES_DB_PATH) ? [] : [ROLES_DB_PATH])].join(" and ");
+  let held = null;
+  try { held = await storeSignInCount(); }
+  catch (e) {
+    refuseBoot(`OFFICE_PAPERWORK_STORE is off and ${missing} is missing, and the store could not be asked whether it holds the town's sign-ins (${String(e?.message ?? e).slice(0, 120)}).`,
+      "Set OFFICE_PAPERWORK_STORE=1: since POS-271 the paperwork lives in the store, and the files are deleted.");
+  }
+  if (held > 0)
+    refuseBoot(`OFFICE_PAPERWORK_STORE is off, ${missing} is missing, and the store holds ${held} sign-ins: this office's paperwork lives in the store.`,
+      "Set OFFICE_PAPERWORK_STORE=1. Booting on an empty file would sign the whole town out; the switch off is no rollback since the files were deleted (POS-271).");
+}
 // A PAPER, not a sqlite handle (paperwork.mjs): oauth.db by default, the
-// store's 031/032 tables with OFFICE_PAPERWORK_STORE=1. A switched office that
-// cannot reach its store cannot sign anyone in, so it refuses to boot rather
-// than answer 401 to the whole town.
+// store's 031/032 tables with OFFICE_PAPERWORK_STORE=1, and then the file is
+// never opened (the mirror is deleted and the files leave the box, POS-271). A
+// switched office that cannot reach its store cannot sign anyone in, so it
+// refuses to boot rather than answer 401 to the whole town.
 let odb;
 try {
   odb = await openPaper(OAUTH_DB_PATH, { readOnly: READ_ONLY_ROLE, schema: oauthSchema });
 } catch (e) {
   refuseBoot(`the office's paperwork could not be opened: ${String(e?.message ?? e).slice(0, 200)}`,
-    paperworkStoreOn() ? "OFFICE_PAPERWORK_STORE=1 reads sign-in from the store; set WORLD2_PG=1 and WORLD2_PG_URL, or turn the switch off (the rollback)." : `the key store is ${OAUTH_DB_PATH}`);
+    paperworkStoreOn() ? "OFFICE_PAPERWORK_STORE=1 reads sign-in from the store; set WORLD2_PG=1 and WORLD2_PG_URL. Turning the switch off is no rollback since POS-271: the files are deleted, and an unswitched office starts on an empty oauth.db, which signs everyone out." : `the key store is ${OAUTH_DB_PATH}`);
 }
 // The berth's acknowledgement of the town's rules for visitors is written on
 // its own row in this paperwork (POS-300, visitor-rules.mjs).
@@ -284,7 +306,7 @@ if (!world2ServeEnabled() && process.env.WORLD_GRAPH_NONE !== "1" && !rowsFixtur
 // read must not be able to take the town down.
 let rdb = null;
 try {
-  rdb = await openPaper(resolve(ROOT, arg("--roles-db", "roles.db")), { readOnly: READ_ONLY_ROLE, schema: rolesSchema });
+  rdb = await openPaper(ROLES_DB_PATH, { readOnly: READ_ONLY_ROLE, schema: rolesSchema });
 } catch (e) {
   rdb = null;
   console.warn(`WARN: roles.db could not be opened (${String(e?.message ?? e).slice(0, 120)}) — ` +
@@ -341,16 +363,26 @@ const RELOAD_POLL_MS = msEnv("OFFICE_RELOAD_POLL_MS", 5_000);        // the inge
 const journal = IN_READ_WORKER ? { log() {}, error() {} } : console;
 
 // ONE STORE READ IN FLIGHT, AND NEVER FOREVER (POS-639; store-refresh.mjs says
-// why): a tick that finds the last roll+probe pair still reading skips. Each
-// read carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a
-// read that runs past the bound, and the guard is freed only when the pair has
-// settled: the poll holds at most the pair's two of the thread's three pen
-// connections (world2-pen.mjs § pool), whatever the store does.
+// why): a tick that finds the last refresh still reading skips. Each read
+// carries statement_timeout = STORE_READ_BOUND_MS, so Postgres ends a read that
+// runs past the bound, and the guard is freed only when the refresh has settled.
+//
+// THE PROBE, THEN THE ROLL (POS-815; Darko 2026-10-29: "Serialize them",
+// "Probe first"). The two reads used to run side by side and held two of the
+// thread's pen connections at once (the pen is three per pool instance,
+// world2-pen.mjs § pool); one after the other, the refresh holds ONE, whatever
+// the store does. The probe goes first: it
+// carries the as-of and the write path's sign-in and resident checks, and the
+// roll behind the position doors waits for it. Each is still its own
+// transaction, published on its own success and refused on its own: a refused
+// probe still reads the roll, and a refused roll leaves the probe it followed.
+// Under a slow store the roll is therefore later than it was (accepted, the
+// same ruling). Boot reads through this same tick, below.
 const storeTick = storeRefresher({
-  read: () => Promise.all([
-    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-  ]),
+  read: async () => {
+    await townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {});
+    await townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {});
+  },
   onRead: () => {
     const was = AS_OF;
     AS_OF = storeAsOf();
@@ -365,16 +397,20 @@ setInterval(() => {
   // a throw from onRead must never become an unhandled rejection that ends the process
   storeTick.tick().catch((e) => faultLogged("the store poll's tick tripped", e));
 }, RELOAD_POLL_MS).unref();
-// AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the roll and the write path's
-// probe are loaded first, so the first ask is never answered by a process that
-// has not read its index yet (a berth or a sign-in a moment after a restart was
-// a 503 or an anonymous key). Bounded: a store that does not answer within 10 s
-// leaves both unloaded, the checks answer the store's 503 and the poll retries.
+// AT BOOT, BEFORE THE OFFICE LISTENS (POS-268): the probe and the roll are
+// loaded first, so the first ask is never answered by a process that has not
+// read its index yet (a berth or a sign-in a moment after a restart was a 503
+// or an anonymous key). Bounded: a store that does not answer within 10 s lets
+// the office listen with whichever reader has not finished still unavailable
+// (the probe refusing with the store's 503, the roll absent) and what has
+// finished kept, and the poll retries.
+// THROUGH THE POLL'S OWN TICK (POS-815): the boot read used to run beside the
+// guard, so a boot read still waiting when the first tick came started a second
+// pair. Now it IS the first tick: the bound returns the boot and lets the office
+// listen, the read goes on holding the guard, and the interval's ticks skip
+// until it settles.
 await Promise.race([
-  Promise.all([
-    townIndexStore.refreshStoreRoll({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-    townIndexStore.refreshStoreProbe({ statementTimeoutMs: STORE_READ_BOUND_MS }).catch(() => {}),
-  ]),
+  storeTick.tick().catch((e) => faultLogged("the store poll's boot read tripped", e)),
   new Promise((ok) => setTimeout(ok, STORE_READ_BOUND_MS).unref()),
 ]);
 AS_OF = storeAsOf();
@@ -2591,6 +2627,23 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // deliberately: shrinking it is a separate act with its own blast radius.
     if (req.method === "POST" && path === "/media") {
       if (!key) return bounce(res, 401, "an upload needs a key", "media upload is a resident's act — send your household key as a Bearer token");
+      // THE THIRD WAY IN (POS-818): a body declared image/* IS the image — a
+      // file sent from a shell (`curl --data-binary @file`) or a browser's
+      // fetch, never through a model. Routed by the declared type only; the
+      // JSON door below is untouched. media.mjs § uploadMediaBody owns the
+      // length rule and the capped read, then hands the bytes to the same
+      // uploadMedia every other way in reaches.
+      if (rawMediaBody(req.headers)) {
+        uploadMediaBody(req, key, odb, { clone: TOWN_CLONE, query: url.searchParams })
+          .then((result) => j(res, 200, result))
+          .catch((e) => {
+            if (isBodyTooLarge(e)) return bodyTooLarge(res, e);
+            if (e instanceof BodyIncomplete) return bounce(res, 400, "could not read the body", "the upload ended before its declared length arrived; nothing was stored — send the file again");
+            if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
+            return bounceFault(res, "the office tripped", e);
+          });
+        return;
+      }
       readJsonBody(req, 3_000_000).then(async (raw) => {
         try {
           const judged = judgeOrBounce(res, "POST /media", JSON.parse(raw || "{}"));
@@ -2633,6 +2686,9 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
             // are reads, and reads are never suspended.
             const st = await standingBounce(key);
             if (st) return bounce(res, st.code, st.defect, st.hint);
+            // Then the law (POS-680 part 2), below the gates that refuse a
+            // caller for who they are, as at the MCP door and the flat routes.
+            if (await lawMovedRefused(res)) return;
           }
           // The SAME validator the MCP door runs, against the SAME tool schema —
           // charge-then-validate in the MCP door's own order. Unknown top-level
@@ -2694,6 +2750,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/marks", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await leaveMarkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a mark is a pen commit, folded now (no ferry)
         } catch (e) {
@@ -2715,6 +2772,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/walks", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await walkViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result); // 200: a departure is a pen commit, recorded now (no ferry)
         } catch (e) {
@@ -2736,6 +2794,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/notes", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await worldNoteViaOffice(WORLD_CLONE, judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
@@ -2756,6 +2815,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         try {
           const judged = judgeOrBounce(res, "POST /world/hold", JSON.parse(raw || "{}"));
           if (!judged) return;
+          if (await lawMovedRefused(res)) return;
           const result = await callHoldTool("world_hold", judged.fields, key);
           return j(res, 200, result);
         } catch (e) {
@@ -2799,6 +2859,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const judged = judgeOrBounce(res, "POST /world/say", JSON.parse(raw || "{}"));
           if (!judged) return;
           const payload = judged.fields;
+          // speaking is an act; listening (no words) is a read and is never refused for it
+          if (payload.text != null && payload.text !== "" && await lawMovedRefused(res)) return;
           const result = payload.human === true
             ? await worldSayHuman(payload, key)
             : await worldSay(payload, key);
@@ -2831,9 +2893,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const judged = judgeOrBounce(res, `POST ${path}`, payload);
         if (!judged) return;
         payload = judged.fields;
-        const fn = path === "/world/stake" ? worldStakeViaOffice(payload, key) : worldUnstakeViaOffice(payload, key);
-        return fn.then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
-          .catch((e) => bounceFault(res, "the stake door tripped", e));
+        return lawMovedRefused(res).then((refused) => {
+          if (refused) return;
+          return (path === "/world/stake" ? worldStakeViaOffice(payload, key) : worldUnstakeViaOffice(payload, key)).then((r) => (r?.error === "bounce" ? bounce(res, r.code ?? 422, r.defect, r.hint) : j(res, 200, r)))
+            .catch((e) => bounceFault(res, "the stake door tripped", e));
+        }).catch((e) => bounceFault(res, "the stake door tripped", e));
       }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
       return;
     }
@@ -2938,6 +3002,14 @@ const resolveBearer = async (token) =>
 
 // POS-633 H4: every act this request writes carries the door's route (act-provenance.mjs).
 const handle = (req, res) => withRoute(routeOfRequest(req), () => handleRequest(req, res));
+
+/** POS-680 part 2: true when the act was refused because the store's law moved and this process could not load it (act-law.mjs). */
+async function lawMovedRefused(res) {
+  const moved = await lawForAnAct();
+  if (!moved) return false;
+  j(res, moved.code, { error: "bounce", defect: moved.defect, hint: moved.hint, behind: moved.behind });
+  return true;
+}
 const handleRequest = (req, res) => {
   const t0 = Date.now();
   const auth = /^Bearer\s+(.+)$/.exec(req.headers.authorization ?? "");

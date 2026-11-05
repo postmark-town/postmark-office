@@ -35,7 +35,7 @@ import { resolveHouse, keyOfSlug, houseRows } from "./household-deriver.mjs";
 export const ROLE_ADMIN = "admin";
 /** The refresh's name in the role audit: the only writer of role `admin`. */
 export const ADMIN_ACTOR = "github:postmark-town-owners";
-export const ADMIN_ORG = "postmark-town";
+const ADMIN_ORG = "postmark-town";
 
 const housesOf = (registry) => registry?.households ?? registry ?? {};
 const idsOf = (rec) => (rec?.accounts ?? []).map((a) => normalizeSubject(a?.id)).filter(Boolean);
@@ -92,7 +92,7 @@ export async function adminMakes(klass, handle) {
 }
 
 /** G6's words, on explain's `makers` answer for the three classes. */
-export const ADMIN_MAKERS_WORDS = "false: the town's, and admin households' (owners of the postmark-town GitHub organisation)";
+const ADMIN_MAKERS_WORDS = "false: the town's, and admin households' (owners of the postmark-town GitHub organisation)";
 export async function withAdminMakers(answer) {
   if (answer?.makers?.value !== false || !(await isAdminClass(answer.explains))) return answer;
   return { ...answer, makers: { ...answer.makers, who: ADMIN_MAKERS_WORDS } };

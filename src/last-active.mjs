@@ -141,10 +141,12 @@ export async function stampRowsOn(q, rows) {
 }
 
 /**
- * Stamp `rows` with ONE store read of their own (the office.db path, whose
- * composed read holds no store connection). `find(handles)` answers the Map;
- * by default it is the pen's officeRead around lastActiveFor, and the house
- * bundle hands the town index's pooled reader instead.
+ * Stamp `rows` with ONE store read of their own, for a caller whose composed
+ * read holds no store connection. `find(handles)` answers the Map. Every caller
+ * in src today (house-bundle.mjs, and household-apex.mjs through
+ * `withLastActive`) hands the town index's pooled reader as `find`; with none,
+ * the default is the pen's officeRead around lastActiveFor, which no caller in
+ * src uses.
  */
 export async function stampRows(rows, { find = null, env = process.env } = {}) {
   const list = (rows ?? []).filter((r) => r && typeof r === "object");
