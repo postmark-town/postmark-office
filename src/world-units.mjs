@@ -194,6 +194,13 @@ export async function liveUnitDeps() {
       const hh = await claimHouseholdFor({ actor: by, household });
       return pen.officeWrite((c) => read(c, { mark, by }), { household: hh });
     },
+    // a full set-down holder's record, read under the WITHDRAWING household as `droppedUnit` is (WLD-138 B)
+    setDownHolder: async ({ mark, by, household }) => {
+      const { claimHouseholdFor } = await import("./world2-claims.mjs");
+      const { setDownHolderOf } = await import("./set-down-return.mjs");
+      const hh = await claimHouseholdFor({ actor: by, household });
+      return pen.officeWrite((c) => setDownHolderOf(c, { mark, by }), { household: hh });
+    },
     onActs: () => pen.laneFlipped("hold"),
     // the things made straight into hands or a holder (POS-766): `Map(id → its mark)`, every make ever, from the kept record
     made: async () => (await (await import("./world-kinds.mjs")).holdRecordNow())?.made ?? new Map(),
@@ -320,6 +327,8 @@ export const refuseIfAnyStolenNow = (deps, klassesOf) => {
 // read from the class tree first and the thing class's older `carry_cap` dial
 // second (G4). Constitution, so no resident's own field moves it.
 const carryOf = (view) => holdingOf({ className: "resident", classProperty: (n, p) => view.property?.(n, p) ?? null, legacy: { capacity: view.dials("thing")?.carry_cap } }).capacity;
+/** A resident's carry cap, as the class view states it (the set-down holder's put-back judges its add by it: set-down-return.mjs). */
+export const carryCapOf = (view) => carryOf(view);
 // A holder's dials, in the chest door's shape, PROPERTY FIRST: capacity and its
 // bounds, and open (the chest's `welcome`), from the mark's class lineage and
 // the mark's own sovereign fields; the chest class's older dials second (G4).
@@ -380,7 +389,9 @@ export async function refuseOverRoomAbove({ deps, view, fold, attachments, holde
 
 async function chestOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is a published mark; a draft holds nothing yet. Nothing was recorded.");
+  // WLD-138 R4: this said "a draft holds nothing yet", and a holder set down full holds what it held (the kind door's
+  // HOLDER_NOT_ON_THE_WORLD was corrected the same way)
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is reached here once it stands on the world (published). A holder set down as its maker's draft keeps what it holds, inside it, but nothing goes in or comes out until it publishes. Nothing was recorded.");
   if (markClassOf(mark) !== "chest") throw bounce(422, `${id} is not a chest`, `it is ${markClassOf(mark) ? `a ${markClassOf(mark)}` : "an unclassed mark"}; units go into chests and residents' hands. Nothing was recorded.`);
   return { mark, capacity: capacityOf(mark, chestDialsFor(view, mark)) };
 }

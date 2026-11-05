@@ -38,6 +38,14 @@ const LAST_WORD_SQL = `
   SELECT action FROM acts
    WHERE class = 'mark' AND object = $1 AND action IN ('leave-mark', 'withdraw')
    ORDER BY id DESC LIMIT 1`;
+// A HOLDER PUT BACK (WLD-138 B): a full holder set down and withdrawn before it published is held
+// again, and its put-back is written in the withdrawal's own transaction, BEFORE the withdraw act
+// (set-down-return.mjs § putBackGuard), so its id is the lower. Its own newest hold row says it is
+// in hand: a holder whose newest hold row is a put-back is not leaving the world.
+const LAST_HOLD_SQL = `
+  SELECT action FROM acts
+   WHERE class = 'holding' AND object = $1 AND action IN ('give', 'drop', 'take', 'make', 'consume', 'set-down', 'put-back')
+   ORDER BY id DESC LIMIT 1`;
 
 /**
  * Inside a transaction: take the chest's lock (and, in order, the lock of each
@@ -52,9 +60,10 @@ export async function lockedChestUse(client, chest, { also = [] } = {}) {
   const fold = foldUnits((await pgHoldingRows(client, {})).filter(isUnitRow));
   const { rows: held } = await pgAttachmentsFor(client);
   const word = (await client.query(LAST_WORD_SQL, [String(chest)])).rows[0]?.action ?? null;
+  const putBack = word === "withdraw" && (await client.query(LAST_HOLD_SQL, [String(chest)])).rows[0]?.action === "put-back";
   const up = liveHolders(held);
   const loadOf = (h) => totalOf(fold, h) + wholeLoadOf({ up, holder: h, unitsOf: (x) => totalOf(fold, x) });
-  return { units: totalOf(fold, chest), things: thingsIn(held, chest), load: loadOf(chest), loads: also.map(loadOf), withdrawn: word === "withdraw" };
+  return { units: totalOf(fold, chest), things: thingsIn(held, chest), load: loadOf(chest), loads: also.map(loadOf), withdrawn: word === "withdraw" && !putBack };
 }
 
 const bounce = (code, defect, hint, extra = {}) => {
