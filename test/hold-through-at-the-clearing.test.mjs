@@ -33,11 +33,13 @@ const skip = store.skip ?? false;
 
 const CONE = "berthillon/a-cone";
 const CONE_ID = "b0000000-0000-4000-8000-000000000001";
+const BAG = "berthillon/a-bag";
+const BAG_ID = "b0000000-0000-4000-8000-000000000003";
 const ROOM = "berthillon/the-shop";
 const ROOM_ID = "b0000000-0000-4000-8000-000000000002";
 const box = (at, ext) => `((${at.x - ext.w / 2},${at.y - ext.h / 2}),(${at.x + ext.w / 2},${at.y + ext.h / 2}))`;
 
-async function seed({ from = null, acts = [] } = {}) {
+async function seed({ from = null, acts = [], bagStands = false } = {}) {
   const c = await store.connect("world2_owner");
   try {
     await c.query("TRUNCATE escrow_projection, claims, marks, windows, projection_heads, households, household_pins, acts CASCADE");
@@ -68,11 +70,12 @@ async function seed({ from = null, acts = [] } = {}) {
     };
     await mark(ROOM_ID, ROOM, "sited", { x: 221, y: 95.5 }, { w: 15, h: 12 });
     await mark(CONE_ID, CONE, "thing", { x: 221, y: 95.5 }, { w: 1, h: 1 });
+    if (bagStands) await mark(BAG_ID, BAG, "thing", { x: 230, y: 90 }, { w: 1, h: 1 });
     for (const a of acts)
       await c.query(
         `INSERT INTO acts (id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, class, payload)
          OVERRIDING SYSTEM VALUE VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [a.id, a.at, a.crossing ?? WIN + 0.1, a.actor, a.action, CONE, a.anchor ?? null, a.dx ?? null, a.dy ?? null, a.cls ?? "holding",
+        [a.id, a.at, a.crossing ?? WIN + 0.1, a.actor, a.action, a.object ?? CONE, a.anchor ?? null, a.dx ?? null, a.dy ?? null, a.cls ?? "holding",
           JSON.stringify(a.payload ?? { thing: CONE, holder: a.holder ?? null, policy: a.action === "drop" ? "detach" : "cascade", made_by: "berthillon" })]);
     // an act the clearing writes comes after every seeded one, as ids do on the record
     await c.query("SELECT setval(pg_get_serial_sequence('acts', 'id'), 1000)");
@@ -359,4 +362,39 @@ test("7. FALSIFIER (Wright's condition 1): clearing_job's INSERT on acts is the 
     }
     await assert.rejects(insert(job, notReturns[0]), refused, "and back on, it refuses again");
   } finally { await job.end(); await owner.end(); }
+});
+
+// WLD-138: a FULL holder set down. The cone is in the bag (a give into it, cascade), the bag is set down (a set-down
+// act, detach): the settlement prints the cone held by the bag, never onto the ground, and the bag where its draft
+// puts it — not from a drop, which it has none of. Invented records; the clearing job runs on the throwaway store.
+const intoBag = (id, at) => ({ id, at, actor: "sb-ash", action: "give", holder: BAG, payload: { thing: CONE, holder: BAG, policy: "cascade", made_by: "berthillon" } });
+const bagSetDown = (id, at) => ({ id, at, actor: "berthillon", action: "set-down", object: BAG, holder: null,
+  payload: { thing: BAG, holder: null, policy: "detach", made_by: "berthillon", set_down: { at: { x: 230, y: 90 }, draft: BAG } } });
+const bagRow = async () => (await read("SELECT geometry, data FROM marks WHERE slug = $1", [BAG]))[0];
+
+test("WLD-138 · a FULL holder set down, its draft published: the cone prints held by the bag (no place of its own), the bag stays where its draft put it, nothing is printed loose", { skip }, async () => {
+  await seed({ from: 100, bagStands: true, acts: [take(101, "2026-10-19T01:00:00Z"), intoBag(102, "2026-10-19T01:10:00Z"), bagSetDown(103, "2026-10-19T02:00:00Z")] });
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /⚑ hold: berthillon\/a-cone — held by berthillon\/a-bag/);
+  const cone = await coneRow();
+  assert.equal(cone.geometry, null, "the cone has no place of its own: it is in the bag");
+  assert.equal(cone.data.held_by, BAG);
+  const bag = await bagRow();
+  assert.deepEqual(bag.geometry, { at: { x: 230, y: 90 }, extent: { w: 1, h: 1 } }, "the bag is where its draft put it, untouched by the clearing");
+  assert.equal(bag.data.held_by, undefined);
+  const [win] = await read("SELECT receipts FROM windows WHERE id = $1", [WIN]);
+  assert.deepEqual(win.receipts.hold_printed.map((p) => p.slug), [CONE], "ONE printout: the contents; the holder is not printed from a drop");
+  assert.doesNotMatch(r.out, /could not be placed/);
+  assert.doesNotMatch(clear().out, /⚑ hold:/, "the next clearing prints nothing again");
+});
+
+test("WLD-138 · a FULL holder set down, its draft NOT yet published: the contents still print held by the bag, and no bag row is invented", { skip }, async () => {
+  await seed({ from: 100, bagStands: false, acts: [take(101, "2026-10-19T01:00:00Z"), intoBag(102, "2026-10-19T01:10:00Z"), bagSetDown(103, "2026-10-19T02:00:00Z")] });
+  const r = clear();
+  assert.equal(r.code, 0, r.out);
+  const cone = await coneRow();
+  assert.equal(cone.geometry, null);
+  assert.equal(cone.data.held_by, BAG);
+  assert.equal((await read("SELECT count(*)::int AS n FROM marks WHERE slug = $1", [BAG]))[0].n, 0, "the holder waits for its own publication");
 });
