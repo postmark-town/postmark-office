@@ -389,7 +389,9 @@ export async function refuseOverRoomAbove({ deps, view, fold, attachments, holde
 
 async function chestOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is a published mark; a draft holds nothing yet. Nothing was recorded.");
+  // WLD-138 R4: this said "a draft holds nothing yet", and a holder set down full holds what it held (the kind door's
+  // HOLDER_NOT_ON_THE_WORLD was corrected the same way)
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a chest is reached here once it stands on the world (published). A holder set down as its maker's draft keeps what it holds, inside it, but nothing goes in or comes out until it publishes. Nothing was recorded.");
   if (markClassOf(mark) !== "chest") throw bounce(422, `${id} is not a chest`, `it is ${markClassOf(mark) ? `a ${markClassOf(mark)}` : "an unclassed mark"}; units go into chests and residents' hands. Nothing was recorded.`);
   return { mark, capacity: capacityOf(mark, chestDialsFor(view, mark)) };
 }

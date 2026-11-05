@@ -229,7 +229,7 @@ async function refusedBag(who, ord, slug, opts) {
 }
 const claimRows = (bag) => q("SELECT status, refusal_check FROM claims WHERE slug = $1 ORDER BY submitted_at", [bag]);
 
-test("REFUSED, then WITHDRAWN · a full holder (1 named slip, 3 counted units) the clearing refused comes back WHOLE to its maker's hands, once: the same id, record and contents, every take path reaches them; a second withdrawal writes nothing", { skip }, async () => {
+test("REFUSED, then WITHDRAWN · a full holder (1 named slip, 3 counted units) the clearing refused comes back WHOLE to its maker's hands, once: the same id, record and contents, every take path reaches them; a second withdrawal is refused and writes nothing", { skip }, async () => {
   const { bag, slips, key } = await refusedBag("sbx-no", 7, "commons-bag", { slips: 1, units: 3 });
   assert.equal(await unitsIn(bag), 3, "refused: the units are still the holder's, by its id");
   const before = await claimRows(bag);
@@ -254,12 +254,12 @@ test("REFUSED, then WITHDRAWN · a full holder (1 named slip, 3 counted units) t
   const made = await leaveMarkViaOffice(repo, { slug: "commons-bag-slip-2", body: "Slip 2.", to: bag }, key);
   assert.equal(made.did, "make", JSON.stringify(made).slice(0, 300));
   assert.equal((await worldMarkById("sbx-no/commons-bag-slip-2")).mark?.held_by, bag, "and a thing made into it lands: its room is not 'withdrawn'");
-  // exactly once
+  // exactly once: a second withdrawal is refused (Wright 21:57), and writes nothing
   const actsBefore = (await q("SELECT count(*)::int AS n FROM acts"))[0].n;
-  const again = await withdrawMarkViaOffice(repo, { mark: bag }, key);
-  assert.equal(again.already, true, JSON.stringify(again).slice(0, 300));
-  assert.equal(again.put_back, 0);
+  await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, key), (e) => e.code === 409 && /already came back whole \(act \d+\)/.test(e.defect)
+    && /a second withdrawal is refused\. Nothing was withdrawn now and nothing was recorded/.test(e.hint));
   assert.equal((await q("SELECT count(*)::int AS n FROM acts"))[0].n, actsBefore, "the second withdrawal writes nothing");
+  assert.deepEqual(await claimRows(bag), before, "nor touches the docket");
   assert.deepEqual((await holdRows([bag])).map((r) => r.action).filter((a) => a === "put-back"), ["put-back"]);
 });
 
@@ -374,15 +374,15 @@ test("F3 · THE HONEST READ of a refused full holder: its maker is told it was n
   assert.equal((await withdrawMarkViaOffice(repo, { mark: bag }, key)).put_back, 1);
 });
 
-test("REFUSED · TWO WITHDRAWALS AT ONCE: exactly one return and one withdrawal deed; the other writes nothing", { skip }, async () => {
+test("REFUSED · TWO WITHDRAWALS AT ONCE: exactly one return and one withdrawal deed; the other is refused (409) and writes nothing", { skip }, async () => {
   const who = "sbx-nt", key = keyOf("sbx-nt");
   const { bag } = await refusedBag(who, 12, "twice-at-once-bag", { slips: 1, units: 2 });
   const both = await Promise.allSettled([withdrawMarkViaOffice(repo, { mark: bag }, key), withdrawMarkViaOffice(repo, { mark: bag }, key)]);
   const won = both.filter((r) => r.status === "fulfilled" && r.value.put_back === 1);
   assert.equal(won.length, 1, JSON.stringify(both.map((r) => r.value ?? { code: r.reason?.code, defect: r.reason?.defect })).slice(0, 600));
   const lost = both.find((r) => r !== won[0]);
-  assert.ok(lost.status === "fulfilled" ? lost.value.already === true && lost.value.put_back === 0
-    : lost.reason?.code === 409 && /already came back whole/.test(lost.reason.defect), JSON.stringify(lost.value ?? lost.reason?.defect));
+  assert.equal(lost.status, "rejected", JSON.stringify(lost.value ?? null).slice(0, 300));
+  assert.ok(lost.reason?.code === 409 && /already came back whole/.test(lost.reason.defect), lost.reason?.defect);
   assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down", "put-back"]);
   assert.equal((await q("SELECT count(*)::int AS n FROM acts WHERE class = 'mark' AND action = 'withdraw' AND object = $1", [bag]))[0].n, 1, "one withdrawal deed");
   assert.equal(await unitsIn(bag), 2);

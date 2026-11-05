@@ -34,8 +34,13 @@
 // holder and contents together, by withdrawing it." The same face and the same
 // writer: the withdrawal's guard accepts a refused claim beside a draft or a
 // pending one, and the clearing still only refuses. Measured, not assumed:
-// refusal is final (no pen may move a `refused` row, 007's transition guard; the
-// stake door cannot see a refused mark), so the withdrawal is the one way home.
+// refusal is final IN THE CURRENT CODE, not by a schema guarantee. 007's
+// transition guard gives the office pen no way out of `refused`, but it exempts
+// `clearing_job` entirely; what keeps a refused row refused is that the clearing
+// moves only the pending claims of the window it clears, and review-rule.mjs only
+// `held_review` ones. The stake door cannot see a refused mark. So the withdrawal
+// is the one way home; a future `clearing_job` path that touched refused rows
+// would reopen the stake/withdraw race, and must answer for it.
 // A claim held for review is not stranded but waiting, and is not withdrawn.
 
 import { MAKE_FACE, SET_DOWN_FACE, PUT_BACK_FACE } from "./named-making.mjs";
@@ -113,9 +118,10 @@ export const holdsAnything = (h) => Boolean(h) && (Number(h.contents?.units) > 0
  * return's own predicate), or its claim the clearing REFUSED. Wright, AUTHORITY 2026-11-04T21:57:51.368Z: "a
  * refused full holder is never stranded. Its dropper gets it back, holder and contents together, by withdrawing
  * it" — the withdrawal's guard accepts a refused claim, and nothing on the clearing side writes. Refusal is final
- * in the code (007_private_drafts.sql § the transition guard: no transition leaves `refused`, and the stake door
- * cannot see a refused mark), so no stake can race this return for the refused claim. A held claim (`held_review`)
- * is not here: it awaits its outcome.
+ * in the current code: 007's transition guard gives the office pen no transition out of `refused` (it exempts
+ * `clearing_job`), the clearing moves only its window's pending claims, review-rule.mjs only `held_review` ones, and
+ * the stake door cannot see a refused mark. So no stake can race this return for the refused claim today. A held
+ * claim (`held_review`) is not here: it awaits its outcome.
  */
 export const unpublished = (h) => Boolean(h) && !h.published
   && (h.status === "draft" || h.status === "refused" || (h.status === "pending" && h.open != null && Number(h.window) === Number(h.open)));
@@ -125,8 +131,9 @@ async function docketHalfRemoves(client, h, by) {
     const { declaredKeys } = await import("./world2-claims.mjs");
     return (await client.query(REMOVED_DRAFT_SQL, [h.mark, String(by), await declaredKeys(client, null)])).rows.length > 0;
   }
-  // refused, read under the candle and the holder's lock: the docket already holds it off the world, and no pen
-  // may move it (007), so the withdrawal has nothing to take off the docket and nothing can put it back on
+  // refused, read under the candle and the holder's lock: the docket already holds it off the world, the office pen
+  // may not move it (007), and the current clearing and review code do not (see `unpublished`), so the withdrawal
+  // has nothing to take off the docket
   if (h.status === "refused") return true;
   return h.open != null && (await client.query(RETRACTED_PENDING_SQL, [h.open, h.mark, String(by)])).rows.length > 0;
 }
@@ -193,8 +200,12 @@ export const putBackGuard = ({ mark, by, household, crossing = null, withdrawnBy
 export async function withdrawSetDownHolder({ mark, by, household, key, caller = null, guard = null, withdraw }, deps) {
   const h = await deps.setDownHolder({ mark, by, household });
   if (!h) return null;
-  if (h.done) return { id: String(mark), withdrawn: true, already: true, put_back: 0, put_back_before: h.done.act,
-    note: `${mark} was already withdrawn and came back whole (act ${h.done.act}); nothing was written now` };
+  // A SECOND WITHDRAWAL IS REFUSED (Wright, AUTHORITY 2026-11-04T21:57:51.368Z: "a second withdraw is refused
+  // (exactly once)"; WLD-138 R1): the same 409 a raced loser gets, before anything is read for a write. The set-down
+  // unit's replay answer (world-units.mjs § withdrawDroppedUnit) is that door's own, and stays.
+  if (h.done) throw bounce(409, `"${mark}" already came back whole (act ${h.done.act})`,
+    `its withdrawal already brought it back, holder and contents together, to the hands it was set down from; a second withdrawal is refused. Nothing was withdrawn now and nothing was recorded.`,
+    { already: true, put_back_before: h.done.act });
   if (!holdsAnything(h)) return null; // an empty set-down withdraws as before
   if (h.published) return null;       // published: a holder on the world, withdrawn only empty (chest-lock.mjs § chestEmptyGuard)
   if (!unpublished(h)) throw notNow(h);

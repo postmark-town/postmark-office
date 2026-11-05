@@ -139,15 +139,40 @@ test("F1 · a full holder (2 named slips and 5 counted units) set down and withd
   await assert.rejects(leaveMarkViaOffice(repo, { slug: "whole-bag", body: "Again.", to: "sbx-cy" }, KEY), (e) => e.code === 409);
 });
 
-test("F1 · REPLAY and REPEAT: a second withdrawal writes nothing and says so; set down and withdrawn again, it comes back once more, by a new set-down's nonce, contents never doubled", { skip }, async () => {
+/** Every table of the store, row by row: a refusal that writes nothing leaves this exactly as it was. */
+const storeImage = () => owner(async (c) => {
+  const { rows: tables } = await c.query("SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1, 2");
+  const out = {};
+  for (const t of tables) out[`${t.schemaname}.${t.tablename}`] = (await c.query(`SELECT md5(coalesce(string_agg(x::text, '|' ORDER BY x::text), '')) AS h, count(*)::int AS n FROM "${t.schemaname}"."${t.tablename}" x`)).rows[0];
+  return out;
+});
+
+test("F1 · REPLAY and REPEAT: a second withdrawal is REFUSED (409, Wright 21:57 \"a second withdraw is refused\") and changes nothing in any table; the holder and its contents stay as they came back, every take path still works; set down and withdrawn again, it comes back once more, by a new set-down's nonce, contents never doubled", { skip }, async () => {
   await seedWindow();
   const { bag, slips } = await fullBag("twice-bag", { who: "sbx-ed",  slips: 1, units: 3 });
   await setDown(bag, keyOf("sbx-ed"));
-  await withdrawMarkViaOffice(repo, { mark: bag }, keyOf("sbx-ed"));
-  const again = await withdrawMarkViaOffice(repo, { mark: bag }, keyOf("sbx-ed"));
-  assert.equal(again.already, true, JSON.stringify(again).slice(0, 300));
-  assert.equal(again.put_back, 0);
-  assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down", "put-back"], "nothing written by the replay");
+  const first = await withdrawMarkViaOffice(repo, { mark: bag }, keyOf("sbx-ed"));
+  const before = await storeImage();
+  await assert.rejects(withdrawMarkViaOffice(repo, { mark: bag }, keyOf("sbx-ed")), (e) => {
+    assert.equal(e.code, 409, `${e.defect} — ${e.hint}`);
+    assert.equal(e.defect, `"${bag}" already came back whole (act ${first.holder.act})`);
+    assert.match(e.hint, /a second withdrawal is refused\. Nothing was withdrawn now and nothing was recorded\.$/);
+    assert.equal(e.already, true);
+    return true;
+  });
+  assert.deepEqual(await storeImage(), before, "the refusal changed no row of any table");
+  assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down", "put-back"], "nothing written by the repeat");
+  assert.equal((await worldMarkById(bag)).mark?.held_by, "sbx-ed", "the holder is where it came back to");
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, bag);
+  assert.equal(await unitsIn(bag), 3);
+  // every take path still reaches what it holds, after the refusal
+  await callHoldTool("world_hold", { from: bag, kind: "pocket-comet", count: 1 }, keyOf("sbx-ed"));
+  assert.equal(await unitsIn(bag), 2);
+  assert.equal(await unitsIn("sbx-ed"), 1);
+  await callHoldTool("world_hold", { thing: slips[0] }, keyOf("sbx-ed"), { verb: "take" });
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, "sbx-ed");
+  await callHoldTool("world_hold", { thing: slips[0], to: bag }, keyOf("sbx-ed"));
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, bag, "and given back into it");
   await setDown(bag, keyOf("sbx-ed"));
   const w2 = await withdrawMarkViaOffice(repo, { mark: bag }, keyOf("sbx-ed"));
   assert.equal(w2.put_back, 1, JSON.stringify(w2).slice(0, 300));
@@ -157,7 +182,7 @@ test("F1 · REPLAY and REPEAT: a second withdrawal writes nothing and says so; s
   assert.equal(rows[4].nonce, `put-back:${rows[3].id}`);
   assert.equal((await worldMarkById(bag)).mark?.held_by, "sbx-ed");
   assert.equal((await worldMarkById(slips[0])).mark?.held_by, bag);
-  assert.equal(await unitsIn(bag), 3, "3 units, never 6");
+  assert.equal(await unitsIn(bag), 2, "the 2 left inside, never doubled");
 });
 
 test("F1 · THE CARRY CAP: with the hands it came from full, the withdrawal is refused before anything is written, and the holder stays pending whole; with room, it comes back", { skip }, async () => {
@@ -287,4 +312,27 @@ test("F1 · THE SET-DOWN'S OWN ROLLBACK on the store's path: the set-down act fa
   assert.equal(readStrands().strands.length, strandsBefore, "no strand recorded by this set-down");
   await setDown(bag, key);
   assert.deepEqual((await holdRows([bag])).map((r) => r.action), ["make", "set-down"]);
+});
+
+test("R4 · THE COUNTED-UNIT DOOR, chests-candy ON (this test only): a take from a full holder set down pending is refused with the truth — it keeps what it holds, inside it, until it publishes — never \"a draft holds nothing yet\"; nothing is recorded", { skip }, async () => {
+  await seedWindow();
+  const { bag, slips } = await fullBag("candy-bag", { who: "sbx-la", slips: 1, units: 2 });
+  await setDown(bag, keyOf("sbx-la"));
+  const was = process.env.WORLD_CHESTS_CANDY;
+  process.env.WORLD_CHESTS_CANDY = "1"; // the flag the unit door reads (chests-candy.mjs); prod's env is not touched
+  try {
+    const actsBefore = (await q("SELECT count(*)::int AS n FROM acts"))[0].n;
+    await assert.rejects(callHoldTool("world_hold", { from: bag, label: "pocket-comet", count: 1 }, keyOf("sbx-la")), (e) => {
+      assert.equal(e.code, 404, `${e.defect} — ${e.hint}`);
+      assert.equal(e.defect, `${bag} does not stand on the world`);
+      assert.doesNotMatch(e.hint, /a draft holds nothing yet/);
+      assert.match(e.hint, /A holder set down as its maker's draft keeps what it holds, inside it, but nothing goes in or comes out until it publishes\. Nothing was recorded\.$/);
+      return true;
+    });
+    assert.equal((await q("SELECT count(*)::int AS n FROM acts"))[0].n, actsBefore, "nothing recorded");
+  } finally { if (was == null) delete process.env.WORLD_CHESTS_CANDY; else process.env.WORLD_CHESTS_CANDY = was; }
+  assert.equal(await unitsIn(bag), 2, "still inside, keyed to the holder");
+  assert.equal((await worldMarkById(slips[0])).mark?.held_by, bag);
+  // and dark again, as prod runs it: the same call is the flag's own refusal
+  await assert.rejects(callHoldTool("world_hold", { from: bag, label: "pocket-comet", count: 1 }, keyOf("sbx-la")), (e) => !/a draft holds nothing yet/.test(String(e.hint ?? "")));
 });
