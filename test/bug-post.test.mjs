@@ -74,6 +74,10 @@
 //      carry, a binary, rename or mode change, an empty diff, a diff that is not
 //      the PR's own count, a hunk cut short, and anything GitHub can't show.
 //      carryPull() serves a PR's JSON and its diff at its base and head.
+//      (Wright 19:57, answer 2) a hidden declaration refuses, named: inside an
+//      HTML comment (multi-line, one line, unclosed) or raw HTML (details with
+//      and without blank lines, unclosed, on one line; script; style), while
+//      the same line plain passes, after a closed template comment or details.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -1904,6 +1908,55 @@ test("18 · the declaration is one exact line of the carrier's body, read as dat
     site: `422 ${r("site")} declares it carries site#9121, and a carrier carries a pull request on its own repo, postmark-office`,
     world: `422 ${r("world")} declares it carries postmark-world#9121, and a carrier carries a pull request on its own repo, postmark-office`,
     chained: `422 postmark-office#9122, which ${r("chained")} carries, declares a carry of its own, and a carried pull request is never carried again`,
+  });
+});
+
+// LAW (Wright, settled 2026-11-05 19:57:03Z, answer 2): "A hidden declaration doesn't count … the `carries:`
+// declaration has to be visible to anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`), or
+// anywhere else the rendered body hides, refuses with a reason naming it, the same as any other unsupported case."
+test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML comment (multi-line, one line, unclosed) or inside raw HTML (details with and without blank lines, unclosed, on one line; script; style); the same line plain and visible passes, after a closed template comment or details too", async () => {
+  adaFix(9401);
+  const bodies = {
+    "comment, multi-line": "Carried from the harbor's fix.\n\n<!--\ncarries: office#9401\n-->",
+    "comment, one line": "Carried from the harbor's fix.\n\n<!-- carries: office#9401 -->",
+    "comment, unclosed": "Carried from the harbor's fix.\n\n<!-- notes for the reviewer\n\ncarries: office#9401",
+    "details, no blank line": "<details><summary>Notes</summary>\ncarries: office#9401\n</details>",
+    "details, blank lines": "<details>\n<summary>Notes</summary>\n\ncarries: office#9401\n\n</details>",
+    "details, unclosed": "Carried.\n\n<details>\n\ncarries: office#9401",
+    "details, one line": "<details><summary>Notes</summary>carries: office#9401</details>",
+    script: "<script>\ncarries: office#9401\n</script>",
+    style: "Carried.\n\n<style>\n\ncarries: office#9401\n",
+    // the visible controls: the same declaration, plain, at the top level
+    "visible, plain": "Carried from the harbor's fix.\n\ncarries: office#9401",
+    "visible, after a closed template comment": "<!-- Describe what this PR changes. -->\n\nCarried from the harbor's fix.\n\ncarries: office#9401",
+    "visible, after a template comment that names the form": "<!-- To credit a carried PR, add a line: carries: office#N -->\n\ncarries: office#9401",
+    "visible, after closed details": "<details><summary>Notes</summary>\n\nThe long notes.\n\n</details>\n\ncarries: office#9401",
+    "visible, after a code span that names the form": "The line is `carries: <repo>#<n>`, so:\n\ncarries: office#9401",
+  };
+  const verdicts = {}, refs = {};
+  let n = 9410;
+  for (const [name, body] of Object.entries(bodies)) {
+    const carrier = carrierOf(++n, 9401, { body });
+    refs[name] = carrier.ref;
+    verdicts[name] = await fixedVerdict(carrier.link);
+  }
+  const comment = (name) => `422 ${refs[name]}'s carries: line is inside an HTML comment, hidden when the pull request is read`;
+  const html = (name) => `422 ${refs[name]}'s carries: line is inside HTML the office does not read, which may hide it when the pull request is read`;
+  assert.deepEqual(verdicts, {
+    "comment, multi-line": comment("comment, multi-line"),
+    "comment, one line": comment("comment, one line"),
+    "comment, unclosed": comment("comment, unclosed"),
+    "details, no blank line": html("details, no blank line"),
+    "details, blank lines": html("details, blank lines"),
+    "details, unclosed": html("details, unclosed"),
+    "details, one line": html("details, one line"),
+    script: html("script"),
+    style: html("style"),
+    "visible, plain": "ok ada",
+    "visible, after a closed template comment": "ok ada",
+    "visible, after a template comment that names the form": "ok ada",
+    "visible, after closed details": "ok ada",
+    "visible, after a code span that names the form": "ok ada",
   });
 });
 

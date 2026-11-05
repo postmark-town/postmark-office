@@ -140,26 +140,76 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 const PATCH_ID_TIMEOUT_MS = 10_000;
 
+// A HIDDEN DECLARATION DOESN'T COUNT (Wright, settled 2026-11-05 19:57:03Z, answer 2): "the `carries:`
+// declaration has to be visible to anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`),
+// or anywhere else the rendered body hides, refuses with a reason naming it". The office models no renderer:
+// only a plain top-level line counts, and a declaration with any HTML around it refuses. Read line by line:
+//   - a comment runs from `<!--` to `-->`, across lines; one never closed runs to the end of the body;
+//   - a tag opens raw HTML until its own close tag, however many lines (blank ones too) come between; one
+//     never closed runs to the end. A void tag (<br>) or a self-closed one (<x/>) opens nothing;
+//   - text in a `code span` is text: neither `<!--` nor a tag there is markup.
+// A declaration-shaped mention (carries:, then a # and a digit on that line) or a line that tries to declare,
+// hidden by a comment or on any line HTML touches, refuses, named. A comment or HTML that holds no such
+// mention (a PR template's) taints nothing, and a plain line after it counts as ever.
+/** carries:, then a # and a digit on the same line: a declaration's shape, wherever it stands in a line. */
+const MENTIONS = /carries[ \t]*:[^\n]*?#[ \t]*[0-9]/i;
+/** A tag: `<name …>` or `</name>`; an autolink (<https://…>) is no tag, and `<!--` is the comment. */
+const TAG = /<(\/?)([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])[^>]*?(\/?)>/g;
+const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+/** A line with its `code spans` blanked out, character for character, so positions hold. */
+const codeless = (s) => s.replace(/`[^`]*`/g, (m) => " ".repeat(m.length));
+const hides = (s) => MENTIONS.test(s) || DECLARES.test(s);
+
 /**
  * The PR a carrier's body declares it carries, `{ repo, number }`; null when no
- * line tries to; else the refusal. Exactly one line, outside quotes and code
- * blocks, on the carrier's own repo (`office` names postmark-office), never itself.
+ * line tries to; else the refusal. Exactly one line, plain and visible (outside
+ * quotes, code blocks, HTML comments and raw HTML), on the carrier's own repo
+ * (`office` names postmark-office), never itself.
  */
 function carriedDeclarationOf(text, ref) {
   const name = `${ref.repo}#${ref.number}`;
   const tried = [];
-  let fence = null;
+  const hidden = { comment: false, html: false };
+  const open = [];        // the raw-HTML tags still open, outermost first
+  let fence = null, comment = false;
   for (const line of String(text ?? "").split(/\r?\n/)) {
-    const f = FENCE.exec(line);
-    if (f) {
-      if (!fence) fence = f[1];
-      else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
-      continue;
+    if (!comment && !open.length) {
+      const f = FENCE.exec(line);
+      if (f) {
+        if (!fence) fence = f[1];
+        else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+        continue;
+      }
+      if (fence) { if (DECLARES.test(line)) tried.push({ line, fenced: true }); continue; }
     }
-    if (DECLARES.test(line)) tried.push({ line, fenced: fence !== null });
+    // what a comment hides, and what the line shows
+    let shown = "", rest = line, markup = open.length > 0;
+    while (rest) {
+      if (comment) {
+        const end = rest.indexOf("-->");
+        if (hides(end < 0 ? rest : rest.slice(0, end))) hidden.comment = true;
+        if (end < 0) break;
+        comment = false; markup = true; rest = rest.slice(end + 3);
+        continue;
+      }
+      const at = codeless(rest).indexOf("<!--");
+      if (at < 0) { shown += rest; break; }
+      shown += rest.slice(0, at); comment = true; markup = true; rest = rest.slice(at + 4);
+    }
+    // the raw HTML it opens and closes
+    for (const [, close, tag, selfClosed] of codeless(shown).matchAll(TAG)) {
+      markup = true;
+      const t = tag.toLowerCase();
+      if (close) { const i = open.lastIndexOf(t); if (i >= 0) open.length = i; }
+      else if (!selfClosed && !VOID_TAGS.has(t)) open.push(t);
+    }
+    if (markup) { if (hides(shown)) hidden.html = true; continue; }
+    if (DECLARES.test(line)) tried.push({ line, fenced: false });
   }
-  if (!tried.length) return null;
   const bad = (defect) => refuse(422, defect, CARRY_HOW, { field: "link" });
+  if (hidden.comment) throw bad(`${name}'s carries: line is inside an HTML comment, hidden when the pull request is read`);
+  if (hidden.html) throw bad(`${name}'s carries: line is inside HTML the office does not read, which may hide it when the pull request is read`);
+  if (!tried.length) return null;
   if (tried.length > 1) throw bad(`${name}'s body declares carries: more than once, and a carrier carries one pull request`);
   const [{ line, fenced }] = tried;
   if (fenced) throw bad(`${name}'s carries: line is inside a code block`);
