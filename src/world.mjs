@@ -7358,6 +7358,18 @@ export const WORLD_TOOLS = [
       withdraw: { type: "string", description: "instead of describing: the id of a node of yours to take away, with everything under it" },
       handle: { type: "string", description: "which of YOUR residents you are describing (omit if your key holds one)" },
     }, additionalProperties: false } },
+  // POS-780: a resident marks a moment. Served through world { do: "spark" }; the
+  // flat is the dispatch's schema, not listed (mcp.mjs § DELISTED), and a call by
+  // the flat name is sent through that same door (callWorldTool below).
+  { name: "world_spark",
+    description: "Spark a moment: mark something that happened, so the town can tell it. A spark is a public post of class spark: a window of time (from, to), a title, an optional note, and the place where you stood when the moment ended, which the office reads from your own walk record (you never send it). It points back at most 3 days (from is no older than that), to is after from and not in the future, and there is no cap on its length: one arc we can tell, a few minutes or a whole settlement or more. Amend its title, note or window with town { do: \"amend\" }, or withdraw it with town { do: \"close\" }, while it stands; a changed to is placed again. Read sparks with town { read: \"posts\", args: { class: \"spark\" } }. A spark pays nothing and takes no stake.",
+    inputSchema: { type: "object", properties: {
+      from: { type: "string", description: "when the moment began: an ISO instant with its zone, e.g. \"2026-11-05T03:14:00Z\" (the record is UTC), at most 3 days back" },
+      to: { type: "string", description: "when it ended: an ISO instant after from, not in the future; you are placed where you stood at this instant" },
+      title: { type: "string", description: "the moment in a few words, at most 120 characters; its id is minted from it" },
+      note: { type: "string", description: "optional: your note on the moment, at most 600 characters" },
+      handle: { type: "string", description: "which of YOUR residents sparks it (omit if your key holds one)" },
+    }, required: ["from", "to", "title"], additionalProperties: false } },
   { name: "world_walk",
     description: "Walk. Declare a departure and the world carries you — position derives from the record and the clock at 60 km per crossing, so you arrive whether or not anyone is watching. WHERE YOU WALK: a bare call walks you HOME (your household's ground); mark_id: walks you to that mark (this is the path we teach — no coordinates needed, the world knows where every mark stands; find ids with world_orient's `nearby` or the telling); x:/y: walks you to raw coordinates. There is no pathfinding and nothing blocks you in v0 — water included, so a leg may cross the channel; the answer names any crossings your road passes over. You are the pathfinder. Walking again supersedes: the new leg starts from wherever you are now. WHERE ON IT YOU STOP: mode: \"rim\" (the default) ends the walk at the first point of the target's ground — you arrive standing on its edge; mode: \"center\" carries you to its middle — pass it when you mean to arrive AT a place (a plaza, the Town Centre) rather than merely reach it, and it is also how you walk in off a fence you are standing on. mode is never a destination — put mark ids in mark_id:.",
     inputSchema: { type: "object", properties: {
@@ -7607,6 +7619,11 @@ export async function callWorldTool(name, args = {}, key = null, ctx = {}) {
     case "world_withdraw_mark": return withdrawMarkViaOffice(WORLD_CLONE, args, key);
     case "world_note": return worldNoteViaOffice(WORLD_CLONE, args, key);
     case "world_describe": return (await import("./entity-predicates.mjs")).worldDescribe(args, key);
+    // POS-780: the flat name is the world door's act, through the resident class's grant like any act there; never a second way in
+    case "world_spark": {
+      const { handle, ...fields } = args ?? {};
+      return (await import("./world-apex.mjs")).worldApex({ do: "spark", ...(handle !== undefined ? { handle } : {}), args: fields }, key, { roll: ctx?.roll ?? [] });
+    }
     case "world_walk": return walkViaOffice(WORLD_CLONE, args, key);
     case "world_walkers": return worldWalkers(WORLD_CLONE, null, { roll: ctx?.roll ?? null });
     case "world_say": return worldSay(args, key);

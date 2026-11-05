@@ -47,6 +47,7 @@ import {
 } from "./ideas.mjs";
 import { signUpAtTown, answerSignUpAtTown, awardAtTown } from "./idea-store.mjs";
 import { REPORT_CLASS } from "./reports.mjs"; // POS-757: the private post class; its pen is report-store.mjs
+import { SPARK_CLASS, SPARK_NOT_AT_TOWN } from "./sparks.mjs"; // POS-780: made at the world door; amended and withdrawn here
 
 const PLACE = { type: "object", description: "where it happens: { mark: \"<owner>/<slug>\" } (a standing mark with an extent) or { at: { x, y } } (absolute world coordinates)" };
 
@@ -72,6 +73,13 @@ export const BUG_POST_PROPERTIES = Object.freeze({
   steps: { type: "string", description: "class \"bug\": optional — how to make it happen, in your own words (reproduced pays whoever reproduces it from these)" },
   record: { type: "string", description: "class \"bug\": optional — one thing that shows it: an act id, a receipt path or a URL" },
   for: { type: "string", description: `class "bug": the town's hands only (${BUG_HANDS.join(", ")}) — the resident a hand posts it on behalf of; the reporter is credited and the act names the hand` },
+});
+
+/** A spark's own fields at the town door's amend (POS-780): it is made at the world door, in these words. */
+export const SPARK_AMEND_PROPERTIES = Object.freeze({
+  from: { type: "string", description: "class \"spark\": when the moment began, an ISO instant with its zone, at most 3 days back" },
+  to: { type: "string", description: "class \"spark\": when it ended, after from and not in the future; the spark is placed again where you stood at the new to" },
+  note: { type: "string", description: "class \"spark\": your note on the moment, at most 600 characters" },
 });
 
 // Each lane's own fields, so the other lane's can be refused by name.
@@ -118,6 +126,9 @@ export async function townPostEvent(args = {}, key = null, { roll = null, env = 
   // A REPORT (POS-757) is private, so it has its own pen and never the post
   // machine's public rows; its fields are judged there (reports.mjs § judgeReport).
   if (c === REPORT_CLASS) return answer(async () => (await import("./report-store.mjs")).postReport(args, key, { roll, env }));
+  // A SPARK (POS-780) is made at the world door, through the resident class's
+  // grant and placed from the record; this flat door does not make one.
+  if (c === SPARK_CLASS) return bounceOf(SPARK_NOT_AT_TOWN());
   if (c === IDEA_CLASS) {
     if (!ideaPostsOn(env)) return null;   // the switch off: the idea lane, exactly as before
     if (args.stamps !== undefined)
@@ -171,20 +182,21 @@ const ifIdeas = (s) => (IDEAS_ON ? s : "");
 const ACTING_HANDLE = { type: "string", description: "which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands" };
 const POST_REF = { type: "string", description: "the post's id, <author>/<slug>, as town { read: \"posts\" } names it" };
 const CLASS_REF = IDEAS_ON
-  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"idea\" or \"report\")" }
-  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, REPORT_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")" };
+  ? { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, IDEA_CLASS, REPORT_CLASS, SPARK_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"idea\", \"report\" or \"spark\")" }
+  : { type: "string", enum: [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, REPORT_CLASS, SPARK_CLASS], description: "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"report\" or \"spark\")" };
 
 export const TOWN_POST_TOOLS = [
   { name: "town_amend",
-    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)}`,
+    description: `Amend a post you (or your household) put up — town { do: "amend" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class "event": title, body (or invitation, at most ${INVITATION_MAX} characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most ${BODY_MAX} characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (${BUG_HANDS.join(", ")}) after. A SPARK: title, note, from and to, by its sparker only, while it stands; a changed to is placed again where they stood then.${ifIdeas(` An IDEA: title and body (at most ${IDEA_BODY_MAX} characters) — its author amends it, or the town's hands (${IDEA_HANDS.join(", ")}), until it is finished.`)}`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF,
       body: { type: "string", description: `the post's text (an event's invitation), at most ${INVITATION_MAX} characters` },
       ...EVENT_POST_PROPERTIES,
       issue: BUG_POST_PROPERTIES.issue, steps: BUG_POST_PROPERTIES.steps, record: BUG_POST_PROPERTIES.record,
+      ...SPARK_AMEND_PROPERTIES,
     }, required: ["post"], additionalProperties: false } },
   { name: "town_close",
-    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug)." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`),
+    description: "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (" + QUEST_HANDS.join(", ") + "); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug). A SPARK is withdrawn by close, by its sparker only: it stays on the record as withdrawn." + ifIdeas(` Nor is an IDEA: it finishes by advance (${IDEA_FINISHED.join(", ")}).`),
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
     }, required: ["post"], additionalProperties: false } },

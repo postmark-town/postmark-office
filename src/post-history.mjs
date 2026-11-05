@@ -31,6 +31,7 @@ import { ACT_POST, ACT_ADVANCE, ACT_RECREDIT, ACT_SKIP, ACT_CLOSE, ACT_HOST, ACT
 import { BUG_CLASS, bugHistoryOf, stagePaidOf, recreditPaidOf } from "./bugs.mjs";
 import { IDEA_CLASS, ideaHistoryOf, ideaAwardsOf, awardPaidOf, ACT_AWARD } from "./ideas.mjs";
 import { QUEST_CLASS, STATE_OPEN, STATE_CLOSED } from "./quests.mjs";
+import { SPARK_CLASS } from "./sparks.mjs";
 
 /** The text `unavailable` carries when the store holds no stamp chain to read. */
 export const NO_CHAIN = "the store holds no stamp chain yet (stamp_lines), so every history row's stamps_paid is null";
@@ -102,6 +103,8 @@ export const HISTORY_ACTIONS = Object.freeze({
   [IDEA_CLASS]: Object.freeze([ACT_POST, ACT_ADVANCE, ACT_AWARD]),
   [EVENT_CLASS]: Object.freeze([ACT_HOST, ACT_POST, ACT_CANCEL, ACT_CLOSE]),
   [QUEST_CLASS]: Object.freeze([ACT_POST, ACT_CLOSE]),
+  // a spark's history is its post and its withdrawal, each carrying the state it left (POS-780)
+  [SPARK_CLASS]: Object.freeze([ACT_POST, ACT_CLOSE]),
 });
 
 const payloadOf = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {}));
