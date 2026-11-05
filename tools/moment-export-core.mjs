@@ -33,7 +33,7 @@ import path from "node:path";
 // archives and `canonical` the line spelling. Import-time is safe (only node builtins and
 // src/crossings.mjs are pulled in; main() is behind an isMain guard).
 import { contentDigest } from "../world2/tools/snapshot-export.mjs";
-import { ACTION_ALIASES, EMISSION_INNER, EMISSION_SOUND_CLASS, SYSTEM_ACTORS, UNITS_MOVE } from "./moment-export-table.mjs";
+import { ACTION_ALIASES, EMISSION_INNER, EMISSION_SOUND_CLASS, SYSTEM_ACTORS, UNITS_DROP_MOVE, UNITS_MOVE } from "./moment-export-table.mjs";
 
 export const COVERAGE = "certified-snapshot";
 export const HELD_BACK_LINE = "held-back acts are not reported by the certificate: no count, and never a zero";
@@ -44,6 +44,20 @@ const ARCHIVE_DIR = path.join("archives", "acts");  // O world2/tools/snapshot-e
 export class ExportCoreError extends Error {
   constructor(code, message) { super(`${code}: ${message}`); this.name = "ExportCoreError"; this.code = code; }
 }
+
+/** Why an act or a reference left. Disjoint, and none of them says a household refused unless the registry said so. */
+export const REASONS = Object.freeze({
+  household: "household_not_yes",      // the registry maps the handle to a household whose answer is no or unset
+  identity: "identity_unresolved",     // no household for the handle (unmapped, ambiguous, a chest or mark, not a handle)
+  type: "type_mismatch",               // a slot holds a value of the wrong type
+  field: "unclassified_field",         // a key the table does not list for this stored name
+});
+/** The precedence an act with several reasons is counted under: the non-household reasons first, so the household count is never overstated. */
+const REASON_ORDER = Object.freeze([REASONS.field, REASONS.type, REASONS.identity, REASONS.household]);
+/** A stored name (arbitrary text, "__proto__" included) counted without ever being an object key on the way. */
+const tally = (m) => Object.fromEntries([...m.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+const bump = (m, k) => m.set(k, (m.get(k) ?? 0) + 1);
+const refusalOf = (consent, handle) => (consent.decide(handle).decision === "unknown" ? REASONS.identity : REASONS.household);
 
 const sha256 = (s) => createHash("sha256").update(s).digest("hex");
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -67,7 +81,7 @@ export function readCertifiedArchives(dir, { fromMs, toMs }) {
   if (!existsSync(certPath)) throw new ExportCoreError("CERT_MISSING", `${CERT_FILE} is not in the notary checkout`);
   let cert;
   try { cert = JSON.parse(readFileSync(certPath, "utf8")); }
-  catch (e) { throw new ExportCoreError("CERT_UNREADABLE", `${CERT_FILE} is not JSON (${e.message})`); }
+  catch { throw new ExportCoreError("CERT_UNREADABLE", `${CERT_FILE} is not JSON`); }
   if (!isObj(cert) || !Array.isArray(cert.archives) || typeof cert.archives_sha !== "string"
       || cert.window_cursor === undefined || cert.acts_cursor === undefined || typeof cert.exported_at !== "string")
     throw new ExportCoreError("CERT_SHAPE", `${CERT_FILE} lacks window_cursor / acts_cursor / archives / archives_sha / exported_at`);
@@ -75,7 +89,7 @@ export function readCertifiedArchives(dir, { fromMs, toMs }) {
   if (!Number.isFinite(certifiedAtMs)) throw new ExportCoreError("CERT_SHAPE", "exported_at is not an instant");
   // The certificate's time is the bound, and it is not a heartbeat (Wright 09:14).
   if (toMs > certifiedAtMs)
-    throw new ExportCoreError("WINDOW_AFTER_CERTIFICATE", `the window ends ${new Date(toMs).toISOString()}, after the certificate's exported_at ${cert.exported_at}`);
+    throw new ExportCoreError("WINDOW_AFTER_CERTIFICATE", `the window ends ${new Date(toMs).toISOString()}, after the certificate's exported_at ${new Date(certifiedAtMs).toISOString()}`);
 
   const seen = new Set();
   const loaded = [];
@@ -134,7 +148,7 @@ export function loadConsentRegistry({ text, sha, file }) {
   if (typeof sha !== "string" || !sha || typeof file !== "string" || !file)
     throw new ExportCoreError("REGISTRY_SOURCE", "consent_source needs the pinned sha and the file");
   let parsed;
-  try { parsed = JSON.parse(text); } catch (e) { throw new ExportCoreError("REGISTRY_UNREADABLE", `the registry is not JSON (${e.message})`); }
+  try { parsed = JSON.parse(text); } catch { throw new ExportCoreError("REGISTRY_UNREADABLE", "the registry is not JSON"); }
   const houses = parsed?.households ?? parsed;
   if (!isObj(houses) || !Object.keys(houses).length) throw new ExportCoreError("REGISTRY_UNREADABLE", "the registry holds no households");
   const houseOf = new Map();   // handle -> slug | null (ambiguous)
@@ -175,7 +189,7 @@ const typeOk = {
 };
 
 /**
- * Judge ONE raw archived row. Returns { outcome: "admit"|"untabled"|"ineligible"|"consent",
+ * Judge ONE raw archived row. Returns { outcome: "admit"|"untabled"|"ineligible"|"excluded",
  * act?, exclusions[], stored_name }. `exclusions` carry the act id, the field, the role, and what
  * happened to it, and never a handle. The row is not altered.
  */
@@ -193,13 +207,16 @@ export function judgeAct(row, consent) {
   let inner = null;
   if (alias.wrapper) {
     inner = payload.payload;
-    if (!isObj(inner) || inner.class !== EMISSION_SOUND_CLASS)
+    if (payload.type !== alias.line_type || !isObj(inner) || inner.class !== EMISSION_SOUND_CLASS)
       return { outcome: "ineligible", reason: "not_a_say", stored_name: stored, exclusions: [] };
     if (payload.room != null || inner.room != null) return { outcome: "ineligible", reason: "room_private", stored_name: stored, exclusions: [] };
   } else {
     if (payload.room != null) return { outcome: "ineligible", reason: "room_private", stored_name: stored, exclusions: [] };
-    if (alias.requires === "put_forward" && payload.put_forward !== true)
-      return { outcome: "ineligible", reason: "private_draft", stored_name: stored, exclusions: [] };
+    // A leave-mark row in `acts` is a public deed by its producer (an unstaked draft never reaches acts while the
+    // candle burns; a stake releases it into acts), so ABSENCE of put_forward proves nothing. A row that says
+    // put_forward:false says it is not put forward, and no door writes that: it is not carried.
+    if (payload.put_forward === false)
+      return { outcome: "ineligible", reason: "put_forward_false", stored_name: stored, exclusions: [] };
   }
 
   // ── roles ──
@@ -210,13 +227,13 @@ export function judgeAct(row, consent) {
   const fail = (field, role, reason) => { partyFail = true; exclusions.push({ act_id: id, field, role, action: "act_excluded", reason }); };
   const partyOk = (v, field, role) => {
     if (v === null || v === undefined) return true;
-    if (typeof v !== "string" || !v) { fail(field, role, "type_mismatch"); return false; }
+    if (typeof v !== "string" || !v) { fail(field, role, REASONS.type); return false; }
     if (SYSTEM_ACTORS.includes(v)) return true;
-    if (consent.decide(v).decision !== "yes") { fail(field, role, "consent_not_yes"); return false; }
+    if (consent.decide(v).decision !== "yes") { fail(field, role, refusalOf(consent, v)); return false; }
     return true;
   };
 
-  if (typeof row.actor !== "string" || !row.actor) fail("actor", "actor", "type_mismatch");
+  if (typeof row.actor !== "string" || !row.actor) fail("actor", "actor", REASONS.type);
   else partyOk(row.actor, "actor", "actor");
 
   const vocab = alias.wrapper ? EMISSION_INNER : alias.payload;
@@ -226,62 +243,70 @@ export function judgeAct(row, consent) {
   for (const [k, v] of Object.entries(source)) {
     const role = Object.hasOwn(vocab, k) ? vocab[k] : undefined;
     const field = prefix + k;
-    if (role === undefined) { fail(field, "unclassified", "unclassified_field"); continue; }
+    if (role === undefined) { fail(field, "unclassified", REASONS.field); continue; }
     if (role === "drop" || role === "private") continue;
     if (role === "party" || role === "speaker") { if (partyOk(v, field, role)) kept[k] = v; continue; }
     if (role === "moves") {
-      if (!Array.isArray(v)) { fail(field, "moves", "type_mismatch"); continue; }
+      const moveVocab = alias.moves === "drop" ? UNITS_DROP_MOVE : UNITS_MOVE;
+      if (!Array.isArray(v)) { fail(field, "moves", REASONS.type); continue; }
       const moves = [];
       for (const [i, m] of v.entries()) {
-        if (!isObj(m)) { fail(`${field}[${i}]`, "moves", "type_mismatch"); continue; }
+        if (!isObj(m)) { fail(`${field}[${i}]`, "moves", REASONS.type); continue; }
         const mv = {};
         for (const [mk, mval] of Object.entries(m)) {
-          const mrole = Object.hasOwn(UNITS_MOVE, mk) ? UNITS_MOVE[mk] : undefined;
+          const mrole = Object.hasOwn(moveVocab, mk) ? moveVocab[mk] : undefined;
           const mf = `${field}[${i}].${mk}`;
-          if (mrole === undefined) { fail(mf, "unclassified", "unclassified_field"); continue; }
+          if (mrole === undefined) { fail(mf, "unclassified", REASONS.field); continue; }
+          // the set-down's destination is the ground: null, and nothing else (a null anywhere else is a missing counterpart, not the ground)
+          if (mrole === "ground") { if (mval === null) mv[mk] = null; else fail(mf, "ground", REASONS.type); continue; }
           // a holder is a resident exactly when it has no "/" (holderLawOf, a qualified caller); a "/" is a mark or chest
           if (mrole === "holder") {
-            if (typeof mval !== "string" || !mval) { fail(mf, "holder", "type_mismatch"); continue; }
+            if (typeof mval !== "string" || !mval) { fail(mf, "holder", REASONS.type); continue; }
             if (!mval.includes("/") && !partyOk(mval, mf, "holder")) continue;
             mv[mk] = mval;
           } else if (typeOk[mrole](mval)) mv[mk] = mval;
-          else fail(mf, "moves", "type_mismatch");
+          else fail(mf, "moves", REASONS.type);
         }
         moves.push(mv);
       }
       kept[k] = moves;
       continue;
     }
-    if (!typeOk[role](v)) { fail(field, role, "type_mismatch"); continue; }
+    if (!typeOk[role](v)) { fail(field, role, REASONS.type); continue; }
     kept[k] = v;
   }
   if (alias.wrapper) {
     // the speech source is spoken_by (else the row's actor): it was gated above if present; the outer `at` is the instant
     if (typeof payload.at === "string") out.emitted_at = payload.at;
-    for (const k of Object.keys(payload)) if (!Object.hasOwn(alias.payload, k)) fail(`payload.${k}`, "unclassified", "unclassified_field");
+    for (const [k, v] of Object.entries(payload)) {
+      const orole = Object.hasOwn(alias.payload, k) ? alias.payload[k] : undefined;
+      if (orole === undefined) fail(`payload.${k}`, "unclassified", REASONS.field);
+      else if (orole === "party") partyOk(v, `payload.${k}`, "party");
+      else if ((orole === "str" || orole === "prov") && !typeOk[orole](v)) fail(`payload.${k}`, orole, REASONS.type);
+    }
   }
 
   // object / anchor columns are provenance and position, kept; witnesses are bystanders
   const objectOk = row.object === null || row.object === undefined || typeof row.object === "string";
-  if (!objectOk) fail("object", "prov", "type_mismatch");
+  if (!objectOk) fail("object", "prov", REASONS.type);
   const w = row.witnesses;
   let witnesses = null;
   let refsDropped = 0;
   if (w !== null && w !== undefined) {
-    if (!isObj(w) || !Array.isArray(w.list ?? []) ) fail("witnesses", "unclassified", "type_mismatch");
+    if (!isObj(w) || !Array.isArray(w.list ?? []) ) fail("witnesses", "unclassified", REASONS.type);
     else {
       const list = [];
       for (const e of w.list ?? []) {
-        if (!isObj(e) || typeof e.handle !== "string") { fail("witnesses.list[]", "bystander", "type_mismatch"); continue; }
+        if (!isObj(e) || typeof e.handle !== "string") { fail("witnesses.list[]", "bystander", REASONS.type); continue; }
         if (consent.decide(e.handle).decision === "yes") list.push({ handle: e.handle, anchor: e.anchor ?? null, dx: e.dx ?? null, dy: e.dy ?? null });
-        else { refsDropped += 1; exclusions.push({ act_id: id, field: "witnesses.list[]", role: "bystander", action: "reference_dropped", reason: "consent_not_yes" }); }
+        else { refsDropped += 1; exclusions.push({ act_id: id, field: "witnesses.list[]", role: "bystander", action: "reference_dropped", reason: refusalOf(consent, e.handle) }); }
       }
       witnesses = { source: w.source ?? null, ...(w.reason !== undefined ? { reason: w.reason } : {}), list };
     }
   }
 
   // a party out takes the act out: a bystander reference dropped from a vanished act is not a record
-  if (partyFail) return { outcome: "consent", stored_name: stored, exclusions: exclusions.filter((e) => e.action === "act_excluded"), refs_dropped: 0 };
+  if (partyFail) return { outcome: "excluded", stored_name: stored, exclusions: exclusions.filter((e) => e.action === "act_excluded"), refs_dropped: 0 };
   const num = (v) => (v === null || v === undefined ? null : Number(v));
   return {
     outcome: "admit", stored_name: stored, exclusions, refs_dropped: refsDropped,
@@ -295,26 +320,33 @@ export function judgeAct(row, consent) {
 }
 
 /**
- * Judge every row of a window. Returns the admitted acts, the consent exclusions (act id + field +
- * role, no handle) and the counts the manifest needs. Admitted acts keep archive order (at, id).
+ * Judge every row of a window. Returns the admitted acts, the exclusions (act id + field + role + reason,
+ * no handle) and the counts the manifest needs. Stored names are counted in a Map, so a name like
+ * "__proto__" is a count and never a property write; every reported counter is a plain object with sorted keys.
+ * `excluded_by_reason` counts each excluded act ONCE under its first reason in the order field, type,
+ * identity, household, so "household_not_yes" is only ever a registry's own no or unset. Admitted acts keep archive order (at, id).
  */
 export function filterActs(rows, consent) {
   const acts = [];
   const exclusions = [];
-  const counts = { in_window: rows.length, admitted: 0, untabled_by_stored_name: {}, ineligible: {}, consent_excluded_acts: 0, bystander_refs_dropped: 0 };
+  const untabled = new Map(), ineligible = new Map(), byReason = new Map();
+  const counts = { in_window: rows.length, admitted: 0, untabled_by_stored_name: {}, ineligible: {}, excluded_acts: 0, excluded_by_reason: {}, bystander_refs_dropped: 0 };
   for (const row of rows) {
     const j = judgeAct(row, consent);
-    if (j.outcome === "untabled") { counts.untabled_by_stored_name[j.stored_name] = (counts.untabled_by_stored_name[j.stored_name] ?? 0) + 1; continue; }
-    if (j.outcome === "ineligible") {
-      const key = `${j.reason}:${j.stored_name}${j.class !== undefined ? `[class ${j.class}]` : ""}`;
-      counts.ineligible[key] = (counts.ineligible[key] ?? 0) + 1; continue;
-    }
+    if (j.outcome === "untabled") { bump(untabled, j.stored_name); continue; }
+    if (j.outcome === "ineligible") { bump(ineligible, `${j.reason}:${j.stored_name}${j.class !== undefined ? `[class ${j.class}]` : ""}`); continue; }
     exclusions.push(...j.exclusions);
-    if (j.outcome === "consent") { counts.consent_excluded_acts += 1; continue; }
+    if (j.outcome === "excluded") {
+      counts.excluded_acts += 1;
+      const had = new Set(j.exclusions.map((e) => e.reason));
+      bump(byReason, REASON_ORDER.find((r) => had.has(r)));
+      continue;
+    }
     counts.admitted += 1; counts.bystander_refs_dropped += j.refs_dropped;
     acts.push(j.act);
   }
-  return { acts, consent_exclusions: exclusions, counts };
+  counts.untabled_by_stored_name = tally(untabled); counts.ineligible = tally(ineligible); counts.excluded_by_reason = tally(byReason);
+  return { acts, exclusions, counts };
 }
 
 /** The residents an admitted set of acts shows or voices, with only the consent records the registry gives. */

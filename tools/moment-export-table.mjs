@@ -22,9 +22,10 @@
 //   drop     removed from the projection; it does not gate (ledger prose, a raw `line`,
 //            a creature id whose namespace is unread).
 //   private  present and non-null means the row is not public (say.room).
-//   moves    units rows: [{from,to,kind,label,n}] where from/to are holders under
+//   moves    units rows: [{from,to,label,n}] where from/to are holders under
 //            holderLawOf (kind-holding.mjs:88, a QUALIFIED caller): no "/" is a resident,
-//            "/" is a mark or chest.
+//            "/" is a mark or chest. A move's `to` may be `ground`: null, and ONLY in the
+//            set-down (units:drop), whose writer stores `to: null` (world-units.mjs:495).
 // A payload key that is not listed for its alias is UNCLASSIFIED: the act is out
 // (Wright 09:14: an unclassified role is a party), counted by field path.
 
@@ -42,18 +43,30 @@ const LEGACY_WALK = Object.freeze({ iso: "str", handle: "party", from: "geo", to
 const FRAME = Object.freeze({ ledger: "drop", lines: "drop", summary: "drop", via: "prov", set_down_at: "prov", arrived: "bool", arrival_of: "prov", dungeon: "prov", locked_until: "str", left_at: "str", fled: "drop" });
 const LEGACY_FRAME = Object.freeze({ iso: "str", handle: "party", act: "str", mark: "prov", at: "num", word: "drop", line: "drop", _ledger: "drop" });
 const HOLD = Object.freeze({ thing: "prov", holder: "party", previous_holder: "party", made_by: "prov", policy: "str", owns: "bool" });
-const UNITS = Object.freeze({ units: "bool", kinds: "bool", moves: "moves" });
+// give/take: the writer stores payload { units: true, moves } and nothing else (world-units.mjs:214-221;
+// moves are planGive/planTake world-stacks.mjs:385,393: { from, to, label, n }). No `kind`, no `kinds`.
+const UNITS = Object.freeze({ units: "bool", moves: "moves" });
+// the set-down: payload { units, moves:[{from:actor,to:null,label,n:1}], label, at:{x,y} } (world-units.mjs:495-497)
+const UNITS_DROP = Object.freeze({ units: "bool", moves: "moves", label: "str", at: "geo" });
 
 /** payload roles for a say; `room` is the private marker (WLD-74: a room's record is shown only to readers in that room). */
 const SAY = Object.freeze({ text: "text", place: "str", aboard: "bool", room: "private", stood_with: "speaker" });
 
-/** The inner payload of an emission. O conversations.mjs:287-300 (normalizer), :391-395 (the live shape it mints). */
-export const EMISSION_INNER = Object.freeze({ class: "str", x: "num", y: "num", text: "text", spoken_by: "speaker", aboard: "bool", place: "str", radius_m: "num", ttl_min: "num", ttl_expires_at: "str", _live: "bool", room: "private" });
-/** The emission's own outer payload keys (`at` is the instant, `payload` is the wrapper's inner). */
-export const EMISSION_OUTER = Object.freeze({ at: "str", payload: "inner", room: "private" });
+/**
+ * The inner payload of a persisted emission. WRITER: tools/crossing-save.mjs:335-348 builds the line
+ * { at, type:"emission", actor, id, payload:{ class, x, y, ttl_expires_at, spoken_by, human, aboard,
+ * place, text, class_version, radius_m, ttl_min } }; world2/tools/seed-import.mjs:681-684 stores that
+ * whole line as the payload of a `legacy:emission` row (class "legacy"). `_live` is not written there.
+ */
+export const EMISSION_INNER = Object.freeze({ class: "str", x: "num", y: "num", text: "text", spoken_by: "speaker", human: "bool", aboard: "bool", place: "str", radius_m: "num", ttl_min: "num", class_version: "num", ttl_expires_at: "str", room: "private" });
+/** The persisted line's own keys (`at` is the instant; `type` is the line's discriminator; `actor` is the source and a party). */
+export const EMISSION_OUTER = Object.freeze({ at: "str", type: "prov", actor: "party", id: "prov", payload: "inner", room: "private" });
+/** The stored line type a `legacy:emission` row must carry (seed-import.mjs:681 names the action after it). */
+export const EMISSION_LINE_TYPE = "emission";
 
 const LEAVE_MARK = Object.freeze({
   slug: "prov", kind: "str", at: "geo", extent: "geo", points: "geo", body: "text", parent_id: "prov", by: "party", date: "str",
+  slot: "str", value: "str",
   holder: "bool", open: "bool", capacity: "num", stamps: "num", put_forward: "bool",
   image: "drop", _set_down: "drop", _placed_by: "drop", _consent: "drop",
 });
@@ -61,15 +74,14 @@ const LEAVE_MARK = Object.freeze({
 /**
  * stored action name -> the canonical act it is, the classes its rows may carry (null: not
  * traced, so the inner check decides), the payload vocabulary, and where it was read.
- * `wrapper: true` means unwrap `payload.payload` and judge the inner as the canonical act.
- * `requires: "put_forward"` means a leave-mark is public only when its payload says so.
+ * `wrapper: true` means unwrap `payload.payload` and judge the inner as the canonical act; `line_type` is
+ * the outer line's required `payload.type`.
  */
 export const ACTION_ALIASES = Object.freeze({
   "walk": { canonical: "walk", classes: ["move"], payload: WALK, source: "O src/world.mjs:1774-1792 walkEntry (class move)" },
   "legacy:departure": { canonical: "walk", classes: ["legacy"], payload: LEGACY_WALK, source: "O world2/tools/ledger-backfill.mjs:233-247; payload = W tools/walk.mjs:86-98 parseWalkLedger departure + _ledger" },
   "say": { canonical: "say", classes: ["voice"], payload: SAY, source: "O src/world.mjs:1905-1921 voiceEntry (class voice)" },
-  "emission": { canonical: "say", classes: null, wrapper: true, payload: EMISSION_OUTER, source: "O world2/tools/conversations.mjs:287-300 voiceOf (normalizer); writer unread" },
-  "legacy:emission": { canonical: "say", classes: null, wrapper: true, payload: EMISSION_OUTER, source: "O world2/tools/conversations.mjs:287-300 voiceOf; world2/tools/live-reads.mjs:942 reader; writer is the generic seed path, unread" },
+  "legacy:emission": { canonical: "say", classes: ["legacy"], wrapper: true, line_type: EMISSION_LINE_TYPE, payload: EMISSION_OUTER, source: "O world2/tools/seed-import.mjs:681-684 (action legacy:<line type>, class legacy, payload = the line) <- tools/crossing-save.mjs:335-348 (the emission line); reader world2/tools/conversations.mjs:287-300" },
   "enter": { canonical: "enter", classes: ["frame"], payload: FRAME, source: "O src/crossing-exec.mjs:107-132 (class frame)" },
   "exit": { canonical: "exit", classes: ["frame"], payload: FRAME, source: "O src/crossing-exec.mjs:107-132 (class frame)" },
   "legacy:enter": { canonical: "enter", classes: ["legacy"], payload: LEGACY_FRAME, source: "O world2/tools/ledger-backfill.mjs:218-231; payload = W tools/enter-exit.mjs:178-182 + _ledger" },
@@ -78,20 +90,24 @@ export const ACTION_ALIASES = Object.freeze({
   "take": { canonical: "take", classes: ["holding"], payload: HOLD, source: "O src/world-hold.mjs:1707-1721 holdingEntry" },
   "give": { canonical: "give", classes: ["holding"], payload: HOLD, source: "O src/world-hold.mjs:1707-1721 holdingEntry (class creature gives are NOT admitted: encounter-verbs.mjs:695, kind `who` unread)" },
   "drop": { canonical: "drop", classes: ["holding"], payload: HOLD, source: "O src/world-hold.mjs:1707-1721 holdingEntry" },
-  "units:give": { canonical: "give", classes: ["holding"], payload: UNITS, source: "O src/world-units.mjs:214-221 writeUnits; src/world-stacks.mjs:46" },
-  "units:take": { canonical: "take", classes: ["holding"], payload: UNITS, source: "O src/world-units.mjs:214-221 writeUnits; src/world-stacks.mjs:47" },
-  "units:drop": { canonical: "drop", classes: ["holding"], payload: UNITS, source: "O src/world-units.mjs:214-221 writeUnits; src/world-stacks.mjs:50" },
-  "leave-mark": { canonical: "leave-mark", classes: ["mark"], requires: "put_forward", payload: LEAVE_MARK, source: "O src/world.mjs:4713,4743-4750,5544-5552; private-draft rule src/world-journal.mjs:78-106" },
+  "units:give": { canonical: "give", classes: ["holding"], payload: UNITS, source: "O src/world-units.mjs:214-221 writeUnits; plan src/world-stacks.mjs:375-385 planGive (moves { from:actor, to, label, n })" },
+  "units:take": { canonical: "take", classes: ["holding"], payload: UNITS, source: "O src/world-units.mjs:214-221 writeUnits; plan src/world-stacks.mjs:389-393 planTake (moves { from, to:actor, label, n })" },
+  "units:drop": { canonical: "drop", classes: ["holding"], moves: "drop", payload: UNITS_DROP, source: "O src/world-units.mjs:495-497 (moves [{ from:actor, to:null, label, n:1 }], payload { label, at:{x,y} }); writer 214-221" },
+  "leave-mark": { canonical: "leave-mark", classes: ["mark"], payload: LEAVE_MARK, source: "O src/world.mjs:5544-5552 (clean), 4713-4750 (declaration, entry); public-log path src/world-journal.mjs:384-440,494-530 (an unstaked draft never reaches acts when the candle is on) + src/world2-claims.mjs:872-925 (the released deferred act lands in acts at the stake)" },
 });
 
-/** The keys of a units move. */
-export const UNITS_MOVE = Object.freeze({ from: "holder", to: "holder", kind: "str", label: "str", n: "num" });
+/** The keys of a units move (give/take): both ends are holders. */
+export const UNITS_MOVE = Object.freeze({ from: "holder", to: "holder", label: "str", n: "num" });
+/** The keys of a set-down's move: the source is the actor, the destination is the ground (null). */
+export const UNITS_DROP_MOVE = Object.freeze({ from: "holder", to: "ground", label: "str", n: "num" });
 
 /**
  * READ AND DELIBERATELY NOT IN THE TABLE (counted by stored name when they appear in a window):
+ *   emission             a bare `emission` has no writer in the tree at 32ce1e05 (conversations.mjs:272,287 and falsifier-live-equality.mjs:131
+ *                        name it; no code stores it): it cannot be qualified, so it is not admitted
  *   land                 DEPARTURE_ACTIONS (live-reads.mjs:410) names it; its writer and payload were not traced
  *   legacy:leave-mark    read at replay-ingest.mjs:1490; its writer is the generic seed path (seed-import.mjs:787), payload unread
  *   units:make|stock|refill|consume|offer|drop-*|take-back|exit-withdrawn|...   not one of the nine
  *   amend, withdraw, stake, note-to-self, letters, stances, creature-class give, every other action
  */
-export const KNOWN_NOT_TABLED = Object.freeze(["land", "legacy:leave-mark", "units:make", "units:stock", "units:refill", "units:consume", "units:offer", "amend", "withdraw", "stake", "note-to-self"]);
+export const KNOWN_NOT_TABLED = Object.freeze(["emission", "land", "legacy:leave-mark", "units:make", "units:stock", "units:refill", "units:consume", "units:offer", "amend", "withdraw", "stake", "note-to-self"]);
