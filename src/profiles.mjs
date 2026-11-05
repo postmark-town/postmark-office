@@ -154,9 +154,44 @@ function parseFrontmatterScalars(source) {
     }
     if (!raw || raw.startsWith("#")) { data[key] = ""; continue; }
     if (/^"/.test(raw)) {
-      try { data[key] = JSON.parse(raw); continue; } catch { /* keep the raw text */ }
+      try { data[key] = JSON.parse(raw); continue; } catch { /* a wrapped literal, or the raw text */ }
     }
-    data[key] = raw;
+    // POS-862: a BIO may WRAP onto indented lines (YAML folds the line breaks to spaces). The
+    // indented lines up to the next top-level key are the same value; an unindented line, a blank
+    // one or the fence ends it. A quoted value is then read as the JSON literal it is; if that
+    // still fails the folded text stands, as the raw line did before. Only `bio`: every other
+    // key, known or unknown, reads exactly as it did (the go is wrapped bios, not a YAML upgrade).
+    const parts = [raw];
+    // An indented COMMENT line ends a plain scalar (it is YAML's, not the author's words); inside an
+    // open double-quoted value a `#` is just text and stays.
+    const quoted = /^"/.test(raw);
+    // A quoted value that reads as a complete JSON string is COMPLETE: what follows is not the bio. The fold
+    // can first read so only where its first unescaped `"` after the opening one is its last character, so
+    // the fold is scanned once, left to right (a backslash escapes the next character, the space each fold
+    // adds included), and parsed only there; past that quote no longer fold is one JSON string, and the
+    // scan stops. (Fix 3 re-joined and re-parsed the whole fold after every line: the same answers, at a
+    // cost quadratic in the line count. POS-862 security brief, 2026-11-02.)
+    let seeking = quoted, escaped = false, unscanned = raw.slice(1);
+    while (key === "bio" && i + 1 < lines.length && /^[ \t]+\S/.test(lines[i + 1]) && (quoted || !/^[ \t]+#/.test(lines[i + 1]))) {
+      parts.push(lines[++i].trim());
+      if (!seeking) continue;
+      const text = `${unscanned} ${parts[parts.length - 1]}`;
+      unscanned = "";
+      let close = -1;
+      for (let c = 0; c < text.length && close < 0; c++) {
+        if (escaped) escaped = false;
+        else if (text[c] === "\\") escaped = true;
+        else if (text[c] === '"') close = c;
+      }
+      if (close < 0) continue;
+      seeking = false;
+      if (close === text.length - 1) { try { JSON.parse(parts.join(" ")); break; } catch { /* malformed before its close: the fold stands */ } }
+    }
+    const folded = parts.join(" ");
+    if (parts.length > 1 && /^"/.test(folded)) {
+      try { data[key] = JSON.parse(folded); continue; } catch { /* keep the folded text */ }
+    }
+    data[key] = folded;
   }
   return data;
 }

@@ -416,7 +416,7 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   const act = { actor, verb: STRIKE_ACTION, actId: String(row.actId), atIso, point: here };
   const [answer] = await d.answer(act, { ...cr, aimed: c, jevMs: ENCOUNTER_JEV_MS, deadline: d.clock() + ENCOUNTER_WAIT_MS });
   const left = nerveOf(living, actor, d.now());
-  if (left === 0) d.flee(actor, { household: key?.household ?? null });
+  if (left === 0) d.flee(actor, { household: key?.household ?? null, creature: id });
   return {
     did: STRIKE_ACTION, creature: id, kind: c.kind,
     ...(fight ? { ...(isDisguised(c, fight, d.now()) ? {} : { bars: { ...barsOf(living, c, kind, fight, d.now()), note: BARS_NOTE } }), ...(damage === 0 ? { glances: GLANCES } : {}),
@@ -487,7 +487,7 @@ async function aidAt({ d, key, verb, actor, target, here, cr }) {
   const act = { actor, verb, actId: String(row.actId), atIso, point: here, target, targetAt: there };
   const answers = await d.answerRing(act, { ...cr, deadline: d.clock() + ENCOUNTER_WAIT_MS, jevMs: ENCOUNTER_JEV_MS });
   const left = nerveOf(living, actor, d.now());
-  if (left === 0) d.flee(actor, { household: key?.household ?? null });
+  if (left === 0) d.flee(actor, { household: key?.household ?? null, creature: c.id });
   return {
     did: verb, resident: target, creature: c.id,
     nerve: nerveSaid(left),
