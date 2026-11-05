@@ -459,7 +459,12 @@ test("the lean read's stated size is near what it measures at the rig's standpoi
 // kogane on the CI world pin: before WLD-29 (train 13a9c24f, ddc8cdd2) v1
 // 14,200 chars; with the digest (5db0d39f) 16,362; the pointer model 14,055.
 // On train/2026-w43 of 10-17 (world pin daef8487) v1 measures 15,613, so
-// SIZE_LEAN keeps the train's own ~15k. The stated number must stay within
+// SIZE_LEAN kept the train's own ~15k. SIZE_LEAN states what the read measures
+// without the digest and never a budget, and it is kept factual (POS-896): v1
+// measures 16,009 chars at world pin 7f5f61c8 and 16,290 at 8ed486ed (kogane's
+// standpoint, measured 2026-11-05), the same keys and the same 19 records, the growth
+// being two more `not_yours` rows (data in an existing field, no new field), so
+// it says roughly 16k. The stated number must stay within
 // 85–108% of the measured read: the old 17k text fails it, and so does a dials
 // table put back on the read (the control below proves the check can see one).
 // v2 is the world read v2 since POS-632 (world-read-v2.mjs § shapeV2), its own
