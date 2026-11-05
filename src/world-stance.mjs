@@ -291,6 +291,27 @@ export const STANCE_LIST_MAX = 100;
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
+/**
+ * Write one stance row to the record, or refuse with 503 when the pen cannot be reached.
+ *
+ * Both arms of the pen flip refuse alike (G1 / POS-156, RULING 3): the flipped arm is `appendActFlipped`
+ * and the other is `appendJournal`, which now awaits the record and throws exactly as the flipped one does.
+ * Either way the record is committed and awaited before the door answers, and an unreachable pen means
+ * nothing was written. The refusal names no flag: `W2_PEN` decides which function writes, not whether the
+ * record is the record. `safeAgain` is the end of the hint, who may speak again ("your stance is safe to
+ * speak again").
+ */
+async function writeStanceAct(entry, safeAgain) {
+  try {
+    return laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
+  } catch (err) {
+    if (err?.name === "PenUnreachableError")
+      throw bounce(503, err.message,
+        `this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — ${safeAgain}`);
+    throw err;
+  }
+}
+
 // ── the engine's geometry, read at a ref ─────────────────────────────────────
 //
 // `rect` and `overlapArea` are the world's own, and the fold itself decides
@@ -742,9 +763,9 @@ function stanceRowFromAct(a) {
  * beside it, merged by the twin key. Empty (never a throw) when neither can be
  * read.
  *
- * ASYNC as of this change, because the register is. There is exactly one caller
- * (`stanceInbox`, already async) and it awaits — a second synchronous copy of
- * this read is how the two would come to disagree about who is standing.
+ * ASYNC because the register is. Every caller awaits it (the stance inbox, the
+ * declare doors, the settlement and the town's reads) — a second synchronous
+ * copy of this read is how the two would come to disagree about who is standing.
  *
  * ── THE SQLITE ARM IS GONE (G1 / POS-156, 2026-09-22) ──────────────────────
  *
@@ -895,9 +916,11 @@ export const stancesGround = (handles) => {
 export const EDGE_LAW = "A word stays with the ground it was spoken on. The same thing on new ground is a new edge, and it starts awaiting that ground's holder.";
 // the reads that carry it are the ground holder's own, so the word awaited is theirs
 export const edgeLine = (c) => { const g = Array.isArray(c?.on_your_ground) ? c.on_your_ground[0] : c?.on_your_ground; return g ? `new ground, new edge: awaiting your word here, on ${g}` : null; };
+// `row` (the candidate, or its one-line form) carries the edge line `c` earns, when it earns one.
+const withEdge = (c, row = c) => { const edge = edgeLine(c); return edge ? { ...row, edge } : row; };
 export function withEdgeWords(answer) {
   if (!answer || answer.unavailable || !Array.isArray(answer.awaiting) || !answer.awaiting.length) return answer;
-  return { ...answer, awaiting: answer.awaiting.map((c) => { const edge = edgeLine(c); return edge ? { ...c, edge } : c; }), edge: EDGE_LAW };
+  return { ...answer, awaiting: answer.awaiting.map((c) => withEdge(c)), edge: EDGE_LAW };
 }
 
 /**
@@ -932,8 +955,8 @@ const ambientLine = (c) => ({
  *    on your own parcel, it expands to a compact ambient block (first ~3
  *    candidates, newest first)"
  *
- * So the integer is unconditional and the detail is not. `onOwnParcel` is the
- * caller's containment spine answering whether they are standing on their own
+ * So the integer is unconditional and the detail is not. The `spine` option is the
+ * caller's containment chain, which answers whether they are standing on their own
  * ground — ambient detail belongs where you live, and a market read never grows
  * it however many candidates are waiting.
  *
@@ -964,7 +987,7 @@ export async function stancesBlock(repo, key, { spine = [], dbPath = null } = {}
     return {
       stances_awaiting: n,
       stances_awaiting_ground: ground,
-      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map((c) => { const edge = edgeLine(c); return edge ? { ...ambientLine(c), edge } : ambientLine(c); }),
+      awaiting: inbox.candidates.slice(0, AMBIENT_CAP).map((c) => withEdge(c, ambientLine(c))),
       edge: EDGE_LAW,
       ...(n > AMBIENT_CAP ? { more: n - AMBIENT_CAP } : {}),
       // ⚑ TRUED 2026-09-02 (#2392). This sentence taught the WORLD door for
@@ -1143,14 +1166,6 @@ export function readNeverPerforms(fields) {
 
 // ── the write ────────────────────────────────────────────────────────────────
 
-/**
- * declare-stance-on — one row in the single log.
- *
- * The door RECORDS AND EXPOSES; it does not enforce. Per the-deferred-gate,
- * "placement, stance, and refusal are the crossing's work" — so nothing here
- * consults a fold, blocks a mark, or changes what anybody's world looks like.
- * It writes the word down with its witnesses and gets out of the way.
- */
 // ── THE OWNER'S WORD (POS-688; Darko 2026-10-19 16:39–16:45, D-O1..D-O6 at 17:14) ──
 //
 // "The owner's word on their thing, while someone outside the house holds it or
@@ -1213,14 +1228,7 @@ async function answerWord({ on, stance, by, key, own, dbPath, witnessStamp, cros
         : stance === "welcomed" ? `the owner's house gives ${on} to ${act.by} to keep`
         : `the owner's house lends ${on} to ${act.by}`,
     };
-    try {
-      row = laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
-    } catch (err) {
-      if (err?.name === "PenUnreachableError")
-        throw bounce(503, err.message,
-          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
-      throw err;
-    }
+    row = await writeStanceAct(entry, "your stance is safe to speak again");
   }
   return {
     on, stance, by, answers: act.kind, act: answered,
@@ -1369,15 +1377,7 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
       ? `the town opposes it, citing ${cites} — the crossing returns it when it judges, and an opposed mark with open stakes stands until they unwind`
       : `the town has looked and says neutral — it clears "awaiting the town" and confers nothing${cites ? ` (citing ${cites})` : ""}`,
   };
-  let row;
-  try {
-    row = laneFlipped("stance") ? await appendActFlipped(null, entry) : await appendJournal(null, entry);
-  } catch (err) {
-    if (err?.name === "PenUnreachableError")
-      throw bounce(503, err.message,
-        "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — the town's word is safe to speak again");
-    throw err;
-  }
+  const row = await writeStanceAct(entry, "the town's word is safe to speak again");
   return {
     on, stance, as: AS_TOWN, by: TOWN_SPEAKER, household: TOWN, hand,
     version, law, law_sha: lawSha.sha, law_sha_from: lawSha.from,
@@ -1388,6 +1388,14 @@ async function declareTownStance(repo, args, key, { dbPath = null, crossing = nu
   };
 }
 
+/**
+ * declare-stance-on — one row in the single log.
+ *
+ * The door RECORDS AND EXPOSES; it does not enforce. Per the-deferred-gate,
+ * "placement, stance, and refusal are the crossing's work" — so nothing here
+ * consults a fold, blocks a mark, or changes what anybody's world looks like.
+ * It writes the word down with its witnesses and gets out of the way.
+ */
 export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPath = null, witnessStamp = null, crossing = null, setDownDeps = {}, townDeps = {}, shared = null } = {}) {
   // THE WORLD-FREEZE GATE (the engine cutover, 2026-08-24). A stance is a
   // ground act — the freeze's own bounce names it in the list — so this door
@@ -1515,22 +1523,18 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
   {
     // THE SUPERSEDED COURTESY READS THE WHOLE RECORD, NOT ONE STORE.
     //
-    // This computed `prior` from `readJournal(db)` alone — the live sqlite
+    // This once computed `prior` from `readJournal(db)` alone — the live sqlite
     // journal — while the read side had already moved to photographs ∪ journal
-    // (#2454) and now to the register beside them. So a resident re-declaring a
-    // stance whose first word had been drained got a receipt saying nothing was
-    // superseded, which is the #2454 sentence in the smallest possible type: the
-    // town knew, and the door told them it did not.
+    // (#2454). So a resident re-declaring a stance whose first word had been
+    // drained got a receipt saying nothing was superseded, which is the #2454
+    // sentence in the smallest possible type: the town knew, and the door told
+    // them it did not. (The sqlite stance row is gone with the journal INSERT,
+    // G1 / POS-156, and so is the reaper that took those rows once their twin
+    // was confirmed in `acts`.)
     //
-    // AND MY OWN REAPER ACCELERATES IT. Once a stance row's twin is confirmed in
-    // `acts` the reaper takes the sqlite row, so this window shrinks from "until
-    // the next drain" to "until the next reap". A courtesy field decaying faster
-    // because of a fix I shipped in the same lane is not a courtesy, it is a
-    // regression I would have introduced and then not been able to see — nothing
-    // asserts `superseded`, which is why it took my reviewer to find it.
-    //
-    // `stanceRows` is the one derivation every tier reads from; this now shares
-    // it rather than keeping a fourth opinion about what has been said.
+    // `stanceRows` is the one derivation every tier reads from — the drained
+    // photographs and the register; this shares it rather than keeping a
+    // fourth opinion about what has been said.
     const prior = standingStances(shared ? shared.rows : await stanceRows({ dbPath, worldClone: repo }), { by, versions }).find((s) => s.on === on) ?? null;
     const entry = {
       crossing, actor: by, household: resolvedWorldHousehold(key) ?? null,
@@ -1544,30 +1548,14 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
           : "your ground opposes it — the crossing reads your veto when it judges",
     };
     // ── LANE ONE OF THE PEN FLIP (W2_PEN=stance; Keemin ruled the shape
-    // 2026-08-29 — D1 per lane, D2 refuse, D3 reverse mirror). The design's
+    // 2026-08-29 — D1 per lane, D2 refuse, D3 reverse mirror (D3 went with
+    // G1 / POS-156)). The design's
     // own pick for first: "the one door that has never had a second pen to
-    // disagree with." Flipped, the record is Postgres `acts`, committed and
-    // awaited BEFORE anything else; sqlite gets the reverse-mirror copy after.
-    // Unreachable Postgres = the ruled refusal, and nothing was written.
-    // ── BOTH ARMS REFUSE NOW (G1 / POS-156, RULING 3) ─────────────────────
-    //
-    // The unflipped arm was `appendJournal(db, entry)` — a sqlite row written
-    // here and a Postgres copy queued behind it. The sqlite row is gone, so
-    // that call awaits the record and throws exactly as the flipped one does,
-    // and this door's refusal is one sentence for both. It names no flag:
-    // `W2_PEN` decides which function writes, not whether the record is the
-    // record.
-    let row;
-    try {
-      row = laneFlipped("stance")
-        ? await appendActFlipped(null, entry)
-        : await appendJournal(null, entry);
-    } catch (err) {
-      if (err?.name === "PenUnreachableError")
-        throw bounce(503, err.message,
-          "this door's pen is the office's record; when it cannot be reached the door refuses rather than writing anywhere else — your stance is safe to speak again");
-      throw err;
-    }
+    // disagree with." The record is Postgres `acts`, committed and awaited
+    // BEFORE anything else, and unreachable Postgres is the ruled refusal with
+    // nothing written. Both arms of the flip refuse alike now (G1 / POS-156,
+    // RULING 3): `writeStanceAct` is that one write and that one refusal.
+    const row = await writeStanceAct(entry, "your stance is safe to speak again");
     return {
       on, stance, by,
       on_your_ground: ground.map((g) => g.id),

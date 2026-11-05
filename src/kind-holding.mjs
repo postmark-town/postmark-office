@@ -51,9 +51,10 @@ const propertyOf = (view) => (n, p) => view.property?.(n, p) ?? null;
  * the thing class's body); and it must not itself hold — a holder has contents
  * of its own, which a count cannot carry (O2 gap G2, the lead's call). Returns
  * `{ kind, lineage }`, or throws the door's refusal, nothing made.
+ *
+ * `named` (POS-766): ONE named thing made into a holder, by its slug, so a kind that holds things is
+ * makeable this way (its contents have somewhere to be); a kind that is no thing is still refused.
  */
-// `named` (POS-766): ONE named thing made into a holder, by its slug, so a kind that holds things is
-// makeable this way (its contents have somewhere to be); a kind that is no thing is still refused.
 export function makeableKind(kind, view, { named = false } = {}) {
   if (kind == null || String(kind).trim() === "")
     throw bounce(422, "make what kind?", "kind: a class id, e.g. a kind of candy — explain: \"candy\" lists the kinds. Nothing was made.");
@@ -172,6 +173,9 @@ export function portableMark(mark, classProperty) {
   return own ?? legacy ?? truth(p?.value) ?? true;
 }
 
+/** The fields a holder's maker may send at the leave door; `holderWordOf` reads them. */
+export const HOLDER_FIELDS = Object.freeze(["holder", "capacity", "open", "portable"]);
+
 /**
  * THE HOLDER'S OWN WORD AT THE LEAVE DOOR (LOGOS v2, O2; review-610 S8; ruled
  * 16:03): any thing may hold, at its maker's choice. `holder` is sovereign on
@@ -183,7 +187,6 @@ export function portableMark(mark, classProperty) {
  * refused with the holding law's own sentence (holding-law § holdingOf), never
  * clamped. Returns the fields the record carries, or null when none were sent.
  */
-export const HOLDER_FIELDS = Object.freeze(["holder", "capacity", "open", "portable"]);
 export function holderWordOf({ payload = {}, klass, classProperty, extendsOf }) {
   const sent = HOLDER_FIELDS.filter((f) => payload[f] !== undefined);
   if (!sent.length) return null;

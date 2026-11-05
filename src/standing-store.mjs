@@ -19,7 +19,7 @@
 // good standing.
 
 import { actsQuery } from "./world2-acts.mjs";
-import { parseStandingLine, foldStanding, formatStandingLine, looksLikeAct } from "./standing.mjs";
+import { parseStandingLine, foldStanding, formatStandingLine, looksLikeAct, standingOfRecord } from "./standing.mjs";
 
 const ROW_SQL = `
   SELECT id, date, act, handle, by_who, founder_word, reason, line, source, actor
@@ -73,10 +73,7 @@ export async function standingForHandlesVia(c, handles) {
 export function foldRecords(records) {
   const standing = new Map();
   for (const rec of records) {
-    standing.set(rec.handle, {
-      state: rec.act === "lift" ? "clear" : rec.act === "revoke" ? "revoked" : "quarantined",
-      since: rec.date, by: rec.by, reason: rec.reason, founderWord: rec.founderWord, line: rec.line,
-    });
+    standing.set(rec.handle, standingOfRecord(rec));
   }
   return { standing };
 }

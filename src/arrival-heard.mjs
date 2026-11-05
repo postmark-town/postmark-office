@@ -23,7 +23,8 @@
 // `begin`, the berth's bridge, asks the same two fields (POS-570) but joins
 // nobody: it parks its declaration on the berth row until the human's co-sign
 // click runs it. THE ANSWER NEVER RIDES THAT ROW: `oauth_berths` is readable
-// by the office's own pen, mirrored into oauth.db, and never deleted. So
+// by the office's own pen (and, until POS-271 deleted the mirror, was copied
+// into oauth.db), and never deleted. So
 // `parkHeard` hands it to the store's `berth_heard_park()` (073), which keeps
 // it where no pen can read it, and the co-sign's declare-exec calls
 // `recordHeard` with the berth's slug: `berth_heard_land()` moves the answer

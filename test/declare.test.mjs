@@ -190,7 +190,7 @@ test("bounce 4: the human-of- prefix is refused", () => {
   bouncesOn({ ...GOOD(), handle: "human-of-keemin" }, { db, registry: REGISTRY(), key: STRANGER }, "handle", 409);
 });
 
-test("bounce 5: a handle taken in ANY of the three registers is refused", () => {
+test("bounce 5: a handle taken in the town index, the household registry or the ship's manifest is refused", () => {
   const db = fixtureTown();
   const clone = declClone();
   // (a) the town index

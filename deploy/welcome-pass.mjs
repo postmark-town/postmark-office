@@ -101,7 +101,7 @@
 // uncommitted in the town clone for 4.5 h because the verify after it failed on
 // an older line and nothing put the file back (POS-295). The tick now refuses to
 // run the pass onto a ledger that arrives red, and restores the ledger's arrival
-// bytes from an EXIT trap when the verify after it fails (deploy/office-tick.sh
+// bytes from an EXIT trap when the verify after it fails (deploy/office-keep.sh
 // § WHOLE OR NOTHING). A bundle rolled back that way is still owed, so the plan
 // names the household again on the next tick.
 

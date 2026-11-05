@@ -19,7 +19,11 @@
 //
 // The deep shapes stay typed (Darko's 21:55 question): a member's typed row is
 // house-bundle.mjs § memberRow, the one the house read pages; this file only
-// says it in one line. v1 is untouched: nothing here runs without read_shape.
+// says it in one line. v1 is untouched, but the glance is not the only caller:
+// household-apex.mjs `householdGlance` runs this file under read_shape: "v2",
+// while `householdDeep` (the typed reads closer, correspondents, happened and
+// stamps' went) and `householdWaiting` (read: "waiting") call its helpers
+// without read_shape.
 
 import { memberRow } from "./house-bundle.mjs";
 import { HOUSEHOLD_LINES, usableActs } from "./door-read-shape.mjs";
@@ -27,7 +31,10 @@ import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
 
-/** How many groups of what waits the glance shows: the oldest first (they have waited longest). */
+/**
+ * How many groups of what waits the glance shows: the largest first, ties
+ * oldest first (needGroups' order).
+ */
 export const NEEDS_FIRST = 2; // round 4 (Darko 15:06): two groups, paying for marks and posts
 /** With more waiting than a page holds, how many of the inbox's last rows are read on their own for the oldest groups. */
 export const TAIL_ROWS = 100;
@@ -156,19 +163,10 @@ export const needRow = (c) => ({
   since: c.date ?? null,
 });
 
-/**
- * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
- * marks over one place of yours is ONE row, `{ by, over, count, oldest,
- * newest, sample }`, the sample being the group's oldest body, whole. Groups
- * run oldest first, up to NEEDS_FIRST. `rows` is newest first, as the inbox
- * orders it.
- */
 /** The stance words the door takes (world-stance.mjs § the declare tool's enum). */
 export const STANCE_WORDS = "welcomed | neutral | opposed";
 /** How many of a group's mark ids the glance names, oldest first. */
 export const GROUP_IDS = 3;
-/** A ready-to-run answer to one waiting mark, as v1's rows carried it. */
-export const answerAct = (id) => `declare-stance-on { on: "${id}", stance: ${STANCE_WORDS} }`;
 /** How many ids one stance call takes (world-stance.mjs § STANCE_LIST_MAX). */
 export const STANCE_LIST_CAP = 100;
 /**
@@ -184,6 +182,13 @@ export function groupAct({ by, over, count }, ids) {
   return `household { read: "stances", args: { ${only}, limit: ${STANCE_LIST_CAP} } }, then declare-stance-on { on: <ids>, stance: ${STANCE_WORDS} }${count > STANCE_LIST_CAP ? `, ${STANCE_LIST_CAP} a call` : ""}`;
 }
 
+/**
+ * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
+ * marks over one place of yours is ONE row, `{ by, over, count, oldest,
+ * newest, sample }`, the sample being the group's oldest body, whole. Groups
+ * run largest first, ties oldest first (round 4, Darko 16:49), up to `max`
+ * (NEEDS_FIRST by default). `rows` is newest first, as the inbox orders it.
+ */
 export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   const groups = new Map();
   for (const c of rows) {
@@ -199,7 +204,7 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   }
   // eval round 1: a group a reader can act on, its oldest ids; round 3: one act answers the whole group
   return [...groups.values()]
-    // after round 4 (Darko 16:49): the largest group first, then the oldest of the rest, so a cut never hides the biggest stream
+    // after round 4 (Darko 16:49): the largest group first, ties oldest first, so a cut never hides the biggest stream
     .sort((a, b) => (b.count - a.count) || String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
     .slice(0, max)
     .map((g) => {
@@ -214,8 +219,9 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
 /**
  * The needs block from the inbox page (newest first, as stanceShadow orders it)
  * and needs-you's counts. `first` is the waiting marks grouped by author and
- * place, oldest group first. When more wait than the page holds, `tail` (the
- * inbox's last rows, read on their own) joins the page so the oldest are there.
+ * place, largest group first, ties oldest first (needGroups' order). When more
+ * wait than the page holds, `tail` (the inbox's last rows, read on their own)
+ * joins the page so the oldest are there.
  */
 export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   const page = stances.awaiting ?? [];

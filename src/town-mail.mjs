@@ -410,7 +410,7 @@ export { NONCE_MAX }; // one cap for every retry key; it lives beside the rows (
 const inFlight = new Map();
 
 const inFlightSlot = (key, from, nonce) =>
-  `${String(key?.household ?? "")} ${String(from ?? "")} ${nonce}`;
+  `${String(key?.household ?? "")}\u0000${String(from ?? "")}\u0000${nonce}`;
 
 /**
  * THE ORIGINAL RECEIPT, handed back — not a new one, and not a bare refusal.

@@ -332,9 +332,10 @@
        "quest",
        "bug",
        "idea",
-       "report"
+       "report",
+       "invite"
       ],
-      "description": "which class's posts — \"quest\", \"event\", \"bug\", \"idea\" or \"report\" (yours only, signed in)"
+      "description": "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"report\" (yours only, signed in) or \"invite\" (the town's hands only)"
      },
      "post": {
       "type": "string",

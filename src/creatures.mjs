@@ -89,20 +89,19 @@ import { currentCrossing } from "./crossings.mjs";
 import { scopeSecret, sealedItem } from "./sealed.mjs";
 import { settlementAtOrBefore } from "./world-forecast.mjs";
 import { enteredBy, occupancyIfRoomed, roomUnknown, sightedLiving, stackedAt } from "./creature-sight.mjs";
+import { asPayload, lawReady, msOf } from "./creature-bits.mjs";
 import {
   ENCOUNTER_KEEP_MS, ENCOUNTER_VERBS, NERVE_ACTION, encounterDial, encounterRowOf, isFinishable, isStrikable, nerveOf, resolveOf,
-  easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt,
+  easeScope, applyEase, fillsEase, pressMenu, pressLanding, ringRoster, queueFlee, strikesOn, windowAt, endingSaid, liveShieldOn,
 } from "./encounter.mjs";
 import {
   ANSWER_OPTIONS, TALLY_ACTION, TEMPT_ACTION, isTempting, openTemptations, phaseOf, plainHouses, plainScore, helpScore,
-  temptPayload, temptTarget, temptationsFor, talliesOf,
+  temptPayload, temptTarget, temptationsFor,
 } from "./temptation.mjs";
-import { endingSaid } from "./encounter.mjs";
 import {
   BARS_NOTE, FLINCH_VERBS, HURLED_ACTION, HURL_ACTION, LINE_ACTION, PERSUADE_ACTION, PHASE_ACTION, PRIOR_HURLED_SQL, PRIOR_PHASE_SQL, PRIOR_UNMASKED_SQL, SANITY_ACTION, UNMASKED_ACTION,
   answerOf as feintAnswer, barsOf, earlierPersuades, feintTarget, hurlAnswered, hurlSaid, isDisguised, isSetPiece, nextPiece, persuadeQuestion, persuadeScore, pieceOf, repeats, sanityOf, writeOnce,
 } from "./set-pieces.mjs";
-import { liveShieldOn } from "./encounter.mjs";
 
 export const CREATURE_CLASS = "creature";
 export const REACT_ACTION = "react";
@@ -261,7 +260,6 @@ export async function creatureLaw({ repo = WORLD_CLONE, refOf = blessedRef, load
   return lawCache.promise;
 }
 export function __resetCreatureLawForTest() { lawCache = { ref: null, promise: null, settled: null }; }
-const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
 
 /** A dial whose value waits on Darko's word: the lane's recommendation, and the call that rules it. */
 const pending = (value, call) => Object.freeze({ value, pending: call });
@@ -390,7 +388,13 @@ export function sampleWith(roll, probabilities) {
   return { picked: (cdf.find((c) => u < c.upto) ?? cdf[cdf.length - 1]).option, u, cdf };
 }
 
-/** C2 (pending): code's answer is a flat distribution over the reactions whose `when` holds. */
+/**
+ * Code's answer: a flat distribution over the reactions whose `when` holds. It
+ * answers when Jev cannot (judgmentFor: a timeout, a fault, an unreadable
+ * answer, one possible reaction, or CREATURE_JUDGE=code). C2 was ruled 2026-10-16 17:50 EDT (see
+ * CREATURE_DIALS), and the per-creature cap that once sent a creature to code
+ * is gone.
+ */
 export const codeDistribution = (allowed) =>
   Object.fromEntries(allowed.map((r) => [r.name, 1 / allowed.length]));
 
@@ -409,8 +413,6 @@ export function approachingOf(point, toward, creature) {
 
 // ── the living set: a fold of acts (W3) ─────────────────────────────────────
 
-const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
-
 /**
  * C1 (RULED 2026-10-15): a walk is perceived when it is declared AND when it
  * lands. Both answer the same walk act, so a reaction is keyed by the trigger
@@ -426,7 +428,6 @@ export const ARRIVAL = "arrival";
 export const ENTRY = "entry";
 const MOMENTS = Object.freeze([ARRIVAL, ENTRY]);
 export const triggerKey = (actId, moment = null) => (MOMENTS.includes(moment) ? `${actId}@${moment}` : String(actId));
-const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 
 // ORDER BY acts.id, the bigint, never the `id::text` the row answers with: ordered as
 // text, "10" comes before "2", the cursor then skips every id it passed (found by the
@@ -1301,6 +1302,14 @@ export const PRIOR_REACTION_SQL = `SELECT id::text AS id, at, payload FROM acts
 export const TRIGGER_SQL = `SELECT 1 AS here FROM acts WHERE id = $1::bigint`;
 export const NO_TRIGGER = "its trigger act is not on the record";
 
+/** A feint's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
+async function writeHurledOnce(client, row, insertAct) {
+  const p = asPayload(row.payload);
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-hurled:${p.hurl}`]);
+  const { rows: before } = await client.query(PRIOR_HURLED_SQL, [row.actor, String(p.hurl)]);
+  return before.length ? null : insertAct(client, row);
+}
+
 /**
  * W4: write the rows in one transaction, unless this creature already answered
  * this act at this moment (a retried act, an arrival judged twice). Answers
@@ -1312,14 +1321,6 @@ export const NO_TRIGGER = "its trigger act is not on the record";
  * lock on (creature, trigger, moment) before it asks, so the second waits for
  * the first and then finds its row: one reaction, never two.
  */
-/** A feint's answer, once (set-pieces.mjs): under its lock, unless the record already holds one. */
-async function writeHurledOnce(client, row, insertAct) {
-  const p = asPayload(row.payload);
-  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`creature-hurled:${p.hurl}`]);
-  const { rows: before } = await client.query(PRIOR_HURLED_SQL, [row.actor, String(p.hurl)]);
-  return before.length ? null : insertAct(client, row);
-}
-
 export async function writeReaction(rows, { officeWrite: ow = null, insertAct: ins = null } = {}) {
   const pen = ow && ins ? null : await import("./world2-pen.mjs");
   const officeWrite = ow ?? pen.officeWrite;
@@ -1975,22 +1976,4 @@ function fleeTheSpent(rows, enc, deps, now, creature) {
   // `creature` is the one whose encounter this is (WLD-132): the id the exit act records as `fled_by`
   for (const h of new Set(rows.filter((r) => r.action === NERVE_ACTION).map((r) => r.object)))
     if (nerveOf(deps.living, h, now) === 0) (deps.flee ?? queueFlee)(h, { household: enc.roster.find((r) => r.handle === h)?.slug ?? null, creature: creature.id });
-}
-
-
-// ── the refresh tick (the writer process) ───────────────────────────────────
-
-let timer = null;
-/** Keep `living` caught up every REFRESH_MS. PR-B starts it beside the arrival tick. */
-export function startLivingRefresh(living, { query = actsQuery, everyMs = REFRESH_MS } = {}) {
-  if (timer) return timer;
-  const run = () => living.refresh({ query }).catch(() => {});
-  run();
-  timer = setInterval(run, everyMs);
-  timer.unref?.();
-  return timer;
-}
-export function stopLivingRefresh() {
-  if (timer) clearInterval(timer);
-  timer = null;
 }

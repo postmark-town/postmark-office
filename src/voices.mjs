@@ -36,11 +36,13 @@ const ROOT = join(HERE, "..");
 //
 // Read ONCE, at module init, deliberately. departurePace reads per call and is
 // right to: one walk, one lookup. These are consulted inside the clustering
-// loop and on every spoken line, so a per-call read would put SQLite in the
-// speech path for numbers that move at a ruling. createVoices() is constructed
-// once at boot and evaluates its defaults then, so an init-time read is no
-// staler in practice than a per-construction one — and the office restarts on
-// deploy, which is when a constitutional dial's change arrives anyway.
+// loop and on every spoken line, so a per-call read would put a walk of the law
+// (`world-classes.mjs § dialNumber`: the law snapshot, or the world graph
+// snapshot behind it) in the speech path for numbers that move at a ruling.
+// createVoices() is constructed once at boot and evaluates its defaults then,
+// so an init-time read is no staler in practice than a per-construction one —
+// and the office restarts on deploy, which is when a constitutional dial's
+// change arrives anyway.
 //
 // THE DEPARTURE→DEPART LESSON, applied: a silent fallback is indistinguishable
 // from a good read, and that is exactly how every walker in the world moved at
@@ -205,8 +207,12 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
 // The thread derivation (spec, "a thread is a derivation, not an object").
 // Voices chain into one conversation when they chain with ANY voice already in
 // it and land within fadeMs of that cluster's latest voice; a cluster that goes
-// quiet for fadeMs is finished and never reopens — five silent minutes at the
-// same spot is a NEW conversation, not a continuation of the old one.
+// quiet for fadeMs is finished and never reopens — a silence that long at the
+// same spot is a NEW conversation, not a continuation of the old one. `fadeMs`
+// defaults to the display fade (5 minutes on the fallback), but every caller
+// passes a close window as `fadeMs`: `closeMs` in createVoices (the say class's
+// `conversation_lull_min`, 30 minutes on the fallback), and the sound class's
+// `thread_close_min` in `dynamic-emissions.mjs § threadsFrom`.
 export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
   const open = [];
@@ -333,6 +339,9 @@ export function createVoices({
   // `roomOf(handle)` (WLD-74): the dungeon room a resident is entered in, or null. Hearing stops at a dungeon room's walls, both ways: a voice
   // is heard only by an ear in the room it was spoken in (null is the open), and its record is shown only to readers in that room.
   roomOf = null,
+  // `roomOfStrict(handle)` (POS-887): the same answer, but it REJECTS where it cannot tell (an unreadable world or enter ledger) instead of reading the failure as the open.
+  // Only the long listeners ask it, through `standing(handle, { strict: true })`; every other caller keeps `roomOf`, which must never stop a read.
+  roomOfStrict = null,
   vesselAt = null,
   heardFrom = null,
   structuralHearing = () => Boolean(heardFrom),
@@ -561,8 +570,32 @@ export function createVoices({
     }
     stats.clusters += 1;
     // The ear alone needs no clusters (POS-632 W4's carried earshot skips them).
-    const clusters = wantClusters ? clusterVoices(hydrate(), { earshotM, fadeMs: closeMs }) : null;
+    const clusters = wantClusters ? clusterByRoom(hydrate()) : null;
     return { t, audible, clusters, window };
+  }
+
+  // THE RECORD, CLUSTERED ROOM BY ROOM (POS-886).
+  //
+  // Whether a voice joins a conversation is decided by who it chains with, so the
+  // voices a reader may not read cannot be allowed into the grouping at all: a
+  // voice spoken inside a dungeon room (WLD-74) that sat between two open
+  // circles used to merge them in an outside reader's record, and filtering the
+  // clusters afterwards left the merge standing. So the eligibility comes
+  // FIRST — each room (null: the open) is clustered from its own voices only,
+  // the same order `conversations()` keeps when it drops `v.room` before it
+  // clusters. A Map keyed by the room, read once, from the same `hydrate()` the
+  // snapshot is built on; `openConversationAt` takes the reader's own key and
+  // never another's.
+  function clusterByRoom(list) {
+    const byRoom = new Map();
+    for (const v of list) {
+      const key = v.room ?? null;
+      if (!byRoom.has(key)) byRoom.set(key, []);
+      byRoom.get(key).push(v);
+    }
+    const clusters = new Map();
+    for (const [key, spoken] of byRoom) clusters.set(key, clusterVoices(spoken, { earshotM, fadeMs: closeMs }));
+    return clusters;
   }
 
   function heardBy(here, snap) {
@@ -637,11 +670,19 @@ export function createVoices({
     "a voice is spoken from a place — walk somewhere (world_walk), or settle your household's ground, and the world will have a point to speak from",
   );
 
-  async function standing(handle) {
+  // A room that cannot be told is a refusal in its own words, never a place and never the open. It names nothing about the room or why.
+  const roomUnavailable = () => ({ ...bounce("the room you stand in could not be read just now",
+    "listen again in a moment — nothing was served from a room this office could not confirm you are in"), code: 503 });
+
+  async function standing(handle, { strict = false } = {}) {
     const here = await standpoint(handle);
     if (!here?.placed) return { bounce: unplaced(handle) };
     const words = await place({ x: here.x, y: here.y, aboard: Boolean(here.aboard), moving: Boolean(here.moving) });
-    const inRoom = roomOf ? await Promise.resolve(roomOf(handle)).catch(() => null) : null; // WLD-74: the dungeon room they are entered in, if any
+    let inRoom = null; // WLD-74: the dungeon room they are entered in, if any
+    if (strict) {
+      const ask = roomOfStrict ?? roomOf;
+      if (ask) { try { inRoom = await ask(handle); } catch { return { bounce: roomUnavailable(), unavailable: true }; } }
+    } else inRoom = roomOf ? await Promise.resolve(roomOf(handle)).catch(() => null) : null;
     return { at: { x: here.x, y: here.y }, aboard: Boolean(here.aboard), place: words ?? null, ...(inRoom ? { room: inRoom } : {}) };
   }
 
@@ -650,8 +691,10 @@ export function createVoices({
   // page showed a twenty-voice thread; hearing was five minutes then, and a
   // conversation was longer than an ear). Chains exactly like the page: earshot or shared deck.
   function openConversationAt(here, t, clusters0) {
-    // WLD-74: only the voices spoken in the reader's own room (the open, for one in no room) are the room's record they may read
-    const clusters = (clusters0 ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
+    // WLD-74: only the voices spoken in the reader's own room (the open, for one in no room) are the room's record they may read.
+    // POS-886: `clusters0` is the snapshot's record clustered room by room (`clusterByRoom`), so the reader takes their own room's
+    // clusters, which were grouped from that room's voices alone. The filter after it cannot change them; it stays as the WLD-74 guard.
+    const clusters = (clusters0?.get(here.room ?? null) ?? []).map((c) => ({ ...c, voices: c.voices.filter((v) => (v.room ?? null) === (here.room ?? null)) })).filter((c) => c.voices.length);
     const mine = clusters.find((c) =>
       t - c.latest <= closeMs &&
       c.voices.some((v) => (v.aboard && here.aboard) || distM(v, here.at) <= earshotM));
@@ -1070,6 +1113,7 @@ export function createVoices({
   // derivation: the push dresses its answers with this module's own `reply`.
   const room = {
     snapshot,
+    /** Where a reader stands now. `strict: true` (the long listeners) answers `{ bounce, unavailable }` when the room cannot be told, never the open. */
     standing,
     /** The voices this ear hears in `snap`, newer than `since` — the waiter's "is there news". */
     heard: (here, snap, since = null) => heardBy(here, snap).filter((v) => !(Number.isFinite(since) && v.at <= since)),
