@@ -117,6 +117,26 @@ test("G7: happening_here says the vessel's next departures and the Mists only wh
   assert.deepEqual(unbodied(rows), []);
 });
 
+test("POS-909 happening_here: a cancelled event is not here, by mark or by distance; its live twins stay; far and composed rows follow", () => {
+  const spot = { mark: "test-host/test-spot", name: "the Test Spot", x: 0, y: 0 };
+  const cal = { now: [
+    { id: "test-host/cancelled-by-mark", title: "Cancelled by mark", cancelled: true, place: spot, phase: "underway", ends: "2030-01-02T15:00:00Z" },
+    { id: "test-host/cancelled-by-point", title: "Cancelled by point", cancelled: true, place: { mark: null, x: 100, y: 100 }, phase: "doors-open", ends: "2030-01-02T15:00:00Z" },
+    { id: "test-host/live-by-mark", title: "Live by mark", cancelled: false, place: spot, phase: "underway", ends: "2030-01-02T15:00:00Z" },
+    { id: "test-host/live-by-point", title: "Live by point", cancelled: false, place: { mark: null, x: 100, y: 100 }, phase: "doors-open", ends: "2030-01-02T15:00:00Z" },
+    { id: "test-host/live-far", title: "Live far", cancelled: false, place: { mark: "test-host/elsewhere", x: 5000, y: 5000 }, phase: "underway", ends: "2030-01-02T15:00:00Z" },
+    { id: "test-host/cancelled-far", title: "Cancelled far", cancelled: true, place: { mark: "test-host/elsewhere", x: 5000, y: 5000 }, phase: "underway", ends: "2030-01-02T15:00:00Z" },
+  ] };
+  const here = eventsHere(cal, { at: { x: 0, y: 50 }, ids: new Set([spot.mark]) });
+  assert.deepEqual(here.map((e) => e.id), ["test-host/live-by-mark", "test-host/live-by-point"], "the cancelled ones are out on both paths; live ones in");
+  const rows = happeningBlock({ events: here, markOf: () => null });
+  assert.deepEqual(rows.filter((r) => r.kind === "event").map((r) => r.event), ["test-host/live-by-mark", "test-host/live-by-point"], "the composed block names no cancelled event");
+  // a cancelled event alone in the window: nothing is here, and the block is null
+  const alone = eventsHere({ now: cal.now.filter((e) => e.cancelled) }, { at: { x: 0, y: 50 }, ids: new Set([spot.mark]) });
+  assert.deepEqual(alone, []);
+  assert.equal(happeningBlock({ events: alone }), null);
+});
+
 test("G4: happened with no cursor names where it reaches back to; an unread delta says so", () => {
   const g = happenedGlance({ to_you: { complete: true, count: 0, events: [] }, around_you: { count: 7, events: [
     { kind: "departure", actor: "elowen", at: "2026-10-15T00:01:00Z" }, { kind: "emission", actor: "fizz", at: "2026-10-15T00:00:09Z" },
