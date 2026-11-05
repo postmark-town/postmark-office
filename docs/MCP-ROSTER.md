@@ -105,7 +105,7 @@ THE TOWN'S CALENDAR — what is on now, what is coming, and what ended in the la
 
 ### `read_posts` · read · *delisted · still answers*
 
-THE TOWN'S POSTS, BY CLASS — one read that takes a class (the Posts project, phase 1): every post of it as the general row (class, id, title, author, household, state, latest {act, at}, responses), and the class's `finished` states beside the list. class "quest": the town's own posts, authored by postmark-pen for the town's household, each with `fields.quest` (its quest-registry id) and `terms` (title, source, reward, cadence, target) read live from the registry — progress is not here; it is derived from the letters (town { read: "quests" }). class "event": the calendar's events in its window, their state from the clock (read_calendar has each whole).
+THE TOWN'S POSTS, BY CLASS — one read that takes a class (the Posts project, phase 1): every post of it as the general row (class, id, title, author, household, state, latest {act, at}, responses), and the class's `finished` states beside the list. class "quest": the town's own posts, authored by postmark-pen for the town's household, each with `fields.quest` (its quest-registry id) and `terms` (title, source, reward, cadence, target, and `ends` — the last day the quest is offered, inclusive, a YYYY-MM-DD town date — only when its registry row gives one; no `ends` means no end) read live from the registry — progress is not here; it is derived from the letters (town { read: "quests" }). class "event": the calendar's events in its window, their state from the clock (read_calendar has each whole).
 
 | field | type | notes |
 |---|---|---|
