@@ -26,6 +26,8 @@ import { fixtureTown, putValues } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
+import { overlayStakes, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
+import { INVENTED_WORLD, INVENTED_STAKE_ROWS } from "./fixtures/pos896-invented-world.mjs";   // POS-896: a made-up world for two asks, below
 import { PSA_SLUG } from "../src/queries.mjs";
 import * as store from "../src/town-index-store.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -112,9 +114,46 @@ const inRecordForm = async (text) => {
   const { worldClone } = await import("./fixture-paths.mjs");
   return JSON.stringify(await stakeKindsInOldForm(v, () => worldKinds(worldClone())));
 };
+// THE TWO ASKS THAT READ A WORLD (POS-896). `ask 3` (read_doorstep) and `ask 7` (household { read: "doorstep" }) carry the doorstep's
+// `stakes` segment, which reads WORLD_CLONE: until this change the tree's pinned world, whose published marks for wright were
+// counted in the record (26) and moved with the pin (285). Those two now run in a process started over an INVENTED world
+// (test/fixtures/pos896-doorstep-ask.mjs, test/fixtures/pos896-invented-world.mjs), so the segment's `count` and `rows` below are
+// the fixture's own marks (INVENTED_STAKE_ROWS, written out, another owner's mark absent) and every other byte of the two
+// answers stays the record's. The other asks, which read the pinned world for wright's home (`ask 8` carries its transport line),
+// are left on it, and the REST doorsteps run in offices with no world. A count alone would erase the rows on both sides; this
+// binds every row.
+// SCOPE, STATED PLAINLY: these two asks are a controlled full-row STAKES test over a made-up world. The other blocks of the two
+// answers that read a world (the Mists block, the stances block) match the record only because the fixture was CONSTRUCTED to
+// give them the least they read (an empty skeleton, a stand-in geometry): that is not an integration test of those blocks over
+// the pinned world, and no other suite is proven by it. The extra-mark falsifier is an IN-SCOPE one: one more of wright's own marks
+// in the invented world turned ask 3 red (count 5 against 4) when it was tried, and the detectors below move the answer against the
+// fixed expectation. That another owner's mark stays out of the rows is a fixture control (the world is built with one such mark
+// and the expectation excludes it); it is not a falsifier of the live ask (the detector that pushes such a row works on a synthetic
+// answer only).
+const INVENTED_WORLD_ASKS = new Set(["ask 3", "ask 7"]);
+const expectedFor = (label) => (INVENTED_WORLD_ASKS.has(label) ? overlayStakes(TWINS.of(label), { rows: INVENTED_STAKE_ROWS }) : TWINS.of(label));
+/** One doorstep ask, answered in a child over the invented world, with the suite's store and the same injected pool (see the fixture). */
+function inventedWorldAsk(which) {
+  const child = spawn(process.execPath, [join(ROOT, "test", "fixtures", "pos896-doorstep-ask.mjs")], {
+    env: { ...process.env, WORLD_CLONE: INVENTED_WORLD, WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), POS896_ASK: which, POS896_NO_CLONE: join(tmp, "no-clone-here") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let out = "", err = "";
+  child.stdout.on("data", (d) => { out += d; });
+  child.stderr.on("data", (d) => { err += d; });
+  return new Promise((ok, no) => {
+    const t = setTimeout(() => { child.kill(); no(new Error(`${which}: the invented-world child did not answer in 120 s`)); }, 120_000);
+    child.on("error", (e) => { clearTimeout(t); no(e); });
+    child.on("exit", (code, signal) => {
+      clearTimeout(t);
+      if (code !== 0) return no(new Error(`${which}: the invented-world child exited ${code ?? signal}: ${err.slice(0, 300)}`));
+      try { ok(JSON.parse(out)); } catch (e) { no(new Error(`${which}: the child's answer was not JSON (${out.length} bytes)`)); }
+    });
+  });
+}
 // the twin's answer as recorded (helpers/twin-golden.mjs), against the store's
 const same = async (label, newAnswer) => {
-  const n = await inRecordForm(steady(bytes(await newAnswer) ?? "undefined")), o = TWINS.of(label);
+  const n = await inRecordForm(steady(bytes(await newAnswer) ?? "undefined")), o = expectedFor(label);
   if (n !== o) assert.fail(`${label}: ${firstDiff(JSON.parse(n), JSON.parse(o))}`);
 };
 
@@ -207,7 +246,9 @@ test("the MCP cases and household { read: address | window | home | doorstep | s
   try {
     Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
     pen.__setPoolForTest(pool);
-    for (const [i, ask] of asks.entries()) await same(`ask ${i}`, ask());
+    // asks 3 and 7 answer over the invented world (a child); the rest are the suite's own, in this process
+    const live = { 3: () => inventedWorldAsk("read_doorstep"), 7: () => inventedWorldAsk("household-doorstep") };
+    for (const [i, ask] of asks.entries()) await same(`ask ${i}`, (live[i] ?? ask)());
     pen.__setPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
     for (const [i, ask] of asks.entries()) {
       const r = await ask();
@@ -282,4 +323,50 @@ test("the roster memo follows the store's head: a new ingest's residents are on 
   await w.end();
   const after = (await store.residentList(api)).map((e) => e.handle);
   assert.ok(after.includes("newcomer"), "a moved head re-reads the cards once, and the roll has the newcomer");
+});
+
+// ── THE DETECTORS (POS-896): the invented world's rows held fixed, one wrong answer per branch ───────────────────────────────────
+// The expectation is `overlayStakes` over an invented record; each case moves the ANSWER (never the expectation) and names the first
+// place the two part. Not one of them reads a world, a store or the office.
+const INV_STAKES_RECORD = { handle: "wright", stakes: { serves: "household.stakes", args: { handle: "wright" }, unavailable: "no town sha is ingested, so the store cannot say what stands behind these marks — unknown, not zero",
+  escrow_at_town_sha: null, count: 26, at_risk: null, rows: [{ mark: "old/one", kind: "sited", body: "b", class: "commons", escrow: null, at_risk: null }] } };
+const INV_WANT = () => overlayStakes(steady(INV_STAKES_RECORD), { rows: INVENTED_STAKE_ROWS });
+const rightAnswer = () => structuredClone(JSON.parse(INV_WANT()));
+const stakesDetector = (mutate) => { const a = rightAnswer(); mutate(a); return firstDiffPath(steady(a), INV_WANT()); };
+
+test("detector · the stakes expectation is the invented rows and their count, in the segment's own order, with another owner's mark out and everything else the record's", () => {
+  const want = JSON.parse(INV_WANT());
+  assert.deepEqual(want.stakes.rows.map((r) => r.mark), ["wright/alpha-bench", "wright/bravo-parcel", "wright/charlie-note", "wright/delta-lamp"]);
+  assert.equal(want.stakes.count, 4);
+  assert.equal(want.stakes.rows.some((r) => r.mark.startsWith("someone-else/")), false, "another owner's mark stays out");
+  assert.deepEqual(want.stakes.rows.map((r) => r.class), ["commons", "home", "commons", null], "a registry row's class, and null for founding estate");
+  assert.deepEqual(want.stakes.rows.map((r) => [r.escrow, r.at_risk]), [[null, null], [null, null], [null, null], [null, null]], "unmeasured, so unjudged");
+  assert.equal(want.stakes.unavailable, INV_STAKES_RECORD.stakes.unavailable, "the segment's own sentences stay the record's");
+  assert.deepEqual(Object.keys(want.stakes.rows[0]), ["mark", "kind", "body", "class", "escrow", "at_risk"]);
+  assert.equal(stakesDetector(() => {}), null, "the control: the right answer equals the expectation");
+});
+
+test("detector · a miscount, a missing row, an extra row (another owner's) and a count with no rows are each named", () => {
+  assert.equal(stakesDetector((a) => { a.stakes.count = 5; }), "$.stakes.count");
+  assert.equal(stakesDetector((a) => { a.stakes.rows.pop(); }), "$.stakes.rows.length");
+  assert.equal(stakesDetector((a) => { a.stakes.rows.push({ mark: "someone-else/echo-gate", kind: "sited", body: "x", class: "commons", escrow: null, at_risk: null }); }), "$.stakes.rows.length");
+  assert.equal(stakesDetector((a) => { a.stakes.rows = []; }), "$.stakes.rows.length", "the count alone is not the branch");
+});
+
+test("detector · a wrong kind, class, body, escrow, risk or order is named at its row and field", () => {
+  assert.equal(stakesDetector((a) => { a.stakes.rows[1].kind = "sited"; }), "$.stakes.rows[1].kind", "wrong kind");
+  assert.equal(stakesDetector((a) => { a.stakes.rows[0].class = "home"; }), "$.stakes.rows[0].class", "wrong class");
+  assert.equal(stakesDetector((a) => { a.stakes.rows[3].class = "commons"; }), "$.stakes.rows[3].class", "founding estate given a class");
+  assert.equal(stakesDetector((a) => { a.stakes.rows[2].body = null; }), "$.stakes.rows[2].body", "a body lost");
+  assert.equal(stakesDetector((a) => { a.stakes.rows[0].escrow = 0; }), "$.stakes.rows[0].escrow", "an escrow read where none was");
+  assert.equal(stakesDetector((a) => { a.stakes.rows[0].at_risk = true; }), "$.stakes.rows[0].at_risk", "a risk where none was judged");
+  assert.equal(stakesDetector((a) => { a.stakes.rows.reverse(); }), "$.stakes.rows[0].mark", "the segment's order lost");
+  assert.equal(stakesDetector((a) => { a.stakes.unavailable = "all clear"; }), "$.stakes.unavailable", "the unmeasured sentence replaced");
+});
+
+test("detector · a record in another state (measured, or with a judged row) is refused by name, never rewritten", () => {
+  const measured = structuredClone(INV_STAKES_RECORD); delete measured.stakes.unavailable;
+  assert.throws(() => overlayStakes(steady(measured), { rows: INVENTED_STAKE_ROWS }), /is measured, but the expected rows are the unmeasured state/);
+  const judged = structuredClone(INV_STAKES_RECORD); judged.stakes.rows[0].at_risk = false;
+  assert.throws(() => overlayStakes(steady(judged), { rows: INVENTED_STAKE_ROWS }), /rows are judged/);
 });
