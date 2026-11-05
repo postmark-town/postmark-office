@@ -339,7 +339,10 @@ test("QA fail 4 · standing on a set-out bowl: the bare read, the close look's c
     const into = await callHoldTool("world_hold", { to: ANA_DOOR_BOWL, kind: "pocket-comet", count: 1 }, KEY, { verb: "give" });
     assert.equal(into.did, "give", "the door admits a give into ana's open bowl under cy's feet");
     const read = await worldApex({}, KEY);
-    assert.ok((read.within ?? []).some((m) => m.id === ANA_DOOR_BOWL), `the bowl is under cy's feet, in her spine: ${(read.within ?? []).map((m) => m.id)}`);
+    // WLD-74 (Darko 2026-10-18: "you cannot be INSIDE a <thing> unless you've entered"): the bowl is under cy's feet,
+    // not a place she is in, so it is not in her spine; it is under her feet, in reach (entered-thing-within.test.mjs
+    // drives the entered and exited arms). Before WLD-74 this line asserted the opposite.
+    assert.ok(!(read.within ?? []).some((m) => m.id === ANA_DOOR_BOWL), `the bowl is under cy's feet, not a place she has entered: ${(read.within ?? []).map((m) => m.id)}`);
     assert.ok(!(read.nearby ?? []).some((o) => o.id === ANA_DOOR_BOWL), "and not among what the eyes see (the case the matrix missed)");
     const acts = read.actions.map((e) => e.action);
     for (const v of ["take", "give", "refill"]) assert.ok(acts.includes(v), `${v} is admitted here, so it shows (${acts})`);
@@ -484,3 +487,4 @@ test("holders · a give of a bag to a resident who carries a bowl lands", { skip
   const gave = await callHoldTool("world_hold", { thing: BAG, to: "sbx-dee" }, KEY, { verb: "give" });
   assert.deepEqual([gave.did, gave.holder ?? gave.to], ["give", "sbx-dee"]);
 });
+

@@ -1631,14 +1631,27 @@ export function enterStackMatters(inPlay = {}) {
 /** What a resident is within now (DEC-5's read), for the eyes and the air; null
  *  when the stack matters to nothing (enterStackMatters), the clone carries no
  *  enter/exit law or the ledger will not read. */
-async function enteredNow(handle, inPlay) {
-  if (!handle || !enterStackMatters(inPlay)) return null;
+async function enteredNow(handle, inPlay, { always = false } = {}) {
+  if (!handle || (!always && !enterStackMatters(inPlay))) return null;
   try {
     const { crossingLaw } = await import("./world-crossings.mjs");
     const { crossingDeps } = await import("./world-apex.mjs");
     const law = await crossingLaw(WORLD_CLONE);
     return await occupiedNowBy(handle, law.thresholds, crossingDeps());
   } catch { return null; }
+}
+
+/** The engine's geometric chain cut to what this reader is inside (held.mjs § enteredSpine, WLD-74): `{ within,
+ *  underfoot }`. The enter stack is the read's own (`entered`), or read here when a thing is in the chain and none
+ *  was read; a spectator glance (coords) has entered nothing. One cut for the orient and the eyes of a read. */
+async function spineEnteredBy(chain, { w, entered, choice, verbs, crossing }) {
+  if (!Array.isArray(chain) || !chain.length) return { within: chain ?? [], underfoot: [] };
+  const { enteredSpine } = await import("./held.mjs");
+  const byId = new Map((w.marks ?? []).map((m) => [m.id, m]));
+  const opts = { classOf: markClassOf, extendsOf: classExtendsOf() };
+  const first = enteredSpine(chain, byId, entered, opts);
+  if (!first.underfoot.length || entered != null || !choice?.handle || choice.coords) return first;
+  return enteredSpine(chain, byId, await enteredNow(choice.handle, { verbs, w, crossing }, { always: true }), opts);
 }
 
 /** How near a refused road's wall point must be to the old track for the refusal to name it (WLD-6). */
@@ -2531,6 +2544,13 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // an entered mark is shelter (§ roadShelter): a body's read carries what it is within
   const entered = choice.coords ? null : await enteredNow(choice.handle, { verbs, w, crossing });
   const o = verbs.orient({ x: at.x, y: at.y }, w, { crossing, entered });
+  // A THING YOU STAND ON IS NOT A PLACE YOU ARE IN UNTIL YOU HAVE ENTERED IT (WLD-74, held.mjs § enteredSpine):
+  // the spine every reach and law read keys on drops it, and the things dropped stand under your feet, in reach
+  // (`_underfoot`, below). Asked of the enter stack, read here when a thing is in the chain and no read of it was
+  // made; a spectator glance (coords) and a keyless reader have entered nothing.
+  const cut = await spineEnteredBy(o.you?.within, { w, entered, choice, verbs, crossing });
+  if (o.you) o.you.within = cut.within;
+  const underfoot = cut.underfoot;
   // the note is embodied property: only the body's standpoint carries it — a
   // spectator glance (coords) is nobody's, so it reads nobody's note.
   const { note, unavailable: noteUnavailable } = choice.handle ? await noteForHandle(key, choice.handle) : { note: null };
@@ -2581,6 +2601,10 @@ export async function worldOrient(args = {}, key = null, { roll = [], crowd = fa
   // the stack this read used, for the eyes of the same read (the apex hands it on, so
   // the ledger is read once); not enumerable, so no answer ever carries it
   Object.defineProperty(out, "_entered", { value: entered });
+  // the things under your feet that the spine dropped (above): in reach, never within. The reads that gather
+  // what is in reach add them (world-apex.mjs), so a verb they admit by reach still shows; not enumerable, so no
+  // answer carries it
+  Object.defineProperty(out, "_underfoot", { value: underfoot });
   return out;
 }
 
@@ -2980,6 +3004,13 @@ export async function worldEyes(args = {}, key = null, { roll = [], v2 = false, 
   // (`given`: the stack orient already read for this same read, handed on by the apex)
   const entered = choice.coords ? null : given !== undefined ? given : await enteredNow(choice.handle, { verbs, w, crossing });
   const r = verbs.openYourEyes({ x: at.x, y: at.y, name: args.name }, w, { crossing, actor: choice.handle ?? null, entered, ...(budget ? { budget } : {}) });
+  // THE TELLING'S SPINE IS THE SAME SPINE (WLD-74): its "You are within …" line and `radial.within` name a thing
+  // only once you have entered it, as `you.within` does. Cut before the telling renders (it reads `radial` lazily).
+  if (Array.isArray(r.radial?.within) && r.radial.within.length) {
+    const { within } = await spineEnteredBy(r.radial.within, { w, entered, choice, verbs, crossing });
+    r.radial.within = within;
+    if (r.fov) r.fov.within = within;
+  }
   // tell is a lazy thunk on the verb's return — render it here so the JSON
   // skin carries the prose (a function would vanish in serialization).
   const engineTelling = typeof r.tell === "function" ? r.tell() : r.tell ?? null;

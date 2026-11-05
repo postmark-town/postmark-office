@@ -1986,8 +1986,9 @@ async function usableHere(args, key, oriented, nearby = []) {
   try {
     const { usableAt } = await import("./world-kinds.mjs");
     const here = { x: Number(sp.x), y: Number(sp.y) };
-    // the spine as well as the eyes: a bowl you stand on is in `within`, never in `nearby` (QA fail 4)
-    const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
+    // the spine, the eyes, and what is under your feet: a bowl you stand on is never in `nearby` (QA fail 4), and
+    // unentered it is under your feet rather than `within` (WLD-74), so the matrix is handed it either way
+    const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: [...(oriented?.you?.within ?? []), ...(oriented?._underfoot ?? [])], nearby }),
       residents: oriented.present?.residents ?? [] });
     // the creatures in sight are objects of the same matrix (POS-672 W4); unread, they add nothing
     return [...pairs, ...(await creaturePairsHere(who, here, oriented.present?.residents ?? []))];
@@ -2753,7 +2754,8 @@ async function apexRead(args, key, ctx = {}) {
     // specificity. Before this the union had one member and the second clause
     // of § Class-nodes reached nothing.
     const spineIds = await apexSpineIds(store.db, spine, args, key);
-    const reachIds = nearby.map((o) => o.id);
+    // WLD-74: a thing under your feet that you have not entered is in reach, not within (world.mjs § worldOrient)
+    const reachIds = [...nearby.map((o) => o.id), ...(oriented._underfoot ?? [])];
     const amb = gatherActions(store.db, { spineIds, reachIds });
     rows = amb.rows;
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });
@@ -3240,7 +3242,8 @@ async function apexDo(args, key, ctx = {}) {
     // read, and never the reverse." A door that admits an act the read did not
     // show is precisely the reverse that law forbids.
     const spineIds = await apexSpineIds(store.db, spine, args, key);
-    const reachIds = (seen.objects ?? []).map((o) => o.id);
+    // WLD-74: a thing under your feet that you have not entered is in reach, not within (world.mjs § worldOrient)
+    const reachIds = [...(seen.objects ?? []).map((o) => o.id), ...(oriented._underfoot ?? [])];
     const amb = gatherActions(store.db, { spineIds, reachIds });
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });
     const held = gatherHeldActions(store.db, await holdingsFor(args, key));
@@ -4039,7 +4042,8 @@ async function apexReadAction(args, key, ctx = {}) {
     // would have found until a human tried to read the card for the act they
     // had just performed.
     const spineIds = await apexSpineIds(store.db, spine, args, key);
-    const reachIds = (seen.objects ?? []).map((o) => o.id);
+    // WLD-74: a thing under your feet that you have not entered is in reach, not within (world.mjs § worldOrient)
+    const reachIds = [...(seen.objects ?? []).map((o) => o.id), ...(oriented._underfoot ?? [])];
     const amb = gatherActions(store.db, { spineIds, reachIds });
     const ground = gatherGroundActions(store.db, { spineIds, reachIds });
     const held = gatherHeldActions(store.db, await holdingsFor(args, key));

@@ -190,6 +190,26 @@ export function groundChain(chain = [], byId = new Map(), opts) {
 }
 
 /**
+ * WHAT YOU ARE INSIDE (WLD-74; Darko 2026-10-18: "you cannot be INSIDE a <thing> unless you've entered"; Wright,
+ * AUTHORITY 2026-11-04T20:34:47Z: `within`, and any reach or law read keyed on it, lists a thing only once its enter
+ * record holds it). The engine's chain is geometry: every mark whose footprint holds the point, a set-out bowl
+ * among them. A thing stays in it only when `entered` (the reader's enter stack, ids) holds it; every other link
+ * (a parcel, a place, a room) stands as the geometry built it, and its own rules (dungeon sight among them) are
+ * applied where they always were. A thing taken out is not gone: it is under the reader's feet, so it is in reach,
+ * and `underfoot` names it for the reads that ask what is in reach. A link is known by its FULL record, as in
+ * `groundChain`. PURE.
+ */
+export function enteredSpine(chain = [], byId = new Map(), entered = null, opts) {
+  const inside = new Set((entered ?? []).map(String));
+  const within = [], underfoot = [];
+  for (const link of chain ?? []) {
+    if (isThingMark(byId.get(link?.id) ?? link, opts) && !inside.has(String(link?.id))) underfoot.push(String(link.id));
+    else within.push(link);
+  }
+  return { within, underfoot };
+}
+
+/**
  * The engine's close look at a mark, with its holder named (POS-688): the engine
  * reads the record's own fields and knows no hold, so the office adds the one
  * word the placed world says. The look gives no place for a held thing already
