@@ -36,7 +36,10 @@ before(async () => {
     [join(ROOT, "src", "server.mjs"), "--port", String(port), "--oauth-db", oauthPath], {
       env: {
         PATH: process.env.PATH, HOME: tmp, WORLD_GRAPH_NONE: "1", ...ix.env,
-        TOWN_CLONE: join(tmp, "no-town-clone"), TOWN_PUSH: "",
+        // NO WORLD, as there is no town (POS-896): with WORLD_CLONE unset the office reads the tree's own world clone, whose
+        // creature declarations the boot creature clock spawns from, a producer this file never asked for. An absent world
+        // leaves it nothing to write (src/creature-tick.mjs § namedSpawns holds, not throws, on a world it cannot read).
+        TOWN_CLONE: join(tmp, "no-town-clone"), WORLD_CLONE: join(tmp, "no-world-clone"), TOWN_PUSH: "",
         PUBLIC_BASE: `http://127.0.0.1:${port}`,
         POSTMARK_OAUTH_GITHUB_CLIENT_ID: "pos526-mock-app", POSTMARK_OAUTH_GITHUB_CLIENT_SECRET: "pos526-mock-secret",
         GITHUB_AUTH_URL: "http://127.0.0.1:9/never", GITHUB_TOKEN_URL: "http://127.0.0.1:9/never", GITHUB_API_URL: "http://127.0.0.1:9",
@@ -118,6 +121,15 @@ async function rows() {
   } finally { await c.end(); }
   return out;
 }
+/**
+ * THE ONE ASSERTION (POS-896): every table in the key store and in the office's store holds exactly the counts it held
+ * before the refused request. It is a function so the falsifier below drives the SAME assertion with a write the refusal
+ * did not make. No table, action or actor is left out of it, and nothing waits for the office to settle: the office is
+ * booted with no world and no town to read (below), so there is no unrelated producer for the counts to race.
+ */
+async function unchanged(before, message) {
+  assert.deepEqual(await rows(), before, message);
+}
 const bounce413 = (r, what) => {
   assert.equal(r.status, 413, `${what}: status`);
   const b = JSON.parse(r.text);
@@ -139,7 +151,7 @@ test("REST (the shared reader, POST /berth, 10 000 bytes): one byte over is a wh
   const malformed = await send("/berth", "{not json");
   assert.equal(malformed.status, 400, "malformed JSON keeps its 400");
   assert.match(JSON.parse(malformed.text).defect, /not JSON/);
-  assert.deepEqual(await rows(), before, "nothing minted or written");
+  await unchanged(before, "nothing minted or written");
 });
 
 test("POST /residency and POST /letters (200 000 bytes): one byte over is a whole 413 bounce", async () => {
@@ -148,7 +160,7 @@ test("POST /residency and POST /letters (200 000 bytes): one byte over is a whol
   bounce413(await send("/residency", filler(200_001), { headers: auth, chunked: true }), "residency, chunked");
   bounce413(await send("/letters", filler(200_001), { headers: auth }), "letters, content-length");
   bounce413(await send("/letters", filler(200_001), { headers: auth, chunked: true }), "letters, chunked");
-  assert.deepEqual(await rows(), before, "no join PR, no letter, no record");
+  await unchanged(before, "no join PR, no letter, no record");
 });
 
 test("the media door keeps its own cap (3 000 000 bytes): over is 413, exactly the cap is read", async () => {
@@ -167,7 +179,7 @@ test("MCP (3 000 000 bytes): one byte over is a whole 413 carrying a JSON-RPC er
     assert.equal(b.error.code, -32600);
     assert.match(b.error.message, /the request body is too large/);
   }
-  assert.deepEqual(await rows(), before);
+  await unchanged(before);
 });
 
 test("OAuth (100 000 bytes): one byte over is a whole 413 { error, error_description } on token, register and the browser's consent", async () => {
@@ -184,7 +196,7 @@ test("OAuth (100 000 bytes): one byte over is a whole 413 { error, error_descrip
     assert.equal(b.error, "invalid_request", path);
     assert.match(b.error_description, /the request body is too large/, path);
   }
-  assert.deepEqual(await rows(), before, "no client, code or token written");
+  await unchanged(before, "no client, code or token written");
 });
 
 test("valid Unicode survives a byte-split upload through a real door (OAuth registration echoes the name)", async () => {
@@ -201,4 +213,24 @@ test("a slow upload that keeps going past the cap gets its 413 mid-stream, and t
   const next = await get("/");
   assert.equal(next.status, 200, "the office is still serving");
   assert.doesNotMatch(stderr, /ERR_HTTP_HEADERS_SENT|write after end|Cannot set headers/, "no second response was attempted");
+});
+
+// ── THE FALSIFIER (POS-896): the SAME assertion, shown to see a write the refusal did not make ──────────────────────────
+// A refused body must change no table. This case refuses a body as the tests above do, then makes ONE deliberate write of
+// its own through the owner's connection (an invented act by an invented actor, nothing real), and requires the one
+// assertion above (`unchanged`) to fail on exactly that difference: store.acts one row higher than before, every other
+// table as it was. Without the write the same refusal passes, so the failure is the write's and not the harness's.
+test("falsifier · the no-write assertion sees a deliberate write: store.acts one higher, nothing else moved", async () => {
+  const before = await rows();
+  bounce413(await send("/residency", filler(200_001), { headers: auth }), "residency, content-length");
+  await unchanged(before, "the refusal alone writes nothing (the control: the same assertion passes without the deliberate write)");
+  const c = await ix.store.connect("world2_owner");
+  try { await c.query("INSERT INTO acts (at, actor, action, class) VALUES (now(), 'invented-writer', 'say', 'voice')"); } finally { await c.end(); }
+  await assert.rejects(unchanged(before, "nothing minted or written"), (e) => {
+    assert.equal(e.code, "ERR_ASSERTION");
+    const changed = Object.keys({ ...e.actual, ...e.expected }).filter((k) => JSON.stringify(e.actual[k]) !== JSON.stringify(e.expected[k]));
+    assert.deepEqual(changed, ["store.acts"], "only the acts table differs");
+    assert.equal(e.actual["store.acts"] - e.expected["store.acts"], 1, "by exactly the one row written");
+    return true;
+  });
 });
