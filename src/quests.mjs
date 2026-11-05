@@ -119,8 +119,10 @@ export function judgeQuestHand(fields, key) {
 /** The terms a quest post shows, joined from its registry entry. */
 export function questTerms(entry) {
   if (!entry) return null;
-  const { title, source, reward, cadence, target } = entry;
-  return { title, source, reward, cadence, target: target ?? null };
+  const { title, source, reward, cadence, target, ends } = entry;
+  // POS-857: the registry's optional last offered day (inclusive, a town date). Carried as a
+  // fact for the offer surfaces to compare; the post's own state and history are not touched.
+  return { title, source, reward, cadence, target: target ?? null, ...(typeof ends === "string" && ends ? { ends } : {}) };
 }
 
 /**
