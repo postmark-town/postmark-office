@@ -221,8 +221,21 @@ systemctl is-active --quiet "$SERVICE" || die "$SERVICE is not active after the 
 # ── 6. the town's own door still answers ─────────────────────────────────────
 # The release probe proves the new code booted; this proves it can still do the
 # job. /town is the read the whole site is built on, and DEPLOY.md's own smoke.
-curl -fsS --max-time 10 "http://127.0.0.1:$PORT/town" >/dev/null \
-  || die "$SERVICE booted the new release but GET /town does not answer. The office is up and broken — this is the state to roll back from (deploy/DEPLOY.md: 'Rollback: systemctl stop postmark-office')."
+# A cold start's first /town takes 30–40 s to warm (STAR-130: w45.6 on 11-05 booted
+# at 03:29:47, its first request lines came at 03:30:29, and the old single 10 s try
+# failed a healthy office). So the probe tries every 5 s, each try given 20 s, until
+# 75 s have passed; a door that never answers in that time still fails, as before.
+# test/remote-deploy-town-probe.test.mjs runs this function with a stand-in curl.
+town_answers() { # <port> <window seconds> <seconds per try>
+  local port=$1 window=$2 per=$3 deadline=$(( $(date +%s) + $2 ))
+  while :; do
+    curl -fsS --max-time "$per" "http://127.0.0.1:$port/town" >/dev/null 2>&1 && return 0
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep "${TOWN_PROBE_PAUSE:-5}" # the test shortens the pause; the box never sets it
+  done
+}
+town_answers "$PORT" 75 20 \
+  || die "$SERVICE booted the new release but GET /town does not answer (75 s of tries, 20 s each). The office is up and broken — this is the state to roll back from (deploy/DEPLOY.md: 'Rollback: systemctl stop postmark-office')."
 say "GET /town answers"
 
 echo "== deployed $TAG @ ${SHA:0:12} to $SERVICE =="
