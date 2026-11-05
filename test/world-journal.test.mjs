@@ -1177,6 +1177,9 @@ const guardStore = ({ claims = [], identities = { alpha: "hh:alpha-house", beta:
         // fixture's case and the honest answer for a store with no session.
         if (/current_setting\('app\.household_keys'/i.test(sql)) return { rows: [{ keys: null }] };
         if (/^UPDATE claims/i.test(sql.trim())) return { rows: [], rowCount: 0 };
+        // WLD-138 B: the withdraw door asks whether the mark is a full set-down holder (its newest hold row,
+        // set-down-return.mjs § setDownHolderOf). This fixture keeps no hold lane, so there is none.
+        if (/FROM acts\s+WHERE class = \$1 AND object = ANY\(\$2\) AND action = ANY\(\$3\)/i.test(sql)) return { rows: [] };
 
         throw new Error(`the hand-built store was asked something it does not know: ${sql.slice(0, 80)}`);
       },
