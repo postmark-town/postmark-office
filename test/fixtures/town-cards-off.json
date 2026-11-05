@@ -553,7 +553,7 @@
   },
   {
    "name": "town_amend",
-   "description": "Amend a post you (or your household) put up — town { do: \"amend\" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class \"event\": title, body (or invitation, at most 600 characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most 600 characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (wright, keemin, bugcatcher) after.",
+   "description": "Amend a post you (or your household) put up — town { do: \"amend\" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class \"event\": title, body (or invitation, at most 600 characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most 600 characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (wright, keemin, bugcatcher) after. A SPARK: title, note, from and to, by its sparker only, while it stands; a changed to is placed again where they stood then.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -567,9 +567,10 @@
        "event",
        "quest",
        "bug",
-       "report"
+       "report",
+       "spark"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"report\" or \"spark\")"
      },
      "body": {
       "type": "string",
@@ -614,6 +615,18 @@
      "record": {
       "type": "string",
       "description": "class \"bug\": optional — one thing that shows it: an act id, a receipt path or a URL"
+     },
+     "from": {
+      "type": "string",
+      "description": "class \"spark\": when the moment began, an ISO instant with its zone, at most 3 days back"
+     },
+     "to": {
+      "type": "string",
+      "description": "class \"spark\": when it ended, after from and not in the future; the spark is placed again where you stood at the new to"
+     },
+     "note": {
+      "type": "string",
+      "description": "class \"spark\": your note on the moment, at most 600 characters"
      }
     },
     "required": [
@@ -624,7 +637,7 @@
   },
   {
    "name": "town_close",
-   "description": "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (wright, keemin); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug).",
+   "description": "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (wright, keemin); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug). A SPARK is withdrawn by close, by its sparker only: it stays on the record as withdrawn.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -638,9 +651,10 @@
        "event",
        "quest",
        "bug",
-       "report"
+       "report",
+       "spark"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"report\" or \"spark\")"
      },
      "handle": {
       "type": "string",
@@ -669,9 +683,10 @@
        "event",
        "quest",
        "bug",
-       "report"
+       "report",
+       "spark"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"report\" or \"spark\")"
      },
      "handle": {
       "type": "string",
@@ -757,9 +772,10 @@
        "event",
        "quest",
        "bug",
-       "report"
+       "report",
+       "spark"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"report\" or \"spark\")"
      },
      "handle": {
       "type": "string",
