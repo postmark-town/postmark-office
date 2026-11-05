@@ -131,6 +131,11 @@ const CHANGED = {
     ['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
   'MCP household {"read":"standing","handle":"wright"}': [['"counted_verbs":["world_hold","world_describe"', '"counted_verbs":["world_hold","world_creature","world_describe"']],
 };
+// AND THE SPARK (POS-780, 2026-11-05): a spark is a post act in the record, charged on the same world-write ledger
+// (bouncer.mjs § WORLD_WRITE_VERBS, after world_describe), so the counted verbs name it; nothing else moves.
+for (const label of ["MCP household {}", 'MCP household {"read":"standing","handle":"wright"}'])
+  CHANGED[label].push(['"counted_verbs":["world_hold","world_creature","world_describe","world_leave_mark"',
+    '"counted_verbs":["world_hold","world_creature","world_describe","world_spark","world_leave_mark"']);
 // AND MAIL PARITY (POS-666, Darko 2026-10-22): the send card says a letter SAILS
 // (a letter a mail block stops is never delivered, and the office never lies),
 // the four acts join the index after mark-all-read, and `blocks` joins the reads.

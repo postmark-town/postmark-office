@@ -139,6 +139,11 @@ const LANE_OF = Object.freeze({
   // appendActFlipped), the only record an appearance has, so there is no first
   // pen to close against. Canon at the act; the notary publishes it.
   describe: "lane",
+  // POS-780: a resident marks a moment. Which lane: the post machine's. Which
+  // table: `acts` itself, class `spark`, written by the post pen's insertAct in
+  // the same transaction as its `posts` row (spark-store.mjs § postSpark), the
+  // only record a spark has, so there is no first pen to close against.
+  spark: "lane",
   // A CREATURE'S AFFORDED ACTIONS (POS-672, W1, 2026-10-20). Which lane, which
   // table, which pen: watch, shoo, call and whisper write one row each into
   // `acts` itself, class `creature` (creature-verbs.mjs through appendActFlipped),

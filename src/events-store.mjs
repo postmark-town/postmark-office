@@ -52,6 +52,7 @@ import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
+import { SPARK_CLASS, SPARK_NOT_AT_TOWN, SPARK_NO_ADVANCE } from "./sparks.mjs"; // POS-780: made at the world door; its pen is spark-store.mjs
 import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
@@ -352,8 +353,11 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
 // class "idea" (POS-290) joins behind IDEA_POSTS; its pen is idea-store.mjs,
 // loaded when an idea act arrives (it imports this file's row helpers).
 const IDEA_CLASS = "idea";
-const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS];
+// class "spark" (POS-780) is a post the world door makes (world { do: "spark" },
+// spark-store.mjs) and its sparker amends and withdraws here; this door never posts one.
+const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, SPARK_CLASS];
 const ideaPen = () => import("./idea-store.mjs");
+const sparkPen = () => import("./spark-store.mjs");
 
 function judgeClass(fields, { required, env = process.env }) {
   const c = fields.class == null ? "" : String(fields.class).trim();
@@ -390,12 +394,14 @@ async function classOf(fields, id, env) {
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
   const { ideaRow } = await ideaPen();
+  const { sparkRow } = await sparkPen();
   return read(async (client) => ((await questRow(client, id)) ? QUEST_CLASS
-    : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
+    : (await bugRow(client, id)) ? BUG_CLASS : (await sparkRow(client, id)) ? SPARK_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
 }
 
 export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null, titleOf = null } = {}) {
   const cls = judgeClass(fields, { required: true, env });
+  if (cls === SPARK_CLASS) throw SPARK_NOT_AT_TOWN();
   if (cls === QUEST_CLASS) return postQuest(fields, key, { now, env, registry });
   if (cls === BUG_CLASS) return postBug(fields, key, { now, env, roll });
   if (cls === IDEA_CLASS) return (await ideaPen()).postIdea(fields, key, { now, env, roll, titleOf });
@@ -409,6 +415,10 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) throw REPORT_NO_AMEND();
   if (cls === QUEST_CLASS) throw QUEST_NO_AMEND();
+  if (cls === SPARK_CLASS) return (await sparkPen()).amendSpark(fields, key, id, { now, env });
+  // the amend schema names a spark's own words (POS-780); no other class reads them, so none takes them silently
+  for (const k of ["from", "to", "note"])
+    if (fields?.[k] !== undefined) throw refuse(422, `${k} is a spark's`, "only a spark's window and note are amended in these words; send this post's own fields", { field: k });
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
   const handle = standpointHandle(fields, key);
@@ -422,6 +432,7 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
   if (cls === REPORT_CLASS) throw REPORT_NO_CLOSE();
   if (cls === QUEST_CLASS) return closeQuest(fields, key, id, { now, env });
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
+  if (cls === SPARK_CLASS) return (await sparkPen()).closeSpark(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
     "it finishes by advance: town { do: \"advance\", args: { post, to: \"shipped\" | \"declined\" | \"duplicate\" } }, by the town's hands");
   const handle = standpointHandle(fields, key);
@@ -442,6 +453,7 @@ export async function advanceAtTown(fields, key, { now = Date.now(), env = proce
   // POS-816: the hands hold, lift or cancel an inviter's payout (invite-hold-store.mjs); anyone else learns nothing
   if (cls === INVITE_CLASS) return (await import("./invite-hold-store.mjs")).advanceInvite(fields, key, id, { now, env, clone });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
+  if (cls === SPARK_CLASS) throw SPARK_NO_ADVANCE(id);
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
   for (const k of ["skip", "reason"])

@@ -73,6 +73,7 @@ const ALLOWED = {
   "registry-store.mjs": [1, `${OWN}: a classifier`],
   "release.mjs": [1, `${OPERATOR} (the deploy receipt the auto-deploy probes)`],
   "server.mjs": [4, `${OWN}: the boot refusal (a log), the paperwork boot guard's refusal when the store cannot be asked (a log, then exit 78; POS-271), causeSaid (the log's reader), doorTripped's own refusal message (KEPT, POS-617: an integer HTTP code is only ever set by the office, and the 503 classes' messages are ruled sentences)`],
+  "spark-store.mjs": [3, `${OWN}: LateCrossingError's ruled message; PenUnreachableError's ruled sentence, as the 503's defect, on the write and on the read`],
   "settle-join-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "standing-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
   "static-keys-retire.mjs": [1, `${OWN}: a tool's own printout`],

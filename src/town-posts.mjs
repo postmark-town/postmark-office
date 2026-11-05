@@ -100,6 +100,8 @@ import { IDEA_STAGES } from "./ideas.mjs";
 import { ALIAS_NOTE } from "./post-words.mjs";
 
 import { REPORT_CLASS, REPORT_IS_PRIVATE } from "./reports.mjs";
+import { SPARK_CLASS, SPARK_FINISHED, SPARK_STATES } from "./sparks.mjs"; // POS-780: the spark post
+import { sparkExtrasVia } from "./spark-store.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOWN_CLONE = () => process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -110,6 +112,7 @@ export const POST_CLASSES = Object.freeze({
   [QUEST_CLASS]: Object.freeze({ finished: QUEST_FINISHED }),
   [BUG_CLASS]: Object.freeze({ finished: BUG_FINISHED }),
   [IDEA_CLASS]: Object.freeze({ finished: IDEA_FINISHED }),
+  [SPARK_CLASS]: Object.freeze({ finished: SPARK_FINISHED }),
 });
 
 /** Every state a class of post stands in (an event's come from its clock: household-posts.mjs). */
@@ -118,6 +121,7 @@ export const CLASS_STATES = Object.freeze({
   [QUEST_CLASS]: Object.freeze([...QUEST_STATES]),
   [BUG_CLASS]: Object.freeze([...BUG_STATES]),
   [IDEA_CLASS]: Object.freeze([...IDEA_STAGES]),
+  [SPARK_CLASS]: Object.freeze([...SPARK_STATES]),
 });
 
 /** The query parameters the posts list takes over HTTP; stage is state's permanent alias (POS-778). */
@@ -238,7 +242,7 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       const rows = await postRowsOf(client, cls, now);
       const ids = rows.map((r) => r.id).filter((id) => !one || id === one);
       return { rows, history: await postHistoryVia(client, cls, ids),
-        extras: cls === IDEA_CLASS ? await ideaExtrasVia(client, ids) : null };
+        extras: cls === IDEA_CLASS ? await ideaExtrasVia(client, ids) : cls === SPARK_CLASS ? await sparkExtrasVia(client, ids) : null };
     }, { env }));
   } catch (e) {
     if (e && typeof e.code === "number" && typeof e.defect === "string") throw e;
@@ -271,6 +275,16 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), body: extras.bodies.get(r.id) ?? "", fields: { ...(r[FIELDS] ?? {}) },
       history: historyOf(r.id), awards: history.awardsByPost.get(r.id) ?? [],
       ...ideaResponsesOf(extras.responses.get(r.id) ?? []) }));
+  } else if (cls === SPARK_CLASS) {
+    // A spark (POS-780) carries its moment: the note, the window, and the place
+    // where its sparker stood when the moment ended, or `place_unknown` saying why
+    // the record does not establish one; `sparked_from` is where it was pressed
+    // from, never where the moment was. Beside its history.
+    posts = [...rows].sort(postOrder).map((r) => {
+      const x = extras.byId.get(r.id);
+      return { ...plain(r), note: x?.note ?? "", window: x?.window ?? null, place: x?.place ?? null,
+        place_unknown: x?.place_unknown ?? null, sparked_from: x?.sparked_from ?? null, history: historyOf(r.id) };
+    });
   } else {
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), history: historyOf(r.id) }));
   }

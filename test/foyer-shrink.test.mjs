@@ -1255,6 +1255,20 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  25324 -> 25086 (-238) · slim  22886 -> 22648 (-238)
   //
+  // ⚠ AND RE-CAPTURED A TWENTY-SECOND TIME, 2026-11-05 (POS-780, the spark post), because
+  // the spark joined POST_CLASSES (town-posts.mjs), so householdPosts reads its half too and,
+  // when that half cannot be read, says so in `unavailable` in class order, before the Think
+  // Tank's line. No pin moved (world 7f5f61c81, town 5efee0178). Captured with
+  // tools/capture-doorstep-golden.mjs on a CI-shaped clone (suite-clones.sh's own fetch into
+  // a fresh scratch frame), where the capture at the train's tip d8b3c7a1 first equalled the
+  // twenty-first golden byte for byte; then the capture at this PR's head was diffed leaf by
+  // leaf against it BEFORE replacing it: exactly FOUR leaves, `posts.unavailable.4` (the Think
+  // Tank's line -> "the sparks could not be read from the office's record") and
+  // `posts.unavailable.5` (added: the Think Tank's line), on both skins, and nothing else.
+  // F7c5e below asserts the six lines themselves, from the class order, not from this file.
+  //
+  //   full  25086 -> 25142 (+56) · slim  22648 -> 22704 (+56) · the file 47948 -> 48060
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
@@ -1354,6 +1368,32 @@ test("F7c5c · THE FATTENING ARM CAN FAIL — the golden is the exact serialisat
   assert.notEqual(JSON.stringify(fattened), gold, "one byte more on the page and the comparison must refuse it");
   assert.equal(JSON.stringify(fattened).length, gold.length + 1,
     "the arm measures BYTES, not shape — if this is not exactly one, F7c5 is not the ceiling it claims to be");
+});
+
+test("F7c5e · THE SPARK'S HALF SAYS WHEN IT CANNOT BE READ — six `posts.unavailable` lines in class order, on both skins, asserted from the class order and not from the golden", async () => {
+  // POS-780: the twenty-second capture above moved F7c5 by the spark's line. A golden can be
+  // re-captured into agreement with any change (the capture tool's own warning), so the line is
+  // asserted here on its own: the posts halves in POST_CLASSES order (events, quests, bugs, the
+  // sparks; the idea posts' line is the Think Tank's and comes last), each unreadable on this
+  // fixture, after the registry's line. Taking the spark out of POST_CLASSES reds this, and F7c5.
+  const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  const { GOLDEN_NOW_MS } = await import("../tools/capture-doorstep-golden.mjs");
+  const { STANCE_ON, stancePoolFromJournal } = await import("./stance-pool-stub.mjs");
+  Object.assign(process.env, STANCE_ON);
+  stancePoolFromJournal(join(mkdtempSync(join(dir, "f7c5e-")), "dynamic.db"));
+  const bctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null, nowMs: GOLDEN_NOW_MS };
+  const SIX = [
+    "the household registry could not be read, so this answers for the resident alone",
+    "the events could not be read from the office's record",
+    "the quests could not be read from the office's record",
+    "the bugs could not be read from the office's record",
+    "the sparks could not be read from the office's record",
+    "the Think Tank could not be read from the world record",
+  ];
+  for (const slim of [false, true]) {
+    const page = await doorstepBundle("wright", { ...bctx, slim });
+    assert.deepEqual(page.posts?.unavailable, SIX, `${slim ? "slim" : "full"}: the six lines, the spark's fifth`);
+  }
 });
 
 test("F7c5d · EVERY CLOCK READ ON THE PAGE IS THREADED — the bare forms are absent from the source", async () => {
