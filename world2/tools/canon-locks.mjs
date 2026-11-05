@@ -34,6 +34,7 @@
 // never null.
 
 import { rowClassOf, townsOwn } from "./escrow-presence.mjs";
+import { heldBy } from "../../src/held.mjs";
 
 /**
  * Every standing mark and the claim that locked it.
@@ -43,7 +44,7 @@ import { rowClassOf, townsOwn } from "./escrow-presence.mjs";
  * examined rather than dropped by the join that was supposed to describe it.
  */
 export const STANDING_SELECT = `
-  SELECT m.slug, m.owner, m.locked_window, m.status AS mark_status, m.data->>'tier' AS tier,
+  SELECT m.slug, m.owner, m.locked_window, m.status AS mark_status, m.data->>'tier' AS tier, m.data->>'held_by' AS held_by,
          w.town_sha AS locking_town_sha,
          c.id::text AS claim_id, c.status AS claim_status, c.window_id, c.claimant, c.decided_at
     FROM marks m
@@ -199,6 +200,12 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
     // The town's own marks need no stake (POS-696; escrow-presence.mjs § townsOwn):
     // not judged, not counted unjudgeable, never listed.
     if (townsOwn(r)) continue;
+    // A HELD THING IS NOT A COMMONS MARK (POS-765; LOGOS § the transfer edge): it is published by its holder and
+    // stands in no place, so the market-to-commons judgement has nothing to ask of it. `held_by` rides in this same
+    // row as the tier does and is read by the office's one held contract (held.mjs § heldBy), at THIS read: a thing
+    // that is set down and so stands placed is judged at the next read, with no memory of having been held. Escrow
+    // only: the canon check above is untouched, and so is every placed commons mark.
+    if (heldBy(r)) continue;
     if (rowClassOf(r.tier) !== "commons") continue;
     if (!r.locking_town_sha) continue;   // a mark whose window pinned no town read cannot be judged
 
