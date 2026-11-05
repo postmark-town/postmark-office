@@ -277,10 +277,13 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       ...ideaResponsesOf(extras.responses.get(r.id) ?? []) }));
   } else if (cls === SPARK_CLASS) {
     // A spark (POS-780) carries its moment: the note, the window, and the place
-    // where its sparker stood when the moment ended, beside its history.
+    // where its sparker stood when the moment ended, or `place_unknown` saying why
+    // the record does not establish one; `sparked_from` is where it was pressed
+    // from, never where the moment was. Beside its history.
     posts = [...rows].sort(postOrder).map((r) => {
       const x = extras.byId.get(r.id);
-      return { ...plain(r), note: x?.note ?? "", window: x?.window ?? null, place: x?.place ?? null, history: historyOf(r.id) };
+      return { ...plain(r), note: x?.note ?? "", window: x?.window ?? null, place: x?.place ?? null,
+        place_unknown: x?.place_unknown ?? null, sparked_from: x?.sparked_from ?? null, history: historyOf(r.id) };
     });
   } else {
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), history: historyOf(r.id) }));

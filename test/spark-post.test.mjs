@@ -36,7 +36,8 @@ const skip = store.skip ?? ((!WORLD && NO_WORLD) || false);
 const repo = mkdtempSync(join(tmpdir(), "pos780-"));
 const NO_TOWN = mkdtempSync(join(tmpdir(), "pos780-no-town-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
-const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "WORLD_CLONE", "WORLD_MOVEMENT_V2", "WORLD_POSITIONS", "POSITIONS_SNAPSHOT", "TOWN_CLONE", "WORLD_APEX"];
+const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "WORLD_CLONE", "WORLD_MOVEMENT_V2", "WORLD_POSITIONS", "POSITIONS_SNAPSHOT", "TOWN_CLONE", "WORLD_APEX",
+  "WORLD_SINGLE_LOG", "WORLD_POOL", "W2_PEN", "W2_GUARDS"];
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 let pool;
 
@@ -45,15 +46,29 @@ const LIO = { household: "sbx-lio", handles: new Set(["sbx-lio"]) };
 const REN = { household: "sbx-ren", handles: new Set(["sbx-ren"]) };
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const O = { x: 0, y: 0 }, B = { x: 300, y: 40 }, A = { x: -200, y: -90 };
+const MO = { household: "sbx-mo", handles: new Set(["sbx-mo"]) }, MO_HOME = "sbx-mo/home", HOME_AT = { x: 700, y: 700 };
+const UNA = { household: "sbx-una", handles: new Set(["sbx-una"]) }, KAI = { household: "sbx-kai", handles: new Set(["sbx-kai"]) };
+const BOAT = "sbx-wharf/the-boat", W = { x: 900, y: -900 }, LANDED = { x: -450, y: 320 };
+/** The stride the walk door stamps on every departure (world-classes.mjs § departurePace; decision 008b). */
+const PACE = 60;
 
 let worldApex, callWorldTool, townPostEvent, callTownPostTool, postAtTown, advanceAtTown, postsAtOffice, residentStandpoint, walkMod, walkEntry, normalizeRow;
+let landEntry, enterViaOffice, crossingDeps, postSpark;
 if (!skip) {
   mkdirSync(join(repo, "tools"), { recursive: true });
   for (const f of readdirSync(join(WORLD, "tools")).filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs")))
     copyFileSync(join(WORLD, "tools", f), join(repo, "tools", f));
   const root = { id: FRAME, by: "the-town", slug: "let-there-be-light", kind: "sited", at: { x: 0, y: 0 }, extent: { w: 100000, h: 100000 } };
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
-  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, households: {}, marks: [{ ...root, body: "Synthetic world frame." }] }));
+  // mo's home parcel stands in TODAY's world (the trap: a current home is no record of where mo stood then), and a
+  // boat (class vehicle) is berthed at W, where lio walks before boarding her
+  const home = { id: MO_HOME, by: "sbx-mo", household: "sbx-mo", slug: "home", kind: "parcel", at: HOME_AT, extent: { w: 25, h: 25 } };
+  const boat = { id: BOAT, by: "sbx-wharf", slug: "the-boat", kind: "sited", class: "vehicle", at: W, extent: { w: 20, h: 10 } };
+  put(`WORLD/marks/${MO_HOME}/mark.md`, markRecord(home, "mo's home ground."));
+  put(`WORLD/marks/${BOAT}/mark.md`, markRecord(boat, "A little boat at the wharf."));
+  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, households: { "sbx-mo": "sbx-mo" },
+    parcels: [{ id: MO_HOME, household: "sbx-mo", at: HOME_AT, extent: { w: 25, h: 25 } }],
+    marks: [{ ...root, body: "Synthetic world frame." }, { ...home, body: "mo's home ground." }, { ...boat, body: "A little boat at the wharf." }] }));
   put("WORLD/walk-ledger.md", "# Walk ledger\n");
   copyFileSync(join(WORLD, "WORLD", "skeleton.json"), join(repo, "WORLD", "skeleton.json"));
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
@@ -61,11 +76,15 @@ if (!skip) {
   execFileSync("git", ["-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qm", "synthetic canon"]);
   const { default: pg } = await import("pg");
   pool = new pg.Pool({ connectionString: store.url("office_api") });
-  Object.assign(process.env, { WORLD_CLONE: repo, WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), WORLD_MOVEMENT_V2: "1", TOWN_CLONE: NO_TOWN });
+  // prod's lanes for the passages: the single log, and the frame pen flipped, so an enter is an act in `acts`
+  Object.assign(process.env, { WORLD_CLONE: repo, WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), WORLD_MOVEMENT_V2: "1", TOWN_CLONE: NO_TOWN,
+    WORLD_SINGLE_LOG: "1", WORLD_POOL: "0", W2_PEN: "hold,frame", W2_GUARDS: "1" });
   delete process.env.WORLD_POSITIONS; delete process.env.POSITIONS_SNAPSHOT;
   (await import("../src/world2-pen.mjs")).__setPoolForTest(pool);
-  ({ worldApex } = await import("../src/world-apex.mjs"));
-  ({ callWorldTool, walkEntry, residentStandpoint } = await import("../src/world.mjs"));
+  ({ worldApex, crossingDeps } = await import("../src/world-apex.mjs"));
+  ({ callWorldTool, walkEntry, residentStandpoint, landEntry } = await import("../src/world.mjs"));
+  ({ enterViaOffice } = await import("../src/world-crossings.mjs"));
+  ({ postSpark } = await import("../src/spark-store.mjs"));
   ({ townPostEvent, callTownPostTool } = await import("../src/town-post.mjs"));
   ({ postAtTown, advanceAtTown } = await import("../src/events-store.mjs"));
   ({ postsAtOffice } = await import("../src/town-posts.mjs"));
@@ -84,9 +103,9 @@ const owner = async (fn) => { const c = await store.connect("world2_owner"); try
 const iso = (t) => new Date(t).toISOString();
 
 /** A walk act, built the way the walk door builds it (world.mjs § walkEntry), at an invented instant. */
-async function walkAt(who, t, from, toward) {
+async function walkAt(who, t, from, toward, { pace = PACE } = {}) {
   const row = normalizeRow(walkEntry({ crossing: walkMod.fractionalCrossing(t), who, targetMarkId: null, stampAt: null, witnesses: null,
-    from, toward, pace: null, targetExtent: null, household: null, writtenAt: iso(t), declaredBy: who }));
+    from, toward, pace, targetExtent: null, household: null, writtenAt: iso(t), declaredBy: who }));
   await owner((c) => c.query("INSERT INTO acts (at, crossing, actor, action, class, payload) VALUES ($1,$2,$3,$4,$5,$6)",
     [row.written_at, String(row.crossing), row.actor, row.action, row.class, row.payload]));
 }
@@ -192,7 +211,7 @@ test("THE PLACE IS THE RECORD'S: lio stands at A now, stood at B when the moment
   assert.deepEqual([here.x, here.y], [A.x, A.y], "the control: where lio stands NOW is A, by the same record");
   // the oracle, independent of the office: the engine's positionAt over lio's walk that governed at `to`
   const to = now - HOUR;
-  const expect = walkMod.positionAt({ from: O, toward: B, at: walkMod.fractionalCrossing(now - 2 * HOUR), pace: null, targetExtent: null, targetMarkId: null }, walkMod.fractionalCrossing(to));
+  const expect = walkMod.positionAt({ from: O, toward: B, at: walkMod.fractionalCrossing(now - 2 * HOUR), pace: PACE, targetExtent: null, targetMarkId: null }, walkMod.fractionalCrossing(to));
   assert.deepEqual([expect.x, expect.y], [B.x, B.y], "the oracle: the first walk had arrived at B by `to`");
 
   await withLaw({ spark: true }, async () => {
@@ -311,4 +330,133 @@ test("THE ID MINT, RACED: two sparks with one title by one sparker at once leave
   assert.deepEqual(acts.map((a) => a.object).sort(), rows.map((r) => r.id).sort(), "the act log and the posts agree id for id");
   assert.equal(new Set(rows.map((r) => r.id)).size, rows.length);
   console.log(`# measured: ${landed.length} landed (${rows.map((r) => r.id).join(", ")}), ${refused.length} refused${refused.length ? ` (${refused.map((o) => `${o.code} ${o.defect}`).join("; ")})` : ""}`);
+});
+
+// ── FIX 1: what the record does not establish is unknown, never today's world ─
+//
+// LAW (Wright, AUTHORITY 2026-11-05T09:33:28Z): "when the record doesn't establish the place, the spark says so. It
+// never substitutes, and never refuses the resident ... a stamped walk establishes the sparker's place at `to` ...
+// No stamped walk row establishes the place at `to`: no `homeOf` in the current world, and no porch. An unstamped
+// old departure: today's default pace doesn't count. Unknown. A rider at `to`: their place is the vehicle, at its own
+// recorded position at `to`. If that isn't recorded, unknown. Never the wharf ... `place: null`, with a plain reason
+// ... Plus the call-time standpoint, labelled `sparked_from` ... The spark is still accepted."
+
+const rowOf = async (id) => owner(async (c) => (await c.query("SELECT place_x, place_y, fields FROM posts WHERE id = $1", [id])).rows[0]);
+const fieldsOf = (r) => (typeof r.fields === "string" ? JSON.parse(r.fields) : r.fields ?? {});
+
+test("UNKNOWN IS ACCEPTED, NEVER SUBSTITUTED: mo has a home in today's world and no walk, una walked with no stamped stride, and each spark stands with place: null, its reason and where it was pressed from; kai's landing places kai; and the grant still decides first", { skip }, async () => {
+  const now = Date.now();
+  await seed(now);
+  await walkAt("sbx-una", now - 2 * HOUR, O, B, { pace: null });
+  const land = normalizeRow(landEntry({ crossing: walkMod.fractionalCrossing(now - 2 * HOUR), who: "sbx-kai", at: LANDED, why: "passage", writtenAt: iso(now - 2 * HOUR) }));
+  await owner((c) => c.query("INSERT INTO acts (at, crossing, actor, action, class, payload) VALUES ($1,$2,$3,$4,$5,$6)",
+    [land.written_at, String(land.crossing), land.actor, land.action, land.class, land.payload]));
+  // the controls: today's world DOES place mo at home, and today's default stride WOULD put una at B
+  const moNow = await residentStandpoint("sbx-mo");
+  assert.deepEqual([moNow.x, moNow.y, moNow.source], [HOME_AT.x, HOME_AT.y, "parcel"], "the trap is live: mo's current home answers where mo stands now");
+  const trap = walkMod.positionAt({ from: O, toward: B, at: walkMod.fractionalCrossing(now - 2 * HOUR), pace: null, targetExtent: null, targetMarkId: null }, walkMod.fractionalCrossing(now - HOUR));
+  assert.deepEqual([trap.x, trap.y], [B.x, B.y], "the trap is live: today's default stride would put una at B");
+  const args = (title) => ({ from: iso(now - 100 * 60_000), to: iso(now - HOUR), title });
+
+  await withLaw({ spark: false }, async () => {
+    const r = await spark(MO, args("No grant, no spark"));
+    assert.equal(r.error, "bounce", "an unknown place is no way past the grant");
+  });
+  await withLaw({ spark: true }, async () => {
+    for (const [key, title] of [[MO, "Mo at home, or so today says"], [UNA, "Una on an unstamped road"], [KAI, "Kai set down"]]) {
+      const r = await spark(key, args(title));
+      assert.ok(!r.error, `${title}: accepted, ${JSON.stringify(r).slice(0, 300)}`);
+    }
+  });
+  const mo = await rowOf("sbx-mo/mo-at-home-or-so-today-says");
+  assert.deepEqual([mo.place_x, mo.place_y], [null, null], "no place: a current home is not where mo stood then");
+  assert.match(fieldsOf(mo).place_unknown, /no stamped walk/);
+  assert.deepEqual(fieldsOf(mo).sparked_from, { x: HOME_AT.x, y: HOME_AT.y, source: "parcel" }, "where it was pressed from, labelled as such");
+  const una = await rowOf("sbx-una/una-on-an-unstamped-road");
+  assert.deepEqual([una.place_x, una.place_y], [null, null], "no place: today's default stride is not una's stride then");
+  assert.match(fieldsOf(una).place_unknown, /no stamped pace/);
+  const kai = await rowOf("sbx-kai/kai-set-down");
+  assert.deepEqual([Number(kai.place_x), Number(kai.place_y)], [LANDED.x, LANDED.y], "a landing names no stride, and needs none: kai stood where kai was set down");
+  assert.equal(fieldsOf(kai).place_unknown, undefined);
+
+  const read = await postsAtOffice({ class: "spark" });
+  const rmo = read.posts.find((p) => p.id === "sbx-mo/mo-at-home-or-so-today-says");
+  assert.deepEqual([rmo.place, rmo.sparked_from], [null, { x: HOME_AT.x, y: HOME_AT.y, source: "parcel" }]);
+  assert.match(rmo.place_unknown, /no stamped walk/, "the read says why");
+  const [act] = (await sparkActs()).filter((a) => a.object === "sbx-mo/mo-at-home-or-so-today-says");
+  const p = typeof act.payload === "string" ? JSON.parse(act.payload) : act.payload;
+  assert.equal(p.place, null, "the post act carries no place");
+});
+
+test("A RIDER IS NOT AT THE WHARF: tam walked to W and boarded the boat; a moment that ended before boarding is placed at W, one that ended aboard is unknown; amending `to` across the boarding clears and restores the place, and never moves where it was pressed from", { skip }, async () => {
+  const now = Date.now();
+  await seed(now);
+  const TAM = { household: "sbx-tam", handles: new Set(["sbx-tam"]) };
+  await walkAt("sbx-tam", now - HOUR, O, W);
+  const before = now - 30 * 60_000;      // tam had reached W by then (1,273 m at the stamped stride is about 15 minutes)
+  const e = await enterViaOffice(repo, { mark: BOAT }, TAM, crossingDeps());
+  assert.ok(!e?.error && (e.entered ?? []).includes(BOAT), `tam boards the boat: ${JSON.stringify(e).slice(0, 300)}`);
+  let id;
+  await withLaw({ spark: true }, async () => {
+    const ashore = await spark(TAM, { from: iso(now - 50 * 60_000), to: iso(before), title: "Tam on the wharf" });
+    assert.ok(!ashore.error, JSON.stringify(ashore).slice(0, 300));
+    const aboard = await spark(TAM, { from: iso(now - 50 * 60_000), to: iso(Date.now()), title: "Tam aboard" });
+    assert.ok(!aboard.error, `aboard is still accepted: ${JSON.stringify(aboard).slice(0, 300)}`);
+    id = "sbx-tam/tam-on-the-wharf";
+  });
+  const ashore = await rowOf(id);
+  assert.deepEqual([Number(ashore.place_x), Number(ashore.place_y)], [W.x, W.y], "before boarding the walk is the record: W");
+  const aboard = await rowOf("sbx-tam/tam-aboard");
+  assert.deepEqual([aboard.place_x, aboard.place_y], [null, null], "aboard at `to`: NOT the wharf, though the last walk ends there");
+  assert.match(fieldsOf(aboard).place_unknown, /aboard sbx-wharf\/the-boat/);
+  const pressed = fieldsOf(ashore).sparked_from;
+  assert.ok(pressed, "where it was pressed from is recorded");
+
+  const out = await callTownPostTool("town_amend", { post: id, to: iso(Date.now()) }, TAM);
+  assert.ok(!out.error, JSON.stringify(out));
+  let r = await rowOf(id);
+  assert.deepEqual([r.place_x, r.place_y], [null, null], "known → unknown: the old place is cleared");
+  assert.match(fieldsOf(r).place_unknown, /aboard/);
+  assert.deepEqual(fieldsOf(r).sparked_from, pressed, "where it was pressed from does not move");
+  const back = await callTownPostTool("town_amend", { post: id, to: iso(before) }, TAM);
+  assert.ok(!back.error, JSON.stringify(back));
+  r = await rowOf(id);
+  assert.deepEqual([Number(r.place_x), Number(r.place_y)], [W.x, W.y], "unknown → known: placed again");
+  assert.equal(fieldsOf(r).place_unknown, null, "and the stale reason is cleared");
+  assert.deepEqual(fieldsOf(r).sparked_from, pressed);
+});
+
+test("A LATE TITLE OR NOTE AMEND MOVES NOTHING: lio's spark keeps its place and where it was pressed from after lio's record moves on", { skip }, async () => {
+  const now = Date.now();
+  await seed(now);
+  const id = "sbx-lio/where-it-was";
+  await withLaw({ spark: true }, async () => {
+    const r = await spark(LIO, { from: iso(now - 100 * 60_000), to: iso(now - HOUR), title: "Where it was" });
+    assert.ok(!r.error, JSON.stringify(r).slice(0, 300));
+  });
+  const first = await rowOf(id);
+  assert.deepEqual(fieldsOf(first).sparked_from, { x: A.x, y: A.y, source: "walk" }, "pressed from A, where lio stood when sparking");
+  // lio's record moves on: a later walk, so where lio stands now is no longer A (the control)
+  await walkAt("sbx-lio", now - 10 * 60_000, A, LANDED);
+  const moved = await residentStandpoint("sbx-lio");
+  assert.notDeepEqual([moved.x, moved.y], [A.x, A.y], "the control: lio's standpoint has moved");
+  const out = await callTownPostTool("town_amend", { post: id, title: "Where it was, renamed", note: "later words" }, LIO);
+  assert.ok(!out.error, JSON.stringify(out));
+  assert.deepEqual(out.amended.sort(), ["note", "title"]);
+  const after_ = await rowOf(id);
+  assert.deepEqual([Number(after_.place_x), Number(after_.place_y)], [B.x, B.y], "the place stays B");
+  assert.deepEqual(fieldsOf(after_).sparked_from, { x: A.x, y: A.y, source: "walk" }, "and where it was pressed from stays A, not lio's later standpoint");
+});
+
+test("STRICT PAST: on a fixed clock, `to` one millisecond ahead is refused and writes nothing; `to` exactly now stands", { skip }, async () => {
+  const now = Date.now();
+  await seed(now);
+  const N = now - 5 * 60_000;
+  const args = (to, title) => ({ from: iso(N - HOUR), to: iso(to), title });
+  await assert.rejects(() => postSpark(args(N + 1, "One millisecond ahead"), LIO, { now: N }),
+    (e) => e.code === 422 && /has happened/.test(e.defect));
+  assert.deepEqual(await sparkRows(), [], "nothing written");
+  const ok = await postSpark(args(N, "Exactly now"), LIO, { now: N });
+  assert.equal(ok.post.to, iso(N));
+  assert.deepEqual((await sparkRows()).map((r) => r.id), ["sbx-lio/exactly-now"]);
 });

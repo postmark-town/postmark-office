@@ -41,8 +41,8 @@ export const SPARK_FINISHED = Object.freeze([STATE_WITHDRAWN]);
 const DAY_MS = 86_400_000;
 /** "pointing back at most 3 days" (POS-638/a): the window's start is no older than this. */
 export const SPARK_LOOKBACK_MS = 3 * DAY_MS;
-/** `to` may be a little ahead of the office's clock (a resident's agent runs fast); carried from office #770. */
-export const SPARK_SKEW_MS = 60_000;
+// `to` is never in the future, not by a minute (Wright, AUTHORITY 2026-11-05T09:33:28Z: "The 60-second future
+// allowance goes, since `to` can't be in the future"). Until 2026-11-05 a 60 s skew carried from office #770 stood here.
 
 export const NOTE_MAX = INVITATION_MAX;
 
@@ -72,7 +72,7 @@ export function judgeWindow({ from, to }, now) {
   const t = instant("to", to);
   const [tF, tT] = [Date.parse(f), Date.parse(t)];
   if (tT <= tF) throw refuse(422, "a moment ends after it starts", `to (${t}) is not after from (${f})`, { field: "to" });
-  if (tT > now + SPARK_SKEW_MS) throw refuse(422, "a spark marks a moment that has happened", `to (${t}) is in the future: spark it once it is over`, { field: "to" });
+  if (tT > now) throw refuse(422, "a spark marks a moment that has happened", `to (${t}) is in the future: spark it once it is over`, { field: "to" });
   if (tF < now - SPARK_LOOKBACK_MS)
     throw refuse(422, "a spark points back at most 3 days", `from (${f}) is older than ${new Date(now - SPARK_LOOKBACK_MS).toISOString()}: the town points a spark back three days and no further`, { field: "from" });
   return { from: f, to: t };
