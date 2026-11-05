@@ -34,9 +34,10 @@
 // pen adds EXACTLY TWO payload keys: `late_from_crossing` (the original crossing, a finite NUMBER) and `late_arrival`
 // (the reason, a non-empty STRING). O src/world2-pen.mjs:119-128 lateCrossingGuard; the standing reason for a stake that
 // puts a draft forward is world2-pen.mjs:101 LATE_ARRIVAL_PUT_FORWARD, filed from src/world2-claims.mjs:927-929.
-// They are neither a resident role nor a clock: kept, never gated, never a consent. Only the pen-written (non-legacy)
+// They are neither a resident role nor a clock: never gated, never a consent. Only the pen-written (non-legacy)
 // profiles list them; a legacy backfill row, and the inner payload of a persisted line, do not. The pair is written
-// together, so one without the other is malformed.
+// together, so one without the other is malformed. `late_from_crossing` is projected; `late_arrival` (the reason, which an operator can type
+// as free text) is validated and NOT projected.
 const LATE = Object.freeze({ late_from_crossing: "crossnum", late_arrival: "reason" });
 const withLate = (vocab) => Object.freeze({ ...vocab, ...LATE });
 

@@ -34,6 +34,8 @@ const EXPORTED = "2026-10-03T00:00:00.000Z";
 // the standing reason of a stake that puts a draft forward, world2-pen.mjs:101, filed at src/world2-claims.mjs:927-929).
 const LATE_REASON = "a stake put a draft forward after the window it was composed in had closed (postmark#2722)";
 const LATE_META = { late_from_crossing: 150, late_arrival: LATE_REASON };
+// an operator can type free text as the reason of a backfill (W2_LATE_ARRIVAL): an invented note that must be validated and never projected
+const OPERATOR_NOTE = "backfill by syn-operator OPERATOR-NOTE-CANARY-4417";
 
 // ── fixtures: archives written by the notary's own producer ───────────────────
 
@@ -531,7 +533,7 @@ test("composed N1: a late arrival keeps its old at in a LATER archive and reache
       { id: 2, at: D("09:00"), crossing: 151, action: "leave-mark", class: "mark", object: "syn-a/late", payload: { slug: "syn-a/late", kind: "sited", at: GEO, body: "MARK-LATE-MARK", by: "syn-a", date: D("09:00"), ...LATE_META } },
       { id: 3, at: D("09:05"), crossing: 151, action: "walk", class: "move", payload: walkP({ declared_by: "syn-n", ...LATE_META }) },
       { id: 4, at: D("09:10"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-ROOM", place: null, room: "cellar", ...LATE_META } },
-      { id: 5, at: D("09:15"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-PUBLIC", place: null, ...LATE_META } },
+      { id: 5, at: D("09:15"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-PUBLIC", place: null, late_from_crossing: 150, late_arrival: OPERATOR_NOTE } },
       // 6: the matched control of 5 — identical but for the stamp
       { id: 6, at: D("09:30"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-NONLATE-PUBLIC", place: null } },
       { id: 7, at: D("09:40"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-STRING", place: null, late_from_crossing: "150", late_arrival: LATE_REASON } },
@@ -544,7 +546,10 @@ test("composed N1: a late arrival keeps its old at in a LATER archive and reache
   assert.deepEqual(res.acts.map((a) => a.at), [D("09:00"), D("09:15"), D("09:30"), D("10:00")], "act.at is the old instant, untouched");
   const byId = new Map(res.acts.map((a) => [a.id, a]));
   assert.equal(byId.get(2).crossing, 151, "the crossing is the window it arrived in");
-  assert.deepEqual([byId.get(2).payload.late_from_crossing, byId.get(2).payload.late_arrival], [150, LATE_REASON], "the two stamp fields travel as they were stored");
+  assert.equal(byId.get(2).payload.late_from_crossing, 150, "the stamp's number travels as it was stored");
+  for (const id of [2, 5]) assert.ok(!("late_arrival" in byId.get(id).payload), `act ${id}: the operator's reason text is validated and not projected`);
+  const wire = JSON.stringify(res);
+  for (const note of ["OPERATOR-NOTE-CANARY-4417", "syn-operator", LATE_REASON, "postmark#2722"]) assert.ok(!wire.includes(note), `the reason text "${note.slice(0, 24)}" is nowhere in the serialized result`);
   assert.ok(!("put_forward" in byId.get(2).payload), "a released public mark has no put_forward and is still a deed");
   assert.ok(!("late_from_crossing" in byId.get(6).payload) && !("late_arrival" in byId.get(6).payload), "the non-late control carries no stamp");
   assert.equal(res.counts.in_window, 8);

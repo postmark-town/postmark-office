@@ -284,6 +284,8 @@ export function judgeAct(row, consent) {
       continue;
     }
     if (!typeOk[role](v)) { fail(field, role, REASONS.type); continue; }
+    // the operator's reason text is validated (it is half of the late stamp's pair, above) and never projected: it can be free text typed at a backfill
+    if (role === "reason") continue;
     kept[k] = v;
   }
   // the pen's late stamp is written as a pair; one without the other is malformed (typed above, and only where the profile lists them)
