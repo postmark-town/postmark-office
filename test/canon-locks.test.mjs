@@ -458,5 +458,13 @@ test("POS-765 · controls stay: a held thing is still canon-checked; backed, hom
 });
 
 test("POS-765 · STANDING_SELECT carries the stored holder in the same row as the tier", () => {
-  assert.match(STANDING_SELECT, /m\.data->>'held_by' AS held_by/);
+  assert.match(STANDING_SELECT, /m\.data->'held_by' AS held_by/);
+  assert.doesNotMatch(STANDING_SELECT, /->>'held_by'/, "the holder travels as the JSON value it is stored as, never cast to text");
+});
+
+test("POS-765 · the guard reads the stored VALUE under the office's one contract: a JSON false or object is no holder, a non-blank string is", () => {
+  const rows = [LAMP({ slug: "sbx-ana/b1", held_by: false }), LAMP({ slug: "sbx-ana/b2", held_by: { by: "sbx-bo" } }), LAMP({ slug: "sbx-ana/b3", held_by: true }), LAMP({ slug: "sbx-ana/b4", held_by: 7 })];
+  const strung = LAMP({ slug: "sbx-ana/s1", held_by: "false" });   // a non-blank STRING is a holder reference, whatever it says: no value blacklist
+  const r = canonLockFindings([...rows, strung], heldRegister(...rows, strung), { escrowBySha: PROJECTED });
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/b1", "sbx-ana/b2", "sbx-ana/b3", "sbx-ana/b4"], "a non-string value is not a holder; the string \"false\" is held");
 });
