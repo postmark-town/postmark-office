@@ -64,6 +64,16 @@
 //      whose fixed was skipped are untouched; force: "<why>" is wright's and
 //      keemin's alone and writes the reason and what it went past on the act.
 //      GitHub is the stub above: pull() serves a merged PR, tagFor() a tag.
+//  18. (POS-912 W2, Wright settled 2026-11-05 17:51:47Z) a merged carrier whose body
+//      declares `carries: <repo>#<n>` on one exact line credits the CARRIED PR's
+//      author through the same judge, when both net diffs agree by patch-id AND
+//      byte for byte in what they change; the fixed link stays the carrier and
+//      the act gains no field. "ab" for "a b" (one patch-id) refuses; so do every
+//      malformed, quoted, fenced, doubled, self, cross-repo or chained declaration,
+//      an unmerged carrier (force or not), a changed context line, a partial
+//      carry, a binary, rename or mode change, an empty diff, a diff that is not
+//      the PR's own count, a hunk cut short, and anything GitHub can't show.
+//      carryPull() serves a PR's JSON and its diff at its base and head.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -128,9 +138,11 @@ const PINS = [{ handle: "finn", login: "finn-gh", gh_id: 1002 }];
 const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn", "kinofire", "wayward-archivist", "mari"]);
 
 // ── GitHub, stubbed: the one GET an earned advance makes (bug-credit.mjs) ────
-const GITHUB = new Map();   // API path -> { status, body }
+const GITHUB = new Map();   // API path -> { status, body }, or { status, text } for a diff (18)
 const github = createServer((req, res) => {
   const hit = GITHUB.get(req.url) ?? { status: 404, body: { message: "Not Found" } };
+  // a diff is served as GitHub serves one asked for application/vnd.github.diff: the text itself
+  if (hit.text !== undefined) { res.writeHead(hit.status, { "content-type": "text/plain; charset=utf-8" }); res.end(hit.text); return; }
   res.writeHead(hit.status, { "content-type": "application/json" });
   res.end(JSON.stringify(hit.body));
 });
@@ -1722,4 +1734,286 @@ test("17 · force is for fixed and shipped only: on any other stage it is refuse
   await postAtTown(BUG, ERRANT, at17);
   await skipThrough(ID, "reproduced");
   await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn"), force: "x" }, WRIGHT, at17), 422, /^force is for fixed and shipped only/);
+});
+
+// ── 18 · a carried fix credits the carried PR's author (POS-912 W2) ─────────
+//
+// LAW (Wright, settled 2026-11-05 17:51:47Z): "Link the CARRIER, credit the carried PR's author.
+// The `fixed` link is the merged carrying PR … so the merge and shipped proofs work as they do
+// today. The credit goes to the author of the PR it declares in `carries:`", and "Patch-id AND
+// exact changed-content agreement; refuse anything else. Patch-id is whitespace-blind … so the
+// carried diff must agree byte-for-byte in its changed content, with no whitespace normalization.
+// Anything ambiguous or unsupported (a rebase that touched the hunks, a partial carry, binary
+// changes) refuses, with a reason naming the mismatch". Every diff here is invented; none is a
+// resident's real patch. GitHub is the stub above: a PR's JSON, and its net diff at its base and
+// head commits, as the compare API serves it asked for application/vnd.github.diff.
+
+const { execFileSync } = await import("node:child_process");
+/** git's own stable patch-id of a diff, the test's instrument (never the office's code). */
+const patchIdOf = (diff) => execFileSync("git", ["patch-id", "--stable"], { input: diff, encoding: "utf8" }).split(" ")[0];
+// measured once with git 2.43.0 (2026-11-05): the "a b" and "ab" diffs below share it
+const PID_GREETING = "f4f6d0bf4d558f4de37239ae3e6dc1662f00f289";
+
+/** An invented one-file diff: greet()'s text goes from "hello" to `text`, under `fn`, at line `at`. */
+const greeting = (text, { fn = "export function greet() {", at = 1, index = "1111111..2222222" } = {}) => [
+  "diff --git a/src/greeting.mjs b/src/greeting.mjs",
+  `index ${index} 100644`,
+  "--- a/src/greeting.mjs",
+  "+++ b/src/greeting.mjs",
+  `@@ -${at},3 +${at},3 @@`,
+  ` ${fn}`,
+  '-  const text = "hello";',
+  `+  const text = "${text}";`,
+  "   return text;",
+  "",
+].join("\n");
+/** A second, new file: what a partial carry leaves out, or a carrier brings in besides. */
+const FAREWELL = [
+  "diff --git a/src/farewell.mjs b/src/farewell.mjs",
+  "new file mode 100644",
+  "index 0000000..3333333",
+  "--- /dev/null",
+  "+++ b/src/farewell.mjs",
+  "@@ -0,0 +1 @@",
+  '+export const bye = "bye";',
+  "",
+].join("\n");
+const ONE = { files: 1, add: 1, del: 1 };
+const shaFor = (what, n) => createHash("sha1").update(`${what}:${n}`).digest("hex");
+
+/**
+ * A pull request on postmark-office as GitHub serves it for a carry: its JSON (its opener, its
+ * merge, its body, its base and head commits and the counts GitHub states for it) and its net
+ * diff at those two commits. `{ n, ref, link }`.
+ */
+function carryPull(who, { n, merged = true, body = "", diff = greeting("a b"), counts = ONE } = {}) {
+  const base = shaFor("base", n), head = shaFor("head", n);
+  GITHUB.set(`/repos/postmark-town/postmark-office/pulls/${n}`, { status: 200, body: { number: n, user: userOf(who), draft: false,
+    state: "closed", merged, merge_commit_sha: merged ? shaOf(n) : null, body,
+    base: { sha: base }, head: { sha: head }, changed_files: counts.files, additions: counts.add, deletions: counts.del } });
+  GITHUB.set(`/repos/postmark-town/postmark-office/compare/${base}...${head}`, { status: 200, text: diff });
+  return { n, ref: `postmark-office#${n}`, link: `https://github.com/postmark-town/postmark-office/pull/${n}` };
+}
+/** ada's own fix (her household's account, harbor-human), closed unmerged as a carried PR is. */
+const adaFix = (n, over = {}) => carryPull("ada", { n, merged: false, ...over });
+/** wright's merged hotfix carrying #`of`, the same change at other line numbers. */
+const carrierOf = (n, of, over = {}) => carryPull("wright", { n, body: `Carried from the harbor's fix onto a hotfix branch.\r\n\r\ncarries: office#${of}\r\n`,
+  diff: greeting("a b", { at: 7, index: "6666666..2222222" }), ...over });
+/** One fixed advance on a fresh bug standing briefed: "ok <credit>", or "<code> <defect>". */
+async function fixedVerdict(link, over = {}) {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const n = pen.rows().length;
+  try {
+    const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "ada", link, ...over }) }, WRIGHT, at17);
+    return `ok ${ok.credit}`;
+  } catch (e) {
+    assert.equal(pen.rows().length, n, `a refused fixed wrote an act: ${e.defect}`);
+    assert.equal(posts.get(ID).state, "briefed");
+    return `${e.code} ${e.defect}`;
+  }
+}
+
+test("18 · the premise, by git itself: \"a b\" and \"ab\" are ONE stable patch-id with the same file and counts; line numbers and the index line are outside it, a context line is inside it", () => {
+  assert.equal(patchIdOf(greeting("a b")), PID_GREETING);
+  assert.equal(patchIdOf(greeting("ab")), PID_GREETING, "patch-id is whitespace-blind");
+  assert.equal(patchIdOf(greeting("a b", { at: 7, index: "6666666..2222222" })), PID_GREETING, "a carrier at other line numbers is the same patch");
+  assert.notEqual(patchIdOf(greeting("a b", { fn: "export function welcome() {" })), PID_GREETING, "a context line is in the patch-id");
+  assert.equal(patchIdOf(""), "", "an empty diff has no patch-id");
+});
+
+test("18 · a merged founder carrier that declares carries: credits the carried PR's author, ada by her household's account harbor-human; the fixed link stays the carrier, the act gains no field, and shipped proves the carrier's merge", async () => {
+  // the control, the old rule: a founder's carrier with no declaration is the founder's work, refused as ever
+  const bare = carryPull("wright", { n: 9101, diff: greeting("a b") });
+  assert.equal(await fixedVerdict(bare.link),
+    `422 ${bare.link} was written by a founder's account, GitHub account wright-starforge (id 306351151), and a founder's work credits only wright or keemin`);
+
+  const { pen, posts } = setup();
+  await toBriefed();
+  const carried = adaFix(9102);
+  const carrier = carrierOf(9103, carried.n);
+  const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "ada", link: carrier.link }) }, WRIGHT, at17);
+  assert.deepEqual([ok.stage, ok.credit, ok.link, ok.stamps], ["fixed", "ada", carrier.link, 25]);
+  // the advance answer says whose work earned it, in plain words (the ruling: "the advance answer say so")
+  assert.match(ok.receipt, new RegExp(`; fixed points at ${esc(carrier.link)}; ${esc(carrier.ref)} carries ${esc(carried.ref)}, `
+    + `so ada's credit was judged against its author, GitHub account harbor-human \\(id 1001\\), on the same patch-id and the same changed bytes$`));
+  assert.equal(posts.get(ID).fields.links.fixed, carrier.link, "the fixed link is the merged carrier");
+  const act = JSON.parse(pen.rows().at(-1).payload);
+  assert.deepEqual(Object.keys(act).sort(), ["credit", "fields", "from", "hand", "post", "to"], "no new field on the act: the body's declaration is not recorded");
+  assert.deepEqual([act.credit, act.fields.links.fixed], ["ada", carrier.link]);
+  // shipped reads the carrier's merge, as for any fix
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: tagFor(carrier.link) }, WRIGHT, at17);
+  assert.equal(ship.stage, "shipped");
+  // the acts alone derive the same post
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+});
+
+test("18 · THE EXACT GUARD: a carrier adding \"ab\" where the carried PR adds \"a b\" (one stable patch-id, the same file, +1 −1 each) is refused, naming where the bytes differ, and writes nothing", async () => {
+  const carried = adaFix(9111, { diff: greeting("a b") });
+  const carrier = carrierOf(9112, carried.n, { diff: greeting("ab") });
+  assert.equal(patchIdOf(greeting("ab")), patchIdOf(greeting("a b")), "the premise: patch-id alone would pass it");
+  assert.equal(await fixedVerdict(carrier.link),
+    `422 ${carrier.ref} and ${carried.ref} change different bytes in src/greeting.mjs (compared byte for byte, whitespace counted), though their patch-ids agree`);
+});
+
+test("18 · the declaration is one exact line of the carrier's body, read as data: none or prose keeps the old rule; two, quoted, fenced, indented, misspelled, a bad number, itself, another repo, or a carried PR that carries in turn each refuse by name", async () => {
+  adaFix(9121);
+  adaFix(9122, { body: "carries: office#9121" });   // a carried PR that declares a carry of its own
+  const bodies = {
+    none: "Carried from the harbor's fix.",
+    prose: "This hotfix carries: the harbor's fix, as reviewed (office#9121).",
+    short: "carries: office#9121",
+    full: "Carried.\n\ncarries: postmark-office#9121",
+    twice: "carries: office#9121\ncarries: office#9121",
+    quoted: "> carries: office#9121",
+    fenced: "```\ncarries: office#9121\n```",
+    indented: "    carries: office#9121",
+    capital: "Carries: office#9121",
+    zero: "carries: office#0",
+    padded: "carries: office#09121",
+    huge: "carries: office#1234567890",
+    itself: "carries: office#{self}",   // the carrier's own number, filled in below
+    site: "carries: site#9121",
+    world: "carries: postmark-world#9121",
+    chained: "carries: office#9122",
+  };
+  const verdicts = {}, refs = {};
+  let n = 9300;
+  for (const [name, body] of Object.entries(bodies)) {
+    const carrier = carryPull("wright", { n: ++n, body: body.replace("{self}", String(n)) });
+    refs[name] = carrier;
+    verdicts[name] = await fixedVerdict(carrier.link);
+  }
+  const r = (name) => refs[name].ref;
+  const founder = (name) => `422 ${refs[name].link} was written by a founder's account, GitHub account wright-starforge (id 306351151), and a founder's work credits only wright or keemin`;
+  assert.deepEqual(verdicts, {
+    none: founder("none"),
+    prose: founder("prose"),
+    short: "ok ada",
+    full: "ok ada",
+    twice: `422 ${r("twice")}'s body declares carries: more than once, and a carrier carries one pull request`,
+    quoted: `422 ${r("quoted")}'s carries: line is quoted`,
+    fenced: `422 ${r("fenced")}'s carries: line is inside a code block`,
+    indented: `422 ${r("indented")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
+    capital: `422 ${r("capital")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
+    zero: `422 ${r("zero")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
+    padded: `422 ${r("padded")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
+    huge: `422 ${r("huge")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
+    itself: `422 ${r("itself")} declares it carries itself`,
+    site: `422 ${r("site")} declares it carries site#9121, and a carrier carries a pull request on its own repo, postmark-office`,
+    world: `422 ${r("world")} declares it carries postmark-world#9121, and a carrier carries a pull request on its own repo, postmark-office`,
+    chained: `422 postmark-office#9122, which ${r("chained")} carries, declares a carry of its own, and a carried pull request is never carried again`,
+  });
+});
+
+test("18 · the carried author is judged as any author: another household's account, an unbound one and a founder's each refuse, naming the carried PR and its carrier, and write nothing", async () => {
+  const cases = { finn: ["finn", 9141, 9142], drifter: ["drifter", 9143, 9144], keemin: ["keemin", 9145, 9146] };
+  const verdicts = {}, links = {};
+  for (const [name, [who, c, k]] of Object.entries(cases)) {
+    const carried = carryPull(who, { n: c, merged: false });
+    const carrier = carrierOf(k, c);
+    links[name] = `${carried.link} (carried by ${carrier.link})`;
+    verdicts[name] = await fixedVerdict(carrier.link, name === "keemin" ? { credit: "mari" } : {});
+  }
+  assert.deepEqual(verdicts, {
+    finn: `422 ${links.finn} was written by GitHub account finn-gh (id 1002), of solo:finn, and ada stands in hh:the-harbor`,
+    drifter: `422 ${links.drifter} was written by GitHub account drifter (id 1003), which is bound to no household here`,
+    keemin: `422 ${links.keemin} was written by a founder's account, GitHub account keeminlee (id 67605380), and a founder's work credits only wright or keemin`,
+  });
+});
+
+test("18 · the carrier must be merged: unmerged it waits at the stage guard, and a founder's force past the guard still never credits a carry", async () => {
+  const carried = adaFix(9151);
+  const open = carrierOf(9152, carried.n, { merged: false });
+  assert.equal(await fixedVerdict(open.link), `409 fixed waits for the PR to merge: ${open.ref} is closed without merging`);
+  assert.equal(await fixedVerdict(open.link, { force: "the hotfix is live" }), `409 a carried credit waits for its carrier to merge: ${open.ref} is not merged`);
+});
+
+test("18 · the change must be the same, or it is refused naming the mismatch: a changed context line, a partial carry either way, a binary change, a rename, a mode change and an empty diff", async () => {
+  const BINARY = ["diff --git a/img/door.png b/img/door.png", "index 4444444..5555555 100644", "Binary files a/img/door.png and b/img/door.png differ", ""].join("\n");
+  const RENAME = ["diff --git a/src/greeting.mjs b/src/greet.mjs", "similarity index 100%", "rename from src/greeting.mjs", "rename to src/greet.mjs", ""].join("\n");
+  const MODE = ["diff --git a/src/greeting.mjs b/src/greeting.mjs", "old mode 100644", "new mode 100755", ""].join("\n");
+  const TWO = { files: 2, add: 2, del: 1 };
+  // [the carried PR's diff and counts, the carrier's]
+  const cases = {
+    context: [[greeting("a b"), ONE], [greeting("a b", { fn: "export function welcome() {" }), ONE]],
+    "carrier brings more": [[greeting("a b"), ONE], [greeting("a b") + FAREWELL, TWO]],
+    "carrier carries part": [[greeting("a b") + FAREWELL, TWO], [greeting("a b"), ONE]],
+    binary: [[greeting("a b"), ONE], [BINARY, { files: 1, add: 0, del: 0 }]],
+    rename: [[RENAME, { files: 1, add: 0, del: 0 }], [greeting("a b"), ONE]],
+    mode: [[greeting("a b"), ONE], [MODE, { files: 1, add: 0, del: 0 }]],
+    empty: [[greeting("a b"), ONE], ["", { files: 0, add: 0, del: 0 }]],
+  };
+  const verdicts = {}, refs = {};
+  let n = 9160;
+  for (const [name, [[dd, dc], [rd, rc]]] of Object.entries(cases)) {
+    const carried = adaFix(++n, { diff: dd, counts: dc });
+    const carrier = carrierOf(++n, carried.n, { diff: rd, counts: rc });
+    refs[name] = [carrier.ref, carried.ref];
+    verdicts[name] = await fixedVerdict(carrier.link);
+  }
+  const notSame = (name) => {
+    const [c, d] = refs[name];
+    return `422 ${c} and ${d} are not the same patch (their patch-ids differ): a rebase that touched the hunks, a partial carry, or another change`;
+  };
+  assert.deepEqual(verdicts, {
+    context: notSame("context"),
+    "carrier brings more": notSame("carrier brings more"),
+    "carrier carries part": notSame("carrier carries part"),
+    binary: `422 ${refs.binary[0]}'s diff holds a binary change (img/door.png), which the office does not compare, so the carry can't be checked`,
+    rename: `422 ${refs.rename[1]}'s diff holds a rename or copy (src/greeting.mjs), which the office does not compare, so the carry can't be checked`,
+    mode: `422 ${refs.mode[0]}'s diff holds a mode change (src/greeting.mjs), which the office does not compare, so the carry can't be checked`,
+    empty: `422 ${refs.empty[0]}'s diff changes nothing, so there is no patch to carry`,
+  });
+});
+
+test("18 · no pass on doubt: a carried PR GitHub doesn't have, one with no commits to diff, a diff GitHub won't serve, a diff that is not the PR's own count and a hunk cut short each refuse and write nothing", async () => {
+  const verdicts = {};
+  // the carried PR is not on GitHub
+  verdicts.missing = await fixedVerdict(carrierOf(9181, 9180).link);
+  // the carried PR answers without its head commit
+  const headless = adaFix(9182);
+  const path = `/repos/postmark-town/postmark-office/pulls/${headless.n}`;
+  GITHUB.set(path, { status: 200, body: { ...GITHUB.get(path).body, head: null } });
+  verdicts.headless = await fixedVerdict(carrierOf(9183, headless.n).link);
+  // GitHub errs serving the carrier's diff
+  const down = carrierOf(9185, adaFix(9184).n);
+  GITHUB.set(`/repos/postmark-town/postmark-office/compare/${shaFor("base", 9185)}...${shaFor("head", 9185)}`, { status: 500, body: { message: "boom" } });
+  verdicts.down = await fixedVerdict(down.link);
+  // the carrier's diff is one file where GitHub counts two: cut short, or against another base
+  verdicts.short = await fixedVerdict(carrierOf(9187, adaFix(9186).n, { counts: { files: 2, add: 2, del: 1 } }).link);
+  // a hunk whose header promises three lines on each side and holds two (the counts still agree)
+  const cut = greeting("a b").replace("   return text;\n", "");
+  verdicts.cut = await fixedVerdict(carrierOf(9189, adaFix(9188).n, { diff: cut }).link);
+  assert.deepEqual(verdicts, {
+    missing: `422 postmark-office#9180, which postmark-office#9181 declares it carries, is not on GitHub`,
+    headless: `503 GitHub could not show postmark-office#9182's commits, so the office cannot prove postmark-office#9183 carries postmark-office#9182`,
+    down: `503 GitHub could not serve postmark-office#9185's diff (too large, unreadable or GitHub down), so the office cannot prove postmark-office#9185 carries postmark-office#9184`,
+    short: `422 postmark-office#9187's diff (1 file, +1 −1) is not the pull request's own (2 files, +2 −1): cut short, or against another base, so the carry can't be checked`,
+    cut: `422 postmark-office#9189's diff has a hunk shorter than its header in src/greeting.mjs: cut short, so the carry can't be checked`,
+  });
+});
+
+test("18 · only fixed reads a carry: a PR linked at diagnosed is judged by its own author, whatever its body declares; and a recredit of fixed may link a carrier, under the same proof", async () => {
+  setup();
+  await postAtTown(BUG, ERRANT, at17);
+  await skipThrough(ID, "reproduced");
+  // finn's PR, declaring it carries ada's: at diagnosed the carry is not read, so ada is refused and finn passes
+  adaFix(9191);
+  const finnPr = carryPull("finn", { n: 9192, body: "carries: office#9191" });
+  await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "ada", link: finnPr.link }, WRIGHT, at17), 422,
+    new RegExp(`^${esc(finnPr.link)} was written by GitHub account finn-gh \\(id 1002\\), of solo:finn, and ada stands in hh:the-harbor`));
+  assert.equal((await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: finnPr.link }, WRIGHT, at17)).credit, "finn");
+
+  // fixed credited to finn by finn's own PR, then re-credited to ada by a carrier of her fix
+  setup();
+  await toBriefed();
+  await advanceAtTown({ post: ID, ...FIX({ link: pull("finn", { n: 9193 }) }) }, WRIGHT, at17);
+  const carried = adaFix(9194);
+  const recredit = (link) => advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "ada", link, note: "the fix was the harbor's, carried onto a hotfix" }, WRIGHT, at17);
+  await refusedWith(recredit(carrierOf(9195, carried.n, { diff: greeting("ab") }).link), 422, /change different bytes in src\/greeting\.mjs/);
+  const ok = await recredit(carrierOf(9196, carried.n).link);
+  assert.deepEqual([ok.recredit, ok.was, ok.credit], [true, "finn", "ada"]);
+  assert.match(ok.receipt, /; postmark-office#9196 carries postmark-office#9194, so ada's credit was judged against its author, GitHub account harbor-human \(id 1001\), on the same patch-id and the same changed bytes\. /);
 });
