@@ -213,7 +213,12 @@ export const WITHDRAWN_OWED_SELECT = `
 // THE TERM. Every STANDING mark the TOWN signed whose store holder (`held_by`) or
 // owner (`owned_by`) differs from what canon carries for it. State, not a window:
 // it is carried by every crossing that looks until the print lands, and the mark
-// leaves the set by the print landing, which is what bounds it. Canon-absent
+// leaves the set when a print that canon carries makes the two agree. That bounds
+// it only where the difference is one the write-down will print (an eligible
+// hand-off); a difference it will not print stays visibly held out and offered
+// again at each crossing, with no promise it ends. Both values travel as the JSON
+// they are stored as (`->`, not `->>`), so a stored false or object reads as no
+// holder on both sides, exactly as `townHoldsOf` reads canon. Canon-absent
 // marks are the second term's, withdrawn ones the third's, and a docket mark is
 // written by the docket, so none of those is offered twice.
 //
@@ -226,7 +231,7 @@ export const WITHDRAWN_OWED_SELECT = `
 // register built before it existed answers `checked: false`, never an empty set:
 // "owed nothing" and "never looked" differ.
 export const TOWN_HOLDS_SELECT = `
-  SELECT slug, data->>'held_by' AS held_by, data->>'owned_by' AS owned_by
+  SELECT slug, data->'held_by' AS held_by, data->'owned_by' AS owned_by
     FROM marks WHERE owner = 'the-town' AND status = 'standing' ORDER BY slug`;
 
 /** The town's slugs whose holder or owner in the store differs from canon's. PURE. */
