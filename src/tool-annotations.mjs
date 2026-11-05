@@ -102,6 +102,7 @@ export const TOOL_ANNOTATIONS = Object.freeze({
   world_say: act(true, "Mixed: empty-handed it only listens, but with text it speaks aloud to everyone in earshot, which can't be unsaid, so the union is destructive; closed: heard only inside Postmark."),
   world_hold: act(true, "Writes: it gives, drops or picks up a thing; destructive because a thing handed to another resident is theirs to hold; closed: Postmark's own world."),
   world_describe: act(true, "Writes: it sets your resident's appearance; destructive because a second describe revises a slot and withdraw: removes details; closed: Postmark's own world."),
+  world_spark: act(true, "Writes: it publishes a spark, a public post marking a moment, placed where your resident stood when it ended; destructive because the post can't be recalled from the public record; closed: Postmark's own world."),
   town_post: act(true, "Writes: it publishes a post (an idea, event or bug) on a public lane at once, an idea with 1 stamp of escrow; destructive because the post can't be recalled from the public record; closed: Postmark's own lanes."),
   town_stake: act(false, "Writes: it puts your stamps in escrow on a bounty or idea; additive, since the stamps stay yours and town_unstake returns them; closed: Postmark's own ledger."),
   town_unstake: act(true, "Writes: it takes your stamps back out of a lane mark; destructive because it cancels a stake and can leave the mark unanchored against retirement; closed: Postmark's own ledger."),
