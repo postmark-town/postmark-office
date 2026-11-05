@@ -122,6 +122,11 @@ const inRecordForm = async (text) => {
 // answers stays the record's. The other asks, which read the pinned world for wright's home (`ask 8` carries its transport line),
 // are left on it, and the REST doorsteps run in offices with no world. A count alone would erase the rows on both sides; this
 // binds every row.
+// SCOPE, STATED PLAINLY: these two asks are a controlled full-row STAKES test over a made-up world. The other blocks of the two
+// answers that read a world (the Mists block, the stances block) match the record only because the fixture was CONSTRUCTED to
+// give them the least they read (an empty skeleton, a stand-in geometry): that is not an integration test of those blocks over
+// the pinned world, and no other suite is proven by it. The extra-mark falsifier is that another owner's mark in the world stays
+// out of the rows; the detectors below move the answer against the fixed expectation.
 const INVENTED_WORLD_ASKS = new Set(["ask 3", "ask 7"]);
 const expectedFor = (label) => (INVENTED_WORLD_ASKS.has(label) ? overlayStakes(TWINS.of(label), { rows: INVENTED_STAKE_ROWS }) : TWINS.of(label));
 /** One doorstep ask, answered in a child over the invented world, with the suite's store and the same injected pool (see the fixture). */
