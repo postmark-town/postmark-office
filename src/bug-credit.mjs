@@ -245,8 +245,8 @@ async function netDiffOf(name, repo, pr, { carrier, carried }, ctx) {
  * A net diff as git writes it, per file: `{ path, id, changed, add, del }`, where
  * `id` is its ---/+++ and new/deleted-file lines and `changed` its added, removed
  * and no-newline lines, hunk by hunk, byte for byte (the text is read as latin1,
- * one char a byte). The index line and the hunks' line numbers are left out, as
- * patch-id leaves them. A binary, rename, copy or mode change, a path git would
+ * one char a byte). The index line and each hunk's @@ line (its line numbers and
+ * section heading) are left out, as patch-id leaves them. A binary, rename, copy or mode change, a path git would
  * quote, a hunk that is not its header's length, or any line it does not read
  * refuses.
  */
