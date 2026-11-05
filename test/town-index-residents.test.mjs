@@ -14,9 +14,6 @@
 // store and one whose store is gone, the MCP cases, and household { read:
 // address | window | home | doorstep }.
 
-// FIRST, so it is evaluated before any module that captures WORLD_CLONE (POS-896): it builds the invented world the two in-process
-// doorstep asks read their stakes from, and points WORLD_CLONE at it (test/fixtures/pos896-invented-world.mjs says why and how).
-import { INVENTED_STAKE_ROWS } from "./fixtures/pos896-invented-world.mjs";
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -30,6 +27,7 @@ import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
 import { overlayStakes, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
+import { INVENTED_WORLD, INVENTED_STAKE_ROWS } from "./fixtures/pos896-invented-world.mjs";   // POS-896: a made-up world for two asks, below
 import { PSA_SLUG } from "../src/queries.mjs";
 import * as store from "../src/town-index-store.mjs";
 import { openOauthDb } from "../src/oauth.mjs";
@@ -116,15 +114,36 @@ const inRecordForm = async (text) => {
   const { worldClone } = await import("./fixture-paths.mjs");
   return JSON.stringify(await stakeKindsInOldForm(v, () => worldKinds(worldClone())));
 };
-// the twin's answer as recorded (helpers/twin-golden.mjs), against the store's
-// THE TWO ASKS THAT READ A WORLD (POS-896). `ask 3` (read_doorstep) and `ask 7` (household { read: "doorstep" }) run in this process, so
-// their `stakes` segment reads WORLD_CLONE: until this change the tree's pinned world, whose published marks for wright were
-// counted in the record (26) and moved with the pin (285). WORLD_CLONE is now the invented world of the fixture imported first,
-// so those rows are explicit: the segment's `count` and `rows` below are the fixture's own marks (INVENTED_STAKE_ROWS, written out,
-// another owner's mark absent), and every other byte of the two answers stays the record's. The REST doorsteps run in offices
-// with no world and are untouched. A count alone would erase the rows on both sides; this binds every row.
+// THE TWO ASKS THAT READ A WORLD (POS-896). `ask 3` (read_doorstep) and `ask 7` (household { read: "doorstep" }) carry the doorstep's
+// `stakes` segment, which reads WORLD_CLONE: until this change the tree's pinned world, whose published marks for wright were
+// counted in the record (26) and moved with the pin (285). Those two now run in a process started over an INVENTED world
+// (test/fixtures/pos896-doorstep-ask.mjs, test/fixtures/pos896-invented-world.mjs), so the segment's `count` and `rows` below are
+// the fixture's own marks (INVENTED_STAKE_ROWS, written out, another owner's mark absent) and every other byte of the two
+// answers stays the record's. The other asks, which read the pinned world for wright's home (`ask 8` carries its transport line),
+// are left on it, and the REST doorsteps run in offices with no world. A count alone would erase the rows on both sides; this
+// binds every row.
 const INVENTED_WORLD_ASKS = new Set(["ask 3", "ask 7"]);
 const expectedFor = (label) => (INVENTED_WORLD_ASKS.has(label) ? overlayStakes(TWINS.of(label), { rows: INVENTED_STAKE_ROWS }) : TWINS.of(label));
+/** One doorstep ask, answered in a child over the invented world, with the suite's store and the same injected pool (see the fixture). */
+function inventedWorldAsk(which) {
+  const child = spawn(process.execPath, [join(ROOT, "test", "fixtures", "pos896-doorstep-ask.mjs")], {
+    env: { ...process.env, WORLD_CLONE: INVENTED_WORLD, WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api"), POS896_ASK: which, POS896_NO_CLONE: join(tmp, "no-clone-here") },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let out = "", err = "";
+  child.stdout.on("data", (d) => { out += d; });
+  child.stderr.on("data", (d) => { err += d; });
+  return new Promise((ok, no) => {
+    const t = setTimeout(() => { child.kill(); no(new Error(`${which}: the invented-world child did not answer in 120 s`)); }, 120_000);
+    child.on("error", (e) => { clearTimeout(t); no(e); });
+    child.on("exit", (code, signal) => {
+      clearTimeout(t);
+      if (code !== 0) return no(new Error(`${which}: the invented-world child exited ${code ?? signal}: ${err.slice(0, 300)}`));
+      try { ok(JSON.parse(out)); } catch (e) { no(new Error(`${which}: the child's answer was not JSON (${out.length} bytes)`)); }
+    });
+  });
+}
+// the twin's answer as recorded (helpers/twin-golden.mjs), against the store's
 const same = async (label, newAnswer) => {
   const n = await inRecordForm(steady(bytes(await newAnswer) ?? "undefined")), o = expectedFor(label);
   if (n !== o) assert.fail(`${label}: ${firstDiff(JSON.parse(n), JSON.parse(o))}`);
@@ -219,7 +238,9 @@ test("the MCP cases and household { read: address | window | home | doorstep | s
   try {
     Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
     pen.__setPoolForTest(pool);
-    for (const [i, ask] of asks.entries()) await same(`ask ${i}`, ask());
+    // asks 3 and 7 answer over the invented world (a child); the rest are the suite's own, in this process
+    const live = { 3: () => inventedWorldAsk("read_doorstep"), 7: () => inventedWorldAsk("household-doorstep") };
+    for (const [i, ask] of asks.entries()) await same(`ask ${i}`, (live[i] ?? ask)());
     pen.__setPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
     for (const [i, ask] of asks.entries()) {
       const r = await ask();

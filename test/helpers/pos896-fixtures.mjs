@@ -44,12 +44,14 @@ function buildBoardRow(row, legacyRows, { resident }) {
   if (!(row.cadence === "milestone" && row.validation === "needs-review"))
     throw new Error(`pos896-fixtures: no independent expectation for registry quest "${row.id}" (cadence ${row.cadence}, validation ${row.validation}); extend the builder with its shape`);
   const out = { ...registryFieldsOf(row) };
+  // The TOWN's board (no resident named) carries neither the four resident fields nor `measured`: the registry fields, `door`, and
+  // `awaits` when the row has one (src/queries.mjs § townQuestBoardOf removes progress, complete, counted and household; `measured`
+  // is the resident row's own statement about its progress). A resident's row has all of them.
   if (resident) {
     const peer = legacyRows.find((r) => r.measured === false && r.progress === null && isObj(r.household));
     assert.ok(peer, `pos896-fixtures: the record holds no uncounted row to take the household's size from, for "${row.id}"`);
-    Object.assign(out, { progress: null, complete: null, counted: [], household: clone(peer.household) });
+    Object.assign(out, { progress: null, complete: null, counted: [], household: clone(peer.household), measured: false });
   }
-  out.measured = false;
   return out;
 }
 

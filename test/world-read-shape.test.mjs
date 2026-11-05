@@ -384,7 +384,7 @@ test("v1: the description says the lean read and its size, and cards takes \"ful
   for (const shape of ["v1"]) {
     setEnv("WORLD_READ_SHAPE", shape);
     try {
-      assert.match(APEX_TOOL.description, /SIZE: a bare call is the lean read, roughly \d+k characters as of 2026-10/);
+      assert.match(APEX_TOOL.description, /SIZE: a bare call is the lean read, roughly \d+k characters as of 2026-11/);   // POS-896: the sentence's as-of month moves with the measurement it states (16,009 / 16,290 chars, 2026-11)
       assert.doesNotMatch(APEX_TOOL.description, /50–80k/);
       assert.doesNotMatch(APEX_TOOL.description, /the full mark record/);
       assert.match(APEX_TOOL.description, /read_shape: "v2" is the compact read, at about half this size: opt-in per call, while the default stays as it is/, "POS-687: the SIZE sentence names v2");

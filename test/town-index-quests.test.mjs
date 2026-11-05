@@ -289,3 +289,13 @@ test("detector · each wrong ANSWER is named against the fixed expectation: miss
   assert.equal(parts((a) => { a.pots.invalid_rows.list[1] = INV_POSTING("inv-fund-c"); }), "$.pots.invalid_rows.list[1].line", "a posting for the wrong id");
   assert.equal(parts((a) => a.pots.invalid_rows.list.reverse()), "$.pots.invalid_rows.list[0].row_kind", "the postings before the pot-file row");
 });
+
+test("detector · the TOWN's board (no resident named) takes the new row with its registry fields and `door` only: no resident field, no `measured`", () => {
+  const rawTown = [INV_RAW[0], { id: "inv-m", title: "A milestone", cadence: "milestone", validation: "needs-review", target: 1, reward: "5 stamps, once", source: "Tell us.", awaits: "a hand reads it" }];
+  const legacy = { handle: null, quests: [{ id: "inv-a", title: "Title of inv-a", cadence: "one-time", validation: "automatic", target: 1, reward: "2 stamps", source: "Do inv-a.", door: null }] };
+  const want = JSON.parse(overlayRegistry(steady(legacy), { rawQuests: rawTown, fixturePotIds: [] }));
+  assert.deepEqual(want.quests[1], { id: "inv-m", title: "A milestone", cadence: "milestone", validation: "needs-review", target: 1, reward: "5 stamps, once", source: "Tell us.", door: null, awaits: "a hand reads it" });
+  assert.deepEqual(Object.keys(want.quests[1]).filter((k) => ["progress", "complete", "counted", "household", "measured"].includes(k)), []);
+  const answer = structuredClone(want); answer.quests[1].measured = false;
+  assert.equal(firstDiffPath(steady(answer), steady(want)), "$.quests[1].measured", "a resident-only key on the town's row is named (a key the expectation does not hold)");
+});
