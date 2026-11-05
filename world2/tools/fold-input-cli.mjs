@@ -120,11 +120,16 @@ export function withholdTakenAway({ marks = [], selection = {} }, slugs) {
     const kept = (selection.carried_absent.slugs ?? []).filter((x) => !away.has(String(x)));
     next = { ...selection, carried_absent: { ...selection.carried_absent, count: kept.length, slugs: kept } };
   }
+  const owed = new Set((selection?.hold_owed?.slugs ?? []).map(String));
+  if (selection?.hold_owed && gone.some((g) => owed.has(g))) {
+    const kept = (selection.hold_owed.slugs ?? []).filter((x) => !away.has(String(x)));
+    next = { ...next, hold_owed: { ...selection.hold_owed, count: kept.length, slugs: kept } };
+  }
   return {
     marks: marks.filter((m) => !away.has(String(m.slug))),
     selection: next,
-    fromDocket: gone.filter((g) => !carried.has(g)).length,
-    fromCarry: gone.filter((g) => carried.has(g)).length,
+    fromDocket: gone.filter((g) => !carried.has(g) && !owed.has(g)).length,
+    fromCarry: gone.filter((g) => carried.has(g) || owed.has(g)).length,
   };
 }
 
