@@ -103,6 +103,10 @@ const stancePool = {
       return { rows: CLAIMS.filter((c) => slugs.has(c.slug) && statuses.has(c.status)) };
     }
     if (/FROM claims\s+WHERE status = ANY\(\$1\)/.test(text)) return { rows: LIVE.filter((r) => params[0].includes(r.status)) };
+    // The first-laid read (postmark#4450). CLAIMS here are version rows for the
+    // amendment tests, not the marks' first claims, so this answers none and the
+    // marks keep their own dates; 5b to 5d test the first-laid comparison itself.
+    if (/FROM claims\s+WHERE slug = ANY\(\$1\)\s*$/.test(text)) return { rows: [] };
     throw new Error(`the stance pool stub does not answer: ${text.slice(0, 80)}`);
   },
   async end() {},
@@ -341,6 +345,47 @@ test("5 · awaiting is grouped by household, with seniority, and the inbox reads
     "alpha's inbox is cleared by a housemate's word");
   await assert.rejects(() => speak({ on: "alpha2/the-cairn", stance: "opposed" }, alpha),
     (e) => e.code === 422 && /own household's ground/.test(e.defect));
+});
+
+// ── 5b · postmark#4450: a thing is not ground, and age is the first-laid date ──
+// Errant's report: a receipt bird (a thing, laid 10-10) was listed as ground
+// under the Snug (first laid 09-18, amended 10-23). Both readers are handed in;
+// `awaitingOf` itself stays pure.
+const box = (id, by, date, extra = {}) => ({ id, by, date, at: { x: 0, y: 0 }, extent: { w: 4, h: 4 }, published: true, ...extra });
+
+test("5b · an older thing over a newer mark is not ground: with isThing it awaits no one", () => {
+  const bird = box("errant/a-bird", "errant", "2026-10-10", { kind: "thing" });
+  const table = box("current/a-table", "current", "2026-10-20");
+  const isThing = (m) => m.kind === "thing";
+  assert.deepEqual(awaitingOf(table, { marks: [bird], overlaps }), [{ who: "errant", ground: ["errant/a-bird"] }],
+    "without the reader the thing still files as ground, which is the reported row");
+  assert.deepEqual(awaitingOf(table, { marks: [bird], overlaps, isThing }), [],
+    "with it, the thing is left out of the ground");
+});
+
+test("5c · an elder mark amended after a younger one is still elder, by its first-laid date", () => {
+  const snug = box("current/the-snug", "current", "2026-10-23");
+  const bird = box("errant/a-bird", "errant", "2026-10-10");
+  const firstLaid = new Map([["current/the-snug", Date.parse("2026-09-18")], ["errant/a-bird", Date.parse("2026-10-10")]]);
+  const ageOf = (m) => firstLaid.get(m.id) ?? Date.parse(m.date);
+  const elder = (g, m) => ageOf(g) < ageOf(m);
+  assert.deepEqual(awaitingOf(bird, { marks: [snug], overlaps }), [],
+    "by the amended date the Snug looks younger and has no word on the bird");
+  assert.deepEqual(awaitingOf(bird, { marks: [snug], overlaps, elder }), [{ who: "current", ground: ["current/the-snug"] }],
+    "by its first-laid date the Snug stood first, and the bird awaits its house");
+});
+
+test("5d · the candidate rows carry no first-laid date: only the comparison crosses", () => {
+  const snug = box("current/the-snug", "current", "2026-10-23");
+  const bird = box("errant/a-bird", "errant", "2026-10-10");
+  const firstLaid = new Map([["current/the-snug", Date.parse("2026-09-18")]]);
+  const ageOf = (m) => firstLaid.get(m.id) ?? Date.parse(m.date);
+  const elder = (g, m) => ageOf(g) < ageOf(m);
+  const plain = candidatesFrom({ mine: [box("current/the-snug", "current", "2026-09-18")], all: [bird], overlaps });
+  const read = candidatesFrom({ mine: [snug], all: [bird], overlaps, elder });
+  assert.equal(read.length, 1);
+  assert.deepEqual(Object.keys(read[0]).sort(), Object.keys(plain[0]).sort(), "the same fields as a candidate read without it");
+  assert.equal(JSON.stringify(read).includes("2026-09-18"), false, "the first-laid instant appears nowhere in the rows");
 });
 
 // ── 6 · the cutover ─────────────────────────────────────────────────────────

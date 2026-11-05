@@ -429,8 +429,16 @@ export const houseOf = (householdOf, h) => (h === TOWN || h === TOWN_SPEAKER ? T
  *
  * → `[{ who, ground }]`, the town first, then households by key. Empty means
  * nothing awaits.
+ *
+ * Two optional readers, both handed in so this stays pure (postmark#4450):
+ * `isThing(g)` leaves a thing out of the ground (the-town/the-not-ground: a
+ * thing is not ground), and `elder(g, mark)` says whether `g` stood first. It
+ * defaults to `before`, the current date; a caller that has read each mark's
+ * first-laid instant passes a comparison on that instead (POS-449: an amend
+ * does not make an elder mark young). Only the yes or no crosses in, so no
+ * date reaches anything this function returns.
  */
-export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf = (h) => h, townSeat = null } = {}) {
+export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf = (h) => h, townSeat = null, isThing = null, elder = before } = {}) {
   if (!mark?.id) return [];
   const own = houseOf(householdOf, mark.by);
   const spoke = new Set();
@@ -444,8 +452,9 @@ export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf
   if (mark.at && mark.extent) {
     for (const g of marks) {
       if (!g?.id || g.id === mark.id || !g.at || !g.extent) continue;
+      if (isThing && isThing(g)) continue;
       const hh = houseOf(householdOf, g.by);
-      if (hh === own || !before(g, mark) || !overlaps(g, mark)) continue;
+      if (hh === own || !elder(g, mark) || !overlaps(g, mark)) continue;
       if (!grounds.has(hh)) grounds.set(hh, []);
       grounds.get(hh).push(g.id);
     }
