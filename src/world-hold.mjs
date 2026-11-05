@@ -977,7 +977,9 @@ export function holdEffectsFrom({ rows = [], handles = [], sinceCrossing, nowCro
         ? `${r.actor} set ${thing} down`
         : action === "take"
           ? `${r.actor} took up ${thing}`
-          : `${r.actor} handed ${thing} to ${p.holder ?? "somebody"}`,
+          : action === "put-back" // WLD-138 B: withdrawn before it published, back whole where it was set down from
+            ? `${thing} came back to ${p.holder ?? "somebody"}, whole, its draft withdrawn before it published`
+            : `${r.actor} handed ${thing} to ${p.holder ?? "somebody"}`,
       read_it: `world { mark: "${thing}" }`,
     });
   }
@@ -1399,7 +1401,9 @@ async function madeThing(id) {
  * It becomes a sited draft keeping its maker's id, where the dropper stands, and
  * the hold face `set-down` ends the holding. In order, each refusal writing nothing:
  *   · the maker's house only (P2-a): the key must act for its maker;
- *   · a holder is set down empty (P2-d), and a candy is never set down (POS-692);
+ *   · a candy is never set down (POS-692). A holder may be set down full (WLD-138; Darko
+ *     2026-11-03 "Yes, at settlement", replacing P2-d): what it holds stays held by its id,
+ *     and holder and contents appear together at the next settlement;
  *   · the stake, exactly as a published thing's set-down asks it (P2-b,
  *     dropStakeTerms): free on the maker's own ground, else ✦1 from the dropper,
  *     terms first and accept: true;
@@ -1417,12 +1421,6 @@ async function setDownMade({ made, args, key, actor }) {
   if (!key?.handles?.has(maker)) throw refuse(nm.setDownNotByMaker(id, maker));
   const { liveUnitDeps, thingHoldingEntry } = await import("./world-units.mjs");
   const deps = await liveUnitDeps();
-  {
-    const { units, attachments } = await deps.readRows();
-    const { foldUnits, totalOf } = await import("./world-stacks.mjs");
-    const n = holdingsOf(attachments, id).length + totalOf(foldUnits(units), id);
-    if (n > 0) throw refuse(nm.setDownHolding(id, n));
-  }
   const { lineageOf } = await import("./world-grants.mjs");
   const { classExtendsOf } = await import("./world-classes.mjs");
   if (lineageOf(String(made.kind), classExtendsOf()).includes("candy")) throw refuse(nm.setDownCandy(id, made.kind));
@@ -1435,10 +1433,14 @@ async function setDownMade({ made, args, key, actor }) {
   const { WORLD_CLONE } = await import("./world-store.mjs");
   const draft = await leaveMarkViaOffice(WORLD_CLONE, nm.setDownDraftOf(made, { at: stood, free: !dropStake?.stake }), key, { fromHand: true });
   if (draft?.error) return draft;
+  let holds = null;
   try {
     await holdTurn(async () => {
-      const { attachments } = await deps.readRows();
+      const { units, attachments } = await deps.readRows();
       if (liveHolder(attachments, id) !== String(actor)) throw bounce(409, `you are not holding ${id} any more`, "Nothing was changed.");
+      // what it holds, for the words (WLD-138 F3): whole things by their hold rows, counted units by the holder
+      const { foldUnits, totalOf } = await import("./world-stacks.mjs");
+      holds = nm.holdsWords({ things: holdingsOf(attachments, id).length, units: totalOf(foldUnits(units), id) });
       const { entry } = await thingHoldingEntry(deps, key, actor, attachments, { did: nm.SET_DOWN_FACE, thing: id, holder: null, previous: String(actor), madeBy: maker });
       entry.payload.policy = "detach"; // its place is its draft's: no hold row carries one
       entry.payload.set_down = { at: stood, draft: id };
@@ -1450,7 +1452,7 @@ async function setDownMade({ made, args, key, actor }) {
     // (its own pen, whichever files drafts here), and the refusal is the answer
     let undone = null;
     try {
-      const w = await (await import("./world.mjs")).withdrawMarkViaOffice(WORLD_CLONE, { mark: id }, key);
+      const w = await (await import("./world.mjs")).withdrawMarkViaOffice(WORLD_CLONE, { mark: id }, key, { undoSetDown: true });
       if (w?.error) undone = w;
     } catch (w) { undone = w; }
     if (undone) {
@@ -1464,7 +1466,7 @@ async function setDownMade({ made, args, key, actor }) {
   }
   const staked = dropStake?.stake ? await stakeTheDrop({ thing: id, actor, key, n: dropStake.stake }) : null;
   return { did: "set-down", thing: id, at: stood, draft: id, ...(staked ?? {}),
-    stands_note: nm.setDownWords({ id, maker, stake: !dropStake?.stake ? "free" : staked?.stake_bounce ? "bounced" : "staked" }),
+    stands_note: nm.setDownWords({ id, maker, stake: !dropStake?.stake ? "free" : staked?.stake_bounce ? "bounced" : "staked", holds }),
     leave: draft };
 }
 
