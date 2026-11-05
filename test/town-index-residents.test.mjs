@@ -125,8 +125,11 @@ const inRecordForm = async (text) => {
 // SCOPE, STATED PLAINLY: these two asks are a controlled full-row STAKES test over a made-up world. The other blocks of the two
 // answers that read a world (the Mists block, the stances block) match the record only because the fixture was CONSTRUCTED to
 // give them the least they read (an empty skeleton, a stand-in geometry): that is not an integration test of those blocks over
-// the pinned world, and no other suite is proven by it. The extra-mark falsifier is that another owner's mark in the world stays
-// out of the rows; the detectors below move the answer against the fixed expectation.
+// the pinned world, and no other suite is proven by it. The extra-mark falsifier is an IN-SCOPE one: one more of wright's own marks
+// in the invented world turned ask 3 red (count 5 against 4) when it was tried, and the detectors below move the answer against the
+// fixed expectation. That another owner's mark stays out of the rows is a fixture control (the world is built with one such mark
+// and the expectation excludes it); it is not a falsifier of the live ask (the detector that pushes such a row works on a synthetic
+// answer only).
 const INVENTED_WORLD_ASKS = new Set(["ask 3", "ask 7"]);
 const expectedFor = (label) => (INVENTED_WORLD_ASKS.has(label) ? overlayStakes(TWINS.of(label), { rows: INVENTED_STAKE_ROWS }) : TWINS.of(label));
 /** One doorstep ask, answered in a child over the invented world, with the suite's store and the same injected pool (see the fixture). */
