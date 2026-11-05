@@ -20,9 +20,9 @@
 //   · a row whose GROUND this window moves leaves the GiST's answer and is walked
 //     the long way (standing.mjs § the candidate set).
 //
-// The clearing still holds its own copy on train/2026-w44, untouched before the
-// Sunday settlement; it switches to this export on train/2026-w45 (POS-701), and
-// test/prospective-standing.test.mjs holds the two equal until then.
+// The clearing's escrow gate reads it (POS-701), and so does the stake door;
+// test/prospective-standing.test.mjs holds the door's answers equal to the
+// clearing's refusals over one set of rows.
 
 import { computeStanding, gistContainment } from "./standing.mjs";
 import { ownerHouseholdFor, liveHouseOfVia, slugOf } from "./materialize.mjs";

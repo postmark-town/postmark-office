@@ -448,6 +448,9 @@ export const CROSSING = [
     run: (ctx) => townJob(ctx, "tools/stamp-mint.mjs", ["--append", "--key", ctx.stampKey]) },
   { phase: "keep", name: "welcome", box: "deploy/welcome-pass.mjs", nonFatal: true,
     run: (ctx) => officeJob(ctx, "deploy/welcome-pass.mjs", ["--town", ctx.t.townClone, "--key", ctx.stampKey, "--date", ctx.today]) },
+  // Bring a neighbour (POS-816): after the welcome, as the keep tick runs it
+  { phase: "keep", name: "invite", box: "deploy/invite-pass.mjs", nonFatal: true,
+    run: (ctx) => officeJob(ctx, "deploy/invite-pass.mjs", ["--town", ctx.t.townClone, "--key", ctx.stampKey, "--date", ctx.today]) },
   { phase: "keep", name: "bug-stages", box: "tools/bug-stage-plan.mjs", nonFatal: true,
     run: (ctx) => officeJob(ctx, "tools/bug-stage-plan.mjs", ["--town", ctx.t.townClone, "--apply", "--quiet", "--key", ctx.stampKey]) },
   { phase: "keep", name: "ballots-in", box: "tools/ballots-backfill.mjs", nonFatal: true,
