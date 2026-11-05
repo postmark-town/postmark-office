@@ -30,6 +30,10 @@ after(() => rmSync(root, { recursive: true, force: true }));
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 const T = (iso) => Date.parse(iso);
 const EXPORTED = "2026-10-03T00:00:00.000Z";
+// The pen's own late-arrival stamp: late_from_crossing is a finite NUMBER, late_arrival a reason STRING (src/world2-pen.mjs:119-128;
+// the standing reason of a stake that puts a draft forward, world2-pen.mjs:101, filed at src/world2-claims.mjs:927-929).
+const LATE_REASON = "a stake put a draft forward after the window it was composed in had closed (postmark#2722)";
+const LATE_META = { late_from_crossing: 150, late_arrival: LATE_REASON };
 
 // ── fixtures: archives written by the notary's own producer ───────────────────
 
@@ -65,7 +69,7 @@ test("reader: accepts what the real producer wrote, finds a late restamped row i
   const { dir, cert, archives } = checkout({
     150: [{ id: 1, at: "2026-10-01T10:00:00Z", crossing: 150, payload: { to: null } }],
     // a late arrival keeps its OLD `at` but is restamped to the open window's crossing (src/world2-pen.mjs:91-128)
-    151: [{ id: 2, at: "2026-10-01T09:00:00Z", crossing: 151, payload: { late_arrival: true, late_from_crossing: 150 } },
+    151: [{ id: 2, at: "2026-10-01T09:00:00Z", crossing: 151, payload: { ...LATE_META } },
           { id: 3, at: "2026-10-05T09:00:00Z", crossing: 151 }],
   });
   // independent recompute of the documented recipe (snapshot-export.mjs:148-157), not the reader's parser
@@ -505,4 +509,85 @@ test("diagnostics: a malformed certificate or registry names its class and never
   const late = errOf(() => readCertifiedArchives(checkout({ 150: [{ id: 1, at: "2026-10-01T10:00:00Z" }] }, { exportedAt: "2026-10-01T12:00:00.000Z" }).dir, { fromMs: W.fromMs, toMs: T("2026-10-02T00:00:00Z") }));
   assert.equal(late?.code, "WINDOW_AFTER_CERTIFICATE");
   assert.match(late.message, /2026-10-01T12:00:00\.000Z/, "the instants are the parsed ones");
+});
+
+// ── composed: certified archives -> reader -> filter ──────────────────────────
+
+/** Archives written by the notary's producer, read by the reader, judged by the filter: the whole road, not two isolated successes. */
+const composed = (windows, win = W) => {
+  const { dir } = checkout(windows);
+  const read = readCertifiedArchives(dir, win);
+  return { read, res: filterActs(read.rows, consent) };
+};
+const GEO = { x: 1, y: 2 };
+const walkP = (o = {}) => ({ from: GEO, toward: GEO, pace: 1, within: null, to: null, declared_by: "syn-a", ...o });
+
+test("composed N1: a late arrival keeps its old at in a LATER archive and reaches the filter with the pen's two metadata fields; a denied party and a private room still fail; a matched non-late row is the control", () => {
+  const D = (hhmm) => `2026-10-01T${hhmm}:00.000Z`;
+  const { read, res } = composed({
+    150: [{ id: 1, at: D("10:00"), crossing: 150, action: "walk", class: "move", payload: walkP() }],
+    151: [
+      // 2: a stake released a late PUBLIC mark: no put_forward in the payload (the held row is the compose-time row), the stamp added by the pen
+      { id: 2, at: D("09:00"), crossing: 151, action: "leave-mark", class: "mark", object: "syn-a/late", payload: { slug: "syn-a/late", kind: "sited", at: GEO, body: "MARK-LATE-MARK", by: "syn-a", date: D("09:00"), ...LATE_META } },
+      { id: 3, at: D("09:05"), crossing: 151, action: "walk", class: "move", payload: walkP({ declared_by: "syn-n", ...LATE_META }) },
+      { id: 4, at: D("09:10"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-ROOM", place: null, room: "cellar", ...LATE_META } },
+      { id: 5, at: D("09:15"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-PUBLIC", place: null, ...LATE_META } },
+      // 6: the matched control of 5 — identical but for the stamp
+      { id: 6, at: D("09:30"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-NONLATE-PUBLIC", place: null } },
+      { id: 7, at: D("09:40"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-STRING", place: null, late_from_crossing: "150", late_arrival: LATE_REASON } },
+      { id: 8, at: D("09:45"), crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-HALF", place: null, late_arrival: LATE_REASON } },
+      { id: 9, at: "2026-10-05T09:00:00.000Z", crossing: 151, action: "say", class: "voice", payload: { text: "MARK-LATE-OUTSIDE", place: null, ...LATE_META } },
+    ],
+  });
+  assert.deepEqual(read.rows.map((r) => r.id), [2, 3, 4, 5, 6, 7, 8, 1], "the reader finds every in-window row, late ones from the later archive, in at order; id 9 is outside");
+  assert.deepEqual(res.acts.map((a) => a.id), [2, 5, 6, 1], "the late public mark and the late public say are carried beside their non-late control");
+  assert.deepEqual(res.acts.map((a) => a.at), [D("09:00"), D("09:15"), D("09:30"), D("10:00")], "act.at is the old instant, untouched");
+  const byId = new Map(res.acts.map((a) => [a.id, a]));
+  assert.equal(byId.get(2).crossing, 151, "the crossing is the window it arrived in");
+  assert.deepEqual([byId.get(2).payload.late_from_crossing, byId.get(2).payload.late_arrival], [150, LATE_REASON], "the two stamp fields travel as they were stored");
+  assert.ok(!("put_forward" in byId.get(2).payload), "a released public mark has no put_forward and is still a deed");
+  assert.ok(!("late_from_crossing" in byId.get(6).payload) && !("late_arrival" in byId.get(6).payload), "the non-late control carries no stamp");
+  assert.equal(res.counts.in_window, 8);
+  assert.equal(res.counts.admitted, 4);
+  assert.equal(res.counts.excluded_acts, 3);
+  assert.deepEqual(res.counts.excluded_by_reason, { household_not_yes: 1, type_mismatch: 2 });
+  assert.deepEqual(res.counts.ineligible, { "room_private:say": 1 });
+  assert.deepEqual(res.counts.untabled_by_stored_name, {});
+  const of = (id) => res.exclusions.filter((e) => e.act_id === id).map((e) => `${e.field}|${e.role}|${e.action}|${e.reason}`);
+  assert.deepEqual(of(3), ["payload.declared_by|party|act_excluded|household_not_yes"], "the stamp does not make a denied party consent");
+  assert.deepEqual(of(7), ["payload.late_from_crossing|crossnum|act_excluded|type_mismatch"], "a stringly crossing is not the pen's number");
+  assert.deepEqual(of(8), ["payload.late_arrival|late|act_excluded|type_mismatch"], "the stamp is a pair");
+  const dump = JSON.stringify(res.acts);
+  for (const w of ["MARK-LATE-MARK", "MARK-LATE-PUBLIC", "MARK-NONLATE-PUBLIC"]) assert.ok(dump.includes(w), w);
+  for (const w of ["MARK-LATE-ROOM", "MARK-LATE-STRING", "MARK-LATE-HALF", "MARK-LATE-OUTSIDE"]) assert.ok(!dump.includes(w), `${w} is not carried`);
+});
+
+test("composed N2: BOTH stored profiles of legacy:departure reach the filter through their own discriminator; a denied actor, an unknown field and a wrong or missing discriminator are controls", () => {
+  const T2 = (n) => `2026-10-01T09:${String(n).padStart(2, "0")}:00.000Z`;
+  const ledger = (o = {}) => ({ iso: T2(11), handle: "syn-a", from: GEO, toward: GEO, at: 150.5, targetExtent: null, targetMarkId: null, pace: null, line: "RAW-LEDGER-LINE-11 syn-n", _ledger: "WORLD/walk-ledger.md", ...o });
+  const line = (inner = {}, outer = {}) => ({ at: T2(12), type: "departure", actor: "syn-a", seq: 42, payload: { from: GEO, toward: GEO, crossing: 150.5, within: null, to: null, pace: 1.5, declared_by: "syn-a", source: "acts", ...inner }, ...outer });
+  const rows = [
+    [11, ledger()], [12, line()], [13, line({ declared_by: "syn-n" })], [14, line({}, { actor: "syn-n" })], [15, line({ zzz: 1 })],
+    [16, line({}, { type: "landing" })], [17, { at: T2(12), type: "departure", actor: "syn-a", seq: 42 }],
+    [18, { ...ledger(), type: "departure" }], [19, { foo: 1 }], [20, ledger({ handle: "syn-n" })], [21, line({}, { room: "cellar" })],
+  ].map(([id, payload]) => ({ id, at: T2(id), crossing: 150, action: "legacy:departure", class: "legacy", payload }));
+  const { read, res } = composed({ 150: rows });
+  assert.deepEqual(read.rows.map((r) => r.id), [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
+  assert.deepEqual(res.acts.map((a) => a.id), [11, 12], "one act from each profile");
+  assert.deepEqual(res.acts.map((a) => [a.action, a.stored_action]), [["walk", "legacy:departure"], ["walk", "legacy:departure"]]);
+  assert.deepEqual(res.acts[0].payload, { iso: T2(11), handle: "syn-a", from: GEO, toward: GEO, at: 150.5, targetExtent: null, targetMarkId: null, pace: null }, "the flat ledger row keeps its parsed fields and drops its raw line");
+  assert.deepEqual(res.acts[1].payload, { from: GEO, toward: GEO, crossing: 150.5, within: null, to: null, pace: 1.5, declared_by: "syn-a", source: "acts", line_at: T2(12) }, "the stored line's payload, with its own instant");
+  assert.equal(res.counts.in_window, 11);
+  assert.equal(res.counts.admitted, 2);
+  assert.equal(res.counts.excluded_acts, 4);
+  assert.deepEqual(res.counts.excluded_by_reason, { household_not_yes: 3, unclassified_field: 1 });
+  assert.deepEqual(res.counts.ineligible, { "not_a_departure:legacy:departure": 4, "room_private:legacy:departure": 1 });
+  const of = (id) => res.exclusions.filter((e) => e.act_id === id).map((e) => `${e.field}|${e.role}|${e.action}|${e.reason}`);
+  assert.deepEqual(of(13), ["payload.payload.declared_by|party|act_excluded|household_not_yes"]);
+  assert.deepEqual(of(14), ["payload.actor|party|act_excluded|household_not_yes"], "the line's own actor is a party");
+  assert.deepEqual(of(15), ["payload.payload.zzz|unclassified|act_excluded|unclassified_field"]);
+  assert.deepEqual(of(20), ["payload.handle|party|act_excluded|household_not_yes"]);
+  assert.ok(!JSON.stringify(res.acts).includes("RAW-LEDGER-LINE-11"));
+  // rows 16-19: a wrong discriminator, a wrapper without its inner payload, a flat row that also claims to be a line, and neither shape — none is unwrapped or guessed
+  for (const id of [16, 17, 18, 19]) assert.deepEqual(of(id), [], `row ${id} is ineligible before roles`);
 });

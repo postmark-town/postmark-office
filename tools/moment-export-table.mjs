@@ -29,6 +29,17 @@
 // A payload key that is not listed for its alias is UNCLASSIFIED: the act is out
 // (Wright 09:14: an unclassified role is a party), counted by field path.
 
+// ── COMMON ARCHIVAL METADATA: the pen's late-arrival stamp ────────────────────
+// A row that files after its window is certified keeps its `at`, is restamped to the open window's crossing, and the
+// pen adds EXACTLY TWO payload keys: `late_from_crossing` (the original crossing, a finite NUMBER) and `late_arrival`
+// (the reason, a non-empty STRING). O src/world2-pen.mjs:119-128 lateCrossingGuard; the standing reason for a stake that
+// puts a draft forward is world2-pen.mjs:101 LATE_ARRIVAL_PUT_FORWARD, filed from src/world2-claims.mjs:927-929.
+// They are neither a resident role nor a clock: kept, never gated, never a consent. Only the pen-written (non-legacy)
+// profiles list them; a legacy backfill row, and the inner payload of a persisted line, do not. The pair is written
+// together, so one without the other is malformed.
+const LATE = Object.freeze({ late_from_crossing: "crossnum", late_arrival: "reason" });
+const withLate = (vocab) => Object.freeze({ ...vocab, ...LATE });
+
 /** The nine canonical acts (the packet's list; Wright 10:03 item 2). */
 export const CANONICAL_ACTS = Object.freeze(["walk", "say", "enter", "exit", "ride", "take", "give", "drop", "leave-mark"]);
 
@@ -38,19 +49,30 @@ export const SYSTEM_ACTORS = Object.freeze(["the-town"]);
 /** The inner class an emission must carry to be a spoken line. O world2/tools/conversations.mjs:274,293. */
 export const EMISSION_SOUND_CLASS = "sound";
 
-const WALK = Object.freeze({ from: "geo", toward: "geo", pace: "num", within: "geo", to: "prov", declared_by: "party", note: "drop", approach: "drop" });
+const WALK = withLate({ from: "geo", toward: "geo", pace: "num", within: "geo", to: "prov", declared_by: "party", note: "drop", approach: "drop" });
 const LEGACY_WALK = Object.freeze({ iso: "str", handle: "party", from: "geo", toward: "geo", at: "num", targetExtent: "geo", targetMarkId: "prov", pace: "num", line: "drop", _ledger: "drop" });
-const FRAME = Object.freeze({ ledger: "drop", lines: "drop", summary: "drop", via: "prov", set_down_at: "prov", arrived: "bool", arrival_of: "prov", dungeon: "prov", locked_until: "str", left_at: "str", fled: "drop" });
+const FRAME = withLate({ ledger: "drop", lines: "drop", summary: "drop", via: "prov", set_down_at: "prov", arrived: "bool", arrival_of: "prov", dungeon: "prov", locked_until: "str", left_at: "str", fled: "drop" });
 const LEGACY_FRAME = Object.freeze({ iso: "str", handle: "party", act: "str", mark: "prov", at: "num", word: "drop", line: "drop", _ledger: "drop" });
-const HOLD = Object.freeze({ thing: "prov", holder: "party", previous_holder: "party", made_by: "prov", policy: "str", owns: "bool" });
+const HOLD = withLate({ thing: "prov", holder: "party", previous_holder: "party", made_by: "prov", policy: "str", owns: "bool" });
 // give/take: the writer stores payload { units: true, moves } and nothing else (world-units.mjs:214-221;
 // moves are planGive/planTake world-stacks.mjs:385,393: { from, to, label, n }). No `kind`, no `kinds`.
-const UNITS = Object.freeze({ units: "bool", moves: "moves" });
+const UNITS = withLate({ units: "bool", moves: "moves" });
 // the set-down: payload { units, moves:[{from:actor,to:null,label,n:1}], label, at:{x,y} } (world-units.mjs:495-497)
-const UNITS_DROP = Object.freeze({ units: "bool", moves: "moves", label: "str", at: "geo" });
+const UNITS_DROP = withLate({ units: "bool", moves: "moves", label: "str", at: "geo" });
 
 /** payload roles for a say; `room` is the private marker (WLD-74: a room's record is shown only to readers in that room). */
-const SAY = Object.freeze({ text: "text", place: "str", aboard: "bool", room: "private", stood_with: "speaker" });
+const SAY = withLate({ text: "text", place: "str", aboard: "bool", room: "private", stood_with: "speaker" });
+
+/**
+ * The STORED DEPARTURE LINE, the second producer of `legacy:departure`. WRITER: tools/crossing-save.mjs:327-329 (and the
+ * derived-side call at :514) builds { at, type:"departure", actor, seq, payload } from storedDepartureEvents, whose payload is
+ * src/world-movement.mjs:535-546 departureEventOf: { from, toward, crossing, within, to, pace, declared_by, source:"acts" }.
+ * world2/tools/seed-import.mjs:681-684 stores the WHOLE line as the payload of a `legacy:departure` row (class legacy).
+ * The line's `actor` is the walker and `declared_by` the same handle: both are parties.
+ */
+export const DEPARTURE_OUTER = Object.freeze({ at: "str", type: "prov", actor: "party", seq: "num", payload: "inner", room: "private" });
+export const DEPARTURE_INNER = Object.freeze({ from: "geo", toward: "geo", crossing: "num", within: "geo", to: "prov", pace: "num", declared_by: "party", source: "str" });
+export const DEPARTURE_LINE_TYPE = "departure";
 
 /**
  * The inner payload of a persisted emission. WRITER: tools/crossing-save.mjs:335-348 builds the line
@@ -64,7 +86,7 @@ export const EMISSION_OUTER = Object.freeze({ at: "str", type: "prov", actor: "p
 /** The stored line type a `legacy:emission` row must carry (seed-import.mjs:681 names the action after it). */
 export const EMISSION_LINE_TYPE = "emission";
 
-const LEAVE_MARK = Object.freeze({
+const LEAVE_MARK = withLate({
   slug: "prov", kind: "str", at: "geo", extent: "geo", points: "geo", body: "text", parent_id: "prov", by: "party", date: "str",
   slot: "str", value: "str",
   holder: "bool", open: "bool", capacity: "num", stamps: "num", put_forward: "bool",
@@ -79,14 +101,21 @@ const LEAVE_MARK = Object.freeze({
  */
 export const ACTION_ALIASES = Object.freeze({
   "walk": { canonical: "walk", classes: ["move"], payload: WALK, source: "O src/world.mjs:1774-1792 walkEntry (class move)" },
-  "legacy:departure": { canonical: "walk", classes: ["legacy"], payload: LEGACY_WALK, source: "O world2/tools/ledger-backfill.mjs:233-247; payload = W tools/walk.mjs:86-98 parseWalkLedger departure + _ledger" },
+  // TWO producers write this stored name; each is a profile with an explicit discriminator. Exactly one must match, else the row is
+  // not carried (no fallback, no unwrap of a shape that did not name itself).
+  "legacy:departure": { canonical: "walk", classes: ["legacy"], mismatch_reason: "not_a_departure", profiles: Object.freeze([
+    { name: "backfill-ledger-row", match: { present: ["iso", "handle"], absent: ["type", "payload"] }, payload: LEGACY_WALK,
+      source: "O world2/tools/ledger-backfill.mjs:233-247; payload = W tools/walk.mjs:86-98 parseWalkLedger departure + _ledger (flat: iso, handle, no type, no inner payload)" },
+    { name: "state-log-line", match: { type: DEPARTURE_LINE_TYPE }, wrapper: true, line_type: DEPARTURE_LINE_TYPE, at_as: "line_at", payload: DEPARTURE_OUTER, inner: DEPARTURE_INNER,
+      source: "O world2/tools/seed-import.mjs:681-684 (the whole STATE/log line) <- tools/crossing-save.mjs:327-329,514 <- src/world-movement.mjs:535-546 departureEventOf" },
+  ]) },
   "say": { canonical: "say", classes: ["voice"], payload: SAY, source: "O src/world.mjs:1905-1921 voiceEntry (class voice)" },
-  "legacy:emission": { canonical: "say", classes: ["legacy"], wrapper: true, line_type: EMISSION_LINE_TYPE, payload: EMISSION_OUTER, source: "O world2/tools/seed-import.mjs:681-684 (action legacy:<line type>, class legacy, payload = the line) <- tools/crossing-save.mjs:335-348 (the emission line); reader world2/tools/conversations.mjs:287-300" },
+  "legacy:emission": { canonical: "say", classes: ["legacy"], mismatch_reason: "not_a_say", wrapper: true, line_type: EMISSION_LINE_TYPE, inner_class: EMISSION_SOUND_CLASS, at_as: "emitted_at", inner: EMISSION_INNER, payload: EMISSION_OUTER, source: "O world2/tools/seed-import.mjs:681-684 (action legacy:<line type>, class legacy, payload = the line) <- tools/crossing-save.mjs:335-348 (the emission line); reader world2/tools/conversations.mjs:287-300" },
   "enter": { canonical: "enter", classes: ["frame"], payload: FRAME, source: "O src/crossing-exec.mjs:107-132 (class frame)" },
   "exit": { canonical: "exit", classes: ["frame"], payload: FRAME, source: "O src/crossing-exec.mjs:107-132 (class frame)" },
   "legacy:enter": { canonical: "enter", classes: ["legacy"], payload: LEGACY_FRAME, source: "O world2/tools/ledger-backfill.mjs:218-231; payload = W tools/enter-exit.mjs:178-182 + _ledger" },
   "legacy:exit": { canonical: "exit", classes: ["legacy"], payload: LEGACY_FRAME, source: "O world2/tools/ledger-backfill.mjs:218-231; payload = W tools/enter-exit.mjs:178-182 + _ledger" },
-  "ride": { canonical: "ride", classes: ["ride"], payload: Object.freeze({ origin: "prov", to: "prov", distance_m: "num", pace_km_per_crossing: "num", declared_at: "str", arrives_at: "str" }), source: "O src/world-ride.mjs:649-657 (key set pinned at src/world-apex.mjs:468-474)" },
+  "ride": { canonical: "ride", classes: ["ride"], payload: withLate({ origin: "prov", to: "prov", distance_m: "num", pace_km_per_crossing: "num", declared_at: "str", arrives_at: "str" }), source: "O src/world-ride.mjs:649-657 (key set pinned at src/world-apex.mjs:468-474)" },
   "take": { canonical: "take", classes: ["holding"], payload: HOLD, source: "O src/world-hold.mjs:1707-1721 holdingEntry" },
   "give": { canonical: "give", classes: ["holding"], payload: HOLD, source: "O src/world-hold.mjs:1707-1721 holdingEntry (class creature gives are NOT admitted: encounter-verbs.mjs:695, kind `who` unread)" },
   "drop": { canonical: "drop", classes: ["holding"], payload: HOLD, source: "O src/world-hold.mjs:1707-1721 holdingEntry" },

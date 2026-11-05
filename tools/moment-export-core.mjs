@@ -33,7 +33,7 @@ import path from "node:path";
 // archives and `canonical` the line spelling. Import-time is safe (only node builtins and
 // src/crossings.mjs are pulled in; main() is behind an isMain guard).
 import { contentDigest } from "../world2/tools/snapshot-export.mjs";
-import { ACTION_ALIASES, EMISSION_INNER, EMISSION_SOUND_CLASS, SYSTEM_ACTORS, UNITS_DROP_MOVE, UNITS_MOVE } from "./moment-export-table.mjs";
+import { ACTION_ALIASES, SYSTEM_ACTORS, UNITS_DROP_MOVE, UNITS_MOVE } from "./moment-export-table.mjs";
 
 export const COVERAGE = "certified-snapshot";
 export const HELD_BACK_LINE = "held-back acts are not reported by the certificate: no count, and never a zero";
@@ -182,7 +182,16 @@ const payloadOf = (row) => {
 };
 
 const geoOk = (v) => v === null || typeof v === "number" || (Array.isArray(v) ? v.every(geoOk) : isObj(v) && Object.values(v).every(geoOk));
+// a stored name with several producers names its profile by data (the table's `match`); exactly one must fit
+const fits = (m, p) => (m.type === undefined || p.type === m.type) && (m.present ?? []).every((k) => Object.hasOwn(p, k)) && (m.absent ?? []).every((k) => !Object.hasOwn(p, k));
+const specOf = (alias, payload) => {
+  if (!alias.profiles) return alias;
+  const hit = alias.profiles.filter((p) => fits(p.match, payload));
+  return hit.length === 1 ? hit[0] : null;
+};
 const typeOk = {
+  // the pen's late-arrival stamp (world2-pen.mjs:119-128): the original crossing is a finite number, the reason a non-empty string
+  crossnum: (v) => typeof v === "number" && Number.isFinite(v), reason: (v) => typeof v === "string" && v.trim().length > 0,
   str: (v) => v === null || typeof v === "string", num: (v) => v === null || typeof v === "number",
   bool: (v) => typeof v === "boolean", geo: geoOk, text: (v) => v === null || typeof v === "string",
   prov: (v) => v === null || typeof v === "string",
@@ -204,11 +213,13 @@ export function judgeAct(row, consent) {
   // ── raw private eligibility: OUTER and INNER classifiers, before any projection ──
   if (alias.classes && !alias.classes.includes(String(row.class)))
     return { outcome: "ineligible", reason: "class_unqualified", stored_name: stored, class: String(row.class), exclusions: [] };
+  const spec = specOf(alias, payload);
+  if (!spec) return { outcome: "ineligible", reason: alias.mismatch_reason ?? "profile_unqualified", stored_name: stored, exclusions: [] };
   let inner = null;
-  if (alias.wrapper) {
+  if (spec.wrapper) {
     inner = payload.payload;
-    if (payload.type !== alias.line_type || !isObj(inner) || inner.class !== EMISSION_SOUND_CLASS)
-      return { outcome: "ineligible", reason: "not_a_say", stored_name: stored, exclusions: [] };
+    if (payload.type !== spec.line_type || !isObj(inner) || (spec.inner_class !== undefined && inner.class !== spec.inner_class))
+      return { outcome: "ineligible", reason: alias.mismatch_reason ?? "profile_unqualified", stored_name: stored, exclusions: [] };
     if (payload.room != null || inner.room != null) return { outcome: "ineligible", reason: "room_private", stored_name: stored, exclusions: [] };
   } else {
     if (payload.room != null) return { outcome: "ineligible", reason: "room_private", stored_name: stored, exclusions: [] };
@@ -236,9 +247,9 @@ export function judgeAct(row, consent) {
   if (typeof row.actor !== "string" || !row.actor) fail("actor", "actor", REASONS.type);
   else partyOk(row.actor, "actor", "actor");
 
-  const vocab = alias.wrapper ? EMISSION_INNER : alias.payload;
-  const source = alias.wrapper ? inner : payload;
-  const prefix = alias.wrapper ? "payload.payload." : "payload.";
+  const vocab = spec.wrapper ? spec.inner : spec.payload;
+  const source = spec.wrapper ? inner : payload;
+  const prefix = spec.wrapper ? "payload.payload." : "payload.";
   const kept = {};
   for (const [k, v] of Object.entries(source)) {
     const role = Object.hasOwn(vocab, k) ? vocab[k] : undefined;
@@ -275,14 +286,17 @@ export function judgeAct(row, consent) {
     if (!typeOk[role](v)) { fail(field, role, REASONS.type); continue; }
     kept[k] = v;
   }
-  if (alias.wrapper) {
-    // the speech source is spoken_by (else the row's actor): it was gated above if present; the outer `at` is the instant
-    if (typeof payload.at === "string") out.emitted_at = payload.at;
+  // the pen's late stamp is written as a pair; one without the other is malformed (typed above, and only where the profile lists them)
+  if (Object.hasOwn(vocab, "late_from_crossing") && (source.late_from_crossing === undefined) !== (source.late_arrival === undefined))
+    fail(prefix + (source.late_from_crossing === undefined ? "late_arrival" : "late_from_crossing"), "late", REASONS.type);
+  if (spec.wrapper) {
+    // the line's own instant; the speaker or walker of the line is its outer `actor` (a party) and the inner source field, both gated
+    if (typeof payload.at === "string") out[spec.at_as] = payload.at;
     for (const [k, v] of Object.entries(payload)) {
-      const orole = Object.hasOwn(alias.payload, k) ? alias.payload[k] : undefined;
+      const orole = Object.hasOwn(spec.payload, k) ? spec.payload[k] : undefined;
       if (orole === undefined) fail(`payload.${k}`, "unclassified", REASONS.field);
       else if (orole === "party") partyOk(v, `payload.${k}`, "party");
-      else if ((orole === "str" || orole === "prov") && !typeOk[orole](v)) fail(`payload.${k}`, orole, REASONS.type);
+      else if (orole !== "inner" && orole !== "private" && orole !== "drop" && !typeOk[orole](v)) fail(`payload.${k}`, orole, REASONS.type);
     }
   }
 
