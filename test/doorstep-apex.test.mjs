@@ -3,7 +3,8 @@
 // The doorstep draws every line from a door's own read through the MCP
 // dispatcher, so these drive it with a fake dispatcher answering in each
 // door's real shape. They hold D1 (the bundle is a read away, untouched), D2
-// (one line per item naming its door, at most 2,500 characters served), D3
+// (one line per item naming its door, at most 2,600 characters served: 2,500 until
+// POS-822/b, Darko 2026-11-06 12:37 EDT), D3
 // (its own cursor: the changed lines only, or nothing_new) and D4 (per
 // handle), and the explain coverage of every key it can answer.
 //
@@ -250,8 +251,9 @@ test("POS-806 — the first-visit line fits the budget with the lines a newcomer
   assert.ok(JSON.stringify(d, null, 1).length <= DOORSTEP_BUDGET, `served ${JSON.stringify(d, null, 1).length}`);
 });
 
-test("POS-822 — the counted first-day line fits the budget for a brand-new household (all seven left), and DOORSTEP_BUDGET is still 2,500", async () => {
-  assert.equal(DOORSTEP_BUDGET, 2500, "the ruled budget is not raised");
+test("POS-822 — the counted first-day line fits the budget for a brand-new household (all seven left), and DOORSTEP_BUDGET is the ruled 2,600", async () => {
+  // LAW (Darko, 2026-11-06 12:37 EDT, POS-822/b): "Raise the budget to ~2,600". It was 2,500 until then; the counted line serves 2,556 on this fixture.
+  assert.equal(DOORSTEP_BUDGET, 2600, "the ruled budget: raised from 2,500 for the first-day count, and no further");
   const { ctx } = doors();
   const base = ctx.steps;
   ctx.steps = async () => [...(await base()), ...arrivingSteps(7)];
