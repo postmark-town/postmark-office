@@ -306,8 +306,8 @@ in the freshen).
 Moving dev's `sandbox/seed` is its own step, one tool, run by hand on its own day
 and never on ship morning. No unit or timer runs it. It finishes with the full
 rehearsal green on the current train, so the ship's rehearsal starts from a
-known-good dev. Carry the train first (step 2): the script comes with it. In a box
-shell, without `--go` for the plan:
+known-good dev. Carry the train first (§ The dev rehearsal, step 2): the script
+comes with it. In a box shell, without `--go` for the plan:
 ```sh
 cd /srv/postmark-office-dev && WORLD2_DB=w2_devsandbox_20260925 bash deploy/dev-seed-advance.sh --town <full sha> --world <full sha> --go
 ```
