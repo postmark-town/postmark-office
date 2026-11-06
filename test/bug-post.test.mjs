@@ -2305,10 +2305,11 @@ test("18 · a credit refused because there's no declaration says a carry is decl
   assert.deepEqual(verdicts, Object.fromEntries(Object.keys(honest).map((name) => [name, "ok ada"])));
 });
 
-test("18 · (a text pin, labelled: it reads the doc, not behaviour) the contract's carried-fix bullet says the declaration is the body's first line, and that a line below is plain text", () => {
+test("18 · (a text pin, labelled: it reads the doc, not behaviour) the contract's carried-fix bullet says the declaration is the body's first line, that a first line not of the form declares nothing, and that a line below is plain text", () => {
   const doc = readFileSync(new URL("../docs/posts-contract.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const [bullet] = doc.split("\n").filter((l) => l.startsWith("  - **A carried fix credits the carried PR's author"));
   assert.match(bullet, /\bfirst line\b/);
+  assert.match(bullet, /\bfirst line that isn't the form, whole\b/, "or a reader expects a 422 for a malformed line, from \"Everything else refuses\"");
   assert.match(bullet, /\bplain text\b/);
   assert.doesNotMatch(bullet, /line of its own|could start markup/, "the old scan's words are gone");
 });

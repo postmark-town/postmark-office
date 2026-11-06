@@ -50,7 +50,8 @@
 // both PRs' net diffs agree by `git patch-id --stable` AND byte for byte in what
 // they change ("Patch-id is whitespace-blind … the carried diff must agree
 // byte-for-byte in its changed content, with no whitespace normalization").
-// Anything ambiguous or unsupported refuses, naming the mismatch, and a founder
+// A first line that isn't the form, whole, declares nothing. Once one declares,
+// anything ambiguous or unsupported refuses, naming the mismatch, and a founder
 // credits it by hand. Only fixed (and its recredit) reads a carry. A body can be
 // edited after the merge, and the act keeps no copy of it: that is the ruled,
 // stated limit, not a merge signature. The reads stay before the transaction:
