@@ -92,7 +92,7 @@ import { appendActFlipped, appendJournal, laneFlipped } from "./world-journal.mj
 import { stanceQuery } from "./world2-acts.mjs";
 import { mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
 import {
-  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, houseOf, judgeTownHand, judgeTownWord,
+  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, elderByFirstLaid, houseOf, judgeTownHand, judgeTownWord,
   lawMarksAt, lawShaFor, onCurrentVersion, readVersions,
 } from "./town-stance.mjs";
 import { join } from "node:path";
@@ -626,21 +626,25 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   // and handed to `awaitingOf` only as a comparison, so no date joins the
   // candidate rows or anything a tier prints. `stance_reader` may read `claims`
   // and nothing else (023; falsifier-draft-privacy § the stance carve), so the
-  // first-laid instant is the earliest claim on the slug, each claim dated as
-  // world-snapshot.mjs § firstClaimedBySlug dates one: its record date, else
-  // its submitted_at. A slug with no claim row keeps its own date, as before.
+  // join `firstClaimedBySlug` makes to `marks` is not open here. The first-laid
+  // instant is the earliest claim on the slug that STOOD (Wright, 2026-11-05 on
+  // office#924: "a claim that never stood never laid the mark"), which is a
+  // `locked` one: a draft or pending claim has not cleared, a refused one never
+  // stood, and a retracted one was withdrawn while pending. Each is dated as
+  // `firstClaimedBySlug` dates one (mark-render.mjs § firstClaimInstant): its
+  // record date, else its submitted_at. A slug with no locked claim (a draft
+  // not yet cleared) keeps its own date, as before.
   const laid = await stanceQuery(FIRST_LAID_SELECT, [marks.map((m) => String(m.id))], env);
   if (laid.unreachable) return { unreachable: laid.unreachable };
+  const { firstClaimInstant } = await import("../world2/tools/mark-render.mjs");
   const firstLaid = new Map();
   for (const r of laid.rows ?? []) {
-    const at = Date.parse(String((r?.laid_date != null && r.laid_date !== "") ? r.laid_date
-      : (r?.submitted_at instanceof Date ? r.submitted_at.toISOString() : r?.submitted_at ?? "")));
+    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
     if (!r?.slug || !Number.isFinite(at)) continue;
     const id = String(r.slug);
     if (!firstLaid.has(id) || at < firstLaid.get(id)) firstLaid.set(id, at);
   }
-  const ageOf = (m) => firstLaid.get(String(m?.id)) ?? (Date.parse(m?.date ?? "") || 0);
-  const elder = (g, m) => (ageOf(g) !== ageOf(m) ? ageOf(g) < ageOf(m) : String(g?.id ?? "") < String(m?.id ?? ""));
+  const elder = elderByFirstLaid(firstLaid);
 
   // A THING IS NOT GROUND (the-town/the-not-ground), read with the office's
   // own test, the same one world.mjs uses for an act's anchor (held.mjs §
@@ -654,13 +658,14 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
 }
 
 // The first-laid read, on the one table `stance_reader` holds. Three columns,
-// none of them a body, and its rows never leave `worldForStances`.
+// none of them a body, only claims that stood, and its rows never leave
+// `worldForStances`.
 const FIRST_LAID_SELECT = `
   SELECT slug,
          data ->> 'date' AS laid_date,
          submitted_at
     FROM claims
-   WHERE slug = ANY($1)`;
+   WHERE slug = ANY($1) AND status = 'locked'`;
 
 // ── A STANCE OUTLIVES THE WINDOW IT WAS SPOKEN IN (postmark#2454, 2026-09-04) ──
 //

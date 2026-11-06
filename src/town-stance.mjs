@@ -408,6 +408,22 @@ const dateMs = (m) => Date.parse(m?.date ?? "") || 0;
 /** Precedence: the ground stood first. The id breaks a tie (world-stance.mjs § standsBefore). */
 const before = (g, m) => (dateMs(g) !== dateMs(m) ? dateMs(g) < dateMs(m) : String(g?.id ?? "") < String(m?.id ?? ""));
 
+/**
+ * The same precedence on FIRST-LAID instants (postmark#4450; POS-449, "an amend
+ * does not make an elder mark young"). PURE. `firstLaid` is `Map(id → instant)`,
+ * an ISO string as world-snapshot.mjs § firstClaimedBySlug returns it, or
+ * milliseconds; a mark with no entry keeps its own date, as before. The label
+ * and the inbox both build their `elder` here, so the two read seniority one way.
+ */
+export function elderByFirstLaid(firstLaid) {
+  const ageOf = (m) => {
+    const v = firstLaid?.get?.(String(m?.id));
+    const at = typeof v === "number" ? v : Date.parse(String(v ?? ""));
+    return Number.isFinite(at) ? at : dateMs(m);
+  };
+  return (g, m) => (ageOf(g) !== ageOf(m) ? ageOf(g) < ageOf(m) : String(g?.id ?? "") < String(m?.id ?? ""));
+}
+
 /** A handle's household, with the town's own ground and pen folded into the town. */
 export const houseOf = (householdOf, h) => (h === TOWN || h === TOWN_SPEAKER ? TOWN : householdOf(h) ?? h);
 
