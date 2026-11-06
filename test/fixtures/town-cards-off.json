@@ -220,8 +220,8 @@
    },
    {
     "act": "reveal",
-    "blurb": "reveal a shipped bug's critter: the town's hands set the three candidates Iris painted (candidates: three media URLs), then the fixer who named the critter picks one (pick: 1–3); the jar shows the picked image, chosen once",
-    "teaches": "reveal a shipped bug's critter: the town's hands set the three candidates Iris painted (candidates: three media URLs), then the fixer who named the critter picks one (pick: 1–3); the jar shows the picked image, chosen once",
+    "blurb": "reveal a shipped bug's critter: the town's hands set the one portrait Iris painted (candidates: [one media URL]) and it is the critter's image at once, with no pick; an older set of three candidates still takes the fixer's pick (pick: 1–3); the jar shows the image, set once",
+    "teaches": "reveal a shipped bug's critter: the town's hands set the one portrait Iris painted (candidates: [one media URL]) and it is the critter's image at once, with no pick; an older set of three candidates still takes the fixer's pick (pick: 1–3); the jar shows the image, set once",
     "fields": {},
     "dispatches_to": "town_reveal"
    },
@@ -296,8 +296,8 @@
    "read": "reveal",
    "card": {
     "act": "reveal",
-    "blurb": "reveal a shipped bug's critter: the town's hands set the three candidates Iris painted (candidates: three media URLs), then the fixer who named the critter picks one (pick: 1–3); the jar shows the picked image, chosen once",
-    "teaches": "reveal a shipped bug's critter: the town's hands set the three candidates Iris painted (candidates: three media URLs), then the fixer who named the critter picks one (pick: 1–3); the jar shows the picked image, chosen once",
+    "blurb": "reveal a shipped bug's critter: the town's hands set the one portrait Iris painted (candidates: [one media URL]) and it is the critter's image at once, with no pick; an older set of three candidates still takes the fixer's pick (pick: 1–3); the jar shows the image, set once",
+    "teaches": "reveal a shipped bug's critter: the town's hands set the one portrait Iris painted (candidates: [one media URL]) and it is the critter's image at once, with no pick; an older set of three candidates still takes the fixer's pick (pick: 1–3); the jar shows the image, set once",
     "fields": {},
     "dispatches_to": "town_reveal"
    },
@@ -743,7 +743,7 @@
   },
   {
    "name": "town_reveal",
-   "description": "Reveal a shipped bug's critter — town { do: \"reveal\" }'s flat charge name (POS-236: \"at ship the image is revealed … three candidates painted by Iris, the resident choosing\"). Two acts, one at a time. The town's hands (wright, keemin, bugcatcher) set candidates: the 3 media URLs Iris answered with (each a URL the media door gave, upload_media). Then the fixer who named the critter picks one: pick, 1–3. The jar shows the picked image; it is chosen once. Only a bug that stands shipped reveals.",
+   "description": "Reveal a shipped bug's critter — town { do: \"reveal\" }'s flat charge name (POS-236: \"at ship the image is revealed\"; CORE-25: one portrait painted by Iris). One portrait per critter: the town's hands (wright, keemin, bugcatcher) send candidates: [the one media URL Iris answered with] (a URL the media door gave, upload_media), and it is the critter's image at once, with no pick. (An older set of 3 candidates still takes a pick, 1–3, from the fixer who named the critter.) The jar shows the image; it is set once. Only a bug that stands shipped reveals.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -770,9 +770,9 @@
       "items": {
        "type": "string"
       },
-      "minItems": 3,
+      "minItems": 1,
       "maxItems": 3,
-      "description": "the town's hands only: the 3 media URLs Iris painted"
+      "description": "the town's hands only: the one media URL Iris painted, which is the critter's image at once (an older set holds 3, and takes a pick)"
      },
      "pick": {
       "type": "integer",

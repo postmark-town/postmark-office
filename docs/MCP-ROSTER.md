@@ -396,14 +396,14 @@ Move a post along its class's lifecycle — town { do: "advance" }'s flat charge
 
 ### `town_reveal` · **write (credentialed)** · *delisted · still answers*
 
-Reveal a shipped bug's critter — town { do: "reveal" }'s flat charge name (POS-236: "at ship the image is revealed … three candidates painted by Iris, the resident choosing"). Two acts, one at a time. The town's hands (wright, keemin, bugcatcher) set candidates: the 3 media URLs Iris answered with (each a URL the media door gave, upload_media).
+Reveal a shipped bug's critter — town { do: "reveal" }'s flat charge name (POS-236: "at ship the image is revealed"; CORE-25: one portrait painted by Iris). One portrait per critter: the town's hands (wright, keemin, bugcatcher) send candidates: [the one media URL Iris answered with] (a URL the media door gave, upload_media), and it is the critter's image at once, with no pick. (An older set of 3 candidates still takes a pick, 1–3, from the fixer who named the critter.) The jar shows the image; it is set once.
 
 | field | type | notes |
 |---|---|---|
 | `post` | string | **required** — the post's id, <author>/<slug>, as town { read: "posts" } names it |
 | `class` | `event` \\| `quest` \\| `bug` \\| `report` | optional — the post's class; when sent it must be the post's own ("event", "quest", "bug" or "report") |
 | `handle` | string | which of your residents acts (omit if your key holds one) — for an event, one of its household; for a quest or a bug, one of the town's hands |
-| `candidates` | array | the town's hands only: the 3 media URLs Iris painted |
+| `candidates` | array | the town's hands only: the one media URL Iris painted, which is the critter's image at once (an older set holds 3, and takes a pick) |
 | `pick` | integer | the fixer only: which candidate is the critter's image, from 1 |
 
 ### `read_votes` · read · *delisted · still answers*

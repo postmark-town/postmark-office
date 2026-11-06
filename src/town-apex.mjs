@@ -227,7 +227,7 @@ const TOWN_ACTS = {
   advance: { tool: "town_advance",
     inline: "move a post along its class's lifecycle (to: the state it moves to; state is the canonical word, and the answer carries both state and stage — stage is a permanent alias) — an event has no advance (its phases follow its clock: amend its times, or close it). A bug advances by the town's hands: reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or to duplicate / not-a-bug; each paid state names whom it credits, fixed carries the critter its fixer named, and any advance may carry link: the issue comment, PR or tag that earned the state" + (ideaPostsOn() ? `. An idea moves by the town's hands (${IDEA_HANDS.join(", ")}) to any named stage, in any order (${IDEA_STAGES.join(", ")}), each move carrying credit, link and note; nothing gates a stage and nothing mints, and a finished idea moves no further` : "") },
   reveal: { tool: "town_reveal",
-    inline: "reveal a shipped bug's critter: the town's hands set the three candidates Iris painted (candidates: three media URLs), then the fixer who named the critter picks one (pick: 1–3); the jar shows the picked image, chosen once" },
+    inline: "reveal a shipped bug's critter: the town's hands set the one portrait Iris painted (candidates: [one media URL]) and it is the critter's image at once, with no pick; an older set of three candidates still takes the fixer's pick (pick: 1–3); the jar shows the image, set once" },
   // THE IDEA CLASS (POS-290), on the menu only while IDEA_POSTS is on: with the
   // switch off this door's card is byte-for-byte what it was.
   ...(ideaPostsOn() ? {

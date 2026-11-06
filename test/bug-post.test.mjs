@@ -738,7 +738,7 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
 
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED }, FINN, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
   // until 2026-11-06 this was /a reveal holds 3 candidates/; CORE-25 lets a hand set one portrait, so two is still the refused count
-  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait, or three candidates/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait, or 3 candidates/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [...PAINTED.slice(0, 2), "https://example.com/x.png"] }, WRIGHT, { now: NOW }), 422, /a candidate is a media URL/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0], PAINTED[0], PAINTED[1]] }, WRIGHT, { now: NOW }), 422, /three different images/);
   // POS-738: a right-shaped URL whose bytes the town never held is refused, by name

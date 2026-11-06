@@ -206,10 +206,10 @@ export const TOWN_POST_TOOLS = [
       note: { type: "string", description: `class "bug", with recredit only, and required there — why the stage's credit was wrong, at most ${NOTE_MAX} characters${ifIdeas(`; class "idea", optional — a few words on why it moved, at most ${NOTE_MAX} characters`)}` },
     }, required: ["post"], additionalProperties: false } },
   { name: "town_reveal",
-    description: `Reveal a shipped bug's critter — town { do: "reveal" }'s flat charge name (POS-236: "at ship the image is revealed … three candidates painted by Iris, the resident choosing"). Two acts, one at a time. The town's hands (${BUG_HANDS.join(", ")}) set candidates: the ${REVEAL_CANDIDATES} media URLs Iris answered with (each a URL the media door gave, upload_media). Then the fixer who named the critter picks one: pick, 1–${REVEAL_CANDIDATES}. The jar shows the picked image; it is chosen once. Only a bug that stands shipped reveals.`,
+    description: `Reveal a shipped bug's critter — town { do: "reveal" }'s flat charge name (POS-236: "at ship the image is revealed"; CORE-25: one portrait painted by Iris). One portrait per critter: the town's hands (${BUG_HANDS.join(", ")}) send candidates: [the one media URL Iris answered with] (a URL the media door gave, upload_media), and it is the critter's image at once, with no pick. (An older set of ${REVEAL_CANDIDATES} candidates still takes a pick, 1–${REVEAL_CANDIDATES}, from the fixer who named the critter.) The jar shows the image; it is set once. Only a bug that stands shipped reveals.`,
     inputSchema: { type: "object", properties: {
       post: POST_REF, class: CLASS_REF, handle: ACTING_HANDLE,
-      candidates: { type: "array", items: { type: "string" }, minItems: REVEAL_CANDIDATES, maxItems: REVEAL_CANDIDATES, description: `the town's hands only: the ${REVEAL_CANDIDATES} media URLs Iris painted` },
+      candidates: { type: "array", items: { type: "string" }, minItems: 1, maxItems: REVEAL_CANDIDATES, description: `the town's hands only: the one media URL Iris painted, which is the critter's image at once (an older set holds ${REVEAL_CANDIDATES}, and takes a pick)` },
       pick: { type: "integer", minimum: 1, maximum: REVEAL_CANDIDATES, description: "the fixer only: which candidate is the critter's image, from 1" },
     }, required: ["post"], additionalProperties: false } },
   ...(IDEAS_ON ? ideaTools() : []),
