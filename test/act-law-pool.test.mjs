@@ -179,3 +179,58 @@ test("F3 · both ticks in flight (the store hangs on both tables) after the grap
   assert.equal(after.admitted, true, `once the hang ends, an act goes on: ${JSON.stringify(after)}`);
   assert.equal(inForce(), 2);
 });
+
+test("N9 · the pin session's statement_timeout gives its connection and its slot back while a table lock is still held (a lock that ends early gives them back too)", async (t) => {
+  // POS-908, from the round-three review of #762 (N9): act outcomes are the same with or without the session's `SET LOCAL statement_timeout`,
+  // because a hung question refuses acts until it ends. What the timeout buys is that the one connection and the one slot come back when the
+  // STORE ends the statement, not when the lock does ("a JS race frees the caller, not the connection": STORE-CONCURRENCY). Only the slot count
+  // and the pool's use, read while the lock is still held, can see it.
+  const r = await rig(t, "act_law_pool_timeout");
+  if (!r) return;
+  const { pool, owner, locker } = r;
+  await build(owner, 1);
+  await law.reloadLawSnapshot(); await graph.reloadWorldGraph();
+  await drain(pool);
+  const inUse = () => pool.totalCount - pool.idleCount;
+  const { rows: [{ pid }] } = await locker.query("SELECT pg_backend_pid() AS pid");
+  const lockHeld = async () => Number((await owner.query(
+    "SELECT count(*) AS n FROM pg_locks WHERE pid = $1 AND granted AND locktype = 'relation' AND mode = 'AccessExclusiveLock'", [pid])).rows[0].n) > 0;
+
+  // the paired control: the lock ends at 300 ms, before any timeout; the question is answered, the act is admitted, the slot and the connection are back
+  await locker.query("BEGIN");
+  await locker.query("LOCK TABLE settlements IN ACCESS EXCLUSIVE MODE");
+  const early = outcome(actLaw.lawForAnAct());
+  await sleep(300);
+  assert.equal(await lockHeld(), true, "control: the lock is held while the question waits");
+  await locker.query("ROLLBACK");
+  const e = await early;
+  assert.equal(e.admitted, true, `control: a lock that ends in time answers the question and the act goes on: ${JSON.stringify(e)}`);
+  await drain(pool);
+  assert.deepEqual({ running: loadsStanding().running, inUse: inUse() }, { running: 0, inUse: 0 }, "control: the slot and the connection are back once the question is answered");
+
+  // the case: the lock outlasts the act's deadline (750 ms) and the store's statement timeout (1000 ms)
+  await locker.query("BEGIN");
+  await locker.query("LOCK TABLE settlements IN ACCESS EXCLUSIVE MODE");
+  let backAfter = null;
+  try {
+    const began = Date.now();
+    const act = await outcome(actLaw.lawForAnAct());
+    assert.equal(act.code, 503, `the act is refused at its own deadline, never admitted on law it has not confirmed: ${JSON.stringify(act)}`);
+    // the refusal frees the CALLER: the session's connection and slot are still taken, because the store has not ended the statement yet
+    assert.deepEqual({ running: loadsStanding().running, inUse: inUse() }, { running: 1, inUse: 1 },
+      "the instrument sees a held session at the act's deadline (before the store's statement timeout): a JS deadline frees the caller, not the connection");
+    for (let i = 0; i < 40 && backAfter === null; i++) {
+      await sleep(50);
+      if (loadsStanding().running === 0 && inUse() === 0) backAfter = Date.now() - began;
+    }
+    assert.notEqual(backAfter, null,
+      `LAW (snapshot-loads.mjs § timedSession; STORE-CONCURRENCY): "the store ends what was let go ... the connection comes back to the pool" — `
+      + `2 s after the act began, with the lock still held, the session still held ${loadsStanding().running} slot(s) and ${inUse()} connection(s)`);
+    assert.equal(await lockHeld(), true, "and the lock was still held when the slot and the connection came back: it was the store's statement timeout, not the lock's end");
+  } finally {
+    await locker.query("ROLLBACK");
+  }
+  await drain(pool);
+  const after = await outcome(actLaw.lawForAnAct());
+  assert.equal(after.admitted, true, `once the lock ends, an act goes on: ${JSON.stringify(after)}`);
+});

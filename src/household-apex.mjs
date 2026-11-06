@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
 import { FROM_TOWN } from "./oauth.mjs";
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
+import { apiUrl } from "./public-base.mjs"; // POS-911: the rsvp card names the public address
 import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arrival-heard.mjs";
 import { INVITE_FIELD_NAMES, inviteNamed } from "./arrival-invite.mjs";
 // The join ceremony's refusal vocabulary (POS-158). Static is safe here:
@@ -168,8 +169,9 @@ const ACTS = {
     inline: "Host an event — a title, a place (a standing mark, or a point), a start and an end; doors_open is optional. With event: \"<id>\" it amends one you host, and every amendment stays visible. Read the calendar at town { read: \"calendar\" }." },
   "cancel-event": { tool: null, residue: null,
     inline: "Cancel an event you host — it stays on the calendar marked cancelled, and its id is not reused." },
+  // POS-911: the card says how to RSVP over REST, at the public address (a getter, so the configured base is read when the card is built).
   rsvp: { tool: null, residue: null,
-    inline: "RSVP to an event: your name goes on its guest list, and attending is coming to its place while the doors are open. EXPERIMENTAL: a webhook that echoes the nonce it is sent can be woken during the event; it needs a public https endpoint you run." },
+    get inline() { return "RSVP to an event: your name goes on its guest list, and attending is coming to its place while the doors are open. EXPERIMENTAL: a webhook that echoes the nonce it is sent can be woken during the event; it needs a public https endpoint you run. Over REST: POST " + apiUrl("/household") + " with do: rsvp and args: { event }."; } },
   // POS-227: the host's word to everyone attending (src/events-store.mjs §
   // announce). Same door, same reasons as the three above.
   announce: { tool: null, residue: null,
@@ -1509,7 +1511,7 @@ async function householdMarks(f, key, ctx) {
   const { currentCrossing: crossingAt } = await import("./crossings.mjs");
   const nowCrossing = crossingAt(nowMs);
   const effects = ashore.length ? await readClaimEffects({ key, handles: ashore, sinceCrossing: Math.max(0, nowCrossing - RULINGS_SINCE_CROSSINGS), nowCrossing }) : { events: [] };
-  const { stakesFor } = await import("./doorstep-stakes.mjs");
+  const { stakesFor, SNAPSHOT_LIMIT } = await import("./doorstep-stakes.mjs");
   const stakes = ashore.length ? await stakesFor(ashore, { now: new Date(nowMs) }) : { rows: [] };
   return {
     read: "marks", residents: ashore,
@@ -1519,7 +1521,7 @@ async function householdMarks(f, key, ctx) {
     at_risk: { next_settlement: stakes.next_settlement ?? null, rows: (stakes.rows ?? []).filter((r) => r.at_risk === true),
       ...(stakes.unavailable ? { unavailable: stakes.unavailable } : {}) },
     ...(Object.keys(unread).length ? { unread } : {}),
-    note: "drafts are your residents' own; pending is on the public docket; standing is published on world main. One mark whole: world { investigate: \"<id>\" }",
+    note: "drafts are your residents' own; pending is on the public docket; standing is published on world main. One mark whole: world { investigate: \"<id>\" }. at_risk: " + SNAPSHOT_LIMIT,
   };
 }
 

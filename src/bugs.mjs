@@ -551,10 +551,23 @@ export function judgeRecredit(r, prev, acts, paid) {
 // town hand (the Bug Catcher, who keeps the jar) sets them on the post, and the
 // fixer who named the critter picks one. Each is one `reveal` act; the post's
 // `fields.reveal` holds { candidates, pick, image, picked_by }, and the jar reads
-// the picked image off the post. Chosen once: a picked reveal takes no second act.
+// the picked image off the post. A pick is made once: a picked reveal takes no
+// second pick and no set of three.
+//
+// ONE PORTRAIT (Darko, 2026-10-27 09:14 EDT and 2026-10-29 00:04 EDT, CORE-25/a:
+// "one portrait plus a certificate letter (no pick from three)"). A town hand
+// that sends exactly one candidate sets it as the critter's image at once: the
+// reveal is written already picked (pick 1, image that URL, picked_by the hand),
+// so the jar reads it as it reads a chosen one and no pick step follows. The
+// three-and-pick road stays for any set already out.
+//
+// THE REDRAW (Darko, 2026-11-06, CORE-25/d: "Let a town hand's reveal replace the
+// image"). The same one-portrait reveal on a critter that already has an image
+// replaces it, with no counter: the whole reveal is rewritten (candidates, image,
+// picked_by). Only a town hand does it. Every guard above still runs first.
 
 export const REVEAL_CANDIDATES = 3;
-const REVEAL_HOW = `town { do: "reveal", args: { post, candidates: [three media URLs] } } by the town's hands (${BUG_HANDS.join(", ")}), then { post, pick: 1–${REVEAL_CANDIDATES} } by the fixer who named the critter`;
+const REVEAL_HOW = `town { do: "reveal", args: { post, candidates: [one media URL] } } by the town's hands (${BUG_HANDS.join(", ")}) sets the critter's portrait at once; the older road is { post, candidates: [three media URLs] }, then { post, pick: 1–${REVEAL_CANDIDATES} } by the fixer who named the critter`;
 
 /**
  * Judge a reveal against the post. Returns `{ actor, reveal }`: who acts, and the
@@ -568,22 +581,27 @@ export function judgeReveal(fields, prev, key, { urlOk }) {
   if (prev.state !== STATE_SHIPPED)
     throw refuse(409, `"${prev.id}" stands ${prev.state}, and a critter is revealed when its fix ships`, "advance it to shipped first");
   const was = prev.fields?.reveal ?? null;
-  if (was?.pick) throw refuse(409, `"${prev.id}"'s critter is revealed`, "its image was chosen once, by its fixer");
+  const revealed = Boolean(was?.pick);
+  const REVEALED = [409, `"${prev.id}"'s critter is revealed`, "its image is set; only a town hand's one-portrait reveal replaces it (candidates: [one media URL])"];
 
   if (has("candidates")) {
     const actor = judgeBugHand(fields, key, { act: "set a critter's candidates" });
     const list = Array.isArray(fields.candidates) ? fields.candidates.map((u) => (typeof u === "string" ? u.trim() : u)) : null;
-    if (!list || list.length !== REVEAL_CANDIDATES)
-      throw refuse(422, `a reveal holds ${REVEAL_CANDIDATES} candidates`, "candidates: the three media URLs Iris answered with", { field: "candidates" });
+    if (!list || (list.length !== 1 && list.length !== REVEAL_CANDIDATES))
+      throw refuse(422, `a reveal holds one portrait, or ${REVEAL_CANDIDATES} candidates`, "candidates: the one media URL Iris answered with", { field: "candidates" });
     const bad = list.find((u) => !urlOk(u));
     if (bad !== undefined)
       throw refuse(422, "a candidate is a media URL", `each is a URL the media door answered with (upload_media); "${String(bad).slice(0, 80)}" is not`, { field: "candidates" });
     if (new Set(list).size !== list.length) throw refuse(422, "the candidates are three different images", "candidates: three distinct URLs", { field: "candidates" });
+    // a set of three on a critter that already has its image is refused; one portrait replaces it (CORE-25/d, no counter)
+    if (revealed && list.length !== 1) throw refuse(...REVEALED);
+    if (list.length === 1) return { actor, reveal: { candidates: list, pick: 1, image: list[0], picked_by: actor } };
     return { actor, reveal: { candidates: list, pick: null, image: null, picked_by: null } };
   }
 
+  if (revealed) throw refuse(...REVEALED);
   const fixer = prev.fields?.named_by ?? null;
-  if (!was?.candidates) throw refuse(409, `"${prev.id}" has no candidates yet`, "Iris paints three once the fix ships; a town hand sets them on the post");
+  if (!was?.candidates) throw refuse(409, `"${prev.id}" has no candidates yet`, "a town hand sets the critter's portrait first: candidates: [one media URL], or the three of an older set");
   if (!fixer) throw refuse(409, `"${prev.id}" names no fixer to choose`, "the critter's namer, set at fixed, makes the pick");
   const held = [...(key?.handles ?? [])];
   const named = typeof fields?.handle === "string" ? fields.handle.trim() : "";

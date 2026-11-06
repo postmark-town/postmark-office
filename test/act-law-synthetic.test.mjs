@@ -909,3 +909,136 @@ test("26 · N7, the graph: an act told G2 waits for a refresh in flight that is 
   await tick;
   assert.equal(G.s.tableAsks, tables + 6, "the act loaded nothing itself: only the tick's six table reads");
 });
+
+test("27 · N8, the law: the refresher's own late, older pin answer never moves what the process knows back", async () => {
+  // POS-908, from the round-three review of #762 (N8): a tick's pin statement reads S1 and its answer is held; the store blesses S2, which
+  // cannot be loaded; an act hears S2, finds the tick in flight, waits for it and is refused; then the tick's S1 answer lands. Case 23 is
+  // the act's side of this (an act's late answer); this is the tick's own write of what the process knows (law-snapshot.mjs § seenPinned).
+  {
+    const { L, ask } = await standing();
+    const hold = holdable();
+    const keep = setInterval(() => {}, 25); // the deadlines below are unref'd timers: hold the loop open while the case waits on one
+    L.s.pinHold = hold.p;
+    try {
+      const tick = law.reloadLawSnapshot({ query: L.query, deadlineMs: 100 }); // its pin question reads S1, held; it is let go at 100 ms
+      for (let i = 0; i < 3; i++) await settle();
+      L.bless(2, 7); L.s.failLaw = true; // the store blesses S2, which cannot be loaded
+      const refused = await ask(); // the act hears S2, finds the tick in flight, waits for it, and is refused
+      assert.equal(refused?.code, 503, `the act, told S2 which will not load, was admitted: ${JSON.stringify(refused)}`);
+      assert.match(law.lawBehind() ?? "", /S2's/, "the act's own hearing of S2 is recorded");
+      hold.open(); // the tick's late answer, S1, lands
+      await tick;
+      for (let i = 0; i < 10; i++) await settle();
+      assert.match(law.lawBehind() ?? "", /S2's/, `LAW (N8): "what the process knows moves only forward, by settlement" — the tick's late S1 answer moved it back: lawBehind() is now ${JSON.stringify(law.lawBehind())}`);
+      assert.match(law.lawRefreshStanding().behind ?? "", /S2's/, "and /release no longer says the law is behind");
+      L.s.failPin = true; // the store cannot be asked now: G1 stands on what the process knows
+      assert.equal((await ask())?.code, 503, "LAW (N8): a later act, whose store could not be asked, was admitted on S1 after the store had blessed S2");
+    } finally { hold.open(); clearInterval(keep); }
+  }
+  law.resetLawSnapshot(); graph.resetWorldGraph();
+  // the matched control: the same tick, held and landing late, with nothing blessed in between — nothing is behind, and G1 admits
+  {
+    const { L, ask } = await standing();
+    const hold = holdable();
+    const keep = setInterval(() => {}, 25);
+    L.s.pinHold = hold.p;
+    try {
+      const tick = law.reloadLawSnapshot({ query: L.query, deadlineMs: 100 });
+      for (let i = 0; i < 3; i++) await settle();
+      assert.equal(await ask(), null, "control: with nothing blessed, an act goes on while the tick is held");
+      hold.open();
+      await tick;
+      for (let i = 0; i < 10; i++) await settle();
+      assert.equal(law.lawBehind(), null, "control: the tick's S1 answer, with S1 in force, says nothing is behind");
+      L.s.failPin = true;
+      assert.equal(await ask(), null, "control: a store that cannot be asked still refuses nothing when no law is known to have moved (G1, kept)");
+    } finally { hold.open(); clearInterval(keep); }
+  }
+});
+
+// ── 28–30 · POS-908, the graph's side of N8 ─────────────────────────────────
+// LAW (Wright, Settled on POS-680/POS-908, 2026-11-05 11:4x EST, option A): "Add a private settlement value beside `seenKey`, advanced
+// coherently with the key, and guard both writes the round-3 review names with it. The graph then refuses a late tick that a later pin
+// round trip has overtaken, just as the law's guard does." And its limits: "Private only: no change to the key's spelling, `/release`, or
+// any public field." So these cases read only what the graph already shows: worldGraphBehind(), the /release standing's `behind`, and
+// whether an act is admitted. The law's side is case 27.
+
+test("28 · N8, the graph: the tick's own late, older pin answer never moves what the process knows back (an act heard the newer pin)", async () => {
+  // a tick's pin statement reads G1 and its answer is held; the store builds G2, which cannot be loaded; an act hears G2, finds the tick in
+  // flight, waits for it and is refused; then the tick's G1 answer lands. Case 24 is the act's side of this; this is the tick's own write.
+  {
+    const { G, ask } = await standing();
+    const hold = holdable();
+    const keep = setInterval(() => {}, 25); // the deadlines below are unref'd timers: hold the loop open while the case waits on one
+    G.s.pinHold = hold.p;
+    try {
+      const tick = graph.reloadWorldGraph({ query: G.query, deadlineMs: 100 }); // its pin question reads G1, held; it is let go at 100 ms
+      for (let i = 0; i < 3; i++) await settle();
+      G.build(2); G.s.failTables = true; // the store builds G2, which cannot be loaded
+      const refused = await ask(); // the act hears G2, finds the tick in flight, waits for it, and is refused
+      assert.equal(refused?.code, 503, `the act, told G2 which will not load, was admitted: ${JSON.stringify(refused)}`);
+      assert.match(graph.worldGraphBehind() ?? "", /world graph/, "the act's own hearing of G2 is recorded");
+      hold.open(); // the tick's late answer, G1, lands
+      await tick;
+      for (let i = 0; i < 10; i++) await settle();
+      assert.match(graph.worldGraphBehind() ?? "", /world graph/, `LAW (N8): "The graph then refuses a late tick that a later pin round trip has overtaken" — the tick's late G1 answer moved it back: worldGraphBehind() is now ${JSON.stringify(graph.worldGraphBehind())}`);
+      assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/, "and /release no longer says the graph is behind");
+      G.s.failPin = true; // the store cannot be asked now: G1 stands on what the process knows
+      assert.equal((await ask())?.code, 503, "LAW (N8): a later act, whose store could not be asked, was admitted on G1 after the store had built G2");
+    } finally { hold.open(); clearInterval(keep); }
+  }
+  law.resetLawSnapshot(); graph.resetWorldGraph();
+  // the matched control: the same tick, held and landing late, with nothing built in between — nothing is behind, and G1 admits
+  {
+    const { G, ask } = await standing();
+    const hold = holdable();
+    const keep = setInterval(() => {}, 25);
+    G.s.pinHold = hold.p;
+    try {
+      const tick = graph.reloadWorldGraph({ query: G.query, deadlineMs: 100 });
+      for (let i = 0; i < 3; i++) await settle();
+      assert.equal(await ask(), null, "control: with nothing built, an act goes on while the tick is held");
+      hold.open();
+      await tick;
+      for (let i = 0; i < 10; i++) await settle();
+      assert.equal(graph.worldGraphBehind(), null, "control: the tick's G1 answer, with G1 in force, says nothing is behind");
+      G.s.failPin = true;
+      assert.equal(await ask(), null, "control: a store that cannot be asked still refuses nothing when no graph is known to have moved (G1, kept)");
+    } finally { hold.open(); clearInterval(keep); }
+  }
+});
+
+test("29 · N8, the graph: an older tick, let go and landing after a newer tick heard G2, never moves what the process knows back (the tick's own write, both halves)", async () => {
+  // no act hears G2 here: the NEWER TICK's own write has to put the settlement beside the key, or the older tick's G1 passes the guard
+  const { G, ask } = await standing();
+  const hold = holdable();
+  const keep = setInterval(() => {}, 25);
+  G.s.pinHold = hold.p;
+  try {
+    const older = graph.reloadWorldGraph({ query: G.query, deadlineMs: 100 }); // reads G1, held; let go at 100 ms
+    for (let i = 0; i < 3; i++) await settle();
+    G.build(2); G.s.failTables = true;
+    await older; // let go: its slot stays taken until its answer lands
+    await graph.reloadWorldGraph({ query: G.query }); // the next tick hears G2 and cannot load it
+    assert.match(graph.worldGraphBehind() ?? "", /world graph/, "the newer tick's hearing of G2 is recorded");
+    hold.open(); // the older tick's late answer, G1, lands
+    for (let i = 0; i < 10; i++) await settle();
+    assert.match(graph.worldGraphBehind() ?? "", /world graph/, `LAW (N8): the older tick's late G1 answer moved what the process knows back: worldGraphBehind() is now ${JSON.stringify(graph.worldGraphBehind())}`);
+    assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/, "and /release no longer says the graph is behind");
+    G.s.failPin = true;
+    assert.equal((await ask())?.code, 503, "LAW (N8): an act, whose store could not be asked, was admitted on G1 after a tick had heard G2");
+  } finally { hold.open(); clearInterval(keep); }
+});
+
+test("30 · N8, the graph: a pin answer that names no settlement never clears what the process knows", async () => {
+  // "stale/null receipt cannot erase later knowledge": an act heard G2 (which will not load); a tick then reads a pin row for the graph in
+  // force whose settlement is null. The key alone would say "nothing is behind"; the settlement beside it keeps it.
+  const { G, ask } = await standing();
+  G.build(2); G.s.failTables = true;
+  assert.equal((await ask())?.code, 503, "the act, told G2 which will not load, is refused");
+  assert.match(graph.worldGraphBehind() ?? "", /world graph/);
+  G.s.pin = { tag_sha: SHA(1, "c"), office_sha: SHA(1, "d"), settlement: null, built_at: "2026-11-01T00:00:00Z" }; // G1's own key, naming no settlement
+  await graph.reloadWorldGraph({ query: G.query });
+  assert.match(graph.worldGraphBehind() ?? "", /world graph/, `LAW (N8): a pin answer naming no settlement cleared what the process knows: worldGraphBehind() is now ${JSON.stringify(graph.worldGraphBehind())}`);
+  assert.match(graph.worldGraphRefreshStanding().behind ?? "", /world graph/);
+});

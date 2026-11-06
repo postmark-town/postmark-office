@@ -780,9 +780,10 @@ async function skipBug(fields, key, id, { now, env }) {
 }
 
 /**
- * The reveal at ship (POS-236): a town hand sets the three candidates Iris
- * painted, or the fixer picks one. One `reveal` act, carrying the post's whole
- * reveal after it; it mints nothing and moves no stage.
+ * The reveal at ship (POS-236, CORE-25): a town hand sets the critter's one
+ * portrait (its image at once, and a later one replaces it), or sets the three
+ * candidates of an older set for the fixer to pick one. One `reveal` act,
+ * carrying the post's whole reveal after it; it mints nothing and moves no stage.
  */
 export async function revealAtTown(fields, key, { now = Date.now(), env = process.env } = {}) {
   const id = String(fields?.post ?? "").trim();
@@ -808,7 +809,11 @@ export async function revealAtTown(fields, key, { now = Date.now(), env = proces
     await updatePost(client, row);
     const critter = prev.fields?.critter ? `"${prev.fields.critter}"` : "its critter";
     return { post: bugAnswer(row), act_id: actId, hand: actor, reveal,
-      receipt: reveal.pick
+      receipt: reveal.pick && reveal.candidates.length === 1 && prev.fields?.reveal?.pick
+        ? `revealed: ${id}'s critter ${critter} has a new portrait, set by ${actor}; it replaces the earlier one, and the jar shows it from now on`
+        : reveal.pick && reveal.candidates.length === 1
+        ? `revealed: ${id}'s critter ${critter} has its portrait, set by ${actor}; the jar shows it from now on`
+        : reveal.pick
         ? `revealed: ${id}'s critter ${critter} is candidate ${reveal.pick}, chosen by ${actor}; the jar shows it from now on`
         : `candidates set on ${id} by ${actor}'s hand: ${REVEAL_CANDIDATES} images for ${critter}; ${prev.fields?.named_by ?? "its fixer"} picks one with { post, pick }`,
       read: bugReadHint(id) };
