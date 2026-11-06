@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   voiceOf, voiceRecords, sayDials, sayDialsDisclosure, composeAnchor,
-  conversationsOf, clusterVoices, SAY_DIAL_SPEC,
+  conversationsOf, clusterVoices, heartbeatEdges, SAY_DIAL_SPEC,
 } from "../world2/tools/conversations.mjs";
 
 const emission = (over = {}) => ({
@@ -128,26 +128,44 @@ test("a predicated mark under a DIFFERENT class is not a say dial", () => {
 
 const v = (at, x, aboard = false) => ({ handle: "a", text: "x", at, x, y: 0, place: null, aboard });
 
-test("the RECORD groups on the lull, not on the fade — the sailing night's ruling", () => {
-  // "agents on the deck spoke ten minutes apart and the record shattered a
-  //  four-hour party into serial threads."
-  const ten = 10 * 60 * 1000;
-  const voices = [v(0, 0), v(ten, 0)];
-  const onTheLull = conversationsOf(voices, { now: ten, earshotM: 60, closeMs: 30 * 60 * 1000, fadeMs: 5 * 60 * 1000 });
-  const onTheEar = conversationsOf(voices, { now: ten, earshotM: 60, closeMs: 5 * 60 * 1000, fadeMs: 5 * 60 * 1000 });
-  assert.equal(onTheLull.live.length + onTheLull.closed.length, 1, "one conversation on the record's clock");
-  assert.equal(onTheEar.live.length + onTheEar.closed.length, 2, "two on the ear's — this is the bug the split fixed");
+test("the RECORD has no lull: a long silence inside a settlement is one thread, and the settlement splits it (POS-779)", () => {
+  const hour = 60 * 60 * 1000;
+  const voices = [v(0, 0), v(5 * hour, 0)];
+  const same = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [-hour], fadeMs: 5 * 60 * 1000 });
+  assert.equal(same.live.length + same.closed.length, 1, "one conversation across five hours of silence");
+  assert.equal(same.close_minutes, null);
+  assert.match(same.close_minutes_deprecated, /settlement_since/);
+  const split = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [-hour, 2 * hour], fadeMs: 5 * 60 * 1000 });
+  assert.equal(split.live.length, 1, "the newest settlement's thread is live");
+  assert.equal(split.closed.length, 1, "the earlier settlement's is closed");
+  assert.equal(split.settlement_since, new Date(2 * hour).toISOString());
+  const unknown = conversationsOf(voices, { now: 6 * hour, earshotM: 60, boundaries: [], fadeMs: 5 * 60 * 1000 });
+  assert.equal(unknown.live.length, 1);
+  assert.match(unknown.settlement_disclosed, /ONE settlement/);
+});
+
+test("heartbeatEdges: 06:00Z and 18:00Z inside the span, for history older than the known settlements (POS-779)", () => {
+  const edges = heartbeatEdges(Date.UTC(2026, 9, 1, 0), Date.UTC(2026, 9, 2, 12));
+  assert.deepEqual(edges.map((m) => new Date(m).toISOString()),
+    ["2026-10-01T06:00:00.000Z", "2026-10-01T18:00:00.000Z", "2026-10-02T06:00:00.000Z"]);
+  assert.deepEqual(heartbeatEdges(NaN, 5), []);
+});
+
+test("boundaries given, the lull (fadeMs) is ignored; absent, the lull path is the sound class's own", () => {
+  const voices = [v(0, 0), v(40 * 60 * 1000, 0)];
+  assert.equal(clusterVoices(voices, { earshotM: 60, fadeMs: 30 * 60 * 1000, boundaries: [] }).length, 1);
+  assert.equal(clusterVoices(voices, { earshotM: 60, fadeMs: 30 * 60 * 1000 }).length, 2);
 });
 
 test("two aboard voices are ONE room however far the water moved", () => {
   const far = [v(0, 0, true), v(1000, 100000, true)];
-  assert.equal(clusterVoices(far, { earshotM: 60, fadeMs: 30 * 60 * 1000 }).length, 1);
+  assert.equal(clusterVoices(far, { earshotM: 60, boundaries: [] }).length, 1);
   const grounded = far.map((x) => ({ ...x, aboard: false }));
-  assert.equal(clusterVoices(grounded, { earshotM: 60, fadeMs: 30 * 60 * 1000 }).length, 2);
+  assert.equal(clusterVoices(grounded, { earshotM: 60, boundaries: [] }).length, 2);
 });
 
-test("a cluster quiet for the lull is finished and never reopens", () => {
-  const lull = 30 * 60 * 1000;
-  const voices = [v(0, 0), v(lull + 1, 0)];
-  assert.equal(clusterVoices(voices, { earshotM: 60, fadeMs: lull }).length, 2);
+test("a cluster from a finished settlement never reopens", () => {
+  const voices = [v(0, 0), v(2000, 0)];
+  assert.equal(clusterVoices(voices, { earshotM: 60, boundaries: [1000] }).length, 2);
+  assert.equal(clusterVoices(voices, { earshotM: 60, boundaries: [5000] }).length, 1);
 });
