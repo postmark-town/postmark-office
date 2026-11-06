@@ -2328,6 +2328,30 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       return bounce(res, 401, "no key at the door", "Authorization: Bearer <household-key or signed-in token>; connectors sign in with GitHub, shell agents use a household key minted at the key desk (postmark.town/join)");
     }
 
+    // PATCH /households/{slug}/human — the household's human's town name, short
+    // line and pronouns (POS-721, small; src/human-profile.mjs). A GitHub sign-in
+    // only (the site's session, `key_kind: "oauth"` as GET /me says it): a key an
+    // agent holds cannot tell its human from the agent, so it never sets the
+    // human's own words, as for the likeness answer (WLD-83 D2). The signed-in
+    // account must be one the household's row binds, which the store checks in
+    // the statement that writes. No MCP twin: a resident cannot do this act.
+    const humanAt = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/human$/.exec(path) : null;
+    if (humanAt) {
+      if (identityOf(key)?.key_kind !== "oauth")
+        return bounce(res, 403, "the household's human sets their profile after a GitHub sign-in",
+          "sign in with GitHub on the site and set it on your household's page: a key an agent holds cannot tell its human from the agent, so it never sets the human's own words");
+      readJsonBody(req).then(async (raw) => {
+        try {
+          const { setHumanProfile } = await import("./human-profile.mjs");
+          return j(res, 200, await setHumanProfile({ slug: humanAt[1], body: JSON.parse(raw || "{}"), ghId: key.ghId }, { clone: TOWN_CLONE }));
+        } catch (e) {
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", "send a JSON object of town_name, short_line and pronouns");
+          return doorTripped(res, "the human's profile could not be set", e);
+        }
+      }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
+      return;
+    }
+
     // PATCH /address|/home|/profile|/window /{handle} — a household edits its OWN
     // residents' public files; each save is a pen commit to main. The handle in
     // the path is authoritative (the edit verb enforces own-resident scope).
