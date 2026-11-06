@@ -651,13 +651,16 @@ test("GET /world/my-marks requires a resident identity", async () => {
 });
 
 test("GET /world/conversations is a keyless read — the page needs no credential", async () => {
+  // POS-779: this office stands on the store but has no world clone, so the published sweep edges cannot be read. The page is
+  // keyless (never a 401), and the honest answer is "cannot be read just now" — not an empty 200 that claims a quiet town.
+  // The 200 shapes (edges known) are asserted in pos-779-conversations-http.test.mjs.
   const res = await get("/world/conversations", null);
-  assert.equal(res.status, 200);
+  assert.notEqual(res.status, 401, "no credential is asked for");
+  assert.equal(res.status, 503);
   const body = await res.json();
-  assert.deepEqual([body.live, body.closed], [[], []], "a quiet town, honestly empty");
-  assert.equal(body.earshot_m, 60);
-  assert.equal(body.fade_minutes, 5);
-  assert.ok(Date.parse(body.now));
+  assert.equal(body.defect, "the conversations cannot be read just now");
+  assert.match(body.hint, /settlements-unknown/);
+  assert.equal(body.live, undefined, "no invented empty list");
 });
 
 // The Stage-1 serving flag's instrument panel. This office runs with the flags

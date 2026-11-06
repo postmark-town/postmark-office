@@ -58,8 +58,11 @@ const poolOf = (acts) => ({
   },
 });
 
+// A thread splits at a published sweep and a voice older than the oldest sweep read has no epoch (POS-779): the office's reader is
+// stood here at one sweep an hour before the first voice.
+const SWEEP = T0 - 3600_000;
 const read = (acts = ACTS) =>
-  world2Serve("/world2/conversations", new URLSearchParams("at=2026-09-01T13:00:00Z"), { p: poolOf(acts) });
+  world2Serve("/world2/conversations", new URLSearchParams("at=2026-09-01T13:00:00Z"), { p: poolOf(acts), settlements: () => [SWEEP], hearingWindow: () => ({ since: SWEEP }) });
 const saidIn = (body) => [...body.live, ...body.closed].flatMap((c) => c.voices.map((v) => v.said ?? v.text));
 
 test("FALSIFIER, #351: a say anchored at a mark the store does not hold never fails the read", async () => {
@@ -107,4 +110,30 @@ test("an act no era explains still stops the read: only an unplaceable say is an
   assert.equal(r.body.defect, "a voice act matches no known era");
   assert.match(r.body.hint, /What failed is in the office's log, not in this answer/);
   assert.match(lines.join("\n"), /match no known era/, "the log says which");
+});
+
+// ── POS-779: where a thread splits is the published sweeps this office has read, and nothing older is guessed ──
+
+const readWith = (opts) => world2Serve("/world2/conversations", new URLSearchParams("at=2026-09-01T13:00:00Z"), { p: poolOf(ACTS), ...opts });
+
+test("a voice older than the oldest sweep read is left out and DISCLOSED, never grouped as if the record began there", async () => {
+  const afterFirst = T0 + 30_000; // between the first voice (T0) and the second (T0 + 1 min)
+  const { body } = await readWith({ settlements: () => [afterFirst], hearingWindow: () => ({ since: afterFirst }) });
+  assert.equal(body.voices, 2);
+  assert.deepEqual(saidIn(body).sort(), ["in the shed, before it came down"].sort(), "only the voice an epoch can be named for is in a thread");
+  assert.ok(body.disclosed.some((d) => /1 of the 2 voices come before the oldest settlement this office has read/.test(d)), JSON.stringify(body.disclosed));
+  for (const k of ["settlement_since", "settlement_disclosed", "close_minutes_deprecated"]) assert.equal(k in body, false, k);
+});
+
+test("no sweep read at all: no thread is drawn, and the answer says so; no heartbeat is invented in its place", async () => {
+  const { body } = await readWith({ settlements: () => [], hearingWindow: () => null });
+  assert.deepEqual([body.live, body.closed], [[], []]);
+  assert.ok(body.disclosed.some((d) => /2 of the 2 voices come when no settlement could be read/.test(d)), JSON.stringify(body.disclosed));
+});
+
+test("the default is the established 80 lines a thread, not 200", async () => {
+  const many = Array.from({ length: 90 }, (_, i) => say(10 + i, "wright", "the-town/the-quay", 3 + i / 100, `line ${i}`));
+  const { body } = await read(many);
+  assert.equal(body.live[0].voice_count, 90);
+  assert.equal(body.live[0].voices.length, 80);
 });

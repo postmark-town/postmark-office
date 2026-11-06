@@ -26,9 +26,15 @@
 //
 // ── WHAT IS PORTED, AND FROM WHERE ──────────────────────────────────────────
 //
-// office `207cdaa52314ffc4ab16109c10dddbead1c92bdd`:
+// office `207cdaa52314ffc4ab16109c10dddbead1c92bdd` (the original port). RE-PINNED for POS-779 after the carrier's last
+// edit to voices.mjs: `VENDOR.voices` below names blob `011fea12…` at office commit `db4bf081…` (this branch's merge of the
+// train, after POS-887 changed `createVoices`' room parameters and `standing`: nothing of `chains`, `clusterVoices`, `threadOf`,
+// `conversations` or `composeAnchor`), the voices.mjs whose `clusterVoices({ boundaries })` and `threadOf` this copy holds. test/pos-779-vendor-equality.test.mjs holds the copy to
+// that producer (seeded clouds, and the whole page against voices.mjs's own `conversations()`) and holds the pin to the
+// checkout. `VENDOR.journal` is NOT re-pinned: it names a world-journal.mjs older than the tree's, as it did on the base,
+// and `composeAnchor` is not touched by POS-779; the mismatch is disclosed in that test, not repaired here.
 //
-//   src/voices.mjs        e1004a5257f6b84756f0a28e22ea3a4cd3baa321
+//   src/voices.mjs        e1004a5257f6b84756f0a28e22ea3a4cd3baa321  (at the original port)
 //     `chains` / `clusterVoices` / `threadOf` — VENDORED verbatim. The thread
 //     derivation is 1.0's law about its own speech ("a thread is a derivation,
 //     not an object") and a re-expression would be a twin.
@@ -72,7 +78,7 @@ import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every h
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "e1004a5257f6b84756f0a28e22ea3a4cd3baa321", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
+            blob: "011fea12cbd0c843557d2ec8fdd7f23f97f75957", at: "db4bf0811d04036dea69eee0fc2ae18fd84731a9" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -82,7 +88,7 @@ export const SAY_CLASS_NAME = "say";
 export const SAY_DIAL_SPEC = Object.freeze({
   earshot_m: [60, 1],                      // a hall, not a district
   fade_min: [5, 60 * 1000],                // on HEARING
-  conversation_lull_min: [30, 60 * 1000],  // silence that ends a conversation IN THE RECORD
+  // conversation_lull_min RETIRED (POS-779, Darko 2026-10-24): a thread splits at the settlement, not at a lull
   speak_every_s: [15, 1000],
   text_max: [500, 1],
   hear_max: [20, 1],
@@ -146,21 +152,32 @@ const distM = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= earshotM;
 
 /**
- * voices.mjs `clusterVoices`, verbatim.
+ * voices.mjs `clusterVoices`, verbatim (POS-779).
  *
- * "The thread derivation (spec, 'a thread is a derivation, not an object').
- *  Voices chain into one conversation when they chain with ANY voice already in
- *  it and land within fadeMs of that cluster's latest voice; a cluster that goes
- *  quiet for fadeMs is finished and never reopens — five silent minutes at the
- *  same spot is a NEW conversation, not a continuation of the old one."
+ * "Voices chain into one conversation when they chain with ANY voice already in
+ *  it (earshot, or a shared deck). THERE IS NO LULL: inside one settlement a
+ *  conversation never expires, and a thread splits only at a settlement. A
+ *  settlement is an instant in `boundaries` (ms, any order); a voice's epoch is
+ *  how many boundaries sit at or before it, two voices in different epochs never
+ *  chain, and a finished epoch never reopens."
+ *
+ * The `fadeMs` lull path is kept for the one caller that is not the say record
+ * (the sound class's `thread_close_min`); `boundaries` absent means it.
  */
-export function clusterVoices(list, { earshotM, fadeMs } = {}) {
+export function clusterVoices(list, { earshotM, fadeMs, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
+  const marks = Array.isArray(boundaries) ? boundaries.filter(Number.isFinite).sort((a, b) => a - b) : null;
+  const epochOf = marks && ((at) => {
+    let lo = 0, hi = marks.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (marks[mid] <= at) lo = mid + 1; else hi = mid; }
+    return lo;
+  });
   const open = [];
   const closed = [];
   for (const v of sorted) {
     for (let i = open.length - 1; i >= 0; i--) {
-      if (v.at - open[i].latest > fadeMs) closed.push(...open.splice(i, 1));
+      const over = epochOf ? epochOf(open[i].latest) !== epochOf(v.at) : v.at - open[i].latest > fadeMs;
+      if (over) closed.push(...open.splice(i, 1));
     }
     const hits = open.filter((c) => c.voices.some((o) => chains(o, v, earshotM)));
     if (hits.length === 0) { open.push({ voices: [v], latest: v.at }); continue; }
@@ -426,29 +443,49 @@ export function unplacedDisclosure(unplaced = []) {
  * voices.mjs `conversations`, over voice records.
  *
  * "The page's read: every conversation in the world, live ones first. Served
- *  from the LOG, not the five-minute window — the conversation is ephemeral to
- *  attend, the record is not (Keemin: 'let's not auto-delete, so we can look
- *  back at them')."
+ *  from the LOG, not the ear's window (Keemin: 'let's not auto-delete, so we can
+ *  look back at them')."
  *
- * THE RECORD'S CLOCK, NOT THE EAR'S: clusters chain across a `closeMs` lull, not
- * a `fadeMs` one. That split is the sailing-night ruling — "agents on the deck
- * spoke ten minutes apart and the record shattered a four-hour party into serial
- * threads" — and passing `fadeMs` here would re-shatter every one of them.
+ * ONE THREAD PER PLACE PER SETTLEMENT (POS-779, Darko 2026-10-24): the same
+ * earshot grouping, the time-lull split gone. `boundaries` are the settlements
+ * (ms) at or before `now`; LIVE is the newest settlement's threads, CLOSED the
+ * earlier ones'. The caller hands in only voices an epoch can be named for (see
+ * `groupable`): nothing here groups the record as if it began at its oldest voice.
+ * (The sailing night's lull ruling is superseded by this one: a four-hour party is
+ * one thread because nothing splits it but a settlement.) `close_minutes` is the
+ * retired lull, kept as null.
  */
-export function conversationsOf(voices, { now, earshotM, closeMs, closedMax = 40, voiceCap = 80, fadeMs }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs }) {
   const t = now;
-  const clusters = clusterVoices(voices, { earshotM, fadeMs: closeMs });
+  const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
+  const since = marks.length ? marks[marks.length - 1] : -Infinity;
+  const clusters = clusterVoices(voices, { earshotM, boundaries: marks });
   const live = [];
   const closed = [];
-  for (const c of clusters) (t - c.latest <= closeMs ? live : closed).push(c);
+  for (const c of clusters) (c.latest >= since ? live : closed).push(c);
   return {
     now: new Date(t).toISOString(),
     earshot_m: earshotM,
     fade_minutes: Math.round(fadeMs / 60000),
-    close_minutes: Math.round(closeMs / 60000),
+    close_minutes: null,
     live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
     closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
   };
+}
+
+/**
+ * Which voices an epoch can be named for (POS-779). The settlements the office
+ * knows are the published sweeps it has read; a voice older than the oldest of them
+ * sits in an epoch whose START is unknown, and with no settlement known at all no
+ * voice has one. Those are NOT grouped: grouping them would present the record as
+ * beginning there, a false certainty. `ungrouped` is how many were left out and
+ * `oldest` the first edge, for the caller to say so.
+ */
+export function groupable(voices, boundaries, now = Infinity) {
+  const marks = (boundaries ?? []).filter((m) => Number.isFinite(m) && m <= now).sort((a, b) => a - b);
+  const oldest = marks.length ? marks[0] : null;
+  const grouped = oldest == null ? [] : voices.filter((v) => v.at >= oldest);
+  return { grouped, ungrouped: voices.length - grouped.length, oldest };
 }
 
 /** What this door says about what it could not do. */
