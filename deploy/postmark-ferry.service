@@ -155,14 +155,19 @@ WorkingDirectory=/srv/postmark-office
 ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   wstage=start; wreport=/tmp/witness-ferry-report.json; : > "$wreport"; wattempt="ferry-$INVOCATION_ID"; \
   [ -n "$INVOCATION_ID" ] || wattempt="ferry-$(date -u -Iseconds)"; \
-  witness() { \
+  witness_ready() { \
       if [ -z "$WITNESS_KEY" ] || [ -z "$WITNESS_OWED" ]; then \
-        echo "[witness] not configured (WITNESS_KEY, WITNESS_OWED): this crossing owes no record" >&2; return 0; fi; \
+        echo "[witness] not configured (WITNESS_KEY, WITNESS_OWED): this crossing owes no record" >&2; return 1; fi; \
       if [ ! -f "$TOWN_CLONE/tools/witness-chain.mjs" ]; then \
-        echo "[witness] the town clone has no tools/witness-chain.mjs yet: no record" >&2; return 0; fi; \
+        echo "[witness] the town clone has no tools/witness-chain.mjs yet: no record" >&2; return 1; fi; }; \
+  witness() { \
+      witness_ready 2>/dev/null || return 0; \
       /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-mail --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" \
           --attempt "$wattempt" --exit "$1" --stage "$wstage" --ferry-report "$wreport" \
-        || echo "[witness] the outcome of this crossing could not be owed: the line above says why" >&2; \
+        || { echo "[witness] the outcome of this crossing could not be composed: it is owed as incomplete" >&2; \
+             /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-incomplete --owed "$WITNESS_OWED" --kind mail-crossing \
+                 --attempt "$wattempt" --why "owe-mail failed after stage $wstage, exit $1" \
+               || echo "[witness] not even that: the open entry stands, and the next publisher records it" >&2; }; \
       /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" publish --repo "$TOWN_CLONE" --owed "$WITNESS_OWED" --key "$WITNESS_KEY" \
         || echo "[witness] the record is owed, not published: the next crossing or settlement pays it" >&2; }; \
   undo() { rc=$?; [ "$rc" -eq 0 ] || { \
@@ -171,6 +176,9 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
       echo "[ferry] a gate refused (exit $rc): the town clone is back at its last commit, and the refused step re-runs at the next crossing" >&2; }; \
     witness "$rc"; }; \
   trap undo EXIT; trap "exit 143" TERM; trap "exit 130" INT; trap "exit 129" HUP; \
+  if witness_ready; then \
+    /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-open --owed "$WITNESS_OWED" --kind mail-crossing --attempt "$wattempt" \
+      || echo "[witness] this crossing could not be opened: its outcome is still owed when it decides" >&2; fi; \
   owed_ok=0; \
   verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else node tools/stamp-verify.mjs; fi; }; \
   git -C "$TOWN_CLONE" reset --hard -q HEAD && \

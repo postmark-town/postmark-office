@@ -52,14 +52,14 @@ test("COMPOSE: the receipt's own bytes, its instant, the shas it read, and the a
   const d = settlementDecided({ receiptText: text, attempt: "2", event: "2026-11-06T18:00:01Z" });
   assert.equal(d.kind, "settlement");
   assert.equal(d.event, "settlement:2026-11-06T18:00:01Z");
-  assert.equal(d.attempt, "2");
+  assert.equal(d.attempt, "2026-11-06T18:00:01Z#2", "the attempt names its crossing, so it is one run's name across all crossings");
   assert.equal(d.decided_at, "2026-11-06T18:00:03Z", "the receipt's instant, so the same decision recomposes to the same outcome");
   assert.deepEqual(d.outcome, { status: "refused", detail: "an invented refusal" });
   assert.deepEqual(d.inputs, { town_sha: sh("a"), world_from: sh("b") });
   assert.deepEqual(d.results, {}, "no world_to on a refusal, so none is claimed");
-  assert.deepEqual(d.artifacts, []);
+  assert.deepEqual([d.artifacts, d.inventory], [[], { complete: true }], "a run that moved nothing has a complete, empty inventory");
   assert.equal(d.receipt.text, text);
-  assert.equal(settlementDecided({ receiptText: text, attempt: "", event: "e" }).attempt, "final");
+  assert.equal(settlementDecided({ receiptText: text, attempt: "", event: "e" }).attempt, "e#final");
   assert.deepEqual(settlementDecided({ receiptText: text, attempt: "2", event: "2026-11-06T18:00:01Z" }), d, "deterministic");
 });
 
@@ -78,9 +78,23 @@ test("COMPOSE: a published settlement binds every World file it changed, by dige
   const to = git(world, "rev-parse", "HEAD").trim();
   const d = settlementDecided({ receiptText: receipt({ status: "published", world_from: from, world_to: to }), attempt: "1", event: "e", sweep: world });
   assert.deepEqual(d.results, { world_to: to });
+  assert.deepEqual(d.inventory, { complete: true });
   assert.deepEqual(d.artifacts.map((a) => [a.path, a.commit, a.sha256 === null]), [
     ["STATE/log/294.jsonl", to, false], ["WORLD.md", to, false], ["gone.md", to, true],
   ]);
+
+  // THE INVENTORY THAT COULD NOT BE READ is never an empty one (Rivet's FIX, 2026-11-06)
+  const rec = (over) => receipt({ status: "published", world_from: from, world_to: to, ...over });
+  const noSweep = settlementDecided({ receiptText: rec({}), attempt: "1", event: "e" });
+  assert.deepEqual([noSweep.artifacts, noSweep.inventory.complete], [[], false]);
+  assert.match(noSweep.inventory.why, /no sweep clone was given/);
+  const unreadable = settlementDecided({ receiptText: rec({ world_to: sh("c") }), attempt: "1", event: "e", sweep: world });
+  assert.equal(unreadable.inventory.complete, false, "a diff the sweep clone cannot answer");
+  assert.match(unreadable.inventory.why, /could not diff/);
+  const noTo = settlementDecided({ receiptText: rec({ world_to: "" }), attempt: "1", event: "e", sweep: world });
+  assert.deepEqual([noTo.inventory.complete, noTo.inventory.why], [false, "the receipt names no world_to for a published settlement"]);
+  const quietRegistry = settlementDecided({ receiptText: rec({ status: "quiet" }), attempt: "1", event: "e", sweep: world });
+  assert.equal(quietRegistry.artifacts.length, 3, "a quiet settlement that still moved World (a registry refresh) binds what it changed");
 });
 
 // ── the tool, against a stub town witness ───────────────────────────────────
@@ -117,10 +131,11 @@ test("NOT CONFIGURED: no WITNESS_KEY, no call, exit 0, said once", () => {
   assert.match(r.stderr, /not configured \(WITNESS_KEY, WITNESS_OWED\): this settlement owes no record/);
 });
 
-test("A RACE INSIDE THE RETRY is not a decision yet: nothing is owed", () => {
+test("A RACE INSIDE THE RETRY is not a decision yet: its open entry is withdrawn, nothing is owed", () => {
   const r = runTool(stubTown(), { attempt: "2", rec: receipt({ status: "race" }) });
   assert.equal(r.status, 0);
-  assert.deepEqual(r.seen, []);
+  assert.deepEqual(r.seen.map((c) => c.verb), ["owe-close"]);
+  assert.deepEqual(r.seen[0].rest, ["--owed", r.seen[0].rest[1], "--kind", "settlement", "--attempt", "2026-11-06T18:00:01Z#2"]);
   assert.match(r.stderr, /lost a race: not a decision yet/);
   const final = runTool(stubTown(), { attempt: "", rec: receipt({ status: "race" }) });
   assert.equal(final.seen[0]?.verb, "owe", "a race that outlived its retries is a decision, and is owed");
@@ -129,8 +144,30 @@ test("A RACE INSIDE THE RETRY is not a decision yet: nothing is owed", () => {
 test("A DRY RECEIPT decided nothing, on any path (the wrapper's raced-out one included): nothing is owed", () => {
   const r = runTool(stubTown(), { attempt: "", rec: receipt({ status: "race", dry: true }) });
   assert.equal(r.status, 0);
-  assert.deepEqual(r.seen, []);
+  assert.deepEqual(r.seen.map((c) => c.verb), ["owe-close"]);
   assert.match(r.stderr, /a dry run decided nothing: no record/);
+});
+
+test("--open: the run is opened before it acts, held by the crossing's own shell", () => {
+  const town = stubTown();
+  const d = dir("open");
+  const calls = join(d, "calls.jsonl");
+  const r = spawnSync(process.execPath, [TOOL, "--open", "--attempt", "1", "--event", "2026-11-06T18:00:01Z", "--town", town, "--pid", "4242"], {
+    encoding: "utf8", env: { ...process.env, WITNESS_KEY: "k", WITNESS_OWED: join(d, "owed"), STUB_CALLS: calls },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const [call] = readFileSync(calls, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(call.verb, "owe-open");
+  assert.deepEqual(call.rest.slice(2), ["--kind", "settlement", "--event", "settlement:2026-11-06T18:00:01Z", "--attempt", "2026-11-06T18:00:01Z#1", "--pid", "4242"]);
+});
+
+test("NEVER A STDERR LINE ALONE: a receipt that cannot be read or composed is owed as incomplete, with its reason, and published", () => {
+  const unreadable = runTool(stubTown(), { rec: "{ not json" });
+  assert.deepEqual(unreadable.seen.map((c) => c.verb), ["owe-incomplete", "publish"]);
+  assert.match(unreadable.seen[0].rest.join(" "), /--why the receipt does not parse/);
+  const noInstant = runTool(stubTown(), { rec: receipt({ at: "" }) });
+  assert.deepEqual(noInstant.seen.map((c) => c.verb), ["owe-incomplete", "publish"]);
+  assert.match(noInstant.seen[0].rest.join(" "), /--why the settlement's outcome could not be composed: the receipt carries no `at` instant/);
 });
 
 test("A DECIDED SETTLEMENT is owed (the composed outcome, on stdin), then published under the town lock", () => {
@@ -148,8 +185,8 @@ test("A DECIDED SETTLEMENT is owed (the composed outcome, on stdin), then publis
 test("KEEP RUNNING: an owe or a publish that fails leaves the tool at exit 0, saying what is owed", () => {
   const oweFails = runTool(stubTown(), { env: { STUB_OWE_EXIT: "1" } });
   assert.equal(oweFails.status, 0);
-  assert.deepEqual(oweFails.seen.map((c) => c.verb), ["owe"], "nothing is published from a debt that was never written");
-  assert.match(oweFails.stderr, /could not be owed/);
+  assert.deepEqual(oweFails.seen.map((c) => c.verb), ["owe", "owe-incomplete", "publish"], "an outcome that could not be owed is owed as incomplete, and published");
+  assert.match(oweFails.stderr, /owed as incomplete: the settlement's outcome could not be owed \(exit 1\)/);
   const pubFails = runTool(stubTown(), { env: { STUB_PUBLISH_EXIT: "3" } });
   assert.equal(pubFails.status, 0, 'LAW: "the record is owed"');
   assert.match(pubFails.stderr, /the record is owed, not published/);
@@ -226,8 +263,9 @@ test(`THE CROSSING: a refused settlement is a signed record on the town's chain,
   assert.deepEqual(names, ["00000001.json"], `one record reached the town:\n${r.stderr.slice(-2000)}`);
   const record = JSON.parse(git(fx.townOrigin, "show", "main:WITNESS/records/00000001.json"));
   const d = record.body.decided;
-  assert.deepEqual([d.kind, d.attempt, d.outcome.status], ["settlement", "1", "refused"]);
+  assert.deepEqual([d.kind, d.outcome.status], ["settlement", "refused"]);
   assert.match(d.event, /^settlement:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
+  assert.equal(d.attempt, `${d.event.slice("settlement:".length)}#1`, "the run's decision replaced its open entry: one record, not an open one beside it");
   assert.equal(d.receipt.text, readFileSync(join(fx.harbor, "settlement-auto.json"), "utf8"), "the record carries the receipt the harbor serves, byte for byte");
   assert.equal(readdirSync(fx.owed).filter((n) => n.endsWith(".json")).length, 0, "the owed queue is paid");
 });
@@ -245,6 +283,25 @@ test(`THE CROSSING, WITNESS UNREACHABLE: the town declines the push; the crossin
   const pay = spawnSync(process.execPath, [join(fx.town, "tools", "witness-chain.mjs"), "publish", "--repo", fx.town, "--owed", fx.owed, "--key", fx.key], { encoding: "utf8" });
   assert.equal(pay.status, 0, pay.stderr);
   assert.deepEqual(git(fx.townOrigin, "ls-tree", "--name-only", "main:WITNESS/records").trim().split("\n"), ["00000001.json"], "one record, once");
+});
+
+test(`THE CROSSING DIES AFTER OPENING (set -eu, before any report): the run is still owed, and the next publish records it as incomplete${crossingSkip ? ` (${crossingSkip})` : ""}`, { skip: crossingSkip }, () => {
+  const fx = crossingFixture();
+  // World's origin goes away: the sweep's fetch fails under set -eu, after the
+  // open and before any decision, the window the 11-06 review named.
+  const worldOrigin = join(fx.root, "world.git");
+  execFileSync("mv", [worldOrigin, `${worldOrigin}.gone`]);
+  const r = runCrossing(fx);
+  assert.notEqual(r.status, 0);
+  assert.ok(!existsSync(join(fx.harbor, "settlement-auto.json")), "it died before any report, so no receipt");
+  const names = readdirSync(fx.owed).filter((n) => n.endsWith(".json"));
+  assert.equal(names.length, 1, "the run's debt survived it");
+  assert.equal(JSON.parse(readFileSync(join(fx.owed, names[0]), "utf8")).state, "open");
+  const pay = spawnSync(process.execPath, [join(fx.town, "tools", "witness-chain.mjs"), "publish", "--repo", fx.town, "--owed", fx.owed, "--key", fx.key], { encoding: "utf8" });
+  assert.equal(pay.status, 0, pay.stderr);
+  const record = JSON.parse(git(fx.townOrigin, "show", "main:WITNESS/records/00000001.json"));
+  assert.deepEqual([record.body.decided.kind, record.body.decided.outcome.status], ["settlement", "incomplete"], 'LAW: "the record is owed"');
+  assert.match(record.body.decided.attempt, /#1$/);
 });
 
 test(`THE CROSSING, DRY: a dry run decides nothing and is witnessed as nothing${crossingSkip ? ` (${crossingSkip})` : ""}`, { skip: crossingSkip }, () => {

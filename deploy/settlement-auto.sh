@@ -417,6 +417,18 @@ if [ -z "${SETTLEMENT_ATTEMPT:-}" ]; then
   exit 2
 fi
 
+# THE WITNESS IS OWED FROM HERE (POS-907; Rivet's FIX, 2026-11-06). Before this
+# attempt fetches, pushes or writes anything, it opens its entry in the town's
+# owed queue, held by this shell. Its decision replaces the entry in place
+# (record_receipt); a run that dies first (set -eu, a kill, an OOM) leaves the
+# entry, and the next publisher records the run as incomplete rather than let it
+# vanish. A dry run decides nothing and opens nothing. Never fails the crossing.
+if [ "$DRY" != "1" ]; then
+  node "$OFFICE/world2/tools/witness-settlement.mjs" --open --attempt "$SETTLEMENT_ATTEMPT" \
+    --event "$SETTLEMENT_EVENT" --town "$TOWN" --pid $$ \
+    || echo "[settlement-auto] the witness could not open this attempt (non-fatal) — the line above names why" >&2
+fi
+
 # Immutable inputs: the town at a pinned sha.
 #
 # The FETCH and the pinned read happen in both modes, because `town_sha` is the

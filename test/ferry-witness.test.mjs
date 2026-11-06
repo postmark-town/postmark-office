@@ -21,8 +21,9 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -82,7 +83,7 @@ process.exit(Number(process.env.STUB_FERRY_EXIT || 0));
 import { execFileSync } from "node:child_process";
 import { call } from "./stub-calls.mjs";
 const [verb, ...rest] = process.argv.slice(2);
-const repo = rest[rest.indexOf("--repo") + 1];
+const repo = rest.includes("--repo") ? rest[rest.indexOf("--repo") + 1] : process.env.TOWN_CLONE;
 const dirty = execFileSync("git", ["-C", repo, "status", "--porcelain"], { encoding: "utf8" }).trim();
 call("witness " + verb + " " + rest.join(" ") + (dirty ? " [DIRTY CLONE]" : " [clean clone]"));
 process.exit(Number(process.env["STUB_WITNESS_" + verb.replace("-", "_").toUpperCase() + "_EXIT"] || 0));
@@ -93,7 +94,13 @@ process.exit(Number(process.env["STUB_WITNESS_" + verb.replace("-", "_").toUpper
 const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
   "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
-  "tools/town-drain-run.mjs": `process.exit(Number(process.env.STUB_DRAIN_EXIT || 0));\n`,
+  // STUB_DRAIN_HANG names a marker: the drain writes it and then hangs, so a test
+  // can kill the crossing mid-run, as an OOM or a stop timeout would.
+  "tools/town-drain-run.mjs": `
+import { writeFileSync } from "node:fs";
+if (process.env.STUB_DRAIN_HANG) { writeFileSync(process.env.STUB_DRAIN_HANG, "draining\\n"); await new Promise((r) => setTimeout(r, 60000)); }
+process.exit(Number(process.env.STUB_DRAIN_EXIT || 0));
+`,
   "tools/ballot-pass-run.mjs": `process.exit(0);\n`,
   "world2/tools/stamp-lines.mjs": `process.exit(0);\n`,
   "deploy/town-index-ingest.sh": "exit 0\n",
@@ -107,7 +114,16 @@ const write = (root, files) => {
   }
 };
 
-function fixture({ ledger = ["row 1"], witnessTool = true } = {}) {
+// THE TOWN'S REAL WITNESS, for the cases that need its queue and publisher. It
+// is the town's code and not in this office's pinned town-clone until the town
+// half ships, so those cases SKIP, saying so, unless POSTMARK_TOWN_WITNESS_TREE
+// names a town tree that has it.
+const TOWN_TREE = process.env.POSTMARK_TOWN_WITNESS_TREE || join(OFFICE, "town-clone");
+const REAL_FILES = ["tools/witness-chain.mjs", "tools/stamp-mint.mjs", "tools/crossings.mjs", "PROJECTS/the-town-seal/seal.mjs"];
+const realSkip = !SH ? "no POSIX shell on this machine"
+  : !existsSync(join(TOWN_TREE, "tools", "witness-chain.mjs")) ? `skipped until the town's witness ships: no tools/witness-chain.mjs in ${TOWN_TREE} (set POSTMARK_TOWN_WITNESS_TREE)` : false;
+
+function fixture({ ledger = ["row 1"], witnessTool = true, realWitness = false } = {}) {
   const root = join(scratch, `run-${++seq}`);
   const origin = join(root, "town.git");
   const seed = join(root, "seed");
@@ -115,7 +131,19 @@ function fixture({ ledger = ["row 1"], witnessTool = true } = {}) {
   const office = join(root, "office");
   const g = (...a) => execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...GIT_ENV } });
   const tools = { ...TOWN_TOOLS };
-  if (!witnessTool) delete tools["tools/witness-chain.mjs"];
+  if (!witnessTool || realWitness) delete tools["tools/witness-chain.mjs"];
+  let key = null;
+  if (realWitness) {
+    for (const f of REAL_FILES) tools[f] = readFileSync(join(TOWN_TREE, f), "utf8");
+    // the real stamp-mint replaces the stub; the mint step's stub is not needed here
+    const pair = () => generateKeyPairSync("ed25519");
+    const witness = pair();
+    tools["WITNESS/witness-pubkey.pem"] = witness.publicKey.export({ type: "spki", format: "pem" });
+    tools["tools/stamp-pubkey.pem"] = pair().publicKey.export({ type: "spki", format: "pem" });
+    key = join(root, "witness-key.pem");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(key, witness.privateKey.export({ type: "pkcs8", format: "pem" }));
+  }
   write(seed, { ...tools, [LEDGER]: ledger.map((l) => `${l}\n`).join("") });
   g("init", "-q", "-b", "main", seed);
   g("-C", seed, "config", "core.autocrlf", "false");
@@ -125,7 +153,7 @@ function fixture({ ledger = ["row 1"], witnessTool = true } = {}) {
   g("-C", seed, "push", "-q", origin, "main");
   g("clone", "-q", "-c", "core.autocrlf=false", origin, town);
   write(office, OFFICE_FILES);
-  return { root, town, office };
+  return { root, origin, town, office, key };
 }
 
 /** The ferry's ExecStart payload, joined the way systemd joins it. */
@@ -172,10 +200,12 @@ test("A CLEAN CROSSING is owed with its stage and exit, from a clean clone, and 
   const ferry = r.calls.find((c) => c.startsWith("ferry "));
   const report = ferry.replace("ferry --report ", "");
   assert.notEqual(report, "(no report)", "the ferry is asked for its report");
-  assert.equal(r.witness.length, 2, r.calls.join("\n"));
-  assert.equal(r.witness[0], `witness owe-mail --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --attempt ferry-inv-1 --exit 0 --stage done --ferry-report ${report} [clean clone]`);
-  assert.equal(r.witness[1], `witness publish --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --key ${env.WITNESS_KEY} [clean clone]`);
-  assert.equal(r.calls.at(-1), r.witness[1], "the witness is the last thing the crossing does");
+  assert.equal(r.witness.length, 3, r.calls.join("\n"));
+  assert.equal(r.witness[0], `witness owe-open --owed ${env.WITNESS_OWED} --kind mail-crossing --attempt ferry-inv-1 [clean clone]`);
+  assert.equal(r.calls[0], r.witness[0], "the crossing is owed before it does anything (Rivet's FIX: an outcome must never vanish)");
+  assert.equal(r.witness[1], `witness owe-mail --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --attempt ferry-inv-1 --exit 0 --stage done --ferry-report ${report} [clean clone]`);
+  assert.equal(r.witness[2], `witness publish --repo ${fwd(fx.town)} --owed ${env.WITNESS_OWED} --key ${env.WITNESS_KEY} [clean clone]`);
+  assert.equal(r.calls.at(-1), r.witness[2], "the witness is the last thing the crossing does");
 });
 
 test("A REFUSED CROSSING is witnessed too: the stage it stopped at, its exit, after the clone is put back; the exit stays the refusal's", { skip }, () => {
@@ -183,8 +213,8 @@ test("A REFUSED CROSSING is witnessed too: the stage it stopped at, its exit, af
   const r = runFerry(fx, { ...CONFIGURED(fx), STUB_APPEND: "a minted row the verify refuses: RED" });
   assert.equal(r.status, 1, "the crossing's own refusal is unchanged");
   assert.ok(r.calls.includes("mint"), "the refused step wrote first, so the clone was dirty when it refused");
-  assert.match(r.witness[0], /^witness owe-mail .* --exit 1 --stage verify .*\[clean clone\]$/, r.calls.join("\n"));
-  assert.match(r.witness[1], /^witness publish /);
+  assert.match(r.witness[1], /^witness owe-mail .* --exit 1 --stage verify .*\[clean clone\]$/, r.calls.join("\n"));
+  assert.match(r.witness[2], /^witness publish /);
   assert.match(r.stderr, /a gate refused \(exit 1\)/);
 });
 
@@ -193,20 +223,50 @@ test("A CROSSING REFUSED AT THE DRAIN names the drain, before any mail moved", {
   const r = runFerry(fx, { ...CONFIGURED(fx), STUB_DRAIN_EXIT: "1" });
   assert.equal(r.status, 1);
   assert.ok(!r.calls.some((c) => c.startsWith("ferry ")), "the ferry never ran");
-  assert.match(r.witness[0], /--exit 1 --stage drain /);
+  assert.match(r.witness[0], /^witness owe-open /, "opened before the drain");
+  assert.match(r.witness[1], /--exit 1 --stage drain /);
 });
 
 test("KEEP RUNNING: a witness that cannot owe or publish changes nothing about the crossing", { skip }, () => {
   const fx = fixture();
   const r = runFerry(fx, { ...CONFIGURED(fx), STUB_WITNESS_OWE_MAIL_EXIT: "1", STUB_WITNESS_PUBLISH_EXIT: "3" });
   assert.equal(r.status, 0, 'LAW: "the town keeps running"');
-  assert.equal(r.witness.length, 2, "publish still runs after a failed owe: older owed records are still paid");
-  assert.match(r.stderr, /\[witness\] the outcome of this crossing could not be owed/);
+  assert.deepEqual(r.witness.map((c) => c.split(" ")[1]), ["owe-open", "owe-mail", "owe-incomplete", "publish"],
+    "a crossing whose outcome cannot be composed is owed as incomplete, then published: it never vanishes");
+  assert.match(r.witness[2], /--kind mail-crossing --attempt ferry-inv-1 --why owe-mail failed after stage done, exit 0/);
+  assert.match(r.stderr, /\[witness\] the outcome of this crossing could not be composed: it is owed as incomplete/);
   assert.match(r.stderr, /\[witness\] the record is owed, not published: the next crossing or settlement pays it/);
 
   const refused = fixture({ ledger: ["a RED line"] });
   const rr = runFerry(refused, { ...CONFIGURED(refused), STUB_WITNESS_PUBLISH_EXIT: "1" });
   assert.equal(rr.status, 1, "and a refused crossing keeps its own exit when the witness fails as well");
+});
+
+test(`A CROSSING KILLED MID-RUN (SIGKILL: no trap runs) leaves its open entry, and the next publish records it as incomplete${realSkip ? ` (${realSkip})` : ""}`, { skip: realSkip }, async () => {
+  const fx = fixture({ realWitness: true });
+  const owedDir = join(fx.root, "owed");
+  const marker = join(fx.root, "draining");
+  const script = ferryPayload().replaceAll("/usr/bin/node", "node").replaceAll("/srv/postmark-office", fwd(fx.office));
+  const child = spawn(SH, ["-c", script], {
+    cwd: fx.office,
+    env: { ...process.env, ...GIT_ENV, TOWN_CLONE: fwd(fx.town), INVOCATION_ID: "inv-killed", WITNESS_KEY: fx.key, WITNESS_OWED: owedDir, STUB_DRAIN_HANG: marker },
+  });
+  const exited = new Promise((ok) => child.on("exit", (code, signal) => ok(signal)));
+  for (let i = 0; i < 200 && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.ok(existsSync(marker), "the crossing reached its drain");
+  child.kill("SIGKILL");
+  assert.equal(await exited, "SIGKILL");
+
+  const entries = readdirSync(owedDir).filter((n) => n.endsWith(".json"));
+  assert.equal(entries.length, 1, "the run's debt survived its death");
+  const open = JSON.parse(readFileSync(join(owedDir, entries[0]), "utf8"));
+  assert.deepEqual([open.state, open.kind, open.attempt, open.holder.pid], ["open", "mail-crossing", "ferry-inv-killed", child.pid], "held by the unit's own shell");
+
+  const pub = spawnSync(process.execPath, [join(fx.town, "tools", "witness-chain.mjs"), "publish", "--repo", fx.town, "--owed", owedDir, "--key", fx.key], { encoding: "utf8" });
+  assert.equal(pub.status, 0, pub.stderr);
+  const record = JSON.parse(execFileSync("git", ["-C", fx.origin, "show", "main:WITNESS/records/00000001.json"], { encoding: "utf8" }));
+  assert.deepEqual([record.body.decided.kind, record.body.decided.attempt, record.body.decided.outcome.status], ["mail-crossing", "ferry-inv-killed", "incomplete"],
+    'LAW: "the record is owed" — the crossing that died is in the chain, said to be incomplete');
 });
 
 test("A TOWN CLONE WITHOUT THE WITNESS TOOL (before the town half ships) is a no-op, said once", { skip }, () => {
