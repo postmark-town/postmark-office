@@ -72,7 +72,7 @@ import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every h
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "50cbe736a6a29930fccaec4549bcd58c93ca0bb0", at: "3e4ad8a0be03e270c5c318ba2328ab5fd494f9de" },
+            blob: "1d16e1c615d270bfbe2e7f496892c7ecdf6fef68", at: "39557aa1118d6bc65fdd898e57f6174e93f51b4a" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
