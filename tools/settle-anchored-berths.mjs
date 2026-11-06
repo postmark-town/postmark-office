@@ -105,7 +105,9 @@ export function readBerth(clone, handle) {
   if (!m) return null;
   const data = {};
   for (const line of m[1].split("\n")) {
-    const kv = /^([a-z_]+):\s*(.*)$/.exec(line);
+    // The lookahead keeps the value from starting on a space `\s*` could have taken (POS-877); the
+    // old `\s*(.*)$` was quadratic on a line `.` can't finish. Trimmed below.
+    const kv = /^([a-z_]+):\s*(?!\s)(.*)$/.exec(line);
     if (kv) data[kv[1]] = kv[2].trim();
   }
   return { data, body: m[2] };
