@@ -41,7 +41,7 @@
 // which merges (a fix PR into main comes from train/* or hotfix/*). "Link the
 // CARRIER, credit the carried PR's author": fixed links the merged carrier, so
 // the stage guard's merge and shipped proofs read it as they read any fix, and
-// the carrier's BODY names the PR it carries, on one line of its own:
+// the FIRST LINE of the carrier's BODY names the PR it carries:
 //
 //   carries: office#910
 //
@@ -134,96 +134,31 @@ export async function githubAuthorOf(j, { env = process.env, fetchImpl = fetch }
 
 // ── the carry: its declaration, the carried PR, and the two net diffs ────────
 
-const CARRY_HOW = 'fixed credits a carried pull request\'s author only when the merged carrier\'s body declares it on one line of its own, "carries: <repo>#<n>" (its own repo: carries: office#910), and both make the same change, by patch-id and byte for byte; anything else a founder credits by hand';
+const CARRY_HOW = 'fixed credits a carried pull request\'s author only when the first line of the merged carrier\'s body declares it, "carries: <repo>#<n>" (its own repo: carries: office#910), and both make the same change, by patch-id and byte for byte; anything else a founder credits by hand';
 const NO_DOUBT = "nothing was written: the office never pays a stage on doubt — ask again shortly, or a founder credits it by hand";
-/** Any line that tries to declare a carry, wherever it stands (quoted, indented, any case). */
-const DECLARES = /^[ \t]*(?:>[ \t]*)*carries[ \t]*:/i;
-/** The one form that does: the whole line, a repo, and a number with no leading zero. */
+/** The one form that declares: the whole line, a repo, and a number with no leading zero. */
 const DECLARATION = /^carries: ([A-Za-z0-9_-][A-Za-z0-9._-]*)#([1-9][0-9]{0,8})$/;
-/** A code fence opening: a backtick fence's info string holds no backtick, or the line is no fence at all. */
-const FENCE = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
-/** A code fence closing: nothing but spaces after it, so a line with an info string closes nothing. */
-const FENCE_CLOSES = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 const PATCH_ID_TIMEOUT_MS = 10_000;
 
 // A HIDDEN DECLARATION DOESN'T COUNT (Wright, settled 2026-11-05 19:57:03Z, answer 2): "the `carries:`
 // declaration has to be visible to anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`),
-// or anywhere else the rendered body hides, refuses with a reason naming it". The office models no renderer. It
-// keeps one rule: A DECLARATION STANDS ABOVE EVERY `<` THAT COULD START MARKUP, in a code span or a fence or not.
-// That `<` holds the rest of the body as HTML, whatever the markup turns out to mean: self-closed, void, closed
-// again, or only text on the page. The cost is plain and named: a line the page would show refuses too, and the
-// refusal says to put it above any HTML. Past that rule, read line by line:
-//   - a comment's own marks, `<!--` and `-->`, are the rule's one exemption, so a PR template's comment taints
-//     nothing. What stands between them is not exempt, since an HTML parser also ends a comment at `<!-->`, `<!--->`
-//     and `--!>`, and what looks like its inside is then live. Nor are the marks exempt in a fence, since a fence in
-//     a list ends with the list, and a `<!--` on the next line is then live;
-//   - a comment runs from `<!--` to `-->`, across lines; one never closed runs to the end of the body;
-//   - a line running on from the text above isn't its own paragraph: a link's title, an image's alt or a
-//     reference definition's title can hide it, and none of them survives a blank line.
-// A declaration-shaped mention (carries:, then a # and a digit on that line) or a line that tries to declare,
-// hidden by a comment or on or below a held line, refuses, named. A body with neither has declared nothing.
-/** carries:, then a # and a digit on the same line: a declaration's shape, wherever it stands in a line. */
-const MENTIONS = /carries[ \t]*:[^\n]*?#[ \t]*[0-9]/i;
-/** A `<` that could start markup: an HTML parser opens something on a letter, `/`, `!` or `?`, and nothing else (`a < b`). */
-const MARKUP_START = /<[A-Za-z/!?]/;
-const COMMENT_MARKS = /<!--|-->/g;
-const hides = (s) => MENTIONS.test(s) || DECLARES.test(s);
+// or anywhere else the rendered body hides, refuses with a reason naming it". So A DECLARATION COUNTS ONLY AS THE
+// BODY'S FIRST LINE (Wright, 2026-11-06 22:01Z, POS-867). Nothing stands above a first line, so nothing can hide
+// it, and the office judges no markup at all. A carries: line anywhere below is plain text: hidden or not, it
+// earns nothing and refuses nobody. The old rule then stands, and the carrier's own author is judged.
+/** The body's first line. Empty when the body opens with a line ending, so a leading blank line isn't skipped. */
+const firstLineOf = (text) => String(text ?? "").split(/\r\n|\r|\n/, 1)[0];
 
 /**
- * The PR a carrier's body declares it carries, `{ repo, number }`; null when no
- * line tries to; else the refusal. Exactly one line, a plain and visible paragraph
- * of its own (outside quotes, code blocks and HTML comments, above every `<` that
- * could start markup), on the carrier's own repo (`office` names postmark-office),
- * never itself.
+ * The PR a carrier's body declares it carries, `{ repo, number }`; null when its first line isn't the declaration,
+ * whole; else the refusal. It names the carrier's own repo (`office` names postmark-office), and never itself.
  */
 function carriedDeclarationOf(text, ref) {
+  const m = DECLARATION.exec(firstLineOf(text));
+  if (!m) return null;
   const name = `${ref.repo}#${ref.number}`;
-  const tried = [];
-  const hidden = { comment: false, html: false };
-  // held: a `<` that could start markup has passed. afterBlank: the line above was blank, or this is the first line.
-  let fence = null, comment = false, held = false, afterBlank = true;
-  for (const line of String(text ?? "").split(/\r?\n/)) {
-    if (MARKUP_START.test(fence ? line : line.replace(COMMENT_MARKS, ""))) held = true;
-    if (!comment && !held) {
-      if (fence) {
-        const c = FENCE_CLOSES.exec(line);
-        if (c && c[1][0] === fence[0] && c[1].length >= fence.length) { fence = null; afterBlank = false; }
-        else if (DECLARES.test(line)) tried.push({ line, fenced: true });
-        continue;
-      }
-      const f = FENCE.exec(line);
-      if (f) { fence = f[1]; afterBlank = false; continue; }
-    }
-    // what a comment hides, and what the line shows
-    let shown = "", rest = line, markup = held || comment;
-    while (rest) {
-      if (comment) {
-        const end = rest.indexOf("-->");
-        if (hides(end < 0 ? rest : rest.slice(0, end))) hidden.comment = true;
-        if (end < 0) break;
-        comment = false; markup = true; rest = rest.slice(end + 3);
-        continue;
-      }
-      const at = rest.indexOf("<!--");
-      if (at < 0) { shown += rest; break; }
-      shown += rest.slice(0, at); comment = true; markup = true; rest = rest.slice(at + 4);
-    }
-    if (markup) { if (hides(shown)) hidden.html = true; }
-    else if (DECLARES.test(line)) tried.push({ line, fenced: false, runsOn: !afterBlank });
-    afterBlank = !line.trim();
-  }
   const bad = (defect) => refuse(422, defect, CARRY_HOW, { field: "link" });
-  if (hidden.comment) throw bad(`${name}'s carries: line is inside an HTML comment, hidden when the pull request is read`);
-  if (hidden.html) throw bad(`${name}'s carries: line is inside or below HTML the office does not read, which may hide it when the pull request is read: put it above any HTML`);
-  if (!tried.length) return null;
-  if (tried.length > 1) throw bad(`${name}'s body declares carries: more than once, and a carrier carries one pull request`);
-  const [{ line, fenced, runsOn }] = tried;
-  if (fenced) throw bad(`${name}'s carries: line is inside a code block`);
-  if (/^[ \t]*>/.test(line)) throw bad(`${name}'s carries: line is quoted`);
-  const m = DECLARATION.exec(line);
-  if (!m) throw bad(`${name}'s carries: line is not "carries: <repo>#<n>" on a line of its own`);
-  if (runsOn) throw bad(`${name}'s carries: line runs on from the text above it, which can hide it when the pull request is read: leave a blank line above it`);
   const own = ref.repo.toLowerCase();
   if (m[1].toLowerCase() !== own && `postmark-${m[1].toLowerCase()}` !== own)
     throw bad(`${name} declares it carries ${m[1]}#${m[2]}, and a carrier carries a pull request on its own repo, ${ref.repo}`);
@@ -249,7 +184,7 @@ async function carriedAuthorOf(ref, carrierPr, of, ctx) {
   if (got.status === 404) throw why(`${carried}, which ${carrier} declares it carries, is not on GitHub`);
   const pr = got.body;
   if (!Number.isSafeInteger(pr?.user?.id)) throw doubt(`GitHub could not be read, so the office cannot prove who wrote ${carried}, which ${carrier} carries`);
-  if (String(pr?.body ?? "").split(/\r?\n/).some((l) => DECLARES.test(l)))
+  if (DECLARATION.test(firstLineOf(pr?.body)))
     throw why(`${carried}, which ${carrier} carries, declares a carry of its own, and a carried pull request is never carried again`);
   const said = { carrier, carried };
   const mine = await netDiffOf(carrier, of.repo, carrierPr, said, ctx);

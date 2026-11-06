@@ -64,24 +64,19 @@
 //      whose fixed was skipped are untouched; force: "<why>" is wright's and
 //      keemin's alone and writes the reason and what it went past on the act.
 //      GitHub is the stub above: pull() serves a merged PR, tagFor() a tag.
-//  18. (POS-912 W2, Wright settled 2026-11-05 17:51:47Z) a merged carrier whose body
-//      declares `carries: <repo>#<n>` on one exact line credits the CARRIED PR's
-//      author through the same judge, when both net diffs agree by patch-id AND
-//      byte for byte in what they change; the fixed link stays the carrier and
-//      the act gains no field. "ab" for "a b" (one patch-id) refuses; so do every
-//      malformed, quoted, fenced, doubled, self, cross-repo or chained declaration,
-//      an unmerged carrier (force or not), a changed context line, a partial
-//      carry, a binary, rename or mode change, an empty diff, a diff that is not
-//      the PR's own count, a hunk cut short, and anything GitHub can't show.
-//      carryPull() serves a PR's JSON and its diff at its base and head.
-//      (Wright 19:57, answer 2) a hidden declaration refuses, named: inside an
-//      HTML comment (multi-line, one line, unclosed) or raw HTML (details with
-//      and without blank lines, unclosed, on one line; script; style), while
-//      the same line plain passes, after a closed template comment.
-//      (19:57 again, the one rule) a declaration stands above every `<` that could
-//      start markup, in a code span or a fence or not. The rows were read against
-//      GitHub's own renderer, and those the page shows and the rule refuses are
-//      named as its cost. A title running over lines needs a blank line above.
+//  18. (POS-912 W2, Wright settled 2026-11-05 17:51:47Z) a merged carrier whose body's
+//      FIRST LINE is `carries: <repo>#<n>` credits the CARRIED PR's author through
+//      the same judge, when both net diffs agree by patch-id AND byte for byte in
+//      what they change; the fixed link stays the carrier and the act gains no
+//      field. "ab" for "a b" (one patch-id) refuses; so do a self, cross-repo or
+//      chained declaration, an unmerged carrier (force or not), a changed context
+//      line, a partial carry, a binary, rename or mode change, an empty diff, a diff
+//      that is not the PR's own count, a hunk cut short, and anything GitHub can't
+//      show. carryPull() serves a PR's JSON and its diff at its base and head.
+//      (Wright 19:57, answer 2, and his 2026-11-06 22:01Z call on POS-867) a hidden
+//      line can't credit, because a line below the first is plain text: every body
+//      that hid it in any review round earns nothing, and credits with the same line
+//      first. A sample was read on GitHub's own renderer.
 //  20. (POS-867, POS-892; Wright 2026-11-05 15:41Z) Starforge's own Apps, by bot
 //      user id AND login, earn wright fixed and nothing else: no other stage, no
 //      other credit. A login or an id alone, a resident, and Truey never do.
@@ -1980,7 +1975,7 @@ function carryPull(who, { n, merged = true, body = "", diff = greeting("a b"), c
 /** ada's own fix (her household's account, harbor-human), closed unmerged as a carried PR is. */
 const adaFix = (n, over = {}) => carryPull("ada", { n, merged: false, ...over });
 /** wright's merged hotfix carrying #`of`, the same change at other line numbers. */
-const carrierOf = (n, of, over = {}) => carryPull("wright", { n, body: `Carried from the harbor's fix onto a hotfix branch.\r\n\r\ncarries: office#${of}\r\n`,
+const carrierOf = (n, of, over = {}) => carryPull("wright", { n, body: `carries: office#${of}\r\n\r\nCarried from the harbor's fix onto a hotfix branch.\r\n`,
   diff: greeting("a b", { at: 7, index: "6666666..2222222" }), ...over });
 /** One fixed advance on a fresh bug standing briefed: "ok <credit>", or "<code> <defect>". */
 async function fixedVerdict(link, over = {}) {
@@ -2040,22 +2035,61 @@ test("18 · THE EXACT GUARD: a carrier adding \"ab\" where the carried PR adds \
     `422 ${carrier.ref} and ${carried.ref} change different bytes in src/greeting.mjs (compared byte for byte, whitespace counted), though their patch-ids agree`);
 });
 
-test("18 · the declaration is one exact line of the carrier's body, read as data: none or prose keeps the old rule; two, quoted, fenced, indented, misspelled, a bad number, itself, another repo, or a carried PR that carries in turn each refuse by name", async () => {
+// LAW (Wright, 2026-11-06 22:01Z, POS-867): "a `carries:` declaration counts only as the body's first line ... A line placed lower is plain text: it earns nothing and refuses nobody."
+test("18 · the declaration is the whole of the body's first line, read as data: the plain line credits, and any line ending ends it; anything else on the line or before it, a second line, and a leading blank line are no declaration, and the old rule judges the carrier; itself, another repo, and a carried PR whose own first line declares each refuse by name", async () => {
   adaFix(9121);
   adaFix(9122, { body: "carries: office#9121" });   // a carried PR that declares a carry of its own
+  adaFix(9123, { body: "Carried on from the harbor.\n\ncarries: office#9121" });   // one that only uses the word, below its first line
   const bodies = {
-    none: "Carried from the harbor's fix.",
-    prose: "This hotfix carries: the harbor's fix, as reviewed (office#9121).",
+    // must credit: the first line, plain
     short: "carries: office#9121",
-    full: "Carried.\n\ncarries: postmark-office#9121",
-    twice: "carries: office#9121\ncarries: office#9121",
-    quoted: "> carries: office#9121",
-    fenced: "```\ncarries: office#9121\n```",
+    full: "carries: postmark-office#9121",
+    "text below": "carries: office#9121\n\nCarried from the harbor's fix.",
+    "ended by lf": "carries: office#9121\nCarried.",
+    "ended by crlf": "carries: office#9121\r\n\r\nCarried.",
+    "ended by a bare cr": "carries: office#9121\rCarried.",
+    "a second line, the same": "carries: office#9121\ncarries: office#9121",
+    "a second line, another pull": "carries: office#9121\ncarries: office#9999",
+    "a carried PR using the word below": "carries: office#9123",
+    // must not credit: no declaration, so the old rule judges the carrier's own author
+    none: "Carried from the harbor's fix.",
+    empty: "",
+    prose: "This hotfix carries: the harbor's fix, as reviewed (office#9121).",
+    "second line": "Carried.\ncarries: office#9121",
+    "second line, crlf": "Carried.\r\ncarries: office#9121",
+    "second line, a bare cr": "Carried.\rcarries: office#9121",
+    "second paragraph": "Carried.\n\ncarries: office#9121",
+    "a leading blank line": "\ncarries: office#9121",
+    "a leading blank line, crlf": "\r\ncarries: office#9121",
+    "a leading blank line, a bare cr": "\rcarries: office#9121",
+    "a leading line of spaces": "  \ncarries: office#9121",
+    "a leading line of nbsp": " \ncarries: office#9121",
+    "text before it on the line": "see carries: office#9121",
+    "a comment before it on the line": "<!-- x --> carries: office#9121",
+    "a leading space": " carries: office#9121",
+    "a leading tab": "\tcarries: office#9121",
+    "a leading bom": "﻿carries: office#9121",
     indented: "    carries: office#9121",
+    quoted: "> carries: office#9121",
+    "in a list": "- carries: office#9121",
+    "in a heading": "# carries: office#9121",
+    "inside a comment": "<!-- carries: office#9121 -->",
+    "inside a comment, over lines": "<!--\ncarries: office#9121\n-->",
+    "inside details": "<details>\ncarries: office#9121\n</details>",
+    "inside details, one line": "<details>carries: office#9121</details>",
+    fenced: "```\ncarries: office#9121\n```",
+    "a code span": "`carries: office#9121`",
     capital: "Carries: office#9121",
+    "no space": "carries:office#9121",
+    "two spaces": "carries:  office#9121",
+    "a trailing space": "carries: office#9121 ",
+    "trailing text": "carries: office#9121, as reviewed",
+    "a form feed ends no line": "carries: office#9121\f\nCarried.",
+    "a line separator ends no line": "carries: office#9121 Carried.",
     zero: "carries: office#0",
     padded: "carries: office#09121",
     huge: "carries: office#1234567890",
+    // the form, naming what can't be carried: refused by name
     itself: "carries: office#{self}",   // the carrier's own number, filled in below
     site: "carries: site#9121",
     world: "carries: postmark-world#9121",
@@ -2071,18 +2105,52 @@ test("18 · the declaration is one exact line of the carrier's body, read as dat
   const r = (name) => refs[name].ref;
   const founder = (name) => `422 ${refs[name].link} was written by a founder's account, GitHub account wright-starforge (id 306351151), and a founder's work credits only wright or keemin`;
   assert.deepEqual(verdicts, {
-    none: founder("none"),
-    prose: founder("prose"),
     short: "ok ada",
     full: "ok ada",
-    twice: `422 ${r("twice")}'s body declares carries: more than once, and a carrier carries one pull request`,
-    quoted: `422 ${r("quoted")}'s carries: line is quoted`,
-    fenced: `422 ${r("fenced")}'s carries: line is inside a code block`,
-    indented: `422 ${r("indented")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
-    capital: `422 ${r("capital")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
-    zero: `422 ${r("zero")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
-    padded: `422 ${r("padded")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
-    huge: `422 ${r("huge")}'s carries: line is not "carries: <repo>#<n>" on a line of its own`,
+    "text below": "ok ada",
+    "ended by lf": "ok ada",
+    "ended by crlf": "ok ada",
+    "ended by a bare cr": "ok ada",
+    "a second line, the same": "ok ada",
+    "a second line, another pull": "ok ada",
+    "a carried PR using the word below": "ok ada",
+    none: founder("none"),
+    empty: founder("empty"),
+    prose: founder("prose"),
+    "second line": founder("second line"),
+    "second line, crlf": founder("second line, crlf"),
+    "second line, a bare cr": founder("second line, a bare cr"),
+    "second paragraph": founder("second paragraph"),
+    "a leading blank line": founder("a leading blank line"),
+    "a leading blank line, crlf": founder("a leading blank line, crlf"),
+    "a leading blank line, a bare cr": founder("a leading blank line, a bare cr"),
+    "a leading line of spaces": founder("a leading line of spaces"),
+    "a leading line of nbsp": founder("a leading line of nbsp"),
+    "text before it on the line": founder("text before it on the line"),
+    "a comment before it on the line": founder("a comment before it on the line"),
+    "a leading space": founder("a leading space"),
+    "a leading tab": founder("a leading tab"),
+    "a leading bom": founder("a leading bom"),
+    indented: founder("indented"),
+    quoted: founder("quoted"),
+    "in a list": founder("in a list"),
+    "in a heading": founder("in a heading"),
+    "inside a comment": founder("inside a comment"),
+    "inside a comment, over lines": founder("inside a comment, over lines"),
+    "inside details": founder("inside details"),
+    "inside details, one line": founder("inside details, one line"),
+    fenced: founder("fenced"),
+    "a code span": founder("a code span"),
+    capital: founder("capital"),
+    "no space": founder("no space"),
+    "two spaces": founder("two spaces"),
+    "a trailing space": founder("a trailing space"),
+    "trailing text": founder("trailing text"),
+    "a form feed ends no line": founder("a form feed ends no line"),
+    "a line separator ends no line": founder("a line separator ends no line"),
+    zero: founder("zero"),
+    padded: founder("padded"),
+    huge: founder("huge"),
     itself: `422 ${r("itself")} declares it carries itself`,
     site: `422 ${r("site")} declares it carries site#9121, and a carrier carries a pull request on its own repo, postmark-office`,
     world: `422 ${r("world")} declares it carries postmark-world#9121, and a carrier carries a pull request on its own repo, postmark-office`,
@@ -2090,66 +2158,25 @@ test("18 · the declaration is one exact line of the carrier's body, read as dat
   });
 });
 
-// LAW (Wright, settled 2026-11-05 19:57:03Z, answer 2): "A hidden declaration doesn't count … the `carries:`
-// declaration has to be visible to anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`), or
-// anywhere else the rendered body hides, refuses with a reason naming it, the same as any other unsupported case."
-test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML comment (multi-line, one line, unclosed) or inside raw HTML (details with and without blank lines, unclosed, on one line; script; style); the same line plain and visible passes, after a closed template comment too, and below closed details it refuses", async () => {
-  adaFix(9401);
-  const bodies = {
-    "comment, multi-line": "Carried from the harbor's fix.\n\n<!--\ncarries: office#9401\n-->",
-    "comment, one line": "Carried from the harbor's fix.\n\n<!-- carries: office#9401 -->",
-    "comment, unclosed": "Carried from the harbor's fix.\n\n<!-- notes for the reviewer\n\ncarries: office#9401",
-    "details, no blank line": "<details><summary>Notes</summary>\ncarries: office#9401\n</details>",
-    "details, blank lines": "<details>\n<summary>Notes</summary>\n\ncarries: office#9401\n\n</details>",
-    "details, unclosed": "Carried.\n\n<details>\n\ncarries: office#9401",
-    "details, one line": "<details><summary>Notes</summary>carries: office#9401</details>",
-    script: "<script>\ncarries: office#9401\n</script>",
-    style: "Carried.\n\n<style>\n\ncarries: office#9401\n",
-    // the visible controls: the same declaration, plain, at the top level
-    "visible, plain": "Carried from the harbor's fix.\n\ncarries: office#9401",
-    "visible, after a closed template comment": "<!-- Describe what this PR changes. -->\n\nCarried from the harbor's fix.\n\ncarries: office#9401",
-    "visible, after a template comment that names the form": "<!-- To credit a carried PR, add a line: carries: office#N -->\n\ncarries: office#9401",
-    "below closed details": "<details><summary>Notes</summary>\n\nThe long notes.\n\n</details>\n\ncarries: office#9401",
-    "below a code span that names the form": "The line is `carries: <repo>#<n>`, so:\n\ncarries: office#9401",
-  };
-  const verdicts = {}, refs = {};
-  let n = 9410;
-  for (const [name, body] of Object.entries(bodies)) {
-    const carrier = carrierOf(++n, 9401, { body });
-    refs[name] = carrier.ref;
-    verdicts[name] = await fixedVerdict(carrier.link);
-  }
-  const comment = (name) => `422 ${refs[name]}'s carries: line is inside an HTML comment, hidden when the pull request is read`;
-  const html = (name) => `422 ${refs[name]}'s carries: line is inside or below HTML the office does not read, which may hide it when the pull request is read: put it above any HTML`;
-  assert.deepEqual(verdicts, {
-    "comment, multi-line": comment("comment, multi-line"),
-    "comment, one line": comment("comment, one line"),
-    "comment, unclosed": comment("comment, unclosed"),
-    "details, no blank line": html("details, no blank line"),
-    "details, blank lines": html("details, blank lines"),
-    "details, unclosed": html("details, unclosed"),
-    "details, one line": html("details, one line"),
-    script: html("script"),
-    style: html("style"),
-    "visible, plain": "ok ada",
-    "visible, after a closed template comment": "ok ada",
-    "visible, after a template comment that names the form": "ok ada",
-    // until 2026-11-06 this row was a visible control. The office can't tell a close tag from text that looks like
-    // one (the next test's rows), so it no longer decides that HTML has ended. Above the HTML it still credits.
-    "below closed details": html("below closed details"),
-    // until 2026-11-06 this row was a visible control, and the page does show it. Under the next test's one rule it refuses.
-    "below a code span that names the form": html("below a code span that names the form"),
-  });
-});
-
-// LAW (the same 19:57 answer 2: "or anywhere else the rendered body hides"). One rule instead of a model of markup: a
-// declaration stands above every `<` that could start markup, in a code span or a fence or not (the independent review
-// at f9adbdf9, F1). Every body here was read against GitHub's own renderer, POST /markdown in mode gfm, on 2026-11-06.
-test("18 · (19:57, the one rule) a declaration stands above every < that could start markup: what the page hides refuses, what it shows below such a < refuses too as the rule's cost, a title running over lines needs a blank line above, and a plain line, a < that starts nothing, a closed comment, a line above the HTML and a closed fence with no tag still credit", async () => {
+// LAW (Wright, settled 2026-11-05 19:57:03Z, answer 2): "A hidden declaration doesn't count … the `carries:` declaration has to be visible to
+// anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`), or anywhere else the rendered body hides, refuses with a reason
+// naming it"; and 2026-11-06 22:01Z: only the first line counts, so a hidden line can't credit. `hidden` holds every body a review round found the
+// page hiding (a collapsed <details>, the line gone, only in an attribute, or only as a diagram's or a math block's source), read on GitHub's renderer,
+// POST /markdown in mode gfm, on 2026-11-06.
+// `lower` is what the rule costs: the page shows the line in each of these, and it earns nothing. Until 2026-11-06 many of them credited.
+test("18 · (19:57, answer 2; the first-line rule) a hidden line can't credit: every body from every review round earns nothing, and so does a line the page shows below the first; the same line put first, above the same body, credits", async () => {
   adaFix(9601);
   const line = "carries: office#9601";
-  const bodies = {
-    // the review's F1: each of these credited at f9adbdf9 while the page hid the line in a collapsed <details>
+  const hidden = {
+    // the first rounds: a comment, and an element that collapses
+    "comment, multi-line": `Carried.\n\n<!--\n${line}\n-->`,
+    "comment, one line": `Carried.\n\n<!-- ${line} -->`,
+    "comment, unclosed": `Carried.\n\n<!-- notes for the reviewer\n\n${line}`,
+    "details, no blank line": `<details><summary>Notes</summary>\n${line}\n</details>`,
+    "details, blank lines": `<details>\n<summary>Notes</summary>\n\n${line}\n\n</details>`,
+    "details, unclosed": `Carried.\n\n<details>\n\n${line}`,
+    "details, one line": `<details><summary>Notes</summary>${line}</details>`,
+    // the review at f9adbdf9, F1
     "a self-closed details": `<details/>\n\n${line}`,
     "a /> inside an attribute": `<details title="/>">\n\n${line}`,
     "an escaped backtick": `\\\`<details>\`\n\n${line}`,
@@ -2160,185 +2187,130 @@ test("18 · (19:57, the one rule) a declaration stands above every < that could 
     "a close tag's block, then a span": `</div>\n\`<details>\`\n\n${line}`,
     "an hr's block, then a fence": `<hr>\n\`\`\`\n<details>\n\`\`\`\n\n${line}`,
     "a self-closed tag's block, then a fence": `<widget/>\n\`\`\`\n<details>\n\`\`\`\n\n${line}`,
-    // and the review's two controls, which the page hides too
-    "details": `<details>\n\n${line}`,
+    details: `<details>\n\n${line}`,
     "details, split": `<details\n>\n\n${line}\n\n</details>`,
-    // each of these credited at f9adbdf9 too. An HTML parser ends a comment at <!-->, <!---> and --!>, so what looks
-    // like its inside is live: a comment's marks are the only exemption the rule has, and never what's between them
+    // an HTML parser ends a comment at <!-->, <!---> and --!>, and a fence in a list ends with the list
     "a comment closed early by <!-->": `<!--> <details> -->\n\n${line}`,
     "a comment closed early by <!--->": `<!---> <details> -->\n\n${line}`,
     "a comment closed early by --!>": `<!-- a --!> <details> -->\n\n${line}`,
     "a comment closed early, a tag on its own line": `<!-->\n\n<details>\n\n-->\n\n${line}`,
-    // a fence in a list ends with the list, so the next line is live: a <!-- runs to the end of the body, a tag opens
     "a comment opened in a fence a list ended": `- a\n\n  \`\`\`\n<!--\n  \`\`\`\n\n${line}`,
     "a tag in a fence a list ended": `- a\n\n  \`\`\`\n<details>\n  \`\`\`\n\n${line}`,
-    // and these refused at f9adbdf9, by the code the rule replaces
     "a close tag holding the line in an attribute": `</div x="\n\n${line}\n\n">`,
     "a tag on a comment's closing line": `<!--\n--> <details>\n\n${line}`,
     "a tag after a closed comment": `<!-- x --> <details>\n\n${line}`,
-    "details with attributes, split": `<details open\nclass="x"\n>\n\n${line}\n\n</details>`,
-    "script, split": `<script\n>\n${line}\n</script>`,
     "processing instruction": `<?\n${line}\n?>`,
-    "declaration span": `<!x\n${line}\n>`,
     cdata: `<![CDATA[\n${line}\n]]>`,
-    "processing instruction, a > before its end": `<? a > b\n\n${line}\n\n?>`,
-    "cdata, a > before its end": `<![CDATA[ a > b\n\n${line}\n\n]]>`,
-    // these spans run across blank lines, so the line is its own paragraph, and only the hold refuses it
     "processing instruction, blank lines": `<?\n\n${line}\n\n?>`,
-    "declaration span, blank lines": `<!x\n\n${line}\n\n>`,
     "cdata, blank lines": `<![CDATA[\n\n${line}\n\n]]>`,
-    // a close tag that is only text leaves the element open
     "close tag in a code span": `<details>\n\n\`\` \`</details>\` \`\`\n\n${line}`,
-    "close tag in a code span over lines": `<details>\n\na \`b\n</details>\` c\n\n${line}`,
     "close tag in a fence": `<details>\n\n\`\`\`\n</details>\n\`\`\`\n\n${line}`,
     "close tag, indented as code": `<details>\n\n    </details>\n\n${line}`,
-    "close tag in a link title": `<details>\n\n[a](/u "b\n</details>\nc")\n\n${line}`,
     "start tag past a run with no partner": `\`<details>\`\`\n\n${line}`,
     "start tag past a span over lines": `x \`y\nz\` <details> \`w\`\n\n${line}`,
     "start tag past a line that is no fence": `\`\`\` a\`b\n<details>\n\`\`\`\nx\n\`\`\`\n\`\`\` i\n\`\`\`\n\n${line}`,
-    // the rule's cost: the page shows every one of these, and each refuses. Until 2026-11-06 most were visible controls
-    "cost, a code span holding a tag": `Use \`<details>\` for notes.\n\n${line}`,
-    "cost, a double-backtick span holding a tag": `Use \`\` \`<details>\` \`\` for notes.\n\n${line}`,
-    "cost, a closed fence holding a tag": `\`\`\`\n<details>\n\`\`\`\n\n${line}`,
-    "cost, a closed fence holding a comment": `\`\`\`\n<!-- x -->\n\`\`\`\n\n${line}`,
-    "cost, a closed comment holding a tag": `<!-- <details> -->\n\n${line}`,
-    "cost, a comment over lines holding a tag": `<!--\n<details>\n-->\n\n${line}`,
-    "cost, an autolink": `<https://example.com>\n\n${line}`,
-    "cost, an email autolink": `<a@example.com>\n\n${line}`,
-    "cost, a void tag": `First.<br>\n\n${line}`,
-    "cost, a self-closed tag": `<widget/>\n\n${line}`,
-    "cost, a stray close tag": `</details>\n\n${line}`,
-    "cost, a stray close tag, split": `Carried.\n\n</details\n>\n\n${line}`,
-    "cost, a generic": `Map<string, number> holds it.\n\n${line}`,
-    "cost, a comparison with no space": `Refuses when count<limit, as before.\n\n${line}`,
-    "cost, a complete processing instruction": `<? note ?>\n\n${line}`,
-    "cost, an escaped <": `\\<details>\n\n${line}`,
-    // an honest PR meaning no carry meets it only by the word: carries:, then a # and a digit on one line, below such a <
-    "cost, no carry meant, the word below a void tag": `First.<br>\n\nThis ${line}, as it happens.`,
-    // no < at all, and no blank line above: running on from the text above, inside a title or an alt
+    // a title or a label running on from the text above
     "reference title": `[notes]: https://example.com "notes\n${line}\n"`,
     "reference title, label over lines": `[no\ntes]: https://example.com "notes\n${line}\n"`,
     "reference title, in a list": `- [notes]: https://example.com "notes\n${line}\n"`,
-    "link title": `see [a](/u "b\n${line}\n")`,
-    "image alt": `![a\n${line}\n](x.png)`,
-    "running on from prose": `Carried.\n${line}`,
-    // a fence is still read, for a line inside one: an info string closes nothing, and a backtick in one opens nothing
-    "fence, an info string closes nothing": `\`\`\`\n\`\`\`js\n${line}\n\`\`\``,
-    "fence, opened on a line after one that is no fence": `\`\`\` a\`b\n\`\`\`\n\n${line}`,
-    // what must still credit: the same line, a paragraph of its own, with nothing above it that could open markup
-    "visible, a plain line": `Carried.\n\n${line}`,
-    "visible, the first line": line,
-    "visible, a < that starts nothing": `a < b\n\n${line}`,
-    "visible, a < before a space": `< details>\n\n${line}`,
-    "visible, a < before a digit": `<1>\n\n${line}`,
-    "visible, a < before an underscore": `<_a>\n\n${line}`,
-    "visible, an empty <>": `<>\n\n${line}`,
-    "visible, a tag written as entities": `&lt;details&gt;\n\n${line}`,
-    "visible, a closed template comment": `<!-- Describe what this PR changes. -->\n\n${line}`,
-    "visible, an empty comment": `<!---->\n\n${line}`,
-    "visible, a comment over lines": `<!--\nA note for the author.\n-->\n\n${line}`,
-    "visible, two comments on a line": `<!-- a --> <!-- b -->\n\n${line}`,
-    "visible, a closed fence with no tag": `\`\`\`\nplain text\n\`\`\`\n\n${line}`,
-    "visible, a closed tilde fence with no tag": `~~~\nplain text\n~~~\n\n${line}`,
-    "visible, a reference definition": `[x]: https://example.com\n\n${line}`,
-    "visible, a reference title closed above": `[notes]: https://example.com "notes\nmore"\n\n${line}`,
-    "visible, a span over lines closed above": `a \`b\nc\` d\n\n${line}`,
-    "visible, above details": `${line}\n\n<details>\n\nNotes.\n\n</details>`,
+    "a link title": `see [a](/u "b\n${line}\n")`,
+    "an image alt": `![a\n${line}\n](x.png)`,
+    // the review at d4f8eb75, F1: a comment opened in a quote or a list ends with it, and the --> outside is only text
+    "a comment opened in a quote": `> <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a list": `- <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a numbered list": `1. <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a list in a quote": `> - <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a list's second block": `- a\n\n  <!-- b\n\n-->\n\n${line}`,
+    "a comment opened in a quote, closed mid-line": `> <!-- a\n\nb --> c\n\n${line}`,
+    "a comment opened in a quote, closed on the next line": `> <!-- a\n-->\n\n${line}`,
+    // the same review, F2: a line of Unicode space isn't blank on the page
+    "a title over a line of nbsp": `[a]: /u "\n \n${line}\n"`,
+    "a title over a line of u3000": `[a]: /u "\n　\n${line}\n"`,
+    "a title over a line of ufeff": `[a]: /u "\n﻿\n${line}\n"`,
+    "a title over a line of u2003": `[a]: /u "\n \n${line}\n"`,
+    "a title over a line of form feed": `[a]: /u "\n\f\n${line}\n"`,
+    "a title over a line of vertical tab": `[a]: /u "\n\v\n${line}\n"`,
+    "a link title over a line of nbsp": `[a](/u "\n \n${line}\n")`,
+    "an image alt over a line of nbsp": `![a\n \n${line}\n](x.png)`,
+    "a footnote over a line of nbsp": `[^1]: x\n \n${line}`,
+    "a label over a line of nbsp": `[\n \n${line}\n]: /u`,
+    // and F3: a bare CR ends a line on the page
+    "a bare cr, then a mermaid fence": `a\r\`\`\`mermaid\n\n${line}\n\n\`\`\``,
+    "a bare cr, then a math fence": `a\r\`\`\`math\n\n${line}\n\n\`\`\``,
   };
-  const verdicts = {}, refs = {};
-  let n = 9610;
-  for (const [name, body] of Object.entries(bodies)) {
+  const lower = {
+    plain: `Carried from the harbor's fix.\n\n${line}`,
+    "running on from prose": `Carried.\n${line}`,
+    "a closed template comment": `<!-- Describe what this PR changes. -->\n\n${line}`,
+    "a comment over lines": `<!--\nA note for the author.\n-->\n\n${line}`,
+    "a closed comment holding a tag": `<!-- <details> -->\n\n${line}`,
+    "closed details": `<details><summary>Notes</summary>\n\nThe long notes.\n\n</details>\n\n${line}`,
+    "a code span holding a tag": `Use \`<details>\` for notes.\n\n${line}`,
+    "a code span naming the form": `The line is \`carries: <repo>#<n>\`, so:\n\n${line}`,
+    "a closed fence with no tag": `\`\`\`\nplain text\n\`\`\`\n\n${line}`,
+    "a closed fence holding a tag": `\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    "a < that starts nothing": `a < b\n\n${line}`,
+    "an autolink": `<https://example.com>\n\n${line}`,
+    "a void tag": `First.<br>\n\n${line}`,
+    "a self-closed tag": `<widget/>\n\n${line}`,
+    "a stray close tag": `</details>\n\n${line}`,
+    "a generic": `Map<string, number> holds it.\n\n${line}`,
+    "a comparison with no space": `Refuses when count<limit, as before.\n\n${line}`,
+    "a reference definition": `[x]: https://example.com\n\n${line}`,
+    "a span over lines closed above": `a \`b\nc\` d\n\n${line}`,
+    "a declaration span": `<!x\n${line}\n>`,
+    script: `<script>\n${line}\n</script>`,
+    style: `Carried.\n\n<style>\n\n${line}\n`,
+    "in a fence, an info string closing nothing": `\`\`\`\n\`\`\`js\n${line}\n\`\`\``,
+    "in a fence in a list, out of step": `- a\n  \`\`\`\nb\n\n\`\`\`\n\n${line}\n\n\`\`\``,
+    "above a setext line": `Carried.\n\n${line}\n---`,
+  };
+  const verdicts = {}, firsts = {}, links = {};
+  let n = 12000;
+  for (const [name, body] of Object.entries({ ...hidden, ...lower })) {
     const carrier = carrierOf(++n, 9601, { body });
-    refs[name] = carrier.ref;
+    links[name] = carrier.link;
     verdicts[name] = await fixedVerdict(carrier.link);
+    firsts[name] = await fixedVerdict(carrierOf(++n, 9601, { body: `${line}\n\n${body}` }).link);
   }
-  const html = (name) => `422 ${refs[name]}'s carries: line is inside or below HTML the office does not read, which may hide it when the pull request is read: put it above any HTML`;
-  const runsOn = (name) => `422 ${refs[name]}'s carries: line runs on from the text above it, which can hide it when the pull request is read: leave a blank line above it`;
-  const fenced = (name) => `422 ${refs[name]}'s carries: line is inside a code block`;
-  assert.deepEqual(verdicts, {
-    "a self-closed details": html("a self-closed details"),
-    "a /> inside an attribute": html("a /> inside an attribute"),
-    "an escaped backtick": html("an escaped backtick"),
-    "an autolink taking the backtick": html("an autolink taking the backtick"),
-    "a tag taking the backtick": html("a tag taking the backtick"),
-    "an hr's block, then a span": html("an hr's block, then a span"),
-    "a br's block, then a span": html("a br's block, then a span"),
-    "a close tag's block, then a span": html("a close tag's block, then a span"),
-    "an hr's block, then a fence": html("an hr's block, then a fence"),
-    "a self-closed tag's block, then a fence": html("a self-closed tag's block, then a fence"),
-    "details": html("details"),
-    "details, split": html("details, split"),
-    "a comment closed early by <!-->": html("a comment closed early by <!-->"),
-    "a comment closed early by <!--->": html("a comment closed early by <!--->"),
-    "a comment closed early by --!>": html("a comment closed early by --!>"),
-    "a comment closed early, a tag on its own line": html("a comment closed early, a tag on its own line"),
-    "a comment opened in a fence a list ended": `422 ${refs["a comment opened in a fence a list ended"]}'s carries: line is inside an HTML comment, hidden when the pull request is read`,
-    "a tag in a fence a list ended": html("a tag in a fence a list ended"),
-    "a close tag holding the line in an attribute": html("a close tag holding the line in an attribute"),
-    "a tag on a comment's closing line": html("a tag on a comment's closing line"),
-    "a tag after a closed comment": html("a tag after a closed comment"),
-    "details with attributes, split": html("details with attributes, split"),
-    "script, split": html("script, split"),
-    "processing instruction": html("processing instruction"),
-    "declaration span": html("declaration span"),
-    cdata: html("cdata"),
-    "processing instruction, a > before its end": html("processing instruction, a > before its end"),
-    "cdata, a > before its end": html("cdata, a > before its end"),
-    "processing instruction, blank lines": html("processing instruction, blank lines"),
-    "declaration span, blank lines": html("declaration span, blank lines"),
-    "cdata, blank lines": html("cdata, blank lines"),
-    "close tag in a code span": html("close tag in a code span"),
-    "close tag in a code span over lines": html("close tag in a code span over lines"),
-    "close tag in a fence": html("close tag in a fence"),
-    "close tag, indented as code": html("close tag, indented as code"),
-    "close tag in a link title": html("close tag in a link title"),
-    "start tag past a run with no partner": html("start tag past a run with no partner"),
-    "start tag past a span over lines": html("start tag past a span over lines"),
-    "start tag past a line that is no fence": html("start tag past a line that is no fence"),
-    "cost, a code span holding a tag": html("cost, a code span holding a tag"),
-    "cost, a double-backtick span holding a tag": html("cost, a double-backtick span holding a tag"),
-    "cost, a closed fence holding a tag": html("cost, a closed fence holding a tag"),
-    "cost, a closed fence holding a comment": html("cost, a closed fence holding a comment"),
-    "cost, a closed comment holding a tag": html("cost, a closed comment holding a tag"),
-    "cost, a comment over lines holding a tag": html("cost, a comment over lines holding a tag"),
-    "cost, an autolink": html("cost, an autolink"),
-    "cost, an email autolink": html("cost, an email autolink"),
-    "cost, a void tag": html("cost, a void tag"),
-    "cost, a self-closed tag": html("cost, a self-closed tag"),
-    "cost, a stray close tag": html("cost, a stray close tag"),
-    "cost, a stray close tag, split": html("cost, a stray close tag, split"),
-    "cost, a generic": html("cost, a generic"),
-    "cost, a comparison with no space": html("cost, a comparison with no space"),
-    "cost, a complete processing instruction": html("cost, a complete processing instruction"),
-    "cost, an escaped <": html("cost, an escaped <"),
-    "cost, no carry meant, the word below a void tag": html("cost, no carry meant, the word below a void tag"),
-    "reference title": runsOn("reference title"),
-    "reference title, label over lines": runsOn("reference title, label over lines"),
-    "reference title, in a list": runsOn("reference title, in a list"),
-    "link title": runsOn("link title"),
-    "image alt": runsOn("image alt"),
-    "running on from prose": runsOn("running on from prose"),
-    "fence, an info string closes nothing": fenced("fence, an info string closes nothing"),
-    "fence, opened on a line after one that is no fence": fenced("fence, opened on a line after one that is no fence"),
-    "visible, a plain line": "ok ada",
-    "visible, the first line": "ok ada",
-    "visible, a < that starts nothing": "ok ada",
-    "visible, a < before a space": "ok ada",
-    "visible, a < before a digit": "ok ada",
-    "visible, a < before an underscore": "ok ada",
-    "visible, an empty <>": "ok ada",
-    "visible, a tag written as entities": "ok ada",
-    "visible, a closed template comment": "ok ada",
-    "visible, an empty comment": "ok ada",
-    "visible, a comment over lines": "ok ada",
-    "visible, two comments on a line": "ok ada",
-    "visible, a closed fence with no tag": "ok ada",
-    "visible, a closed tilde fence with no tag": "ok ada",
-    "visible, a reference definition": "ok ada",
-    "visible, a reference title closed above": "ok ada",
-    "visible, a span over lines closed above": "ok ada",
-    "visible, above details": "ok ada",
-  });
+  const names = Object.keys(links);
+  assert.equal(names.length, Object.keys(hidden).length + Object.keys(lower).length, "no row shares a name");
+  assert.deepEqual(verdicts, Object.fromEntries(names.map((name) => [name, `422 ${links[name]} was written by a founder's account, GitHub account wright-starforge (id 306351151), and a founder's work credits only wright or keemin`])),
+    "a line below the first is plain text, so the old rule judges the carrier");
+  assert.deepEqual(firsts, Object.fromEntries(names.map((name) => [name, "ok ada"])), "nothing below a first line takes its credit away");
+});
+
+test("18 · a credit refused because there's no declaration says a carry is declared on the body's first line, whoever's carrier it is; and an honest PR that uses the word is plain text: it refuses nobody, whatever stands above it", async () => {
+  const body = "Carried.\n\ncarries: office#9501";
+  adaFix(9501);
+  const hints = {};
+  for (const [who, n] of [["wright", 9502], ["rivetApp", 9503], ["finn", 9504]]) {
+    const { link } = carryPull(who, { n, body });
+    setup();
+    await toBriefed();
+    await assert.rejects(advanceAtTown({ post: ID, ...FIX({ credit: "ada", link }) }, WRIGHT, at17), (e) => { hints[who] = e.code === 422 && /first line/.test(e.hint); return true; });
+  }
+  assert.deepEqual(hints, { wright: true, rivetApp: true, finn: true }, "LAW (Wright, 2026-11-06): the reason says a carry is declared on the body's first line");
+  // an honest resident's own fix, using the word: each credits her, as it would with no such line
+  const honest = {
+    "below a void tag": "First.<br>\n\nThis carries: the fix for #4441",
+    "below an element": "<details>log</details>\n\nThis carries: the fix for #4441",
+    "a comment": "<!-- note: carries: see #12 -->",
+    "the first line, no declaration": "Carries: nothing of note",
+    "a line of the form, lower": "The fix.\n\ncarries: office#9501",
+  };
+  const verdicts = {};
+  let n = 9510;
+  for (const [name, text] of Object.entries(honest)) verdicts[name] = await fixedVerdict(carryPull("ada", { n: ++n, body: text }).link);
+  assert.deepEqual(verdicts, Object.fromEntries(Object.keys(honest).map((name) => [name, "ok ada"])));
+});
+
+test("18 · (a text pin, labelled: it reads the doc, not behaviour) the contract's carried-fix bullet says the declaration is the body's first line, and that a line below is plain text", () => {
+  const doc = readFileSync(new URL("../docs/posts-contract.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const [bullet] = doc.split("\n").filter((l) => l.startsWith("  - **A carried fix credits the carried PR's author"));
+  assert.match(bullet, /\bfirst line\b/);
+  assert.match(bullet, /\bplain text\b/);
+  assert.doesNotMatch(bullet, /line of its own|could start markup/, "the old scan's words are gone");
 });
 
 test("18 · the carried author is judged as any author: another household's account, an unbound one and a founder's each refuse, naming the carried PR and its carrier, and write nothing", async () => {
@@ -2629,7 +2601,7 @@ test("20 · a recredit of fixed by an App's PR may name wright, under the same j
 });
 
 test("20 · with a carry: an App's merged carrier credits the resident it carries, and an App's carried PR earns wright and no resident", async () => {
-  const body = (n) => `Carried.\n\ncarries: office#${n}`;
+  const body = (n) => `carries: office#${n}\n\nCarried.`;
   const carrierDiff = greeting("a b", { at: 7, index: "6666666..2222222" });
   const adas = adaFix(9711);
   const appCarrier = carryPull("rivetApp", { n: 9712, body: body(adas.n), diff: carrierDiff });
