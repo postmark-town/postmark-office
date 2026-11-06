@@ -27,7 +27,7 @@
 // tag only by READING the tag, and this tool is that reader: run it after any
 // bless and it writes exactly the tags the table lacks; run it at the ship and
 // it writes S1 through S71. WHO RUNS IT (Wright-ruled 2026-09-17, on the lane's
-// stop on shape): `deploy/office-tick.sh`, every 15 minutes, right after the
+// stop on shape): `deploy/office-keep.sh`, every 15 minutes, right after the
 // world fetch that carries the tag in — `--apply --prod --quiet`, non-fatal,
 // its one receipt line in the tick's journal. So the table is as current as
 // the office's tick, at most ~15 minutes behind a bless, and the twin says so.

@@ -20,7 +20,7 @@
 //
 // The world half is postmark-world#146: `resolveConsent({ …, townWords })`
 // takes the map `townWordsOf` builds here. Wiring it into the clearing is
-// POS-362's; the settlement reads `townWordsAtOffice()` below.
+// POS-362's; the settlement reads `townWordsOf` directly (world-settlement.mjs § vetoesFrom).
 //
 // ── WHAT A "VERSION" IS ─────────────────────────────────────────────────────
 //
@@ -374,7 +374,7 @@ const isTownRow = (r) => r?.actor === TOWN_SPEAKER && r?.payload?.as === AS_TOWN
  * version is absent, so an amendment puts the mark back to awaiting the town.
  *
  * World #146's `resolveConsent({ …, townWords })` reads exactly this. The
- * settlement reads it through `townWordsAtOffice` (POS-362 wires it).
+ * settlement calls it directly (world-settlement.mjs § vetoesFrom).
  */
 export function townWordsOf(rows, { versions = null } = {}) {
   const latest = new Map();
@@ -388,18 +388,6 @@ export function townWordsOf(rows, { versions = null } = {}) {
     if (later) latest.set(r.object, r);
   }
   return new Map([...latest].map(([id, r]) => [id, r.payload.stance]));
-}
-
-/**
- * The town's words as the settlement will read them: the stance rows from the
- * record, their versions from the store. `{ townWords }` or `{ unreachable }`.
- */
-export async function townWordsAtOffice({ rows = null, versionsQuery = undefined } = {}) {
-  const all = rows ?? await (await import("./world-stance.mjs")).stanceRows();
-  const town = all.filter(isTownRow);
-  const read = await readVersions(town.map((r) => r.object), { query: versionsQuery });
-  if (read.unreachable) return { unreachable: read.unreachable };
-  return { townWords: townWordsOf(town, { versions: read.versions }) };
 }
 
 // ── who a mark awaits ───────────────────────────────────────────────────────

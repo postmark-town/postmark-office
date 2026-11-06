@@ -136,7 +136,8 @@ test("7 · open: another household's holder that is not open refuses at the door
 
 test("a holder must be published and must hold: a draft and a plain thing refuse, nothing made", async () => {
   const w = world();
-  await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: "sbx-cy/a-draft" }), (e) => e.code === 404 && /a draft holds nothing yet/.test(e.hint));
+  // WLD-138 F3: the words say what is true of a holder not on the world (a full one set down keeps what it holds)
+  await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: "sbx-cy/a-draft" }), (e) => e.code === 404 && /nothing goes in or comes out until it publishes/.test(e.hint) && !/a draft holds nothing yet/.test(e.hint));
   await assert.rejects(go(w, "make", { kind: "pocket-comet", count: 1, to: "sbx-ana/a-lamp" }), (e) => /holds nothing/.test(e.defect));
   assert.equal(w.acts.length, 0);
 });
@@ -440,7 +441,8 @@ test("B2 · [source pin, not a run] the withdraw-only-when-empty guard and the f
   const { readFileSync } = await import("node:fs");
   const world = readFileSync(new URL("../src/world.mjs", import.meta.url), "utf8");
   const hold = readFileSync(new URL("../src/world-hold.mjs", import.meta.url), "utf8");
-  assert.match(world, /const isChest = \(await import\("\.\/kind-holding\.mjs"\)\)\.isHolderMark\(/, "journalWithdraw's empty guard is keyed on the holder property");
+  // WLD-138 B: excepting only `contentsKept`, whose guard proves in the same transaction that nothing is stranded (set-down-return.mjs)
+  assert.match(world, /const isChest = !contentsKept && \(await import\("\.\/kind-holding\.mjs"\)\)\.isHolderMark\(/, "journalWithdraw's empty guard is keyed on the holder property");
   assert.match(hold, /!\(await import\("\.\/kind-holding\.mjs"\)\)\.portableMark\(m, classProperty\)/, "the fixed-thing refusal reads thing/portable");
   assert.doesNotMatch(hold, /markClassOf\(m\) === "chest" && m\.portable === false/);
 });

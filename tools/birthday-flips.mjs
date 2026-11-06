@@ -220,9 +220,10 @@ for (const f of FLIPS) {
   const path = join(root, f.file);
   const original = readFileSync(path, "utf8");
   // Line endings normalised before the edit — see arena-flips.mjs for the full
-  // note. Short version: a multi-line flip string is written with a newline, a
-  // CRLF checkout holds a carriage return too, the match silently fails, and the
-  // runner says "the edit changed nothing" without saying which kind of nothing.
+  // note (arena-flips.mjs was deleted in dd402ca1, 2026-09-30; read it at
+  // dd402ca1^). Short version: a multi-line flip string is written with a
+  // newline, a CRLF checkout holds a carriage return too, the match silently
+  // fails, and the runner says "the edit changed nothing" without saying which kind of nothing.
   // The same flip was red in one worktree and inert in another over identical
   // source. The tree is restored from `original` below either way.
   const source = original.includes("\r\n") ? original.split("\r\n").join("\n") : original;

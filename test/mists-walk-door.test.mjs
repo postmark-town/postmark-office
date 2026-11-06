@@ -158,11 +158,83 @@ test("the signpost is findable: `find: \"old track\"` ranks the-town/the-old-tra
   assert.equal(found.hits[0].name, "the Old Track");
 });
 
-test("against the world clone, once it carries the export: Sol's road is still refused, and is now told the track", { skip: !HAS_ROAD && WHY_NOT }, async (t) => {
+// ── WLD-134 (Darko 2026-10-30 09:59 EDT, "Add from crossing"): THE WAY TO THE SPIRE PARTS AT CROSSING 282 (POS-896) ──
+// Until this change the case below read the last standing crossing (282) off the pinned skeleton and expected Sol's
+// diagonal (3198.9, -2907.5) → (3735, -4065) REFUSED. At the world pin that carries WLD-134 two clearings are parted
+// FROM crossing 282, "the way to the Spire" (3850, -4263, r 935) among them, so at 282 that whole diagonal lies on clear
+// ground: the clear box up to the wall's face at y -3840, then the one convex disc from there to the destination (the
+// face point is 476 m from the disc's centre and the destination 229 m, the disc's radius 935). Not the endpoint alone:
+// the engine reads the entire segment (a wall endpoint inside a disc says nothing about the stretch between). The
+// movement exception for the old track (KEPT_AIR) is a separate, movement-only rule (WLD-6): nothing here reads sight
+// or paint as permission to walk. At crossing 281 the clearing has not parted, so the same road is refused as it was.
+//
+// THE INPUTS ARE THIS FILE'S OWN: a mists record spelled out below (the world's border, schedule and the two clearings as
+// numbers), so a later move of the world's skeleton cannot move this case; what is read from the clone is the ENGINE (the
+// code under test). It skips, by its title, on an engine without WLD-134's `from_crossing` (the pin before it).
+const PARTING = 282;
+const MISTS = {
+  border_m: { minX: -4600, minY: -4600, maxX: 5850, maxY: 9700 },
+  fringe_m: 400, wall_sight_m: 20,
+  density: { from: 0.55, to: 0.95, power: 2 },
+  schedule: [{ crossing: 244, front_m: 0, veil: 0.1 }, { crossing: 272, front_m: 390, veil: 0.3 }, { crossing: PARTING, front_m: 760, veil: 0.5 }],
+  clearings_m: [
+    { id: "invented-spire", x: 3850, y: -5500, r_m: 821, from_crossing: PARTING },
+    { id: "invented-way", x: 3850, y: -4263, r_m: 935, from_crossing: PARTING },
+  ],
+};
+const SOL_FROM = { x: 3198.9, y: -2907.5 }, SOL_TO = { x: 3735, y: -4065 };
+const HAS_PARTING = HAS_ROAD && readFileSync(ENGINE, "utf8").includes("from_crossing");
+const WHY_NO_PARTING = !HAS_ROAD ? WHY_NOT : "the pinned world engine predates WLD-134's from_crossing (clearings parted from a crossing); the pin moves to it with the world's merge";
+const road = (from, to, crossing) => mistsOnTheRoad(CLONE, { mists: MISTS }, from, to, crossing);
+const clearingsAt = (c) => MISTS.clearings_m.filter((k) => c >= k.from_crossing);
+const inAnyClearing = (p, c) => clearingsAt(c).some((k) => Math.hypot(p.x - k.x, p.y - k.y) <= k.r_m);
+/** n+1 points along the segment: the entire path, not its endpoints. */
+const along = (a, b, n = 200) => Array.from({ length: n + 1 }, (_, i) => ({ x: a.x + (b.x - a.x) * i / n, y: a.y + (b.y - a.y) * i / n }));
+
+test("WLD-134 · Sol's whole diagonal: refused at 281 (the way not yet parted), walked at 282 (every point of it on clear ground)", { skip: !HAS_PARTING && WHY_NO_PARTING }, async () => {
+  const eng = await import(pathToFileURL(ENGINE).href);
+  const at281 = await road(SOL_FROM, SOL_TO, PARTING - 1);
+  assert.ok(at281.refused, "281: the clearing has not parted, so the diagonal into the wall is refused");
+  const face281 = eng.mistsAt(PARTING - 1, MISTS).clear.minY;
+  assert.ok(Math.abs(at281.refused.y - face281) <= 2, `281: it is refused where the road meets the wall's face (${at281.refused.y} vs ${face281})`);
+  assert.ok(along(SOL_FROM, SOL_TO).some((p) => eng.mistsHere(p, eng.mistsAt(PARTING - 1, MISTS)).inWall), "281: some stretch of the segment is in the wall");
+
+  const at282 = await road(SOL_FROM, SOL_TO, PARTING);
+  assert.ok(!at282.refused, `282: the whole diagonal is clear ground, not refused (${JSON.stringify(at282)})`);
+  const m282 = eng.mistsAt(PARTING, MISTS);
+  assert.ok(along(SOL_FROM, SOL_TO).every((p) => !eng.mistsHere(p, m282).inWall), "282: no point of the entire segment is in the wall");
+  assert.ok(inAnyClearing(SOL_TO, PARTING), "282: the destination is inside a parted clearing (the precondition of the case)");
+  assert.ok(!inAnyClearing(SOL_TO, PARTING - 1), "281: the same destination is in no active clearing");
+});
+
+test("WLD-134 · the rim pair: 1 m inside the parted way is walked at 282 and refused at 281; 1 m outside is refused at both", { skip: !HAS_PARTING && WHY_NO_PARTING }, async () => {
+  const way = MISTS.clearings_m.find((k) => k.id === "invented-way");
+  const inside = { x: way.x + way.r_m - 1, y: way.y }, outside = { x: way.x + way.r_m + 1, y: way.y };
+  assert.ok(inAnyClearing(inside, PARTING) && !inAnyClearing(outside, PARTING), "the pair straddles the rim");
+  assert.ok(!(await road(SOL_FROM, inside, PARTING)).refused, "inside the rim at 282: walked");
+  assert.ok((await road(SOL_FROM, inside, PARTING - 1)).refused, "inside the rim at 281: refused");
+  assert.ok((await road(SOL_FROM, outside, PARTING)).refused, "1 m outside the rim at 282: refused");
+  assert.ok((await road(SOL_FROM, outside, PARTING - 1)).refused, "outside at 281: refused");
+});
+
+test("WLD-134 · a current negative outside ALL active clearings and off the old track: a diagonal into the wall at 282 is still refused", { skip: !HAS_PARTING && WHY_NO_PARTING }, async () => {
+  const eng = await import(pathToFileURL(ENGINE).href);
+  const far = { x: 2400, y: -4300 };
+  assert.ok(!inAnyClearing(far, PARTING), "outside every clearing active at 282");
+  assert.ok(!(eng.KEPT_AIR ?? []).some((b) => far.x >= b.minX && far.x <= b.maxX && far.y >= b.minY && far.y <= b.maxY), "and not on the old track");
+  const r = await road(SOL_FROM, far, PARTING);
+  assert.ok(r.refused, "refused");
+  assert.ok(Math.abs(r.refused.y - eng.mistsAt(PARTING, MISTS).clear.minY) <= 2, "at the wall's face");
+});
+
+test("WLD-134 · the track is still named on the 281 refusal: the sentence is the engine's kept air in plain words", { skip: !HAS_PARTING && WHY_NO_PARTING }, async (t) => {
   const eng = await import(pathToFileURL(ENGINE).href);
   if (!eng.KEPT_AIR) return t.skip("the pinned world engine predates the KEPT_AIR export (WLD-6 part 2); the pin moves to it with the world's merge");
-  const last = lastStandingCrossing(SKELETON.mists);
-  const road = await mistsOnTheRoad(CLONE, SKELETON, { x: 3198.9, y: -2907.5 }, { x: 3735, y: -4065 }, last);
-  assert.ok(road.refused, "who may walk where is unchanged: the diagonal is still refused");
-  assert.equal(await mistsTrackHint(CLONE, road.refused, last), SENTENCE);
+  const refused = (await road(SOL_FROM, SOL_TO, PARTING - 1)).refused;
+  assert.ok(refused, "refused at 281 (the precondition)");
+  assert.equal(await mistsTrackHint(CLONE, refused, PARTING - 1), SENTENCE);
+  // and off the track the old hint stands whole: the far negative is refused with no sentence
+  const farRefused = (await road(SOL_FROM, { x: -3000, y: -4300 }, PARTING)).refused;
+  assert.ok(farRefused);
+  assert.equal(await mistsTrackHint(CLONE, farRefused, PARTING), null, "a refusal far from the track names no track");
 });

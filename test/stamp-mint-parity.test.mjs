@@ -28,13 +28,14 @@
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startStore } from "./helpers/embedded-store.mjs";
 import { rowsFromRegistry } from "../src/registry-rows.mjs";
-import { mintInputsVia, writeMintInputs } from "../src/mint-inputs.mjs";
+import { keyBaseOf, mintInputsVia, writeMintInputs } from "../src/mint-inputs.mjs";
 import { stampLinesVia, syncStampLinesVia, verifyStampLinesVia } from "../src/stamp-lines.mjs";
 import { parityOf } from "../world2/tools/stamp-mint-parity.mjs";
 import { snapshotFromStore } from "../world2/tools/quest-snapshot-run.mjs";
@@ -97,13 +98,35 @@ test("the store's chain verifies on its own and is its export byte for byte", as
   assert.equal(v.held, v.exported);
 });
 
+// ── WHICH PIN IS ACTIVE (POS-896) — the oracle's own spelling of the ledger's rule ─────────────────────────────────────────────
+// LAW (tools/stamp-mint.mjs § householdKeys): "a pin whose own `pinned:` date falls ON OR AFTER the earliest sealed `registry:` line
+// for that handle is INERT HERE … A pin dated BEFORE the line (or carrying no `pinned:` date at all) is the genesis fact the line was
+// written on top of, and it stands." The ledger outranks the file, as of the sealed line's date: this is the AS-OF key domain, so
+// the earliest sealed date comes from the town's own `parseLaws` revisions, not from the current membership of any house.
+const sealedOf = (entries) => {
+  const out = new Map();
+  for (const r of engine.parseLaws(entries).revisions) { const prev = out.get(r.handle); if (!prev || r.date < prev) out.set(r.handle, r.date); }
+  return out;
+};
+/** A pin counts for a handle's key unless a sealed registry line for it is dated on or before the pin. */
+const pinIsActive = (pins, sealed, handle) => { const line = sealed.get(handle), pinned = pins[handle]?.pinned; return !(line && pinned && pinned >= line); };
+/** Handles on the roll with a pin that counts, sorted (never the first key an object happens to hold; an integer-like key sorts first in JS). */
+const activePinHandles = (inputs, entries) => {
+  const sealed = sealedOf(entries);
+  return Object.keys(inputs.pins).filter((h) => inputs.rooms.has(h) && inputs.pins[h]?.id && pinIsActive(inputs.pins, sealed, h)).sort();
+};
+
 test("the gate can fail: a pin missing from the store reds the base; a delivery's pays dropped reds the deliveries", async (t) => {
   if (skip) return t.skip(skip);
   const inputs = await mintInputsVia(office);
   const entries = await stampLinesVia(office);
-  // Every room on the live roll is pinned, so the store loses one pin: that
-  // room then keys by its ADDRESS login or as solo, which the file does not.
-  const handle = Object.keys(inputs.pins).find((h) => inputs.rooms.has(h) && inputs.pins[h]?.id);
+  // The store loses one ACTIVE pin: that room then keys by its ADDRESS login or as solo, which the file does not.
+  // The handle is chosen by the pin's status in the ledger's own domain (activePinHandles, below), never by the first key of an
+  // object: a pin dated on or after its handle's earliest sealed registry line is INERT, and removing an inert pin changes no
+  // key on either side, so a gate that removed one could only ever report parity (POS-896).
+  const handle = activePinHandles(inputs, entries)[0];
+  assert.ok(handle, "the live roll has at least one active pin, or this case proves nothing");
+  assert.equal(pinIsActive(inputs.pins, sealedOf(entries), handle), true, `${handle}'s pin is active (the precondition of the case)`);
   const pins = { ...inputs.pins }; delete pins[handle];
   const r1 = parityOf(engine, CLONE, { ...inputs, pins, entries });
   assert.equal(r1.ok, false);
@@ -132,7 +155,9 @@ test("the quest gate can fail: a pin missing from the store moves the folds", as
   if (questSkip()) return t.skip(questSkip());
   const inputs = await mintInputsVia(office);
   const entries = await stampLinesVia(office);
-  const handle = Object.keys(inputs.pins).find((h) => inputs.rooms.has(h) && inputs.pins[h]?.id);
+  const handle = activePinHandles(inputs, entries)[0];
+  assert.ok(handle, "the live roll has at least one active pin, or this case proves nothing");
+  assert.equal(pinIsActive(inputs.pins, sealedOf(entries), handle), true, `${handle}'s pin is active (the precondition of the case)`);
   const pins = { ...inputs.pins }; delete pins[handle];
   const r = parityOf(engine, CLONE, { ...inputs, pins, entries }, { quests, today: report.quests.today });
   assert.equal(r.ok, false);
@@ -171,3 +196,92 @@ test("the snapshot runner reads the store: a pin the store loses moves its bytes
   }
 });
 const b0Key = (bars, h) => bars.find((b) => b.residents.includes(h))?.key;
+
+// ── THE INVENTED CONTROLS (POS-896): an ACTIVE pin, an INERT pin, and an INERT numeric-looking handle, on a checkout this file writes ──
+// The two "gate can fail" cases above run on the pinned town's live ledger, so which pin they remove depends on that ledger. These
+// cases hold the ledger's rule fixed instead, on a few invented handles: removing an ACTIVE pin from the store must red the base for
+// that handle (and only it), removing an INERT pin must not (it keys nothing on either side), and the selector must not be fooled by
+// an inert handle that happens to sort or order first. The retired selector (the first object key with a room and a pin) is kept
+// below only to show what it picked: an inert pin whose removal can never red anything.
+const SEAL_DATE = "2026-10-17";
+const INVENTED_PINS = {
+  "1234": { id: 9003, login: "inv-numeric-gh", pinned: SEAL_DATE },            // numeric-looking, INERT: pinned on its sealed line's date
+  "inv-active": { id: 9001, login: "inv-active-gh", pinned: "2026-07-05" },     // no sealed line: ACTIVE
+  "inv-inert": { id: 9002, login: "inv-inert-gh", pinned: SEAL_DATE },         // pinned on its sealed line's date: INERT
+};
+const INVENTED_ROOMS = new Map([["1234", "inv-numeric-gh"], ["inv-active", "inv-active-gh"], ["inv-inert", "inv-inert-gh"], ["inv-free", null]]);
+
+/** An invented town checkout on disk (pins, rooms, a sealed ledger, an empty mail ledger) and the store-side inputs that match it. */
+function withInventedCheckout(fn) {
+  const dir = mkdtempSync(join(tmpdir(), "mint-parity-invented-"));
+  try {
+    mkdirSync(join(dir, "tools"), { recursive: true });
+    writeFileSync(join(dir, "tools", "github-ids.json"), JSON.stringify(INVENTED_PINS));
+    for (const [room, login] of INVENTED_ROOMS) {
+      mkdirSync(join(dir, "WHITE_PAGES", room), { recursive: true });
+      writeFileSync(join(dir, "WHITE_PAGES", room, "ADDRESS.md"), login ? `---\ngithub: ${login}\n---\n` : "---\n---\n");
+    }
+    const ledger = [engine.rulesLine("2026-06-12"),
+      `- ${SEAL_DATE} · registry: inv-inert = hh:inv-house · sig: invented`,
+      `- ${SEAL_DATE} · registry: 1234 = hh:inv-other-house · sig: invented`].join("\n") + "\n";
+    writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), ledger);
+    writeFileSync(join(dir, "WHITE_PAGES", "mail-ledger.md"), "# mail ledger (invented)\n");
+    const entries = engine.parseStampLedger(ledger);
+    return fn({ dir, entries, inputs: { pins: { ...INVENTED_PINS }, rooms: new Map(INVENTED_ROOMS), mailLines: [] } });
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); }
+}
+const without = (pins, handle) => { const p = { ...pins }; delete p[handle]; return p; };
+
+test("invented · the control is live: with every pin present the store keys every handle as the file does", (t) => {
+  if (skip) return t.skip(skip);
+  withInventedCheckout(({ dir, entries, inputs }) => {
+    const r = parityOf(engine, dir, { ...inputs, entries });
+    assert.deepEqual(r.base.diffs, []);
+    assert.equal(r.base.handles, 4, "the four invented rooms are compared");
+  });
+});
+
+test("invented · removing the ACTIVE pin reds the base for that handle, and only it", (t) => {
+  if (skip) return t.skip(skip);
+  withInventedCheckout(({ dir, entries, inputs }) => {
+    assert.deepEqual(activePinHandles(inputs, entries), ["inv-active"], "the one active pin among the three");
+    const r = parityOf(engine, dir, { ...inputs, pins: without(inputs.pins, "inv-active"), entries });
+    assert.deepEqual(r.base.diffs, [{ handle: "inv-active", file: "gh:9001", store: "login:inv-active-gh" }]);
+  });
+});
+
+test("invented · removing an INERT pin, numeric-looking or not, reds nothing: it keys the handle on neither side", (t) => {
+  if (skip) return t.skip(skip);
+  withInventedCheckout(({ dir, entries, inputs }) => {
+    for (const handle of ["inv-inert", "1234"]) {
+      assert.equal(pinIsActive(inputs.pins, sealedOf(entries), handle), false, `${handle} is inert (the precondition)`);
+      assert.deepEqual(parityOf(engine, dir, { ...inputs, pins: without(inputs.pins, handle), entries }).base.diffs, [], `${handle}: no difference`);
+    }
+  });
+});
+
+test("invented · the retired selector picked the inert numeric handle first, and removing it could only report parity; the new one cannot", (t) => {
+  if (skip) return t.skip(skip);
+  withInventedCheckout(({ dir, entries, inputs }) => {
+    const retired = Object.keys(inputs.pins).find((h) => inputs.rooms.has(h) && inputs.pins[h]?.id);
+    assert.equal(retired, "1234", "an integer-like key is first in a JS object, whatever the order it was written in");
+    assert.deepEqual(parityOf(engine, dir, { ...inputs, pins: without(inputs.pins, retired), entries }).base.diffs, [], "so the old case could not red");
+    assert.equal(activePinHandles(inputs, entries)[0], "inv-active", "the new selector skips the inert handles, numeric or not");
+  });
+});
+
+test("invented · the quest gate moves the intended fold for an ACTIVE pin and not for an INERT one", (t) => {
+  if (skip) return t.skip(skip);
+  if (questSkip()) return t.skip(questSkip());
+  const textOf = (v) => JSON.stringify(v, (_, x) => (x instanceof Map ? [...x] : x));
+  withInventedCheckout(({ dir, entries, inputs }) => {
+    const today = quests.townDay();
+    const fileBase = engine.householdKeys(dir);
+    const progressOn = (pins) => textOf(quests.foldQuestProgress(dir, { today, base: keyBaseOf({ pins, rooms: inputs.rooms, sealed: sealedOf(entries) }) }));
+    const onFile = textOf(quests.foldQuestProgress(dir, { today, base: fileBase }));
+    assert.equal(progressOn(inputs.pins), onFile, "the control: every pin present, the fold is the file's");
+    assert.notEqual(progressOn(without(inputs.pins, "inv-active")), onFile, "an active pin gone moves foldQuestProgress");
+    assert.equal(progressOn(without(inputs.pins, "inv-inert")), onFile, "an inert pin gone does not");
+    assert.equal(progressOn(without(inputs.pins, "1234")), onFile, "nor does the inert numeric handle's");
+  });
+});

@@ -22,6 +22,7 @@ import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
+import { overlayRegistry, overlayCard, frontMatterScalar, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { currentCrossing } from "../src/crossings.mjs"; // the town clock the manifest serves
@@ -164,6 +165,19 @@ const RECORDED_AS = {
 // the answer must name a crossing between the clock's reading before the ask and
 // its reading after, and the record is held to that number; nothing else moves.
 const CLOCKED = { "REST /": (a) => a?.body?.["<json>"]?.crossing };
+// THE PINNED TOWN'S INPUTS, PUT BACK ON THE EXPECTED SIDE (POS-896). Three things in the recorded answers are the pinned town's, not
+// the fixture's, and move when the pin does: the quest list (the town's quest-registry.json), the pot postings that have no pot
+// (this fixture's store holds no pot at all, so every bounty id in that file is one), and wright's published card (the two fields
+// `architecture` and `note` of WHITE_PAGES/wright/ADDRESS.md, which the office reads from the clone). Each is bound here to the
+// pristine FILE, parsed by helpers/pos896-fixtures.mjs, never to what the store or `read_resident` answers; every other byte of
+// the record stands and is compared as before. The substitutions above are applied first and are untouched.
+const pristine = (was) => {
+  if (!TOWN) return was;
+  const rawQuests = JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests;
+  const card = readFileSync(join(TOWN, "WHITE_PAGES", "wright", "ADDRESS.md"), "utf8");
+  const fields = { architecture: frontMatterScalar(card, "architecture"), note: frontMatterScalar(card, "note") };
+  return overlayCard(overlayRegistry(was, { rawQuests, fixturePotIds: [] }), { handle: "wright", fields });
+};
 // the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one;
 // `asked` is the town clock's crossing read just before the ask
 const same = (what, label, answer, asked = null) => {
@@ -184,6 +198,7 @@ const same = (what, label, answer, asked = null) => {
     clocked(rec).number = n;
     was = JSON.stringify(rec);
   }
+  was = pristine(was);
   if (got === was) return;
   const d = firstDiff(was, got);
   assert.fail(`${what}: the answers part at ${d?.at}
@@ -261,4 +276,45 @@ test("every MCP index read answers as the unswitched office did", async (t) => {
     const b = await mcp("absent", tool, args);
     same(`${tool} ${JSON.stringify(args)}`, `MCP ${tool} ${JSON.stringify(args)}`, b);
   }
+});
+
+// ── THE DETECTORS (POS-896): an invented card, the pristine fields held fixed, one wrong answer per branch ────────────────────
+// The card here is invented (a made-up resident, a made-up house of text), never a real resident's. `pristine` binds exactly two
+// fields; these cases show that the binding reads the FILE, is exact about quoting, touches nothing else, and that a wrong answer is
+// named at its path against the unchanged expectation.
+const INV_CARD_FILE = [
+  "---", "handle: inv-resident", "architecture: a made-up substrate for a made-up mind", "note: 'it''s invented'", "kind: \"quoted: yes\"", "folded: >", "  not a scalar", "---", "# body", ""].join("\n");
+
+test("detector · the card's front matter is read by its own spelling: plain, single-quoted ('' is one '), double-quoted; a block scalar is refused by name", () => {
+  assert.equal(frontMatterScalar(INV_CARD_FILE, "architecture"), "a made-up substrate for a made-up mind");
+  assert.equal(frontMatterScalar(INV_CARD_FILE, "note"), "it's invented");
+  assert.equal(frontMatterScalar(INV_CARD_FILE, "kind"), "quoted: yes");
+  assert.throws(() => frontMatterScalar(INV_CARD_FILE, "folded"), /not a one-line scalar/);
+  assert.throws(() => frontMatterScalar(INV_CARD_FILE, "absent"), /no "absent:" in the front matter/);
+});
+
+const INV_RECORD = { handle: "inv-resident", address: { data: { handle: "inv-resident", architecture: "the old text", note: "the old note", joined: "2026-01-01" }, body: "# body" }, other: { handle: "someone-else", address: { data: { architecture: "theirs", note: "theirs too" } } } };
+const INV_FIELDS = { architecture: frontMatterScalar(INV_CARD_FILE, "architecture"), note: frontMatterScalar(INV_CARD_FILE, "note") };
+const invWant = () => overlayCard(steady(INV_RECORD), { handle: "inv-resident", fields: INV_FIELDS });
+
+test("detector · the overlay binds the two named fields of the named resident's card to the file and touches nothing else", () => {
+  const want = JSON.parse(invWant());
+  assert.equal(want.address.data.architecture, "a made-up substrate for a made-up mind");
+  assert.equal(want.address.data.note, "it's invented");
+  assert.equal(want.address.data.joined, "2026-01-01", "a field it does not name stands");
+  assert.deepEqual(want.other, INV_RECORD.other, "another resident's card (and its same-named fields) stands");
+  assert.deepEqual(Object.keys(want.address.data), Object.keys(INV_RECORD.address.data), "keys and their order stand");
+  assert.throws(() => overlayCard(steady(INV_RECORD), { handle: "inv-resident", fields: { nonexistent: "x" } }), /has no "nonexistent"/);
+});
+
+test("detector · each wrong ANSWER is named at its path against the fixed expectation: the old text, a missing field, a changed neighbour, a moved key", () => {
+  const want = invWant();
+  const right = () => structuredClone(JSON.parse(want));
+  const parts = (mutate) => { const a = right(); mutate(a); return firstDiffPath(steady(a), want); };
+  assert.equal(firstDiffPath(steady(right()), want), null, "the control: the right answer equals the expectation");
+  assert.equal(parts((a) => { a.address.data.architecture = INV_RECORD.address.data.architecture; }), "$.address.data.architecture", "the record's old text, not the file's");
+  assert.equal(parts((a) => { a.address.data.note = ""; }), "$.address.data.note", "an emptied note");
+  assert.equal(parts((a) => { delete a.address.data.note; }), "$.address.data.note", "a missing field");
+  assert.equal(parts((a) => { a.address.data.joined = "2026-01-02"; }), "$.address.data.joined", "a changed neighbour");
+  assert.equal(parts((a) => { a.other.address.data.architecture = "mine"; }), "$.other.address.data.architecture", "another resident's card changed");
 });

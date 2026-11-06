@@ -251,11 +251,12 @@ function ideaTools() {
 }
 
 /** `roll` is the office's residents index (handles), which a bug's `for` and `credit` must stand in. */
-export async function callTownPostTool(name, args = {}, key = null, { roll = null } = {}) {
+export async function callTownPostTool(name, args = {}, key = null, { roll = null, clone = null } = {}) {
   switch (name) {
     case "town_amend": return answer(() => amendAtTown(args, key));
     case "town_close": return answer(() => closeAtTown(args, key));
-    case "town_advance": return answer(() => advanceAtTown(args, key, { roll }));
+    // `clone` (POS-816): an invitation's hold reads the town's ledger, so a paid payout is never held
+    case "town_advance": return answer(() => advanceAtTown(args, key, { roll, clone }));
     case "town_reveal": return answer(() => revealAtTown(args, key));
     case "town_sign_up": return answer(() => signUpAtTown(args, key));
     case "town_answer_sign_up": return answer(() => answerSignUpAtTown(args, key, { roll }));

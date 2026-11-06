@@ -117,7 +117,8 @@ test("the store names the rehearsal's own standing parcels as covered ground, by
     const [row] = await s.q("clearing_job", "SELECT slug, geometry FROM marks WHERE kind = 'parcel' AND status = 'standing' AND slug = $1", [`rh-${crossed.run}-a/rh-${crossed.run}-ground`]);
     assert.ok(row, "the rehearsal's parcel stands in the store");
     const taken = groundTakenIn(s, OVERLAP, boxOf);
-    const own = /^the standing (parcel|sited) "rh-[0-9a-z]+-[ab]\/rh-[0-9a-z]+-(ground|by-hand|lamp)"$/;
+    // the by-hand parcel is the second house's (handle -c, POS-896); the ground and the lamp are the first's (-a)
+    const own = /^the standing (parcel|sited) "rh-[0-9a-z]+-[ac]\/rh-[0-9a-z]+-(ground|by-hand|lamp)"$/;
     // the place it stands on: covered by it, the lamp on it, or the by-hand parcel beside it (one answer, LIMIT 1)
     assert.match((await taken(groundOf(row.geometry.at, 25))) ?? "", own);
     // a parcel's width east, sharing only an edge: still covered (the operator is inclusive)

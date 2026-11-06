@@ -1,6 +1,6 @@
 // read-grammar.test.mjs — explain:, the read grammar's second move (POS-632).
 //
-// One table, three doors. These hold: the fixed shape; the tutorial at an
+// One table, four doors. These hold: the fixed shape; the tutorial at an
 // empty path; an unknown path refused with the list; and COVERAGE: every key a
 // bare read can carry has a row, so a new key with no explain reds here by
 // name. The world's coverage is the v2 read with every optional block filled;

@@ -250,7 +250,7 @@ export const ROUTE_ACTS = Object.freeze({
 // door, while every other read of your correspondence lives at `household`.
 // The household twin is not a second read: it takes the flat tool's own field
 // list (READ_FIELDS, which the flat tool's schema IS — mcp.mjs reads it from
-// here) and answers through the same function (queries.mjs § letterAnswer).
+// here) and answers through the same function (town-index-store.mjs § letterAnswer).
 // What the twin adds is its door's privacy, named here so the table says what
 // the second door is for: a letter your household sent or received.
 export const READ_FIELDS = Object.freeze({

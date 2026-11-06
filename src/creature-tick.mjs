@@ -3,11 +3,12 @@
 //
 // RULED (Darko, 2026-10-15 12:09 EDT, WLD-56 D1–D6, as recommended): per 12 h
 // window a wolf 2, a raven 4 and a bat 3, each at its own seeded minute, in the
-// 400 m fringe on the clear side of the Mists' wall, open country only. Each
-// lasts 12 h from its own spawn minute, then fades (withdraw, reason `faded`),
-// or leaves early if it flees (`fled`, the creature's own row, POS-637). So
-// creatures overlap across a crossing rather than turning over at once. No
-// movement in w44: a creature stands where it spawned.
+// 400 m fringe on the clear side of the Mists' wall, open country only. As
+// ruled, each lasted 12 h from its own spawn minute and then faded (withdraw,
+// reason `faded`; RETIRED, see the next paragraph), or left early if it fled
+// (`fled`, the creature's own row, POS-637). Spawn minutes still fall through
+// the 12 h window. Nothing turns over now that the fade is gone (the next
+// paragraph). No movement in w44: a creature stands where it spawned.
 //
 // THE FADE IS GONE: THE MISTS CREATURES GATHER (WLD-96; RULED, Darko 2026-10-21
 // 19:39 and 19:41 EDT). A spawn carries no `fades_at` and the tick writes no
@@ -76,6 +77,7 @@ import { settlementAtOrBefore } from "./world-forecast.mjs";
 import { errorSaid, faultLogged } from "./fault-words.mjs";
 import { CREATURE_CLASS, SPAWN_ACTION, WITHDRAW_ACTION, TELL_ACTION, UNSEAL_ACTION } from "./creatures.mjs";
 import { scopeSecret } from "./sealed.mjs";
+import { asPayload } from "./creature-bits.mjs";
 
 export const CREATURE_TICK_MS = 30_000;
 export const SEED_ACTION = "seed";
@@ -94,7 +96,6 @@ export const TICK_ROWS_SQL = `SELECT id::text AS id, at, actor, action, object, 
 export const PRIOR_ROW_SQL = `SELECT id::text AS id, at, actor, action, object, payload FROM acts
   WHERE class = '${CREATURE_CLASS}' AND action = $1 AND object = $2 ORDER BY acts.id LIMIT 1`;
 
-const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
 const isoOf = (t) => (t instanceof Date ? t.toISOString() : typeof t === "number" ? new Date(t).toISOString() : String(t));
 /** A store row as the world's fold reads it: `at` an ISO string, `payload` an object. */
 export const rowOf = (r) => ({ id: r.id == null ? null : String(r.id), at: isoOf(r.at), actor: r.actor, action: r.action, object: r.object, payload: asPayload(r.payload) });
@@ -143,7 +144,6 @@ export function cachedInputsAt(sha, opts = {}, load = windowInputsAt) {
   }
   return inputsCache.get(sha);
 }
-export function __resetInputsForTest() { inputsCache.clear(); }
 
 // ── the write: once, under a lock ───────────────────────────────────────────
 
@@ -466,6 +466,3 @@ export function startCreatureTick({ port, env = process.env, log = console, tick
 
 /** Tests only: stop the timer. */
 export function stopCreatureTick() { if (timer.handle) clearInterval(timer.handle); Object.assign(timer, { handle: null, running: false, last: null }); }
-
-/** The clock's last run, for an operator. */
-export const creatureTickLast = () => timer.last;

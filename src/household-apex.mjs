@@ -564,24 +564,24 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
  * action's shadow" and the two range over one set.
  *
  * At the world door the shadow read CARRIES the card: `{read, card, ...domain}`.
- * I tried that here and the doorstep bundle's falsifier refused it — the
- * bundle's law is that a segment IS the answer of the read its `serves` names,
- * and the doorstep composes `window` itself. Growing both the read and the
- * morning page to match would tax the one surface this branch exists to
- * lighten, and would move REST doorstep bytes.
+ * This door first refused that: the doorstep bundle's falsifier held that a
+ * segment IS the answer of the read its `serves` names, and the doorstep
+ * composes `window` itself, so a card on the read would have grown the morning
+ * page and moved REST doorstep bytes. The founder re-strung that law on
+ * 2026-08-31 (a segment carries the read's DOMAIN; the envelope is the apex's),
+ * and the shadow reads now carry the card (§ THE SHADOW READ, shadowReadAnswer).
  *
- * So the honest state, asserted rather than wished:
+ * So the state, asserted rather than wished (test/foyer-shrink.test.mjs, F7b
+ * and F7c):
  *
- *   • NINE acts have no read of their own; `read: "<act>"` answers their card.
- *   • THREE (`ACT_SHADOW_READS`) already own their name as a read, and keep it
- *     unchanged. Their cards ride the act's own answer and the bare index's
- *     field names — not a bare `read:`.
+ *   • The acts whose name is not also a read have no read of their own;
+ *     `read: "<act>"` answers their card. The suite pins how many.
+ *   • THREE (`ACT_SHADOW_READS`) own their name as a read. On the connector
+ *     skin (`slim`) the answer carries the card beside the domain; on REST it
+ *     is the frozen answer it always was.
  *
- * That asymmetry is real and it is the founder's to resolve, not mine: the
- * choices are to let the shadow reads carry the card (and pay it on the
- * doorstep), to rename three public reads, or to leave it as it stands. The
- * guard below states what IS true so the next reader is not misled by a
- * grammar that looks total and is not.
+ * The guards below keep this roster honest against the door, so the next
+ * reader is not misled by a grammar that looks total and is not.
  */
 export const ACT_SHADOW_READS = Object.freeze(
   HOUSEHOLD_DISPATCHABLE.filter((a) => Object.prototype.hasOwnProperty.call(HOUSEHOLD_READS, a)));
@@ -1056,7 +1056,7 @@ async function doBegin(fields, key, { odb }) {
     what_it_does_not_do: `Settle you ashore by itself — ${SETTLING_ASHORE}. Your human's click is the anchor, so completion here is necessary, never sufficient.`,
     note: "Calling begin again replaces the parked declaration; nothing is executed until the click.",
     ...(fromTown ? { from_town: { claimed: fromTown, note: "parked with your declaration; printed on your berth as your claim when your human co-signs" } } : {}),
-    ...(invitedBy ? { invited_by: { named: invitedBy, note: "parked with your declaration; when your human co-signs it is recorded publicly on your household's record, unless it names your own household, the founders' household (it never earns invitation stamps), a meep or nobody the town knows" } } : {}),
+    ...(invitedBy ? { invited_by: { named: invitedBy, note: "parked with your declaration; when your human co-signs it is recorded publicly on your household's record, unless it names your own household, the town's own household, a meep or nobody the town knows" } } : {}),
     ...(heardLine ? { heard_about: heardLine } : {}),
   };
 }
@@ -1154,11 +1154,11 @@ function actCard(act, db, ctx = {}, { human = false } = {}) {
 // `rest` is what a REST caller has always received and is returned verbatim off
 // the slim gate. That gate is not a new flag threaded for this feature — it is
 // the skin discriminator the foyer already rides, and it is load-bearing:
-// GET /household routes this same function (src/server.mjs:1126), so without it
+// GET /household routes this same function (src/server.mjs § GET /household), so without it
 // the parity walks onto a frozen consumer's ?read=address. CONTRACT.md § Breaking changes:
 // "REST: stable/simple for frozen consumers; MCP: renegotiated per session."
 //
-// NOTE for anyone tracing the falsifier: `callTool` (src/mcp.mjs:573) dispatches
+// NOTE for anyone tracing the falsifier: `callTool` (src/mcp.mjs § callTool, the household case) dispatches
 // household with `slim: true` ALWAYS, so the doorstep bundle's falsifier sees
 // the ENVELOPE, not the REST answer. There was never a version of this where
 // gating on slim hid the change from that test — which is why the law had to be
@@ -1209,9 +1209,11 @@ function cardOnBounce(what, ctx = {}) {
  * flat schemas; passing them down keeps the dependency a line, not a cycle).
  */
 export async function householdApex(args = {}, key = null, ctx = {}) {
-  // `asOf` rides the ctx (both skins pass it). `slim` rides the ctx for ONE
-  // read (`doorstep`), and only the MCP skin sets it, on purpose rather than
-  // by omission.
+  // `asOf` rides the ctx (both skins pass it). `slim` rides the ctx too, and
+  // only the MCP skin sets it, on purpose rather than by omission. It is read
+  // in several places, each noted where it is read: the bare foyer, the shadow
+  // reads' card (§ shadowReadAnswer, cardOnBounce), the `doorstep` read, and
+  // `send`'s receipt.
   const { db, clone, odb, pen, schemas, schemaRequired, asOf, canWrite, channel, slim = false } = ctx;
   // THE INDEX, PICKED ONCE (POS-268): the resident, window, house and doorstep
   // reads below answer from the store through `ix` (each index read its own
@@ -1595,22 +1597,23 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
   // ── read shadows ──────────────────────────────────────────────────────────
   if (reading) {
     const what = String(args.read).trim();
-    // ⚠ THE CARD DOES NOT RIDE A SHADOW READ, AND THE SUITE IS WHY.
+    // ⚠ THE CARD RIDES A SHADOW READ ON THE CONNECTOR SKIN ONLY, AND THE SUITE
+    // IS WHY (§ shadowReadAnswer; test/foyer-shrink.test.mjs F7c to F7c4).
     //
-    // I first attached each act's card to its shadow read, mirroring the world
-    // door's `{read, card, ...domain}`. The doorstep bundle's own falsifier
-    // caught it: "segment \"window\" drifted from household.window — the bundle
-    // is restating a read instead of carrying it". The bundle's law is that
-    // every segment IS the answer of the read its `serves` names, and the
-    // doorstep composes `window` from `windowRead` directly. Adding a key to
-    // the read and not to the segment breaks that law; adding it to BOTH grows
-    // the morning page, which is the surface this whole branch exists to make
-    // lighter, and changes REST doorstep bytes besides.
+    // The first attempt attached each act's card to its shadow read, mirroring
+    // the world door's `{read, card, ...domain}`, and the doorstep bundle's own
+    // falsifier caught it: the bundle's law was then that every segment IS the
+    // answer of the read its `serves` names, and the doorstep composes `window`
+    // from `windowRead` directly. Adding a key to the read and not to the
+    // segment broke that law; adding it to BOTH would grow the morning page and
+    // change REST doorstep bytes besides.
     //
-    // So `read: "address" | "home" | "window"` answer exactly what they always
-    // answered. What that costs is honest and is named in the handback: the
-    // world's grammar transplants for the NINE acts whose name is not also a
-    // read, and the remaining three need a call I do not get to make alone.
+    // The founder re-strung the law on 2026-08-31: a segment carries the read's
+    // DOMAIN, and the envelope is the apex's. So `read: "address" | "home" |
+    // "window"` answer the card beside the domain when `slim` is set (the MCP
+    // skin), and exactly what they always answered on REST. The world's grammar
+    // transplants for the acts whose name is not also a read, and these three
+    // are the ones that own their name as a read.
     // A READ TAKES FIELDS TOO, through the same do:/args: envelope the acts use
     // (the town apex's read branch has merged them since it opened). Until the
     // mail read landed, `handle` was the only field any household read wanted,
@@ -2006,13 +2009,6 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
         ...(Number.isFinite(Number(f.crossings)) ? { sinceCrossings: Number(f.crossings) } : {}) });
       return what === "rulings" ? { ...body, renamed: [renamedRow("read", "rulings", "outcomes")] } : body;
     }
-    // ── your marks and what stands behind each (2026-09-18, #2919) ──────────
-    //
-    // The docket says what is held behind a claim; the portfolio says what you
-    // own; neither says which of your PUBLISHED marks the next settlement would
-    // take back. This does, with the sweep's own inputs, and the doorstep's
-    // ninth segment points here. Scope as stances and rulings: bare is the
-    // whole house, a named handle narrows to one resident.
     // ── the earpiece's log (POS-209) · src/earpiece-store.mjs ──────────────
     // The resident's own wakes for one event, read inside their household's
     // transaction, so the row policy is what keeps them theirs.
@@ -2056,6 +2052,13 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     // ── the glance's blocks, each a read of its own name (POS-633 round 4) ──
     if (what === "waiting") return householdWaiting(key, ctx);
     if (what === "marks") return householdMarks({ state: f.state, limit: f.limit, offset: f.offset }, key, ctx);
+    // ── your marks and what stands behind each (2026-09-18, #2919) ──────────
+    //
+    // The docket says what is held behind a claim; the portfolio says what you
+    // own; neither says which of your PUBLISHED marks the next settlement would
+    // take back. This does, with the sweep's own inputs, and the doorstep's
+    // ninth segment points here. Scope as stances and rulings: bare is the
+    // whole house, a named handle narrows to one resident.
     if (what === "stakes") {
       const named = String(f.handle ?? "").trim();
       const held = [...(key?.handles ?? [])];
@@ -2434,7 +2437,6 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
     // founder's ruling — cross-door grammar is one grammar or it is not one.
     // The drift guard is HOUSEHOLD_READ_ENUM, asserted against the door's own
     // accepted set, so a new act cannot be born unadvertised.
-    // `examples` suggests the roster without constraining it.
     do: { type: "string", enum: HOUSEHOLD_DISPATCHABLE, description: "the act to perform — send (write a letter), stake-vote, stake, fund-verify, declare-stance-on (speak your ground's word on a mark laid over it: args { on, stance: \"welcomed\"|\"neutral\"|\"opposed\" }; see what is waiting with read: \"stances\"), host (put an event on the town's calendar: args { title, place, starts, ends }; with event: it amends yours), cancel-event, rsvp (args { event, harness?, budget? }), announce (args { event, text }), mark-all-read (args { handle? }), amend-letter (args { id, body }), withdraw-letter (args { id }), block and unblock (args { household }), address, address-fields, home, profile, window, add-resident, begin, declare. Omit to read your standing. Never rides with read:" },
     // ⚑ THE FIFTH PROSE SURFACE, DERIVED (repaired 2026-09-07, reviewer-found).
     // Commit 7 named the class — three hand-written surfaces enumerating one
@@ -2456,7 +2458,7 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
       + "The reads — "
       + HOUSEHOLD_READABLE.map((r) => `${r} (${HOUSEHOLD_READS[r]})`).join("; ")
       + ". Never rides with do:" },
-    // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
+    // POS-632: the read grammar's second move. One table for four doors (read-grammar.mjs).
     explain: { type: "string", description: "explain: \"<path>\" answers what any part of this door's bare read is for, in one fixed shape: { explains, what, detail?, deeper, changes } (changes: live, settled or weekly). The path is a key path into the read, like \"papers\" or \"next\". explain: \"\" is the tutorial. It answers docs, never data, and rides with no do: or read:." },
     args: { type: "object", description: "the act's or read's own fields — household { do: \"send\", args: { from: \"…\", to: \"…\", title: \"…\", body: \"…\" } }. Unknown fields bounce by name. On do: \"send\" and the five paper acts (address, address-fields, home, profile, window) it also takes an optional `nonce`: a retry key of your own choosing — make the same call twice with the same nonce and the second returns the FIRST call's receipt rather than acting twice.", additionalProperties: true },
     handle: { type: "string", description: "which of YOUR residents (defaults to your only one where it can)" },

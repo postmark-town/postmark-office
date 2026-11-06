@@ -46,8 +46,10 @@
 //               synthetic GitHub account, through the office's own key desk
 //               function, into the store's paperwork (on prod it is GitHub's
 //               OAuth dance, which a script cannot do)
-//   join        POST /households declares the rehearsal's house
-//   resident    POST /household add-resident: a house adding its own is bound at
+//   join        POST /households declares the rehearsal's house, and (POS-896) a
+//               second house, signed in the same way, whose first parcel the
+//               by-hand road takes
+//   resident   POST /household add-resident: a house adding its own is bound at
 //               admission (POS-297); where the door opens a join PR instead (a
 //               frozen gangway), the PR lands on this script's stub GitHub, its
 //               merge on the dev town clone, and the keeping tick's settle-pass binds it
@@ -61,8 +63,8 @@
 //               scheduled settlement waits for it (the box fires both at once)
 //   settle      settlement-auto.sh from the store, into a bare copy of the world
 //   bless       an annotated settlement tag on the copy, then settlements-backfill
-//   recovery    the clearing re-run refuses and moves nothing; a second claim
-//               settled BY HAND; a claim the clearing cannot file (the 10-04
+//   recovery    the clearing re-run refuses and moves nothing; the second house's
+//               first claim settled BY HAND; a claim the clearing cannot file (the 10-04
 //               instance, planted) refuses alone while its window locks and crosses
 //   sandbox     CI's `stamp sandbox` check is GREEN on the sha carried to dev
 //
@@ -448,6 +450,9 @@ export const CROSSING = [
     run: (ctx) => townJob(ctx, "tools/stamp-mint.mjs", ["--append", "--key", ctx.stampKey]) },
   { phase: "keep", name: "welcome", box: "deploy/welcome-pass.mjs", nonFatal: true,
     run: (ctx) => officeJob(ctx, "deploy/welcome-pass.mjs", ["--town", ctx.t.townClone, "--key", ctx.stampKey, "--date", ctx.today]) },
+  // Bring a neighbour (POS-816): after the welcome, as the keep tick runs it
+  { phase: "keep", name: "invite", box: "deploy/invite-pass.mjs", nonFatal: true,
+    run: (ctx) => officeJob(ctx, "deploy/invite-pass.mjs", ["--town", ctx.t.townClone, "--key", ctx.stampKey, "--date", ctx.today]) },
   { phase: "keep", name: "bug-stages", box: "tools/bug-stage-plan.mjs", nonFatal: true,
     run: (ctx) => officeJob(ctx, "tools/bug-stage-plan.mjs", ["--town", ctx.t.townClone, "--apply", "--quiet", "--key", ctx.stampKey]) },
   { phase: "keep", name: "ballots-in", box: "tools/ballots-backfill.mjs", nonFatal: true,
@@ -520,7 +525,8 @@ export function plan() {
         const { mintHouseholdKey } = await importFrom(join(ctx.t.officeRoot, "src", "oauth.mjs"));
         const { paperOnPool, paperworkPoolTypes } = await importFrom(join(ctx.t.officeRoot, "src", "paperwork.mjs"));
         const pool = new ctx.s.pg.Pool({ connectionString: ctx.t.urls.office_api, max: 1, types: paperworkPoolTypes(ctx.s.pg) });
-        try { ctx.key = await mintHouseholdKey(paperOnPool(pool), ctx.who.ghId, ctx.who.login); }
+        // the second house's account signs in the same way (its key is handed to the join below)
+        try { ctx.key = await mintHouseholdKey(paperOnPool(pool), ctx.who.ghId, ctx.who.login); ctx.key2 = await mintHouseholdKey(paperOnPool(pool), ctx.who.ghId2, ctx.who.login2); }
         finally { await pool.end(); }
         return door(ctx.t, "GET", "/me", { key: ctx.key });
       },
@@ -528,6 +534,8 @@ export function plan() {
         const p = [];
         const rows = await ctx.s.q("office_api", "SELECT kind FROM oauth_tokens WHERE gh_id = $1", [ctx.who.ghId]);
         if (rows.length !== 1) p.push(`the store holds ${rows.length} tokens for the rehearsal account, not 1`);
+        const rows2 = await ctx.s.q("office_api", "SELECT kind FROM oauth_tokens WHERE gh_id = $1", [ctx.who.ghId2]);
+        if (rows2.length !== 1) p.push(`the store holds ${rows2.length} tokens for the second house's account, not 1`);
         if (me.status !== 200 || me.body?.visitor !== true) p.push(`GET /me with the new key answered ${said(me)} ${JSON.stringify(me.body).slice(0, 200)}, not a visitor pass`);
         return p;
       },
@@ -536,14 +544,27 @@ export function plan() {
       id: "join",
       title: "POST /households declares the rehearsal's house",
       async run(ctx) {
-        return door(ctx.t, "POST", "/households", { key: ctx.key, body: {
+        const first = await door(ctx.t, "POST", "/households", { key: ctx.key, body: {
           handle: ctx.who.a, household: ctx.who.house,
           card: `${ctx.who.a} is a dev rehearsal resident (POS-354, run ${ctx.run}). Nobody lives here; the next freshen forgets it.`,
         } });
+        // The second house (POS-896), declared the same way and before the crossing, so the town index carries it ashore as it carries the first:
+        // the by-hand road's parcel is its first.
+        const second = await door(ctx.t, "POST", "/households", { key: ctx.key2, body: {
+          handle: ctx.who.c, household: ctx.who.house2,
+          card: `${ctx.who.c} is the dev rehearsal's second house (POS-896, run ${ctx.run}). Nobody lives here; the next freshen forgets it.`,
+        } });
+        return { first, second };
       },
-      async check(ctx, r, rec) {
+      async check(ctx, { first: r, second }, rec) {
         const p = [];
         if (r.status !== 201) return [`POST /households answered ${said(r)}`];
+        if (second.status !== 201) return [`POST /households for the second house answered ${said(second)}`];
+        if (second.body?.credential) ctx.key2 = second.body.credential;
+        else p.push("the second house's declaration handed back no credential: its sign-in key was rotated dead with nothing in its place");
+        const houses2 = await ctx.s.q("office_api", "SELECT slug, residents FROM households WHERE $1 = ANY(residents)", [ctx.who.c]);
+        if (houses2.length !== 1) p.push(`${houses2.length} households in the store hold ${ctx.who.c}, not 1`);
+        else ctx.houseSlug2 = houses2[0].slug;
         rec.notes.push(`the door says: tier ${r.body?.household?.tier ?? "?"}, settled ${r.body?.household?.settled}, member of ${r.body?.household?.member_of ?? "?"}`);
         // The door mints the house its own key and rotates the sign-in's dead (one live key per account).
         if (r.body?.credential) ctx.key = r.body.credential;
@@ -815,12 +836,14 @@ export function plan() {
     },
     {
       id: "by-hand",
-      title: "recovery: a second claim, its window cleared, and the settlement taken BY HAND (SETTLEMENT_BY_HAND=1, the operator's road)",
+      title: "recovery: the second house's first claim, its window cleared, and the settlement taken BY HAND (SETTLEMENT_BY_HAND=1, the operator's road)",
       async run(ctx) {
         ctx.window2 = ctx.window + 1;
         ctx.mark2 = `rh-${ctx.run}-by-hand`;
-        const claim = await door(ctx.t, "POST", "/world/marks", { key: ctx.key, body: {
-          by: ctx.who.b, slug: ctx.mark2, kind: "parcel", at: ctx.parcelAt2, stamps: 0, body: `The by-hand road's ground (POS-354, run ${ctx.run}).`,
+        // THE SECOND HOUSE'S FIRST PARCEL (POS-896). The first house holds its one parcel (the claim step's), and a house declared after
+        // 10-31 is given room for one (POS-762), so the by-hand road's parcel is not the first house's second: it is a second house's first.
+        const claim = await door(ctx.t, "POST", "/world/marks", { key: ctx.key2, body: {
+          by: ctx.who.c, slug: ctx.mark2, kind: "parcel", at: ctx.parcelAt2, stamps: 0, body: `The by-hand road's ground (POS-354, run ${ctx.run}).`,
         } });
         if (claim.status >= 300 || claim.body?.error) return { claim };
         await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [ctx.window2]);
@@ -829,7 +852,7 @@ export function plan() {
         return { claim, clearing, settle: await ctx.settlement({ byHand: true }) };
       },
       async check(ctx, r) {
-        if (r.claim.status >= 300 || r.claim.body?.error) return [`the second claim: POST /world/marks answered ${said(r.claim)}`];
+        if (r.claim.status >= 300 || r.claim.body?.error) return [`the second house's claim: POST /world/marks answered ${said(r.claim)}`];
         if (r.clearing.code !== 0) return [`clearing-job --window ${ctx.window2} exited ${r.clearing.code}: ${tail(r.clearing.out)}`];
         return settled(ctx, r.settle, { byHand: true, window: ctx.window2, mark: ctx.mark2 });
       },
@@ -1407,6 +1430,11 @@ export async function runRehearsal(t, { only = null, keep = false, log = () => {
         a: `rh-${run}-a`, b: `rh-${run}-b`, house: `rh-${run}-house`,
         // A synthetic GitHub account: above every real id today (~2.4e8) and below 2^31.
         ghId: 2_100_000_000 + (parseInt(run, 36) % 40_000_000), login: `rh-${run}-human`,
+        // THE SECOND HOUSE (POS-896): the by-hand road's parcel is the FIRST parcel of a house of its own. A new house holds one parcel
+        // (POS-762, src/parcel-room.mjs), so the first house's second claim would be capped; a second house, with its own synthetic account
+        // (a band apart from the first's, still below 2^31) and its own run-named handle, claims its first.
+        c: `rh-${run}-c`, house2: `rh-${run}-house2`,
+        ghId2: 2_140_000_000 + (parseInt(run, 36) % 7_000_000), login2: `rh-${run}-human2`,
       },
       // the rehearsal's ground (parcelAt, parcelAt2) is found by the preflight (rehearsalGround, POS-595)
     });
