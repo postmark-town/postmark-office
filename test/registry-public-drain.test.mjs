@@ -14,6 +14,8 @@
 //   § 2  checkRegistry against a public printout, a changed pin, a changed field, a private-bearing printout
 //   § 3  drainRegistry writes the public printout once, then is a no-op; the store is untouched
 //   § 4  the guards: a missing house or pin writes nothing, a rename is not a deletion, no store is refused
+//   § 5  the named list (POS-726): the printout carries only named fields; the private render keeps the rest
+//   § 6  the FIX round (POS-726): home_images and accounts printed in their declared shapes
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -204,4 +206,137 @@ test("§ 4 a house or pin the store lacks writes nothing; a rename is not a dele
   assert.equal(read(clone, REGISTRY_PATH), PUBLIC_RAW);
   const c = await checkRegistry({ clone, env: {} });
   assert.deepEqual([c.ok, c.unreachable], [false, true], "an un-run gate is not a pass");
+});
+
+// ── § 5 the named list (POS-726) ────────────────────────────────────────────
+//
+// LAW (Darko's picker answer on POS-845, 2026-11-03 05:53Z): the public line is a "Named list".
+// Wright's hand-back on POS-726: only fields named public are sent; a new field is private until named.
+//
+// The sentinels reach the render through the real fold, and through the in-memory store the drain
+// reads (jsonb keys come back re-sorted, as Postgres hands them): a scalar registry meta key, an
+// unnamed key in an account, a likeness answer and an invitation, an object under a resident's handle
+// in `home_images`, an object under the named house key `name`, and an object under the named pin key
+// `note`. Invented houses, handles, logins and ids throughout.
+
+const S726 = Object.freeze({
+  meta: "SENT_P726_meta", account: "SENT_P726_account", likeness: "SENT_P726_likeness", invite: "SENT_P726_invite",
+  image: "SENT_P726_image", underNamed: "SENT_P726_under_named", underPin: "SENT_P726_under_pin", human: "SENT_P726_human",
+});
+const leaks726 = (s) => Object.entries(S726).filter(([, v]) => String(s).includes(v)).map(([k]) => k).sort();
+const IMG = "https://media.postmark.town/media/p726/pell.png";
+const REG_726 = { schema_version: 1, note: "invented for POS-726", extra_meta: S726.meta, households: {
+  "ember-loft": { name: "Ember Loft", human: S726.human, accounts: [{ login: "el-gh", id: 9811, secret: S726.account }],
+    residents: ["pell", "otter-q"], since: "2026-09-01", declared_by: "pell",
+    home_images: { pell: IMG, "otter-q": { url: IMG, secret: S726.image } },
+    likeness: { answer: "yes", at: "2026-10-20T00:00:00.000Z", by: "el-gh", gh_id: 9811, words: "v1", secret: S726.likeness },
+    invited_by: { by: "wren-c", named: "wren-c", at: "2026-09-01T00:00:00.000Z", secret: S726.invite } },
+  "tarn-yard": { name: { shown: "Tarn Yard", secret: S726.underNamed }, accounts: [{ login: "ty-gh", id: 9813 }],
+    residents: ["tarn"], since: "2026-09-02", declared_by: "tarn" },
+} };
+const PINS_726 = { pell: { login: "el-gh", id: 9811, pinned: "2026-09-01" }, "otter-q": { login: "el-gh", id: 9811 },
+  tarn: { login: "ty-gh", id: 9813, pinned: "2026-09-02", note: { text: "n", secret: S726.underPin } } };
+
+// The printout, written out by hand: named keys only, in the file's template order, two-space JSON, one newline.
+const PUBLIC_726_RAW = JSON.stringify({ schema_version: 1, note: "invented for POS-726", households: {
+  "ember-loft": { name: "Ember Loft", accounts: [{ login: "el-gh", id: 9811 }], residents: ["pell", "otter-q"],
+    since: "2026-09-01", declared_by: "pell", home_images: { pell: IMG },
+    likeness: { answer: "yes", at: "2026-10-20T00:00:00.000Z", by: "el-gh", gh_id: 9811, words: "v1" },
+    invited_by: { by: "wren-c", named: "wren-c", at: "2026-09-01T00:00:00.000Z" } },
+  "tarn-yard": { accounts: [{ login: "ty-gh", id: 9813 }], residents: ["tarn"], since: "2026-09-02", declared_by: "tarn" },
+} }, null, 2) + "\n";
+const PINS_726_RAW = JSON.stringify({ "otter-q": { login: "el-gh", id: 9811 }, pell: { login: "el-gh", id: 9811, pinned: "2026-09-01" },
+  tarn: { login: "ty-gh", id: 9813, pinned: "2026-09-02" } }, null, 2) + "\n";
+
+test("§ 5 the named list: the printout carries only named fields, byte for byte; the private render keeps the rest", () => {
+  const rows = rowsFromRegistry(REG_726, PINS_726);
+  const before = JSON.stringify(rows);
+  const priv = renderRegistry(rows);
+  assert.deepEqual(leaks726(priv.households + priv.pins), Object.keys(S726).sort(), "CONTROL: the private render still prints every sentinel");
+  const pub = renderPublicRegistry(rows);
+  assert.deepEqual(leaks726(pub.households + pub.pins), [], "no sentinel in the printout (the list names each one that is)");
+  assert.equal(pub.households, PUBLIC_726_RAW, "households.json, byte for byte");
+  assert.equal(pub.pins, PINS_726_RAW, "github-ids.json, byte for byte");
+  assert.equal(JSON.stringify(rows), before, "the rows handed in are unchanged");
+});
+
+test("§ 5 the named list: the drain writes that printout from the store, and --check is green against it", async () => {
+  await withStore(rowsFromRegistry(REG_726, PINS_726), async (pool) => {
+    const storeBefore = JSON.stringify(pool.state);
+    const clone = cloneWith("{}\n", "{}\n");
+    const calls = [];
+    const r = await drainRegistry({ clone, env: RECORD_ON, commit: (c, paths, message) => { calls.push(message); return "c0ffee"; } });
+    assert.equal(r.ran, true, r.refused ?? r.skipped);
+    assert.equal(read(clone, REGISTRY_PATH), PUBLIC_726_RAW, "the printout the drain wrote, byte for byte");
+    assert.equal(read(clone, PINS_PATH), PINS_726_RAW);
+    assert.deepEqual(leaks726(calls.join("\n")), [], "and nothing private in its commit message");
+    const gate = await checkRegistry({ clone, env: RECORD_ON });
+    assert.equal(gate.ok, true, JSON.stringify(gate.diffs));
+    assert.equal(JSON.stringify(pool.state), storeBefore, "the store is untouched by the drain");
+    assert.deepEqual(leaks726(JSON.stringify(pool.state)), Object.keys(S726).sort(), "CONTROL: the store still holds every sentinel");
+  });
+});
+
+// ── § 6 the FIX round (POS-726) ─────────────────────────────────────────────
+//
+// LAW (Rivet's FIX brief on POS-726, 2026-11-03 17:58Z): "A named scalar is not a license for arbitrary
+// keys/objects below it; lists/nested fields keep their existing DECLARED shapes." `home_images` is URL text
+// under a resident's handle, on the house that resident stands in (registry-store.mjs § setHomeImage: "a
+// picture can only ever land on the house the resident stands in at that moment"; registry-rows.mjs §
+// homePictureIn: "Only an entry for one of THAT house's own residents counts, so a picture left behind when a
+// resident moved house reads as none"). An account is an object in a list, cut to `login` and `id`.
+//
+// The bad entries reach the render through the real fold and through the in-memory store the drain reads.
+// Invented houses, handles, logins, ids and URLs; `gone-wren` lives in odd-shed and left a picture on
+// fen-hollow. The two numbers are sentinels too.
+
+const S_FIX = Object.freeze({ left: "SENT_P726_left_behind", alone: "SENT_P726_left_alone", list: "SENT_P726_image_list",
+  bare: "SENT_P726_bare_account", nested: "SENT_P726_nested_account", account: "SENT_P726_fix_account",
+  num: "72600931", numAccount: "72600932", human: "SENT_P726_fix_human" });
+const leaksFix = (s) => Object.entries(S_FIX).filter(([, v]) => String(s).includes(v)).map(([k]) => k).sort();
+const media = (name) => `https://media.postmark.town/media/p726/${name}.png`;
+const REG_FIX = { schema_version: 1, note: "invented for POS-726's FIX round", households: {
+  "fen-hollow": { name: "Fen Hollow", human: S_FIX.human,
+    accounts: [{ login: "fh-gh", id: 9821 }, S_FIX.bare, Number(S_FIX.numAccount), null, [{ login: S_FIX.nested, id: 9822 }],
+      { login: "fh2-gh", id: 9823, secret: S_FIX.account }],
+    residents: ["fen", "reed-b", "moss-c", "lark-d", "tern-e", "kit-f"], since: "2026-09-04", declared_by: "fen",
+    home_images: { fen: IMG, "gone-wren": media(S_FIX.left), "reed-b": Number(S_FIX.num), "moss-c": true, "lark-d": null, "tern-e": "",
+      "kit-f": [media(S_FIX.list)] } },
+  "odd-shed": { name: "Odd Shed", accounts: [{ login: "os-gh", id: 9825 }], residents: ["shed", "gone-wren"], since: "2026-09-06",
+    declared_by: "shed", home_images: { "moved-x": media(S_FIX.alone) } },
+} };
+const PINS_FIX = { fen: { login: "fh-gh", id: 9821, pinned: "2026-09-04" }, shed: { login: "os-gh", id: 9825 } };
+
+// The printout, written out by hand: the account objects in order, only fen's own picture, no `home_images`
+// on a house with no picture left, two-space JSON, one newline.
+const PUBLIC_FIX_RAW = JSON.stringify({ schema_version: 1, note: "invented for POS-726's FIX round", households: {
+  "fen-hollow": { name: "Fen Hollow", accounts: [{ login: "fh-gh", id: 9821 }, { login: "fh2-gh", id: 9823 }],
+    residents: ["fen", "reed-b", "moss-c", "lark-d", "tern-e", "kit-f"], since: "2026-09-04", declared_by: "fen", home_images: { fen: IMG } },
+  "odd-shed": { name: "Odd Shed", accounts: [{ login: "os-gh", id: 9825 }], residents: ["shed", "gone-wren"], since: "2026-09-06", declared_by: "shed" },
+} }, null, 2) + "\n";
+const PINS_FIX_RAW = JSON.stringify(PINS_FIX, null, 2) + "\n";
+
+test("§ 6 the FIX round: the printout keeps only this house's residents' URL text and the account objects; the drain writes it and --check is green", async () => {
+  const rows = rowsFromRegistry(REG_FIX, PINS_FIX);
+  const before = JSON.stringify(rows);
+  const priv = renderRegistry(rows);
+  assert.deepEqual(leaksFix(priv.households), Object.keys(S_FIX).sort(), "CONTROL: the private render still prints every bad entry and the human");
+  const pub = renderPublicRegistry(rows);
+  assert.deepEqual(leaksFix(pub.households + pub.pins), [], "no bad entry in the printout (the list names each one that is)");
+  assert.equal(pub.households, PUBLIC_FIX_RAW, "households.json, byte for byte");
+  assert.equal(pub.pins, PINS_FIX_RAW, "github-ids.json, byte for byte");
+  assert.equal(JSON.stringify(rows), before, "the rows handed in are unchanged");
+
+  await withStore(rowsFromRegistry(REG_FIX, PINS_FIX), async (pool) => {
+    const storeBefore = JSON.stringify(pool.state);
+    const clone = cloneWith("{}\n", "{}\n");
+    const r = await drainRegistry({ clone, env: RECORD_ON, commit: () => "c0ffee" });
+    assert.equal(r.ran, true, r.refused ?? r.skipped);
+    assert.equal(read(clone, REGISTRY_PATH), PUBLIC_FIX_RAW, "the printout the drain wrote from the store, byte for byte");
+    assert.equal(read(clone, PINS_PATH), PINS_FIX_RAW);
+    const gate = await checkRegistry({ clone, env: RECORD_ON });
+    assert.equal(gate.ok, true, JSON.stringify(gate.diffs));
+    assert.equal(JSON.stringify(pool.state), storeBefore, "the store is untouched by the drain");
+    assert.deepEqual(leaksFix(JSON.stringify(pool.state)), Object.keys(S_FIX).sort(), "CONTROL: the store still holds every bad entry");
+  });
 });
