@@ -10,8 +10,10 @@
 // LAW (the brief's ruling): "The card names how to call it over REST (the apex door and the do: value), instead of the internal dispatch
 // name or alongside it. The same goes for rsvp." and "Shape stop: no new field in the card format." So the teaching rides an EXISTING
 // text of each card: the ride card's `to` field description (world-apex.mjs § fieldsFor, from the flat tool's schema) and the rsvp
-// act's `teaches` (household-apex.mjs § ACTS, read on the capability index). The two texts are getters, so the public base is read when
-// the card is read (src/public-base.mjs, POS-777).
+// act's `teaches` (household-apex.mjs § ACTS, read on the capability index). The two texts are getters that read the public base
+// (src/public-base.mjs, POS-777) each time they are read. The rsvp row reads its getter on every call; the ride CARD does not: it copies
+// the schema property (flatSchemas() caches, and actionFields spreads), so the ride card's base is fixed at its first read in a process.
+// That is enough, because a deploy sets PUBLIC_BASE at start. The third test reads the raw ride schema, not the card, and says so.
 //
 // WHAT THIS READS. The real field producer for the ride card and the real capability index for the rsvp row (the same `teaches` the bare
 // household answer lists), in this process. The size of that answer is test/foyer-shrink.test.mjs F5c; the recorded household answer is
@@ -64,7 +66,7 @@ test("POS-911 · the rsvp card names its REST call: POST /household with do: rsv
     `LAW (POS-911): "the same goes for rsvp" — the rsvp card's teaches was: ${JSON.stringify(text)}`);
 });
 
-test("POS-911 · both addresses follow the configured PUBLIC_BASE when the card is read (a getter), and fall back to the public default", () => {
+test("POS-911 · the ride schema's text and the rsvp card's teaches follow the configured PUBLIC_BASE each time they are read, and fall back to the public default", () => {
   const prop = RIDE_TOOLS.find((t) => t.name === "world_ride").inputSchema.properties.to;
   const under = (base) => withBase(base, () => ({ ride: prop.description, rsvp: rsvpText() }));
   const [custom, dflt] = [under(CUSTOM_BASE), under(undefined)];
