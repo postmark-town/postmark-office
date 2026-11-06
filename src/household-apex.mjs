@@ -1280,7 +1280,7 @@ async function householdGlance(args, key, ctx) {
   const lookback = new Date(nowMs - v2.LOOKBACK_MS).toISOString();
   const actors = [...ashore, `human-of-${house.slug}`];
   const acts = await soft(() => ix.houseActs(houseKey, { actors, ...(since?.hw ? { afterId: since.hw } : { sinceIso: since ? new Date(since.ms).toISOString() : lookback }) }));
-  const happened = acts ? acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name })) : null;
+  const happened = acts ? acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null })) : null;
   const mine = new Set(ashore);
   const lines = await soft(() => ix.stampLinesSince(since ? new Date(since.ms).toISOString() : lookback));
   const went = lines ? v2.wentRows(lines.rows, mine, { house: house.members }) : null;
@@ -1347,7 +1347,7 @@ async function householdGlance(args, key, ctx) {
   return v2.glanceV2({
     marks: ashore.length ? { counts, published, effects, atRisk: needs?.stakes_at_risk?.rows ?? null } : null,
     posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
-    house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
+    house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null, human: house.rec.human_profile ?? null },
     you, rows, gaps, stances, tail, needs, details,
     mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members }) : null, standing: standingLetters },
     quests: v2.questLines(board),
@@ -1416,7 +1416,7 @@ async function householdDeep(what, f, args, key, ctx) {
   if (what === "happened") {
     const actors = [...mine, `human-of-${house.slug}`];
     const acts = await ix.houseActs(`hh:${house.slug}`, { actors, beforeId: f.before ?? null, ...(since?.hw ? { afterId: since.hw } : { sinceIso: after }) });
-    const rows = acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name }));
+    const rows = acts.rows.map((a) => v2.happenedRow(a, { houseName: house.rec.name, human: house.rec.human_profile ?? null }));
     const next = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: acts.hw });
     const out = { read: "happened", household: house.slug, ...(since ? { since: after } : { window: "the last 12 hours" }), ...page(rows), cursor: next };
     out.complete = out.complete && !acts.cut;

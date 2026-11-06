@@ -86,11 +86,11 @@ import { publicRegistry } from "./registry-public.mjs";
 // input against them. They are the file's grammar, and they are the only place
 // that grammar is written down.
 //
-// THE TAIL OF THIS TEMPLATE IS FIVE COLUMNS, and they are appended in the order
+// THE TAIL OF THIS TEMPLATE IS SIX COLUMNS, and they are appended in the order
 // their migrations landed so that no standing key ever moves: `formerly`
 // (POS-158, migration 020) after `declared_by`, then `provisional` (POS-159,
-// migration 021) after that, then `home_images`, `likeness` and `invited_by`
-// (each described beside NESTED_KEYS below). The first two usually render
+// migration 021) after that, then `home_images`, `likeness`, `invited_by` and
+// `human_profile` (each described beside NESTED_KEYS below). The first two usually render
 // nothing: 0/118 live rows carried either — measured on the town's own files,
 // twice, a day apart, when they landed.
 //
@@ -101,9 +101,11 @@ import { publicRegistry } from "./registry-public.mjs";
 // ("this house has no former key"); so are a `false` and an absent
 // `provisional` ("this house's key was chosen"). Both render as no key at all,
 // exactly as a NULL `name` does — see the two narrow predicates below.
+// `human_profile` (POS-721, migration 091) is the sixth tail column, appended
+// last so no standing key moves (described beside NESTED_KEYS below).
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness", "invited_by",
+  "provisional", "home_images", "likeness", "invited_by", "human_profile",
 ]);
 export const PIN_KEYS = Object.freeze([
   "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
@@ -138,8 +140,8 @@ export const PIN_KEYS = Object.freeze([
 export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 
 // Which household columns carry nested objects, and the template each one's
-// objects are ordered by. Four columns carry them (NESTED_KEYS below):
-// `accounts`, `home_images`, `likeness` and `invited_by`. `residents` and
+// objects are ordered by. Five columns carry them (NESTED_KEYS below):
+// `accounts`, `home_images`, `likeness`, `invited_by` and `human_profile`. `residents` and
 // `formerly` are `text[]` of strings (no keys to reorder) and every other
 // column is a scalar. If a later migration adds another jsonb column, it
 // arrives with its row here in the same commit, or the drain renders it in
@@ -162,7 +164,14 @@ export const LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "word
 // first. NULL when nobody invited, and a NULL renders as no key at all, so
 // nothing moves on the first crossing after the column lands.
 export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at"]);
-const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS });
+//
+// `human_profile` (migration 091, POS-721) is the fifth: one object with a FIXED
+// set of keys (the one writer, src/human-profile.mjs, builds it), the town name
+// first, each key present only while its field is set. NULL when nothing is
+// set, and a NULL renders as no key at all, so nothing moves on the first
+// crossing after the column lands.
+export const HUMAN_PROFILE_KEYS = Object.freeze(["town_name", "short_line", "pronouns"]);
+const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS, human_profile: HUMAN_PROFILE_KEYS });
 
 // A pin's column names are the file's key names except one: `id` is a reserved
 // enough word in SQL company that the column is `gh_id`, and this is the single
@@ -293,6 +302,8 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       likeness: rec?.likeness ?? null,
       // And `invited_by` (085): no key folds to NULL, "nobody invited".
       invited_by: rec?.invited_by ?? null,
+      // And `human_profile` (091): no key folds to NULL, "nothing set".
+      human_profile: rec?.human_profile ?? null,
     });
   }
 
