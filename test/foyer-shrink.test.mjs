@@ -290,7 +290,8 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 // below the unabridged answer, so losing the abridgement still trips them at once.
 // POS-911 (2026-11-05, RULED by Darko 21:18 EST in the picker, "Raise to 9,088 (rec)"; Wright AUTH 02:20Z): the rsvp card teaches
 // its REST call at the public address, which the connector's bare answer carries once (the frozen 8,951 B baseline had 9 B of room).
-// SLIM_CEILING to 9,088 (+128), superseding POS-666/h's 8,960 for the connector; REST_CEILING stays 28,672.
+// SLIM_CEILING to 9,088 (+128), superseding POS-666/h's 8,960 for the connector; REST_CEILING stays 28,672. Measured by F5c below on
+// the final wording (not trimmed to fit): connector bare 9,038 B (+87 B, the sentence), REST bare 28,216 B.
 const REST_CEILING = 28_672;
 const SLIM_CEILING = 9_088;
 
