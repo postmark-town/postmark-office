@@ -144,6 +144,11 @@ CHANGED["MCP household {}"].push(
 CHANGED["MCP household {}"].push(
   [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,
     `{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}},{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}}]`]);
+// AND THE RSVP CARD TEACHES ITS REST CALL (POS-911, Darko 2026-11-05 21:18 EST, "Raise to 9,088 (rec)"): the card's last
+// sentence names the public address, which the recorded answer does not have. Nothing else in the row moves.
+CHANGED["MCP household {}"].push(
+  ["it needs a public https endpoint you run.",
+    "it needs a public https endpoint you run. Over REST: POST https://postmark.town/api/household with do: rsvp and args: { event }."]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
