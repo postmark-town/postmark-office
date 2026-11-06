@@ -11,9 +11,9 @@
 // ballot-pass-run 214 ms, world-hydrate 185 ms, settle-anchored-berths 187 ms.
 //
 // THE BOUND, AND WHY IT IS TIME. Nothing counts a regex's backtracking steps from JavaScript, so
-// these tests bound wall time, generously: 1,000 ms for one parse of about 64,000 characters. The
-// linear parse takes about a millisecond; the old regexes take seconds at 64,000 (quadratic: four
-// times the 16,000 figures above, then four times again). The control in each block is the same
+// these tests bound wall time, generously: 1,000 ms for one parse of 64,000 characters (100,000 for
+// the parsers with no size guard in front of them). The linear parse takes about a millisecond; the
+// old regexes take seconds (quadratic: four times the 16,000 figures above at 64,000, and more at 100,000). The control in each block is the same
 // input with a letter where the terminator was: it stays green on the old regexes while the
 // pathological cases red.
 //
@@ -41,6 +41,7 @@ import { withHouseLine } from "../tools/rekey-household.mjs";
 
 const LAW = 'POS-877: "every super-linear key-line regex in office src/ and tools/ is linear, with the same answers"';
 const SIZE = 64_000;
+const BIG = 100_000; // the parsers with no size guard in front of them: the old regexes take seconds here, not milliseconds
 const BOUND_MS = 1_000;
 // The line terminators `.` refuses and `\s` accepts, other than LF (every parser splits on LF first).
 const TERMINATORS = { "a lone CR": "\r", "a lone U+2028": String.fromCharCode(0x2028), "a lone U+2029": String.fromCharCode(0x2029) };
@@ -134,15 +135,15 @@ test("world-hydrate calls the lifted regexes, and no inline copy of the old ones
 });
 
 for (const [name, end] of Object.entries(TERMINATORS)) {
-  test(`world-hydrate: an ENGINE.md heading line of about 64,000 blanks then ${name} reads in under ${BOUND_MS} ms, and is no heading as before`, () => {
-    for (const line of [`##${" ".repeat(SIZE)}${end}x${end}y`, `##${"\t".repeat(SIZE)}x${end}y`]) {
+  test(`world-hydrate: an ENGINE.md heading line of about 100,000 blanks then ${name} reads in under ${BOUND_MS} ms, and is no heading as before`, () => {
+    for (const line of [`##${" ".repeat(BIG)}${end}x${end}y`, `##${"\t".repeat(BIG)}x${end}y`]) {
       const { value, ms } = timed(() => ENGINE_HEADING_RE.exec(line));
       assert.ok(ms < BOUND_MS, `${LAW}; this read took ${ms.toFixed(0)} ms`);
       assert.equal(value, null);
     }
   });
-  test(`world-hydrate: a walk-ledger field of about 64,000 blanks then ${name} reads in under ${BOUND_MS} ms, and is no field as before`, () => {
-    for (const seg of [`pace${" ".repeat(SIZE)}${end}x${end}y`, `from${"\t".repeat(SIZE)}x${end}y`]) {
+  test(`world-hydrate: a walk-ledger field of about 100,000 blanks then ${name} reads in under ${BOUND_MS} ms, and is no field as before`, () => {
+    for (const seg of [`pace${" ".repeat(BIG)}${end}x${end}y`, `from${"\t".repeat(BIG)}x${end}y`]) {
       const { value, ms } = timed(() => WALK_LEDGER_FIELD_RE.exec(seg));
       assert.ok(ms < BOUND_MS, `${LAW}; this read took ${ms.toFixed(0)} ms`);
       assert.equal(value, null);
@@ -150,11 +151,11 @@ for (const [name, end] of Object.entries(TERMINATORS)) {
   });
 }
 
-test("control: 64,000 blanks then a letter read fast and give the text", () => {
-  const h = timed(() => ENGINE_HEADING_RE.exec(`##${" ".repeat(SIZE)}yx`));
+test("control: 100,000 blanks then a letter read fast and give the text", () => {
+  const h = timed(() => ENGINE_HEADING_RE.exec(`##${" ".repeat(BIG)}yx`));
   assert.ok(h.ms < BOUND_MS, `the heading control took ${h.ms.toFixed(0)} ms`);
   assert.equal(h.value[1], "yx");
-  const f = timed(() => WALK_LEDGER_FIELD_RE.exec(`pace${" ".repeat(SIZE)}yx`));
+  const f = timed(() => WALK_LEDGER_FIELD_RE.exec(`pace${" ".repeat(BIG)}yx`));
   assert.ok(f.ms < BOUND_MS, `the field control took ${f.ms.toFixed(0)} ms`);
   assert.deepEqual([f.value[1], f.value[2]], ["pace", "yx"]);
 });
@@ -190,8 +191,8 @@ function berthClone(frontmatter) {
 }
 
 for (const [name, end] of Object.entries(TERMINATORS)) {
-  test(`settle-anchored-berths: a berth line of about 64,000 blanks then ${name} reads in under ${BOUND_MS} ms, and the lines after it still read`, () => {
-    for (const tail of [`${" ".repeat(SIZE)}${end}x${end}y`, `${"\t".repeat(SIZE)}x${end}y`]) {
+  test(`settle-anchored-berths: a berth line of about 100,000 blanks then ${name} reads in under ${BOUND_MS} ms, and the lines after it still read`, () => {
+    for (const tail of [`${" ".repeat(BIG)}${end}x${end}y`, `${"\t".repeat(BIG)}x${end}y`]) {
       const clone = berthClone(`note:${tail}\nhandle: ada`);
       const { value, ms } = timed(() => readBerth(clone, "ada"));
       assert.ok(ms < BOUND_MS, `${LAW}; this read took ${ms.toFixed(0)} ms`);
@@ -200,8 +201,8 @@ for (const [name, end] of Object.entries(TERMINATORS)) {
   });
 }
 
-test("control: a berth line of 64,000 blanks then a letter reads fast, and the value is read", () => {
-  const clone = berthClone(`note:${" ".repeat(SIZE)}yx\nhandle: ada`);
+test("control: a berth line of 100,000 blanks then a letter reads fast, and the value is read", () => {
+  const clone = berthClone(`note:${" ".repeat(BIG)}yx\nhandle: ada`);
   const { value, ms } = timed(() => readBerth(clone, "ada"));
   assert.ok(ms < BOUND_MS, `the control took ${ms.toFixed(0)} ms`);
   assert.deepEqual(value.data, { note: "yx", handle: "ada" });
@@ -226,8 +227,8 @@ test("settle-anchored-berths: short tails read as the string-operation reference
 // ── 4 · ballot-pass-run: a ballot letter's frontmatter (tools, through parseFrontmatter) ─────────────
 
 for (const [name, end] of Object.entries(TERMINATORS)) {
-  test(`ballot-pass-run: a letter line of about 64,000 blanks then ${name} reads in under ${BOUND_MS} ms, and the lines after it still read`, () => {
-    for (const tail of [`${" ".repeat(SIZE)}${end}x${end}y`, `${"\t".repeat(SIZE)}x${end}y`]) {
+  test(`ballot-pass-run: a letter line of about 100,000 blanks then ${name} reads in under ${BOUND_MS} ms, and the lines after it still read`, () => {
+    for (const tail of [`${" ".repeat(BIG)}${end}x${end}y`, `${"\t".repeat(BIG)}x${end}y`]) {
       const { value, ms } = timed(() => parseFrontmatter(`---\nnote:${tail}\nstake_topic: t\n---\n\nmy ballot\n`));
       assert.ok(ms < BOUND_MS, `${LAW}; this read took ${ms.toFixed(0)} ms`);
       assert.deepEqual(value, { stake_topic: "t" }, "the line `.` can't finish is skipped, as it always was");
@@ -235,8 +236,8 @@ for (const [name, end] of Object.entries(TERMINATORS)) {
   });
 }
 
-test("control: a letter line of 64,000 blanks then a letter reads fast, and the value is read", () => {
-  const { value, ms } = timed(() => parseFrontmatter(`---\nnote:${" ".repeat(SIZE)}yx\nstake_topic: t\n---\n\nmy ballot\n`));
+test("control: a letter line of 100,000 blanks then a letter reads fast, and the value is read", () => {
+  const { value, ms } = timed(() => parseFrontmatter(`---\nnote:${" ".repeat(BIG)}yx\nstake_topic: t\n---\n\nmy ballot\n`));
   assert.ok(ms < BOUND_MS, `the control took ${ms.toFixed(0)} ms`);
   assert.deepEqual(value, { note: "yx", stake_topic: "t" });
 });
@@ -269,10 +270,17 @@ test(`rekey-household: a household line with a value of 64,000 inner blanks read
   }
 });
 
-test("control: a value that is not an old one is left alone, fast", () => {
+test("control: a household value of 64,000 letters (no run of blanks) is rewritten fast on any regex", () => {
+  const value = `a${"b".repeat(SIZE)}`;
+  const { value: out, ms } = timed(() => withHouseLine(card(` ${value}  `), { oldValues: [value], name: "New Name" }));
+  assert.ok(ms < BOUND_MS, `the control took ${ms.toFixed(0)} ms`);
+  assert.equal(out, card(" New Name"));
+});
+
+test("rekey-household: a value that is not an old one is left alone, fast, with 64,000 inner blanks", () => {
   const value = `a${" ".repeat(SIZE)}b`;
   const { value: out, ms } = timed(() => withHouseLine(card(` ${value}`), { oldValues: ["somebody else"], name: "New Name" }));
-  assert.ok(ms < BOUND_MS, `the control took ${ms.toFixed(0)} ms`);
+  assert.ok(ms < BOUND_MS, `${LAW}; this read took ${ms.toFixed(0)} ms`);
   assert.equal(out, null);
 });
 
