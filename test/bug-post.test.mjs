@@ -2172,6 +2172,8 @@ test("18 · (19:57, the one rule) a declaration stands above every < that could 
     // a fence in a list ends with the list, so the next line's <!-- is live and runs to the end of the body
     "a comment opened in a fence a list ended": `- a\n\n  \`\`\`\n<!--\n  \`\`\`\n\n${line}`,
     // and these refused at f9adbdf9, by the code the rule replaces
+    "a tag in a fence a list ended": `- a\n\n  \`\`\`\n<details>\n  \`\`\`\n\n${line}`,
+    "a close tag holding the line in an attribute": `</div x="\n\n${line}\n\n">`,
     "a tag on a comment's closing line": `<!--\n--> <details>\n\n${line}`,
     "a tag after a closed comment": `<!-- x --> <details>\n\n${line}`,
     "details with attributes, split": `<details open\nclass="x"\n>\n\n${line}\n\n</details>`,
@@ -2269,6 +2271,8 @@ test("18 · (19:57, the one rule) a declaration stands above every < that could 
     "a comment closed early by --!>": html("a comment closed early by --!>"),
     "a comment closed early, a tag on its own line": html("a comment closed early, a tag on its own line"),
     "a comment opened in a fence a list ended": `422 ${refs["a comment opened in a fence a list ended"]}'s carries: line is inside an HTML comment, hidden when the pull request is read`,
+    "a tag in a fence a list ended": html("a tag in a fence a list ended"),
+    "a close tag holding the line in an attribute": html("a close tag holding the line in an attribute"),
     "a tag on a comment's closing line": html("a tag on a comment's closing line"),
     "a tag after a closed comment": html("a tag after a closed comment"),
     "details with attributes, split": html("details with attributes, split"),
