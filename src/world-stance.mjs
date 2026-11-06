@@ -92,7 +92,7 @@ import { appendActFlipped, appendJournal, laneFlipped } from "./world-journal.mj
 import { stanceQuery } from "./world2-acts.mjs";
 import { mainRef, materializeAtRef, publishedState, resolvedWorldHousehold } from "./world-branches.mjs";
 import {
-  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, houseOf, judgeTownHand, judgeTownWord,
+  AS_TOWN, RESIDENT_WORDS, TOWN, TOWN_SPEAKER, awaitingOf, citeLaw, elderByFirstLaid, houseOf, judgeTownHand, judgeTownWord,
   lawMarksAt, lawShaFor, onCurrentVersion, readVersions,
 } from "./town-stance.mjs";
 import { join } from "node:path";
@@ -373,14 +373,14 @@ export function groundFor(incoming, marks, overlaps) {
 // marks), `householdOf` groups handles into households (identity when absent,
 // which is the old per-handle reading), and `words` are the standing words on
 // current versions: any resident's word clears the whole house.
-export function candidatesFrom({ mine = [], all = [], spoken = new Set(), overlaps, householdOf = (h) => h, words = [], households = null }) {
+export function candidatesFrom({ mine = [], all = [], spoken = new Set(), overlaps, householdOf = (h) => h, words = [], households = null, isThing = null, elder = undefined }) {
   const mineById = new Map(mine.map((m) => [m.id, m]));
   const myHouses = households ?? new Set(mine.map((m) => houseOf(householdOf, m.by)));
   const out = [];
   for (const incoming of all) {
     if (!incoming?.id || mineById.has(incoming.id)) continue;
     if (spoken.has(incoming.id)) continue;
-    const ground = awaitingOf(incoming, { marks: mine, overlaps, words, householdOf })
+    const ground = awaitingOf(incoming, { marks: mine, overlaps, words, householdOf, isThing, elder })
       .filter((a) => myHouses.has(a.who))
       .flatMap((a) => a.ground)
       .sort()
@@ -619,8 +619,53 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   const byId = new Map();
   for (const m of live) byId.set(m.id, m);
   for (const m of canon) if (m?.id) byId.set(m.id, { ...m, published: true });
-  return { marks: [...byId.values()], householdOf };
+  const marks = [...byId.values()];
+
+  // SENIORITY IS THE FIRST-LAID DATE (postmark#4450; POS-449, "an amend does not
+  // make an elder mark young"). Read here, where the claims are already read,
+  // and handed to `awaitingOf` only as a comparison, so no date joins the
+  // candidate rows or anything a tier prints. `stance_reader` may read `claims`
+  // and nothing else (023; falsifier-draft-privacy § the stance carve), so the
+  // join `firstClaimedBySlug` makes to `marks` is not open here. The first-laid
+  // instant is the earliest claim on the slug that STOOD (Wright, 2026-11-05 on
+  // office#924: "a claim that never stood never laid the mark"), which is a
+  // `locked` one: a draft or pending claim has not cleared, a refused one never
+  // stood, and a retracted one was withdrawn while pending. Each is dated as
+  // `firstClaimedBySlug` dates one (mark-render.mjs § firstClaimInstant): its
+  // record date, else its submitted_at. A slug with no locked claim (a draft
+  // not yet cleared) keeps its own date, as before.
+  const laid = await stanceQuery(FIRST_LAID_SELECT, [marks.map((m) => String(m.id))], env);
+  if (laid.unreachable) return { unreachable: laid.unreachable };
+  const { firstClaimInstant } = await import("../world2/tools/mark-render.mjs");
+  const firstLaid = new Map();
+  for (const r of laid.rows ?? []) {
+    const at = Date.parse(String(firstClaimInstant(r?.laid_date, r?.submitted_at) ?? ""));
+    if (!r?.slug || !Number.isFinite(at)) continue;
+    const id = String(r.slug);
+    if (!firstLaid.has(id) || at < firstLaid.get(id)) firstLaid.set(id, at);
+  }
+  const elder = elderByFirstLaid(firstLaid);
+
+  // A THING IS NOT GROUND (the-town/the-not-ground), read with the office's
+  // own test, the same one world.mjs uses for an act's anchor (held.mjs §
+  // isThingMark).
+  const [{ isThingMark }, { markClassOf }, { classExtendsOf }] = await Promise.all([
+    import("./held.mjs"), import("./world-grants.mjs"), import("./world-classes.mjs")]);
+  const thingOpts = { classOf: markClassOf, extendsOf: classExtendsOf() };
+  const isThing = (m) => isThingMark(m, thingOpts);
+
+  return { marks, householdOf, elder, isThing };
 }
+
+// The first-laid read, on the one table `stance_reader` holds. Three columns,
+// none of them a body, only claims that stood, and its rows never leave
+// `worldForStances`.
+const FIRST_LAID_SELECT = `
+  SELECT slug,
+         data ->> 'date' AS laid_date,
+         submitted_at
+    FROM claims
+   WHERE slug = ANY($1) AND status = 'locked'`;
 
 // ── A STANCE OUTLIVES THE WINDOW IT WAS SPOKEN IN (postmark#2454, 2026-09-04) ──
 //
@@ -836,7 +881,8 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   // pass runs once without words to find them, and the versions of those marks
   // decide which words still stand. Unreachable is `unavailable`, never "every
   // word stands": a stale word passed off as current would hide an amendment.
-  const open = candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses });
+  const { isThing, elder } = world;
+  const open = candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses, isThing, elder });
   const read = await readVersions(open.map((c) => c.mark), versionDeps);
   if (read.unreachable) return { candidates: [], standing: [], mine: [], unavailable: read.unreachable };
   const words = standingStances(rows, { versions: read.versions });
@@ -845,7 +891,7 @@ export async function stanceInbox(repo, key, { dbPath = null, versionDeps = {} }
   // WHOSE GROUND THE NUMBER COUNTED, now that it is the house's: a resident's
   // own only while every mark counted is theirs, else the household's.
   const scope = mine.every((m) => mineHandles.has(m.by)) ? stancesGround(mineHandles) : "household";
-  return { candidates: candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses, words }), standing, mine: mine.map((m) => m.id), scope,
+  return { candidates: candidatesFrom({ mine, all, overlaps, householdOf, households: myHouses, words, isThing, elder }), standing, mine: mine.map((m) => m.id), scope,
     // Carried for the set-down group (`stanceShadow`'s `setDowns`), which needs
     // the same world and the same stance rows — never a second read of either.
     // Nothing renders these two keys; the shadow names every field it answers.
@@ -1490,7 +1536,7 @@ export async function declareStanceViaOffice(repo, args = {}, key = null, { dbPa
       `${target.by} is of your own household, and a house does not consent to its own declaration — a stance is the word of the ground it landed on`);
   const mine = all.filter((m) => myHouses.has(houseOf(householdOf, m.by)) && m.at && m.extent);
   const mineById = new Map(mine.map((m) => [m.id, m]));
-  const ground = awaitingOf(target, { marks: mine, overlaps, householdOf })
+  const ground = awaitingOf(target, { marks: mine, overlaps, householdOf, isThing: world.isThing, elder: world.elder })
     .filter((a) => myHouses.has(a.who)).flatMap((a) => a.ground).sort().map((id) => mineById.get(id));
   if (!ground.length)
     throw bounce(403, `"${on}" does not stand on your ground`,

@@ -408,6 +408,22 @@ const dateMs = (m) => Date.parse(m?.date ?? "") || 0;
 /** Precedence: the ground stood first. The id breaks a tie (world-stance.mjs § standsBefore). */
 const before = (g, m) => (dateMs(g) !== dateMs(m) ? dateMs(g) < dateMs(m) : String(g?.id ?? "") < String(m?.id ?? ""));
 
+/**
+ * The same precedence on FIRST-LAID instants (postmark#4450; POS-449, "an amend
+ * does not make an elder mark young"). PURE. `firstLaid` is `Map(id → instant)`,
+ * an ISO string as world-snapshot.mjs § firstClaimedBySlug returns it, or
+ * milliseconds; a mark with no entry keeps its own date, as before. The label
+ * and the inbox both build their `elder` here, so the two read seniority one way.
+ */
+export function elderByFirstLaid(firstLaid) {
+  const ageOf = (m) => {
+    const v = firstLaid?.get?.(String(m?.id));
+    const at = typeof v === "number" ? v : Date.parse(String(v ?? ""));
+    return Number.isFinite(at) ? at : dateMs(m);
+  };
+  return (g, m) => (ageOf(g) !== ageOf(m) ? ageOf(g) < ageOf(m) : String(g?.id ?? "") < String(m?.id ?? ""));
+}
+
 /** A handle's household, with the town's own ground and pen folded into the town. */
 export const houseOf = (householdOf, h) => (h === TOWN || h === TOWN_SPEAKER ? TOWN : householdOf(h) ?? h);
 
@@ -429,8 +445,16 @@ export const houseOf = (householdOf, h) => (h === TOWN || h === TOWN_SPEAKER ? T
  *
  * → `[{ who, ground }]`, the town first, then households by key. Empty means
  * nothing awaits.
+ *
+ * Two optional readers, both handed in so this stays pure (postmark#4450):
+ * `isThing(g)` leaves a thing out of the ground (the-town/the-not-ground: a
+ * thing is not ground), and `elder(g, mark)` says whether `g` stood first. It
+ * defaults to `before`, the current date; a caller that has read each mark's
+ * first-laid instant passes a comparison on that instead (POS-449: an amend
+ * does not make an elder mark young). Only the yes or no crosses in, so no
+ * date reaches anything this function returns.
  */
-export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf = (h) => h, townSeat = null } = {}) {
+export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf = (h) => h, townSeat = null, isThing = null, elder = before } = {}) {
   if (!mark?.id) return [];
   const own = houseOf(householdOf, mark.by);
   const spoke = new Set();
@@ -444,8 +468,9 @@ export function awaitingOf(mark, { marks = [], overlaps, words = [], householdOf
   if (mark.at && mark.extent) {
     for (const g of marks) {
       if (!g?.id || g.id === mark.id || !g.at || !g.extent) continue;
+      if (isThing && isThing(g)) continue;
       const hh = houseOf(householdOf, g.by);
-      if (hh === own || !before(g, mark) || !overlaps(g, mark)) continue;
+      if (hh === own || !elder(g, mark) || !overlaps(g, mark)) continue;
       if (!grounds.has(hh)) grounds.set(hh, []);
       grounds.get(hh).push(g.id);
     }

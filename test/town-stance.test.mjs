@@ -36,7 +36,7 @@ import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs
 import { __setStancePoolForTest } from "../src/world2-acts.mjs";
 import { CLASS_STANCE, ACTION_STANCE, candidatesFrom, declareStanceViaOffice, resetStanceGeometry, stanceInbox, stanceRows, standingStances } from "../src/world-stance.mjs";
 import {
-  TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber,
+  TOWN, TOWN_HANDS, TOWN_SPEAKER, awaitingLabels, awaitingOf, citeLaw, clearedAtCutover, cutoverNumber, elderByFirstLaid,
   readCutover, townSeatOf, townWordsOf, versionAt, versionsFromRows,
 } from "../src/town-stance.mjs";
 
@@ -94,6 +94,8 @@ const MAIN_SHA = git("rev-parse", "HEAD").trim();
 let CLAIMS = [];
 // The live layer: drafts the stance credential sees (023's carve). Empty unless a test plants one.
 let LIVE = [];
+// The marks' own first claims, for the first-laid read (postmark#4450). Empty unless a test plants one.
+let FIRST = [];
 const claim = (slug, id, { status = "locked", window_id = 10, at = "2026-08-20T00:00:00Z" } = {}) =>
   ({ slug, id, status, window_id, submitted_at: at, decided_at: status === "locked" ? at : null });
 const stancePool = {
@@ -103,6 +105,16 @@ const stancePool = {
       return { rows: CLAIMS.filter((c) => slugs.has(c.slug) && statuses.has(c.status)) };
     }
     if (/FROM claims\s+WHERE status = ANY\(\$1\)/.test(text)) return { rows: LIVE.filter((r) => params[0].includes(r.status)) };
+    // The first-laid read (postmark#4450). CLAIMS here are version rows for the
+    // amendment tests, not the marks' first claims, so it reads FIRST instead,
+    // empty unless a test plants one, and the marks keep their own dates. The
+    // status clause is applied only when the SQL carries it, so a read that
+    // dropped it would count a claim that never stood (5e).
+    const firstLaid = /FROM claims\s+WHERE slug = ANY\(\$1\)( AND status = 'locked')?\s*$/.exec(text);
+    if (firstLaid) {
+      const slugs = new Set(params[0]);
+      return { rows: FIRST.filter((c) => slugs.has(c.slug) && (!firstLaid[1] || c.status === "locked")) };
+    }
     throw new Error(`the stance pool stub does not answer: ${text.slice(0, 80)}`);
   },
   async end() {},
@@ -125,6 +137,7 @@ beforeEach(() => {
   resetStanceGeometry();
   CLAIMS = [claim("beta/on-alphas-edge", "c-beta-1"), claim("alpha/alphas-parcel", "c-alpha-1")];
   LIVE = [];
+  FIRST = [];
 });
 after(() => {
   for (const k of ["WORLD_SINGLE_LOG", "WORLD2_STANCE_URL", "WORLD2_PG", "WORLD2_PG_URL", "W2_LATE_ARRIVAL"]) delete process.env[k];
@@ -341,6 +354,94 @@ test("5 · awaiting is grouped by household, with seniority, and the inbox reads
     "alpha's inbox is cleared by a housemate's word");
   await assert.rejects(() => speak({ on: "alpha2/the-cairn", stance: "opposed" }, alpha),
     (e) => e.code === 422 && /own household's ground/.test(e.defect));
+});
+
+// ── 5b · postmark#4450: a thing is not ground, and age is the first-laid date ──
+// Errant's report: a receipt bird (a thing, laid 10-10) was listed as ground
+// under the Snug (first laid 09-18, amended 10-23). Both readers are handed in;
+// `awaitingOf` itself stays pure.
+const box = (id, by, date, extra = {}) => ({ id, by, date, at: { x: 0, y: 0 }, extent: { w: 4, h: 4 }, published: true, ...extra });
+
+test("5b · an older thing over a newer mark is not ground: with isThing it awaits no one", () => {
+  const bird = box("errant/a-bird", "errant", "2026-10-10", { kind: "thing" });
+  const table = box("current/a-table", "current", "2026-10-20");
+  const isThing = (m) => m.kind === "thing";
+  assert.deepEqual(awaitingOf(table, { marks: [bird], overlaps }), [{ who: "errant", ground: ["errant/a-bird"] }],
+    "without the reader the thing still files as ground, which is the reported row");
+  assert.deepEqual(awaitingOf(table, { marks: [bird], overlaps, isThing }), [],
+    "with it, the thing is left out of the ground");
+});
+
+test("5c · an elder mark amended after a younger one is still elder, by its first-laid date", () => {
+  const snug = box("current/the-snug", "current", "2026-10-23");
+  const bird = box("errant/a-bird", "errant", "2026-10-10");
+  const firstLaid = new Map([["current/the-snug", Date.parse("2026-09-18")], ["errant/a-bird", Date.parse("2026-10-10")]]);
+  const ageOf = (m) => firstLaid.get(m.id) ?? Date.parse(m.date);
+  const elder = (g, m) => ageOf(g) < ageOf(m);
+  assert.deepEqual(awaitingOf(bird, { marks: [snug], overlaps }), [],
+    "by the amended date the Snug looks younger and has no word on the bird");
+  assert.deepEqual(awaitingOf(bird, { marks: [snug], overlaps, elder }), [{ who: "current", ground: ["current/the-snug"] }],
+    "by its first-laid date the Snug stood first, and the bird awaits its house");
+});
+
+test("5d · the candidate rows carry no first-laid date: only the comparison crosses", () => {
+  const snug = box("current/the-snug", "current", "2026-10-23");
+  const bird = box("errant/a-bird", "errant", "2026-10-10");
+  const firstLaid = new Map([["current/the-snug", Date.parse("2026-09-18")]]);
+  const ageOf = (m) => firstLaid.get(m.id) ?? Date.parse(m.date);
+  const elder = (g, m) => ageOf(g) < ageOf(m);
+  const plain = candidatesFrom({ mine: [box("current/the-snug", "current", "2026-09-18")], all: [bird], overlaps });
+  const read = candidatesFrom({ mine: [snug], all: [bird], overlaps, elder });
+  assert.equal(read.length, 1);
+  assert.deepEqual(Object.keys(read[0]).sort(), Object.keys(plain[0]).sort(), "the same fields as a candidate read without it");
+  assert.equal(JSON.stringify(read).includes("2026-09-18"), false, "the first-laid instant appears nowhere in the rows");
+});
+
+// FLIP: drop `AND status = 'locked'` from world-stance.mjs § FIRST_LAID_SELECT →
+// the refused claim dated 07-01 lays beta's cairn before alpha's parcel, and
+// the last assertion reds.
+test("5e · the first-laid read counts only a claim that stood (Wright on office#924)", async () => {
+  const awaitsAlpha = async () => (await stanceInbox(repo, alpha)).candidates.some((c) => c.mark === "beta/on-alphas-edge");
+  assert.equal(await awaitsAlpha(), true, "with no first claims planted, beta's cairn (08-10) lands on alpha's older parcel (08-01)");
+  FIRST = [{ slug: "beta/on-alphas-edge", status: "locked", laid_date: "2026-07-01", submitted_at: "2026-07-01T00:00:00Z" }];
+  assert.equal(await awaitsAlpha(), false, "first laid 07-01 by a claim that stood, the cairn is elder, and alpha has no word on it");
+  FIRST = [
+    { slug: "beta/on-alphas-edge", status: "refused", laid_date: "2026-07-01", submitted_at: "2026-07-01T00:00:00Z" },
+    { slug: "beta/on-alphas-edge", status: "locked", laid_date: "2026-08-10", submitted_at: "2026-08-10T00:00:00Z" },
+  ];
+  assert.equal(await awaitsAlpha(), true, "a refused claim never stood, so it laid nothing: the cairn is still 08-10");
+});
+
+// FLIP: in world-settlement.mjs § labelMarks, stop passing `isThing, elder` to
+// `awaitingOf` → the label files the thing as ground and reads the amended date,
+// and both label assertions red while the inbox's stay green.
+test("5f · the label reads the same two readers as the inbox, so the two agree", async () => {
+  const { labelMarks } = await import("../src/world-settlement.mjs");
+  const isThing = (m) => m.kind === "thing";
+  const elder = elderByFirstLaid(new Map([["current/the-snug", "2026-09-18"]]));
+  const awaits = (labelled, id) => (labelled.find((m) => m.id === id)?.awaiting ?? []).filter((w) => w !== TOWN);
+
+  const bird = box("errant/a-bird", "errant", "2026-10-10", { kind: "thing" });
+  const table = box("current/a-table", "current", "2026-10-20");
+  const things = await labelMarks([bird, table], { townWords: new Map(), overlaps, isThing, elder });
+  assert.deepEqual(awaits(things, "current/a-table"), [], "the bird is a thing, so the table awaits no one on its account");
+  assert.deepEqual(candidatesFrom({ mine: [bird], all: [table], overlaps, isThing, elder }), [], "and the inbox says the same");
+
+  const snug = box("current/the-snug", "current", "2026-10-23");
+  const sketch = box("errant/a-sketch", "errant", "2026-10-10");
+  const ages = await labelMarks([snug, sketch], { townWords: new Map(), overlaps, isThing, elder });
+  assert.deepEqual(awaits(ages, "errant/a-sketch"), ["current"], "the Snug, first laid 09-18, is elder over a mark laid 10-10");
+  assert.equal(candidatesFrom({ mine: [snug], all: [sketch], overlaps, isThing, elder }).length, 1, "and the inbox says the same");
+});
+
+test("5g · elderByFirstLaid: first-laid instants as ISO or milliseconds, else the mark's own date, and the id breaks a tie", () => {
+  const a = { id: "a/one", date: "2026-10-23" }, b = { id: "b/two", date: "2026-10-10" };
+  assert.equal(elderByFirstLaid(new Map())(a, b), false, "with no entries it reads the current date, as before");
+  assert.equal(elderByFirstLaid(new Map([["a/one", "2026-09-18"]]))(a, b), true, "an ISO first-laid instant");
+  assert.equal(elderByFirstLaid(new Map([["a/one", Date.parse("2026-09-18")]]))(a, b), true, "milliseconds");
+  const same = elderByFirstLaid(new Map([["a/one", "2026-09-18"], ["b/two", "2026-09-18"]]));
+  assert.equal(same(a, b), true, "a tie goes to the id, as `before` breaks one");
+  assert.equal(same(b, a), false);
 });
 
 // ── 6 · the cutover ─────────────────────────────────────────────────────────

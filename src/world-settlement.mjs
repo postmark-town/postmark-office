@@ -70,8 +70,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { snapshotFoldArgs } from "./world-snapshot.mjs";
-import { extendsFromMarks, isSited } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
+import { firstClaimedBySlug, snapshotFoldArgs } from "./world-snapshot.mjs";
+import { extendsFromMarks, isSited, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
@@ -649,8 +649,13 @@ export async function vetoesNow(p, { worldRepo } = {}) {
  *
  * An opposed mark is not served, so it is never labelled. Law marks (kind
  * `class`) are the law, not cleared marks, and carry nothing.
+ *
+ * `isThing` and `elder` are the same two readers the stance inbox hands
+ * `awaitingOf` (postmark#4450): a thing is not ground, and seniority is the
+ * first-laid date. Handed in so this stays pure; a caller that passes neither
+ * reads as before.
  */
-export async function labelMarks(marks, { townWords, cutover = null, versions = null, words = [], householdOf = (h) => h, overlaps }) {
+export async function labelMarks(marks, { townWords, cutover = null, versions = null, words = [], householdOf = (h) => h, overlaps, isThing = null, elder = undefined }) {
   const { awaitingOf, clearedAtCutover, townSeatOf } = await import("./town-stance.mjs");
   const townSeat = townSeatOf({ cutover, versions });
   const ground = marks.filter((m) => m?.kind !== "class");
@@ -658,7 +663,7 @@ export async function labelMarks(marks, { townWords, cutover = null, versions = 
     if (!m?.id || m.kind === "class") return m;
     if (clearedAtCutover(m, { cutover, versions })) return m;
     const neutral = townWords?.get?.(m.id) === "neutral";
-    const who = awaitingOf(m, { marks: ground, overlaps, words, householdOf, townSeat }).map((a) => a.who);
+    const who = awaitingOf(m, { marks: ground, overlaps, words, householdOf, townSeat, isThing, elder }).map((a) => a.who);
     if (!neutral && !who.length) return m;
     return { ...m, ...(neutral ? { town_stance: "neutral" } : {}), ...(who.length ? { awaiting: who } : {}) };
   });
@@ -962,9 +967,20 @@ async function labelsFor(p, header, world, words, { worldRepo, servedKey, seal =
       : await readVersions(ids, { query: ask });
     if (read.unreachable) return { unread: read.unreachable };
     const hh = world.households ?? {};
+    // THE SAME TWO READERS AS THE STANCE INBOX (postmark#4450; Wright on
+    // office#924: the label and the inbox read one function, so both change
+    // together). Seniority is the first-laid date, read the one way the fold
+    // reads it (world-snapshot.mjs § firstClaimedBySlug: the origin claim). A
+    // thing is not ground, its class read off this World's own class nodes
+    // (extendsFromMarks, as the positioned set above reads them).
+    const { elderByFirstLaid } = await import("./town-stance.mjs");
+    const { isThingMark } = await import("./held.mjs");
+    const elder = elderByFirstLaid(await firstClaimedBySlug(p, ids));
+    const thingOpts = { classOf: markClassOf, extendsOf: extendsFromMarks(world.marks ?? []) };
     const marks = await labelMarks(world.marks ?? [], {
       townWords: words.townWords, cutover, versions: read.versions, words: words.words,
       householdOf: (h) => hh[h] ?? h, overlaps: await overlapsAt(worldRepo, header.law_sha),
+      isThing: (m) => isThingMark(m, thingOpts), elder,
     });
     LABELLED.set(key, marks);
     if (LABELLED.size > 6) LABELLED.delete(LABELLED.keys().next().value);
