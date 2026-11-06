@@ -72,7 +72,7 @@ import { standingOf } from "../../src/speaker-standing.mjs"; // POS-739: every h
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "e619c3560b592385086fbfd4156bff6d05ed8438", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
+            blob: "50cbe736a6a29930fccaec4549bcd58c93ca0bb0", at: "3e4ad8a0be03e270c5c318ba2328ab5fd494f9de" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
@@ -480,12 +480,10 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
 }
 
 /**
- * The published heartbeat edges (06:00Z and 18:00Z, deploy/settlement-auto.sh), in
- * [fromMs, toMs]. THE FALLBACK FOR HISTORY OLDER THAN THE KNOWN SETTLEMENTS
- * (POS-779): the store knows a blessing only once its tag exists and the live
- * reader keeps about sixty sweeps; every voice older than that would otherwise
- * collapse into one never-closing thread per place. A heartbeat the gate refused
- * is an edge that never was, so this over-splits by a thread at worst, never merges.
+ * The scheduled heartbeat edges (06:00Z and 18:00Z, deploy/settlement-auto.sh), in [fromMs, toMs]. A STAND-IN FOR TESTS AND THE
+ * OPERATOR'S FALSIFIER ONLY (POS-779): a heartbeat is a schedule, and a crossing the gate refused publishes nothing, so no read
+ * splits a thread at one. The door splits at the settlements the box PUBLISHED (src/hearing-window.mjs), and a voice older than
+ * the oldest of them is left out and said, never grouped.
  */
 export function heartbeatEdges(fromMs, toMs) {
   const H = 12 * 3600_000, O = 6 * 3600_000, out = [];
