@@ -7,8 +7,8 @@
 # 830a6996 / world 52c281b8). Both clones hard-reset to their tag, derived
 # state is deleted and rebuilt, the dev service restarts. Local rehearsal
 # commits (TOWN_PUSH=0 keeps them local by construction) are DISCARDED —
-# that is the point. To advance the default: retag sandbox/seed in both
-# repos (founder's word) and run this again.
+# that is the point. To advance the default, run deploy/dev-seed-advance.sh,
+# which prints the retag of sandbox/seed in both repos when origin needs it.
 #
 # oauth.db is deliberately KEPT: sign-ins are box-side state, not town state,
 # and wiping it would lock every tester out after each reset.
