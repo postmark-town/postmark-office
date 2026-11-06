@@ -288,8 +288,11 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 // headroom), connector bare 8,834 B (was 8,298). REST_CEILING to 28,672 (+4 KiB,
 // about 9% over the measure), SLIM_CEILING to 8,960 (+512). Both still sit far
 // below the unabridged answer, so losing the abridgement still trips them at once.
+// POS-911 (2026-11-05, RULED by Darko 21:18 EST in the picker, "Raise to 9,088 (rec)"; Wright AUTH 02:20Z): the rsvp card teaches
+// its REST call at the public address, which the connector's bare answer carries once (the frozen 8,951 B baseline had 9 B of room).
+// SLIM_CEILING to 9,088 (+128), superseding POS-666/h's 8,960 for the connector; REST_CEILING stays 28,672.
 const REST_CEILING = 28_672;
-const SLIM_CEILING = 8_960;
+const SLIM_CEILING = 9_088;
 
 test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
   const { shapeOf } = await import("../tools/capture-household-golden.mjs");
