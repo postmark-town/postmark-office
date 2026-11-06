@@ -450,6 +450,20 @@ fi
 git -C "$REPO" push -q origin HEAD:main || fail "push failed — the dump is on the box and NOWHERE ELSE" ship
 REMOTE_TIP=$(git -C "$REPO" ls-remote origin refs/heads/main | cut -f1)
 
+# ── 4b · off-box to S3 (STAR-118) ───────────────────────────────────────────
+# Darko 2026-11-04 09:03: "the real solution is 2", an S3 bucket in the box's own account. It runs beside the git
+# ship until a hand run and a rehearsal from S3 prove it, then the git ship comes out. The whole dump goes as one
+# object (S3 has no 100 MB file limit), with the sum of the whole beside it, roles.db, the intake files and LATEST.json,
+# under world2/<stamp>/. The instance's role writes and reads that one bucket and can't delete; set W2_S3_BUCKET in the
+# unit's environment to switch it on.
+S3_STATUS=off
+if [ -n "${W2_S3_BUCKET:-}" ]; then
+  S3_PREFIX="world2/$STAMP"
+  S3_FILES=$(w2_ship_s3 "$W2_S3_BUCKET" "$S3_PREFIX" "$DUMP" "$REPO/dumps/$DUMP_NAME.sha256" "${ROLES_COPY:-}" "$INTAKE_STAGE"/* "$REPO/LATEST.json") \
+    || fail "S3 upload to s3://$W2_S3_BUCKET/$S3_PREFIX failed (the git copy shipped; S3 has none for this night)" s3
+  S3_STATUS="s3://$W2_S3_BUCKET/$S3_PREFIX ($S3_FILES files)"
+fi
+
 # ── 5 · local retention ─────────────────────────────────────────────────────
 ls -1t "$DUMPS"/world2-*.dump 2>/dev/null | tail -n +$((KEEP_DUMPS + 1)) | xargs -r rm -f
 ls -1t "$DUMPS"/roles-*.db 2>/dev/null | tail -n +$((KEEP_DUMPS + 1)) | xargs -r rm -f
@@ -490,10 +504,10 @@ WAL_FILES=$(find "$WAL" -type f 2>/dev/null | wc -l)   # recounted AFTER the pru
 # distinguishes the two silences a reader must never confuse — `absent` (no role
 # was ever granted on this box) from a copy that FAILED, which exits 1 above and
 # never reaches this line at all.
-w2_state backup.json "$(printf '"status":"%s","database":"%s","dump_bytes":%d,"toc_entries":%d,"basebackup_ok":%s,"basebackup_bytes":%d,"wal_bytes":%d,"wal_files":%d,"roles_status":"%s","roles_db_bytes":%d,"role_audit_rows":%d,"grant_rows":%d,"intake":{%s},"remote_tip":"%s","destination":"github.com/wright-starforge/postmark-world2-backups (private)"' \
+w2_state backup.json "$(printf '"status":"%s","database":"%s","dump_bytes":%d,"toc_entries":%d,"basebackup_ok":%s,"basebackup_bytes":%d,"wal_bytes":%d,"wal_files":%d,"roles_status":"%s","roles_db_bytes":%d,"role_audit_rows":%d,"grant_rows":%d,"intake":{%s},"remote_tip":"%s","destination":"github.com/wright-starforge/postmark-world2-backups (private)","s3":"%s"' \
   "$([ "$BASE_OK" = true ] && echo shipped || echo shipped-no-basebackup)" \
   "$DB" "$DUMP_BYTES" "$TOC_ENTRIES" "$BASE_OK" "$BASE_BYTES" "$WAL_BYTES_AFTER" "$WAL_FILES" \
-  "$ROLES_STATUS" "$ROLES_BYTES" "$ROLES_AUDIT" "$ROLES_GRANTS" "$INTAKE_STATUS" "$REMOTE_TIP")"
+  "$ROLES_STATUS" "$ROLES_BYTES" "$ROLES_AUDIT" "$ROLES_GRANTS" "$INTAKE_STATUS" "$REMOTE_TIP" "$S3_STATUS")"
 
 echo "[world2-backup] $DB → $(numfmt --to=iec "$DUMP_BYTES") dump, $TOC_ENTRIES toc entries; remote main = $REMOTE_TIP"
 echo "[world2-backup] on-box: basebackup=$BASE_OK ($(numfmt --to=iec "$BASE_BYTES")), wal $WAL_FILES files $(numfmt --to=iec "$WAL_BYTES_AFTER")"
