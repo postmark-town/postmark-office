@@ -662,6 +662,65 @@ test("9 · the reveal: a hand sets Iris's three candidates, the fixer picks one,
   assert.equal(out.equal, true, out.drift.join("\n"));
 });
 
+test("9 · CORE-25: one portrait per critter: a hand's single-candidate reveal sets the image at once, with no pick, and the jar and the rebuild read it", async () => {
+  // RULED, Darko 2026-10-27 09:14 EDT and 2026-10-29 00:04 EDT (CORE-25/a): "one portrait plus a certificate letter (no pick from three)".
+  // Until 2026-11-06 this asserted that a reveal held exactly three candidates and the fixer chose.
+  const { pen, posts } = setup();
+  await toShipped();
+
+  const done = await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.deepEqual(done.reveal, { candidates: [PAINTED[0]], pick: 1, image: PAINTED[0], picked_by: "wright" },
+    'LAW CORE-25: "one portrait per critter … with no pick step": the town hand\'s one candidate is the image');
+  assert.match(done.receipt, /revealed: errant\/the-door-sticks's critter "Hinge Nibbler" has its portrait, set by wright; the jar shows it from now on/);
+  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: ID, reveal: done.reveal, hand: "wright" });
+  assert.equal(posts.get(ID).state, "shipped", "a reveal moves no stage");
+
+  // the jar reads the image off the post, as it reads a picked one
+  const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual([one.fields.critter, one.fields.named_by, one.fields.reveal.image], ["Hinge Nibbler", "ada", PAINTED[0]]);
+
+  // the rebuild: the acts alone derive the reveal, and the table agrees
+  const acts = pen.rows().filter((a) => a.class === "bug").map((a) => ({ ...a, payload: JSON.parse(a.payload) }));
+  assert.deepEqual(foldPostActs(acts).posts.get(ID).fields.reveal, done.reveal);
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+
+  // it is the critter's image once: the namer has nothing to pick, and a second set is refused, writing nothing
+  const n = pen.rows().length;
+  await refusedWith(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), 409, /critter is revealed/);
+  await refusedWith(revealAtTown({ post: ID, candidates: [PAINTED[1]] }, WRIGHT, { now: NOW }), 409, /critter is revealed/);
+  assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+});
+
+test("9 · CORE-25: the single-candidate reveal keeps every guard of the three: a hand only, shipped only, a media URL the town holds, and never an empty or two-image list", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const PR9 = pull("ada");
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: PR9 }, WRIGHT, { now: NOW, roll: ROLL });
+  const refusedNothingWritten = async (p, code, re) => {
+    const n = pen.rows().length;
+    const had = JSON.stringify(posts.get(ID));
+    await refusedWith(p, code, re);
+    assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+    assert.equal(JSON.stringify(posts.get(ID)), had, "a refused reveal changed the post");
+  };
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW }), 409, /stands fixed, and a critter is revealed when its fix ships/);
+  await advanceAtTown({ post: ID, to: "shipped", link: tagFor(PR9) }, WRIGHT, { now: NOW, roll: ROLL });
+
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]] }, FINN, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]] }, ADA, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [] }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: ["https://example.com/x.png"] }, WRIGHT, { now: NOW }), 422, /a candidate is a media URL/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [`https://media.postmark.town/media/iris/${"4".repeat(64)}.png`] }, WRIGHT, { now: NOW }), 422, /the town holds no file at that URL/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]], pick: 1 }, WRIGHT, { now: NOW }), 422, /one at a time/);
+
+  // control: the writer is live: the same hand's one good portrait lands
+  const done = await revealAtTown({ post: ID, candidates: [PAINTED[2]] }, WRIGHT, { now: NOW });
+  assert.equal(done.reveal.image, PAINTED[2]);
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[2], "the writer is live: the good portrait is on the post");
+});
+
 test("9 · the reveal's refusals each write nothing: not shipped, not a hand, not three media URLs, no candidates, not the fixer, a pick out of range, both at once, and after the pick", async () => {
   const { pen, posts } = setup();
   await toBriefed();
@@ -678,7 +737,8 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
   await advanceAtTown({ post: ID, to: "shipped", link: tagFor(PR9) }, WRIGHT, { now: NOW, roll: ROLL });
 
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED }, FINN, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
-  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds 3 candidates/);
+  // until 2026-11-06 this was /a reveal holds 3 candidates/; CORE-25 lets a hand set one portrait, so two is still the refused count
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait, or three candidates/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [...PAINTED.slice(0, 2), "https://example.com/x.png"] }, WRIGHT, { now: NOW }), 422, /a candidate is a media URL/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0], PAINTED[0], PAINTED[1]] }, WRIGHT, { now: NOW }), 422, /three different images/);
   // POS-738: a right-shaped URL whose bytes the town never held is refused, by name
