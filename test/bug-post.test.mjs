@@ -2169,10 +2169,10 @@ test("18 · (19:57, the one rule) a declaration stands above every < that could 
     "a comment closed early by <!--->": `<!---> <details> -->\n\n${line}`,
     "a comment closed early by --!>": `<!-- a --!> <details> -->\n\n${line}`,
     "a comment closed early, a tag on its own line": `<!-->\n\n<details>\n\n-->\n\n${line}`,
-    // a fence in a list ends with the list, so the next line's <!-- is live and runs to the end of the body
+    // a fence in a list ends with the list, so the next line is live: a <!-- runs to the end of the body, a tag opens
     "a comment opened in a fence a list ended": `- a\n\n  \`\`\`\n<!--\n  \`\`\`\n\n${line}`,
-    // and these refused at f9adbdf9, by the code the rule replaces
     "a tag in a fence a list ended": `- a\n\n  \`\`\`\n<details>\n  \`\`\`\n\n${line}`,
+    // and these refused at f9adbdf9, by the code the rule replaces
     "a close tag holding the line in an attribute": `</div x="\n\n${line}\n\n">`,
     "a tag on a comment's closing line": `<!--\n--> <details>\n\n${line}`,
     "a tag after a closed comment": `<!-- x --> <details>\n\n${line}`,
