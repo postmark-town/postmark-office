@@ -85,8 +85,8 @@ test("world_hold { kind, count, to: <the published bowl> } reaches the kind door
   assert.equal(await units(), 0, "nothing written");
 });
 
-test("world_hold { from: <a draft> } and { act: refill, thing: <a draft> } are the kind door's refusals: a draft holds nothing yet", { skip }, async () => {
-  await assert.rejects(callHoldTool("world_hold", { from: "sbx-cy/a-draft-bowl" }, KEY), (e) => e.code === 404 && /a draft holds nothing yet/.test(e.hint));
+test("world_hold { from: <a draft> } and { act: refill, thing: <a draft> } are the kind door's refusals: a holder not on the world is reached by nothing (WLD-138 F3: never 'a draft holds nothing yet', which a full holder set down is not)", { skip }, async () => {
+  await assert.rejects(callHoldTool("world_hold", { from: "sbx-cy/a-draft-bowl" }, KEY), (e) => e.code === 404 && /nothing goes in or comes out until it publishes/.test(e.hint) && !/a draft holds nothing yet/.test(e.hint));
   await assert.rejects(callHoldTool("world_hold", { act: "refill", thing: "sbx-cy/a-draft-bowl", kind: "pocket-comet" }, KEY), (e) => e.code === 404);
   await assert.rejects(callHoldTool("world_hold", { from: BOWL, kind: "no-such-kind" }, KEY), (e) => e.code === 409 && /you are not standing where sbx-ana\/the-bowl stands/.test(e.defect));
   assert.equal(await units(), 0);
@@ -114,7 +114,7 @@ test("POS-766 · a thing made in hand at the real door: world_hold { act: consum
 
 test("POS-766 part 2 · SET DOWN: the maker's house sets a thing made in hand down as its own draft where it stands; the stake's terms come first, the holding ends, and the world lays it in no more", { skip }, async () => {
   const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
-  const pebble = "sbx-cy/a-pebble", bag = "sbx-cy/a-bag", slip = "sbx-cy/a-slip";
+  const pebble = "sbx-cy/a-pebble";
   await leaveMarkViaOffice(repo, { slug: "a-pebble", body: "A smooth pebble.", to: "sbx-cy" }, KEY);
   const c = await store.connect("world2_owner");
   const q = async (sql, a = []) => (await c.query(sql, a)).rows;
@@ -135,10 +135,7 @@ test("POS-766 part 2 · SET DOWN: the maker's house sets a thing made in hand do
     assert.deepEqual(hold.map((a) => a.action), ["make", "set-down"]);
     assert.equal(hold[1].payload.policy, "detach");
     assert.equal((await worldMarkById(pebble)).mark, null, "set down: the overlay lets it go, and its draft is its maker's own");
-    // P2-d: a holder is set down empty
-    await leaveMarkViaOffice(repo, { slug: "a-bag", body: "A cloth bag.", holder: true, to: "sbx-cy" }, KEY);
-    await leaveMarkViaOffice(repo, { slug: "a-slip", body: "A slip of paper.", to: bag }, KEY);
-    await assert.rejects(callHoldTool("world_hold", { thing: bag, accept: true }, KEY, { verb: "drop" }), (e) => e.code === 409 && /holds 1 thing, and a holder is set down empty/.test(e.defect));
+    // (P2-d, "a holder is set down empty", gave way on WLD-138: a full holder is set down in the tests below)
     // P2-a: another house holding it is told what it can do, and nothing is written
     await leaveMarkViaOffice(repo, { slug: "a-gift-for-dee", body: "A paper boat.", to: "sbx-cy" }, KEY);
     await callHoldTool("world_hold", { thing: "sbx-cy/a-gift-for-dee", to: "sbx-dee" }, KEY);
@@ -148,7 +145,7 @@ test("POS-766 part 2 · SET DOWN: the maker's house sets a thing made in hand do
       assert.match(e.hint, /Give it back to its maker's house to set down, or keep, give or eat it/);
       return true;
     });
-    assert.equal((await q("SELECT count(*)::int AS n FROM acts WHERE object IN ($1, $2) AND action = 'set-down'", [bag, "sbx-cy/a-gift-for-dee"]))[0].n, 0, "no set-down for either refusal");
+    assert.equal((await q("SELECT count(*)::int AS n FROM acts WHERE object = $1 AND action = 'set-down'", ["sbx-cy/a-gift-for-dee"]))[0].n, 0, "no set-down for the refusal");
   } finally { await c.end(); }
 });
 
@@ -221,6 +218,86 @@ test("#760 review 3 · a named make when the maker's drafts cannot be read fails
   } finally { undo(); }
   const c = await store.connect("world2_owner");
   try { assert.equal((await c.query("SELECT count(*)::int AS n FROM acts WHERE object = 'sbx-cy/while-blind'")).rows[0].n, 0, "nothing made"); } finally { await c.end(); }
+});
+
+// WLD-138 (Darko 2026-11-03 00:09 EDT, "Yes, at settlement"): a filled holder is set down WITH what it holds. The
+// contents are never copied or re-filed: they stay held by the holder's id, so the record that already says what is
+// in the holder is the record that says it afterwards (hold-through's printout is proved on it in
+// set-down-full-holder-printout.test.mjs). Nothing here is a real record: sbx-cy, a bag and two slips are invented.
+const fullBag = async (leaveMarkViaOffice, bag, slips) => {
+  await leaveMarkViaOffice(repo, { slug: bag.split("/")[1], body: "A cloth bag.", holder: true, to: "sbx-cy" }, KEY);
+  for (const s of slips) await leaveMarkViaOffice(repo, { slug: s.split("/")[1], body: "A slip of paper.", to: bag }, KEY);
+};
+
+test("WLD-138 · SET DOWN FULL: the door permits a full holder, asks the stake first, and writes ONE set-down act: its contents are neither moved, copied nor freed", { skip }, async () => {
+  const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
+  const bag = "sbx-cy/a-full-bag", s1 = "sbx-cy/a-slip-one", s2 = "sbx-cy/a-slip-two";
+  await fullBag(leaveMarkViaOffice, bag, [s1, s2]);
+  const c = await store.connect("world2_owner");
+  const rowsOf = async (ids) => (await c.query("SELECT id::int AS id, action, object, payload FROM acts WHERE class = 'holding' AND object = ANY($1) ORDER BY id", [ids])).rows;
+  try {
+    const before = await rowsOf([bag, s1, s2]);
+    assert.deepEqual(before.map((r) => [r.action, r.object]), [["make", bag], ["make", s1], ["make", s2]]);
+    // the terms come first, exactly as for an empty holder: nothing is recorded
+    const terms = await callHoldTool("world_hold", { thing: bag }, KEY, { verb: "drop" });
+    assert.deepEqual([terms.recorded, terms.stake], [false, 1], JSON.stringify(terms).slice(0, 300));
+    assert.deepEqual(await rowsOf([bag, s1, s2]), before, "no act before accept");
+    // P2-d gave way: the full holder is set down (the stake bounces in this purse-less fixture; the words say so, as for any set-down)
+    const r = await callHoldTool("world_hold", { thing: bag, accept: true }, KEY, { verb: "drop" });
+    assert.equal(r.did, "set-down", JSON.stringify(r).slice(0, 400));
+    assert.equal(r.draft, bag);
+    assert.match(r.stands_note, /publishes at the next settlement|but the stamp did not land|with your stamp behind it/);
+    // exactly one new act, the holder's own: both slips' rows are byte-for-byte what they were
+    const after = await rowsOf([bag, s1, s2]);
+    assert.deepEqual(after.slice(0, 3), before, "the earlier rows are untouched");
+    assert.deepEqual(after.slice(3).map((a) => [a.action, a.object, a.payload.holder, a.payload.policy]), [["set-down", bag, null, "detach"]]);
+    // PENDING, not live: the holder is its maker's draft until the settlement, and the world lays it in no more ...
+    assert.equal((await worldMarkById(bag)).mark, null, "the holder waits for the settlement");
+    // ... and its contents are still the holder's contents: held by its id, not loose, not in anyone's hands
+    for (const s of [s1, s2]) {
+      const m = (await worldMarkById(s)).mark;
+      assert.equal(m?.held_by, bag, `${s} stays held by the holder`);
+      assert.equal(m?.at, undefined, `${s} is not loose on the ground`);
+    }
+  } finally { await c.end(); }
+});
+
+test("WLD-138 · SET DOWN FULL, ROLLBACK: the set-down act fails, the draft goes back out, the holder stays in hand with every slip in it; the retry then lands without touching a slip", { skip }, async () => {
+  const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
+  const pen = await import("../src/world2-pen.mjs");
+  const bag = "sbx-cy/a-rollback-bag", s1 = "sbx-cy/a-rb-slip-one", s2 = "sbx-cy/a-rb-slip-two";
+  await fullBag(leaveMarkViaOffice, bag, [s1, s2]);
+  const refusing = {
+    connect: async () => {
+      const c = await pool.connect();
+      return new Proxy(c, { get(t, k) {
+        if (k === "query") return (text, params) => {
+          const sql = String(text?.text ?? text), vals = params ?? text?.values ?? [];
+          return /INSERT INTO acts/i.test(sql) && vals.includes("set-down") ? Promise.reject(new Error("the store refused the set-down (test)")) : t.query(text, params);
+        };
+        const v = t[k]; return typeof v === "function" ? v.bind(t) : v;
+      } });
+    },
+    query: (...a) => pool.query(...a),
+  };
+  pen.__setPoolForTest(refusing);
+  try {
+    await assert.rejects(callHoldTool("world_hold", { thing: bag, accept: true }, KEY, { verb: "drop" }), (e) => String(e?.cause?.message ?? "").includes("refused the set-down (test)"));
+  } finally { pen.__setPoolForTest(pool); }
+  assert.equal((await worldMarkById(bag)).mark?.held_by, "sbx-cy", "still in hand");
+  for (const s of [s1, s2]) assert.equal((await worldMarkById(s)).mark?.held_by, bag, `${s} still in the holder`);
+  const r = await callHoldTool("world_hold", { thing: bag, accept: true }, KEY, { verb: "drop" });
+  assert.equal(r.did, "set-down", JSON.stringify(r).slice(0, 300));
+  for (const s of [s1, s2]) assert.equal((await worldMarkById(s)).mark?.held_by, bag, `${s} still in the holder after the retry`);
+});
+
+test("WLD-138 · an EMPTY holder is set down exactly as before (the ordinary case), and a holder is no longer asked to be empty", { skip }, async () => {
+  const { leaveMarkViaOffice, worldMarkById } = await import("../src/world.mjs");
+  const bag = "sbx-cy/an-empty-bag";
+  await leaveMarkViaOffice(repo, { slug: "an-empty-bag", body: "A cloth bag.", holder: true, to: "sbx-cy" }, KEY);
+  const r = await callHoldTool("world_hold", { thing: bag, accept: true }, KEY, { verb: "drop" });
+  assert.equal(r.did, "set-down");
+  assert.equal((await worldMarkById(bag)).mark, null);
 });
 
 test("#760 review 2 · THE ROLLBACK: the draft is filed, the set-down act fails, and the draft is withdrawn again, so the thing stays in hand and can be set down once the store answers", { skip }, async () => {

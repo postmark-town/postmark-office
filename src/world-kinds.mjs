@@ -127,10 +127,16 @@ async function shownIn(fold, holder, attachments, view, deps, { sharp = false } 
     counting: `${sum.join(", ")}: ${count} counted, as the room counts it (a holder counts 1 and everything it holds)` };
 }
 
-/** A published holder, or the refusal: a draft holds nothing yet; a mark that does not hold, says so. */
+/** A holder on the world (published, or in someone's hands), or the refusal; a mark that does not hold, says so. */
+// WLD-138 F3: the 404 used to say "a draft holds nothing yet", and a holder set down full holds what it held
+// (its contents stay inside it, by its id, pending with it). So it says what is true of every holder not on the world.
+export const HOLDER_NOT_ON_THE_WORLD = "a holder is reached once it stands on the world (published) or while it is in someone's hands. " +
+  "A holder set down as its maker's draft keeps what it holds, inside it, but nothing goes in or comes out until it publishes: " +
+  "at the next settlement on its maker's own ground, and on the commons only with a stamp behind it. Withdrawn by its maker before then, " +
+  "a holder that holds anything comes back whole to the hands it was set down from. Nothing was changed.";
 async function holderOrThrow(deps, id, view) {
   const mark = await deps.markById(id);
-  if (!mark) throw bounce(404, `${id} does not stand on the world`, "a holder is a published mark; a draft holds nothing yet. Nothing was changed.");
+  if (!mark) throw bounce(404, `${id} does not stand on the world`, HOLDER_NOT_ON_THE_WORLD);
   const law = holderLawOf({ holder: id, mark, view });
   if (!law.holder) throw bounce(422, `${id} holds nothing`, `it is ${law.className ? `a ${law.className}` : "a mark of no thing class"} whose holder is false; a holder is a thing its maker made with holder: true. Nothing was changed.`);
   if (law.capacity_refused) throw bounce(422, `${id}'s own capacity is refused`, `${law.capacity_refused}; until its maker sets one within them, nothing goes in or comes out by count. Nothing was changed.`);

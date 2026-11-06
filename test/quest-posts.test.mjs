@@ -26,11 +26,12 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, copyFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { OFFICE_ROOT } from "./fixture-paths.mjs";
+import { INVITE_TOWN } from "./helpers/invite-town.mjs";
 
 const REAL_TOWN = process.env.TOWN_CLONE ?? join(OFFICE_ROOT, "town-clone");
 const DIR = mkdtempSync(join(tmpdir(), "pm-quest-posts-"));
@@ -47,16 +48,57 @@ const { readQuestRegistry, questEntries, QUEST_HANDS } = await import("../src/qu
 const { compareRebuild, dryRun } = await import("../world2/tools/events-rebuild.mjs");
 
 const REGISTRY = readQuestRegistry(TOWN);
-const QUEST_IDS = questEntries(REGISTRY).map((q) => q.id);
+// THE EXPECTATION IS THE PINNED FILE, READ BY THE TEST (POS-896). Until this change the counts below were typed into the
+// assertions (11 quests, 12 acts, a four-card board), so a registry that gains a quest reddened the file although the
+// seeding and the read were right. The expected quests are now parsed straight from the registry JSON with this file's own
+// spelling of "what is a quest post" (a cadence from ADMITTED_CADENCES) and "what is a pot" (cadence "ongoing"), NOT through
+// the production helpers (readQuestRegistry, questEntries, questTerms) that the code under test uses: the same helper on
+// both sides could never disagree with itself. Production's own answer is compared to it.
+const ADMITTED_CADENCES = ["daily", "monthly", "milestone", "one-time"];   // src/quests.mjs § QUEST_CADENCES, spelled here on purpose
+const RAW_QUESTS = JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests;
+/** The quests that are posts, in the file's order, as plain objects with exactly the five term fields the read promises. */
+const expectedEntriesOf = (quests) => quests.filter((q) => ADMITTED_CADENCES.includes(q.cadence))
+  .map((q) => ({ id: q.id, title: q.title, source: q.source, reward: q.reward, cadence: q.cadence, target: q.target ?? null }));
+const EXPECTED = expectedEntriesOf(RAW_QUESTS);
+const QUEST_IDS = EXPECTED.map((q) => q.id);
+const N_QUESTS = QUEST_IDS.length;
+const POT_IDS = RAW_QUESTS.filter((q) => q.cadence === "ongoing").map((q) => q.id);
 // THE REAL CLOCK, NOT A PINNED DAY. The pen refuses a row stamped for a
 // crossing older than the open window (src/events.mjs § refuse, the act-4171
 // class), and the open window is read from the wall clock. A pinned 09-28 went
 // red the day the window moved to 219: a calendar-pinned control decays.
 const NOW = Date.now();
 
-// The four cards the site's Quest Guild draws today (site src/lib/civic.mjs §
-// QUEST_REGISTRY): the daily pair and the two milestones, by title.
-const BOARD = ["Reach out", "Be reached", "Budding friendship", "A first idea"];
+// The cards the site's Quest Guild draws (site src/lib/civic.mjs § QUEST_REGISTRY): the open daily and milestone posts, by
+// title, in the registry's order. It was the four cards of the pin this file was written on (the daily pair and two
+// milestones, typed in); it is now read off the registry file, less the quest test 5 closes.
+const CLOSED_IN_TEST_5 = "welcome-to-postmark";
+const boardOf = (entries) => entries.filter((q) => ["daily", "milestone"].includes(q.cadence) && q.id !== CLOSED_IN_TEST_5).map((q) => q.title);
+const BOARD = boardOf(EXPECTED);
+
+/**
+ * What a read of class quest got wrong against the pristine expectation `expected` (entries as expectedEntriesOf spells them).
+ * Empty when right. The expectation is held fixed by the caller; only the compared answer moves in a detector.
+ */
+function postsMismatches(expected, posts) {
+  const out = [];
+  const got = posts.map((p) => p.fields?.quest);
+  const seen = new Set();
+  for (const id of got) { if (seen.has(id)) out.push(`duplicate ${id}`); seen.add(id); }
+  for (const e of expected) if (!seen.has(e.id)) out.push(`missing ${e.id}`);
+  const want = new Set(expected.map((e) => e.id));
+  for (const id of seen) if (!want.has(id)) out.push(`unexpected ${id}`);
+  if (!out.length && JSON.stringify(got) !== JSON.stringify(expected.map((e) => e.id))) out.push(`order ${got.join(",")}`);
+  for (const e of expected) {
+    const p = posts.find((x) => x.fields?.quest === e.id);
+    if (!p) continue;
+    for (const f of ["title", "source", "reward", "cadence", "target"]) {
+      const g = p.terms?.[f];
+      if (JSON.stringify(g) !== JSON.stringify(e[f])) out.push(`terms ${e.id}.${f}: got ${JSON.stringify(g)} wanted ${JSON.stringify(e[f])}`);
+    }
+  }
+  return out;
+}
 
 const WRIGHT = { household: "starforge", handles: new Set(["wright"]) };
 const KEEMIN = { household: "darko", handles: new Set(["keemin"]) };
@@ -127,15 +169,19 @@ async function refusedWith(p, code, re) {
 
 test("1 · the seeding puts every registry quest up once, the pen as author and the act naming the hand; a second run posts nothing", async () => {
   const { pen, posts } = setup();
-  assert.equal(QUEST_IDS.length, 11, "the registry's quests: 2 daily, 2 milestone, 7 one-time (the 2 pots are POS-291's)");
+  // the registry still holds at least the eleven quests this file was written against (2 daily, 2 milestone, 7 one-time at that
+  // pin), so a registry that emptied cannot pass; how many more it holds is the file's, not a typed-in number (POS-896)
+  assert.ok(N_QUESTS >= 11, `the registry's quests: ${N_QUESTS}`);
+  assert.deepEqual(questEntries(REGISTRY).map((q) => q.id), QUEST_IDS, "production's own list of quest posts is the file's");
+  assert.ok(POT_IDS.length > 0, "the registry names pots, so the 'no pot is posted' check below is not vacuous");
 
   const dry = await seedQuestPosts({ hand: "wright", registry: REGISTRY, now: NOW, dryRun: true });
   assert.deepEqual(dry.would_post, QUEST_IDS.map((id) => `postmark-pen/${id}`));
   assert.equal(pen.rows().length, 0, "a dry run wrote an act");
 
   const run = await seedQuestPosts({ hand: "wright", registry: REGISTRY, now: NOW });
-  assert.equal(run.posted.length, 11);
-  assert.equal(posts.size, 11);
+  assert.equal(run.posted.length, N_QUESTS);
+  assert.equal(posts.size, N_QUESTS);
   for (const act of pen.rows()) {
     assert.equal(act.class, "quest");
     assert.equal(act.action, "post");
@@ -154,11 +200,11 @@ test("1 · the seeding puts every registry quest up once, the pen as author and 
   // every card the board shows today is one of them
   const titles = new Map([...posts.values()].map((r) => [r.title, r]));
   for (const t of BOARD) assert.equal(titles.get(t)?.author, "postmark-pen", `the board's "${t}" is not a post by the pen`);
-  assert.ok(![...posts.keys()].some((id) => /darko-fund|keeping-ec2/.test(id)), "a pot was posted");
+  assert.ok(![...posts.keys()].some((id) => POT_IDS.some((pot) => id === `postmark-pen/${pot}`)), "a pot was posted");
 
   const again = await seedQuestPosts({ hand: "wright", registry: REGISTRY, now: NOW });
-  assert.deepEqual([again.posted.length, again.already.length], [0, 11]);
-  assert.equal(pen.rows().length, 11, "a second run wrote an act");
+  assert.deepEqual([again.posted.length, again.already.length], [0, N_QUESTS]);
+  assert.equal(pen.rows().length, N_QUESTS, "a second run wrote an act");
 });
 
 // ── 2 ───────────────────────────────────────────────────────────────────────
@@ -193,6 +239,45 @@ test("2b · a pot, an unknown quest, a repeat and a stray field are each refused
   const stray = await townPostEvent({ class: "quest", quest: "first-idea", title: "mine" }, WRIGHT);
   assert.equal(stray.code, 422);
   assert.match(stray.defect, /a quest does not take: title/);
+  assert.equal(pen.rows().length, 1);
+});
+
+// ── 2c · POS-816/g: the monthly cadence ─────────────────────────────────────
+// Darko 2026-11-03 09:42 EST: "if it's easier to just make a monthly cadence and keep things flat that's fine
+// with me." Until 2026-11-03 Bring a neighbour wore the pots' "ongoing", and judgeQuestEntry refused it as "a
+// funding pot, not a quest post" (Truey, postmark#4424 finding 1). `monthly` is a quest cadence now; `ongoing`
+// stays the pots'.
+const MONTHLY_REGISTRY = () => ({ quests: [
+  { id: "bring-a-neighbour", title: "Bring a neighbour", cadence: "monthly", validation: "automatic", source: "Invite someone you'd like to have in town.", reward: "10 stamps", target: 10 },
+  { id: "keeping-pot", title: "A pot", cadence: "ongoing", subtype: "bounty", validation: "needs-review", target: 200 },
+  { id: "fortnightly-thing", title: "A cadence nobody named", cadence: "fortnightly" },
+] });
+
+test("2c · a monthly row is a quest post, a pot's ongoing is still refused, and a cadence nobody named is not a quest's", async () => {
+  const { pen, posts } = setup();
+  const { judgeQuestEntry, QUEST_CADENCES, POT_CADENCE } = await import("../src/quests.mjs");
+  const reg = MONTHLY_REGISTRY();
+  assert.ok(QUEST_CADENCES.includes("monthly"));
+  assert.equal(QUEST_CADENCES.includes(POT_CADENCE), false, "ongoing is the pots', not a quest cadence");
+  assert.deepEqual(questEntries(reg).map((q) => q.id), ["bring-a-neighbour"], "the board's quests: the monthly row, not the pot, not the cadence nobody named");
+  assert.equal(judgeQuestEntry(reg, "bring-a-neighbour").cadence, "monthly");
+  const posted = await postAtTown({ class: "quest", quest: "bring-a-neighbour" }, WRIGHT, { now: NOW, registry: reg });
+  assert.equal(posted.post.id, "postmark-pen/bring-a-neighbour");
+  assert.equal(posts.get("postmark-pen/bring-a-neighbour").state, "open", "put up, as the town's post");
+  assert.equal(pen.rows().length, 1);
+  await refusedWith(postAtTown({ class: "quest", quest: "keeping-pot" }, WRIGHT, { now: NOW, registry: reg }), 422, /funding pot.*POS-291/);
+  await refusedWith(postAtTown({ class: "quest", quest: "fortnightly-thing" }, WRIGHT, { now: NOW, registry: reg }), 422, /cadence "fortnightly", which is not a quest's.*daily, monthly, milestone, one-time/);
+  assert.equal(pen.rows().length, 1, "a refused post wrote an act");
+});
+
+test("2c · the town's own bring-a-neighbour row is a quest post, once the town carries it (INVITE_TOWN_CLONE)", { skip: INVITE_TOWN ? false : "needs postmark#4424's quest-registry.json row: set INVITE_TOWN_CLONE to a town checkout carrying it" }, async () => {
+  const { pen } = setup();
+  const real = readQuestRegistry(INVITE_TOWN);
+  const row = real.quests.find((q) => q.id === "bring-a-neighbour");
+  assert.equal(row?.cadence, "monthly", "the town's row is the monthly one");
+  assert.ok(questEntries(real).some((q) => q.id === "bring-a-neighbour"), "the board's quests include it");
+  const posted = await postAtTown({ class: "quest", quest: "bring-a-neighbour" }, WRIGHT, { now: NOW, registry: real });
+  assert.equal(posted.post.id, "postmark-pen/bring-a-neighbour");
   assert.equal(pen.rows().length, 1);
 });
 
@@ -242,11 +327,14 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
 
   assert.equal(r.class, "quest");
   assert.deepEqual(r.finished, ["closed"]);
-  assert.equal(r.total, 11);
+  assert.equal(r.total, N_QUESTS);
   assert.deepEqual(r.posts.map((p) => p.fields.quest), QUEST_IDS, "the registry's own order");
+  // every quest, its order and each of its five terms, against the pristine file (a missing, duplicated or changed one is named)
+  assert.deepEqual(postsMismatches(EXPECTED, r.posts), []);
   const send = r.posts[0];
   assert.deepEqual(Object.keys(send).sort(), ["author", "class", "fields", "history", "household", "id", "latest", "responses", "state", "terms", "title"]);
-  assert.deepEqual(send.terms, { title: "Reach out", source: "Send a letter to 5 different residents. Resets daily.", reward: "1 stamp each", cadence: "daily", target: 5 });
+  assert.deepEqual(send.terms, { title: EXPECTED[0].title, source: EXPECTED[0].source, reward: EXPECTED[0].reward, cadence: EXPECTED[0].cadence, target: EXPECTED[0].target },
+    "the first post's terms are the file's first quest, field for field");
   assert.deepEqual([send.author, send.household, send.state, send.responses, send.latest.act], ["postmark-pen", "hh:the-town", "open", 0, "post"]);
   assert.ok(!("progress" in send), "progress is derived from the letters, never on the post");
   const welcome = r.posts.find((p) => p.fields.quest === "welcome-to-postmark");
@@ -259,7 +347,7 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   assert.deepEqual(guild, BOARD);
 
   const one = await postsAtOffice({ class: "quest", post: "postmark-pen/first-idea" }, { now: NOW, townClone: TOWN });
-  assert.equal(one.post.terms.title, "A first idea");
+  assert.equal(one.post.terms.title, EXPECTED.find((q) => q.id === "first-idea").title, "the post first-idea carries the file's title for first-idea");
   await refusedWith(postsAtOffice({ class: "quest", post: "postmark-pen/nothing" }, { now: NOW, townClone: TOWN }), 404);
   // an idea is a post class since POS-290: the read answers what the store holds (here, none)
   assert.equal((await postsAtOffice({ class: "idea" }, { now: NOW, townClone: TOWN })).total, 0);
@@ -270,6 +358,36 @@ test("5 · the posts read answers class quest: the registry's order and terms, t
   assert.equal(blind.posts[0].terms, null);
 });
 
+// ── 5b (POS-857) ────────────────────────────────────────────────────────────
+//
+// LAW (Wright on Darko's behalf, 2026-11-01): "An optional registry `ends`, holding the
+// existing inclusive cutoff ... The post's own state and act history stay as they are: no
+// invented 'closed-by-window' state and no close act." So the terms carry `ends` as a fact
+// for the offer surfaces, an open post stays open and an explicitly closed one stays closed.
+
+test("5b · a registry row's ends rides the quest post's terms, and the post's state and history are untouched", async () => {
+  const { pen, posts } = setup();
+  const SYN = join(DIR, "synthetic-town");
+  mkdirSync(SYN, { recursive: true });
+  const row = (id, extra = {}) => ({ id, title: `An invented ${id}`, cadence: "milestone", validation: "automatic", source: "s", target: 1, reward: "r", ...extra });
+  const synthetic = { quests: [row("window", { ends: "2026-03-15" }), row("lasting"), row("shut", { ends: "2026-03-15" }), row("daily-one", { cadence: "daily" })] };
+  writeFileSync(join(SYN, "quest-registry.json"), JSON.stringify(synthetic));
+  await seedQuestPosts({ hand: "wright", registry: synthetic, now: NOW });
+  await closeAtTown({ post: "postmark-pen/shut" }, WRIGHT, { now: NOW });
+  const actsBefore = pen.rows().length;
+  const stateBefore = JSON.stringify([...posts.values()].map((r) => [r.id, r.state, r.last_act]));
+
+  const r = await postsAtOffice({ class: "quest" }, { now: NOW, townClone: SYN });
+  const by = Object.fromEntries(r.posts.map((p) => [p.fields.quest, p]));
+  assert.equal(by.window.terms.ends, "2026-03-15", "the ended-window row's terms carry its last offered day");
+  assert.equal("ends" in by.lasting.terms, false, "no ends in the registry: no key, as before");
+  assert.equal("ends" in by["daily-one"].terms, false, "cadence is not an end");
+  assert.deepEqual([by.window.state, by.shut.state], ["open", "closed"], "no state was invented or reopened");
+  assert.deepEqual(by.window.history.map(({ at, ...h }) => h), [{ stage: "open", state: "open", hand: "wright" }], "an open post gains no act");
+  assert.equal(pen.rows().length, actsBefore, "the read wrote no act");
+  assert.equal(JSON.stringify([...posts.values()].map((p) => [p.id, p.state, p.last_act])), stateBefore, "the stored rows are as they were");
+});
+
 // ── 6 ───────────────────────────────────────────────────────────────────────
 
 test("6 · the rebuild folds the quest acts back into exactly the rows the pen wrote, and a hand-edited row is drift", async () => {
@@ -278,7 +396,7 @@ test("6 · the rebuild folds the quest acts back into exactly the rows the pen w
   await closeAtTown({ post: "postmark-pen/first-idea" }, WRIGHT, { now: NOW });
   const out = await dryRun(pen);
   assert.equal(out.equal, true, out.drift.join("; "));
-  assert.deepEqual([out.counts.quest_acts, out.counts.quests], [12, 11]);
+  assert.deepEqual([out.counts.quest_acts, out.counts.quests], [N_QUESTS + 1, N_QUESTS], "one post act per quest, and the one close");
   const quests = [...posts.values()].map((r) => ({ ...r, fields: { ...r.fields } }));
   quests[0].state = "closed";
   const acts = pen.rows().map((a) => ({ ...a, payload: JSON.parse(a.payload) }));
@@ -297,4 +415,72 @@ test("the town door: read: \"posts\" and read: \"quest\" serve read_posts, the a
   await townApex({ read: "quest" }, null, { call, schemas });
   await townApex({ read: "posts", args: { class: "event" } }, null, { call, schemas });
   assert.deepEqual(calls, [{ tool: "read_posts", fields: { class: "quest" } }, { tool: "read_posts", fields: { class: "event" } }]);
+});
+
+// ── THE DETECTORS (POS-896): an invented registry, the pristine expectation held fixed, one wrong answer per branch ──
+// The shapes are the minimal admitted ones (a daily, a milestone, a one-time, and a pot that is not a quest). Every detector
+// asks the REAL seeding and the REAL read; only the registry the code reads (or the answer compared) moves, never the oracle.
+const INVENTED_QUESTS = [
+  { id: "inv-daily", title: "Invented daily", cadence: "daily", validation: "automatic", source: "Do the invented daily thing 3 times.", reward: "1 stamp each", target: 3 },
+  { id: "inv-milestone", title: "Invented milestone", cadence: "milestone", validation: "needs-review", source: "Do the invented milestone once.", reward: "5 stamps", target: 1 },
+  { id: "inv-once", title: "Invented one-time", cadence: "one-time", validation: "automatic", source: "Do the invented one-time thing.", reward: "2 stamps" },
+  { id: "inv-pot", title: "Invented pot", cadence: "ongoing", subtype: "bounty", validation: "needs-review", source: "A pot of the invented town.", reward: "" },
+];
+const PRISTINE = expectedEntriesOf(INVENTED_QUESTS);
+let inventedTowns = 0;
+/** An invented town dir holding `quests` as its registry, under this file's own temp root. */
+function inventedTown(quests) {
+  const dir = join(DIR, `invented-${inventedTowns += 1}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "quest-registry.json"), JSON.stringify({ quests }));
+  return dir;
+}
+/** Seed the pen from `quests` (what the code reads), read class quest back from the same dir. */
+async function seededAndRead(quests) {
+  setup();
+  const dir = inventedTown(quests);
+  await seedQuestPosts({ hand: "wright", registry: readQuestRegistry(dir), now: NOW });
+  return postsAtOffice({ class: "quest" }, { now: NOW, townClone: dir });
+}
+
+test("detector · the pristine invented registry is seeded and read as the pristine expectation says (the oracle agrees with the code)", async () => {
+  const r = await seededAndRead(INVENTED_QUESTS);
+  assert.deepEqual(postsMismatches(PRISTINE, r.posts), []);
+  assert.equal(r.total, 3, "three quests; the pot is not a post");
+  assert.deepEqual(boardOf(PRISTINE), ["Invented daily", "Invented milestone"]);
+});
+
+test("detector · a quest the registry loses is named missing (the pristine expectation still has it)", async () => {
+  const r = await seededAndRead(INVENTED_QUESTS.filter((q) => q.id !== "inv-once"));
+  assert.deepEqual(postsMismatches(PRISTINE, r.posts), ["missing inv-once"]);
+});
+
+test("detector · a quest the registry adds is named unexpected", async () => {
+  const r = await seededAndRead([...INVENTED_QUESTS, { id: "inv-extra", title: "Extra", cadence: "one-time", source: "x", reward: "1 stamp" }]);
+  assert.deepEqual(postsMismatches(PRISTINE, r.posts), ["unexpected inv-extra"]);
+});
+
+test("detector · a changed reward is named by quest and field, wanted and got", async () => {
+  const r = await seededAndRead(INVENTED_QUESTS.map((q) => (q.id === "inv-daily" ? { ...q, reward: "9 stamps each" } : q)));
+  assert.deepEqual(postsMismatches(PRISTINE, r.posts), ['terms inv-daily.reward: got "9 stamps each" wanted "1 stamp each"']);
+});
+
+test("detector · a changed target and a changed cadence are each named", async () => {
+  const r = await seededAndRead(INVENTED_QUESTS.map((q) => (q.id === "inv-milestone" ? { ...q, target: 2 } : q)));
+  assert.deepEqual(postsMismatches(PRISTINE, r.posts), ["terms inv-milestone.target: got 2 wanted 1"]);
+  const r2 = await seededAndRead(INVENTED_QUESTS.map((q) => (q.id === "inv-once" ? { ...q, cadence: "monthly" } : q)));
+  assert.deepEqual(postsMismatches(PRISTINE, r2.posts), ['terms inv-once.cadence: got "monthly" wanted "one-time"']);
+});
+
+test("detector · a duplicated answer row and a swapped order are named (the compared answer moves, the oracle does not)", async () => {
+  const r = await seededAndRead(INVENTED_QUESTS);
+  assert.deepEqual(postsMismatches(PRISTINE, [...r.posts, r.posts[0]]), ["duplicate inv-daily"]);
+  assert.deepEqual(postsMismatches(PRISTINE, [r.posts[1], r.posts[0], r.posts[2]]), ["order inv-milestone,inv-daily,inv-once"]);
+});
+
+test("detector · a pot that comes up as a post is named unexpected, and the pot is never in the expectation", async () => {
+  const r = await seededAndRead(INVENTED_QUESTS);
+  const withPot = [...r.posts, { ...r.posts[0], fields: { quest: "inv-pot" } }];
+  assert.deepEqual(postsMismatches(PRISTINE, withPot), ["unexpected inv-pot"]);
+  assert.equal(PRISTINE.some((q) => q.id === "inv-pot"), false);
 });
