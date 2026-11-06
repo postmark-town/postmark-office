@@ -3,8 +3,9 @@
 // deploy/dev-seed-advance.sh runs here whole under bash, with every box command a
 // stub on PATH: no box, no Postgres, no sudo. `sudo` drops its flags and execs,
 // so the script's `bash -c` law-pen line really runs, with the real
-// deploy/world2-lib.sh. Every other stub logs its call to one file, in order, and
-// exits 7 when STUB_FAIL matches the call.
+// deploy/world2-lib.sh, and the env file's `grep` is the real one over a fixture
+// standing for the box's file. Every other stub logs its call to one file, in
+// order, and exits 7 when STUB_FAIL matches the call.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -23,6 +24,8 @@ const skip = spawnSync("bash", ["-c", "exit 0"]).status === 0 ? false : "no bash
 const SANDBOX = "w2_devsandbox_20260925";
 const TOWN = "a".repeat(40), WORLD = "b".repeat(40), OLD = "c".repeat(40);
 const TOWN_HEAD = "d".repeat(40);
+const OFFICE_ENV_SECRET = "invented-office-env-password";
+const STORE_AT = `postgres://office_api:${OFFICE_ENV_SECRET}@localhost:5432`;
 
 /** The ledger's parser, in the town's shape (tools/stamp-mint.mjs § parseStampLedger). */
 const STAMP_MINT = `export function parseStampLedger(text) {
@@ -36,14 +39,17 @@ const ledgerOf = (sigs) => `# the stamp ledger\n\n${sigs.map((s, i) => `- line $
 // Every stub logs its name and arguments, then fails if STUB_FAIL matches them.
 const LOGGED = 'echo "$NAME $*" >> "$STUB_LOG"\nif [ -n "${STUB_FAIL:-}" ] && [[ "$NAME $*" =~ $STUB_FAIL ]]; then echo "$NAME: stubbed failure" >&2; exit 7; fi\n';
 const STUBS = {
-  // exec, with the flags off; the env file's grep stands alone, since the box's file isn't here
-  sudo: `while :; do case "\${1:-}" in -n) shift ;; -u) shift 2 ;; *) break ;; esac; done
-if [ "$1" = grep ]; then NAME=grep; shift; ${LOGGED}exit "\${STUB_ENV_GREP:-0}"; fi
+  // exec, with the flags off and the law pen's names unset, as the real sudo's env_reset leaves them.
+  // The env file's grep is the real one, over the fixture that stands for the box's file.
+  sudo: `unset WORLD2_DB STAMP_LINES PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD
+while :; do case "\${1:-}" in -n) shift ;; -u) shift 2 ;; *) break ;; esac; done
+if [ "$1" = grep ]; then NAME=grep; shift; ${LOGGED}[ "\${!#}" = /etc/postmark-office-dev.env ] || { echo "sudo stub: grep asked of \${!#}" >&2; exit 8; }
+  exec grep "\${@:1:$#-1}" "$STUB_OFFICE_ENV"; fi
 exec "$@"\n`,
   runuser: 'shift 3; exec "$@"\n', // -u meepo --
   git: `NAME=git; ${LOGGED}case "$*" in
-  *" remote get-url --push "*) case "$2" in *town-clone) echo "$STUB_PUSH_TOWN" ;; *) echo "$STUB_PUSH_WORLD" ;; esac ;;
-  *" remote") echo origin ;;
+  *" remote get-url --push "*) if [ "$6" != origin ]; then echo "$STUB_PUSH_OTHER"; else case "$2" in *town-clone) echo "$STUB_PUSH_TOWN" ;; *) echo "$STUB_PUSH_WORLD" ;; esac; fi ;;
+  *" remote") echo "$STUB_REMOTES" ;;
   *" ls-remote "*) case "$2" in
       *town-clone) printf '%s\\trefs/tags/sandbox/seed\\n' "$STUB_TAG_TOWN" ;;
       *) printf '%s\\trefs/tags/sandbox/seed\\n' "$STUB_TAG_WORLD"
@@ -51,9 +57,13 @@ exec "$@"\n`,
     esac ;;
   *" rev-parse HEAD") echo "$STUB_TOWN_HEAD" ;;
 esac\n`,
-  // the one node that really runs is the chain comparison; the rest are logged
-  node: `if [ "$1" = --input-type=module ]; then "$STUB_REAL_NODE" "$@" || exit $?; NAME=node; shift 3; set -- chain-comparison; ${LOGGED}exit 0; fi
-NAME=node; ${LOGGED}exit 0\n`,
+  // the one node that really runs is the chain comparison, unless a test names what it prints;
+  // the rest log their call, and the store identity each would connect with
+  node: `if [ "$1" = --input-type=module ]; then
+  if [ -n "\${STUB_CHAIN_PRINTS:-}" ]; then cat > /dev/null; echo "$STUB_CHAIN_PRINTS"; else "$STUB_REAL_NODE" "$@" || exit $?; fi
+  NAME=node; shift 3; set -- chain-comparison; ${LOGGED}exit 0
+fi
+NAME=node; ${LOGGED}echo "$1 PGUSER=\${PGUSER:-} PGDATABASE=\${PGDATABASE:-} STAMP_LINES=\${STAMP_LINES:-}" >> "$STUB_ENV_LOG"; exit 0\n`,
   psql: `NAME=psql; ${LOGGED}case "$*" in
   *"SELECT sig"*) cat "$STUB_STORE_SIGS" ;;
   *"SELECT sha"*) echo "$STUB_PIN" ;;
@@ -61,10 +71,10 @@ esac\n`,
   systemctl: `NAME=systemctl; ${LOGGED}`,
   // drops its own properties, so the command it runs logs as itself
   "systemd-run": 'while [ "${1#-}" != "$1" ]; do case "$1" in -p) shift 2 ;; *) shift ;; esac; done\nexec "$@"\n',
-  realpath: 'for last; do :; done\ncase "$last" in *town-clone) [ -n "${STUB_REAL_TOWN:-}" ] && { echo "$STUB_REAL_TOWN"; exit 0; } ;; esac\nexec /usr/bin/realpath "$@"\n',
+  realpath: 'for last; do :; done\ncase "$last" in\n  *town-clone) [ -n "${STUB_REAL_TOWN:-}" ] && { echo "$STUB_REAL_TOWN"; exit 0; } ;;\n  *world-clone) [ -n "${STUB_REAL_WORLD:-}" ] && { echo "$STUB_REAL_WORLD"; exit 0; } ;;\nesac\nexec /usr/bin/realpath "$@"\n',
 };
 
-function box({ lib = null, ledger = ["s1", "s2", "s3"], store = ["s1", "s2", "s3"] } = {}) {
+function box({ lib = null, ledger = ["s1", "s2", "s3"], store = ["s1", "s2", "s3"], officeEnvLine = `WORLD2_PG_URL=${STORE_AT}/${SANDBOX}` } = {}) {
   const dir = tempDir("dev-seed-advance-");
   const bin = join(dir, "bin"), tree = join(dir, "srv-dev");
   mkdirSync(bin);
@@ -76,14 +86,17 @@ function box({ lib = null, ledger = ["s1", "s2", "s3"], store = ["s1", "s2", "s3
   mkdirSync(join(tree, "town-clone", "WHITE_PAGES"), { recursive: true });
   mkdirSync(join(tree, "world-clone"), { recursive: true });
   writeFileSync(join(tree, "town-clone", "tools", "stamp-mint.mjs"), STAMP_MINT);
-  writeFileSync(join(tree, "town-clone", "WHITE_PAGES", "stamp-ledger.md"), ledgerOf(ledger));
+  if (ledger) writeFileSync(join(tree, "town-clone", "WHITE_PAGES", "stamp-ledger.md"), ledgerOf(ledger));
   const sigs = join(dir, "store-sigs.txt");
   writeFileSync(sigs, store.length ? `${store.join("\n")}\n` : "");
   const creds = join(dir, "world2.env");
   writeFileSync(creds, "PG_LAW_INGESTER_PASSWORD=invented-for-this-test\n");
-  const log = join(dir, "calls.log");
+  const officeEnv = join(dir, "office-dev.env");
+  writeFileSync(officeEnv, `WORLD2_PG=1\n${officeEnvLine}\nTOWN_PUSH=0\n`);
+  const log = join(dir, "calls.log"), envLog = join(dir, "envs.log");
   writeFileSync(log, "");
-  return { bin, tree, log, sigs, creds };
+  writeFileSync(envLog, "");
+  return { bin, tree, log, envLog, sigs, creds, officeEnv };
 }
 
 function advance({ args = ["--town", TOWN, "--world", WORLD, "--go"], env = {}, ...setup } = {}) {
@@ -91,17 +104,21 @@ function advance({ args = ["--town", TOWN, "--world", WORLD, "--go"], env = {}, 
   const base = { ...process.env };
   const pathKey = Object.keys(base).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
   base[pathKey] = `${b.bin}${delimiter}${base[pathKey] ?? ""}`;
-  for (const k of ["WORLD2_DB", "PGDATABASE", "STUB_FAIL", "STUB_WORLD_PEELED", "STUB_REAL_TOWN", "STUB_ENV_GREP"]) delete base[k];
+  for (const k of ["WORLD2_DB", "PGDATABASE", "STUB_FAIL", "STUB_WORLD_PEELED", "STUB_REAL_TOWN", "STUB_REAL_WORLD", "STUB_CHAIN_PRINTS"]) delete base[k];
   const merged = {
     ...base,
     DEV_SEED_ADVANCE_TEST_ROOT: posix(b.tree),
     WORLD2_DB: SANDBOX,
     WORLD2_ENV_FILE: posix(b.creds),
     STUB_LOG: posix(b.log),
+    STUB_ENV_LOG: posix(b.envLog),
+    STUB_OFFICE_ENV: posix(b.officeEnv),
     STUB_REAL_NODE: posix(process.execPath),
     STUB_STORE_SIGS: posix(b.sigs),
+    STUB_REMOTES: "origin",
     STUB_PUSH_TOWN: "DISABLED-dev-channel-never-pushes",
     STUB_PUSH_WORLD: "DISABLED-dev-channel-never-pushes",
+    STUB_PUSH_OTHER: "DISABLED-dev-channel-never-pushes",
     STUB_TAG_TOWN: TOWN,
     STUB_TAG_WORLD: WORLD,
     STUB_TOWN_HEAD: TOWN_HEAD,
@@ -110,7 +127,8 @@ function advance({ args = ["--town", TOWN, "--world", WORLD, "--go"], env = {}, 
   };
   for (const [k, v] of Object.entries(merged)) if (v === undefined) delete merged[k];
   const r = spawnSync("bash", [posix(SCRIPT), ...args], { encoding: "utf8", env: merged, timeout: 60_000 });
-  return { ...r, calls: readFileSync(b.log, "utf8").split("\n").filter(Boolean), tree: posix(b.tree) };
+  const lines = (f) => readFileSync(f, "utf8").split("\n").filter(Boolean);
+  return { ...r, calls: lines(b.log), envs: lines(b.envLog), tree: posix(b.tree) };
 }
 
 // Each act's mark in the log, in the script's order. Reads are not among them.
@@ -121,6 +139,7 @@ const ACTS = [
   ["the verify", /^node world2\/tools\/stamp-lines\.mjs --verify --clone /],
   ["the reseed", /^node world2\/tools\/town-index-ingest\.mjs .*--seed --reseed$/],
   ["the law", /^node world2\/tools\/law-ingest\.mjs --law-repo /],
+  ["the snapshot", /^node src\/world-hydrate\.mjs .*--to-store$/],
   ["the preflight", /^node tools\/dev-rehearsal\.mjs --user meepo --only preflight$/],
 ];
 const actsIn = (calls) => calls.flatMap((c) => ACTS.filter(([, re]) => re.test(c)).map(([name]) => name));
@@ -138,7 +157,7 @@ test("without --go it prints the plan and runs nothing at all, not even a read",
   assert.deepEqual(r.calls, [], "not one box command was called");
   assert.match(r.stdout, /Nothing ran/);
   for (const [word, sha] of [["town", TOWN], ["world", WORLD]]) assert.match(r.stdout, new RegExp(`${word} ${sha}`));
-  for (const step of ["retag", "freshen", "stamp-lines --sync, then --verify", "--seed --reseed", "law-ingest", "--only preflight"]) assert.ok(r.stdout.includes(step), step);
+  for (const step of ["retag", "freshen", "stamp-lines --sync, then --verify", "--seed --reseed", "law-ingest", "world-hydrate --to-store", "--only preflight"]) assert.ok(r.stdout.includes(step), step);
 });
 
 test("a missing or short sha is usage, and runs nothing, --go or not", { skip }, () => {
@@ -182,12 +201,47 @@ test("a law pen with no readable password is refused before any step", { skip },
   assertNothingWrote(r);
 });
 
-test("a dev office env file that doesn't name the sandbox is refused before any step", { skip }, () => {
-  const r = advance({ env: { STUB_ENV_GREP: "1" } });
-  assert.equal(r.status, 9, r.stderr);
-  assert.match(r.stderr, /REFUSED: \/etc\/postmark-office-dev\.env does not name/);
-  assertNothingWrote(r);
-});
+// The script's own reason: "stamp-lines reaches the store through this file's URL, so it is checked too."
+// Each line runs the script's real pattern through the real grep, over a real file.
+const ENV_LINES_REFUSED = {
+  "prod's store": `WORLD2_PG_URL=${STORE_AT}/world2_dev`,
+  "prod's store, double-quoted": `WORLD2_PG_URL="${STORE_AT}/world2_dev"`,
+  "prod's store with the sandbox's name in its query": `WORLD2_PG_URL=${STORE_AT}/world2_dev?options=/${SANDBOX}`,
+  "no database, the sandbox's name in the query": `WORLD2_PG_URL=${STORE_AT}?options=/${SANDBOX}`,
+  "no database, the sandbox's name in the fragment": `WORLD2_PG_URL=${STORE_AT}#/${SANDBOX}`,
+  "a path that only ends in the sandbox's name": `WORLD2_PG_URL=${STORE_AT}/world2_dev/${SANDBOX}`,
+  "a longer name than the sandbox's": `WORLD2_PG_URL=${STORE_AT}/${SANDBOX}x`,
+  "no WORLD2_PG_URL in the file": `WORLD2_CLEARING_URL=${STORE_AT}/${SANDBOX}`,
+  "the sandbox's URL commented out": `#WORLD2_PG_URL=${STORE_AT}/${SANDBOX}`,
+};
+for (const [what, officeEnvLine] of Object.entries(ENV_LINES_REFUSED)) {
+  test(`a dev office env file is refused before any step: ${what}`, { skip }, () => {
+    const r = advance({ officeEnvLine });
+    assert.equal(r.status, 9, r.stderr);
+    assert.match(r.stderr, /REFUSED: \/etc\/postmark-office-dev\.env does not name/);
+    assert.ok(!(r.stdout + r.stderr).includes(OFFICE_ENV_SECRET), "the URL's password is not printed");
+    assertNothingWrote(r);
+  });
+}
+
+const ENV_LINES_PASSED = {
+  "the sandbox's URL, bare": `WORLD2_PG_URL=${STORE_AT}/${SANDBOX}`,
+  "double-quoted": `WORLD2_PG_URL="${STORE_AT}/${SANDBOX}"`,
+  "with a query": `WORLD2_PG_URL=${STORE_AT}/${SANDBOX}?sslmode=require`,
+  "double-quoted, with a query": `WORLD2_PG_URL="${STORE_AT}/${SANDBOX}?sslmode=require"`,
+  "the postgresql scheme": `WORLD2_PG_URL=postgresql://office_api:${OFFICE_ENV_SECRET}@localhost:5432/${SANDBOX}`,
+};
+for (const [what, officeEnvLine] of Object.entries(ENV_LINES_PASSED)) {
+  // Past the refusals, and stopped by a tag off the pair: step 1 is the first thing after them.
+  test(`a dev office env file naming the sandbox passes: ${what}`, { skip }, () => {
+    const r = advance({ officeEnvLine, env: { STUB_TAG_TOWN: OLD } });
+    assert.equal(r.status, 3, r.stderr);
+    assert.match(r.stderr, /STOPPED at step 1 \(the retag\)/);
+    assert.ok(r.calls.some((c) => c.startsWith("grep ") && c.endsWith(" /etc/postmark-office-dev.env")), r.calls.join("\n"));
+    assert.ok(!(r.stdout + r.stderr).includes(OFFICE_ENV_SECRET), "the URL's password is not printed");
+    assertNothingWrote(r);
+  });
+}
 
 test("a clone with a real push URL is refused before any step, whichever clone", { skip }, () => {
   const real = "https://github.com/postmark-town/postmark.git";
@@ -200,11 +254,20 @@ test("a clone with a real push URL is refused before any step, whichever clone",
   }
 });
 
-test("a clone whose real path leaves the dev tree is refused before any step", { skip }, () => {
-  const r = advance({ env: { STUB_REAL_TOWN: "/srv/postmark-office/town-clone" } });
+test("a second remote that can push is refused before any step, though origin can't", { skip }, () => {
+  const r = advance({ env: { STUB_REMOTES: "origin fork", STUB_PUSH_OTHER: "https://github.com/postmark-town/postmark.git" } });
   assert.equal(r.status, 9, r.stderr);
-  assert.match(r.stderr, /REFUSED: .*is really \/srv\/postmark-office\/town-clone, outside the dev tree/);
+  assert.match(r.stderr, /REFUSED: .*town-clone's remote fork can push/);
   assertNothingWrote(r);
+});
+
+test("a clone whose real path leaves the dev tree is refused before any step, whichever clone", { skip }, () => {
+  for (const [key, clone] of [["STUB_REAL_TOWN", "town-clone"], ["STUB_REAL_WORLD", "world-clone"]]) {
+    const r = advance({ env: { [key]: `/srv/postmark-office/${clone}` } });
+    assert.equal(r.status, 9, r.stderr);
+    assert.match(r.stderr, new RegExp(`REFUSED: .*is really /srv/postmark-office/${clone}, outside the dev tree`));
+    assertNothingWrote(r);
+  }
 });
 
 test("the test seam can't name prod's tree, however it is spelled", { skip }, () => {
@@ -226,8 +289,18 @@ test("the steps run in order, and the last line names the full rehearsal as the 
   assert.ok(lsRemotes !== -1 && lsRemotes < r.calls.findIndex((c) => ACTS[0][1].test(c)), "the retag's read comes before the freshen");
   assert.ok(r.calls.some((c) => c === `node world2/tools/town-index-ingest.mjs --town-repo ${r.tree}/town-clone --sha ${TOWN_HEAD} --seed --reseed`), "reseeded at the clone's head");
   assert.ok(r.calls.some((c) => c === `node world2/tools/law-ingest.mjs --law-repo ${r.tree}/world-clone --sha ${WORLD}`), "the law at the given world sha");
+  assert.ok(r.calls.some((c) => c === `node src/world-hydrate.mjs --world ${r.tree}/world-clone --office ${r.tree} --to-store`), "the snapshot, by sandbox-reset.sh's line");
   assert.deepEqual(r.calls.filter((c) => WRITE_VERB.test(c)), [], "it writes no git of its own: the freshen does");
   assert.match(r.stdout.trim().split("\n").at(-1), /full rehearsal is yours: .*dev-rehearsal\.mjs --user meepo --report /);
+});
+
+test("the law pen's three writes connect as law_ingester, to the sandbox, with the store's stamp chain", { skip }, () => {
+  // DEPLOY step 7's line: "export WORLD2_DB=w2_devsandbox_20260925 STAMP_LINES=store", then w2_pgenv law_ingester.
+  const r = advance();
+  assert.equal(r.status, 0, r.stderr);
+  for (const tool of ["world2/tools/town-index-ingest.mjs", "world2/tools/law-ingest.mjs", "src/world-hydrate.mjs"]) {
+    assert.ok(r.envs.includes(`${tool} PGUSER=law_ingester PGDATABASE=${SANDBOX} STAMP_LINES=store`), `${tool}: ${r.envs.join("\n")}`);
+  }
 });
 
 test("a real advance: the trim keeps only what the store and the new seed's ledger share, and the sync records the rest", { skip }, () => {
@@ -289,7 +362,8 @@ const FAILS = [
   { fail: "^node .*stamp-lines\\.mjs --verify", step: 3, name: "the stamp chain: trim, sync, verify", ran: 3 },
   { fail: "^node .*town-index-ingest", step: 4, name: "the town index, reseeded at the clone's head", ran: 4 },
   { fail: "^node .*law-ingest", step: 5, name: "the world law, ingested forward", ran: 5 },
-  { fail: "^node tools/dev-rehearsal", step: 6, name: "the preflight", ran: 6 },
+  { fail: "^node .*world-hydrate", step: 6, name: "the world graph snapshot, rebuilt from the seed", ran: 6 },
+  { fail: "^node tools/dev-rehearsal", step: 7, name: "the preflight", ran: 7 },
 ];
 
 for (const { fail, step, name, ran } of FAILS) {
@@ -303,9 +377,27 @@ for (const { fail, step, name, ran } of FAILS) {
   });
 }
 
-test("a world-law pin that law-ingest held stops at step 5, though law-ingest exited 0", { skip }, () => {
+test("a world-law pin that law-ingest held stops at step 5, though law-ingest exited 0, and names the remedy", { skip }, () => {
   const r = advance({ env: { STUB_PIN: OLD } });
   assert.equal(r.status, 1, r.stderr);
   assert.ok(r.stderr.includes(`STOPPED at step 5 (the world law, ingested forward): the world-law pin stands at ${OLD}, not ${WORLD}`), r.stderr);
-  assert.ok(!actsIn(r.calls).includes("the preflight"));
+  // With the row gone, law-ingest's pinMove reads "no pin yet" and moves it (test/law-pin-forward.test.mjs).
+  assert.ok(r.stderr.includes(`sudo -u postgres psql -d ${SANDBOX} -v ON_ERROR_STOP=1 -c "SET ROLE world2_owner; DELETE FROM projection_heads WHERE repo = 'world-law'"`), r.stderr);
+  assert.deepEqual(actsIn(r.calls).slice(-1), ["the law"], "neither the snapshot nor the preflight ran");
 });
+
+// ── a chain comparison that fails stops before the trim can read it ─────────
+
+for (const [what, setup, how] of [
+  ["the store can't be read", { env: { STUB_FAIL: "^psql .*SELECT sig" } }, "could not compare"],
+  ["the clone's ledger can't be read", { ledger: null }, "could not compare"],
+  ["it prints words, not counts", { env: { STUB_CHAIN_PRINTS: "no counts here" } }, "not three counts"],
+]) {
+  test(`a chain comparison that fails stops at step 3, before the trim: ${what}`, { skip }, () => {
+    const r = advance(setup);
+    assert.equal(r.status, 1, r.stderr);
+    assert.ok(r.stderr.includes(`STOPPED at step 3 (the stamp chain: trim, sync, verify)`), r.stderr);
+    assert.ok(r.stderr.includes(how), r.stderr);
+    assert.deepEqual(actsIn(r.calls), ["the freshen"], "the freshen ran, and nothing after it");
+  });
+}

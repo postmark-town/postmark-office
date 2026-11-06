@@ -505,7 +505,7 @@ export function plan() {
           const head = git(ctx.t.townClone, "rev-parse", "HEAD");
           if (!h) p.push("the store has no town-index head: seed it from the dev town clone first (town-index-ingest.mjs --seed)");
           else if (gitQuiet(ctx.t.townClone, "merge-base", "--is-ancestor", h.sha, head).status !== 0)
-            p.push(`the store's town index is at ${h.sha.slice(0, 9)}, which is not on the dev town clone's history (HEAD ${head.slice(0, 9)}): reseed it at HEAD (node world2/tools/town-index-ingest.mjs --town-repo ${ctx.t.townClone} --sha ${head} --seed, as law_ingester)`);
+            p.push(`the store's town index is at ${h.sha.slice(0, 9)}, which is not on the dev town clone's history (HEAD ${head.slice(0, 9)}): reseed it at HEAD (node world2/tools/town-index-ingest.mjs --town-repo ${ctx.t.townClone} --sha ${head} --seed --reseed, as law_ingester)`);
         }
         // THE GROUND (POS-595), last: a store that lags or an office misread is named first
         if (!p.length) {

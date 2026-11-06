@@ -59,7 +59,8 @@ The plan: dev's sandbox/seed moves to town $TOWN_SHA, world $WORLD_SHA.
   3. the stamp chain: trim the store to the lines it shares with the clone, stamp-lines --sync, then --verify
   4. the town index: town-index-ingest --seed --reseed at the town clone's head, as the law pen
   5. the world law: law-ingest at $WORLD_SHA, as the law pen, and the world-law pin reads back as that sha
-  6. the preflight: sudo node tools/dev-rehearsal.mjs --user meepo --only preflight
+  6. the world graph snapshot: world-hydrate --to-store from the world clone, as the law pen
+  7. the preflight: sudo node tools/dev-rehearsal.mjs --user meepo --only preflight
 
 Before any of that it refuses a database that isn't $SANDBOX_DB and a clone that isn't dev's.
 Nothing ran. To run it:
@@ -70,7 +71,7 @@ fi
 
 refuse() { echo "REFUSED: $1; nothing was written" >&2; exit 9; }
 STEP=0 STEP_NAME=""
-step() { STEP=$1; STEP_NAME=$2; echo; echo "== step $STEP of 6: $STEP_NAME =="; }
+step() { STEP=$1; STEP_NAME=$2; echo; echo "== step $STEP of 7: $STEP_NAME =="; }
 stop() { echo "STOPPED at step $STEP ($STEP_NAME): $1. The steps after it did not run; fix it and run this line again." >&2; exit 1; }
 
 # ── the refusals: every one before anything writes ─────────────────────────────
@@ -112,7 +113,9 @@ law_pen() {
 }
 law_pen true || refuse "the law pen does not reach $SANDBOX_DB"
 # stamp-lines reaches the store through this file's URL, so it is checked too. -q prints nothing of it.
-sudo -n grep -qE "^WORLD2_PG_URL=\"?postgres(ql)?://[^[:space:]]*/$SANDBOX_DB(\"|\\?|\$)" "$OFFICE_ENV" \
+# The database is the path right after the host, so no /, ? or # may come before the
+# name: the sandbox's name in another database's query doesn't count.
+sudo -n grep -qE "^WORLD2_PG_URL=\"?postgres(ql)?://[^/?#[:space:]]*/$SANDBOX_DB(\"|\\?|\$)" "$OFFICE_ENV" \
   || refuse "$OFFICE_ENV does not name $SANDBOX_DB as its WORLD2_PG_URL"
 
 store_read() { sudo -n -u postgres psql -d "$SANDBOX_DB" -XAt -v ON_ERROR_STOP=1 -c "$1"; }
@@ -193,11 +196,17 @@ law_pen node world2/tools/town-index-ingest.mjs --town-repo "$D/town-clone" --sh
 step 5 "the world law, ingested forward"
 law_pen node world2/tools/law-ingest.mjs --law-repo "$D/world-clone" --sha "$WORLD_SHA" || stop "law-ingest failed"
 pin="$(store_read "SELECT sha FROM projection_heads WHERE repo = 'world-law'")" || stop "could not read the world-law pin"
-[ "$pin" = "$WORLD_SHA" ] || stop "the world-law pin stands at ${pin:-nothing}, not $WORLD_SHA: law-ingest held it (a pin moves only to a descendant)"
+[ "$pin" = "$WORLD_SHA" ] || stop "the world-law pin stands at ${pin:-nothing}, not $WORLD_SHA: law-ingest held it, since a pin moves only to a descendant. Clear it on this sandbox, and the ingest writes it: sudo -u postgres psql -d $SANDBOX_DB -v ON_ERROR_STOP=1 -c \"SET ROLE world2_owner; DELETE FROM projection_heads WHERE repo = 'world-law'\""
 
-# ── 6. the preflight ───────────────────────────────────────────────────────────
+# ── 6. the world graph snapshot ────────────────────────────────────────────────
 
-step 6 "the preflight"
+step 6 "the world graph snapshot, rebuilt from the seed"
+# Nothing else writes dev's snapshot: the freshen resets only the clones. sandbox-reset.sh's line.
+law_pen node src/world-hydrate.mjs --world "$D/world-clone" --office "$D" --to-store || stop "world-hydrate --to-store failed"
+
+# ── 7. the preflight ───────────────────────────────────────────────────────────
+
+step 7 "the preflight"
 sudo -n node tools/dev-rehearsal.mjs --user meepo --only preflight || stop "the preflight is red"
 
 echo

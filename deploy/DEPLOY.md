@@ -290,9 +290,10 @@ by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
 
 **Before each later rehearsal** (the nightly freshen stands the clone back on
 the seed and the store keeps the last rehearsal's rows): run the seed advance
-below with the seed's current pair, then the rehearsal. The pair, from a box shell:
+below with the seed's current pair, then the rehearsal. The pair, read from origin
+in a box shell, since a clone's local tags are only as new as its last fetch:
 ```sh
-for c in town-clone world-clone; do sudo -u meepo git -C /srv/postmark-office-dev/$c rev-parse 'refs/tags/sandbox/seed^{commit}'; done
+for c in town-clone world-clone; do sudo -u meepo git -C /srv/postmark-office-dev/$c ls-remote origin refs/tags/sandbox/seed 'refs/tags/sandbox/seed^{}' | tail -n1 | cut -f1; done
 ```
 
 Dev's stamped writes refuse every night until the trim runs. Folding it into the
@@ -323,10 +324,17 @@ dev's. Then, in order, stopping at the first failure and naming it:
 4. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
    head already exists).
 5. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
-   that sha.
-6. **The preflight.** Its last line names the full rehearsal, which is yours.
+   that sha. A world sha that doesn't descend from the pin stops here, and the stop
+   prints the line that clears the pin.
+6. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
+   as the law pen). Nothing else writes dev's snapshot, and the preflight doesn't read it.
+7. **The preflight.** The script's last line then names the full rehearsal, which is yours.
 
 Every step is safe to repeat, so after a stop, fix the cause and run the same line.
+
+No testers on dev during an advance. The dev office stays up, and the trim doesn't
+take the lock its stamped writes take, so a tester's act between the trim and the
+sync can be refused.
 
 ### Repo secrets it needs
 
