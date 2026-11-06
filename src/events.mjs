@@ -587,7 +587,9 @@ export function eventView(row, rsvpHandles, now, announcements = []) {
 export function calendarFrom(rows, rsvpsByEvent, now, announcementsByEvent = new Map()) {
   const views = rows.map((r) => eventView(r, rsvpsByEvent.get(r.id) ?? [], now, announcementsByEvent.get(r.id) ?? []));
   const byStart = (a, b) => Date.parse(a.starts) - Date.parse(b.starts) || a.id.localeCompare(b.id);
-  const current = views.filter((v) => v.phase === "doors-open" || v.phase === "underway").sort(byStart);
+  // POS-909: in `now` a live event leads and a cancelled one follows (each by `byStart`); the cancelled one stays listed, marked.
+  const current = views.filter((v) => v.phase === "doors-open" || v.phase === "underway")
+    .sort((a, b) => Number(a.cancelled) - Number(b.cancelled) || byStart(a, b));
   const coming = views.filter((v) => v.phase === "announced").sort(byStart);
   const ended = views.filter((v) => v.phase === "ended" && now - Date.parse(v.ends) <= ENDED_LIST_DAYS * DAY_MS)
     .sort((a, b) => Date.parse(b.ends) - Date.parse(a.ends) || a.id.localeCompare(b.id));
