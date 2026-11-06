@@ -1566,6 +1566,15 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
   const state = { x: near.x, y: near.y };
   const oriented = eng.verbs.orient(state, world, { crossing: n });
   const seen = eng.verbs.openYourEyes(state, world, { crossing: n });
+  // A THING IS NOT A PLACE YOU ARE IN UNTIL YOU HAVE ENTERED IT (WLD-74, held.mjs § enteredSpine), and the keyless
+  // reader has entered nothing: a thing under the point leaves the spine and stands under its feet, in reach, as at
+  // the keyed door (world.mjs § worldOrient). Its class is read from this answer's own law rows, at the pin.
+  const { enteredSpine } = await import("./held.mjs");
+  const { markClassOf } = await import("./world-grants.mjs");
+  const parentOf = new Map(lawRows.filter((r) => r.kind === "class").map((r) => [String(r.data?.class ?? r.key), r.data?.extends ?? null]));
+  const cut = enteredSpine(oriented.you?.within ?? [], new Map(world.marks.map((m) => [m.id, m])), null,
+    { classOf: markClassOf, extendsOf: (name) => { const e = parentOf.get(String(name)); return e == null ? null : String(e); } });
+  if (oriented.you) oriented.you.within = cut.within;
 
   const spine = oriented.you?.within ?? [];
   const markById = new Map(world.marks.map((m) => [m.id, m]));
@@ -1584,7 +1593,7 @@ export async function world2Apex(searchParams, { p: injected = null, eng: inject
   // caller's whole roll lands under granted.here.
   const law = apex.apexLawAt({
     lawRows, markRecords: world.marks,
-    spineIds: spine.map((m) => m.id), reachIds: nearby.map((o) => o.id),
+    spineIds: spine.map((m) => m.id), reachIds: [...nearby.map((o) => o.id), ...cut.underfoot],
     kind: "resident", embodied: false,
   });
 
