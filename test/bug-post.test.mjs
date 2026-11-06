@@ -77,7 +77,13 @@
 //      (Wright 19:57, answer 2) a hidden declaration refuses, named: inside an
 //      HTML comment (multi-line, one line, unclosed) or raw HTML (details with
 //      and without blank lines, unclosed, on one line; script; style), while
-//      the same line plain passes, after a closed template comment or details.
+//      the same line plain passes, after a closed template comment.
+//      (19:57 again, the final review's F1, F2, L5) markup the old scan didn't
+//      read: a start tag split over lines, `<?`, `<!x`, CDATA, a close tag that is
+//      only text, a backtick run paired wrongly, a title running over lines.
+//  20. (POS-867, POS-892; Wright 2026-11-05 15:41Z) Starforge's own Apps, by bot
+//      user id AND login, earn wright fixed and nothing else: no other stage, no
+//      other credit. A login or an id alone, a resident, and Truey never do.
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -129,6 +135,15 @@ const GH_ACCOUNT = Object.freeze({
   doors: { id: 334016343, login: "commander-and-chief" },
   wright: { id: 306351151, login: "wright-starforge" },
   keemin: { id: 67605380, login: "keeminlee" },
+  // Starforge's own Apps, by the real ids of their bot users (20), and the forgeries that must not pass for one
+  rivetApp: { id: 340608403, login: "rivet-starforge[bot]" },
+  bevelApp: { id: 341174930, login: "bevel-starforge[bot]" },
+  jettoApp: { id: 342797059, login: "jetto-starforge[bot]" },
+  artiApp: { id: 351277522, login: "arti-starforge[bot]" },
+  trueyApp: { id: 350924601, login: "truey-starforge[bot]" },
+  appLoginOnly: { id: 1004, login: "rivet-starforge[bot]" },
+  appIdOnly: { id: 340608403, login: "not-rivet" },
+  appIdNotBotId: { id: 5263298, login: "rivet-starforge[bot]" },
 });
 // whose account a resident's own work on GitHub comes from
 const ACCOUNT_OF = { errant: "harbor", ada: "harbor", finn: "finn", kinofire: "doors", "wayward-archivist": "doors", wright: "wright", keemin: "keemin" };
@@ -1189,8 +1204,9 @@ test("13 · fixed: an issue-comment link is refused; a founder's PR crediting a 
   await refusedNothing(t, adv({ ...fix, credit: "mari", link: pull("keemin") }), 422,
     /was written by a founder's account, GitHub account keeminlee \(id 67605380\), and a founder's work credits only wright or keemin/);
   // and only a founder's account earns a founder a stage
+  // (until 2026-11-06 this read "only a founder's account earns wright a stage"; POS-867 gave wright's fixed a second door, and the refusal stays: group 20)
   await refusedNothing(t, adv({ ...fix, credit: "wright", link: pull("kinofire") }), 422,
-    /^only a founder's account earns wright a stage, and .* was written by GitHub account commander-and-chief \(id 334016343\)/);
+    /^only a founder's account or one of Starforge's own Apps earns wright fixed, and .* was written by GitHub account commander-and-chief \(id 334016343\)/);
   const ok = await adv({ ...fix, credit: "wayward-archivist", link: pull("kinofire") });
   assert.deepEqual([ok.credit, ok.stamps], ["wayward-archivist", 10]);
   // a founder's own PR crediting a founder passes (Darko 10-07: fixed on our own builds is ours)
@@ -2074,7 +2090,7 @@ test("18 · the declaration is one exact line of the carrier's body, read as dat
 // LAW (Wright, settled 2026-11-05 19:57:03Z, answer 2): "A hidden declaration doesn't count … the `carries:`
 // declaration has to be visible to anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`), or
 // anywhere else the rendered body hides, refuses with a reason naming it, the same as any other unsupported case."
-test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML comment (multi-line, one line, unclosed) or inside raw HTML (details with and without blank lines, unclosed, on one line; script; style); the same line plain and visible passes, after a closed template comment or details too", async () => {
+test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML comment (multi-line, one line, unclosed) or inside raw HTML (details with and without blank lines, unclosed, on one line; script; style); the same line plain and visible passes, after a closed template comment too, and below closed details it refuses", async () => {
   adaFix(9401);
   const bodies = {
     "comment, multi-line": "Carried from the harbor's fix.\n\n<!--\ncarries: office#9401\n-->",
@@ -2090,7 +2106,7 @@ test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML co
     "visible, plain": "Carried from the harbor's fix.\n\ncarries: office#9401",
     "visible, after a closed template comment": "<!-- Describe what this PR changes. -->\n\nCarried from the harbor's fix.\n\ncarries: office#9401",
     "visible, after a template comment that names the form": "<!-- To credit a carried PR, add a line: carries: office#N -->\n\ncarries: office#9401",
-    "visible, after closed details": "<details><summary>Notes</summary>\n\nThe long notes.\n\n</details>\n\ncarries: office#9401",
+    "below closed details": "<details><summary>Notes</summary>\n\nThe long notes.\n\n</details>\n\ncarries: office#9401",
     "visible, after a code span that names the form": "The line is `carries: <repo>#<n>`, so:\n\ncarries: office#9401",
   };
   const verdicts = {}, refs = {};
@@ -2101,7 +2117,7 @@ test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML co
     verdicts[name] = await fixedVerdict(carrier.link);
   }
   const comment = (name) => `422 ${refs[name]}'s carries: line is inside an HTML comment, hidden when the pull request is read`;
-  const html = (name) => `422 ${refs[name]}'s carries: line is inside HTML the office does not read, which may hide it when the pull request is read`;
+  const html = (name) => `422 ${refs[name]}'s carries: line is inside or below HTML the office does not read, which may hide it when the pull request is read: put it above any HTML`;
   assert.deepEqual(verdicts, {
     "comment, multi-line": comment("comment, multi-line"),
     "comment, one line": comment("comment, one line"),
@@ -2115,8 +2131,107 @@ test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML co
     "visible, plain": "ok ada",
     "visible, after a closed template comment": "ok ada",
     "visible, after a template comment that names the form": "ok ada",
-    "visible, after closed details": "ok ada",
+    // until 2026-11-06 this row was a visible control. The office can't tell a close tag from text that looks like
+    // one (the next test's rows), so it no longer decides that HTML has ended. Above the HTML it still credits.
+    "below closed details": html("below closed details"),
     "visible, after a code span that names the form": "ok ada",
+  });
+});
+
+// LAW (the same 19:57 answer 2: "or anywhere else the rendered body hides"). The final review at 144defe7 (office#923,
+// F1, F2 and L5, Rivet's FIX 2026-11-06 01:53Z), and the same class past what it listed. Reasoned from CommonMark's rules, not probed on GitHub.
+test("18 · (19:57, the final review) markup the scan must not read past: a start tag split over lines, <?, <!x, CDATA, a close tag that is only text, a backtick run, and a title running over lines refuse; a < that starts nothing, an autolink, a closed span and a blank line above keep the same line visible", async () => {
+  adaFix(9601);
+  const line = "carries: office#9601";
+  const bodies = {
+    // F1.1: a start tag whose > is on a later line
+    "details, split": `<details\n>\n\n${line}\n\n</details>`,
+    "details with attributes, split": `<details open\nclass="x"\n>\n\n${line}\n\n</details>`,
+    "script, split": `<script\n>\n${line}\n</script>`,
+    "close tag, split": `Carried.\n\n</details\n>\n\n${line}`,
+    // F1.2: spans that are neither a tag nor a comment
+    "processing instruction": `<?\n${line}\n?>`,
+    "declaration span": `<!x\n${line}\n>`,
+    cdata: `<![CDATA[\n${line}\n]]>`,
+    // F1.3 and past it: a close tag that is only text leaves the element open
+    "close tag in a code span": `<details>\n\n\`\` \`</details>\` \`\`\n\n${line}`,
+    "close tag in a code span over lines": `<details>\n\na \`b\n</details>\` c\n\n${line}`,
+    "close tag in a fence": `<details>\n\n\`\`\`\n</details>\n\`\`\`\n\n${line}`,
+    "close tag, indented as code": `<details>\n\n    </details>\n\n${line}`,
+    "close tag in a link title": `<details>\n\n[a](/u "b\n</details>\nc")\n\n${line}`,
+    // a backtick run paired by length: the tag is outside every span
+    "start tag past a run with no partner": `\`<details>\`\`\n\n${line}`,
+    "start tag past a span over lines": `x \`y\nz\` <details> \`w\`\n\n${line}`,
+    "start tag past a line that is no fence": `\`\`\` a\`b\n<details>\n\`\`\`\nx\n\`\`\`\n\`\`\` i\n\`\`\`\n\n${line}`,
+    // F2 and past it: running on from the text above, inside a title or an alt
+    "reference title": `[notes]: https://example.com "notes\n${line}\n"`,
+    "reference title, label over lines": `[no\ntes]: https://example.com "notes\n${line}\n"`,
+    "reference title, in a list": `- [notes]: https://example.com "notes\n${line}\n"`,
+    "link title": `see [a](/u "b\n${line}\n")`,
+    "image alt": `![a\n${line}\n](x.png)`,
+    "running on from prose": `Carried.\n${line}`,
+    // L5: a line with an info string closes no fence
+    "fence, an info string closes nothing": `\`\`\`\n\`\`\`js\n${line}\n\`\`\``,
+    // the controls: the same line, a paragraph of its own
+    "visible, a < that starts nothing": `a < b\n\n${line}`,
+    "visible, an autolink": `<https://example.com>\n\n${line}`,
+    "visible, an email autolink": `<a@example.com>\n\n${line}`,
+    "visible, a void tag": `First.<br>\n\n${line}`,
+    "visible, a generic with its end on the line": `Map<string, number> holds it.\n\n${line}`,
+    "visible, a complete processing instruction": `<? note ?>\n\n${line}`,
+    "visible, a reference definition": `[x]: https://example.com\n\n${line}`,
+    "visible, a reference title closed above": `[notes]: https://example.com "notes\nmore"\n\n${line}`,
+    "visible, a span over lines closed above": `a \`b\nc\` d\n\n${line}`,
+    "visible, a code span holding a tag": `Use \`<details>\` for notes.\n\n${line}`,
+    "visible, a double-backtick span holding a tag": `Use \`\` \`<details>\` \`\` for notes.\n\n${line}`,
+    "visible, a closed fence holding a tag": `\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    "visible, above details": `${line}\n\n<details>\n\nNotes.\n\n</details>`,
+  };
+  const verdicts = {}, refs = {};
+  let n = 9610;
+  for (const [name, body] of Object.entries(bodies)) {
+    const carrier = carrierOf(++n, 9601, { body });
+    refs[name] = carrier.ref;
+    verdicts[name] = await fixedVerdict(carrier.link);
+  }
+  const html = (name) => `422 ${refs[name]}'s carries: line is inside or below HTML the office does not read, which may hide it when the pull request is read: put it above any HTML`;
+  const runsOn = (name) => `422 ${refs[name]}'s carries: line runs on from the text above it, which can hide it when the pull request is read: leave a blank line above it`;
+  assert.deepEqual(verdicts, {
+    "details, split": html("details, split"),
+    "details with attributes, split": html("details with attributes, split"),
+    "script, split": html("script, split"),
+    "close tag, split": html("close tag, split"),
+    "processing instruction": html("processing instruction"),
+    "declaration span": html("declaration span"),
+    cdata: html("cdata"),
+    "close tag in a code span": html("close tag in a code span"),
+    "close tag in a code span over lines": html("close tag in a code span over lines"),
+    "close tag in a fence": html("close tag in a fence"),
+    "close tag, indented as code": html("close tag, indented as code"),
+    "close tag in a link title": html("close tag in a link title"),
+    "start tag past a run with no partner": html("start tag past a run with no partner"),
+    "start tag past a span over lines": html("start tag past a span over lines"),
+    "start tag past a line that is no fence": html("start tag past a line that is no fence"),
+    "reference title": runsOn("reference title"),
+    "reference title, label over lines": runsOn("reference title, label over lines"),
+    "reference title, in a list": runsOn("reference title, in a list"),
+    "link title": runsOn("link title"),
+    "image alt": runsOn("image alt"),
+    "running on from prose": runsOn("running on from prose"),
+    "fence, an info string closes nothing": `422 ${refs["fence, an info string closes nothing"]}'s carries: line is inside a code block`,
+    "visible, a < that starts nothing": "ok ada",
+    "visible, an autolink": "ok ada",
+    "visible, an email autolink": "ok ada",
+    "visible, a void tag": "ok ada",
+    "visible, a generic with its end on the line": "ok ada",
+    "visible, a complete processing instruction": "ok ada",
+    "visible, a reference definition": "ok ada",
+    "visible, a reference title closed above": "ok ada",
+    "visible, a span over lines closed above": "ok ada",
+    "visible, a code span holding a tag": "ok ada",
+    "visible, a double-backtick span holding a tag": "ok ada",
+    "visible, a closed fence holding a tag": "ok ada",
+    "visible, above details": "ok ada",
   });
 });
 
@@ -2309,4 +2424,126 @@ test("19 · (a text pin, labelled: it reads the doc, not behaviour) the contract
   assert.deepEqual(verdictOfText(bullets[0], want), allTrue(want),
     `LAW (POS-912, 20:38Z): the ladder's docs name the location limit beside the body-mutability one`);
   assert.doesNotMatch(bullets[0], NOT_CLAIMED);
+});
+
+// ── 20: Starforge's own Apps earn wright fixed ──────────────────────────────
+// LAW (POS-892, Wright 2026-11-05 15:41:22Z): "trusted Starforge Apps, identified by App ID (never a matching
+// login), may earn wright `fixed` only, never `diagnosed`, `briefed` or any resident's credit."
+const { judgeEarnedCredit } = await import("../src/bug-credit.mjs");
+const { HOUSE_APPS } = await import("../src/bugs.mjs");
+const APP_REFUSES_CREDIT = (link, who, id) => `422 ${link} was written by one of Starforge's own Apps, GitHub account ${who} (id ${id}), and an App's work credits only wright`;
+
+test("20 · (the falsifier) a merged PR by each lead's App earns wright fixed, paid as a founder's own fix; the act is the ordinary one, and shipped proves its merge", async () => {
+  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp"]) {
+    const { pen, posts } = setup();
+    await toBriefed();
+    const link = pull(app);
+    const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "wright", link }) }, WRIGHT, at17);
+    assert.deepEqual([ok.stage, ok.credit, ok.stamps, ok.link], ["fixed", "wright", 25, link], `LAW (POS-892): ${app}'s merged PR earns wright fixed`);
+    assert.equal(posts.get(ID).fields.links.fixed, link);
+    assert.deepEqual(Object.keys(JSON.parse(pen.rows().at(-1).payload)).sort(), ["credit", "fields", "from", "hand", "post", "to"]);
+    assert.equal((await advanceAtTown({ post: ID, to: "shipped", link: tagFor(link) }, WRIGHT, at17)).stage, "shipped");
+  }
+  // the town's repo too: limen's post, town#4294, by Rivet's App, was this refusal (POS-867)
+  assert.equal(await fixedVerdict(pull("rivetApp", { repo: "postmark" }), { credit: "wright" }), "ok wright");
+});
+
+test("20 · (the control) a resident's PR is unchanged: it credits its own household, and still never earns wright; an App's PR is still held to the merge", async () => {
+  const harbor = pull("ada");
+  assert.equal(await fixedVerdict(harbor), "ok ada");
+  assert.equal(await fixedVerdict(harbor, { credit: "wright" }),
+    `422 only a founder's account or one of Starforge's own Apps earns wright fixed, and ${harbor} was written by GitHub account harbor-human (id 1001)`);
+  assert.equal(await fixedVerdict(harbor, { credit: "keemin" }),
+    `422 only a founder's account earns keemin a stage, and ${harbor} was written by GitHub account harbor-human (id 1001)`);
+  const open = pull("rivetApp", { n: 9701, state: "open" });
+  assert.equal(await fixedVerdict(open, { credit: "wright" }), "409 fixed waits for the PR to merge: postmark-office#9701 is open");
+});
+
+test("20 · an App's work earns only wright: at fixed, keemin and any resident refuse, even a resident whose handle is pinned to the App's bot user", async () => {
+  const link = pull("rivetApp");
+  const who = ["rivet-starforge[bot]", 340608403];
+  assert.deepEqual({
+    keemin: await fixedVerdict(link, { credit: "keemin" }),
+    ada: await fixedVerdict(link, { credit: "ada" }),
+    finn: await fixedVerdict(link, { credit: "finn" }),
+  }, {
+    keemin: APP_REFUSES_CREDIT(link, ...who),
+    ada: APP_REFUSES_CREDIT(link, ...who),
+    finn: APP_REFUSES_CREDIT(link, ...who),
+  });
+  // the binding never reaches the judge's household road: pinned or not, an App credits no resident
+  const pinned = { registry: {}, pins: { ada: { id: 340608403 } } };
+  assert.throws(() => judgeEarnedCredit({ to: "fixed", credit: "ada", link: "L" }, { gh: { id: 340608403, login: "rivet-starforge[bot]", pull: true } }, pinned),
+    (e) => e.code === 422 && e.defect === "L was written by one of Starforge's own Apps, GitHub account rivet-starforge[bot] (id 340608403), and an App's work credits only wright");
+});
+
+test("20 · an App's work never earns diagnosed or briefed, for anyone, by a comment, an issue or a PR; a founder's comment still does, so the refusal is the App's", async () => {
+  const onlyFixed = (link, to) => new RegExp(`^${esc(link)} was written by one of Starforge's own Apps, GitHub account rivet-starforge\\[bot\\] \\(id 340608403\\), and an App's work earns only fixed, never ${to} `);
+  const t = await kinoBug();
+  for (const link of [comment("rivetApp"), issue("rivetApp"), issue("rivetApp", { pr: true }), pull("rivetApp")])
+    for (const credit of ["wright", "kinofire"])
+      await refusedNothing(t, adv({ to: "diagnosed", credit, link }), 422, onlyFixed(link, "diagnosed"));
+  assert.equal((await adv({ to: "diagnosed", credit: "wright", link: comment("wright") })).credit, "wright", "the control: the same stage, a founder's comment");
+  for (const link of [comment("rivetApp"), issue("rivetApp"), pull("rivetApp")])
+    await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link }), 422, onlyFixed(link, "briefed"));
+});
+
+test("20 · identity is the bot user's id AND its login: a matching login, a matching id, an App ID standing as an account id, and Truey's App each refuse as anyone else's work", async () => {
+  const forged = {};
+  for (const who of ["appLoginOnly", "appIdOnly", "appIdNotBotId", "trueyApp"]) {
+    const link = pull(who);
+    const { id, login } = GH_ACCOUNT[who];
+    forged[who] = (await fixedVerdict(link, { credit: "wright" })).replace(link, "<link>");
+    assert.equal(forged[who], `422 only a founder's account or one of Starforge's own Apps earns wright fixed, and <link> was written by GitHub account ${login} (id ${id})`);
+  }
+  assert.equal(Object.keys(forged).length, 4);
+  assert.equal(await fixedVerdict(pull("rivetApp"), { credit: "wright" }), "ok wright", "the control: the real App, the same door");
+});
+
+test("20 · the table is the four leads' Apps: no fifth, no Truey, each App ID beside its own bot user, and neither number standing for the other", () => {
+  assert.deepEqual(HOUSE_APPS.map((a) => [a.slug, a.app_id, a.bot_id]), [
+    ["rivet-starforge", 5263298, 340608403],
+    ["bevel-starforge", 5279270, 341174930],
+    ["jetto-starforge", 5325007, 342797059],
+    ["arti-starforge", 5573296, 351277522],
+  ]);
+  for (const a of HOUSE_APPS) assert.notEqual(a.app_id, a.bot_id);
+});
+
+test("20 · a recredit of fixed by an App's PR may name wright, under the same judge, and may not name a resident", async () => {
+  const { posts } = setup();
+  await toBriefed();
+  await advanceAtTown({ post: ID, ...FIX({ credit: "finn", link: pull("finn") }) }, WRIGHT, at17);
+  const app = pull("bevelApp");
+  await assert.rejects(advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "ada", link: app, note: "the wrong hand" }, WRIGHT, at17),
+    (e) => e.code === 422 && /and an App's work credits only wright$/.test(e.defect));
+  const ok = await advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "wright", link: app, note: "our own build" }, WRIGHT, at17);
+  assert.deepEqual([ok.recredit, ok.was, ok.credit], [true, "finn", "wright"]);
+  assert.equal(posts.get(ID).state, "fixed");
+});
+
+test("20 · with a carry: an App's merged carrier credits the resident it carries, and an App's carried PR earns wright and no resident", async () => {
+  const body = (n) => `Carried.\n\ncarries: office#${n}`;
+  const carrierDiff = greeting("a b", { at: 7, index: "6666666..2222222" });
+  const adas = adaFix(9711);
+  const appCarrier = carryPull("rivetApp", { n: 9712, body: body(adas.n), diff: carrierDiff });
+  assert.equal(await fixedVerdict(appCarrier.link), "ok ada", "the carried PR's author is judged, not the App that carried it");
+  assert.equal(await fixedVerdict(appCarrier.link, { credit: "wright" }),
+    `422 only a founder's account or one of Starforge's own Apps earns wright fixed, and ${adas.link} (carried by ${appCarrier.link}) was written by GitHub account harbor-human (id 1001)`);
+
+  const appFix = carryPull("rivetApp", { n: 9713, merged: false });
+  const founderCarrier = carrierOf(9714, appFix.n);
+  assert.equal(await fixedVerdict(founderCarrier.link, { credit: "wright" }), "ok wright");
+  assert.equal(await fixedVerdict(founderCarrier.link),
+    APP_REFUSES_CREDIT(`${appFix.link} (carried by ${founderCarrier.link})`, "rivet-starforge[bot]", 340608403));
+});
+
+test("20 · (the live record: skipped unless POSTMARK_OFFICE_LIVE_GITHUB is set; it reads api.github.com, so no suite depends on it) GitHub still binds each App ID to its slug and each bot user to its login", { skip: !process.env.POSTMARK_OFFICE_LIVE_GITHUB }, async () => {
+  const read = async (path) => (await fetch(`https://api.github.com${path}`, { headers: { accept: "application/vnd.github+json", "user-agent": "postmark-office" } })).json();
+  for (const a of HOUSE_APPS) {
+    const app = await read(`/apps/${a.slug}`);
+    assert.deepEqual([app.id, app.slug, app.owner?.login], [a.app_id, a.slug, "keeminlee"]);
+    const bot = await read(`/users/${a.slug}%5Bbot%5D`);
+    assert.deepEqual([bot.id, bot.login, bot.type], [a.bot_id, `${a.slug}[bot]`, "Bot"]);
+  }
 });

@@ -15,6 +15,8 @@
 //                            of the same household.
 //   the founders             wright-starforge and keeminlee may credit only wright
 //                            or keemin, and only they may credit them.
+//   Starforge's Apps         the leads' Apps (bugs.mjs § HOUSE_APPS) earn wright
+//                            fixed, and nothing else for anyone (POS-867, POS-892).
 //
 // NEVER PASS ON DOUBT. GitHub unreachable, an author bound to no house, a
 // letter the store does not hold: each refuses, naming what could not be
@@ -62,11 +64,13 @@ import { refuse } from "./events.mjs";
 import { registryRowsVia } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { resolveHouse, VIA } from "./household-deriver.mjs";
-import { EARNED_BY, FOUNDER_ACCOUNTS, FOUNDER_HANDLES, STATE_FIXED } from "./bugs.mjs";
+import { EARNED_BY, FOUNDER_ACCOUNTS, FOUNDER_HANDLES, HOUSE_APPS, STATE_FIXED } from "./bugs.mjs";
 
 export const GITHUB_READ_TOKEN_FILE = "/srv/postmark-office/git-metrics-token";
 const GITHUB_API = "https://api.github.com";
 const READ_TIMEOUT_MS = 8000;
+/** The one handle Starforge's own Apps earn a stage for (bugs.mjs § HOUSE_APPS). */
+const HOUSE_APP_CREDIT = "wright";
 
 const githubPath = (ref) =>
   ref.kind === "comment" ? `/repos/postmark-town/${ref.repo}/issues/comments/${ref.comment}`
@@ -136,54 +140,87 @@ const NO_DOUBT = "nothing was written: the office never pays a stage on doubt �
 const DECLARES = /^[ \t]*(?:>[ \t]*)*carries[ \t]*:/i;
 /** The one form that does: the whole line, a repo, and a number with no leading zero. */
 const DECLARATION = /^carries: ([A-Za-z0-9_-][A-Za-z0-9._-]*)#([1-9][0-9]{0,8})$/;
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+/** A code fence opening: a backtick fence's info string holds no backtick, or the line is no fence at all. */
+const FENCE = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
+/** A code fence closing: nothing but spaces after it, so a line with an info string closes nothing. */
+const FENCE_CLOSES = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
 const PATCH_ID_TIMEOUT_MS = 10_000;
 
 // A HIDDEN DECLARATION DOESN'T COUNT (Wright, settled 2026-11-05 19:57:03Z, answer 2): "the `carries:`
 // declaration has to be visible to anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`),
-// or anywhere else the rendered body hides, refuses with a reason naming it". The office models no renderer:
-// only a plain top-level line counts, and a declaration with any HTML around it refuses. Read line by line:
+// or anywhere else the rendered body hides, refuses with a reason naming it". The office models no renderer,
+// so it never decides that HTML has ended: a declaration counts only as a plain top-level paragraph of its own,
+// above any raw HTML. Read line by line:
 //   - a comment runs from `<!--` to `-->`, across lines; one never closed runs to the end of the body;
-//   - a tag opens raw HTML until its own close tag, however many lines (blank ones too) come between; one
-//     never closed runs to the end. A void tag (<br>) or a self-closed one (<x/>) opens nothing;
-//   - text in a `code span` is text: neither `<!--` nor a tag there is markup.
+//   - an element's start tag holds the rest of the body as HTML, close tag or not: a `</details>` may be text
+//     in a code span, a fence or a link title, and the element then stays open and hides what follows. A void
+//     tag (<br>) or a self-closed one (<x/>) opens nothing;
+//   - any other `<` before a letter, `/`, `!` or `?` is markup on its line, and if its end (`>`, `?>`, `]]>`)
+//     isn't on that line it holds the rest of the body too: a start tag split over lines, `<?`, `<!x`, CDATA;
+//   - text in a `code span` is text, its backtick runs paired by length; after a run left unpaired, the
+//     paragraph's later lines blank nothing, since that run may pair across lines;
+//   - a line running on from the text above isn't its own paragraph: a link's title, an image's alt or a
+//     reference definition's title can hide it, and none of them survives a blank line.
 // A declaration-shaped mention (carries:, then a # and a digit on that line) or a line that tries to declare,
-// hidden by a comment or on any line HTML touches, refuses, named. A comment or HTML that holds no such
-// mention (a PR template's) taints nothing, and a plain line after it counts as ever.
+// hidden by a comment or on any line HTML touches, refuses, named. A closed comment or a void tag that holds no
+// such mention (a PR template's) taints nothing, and a plain paragraph after it counts as ever.
 /** carries:, then a # and a digit on the same line: a declaration's shape, wherever it stands in a line. */
 const MENTIONS = /carries[ \t]*:[^\n]*?#[ \t]*[0-9]/i;
 /** A tag: `<name …>` or `</name>`; an autolink (<https://…>) is no tag, and `<!--` is the comment. */
 const TAG = /<(\/?)([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])[^>]*?(\/?)>/g;
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-/** A line with its `code spans` blanked out, character for character, so positions hold. */
-const codeless = (s) => s.replace(/`[^`]*`/g, (m) => " ".repeat(m.length));
+/** A `<` that may start markup; `a < b` doesn't. */
+const MARKUP_START = /^<[A-Za-z/!?]/;
+/** An autolink is markup that hides nothing: `<https://…>`, `<a@b.c>`. */
+const AUTOLINK = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[^\s<>@]+@[^\s<>]+)>/;
+/**
+ * A line with its `code spans` blanked out, character for character, so positions hold, pairing backtick runs
+ * of equal length as CommonMark does: `{ text, unpaired }`, unpaired when a run found no partner on this line.
+ */
+function codeless(s) {
+  const runs = [...s.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
+  let text = s, unpaired = false;
+  for (let i = 0; i < runs.length; i++) {
+    const j = runs.findIndex((r, k) => k > i && r.len === runs[i].len);
+    if (j < 0) { unpaired = true; continue; }
+    const end = runs[j].at + runs[j].len;
+    text = text.slice(0, runs[i].at) + " ".repeat(end - runs[i].at) + text.slice(end);
+    i = j;
+  }
+  return { text, unpaired };
+}
 const hides = (s) => MENTIONS.test(s) || DECLARES.test(s);
+/** What ends the markup that starts at the head of `s`. */
+const endOfMarkup = (s) => (s.startsWith("<?") ? "?>" : s.startsWith("<![CDATA[") ? "]]>" : ">");
 
 /**
  * The PR a carrier's body declares it carries, `{ repo, number }`; null when no
- * line tries to; else the refusal. Exactly one line, plain and visible (outside
- * quotes, code blocks, HTML comments and raw HTML), on the carrier's own repo
- * (`office` names postmark-office), never itself.
+ * line tries to; else the refusal. Exactly one line, a plain and visible paragraph
+ * of its own (outside quotes, code blocks, HTML comments and raw HTML), on the
+ * carrier's own repo (`office` names postmark-office), never itself.
  */
 function carriedDeclarationOf(text, ref) {
   const name = `${ref.repo}#${ref.number}`;
   const tried = [];
   const hidden = { comment: false, html: false };
-  const open = [];        // the raw-HTML tags still open, outermost first
-  let fence = null, comment = false;
+  // held: raw HTML has opened, and the rest of the body is held as HTML. spilled: a backtick run is unpaired in
+  // this paragraph. afterBlank: the line above was blank, or this is the first line.
+  let fence = null, comment = false, held = false, spilled = false, afterBlank = true;
   for (const line of String(text ?? "").split(/\r?\n/)) {
-    if (!comment && !open.length) {
-      const f = FENCE.exec(line);
-      if (f) {
-        if (!fence) fence = f[1];
-        else if (f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+    if (!comment && !held) {
+      if (fence) {
+        const c = FENCE_CLOSES.exec(line);
+        if (c && c[1][0] === fence[0] && c[1].length >= fence.length) { fence = null; afterBlank = false; }
+        else if (DECLARES.test(line)) tried.push({ line, fenced: true });
         continue;
       }
-      if (fence) { if (DECLARES.test(line)) tried.push({ line, fenced: true }); continue; }
+      const f = FENCE.exec(line);
+      if (f) { fence = f[1]; afterBlank = false; continue; }
     }
+    const plain = (s) => (spilled ? s : codeless(s).text);
     // what a comment hides, and what the line shows
-    let shown = "", rest = line, markup = open.length > 0;
+    let shown = "", rest = line, markup = held || comment;
     while (rest) {
       if (comment) {
         const end = rest.indexOf("-->");
@@ -192,30 +229,39 @@ function carriedDeclarationOf(text, ref) {
         comment = false; markup = true; rest = rest.slice(end + 3);
         continue;
       }
-      const at = codeless(rest).indexOf("<!--");
+      const at = plain(rest).indexOf("<!--");
       if (at < 0) { shown += rest; break; }
       shown += rest.slice(0, at); comment = true; markup = true; rest = rest.slice(at + 4);
     }
-    // the raw HTML it opens and closes
-    for (const [, close, tag, selfClosed] of codeless(shown).matchAll(TAG)) {
+    // the raw HTML it opens
+    const seen = plain(shown);
+    for (const [, close, tag, selfClosed] of seen.matchAll(TAG)) {
       markup = true;
-      const t = tag.toLowerCase();
-      if (close) { const i = open.lastIndexOf(t); if (i >= 0) open.length = i; }
-      else if (!selfClosed && !VOID_TAGS.has(t)) open.push(t);
+      if (!close && !selfClosed && !VOID_TAGS.has(tag.toLowerCase())) held = true;
     }
-    if (markup) { if (hides(shown)) hidden.html = true; continue; }
-    if (DECLARES.test(line)) tried.push({ line, fenced: false });
+    // and any other markup: split over lines, it holds the rest too
+    for (let at = seen.indexOf("<"); at >= 0; at = seen.indexOf("<", at + 1)) {
+      const from = seen.slice(at);
+      if (!MARKUP_START.test(from) || AUTOLINK.test(from)) continue;
+      markup = true;
+      if (!from.includes(endOfMarkup(from))) held = true;
+    }
+    if (markup) { if (hides(shown)) hidden.html = true; }
+    else if (DECLARES.test(line)) tried.push({ line, fenced: false, runsOn: !afterBlank });
+    afterBlank = !line.trim();
+    spilled = !afterBlank && (spilled || codeless(line).unpaired);
   }
   const bad = (defect) => refuse(422, defect, CARRY_HOW, { field: "link" });
   if (hidden.comment) throw bad(`${name}'s carries: line is inside an HTML comment, hidden when the pull request is read`);
-  if (hidden.html) throw bad(`${name}'s carries: line is inside HTML the office does not read, which may hide it when the pull request is read`);
+  if (hidden.html) throw bad(`${name}'s carries: line is inside or below HTML the office does not read, which may hide it when the pull request is read: put it above any HTML`);
   if (!tried.length) return null;
   if (tried.length > 1) throw bad(`${name}'s body declares carries: more than once, and a carrier carries one pull request`);
-  const [{ line, fenced }] = tried;
+  const [{ line, fenced, runsOn }] = tried;
   if (fenced) throw bad(`${name}'s carries: line is inside a code block`);
   if (/^[ \t]*>/.test(line)) throw bad(`${name}'s carries: line is quoted`);
   const m = DECLARATION.exec(line);
   if (!m) throw bad(`${name}'s carries: line is not "carries: <repo>#<n>" on a line of its own`);
+  if (runsOn) throw bad(`${name}'s carries: line runs on from the text above it, which can hide it when the pull request is read: leave a blank line above it`);
   const own = ref.repo.toLowerCase();
   if (m[1].toLowerCase() !== own && `postmark-${m[1].toLowerCase()}` !== own)
     throw bad(`${name} declares it carries ${m[1]}#${m[2]}, and a carrier carries a pull request on its own repo, ${ref.repo}`);
@@ -417,6 +463,14 @@ export function judgeEarnedCredit({ to, credit, link }, author, { registry, pins
   if (author?.gh) {
     const { id, login } = author.gh;
     const who = `GitHub account ${login || "?"} (id ${id})`;
+    // Starforge's own Apps (bugs.mjs § HOUSE_APPS): their work earns wright fixed, and nothing else for anyone.
+    if (HOUSE_APPS.some((a) => a.bot_id === id && `${a.slug}[bot]` === login)) {
+      if (to !== STATE_FIXED)
+        throw refuse(422, `${link} was written by one of Starforge's own Apps, ${who}, and an App's work earns only fixed, never ${to}`, teach, { field: "link" });
+      if (credit !== HOUSE_APP_CREDIT)
+        throw refuse(422, `${link} was written by one of Starforge's own Apps, ${who}, and an App's work credits only ${HOUSE_APP_CREDIT}`, teach, { field: "credit" });
+      return;
+    }
     const authorFounder = Object.hasOwn(FOUNDER_ACCOUNTS, String(id));
     // A founder's PR never earns diagnosed or briefed, for anyone (#3757's link).
     if (authorFounder && author.gh.pull && (to === "diagnosed" || to === "briefed"))
@@ -425,7 +479,9 @@ export function judgeEarnedCredit({ to, credit, link }, author, { registry, pins
     if (authorFounder && !creditFounder)
       throw refuse(422, `${link} was written by a founder's account, ${who}, and a founder's work credits only ${FOUNDER_HANDLES.join(" or ")}`, teach, { field: "credit" });
     if (!authorFounder && creditFounder)
-      throw refuse(422, `only a founder's account earns ${credit} a stage, and ${link} was written by ${who}`, teach, { field: "credit" });
+      throw refuse(422, to === STATE_FIXED && credit === HOUSE_APP_CREDIT
+        ? `only a founder's account or one of Starforge's own Apps earns ${credit} fixed, and ${link} was written by ${who}`
+        : `only a founder's account earns ${credit} a stage, and ${link} was written by ${who}`, teach, { field: "credit" });
     if (authorFounder) return;
     const bound = householdsOfAccount(id, registry, pins);
     if (!bound.size)

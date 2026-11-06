@@ -216,6 +216,20 @@ const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue"
 export const FOUNDER_ACCOUNTS = Object.freeze({ 306351151: "wright-starforge", 67605380: "keeminlee" });
 export const FOUNDER_HANDLES = Object.freeze(["wright", "keemin"]);
 
+// STARFORGE'S OWN APPS (POS-867, POS-892; Wright, 2026-11-05 15:41Z: "trusted Starforge Apps, identified by
+// App ID (never a matching login), may earn wright `fixed` only, never `diagnosed`, `briefed` or any resident's
+// credit"). The leads' pods push as these Apps, and "Plumb builds, Wright is credited" (Darko, 2026-10-07). A
+// pull request's JSON names no App ID, only the App's bot user, so each row binds the App ID to its bot user's
+// account id and the login GitHub gives it, `<slug>[bot]` (GET /apps/{slug} and /users/{slug}%5Bbot%5D, read
+// 2026-11-06; a test re-reads them on request). An author is one of these only by that id AND that login: a
+// login alone is a label. Truey reviews and never builds, so it isn't here.
+export const HOUSE_APPS = Object.freeze([
+  Object.freeze({ slug: "rivet-starforge", app_id: 5263298, bot_id: 340608403 }),
+  Object.freeze({ slug: "bevel-starforge", app_id: 5279270, bot_id: 341174930 }),
+  Object.freeze({ slug: "jetto-starforge", app_id: 5325007, bot_id: 342797059 }),
+  Object.freeze({ slug: "arti-starforge", app_id: 5573296, bot_id: 351277522 }),
+]);
+
 // A repo name never starts with a dot, so `.` and `..` can never steer the API path (review-649 § 6).
 const REPO = "([A-Za-z0-9_-][A-Za-z0-9._-]*)";
 const COMMENT_LINK_RE = new RegExp(`^https://github\\.com/postmark-town/${REPO}/issues/(\\d+)#issuecomment-(\\d+)$`);
