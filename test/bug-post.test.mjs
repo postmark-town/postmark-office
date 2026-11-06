@@ -78,9 +78,10 @@
 //      HTML comment (multi-line, one line, unclosed) or raw HTML (details with
 //      and without blank lines, unclosed, on one line; script; style), while
 //      the same line plain passes, after a closed template comment.
-//      (19:57 again, the final review's F1, F2, L5) markup the old scan didn't
-//      read: a start tag split over lines, `<?`, `<!x`, CDATA, a close tag that is
-//      only text, a backtick run paired wrongly, a title running over lines.
+//      (19:57 again, the one rule) a declaration stands above every `<` that could
+//      start markup, in a code span or a fence or not. The rows were read against
+//      GitHub's own renderer, and those the page shows and the rule refuses are
+//      named as its cost. A title running over lines needs a blank line above.
 //  20. (POS-867, POS-892; Wright 2026-11-05 15:41Z) Starforge's own Apps, by bot
 //      user id AND login, earn wright fixed and nothing else: no other stage, no
 //      other credit. A login or an id alone, a resident, and Truey never do.
@@ -2109,7 +2110,7 @@ test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML co
     "visible, after a closed template comment": "<!-- Describe what this PR changes. -->\n\nCarried from the harbor's fix.\n\ncarries: office#9401",
     "visible, after a template comment that names the form": "<!-- To credit a carried PR, add a line: carries: office#N -->\n\ncarries: office#9401",
     "below closed details": "<details><summary>Notes</summary>\n\nThe long notes.\n\n</details>\n\ncarries: office#9401",
-    "visible, after a code span that names the form": "The line is `carries: <repo>#<n>`, so:\n\ncarries: office#9401",
+    "below a code span that names the form": "The line is `carries: <repo>#<n>`, so:\n\ncarries: office#9401",
   };
   const verdicts = {}, refs = {};
   let n = 9410;
@@ -2136,22 +2137,45 @@ test("18 · (19:57, answer 2) a hidden declaration refuses, named: in an HTML co
     // until 2026-11-06 this row was a visible control. The office can't tell a close tag from text that looks like
     // one (the next test's rows), so it no longer decides that HTML has ended. Above the HTML it still credits.
     "below closed details": html("below closed details"),
-    "visible, after a code span that names the form": "ok ada",
+    // until 2026-11-06 this row was a visible control, and the page does show it. Under the next test's one rule it refuses.
+    "below a code span that names the form": html("below a code span that names the form"),
   });
 });
 
-// LAW (the same 19:57 answer 2: "or anywhere else the rendered body hides"). The final review at 144defe7 (office#923,
-// F1, F2 and L5, Rivet's FIX 2026-11-06 01:53Z), and the same class past what it listed. Reasoned from CommonMark's rules, not probed on GitHub.
-test("18 · (19:57, the final review) markup the scan must not read past: a start tag split over lines, <?, <!x, CDATA, a close tag that is only text, a backtick run, and a title running over lines refuse; a < that starts nothing, an autolink, a closed span and a blank line above keep the same line visible", async () => {
+// LAW (the same 19:57 answer 2: "or anywhere else the rendered body hides"). One rule instead of a model of markup: a
+// declaration stands above every `<` that could start markup, in a code span or a fence or not (the independent review
+// at f9adbdf9, F1). Every body here was read against GitHub's own renderer, POST /markdown in mode gfm, on 2026-11-06.
+test("18 · (19:57, the one rule) a declaration stands above every < that could start markup: what the page hides refuses, what it shows below such a < refuses too as the rule's cost, a title running over lines needs a blank line above, and a plain line, a < that starts nothing, a closed comment, a line above the HTML and a closed fence with no tag still credit", async () => {
   adaFix(9601);
   const line = "carries: office#9601";
   const bodies = {
-    // F1.1: a start tag whose > is on a later line
+    // the review's F1: each of these credited at f9adbdf9 while the page hid the line in a collapsed <details>
+    "a self-closed details": `<details/>\n\n${line}`,
+    "a /> inside an attribute": `<details title="/>">\n\n${line}`,
+    "an escaped backtick": `\\\`<details>\`\n\n${line}`,
+    "an autolink taking the backtick": `<http://a\`b> <details> \` >\n\n${line}`,
+    "a tag taking the backtick": `<a title="\`"/> <details> \`/>\n\n${line}`,
+    "an hr's block, then a span": `<hr>\n\`<details>\`\n\n${line}`,
+    "a br's block, then a span": `<br>\n\`<details>\`\n\n${line}`,
+    "a close tag's block, then a span": `</div>\n\`<details>\`\n\n${line}`,
+    "an hr's block, then a fence": `<hr>\n\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    "a self-closed tag's block, then a fence": `<widget/>\n\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    // and the review's two controls, which the page hides too
+    "details": `<details>\n\n${line}`,
     "details, split": `<details\n>\n\n${line}\n\n</details>`,
+    // each of these credited at f9adbdf9 too. An HTML parser ends a comment at <!-->, <!---> and --!>, so what looks
+    // like its inside is live: a comment's marks are the only exemption the rule has, and never what's between them
+    "a comment closed early by <!-->": `<!--> <details> -->\n\n${line}`,
+    "a comment closed early by <!--->": `<!---> <details> -->\n\n${line}`,
+    "a comment closed early by --!>": `<!-- a --!> <details> -->\n\n${line}`,
+    "a comment closed early, a tag on its own line": `<!-->\n\n<details>\n\n-->\n\n${line}`,
+    // a fence in a list ends with the list, so the next line's <!-- is live and runs to the end of the body
+    "a comment opened in a fence a list ended": `- a\n\n  \`\`\`\n<!--\n  \`\`\`\n\n${line}`,
+    // and these refused at f9adbdf9, by the code the rule replaces
+    "a tag on a comment's closing line": `<!--\n--> <details>\n\n${line}`,
+    "a tag after a closed comment": `<!-- x --> <details>\n\n${line}`,
     "details with attributes, split": `<details open\nclass="x"\n>\n\n${line}\n\n</details>`,
     "script, split": `<script\n>\n${line}\n</script>`,
-    "close tag, split": `Carried.\n\n</details\n>\n\n${line}`,
-    // F1.2: spans that are neither a tag nor a comment
     "processing instruction": `<?\n${line}\n?>`,
     "declaration span": `<!x\n${line}\n>`,
     cdata: `<![CDATA[\n${line}\n]]>`,
@@ -2161,40 +2185,60 @@ test("18 · (19:57, the final review) markup the scan must not read past: a star
     "processing instruction, blank lines": `<?\n\n${line}\n\n?>`,
     "declaration span, blank lines": `<!x\n\n${line}\n\n>`,
     "cdata, blank lines": `<![CDATA[\n\n${line}\n\n]]>`,
-    // F1.3 and past it: a close tag that is only text leaves the element open
+    // a close tag that is only text leaves the element open
     "close tag in a code span": `<details>\n\n\`\` \`</details>\` \`\`\n\n${line}`,
     "close tag in a code span over lines": `<details>\n\na \`b\n</details>\` c\n\n${line}`,
     "close tag in a fence": `<details>\n\n\`\`\`\n</details>\n\`\`\`\n\n${line}`,
     "close tag, indented as code": `<details>\n\n    </details>\n\n${line}`,
     "close tag in a link title": `<details>\n\n[a](/u "b\n</details>\nc")\n\n${line}`,
-    // a backtick run paired by length: the tag is outside every span
     "start tag past a run with no partner": `\`<details>\`\`\n\n${line}`,
     "start tag past a span over lines": `x \`y\nz\` <details> \`w\`\n\n${line}`,
     "start tag past a line that is no fence": `\`\`\` a\`b\n<details>\n\`\`\`\nx\n\`\`\`\n\`\`\` i\n\`\`\`\n\n${line}`,
-    // F2 and past it: running on from the text above, inside a title or an alt
+    // the rule's cost: the page shows every one of these, and each refuses. Until 2026-11-06 most were visible controls
+    "cost, a code span holding a tag": `Use \`<details>\` for notes.\n\n${line}`,
+    "cost, a double-backtick span holding a tag": `Use \`\` \`<details>\` \`\` for notes.\n\n${line}`,
+    "cost, a closed fence holding a tag": `\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    "cost, a closed fence holding a comment": `\`\`\`\n<!-- x -->\n\`\`\`\n\n${line}`,
+    "cost, a closed comment holding a tag": `<!-- <details> -->\n\n${line}`,
+    "cost, a comment over lines holding a tag": `<!--\n<details>\n-->\n\n${line}`,
+    "cost, an autolink": `<https://example.com>\n\n${line}`,
+    "cost, an email autolink": `<a@example.com>\n\n${line}`,
+    "cost, a void tag": `First.<br>\n\n${line}`,
+    "cost, a self-closed tag": `<widget/>\n\n${line}`,
+    "cost, a stray close tag": `</details>\n\n${line}`,
+    "cost, a stray close tag, split": `Carried.\n\n</details\n>\n\n${line}`,
+    "cost, a generic": `Map<string, number> holds it.\n\n${line}`,
+    "cost, a comparison with no space": `Refuses when count<limit, as before.\n\n${line}`,
+    "cost, a complete processing instruction": `<? note ?>\n\n${line}`,
+    "cost, an escaped <": `\\<details>\n\n${line}`,
+    // no < at all, and no blank line above: running on from the text above, inside a title or an alt
     "reference title": `[notes]: https://example.com "notes\n${line}\n"`,
     "reference title, label over lines": `[no\ntes]: https://example.com "notes\n${line}\n"`,
     "reference title, in a list": `- [notes]: https://example.com "notes\n${line}\n"`,
     "link title": `see [a](/u "b\n${line}\n")`,
     "image alt": `![a\n${line}\n](x.png)`,
     "running on from prose": `Carried.\n${line}`,
-    // L5: a line with an info string closes no fence
+    // a fence is still read, for a line inside one: an info string closes nothing, and a backtick in one opens nothing
     "fence, an info string closes nothing": `\`\`\`\n\`\`\`js\n${line}\n\`\`\``,
-    // the controls: the same line, a paragraph of its own
+    "fence, opened on a line after one that is no fence": `\`\`\` a\`b\n\`\`\`\n\n${line}`,
+    // what must still credit: the same line, a paragraph of its own, with nothing above it that could open markup
+    "visible, a plain line": `Carried.\n\n${line}`,
+    "visible, the first line": line,
     "visible, a < that starts nothing": `a < b\n\n${line}`,
-    "visible, an autolink": `<https://example.com>\n\n${line}`,
-    "visible, an email autolink": `<a@example.com>\n\n${line}`,
-    "visible, a void tag": `First.<br>\n\n${line}`,
-    "visible, a self-closed tag": `<widget/>\n\n${line}`,
-    "visible, a stray close tag": `</details>\n\n${line}`,
-    "visible, a generic with its end on the line": `Map<string, number> holds it.\n\n${line}`,
-    "visible, a complete processing instruction": `<? note ?>\n\n${line}`,
+    "visible, a < before a space": `< details>\n\n${line}`,
+    "visible, a < before a digit": `<1>\n\n${line}`,
+    "visible, a < before an underscore": `<_a>\n\n${line}`,
+    "visible, an empty <>": `<>\n\n${line}`,
+    "visible, a tag written as entities": `&lt;details&gt;\n\n${line}`,
+    "visible, a closed template comment": `<!-- Describe what this PR changes. -->\n\n${line}`,
+    "visible, an empty comment": `<!---->\n\n${line}`,
+    "visible, a comment over lines": `<!--\nA note for the author.\n-->\n\n${line}`,
+    "visible, two comments on a line": `<!-- a --> <!-- b -->\n\n${line}`,
+    "visible, a closed fence with no tag": `\`\`\`\nplain text\n\`\`\`\n\n${line}`,
+    "visible, a closed tilde fence with no tag": `~~~\nplain text\n~~~\n\n${line}`,
     "visible, a reference definition": `[x]: https://example.com\n\n${line}`,
     "visible, a reference title closed above": `[notes]: https://example.com "notes\nmore"\n\n${line}`,
     "visible, a span over lines closed above": `a \`b\nc\` d\n\n${line}`,
-    "visible, a code span holding a tag": `Use \`<details>\` for notes.\n\n${line}`,
-    "visible, a double-backtick span holding a tag": `Use \`\` \`<details>\` \`\` for notes.\n\n${line}`,
-    "visible, a closed fence holding a tag": `\`\`\`\n<details>\n\`\`\`\n\n${line}`,
     "visible, above details": `${line}\n\n<details>\n\nNotes.\n\n</details>`,
   };
   const verdicts = {}, refs = {};
@@ -2206,11 +2250,29 @@ test("18 · (19:57, the final review) markup the scan must not read past: a star
   }
   const html = (name) => `422 ${refs[name]}'s carries: line is inside or below HTML the office does not read, which may hide it when the pull request is read: put it above any HTML`;
   const runsOn = (name) => `422 ${refs[name]}'s carries: line runs on from the text above it, which can hide it when the pull request is read: leave a blank line above it`;
+  const fenced = (name) => `422 ${refs[name]}'s carries: line is inside a code block`;
   assert.deepEqual(verdicts, {
+    "a self-closed details": html("a self-closed details"),
+    "a /> inside an attribute": html("a /> inside an attribute"),
+    "an escaped backtick": html("an escaped backtick"),
+    "an autolink taking the backtick": html("an autolink taking the backtick"),
+    "a tag taking the backtick": html("a tag taking the backtick"),
+    "an hr's block, then a span": html("an hr's block, then a span"),
+    "a br's block, then a span": html("a br's block, then a span"),
+    "a close tag's block, then a span": html("a close tag's block, then a span"),
+    "an hr's block, then a fence": html("an hr's block, then a fence"),
+    "a self-closed tag's block, then a fence": html("a self-closed tag's block, then a fence"),
+    "details": html("details"),
     "details, split": html("details, split"),
+    "a comment closed early by <!-->": html("a comment closed early by <!-->"),
+    "a comment closed early by <!--->": html("a comment closed early by <!--->"),
+    "a comment closed early by --!>": html("a comment closed early by --!>"),
+    "a comment closed early, a tag on its own line": html("a comment closed early, a tag on its own line"),
+    "a comment opened in a fence a list ended": `422 ${refs["a comment opened in a fence a list ended"]}'s carries: line is inside an HTML comment, hidden when the pull request is read`,
+    "a tag on a comment's closing line": html("a tag on a comment's closing line"),
+    "a tag after a closed comment": html("a tag after a closed comment"),
     "details with attributes, split": html("details with attributes, split"),
     "script, split": html("script, split"),
-    "close tag, split": html("close tag, split"),
     "processing instruction": html("processing instruction"),
     "declaration span": html("declaration span"),
     cdata: html("cdata"),
@@ -2227,27 +2289,47 @@ test("18 · (19:57, the final review) markup the scan must not read past: a star
     "start tag past a run with no partner": html("start tag past a run with no partner"),
     "start tag past a span over lines": html("start tag past a span over lines"),
     "start tag past a line that is no fence": html("start tag past a line that is no fence"),
+    "cost, a code span holding a tag": html("cost, a code span holding a tag"),
+    "cost, a double-backtick span holding a tag": html("cost, a double-backtick span holding a tag"),
+    "cost, a closed fence holding a tag": html("cost, a closed fence holding a tag"),
+    "cost, a closed fence holding a comment": html("cost, a closed fence holding a comment"),
+    "cost, a closed comment holding a tag": html("cost, a closed comment holding a tag"),
+    "cost, a comment over lines holding a tag": html("cost, a comment over lines holding a tag"),
+    "cost, an autolink": html("cost, an autolink"),
+    "cost, an email autolink": html("cost, an email autolink"),
+    "cost, a void tag": html("cost, a void tag"),
+    "cost, a self-closed tag": html("cost, a self-closed tag"),
+    "cost, a stray close tag": html("cost, a stray close tag"),
+    "cost, a stray close tag, split": html("cost, a stray close tag, split"),
+    "cost, a generic": html("cost, a generic"),
+    "cost, a comparison with no space": html("cost, a comparison with no space"),
+    "cost, a complete processing instruction": html("cost, a complete processing instruction"),
+    "cost, an escaped <": html("cost, an escaped <"),
     "reference title": runsOn("reference title"),
     "reference title, label over lines": runsOn("reference title, label over lines"),
     "reference title, in a list": runsOn("reference title, in a list"),
     "link title": runsOn("link title"),
     "image alt": runsOn("image alt"),
     "running on from prose": runsOn("running on from prose"),
-    "fence, an info string closes nothing": `422 ${refs["fence, an info string closes nothing"]}'s carries: line is inside a code block`,
+    "fence, an info string closes nothing": fenced("fence, an info string closes nothing"),
+    "fence, opened on a line after one that is no fence": fenced("fence, opened on a line after one that is no fence"),
+    "visible, a plain line": "ok ada",
+    "visible, the first line": "ok ada",
     "visible, a < that starts nothing": "ok ada",
-    "visible, an autolink": "ok ada",
-    "visible, an email autolink": "ok ada",
-    "visible, a void tag": "ok ada",
-    "visible, a self-closed tag": "ok ada",
-    "visible, a stray close tag": "ok ada",
-    "visible, a generic with its end on the line": "ok ada",
-    "visible, a complete processing instruction": "ok ada",
+    "visible, a < before a space": "ok ada",
+    "visible, a < before a digit": "ok ada",
+    "visible, a < before an underscore": "ok ada",
+    "visible, an empty <>": "ok ada",
+    "visible, a tag written as entities": "ok ada",
+    "visible, a closed template comment": "ok ada",
+    "visible, an empty comment": "ok ada",
+    "visible, a comment over lines": "ok ada",
+    "visible, two comments on a line": "ok ada",
+    "visible, a closed fence with no tag": "ok ada",
+    "visible, a closed tilde fence with no tag": "ok ada",
     "visible, a reference definition": "ok ada",
     "visible, a reference title closed above": "ok ada",
     "visible, a span over lines closed above": "ok ada",
-    "visible, a code span holding a tag": "ok ada",
-    "visible, a double-backtick span holding a tag": "ok ada",
-    "visible, a closed fence holding a tag": "ok ada",
     "visible, above details": "ok ada",
   });
 });

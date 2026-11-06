@@ -149,63 +149,42 @@ const PATCH_ID_TIMEOUT_MS = 10_000;
 
 // A HIDDEN DECLARATION DOESN'T COUNT (Wright, settled 2026-11-05 19:57:03Z, answer 2): "the `carries:`
 // declaration has to be visible to anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`),
-// or anywhere else the rendered body hides, refuses with a reason naming it". The office models no renderer,
-// so it never decides that HTML has ended: a declaration counts only as a plain top-level paragraph of its own,
-// above any raw HTML. Read line by line:
+// or anywhere else the rendered body hides, refuses with a reason naming it". The office models no renderer. It
+// keeps one rule: A DECLARATION STANDS ABOVE EVERY `<` THAT COULD START MARKUP, in a code span or a fence or not.
+// That `<` holds the rest of the body as HTML, whatever the markup turns out to mean: self-closed, void, closed
+// again, or only text on the page. The cost is plain and named: a line the page would show refuses too, and the
+// refusal says to put it above any HTML. Past that rule, read line by line:
+//   - a comment's own marks, `<!--` and `-->`, are the rule's one exemption, so a PR template's comment taints
+//     nothing. What stands between them is not exempt, since an HTML parser also ends a comment at `<!-->`, `<!--->`
+//     and `--!>`, and what looks like its inside is then live. Nor are the marks exempt in a fence, since a fence in
+//     a list ends with the list, and a `<!--` on the next line is then live;
 //   - a comment runs from `<!--` to `-->`, across lines; one never closed runs to the end of the body;
-//   - an element's start tag holds the rest of the body as HTML, close tag or not: a `</details>` may be text
-//     in a code span, a fence or a link title, and the element then stays open and hides what follows. A void
-//     tag (<br>) or a self-closed one (<x/>) opens nothing;
-//   - any other `<` before a letter, `/`, `!` or `?` is markup on its line, and if its end (`>`, `?>`, `]]>`)
-//     isn't on that line it holds the rest of the body too: a start tag split over lines, `<?`, `<!x`, CDATA;
-//   - text in a `code span` is text, its backtick runs paired by length; after a run left unpaired, the
-//     paragraph's later lines blank nothing, since that run may pair across lines;
 //   - a line running on from the text above isn't its own paragraph: a link's title, an image's alt or a
 //     reference definition's title can hide it, and none of them survives a blank line.
 // A declaration-shaped mention (carries:, then a # and a digit on that line) or a line that tries to declare,
-// hidden by a comment or on any line HTML touches, refuses, named. A closed comment or a void tag that holds no
-// such mention (a PR template's) taints nothing, and a plain paragraph after it counts as ever.
+// hidden by a comment or on or below a held line, refuses, named. A body with neither has declared nothing.
 /** carries:, then a # and a digit on the same line: a declaration's shape, wherever it stands in a line. */
 const MENTIONS = /carries[ \t]*:[^\n]*?#[ \t]*[0-9]/i;
-/** A tag: `<name …>` or `</name>`; an autolink (<https://…>) is no tag, and `<!--` is the comment. */
-const TAG = /<(\/?)([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])[^>]*?(\/?)>/g;
-const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
-/** A `<` that may start markup; `a < b` doesn't. */
-const MARKUP_START = /^<[A-Za-z/!?]/;
-/**
- * A line with its `code spans` blanked out, character for character, so positions hold, pairing backtick runs
- * of equal length as CommonMark does: `{ text, unpaired }`, unpaired when a run found no partner on this line.
- */
-function codeless(s) {
-  const runs = [...s.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
-  let text = s, unpaired = false;
-  for (let i = 0; i < runs.length; i++) {
-    const j = runs.findIndex((r, k) => k > i && r.len === runs[i].len);
-    if (j < 0) { unpaired = true; continue; }
-    const end = runs[j].at + runs[j].len;
-    text = text.slice(0, runs[i].at) + " ".repeat(end - runs[i].at) + text.slice(end);
-    i = j;
-  }
-  return { text, unpaired };
-}
+/** A `<` that could start markup: an HTML parser opens something on a letter, `/`, `!` or `?`, and nothing else (`a < b`). */
+const MARKUP_START = /<[A-Za-z/!?]/;
+const COMMENT_MARKS = /<!--|-->/g;
 const hides = (s) => MENTIONS.test(s) || DECLARES.test(s);
-/** What ends the markup that starts at the head of `s`. */
-const endOfMarkup = (s) => (s.startsWith("<?") ? "?>" : s.startsWith("<![CDATA[") ? "]]>" : ">");
 
 /**
  * The PR a carrier's body declares it carries, `{ repo, number }`; null when no
  * line tries to; else the refusal. Exactly one line, a plain and visible paragraph
- * of its own (outside quotes, code blocks, HTML comments and raw HTML), on the
- * carrier's own repo (`office` names postmark-office), never itself.
+ * of its own (outside quotes, code blocks and HTML comments, above every `<` that
+ * could start markup), on the carrier's own repo (`office` names postmark-office),
+ * never itself.
  */
 function carriedDeclarationOf(text, ref) {
   const name = `${ref.repo}#${ref.number}`;
   const tried = [];
   const hidden = { comment: false, html: false };
-  // held: raw HTML has opened, and the rest of the body is held as HTML. spilled: a backtick run is unpaired in
-  // this paragraph. afterBlank: the line above was blank, or this is the first line.
-  let fence = null, comment = false, held = false, spilled = false, afterBlank = true;
+  // held: a `<` that could start markup has passed. afterBlank: the line above was blank, or this is the first line.
+  let fence = null, comment = false, held = false, afterBlank = true;
   for (const line of String(text ?? "").split(/\r?\n/)) {
+    if (MARKUP_START.test(fence ? line : line.replace(COMMENT_MARKS, ""))) held = true;
     if (!comment && !held) {
       if (fence) {
         const c = FENCE_CLOSES.exec(line);
@@ -216,7 +195,6 @@ function carriedDeclarationOf(text, ref) {
       const f = FENCE.exec(line);
       if (f) { fence = f[1]; afterBlank = false; continue; }
     }
-    const plain = (s) => (spilled ? s : codeless(s).text);
     // what a comment hides, and what the line shows
     let shown = "", rest = line, markup = held || comment;
     while (rest) {
@@ -227,27 +205,13 @@ function carriedDeclarationOf(text, ref) {
         comment = false; markup = true; rest = rest.slice(end + 3);
         continue;
       }
-      const at = plain(rest).indexOf("<!--");
+      const at = rest.indexOf("<!--");
       if (at < 0) { shown += rest; break; }
       shown += rest.slice(0, at); comment = true; markup = true; rest = rest.slice(at + 4);
-    }
-    // the raw HTML it opens
-    const seen = plain(shown);
-    for (const [, close, tag, selfClosed] of seen.matchAll(TAG)) {
-      markup = true;
-      if (!close && !selfClosed && !VOID_TAGS.has(tag.toLowerCase())) held = true;
-    }
-    // and any other markup: split over lines, it holds the rest too
-    for (let at = seen.indexOf("<"); at >= 0; at = seen.indexOf("<", at + 1)) {
-      const from = seen.slice(at);
-      if (!MARKUP_START.test(from)) continue;
-      markup = true;
-      if (!from.includes(endOfMarkup(from))) held = true;
     }
     if (markup) { if (hides(shown)) hidden.html = true; }
     else if (DECLARES.test(line)) tried.push({ line, fenced: false, runsOn: !afterBlank });
     afterBlank = !line.trim();
-    spilled = !afterBlank && (spilled || codeless(line).unpaired);
   }
   const bad = (defect) => refuse(422, defect, CARRY_HOW, { field: "link" });
   if (hidden.comment) throw bad(`${name}'s carries: line is inside an HTML comment, hidden when the pull request is read`);
