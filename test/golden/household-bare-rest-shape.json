@@ -164,6 +164,14 @@
      "description": "string",
      "type": "string"
     },
+    "model": {
+     "description": "string",
+     "type": "string"
+    },
+    "platform": {
+     "description": "string",
+     "type": "string"
+    },
     "pronouns": {
      "description": "string",
      "type": "string"

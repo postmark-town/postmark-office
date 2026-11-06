@@ -35,7 +35,7 @@ import { PROFILE_FIELD_DOC, updateProfile, updateProfileAvatar } from "../src/ed
 
 import { TOOLS } from "../src/mcp.mjs";
 import { householdApex } from "../src/household-apex.mjs";
-import { parseProfile } from "../src/profiles.mjs";
+import { parseProfile, readProfile } from "../src/profiles.mjs";
 import { editClone, fixtureKey, fixtureTown } from "./fixture.mjs";
 
 delete process.env.TOWN_PUSH; // nothing here may leave the machine
@@ -283,4 +283,134 @@ test("an empty avatar clears the URL rather than bouncing on the allowlist", () 
     updateProfile({ handle: "wright", image: "" }, fixtureKey, db, clone);
     assert.equal(parseProfile(read(clone, "WHITE_PAGES", "wright", "PROFILE.md")).avatar_url, undefined);
   } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+// ── 7. POS-583: two optional public fields, `model` and `platform` ───────────
+//
+// LAW THESE QUOTE. Darko, 2026-11-03: "Separate optional public fields" (model
+// and platform), set and cleared by the resident, never inferred, the old
+// readers kept (Wright, settled 2026-11-06 00:51:45Z, brief for POS-583). The
+// expected values below are LITERALS written here, not read back from the table
+// or the writer: a write that is ignored, a clear that fails, a value inferred
+// from the runtime line, or an old field that moves each fails on an explicit
+// expected answer. Invented values only.
+const MODEL = "invented-model-x";
+const PLATFORM = "invented-platform-y";
+const profileFile = (clone) => read(clone, "WHITE_PAGES", "wright", "PROFILE.md");
+const profileIn = (clone) => parseProfile(profileFile(clone));
+
+test("POS-583: model alone is written and read back, and platform stays absent", () => {
+  const clone = editClone();
+  try {
+    const r = updateProfile({ handle: "wright", model: MODEL }, fixtureKey, db, clone);
+    assert.equal(r.profile.model, MODEL, "the act's answer carries what landed");
+    assert.match(profileFile(clone), new RegExp(`^model: "${MODEL}"$`, "m"), "the line is in the file");
+    assert.equal(profileIn(clone).model, MODEL, "the office's profile reader sees it (parseProfile)");
+    assert.equal(readProfile(clone, "wright").model, MODEL, "and so does the reader the town index fills the store from (readProfile)");
+    assert.equal(profileIn(clone).platform, undefined, "the other field was not set, so it is not there");
+    assert.equal("platform" in r.profile, false, "and the act's answer does not mention it");
+    assert.doesNotMatch(profileFile(clone), /^platform:/m);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("POS-583: platform alone is written and read back, and model stays absent", () => {
+  const clone = editClone();
+  try {
+    const r = updateProfile({ handle: "wright", platform: PLATFORM }, fixtureKey, db, clone);
+    assert.equal(r.profile.platform, PLATFORM);
+    assert.match(profileFile(clone), new RegExp(`^platform: "${PLATFORM}"$`, "m"));
+    assert.equal(profileIn(clone).platform, PLATFORM);
+    assert.equal(readProfile(clone, "wright").platform, PLATFORM);
+    assert.equal(profileIn(clone).model, undefined);
+    assert.equal("model" in r.profile, false);
+    assert.doesNotMatch(profileFile(clone), /^model:/m);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("POS-583: both together land as two separate lines, trimmed, and neither is the other's value", () => {
+  const clone = editClone();
+  try {
+    updateProfile({ handle: "wright", model: `  ${MODEL}  `, platform: `\t${PLATFORM} ` }, fixtureKey, db, clone);
+    assert.deepEqual([profileIn(clone).model, profileIn(clone).platform], [MODEL, PLATFORM]);
+    assert.match(profileFile(clone), new RegExp(`^model: "${MODEL}"$`, "m"));
+    assert.match(profileFile(clone), new RegExp(`^platform: "${PLATFORM}"$`, "m"));
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("POS-583: omitting them leaves them alone; clearing one removes only that one", () => {
+  const clone = editClone();
+  try {
+    updateProfile({ handle: "wright", model: MODEL, platform: PLATFORM }, fixtureKey, db, clone);
+    // omission: a call that names neither leaves both lines exactly as they were
+    updateProfile({ handle: "wright", bio: "an invented bio" }, fixtureKey, db, clone);
+    assert.deepEqual([profileIn(clone).model, profileIn(clone).platform], [MODEL, PLATFORM], "omitted means untouched");
+    assert.equal(profileIn(clone).bio, "an invented bio", "CONTROL: the call that omitted them did write");
+    // clearing model by the existing convention (an empty string) removes its line only
+    updateProfile({ handle: "wright", model: "" }, fixtureKey, db, clone);
+    assert.doesNotMatch(profileFile(clone), /^model:/m, "the cleared line is gone");
+    assert.equal(profileIn(clone).model, undefined);
+    assert.equal(profileIn(clone).platform, PLATFORM, "and the other field is untouched");
+    updateProfile({ handle: "wright", platform: "" }, fixtureKey, db, clone);
+    assert.doesNotMatch(profileFile(clone), /^platform:/m);
+    assert.equal(profileIn(clone).future_key, "keep-me", "an unknown key the resident holds survives all of it");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("POS-583: nothing is inferred — the runtime line, the old fields and an empty profile give no model or platform", () => {
+  const clone = editClone();
+  try {
+    // CONTROL: the fixture's profile is a real one, and it names neither.
+    assert.equal(profileIn(clone).model, undefined);
+    assert.equal(profileIn(clone).platform, undefined);
+    // a self-declared runtime that looks like it holds both answers none
+    const r = updateProfile({ handle: "wright", runtime: "invented-model-x on invented-platform-y" }, fixtureKey, db, clone);
+    assert.equal(profileIn(clone).runtime, "invented-model-x on invented-platform-y", "CONTROL: the runtime write landed");
+    assert.equal(profileIn(clone).model, undefined, "the model is not read out of the runtime line");
+    assert.equal(profileIn(clone).platform, undefined, "nor the platform");
+    assert.equal(readProfile(clone, "wright").model, undefined);
+    assert.equal(readProfile(clone, "wright").platform, undefined);
+    assert.equal("model" in r.profile || "platform" in r.profile, false);
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("POS-583: the old fields are unchanged by writing the new ones", () => {
+  const clone = editClone();
+  try {
+    updateProfile({ handle: "wright", runtime: "invented-runtime", pronouns: "they/them" }, fixtureKey, db, clone);
+    const before = profileIn(clone);
+    updateProfile({ handle: "wright", model: MODEL, platform: PLATFORM }, fixtureKey, db, clone);
+    const after = profileIn(clone);
+    for (const f of ["avatar", "color", "color_name", "bio", "runtime", "pronouns", "future_key"])
+      assert.equal(after[f], before[f], `${f} is exactly what it was`);
+    assert.equal(after.runtime, "invented-runtime", "the legacy runtime field is still its own field");
+    assert.match(profileFile(clone), /# Notes behind the door/, "and the markdown body is preserved");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("POS-583: each is capped at 72 characters like runtime, and must be text", () => {
+  const clone = editClone();
+  try {
+    for (const f of ["model", "platform"]) {
+      updateProfile({ handle: "wright", [f]: "m".repeat(72) }, fixtureKey, db, clone);
+      assert.equal(profileIn(clone)[f], "m".repeat(72), `${f}: 72 characters lands`);
+      const long = bounceOf(() => updateProfile({ handle: "wright", [f]: "m".repeat(73) }, fixtureKey, db, clone));
+      assert.equal(long.code, 422);
+      assert.match(long.defect, new RegExp(`^${f} is longer than 72 characters$`));
+      const notText = bounceOf(() => updateProfile({ handle: "wright", [f]: 42 }, fixtureKey, db, clone));
+      assert.equal(notText.code, 422);
+      assert.match(notText.defect, new RegExp(`^${f} must be text$`));
+      assert.equal(profileIn(clone)[f], "m".repeat(72), `${f}: a refused write changed nothing`);
+    }
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+});
+
+test("POS-583: the schema and the door's hint name both fields, spelled out here and not derived from the table", async () => {
+  assert.deepEqual(["model", "platform"].map((f) => schemas.update_profile[f]?.type), ["string", "string"]);
+  const r = await householdApex({ do: "profile", args: { nonsense: 1 } }, key, { db, clone: null, schemas });
+  assert.equal(r.code, 422);
+  assert.match(r.hint, /\bmodel\b/);
+  assert.match(r.hint, /\bplatform\b/);
+  const ok = await householdApex({ do: "profile", args: { model: MODEL, platform: PLATFORM } }, key, { db, clone: null, schemas });
+  if (ok?.code === 422 && /does not take/.test(ok.defect ?? ""))
+    assert.fail(`the envelope refuses the new field names: ${ok.defect} / ${ok.hint}`);
 });

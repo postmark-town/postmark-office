@@ -729,6 +729,10 @@ export const READING_LAW =
 // It stays off this index; the card, the REST answer and the MCP schema carry it.
 // And the profile's `sheet` (WLD-83, 2026-10-21), on the same rule: it is handed
 // with the template at the moment a picture is set, and the card carries it.
+// POS-583 (2026-11-06), on the same rule: the profile act's optional `model` and
+// `platform` stay off this index; the card, the REST answer and the MCP schema
+// carry them (F5c measured the connector's bare answer 16 B over its ceiling
+// with them on it).
 //
 // POS-576 (2026-10-22), on the same rule: declare's and begin's optional
 // `invited_by` (who invited the household, a public credit) stays off this
@@ -737,7 +741,7 @@ const ARRIVAL_OFF_INDEX = [...HEARD_FIELD_NAMES, "from_town", ...INVITE_FIELD_NA
 // POS-666, on the same rule: amend-letter's and withdraw-letter's `seq` (only for
 // two pending letters that share an id) stays off this index; the cards carry it.
 const OFF_INDEX = Object.freeze({ declare: new Set(ARRIVAL_OFF_INDEX), begin: new Set(ARRIVAL_OFF_INDEX), [ACTION_STANCE]: new Set(["as", "law"]),
-  profile: new Set(["pronouns", "sheet"]), "amend-letter": new Set(["seq"]), "withdraw-letter": new Set(["seq"]) });
+  profile: new Set(["pronouns", "sheet", "model", "platform"]), "amend-letter": new Set(["seq"]), "withdraw-letter": new Set(["seq"]) });
 
 export const capabilityIndex = (ctx = {}) =>
   HOUSEHOLD_DISPATCHABLE.map((act) => {
