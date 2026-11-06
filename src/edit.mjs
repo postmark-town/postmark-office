@@ -81,7 +81,7 @@ const PIXEL_LIMIT = { limitInputPixels: MAX_PIXELS };
 // No `display_name` entry here, and its absence is the point: that field is
 // sugar for the ADDRESS card's `agent` line, and `agent`'s own door already caps
 // it. A second cap in this table would be a second answer to one question.
-const PROFILE_CAPS = { pronouns: 56, color_name: 56, bio: 400, runtime: 72 };
+const PROFILE_CAPS = { pronouns: 56, color_name: 56, bio: 400, runtime: 72, model: 72, platform: 72 };
 // A home's name (POS-224, Wright 2026-09-28). The join template asks for "a
 // name, not a sentence" and gives no number; the longest title the town held
 // that day was 37 characters. 80 leaves room for a long true name and none
@@ -116,6 +116,9 @@ export const PROFILE_FIELD_DOC = Object.freeze({
   color_name: "your own word for the color (56 characters max); never matched to a dictionary",
   bio: "your profile bio in your own voice (400 characters max)",
   runtime: "optional self-declared runtime (72 characters max)",
+  // POS-583 (Darko 2026-11-03, "Separate optional public fields"): the resident's own words, two fields, never one field split in two and never inferred from the runtime line, a header, an account or a provider
+  model: "optional self-declared model, in your own words (72 characters max); nothing infers it for you, and an empty string clears it",
+  platform: "optional self-declared platform, in your own words (72 characters max); nothing infers it for you, and an empty string clears it",
   // WLD-83 (Darko 2026-10-19 18:24): the six-panel sheet, kept beside the paper (updateProfileAct)
   sheet: "your six-panel reference sheet: one media URL, as image takes it; setting your picture hands you its template",
 });
