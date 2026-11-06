@@ -27,6 +27,7 @@
 import { createHash } from "node:crypto";
 import { explainAnswer, explainPath } from "./read-grammar.mjs";
 import { withRefused } from "./one-contract.mjs";
+import { SNAPSHOT_LIMIT } from "./doorstep-stakes.mjs"; // WLD-51: the frame every at-risk word states
 
 export const DOORSTEP_BUDGET = 2500;
 export const QUESTS_SHOWN = 3;
@@ -68,7 +69,7 @@ export function youPart({ needs, unread, steps } = {}) {
   const tk = needs?.takes_awaiting?.rows?.length ?? 0;
   if (tk) out.push(item(`${plural(tk, "thing")} of your house's taken by another wait on your word`, "household.needs-you"));
   const risk = needs?.stakes_at_risk?.rows?.length ?? 0;
-  if (risk) out.push(item(`${plural(risk, "mark")} of yours would be swept at the next settlement`, "household.stakes"));
+  if (risk) out.push(item(`${plural(risk, "mark")} of yours would be swept at the next settlement. ${SNAPSHOT_LIMIT}`, "household.stakes"));
   const asks = needs?.key_asks?.rows?.length ?? 0;
   if (asks) out.push(item(`${plural(asks, "ask")} about your key`, "household.needs-you"));
   // WLD-83: the line carries the household's own link whole, so the agent can paste it

@@ -146,11 +146,35 @@ test("an office with no docket store configured says so, through the doorstep's 
 test("a quiet page says so, and an empty one points at the portfolio", async () => {
   const quiet = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: HEAD, byMark: new Map([["berthillon/the-orchard-bench", 1], ["berthillon/cone-coing", 2]]), reason: null }) }));
   assert.equal(quiet.at_risk, 0);
-  assert.match(quiet.note, /nothing of yours is at risk at the next settlement/);
+  assert.match(quiet.note, /^nothing of yours is at risk as of the town head named above\. /);
   const empty = await stakesFor(["nobody"], readers());
   assert.equal(empty.count, 0);
   assert.match(empty.note, /no published mark of yours stands on world main/);
   assert.match(empty.read_the_rest, /world \{ read: "leave-mark" \}/, "the portfolio's own grammar");
+});
+
+// WLD-51 (Wright, 2026-11-03 19:25 EST): the warning states the frame it was read in. The words are spelled here, not
+// imported, so a changed sentence or a surface that stops saying it reds on this assertion. SWEEP_RULE is the verbatim
+// ruling and does not carry it; the existing optional prose does, and no field is added.
+const FRAME = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
+const KNOWN_KEYS = new Set(["next_settlement", "clock", "rule", "unavailable", "registry_unavailable", "escrow_at_town_sha", "escrow_ingested_at",
+  "catches_up_at", "later_stakes", "count", "at_risk", "note", "read_the_rest", "rows"]);
+
+test("WLD-51 · the at-risk segment states its frame in existing prose, with the at-risk row, the quiet note and the unmeasured read alike", async () => {
+  const risky = await stakesFor(["berthillon"], readers());
+  assert.equal(risky.at_risk, 1, "the warning is live on this page");
+  assert.ok(risky.later_stakes.endsWith(`shows it now. ${FRAME}`), `later_stakes: ${risky.later_stakes}`);
+  assert.ok(risky.later_stakes.startsWith("a stake or unstake made after escrow_ingested_at shows here at catches_up_at"), "and keeps its own words");
+  assert.equal(risky.rule, SWEEP_RULE, "the sweep's rule is the ruling verbatim and does not carry the frame");
+  assert.ok(!risky.rule.includes("last settlement"));
+  const quiet = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: HEAD, byMark: new Map([["berthillon/the-orchard-bench", 1], ["berthillon/cone-coing", 2]]), reason: null }) }));
+  assert.equal(quiet.at_risk, 0);
+  assert.ok(quiet.note.endsWith(`as of the town head named above. ${FRAME}`), `the "nothing at risk" note: ${quiet.note}`);
+  const blind = await stakesFor(["berthillon"], readers({ escrow: async () => ({ townSha: null, byMark: null, reason: "no town head" }) }));
+  assert.equal(blind.at_risk, null);
+  assert.ok(blind.later_stakes.endsWith(FRAME));
+  for (const seg of [risky, quiet, blind]) for (const k of Object.keys(seg)) assert.ok(KNOWN_KEYS.has(k), `no new field: ${k}`);
+  assert.deepEqual(risky.rows[0].act, stakeEnvelope("berthillon/the-orchard-bench"), "the row's act is untouched by prose");
 });
 
 test("scope is the stances/rulings grammar: a named handle is one resident, bare is the whole house the key holds", async () => {
@@ -241,9 +265,13 @@ test("the finished doorstep carries the segment, always — serves, args, and th
         assert.equal(d.stakes.read_the_rest, undefined);
         assert.match(d.stakes.teach_at, /household \{ read: "stakes" \}/);
         assert.match(d.stakes.abridged, /drops `rule` and `read_the_rest`/);
+        // WLD-51: this skin strips `later_stakes`, so the frame rides the cut's own words, which stay on the page
+        assert.equal(d.stakes.later_stakes, undefined);
+        assert.ok(d.stakes.abridged.endsWith(`answers it whole. ${FRAME}`), `the slim skin's abridged states the frame: ${d.stakes.abridged}`);
       } else {
         assert.match(d.stakes.rule, /a commons mark with no stamps behind it leaves the world/, "REST answers the read whole — the bundle law");
         assert.equal(d.stakes.teach_at, undefined);
+        assert.ok(d.stakes.later_stakes.endsWith(FRAME), `the full skin's later_stakes states the frame: ${d.stakes.later_stakes}`); // WLD-51
       }
     }
   } finally { await restore(); await ix.stop(); }
@@ -359,4 +387,144 @@ test("WLD-51 part 3 · every stakes row carries its mark's whole body (Darko, 20
   for (const row of seg.rows) assert.equal(row.body, `${row.mark}: ${body}`, `${row.mark} carries its body, whole`);
   const bare = stakesRowsFrom({ handles: ["berthillon"], marks: [{ id: "berthillon/x", kind: "sited", by: "berthillon" }], registry: {}, byMark: new Map() });
   assert.equal(bare[0].body, null, "a mark the fold holds no body for says so: null, never a missing key");
+});
+
+// ── WLD-51 · A THING IN HANDS IS NOT AT RISK (POS-688's held veto, handed in) ──
+//
+// The sweep asks the verdict whether a mark is printed as held (`held_by`):
+// a thing in someone's hands is published but unplaced, never a candidate while
+// held (world unpublish-verdict.mjs, `held`). Until WLD-51 this page asked the
+// same function without that input, so a held thing at ✦0 read "at risk", with
+// a stake act, while the sweep kept it: postmark#3757's class, the warning and
+// the sweep disagreeing. Invented handles; the verdict is the pinned world's.
+//
+// THE FLIP: drop `held: heldBy(m) != null` from stakesRowsFrom's rule call, and
+// the first test below reds on the held row.
+
+const MARK_KIND = await import(pathToFileURL(join(WORLD_CLONE, "tools", "mark-kind.mjs")).href);
+const TINKER = "tinker-of-nowhere";
+const heldReaders = (marks, over = {}) => readers({
+  world: async () => ({ state: { marks }, ref: "origin/main" }),
+  registry: async () => Object.fromEntries(marks.map((m) => [m.id, { household: TINKER, path: `WORLD/marks/${m.id}/mark.md`, class: "commons" }])),
+  pathAt: async () => () => true,
+  escrow: async () => ({ townSha: HEAD, byMark: new Map(), reason: null }),
+  ...over,
+});
+const thing = (slug, extra = {}) => ({ id: `${TINKER}/${slug}`, kind: "sited", by: TINKER, household: TINKER, tier: "market", ...extra });
+
+test("WLD-51 · THE FALSIFIER: a held thing on a commons row at ✦0 is not at risk and asks no stake; the same thing set down is", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const placed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const seg = await stakesFor([TINKER], heldReaders([held, placed]));
+  const by = Object.fromEntries(seg.rows.map((r) => [r.mark, r]));
+  assert.equal(by[held.id].at_risk, false, "in someone's hands: the sweep keeps it, so the page does not warn");
+  assert.equal(by[held.id].act, undefined, "and no stake is asked for");
+  assert.equal(by[held.id].class, "commons", "the row still reads as the registry holds it");
+  assert.equal(by[placed.id].at_risk, true, "THE CONTROL: unheld, commons, ✦0, path on main — swept, and warned");
+  assert.equal(by[placed.id].act, stakeEnvelope(placed.id), "with the ordinary stake act");
+  assert.equal(seg.at_risk, 1);
+  // the page's answer IS the sweep's: the same function, asked with the held state the sweep reads
+  for (const m of [held, placed])
+    assert.equal(VERDICT.unpublishVerdict({ class: "commons", path: `WORLD/marks/${m.id}/mark.md` },
+      { escrow: 0, pathOnMain: true, standing: "market", held: MARK_KIND.isHeld(m) }).unpublish, by[m.id].at_risk, m.id);
+});
+
+test("WLD-51 · the held fact is the world's own reading of `held_by`: every printed shape reaches the verdict as the sweep reads it", () => {
+  const shapes = [
+    ["a-named-holder", { held_by: "some-other-house" }],
+    ["a-padded-holder", { held_by: "  some-other-house  " }],
+    ["a-holder-thing", { held_by: "some-other-house/a-chest" }],
+    ["a-blank-holder", { held_by: "   " }],
+    ["an-empty-holder", { held_by: "" }],
+    ["a-null-holder", { held_by: null }],
+    ["a-number-holder", { held_by: 7 }],
+    ["no-holder-at-all", {}],
+  ].map(([slug, extra]) => thing(slug, extra));
+  const asked = new Map();
+  const spy = (entry, args) => { asked.set(entry.path, args.held); return { unpublish: args.held ? false : true }; };
+  const reg = Object.fromEntries(shapes.map((m) => [m.id, { household: TINKER, path: m.id, class: "commons" }]));
+  const rows = stakesRowsFrom({ handles: [TINKER], marks: shapes, registry: reg, byMark: new Map(), rule: spy, pathOnMain: () => true });
+  assert.equal(asked.size, shapes.length, "the rule was asked of every row");
+  for (const m of shapes) {
+    assert.equal(asked.get(m.id), MARK_KIND.isHeld(m), `${m.id}: the page hands in what the sweep's isHeld reads`);
+    assert.equal(rows.find((r) => r.mark === m.id).at_risk, !MARK_KIND.isHeld(m), m.id);
+  }
+  assert.deepEqual(shapes.filter((m) => MARK_KIND.isHeld(m)).map((m) => m.id.split("/")[1]), ["a-named-holder", "a-padded-holder", "a-holder-thing"],
+    "held is a printed holder; a blank, empty, null or non-string field is a placed thing, as the sweep reads it");
+});
+
+test("WLD-51 · held changes nothing that was unknown, backed or never a candidate", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  // the projection refused: unknown, never safe, held or not
+  const refused = await stakesFor([TINKER], heldReaders([held], { escrow: async () => ({ townSha: null, byMark: null, reason: "no town head" }) }));
+  assert.equal(refused.rows[0].at_risk, null, "escrow unread is unjudged, held or not");
+  assert.equal(refused.at_risk, null);
+  // no rule in the engine: unjudged
+  const noRule = await stakesFor([TINKER], heldReaders([held], { rule: async () => null }));
+  assert.equal(noRule.rows[0].at_risk, null, "no rule, no judgment");
+  // backed: kept either way
+  const backed = await stakesFor([TINKER], heldReaders([held, thing("a-tin-kettle")], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[held.id, 2], [`${TINKER}/a-tin-kettle`, 2]]), reason: null }) }));
+  for (const r of backed.rows) assert.equal(r.at_risk, false, `${r.mark}: ✦2 behind it`);
+  // walks home, or no registry row: never at risk, held or not
+  const home = await stakesFor([TINKER], heldReaders([thing("a-hearth-stone", { tier: "home" })]));
+  assert.equal(home.rows[0].at_risk, false, "a mark that walks home is never swept");
+  const founding = stakesRowsFrom({ handles: [TINKER], marks: [held], registry: {}, byMark: new Map(), rule: VERDICT.unpublishVerdict, pathOnMain: () => true });
+  assert.equal(founding[0].at_risk, false, "no registry row: founding estate");
+});
+
+// ── WLD-51 · the quiet note tells the truth about a commons row with no stamps behind it (Wright 2026-11-04T17:06:41.928Z) ──
+//
+// The quiet note used to say "every commons mark you hold has stamps behind it". A held commons row at ✦0 exists (the sweep
+// keeps it, so the page does not warn) and has NO stamps; the sentence was false on exactly that page. The approved fix is the
+// one existing note sentence, neutral: "nothing of yours is at risk as of the town head named above." and the frame, unchanged.
+// These run the real exported `stakesFor` over the world's own rule and `isHeld` (heldBy → stakesRowsFrom → the note); the
+// sentence is spelled here, not imported. Counted commons ROWS remain on the page; their STAMPS are zero.
+const SAFE_NOTE = `nothing of yours is at risk as of the town head named above. ${FRAME}`;
+const OLD_CLAIMS = [/every commons mark you hold/, /has stamps behind it/, /at the next settlement —/];
+const commonsAtZero = (seg) => seg.rows.filter((r) => r.class === "commons" && r.escrow === 0 && r.at_risk === false);
+
+test("WLD-51 · A HELD COMMONS ROW AT ✦0 (own maker): the page has a commons row with no stamps, nothing is at risk, and the note does not claim stamps", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const seg = await stakesFor([TINKER], heldReaders([held]));
+  assert.equal(seg.count, 1, "the commons row is on the page");
+  assert.equal(commonsAtZero(seg).length, 1, "a commons row, escrow 0, at_risk false: stamps zero is the case the old sentence denied");
+  assert.equal(seg.rows[0].id ?? seg.rows[0].mark, held.id);
+  assert.equal(seg.at_risk, 0);
+  assert.equal(seg.note, SAFE_NOTE, "the approved neutral sentence and the exact frame");
+  for (const re of OLD_CLAIMS) assert.doesNotMatch(seg.note, re, "the old false cause is gone");
+  assert.equal(seg.note.slice(-FRAME.length), FRAME);
+  assert.equal(FRAME.length, 113, "the frame is the 113 characters");
+});
+
+test("WLD-51 · MIXED: a held commons row at ✦0 beside a backed one (✦2): the page is quiet, one row has no stamps, and the note stays true", async () => {
+  const held = thing("a-brass-whistle", { held_by: "some-other-house" });
+  const backed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const seg = await stakesFor([TINKER], heldReaders([held, backed], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[backed.id, 2]]), reason: null }) }));
+  assert.equal(seg.count, 2);
+  assert.equal(seg.at_risk, 0);
+  assert.deepEqual(commonsAtZero(seg).map((r) => r.mark), [held.id], "exactly the held row is a commons row with no stamps");
+  assert.equal(seg.rows.find((r) => r.mark === backed.id).escrow, 2);
+  assert.equal(seg.note, SAFE_NOTE);
+  for (const re of OLD_CLAIMS) assert.doesNotMatch(seg.note, re);
+});
+
+test("WLD-51 · THE CONTROLS the note must not touch: an unheld ✦0 commons row warns and carries no quiet note; backed-only, a home row, founding estate and an empty page keep their reads", async () => {
+  const placed = thing("a-tin-kettle", { at: { x: 5, y: 5 } });
+  const risky = await stakesFor([TINKER], heldReaders([placed]));
+  assert.equal(risky.at_risk, 1, "unheld, commons, ✦0, path on main: still at risk");
+  assert.equal(risky.rows[0].act, stakeEnvelope(placed.id));
+  assert.equal(risky.note, undefined, "and no quiet note beside a warning");
+  const backedOnly = await stakesFor([TINKER], heldReaders([placed], { escrow: async () => ({ townSha: HEAD, byMark: new Map([[placed.id, 2]]), reason: null }) }));
+  assert.equal(backedOnly.at_risk, 0);
+  assert.equal(backedOnly.note, SAFE_NOTE, "backed-only: quiet, in the same words");
+  const home = await stakesFor([TINKER], heldReaders([thing("a-hearth-stone", { tier: "home" })]));
+  assert.equal(home.at_risk, 0);
+  assert.equal(home.note, SAFE_NOTE, "a mark that walks home is never swept: quiet");
+  const founding = await stakesFor([TINKER], heldReaders([thing("a-founders-lamp")], { registry: async () => ({}) }));
+  assert.equal(founding.at_risk, 0, "no registry row: founding estate stays published");
+  assert.equal(founding.note, SAFE_NOTE);
+  const empty = await stakesFor(["nobody-at-all"], heldReaders([placed]));
+  assert.equal(empty.count, 0);
+  assert.match(empty.note, /^no published mark of yours stands on world main/, "an empty page keeps its own note");
+  assert.ok(!empty.note.includes(FRAME), "and carries no frame");
 });
