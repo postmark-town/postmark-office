@@ -821,7 +821,7 @@ async function conversationsFromRecord(p, searchParams, { settlements = settleme
     earshotM: dials.earshot_m.value,
     boundaries: edges,
     fadeMs: dials.fade_min.ms,
-    closedMax: n("closed", 40), voiceCap: n("voices", 200),
+    closedMax: n("closed", 40), voiceCap: n("voices", 80),
     before,
   });
   const ungroupedLine = ungrouped

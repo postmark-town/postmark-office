@@ -452,7 +452,7 @@ export function unplacedDisclosure(unplaced = []) {
  * newest line is strictly earlier than it, with no live threads. A page keeps every thread tied on its last line's instant, so
  * a cursor never skips one. voices.mjs `conversations` pages the same way (the equality falsifier holds them together).
  */
-export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 200, fadeMs, before = null }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 80, fadeMs, before = null }) {
   const t = now;
   const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
   const since = marks.length ? marks[marks.length - 1] : -Infinity;

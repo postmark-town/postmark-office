@@ -28,6 +28,8 @@ const iso = (ms) => new Date(ms).toISOString();
 // three published sweeps, long enough ago that "now" is in the open epoch
 const S1 = Date.parse("2026-06-01T06:00:00.000Z"), S2 = S1 + 12 * H, S3 = S2 + 12 * H;
 const FAR = iso(S3 + 30 * H); // a cursor later than every voice: the first page of the record's closed threads
+// what the conversations page asks with when its poll shows no finished thread to count back from (site index.astro EVER)
+const EVER = "9999-12-31T23:59:59.999Z";
 
 let s = null, skip = false, api = null;
 const offices = {};
@@ -78,6 +80,9 @@ before(async () => {
   // two public circles 100 m apart, in settlement 2, and a voice from inside a room standing between them (it must not bridge them)
   add(S2 + 6 * H, "p0", 20000, 0); add(S2 + 6 * H + MIN, "p1", 20100, 0);
   add(S2 + 6 * H + 2 * MIN, "room0", 20050, 0, { room: "cellar" });
+  // a long thread (100 voices) for the per-thread line cap, and one voice older than the oldest published sweep (not groupable)
+  for (let i = 0; i < 100; i++) add(S2 + 8 * H + i * 20_000, "z0", 30000, 0);
+  add(S1 - 3 * H, "old0", -9000, 0);
   await api.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy)
     SELECT (r->>'at')::timestamptz, 0, r->>'actor', 'say', 'voice', r->'payload', 'world', (r->>'x')::float, (r->>'y')::float
       FROM jsonb_array_elements($1::jsonb) AS r ORDER BY (r->>'at')::timestamptz`, [JSON.stringify(rows)]);
@@ -88,6 +93,15 @@ before(async () => {
   writeFileSync(log, ["x0", "x1", "x2"].map((h, i) => JSON.stringify({ at: iso(S1 + H + i * 40 * MIN), handle: h, text: `${h} spoke`, x: i * 5000, y: 0, place: null, aboard: false })).join("\n") + "\n");
   await spawnOffice("durable", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
   await spawnOffice("legacy", {}, log);
+  // a store-engaged office whose MEMORY holds only the newest finished threads (settlement 2's talk, not settlement 1's)
+  const partialLog = join(tmp, "partial-voices.jsonl");
+  const mem = [];
+  for (let k = 0; k < PLACES; k++) for (let i = 0; i < 3; i++) mem.push({ at: iso(S2 + H + k * MIN + i * 5 * MIN), handle: `b${k}`, text: "m", x: k * 1000, y: 5000 });
+  mem.push({ at: iso(S2 + 6 * H), handle: "p0", text: "m", x: 20000, y: 0 }, { at: iso(S2 + 6 * H + MIN), handle: "p1", text: "m", x: 20100, y: 0 });
+  for (let i = 0; i < 100; i++) mem.push({ at: iso(S2 + 8 * H + i * 20_000), handle: "z0", text: "m", x: 30000, y: 0 });
+  writeFileSync(partialLog, mem.sort((x, y) => Date.parse(x.at) - Date.parse(y.at)).map((v) => JSON.stringify({ ...v, place: null, aboard: false })).join("\n") + "\n");
+  inventedWorld(join(tmp, "partial-world"));
+  await spawnOffice("partial", { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }, partialLog);
 });
 
 after(async () => {
@@ -188,4 +202,62 @@ test("without the store the same URL answers from memory and SAYS it is only mem
   assert.equal(paged.body.earlier.source, "memory");
   assert.ok(paged.body.closed.length <= 2 + 1);
   assert.deepEqual(paged.body.live, []);
+});
+
+// ── POS-779 FIX: the record is reachable from the page's entry, whatever memory holds ─────────────────────────────────────────
+// The page's poll is answered from the office's MEMORY; its "Show earlier" asks with the cursor the poll hands back (`earlier.before`,
+// else EVER when memory shows no finished thread) and reads the RECORD behind it. These walk exactly that, on a store-engaged office.
+
+test("empty memory: the poll shows nothing finished and says memory, yet the record is one cursor away and holds every finished thread", async (t) => {
+  if (skip) return t.skip(skip);
+  await untilEdges("durable", `/world/conversations?before=${encodeURIComponent(FAR)}`);
+  const poll = (await getJson("durable", "/world/conversations?closed=40")).body;
+  assert.deepEqual(poll.closed, [], "memory holds no finished thread");
+  assert.equal(poll.earlier.source, "memory");
+  assert.equal(poll.earlier.before, null, "memory has no cursor to count back from");
+  const record = (await getJson("durable", `/world/conversations?closed=40&before=${encodeURIComponent(EVER)}`)).body;
+  assert.equal(record.earlier.source, "record");
+  assert.ok(record.closed.length >= 2 * PLACES + 2, `the record's finished threads: ${record.closed.length}`);
+});
+
+test("partial memory: memory holds one page or less, and the record's older threads are reached from its cursor and the walk comes back", async (t) => {
+  if (skip) return t.skip(skip);
+  await untilEdges("partial", `/world/conversations?before=${encodeURIComponent(FAR)}`);
+  const poll = (await getJson("partial", "/world/conversations?closed=40")).body;
+  assert.equal(poll.earlier.source, "memory");
+  assert.equal(poll.earlier.remaining, 0, "memory has no more than this page");
+  const inMemory = poll.closed.map((th) => th.id);
+  assert.ok(inMemory.length >= PLACES + 2, `memory's finished threads: ${inMemory.length}`);
+  assert.ok(poll.closed.every((th) => !th.participants.some((h) => h.startsWith("a"))), "settlement 1's talk is not in memory");
+  // the entry: the cursor the poll hands back, whose page is the record's older threads
+  const older = (await getJson("partial", `/world/conversations?closed=40&before=${encodeURIComponent(poll.earlier.before)}`)).body;
+  assert.equal(older.earlier.source, "record");
+  assert.equal(older.closed.length, PLACES, "settlement 1's six threads, unreachable from memory");
+  assert.ok(older.closed.every((th) => th.participants.some((h) => h.startsWith("a"))));
+  assert.ok(older.closed.every((th) => !inMemory.includes(th.id)), "none of memory's page repeated");
+  // and back: from the record's page the walk re-enters at the newest by asking the poll's own URL again
+  const again = (await getJson("partial", "/world/conversations?closed=40")).body;
+  assert.deepEqual(again.closed.map((th) => th.id), inMemory, "the newest page is the poll's, unchanged");
+});
+
+test("the limit of the reach is in the record's answer, and reads the way the page looks for it", async (t) => {
+  if (skip) return t.skip(skip);
+  await untilEdges("durable", `/world/conversations?before=${encodeURIComponent(FAR)}`);
+  const record = (await getJson("durable", `/world/conversations?closed=40&before=${encodeURIComponent(EVER)}`)).body;
+  // the same pattern the page matches (site index.astro OLDER_NOTE): a producer rename reds here and not silently on the page
+  const line = record.disclosed.find((d) => /before the oldest settlement this office has read/.test(d));
+  assert.ok(line, "the older-than-the-sweeps line rides disclosed[]: " + JSON.stringify(record.disclosed));
+  assert.match(line, /^1 of the \d+ voices come before the oldest settlement this office has read \(.+\), so their settlement is unknown and they are not grouped$/);
+});
+
+test("the per-thread line cap is the existing 80 on every road, with the thread's true count beside it", async (t) => {
+  if (skip) return t.skip(skip);
+  await untilEdges("durable", `/world/conversations?before=${encodeURIComponent(FAR)}`);
+  const rec = (await getJson("durable", `/world/conversations?closed=40&before=${encodeURIComponent(EVER)}`)).body.closed.find((th) => th.participants.includes("z0"));
+  assert.equal(rec.voice_count, 100);
+  assert.equal(rec.voices.length, 80, "the record's default is 80, as the base's was");
+  await untilEdges("partial", `/world/conversations?before=${encodeURIComponent(FAR)}`);
+  const mem = (await getJson("partial", "/world/conversations?closed=40")).body.closed.find((th) => th.participants.includes("z0"));
+  assert.equal(mem.voice_count, 100);
+  assert.equal(mem.voices.length, 80, "and memory's");
 });

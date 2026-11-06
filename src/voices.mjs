@@ -1115,7 +1115,7 @@ export function createVoices({
   // (ms) asks for the page of closed threads whose newest line is strictly earlier, with no live threads. A page keeps every thread
   // tied on its last line's instant, so a cursor never skips one. This is the office's MEMORY (the last memoryMax voices, a RAM fact
   // about a running process): `earlier.source` says so, and the store's read (world2/tools/conversations.mjs) is the record.
-  function conversations({ closedMax = 40, voiceCap = 200, before = null } = {}) {
+  function conversations({ closedMax = 40, voiceCap = 80, before = null } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
     // page draws a voice. `hearable_since` beside it is where an ear's window opens.
