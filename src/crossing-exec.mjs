@@ -126,7 +126,7 @@ async function main() {
         // when they left. The enter door reads them back (world-apex § dungeonLocksOf).
         ...(p.dungeon && p.locked_until ? { dungeon: String(p.dungeon), locked_until: String(p.locked_until), ...(p.left_at ? { left_at: String(p.left_at) } : {}) } : {}),
         // FLED (an encounter): an exit the office made because the resident's nerve ran out names why
-        ...(p.fled ? { fled: String(p.fled) } : {}),
+        ...(p.fled ? { fled: String(p.fled), ...(p.fled_by ? { fled_by: String(p.fled_by) } : {}) } : {}),
       },
       effect: "the crossing is declared; the record receives it at the save",
     };
