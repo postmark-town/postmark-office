@@ -280,7 +280,8 @@ async function actsOfActor(who) {
 
 /**
  * THE EXIT LOCKS A WALKER'S OWN ACTS HOLD (WLD-5 A): for each dungeon, the newest
- * exit act that recorded one, `{ dungeon, locked_until, left_at }`. Read from the
+ * exit act that recorded one, `{ dungeon, locked_until, left_at, fled }` (`fled` is
+ * the exit act's own recorded cause, null for an exit the resident made). Read from the
  * STORE, the record, on the actor index. Unlike `actsOfActor` it does NOT fail
  * open: an unreachable store throws, and the enter door refuses with a 503 rather
  * than letting a locked-out walker in (Wright, W1). `null` from actsQuery means
@@ -289,7 +290,8 @@ async function actsOfActor(who) {
 async function dungeonLocksOf(who) {
   const { actsQuery } = await import("./world2-acts.mjs");
   const rows = await actsQuery(
-    `SELECT DISTINCT ON (payload->>'dungeon') payload->>'dungeon' AS dungeon, payload->>'locked_until' AS locked_until, payload->>'left_at' AS left_at
+    `SELECT DISTINCT ON (payload->>'dungeon') payload->>'dungeon' AS dungeon, payload->>'locked_until' AS locked_until, payload->>'left_at' AS left_at,
+            payload->>'fled' AS fled
        FROM acts WHERE actor = $1 AND action = 'exit' AND payload ? 'locked_until'
       ORDER BY payload->>'dungeon', id DESC`, [String(who)]);
   return Array.isArray(rows) ? rows : [];
@@ -541,11 +543,11 @@ export function crossingDeps() {
     dungeonLocks: async (who) => dungeonLocksOf(who),
     // WLD-5 B: what each door that asks for something holds now, from the record (a throw is the door's 503)
     doorHoldings: async (holders) => doorHoldingsOf(holders),
-    record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null, arrival_of = null, dungeon = null, locked_until = null, left_at = null, fled = null }) => {
+    record: async ({ handle, act, at, lines, summary, mark = null, via = null, set_down_at = null, arrived = null, arrival_of = null, dungeon = null, locked_until = null, left_at = null, fled = null, fled_by = null }) => {
       const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
       let out;
       try {
-        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary, mark, via, set_down_at, arrived, ...(arrival_of ? { arrival_of } : {}), ...(dungeon && locked_until ? { dungeon, locked_until, left_at } : {}), ...(fled ? { fled } : {}) }),
+        out = await execUnderTownLock(CROSSING_EXEC, JSON.stringify({ handle, act, at, lines, summary, mark, via, set_down_at, arrived, ...(arrival_of ? { arrival_of } : {}), ...(dungeon && locked_until ? { dungeon, locked_until, left_at } : {}), ...(fled ? { fled, ...(fled_by ? { fled_by } : {}) } : {}) }),
           { ...process.env, WORLD_CLONE });
       } catch (e) {
         if (lockTimedOut(e)) { const err = new Error(LOCK_BUSY.defect); Object.assign(err, LOCK_BUSY); throw err; }
