@@ -126,6 +126,13 @@ test("A RACE INSIDE THE RETRY is not a decision yet: nothing is owed", () => {
   assert.equal(final.seen[0]?.verb, "owe", "a race that outlived its retries is a decision, and is owed");
 });
 
+test("A DRY RECEIPT decided nothing, on any path (the wrapper's raced-out one included): nothing is owed", () => {
+  const r = runTool(stubTown(), { attempt: "", rec: receipt({ status: "race", dry: true }) });
+  assert.equal(r.status, 0);
+  assert.deepEqual(r.seen, []);
+  assert.match(r.stderr, /a dry run decided nothing: no record/);
+});
+
 test("A DECIDED SETTLEMENT is owed (the composed outcome, on stdin), then published under the town lock", () => {
   const r = runTool(stubTown());
   assert.equal(r.status, 0, r.stderr);

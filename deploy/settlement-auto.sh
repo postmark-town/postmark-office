@@ -339,10 +339,10 @@ record_receipt() { # [attempt]
 # then published under the town clone's lock. Darko 2026-11-06, "Keep running":
 # a record that cannot publish is OWED and the crossing goes on, so this never
 # fails one. The event is the wrapper's SETTLEMENT_EVENT, one name for every
-# attempt of this crossing. Unconfigured (no WITNESS_KEY), it says so and stops.
+# attempt of this crossing. Unconfigured (no WITNESS_KEY), it says so and stops;
+# a dry receipt and a race inside the retry are not decisions, and the tool says
+# so too.
 witness_settlement() { # [attempt]
-  # A dry crossing decided nothing, so it is witnessed as nothing.
-  if [ "$DRY" = "1" ]; then return 0; fi
   node "$OFFICE/world2/tools/witness-settlement.mjs" --receipt "$OUT" --attempt "${1:-}" \
     --event "$SETTLEMENT_EVENT" --town "$TOWN" --sweep "$SWEEP" --lock "${TOWN_LOCK:-$OFFICE/town.lock}" \
     || echo "[settlement-auto] the witness step tripped (non-fatal) — the crossing's outcome stands; the line above names why" >&2

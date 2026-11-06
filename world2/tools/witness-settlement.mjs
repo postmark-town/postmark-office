@@ -113,6 +113,10 @@ function main(argv) {
   try { receiptText = readFileSync(receiptPath, "utf8"); } catch (e) { log(`no receipt to witness at ${receiptPath}: ${e.message}`); return 0; }
   let receipt;
   try { receipt = JSON.parse(receiptText); } catch (e) { log(`the receipt does not parse, so no record: ${e.message}`); return 0; }
+  // A dry crossing decided nothing (deploy/settlement-receipt.mjs § dry). The
+  // wrapper's raced-out path records its receipt whatever the leg, so the rule
+  // lives here, where every path passes.
+  if (receipt.dry === true) { log("a dry run decided nothing: no record"); return 0; }
   if (!isDecision(receipt, attempt)) { log(`attempt ${attempt} lost a race: not a decision yet, so no record`); return 0; }
 
   let decided;
