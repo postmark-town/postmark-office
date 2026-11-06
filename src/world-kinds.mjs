@@ -760,17 +760,23 @@ export async function holdRecordStats() { return (await keeper()).stats(); }
  * verbs you can do to it now) and, for a holder, what it holds, sharpened to
  * its kinds — a class and a number each, never a unit (15:46; 18:44 item 4).
  */
-export async function investigateMark(id, usable = null) {
-  const [world, guards, { lawSnapshot }, { canOn }, { classViewOf }, { isUnitRow }] = await Promise.all([
+export async function investigateMark(id, usable = null, { here = null } = {}) {
+  const [world, guards, { lawSnapshot }, { canOn }, { classViewOf }, { isUnitRow }, { standsWithin }] = await Promise.all([
     import("./world.mjs"), import("./world2-guards.mjs"), import("./law-snapshot.mjs"), import("./usable-verbs.mjs"),
-    import("./world-units.mjs"), import("./world-stacks.mjs"),
+    import("./world-units.mjs"), import("./world-stacks.mjs"), import("./reach.mjs"),
   ]);
   const mark = (await world.worldMarkById(String(id))).mark;
   const can = usable ? { can: canOn(usable, id) } : {};
   if (!mark) return { mark: String(id), stands: false, note: "no mark by that id stands on the world (a draft is not the town's canon; it lives only in its own household's reading of the world)", ...can };
+  // HOW FAR IT STANDS FROM THE READER (WLD-79; Darko 2026-10-19 18:49 EDT, "(b), 60 m, one rule for give and take"):
+  // the refusal's own measure (reach.mjs § standsWithin: metres rounded, then the compass point) and its own words,
+  // "140 m NE", so the close look and the refusal that follows it say one thing. Absent for a reader who is not
+  // standing anywhere, and for a mark with no place (one in someone's hands has none).
+  const reach = here ? standsWithin(here, mark) : null;
+  const distance = reach?.distance_round == null ? {} : { distance: `${reach.distance_round} m${reach.bearing ? ` ${reach.bearing}` : ""}` };
   const view = classViewOf(lawSnapshot());
   const law = holderLawOf({ holder: String(id), mark, view });
-  const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...can };
+  const out = { mark: String(id), class: markClassOf(mark), by: ownerOf(mark, id), ...distance, ...can };
   if (!law.holder) return out;
   const { fold, attachments } = await holdRecordNow();
   return { ...out, holder: { capacity: law.capacity, open: law.open }, holds: await shownIn(fold, id, attachments, view,

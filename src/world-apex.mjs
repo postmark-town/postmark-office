@@ -1989,7 +1989,11 @@ async function usableHere(args, key, oriented, nearby = []) {
     const { usableAt } = await import("./world-kinds.mjs");
     const here = { x: Number(sp.x), y: Number(sp.y) };
     // the spine as well as the eyes: a bowl you stand on is in `within`, never in `nearby` (QA fail 4)
-    const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby }),
+    // A FOCUSED MARK ALWAYS GETS ITS COLUMN (WLD-79): the eyes list is capped, so a mark 10 m away that
+    // the glance dropped was never in the matrix and its close look said `can: []` whatever its distance.
+    // The matrix measures reach itself (usable-verbs § standsWithin), so adding the focus adds no verb it does not earn.
+    const focused = focusArgs(args)?.mark;
+    const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby: focused ? [...nearby, focused] : nearby }),
       residents: oriented.present?.residents ?? [] });
     // the creatures in sight are objects of the same matrix (POS-672 W4); unread, they add nothing
     return [...pairs, ...(await creaturePairsHere(who, here, oriented.present?.residents ?? []))];
@@ -2672,7 +2676,11 @@ async function closeLooks(args, key, oriented, usable) {
   if (focus && !focus.error && focusArgs(args)) {
     try {
       const { investigateMark } = await import("./world-kinds.mjs");
-      const close = await investigateMark(focusArgs(args).mark, usable);
+      // `here`: where the reader stands, so the close look says how far the mark is (WLD-79); a reader standing nowhere gets none
+      const sp = oriented?.standpoint;
+      const here = sp?.stance === "embodied" && Number.isFinite(Number(sp.x)) && Number.isFinite(Number(sp.y)) ? { x: Number(sp.x), y: Number(sp.y) } : null;
+      const close = await investigateMark(focusArgs(args).mark, usable, { here });
+      if (close.distance) focus.distance = close.distance;
       if (close.can) focus.can = close.can;
       if (close.holds) Object.assign(focus, { holder: close.holder, holds: close.holds });
     } catch { /* the close look stands without its column; the doors still answer */ }
