@@ -577,7 +577,7 @@ export async function refuseOutOfReach({ thing, to, actor, act, holder, ctx: giv
     const reach = standsWithin(here, mark, { pointWithinMark: within });
     if (!reach.stands)
       throw bounce(409, `you are not standing where ${thing} stands — ${standsOff(thing, reach)}`,
-        `a take is a threshold act (the-town/the-reach): you stand within a thing's extent, or within ${reach.earshot_m ?? 60} m of its point, to take it, exactly as an entry stands at a threshold you truly stand before. Walk to it and take it there — world { do: "walk", args: { mark_id: "${thing}", mode: "center" } } — then world { do: "take", args: { thing: "${thing}" } }. Nothing was recorded.`);
+        `takes reach ${reach.earshot_m ?? 60} m, the same as a give (the-town/the-reach): you stand within a thing's extent, or within ${reach.earshot_m ?? 60} m of its point, to take it, exactly as an entry stands at a threshold you truly stand before. Walk to it and take it there — world { do: "walk", args: { mark_id: "${thing}", mode: "center" } } — then world { do: "take", args: { thing: "${thing}" } }. Nothing was recorded.`);
     return { reach };
   }
 

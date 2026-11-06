@@ -324,7 +324,9 @@ test("WALK #12 item 1 — a take from 536 m is REFUSED, naming the distance and 
   assert.equal(e.code, 409);
   assert.match(e.defect, /you are not standing where wright\/a-trued-spinning-top-for-little-m stands/);
   assert.match(e.defect, /54\d m|53\d m/, "the refusal names the distance the walk measured");
-  assert.match(e.hint, /a take is a threshold act/);
+  // WLD-79 (world #370): until 2026-11-06 this asserted "a take is a threshold act"; the law now says takes reach 60 m, the same as a give
+  assert.match(e.hint, /takes reach 60 m, the same as a give/);
+  assert.doesNotMatch(e.hint, /a take is a threshold act/, "the old words contradict the law");
   assert.match(e.hint, /mode: "center"/, "the refusal must hand back the walk that closes the distance");
 });
 
