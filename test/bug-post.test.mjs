@@ -160,6 +160,8 @@ const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn", "kinofire", "
 // ── GitHub, stubbed: the one GET an earned advance makes (bug-credit.mjs) ────
 const GITHUB = new Map();   // API path -> { status, body }, or { status, text } for a diff (18)
 const github = createServer((req, res) => {
+  // no reused socket: a synchronous git call (18's premise) can outlast the server's 5 s keep-alive, and fetch then reuses a closed socket and reads as GitHub down
+  res.shouldKeepAlive = false;
   const hit = GITHUB.get(req.url) ?? { status: 404, body: { message: "Not Found" } };
   // a diff is served as GitHub serves one asked for application/vnd.github.diff: the text itself
   if (hit.text !== undefined) { res.writeHead(hit.status, { "content-type": "text/plain; charset=utf-8" }); res.end(hit.text); return; }
