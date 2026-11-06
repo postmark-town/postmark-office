@@ -1992,7 +1992,14 @@ async function usableHere(args, key, oriented, nearby = []) {
     // A FOCUSED MARK ALWAYS GETS ITS COLUMN (WLD-79): the eyes list is capped, so a mark 10 m away that
     // the glance dropped was never in the matrix and its close look said `can: []` whatever its distance.
     // The matrix measures reach itself (usable-verbs § standsWithin), so adding the focus adds no verb it does not earn.
-    const focused = focusArgs(args)?.mark;
+    // But the eyes are sight-filtered and the focus is not: a thing in a dungeon room the reader has not entered is no
+    // mark to the take door (WLD-74), so the focus joins the matrix only where the one sight function (world.mjs § reachableBy,
+    // null when the world hides nothing) lets this reader reach it.
+    let focused = focusArgs(args)?.mark;
+    if (focused) {
+      try { const reachable = await (await import("./world.mjs")).reachableBy(who, key); if (reachable && !reachable(focused)) focused = null; }
+      catch { focused = null; } // the sight could not be read: the focus stays out, as the eyes' own list would
+    }
     const pairs = await usableAt({ actor: who, here, markIds: viewMarkIds({ within: oriented?.you?.within ?? [], nearby: focused ? [...nearby, focused] : nearby }),
       residents: oriented.present?.residents ?? [] });
     // the creatures in sight are objects of the same matrix (POS-672 W4); unread, they add nothing

@@ -27,6 +27,13 @@ const BANDS = [10, 59, 60, 61];
 const lampAt = (d) => `sbx-ana/lamp-${d}`;
 const NORTH_LAMP = "sbx-ana/lamp-north-40"; // 40 m straight north (y is south in the world's grid)
 const CROWD = Array.from({ length: 14 }, (_, i) => `sbx-ana/big-${i}`);
+// bo stands 2 km east of cy beside a dungeon: a keep, its hall, and a lamp in the hall 25 m south of her (WLD-74's shape: test/dungeon-reach.test.mjs)
+const BO = { x: 3010, y: 10 };
+const KEEP = "sbx-fort/the-keep", HALL = "sbx-fort/the-hall", HALL_LAMP = "sbx-fort/the-hall-lamp";
+// cat stands 1 km further east in the open, with fourteen things that cannot be carried around her and one lamp 10 m east the glance drops
+const CAT = { x: 4010, y: 10 };
+const CAT_LAMP = "sbx-ana/cat-lamp";
+const CAT_CROWD = Array.from({ length: 14 }, (_, i) => `sbx-ana/cat-big-${i}`);
 const repo = mkdtempSync(join(tmpdir(), "wld79-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
 const FLAGS = ["WORLD2_PG", "WORLD2_PG_URL", "W2_PEN", "W2_GUARDS", "WORLD_CLONE", "WORLD_SINGLE_LOG", "WORLD_POOL", "TOWN_CLONE"];
@@ -55,7 +62,7 @@ if (!skip) {
   put("tools/where-is.mjs", `
 export const NOWHERE = Object.freeze({ x: null, y: null, placed: false, source: null, mark_id: null });
 export const QUAY_MARK_ID = "the-town/the-quay";
-const HOMES = { "sbx-cy": { x: ${HOME.x}, y: ${HOME.y} } };
+const HOMES = { "sbx-cy": { x: ${HOME.x}, y: ${HOME.y} }, "sbx-bo": { x: ${BO.x}, y: ${BO.y} }, "sbx-cat": { x: ${CAT.x}, y: ${CAT.y} } };
 export function homeOf(handle) { const h = HOMES[handle]; return h ? { ...h, mark_id: handle + "/home", placed: true, source: "home", parcel: { id: handle + "/home", at: { x: h.x, y: h.y }, extent: { w: 25, h: 25 } } } : NOWHERE; }
 export function whereIs(handle) { const h = homeOf(handle); return h.placed ? { ...h, position: null } : NOWHERE; }
 export function publicResidents() { return []; }
@@ -66,13 +73,21 @@ export function parcelFor() { return null; }
 export function sourceLabel() { return "home"; }
 `);
   const root = { id: "the-town/let-there-be-light", by: "the-town", slug: "let-there-be-light", kind: "sited", at: { x: 0, y: 0 }, extent: { w: 10000, h: 10000 } };
-  const thing = (id, at, extent) => ({ rec: { id, by: id.split("/")[0], slug: id.split("/")[1], kind: "sited", class: "thing", at, extent }, body: `A thing, ${id}.` });
+  const thing = (id, at, extent, extra = {}) => ({ rec: { id, by: id.split("/")[0], slug: id.split("/")[1], kind: "sited", class: "thing", at, extent, ...extra }, body: `A thing, ${id}.` });
+  const ring = (ids, c, extra) => ids.map((id, i) => thing(id, { x: Math.round(c.x + 45 * Math.cos((i / 14) * 2 * Math.PI + 0.3)), y: Math.round(c.y + 45 * Math.sin((i / 14) * 2 * Math.PI + 0.3)) }, { w: 20, h: 20 }, extra));
   const ms = [
     ...BANDS.map((d) => thing(lampAt(d), { x: HOME.x + d, y: HOME.y }, { w: 1, h: 1 })),
     thing(NORTH_LAMP, { x: HOME.x, y: HOME.y - 40 }, { w: 1, h: 1 }),
     // the crowd: fourteen big things on a 45 m ring, each far larger to the eye than any lamp
     ...CROWD.map((id, i) => thing(id, { x: Math.round(HOME.x + 45 * Math.cos((i / 14) * 2 * Math.PI + 0.3)), y: Math.round(HOME.y + 45 * Math.sin((i / 14) * 2 * Math.PI + 0.3)) }, { w: 20, h: 20 })),
     { rec: { id: "sbx-cy/home", by: "sbx-cy", slug: "home", kind: "parcel", at: HOME, extent: { w: 25, h: 25 } }, body: "cy's home ground." },
+    { rec: { id: "sbx-bo/home", by: "sbx-bo", slug: "home", kind: "parcel", at: BO, extent: { w: 25, h: 25 } }, body: "bo's home ground." },
+    { rec: { id: KEEP, by: "sbx-fort", slug: "the-keep", kind: "dungeon", at: { x: BO.x, y: BO.y + 25 }, extent: { w: 20, h: 20 } }, body: "A small keep." },
+    { rec: { id: HALL, by: "sbx-fort", slug: "the-hall", kind: "sited", at: { x: BO.x, y: BO.y + 25 }, extent: { w: 16, h: 16 } }, body: "Its hall." },
+    thing(HALL_LAMP, { x: BO.x, y: BO.y + 25 }, { w: 1, h: 1 }),
+    { rec: { id: "sbx-cat/home", by: "sbx-cat", slug: "home", kind: "parcel", at: CAT, extent: { w: 25, h: 25 } }, body: "cat's home ground." },
+    thing(CAT_LAMP, { x: CAT.x + 10, y: CAT.y }, { w: 1, h: 1 }),
+    ...ring(CAT_CROWD, CAT, { portable: false }),
   ];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
@@ -167,5 +182,62 @@ test("WLD-79 · a mark that stands nowhere on the world gets no distance (not a 
   await withApex(async (worldApex) => {
     const none = await worldApex({ mark: "sbx-ana/no-such-lamp" }, KEY);
     assert.equal(none.focus?.distance, undefined, `an unknown mark has no distance: ${JSON.stringify(none.focus ?? none).slice(0, 300)}`);
+  });
+});
+
+test("WLD-79 · a thing in your own hands has no place, so its close look shows no distance (and not a 0 m)", { skip }, async () => {
+  await seed();
+  await withApex(async (worldApex) => {
+    assert.equal((await worldApex({ mark: lampAt(10) }, KEY)).focus?.distance, "10 m E", "control: set down 10 m away, it has one");
+    const took = await callHoldTool("world_hold", { thing: lampAt(10) }, KEY, { verb: "take" });
+    assert.equal(took.did, "take", "the lamp is in cy's hands");
+    const held = await worldApex({ mark: lampAt(10) }, KEY);
+    assert.ok(held.focus && !held.focus.error, `the look itself stands (control that it was read): ${JSON.stringify(held.focus ?? held).slice(0, 300)}`);
+    assert.equal(held.focus.distance, undefined, `in hands: no distance, ${JSON.stringify(held.focus.distance)}`);
+  });
+});
+
+// ── THE SIGHT RULE (Truey, PR 934, 8f98a203d): the focus joins the matrix only where the one sight function lets the reader reach it ──
+//
+// The eyes are sight-filtered and a focused id is not, so a bare read with mark: set to a thing in a dungeon room the reader has not
+// entered must not add a `take` the door refuses (WLD-74, world.mjs § reachableBy), nor hint that the room's lamp is there.
+// The fixture is test/dungeon-reach.test.mjs's shape: bo stands 25 m from a lamp in a hall of a keep. Nothing else is takeable near her,
+// so `actions` carries `take` only if the lamp reached the matrix.
+const KEY_BO = { household: "sbx-bo", handles: new Set(["sbx-bo"]) };
+const KEY_CAT = { household: "sbx-cat", handles: new Set(["sbx-cat"]) };
+const takes = (read) => (read.actions ?? []).some((e) => e.action === "take");
+
+test("WLD-79 · a focused lamp in a dungeon room the reader has not entered adds no take; one who entered the room gets it", { skip }, async () => {
+  const { __setOccupancyForTest } = await import("../src/creature-sight.mjs");
+  await seed();
+  try {
+    await withApex(async (worldApex) => {
+      __setOccupancyForTest(() => new Map());
+      const outside = await worldApex({ mark: HALL_LAMP }, KEY_BO);
+      assert.equal(takes(outside), false, `outside the hall: no take, and no hint the lamp is there (${(outside.actions ?? []).map((e) => e.action)})`);
+      assert.equal(takes(await worldApex({}, KEY_BO)), false, "and the bare read without a focus has none either (control: nothing else of hers is takeable)");
+      // the control: one who entered the hall reaches its lamp, and the matrix lists the take for it
+      __setOccupancyForTest(() => new Map([["sbx-bo", [KEEP, HALL]]]));
+      const inside = await worldApex({ mark: HALL_LAMP }, KEY_BO);
+      assert.equal(takes(inside), true, `inside the hall: the focused lamp is hers to take (${(inside.actions ?? []).map((e) => e.action)})`);
+      assert.deepEqual(inside.focus?.can, ["take"], "and its close look carries the column");
+      // the door and the matrix agree on both sides of the wall
+      __setOccupancyForTest(() => new Map());
+      await assert.rejects(callHoldTool("world_hold", { thing: HALL_LAMP }, KEY_BO, { verb: "take" }), (e) => e.code === 409, "the door refuses her outside");
+    });
+  } finally { __setOccupancyForTest(null); }
+});
+
+test("WLD-79 · the side effect Darko is asked to accept: a sighted lamp inside 60 m that the glance dropped makes `take` show in the bare read's actions only when it is focused", { skip }, async () => {
+  await seed();
+  await withApex(async (worldApex) => {
+    const bare = await worldApex({}, KEY_CAT);
+    assert.ok(!(bare.nearby ?? []).some((o) => o.id === CAT_LAMP), "premise: the glance dropped the lamp");
+    assert.equal(takes(bare), false, "control: nothing else around cat can be carried, so no take shows without a focus");
+    const focused = await worldApex({ mark: CAT_LAMP }, KEY_CAT);
+    assert.equal(takes(focused), true, `focused, the lamp 10 m off is in the matrix: ${(focused.actions ?? []).map((e) => e.action)}`);
+    assert.equal(focused.focus?.distance, "10 m E");
+    const took = await callHoldTool("world_hold", { thing: CAT_LAMP }, KEY_CAT, { verb: "take" });
+    assert.equal(took.did, "take", "and the door admits the take the read showed");
   });
 });
