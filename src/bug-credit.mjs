@@ -172,8 +172,6 @@ const TAG = /<(\/?)([A-Za-z][A-Za-z0-9-]*)(?=[\s/>])[^>]*?(\/?)>/g;
 const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 /** A `<` that may start markup; `a < b` doesn't. */
 const MARKUP_START = /^<[A-Za-z/!?]/;
-/** An autolink is markup that hides nothing: `<https://…>`, `<a@b.c>`. */
-const AUTOLINK = /^<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[^\s<>@]+@[^\s<>]+)>/;
 /**
  * A line with its `code spans` blanked out, character for character, so positions hold, pairing backtick runs
  * of equal length as CommonMark does: `{ text, unpaired }`, unpaired when a run found no partner on this line.
@@ -242,7 +240,7 @@ function carriedDeclarationOf(text, ref) {
     // and any other markup: split over lines, it holds the rest too
     for (let at = seen.indexOf("<"); at >= 0; at = seen.indexOf("<", at + 1)) {
       const from = seen.slice(at);
-      if (!MARKUP_START.test(from) || AUTOLINK.test(from)) continue;
+      if (!MARKUP_START.test(from)) continue;
       markup = true;
       if (!from.includes(endOfMarkup(from))) held = true;
     }
