@@ -685,11 +685,110 @@ test("9 · CORE-25: one portrait per critter: a hand's single-candidate reveal s
   const out = await dryRun(pen);
   assert.equal(out.equal, true, out.drift.join("\n"));
 
-  // it is the critter's image once: the namer has nothing to pick, and a second set is refused, writing nothing
+  // the namer has nothing to pick, and the refusal writes nothing.
+  // Until 2026-11-06 this also asserted a hand's second one-portrait reveal was a 409; CORE-25/d rules that a redraw, below.
   const n = pen.rows().length;
   await refusedWith(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), 409, /critter is revealed/);
-  await refusedWith(revealAtTown({ post: ID, candidates: [PAINTED[1]] }, WRIGHT, { now: NOW }), 409, /critter is revealed/);
   assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+});
+
+test("9 · CORE-25/d: a town hand's one-portrait reveal on a critter that already has an image replaces it, with no counter, and the jar and the rebuild read the newest", async () => {
+  // RULED, Darko 2026-11-06 (CORE-25/d): "Let a town hand's reveal replace the image". Until then a revealed critter took no second reveal.
+  const { pen, posts } = setup();
+  await toShipped();
+  const KEEMIN9 = { household: "starforge", handles: new Set(["keemin"]) };
+
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  const redraw = await revealAtTown({ post: ID, candidates: [PAINTED[1]] }, KEEMIN9, { now: NOW });
+  assert.deepEqual(redraw.reveal, { candidates: [PAINTED[1]], pick: 1, image: PAINTED[1], picked_by: "keemin" },
+    'LAW CORE-25/d: "Let a town hand\'s reveal replace the image": image, candidates and picked_by are the new hand\'s');
+  assert.match(redraw.receipt, /revealed: errant\/the-door-sticks's critter "Hinge Nibbler" has a new portrait, set by keemin; it replaces the earlier one, and the jar shows it from now on/);
+  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: ID, reveal: redraw.reveal, hand: "keemin" });
+  assert.equal(posts.get(ID).state, "shipped", "a redraw moves no stage");
+
+  // no counter: a third portrait lands the same way
+  const third = await revealAtTown({ post: ID, candidates: [PAINTED[2]] }, WRIGHT, { now: NOW });
+  assert.equal(third.reveal.image, PAINTED[2]);
+
+  // the jar reads the newest image off the post
+  const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual([one.fields.critter, one.fields.named_by, one.fields.reveal.image, one.fields.reveal.picked_by], ["Hinge Nibbler", "ada", PAINTED[2], "wright"]);
+
+  // the rebuild: the three reveal acts alone derive the newest reveal, and the table agrees
+  const acts = pen.rows().filter((a) => a.class === "bug");
+  assert.equal(acts.filter((a) => a.action === "reveal").length, 3, "each redraw is its own act");
+  const folded = foldPostActs(acts.map((a) => ({ ...a, payload: JSON.parse(a.payload) }))).posts.get(ID).fields.reveal;
+  assert.deepEqual(folded, third.reveal);
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+});
+
+test("9 · CORE-25/d: a hand also replaces an image the fixer picked from an older set of three", async () => {
+  const { posts } = setup();
+  await toShipped();
+  await revealAtTown({ post: ID, candidates: PAINTED }, WRIGHT, { now: NOW });
+  await revealAtTown({ post: ID, pick: 2 }, ADA, { now: NOW });
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[1]);
+  const redraw = await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.deepEqual(redraw.reveal, { candidates: [PAINTED[0]], pick: 1, image: PAINTED[0], picked_by: "wright" });
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[0]);
+});
+
+test("9 · CORE-25/d: the refusals' words are true for both roads: a revealed critter names who can change its image, and no image yet points at the one-portrait reveal", async () => {
+  const { posts } = setup();
+  await toShipped();
+  const hint = async (p) => { try { await p; } catch (e) { return e.hint; } assert.fail("expected a refusal"); };
+  // no reveal yet: a pick has nothing to choose, and the hint must not say Iris paints three
+  const none = await hint(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }));
+  assert.doesNotMatch(none, /Iris paints three/, "the stale three-candidates hint");
+  assert.match(none, /candidates: \[one media URL\]/);
+  // revealed: the hint must not say the image was chosen by its fixer (a hand's reveal set it), and must say who may replace it
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.equal(posts.get(ID).fields.reveal.picked_by, "wright");
+  const done = await hint(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }));
+  assert.doesNotMatch(done, /chosen once, by its fixer/, "the stale chosen-once hint");
+  assert.match(done, /only a town hand's one-portrait reveal replaces it/);
+});
+
+test("9 · CORE-25/d control: on a revealed critter a non-hand, a pick and a set of three are still refused, writing nothing and leaving the image", async () => {
+  const { pen, posts } = setup();
+  await toShipped();
+  const before = pen.rows().length;
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.equal(pen.rows().length, before + 1, "control: the writer is live, the first portrait wrote its act");
+  const refusedUnchanged = async (p, codes, re) => {
+    const n = pen.rows().length;
+    await assert.rejects(p, (e) => { assert.ok(codes.includes(e.code), `${e.code} ${e.defect}`); if (re) assert.match(`${e.defect} ${e.hint}`, re); return true; });
+    assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+    assert.equal(posts.get(ID).fields.reveal.image, PAINTED[0], "a refused reveal moved the image");
+  };
+  // not a hand: the fixer who named the critter, and a resident, are refused (403 hands only; 409 revealed before CORE-25/d)
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [PAINTED[1]] }, ADA, { now: NOW }), [403, 409]);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [PAINTED[1]] }, FINN, { now: NOW }), [403, 409]);
+  // a pick, by the fixer or a hand; a set of three, by a hand or a resident
+  await refusedUnchanged(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), [409], /critter is revealed/);
+  await refusedUnchanged(revealAtTown({ post: ID, pick: 1 }, WRIGHT, { now: NOW }), [409], /critter is revealed/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: PAINTED }, WRIGHT, { now: NOW }), [409], /critter is revealed/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: PAINTED }, FINN, { now: NOW }), [403, 409]);
+});
+
+test("9 · CORE-25/d: a hand's redraw runs every guard first: a media URL the town holds, one portrait not two or none, never with a pick, and the image stays on a refusal", async () => {
+  const { pen, posts } = setup();
+  await toShipped();
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  const refusedUnchanged = async (p, codes, re) => {
+    const n = pen.rows().length;
+    await assert.rejects(p, (e) => { assert.ok(codes.includes(e.code), `${e.code} ${e.defect}`); if (re) assert.match(`${e.defect} ${e.hint}`, re); return true; });
+    assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+    assert.equal(posts.get(ID).fields.reveal.image, PAINTED[0], "a refused reveal moved the image");
+  };
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: ["https://example.com/x.png"] }, WRIGHT, { now: NOW }), [422], /a candidate is a media URL/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [`https://media.postmark.town/media/iris/${"4".repeat(64)}.png`] }, WRIGHT, { now: NOW }), [422], /the town holds no file at that URL/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), [422], /a reveal holds one portrait/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [PAINTED[1]], pick: 1 }, WRIGHT, { now: NOW }), [422], /one at a time/);
+  // control: the writer is live: the same hand's good portrait replaces it
+  await revealAtTown({ post: ID, candidates: [PAINTED[1]] }, WRIGHT, { now: NOW });
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[1], "the writer is live");
 });
 
 test("9 · CORE-25: the single-candidate reveal keeps every guard of the three: a hand only, shipped only, a media URL the town holds, and never an empty or two-image list", async () => {
