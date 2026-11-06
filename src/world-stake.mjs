@@ -1,9 +1,7 @@
-// world-stake.mjs — the world_stake / world_unstake doors (write-release P3 DRAFT).
+// world-stake.mjs — the world_stake / world_unstake / world_stake_read doors.
 //
-// Append-shaped on purpose: a NEW module, so world.mjs only gains an import, a
-// spread into WORLD_TOOLS, and two switch cases. (A parallel draft is adding walk
-// to the same file; conflicts are the conductor's at review, so the surface each
-// draft touches is kept as small as it can be.)
+// Append-shaped on purpose: a module of its own, so world.mjs reaches it through an
+// import, a spread into WORLD_TOOLS, and the default case of its tool switch.
 //
 // THE LAW IS NOT HERE. Every rule — the balance clip, the no-cap ruling, the meep
 // prohibition, ownership on unstake, the retirement gate — lives in the TOWN's own
@@ -27,7 +25,7 @@ import { existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { publishedState } from "./world-branches.mjs";
-import { guardedDraftsForKey } from "./world2-guards.mjs"; // the §1c delta, over the sketchbook and the journal both (POS-5 slice 1); B1 puts the journal half behind W2_GUARDS
+import { guardedDraftsForKey } from "./world2-guards.mjs"; // the §1c delta, over the sketchbook and the journal both (POS-5 slice 1); the journal half is answered from the store, unconditionally since G1
 import { forecastForMark, nextSettlement } from "./world-forecast.mjs";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { heldFor, clipTo, stampsBlock, toConfirm, RULE_MARK, NOTHING_MOVED } from "./stamps-preview.mjs"; // POS-83: the confirmation step for every act that moves stamps
@@ -40,6 +38,14 @@ const TOWN_CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
 const WORLD_CLONE = process.env.WORLD_CLONE ?? resolve(HERE, "..", "world-clone");
 
 const bounce = (code, defect, hint, extra = {}) => ({ error: "bounce", code, defect, hint, ...extra });
+
+// The town clone's own stake engine, imported live; null when that clone carries none.
+// Each caller says what a missing engine means at its own door.
+async function townStakeEngine(clone = TOWN_CLONE) {
+  const enginePath = join(clone, "tools", "world-stake.mjs");
+  if (!existsSync(enginePath)) return null;
+  return import(pathToFileURL(enginePath));
+}
 
 /**
  * Should this stake be refused BEFORE the ledger runs? Returns a bounce, or null.
@@ -356,9 +362,9 @@ export function actingAs(named, key) {
 // purpose: you cannot back what you cannot see. Canon is read at the REF, never
 // from the checkout's working-tree file (the checkout sits on whatever branch
 // the pen last wrote — its file is nobody's truth).
-// ASYNC since B1 (runbook §4 B1): the second look reads the draft overlay, and
-// under `W2_GUARDS=1` that overlay's journal half is a Postgres round trip. The
-// one caller (`worldStakeAct` below) was already async.
+// ASYNC since B1 (runbook §4 B1): the second look reads the draft overlay, whose
+// journal half is a Postgres round trip (unconditionally since G1, world2-guards.mjs).
+// The one caller (`worldStakeViaOffice` below) was already async.
 export async function markExists(mark, key = null) {
   if (!existsSync(join(WORLD_CLONE, ".git")))
     return { known: false, reason: "the office has no world clone to check against" };
@@ -397,9 +403,8 @@ export async function markExists(mark, key = null) {
  * engine cannot fold throws, and the guard refuses.
  */
 export async function ledgerEscrowOf(mark, clone = TOWN_CLONE) {
-  const enginePath = join(clone, "tools", "world-stake.mjs");
-  if (!existsSync(enginePath)) return 0;
-  const mod = await import(pathToFileURL(enginePath));
+  const mod = await townStakeEngine(clone);
+  if (!mod) return 0;
   const n = Number(mod.markEscrow(clone, String(mark), mod.worldStakeState(clone)));
   if (!Number.isFinite(n)) throw new Error(`the ledger's escrow for ${mark} is not a number`);
   return n;
@@ -412,9 +417,8 @@ const townDay = () => new Date().toLocaleDateString("en-CA", { timeZone: process
 export async function worldStakeRead(args = {}) {
   const mark = args.mark;
   if (!mark) return bounce(422, "which mark?", "pass mark: '<by>/<slug>'");
-  if (!existsSync(join(TOWN_CLONE, "tools", "world-stake.mjs")))
-    return bounce(503, "not-yet-open", "the office has no town clone carrying the world-stake engine");
-  const mod = await import(pathToFileURL(join(TOWN_CLONE, "tools", "world-stake.mjs")));
+  const mod = await townStakeEngine();
+  if (!mod) return bounce(503, "not-yet-open", "the office has no town clone carrying the world-stake engine");
   const state = mod.worldStakeState(TOWN_CLONE);
   const holders = [];
   for (const [k, n] of state.positions) {
@@ -487,10 +491,9 @@ export async function worldPortfolioStakeSlice(key, marks = [], { also = [] } = 
   const household = String(key?.household ?? "").trim();
   if (!household || key?.visitor || !(key?.handles instanceof Set) || key.handles.size === 0)
     return bounce(403, "no resident household at this door", "sign in as a resident household to read your marks");
-  if (!existsSync(join(TOWN_CLONE, "tools", "world-stake.mjs")))
-    return bounce(503, "not-yet-open", "the office has no town clone carrying the world-stake derive");
+  const mod = await townStakeEngine();
+  if (!mod) return bounce(503, "not-yet-open", "the office has no town clone carrying the world-stake derive");
 
-  const mod = await import(pathToFileURL(join(TOWN_CLONE, "tools", "world-stake.mjs")));
   const stakeState = mod.worldStakeState(TOWN_CLONE);
   const derived = mod.deriveWorldMarkWeights(TOWN_CLONE, stakeState);
   // Canon first, the caller's own live layer second — canon wins on a shared
@@ -613,7 +616,7 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     // could not pass its own clone in would be asserting whichever ledger
     // happened to be on the box — and the clip case, which is the founder's
     // whole reason for asking, is only reachable against a balance you control.
-    held = (handle) => heldFor(TOWN_CLONE, handle),
+    held = heldAtOffice,
     // THE FIFTH (WLD-27 A): has this mark's dropped unit already left? A read
     // of the record, asked before anything is promoted or charged. It is the
     // early answer only; the exec asks again under the mark's lock, which is
@@ -913,15 +916,13 @@ export async function worldUnstakeViaOffice(args = {}, key = null, deps = {}) {
     // The resident's OWN open position on this mark — the ceiling an unstake
     // clips to. The town's own exported read; the office never folds positions.
     position = async (mark, handle) => {
-      const enginePath = join(TOWN_CLONE, "tools", "world-stake.mjs");
-      if (!existsSync(enginePath)) return null;
-      const mod = await import(pathToFileURL(enginePath));
-      return mod.markPosition(TOWN_CLONE, mark, handle);
+      const mod = await townStakeEngine();
+      return mod ? mod.markPosition(TOWN_CLONE, mark, handle) : null;
     },
     // Injectable for the same reason as on the stake door: `TOWN_CLONE` is fixed
     // at module load, so a falsifier could not otherwise put a known ledger in
     // front of the block it is asserting about.
-    held = (handle) => heldFor(TOWN_CLONE, handle),
+    held = heldAtOffice,
   } = deps;
   const who = actingAs(args.handle, key);
   if (who.bounce) return who.bounce;

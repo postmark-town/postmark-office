@@ -803,7 +803,11 @@ export async function publishedMarkFrom(client) {
 // holder, one eaten from hand, and one set down as its maker's draft. All are hold-lane faces of
 // the one edge: a make is held from its first act; a consume and a set-down end the holding
 // (policy detach, with no place: the set-down's place is its draft's, never a hold row's).
-export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down"]);
+// `put-back` (WLD-138 B, Wright 2026-11-04T16:00:21Z): a full holder set down and withdrawn
+// before it published, back in the hold it came from. Restoration only: its one writer is the
+// withdrawal's own transaction (src/set-down-return.mjs § putBackGuard); it carries the make's
+// own record (`made`, so the made fold re-registers it), and the holder is held again (cascade).
+export const HOLD_FACES = Object.freeze(["give", "drop", "take", "make", "consume", "set-down", "put-back"]);
 export const ATTACHMENT_ACTIONS = Object.freeze(["legacy:attachment", ...HOLD_FACES]);
 
 /**
@@ -1221,10 +1225,12 @@ export const HOLDING_ORDER_SQL = "ORDER BY acts.at, acts.id";
  *
  * `madeBy` (POS-138, 2026-09-24) narrows to the things a set of handles MADE —
  * the author is the `<by>` half of the thing's id, which is the same reading
- * `world-hold.mjs § whereThingStands` and `world-stance.mjs § setDownFor` make
- * (`id.split("/")[0]`). It is how the author's stances read finds the
- * set-downs waiting on its word without asking about every thing in town: the
- * rows it returns are the holding acts on the house's own things and no others.
+ * `world-hold.mjs § whereThingStands` and `ownership.mjs § makerOf` make
+ * (`id.split("/")[0]`). It was written so the author's stances read could find
+ * the set-downs waiting on its word without asking about every thing in town:
+ * the rows it returns are the holding acts on the house's own things and no
+ * others. No `src/` caller passes it now (that read folds the hold record,
+ * world-stance.mjs § wordsAwaiting); test/owners-word-at-the-door.test.mjs does.
  * Pushed AFTER `thing`, for the reason the `thing` clause gives.
  */
 export async function pgHoldingRows(client, { thing = null, since = null, until = null, madeBy = null, afterId = null } = {}) {

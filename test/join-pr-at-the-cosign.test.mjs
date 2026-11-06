@@ -632,3 +632,53 @@ test("a push that did not land leaves the pin in the store; the same account's r
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
 });
+
+// ── POS-884: THE RESERVED PREFIXES, AT THE BIND ITSELF ──────────────────────
+//
+// The locked writer, entered the way its exec enters it (`viaExec`: the pen's
+// transaction around `bindUnderLock`), not through `requestResidency`, whose
+// own first check would refuse first. Each reserved request is otherwise the
+// admitted shape (the house's own account, a grammatical handle, a card), so
+// the refusal is the town's one reserved-prefix rule (vendored,
+// vendor/tools/reserved-handles.mjs), and it binds nothing: no pin, no
+// membership, no ashore row, no card, no commit. The same request for an
+// ordinary handle is admitted and bound.
+
+test("POS-884 · the bind refuses each reserved prefix by the rule's sentence and binds nothing; the matched ordinary request is admitted", async () => {
+  const pool = makePool(rowsFromRegistry(REGISTRY(), PINS()));
+  const was = { pg: process.env.WORLD2_PG, url: process.env.WORLD2_PG_URL };
+  __setPoolForTest(pool);
+  Object.assign(process.env, ENV_ON);
+  const bindAs = (handle, clone) => viaExec({ args: { handle, card: "An invented agent of this house.", agent: "Invented" }, key: HOUSE_KEY }, { clone });
+  try {
+    for (const [handle, prefix] of [["berth-inv-tide", "berth-"], ["human-of-inv-reed", "human-of-"]]) {
+      const clone = town(REGISTRY(), PINS());
+      const head = git(clone, "rev-parse", "HEAD");
+      const writes = { ...pool.state.writes };
+      await assert.rejects(() => bindAs(handle, clone), (e) => {
+        assert.equal(e.code, 409);
+        assert.equal(e.defect, `"${handle}" wears a reserved prefix`);
+        assert.match(e.hint, new RegExp(`^handle "${handle}" wears the ${prefix} reserved prefix \\(the reserved-prefix rule: no resident handle begins with berth- or human-of-\\)`));
+        return true;
+      });
+      assert.deepEqual(pool.state.writes, writes, `${handle}: no write reached the record`);
+      assert.equal(pinOf(pool, handle), undefined, `${handle}: no pin`);
+      assert.deepEqual(house(pool, "the-trueing-house").residents, ["wright"], `${handle}: no membership`);
+      assert.equal(pool.state.ashore.some((a) => a.handle === handle), false, `${handle}: no ashore row`);
+      assert.equal(git(clone, "rev-parse", "HEAD"), head, `${handle}: no commit`);
+      assert.equal(existsSync(join(clone, "WHITE_PAGES", handle)), false, `${handle}: no card`);
+      assert.equal(git(clone, "status", "--porcelain"), "", `${handle}: nothing left behind`);
+    }
+    const clone = town(REGISTRY(), PINS());
+    const head = git(clone, "rev-parse", "HEAD");
+    const out = await bindAs("inv-moss", clone);
+    assert.equal(out.admitted, "inv-moss", "the matched ordinary request is admitted");
+    assert.equal(String(pinOf(pool, "inv-moss")?.gh_id), "999", "and bound to the verified id");
+    assert.deepEqual(house(pool, "the-trueing-house").residents, ["wright", "inv-moss"]);
+    assert.equal(git(clone, "rev-list", "--count", `${head}..HEAD`), "1", "in one commit");
+  } finally {
+    __setPoolForTest(null);
+    if (was.pg === undefined) delete process.env.WORLD2_PG; else process.env.WORLD2_PG = was.pg;
+    if (was.url === undefined) delete process.env.WORLD2_PG_URL; else process.env.WORLD2_PG_URL = was.url;
+  }
+});

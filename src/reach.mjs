@@ -96,7 +96,7 @@ export function metresBetween(a, b) {
 export function bearingWord(from, to) {
   const dx = Number(to?.x) - Number(from?.x), dy = Number(to?.y) - Number(from?.y);
   if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) return null;
-  const deg = (Math.atan2(dx, dy) * 180) / Math.PI; // 0 = north (+y), clockwise
+  const deg = (Math.atan2(dx, -dy) * 180) / Math.PI; // 0 = north, clockwise; the world's grid is x east, y south, so north is -y (tools/world-engine.mjs bearingDeg)
   const points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
   return points[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
 }

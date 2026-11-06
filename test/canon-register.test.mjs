@@ -50,6 +50,7 @@
 // A test suite that only reds on the first flip is watching the town's safety and
 // not the ruling's; both are run, and both splits are in the report.
 
+import { townHoldsOf } from "../world2/tools/canon-register.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -349,4 +350,17 @@ test("a sha whose marks tree is EMPTY is a CANNOT-RUN, never `canon carries noth
   const e = await caughtAsync(() => canonRegisterAtSha({ worldRepo: dir, sha: empty }));
   assert.ok(e, "an empty register must refuse");
   assert.match(e.message, /loads no marks|no WORLD\/marks/);
+});
+
+test("TOWN HOLDS · townHoldsOf keeps the town's own records' holder and owner, null when canon prints none, and no one else's", () => {
+  const holds = townHoldsOf([
+    { id: "the-town/a-key", by: "the-town", held_by: "wright/a-knight", owned_by: " kai " },
+    { id: "the-town/a-sign", by: "the-town" },
+    { id: "alpha/held-thing", by: "alpha", held_by: "beta" },
+    { id: "the-town/broken", by: "the-town", _error: "unparseable" },
+  ]);
+  assert.deepEqual([...holds.entries()], [
+    ["the-town/a-key", { held_by: "wright/a-knight", owned_by: "kai" }],
+    ["the-town/a-sign", { held_by: null, owned_by: null }],
+  ]);
 });

@@ -50,7 +50,8 @@ import { worldGraphSnapshot } from "./world-graph-snapshot.mjs";
 //
 // Resolved under OFFICE_ROOT because that is exactly where the writer puts them:
 // src/world-hydrate.mjs calls exportGexf with `join(OFFICE, ...)` for both views,
-// whatever --db it was pointed at. One spelling of the location, on the writer's
+// whichever output it was asked for (--to-store, --rows-out; --db is retired and
+// refused). One spelling of the location, on the writer's
 // side, read back here — never a second guess about where a file "probably" is.
 export const GEXF_VIEWS = {
   full: "world-graph.gexf",

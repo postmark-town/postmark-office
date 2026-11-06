@@ -1,5 +1,12 @@
 # The world store
 
+> **Status, 2026-11-03:** `world.db` and `office.db` are retired (`world.db`: POS-270,
+> and `src/server.mjs` says "world.db is retired"; `office.db`: POS-656). The world
+> graph's snapshot loads from the world 2.0 store, and an office with no source for
+> it refuses to boot. What follows describes `world.db` and `office.db` as live;
+> it is the stage-1 design as written, kept as history. (The flag names in
+> § Serving were not re-audited here.)
+
 `world.db` — the office's read index of the **world** repo, as `office.db` is its
 read index of the **town** repo. Stage 1 of the world-graph plan
 (`G:/Starstory/docs/2026-08-09/world-graph-apex-proposal.html`, §5.2): the store,
