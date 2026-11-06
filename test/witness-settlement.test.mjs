@@ -232,6 +232,21 @@ test(`THE CROSSING: a refused settlement is a signed record on the town's chain,
   assert.equal(readdirSync(fx.owed).filter((n) => n.endsWith(".json")).length, 0, "the owed queue is paid");
 });
 
+test(`THE CROSSING, WITNESS UNREACHABLE: the town declines the push; the crossing's exit is its own, the record stays owed, and the next publish pays it once${crossingSkip ? ` (${crossingSkip})` : ""}`, { skip: crossingSkip }, () => {
+  const fx = crossingFixture();
+  const hook = join(fx.townOrigin, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\necho declined >&2\nexit 1\n", { mode: 0o755 });
+  const r = runCrossing(fx);
+  const without = runCrossing(crossingFixture(), { WITNESS_KEY: "" });
+  assert.equal(r.status, without.status, "the same exit with the witness failing as with no witness at all");
+  assert.match(r.stderr, /the record is owed, not published/);
+  assert.equal(readdirSync(fx.owed).filter((n) => n.endsWith(".json")).length, 1, 'LAW: "the record is owed"');
+  rmSync(hook);
+  const pay = spawnSync(process.execPath, [join(fx.town, "tools", "witness-chain.mjs"), "publish", "--repo", fx.town, "--owed", fx.owed, "--key", fx.key], { encoding: "utf8" });
+  assert.equal(pay.status, 0, pay.stderr);
+  assert.deepEqual(git(fx.townOrigin, "ls-tree", "--name-only", "main:WITNESS/records").trim().split("\n"), ["00000001.json"], "one record, once");
+});
+
 test(`THE CROSSING, DRY: a dry run decides nothing and is witnessed as nothing${crossingSkip ? ` (${crossingSkip})` : ""}`, { skip: crossingSkip }, () => {
   const fx = crossingFixture();
   runCrossing(fx, { SETTLEMENT_DRY: "1", SETTLEMENT_SOURCE: "store", SETTLEMENT_CLONE: join(fx.root, "dry-sweep") });

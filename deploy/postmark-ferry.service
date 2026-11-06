@@ -153,7 +153,7 @@ WorkingDirectory=/srv/postmark-office
 # from /etc/postmark-office.env; unset, the step says the witness is not
 # configured and owes nothing. `wstage` names the step a refusal stopped at.
 ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
-  wstage=start; wreport=/tmp/witness-ferry-report.json; wattempt="ferry-$INVOCATION_ID"; \
+  wstage=start; wreport=/tmp/witness-ferry-report.json; : > "$wreport"; wattempt="ferry-$INVOCATION_ID"; \
   [ -n "$INVOCATION_ID" ] || wattempt="ferry-$(date -u -Iseconds)"; \
   witness() { \
       if [ -z "$WITNESS_KEY" ] || [ -z "$WITNESS_OWED" ]; then \
