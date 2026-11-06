@@ -19,7 +19,7 @@
 // database on this tree's server. Nothing here can reach dev or prod.
 
 import { execFileSync, spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -233,5 +233,3 @@ export async function callTool(base, key, name, args = {}) {
   try { body = t == null ? null : JSON.parse(t); } catch { body = t; }
   return { status: r.status, isError: Boolean(r.json?.result?.isError), body, chars: t?.length ?? 0 };
 }
-
-export const keyHash = (key) => createHash("sha256").update(key).digest("base64url");

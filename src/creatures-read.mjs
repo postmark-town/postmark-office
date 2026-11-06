@@ -41,8 +41,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WORLD_CLONE } from "./world-store.mjs";
 import { sightedFor } from "./creature-sight.mjs";
-
-const lawReady = (law) => !!law && !law.unavailable && !!law.kindMod;
+import { lawReady, msOf } from "./creature-bits.mjs";
 
 // ── this process's creatures, for a read ────────────────────────────────────
 
@@ -90,7 +89,6 @@ async function creaturesRaw({ nowMs, hook, law: given, query }) {
 
 // ── words ───────────────────────────────────────────────────────────────────
 
-const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 const point = (p) => (Number.isFinite(Number(p?.x)) && Number.isFinite(Number(p?.y)) ? { x: Number(p.x), y: Number(p.y) } : null);
 
 /** The reaction a creature's kind names, or null. */

@@ -1,15 +1,16 @@
 // crossing-exec.mjs — one crossing, appended, under the caller's flock.
 //
-// DEMO SLICE (gold plan postmark-world-view-system, step 5 — the enter/exit
-// pair, ruled in the 2026-08-18 wind-down and NOT yet planted in LOGOS). This
-// file exists on `jetto/enter-exit-demo` and merges nowhere: verbs-before-law
-// would break the TDD method, so the pen is written and left standing.
+// It began as the demo slice of the gold plan postmark-world-view-system, step 5
+// (the enter/exit pair, ruled in the 2026-08-18 wind-down), and it is live now:
+// `world-crossings.mjs` names it (`CROSSING_EXEC`) and `world-apex.mjs` runs it
+// under the town lock as the pen for an enter or exit, and the suites drive it as a real
+// process (enter-exit-ledger, arrival-entries-store).
 //
 // It is walk-exec.mjs's sibling and deliberately its twin, because a crossing
 // is the same KIND of fact as a departure: declared once, at the moment it is
 // declared, into an append-only public record — and everything after it derives.
 // Occupancy is never stored. The `contains` edge with the entity child that R14
-// makes a crossing MEAN is derived from these lines by tools/thresholds.mjs, in
+// makes a crossing MEAN is derived from these lines by tools/enter-exit.mjs, in
 // every reader, exactly as position is derived from the walk ledger's.
 //
 // It appends ONE OR MORE lines and commits: one per link of the chain, because
@@ -18,9 +19,10 @@
 // refusal, which is precisely what happened and precisely what the record
 // should hold.
 //
-// The grammar travels with the clone (`tools/thresholds.mjs` imported FROM the
-// world clone, as walk-exec imports the clone's walk.mjs): the enforcer and the
-// record must agree, and the clone owns both.
+// The grammar travels with the clone (`tools/enter-exit.mjs` imported FROM the
+// world clone, falling back to its retired name `tools/thresholds.mjs`; as
+// walk-exec imports the clone's walk.mjs): the enforcer and the record must
+// agree, and the clone owns both.
 //
 // Env: WORLD_CLONE, TOWN_PUSH=1 to push, BOT_NAME/BOT_EMAIL (penCommit's).
 // Exit 0 with { lines, at, within, commit, pushed } or { error }.

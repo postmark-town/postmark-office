@@ -380,8 +380,8 @@ export function makeActsPen({ households = [], pins = [], meta = [], claims = []
  * Point the office at a fresh pen for the length of one test, and hand it back.
  *
  * ⚑ THE HOUSE CACHE IS CLEARED BOTH WAYS. `houseOfVia` memoizes per queryable
- * AND `houseOf` memoizes per process; a suite that installs a second pen in the
- * same process would otherwise resolve handles against the first one's
+ * AND `houseRows` memoizes per process; a suite that installs a second pen in
+ * the same process would otherwise resolve handles against the first one's
  * registry. `household-deriver.mjs` exports the drop for exactly this.
  */
 export function installActsPen(opts = {}) {

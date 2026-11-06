@@ -1,15 +1,23 @@
-// world-store.mjs — the world graph's DDL and read-side runtime.
+// world-store.mjs — the world graph's row shape (DDL) and read-side runtime.
 //
-// world.db is a SIBLING of office.db, never a part of it. Same constitution
-// ("The DB is an INDEX, never the truth", rebuilt from scratch every hydration,
-// as-of shas stamped in `meta`, served read-only), but a separate file for a
-// separate reason: office.db indexes the TOWN repo, world.db indexes the WORLD
-// repo, and the two advance on different clocks. Mixing them would mean one
-// rehydration could not be truthful about both shas at once.
+// The world graph is an INDEX of the WORLD repo, never a part of the town's
+// index. Same constitution as that one ("The DB is an INDEX, never the truth",
+// rebuilt from scratch every hydration, as-of shas stamped in `meta`, served
+// read-only), kept apart for a separate reason: the two indexes advance on
+// different clocks, and mixing them would mean one rehydration could not be
+// truthful about both shas at once.
 //
-// Everything in world.db is recomputable from the two checkouts named in `meta`
-// at the shas named in `meta`, so the file may be deleted at any moment without
-// losing a fact the town owns.
+// world.db, the file the graph used to live in, is retired (POS-270, lane W 3b),
+// and so is office.db, the town's (POS-656). Today the hydrator builds the
+// graph's rows in memory and the store keeps them as one snapshot per
+// settlement (`world_graph_*`, written by world2/tools/graph-ingest.mjs and
+// read by world-graph-snapshot.mjs through `graphFromTables` below). The SCHEMA
+// below is the shape those rows keep, which the tests build their sqlite
+// fixtures from.
+//
+// Everything in the graph is recomputable from the two checkouts named in `meta`
+// at the shas named in `meta`, so a snapshot may be dropped at any moment
+// without losing a fact the town owns.
 //
 // Node kinds today: mark | class | code | doctrine — and that is the whole list.
 // `entity` and `emission` were expected here at Stage 2 and landed in a separate
@@ -409,12 +417,13 @@ export function pruneWorldCache(cacheRoot = WORLD_CACHE, keepDir = null, keep = 
   return dropped;
 }
 
-// ── the runtime: world.db -> a Graphology multigraph ─────────────────────────
+// ── the runtime: the graph's rows -> a Graphology multigraph ─────────────────
 //
-// §2.6 decided node:sqlite for persistence and Graphology for the in-memory
-// graph precisely so the lints, the parity harness and the visualiser traverse
-// ONE object. If each wrote its own recursive CTE they would drift and the
-// lints would be checking three different graphs.
+// §2.6 decided one persisted set of rows (then node:sqlite, now the store's
+// snapshot) and Graphology for the in-memory graph precisely so the lints, the
+// parity harness and the visualiser traverse ONE object. If each wrote its own
+// recursive CTE they would drift and the lints would be checking three
+// different graphs.
 //
 // Nothing here writes and nothing here repairs. Where the store holds a
 // dangling edge, this materialises a PLACEHOLDER node marked `missing: true`

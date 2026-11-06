@@ -130,7 +130,7 @@
 //     reads that table;
 //   - both stake clips take their balance from the town's ballotState —
 //     src/pot-stake-exec.mjs § clipPotStake and src/stake-exec.mjs via
-//     tools/ballot.mjs § clipApply.
+//     src/ballots-store.mjs § stakeInStore.
 //
 // `foldFunding` below folds holo as a READOUT — who gave, to which pot, against
 // which receipt — and a readout is all it may ever be. Crediting holo to a
