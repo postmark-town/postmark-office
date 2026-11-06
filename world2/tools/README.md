@@ -3050,3 +3050,13 @@ on this pair, printed every run.
    rides on a mark and marks are in the store. A7 (the key-set equality) is what
    found it missing — twelve keys against eleven at the vessel. No value
    comparison could have.
+
+## A named creature's ending: when an operator changes a promised item (WLD-123)
+
+`creature-endings.mjs` hands a carried item to the first finisher only at the
+settlement; until then a finish notice names the item as *pending*, never as
+already held. Nothing in the office detects a changed outcome, and none is
+built. If an operator changes a promised carried-item outcome after a finish
+(a later ruling, a different winner, the item withheld), the operator sends the
+affected household a follow-up through the existing letter channel, saying what
+changed and why. No new sender, detection job, mail API or schema.
