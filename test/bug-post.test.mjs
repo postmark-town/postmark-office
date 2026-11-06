@@ -2213,6 +2213,8 @@ test("18 · (19:57, the one rule) a declaration stands above every < that could 
     "cost, a comparison with no space": `Refuses when count<limit, as before.\n\n${line}`,
     "cost, a complete processing instruction": `<? note ?>\n\n${line}`,
     "cost, an escaped <": `\\<details>\n\n${line}`,
+    // an honest PR meaning no carry meets it only by the word: carries:, then a # and a digit on one line, below such a <
+    "cost, no carry meant, the word below a void tag": `First.<br>\n\nThis ${line}, as it happens.`,
     // no < at all, and no blank line above: running on from the text above, inside a title or an alt
     "reference title": `[notes]: https://example.com "notes\n${line}\n"`,
     "reference title, label over lines": `[no\ntes]: https://example.com "notes\n${line}\n"`,
@@ -2309,6 +2311,7 @@ test("18 · (19:57, the one rule) a declaration stands above every < that could 
     "cost, a comparison with no space": html("cost, a comparison with no space"),
     "cost, a complete processing instruction": html("cost, a complete processing instruction"),
     "cost, an escaped <": html("cost, an escaped <"),
+    "cost, no carry meant, the word below a void tag": html("cost, no carry meant, the word below a void tag"),
     "reference title": runsOn("reference title"),
     "reference title, label over lines": runsOn("reference title, label over lines"),
     "reference title, in a list": runsOn("reference title, in a list"),
