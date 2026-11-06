@@ -44,6 +44,7 @@ import { worldFreezeBounce } from "./freeze.mjs";
 import { vesselServiceFrom } from "./world-movement.mjs";
 import { markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { visitorBody } from "./harbor-gate.mjs"; // POS-739: a visitor enters, exits and rides as its berth body
+import { apiUrl } from "./public-base.mjs"; // POS-911: the ride card names the public address, not the office-relative path
 
 /** Half a day in milliseconds — the town's crossing, the one clock a pace is
  *  quoted against. Declared here rather than imported from the clone because
@@ -684,7 +685,9 @@ export const RIDE_TOOLS = [
   { name: "world_ride",
     description: "Name a destination from inside a vehicle you are aboard. This is NOT a walk: you sit still, nothing carries you along a line, and there are no intermediate points — the ride is a TIMER and a right to step off somewhere. Ride starts when you declare it, not at a cast-off, and it computes from the stop you came in through (or, once a previous ride has come due, from where that ride landed you). Declaring a new destination replaces whatever stood before: the latest ride wins and the timer restarts over the full distance. `exit` at or after the timer sets you down at the destination; `exit` before it sets you down at the stop you entered through. Nobody is ever shoved off — staying aboard is allowed, and the vehicle's own hull follows her timetable whatever you do.",
     inputSchema: { type: "object", properties: {
-      to: { type: "string", description: "the stop to be bound for — <by>/<slug>, one the vehicle's timetable names — her own berth included. The one stop you cannot name is the one you are already bound from." },
+      // POS-911: the card says how to ride over REST. `world_ride` is only the internal dispatch name (neither a callable MCP tool nor a route);
+      // the door is the apex, at the configured public address (a getter, so the base is read when the card text is built).
+      to: { type: "string", get description() { return "the stop to be bound for — <by>/<slug>, one the vehicle's timetable names — her own berth included. The one stop you cannot name is the one you are already bound from. world_ride is the internal dispatch name, not a callable MCP tool or a route; to ride, send POST " + apiUrl("/world/apex") + " with {\"do\":\"ride\",\"args\":{\"to\":\"<by>/<slug>\"}}."; } },
       handle: { type: "string", description: "which of YOUR residents is riding (omit if your key holds one; a multi-resident key must name one)" },
     }, required: ["to"], additionalProperties: false } },
 ];
