@@ -171,6 +171,18 @@ test("the doorstep is listed beside the three, and the tutorial starts there", a
   assert.match(TUTORIAL.split("\n")[1], /doorstep \{ \}.*Start here/);
 });
 
+// ── WLD-51 · the at-risk line states its frame ───────────────────────────────
+
+test("WLD-51 — YOU's at-risk line states the snapshot it was read from, and keeps its own words and its door", async () => {
+  const { youPart } = await import("../src/doorstep-apex.mjs");
+  const FRAME = "This reads the world as of the last settlement. A thing set down since then can change what the next sweep takes.";
+  const one = youPart({ unread: 0, needs: { stakes_at_risk: { rows: [{ mark: "invented/a-lamp" }] } } }).filter((i) => i.from === "household.stakes");
+  assert.deepEqual(one, [{ what: `1 mark of yours would be swept at the next settlement. ${FRAME}`, from: "household.stakes" }]);
+  const two = youPart({ unread: 0, needs: { stakes_at_risk: { rows: [{ mark: "invented/a-lamp" }, { mark: "invented/a-bench" }] } } }).filter((i) => i.from === "household.stakes");
+  assert.equal(two[0].what, `2 marks of yours would be swept at the next settlement. ${FRAME}`);
+  assert.equal(youPart({ unread: 0, needs: { stakes_at_risk: { rows: [] } } }).some((i) => i.from === "household.stakes"), false, "no risk, no line, so no frame to state");
+});
+
 // ── POS-806 · the first-visit line points at FIRST-DAY.md ────────────────────
 
 test("POS-806 — while arriving steps remain, YOU carries one line pointing at the first-day walk; with none left it is gone", async () => {

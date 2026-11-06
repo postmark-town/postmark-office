@@ -9,17 +9,19 @@
 //     is in the clone's commit but outside its patterns, names the path, and reds the
 //     process even when the throw is caught; an `unlisted` absence passes;
 //   · a stand-in (test/helpers/dev-target.mjs's scratch clones) leaves out only the older
-//     letters and the older STATE/log metas, and its office can still `git add` a new letter.
+//     letters and the older STATE/log metas, and its office can still `git add` a new letter;
+//     and it is made on another filesystem than its source (a copy) as well as on the same.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { CLONES, OFFICE, applySparse, globMatch, patternsOf, readSparse, sparseProblem, standinClone, standinPatterns } from "./helpers/clone-sparse.mjs";
-import { tempDir } from "./helpers/temp-dir.mjs";
+import { removeTempDirSync, tempDir } from "./helpers/temp-dir.mjs";
 
 const GUARD = pathToFileURL(join(OFFICE, "test", "helpers", "sparse-guard.mjs")).href;
 const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" }).trim();
@@ -234,4 +236,32 @@ test("a world stand-in leaves out the metas of all but the newest two crossings"
   writeFileSync(join(dest, "STATE", "log", "5.journal.meta.json"), "{}\n");
   git(dest, "add", "-A");
   assert.equal(git(dest, "status", "--porcelain"), "A  STATE/log/5.journal.meta.json");
+});
+
+// A STAND-IN ACROSS FILESYSTEMS (POS-726, office#895, 2026-11-04). On some CI runners
+// /tmp is not the workspace's filesystem, and the explicit `git clone --local` the
+// stand-in used to run died there ("Invalid cross-device link"): every dev-rehearsal-
+// local test red in its first hook. /dev/shm is the second filesystem a Linux machine
+// has to hand; without one this cannot be asked, and says so.
+const SHM = "/dev/shm";
+const otherFilesystem = (() => { try { return statSync(SHM).dev !== statSync(tmpdir()).dev; } catch { return false; } })();
+
+test("a stand-in on another filesystem than its source is copied, not refused, and on the same one it still hardlinks", { skip: otherFilesystem ? false : `no second filesystem (${SHM}) beside ${tmpdir()}` }, () => {
+  const src = repoWith({ "WHITE_PAGES/r/ADDRESS.md": "a\n", "MEEPS/m/m.md": "m\n" });
+  git(src, "gc", "-q"); // a pack: the file the link failed on
+  const pack = readdirSync(join(src, ".git", "objects", "pack")).find((f) => f.endsWith(".pack"));
+  const far = mkdtempSync(join(SHM, "clone-sparse-xdev-"));
+  try {
+    // the control: an explicit --local, here, dies with CI's words
+    const control = spawnSync("git", ["clone", "--local", "--quiet", "--no-checkout", src, join(far, "control")], { encoding: "utf8", windowsHide: true });
+    assert.notEqual(control.status, 0);
+    assert.match(control.stderr, /Invalid cross-device link/);
+    const dest = standinClone("town", src, join(far, "town-clone"));
+    assert.equal(git(dest, "rev-parse", "HEAD"), git(src, "rev-parse", "HEAD"));
+    assert.ok(existsSync(join(dest, "WHITE_PAGES", "r", "ADDRESS.md")) && existsSync(join(dest, "MEEPS", "m", "m.md")));
+    assert.equal(statSync(join(dest, ".git", "objects", "pack", pack)).nlink, 1, "across filesystems the pack is a copy");
+  } finally { removeTempDirSync(far); }
+  // beside its source, a stand-in still shares the source's pack rather than copying it
+  const near = standinClone("town", src, join(tempDir("clone-sparse-standin-"), "town-clone"));
+  assert.ok(statSync(join(near, ".git", "objects", "pack", pack)).nlink >= 2, "on one filesystem the pack is a hardlink");
 });

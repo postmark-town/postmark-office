@@ -17,7 +17,7 @@ import {
   hostAtOffice, cancelAtOffice, rsvpAtOffice, calendarAtOffice, eventActs, announceAtOffice,
   postAtTown, amendAtTown, closeAtTown, advanceAtTown,
 } from "../src/events-store.mjs";
-import { phaseAt, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE, ANNOUNCE_TEXT_MAX } from "../src/events.mjs";
+import { phaseAt, calendarFrom, judgeInterval, EVENT_MAX_DAYS, FELL_BACK_NO_ECHO, BUDGET_DEFAULT, SECRET_NOTE, ANNOUNCE_TEXT_MAX } from "../src/events.mjs";
 import { compareRebuild, dryRun, NEVER_TOUCHED_LINE } from "../world2/tools/events-rebuild.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -279,6 +279,53 @@ test("cancel · stays on the calendar marked cancelled; its id is not reused —
   const again = await hostAtOffice(HOST(now), WRIGHT);
   assert.equal(again.event.id, `${event.id}-2`);
   await refusedWith(rsvpAtOffice({ event: event.id }, ERRANT), 409, /was cancelled/);
+});
+
+// POS-909 · the calendar's `now`: live events lead, cancelled ones follow. All inputs invented, the clock fixed.
+const CAL_NOW = Date.parse("2030-01-02T12:00:00Z");
+const calRow = (id, starts, ends, state = "announced", opts = {}) => ({
+  id, title: id, body: "", author: "test-host", household: "test-house", place_mark: null, place_x: 1, place_y: 2,
+  starts, ends, revised: 0, state, fields: { doors_open: opts.doors_open ?? starts }, class: "event",
+});
+const ids = (list) => list.map((e) => e.id);
+
+test("POS-909 calendar · in `now` a live event leads a cancelled one that started earlier; the cancelled one stays listed, marked, in its phase; coming and ended keep their order", () => {
+  const rows = [
+    calRow("test-host/cancelled-early", "2030-01-02T09:00:00Z", "2030-01-02T15:00:00Z", "cancelled"),
+    calRow("test-host/live-late", "2030-01-02T11:00:00Z", "2030-01-02T15:00:00Z"),
+    calRow("test-host/live-early", "2030-01-02T10:00:00Z", "2030-01-02T15:00:00Z"),
+    // the same start as live-late: the id tiebreaker holds inside each partition
+    calRow("test-host/cancelled-tie-b", "2030-01-02T11:00:00Z", "2030-01-02T15:00:00Z", "cancelled"),
+    calRow("test-host/cancelled-tie-a", "2030-01-02T11:00:00Z", "2030-01-02T15:00:00Z", "cancelled"),
+    calRow("test-host/cancelled-doors", "2030-01-02T12:30:00Z", "2030-01-02T15:00:00Z", "cancelled", { doors_open: "2030-01-02T11:30:00Z" }),
+    // coming: a cancelled one earlier than a live one stays in time order
+    calRow("test-host/coming-cancelled", "2030-01-03T10:00:00Z", "2030-01-03T12:00:00Z", "cancelled"),
+    calRow("test-host/coming-live", "2030-01-03T11:00:00Z", "2030-01-03T12:00:00Z"),
+    // ended: inside and outside the 7-day list, a cancelled one among them
+    calRow("test-host/ended-new", "2030-01-02T07:00:00Z", "2030-01-02T08:00:00Z"),
+    calRow("test-host/ended-cancelled", "2029-12-30T07:00:00Z", "2029-12-30T08:00:00Z", "cancelled"),
+    calRow("test-host/ended-old", "2029-12-01T07:00:00Z", "2029-12-01T08:00:00Z"),
+  ];
+  const cal = calendarFrom(rows, new Map(), CAL_NOW);
+  assert.deepEqual(ids(cal.now), [
+    "test-host/live-early", "test-host/live-late",
+    "test-host/cancelled-early", "test-host/cancelled-tie-a", "test-host/cancelled-tie-b", "test-host/cancelled-doors",
+  ]);
+  assert.equal(cal.now[0].cancelled, false);
+  assert.deepEqual(cal.now.map((e) => e.cancelled), [false, false, true, true, true, true], "every cancelled one stays listed and marked");
+  assert.deepEqual(cal.now.map((e) => e.phase), ["underway", "underway", "underway", "underway", "underway", "doors-open"], "the clock's phase is untouched");
+  assert.deepEqual(ids(cal.coming), ["test-host/coming-cancelled", "test-host/coming-live"], "coming stays in time order, cancelled in place");
+  assert.equal(cal.coming[0].cancelled, true);
+  assert.deepEqual(ids(cal.ended), ["test-host/ended-new", "test-host/ended-cancelled"], "ended: newest end first, 7 days, cancelled still there");
+  assert.equal(cal.total, 10, "total counts every listed event once");
+});
+
+test("POS-909 calendar · a cancelled event alone in its window is still listed and marked in `now`; with no cancelled event nothing about `now` changes", () => {
+  const lone = calendarFrom([calRow("test-host/lone", "2030-01-02T10:00:00Z", "2030-01-02T15:00:00Z", "cancelled")], new Map(), CAL_NOW);
+  assert.deepEqual(lone.now.map((e) => [e.id, e.cancelled, e.phase]), [["test-host/lone", true, "underway"]]);
+  assert.equal(lone.total, 1);
+  const live = ["b", "a", "c"].map((s, i) => calRow(`test-host/live-${s}`, `2030-01-02T1${i}:00:00Z`, "2030-01-02T15:00:00Z"));
+  assert.deepEqual(ids(calendarFrom(live, new Map(), CAL_NOW).now), ["test-host/live-b", "test-host/live-a", "test-host/live-c"], "all live: starts order, as before");
 });
 
 test("a second host of a STANDING event's title is refused and pointed at the amendment", async () => {
