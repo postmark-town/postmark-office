@@ -2427,8 +2427,13 @@ export function withNoticeBoard(r, t = Date.now(), events = null, withinFn = nul
 // same commit, and — like the door — only while the office is actually keeping
 // the record. `record` is a field the page can render; the two doors do not get
 // to disagree about what the town does with speech.
-export function worldConversations() {
-  const base = { pinned: activeNotices(), ...voices.conversations() };
+// POS-779, SHOW EARLIER: `query` (URLSearchParams) carries the page's `before` cursor and the `closed` / `voices` dials to the in-memory
+// read; `page` is the store's body for the same question (server.mjs hands it over for a `before` page when the store is engaged).
+export function worldConversations(query = null, page = null) {
+  const num = (k) => { const v = Number(query?.get(k)); return Number.isFinite(v) && v > 0 ? v : undefined; };
+  const raw = query?.get("before");
+  const before = raw ? (/^\d+$/.test(raw) ? Number(raw) : Date.parse(raw)) : null;
+  const base = { pinned: activeNotices(), ...(page ?? voices.conversations({ closedMax: num("closed"), voiceCap: num("voices"), before })) };
   return emissionsEnabled()
     ? { ...base, record: "Presence fades; occurrence is history. A voice stays hearable within earshot until the next settlement; the words themselves — with who spoke them, where, and when — are written into Postmark's public record at every crossing and kept. The town does not secretly log its residents; it openly remembers them." }
     : base;

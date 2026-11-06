@@ -1291,21 +1291,22 @@ test("POS-886 — one snapshot, two readers: the outside reader and the room's r
   assert.equal(bare.voices.length, 2, "and the ear still hears");
 });
 
-test("POS-886 — speech from a room later than the open voices does not keep a quiet open conversation open", async () => {
+// Until 2026-11-06 this asserted a lull: a later room voice must not keep a quiet open conversation from closing at the
+// 30-minute lull. POS-779 retired the lull (a conversation lasts the settlement), so the property is now that a later voice
+// from a room changes nothing in the outside reader's conversation, while a later open voice does join it.
+test("POS-886 — speech from a room later than the open voices leaves the open conversation as it was", async () => {
   const circles = ["a1", "a2"];
-  const lull = MIN * Math.round(CLOSE_MS / MIN);
   const run = async (who, rooms) => {
     const w = roomBench({ ...RING_OF(circles), ...(who ? { [who]: { x: 20, y: 0 } } : {}), rd: { x: 5, y: 0 } }, rooms);
     await speakCircles(w, circles);
-    w.tick(lull - 5 * MIN - 32_000); // five minutes short of the close, counted from the last open voice
+    w.tick(40 * MIN); // well past the former 30-minute lull, inside one settlement
     if (who) await w.store.say(who, `${who} speaks`);
-    w.tick(6 * MIN); // now six minutes past the close for the open voices
+    w.tick(6 * MIN);
     return w.store.hear("rd");
   };
   const without = await run(null, {});
-  assert.equal(without.conversation, undefined, "the open conversation is closed");
-  assert.deepEqual(without.voices.map((v) => v.handle), ["a1", "a2"], "and its voices are still hearable");
-  assert.deepEqual(await run("warden", { warden: HALL }), without, "a later voice from a room does not reopen it");
+  assert.deepEqual(without.conversation.participants, ["a1", "a2"], "the open conversation outlasts the former lull, inside one settlement");
+  assert.deepEqual((await run("warden", { warden: HALL })).conversation, without.conversation, "a later voice from a room changes nothing in it");
   const later = await run("pub", {});
-  assert.deepEqual(later.conversation.participants, ["a1", "a2", "pub"], "the admitting control: a later open voice keeps it open");
+  assert.deepEqual(later.conversation.participants, ["a1", "a2", "pub"], "the admitting control: a later open voice joins it");
 });

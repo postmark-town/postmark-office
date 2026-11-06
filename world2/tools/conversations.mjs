@@ -446,8 +446,13 @@ export function unplacedDisclosure(unplaced = []) {
  * earlier ones'. No boundary known: one epoch, everything live, said in
  * `settlement_disclosed`. (The sailing night's lull ruling is superseded by this
  * one: a four-hour party is one thread because nothing splits it but a settlement.)
+ *
+ * SHOW EARLIER (POS-779): `closed` is one PAGE of closedMax threads, newest first, and `earlier` says what is behind it:
+ * `remaining` threads and the `before` cursor to ask the next page with. `before` (ms) asks for the page of closed threads whose
+ * newest line is strictly earlier than it, with no live threads. A page keeps every thread tied on its last line's instant, so
+ * a cursor never skips one. voices.mjs `conversations` pages the same way (the equality falsifier holds them together).
  */
-export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 200, fadeMs }) {
+export function conversationsOf(voices, { now, earshotM, boundaries = [], closedMax = 40, voiceCap = 200, fadeMs, before = null }) {
   const t = now;
   const marks = boundaries.filter((m) => Number.isFinite(m) && m <= t).sort((a, b) => a - b);
   const since = marks.length ? marks[marks.length - 1] : -Infinity;
@@ -455,6 +460,11 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
   const live = [];
   const closed = [];
   for (const c of clusters) (c.latest >= since ? live : closed).push(c);
+  const paged = Number.isFinite(before);
+  const older = (paged ? closed.filter((c) => c.latest < before) : closed).sort((a, b) => b.latest - a.latest);
+  let cut = Math.min(closedMax, older.length);
+  while (cut < older.length && older[cut].latest === older[cut - 1].latest) cut += 1;
+  const page = older.slice(0, cut);
   return {
     now: new Date(t).toISOString(),
     earshot_m: earshotM,
@@ -463,8 +473,9 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
     close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
     settlement_since: marks.length ? new Date(since).toISOString() : null,
     ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
-    live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
-    closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
+    live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
+    closed: page.map((c) => threadOf(c, { live: false, voiceCap })),
+    earlier: { source: "record", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null },
   };
 }
 

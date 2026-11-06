@@ -1110,7 +1110,12 @@ export function createVoices({
   // LIVE is the newest settlement's threads; CLOSED are the earlier settlements'.
   // `close_minutes` stays as null for a month (agent-facing breaks get notice, Darko):
   // it named the retired lull, and `settlement_since` names the edge instead.
-  function conversations({ closedMax = 40, voiceCap = 200 } = {}) {
+  //
+  // SHOW EARLIER (POS-779): `closed` is one PAGE of closedMax threads, newest first, and `earlier` says what is behind it. `before`
+  // (ms) asks for the page of closed threads whose newest line is strictly earlier, with no live threads. A page keeps every thread
+  // tied on its last line's instant, so a cursor never skips one. This is the office's MEMORY (the last memoryMax voices, a RAM fact
+  // about a running process): `earlier.source` says so, and the store's read (world2/tools/conversations.mjs) is the record.
+  function conversations({ closedMax = 40, voiceCap = 200, before = null } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
     // page draws a voice. `hearable_since` beside it is where an ear's window opens.
@@ -1121,6 +1126,11 @@ export function createVoices({
     const live = [];
     const closed = [];
     for (const c of clusters) (c.latest >= since ? live : closed).push(c);
+    const paged = Number.isFinite(before);
+    const older = (paged ? closed.filter((c) => c.latest < before) : closed).sort((a, b) => b.latest - a.latest);
+    let cut = Math.min(closedMax, older.length);
+    while (cut < older.length && older[cut].latest === older[cut - 1].latest) cut += 1;
+    const page = older.slice(0, cut);
     return {
       now: new Date(t).toISOString(),
       earshot_m: earshotM,
@@ -1130,8 +1140,10 @@ export function createVoices({
       close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
       settlement_since: boundaries.length ? new Date(since).toISOString() : null,
       ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
-      live: live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
-      closed: closed.sort((a, b) => b.latest - a.latest).slice(0, closedMax).map((c) => threadOf(c, { live: false, voiceCap })),
+      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
+      closed: page.map((c) => threadOf(c, { live: false, voiceCap })),
+      earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,
+        note: "this is the office's short in-memory record, so speech older than it holds is not here" },
     };
   }
 
