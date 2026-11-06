@@ -331,6 +331,21 @@ report() { # status detail
 record_receipt() { # [attempt]
   node "$OFFICE/world2/tools/crossing-receipt.mjs" --receipt "$OUT" --attempt "${1:-}" \
     || echo "[settlement-auto] the receipt was NOT recorded in the store (non-fatal) — the line above names why; the file at $OUT still holds it" >&2
+  witness_settlement "${1:-}"
+}
+
+# THE WITNESS RECORD (POS-907; town WITNESS.md). Every DECIDED crossing is a
+# record in the town's one witness chain, beside the mail crossings: owed first,
+# then published under the town clone's lock. Darko 2026-11-06, "Keep running":
+# a record that cannot publish is OWED and the crossing goes on, so this never
+# fails one. The event is the wrapper's SETTLEMENT_EVENT, one name for every
+# attempt of this crossing. Unconfigured (no WITNESS_KEY), it says so and stops.
+witness_settlement() { # [attempt]
+  # A dry crossing decided nothing, so it is witnessed as nothing.
+  if [ "$DRY" = "1" ]; then return 0; fi
+  node "$OFFICE/world2/tools/witness-settlement.mjs" --receipt "$OUT" --attempt "${1:-}" \
+    --event "$SETTLEMENT_EVENT" --town "$TOWN" --sweep "$SWEEP" --lock "${TOWN_LOCK:-$OFFICE/town.lock}" \
+    || echo "[settlement-auto] the witness step tripped (non-fatal) — the crossing's outcome stands; the line above names why" >&2
 }
 
 # THE ESCALATION, in one place. A crossing is never failed by its own alarm, so
@@ -374,6 +389,11 @@ escalate() { # --class <class> [args…]
 # then 0, then 2 forever). What stays HERE is the part that needs this script's
 # context — the receipt, and the escalation of a race that outlived its retries.
 : "${SETTLEMENT_RACE_ATTEMPTS:=3}"
+# ONE EVENT, EVERY ATTEMPT (POS-907): the witness names this crossing by the
+# instant its first process started, so a retry's records follow one another
+# instead of standing as strangers. Set here, before the wrapper re-execs.
+: "${SETTLEMENT_EVENT:=$STAMP}"
+export SETTLEMENT_EVENT
 if [ -z "${SETTLEMENT_ATTEMPT:-}" ]; then
   sh "$OFFICE/deploy/settlement-retry.sh" "$SETTLEMENT_RACE_ATTEMPTS" sh "$0" "$@" && exit 0
   rc=$?
