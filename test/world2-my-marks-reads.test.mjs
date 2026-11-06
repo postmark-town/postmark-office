@@ -490,7 +490,7 @@ test("the canon the shelf is handed is the CARRIED marks only: an uncarried stan
   assert.ok(seen[0].includes("wright/the-trueing-house"), "a mark with no lock window to compare stays canon, as today");
 });
 
-test("a mark nobody staked is the only one moved: a BACKED uncarried mark stays on `backed` and is never double-listed", async () => {
+test("a BACKED uncarried mark stays on `backed`, is not published, and is on the locked shelf once", async () => {
   const stakedBowl = { mark: BOWL, holder: "pos104-wright", household: HOUSEHOLD, own_household: HOUSEHOLD, n: 2, weight_k: 5 };
   const body = await mine({ pool: { marks: [...PUBLISHED_ROWS, bowlAt(261)], settlements: [SETTLED_260], escrow: [...ESCROW_ROWS, stakedBowl] }, lockedReader: shelfOf([lockedEvent(BOWL, { window: 261 })]) });
   assert.ok(body.backed.some((r) => r.id === BOWL), "it is still backed");
