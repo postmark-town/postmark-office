@@ -85,15 +85,18 @@ test("one crossing, end to end, through the dev office's doors, the Mists at the
   const sandboxVerdict = async (sha) => ({ runs: 1, status: "completed", conclusion: "success", url: "(the local stand-in's verdict)", head_sha: sha });
   const r = await runRehearsal(target({ sandboxVerdict }), { log: (l) => lines.push(l) });
   const text = renderReport(r);
-  // ON FAILURE, THE REPORT GOES TO THE JOB TOO (POS-746): a test's own output lands only in its shard's
-  // artifact, which a rerun replaces, so a red step was lost once. CI's step summary is kept per attempt;
-  // locally the assertion below carries the report as before.
+  // ON FAILURE, THE REPORT GOES TO THE STEP SUMMARY TOO (POS-746): a test's own output lands only in its
+  // shard's artifact, which a rerun replaces, so a red step was lost once. CI's step summary is kept per
+  // attempt; locally the assertion below carries the report as before.
   if (!r.green && process.env.GITHUB_STEP_SUMMARY)
     try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### dev-rehearsal-local: not green\n\n~~~\n${text}\n~~~\n`); } catch { /* the assertion still says it */ }
   // the store's own database: w2_devsandbox_rehearsal, or on a pool tree t<pid>_<n>_w2_devsandbox_rehearsal (POS-479)
   assert.match(dev.store.database, /^(t\d+_\d+_)?w2_devsandbox_rehearsal$/);
   assert.match(lines[0], new RegExp(`^dev-rehearsal: target store ${dev.store.database} \\(the dev office's, from .*\\); not world2_dev$`));
-  assert.equal(r.green, true, text);
+  // THE FIRST LINE NAMES THE STEP (POS-926): the suite verdict prints only an error's first line
+  // (.github/scripts/suite-reporter.mjs), and the report's own first line is its guard, whatever went red.
+  const stopped = r.steps.find((s) => !s.ok);
+  assert.equal(r.green, true, `${stopped ? `RED at ${stopped.id}: ${stopped.problems[0]}` : `RED: ${r.error ?? "no step ran"}`}\n${text}`);
   const ran = r.steps.filter((s) => !s.pending).map((s) => s.id);
   assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand", "refused-alone", "stamp-sandbox"], text);
   assert.deepEqual(r.steps.filter((s) => s.pending).map((s) => s.id), [], "no step is pending (POS-356 landed in #427)");
