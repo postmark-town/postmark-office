@@ -15,9 +15,9 @@ permissions:
   pull-requests: read
 jobs:
   linear:
-    uses: keeminlee/starforge-linear-handler/.github/workflows/linear-handler.yml@95b0bf3d3b7d04707d5bf756e004ef73eb154325
+    uses: keeminlee/starforge-linear-handler/.github/workflows/linear-handler.yml@6f8f4ed4a33a0a0e4b2d667a8426ad1e07e66ce0
     with:
-      handler-ref: 95b0bf3d3b7d04707d5bf756e004ef73eb154325
+      handler-ref: 6f8f4ed4a33a0a0e4b2d667a8426ad1e07e66ce0
       live: ${{ vars.LINEAR_HANDLER_LIVE == '1' }}
     secrets:
       LINEAR_APP: ${{ secrets.LINEAR_HANDLER_APP }}

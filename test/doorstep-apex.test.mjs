@@ -3,7 +3,8 @@
 // The doorstep draws every line from a door's own read through the MCP
 // dispatcher, so these drive it with a fake dispatcher answering in each
 // door's real shape. They hold D1 (the bundle is a read away, untouched), D2
-// (one line per item naming its door, at most 2,500 characters served), D3
+// (one line per item naming its door, at most 2,600 characters served: 2,500 until
+// POS-822/b, Darko 2026-11-06 12:37 EDT), D3
 // (its own cursor: the changed lines only, or nothing_new) and D4 (per
 // handle), and the explain coverage of every key it can answer.
 //
@@ -11,6 +12,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { townClone, NO_TOWN } from "./fixture-paths.mjs";
 
 process.env.WORLD_APEX = "1";
 const { doorstepApex, DOORSTEP_BUDGET, decodeDoorstepCursor, DOORSTEP_TOOL, herePart } = await import("../src/doorstep-apex.mjs");
@@ -186,15 +190,56 @@ test("WLD-51 — YOU's at-risk line states the snapshot it was read from, and ke
 // ── POS-806 · the first-visit line points at FIRST-DAY.md ────────────────────
 
 test("POS-806 — while arriving steps remain, YOU carries one line pointing at the first-day walk; with none left it is gone", async () => {
-  const { youPart, FIRST_DAY_LINE } = await import("../src/doorstep-apex.mjs");
+  const { youPart, firstDayLine } = await import("../src/doorstep-apex.mjs");
   const newcomer = youPart({ unread: 0, steps: [{ kind: "onboarding", id: "write-your-card", title: "Write your card" }, { kind: "quest", title: "q" }] });
-  const line = newcomer.filter((i) => i.what === FIRST_DAY_LINE);
+  const line = newcomer.filter((i) => i.what === firstDayLine(1));
   assert.equal(line.length, 1, "exactly one line");
   assert.equal(line[0].from, "town.docs");
   assert.match(line[0].what, /town \{ read: "docs", args: \{ doc: "first-day" \} \}/);
   const settled = youPart({ unread: 0, steps: [{ kind: "quest", title: "q" }] });
-  assert.equal(settled.some((i) => i.what === FIRST_DAY_LINE), false, "a resident with no arriving steps left is not told to take the newcomer's tour");
-  assert.equal(youPart({ unread: 0 }).some((i) => i.what === FIRST_DAY_LINE), false);
+  assert.equal(settled.some((i) => /first-day/.test(i.what)), false, "a resident with no arriving steps left is not told to take the newcomer's tour");
+  assert.equal(youPart({ unread: 0 }).some((i) => /first-day/.test(i.what)), false);
+});
+
+// ── POS-822 · the first-day line counts what is left (Darko 2026-11-06 12:11 EDT: "Count in the first-day line") ──
+
+const ONE_TIME = ["write-your-card", "tend-your-home", "hang-your-window", "first-letter-out", "first-answer", "walk-the-world", "welcome-to-postmark"];
+const arrivingSteps = (n) => ONE_TIME.slice(ONE_TIME.length - n).map((id) => ({ kind: "onboarding", id, title: id }));
+const firstDayItems = (steps) => import("../src/doorstep-apex.mjs").then(({ youPart }) => youPart({ unread: 0, steps }).filter((i) => i.from === "town.docs"));
+
+test("POS-822 — the first-day line names how many of the seven settling-in steps are left, and the bundle that lists them; it changes as rows finish and is gone at none", async () => {
+  // LAW (Darko 2026-11-06 12:11 EDT, POS-822/a): "Count in the first-day line" — "N of 7 left" and a pointer to doorstep { read: "bundle" }, whose next_steps lists every unfinished one.
+  const seen = [];
+  for (const left of [7, 6, 3, 1]) {
+    const items = await firstDayItems([...arrivingSteps(left), { kind: "quest", title: "q" }]);
+    assert.equal(items.length, 1, `${left} left: exactly one first-day line`);
+    assert.match(items[0].what, new RegExp(`^new here\\? ${left} of 7 settling-in steps left\\b`), `${left} left: the count is in the line`);
+    assert.ok(items[0].what.includes('doorstep { read: "bundle" }'), "the line points at the bundle");
+    assert.ok(items[0].what.includes('town { read: "docs", args: { doc: "first-day" } }'), "the first-day walk is still there");
+    seen.push(items[0].what);
+  }
+  assert.equal(new Set(seen).size, 4, "each count reads differently");
+  assert.deepEqual(await firstDayItems(arrivingSteps(0)), [], "none left, no line");
+  // kind: "paper" and "quest" steps are not settling-in rows and are not counted
+  assert.match((await firstDayItems([...arrivingSteps(2), { kind: "paper", id: "x" }, { kind: "quest", title: "q" }]))[0].what, /^new here\? 2 of 7 /);
+});
+
+test("POS-822 — the seven is the town's: SETTLING_IN_TOTAL equals the one-time rows of the pinned quest-registry.json", { skip: NO_TOWN || false }, async () => {
+  const { SETTLING_IN_TOTAL } = await import("../src/doorstep-apex.mjs");
+  const registry = JSON.parse(readFileSync(join(townClone(), "quest-registry.json"), "utf8"));
+  const oneTime = registry.quests.filter((q) => q.cadence === "one-time").map((q) => q.id);
+  assert.equal(oneTime.length, 7, "the town's registry has seven one-time rows");
+  assert.equal(SETTLING_IN_TOTAL, oneTime.length);
+  assert.deepEqual(oneTime, ONE_TIME, "the test's list is the registry's, in its order");
+});
+
+test("POS-822 — a row finishing changes the doorstep's own cursor: the count line is news, not a repeat", async () => {
+  const mk = (n) => { const { ctx } = doors(); ctx.steps = async () => [...arrivingSteps(n), { kind: "quest", title: "Reach out", what: "Send a letter to 5 different residents. Resets daily. (0/5 today)" }]; return ctx; };
+  const first = await doorstepApex({}, KEY, mk(5));
+  const same = await doorstepApex({ since: first.cursor }, KEY, mk(5));
+  assert.equal(same.nothing_new, true);
+  const moved = await doorstepApex({ since: first.cursor }, KEY, mk(4));
+  assert.deepEqual(moved.you.map((i) => i.what.slice(0, 32)), ["new here? 4 of 7 settling-in ste"]);
 });
 
 test("POS-806 — the first-visit line fits the budget with the lines a newcomer's doorstep really carries", async () => {
@@ -203,6 +248,18 @@ test("POS-806 — the first-visit line fits the budget with the lines a newcomer
   ctx.steps = async () => [...(await base()), { kind: "onboarding", id: "write-your-card", title: "Write your card" }];
   const d = await doorstepApex({}, KEY, ctx);
   assert.ok(d.you.some((i) => i.from === "town.docs" && /first-day/.test(i.what)), "the line is there");
+  assert.ok(JSON.stringify(d, null, 1).length <= DOORSTEP_BUDGET, `served ${JSON.stringify(d, null, 1).length}`);
+});
+
+test("POS-822 — the counted first-day line fits the budget for a brand-new household (all seven left), and DOORSTEP_BUDGET is the ruled 2,600", async () => {
+  // LAW (Darko, 2026-11-06 12:37 EDT, POS-822/b): "Raise the budget to ~2,600". It was 2,500 until then; the counted line serves 2,556 on this fixture.
+  assert.equal(DOORSTEP_BUDGET, 2600, "the ruled budget: raised from 2,500 for the first-day count, and no further");
+  const { ctx } = doors();
+  const base = ctx.steps;
+  ctx.steps = async () => [...(await base()), ...arrivingSteps(7)];
+  const d = await doorstepApex({}, KEY, ctx);
+  assert.ok(d.you.some((i) => /^new here\? 7 of 7 /.test(i.what)), "the line is there");
+  console.log(`# POS-822 newcomer fixture served ${JSON.stringify(d, null, 1).length} of ${DOORSTEP_BUDGET}`);
   assert.ok(JSON.stringify(d, null, 1).length <= DOORSTEP_BUDGET, `served ${JSON.stringify(d, null, 1).length}`);
 });
 
