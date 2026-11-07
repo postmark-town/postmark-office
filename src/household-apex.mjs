@@ -1850,8 +1850,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
         const awaiting = await fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts));
         // POS-730: the household's private notes ride the key that holds the resident, and nobody else's read.
         if (key?.handles?.has?.(handle) !== true || !awaiting || awaiting.error) return awaiting;
-        const { notesFor, annotateAwaiting } = await import("./letter-notes.mjs");
-        const got = await notesFor([handle]);
+        const { notesFor, inScope, annotateAwaiting } = await import("./letter-notes.mjs");
+        const got = await inScope(await notesFor([handle]), [...key.handles]);
         const view = annotateAwaiting(awaiting, got.notes);
         return got.unavailable ? { ...view, notes_unavailable: got.unavailable } : view;
       }

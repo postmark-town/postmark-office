@@ -127,9 +127,7 @@ export const ageDays = (markedAt, nowMs = Date.now()) => {
 const noteRow = (r, nowMs) => ({
   state: r.state,
   ...(r.waiting_on != null ? { on: r.waiting_on } : {}),
-  marked_at: r.marked_at instanceof Date ? r.marked_at.toISOString() : r.marked_at,
   age_days: ageDays(r.marked_at, nowMs),
-  marked_by: r.marked_by,
 });
 
 /**
@@ -207,40 +205,44 @@ export async function notesFor(handles, { env = process.env } = {}) {
     }
     return { notes };
   } catch (e) {
-    if (e?.name === "NoRecordError" || isMissingTable(e)) return { notes: new Map() };
+    // A missing table is NOT "no notes": a lost table can hide marks that exist (POS-730/c), so it is said like any other failure.
     return { notes: new Map(), unavailable: `letter notes unreadable — marked letters may still be counted` };
   }
 }
 
 /**
- * The awaiting view with the household's notes on it: each conversation (and
- * thread) row that stands on a marked letter gains `note: { state, on?, marked_at,
- * age_days, marked_by }`. The view's own rows, counts and order are untouched: a
- * marked letter stays where the town's law put it. Pure; a view with no marked
- * letter comes back as the same object.
+ * The notes of the letters the key may read: those delivered to a resident it holds.
+ * A note belongs to the household, but what an awaiting read may SHOW is bounded by
+ * the key's own mail (never widened to a letter the key could not read anyway).
+ * `{ notes }` in, `{ notes }` out; an unreadable ledger is `unavailable`.
+ */
+export async function inScope(got, held, { env = process.env } = {}) {
+  if (!got?.notes?.size || !held?.length) return { ...got, notes: new Map() };
+  try {
+    const ids = await officeRead(async (c) => (await c.query(
+      "SELECT DISTINCT id FROM town_ledger WHERE kind = 'delivery' AND id = ANY($1) AND to_h = ANY($2)", [[...got.notes.keys()], held])).rows.map((r) => r.id), { env });
+    const keep = new Set(ids);
+    return { ...got, notes: new Map([...got.notes].filter(([k]) => keep.has(k))) };
+  } catch {
+    return { notes: new Map(), unavailable: "letter notes unreadable — marked letters may still be counted" };
+  }
+}
+
+/**
+ * The awaiting view with the household's still-marked letters on it, once, as
+ * `letter_notes: [{ letter, state, on?, age_days }]` (oldest mark first). A mark stays
+ * until it is cleared, so it is listed even after a newer letter has replaced its
+ * conversation's row or a reply has arrived. The view's own rows, counts and order
+ * are untouched, and no resident or absolute time is shown. Pure; a view with no
+ * marked letter comes back as the same object.
  */
 export function annotateAwaiting(view, notes, { nowMs = Date.now() } = {}) {
   if (!view || typeof view !== "object" || !notes?.size) return view;
-  const mark = (rows, idKey) => {
-    if (!Array.isArray(rows)) return rows;
-    let touched = false;
-    const out = rows.map((r) => {
-      const n = r && notes.get(r[idKey]);
-      if (!n) return r;
-      touched = true;
-      return { ...r, note: noteRow(n, nowMs) };
-    });
-    return touched ? out : rows;
-  };
-  const conversations = mark(view.conversations, "latest_delivered_id");
-  const threads = mark(view.threads, "last_id");
-  const letter_threads = mark(view.letter_threads, "latest_delivered_id");
-  if (conversations === view.conversations && threads === view.threads && letter_threads === view.letter_threads) return view;
+  const letter_notes = [...notes].map(([letter, n]) => ({ letter, ...noteRow(n, nowMs) }))
+    .sort((a, b) => (b.age_days - a.age_days) || (a.letter < b.letter ? -1 : 1));
   return {
     ...view,
-    ...(conversations !== view.conversations ? { conversations } : {}),
-    ...(threads !== view.threads ? { threads } : {}),
-    ...(letter_threads !== view.letter_threads ? { letter_threads } : {}),
-    notes_note: `a row's note is your household's own mark on that letter (${NOTE_PRIVATE}); ${NOTE_CLEARS}`,
+    letter_notes,
+    notes_note: `letter_notes are your household's own marks on letters (${NOTE_PRIVATE}); ${NOTE_CLEARS}`,
   };
 }

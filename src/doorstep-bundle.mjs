@@ -481,8 +481,8 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
     // and `household { read: "mail", view: "awaiting" }` (which it serves) agree.
     try {
       if (d.awaiting && typeof d.awaiting === "object") {
-        const { notesFor, annotateAwaiting } = await import("./letter-notes.mjs");
-        const got = await notesFor([handle]);
+        const { notesFor, inScope, annotateAwaiting } = await import("./letter-notes.mjs");
+        const got = await inScope(await notesFor([handle]), [...key.handles]);
         d.awaiting = annotateAwaiting(d.awaiting, got.notes);
         if (got.unavailable) d.awaiting = { ...d.awaiting, notes_unavailable: got.unavailable };
       }

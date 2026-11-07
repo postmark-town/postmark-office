@@ -232,25 +232,31 @@ test("PRIVATE: no act is written, no other table holds a byte of the note, and t
 
 // ── the awaiting view: marked letters stay, with mark, condition and age ─────
 
-test("the awaiting view still lists a marked letter, with its mark, condition and age, on the household's key only; the unmarked rows are untouched", { skip }, async () => {
+test("the awaiting view still lists a marked letter, with its mark, condition and age, once, in letter_notes, on the household's key only; the rows are untouched", { skip }, async () => {
   await fresh();
   const plain = await awaiting("a1", keyA);
   assert.ok(rowOf(plain, LA1), "the letter awaits");
-  assert.equal(rowOf(plain, LA1).note, undefined);
+  assert.equal(plain.letter_notes, undefined);
   await note({ letter: LA1, state: "waiting", on: SECRET });
   await asOwner("UPDATE letter_notes SET marked_at = now() - interval '30 days'");
   const marked = await awaiting("a1", keyA);
-  const r = rowOf(marked, LA1);
-  assert.ok(r, "the marked letter is still listed");
-  assert.equal(r.note.state, "waiting");
-  assert.equal(r.note.on, SECRET);
-  assert.equal(r.note.age_days, 30, "the age is from the mark, and waiting never expired");
+  assert.ok(rowOf(marked, LA1), "the marked letter is still listed");
+  assert.deepEqual(marked.letter_notes, [{ letter: LA1, state: "waiting", on: SECRET, age_days: 30 }], "letter, state, condition and age, and nothing else: no resident, no absolute time");
+  assert.equal(rowOf(marked, LA1).note, undefined, "the mark is not duplicated onto the row");
   assert.equal(marked.conversations.length, plain.conversations.length, "the view's rows are the town's own, none dropped");
-  assert.deepEqual(Object.keys(r).filter((k) => k !== "note").sort(), Object.keys(rowOf(plain, LA1)).sort(), "the row is otherwise unchanged");
-  // a housemate reads the common note on their own resident's letter? the note is on the letter, so only the recipient's view lists it
-  assert.equal(rowOf(await awaiting("a2", keyA2), LA2).note, undefined, "another letter, no note");
+  assert.deepEqual(rowOf(marked, LA1), rowOf(plain, LA1), "the row is unchanged");
+  assert.ok(!JSON.stringify(marked).includes("marked_by") && !JSON.stringify(marked).includes("marked_at"));
+  // another letter, no note of this key's own: the housemate's view lists the common note only for letters the key may read
+  assert.equal(rowOf(await awaiting("a2", keyA2), LA2).note, undefined);
   // a key that does not hold the resident reads the view as it always read: no notes
-  assert.equal(rowOf(await awaiting("a1", keyB), LA1)?.note, undefined);
+  assert.equal((await awaiting("a1", keyB)).letter_notes, undefined);
+});
+
+test("a mark outside the key's mail scope is not listed: a row for a letter delivered to no resident the key holds stays out of letter_notes", { skip }, async () => {
+  await fresh();
+  await note({ letter: LA1, state: "no-reply" });
+  await asOwner("INSERT INTO letter_notes (household, letter, state, marked_at, marked_by) VALUES ($1, $2, 'no-reply', now(), 'a1')", [A, LB1]);
+  assert.deepEqual((await awaiting("a1", keyA)).letter_notes.map((n) => n.letter), [LA1], "the letter B received is not readable by A's key, so it is not listed");
 });
 
 test("a reply does not clear a mark: the reply is delivered, the letter keeps its note, and the row stands", { skip }, async () => {
@@ -260,21 +266,24 @@ test("a reply does not clear a mark: the reply is delivered, the letter keeps it
   await seedTownIndex(w, town({ withReply: true }));
   await w.end();
   assert.equal(Number((await asOwner("SELECT count(*)::int AS n FROM town_ledger WHERE id = $1", [LREPLY]))[0].n), 1, "the reply is in the ledger now");
-  assert.equal(rowOf(await awaiting("a1", keyA), LA1).note.state, "no-reply", "the mark survived the reply");
+  const after = await awaiting("a1", keyA);
+  assert.deepEqual(after.letter_notes.map((n) => [n.letter, n.state]), [[LA1, "no-reply"]], "the mark survived the reply, and is listed even if its letter is no longer the conversation's latest");
   assert.equal((await rows()).length, 1);
+  await note({ letter: LA1, state: "clear" });
+  assert.equal((await awaiting("a1", keyA)).letter_notes, undefined, "it stays until cleared, and clear takes it off the view");
   const w2 = await store.connect("law_ingester");
   await seedTownIndex(w2, town());
   await w2.end();
 });
 
-test("annotateAwaiting is pure: a view with no marked letter comes back as the same object, and a thread row is marked by its last_id", () => {
+test("annotateAwaiting is pure: no marked letter, the same object; marked letters list once, oldest first, whether or not a row stands on them", () => {
   const view = { conversations: [{ latest_delivered_id: "x" }], threads: [{ last_id: "y" }] };
   assert.equal(annotateAwaiting(view, new Map()), view);
-  assert.equal(annotateAwaiting(view, new Map([["z", { state: "no-reply", marked_at: "2026-11-01T00:00:00.000Z", marked_by: "a1" }]])), view);
-  const out = annotateAwaiting(view, new Map([["y", { state: "waiting", waiting_on: "rain", marked_at: "2026-11-01T00:00:00.000Z", marked_by: "a1" }]]), { nowMs: Date.parse("2026-11-04T01:00:00.000Z") });
-  assert.deepEqual(out.threads[0].note, { state: "waiting", on: "rain", marked_at: "2026-11-01T00:00:00.000Z", age_days: 3, marked_by: "a1" });
-  assert.equal(out.conversations[0].note, undefined);
-  assert.equal(view.threads[0].note, undefined, "the input is not mutated");
+  const t = (iso) => ({ state: "no-reply", marked_at: iso, marked_by: "a1" });
+  const out = annotateAwaiting(view, new Map([["old", { state: "waiting", waiting_on: "rain", marked_at: "2026-11-01T00:00:00.000Z", marked_by: "a1" }], ["new", t("2026-11-03T00:00:00.000Z")]]), { nowMs: Date.parse("2026-11-04T01:00:00.000Z") });
+  assert.deepEqual(out.letter_notes, [{ letter: "old", state: "waiting", on: "rain", age_days: 3 }, { letter: "new", state: "no-reply", age_days: 1 }], "no row stands on either letter; both are listed");
+  assert.deepEqual(out.conversations, view.conversations);
+  assert.equal(view.letter_notes, undefined, "the input is not mutated");
 });
 
 // ── the count: to_answer skips a marked letter ───────────────────────────────
@@ -318,7 +327,7 @@ test("the count changes while the marked letter stays in the awaiting view: real
 
 // ── a store without the table ────────────────────────────────────────────────
 
-test("a store with no letter_notes table refuses the write (503, nothing written) and reads as no notes; it never falls back to a file", { skip }, async () => {
+test("a store with no letter_notes table refuses the write (503, nothing written) and reads say the notes are unreadable, not none; it never falls back to a file", { skip }, async () => {
   await asOwner("ALTER TABLE letter_notes RENAME TO letter_notes_away");
   try {
     const r = bounceOf(await note({ letter: LA1, state: "no-reply" }));
@@ -327,7 +336,9 @@ test("a store with no letter_notes table refuses the write (503, nothing written
     assert.match(r.hint, /nothing was written/);
     const got = await notesFor(["a1"]);
     assert.equal(got.notes.size, 0);
-    assert.equal(got.unavailable, undefined, "a missing table is no notes, truly: nothing could have been written");
-    assert.ok(rowOf(await awaiting("a1", keyA), LA1), "and the awaiting view still answers");
+    assert.match(got.unavailable, /letter notes unreadable/, "a lost table can hide marks that exist: said, never presented as none");
+    const view = await awaiting("a1", keyA);
+    assert.ok(rowOf(view, LA1), "and the awaiting view still answers");
+    assert.match(view.notes_unavailable, /unreadable/);
   } finally { await asOwner("ALTER TABLE letter_notes_away RENAME TO letter_notes"); }
 });
