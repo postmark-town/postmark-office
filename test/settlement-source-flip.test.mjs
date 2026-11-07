@@ -435,7 +435,10 @@ test("F-git · SETTLEMENT_SOURCE=git matches the open train and runs the ghost s
   // POS-907 (2026-11-06): every decided crossing owes its record to the town's
   // witness chain, right after the receipt's store record (record_receipt).
   // Bookkeeping beside the crossing that never fails one, declared here by name.
+  // The attempt is opened before it acts (Rivet's FIX, 2026-11-06), so a run that
+  // dies before its decision is still owed.
   const WITNESS_RECORD = [
+    /^node witness-settlement\.mjs --open --attempt \S* --event \S+ --town town --pid \S+$/,
     /^node witness-settlement\.mjs --receipt settlement-auto\.json --attempt \S* --event \S+ --town town --sweep sweep --lock town\.lock$/,
   ];
 
