@@ -191,6 +191,42 @@ for (const pushing of [false, true]) {
   });
 }
 
+// The same writer one step earlier: its reset lands after the engine appended
+// the stake's line and before the pen stages it. The pen then finds nothing to
+// commit and names no commit; the stake moved nothing on the ledger, so it must
+// refuse rather than answer `applied` with no write behind it. The town engine
+// in the fixture clone is wrapped (the real engine, then that reset), switched
+// on for one mark by POS922_RESET_AFTER_APPLY.
+test("A WRITER RESETS THE CLONE BEFORE THE PEN STAGES LANE B's LINE: B refuses rather than answer applied with no commit", { skip }, async () => {
+  await seed();
+  const tools = join(FX.repo, "tools");
+  const real = readFileSync(join(tools, "world-stake.mjs"), "utf8");
+  writeFileSync(join(tools, "world-stake-real.mjs"), real);
+  writeFileSync(join(tools, "world-stake.mjs"), `import { execFileSync } from "node:child_process";
+import * as engine from "./world-stake-real.mjs";
+export * from "./world-stake-real.mjs";
+export function worldStakeApply(repo, args, keyPem) {
+  const out = engine.worldStakeApply(repo, args, keyPem);
+  if (process.env.POS922_RESET_AFTER_APPLY && args.mark === process.env.POS922_RESET_AFTER_APPLY)
+    execFileSync("git", ["-C", repo, "checkout", "-q", "HEAD", "--", "WHITE_PAGES/stamp-ledger.md"]);
+  return out;
+}
+`);
+  git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the engine, wrapped for one test");
+  const b = await markOf("south-keeper");
+  setEnv("POS922_RESET_AFTER_APPLY", b);
+  try {
+    const rb = await stake(b);
+    assert.ok(rb?.error, `LAW (POS-922): "names its own write, or refuses" — it answered ${JSON.stringify(rb)}`);
+    assert.match(rb.hint, /nothing was staked and your stamps are untouched/);
+  } finally {
+    delete process.env.POS922_RESET_AFTER_APPLY;
+    writeFileSync(join(tools, "world-stake.mjs"), real);
+    rmSync(join(tools, "world-stake-real.mjs"), { force: true });
+    git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the engine, unwrapped");
+  }
+});
+
 test("TWO CONCURRENT STAKES BY ONE HAND, the pen local: each answer names its own write, or refuses", { skip }, async () => {
   await seed();
   await race(6, "local");
