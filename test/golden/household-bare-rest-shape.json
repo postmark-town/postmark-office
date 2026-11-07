@@ -580,6 +580,31 @@
     }
    },
    "teaches": "string"
+  },
+  {
+   "act": "string",
+   "blurb": "string",
+   "dispatches_to": "null",
+   "fields": {
+    "letter": {
+     "description": "string",
+     "required": "boolean",
+     "type": "string"
+    },
+    "on": {
+     "description": "string",
+     "type": "string"
+    },
+    "state": {
+     "description": "string",
+     "enum": [
+      "string"
+     ],
+     "required": "boolean",
+     "type": "string"
+    }
+   },
+   "teaches": "string"
   }
  ],
  "credential": {

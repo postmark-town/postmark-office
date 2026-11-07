@@ -103,7 +103,7 @@ const ALLOWED = {
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
   "world2-pen.mjs": [1, `${OWN}: a status field (penWrite's lastError)`],
-  "write.mjs": [1, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723)`],
+  "write.mjs": [2, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723); ${OWN}: the ancestry classifier checks whether git's exit 1 carries stderr, never puts that text in an answer (POS-922)`],
 };
 
 const walk = (d) => readdirSync(d).flatMap((n) => {
