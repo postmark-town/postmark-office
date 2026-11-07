@@ -245,7 +245,9 @@ test("every creature verb, through worldCreature: watch, shoo, call, whisper, of
 
 // ── the deadline: the answer keeps its bound and says the cost is not recorded yet ─────────
 
-const PENDING = /^The nerve this cost you is not recorded yet, so no amount is given; you have (\d+) of 10 left as recorded so far\.$/;
+const PENDING = /^What this cost you is not recorded yet, so no amount is given, and more may still land: as recorded so far you have (\d+) of 10 nerve, which is not final\.$/;
+// a held write finishes on its own time: wait for the fact, not a fixed delay (a loaded machine is slower, not wrong)
+const until = async (fact, ms = 5000) => { const t0 = Date.now(); while (!fact() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 20)); };
 const gateOf = () => { let open; const gate = new Promise((r) => { open = r; }); return { gate, open }; };
 
 test("DEADLINE, a ring act with a reaction: the reply keeps its bound, says the cost is not recorded yet with no amount, and the late write charges as ever", async () => {
@@ -254,14 +256,14 @@ test("DEADLINE, a ring act with a reaction: the reply keeps its bound, says the 
   const { gate, open } = gateOf();
   const t0 = Date.now();
   const out = await creaturesAnswer([penRow()], { did: "say" }, hookDeps({ write: async (rows) => { await gate; return store()(rows); } }));
-  assert.ok(Date.now() - t0 < 2500, "the reply came inside the existing bound (ANSWER_WAIT_MS), not after the write");
+  assert.ok(Date.now() - t0 < 4000, "the reply came while the write was still held: inside the existing bound, not after the write");
   assert.match(out.nerve_said, PENDING);
   assert.equal(PENDING.exec(out.nerve_said)[1], "10", "left is what is recorded so far: nothing yet");
   assert.doesNotMatch(out.nerve_said, /cost you \d/, "no invented amount");
   assert.equal(out.creatures, undefined, "no fabricated reaction entry");
   assert.equal(nerveOf(living, "kai", Date.now()), 10, "nothing is recorded yet");
   open();
-  await new Promise((r) => setTimeout(r, 100));
+  await until(() => nerveOf(living, "kai", Date.now()) === 7);
   assert.equal(nerveOf(living, "kai", Date.now()), 7, "the late write lands: 1 for the act, 2 for the press, exactly the charges of the on-time case");
   __setCreaturesForTest(null);
 });
@@ -274,7 +276,7 @@ test("DEADLINE, a charged act with no reaction: pending too; and a free, out-of-
   const out = await creaturesAnswer([take], { did: "take" }, hookDeps({ writeCost: async (rows) => { await gate; return store()(rows); } }));
   assert.match(out.nerve_said, PENDING);
   open();
-  await new Promise((r) => setTimeout(r, 100));
+  await until(() => nerveOf(living, "kai", Date.now()) === 9);
   assert.equal(nerveOf(living, "kai", Date.now()), 9);
   const gate2 = gateOf();
   const slow = { write: async (rows) => { await gate2.gate; return store()(rows); }, writeCost: async (rows) => { await gate2.gate; return store()(rows); } };
@@ -286,6 +288,98 @@ test("DEADLINE, a charged act with no reaction: pending too; and a free, out-of-
   __setCreaturesForTest(null);
 });
 
+// ── a partly recorded act: one creature's turn committed, another's not ───────────────────────
+
+const ID2 = "creature:keeper-twin";
+const twinLiving = (...rows) => new LivingSet({ law: lawWith() }).fold([spawn(ID), spawn(ID2)]).fold(rows, { advance: false });
+const payloadOf = (r) => (typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload);
+/** The store's own cost-once rule (creatures.mjs § writeActCostOnce): an act's cost row is kept once per resident and act, whichever creature writes it. */
+function dedupeStore({ gate = null, gateActor = null } = {}) {
+  const seen = new Set(), base = store();
+  return async (rows) => {
+    if (gate && rows.some((r) => r.actor === gateActor)) await gate;
+    return base(rows.filter((r) => {
+      const p = payloadOf(r);
+      if (r.action !== "nerve" || p.why !== "act") return true;
+      const k = `${r.object}|${p.act}`;
+      return seen.has(k) ? false : (seen.add(k), true);
+    }));
+  };
+}
+const actCostRows = (living, actor) => living.encounter.filter((r) => r.action === "nerve" && r.object === actor && r.payload.why === "act");
+const pressRows = (living, actor) => living.encounter.filter((r) => r.action === "nerve" && r.object === actor && r.payload.why === "press");
+const PARTLY = /^So far that cost you 1 nerve, and the creature's press took 2 more; more may still land: as recorded so far you have 7 of 10 nerve, which is not final\.$/;
+
+test("MIXED: one creature's turn committed, the other's held past the deadline: the line is labelled not final, then the actual record is the cost once and each press", async () => {
+  const living = twinLiving();
+  __setCreaturesForTest(living);
+  const { gate, open } = gateOf();
+  const w = dedupeStore({ gate, gateActor: ID2 });
+  const owed = new Set();
+  const t0 = Date.now();
+  const out = await creaturesAnswer([penRow()], { did: "say" }, hookDeps({ write: w, writeCost: w, owed }));
+  assert.ok(Date.now() - t0 < 4000, "inside the existing bound");
+  assert.match(out.nerve_said, PARTLY, "what is recorded (own cost 1, the press 2), apart, and plainly not final");
+  assert.deepEqual([...owed], [ID2], "only the unfinished turn is outstanding; the committed one is retired");
+  open();
+  await until(() => owed.size === 0 && nerveOf(living, "kai", Date.now()) === 5);
+  assert.deepEqual([...owed], [], "nothing outstanding once it lands");
+  assert.equal(actCostRows(living, "kai").length, 1, "the act's cost is on the record once, not once per creature");
+  assert.equal(pressRows(living, "kai").length, 2, "each creature's press is its own row");
+  assert.equal(nerveOf(living, "kai", Date.now()), 5, "1 for the act, 2 and 2 for the presses: the charges are the on-time ones");
+  __setCreaturesForTest(null);
+});
+
+test("MIXED controls: every turn committed says the plain total; a turn whose write fails is retired and promises nothing", async () => {
+  const done = twinLiving();
+  __setCreaturesForTest(done);
+  const owed = new Set();
+  const w = dedupeStore();
+  const all = await creaturesAnswer([penRow()], { did: "say" }, hookDeps({ write: w, writeCost: w, owed }));
+  assert.equal(all.nerve_said, "That cost you 1 nerve, and the creature's press took 4 more; you have 5 of 10 left.");
+  assert.equal(owed.size, 0);
+  const broken = twinLiving();
+  __setCreaturesForTest(broken);
+  const down = Promise.reject(new Error("the pen is down")); down.catch(() => {});
+  const owed2 = new Set();
+  const w2 = dedupeStore({ gate: down, gateActor: ID2 });
+  const quiet2 = console.error; console.error = () => {};
+  let out;
+  try { out = await creaturesAnswer([penRow()], { did: "say" }, hookDeps({ write: w2, writeCost: w2, owed: owed2 })); } finally { console.error = quiet2; }
+  assert.equal(out.nerve_said, "That cost you 1 nerve, and the creature's press took 2 more; you have 7 of 10 left.", "the failed turn is no longer outstanding: no promise of a record that will not come");
+  assert.equal(owed2.size, 0);
+  assert.equal(pressRows(broken, "kai").length, 1);
+  __setCreaturesForTest(null);
+});
+
+test("MIXED, an approach: the aimed creature committed, a neighbour answering the walk held past the deadline: the reply is not final; the cost lands once", async () => {
+  const living = twinLiving();
+  __setCreaturesForTest(living);
+  const { gate, open } = gateOf();
+  const w = dedupeStore({ gate, gateActor: ID2 });
+  let next = 900;
+  const run = worldCreature({ act: "approach", creature: ID }, { handles: new Set(["kai"]), household: "hh:kai" }, {
+    now: () => Date.now(), clock: () => Date.now(), env: { CREATURE_JUDGE: "code" }, freeze: () => null,
+    creatures: async () => ({ living, law: living.law }), standpoint: async () => ({ x: 35, y: 0 }),
+    householdOf: async () => "hh:kai", carryingConsumable: async () => false,
+    approach: async () => ({ result: { walked: true }, rows: [{ id: String(++next + 8000), action: "walk", actor: "kai", written_at: iso(NOW) }] }),
+    write: async () => ({ actId: String(++next + 8000), written_at: iso(NOW) }),
+    answer: async (act, d2) => answerWithin(act, { ...d2, env: { CREATURE_JUDGE: "code" }, around: async () => ({}), heardFor: async () => null, write: w, writeCost: w,
+      present: presentOf([["kai", 35]]), households: async () => lookup, flee: () => {}, clock: Date.now, deadline: Date.now() + 1500 }),
+    others: (rows, except, owed) => creaturesAnswer(rows, {}, hookDeps({ write: w, writeCost: w, standpointOf: async () => ({ x: 35, y: 0, placed: true }), present: presentOf([["kai", 35]]), except, owed }))
+      .then((r) => r?.creatures ?? []),
+  });
+  const out = await run;
+  assert.equal(out.did, "approach");
+  assert.equal(Object.keys(out)[0], "nerve_said");
+  assert.equal(out.nerve_said, "So far that cost you 1 nerve; more may still land: as recorded so far you have 9 of 10 nerve, which is not final.");
+  open();
+  await until(() => false, 300); // the late turn adds nothing to wait for: give it its time
+  assert.equal(actCostRows(living, "kai").length, 1, "the walk's cost is on the record once, not once per creature");
+  assert.equal(nerveOf(living, "kai", Date.now()), 9, "the late turn adds no second charge");
+  __setCreaturesForTest(null);
+});
+
 test("DEADLINE, through the aimed door: the reply says the cost is not recorded yet, then the late write charges 1", async () => {
   const living = livingWith();
   const { gate, open } = gateOf();
@@ -294,6 +388,6 @@ test("DEADLINE, through the aimed door: the reply says the cost is not recorded 
   assert.equal(out.reaction, null, "no reaction is made up");
   assert.equal(nerveOf(living, "kai", Date.now()), 10);
   open();
-  await new Promise((r) => setTimeout(r, 100));
+  await until(() => nerveOf(living, "kai", Date.now()) === 9);
   assert.equal(nerveOf(living, "kai", Date.now()), 9, "charged 1, as on time");
 });

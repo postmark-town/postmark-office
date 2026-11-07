@@ -1510,8 +1510,9 @@ async function creatureTurn(creature, act, distance_m, deps) {
     if (isSetPiece(kind) && !fight) return null;
     const ft = enc && fight ? fightTurn(creature, kind, fight, act, enc, deps) : null;
     if (ft?.cost) enc.cost = ft.cost;
-    // WLD-153: a cost this turn will write; an answer that goes out before the write lands says "not recorded yet" (encounter.mjs § nerveSpentSaid)
-    if (enc && (enc.cost.length || ft?.early.length)) deps.owed?.add(String(act.actId));
+    // WLD-153: this turn holds a write that can move the actor's nerve for this act (its cost, a press). It is outstanding until its
+    // rows are folded, or the turn ends any other way; an answer that goes out meanwhile says so (encounter.mjs § nerveSpentSaid)
+    if (enc && (enc.cost.length || ft?.early.length)) deps.owed?.add(creature.id);
     // WHAT IT COULD REPEAT (POS-672 D5): only a kind whose law reads heard.any is
     // asked, and the ear is bounded like the read; none heard is none to repeat
     const readsHeard = kind.reactions.some((r) => /\bheard\.any\b/.test(String(r.src ?? "")));
@@ -1592,6 +1593,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     rows.push(...fought.rows);
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
+    deps.owed?.delete(creature.id); // WLD-153: its rows are on the record
     if (enc) fleeTheSpent(written.rows, enc, deps, now, creature);
     // THE FIGHT MOVES ON when this act brought its set piece to an end (never fatal to the act's answer)
     const moved = fight ? await advanceFight(creature, kind, fight, { living, now, roster: enc?.roster ?? [], write: deps.writeOnce ?? null })
@@ -1623,6 +1625,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
   } catch (e) {
     faultLogged(`a creature's turn tripped (${creature?.id})`, e);
     return null;
+  } finally {
+    deps.owed?.delete(creature?.id); // WLD-153: a turn that ended, written or not, holds nothing outstanding
   }
 }
 
@@ -1970,6 +1974,7 @@ async function chargeOnly(creature, act, enc, deps, answered = []) {
   if (!rows.length) return;
   const written = await (deps.writeCost ?? writeCost)(rows);
   deps.living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
+  deps.owed?.delete(creature.id); // WLD-153: its cost is on the record
   fleeTheSpent(written.rows, enc, deps, deps.now, creature);
 }
 

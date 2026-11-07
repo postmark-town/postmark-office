@@ -161,8 +161,9 @@ export const nerveOf = (living, handle, now = Date.now()) => foldNerve(inWindow(
  * for that act (a ring act's, a flinch, a strike's, a steady's or a shield's), never a press (that is the creature's
  * turn, said apart when it landed on the actor). Null when the act spent nothing, so a refused, free or out-of-ring act
  * carries no line. What is left is the authoritative nerve after the act (nerveOf), whatever else moved it.
- * `owed` (a Set of act ids): the acts a creature's turn found chargeable whose cost row was not on the record when the answer
- * went out (the answer keeps its deadline). Those say so, in the same string, with no amount: a number would be a guess.
+ * `owed` (a Set of creature ids, one reply's own): the turns that hold a write for this act, its cost or a press, not yet on the
+ * record when the answer went out (the answer keeps its deadline). While any is outstanding the string says so: with nothing
+ * recorded it gives no amount (a number would be a guess); with part recorded it gives what is recorded, labelled as not final.
  */
 export function nerveSpentSaid(living, actor, actId, now = Date.now(), owed = null) {
   const h = String(actor), id = String(actId);
@@ -176,8 +177,14 @@ export function nerveSpentSaid(living, actor, actId, now = Date.now(), owed = nu
     } else if ((r.action === STRIKE_ACTION || r.action === STEADY_ACTION || r.action === SHIELD_ACTION) && r.actor === h && String(r.id) === id) spent += Math.max(0, num(p.cost));
   }
   const left = nerveOf(living, h, now), max = encounterDial("nerve_max");
-  if (!(spent > 0)) return owed?.has(id) ? `The nerve this cost you is not recorded yet, so no amount is given; you have ${left} of ${max} left as recorded so far.` : null;
-  return `That cost you ${spent} nerve${pressed ? `, and the creature's press took ${pressed} more` : ""}; you have ${left} of ${max} left.${left === 0 ? " Your nerve is gone: you flee, and stay out until the settlement." : ""}`;
+  const outstanding = owed?.size > 0;
+  const press = pressed ? `the creature's press took ${pressed}` : "";
+  // WLD-153 (Wright 2026-11-07 00:25:58Z): while any write for this act is outstanding, say what is recorded so far and that more may
+  // still land, and never give "left" as final; a pending press is never counted as the act's own cost
+  if (!(spent > 0)) return outstanding ? `What this cost you is not recorded yet, so no amount is given${press ? `; ${press} so far` : ""}, and more may still land: as recorded so far you have ${left} of ${max} nerve, which is not final.` : null;
+  const flee = left === 0 ? " Your nerve is gone: you flee, and stay out until the settlement." : "";
+  if (outstanding) return `So far that cost you ${spent} nerve${pressed ? `, and ${press} more` : ""}; more may still land: as recorded so far you have ${left} of ${max} nerve, which is not final.${flee}`;
+  return `That cost you ${spent} nerve${pressed ? `, and the creature's press took ${pressed} more` : ""}; you have ${left} of ${max} left.${flee}`;
 }
 
 /** The creature's strikes this window, from the living set. */

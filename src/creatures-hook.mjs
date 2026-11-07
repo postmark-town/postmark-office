@@ -183,8 +183,9 @@ export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {})
   const deadline = clock() + ANSWER_WAIT_MS;
   const partial = [];
   // a visitor's act is never a creature's to answer (POS-739: no fights for visitors, so no ring holds one)
-  const trigger = [...rows].reverse().find((r) => now.law.kindMod.RING_VERBS.includes(r.action) && !String(r.actor ?? "").startsWith("berth-"));
-  const owed = new Set(); // WLD-153: the acts a turn found chargeable (creatures.mjs § creatureTurn)
+  const ring = now.law.kindMod.RING_VERBS;
+  const trigger = [...rows].reverse().find((r) => ring.includes(r.action) && !String(r.actor ?? "").startsWith("berth-"));
+  const owed = deps.owed ?? new Set(); // WLD-153: the turns holding a write for this act, one reply's own (an approach's other creatures share the aimed door's)
   const work = (async () => {
     try {
       if (!trigger) return [];
