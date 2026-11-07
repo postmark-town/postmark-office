@@ -277,7 +277,7 @@ function commitAndLand(clone, addPaths, message, { rebase = true } = {}) {
   //     and only then says nothing was recorded.
   const own = findOwnCommit(clone, { base, message });
   if (!own) throw movedCloneError("the town clone was reset under this write between its commit and its receipt, and its commit is in neither the clone nor origin/main");
-  return landCommit(clone, { rebase, own: { sha: own, base, message } });
+  return landCommit(clone, { rebase, own: { sha: own, base, msg: message } }); // `msg`: a commit's message, not an error's
 }
 
 /** The refusal for a write whose own commit is genuinely gone (POS-922): the pen's not-landed answer, with its true cause. */
@@ -365,7 +365,7 @@ function landCommit(clone, { rebase = true, push = ["push", "-q"], own = null } 
       // another writer's commit on top of it), or, if the rebase dropped it as a
       // duplicate, the commit already upstream that carries its change. Never
       // HEAD for its own sake: HEAD at the remote's tip is someone else's write.
-      const rebased = findRebased(clone, { tip, message: own.message });
+      const rebased = findRebased(clone, { tip, message: own.msg });
       if (rebased) { commit = rebased; continue; }
       const upstream = upstreamEquivalent(clone, { sha: commit, base: own.base });
       if (upstream) { commit = upstream; break; }
