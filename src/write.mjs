@@ -294,10 +294,10 @@ const movedCloneError = (detail) => Object.assign(notLandedError(detail), {
 const cleanMessage = (clone, message) =>
   execFileSync("git", ["-C", clone, "stripspace"], { input: String(message), encoding: "utf8" }).trim();
 const messageOf = (clone, sha) => git(clone, "log", "-1", "--format=%B", sha).trim();
-/** `merge-base --is-ancestor`: exit 0 is yes, exit 1 is no, anything else is a read that failed, and throws. */
+/** `merge-base --is-ancestor`: exit 0 is yes, exit 1 without stderr is no; a read error (including old git's exit 1 with stderr) throws. */
 const isAncestor = (clone, a, b) => {
   try { git(clone, "merge-base", "--is-ancestor", a, b); return true; }
-  catch (e) { if (e?.status === 1) return false; throw e; }
+  catch (e) { if (e?.status === 1 && !String(e.stderr ?? "").trim()) return false; throw e; }
 };
 /** git's patch id of a commit's change (`diffArgs`: e.g. `-U0`, its lines without their surroundings). */
 const patchIdOf = (clone, sha, ...diffArgs) => {

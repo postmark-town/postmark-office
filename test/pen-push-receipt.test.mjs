@@ -5,7 +5,7 @@
 // which advances origin between the other's commit and its push.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, appendFileSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -136,6 +136,45 @@ exit 0`);
   try { penCommit(a, ["ledger.md"], "row two"); } catch (e) { thrown = e; }
   assert.ok(existsSync(moved), "the hook ran");
   assert.ok(notTheSafeRefusal(thrown), `an ancestry read that failed is no "not landed": ${thrown?.hint ?? thrown?.message ?? "it answered a sha"}`);
+});
+
+test("POS-922: a missing intermediate commit is an unread landing, even when git answers exit 1 with stderr", () => {
+  const { a, b } = stage();
+  process.env.TOWN_PUSH = "1";
+  const moved = aside();
+  // The other writer lands this write beneath two commits. Both ends remain
+  // readable, but the middle disappears before the receipt's ancestry read.
+  hook(a, "pre-push", `read lref lsha rref rsha
+[ -e "${moved}" ] && exit 1
+(
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+git -C "${b}" fetch -q "${a}" HEAD && git -C "${b}" reset -q --hard FETCH_HEAD || exit 1
+echo middle > "${b}/paper.md"
+git -C "${b}" add paper.md && git -C "${b}" -c user.name=p -c user.email=p@p commit -qm middle || exit 1
+echo tip >> "${b}/paper.md"
+git -C "${b}" add paper.md && git -C "${b}" -c user.name=p -c user.email=p@p commit -qm tip || exit 1
+git -C "${b}" push -q origin main
+) || exit 1
+git fetch -q origin main || exit 1
+git merge-base --is-ancestor "$lsha" origin/main || exit 1
+middle=$(git rev-parse origin/main^)
+git reset -q --hard "$lsha^"
+mv "${objectOf("$middle")}" "${moved}"
+exit 1`);
+  appendFileSync(join(a, "ledger.md"), "- row two\n");
+  let thrown;
+  try { penCommit(a, ["ledger.md"], "row two"); } catch (e) { thrown = e; }
+  assert.ok(existsSync(moved), "the hook removed the intermediate commit after proving the write landed");
+  const middle = sh(b, "rev-parse", "HEAD^");
+  try {
+    for (const sha of [sh(b, "rev-parse", "HEAD~2"), sh(b, "rev-parse", "HEAD")])
+      assert.doesNotThrow(() => sh(a, "cat-file", "-e", `${sha}^{commit}`), "both ancestry endpoints are readable");
+    assert.ok(notTheSafeRefusal(thrown), `a missing middle is unknown, not absent: ${thrown?.hint ?? thrown?.message ?? "it answered a sha"}`);
+    assert.match(thrown.message, /merge-base --is-ancestor/, "the receipt's ancestry read, not another failed command, threw");
+    assert.match(String(thrown.stderr), /Could not read/, "git disclosed the unread intermediate commit");
+  } finally {
+    renameSync(moved, join(a, ".git", "objects", middle.slice(0, 2), middle.slice(2)));
+  }
 });
 
 test("POS-922: its change unreadable after the rebase dropped it as already upstream: the pen throws to the machinery, never the safe-to-repeat refusal", () => {
