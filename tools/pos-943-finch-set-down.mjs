@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // pos-943-finch-set-down.mjs — set finch down at the Snug Jetty, the deposit his exit never made (POS-943).
 //
-//   node tools/pos-943-finch-set-down.mjs [--json]                              a DRY RUN (the default)
-//   node tools/pos-943-finch-set-down.mjs --apply --expect-last <act id> [--json]
+//   node tools/pos-943-finch-set-down.mjs --boarded <act id> [--json]                              a DRY RUN (the default)
+//   node tools/pos-943-finch-set-down.mjs --boarded <act id> --apply --expect-last <act id> [--json]
 //
 // A ONE-OFF, FOR EXACTLY ONE AUTHORISED HAND REPAIR (Wright, 2026-11-07 21:41Z, on POS-943; Rivet's plan,
 // 16:41 EST). finch entered the-town/the-post-office through current-the-reader/the-snug-jetty, declared no
@@ -21,8 +21,12 @@
 // nothing.
 //
 // THE GUARDS. Each refuses by name and writes nothing:
-//   · the stranded exit: finch's newest exit from the Post Office carries no `set_down_at`; the enter before it
-//     came through the Snug Jetty; no ride was standing (a ride would owe its own destination);
+//   · THE BOARDING, BY ITS OWN ACT (--boarded, Wright 17:01 EST): that act is finch's `enter` of the Post Office
+//     (its object, or its summary "enters the-town/the-post-office via current-the-reader/the-snug-jetty"), and
+//     its raw payload's `via` is the Snug Jetty. No fold reads the history: world-ride § rideStateFrom found no
+//     stop in the store's own rows (the 1a212ee9 dry run), and that is the class fix's to explain;
+//   · the stranded exit: finch's first exit from the Post Office after that act carries no `set_down_at`, and no
+//     ride (which would owe its own destination) and no land stands between the two;
 //   · ALREADY REPAIRED: any land of finch's after that exit (this repair, or any other set-down) refuses, so a
 //     second --apply is a no-op that says so;
 //   · nothing has moved him into anything: no enter or exit of finch's after that exit, and his occupancy now
@@ -51,29 +55,39 @@ export const REPAIR = Object.freeze({
 /** The acts that place or carry a resident: what the stale guard pins. */
 export const MOVE_ACTIONS = Object.freeze(["legacy:departure", "walk", "land", "enter", "exit", "ride"]);
 export const REPAIR_LOCK = "pos-943:finch-set-down";
-export const ACTS_SQL = "SELECT id, at, action, object, payload, household FROM acts WHERE actor = $1 ORDER BY id";
+export const ACTS_SQL = "SELECT id, at, actor, action, object, payload, household FROM acts WHERE actor = $1 ORDER BY id";
 
 const payloadOf = (a) => (typeof a?.payload === "string" ? JSON.parse(a.payload) : (a?.payload ?? {}));
 const idOf = (a) => Number(a.id);
 
 /**
- * Judge the repair against finch's acts, oldest first (`{ id, at, action, object, payload, household }`).
- * PURE. Returns `{ ok: true, enter, exit, after, newestMove, household }`, or `{ ok: false, why, already? }`.
- * `rideStateFrom` is world-ride's fold, passed in.
+ * Judge the repair against finch's acts as the store returns them (`{ id, at, action, object, payload,
+ * household }`; ids may be text, payloads text or objects). PURE. `boarded` is the boarding act's id, named by
+ * the operator (--boarded): THE ACT ITSELF is read, never a fold over the history (Wright, 17:01 EST: "the
+ * instance repair shouldn't use the same fold that's broken"; world-ride § rideStateFrom found no stop in these
+ * rows, which is POS-943's class question, not this one's). Returns `{ ok: true, enter, exit, between, after,
+ * newestMove, household }`, or `{ ok: false, why, already? }`.
  */
-export function judgeRepair(acts, { rideStateFrom, expectLast = null } = {}) {
+export function judgeRepair(acts, { boarded, expectLast = null } = {}) {
   const rows = (acts ?? []).map((a) => ({ ...a, id: idOf(a), payload: payloadOf(a) })).sort((a, b) => a.id - b.id);
-  const exit = rows.filter((a) => a.action === "exit" && a.object === REPAIR.vessel).at(-1) ?? null;
-  if (!exit) return { ok: false, why: `${REPAIR.actor} has no exit from ${REPAIR.vessel} on record` };
+  const enter = rows.find((a) => a.id === Number(boarded)) ?? null;
+  if (!enter) return { ok: false, why: `act ${boarded} is not one of ${REPAIR.actor}'s acts` };
+  const boardsHere = `enters ${REPAIR.vessel} via ${REPAIR.stop}`;
+  if (enter.actor != null && enter.actor !== REPAIR.actor) return { ok: false, why: `act ${enter.id} is ${enter.actor}'s, not ${REPAIR.actor}'s` };
+  if (enter.action !== "enter") return { ok: false, why: `act ${enter.id} is ${REPAIR.actor}'s ${enter.action}, not an enter` };
+  // the Post Office, by the act's object, or, failing that, by its own summary's words
+  if (enter.object !== REPAIR.vessel && enter.payload.summary !== boardsHere)
+    return { ok: false, why: `act ${enter.id} enters ${enter.object ?? "nothing"} (its summary: ${JSON.stringify(enter.payload.summary ?? null)}), not ${REPAIR.vessel}` };
+  if (enter.payload.via !== REPAIR.stop)
+    return { ok: false, why: `act ${enter.id}'s payload boards via ${JSON.stringify(enter.payload.via ?? null)}, not ${REPAIR.stop}` };
+  const exit = rows.find((a) => a.id > enter.id && a.action === "exit" && a.object === REPAIR.vessel) ?? null;
+  if (!exit) return { ok: false, why: `${REPAIR.actor} has no exit from ${REPAIR.vessel} after act ${enter.id}` };
   if (exit.payload.set_down_at)
-    return { ok: false, why: `${REPAIR.actor}'s newest exit from ${REPAIR.vessel} (act ${exit.id}) set them down at ${exit.payload.set_down_at}: not the stranded exit` };
-  const before = rows.filter((a) => a.id < exit.id);
-  const state = rideStateFrom(before, { vesselId: REPAIR.vessel });
-  if (state.entryStop !== REPAIR.stop)
-    return { ok: false, why: `before act ${exit.id}, ${REPAIR.actor} boarded through ${state.entryStop ?? "no stop"}, not ${REPAIR.stop}` };
-  if (state.standingRide)
-    return { ok: false, why: `before act ${exit.id}, ${REPAIR.actor} had declared a ride to ${state.standingRide.to ?? "?"}: a ride owes its own deposit, which this repair does not judge` };
-  const enter = before.filter((a) => a.action === "enter" && a.object === REPAIR.vessel).at(-1) ?? null;
+    return { ok: false, why: `${REPAIR.actor}'s exit after the boarding (act ${exit.id}) set them down at ${exit.payload.set_down_at}: not the stranded exit` };
+  const between = rows.filter((a) => a.id > enter.id && a.id < exit.id);
+  const owed = between.find((a) => a.action === "ride" || a.action === "land");
+  if (owed)
+    return { ok: false, why: `act ${owed.id}, a ${owed.action}, stands between the boarding (act ${enter.id}) and the exit (act ${exit.id}): ${owed.action === "ride" ? "a ride owes its own deposit" : "something set them down aboard"}, which this repair does not judge` };
   const after = rows.filter((a) => a.id > exit.id);
   const landed = after.find((a) => a.action === "land");
   if (landed) {
@@ -88,7 +102,7 @@ export function judgeRepair(acts, { rideStateFrom, expectLast = null } = {}) {
   const newestMove = rows.filter((a) => MOVE_ACTIONS.includes(a.action)).at(-1) ?? null;
   if (expectLast != null && Number(expectLast) !== newestMove?.id)
     return { ok: false, why: `STALE: ${REPAIR.actor}'s newest movement act is ${newestMove?.id ?? "none"}, not the ${expectLast} the reviewed dry run named: run the dry run again` };
-  return { ok: true, enter, exit, after, newestMove, household: exit.household ?? enter?.household ?? null };
+  return { ok: true, enter, exit, between, after, newestMove, household: exit.household ?? enter.household ?? null };
 }
 
 /** The point the deposit rule gives the stop, against the authorised one. PURE. */
@@ -109,10 +123,10 @@ export function repairEntry(landEntry, { crossing, writtenAt, household }) {
  * The pen's in-transaction guard: the lock, then finch's acts read on the pen's own client and judged again.
  * A refusal carries `defect`, so penWrite rolls back and hands it on as the guard's answer.
  */
-export const repairGuard = ({ rideStateFrom, expectLast }) => async (client) => {
+export const repairGuard = ({ boarded, expectLast }) => async (client) => {
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [REPAIR_LOCK]);
   const { rows } = await client.query(ACTS_SQL, [REPAIR.actor]);
-  const j = judgeRepair(rows, { rideStateFrom, expectLast });
+  const j = judgeRepair(rows, { boarded, expectLast });
   if (!j.ok) throw Object.assign(new Error(j.why), { code: 409, defect: j.why, already: j.already === true });
 };
 
@@ -122,13 +136,16 @@ if (isMain) {
   const argv = process.argv.slice(2);
   const json = argv.includes("--json");
   const apply = argv.includes("--apply");
-  const i = argv.indexOf("--expect-last");
-  const expectLast = i === -1 ? null : argv[i + 1] ?? null;
-  const known = new Set(["--json", "--apply", "--expect-last"]);
-  const stray = argv.filter((a, k) => !known.has(a) && argv[k - 1] !== "--expect-last");
-  if (stray.length || (i !== -1 && !/^[1-9][0-9]*$/.test(String(expectLast))) || (apply && expectLast == null)) {
-    console.error("usage: node tools/pos-943-finch-set-down.mjs [--json]   (a dry run)\n" +
-      "       node tools/pos-943-finch-set-down.mjs --apply --expect-last <act id> [--json]\n" +
+  const valueOf = (flag) => { const k = argv.indexOf(flag); return k === -1 ? null : argv[k + 1] ?? ""; };
+  const expectLast = valueOf("--expect-last");
+  const boarded = valueOf("--boarded");
+  const ID = /^[1-9][0-9]*$/;
+  const known = new Set(["--json", "--apply", "--expect-last", "--boarded"]);
+  const stray = argv.filter((a, k) => !known.has(a) && argv[k - 1] !== "--expect-last" && argv[k - 1] !== "--boarded");
+  if (stray.length || !ID.test(String(boarded ?? "")) || (expectLast != null && !ID.test(expectLast)) || (apply && expectLast == null)) {
+    console.error("usage: node tools/pos-943-finch-set-down.mjs --boarded <act id> [--json]   (a dry run)\n" +
+      "       node tools/pos-943-finch-set-down.mjs --boarded <act id> --apply --expect-last <act id> [--json]\n" +
+      "--boarded is finch's boarding act (his enter of the Post Office via the Snug Jetty), and is always needed;\n" +
       "--apply needs --expect-last: finch's newest movement act id, as the reviewed dry run printed it");
     process.exit(2);
   }
@@ -136,13 +153,13 @@ if (isMain) {
   const refuse = (why, extra = {}) => { out({ written: false, refused: why, ...extra }, [`REFUSED: ${why}`, "Nothing written."]); process.exit(1); };
 
   const { actsQuery } = await import("../src/world2-acts.mjs");
-  const { rideStateFrom, depositPointFor, vesselIdOf } = await import("../src/world-ride.mjs");
+  const { depositPointFor, vesselIdOf } = await import("../src/world-ride.mjs");
   let acts;
   try { acts = await actsQuery(ACTS_SQL, [REPAIR.actor]); }
   catch (e) { console.error(`cannot read the store: ${String(e?.message ?? e).split("\n")[0]}`); process.exit(2); }
   if (!Array.isArray(acts)) { console.error("no store configured (WORLD2_PG / WORLD2_PG_URL): this runs with the office's own environment"); process.exit(2); }
 
-  const j = judgeRepair(acts, { rideStateFrom, expectLast });
+  const j = judgeRepair(acts, { boarded, expectLast });
   if (!j.ok) refuse(j.why, j.already ? { already: true } : {});
 
   // the world's reads: the deposit point, and that nothing holds him now
@@ -170,6 +187,8 @@ if (isMain) {
   const nm = j.newestMove;
   const seen = {
     enter: fmt(j.enter), exit: fmt(j.exit),
+    boarding: { object: j.enter.object ?? null, via: j.enter.payload.via ?? null, summary: j.enter.payload.summary ?? null },
+    between: j.between.map(fmt),
     since_exit: j.after.map(fmt),
     newest_move: nm ? { ...nm, payload: nm.payload } : null,
     within: [], deposit_point: REPAIR.at,
@@ -181,7 +200,8 @@ if (isMain) {
   const entry = repairEntry(w.landEntry, { crossing, writtenAt, household: j.household });
   const read = [
     `${REPAIR.actor}, read from the store now:`,
-    `  boarded:   ${seen.enter} (via ${j.enter?.payload?.via ?? "?"})`,
+    `  boarded:   ${seen.enter} (--boarded ${boarded}; payload via ${JSON.stringify(seen.boarding.via)}, summary ${JSON.stringify(seen.boarding.summary)})`,
+    `  between:   ${seen.between.length ? seen.between.join("\n             ") : "nothing"} (no ride, no land)`,
     `  exited:    ${seen.exit} (no set_down_at)`,
     `  since:     ${seen.since_exit.length ? seen.since_exit.join("\n             ") : "nothing"}`,
     `  newest movement act: ${nm ? `${nm.id} (${nm.action}${nm.payload?.toward ? `, toward (${nm.payload.toward.x}, ${nm.payload.toward.y})` : ""})` : "none"}`,
@@ -198,7 +218,7 @@ if (isMain) {
         `  payload ${JSON.stringify(entry.payload)}`,
         "  (the crossing, the instant and the witness stamp are taken again at --apply)",
         "",
-        `The guards pass. To write it, after Wright's word: --apply --expect-last ${nm?.id}`]);
+        `The guards pass. To write it, after Wright's word: --boarded ${boarded} --apply --expect-last ${nm?.id}`]);
     process.exit(0);
   }
 
@@ -206,7 +226,7 @@ if (isMain) {
   const { laneFlipped } = await import("../src/world2-pen.mjs");
   const { at: stampAt, witnesses } = await w.witnessStampAt(REPAIR.actor, REPAIR.at);
   entry.at = stampAt; entry.witnesses = witnesses;
-  const guard = repairGuard({ rideStateFrom, expectLast });
+  const guard = repairGuard({ boarded, expectLast });
   let row;
   try { row = laneFlipped("walk") ? await appendActFlipped(null, entry, { guard }) : await appendJournal(null, entry, { guard }); }
   catch (e) {
