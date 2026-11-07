@@ -202,6 +202,8 @@ const ROSTER = {
   "tools/ship-guard.mjs": { args: [], code: 2, needle: "usage: node tools/ship-guard.mjs" },
   // POS-740: the hand set-down refuses with no --handle before it reads the world or the store.
   "tools/set-down-ashore.mjs": { args: [], code: 2, needle: "usage: node tools/set-down-ashore.mjs --handle" },
+  // POS-943: finch's one-off set-down refuses --apply without --expect-last before it reads the world or the store.
+  "tools/pos-943-finch-set-down.mjs": { args: ["--apply"], env: NO_PG, code: 2, needle: "--apply needs --expect-last" },
   // POS-341: the owed-tolerant verify refuses a directory with no town verifier before it runs anything.
   "tools/stamp-verify-owed.mjs": { args: [], code: 2, needle: "stamp-verify-owed: no town at" },
   "tools/site-sentinel.mjs": { args: ["--now", "not-a-date", "--dry-run", "--state", NOWHERE_OUT, "--out", NOWHERE_OUT], env: { SENTINEL_DISCORD_WEBHOOK: undefined }, code: 1, needle: "site-sentinel" },
