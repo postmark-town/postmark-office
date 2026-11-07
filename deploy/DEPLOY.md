@@ -289,23 +289,52 @@ into the train before the ship (SHIPPING.md), or, once `sandbox.yml` is on main,
 by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
 
 **Before each later rehearsal** (the nightly freshen stands the clone back on
-the seed and the store keeps the last rehearsal's rows):
-- the stamp chain is trimmed to the seed, then checked. The re-sign is the same
-  every night, so the store's first N lines are the seed's exactly. In a box shell:
-  ```sh
-  N=$(sudo -u meepo node --input-type=module -e 'const e = await import("/srv/postmark-office-dev/town-clone/tools/stamp-mint.mjs"); const { readFileSync } = await import("node:fs"); console.log(e.parseStampLedger(readFileSync("/srv/postmark-office-dev/town-clone/WHITE_PAGES/stamp-ledger.md", "utf8")).length)')
-  sudo -u postgres psql -d w2_devsandbox_20260925 -v ON_ERROR_STOP=1 -c "SET ROLE world2_owner; DELETE FROM stamp_lines WHERE seq > $N"
-  sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
-    node world2/tools/stamp-lines.mjs --verify --clone /srv/postmark-office-dev/town-clone
-  ```
-- then step 7 again (the index at the clone's head), and step 10.
+the seed and the store keeps the last rehearsal's rows): run the seed advance
+below with the seed's current pair, then the rehearsal. The pair, read from origin
+in a box shell, since a clone's local tags are only as new as its last fetch:
+```sh
+for c in town-clone world-clone; do sudo -u meepo git -C /srv/postmark-office-dev/$c ls-remote origin refs/tags/sandbox/seed 'refs/tags/sandbox/seed^{}' | tail -n1 | cut -f1; done
+```
 
-This trim is a recurring hand repair, and dev's stamped writes refuse every
-night until someone runs it. Folding it into the freshen (or a dev-only unit
-after it) is proposed, not built: it would give a dev unit the owner's DELETE on
-`stamp_lines`, which is Wright's call
+Dev's stamped writes refuse every night until the trim runs. Folding it into the
+freshen (or a dev-only unit after it) is proposed, not built: it would give a dev
+unit the owner's DELETE on `stamp_lines`, which is Wright's call
 (`G:/Starstory/docs/2026-10-09/rail/plumb-dev-rehearsal/NOTES.md` § Proposal: the trim
 in the freshen).
+
+### The dev seed advance (POS-791)
+
+Moving dev's `sandbox/seed` is its own step, one tool, run by hand on its own day
+and never on ship morning. No unit or timer runs it. It finishes with the full
+rehearsal green on the current train, so the ship's rehearsal starts from a
+known-good dev. Carry the train first (§ The dev rehearsal, step 2): the script
+comes with it. In a box shell, without `--go` for the plan:
+```sh
+cd /srv/postmark-office-dev && WORLD2_DB=w2_devsandbox_20260925 bash deploy/dev-seed-advance.sh --town <full sha> --world <full sha> --go
+```
+It refuses before anything writes unless the database is dev's and both clones are
+dev's. Then, in order, stopping at the first failure and naming it:
+1. **The retag.** The freshen reads the pair from origin, and a dev clone can't
+   push, so this reads origin's tag. If it isn't the pair given, the script stops,
+   having written nothing, and prints the retag for someone whose clone can push.
+   Run it, then run the script again.
+2. **The freshen** stands the clones on the seed and re-signs.
+3. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
+   `stamp-lines --sync` records the seed's lines past them, then `--verify`.
+4. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
+   head already exists).
+5. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
+   that sha. A world sha that doesn't descend from the pin stops here, and the stop
+   prints the line that clears the pin.
+6. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
+   as the law pen). Nothing else writes dev's snapshot, and the preflight doesn't read it.
+7. **The preflight.** The script's last line then names the full rehearsal, which is yours.
+
+Every step is safe to repeat, so after a stop, fix the cause and run the same line.
+
+No testers on dev during an advance. The dev office stays up, and the trim doesn't
+take the lock its stamped writes take, so a tester's act between the trim and the
+sync can be refused.
 
 ### Repo secrets it needs
 

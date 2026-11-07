@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
 import { FROM_TOWN } from "./oauth.mjs";
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
+import { apiUrl } from "./public-base.mjs"; // POS-911: the rsvp card names the public address
 import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arrival-heard.mjs";
 import { INVITE_FIELD_NAMES, inviteNamed } from "./arrival-invite.mjs";
 // The join ceremony's refusal vocabulary (POS-158). Static is safe here:
@@ -168,8 +169,9 @@ const ACTS = {
     inline: "Host an event — a title, a place (a standing mark, or a point), a start and an end; doors_open is optional. With event: \"<id>\" it amends one you host, and every amendment stays visible. Read the calendar at town { read: \"calendar\" }." },
   "cancel-event": { tool: null, residue: null,
     inline: "Cancel an event you host — it stays on the calendar marked cancelled, and its id is not reused." },
+  // POS-911: the card says how to RSVP over REST, at the public address (a getter, so the configured base is read when the card is built).
   rsvp: { tool: null, residue: null,
-    inline: "RSVP to an event: your name goes on its guest list, and attending is coming to its place while the doors are open. EXPERIMENTAL: a webhook that echoes the nonce it is sent can be woken during the event; it needs a public https endpoint you run." },
+    get inline() { return "RSVP to an event: your name goes on its guest list, and attending is coming to its place while the doors are open. EXPERIMENTAL: a webhook that echoes the nonce it is sent can be woken during the event; it needs a public https endpoint you run. Over REST: POST " + apiUrl("/household") + " with do: rsvp and args: { event }."; } },
   // POS-227: the host's word to everyone attending (src/events-store.mjs §
   // announce). Same door, same reasons as the three above.
   announce: { tool: null, residue: null,
@@ -198,6 +200,11 @@ const ACTS = {
   // parcel room ahead, 50 × the room it has (src/parcel-room.mjs § buying room).
   "buy-parcel-room": { tool: null, residue: null,
     inline: "Buy room for one more parcel." },
+  // POS-730 (Darko 2026-11-06): a household's private note on a letter it received
+  // (src/letter-notes.mjs). Private, so no class mark defines it and no act row
+  // records it. Short, for the foyer's 8 KiB bound; the schema says the rest.
+  "letter-note": { tool: null, residue: null,
+    inline: "Note a letter." },
 };
 
 // ── THE OPERATOR ACTS · unlisted (#3231, Wright's ruling 2026-09-28) ────────
@@ -391,6 +398,14 @@ export const APEX_ONLY_FIELDS = {
       preview: { type: "boolean", description: "true = quote the price, the room and the cutoff, and write nothing" },
     },
     required: ["from"],
+  },
+  "letter-note": {
+    properties: {
+      letter: { type: "string", description: "id of a letter delivered to your house" },
+      state: { type: "string", enum: ["no-reply", "waiting", "clear"], description: "private; a reply does not clear it" },
+      on: { type: "string", description: "waiting only: what it waits on, up to 140 characters" },
+    },
+    required: ["letter", "state"],
   },
 };
 
@@ -1291,6 +1306,8 @@ async function householdGlance(args, key, ctx) {
   const houseOf = (h) => { try { const { slug } = resolveHouse(h, reg?.registry, reg?.pins); return slug ? (reg.registry.households?.[slug]?.name ?? slug) : null; } catch { return null; } };
   const closer = letters ? v2.closerRows(letters, { mine, house: house.members, houseOf }) : null;
 
+  // POS-730: the house's private letter notes (src/letter-notes.mjs): a marked letter is not counted in to_answer, and the awaiting read still lists it
+  const letterNotes = ashore.length ? await (await import("./letter-notes.mjs")).notesFor(ashore) : { notes: new Map() };
   const standing = await householdStanding(key, ctx);
   const needs = ashore.length
     ? await hb.needsYou({}, { key, clone, odb, asOf, ix, readers: { stances: async () => stances } })
@@ -1349,7 +1366,7 @@ async function householdGlance(args, key, ctx) {
     posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
     you, rows, gaps, stances, tail, needs, details,
-    mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members }) : null, standing: standingLetters },
+    mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members, noted: letterNotes.notes }) : null, standing: standingLetters, notesUnavailable: letterNotes.unavailable ?? null },
     quests: v2.questLines(board),
     standing,
     closer, happened, went, hw: acts?.hw ?? null,
@@ -1830,7 +1847,13 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
             awaitingOpts.standing = (await hotMailBlock(odb, key, { handle }))?.standing ?? null;
           } catch { /* the record's own answer still stands */ }
         }
-        return fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts));
+        const awaiting = await fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts));
+        // POS-730: the household's private notes ride the key that holds the resident, and nobody else's read.
+        if (key?.handles?.has?.(handle) !== true || !awaiting || awaiting.error) return awaiting;
+        const { notesFor, inScope, annotateAwaiting } = await import("./letter-notes.mjs");
+        const got = await inScope(await notesFor([handle]), [...key.handles]);
+        const view = annotateAwaiting(awaiting, got.notes);
+        return got.unavailable ? { ...view, notes_unavailable: got.unavailable } : view;
       }
       // ── correspondents (walk #2 item 1, 2026-09-06) ───────────────────────
       //
@@ -2345,6 +2368,11 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "mark-all-read": {
         const { markAllReadAtOffice } = await import("./unread-store.mjs");
         result = await markAllReadAtOffice(fields, key);
+        break;
+      }
+      case "letter-note": {
+        const { letterNoteAtOffice } = await import("./letter-notes.mjs");
+        result = await letterNoteAtOffice(fields, key);
         break;
       }
       // ── a letter's later words, and the mail blocks (POS-666) ───────────
