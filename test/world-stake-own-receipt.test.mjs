@@ -19,7 +19,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -190,6 +190,91 @@ for (const pushing of [false, true]) {
     }
   });
 }
+
+// ── THE OTHER SHAPE: A WRITER COMMITS ON TOP (the independent review, 2026-11-07) ──
+//
+// The unlocked writer's ordinary act is not a reset but a commit of its own,
+// right on top of the stake's, and a push. Then HEAD is not the stake's commit,
+// yet the stake's commit IS on the clone and, once pushed, on origin/main. The
+// stake must answer with ITS OWN sha, never the writer's on top, and never the
+// "nothing was recorded, safe to repeat" refusal (that invites a double stake).
+// In store mode (the box's) a landed stake must also keep its store rows.
+function commitOnTopOfTheNextCommitOf(mark, { push = false } = {}) {
+  const marker = join(scratch("pos922-ontop-"), "fired");
+  const hook = join(FX.repo, ".git", "hooks", "post-commit");
+  writeFileSync(hook, `#!/bin/sh
+[ -e "${marker}" ] && exit 0
+git log -1 --format=%s | grep -q "${mark}" || exit 0
+: > "${marker}"
+mkdir -p WHITE_PAGES/paper && date +%N > WHITE_PAGES/paper/edit.md
+git add WHITE_PAGES/paper/edit.md
+git -c user.name=paper -c user.email=paper@test.invalid commit -q -m "paper: an edit on top"
+${push ? "git push -q origin HEAD:main" : ""}
+exit 0
+`, { mode: 0o755 });
+  return { fired: () => { try { readFileSync(marker); return true; } catch { return false; } }, remove: () => rmSync(hook, { force: true }) };
+}
+
+function withOrigin() {
+  const origin = join(scratch("pos922-origin-"), "town.git");
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+  try { git(FX.repo, "remote", "remove", "origin"); } catch { /* none yet */ }
+  git(FX.repo, "remote", "add", "origin", origin);
+  git(FX.repo, "push", "-q", "-u", "origin", "main");
+  setEnv("TOWN_PUSH", "1");
+  return origin;
+}
+
+for (const mode of ["local", "pushing", "store"]) {
+  test(`A WRITER COMMITS ON TOP OF LANE B'S COMMIT (${mode} pen): B answers its OWN commit, not the one on top, and is never told "nothing was recorded"`, { skip }, async () => {
+    await seed();
+    if (mode !== "local") withOrigin();
+    if (mode === "store") { setEnv("STAMP_LINES", "store"); await owner((c) => c.query("DELETE FROM stamp_lines")); }
+    const a = await markOf("buttress");
+    const b = await markOf("south-keeper");
+    const writer = commitOnTopOfTheNextCommitOf(b, { push: mode !== "local" });
+    try {
+      const [ra, rb] = await Promise.all([stake(a), stake(b)]);
+      assert.ok(writer.fired(), "the other writer committed on top of B's commit");
+      assertOwnWrite(ra, a, "lane A");
+      assert.ok(!rb?.error, `LAW (POS-922): a stake whose own commit stands is no "nothing was recorded" refusal — it answered ${JSON.stringify(rb)}`);
+      assertOwnWrite(rb, b, "lane B");
+      assert.notEqual(git(FX.repo, "log", "-1", "--format=%s", rb.commit), "paper: an edit on top", "its own sha, not the writer's on top");
+      if (mode !== "local") assert.equal(spawnSync("git", ["-C", FX.repo, "merge-base", "--is-ancestor", rb.commit, "origin/main"]).status, 0, "and that sha is landed");
+      if (mode === "store") {
+        const rows = await owner(async (c) => (await c.query("SELECT canonical FROM stamp_lines ORDER BY seq")).rows.map((r) => r.canonical));
+        assert.ok(rows.some((l) => l.includes(`world-mark/${b}`)), "the landed stake keeps its store row: the store agrees with the public ledger");
+      }
+    } finally {
+      writer.remove();
+      delete process.env.TOWN_PUSH;
+      delete process.env.STAMP_LINES;
+    }
+  });
+}
+
+test("A WRITER RESETS THE CLONE UNDER LANE B (store pen): B refuses, and the store holds no row the ledger lacks", { skip }, async () => {
+  await seed();
+  withOrigin();
+  setEnv("STAMP_LINES", "store");
+  await owner((c) => c.query("DELETE FROM stamp_lines"));
+  const a = await markOf("buttress");
+  const b = await markOf("south-keeper");
+  const writer = resetUnderTheNextCommitOf(b);
+  try {
+    const [ra, rb] = await Promise.all([stake(a), stake(b)]);
+    assert.ok(writer.fired());
+    assertOwnWrite(ra, a, "lane A");
+    assert.ok(rb?.error, `B's commit is gone, so it refuses: ${JSON.stringify(rb)}`);
+    assert.match(rb.hint, /took its commit away before it landed|nothing was staked|nothing was recorded/);
+    const rows = await owner(async (c) => (await c.query("SELECT canonical FROM stamp_lines ORDER BY seq")).rows.map((r) => r.canonical));
+    assert.ok(!rows.some((l) => l.includes(`world-mark/${b}`)), "no store row for a stake the ledger does not hold");
+  } finally {
+    writer.remove();
+    delete process.env.TOWN_PUSH;
+    delete process.env.STAMP_LINES;
+  }
+});
 
 // The same writer one step earlier: its reset lands after the engine appended
 // the stake's line and before the pen stages it. The pen then finds nothing to
