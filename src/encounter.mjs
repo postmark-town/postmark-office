@@ -156,6 +156,37 @@ const inWindow = (rows, now) => { const w = windowAt(now); return rows.filter((r
 /** `handle`'s nerve now, from the living set's rows. */
 export const nerveOf = (living, handle, now = Date.now()) => foldNerve(inWindow(living.encounter ?? [], now), handle);
 
+/**
+ * WLD-153: what ONE act cost its actor in nerve, said in plain words, from the record: the actor's own cost rows
+ * for that act (a ring act's, a flinch, a strike's, a steady's or a shield's), never a press (that is the creature's
+ * turn, said apart when it landed on the actor). Null when the act spent nothing, so a refused, free or out-of-ring act
+ * carries no line. What is left is the authoritative nerve after the act (nerveOf), whatever else moved it.
+ * `owed` (a Set of creature ids, one reply's own): the turns that hold a write for this act, its cost or a press, not yet on the
+ * record when the answer went out (the answer keeps its deadline). While any is outstanding the string says so: with nothing
+ * recorded it gives no amount (a number would be a guess); with part recorded it gives what is recorded, labelled as not final.
+ */
+export function nerveSpentSaid(living, actor, actId, now = Date.now(), owed = null) {
+  const h = String(actor), id = String(actId);
+  let spent = 0, pressed = 0;
+  for (const r of inWindow(living?.encounter ?? [], now)) {
+    const p = asPayload(r.payload);
+    if (r.action === NERVE_ACTION) {
+      if (r.object !== h || String(p.act) !== id) continue;
+      if (p.why === "press") pressed += Math.max(0, -num(p.by));
+      else spent += Math.max(0, -num(p.by));
+    } else if ((r.action === STRIKE_ACTION || r.action === STEADY_ACTION || r.action === SHIELD_ACTION) && r.actor === h && String(r.id) === id) spent += Math.max(0, num(p.cost));
+  }
+  const left = nerveOf(living, h, now), max = encounterDial("nerve_max");
+  const outstanding = owed?.size > 0;
+  const press = pressed ? `the creature's press took ${pressed}` : "";
+  // WLD-153 (Wright 2026-11-07 00:25:58Z): while any write for this act is outstanding, say what is recorded so far and that more may
+  // still land, and never give "left" as final; a pending press is never counted as the act's own cost
+  if (!(spent > 0)) return outstanding ? `What this cost you is not recorded yet, so no amount is given${press ? `; ${press} so far` : ""}, and more may still land: as recorded so far you have ${left} of ${max} nerve, which is not final.` : null;
+  const flee = left === 0 ? " Your nerve is gone: you flee, and stay out until the settlement." : "";
+  if (outstanding) return `So far that cost you ${spent} nerve${pressed ? `, and ${press} more` : ""}; more may still land: as recorded so far you have ${left} of ${max} nerve, which is not final.${flee}`;
+  return `That cost you ${spent} nerve${pressed ? `, and the creature's press took ${pressed} more` : ""}; you have ${left} of ${max} left.${flee}`;
+}
+
 /** The creature's strikes this window, from the living set. */
 export const strikesOn = (living, creatureId, now = Date.now()) =>
   inWindow(living.encounter ?? [], now).filter((r) => r.action === STRIKE_ACTION && r.object === creatureId);
@@ -410,9 +441,12 @@ export function endingSaid(creature, now = Date.now()) {
   if (!fs.length || creature.gone) return null;
   const first = fs.sort((a, b) => (BigInt(a.act) < BigInt(b.act) ? -1 : 1))[0];
   const at = new Date(windowAt(now).ends).toISOString();
-  const what = creature.carries ? `what it carries (${creature.carries})` : "its ending";
-  return { first: first.by, at, ...(creature.carries ? { carries: creature.carries } : {}),
-    note: `At the settlement (${at.slice(11, 16)}Z), ${what} goes to ${first.by}, the first to finish it, and everyone it answered is named.` };
+  const when = at.slice(11, 16);
+  // WLD-123: a carried item is PENDING until the settlement hands it over; the note never says it is held already
+  const note = creature.carries
+    ? `Pending until the settlement (${when}Z): what it carries (${creature.carries}) is named for ${first.by}, the first to finish it, at the next settlement, and everyone it answered is named. It is handed over only when the settlement lands.`
+    : `At the settlement (${when}Z), its ending goes to ${first.by}, the first to finish it, and everyone it answered is named.`;
+  return { first: first.by, at, ...(creature.carries ? { carries: creature.carries } : {}), note };
 }
 
 /**

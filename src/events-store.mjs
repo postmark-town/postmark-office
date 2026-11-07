@@ -666,9 +666,10 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
   if (!RECREDIT_HANDS.includes(hand))
     throw refuse(403, `only ${RECREDIT_HANDS.join(" and ")} re-credit a stage`, "a recredit burns a mint the town paid, and only the founders move money");
   const r = judgeRecreditFields(fields, roll);
+  // The advance, the skip (POS-931/a: a skipped stage is re-credited only on its skip act) and any recredit.
   const stageActs = (c) => c.query(
     "SELECT id, object, action, payload FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id", [BUG_CLASS, [id]])
-    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_RECREDIT)));
+    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_SKIP || a.action === ACT_RECREDIT)));
   const { postPaymentsVia } = await import("./post-history.mjs");
   // As at the advance: the stage is judged, then its linked work is read from
   // GitHub before the write's transaction opens.
@@ -686,10 +687,19 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     await client.query("SELECT id FROM posts WHERE id = $1 AND class = $2 FOR UPDATE", [id, BUG_CLASS]);
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
-    const { was, n } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
+    const { was, n, skipped, grade } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
     await judgeEarnedCreditVia(client, r, gh);
-    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand };
+    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand,
+      ...(skipped ? { skipped: true, ...(grade !== undefined ? { grade } : {}) } : {}) };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
+    if (skipped) {
+      return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, skipped: true, was: null, credit: r.credit, stamps: n, link: r.link,
+        ...(grade !== undefined ? { grade } : {}),
+        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. The skip and its reason stay on the bug's history, with this credit beside them. `
+          + `The reviewed stage pass reads the town's ledger: when it holds no line for ${r.to}, it pays ${r.credit} ${n} stamps (post:${id}/${r.to}-recredit), with nothing to burn; this act moves no stamps. `
+          + `If the ledger cannot be read, or holds a line for that stage, the pass holds the credit and says why.`,
+        read: bugReadHint(id) };
+    }
     return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
       receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. `
         + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
@@ -775,9 +785,10 @@ async function skipBug(fields, key, id, { now, env }) {
 }
 
 /**
- * The reveal at ship (POS-236): a town hand sets the three candidates Iris
- * painted, or the fixer picks one. One `reveal` act, carrying the post's whole
- * reveal after it; it mints nothing and moves no stage.
+ * The reveal at ship (POS-236, CORE-25): a town hand sets the critter's one
+ * portrait (its image at once, and a later one replaces it), or sets the three
+ * candidates of an older set for the fixer to pick one. One `reveal` act,
+ * carrying the post's whole reveal after it; it mints nothing and moves no stage.
  */
 export async function revealAtTown(fields, key, { now = Date.now(), env = process.env } = {}) {
   const id = String(fields?.post ?? "").trim();
@@ -803,7 +814,11 @@ export async function revealAtTown(fields, key, { now = Date.now(), env = proces
     await updatePost(client, row);
     const critter = prev.fields?.critter ? `"${prev.fields.critter}"` : "its critter";
     return { post: bugAnswer(row), act_id: actId, hand: actor, reveal,
-      receipt: reveal.pick
+      receipt: reveal.pick && reveal.candidates.length === 1 && prev.fields?.reveal?.pick
+        ? `revealed: ${id}'s critter ${critter} has a new portrait, set by ${actor}; it replaces the earlier one, and the jar shows it from now on`
+        : reveal.pick && reveal.candidates.length === 1
+        ? `revealed: ${id}'s critter ${critter} has its portrait, set by ${actor}; the jar shows it from now on`
+        : reveal.pick
         ? `revealed: ${id}'s critter ${critter} is candidate ${reveal.pick}, chosen by ${actor}; the jar shows it from now on`
         : `candidates set on ${id} by ${actor}'s hand: ${REVEAL_CANDIDATES} images for ${critter}; ${prev.fields?.named_by ?? "its fixer"} picks one with { post, pick }`,
       read: bugReadHint(id) };

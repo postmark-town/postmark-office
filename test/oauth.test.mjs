@@ -474,6 +474,72 @@ test("key desk: anonymous mint is a 401 at the write tier", async () => {
   assert.equal(r.status, 401);
 });
 
+// POS-910 part 2, the desk's wording. Wright (AUTH 2026-11-05T15:16:06Z, quoting the ask): "the key desk says plainly at
+// mint time that the new key replaces the current one, and every copy must be updated. A falsifier: a test that the mint
+// page or response names the replacement." The note was already saying "Minting again replaces it." — about a FUTURE
+// mint, never about the key just handed over — so this reads the three clauses of the requirement one by one, on the
+// real POST /keys answer (a real office, a mock GitHub), for BOTH messages the desk has (a household key, a visitor pass).
+// Each clause is its own boolean in a map the assertion compares whole, so a red names the clause that is missing, and
+// the clauses the desk already kept (shown once, a password, what a visitor pass becomes) ride the same map: reworded,
+// not replaced. The Site's key card prints `note` verbatim (KeysCard.astro, `notes.push(data.note)`), so the response
+// IS the mint page's warning. Wording only: the status, the field names and the rotation itself are asserted unchanged.
+const REPLACEMENT_CLAUSES = {
+  // the NEW key (the one just minted) is the subject, not "minting again" (a future act)
+  newKeyReplacesTheOld: /\b(?:this|the) new key (?:now )?replaces\b/i,
+  // the old key is said to stop working, so a stale copy is expected to fail
+  oldKeyStops: /\bold (?:key|copies|copy)\b[^.]*\b(?:stops? working|no longer works?|is dead|dies|stopped working|is revoked)\b/i,
+  // and the human is told to update every stored or running copy
+  updateEveryCopy: /\bupdate\b[^.]*\bevery\b[^.]*\bcop(?:y|ies)\b|\bevery\b[^.]*\bcop(?:y|ies)\b[^.]*\bupdate\b/i,
+  // kept from before, unchanged in meaning
+  shownOnce: /\bshown once\b/i,
+  likeAPassword: /\blike a password\b/i,
+};
+const verdictOf = (note, clauses) => Object.fromEntries(Object.entries(clauses).map(([k, re]) => [k, re.test(String(note))]));
+const MINT_BODY_KEYS = ["household", "key", "note", "visitor"];
+
+async function mintTwice(identity) {
+  const access = await accessTokenFor(identity);
+  const mintOnce = async () => {
+    const r = await fetch(`${BASE}/keys`, { method: "POST", headers: { authorization: `Bearer ${access}` } });
+    return { status: r.status, body: await r.json() };
+  };
+  const first = await mintOnce();
+  const second = await mintOnce();
+  return { first, second };
+}
+
+test("POS-910 · key desk: a household key's note says the new key replaces the old one and every copy must be updated", async () => {
+  const { first, second } = await mintTwice({ id: 999, login: "keeminlee" });
+  for (const m of [first, second]) {
+    assert.equal(m.status, 201, "the mint answers 201, as before");
+    assert.deepEqual(Object.keys(m.body).sort(), MINT_BODY_KEYS, "the answer's fields are unchanged: the warning rides the existing `note`");
+    assert.equal(m.body.visitor, false);
+    assert.match(m.body.key, /^pmk_/);
+  }
+  const clauses = { ...REPLACEMENT_CLAUSES, actsAsResidents: /\bacts as your residents\b/i };
+  assert.deepEqual(verdictOf(second.body.note, clauses), Object.fromEntries(Object.keys(clauses).map((k) => [k, true])),
+    `every clause of "the new key replaces the current one, and every copy must be updated" must be said at mint time; note was: ${second.body.note}`);
+  // the promise the note makes is true: the first key is dead after the second mint, the second works
+  const dead = await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${first.body.key}` } });
+  assert.equal(dead.status, 401, "the note says the old key stops working, and it does");
+  assert.equal((await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${second.body.key}` } })).status, 200);
+});
+
+test("POS-910 · key desk: a visitor pass's note says the same, and keeps what the pass becomes", async () => {
+  const { first, second } = await mintTwice({ id: 910910, login: "syn-wording-visitor" });
+  for (const m of [first, second]) {
+    assert.equal(m.status, 201);
+    assert.deepEqual(Object.keys(m.body).sort(), MINT_BODY_KEYS);
+    assert.equal(m.body.visitor, true);
+    assert.match(m.body.key, /^pmk_/);
+  }
+  const clauses = { ...REPLACEMENT_CLAUSES, aVisitorPass: /\bvisitor pass\b/i, becomesTheHouseKey: /\bjoin PR merges\b[^.]*\bfull house key\b/i };
+  assert.deepEqual(verdictOf(second.body.note, clauses), Object.fromEntries(Object.keys(clauses).map((k) => [k, true])),
+    `every clause must be said at mint time for a visitor pass too; note was: ${second.body.note}`);
+  const dead = await fetch(`${BASE}/me`, { headers: { authorization: `Bearer ${first.body.key}` } });
+  assert.equal(dead.status, 401, "the visitor pass rotates too: the old one is dead");
+});
+
 // ── the manual finish (#2764 friction 3, under #2754 box 2) ──────────────────
 //
 // Mari's report: "DCR + PKCE + GitHub sign-in all worked from a bare shell,

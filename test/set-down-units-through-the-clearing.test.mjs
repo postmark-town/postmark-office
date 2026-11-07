@@ -122,8 +122,10 @@ const clear = (win = 300) => {
 
 const seedClearing = () => owner(async (c) => {
   if ((await c.query("SELECT 1 FROM windows WHERE id = 299")).rows.length) return; // once per store: the candle tiles time
-  await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (299, date_trunc('second', now()) - interval '4 days', date_trunc('second', now()) - interval '2 days', 'closed', date_trunc('second', now()) - interval '2 days') ON CONFLICT (id) DO NOTHING");
-  await c.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (300, date_trunc('second', now()) - interval '2 days', date_trunc('second', now()) - interval '1 minute', 'open') ON CONFLICT (id) DO NOTHING");
+  // one clock reading for both rows: each statement's own now() can land either side of a second, and 300 must open where 299 closed
+  const { rows: [{ t }] } = await c.query("SELECT date_trunc('second', now()) AS t");
+  await c.query("INSERT INTO windows (id, opens_at, closes_at, status, cleared_at) VALUES (299, $1::timestamptz - interval '4 days', $1::timestamptz - interval '2 days', 'closed', $1::timestamptz - interval '2 days') ON CONFLICT (id) DO NOTHING", [t]);
+  await c.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (300, $1::timestamptz - interval '2 days', $1::timestamptz - interval '1 minute', 'open') ON CONFLICT (id) DO NOTHING", [t]);
   await c.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('world-law', $1, now()), ('town', $2, now()) ON CONFLICT DO NOTHING", ["l".repeat(40), "t".repeat(40)]);
   await c.query(`INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
     VALUES ('c0000000-0000-4000-8000-000000000001', $1, 'parcel', 'sbx-mo', 'hh:sbx-mo', 'home.', $2, '((-20,-20),(20,20))'::box, 'standing', 299, '{}')

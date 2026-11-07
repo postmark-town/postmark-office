@@ -114,6 +114,9 @@ const GH_ACCOUNT = Object.freeze({
   doors: { id: 334016343, login: "commander-and-chief" },
   wright: { id: 306351151, login: "wright-starforge" },
   keemin: { id: 67605380, login: "keeminlee" },
+  // POS-931/b: the leads' apps, their real ids (GitHub users API, 2026-11-07)
+  rivet: { id: 340608403, login: "rivet-starforge[bot]" },
+  bevel: { id: 341174930, login: "bevel-starforge[bot]" },
 });
 // whose account a resident's own work on GitHub comes from
 const ACCOUNT_OF = { errant: "harbor", ada: "harbor", finn: "finn", kinofire: "doors", "wayward-archivist": "doors", wright: "wright", keemin: "keemin" };
@@ -662,6 +665,164 @@ test("9 · the reveal: a hand sets Iris's three candidates, the fixer picks one,
   assert.equal(out.equal, true, out.drift.join("\n"));
 });
 
+test("9 · CORE-25: one portrait per critter: a hand's single-candidate reveal sets the image at once, with no pick, and the jar and the rebuild read it", async () => {
+  // RULED, Darko 2026-10-27 09:14 EDT and 2026-10-29 00:04 EDT (CORE-25/a): "one portrait plus a certificate letter (no pick from three)".
+  // Until 2026-11-06 this asserted that a reveal held exactly three candidates and the fixer chose.
+  const { pen, posts } = setup();
+  await toShipped();
+
+  const done = await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.deepEqual(done.reveal, { candidates: [PAINTED[0]], pick: 1, image: PAINTED[0], picked_by: "wright" },
+    'LAW CORE-25: "one portrait per critter … with no pick step": the town hand\'s one candidate is the image');
+  assert.match(done.receipt, /revealed: errant\/the-door-sticks's critter "Hinge Nibbler" has its portrait, set by wright; the jar shows it from now on/);
+  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: ID, reveal: done.reveal, hand: "wright" });
+  assert.equal(posts.get(ID).state, "shipped", "a reveal moves no stage");
+
+  // the jar reads the image off the post, as it reads a picked one
+  const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual([one.fields.critter, one.fields.named_by, one.fields.reveal.image], ["Hinge Nibbler", "ada", PAINTED[0]]);
+
+  // the rebuild: the acts alone derive the reveal, and the table agrees
+  const acts = pen.rows().filter((a) => a.class === "bug").map((a) => ({ ...a, payload: JSON.parse(a.payload) }));
+  assert.deepEqual(foldPostActs(acts).posts.get(ID).fields.reveal, done.reveal);
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+
+  // the namer has nothing to pick, and the refusal writes nothing.
+  // Until 2026-11-06 this also asserted a hand's second one-portrait reveal was a 409; CORE-25/d rules that a redraw, below.
+  const n = pen.rows().length;
+  await refusedWith(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), 409, /critter is revealed/);
+  assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+});
+
+test("9 · CORE-25/d: a town hand's one-portrait reveal on a critter that already has an image replaces it, with no counter, and the jar and the rebuild read the newest", async () => {
+  // RULED, Darko 2026-11-06 (CORE-25/d): "Let a town hand's reveal replace the image". Until then a revealed critter took no second reveal.
+  const { pen, posts } = setup();
+  await toShipped();
+  const KEEMIN9 = { household: "starforge", handles: new Set(["keemin"]) };
+
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  const redraw = await revealAtTown({ post: ID, candidates: [PAINTED[1]] }, KEEMIN9, { now: NOW });
+  assert.deepEqual(redraw.reveal, { candidates: [PAINTED[1]], pick: 1, image: PAINTED[1], picked_by: "keemin" },
+    'LAW CORE-25/d: "Let a town hand\'s reveal replace the image": image, candidates and picked_by are the new hand\'s');
+  assert.match(redraw.receipt, /revealed: errant\/the-door-sticks's critter "Hinge Nibbler" has a new portrait, set by keemin; it replaces the earlier one, and the jar shows it from now on/);
+  assert.deepEqual(JSON.parse(pen.rows().at(-1).payload), { post: ID, reveal: redraw.reveal, hand: "keemin" });
+  assert.equal(posts.get(ID).state, "shipped", "a redraw moves no stage");
+
+  // no counter: a third portrait lands the same way
+  const third = await revealAtTown({ post: ID, candidates: [PAINTED[2]] }, WRIGHT, { now: NOW });
+  assert.equal(third.reveal.image, PAINTED[2]);
+
+  // the jar reads the newest image off the post
+  const one = (await postsAtOffice({ class: "bug", post: ID }, { now: NOW, roll: ROLL })).post;
+  assert.deepEqual([one.fields.critter, one.fields.named_by, one.fields.reveal.image, one.fields.reveal.picked_by], ["Hinge Nibbler", "ada", PAINTED[2], "wright"]);
+
+  // the rebuild: the three reveal acts alone derive the newest reveal, and the table agrees
+  const acts = pen.rows().filter((a) => a.class === "bug");
+  assert.equal(acts.filter((a) => a.action === "reveal").length, 3, "each redraw is its own act");
+  const folded = foldPostActs(acts.map((a) => ({ ...a, payload: JSON.parse(a.payload) }))).posts.get(ID).fields.reveal;
+  assert.deepEqual(folded, third.reveal);
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+});
+
+test("9 · CORE-25/d: a hand also replaces an image the fixer picked from an older set of three", async () => {
+  const { posts } = setup();
+  await toShipped();
+  await revealAtTown({ post: ID, candidates: PAINTED }, WRIGHT, { now: NOW });
+  await revealAtTown({ post: ID, pick: 2 }, ADA, { now: NOW });
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[1]);
+  const redraw = await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.deepEqual(redraw.reveal, { candidates: [PAINTED[0]], pick: 1, image: PAINTED[0], picked_by: "wright" });
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[0]);
+});
+
+test("9 · CORE-25/d: the refusals' words are true for both roads: a revealed critter names who can change its image, and no image yet points at the one-portrait reveal", async () => {
+  const { posts } = setup();
+  await toShipped();
+  const hint = async (p) => { try { await p; } catch (e) { return e.hint; } assert.fail("expected a refusal"); };
+  // no reveal yet: a pick has nothing to choose, and the hint must not say Iris paints three
+  const none = await hint(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }));
+  assert.doesNotMatch(none, /Iris paints three/, "the stale three-candidates hint");
+  assert.match(none, /candidates: \[one media URL\]/);
+  // revealed: the hint must not say the image was chosen by its fixer (a hand's reveal set it), and must say who may replace it
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.equal(posts.get(ID).fields.reveal.picked_by, "wright");
+  const done = await hint(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }));
+  assert.doesNotMatch(done, /chosen once, by its fixer/, "the stale chosen-once hint");
+  assert.match(done, /only a town hand's one-portrait reveal replaces it/);
+});
+
+test("9 · CORE-25/d control: on a revealed critter a non-hand, a pick and a set of three are still refused, writing nothing and leaving the image", async () => {
+  const { pen, posts } = setup();
+  await toShipped();
+  const before = pen.rows().length;
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  assert.equal(pen.rows().length, before + 1, "control: the writer is live, the first portrait wrote its act");
+  const refusedUnchanged = async (p, codes, re) => {
+    const n = pen.rows().length;
+    await assert.rejects(p, (e) => { assert.ok(codes.includes(e.code), `${e.code} ${e.defect}`); if (re) assert.match(`${e.defect} ${e.hint}`, re); return true; });
+    assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+    assert.equal(posts.get(ID).fields.reveal.image, PAINTED[0], "a refused reveal moved the image");
+  };
+  // not a hand: the fixer who named the critter, and a resident, are refused (403 hands only; 409 revealed before CORE-25/d)
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [PAINTED[1]] }, ADA, { now: NOW }), [403, 409]);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [PAINTED[1]] }, FINN, { now: NOW }), [403, 409]);
+  // a pick, by the fixer or a hand; a set of three, by a hand or a resident
+  await refusedUnchanged(revealAtTown({ post: ID, pick: 1 }, ADA, { now: NOW }), [409], /critter is revealed/);
+  await refusedUnchanged(revealAtTown({ post: ID, pick: 1 }, WRIGHT, { now: NOW }), [409], /critter is revealed/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: PAINTED }, WRIGHT, { now: NOW }), [409], /critter is revealed/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: PAINTED }, FINN, { now: NOW }), [403, 409]);
+});
+
+test("9 · CORE-25/d: a hand's redraw runs every guard first: a media URL the town holds, one portrait not two or none, never with a pick, and the image stays on a refusal", async () => {
+  const { pen, posts } = setup();
+  await toShipped();
+  await revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW });
+  const refusedUnchanged = async (p, codes, re) => {
+    const n = pen.rows().length;
+    await assert.rejects(p, (e) => { assert.ok(codes.includes(e.code), `${e.code} ${e.defect}`); if (re) assert.match(`${e.defect} ${e.hint}`, re); return true; });
+    assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+    assert.equal(posts.get(ID).fields.reveal.image, PAINTED[0], "a refused reveal moved the image");
+  };
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: ["https://example.com/x.png"] }, WRIGHT, { now: NOW }), [422], /a candidate is a media URL/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [`https://media.postmark.town/media/iris/${"4".repeat(64)}.png`] }, WRIGHT, { now: NOW }), [422], /the town holds no file at that URL/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), [422], /a reveal holds one portrait/);
+  await refusedUnchanged(revealAtTown({ post: ID, candidates: [PAINTED[1]], pick: 1 }, WRIGHT, { now: NOW }), [422], /one at a time/);
+  // control: the writer is live: the same hand's good portrait replaces it
+  await revealAtTown({ post: ID, candidates: [PAINTED[1]] }, WRIGHT, { now: NOW });
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[1], "the writer is live");
+});
+
+test("9 · CORE-25: the single-candidate reveal keeps every guard of the three: a hand only, shipped only, a media URL the town holds, and never an empty or two-image list", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const PR9 = pull("ada");
+  await advanceAtTown({ post: ID, to: "fixed", credit: "ada", size: "M", critter: "Hinge Nibbler", link: PR9 }, WRIGHT, { now: NOW, roll: ROLL });
+  const refusedNothingWritten = async (p, code, re) => {
+    const n = pen.rows().length;
+    const had = JSON.stringify(posts.get(ID));
+    await refusedWith(p, code, re);
+    assert.equal(pen.rows().length, n, "a refused reveal wrote an act");
+    assert.equal(JSON.stringify(posts.get(ID)), had, "a refused reveal changed the post");
+  };
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]] }, WRIGHT, { now: NOW }), 409, /stands fixed, and a critter is revealed when its fix ships/);
+  await advanceAtTown({ post: ID, to: "shipped", link: tagFor(PR9) }, WRIGHT, { now: NOW, roll: ROLL });
+
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]] }, FINN, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]] }, ADA, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [] }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: ["https://example.com/x.png"] }, WRIGHT, { now: NOW }), 422, /a candidate is a media URL/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [`https://media.postmark.town/media/iris/${"4".repeat(64)}.png`] }, WRIGHT, { now: NOW }), 422, /the town holds no file at that URL/);
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0]], pick: 1 }, WRIGHT, { now: NOW }), 422, /one at a time/);
+
+  // control: the writer is live: the same hand's one good portrait lands
+  const done = await revealAtTown({ post: ID, candidates: [PAINTED[2]] }, WRIGHT, { now: NOW });
+  assert.equal(done.reveal.image, PAINTED[2]);
+  assert.equal(posts.get(ID).fields.reveal.image, PAINTED[2], "the writer is live: the good portrait is on the post");
+});
+
 test("9 · the reveal's refusals each write nothing: not shipped, not a hand, not three media URLs, no candidates, not the fixer, a pick out of range, both at once, and after the pick", async () => {
   const { pen, posts } = setup();
   await toBriefed();
@@ -678,7 +839,8 @@ test("9 · the reveal's refusals each write nothing: not shipped, not a hand, no
   await advanceAtTown({ post: ID, to: "shipped", link: tagFor(PR9) }, WRIGHT, { now: NOW, roll: ROLL });
 
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED }, FINN, { now: NOW }), 403, /only the town's hands set a critter's candidates/);
-  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds 3 candidates/);
+  // until 2026-11-06 this was /a reveal holds 3 candidates/; CORE-25 lets a hand set one portrait, so two is still the refused count
+  await refusedNothingWritten(revealAtTown({ post: ID, candidates: PAINTED.slice(0, 2) }, WRIGHT, { now: NOW }), 422, /a reveal holds one portrait, or 3 candidates/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [...PAINTED.slice(0, 2), "https://example.com/x.png"] }, WRIGHT, { now: NOW }), 422, /a candidate is a media URL/);
   await refusedNothingWritten(revealAtTown({ post: ID, candidates: [PAINTED[0], PAINTED[0], PAINTED[1]] }, WRIGHT, { now: NOW }), 422, /three different images/);
   // POS-738: a right-shaped URL whose bytes the town never held is refused, by name
@@ -1128,12 +1290,10 @@ test("14 · a second recredit of the same stage is refused, whoever it names", a
   await refusedNothing(t, rc({ credit: "wayward-archivist", link: KINO_PLAN }), 409, /^"kinofire\/false-sweep-warning"'s briefed was already re-credited, to kinofire one recredit per post and stage, ever/);
 });
 
-test("14 · a stage never passed and a skipped stage are refused, and say what to do instead", async () => {
+test("14 · a stage never passed is refused, and says what to do instead (a skipped one is § 18's)", async () => {
   const t = await paidToWright();
   await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "fixed", recredit: true, credit: "kinofire", link: pull("kinofire"), note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
     /^"kinofire\/false-sweep-warning" never passed fixed it stands briefed; advance it to fixed, crediting the right resident, rather than re-crediting/);
-  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "diagnosed", recredit: true, credit: "kinofire", link: KINO_PLAN, note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
-    /never passed diagnosed diagnosed was skipped, and a skipped stage paid no one: there is nothing to re-credit/);
 });
 
 test("14 · (review-3842-578 § 1) the door never gates on the store's stamp chain: with no chain (prod today) or a chain without the stage's line, the act records with paid null, and the stage pass reads the ledger", async () => {
@@ -1174,7 +1334,9 @@ test("14 · the recredit's own law: wright and keemin only, a note, recredit tru
   await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN }, KINO), 403, /only the town's hands re-credit a bug's stage/);
   await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, note: "  " }), 422, /^a recredit says why note: what the stage's credit got wrong/);
   await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, recredit: "yes" }), 422, /^recredit is true, or left off/);
-  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, grade: "light" }), 422, /^a recredit takes no grade it pays the stage again at exactly what the stage paid/);
+  // a paid stage pays again exactly what it paid: grade is only a skipped briefed's (POS-931/a)
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, grade: "light" }), 422, /^briefed on "kinofire\/false-sweep-warning" was paid, and a recredit of a paid stage takes no grade/);
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, size: "S" }), 422, /^a recredit takes no size it pays the stage again at exactly what the stage paid/);
   await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "confirmed", recredit: true, credit: "kinofire", note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 422,
     /^only diagnosed, briefed, fixed are re-credited/);
   await refusedNothing(t, rc({ link: KINO_PLAN }), 422, /^a recredit names whom it credits/);
@@ -1387,11 +1549,6 @@ test("16 · skip and reason are the bug's alone: an idea or an event refuses the
   await refusedWith(advanceAtTown({ post: "errant/a-dance", class: "event", skip: "underway", reason: "r" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /^skip is a bug's/);
 });
 
-test("16 · a skipped stage is never re-credited: it paid no one", async () => {
-  const t = await kinoBug("diagnosed");
-  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "diagnosed", recredit: true, credit: "kinofire", link: KINO_PLAN, note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
-    /never passed diagnosed diagnosed was skipped, and a skipped stage paid no one: there is nothing to re-credit/);
-});
 
 test("16 · grandfathered: a bug already past a gap before the rule advances on from where it stands, and its history is not back-filled", async () => {
   const { pen, posts } = setup();
@@ -1722,4 +1879,131 @@ test("17 · force is for fixed and shipped only: on any other stage it is refuse
   await postAtTown(BUG, ERRANT, at17);
   await skipThrough(ID, "reproduced");
   await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn"), force: "x" }, WRIGHT, at17), 422, /^force is for fixed and shipped only/);
+});
+
+// ── 18 · a stage skipped by mistake, credited; the leads' apps as founder authors (POS-931) ──
+//
+// RULED, Darko 2026-11-06 21:32 EST, in the picker: /a "Extend the door", /b
+// "Add their apps". Wright skipped Moose's diagnosed though Moose had named the
+// cause, and the door could not undo a skip. Now a recredit credits a stage the
+// record shows SKIPPED: the skip stays with its reason, the credit sits beside
+// it, and the reviewed pass pays the stage's amount with nothing to burn
+// (tools/bug-stage-plan.mjs; the town's --stage-recredit --skipped).
+
+const SKIP_NOTE = "the cause was in the reporter's letter; the skip was a hand's mistake";
+const rcSkipped = (fields, key = WRIGHT) => advanceAtTown({ post: KINO_BUG, recredit: true, note: SKIP_NOTE, ...fields }, key, { now: NOW, roll: ROLL });
+
+test("18 · a skipped diagnosed, credited to the cause's author: its own act, 5 owed with nothing to burn; the skip stays on the history with the credit beside it; the Hall counts it once paid", async () => {
+  const t = await kinoBug("diagnosed");   // confirmed; reproduced and diagnosed skipped
+  resetChainMemo();
+  t.ledger.lines = [];
+  const before = JSON.stringify(t.posts.get(KINO_BUG));
+  const r = await rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN });
+  assert.deepEqual([r.stage, r.recredit, r.skipped, r.was, r.credit, r.stamps, r.link], ["diagnosed", true, true, null, "kinofire", 5, KINO_PLAN]);
+  assert.match(r.receipt, /^re-credited: kinofire\/false-sweep-warning's skipped diagnosed to kinofire by wright's hand; .*The skip and its reason stay on the bug's history, with this credit beside them\. .*it pays kinofire 5 stamps \(post:kinofire\/false-sweep-warning\/diagnosed-recredit\), with nothing to burn; this act moves no stamps/);
+  const act = t.pen.rows().at(-1);
+  assert.deepEqual([act.class, act.action, act.actor, act.object], ["bug", "recredit", "wright", KINO_BUG]);
+  assert.deepEqual(JSON.parse(act.payload), { post: KINO_BUG, to: "diagnosed", was: null, credit: "kinofire", link: KINO_PLAN, note: SKIP_NOTE, paid: 5, hand: "wright", skipped: true });
+  assert.equal(JSON.stringify(t.posts.get(KINO_BUG)), before, "a recredit moved the stage or changed the post's row");
+  const out = await dryRun(t.pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+  const diagnosed = async () => (await postsAtOffice({ class: "bug", post: KINO_BUG }, { now: NOW, roll: ROLL })).post.history
+    .filter((h) => h.stage === "diagnosed").map(({ at, ...h }) => h);
+  // before the pass: the skip stands with its reason and says where the credit went; the credit is not paid yet
+  assert.deepEqual(await diagnosed(), [
+    { ...SKIPPED("diagnosed"), recredited_to: "kinofire" },
+    { stage: "diagnosed", state: "diagnosed", recredit: true, hand: "wright", credit: "kinofire", was: null, link: KINO_PLAN, note: SKIP_NOTE, stamps_paid: null },
+  ]);
+  // the pass has written its one line: the credit is paid, and the Hall counts it
+  resetChainMemo();
+  t.ledger.lines = [`- 2026-11-07 · MINT → kinofire · 5 · for: post:${KINO_BUG}/diagnosed-recredit · by: the-town`];
+  assert.equal((await diagnosed())[1].stamps_paid, 5);
+  const { catchers } = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.deepEqual(catchers.find((c) => c.handle === "kinofire"), { handle: "kinofire", stamps: 5, bugs: 1 });
+});
+
+// The stub pen runs no row locks, so a race at the door is shown as 14 § 3 shows it: the lock's place in
+// the write. Money is once-only below it too: the pass plans one line per stage, and the town's verb and
+// verifier refuse a second (tools/bug-stage-plan.test.mjs § 9; the town's stamp-recredit.test.mjs § 5).
+test("18 · once per stage: the row lock comes before the acts read, and a second credit of the skipped stage is refused", async () => {
+  const t = await kinoBug("diagnosed");
+  const from = t.pen.asked().length;
+  await rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN });
+  const asked = t.pen.asked().slice(from);
+  const lock = asked.findIndex((q) => /^SELECT id FROM posts WHERE id = \$1 AND class = \$2 FOR UPDATE$/i.test(q));
+  const actsRead = asked.findIndex((q, i) => i > lock && /FROM acts WHERE class = \$1 AND object = ANY\(\$2\)/i.test(q));
+  const insert = asked.findIndex((q) => /^INSERT INTO acts/i.test(q));
+  assert.ok(lock >= 0 && actsRead > lock && insert > actsRead, `the lock (${lock}) must come before the acts read (${actsRead}) and the insert (${insert})`);
+  await refusedNothing(t, rcSkipped({ to: "diagnosed", credit: "wayward-archivist", link: KINO_PLAN }), 409, /'s diagnosed was already re-credited, to kinofire/);
+});
+
+test("18 · the hands and the evidence: the Bug Catcher's, a resident's and a stranger's hand are refused; a credit the linked work's author can't earn, a founder's PR, no link and no note are refused; each writes nothing", async () => {
+  const t = await kinoBug("diagnosed");
+  const ok = { to: "diagnosed", credit: "kinofire", link: KINO_PLAN };
+  await refusedNothing(t, rcSkipped(ok, BUGCATCHER), 403, /^only wright and keemin re-credit a stage/);
+  await refusedNothing(t, rcSkipped(ok, KINO), 403, /only the town's hands re-credit a bug's stage/);
+  await refusedNothing(t, rcSkipped(ok, ERRANT), 403, /only the town's hands re-credit a bug's stage/);
+  await refusedNothing(t, rcSkipped({ ...ok, credit: "finn" }), 422,
+    /^letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire, of hh:house-of-many-doors, and finn stands in solo:finn/);
+  await refusedNothing(t, rcSkipped({ ...ok, link: comment("errant") }), 422, /of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
+  await refusedNothing(t, rcSkipped({ ...ok, link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, rcSkipped({ ...ok, link: undefined }), 422, /^diagnosed needs a link to the work that earned it/);
+  await refusedNothing(t, rcSkipped({ ...ok, note: "  " }), 422, /^a recredit says why/);
+});
+
+test("18 · what a skipped stage needs: briefed names its grade (light 10, heavy 5), diagnosed takes none; a skipped fixed is refused and says why; a chain showing the stage paid is refused", async () => {
+  const t = await kinoBug("briefed");   // reproduced, diagnosed and briefed skipped
+  const brief = { to: "briefed", credit: "kinofire", link: KINO_PLAN };
+  await refusedNothing(t, rcSkipped(brief), 422, /^briefed on "kinofire\/false-sweep-warning" was skipped, so its recredit names the grade/);
+  await refusedNothing(t, rcSkipped({ ...brief, grade: "medium" }), 422, /^grade is light or heavy/);
+  await refusedNothing(t, rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN, grade: "light" }), 422, /^grade is a skipped briefed's/);
+  const b = await rcSkipped({ ...brief, grade: "heavy" });
+  assert.deepEqual([b.stage, b.skipped, b.stamps, b.grade], ["briefed", true, 5, "heavy"]);
+  assert.deepEqual(JSON.parse(t.pen.rows().at(-1).payload), { post: KINO_BUG, to: "briefed", was: null, credit: "kinofire", link: KINO_PLAN, note: SKIP_NOTE, paid: 5, hand: "wright", skipped: true, grade: "heavy" });
+  assert.equal((await rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN })).stamps, 5, "each skipped stage is its own, once");
+
+  const f = await kinoBug("fixed");
+  await refusedNothing(f, rcSkipped({ to: "fixed", credit: "kinofire", link: pull("kinofire") }), 422,
+    /^fixed on "kinofire\/false-sweep-warning" was skipped, and a skipped fixed is not re-credited only a skipped diagnosed or briefed is: fixed carries the size, the critter its fixer names on the post, and the merge guard/);
+
+  const c = await kinoBug("diagnosed");
+  resetChainMemo();
+  c.ledger.lines = [stageLine("ada", 5, KINO_BUG, "diagnosed")];
+  await refusedNothing(c, rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN }), 409,
+    /'s diagnosed is recorded skipped, and the chain shows it paid 5 a person reads both before anything is paid/);
+});
+
+test("18 · no evidenced skip, no credit: a stage with neither an advance nor a skip on the record (a gap from before every rung was recorded) is refused", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  const brief = comment("finn");
+  const legacy = { post: ID, from: "reported", to: "briefed", credit: "finn", fields: { grade: "light", links: { briefed: brief } }, hand: "wright" };
+  const act = pen.seedAct({ class: "bug", action: "advance", actor: "wright", object: ID, payload: JSON.stringify(legacy), at: new Date(NOW).toISOString() });
+  posts.set(ID, { ...posts.get(ID), state: "briefed", fields: { links: { briefed: brief } }, last_act: act });
+  const n = pen.rows().length;
+  await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", recredit: true, credit: "finn", link: comment("finn"), note: SKIP_NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+    /^"errant\/the-door-sticks" never passed diagnosed diagnosed has neither an advance nor a skip on the record/);
+  assert.equal(pen.rows().length, n, "a refused credit wrote an act");
+});
+
+test("18 · (POS-931/b) the leads' apps are founder authors: their merged PR earns fixed for wright, never a resident's credit, and never diagnosed or briefed for anyone", async () => {
+  const fix = { to: "fixed", size: "S", critter: "Sweepling" };
+  for (const app of ["rivet", "bevel"]) {
+    const who = `GitHub account ${GH_ACCOUNT[app].login.replace(/[[\]]/g, "\\$&")} \\(id ${GH_ACCOUNT[app].id}\\)`;
+    const t = await kinoBug("briefed");
+    await refusedNothing(t, adv({ ...fix, credit: "kinofire", link: pull(app) }), 422,
+      new RegExp(`was written by a founder's account, ${who}, and a founder's work credits only wright or keemin`));
+    assert.equal((await adv({ ...fix, credit: "wright", link: pull(app) })).credit, "wright", `${app}'s merged PR earns fixed for wright`);
+
+    const d = await kinoBug("reproduced");
+    for (const credit of ["wright", "kinofire"])
+      await refusedNothing(d, adv({ to: "diagnosed", credit, link: pull(app) }), 422,
+        new RegExp(`is a founder's pull request \\(${who}\\), and a founder's pull request never earns diagnosed`));
+    const b = await kinoBug("diagnosed");
+    await refusedNothing(b, adv({ to: "briefed", grade: "light", credit: "wright", link: pull(app) }), 422,
+      new RegExp(`is a founder's pull request \\(${who}\\), and a founder's pull request never earns briefed`));
+  }
+  // nothing else moved: a resident's account still earns wright nothing
+  const t = await kinoBug("briefed");
+  await refusedNothing(t, adv({ ...fix, credit: "wright", link: pull("kinofire") }), 422, /^only a founder's account earns wright a stage/);
 });
