@@ -441,9 +441,12 @@ export function endingSaid(creature, now = Date.now()) {
   if (!fs.length || creature.gone) return null;
   const first = fs.sort((a, b) => (BigInt(a.act) < BigInt(b.act) ? -1 : 1))[0];
   const at = new Date(windowAt(now).ends).toISOString();
-  const what = creature.carries ? `what it carries (${creature.carries})` : "its ending";
-  return { first: first.by, at, ...(creature.carries ? { carries: creature.carries } : {}),
-    note: `At the settlement (${at.slice(11, 16)}Z), ${what} goes to ${first.by}, the first to finish it, and everyone it answered is named.` };
+  const when = at.slice(11, 16);
+  // WLD-123: a carried item is PENDING until the settlement hands it over; the note never says it is held already
+  const note = creature.carries
+    ? `Pending until the settlement (${when}Z): what it carries (${creature.carries}) is named for ${first.by}, the first to finish it, at the next settlement, and everyone it answered is named. It is handed over only when the settlement lands.`
+    : `At the settlement (${when}Z), its ending goes to ${first.by}, the first to finish it, and everyone it answered is named.`;
+  return { first: first.by, at, ...(creature.carries ? { carries: creature.carries } : {}), note };
 }
 
 /**
