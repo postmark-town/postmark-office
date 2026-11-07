@@ -13,8 +13,10 @@
 //                            GitHub hands abandoned ones out again.
 //   a letter                 its `from` is the credited resident, or a resident
 //                            of the same household.
-//   the founders             wright-starforge and keeminlee may credit only wright
-//                            or keemin, and only they may credit them.
+//   the founders             wright-starforge and keeminlee, and the leads' apps
+//                            rivet-starforge[bot] and bevel-starforge[bot]
+//                            (POS-931/b), may credit only wright or keemin, and
+//                            only they may credit them.
 //
 // NEVER PASS ON DOUBT. GitHub unreachable, an author bound to no house, a
 // letter the store does not hold: each refuses, naming what could not be
