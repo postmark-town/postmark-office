@@ -190,7 +190,8 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
 // ── I4 the record ───────────────────────────────────────────────────────────
 
 test("I4 · invited_by is the tail column; absent renders no key, present renders in template order, and folds back", () => {
-  assert.equal(HOUSEHOLD_KEYS.at(-1), "invited_by");
+  // the last column it joined; 091's human_profile (POS-721) came after it
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-2), ["invited_by", "human_profile"]);
   const rows = rowsFromRegistry(REGISTRY(), PINS());
   assert.ok(rows.households.every((r) => r.invited_by === null), "no key folds to NULL");
   assert.equal(renderRegistry(rows).households.includes("invited_by"), false, "an uninvited registry prints exactly as before");

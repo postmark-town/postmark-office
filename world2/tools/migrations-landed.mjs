@@ -144,6 +144,8 @@ export const LANDED = {
   "085_household_invited_by.sql":  { probe: `${col("households", "invited_by")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_invited_by_shape')` },
   // 087 (POS-816): the hands' hold on an inviter's payout, private, office_api its only reader.
   "087_invite_holds.sql":       { probe: `${rel("invite_holds")} AND has_table_privilege('office_api', 'invite_holds', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'invite_holds', 'SELECT')` },
+  // 091 (POS-721, small): the household's human's town name, short line and pronouns, on its row.
+  "091_household_human_profile.sql": { probe: `${col("households", "human_profile")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_human_profile_shape')` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
