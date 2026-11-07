@@ -301,6 +301,14 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-07 FOR POS-730 (Darko 2026-11-06 14:32 EDT, "Build that shape"): the household
+  // gained the act `letter-note`, a household's private note on a letter it received. ADDITIVE and proven
+  // so: the capture diff added exactly `/acts/21/{act,blurb,teaches,dispatches_to}` and
+  // `/acts/21/fields/{letter,on,state}/…` (13 leaves) and removed or retyped none; the base capture equalled
+  // the committed golden before the change. The card is appended at the END of the roster, as every act
+  // since POS-666 has been, so no existing act's index moves. PSA for the release notes: "household
+  // { do: "letter-note", args: { letter, state: no-reply | waiting | clear, on? } } marks a letter you
+  // received, privately: to_answer skips it and the awaiting view still shows it with its mark and age."
   // ⚑ REGENERATED 2026-10-23 FOR POS-762/e (Darko 09:51 EDT, "Buy room ahead"):
   // the household gained the act `buy-parcel-room`, a household declared after
   // 2026-10-31 buying parcel room ahead. ADDITIVE and proven so: the capture diff
@@ -661,7 +669,7 @@ test("F7 · an unknown read bounces naming BOTH namespaces — the reads and the
   assert.match(r.hint, /reads back its own full card/);
 });
 
-test("F7b · the NINETEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
+test("F7b · the TWENTY-ONE acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
   // ⚠ THE ROUND ASKED FOR A DISJOINTNESS GUARD. It fired on the live door:
   // `address`, `home` and `window` have been both an act and a read since long
   // before this branch, because a read here IS that act's shadow. At the world
@@ -700,7 +708,10 @@ test("F7b · the NINETEEN acts that own their name answer their card; the THREE 
   // ⚑ NINETEEN → TWENTY, 2026-10-23 (POS-762/e): `buy-parcel-room` joined as a
   // BARE act. What it buys is read on the parcel room quote (its own preview),
   // not at a household read of its name.
-  assert.equal(bare.length, 20);
+  //
+  // ⚑ TWENTY → TWENTY-ONE, 2026-11-07 (POS-730): `letter-note` joined as a BARE act. What it marks is
+  // shown on the awaiting view's rows (`read: "mail", view: "awaiting"`), not at a household read of its name.
+  assert.equal(bare.length, 21);
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);

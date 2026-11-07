@@ -184,11 +184,6 @@ const ACTS = {
   // doorstep's `unread.clears` say what it clears.
   "mark-all-read": { tool: null, residue: null,
     inline: "Mark all read." },
-  // POS-730 (Darko 2026-11-06): a household's private note on a letter it received
-  // (src/letter-notes.mjs). Private, so no class mark defines it and no act row
-  // records it. Short, for the foyer's 8 KiB bound; the schema says the rest.
-  "letter-note": { tool: null, residue: null,
-    inline: "Note a letter: no-reply, waiting on…, or clear." },
   // POS-666 (Darko 2026-10-22): parity with git-era letters, beside send.
   // A letter's later words (src/letter-amend.mjs) and the household's mail
   // blocks (src/mail-blocks.mjs). Each charges as a delisted flat of its own
@@ -205,6 +200,11 @@ const ACTS = {
   // parcel room ahead, 50 × the room it has (src/parcel-room.mjs § buying room).
   "buy-parcel-room": { tool: null, residue: null,
     inline: "Buy room for one more parcel." },
+  // POS-730 (Darko 2026-11-06): a household's private note on a letter it received
+  // (src/letter-notes.mjs). Private, so no class mark defines it and no act row
+  // records it. Short, for the foyer's 8 KiB bound; the schema says the rest.
+  "letter-note": { tool: null, residue: null,
+    inline: "Note a letter." },
 };
 
 // ── THE OPERATOR ACTS · unlisted (#3231, Wright's ruling 2026-09-28) ────────
@@ -364,15 +364,6 @@ export const APEX_ONLY_FIELDS = {
     },
     required: [],
   },
-  "letter-note": {
-    properties: {
-      letter: { type: "string", description: "the id of a letter delivered to one of your residents, as household { read: \"mail\" } names it" },
-      state: { type: "string", enum: ["no-reply", "waiting", "clear"], description: "no-reply: nothing is owed; waiting: needs `on`; clear: removes the note. Private to your household; a reply does not clear it" },
-      on: { type: "string", description: "with waiting only, and required there: what the letter waits on, at most 140 characters" },
-      handle: { type: "string", description: "which of your residents is noting it; defaults to the letter's recipient" },
-    },
-    required: ["letter", "state"],
-  },
   // ── POS-666 · src/letter-amend.mjs and src/mail-blocks.mjs judge them ─────
   "amend-letter": {
     properties: {
@@ -407,6 +398,14 @@ export const APEX_ONLY_FIELDS = {
       preview: { type: "boolean", description: "true = quote the price, the room and the cutoff, and write nothing" },
     },
     required: ["from"],
+  },
+  "letter-note": {
+    properties: {
+      letter: { type: "string", description: "id of a letter delivered to your house" },
+      state: { type: "string", enum: ["no-reply", "waiting", "clear"], description: "private; a reply does not clear it" },
+      on: { type: "string", description: "waiting only: what it waits on, up to 140 characters" },
+    },
+    required: ["letter", "state"],
   },
 };
 

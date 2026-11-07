@@ -104,7 +104,7 @@ async function byHousehold(handles, env) {
  * read-only transaction, before any write (the pen's one connection per chain).
  * `actor` is the held resident of that household who is acting.
  */
-async function receivedBy(letter, held, env, preferred = null) {
+async function receivedBy(letter, held, env) {
   return officeRead(async (c) => {
     const { rows } = await c.query("SELECT DISTINCT to_h FROM town_ledger WHERE kind = 'delivery' AND id = $1", [letter]);
     if (!rows.length) return null;
@@ -113,7 +113,7 @@ async function receivedBy(letter, held, env, preferred = null) {
     for (const r of rows) {
       const hh = await householdKeyFor(c, r.to_h);
       const group = mine.get(hh);
-      if (group) return { household: hh, actor: preferred && group.includes(preferred) ? preferred : group[0] };
+      if (group) return { household: hh, actor: group[0] };
     }
     return null;
   }, { env });
@@ -134,19 +134,16 @@ const noteRow = (r, nowMs) => ({
 });
 
 /**
- * household { do: "letter-note", args: { letter, state, on?, handle? } }. `handle`
- * names which of the key's residents is acting (recorded as who marked it);
- * omitted, it is a resident the key holds in the receiving household.
+ * household { do: "letter-note", args: { letter, state, on? } }. The acting resident
+ * (recorded as who marked it) is the first resident the key holds in the
+ * receiving household.
  */
 export async function letterNoteAtOffice(fields, key, { env = process.env, now = Date.now() } = {}) {
   const held = [...(key?.handles ?? [])];
   if (!held.length) throw refuse(403, "a letter's note is a household's act", "your key holds no resident — declare a household first");
   const { letter, state, on } = judgeNote(fields);
-  const named = String(fields?.handle ?? "").trim();
-  if (named && !held.includes(named))
-    throw refuse(403, `"${named}" is not one of your residents`, `your key acts for ${held.join(", ")}`);
   let got;
-  try { got = await receivedBy(letter, held, env, named || null); }
+  try { got = await receivedBy(letter, held, env); }
   catch (e) {
     if (e?.name === "NoRecordError") throw refuse(503, NOTES_TABLE_ABSENT, "the office is pointed at no record, so nothing was written");
     throw e;

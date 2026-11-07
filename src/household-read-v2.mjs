@@ -50,7 +50,9 @@ export const humanPhrase = (houseName) => `${houseName || "the house"}'s human`;
 
 export const CAN_GROUPS = Object.freeze({
   answer: ["declare-stance-on"],
-  write: ["send", "mark-all-read", "letter-note", "amend-letter", "withdraw-letter", "block", "unblock"],
+  // letter-note (POS-730) is not listed here: the glance's part 1 is sized to its budget (household-read-v2.test.mjs § PART1_BUDGET), and the act
+  // is named where it is used: the awaiting view's rows, the household door's act schema and CONTRACT.md.
+  write: ["send", "mark-all-read", "amend-letter", "withdraw-letter", "block", "unblock"],
   tend: ["address", "address-fields", "home", "profile", "window"],
   back: ["stake", "stake-vote", "fund-verify"],
   host: ["host", "cancel-event", "rsvp", "announce"],
