@@ -120,11 +120,15 @@ test("POS-922: its landing unreadable (pushing pen, the ancestry read fails): th
   const { a } = stage();
   process.env.TOWN_PUSH = "1";
   const moved = aside();
-  // at the push, the pen's commit object becomes unreadable: the push cannot
-  // send it, and `merge-base --is-ancestor` then fails (exit 128), not "no" (1)
+  // at the push, another writer resets the clone (as `restore` does), and the
+  // pen's commit object becomes unreadable: the push cannot send it, and
+  // `merge-base --is-ancestor` then fails (exit 128), not "no" (1). The clone
+  // itself stays readable, so the pen's own restore runs and the answer is the
+  // ancestry read's.
   hook(a, "pre-push", `read lref lsha rref rsha
 [ -e "${moved}" ] && exit 0
 git log -1 --format=%s "$lsha" | grep -qx "row two" || exit 0
+git reset -q --hard HEAD~1
 mv "${objectOf("$lsha")}" "${moved}"
 exit 0`);
   appendFileSync(join(a, "ledger.md"), "- row two\n");
