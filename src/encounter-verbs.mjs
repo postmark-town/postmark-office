@@ -31,7 +31,7 @@ import { BARS_NOTE, GLANCES, HURLED_ACTION, PRIOR_HURLED_SQL, barsOf, isDisguise
 import { AIM_ACTIONS, AIM_GUARD_SQL, SIGHT_M, windowLeftS } from "./creature-verbs.mjs";
 import {
   ENCOUNTER_VERBS, STRIKE_ACTION, STEADY_ACTION, SHIELD_ACTION, STRIKES_SQL, encounterDial, isFinishable, isStrikable,
-  nerveInStore, nerveOf, queueFlee, resolveAfter, resolveOf, strikesOn, windowAt, wornBy, hasResolve, isTempter, endingSaid,
+  nerveInStore, nerveOf, nerveSpentSaid, queueFlee, resolveAfter, resolveOf, strikesOn, windowAt, wornBy, hasResolve, isTempter, endingSaid,
 } from "./encounter.mjs";
 import { faultLogged } from "./fault-words.mjs";
 import { isoOf, nameOf, ringOf, theOf } from "./creature-bits.mjs";
@@ -417,7 +417,9 @@ async function strikeAt({ d, key, actor, id, here, cr }) {
   const [answer] = await d.answer(act, { ...cr, aimed: c, jevMs: ENCOUNTER_JEV_MS, deadline: d.clock() + ENCOUNTER_WAIT_MS });
   const left = nerveOf(living, actor, d.now());
   if (left === 0) d.flee(actor, { household: key?.household ?? null, creature: id });
+  const said = nerveSpentSaid(living, actor, row.actId, d.now()); // WLD-153: the strike's cost and what is left, in words
   return {
+    ...(said ? { nerve_said: said } : {}),
     did: STRIKE_ACTION, creature: id, kind: c.kind,
     ...(fight ? { ...(isDisguised(c, fight, d.now()) ? {} : { bars: { ...barsOf(living, c, kind, fight, d.now()), note: BARS_NOTE } }), ...(damage === 0 ? { glances: GLANCES } : {}),
         ...(moved?.piece && piece.piece === "disguise" ? { saw_through: `your strike broke its disguise: everyone in its ring sees it as it is` } : {}) }
@@ -488,7 +490,9 @@ async function aidAt({ d, key, verb, actor, target, here, cr }) {
   const answers = await d.answerRing(act, { ...cr, deadline: d.clock() + ENCOUNTER_WAIT_MS, jevMs: ENCOUNTER_JEV_MS });
   const left = nerveOf(living, actor, d.now());
   if (left === 0) d.flee(actor, { household: key?.household ?? null, creature: c.id });
+  const said = nerveSpentSaid(living, actor, row.actId, d.now()); // WLD-153: what the steady or shield cost, and what is left, in words
   return {
+    ...(said ? { nerve_said: said } : {}),
     did: verb, resident: target, creature: c.id,
     nerve: nerveSaid(left),
     ...(verb === STEADY_ACTION ? { their_nerve: nerveSaid(nerveOf(living, target, d.now())) } : { note: `the next press aimed at ${target} lands on you instead, until the settlement` }),

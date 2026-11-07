@@ -42,7 +42,7 @@ import { ENDED, capOf, dial, distanceM, judgeMode, ringHolds, seesCreature } fro
 import { PRESENCE_DIALS } from "./dynamic-presence.mjs";
 import { CREATURE_CALLS, WHISPER_WORDS } from "./world-read-shape.mjs";
 import { DODGE_ACTION, PERSUADE_ACTION, isSetPiece, openHurls, persuadedThisWindow, pieceOf } from "./set-pieces.mjs";
-import { windowAt } from "./encounter.mjs";
+import { nerveSpentSaid, windowAt } from "./encounter.mjs";
 import { isoOf, nameOf, ringOf, theOf } from "./creature-bits.mjs";
 
 /** The six verbs this door answers (the world's AFFORDED_VERBS, as ruled). */
@@ -436,7 +436,10 @@ async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
   // an approach is a walk: every other creature whose ring holds where you set out answers it as one
   let others = [];
   if (othersRows?.length) others = (await d.others(othersRows, id)) ?? [];
+  // WLD-153: what this act cost you, said first, from the cost rows the creature's turn wrote (a charge with no reaction included)
+  const said = nerveSpentSaid(living, actor, trigger.actId, d.now());
   return {
+    ...(said ? { nerve_said: said } : {}),
     did: verb, creature: id, kind: c.kind, ...extra,
     ...(answer ? { reaction: answer } : { reaction: null, note: `${theOf(law, c)} did not answer in time; if it answers, its line stands in happening_here` }),
     ...(others.length ? { creatures: others } : {}),

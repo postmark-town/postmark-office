@@ -156,6 +156,28 @@ const inWindow = (rows, now) => { const w = windowAt(now); return rows.filter((r
 /** `handle`'s nerve now, from the living set's rows. */
 export const nerveOf = (living, handle, now = Date.now()) => foldNerve(inWindow(living.encounter ?? [], now), handle);
 
+/**
+ * WLD-153: what ONE act cost its actor in nerve, said in plain words, from the record: the actor's own cost rows
+ * for that act (a ring act's, a flinch, a strike's, a steady's or a shield's), never a press (that is the creature's
+ * turn, said apart when it landed on the actor). Null when the act spent nothing, so a refused, free or out-of-ring act
+ * carries no line. What is left is the authoritative nerve after the act (nerveOf), whatever else moved it.
+ */
+export function nerveSpentSaid(living, actor, actId, now = Date.now()) {
+  const h = String(actor), id = String(actId);
+  let spent = 0, pressed = 0;
+  for (const r of inWindow(living?.encounter ?? [], now)) {
+    const p = asPayload(r.payload);
+    if (r.action === NERVE_ACTION) {
+      if (r.object !== h || String(p.act) !== id) continue;
+      if (p.why === "press") pressed += Math.max(0, -num(p.by));
+      else spent += Math.max(0, -num(p.by));
+    } else if ((r.action === STRIKE_ACTION || r.action === STEADY_ACTION || r.action === SHIELD_ACTION) && r.actor === h && String(r.id) === id) spent += Math.max(0, num(p.cost));
+  }
+  if (!(spent > 0)) return null;
+  const left = nerveOf(living, h, now), max = encounterDial("nerve_max");
+  return `That cost you ${spent} nerve${pressed ? `, and the creature's press took ${pressed} more` : ""}; you have ${left} of ${max} left.${left === 0 ? " Your nerve is gone: you flee, and stay out until the settlement." : ""}`;
+}
+
 /** The creature's strikes this window, from the living set. */
 export const strikesOn = (living, creatureId, now = Date.now()) =>
   inWindow(living.encounter ?? [], now).filter((r) => r.action === STRIKE_ACTION && r.object === creatureId);

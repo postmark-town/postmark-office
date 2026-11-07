@@ -64,6 +64,7 @@
 import {
   ANSWER_WAIT_MS, ARRIVAL, ENTRY, LivingSet, REFRESH_MS, creatureLaw, distanceM, heardWords, publishedMarks, reactTo, warmRosters,
 } from "./creatures.mjs";
+import { nerveSpentSaid } from "./encounter.mjs";
 import { setCreaturesAwake } from "./act-watch.mjs";
 import { outsideRetryKey } from "./act-nonce.mjs";
 import { actsQuery, world2Enabled } from "./world2-acts.mjs";
@@ -199,7 +200,11 @@ export async function creaturesAnswer(rows, result, deps = state.testDeps ?? {})
   })();
   const answers = await byDeadline(work, deadline, clock, partial);
   if (answers.length) result.creatures = answers;
-  return result;
+  // WLD-153: what this act cost its actor, from the cost rows the turns wrote and folded (a charge with no reaction included).
+  // An aimed act's door (`except`) says it itself, and a late write is simply not on the record yet.
+  const trigger = [...rows].reverse().find((r) => now.law.kindMod.RING_VERBS.includes(r.action) && !String(r.actor ?? "").startsWith("berth-"));
+  const said = trigger && deps.except == null ? nerveSpentSaid(now.living, trigger.actor, trigger.id, clock()) : null;
+  return said ? { nerve_said: said, ...result } : result;
 }
 
 /** `work`'s answers if it settles by `deadline`; else the turns that had finished (nearest first). A held timer. */

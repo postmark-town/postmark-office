@@ -21,7 +21,7 @@ import { test as nodeTest } from "node:test";
 import assert from "node:assert/strict";
 
 import { LivingSet, loadCreatureLaw, reactTo, advanceFight, unmaskFight } from "../src/creatures.mjs";
-import { NERVE_ACTION, nerveOf, windowAt } from "../src/encounter.mjs";
+import { NERVE_ACTION, nerveOf, nerveSpentSaid, windowAt } from "../src/encounter.mjs";
 import {
   PHASE_ACTION, HURL_ACTION, HURLED_ACTION, SANITY_ACTION, UNMASKED_ACTION, PERSUADE_ACTION, LINE_ACTION, GLANCES,
   pieceOf, sanityOf, barsOf, nextPiece, openHurls, answerOf, STRIKE_UNDER_FEINT, persuadeScore, repeats, persuadedThisWindow,
@@ -196,6 +196,9 @@ test("the target's next act in the ring answers it: dodge, walk or exit flinch (
   assert.deepEqual([payloadOf(hd[0]).outcome, payloadOf(hd[0]).hurl], ["flinched", dodged.h.id]);
   assert.deepEqual(rowsOf(dodged.w, NERVE_ACTION).filter((r) => payloadOf(r).why === "flinched").map((r) => payloadOf(r).by), [-3]);
   assert.deepEqual(dodged.answer.feint, { outcome: "flinched", nerve: -3 });
+  // WLD-153: the dodge's answer adds the flinch (3) to the act's own 1, and says what is left
+  const dodgeAct = payloadOf(rowsOf(dodged.w, NERVE_ACTION).find((r) => payloadOf(r).why === "flinched")).act;
+  assert.equal(nerveSpentSaid(dodged.living, "kai", dodgeAct, NOW), "That cost you 4 nerve; you have 6 of 10 left.");
   const walked = await run("walk");
   assert.equal(payloadOf(rowsOf(walked.w, HURLED_ACTION)[0]).outcome, "flinched");
   const said = await run("say");
@@ -321,8 +324,11 @@ test("persuade: only in the unbreakable piece, once per household each settlemen
   // the cost and the score
   const { w, d } = turnDeps(living, { env: { TYPESAFE_API_KEY: "k" },
     ask: async (state, q) => ({ response: { answers: { reaction: { probabilities: { hum: 1 } }, persuade_score: { probabilities: { s8: 0.9, s3: 0.1 } } } } }) });
-  const [answer] = await reactTo(act({ verb: "persuade", words: "You waited for it once. Wait with us.", actor: "kai" }), { ...d, aimed: living.byId.get(ID) });
+  const persuasion = act({ verb: "persuade", words: "You waited for it once. Wait with us.", actor: "kai" });
+  const [answer] = await reactTo(persuasion, { ...d, aimed: living.byId.get(ID) });
   assert.deepEqual(rowsOf(w, NERVE_ACTION).filter((r) => r.object === "kai").map((r) => payloadOf(r).by), [-8], "its nerve, in place of an act's 1");
+  // WLD-153: the persuade's answer says its own cost (the piece's nerve, not an act's 1) and what is left
+  assert.equal(nerveSpentSaid(living, "kai", persuasion.actId, NOW), "That cost you 8 nerve; you have 2 of 10 left.");
   assert.deepEqual(rowsOf(w, SANITY_ACTION).map((r) => payloadOf(r).by), [8]);
   assert.equal(answer.persuaded.sanity, 8);
 });
