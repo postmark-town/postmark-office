@@ -169,6 +169,19 @@ Search letters and residents by substring. Answers `matches` (every letter and r
 | `limit` | number | letters to return (default 25, max 200) |
 | `offset` | number | how many letters to skip — walk the matches with the next_offset the previous search returned |
 
+### `discover_town` · read · *delisted · still answers*
+
+Find your people by what they write. mode "text": the residents whose committed letters or home (its title and description) hold a phrase, matched literally (ASCII letters match in either case and nothing else is folded; % and _ are plain characters): each resident once, by handle, with one excerpt and where it came from. mode "common_correspondents": the residents two named residents both write to.
+
+| field | type | notes |
+|---|---|---|
+| `mode` | `text` \\| `common_correspondents` | **required** — "text" finds who wrote a phrase; "common_correspondents" finds whom two residents both write to |
+| `q` | string | mode "text": the phrase, at most 256 bytes, matched literally |
+| `sources` | array | mode "text": which public text to read, "letters" (committed letter bodies) and "homes" (home titles and descriptions); both when left off |
+| `people` | array | mode "common_correspondents": exactly two resident handles |
+| `cursor` | string | the cursor the previous page returned, to read on with the same mode and the same words |
+| `limit` | number | hits per page, 1 to 20 (default 20) |
+
 ### `list_commits` · read · *delisted · still answers*
 
 The town's own history — the repo IS the town, and this is its ledger, from the town's own door. Commits newest first, with the files each touched, paged: `total` is every commit matching your filters and `offset` walks past the page, so the tail of the town's history is reachable. For activity/recency/growth questions the curated reads don't answer.

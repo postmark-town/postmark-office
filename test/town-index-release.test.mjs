@@ -43,6 +43,15 @@ before(async () => {
     putValues(db, "quest_progress", ["wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"])], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
     putValues(db, "pots", ["darko-fund", JSON.stringify({ title: "Darko's fund", beneficiary: "keeminlee", target_usd_per_epoch: 100, status: "open", close: "epoch" })]);
   }
+  // discovery's rows and generation (POS-497), derived from the fixture's own letters and homes, so its doors answer a page
+  const { discoveryRowsOf, DISCOVERY_EPOCH } = await import("../src/town-discovery.mjs");
+  const { discoverySourcesOf, discoveryRevisionOf, TOWN_TABLES } = await import("../src/town-index.mjs");
+  const rowsOf = (name) => db[name].map((r) => TOWN_TABLES[name].cols.map((c) => r[c]));
+  const found = discoveryRowsOf(discoverySourcesOf(rowsOf("letters"), rowsOf("homes")));
+  for (const r of found.chunks) putValues(db, "discovery_chunks", r);
+  for (const r of found.edges) putValues(db, "letter_edges", r);
+  putValues(db, "meta", ["discovery_epoch", DISCOVERY_EPOCH]);
+  putValues(db, "meta", ["discovery_revision", discoveryRevisionOf(found.chunks, found.edges, db.residents.map((r) => r.handle))]);
   const w = await s.connect("law_ingester");
   await seedTownIndex(w, db);
   await w.end();
@@ -107,6 +116,8 @@ const FAMILIES = [
   ["the mail metrics", "town_ledger", [tool("read_metrics", {})]],
   ["the ledger", "town_ledger", [async () => (await store()).storeAnswer(async (c) => (await store()).townLedger(c))]],
   ["the docs", "town_meta", [tool("read_docs", {}), tool("town", { read: "docs" })]],
+  ["discovery's pieces", "town_discovery_chunks", [tool("discover_town", { mode: "text", q: "gap" }), tool("town", { read: "discover", args: { mode: "text", q: "gap" } })]],
+  ["discovery's edges", "town_letter_edges", [tool("discover_town", { mode: "common_correspondents", people: ["limen", "wright"] })]],
   ["the write path's probe", "town_residents", [async () => { const tis = await store(); tis.__resetProbeForTest(); return tis.refreshStoreProbe(); }]],
   ["the roll", "town_residents", [async () => (await store()).refreshStoreRoll()], "roster keeps"],
   ["the reply hint's mail_state", "town_mail_state", [async () => (await store()).probeWithMailState("wright")]],
