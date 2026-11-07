@@ -15,29 +15,21 @@
 //              Writes go to the store FIRST and are awaited; a store that
 //              refuses is a refusal, never a quiet fall back to the file.
 //
-// ── COPY, THEN SWITCH, AND THE ROLLBACK IS THE FLAG ─────────────────────────
+// ── COPY, THEN SWITCH; THE FILES ARE GONE ───────────────────────────────────
 //
-// world2/tools/paperwork-import.mjs copies the files into the store and commits
-// only when every row is equal. The flag then switches reads. The rollback is
-// the flag off, so the file has to still be RIGHT after a switched office has
-// minted a key: a token issued on the store must answer after the rollback
-// (the lane's gate). So while switched, every write that commits on the store
-// is then written to the file too — the same statement, the same arguments, the
-// same seq for a town-log row — after the store, best-effort, and never with a
-// vote. That is the pen's reverse mirror (world2-pen.mjs § D3) applied to
-// paperwork: "a rollback convenience, not a record". A mirror write that fails
-// is counted and logged loudly (`paperStatus()`), and the file is then behind
-// the store by that row; the import's `--check` names exactly which.
-//
-// ⚑ THE MIRROR IS TEMPORARY (Wright, 2026-09-30). It is the rollback's bridge
-// and nothing else, and it is DELETED — `#mirror`, `withIdColumn`, the `file`
-// on a switched paper and `paperStatus` — in the same change that deletes
-// oauth.db and roles.db after a clean week on the store. Until then a failed
-// mirror write is never dropped silently: it is counted (`paperStatus()`) and
-// logged on one greppable line, `[paperwork] MIRROR FAILED`, for the
-// roll-call, because a file that drifted makes the rollback sign people out.
-// With no file (after the deletion, or on a read worker) a paper simply has
-// nothing to mirror to.
+// world2/tools/paperwork-import.mjs copied the files into the store and
+// committed only when every row was equal; the flag then switched reads. Until
+// this change, every write that committed on the store was also written to the
+// file (the rollback's mirror, Wright 2026-09-30), so the flag off was a
+// lossless rollback. That mirror is DELETED here, and oauth.db and roles.db
+// leave the box after it (POS-271, deploy/DEPLOY.md § The paperwork files leave
+// the box): a switched paper holds no file and writes only the store. There is
+// no rollback to the files after it, and an unswitched writer whose oauth.db is
+// missing refuses to boot while the store holds sign-ins (server.mjs, the boot
+// guard). The file road below is the unswitched office's (a suite, a dev
+// office), and a switched office never opens either file. Neither does
+// static-keys-retire, whose own replay into the file went in the same change
+// (its § NO FILE).
 //
 // ── ONE SPELLING OF THE SQL ─────────────────────────────────────────────────
 //
@@ -47,7 +39,9 @@
 // (read off oauth.mjs, roles.mjs, media.mjs and town-journal.mjs). Two
 // statements that were SQLite-only (`INSERT OR REPLACE INTO meta`) are now
 // written as the upsert both engines speak. A statement the rename cannot carry
-// is a bug in that statement; test/paperwork.test.mjs holds each one.
+// is a bug in that statement; test/paperwork-store.test.mjs runs the office's
+// statements against a real Postgres (it skips without PAPERWORK_TEST_PG_*).
+// No test imports `toStoreSql` on its own.
 //
 // ── NUMBERS ─────────────────────────────────────────────────────────────────
 //
@@ -59,11 +53,12 @@
 // numeric, and its one caller (media.mjs § mediaQuota) says Number() itself.
 
 import { DatabaseSync } from "node:sqlite";
-import { existsSync } from "node:fs";
 
-// THIS MODULE IMPORTS NOTHING BUT NODE BUILTINS (and pg, lazily), ON PURPOSE:
+// THIS MODULE'S STATIC IMPORTS ARE NODE BUILTINS ONLY, ON PURPOSE:
 // roles.mjs reaches the store through it, and the registry's boundary is that
-// it has no edge into world code (test/roles.test.mjs § THE BOUNDARY). So the
+// it has no edge into world code (test/roles.test.mjs § THE BOUNDARY, which
+// pins that list). The store path adds two LAZY imports inside `storePool`,
+// `pg` and ./store-pool.mjs (the pool options; builtins only itself). So the
 // store's two switches are read here in world2-acts.mjs § world2Enabled's own
 // words rather than imported from it — one line of env, not a domain rule.
 const storeConfigured = (env) => env.WORLD2_PG === "1" && !!env.WORLD2_PG_URL;
@@ -71,7 +66,9 @@ const storeConfigured = (env) => env.WORLD2_PG === "1" && !!env.WORLD2_PG_URL;
 /** The switch. Off, every paper answers from its file, exactly as before. */
 export const paperworkStoreOn = (env = process.env) => env.OFFICE_PAPERWORK_STORE === "1";
 
-/** File table -> store table (031, 032). Exported for the import and the suite. */
+/** File table -> store table (031, 032). Used inside this file only: nothing
+ *  else imports it (the import tool keeps its own table pairs, and no test
+ *  reads it). The same holds for `toStoreSql` below. */
 export const STORE_TABLES = Object.freeze({
   clients: "oauth_clients", pending: "oauth_pending", codes: "oauth_codes", tokens: "oauth_tokens",
   berths: "oauth_berths", key_claims: "oauth_key_claims",
@@ -86,31 +83,10 @@ export function toStoreSql(sql) {
   return sql.replace(TABLE_RE, (t) => STORE_TABLES[t]).replace(/\?/g, () => `$${++n}`);
 }
 
-/**
- * `INSERT INTO t (a, b) VALUES (?, ?)` -> `INSERT INTO t (id, a, b) VALUES (?, ?, ?)`:
- * the mirror of an append, carrying the id the store assigned so the file's row
- * is the same row (a town-log seq the drain cursor names, an audit id).
- */
-export function withIdColumn(sql, idCol) {
-  const out = sql.replace(/^(\s*INSERT INTO \w+\s*\()/i, `$1${idCol}, `).replace(/\bVALUES\s*\(/i, "VALUES (?, ");
-  if (out === sql || !/VALUES \(\?, /.test(out)) throw new Error(`paperwork: cannot carry ${idCol} into "${sql.slice(0, 60)}"`);
-  return out;
-}
-
 const INT8 = 20;
 const storeTypes = (pg) => ({
   getTypeParser: (oid, format) => (oid === INT8 ? (v) => (v == null ? null : Number(v)) : pg.types.getTypeParser(oid, format)),
 });
-
-const status = { mirrored: 0, mirrorFailed: 0, lastMirrorError: null };
-/** What the mirror has done since boot — for /ops and the suite. */
-export const paperStatus = () => ({ ...status });
-
-const loud = (what, e) => {
-  status.mirrorFailed += 1;
-  status.lastMirrorError = `${what}: ${String(e?.message ?? e).slice(0, 200)}`;
-  console.error(`[paperwork] MIRROR FAILED (the file is now behind the store by this write; paperwork-import --check names it): ${status.lastMirrorError}`);
-};
 
 // ── the file ────────────────────────────────────────────────────────────────
 
@@ -136,20 +112,6 @@ class Paper {
 
   #refuseWrite() { if (this.readOnly) throw new Error("paperwork: this handle is read-only (a read worker holds no pen)"); }
 
-  // The writes the mirror replays, in order, after the store committed them.
-  // TEMPORARY: deleted with the files (see ⚑ THE MIRROR IS TEMPORARY, above).
-  #mirror(steps) {
-    if (!this.file || !steps.length) return;
-    try {
-      this.file.exec("BEGIN");
-      try {
-        for (const [sql, args] of steps) this.file.prepare(sql).run(...args);
-        this.file.exec("COMMIT");
-      } catch (e) { try { this.file.exec("ROLLBACK"); } catch { /* already gone */ } throw e; }
-      status.mirrored += steps.length;
-    } catch (e) { loud(steps[0][0].trim().split(/\s+/).slice(0, 4).join(" "), e); }
-  }
-
   async get(sql, ...args) {
     if (!this.onStore) return this.file.prepare(sql).get(...args);
     return (await this.pool.query(toStoreSql(sql), args)).rows[0];
@@ -164,7 +126,6 @@ class Paper {
     this.#refuseWrite();
     if (!this.onStore) return fileVerbs(this.file).run(sql, ...args);
     const r = await this.pool.query(toStoreSql(sql), args);
-    this.#mirror([[sql, args]]);
     return { changes: r.rowCount ?? 0 };
   }
 
@@ -172,16 +133,13 @@ class Paper {
   async append(sql, args, idCol) {
     this.#refuseWrite();
     if (!this.onStore) return fileVerbs(this.file).append(sql, args);
-    const id = Number((await this.pool.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]);
-    this.#mirror([[withIdColumn(sql, idCol), [id, ...args]]]);
-    return id;
+    return Number((await this.pool.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]);
   }
 
   /**
    * `fn(t)` in one transaction, `t` carrying the same four verbs. On the file
    * it is BEGIN/COMMIT on the handle, as roles.mjs always did. On the store it
-   * is one client; the mirror replays the transaction's writes as one sqlite
-   * transaction only after the store's COMMIT.
+   * is one client.
    */
   async tx(fn) {
     this.#refuseWrite();
@@ -191,16 +149,11 @@ class Paper {
       catch (e) { try { this.file.exec("ROLLBACK"); } catch { /* already gone */ } throw e; }
     }
     const client = await this.pool.connect();
-    const steps = [];
     const t = {
       get: async (sql, ...args) => (await client.query(toStoreSql(sql), args)).rows[0],
       all: async (sql, ...args) => (await client.query(toStoreSql(sql), args)).rows,
-      run: async (sql, ...args) => { const r = await client.query(toStoreSql(sql), args); steps.push([sql, args]); return { changes: r.rowCount ?? 0 }; },
-      append: async (sql, args, idCol) => {
-        const id = Number((await client.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]);
-        steps.push([withIdColumn(sql, idCol), [id, ...args]]);
-        return id;
-      },
+      run: async (sql, ...args) => ({ changes: (await client.query(toStoreSql(sql), args)).rowCount ?? 0 }),
+      append: async (sql, args, idCol) => Number((await client.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]),
     };
     // A ROLLBACK that fails may leave the connection inside the transaction; it
     // is discarded, never handed to the next caller (POS-370, the pen's rule).
@@ -218,7 +171,6 @@ class Paper {
       await client.query("BEGIN");
       const out = await fn(t);
       await client.query("COMMIT");
-      this.#mirror(steps);
       return out;
     } catch (e) {
       try { await client.query("ROLLBACK"); } catch { discard = true; }
@@ -249,10 +201,9 @@ export function asPaper(h) {
  * The office's paper for one file. `schema(db)` builds the file's own tables
  * (the writer owns them) and runs only when the file is opened for writing.
  *
- * Switched, the paper reads the store and keeps the file as its mirror, if the
- * file is there. A read worker's paper holds no file at all when switched: it
- * has nothing to mirror, and a worker that could write the file would be a
- * second writer.
+ * Switched, the paper is the store's and `path` is never opened: the mirror is
+ * deleted and the files leave the box after it (POS-271), so nothing here may
+ * create one.
  */
 export async function openPaper(path, { readOnly = false, schema = null, env = process.env, pool = null } = {}) {
   if (!paperworkStoreOn(env)) {
@@ -260,11 +211,7 @@ export async function openPaper(path, { readOnly = false, schema = null, env = p
     if (!readOnly && schema) schema(db);
     return new Paper({ file: db, readOnly });
   }
-  let file = null;
-  if (!readOnly) {
-    if (existsSync(path)) { file = new DatabaseSync(path); if (schema) schema(file); }
-  }
-  return new Paper({ file, pool: pool ?? await storePool(env), readOnly });
+  return new Paper({ pool: pool ?? await storePool(env), readOnly });
 }
 
 const pools = new Map(); // url -> pool: every paper in a process shares one
@@ -283,6 +230,22 @@ async function storePool(env) {
   return pools.get(url);
 }
 
+/**
+ * How many sign-ins the store holds (its oauth_tokens rows), or null when no
+ * store is configured. One connection, opened and closed here: it is asked once,
+ * at an UNSWITCHED office's boot, by the guard that refuses to start on an empty
+ * file while the town's sign-ins live in the store (server.mjs, POS-271).
+ */
+export async function storeSignInCount(env = process.env) {
+  if (!storeConfigured(env)) return null;
+  const { default: pg } = await import("pg");
+  const c = new pg.Client({ connectionString: env.WORLD2_PG_URL, connectionTimeoutMillis: 10_000 });
+  c.on("error", () => {});
+  await c.connect();
+  try { return Number((await c.query("SELECT count(*) AS n FROM oauth_tokens")).rows[0].n); }
+  finally { await c.end().catch(() => {}); }
+}
+
 /** Close every store pool this process opened (a tool's exit, a suite's end). */
 export async function closePaperworkPools() {
   const all = [...pools.values()];
@@ -290,9 +253,13 @@ export async function closePaperworkPools() {
   await Promise.all(all.map((p) => p.end().catch(() => {})));
 }
 
-/** A store paper on a pool the caller owns — the suite's seam, and the proof's. */
-export function paperOnPool(pool, { file = null, readOnly = false } = {}) {
-  return new Paper({ file, pool, readOnly });
+/**
+ * A store paper on a pool the caller owns — the suite's seam, and the proof's.
+ * It holds no file, as every store paper holds none since the mirror was
+ * deleted (POS-271): the option that could hand it one is gone, not just unused.
+ */
+export function paperOnPool(pool, { readOnly = false } = {}) {
+  return new Paper({ pool, readOnly });
 }
 
 /** The int8-as-Number types for a pool a caller builds (the suite, the proof). */

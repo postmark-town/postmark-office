@@ -57,11 +57,6 @@ export function intakeAddresses(map, standing = INTAKE) {
   return [...new Set([lower(standing), ...map.keys()])];
 }
 
-/** Which pot an address names, or null for the standing shared address. */
-export function potForAddress(addr, map) {
-  return map.get(lower(addr)) ?? null;
-}
-
 /** Every address mapped to this pot. More than one is a mistake, not a feature. */
 export function addressesForPot(pot, map) {
   return [...map].filter(([, p]) => p === String(pot)).map(([a]) => a);
@@ -88,24 +83,4 @@ export function addressForPot(pot, map, standing = INTAKE) {
   if (own.length === 1) return own[0];
   if (own.length === 0) return lower(standing);
   return null;
-}
-
-/**
- * THE ADDRESSES A CLAIM ON THIS POT MAY HAVE PAID — the grandfather rule,
- * stated once so the door and its falsifiers read the same sentence:
- *
- *   A claim naming pot P verifies against P's own mapped address AND against
- *   the standing shared intake, because the shared address was the published
- *   answer for every pot up to the moment P's own address was minted. Refusing
- *   a tx that paid the shared address would strand an honest payer who
- *   followed yesterday's instructions, and yesterday's instructions were the
- *   town's own.
- *
- * The union is deliberate and it is not symmetric: paying P's address while
- * claiming pot Q is NOT grandfathered, because the chain named P out loud and
- * no published instruction ever pointed a Q-payer at P's address.
- */
-export function acceptedForPot(pot, map, standing = INTAKE) {
-  const own = addressForPot(pot, map, standing);
-  return [...new Set([lower(standing), ...(own ? [own] : [])])];
 }

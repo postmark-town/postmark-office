@@ -44,7 +44,7 @@ import {
   QUEST_NO_AMEND, QUEST_NO_ADVANCE,
 } from "./quests.mjs";
 import {
-  BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
+  BUG_CLASS, BUG_FIELDS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
   RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
@@ -52,6 +52,7 @@ import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
+import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -384,6 +385,8 @@ function bodyOf(fields) {
 async function classOf(fields, id, env) {
   // a report's id says its class (POS-757): report/<hex>, never a public row
   if (String(fields.class ?? "").trim() === REPORT_CLASS || REPORT_ID_RE.test(id)) return REPORT_CLASS;
+  // and an invitation's (POS-816): invite:<the invited household's slug>, never a public row
+  if (INVITE_ID_RE.test(id)) return INVITE_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
   const { ideaRow } = await ideaPen();
@@ -432,10 +435,12 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
  * `close`. A quest's one move is `close` too. A bug advances (bugs.mjs), by
  * the town's hands, and so does an idea (ideas.mjs), to any named stage.
  */
-export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
+export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null, clone = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) return (await import("./report-store.mjs")).advanceReport(fields, key, id, { now, env });
+  // POS-816: the hands hold, lift or cancel an inviter's payout (invite-hold-store.mjs); anyone else learns nothing
+  if (cls === INVITE_CLASS) return (await import("./invite-hold-store.mjs")).advanceInvite(fields, key, id, { now, env, clone });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
@@ -631,7 +636,7 @@ async function amendBug(fields, key, id, { now, env }) {
         `a reporter amends until the bug is confirmed; tell ${BUG_HANDS.join(", ")} what changed, by letter`);
     const now_ = { title: text.title ?? prev.title, body: text.body ?? prev.body, ...prev.fields, ...text.fields };
     const was = { title: prev.title, body: prev.body, ...prev.fields };
-    const changed = ["title", "body", "issue", "steps", "record"].filter((k) => k in now_ && now_[k] !== was[k]);
+    const changed = ["title", "body", ...BUG_FIELDS].filter((k) => k in now_ && now_[k] !== was[k]);
     if (!changed.length) throw refuse(422, "nothing to amend", `every field you sent already stands on "${id}"`);
     const payload = { post: id, changed };
     for (const k of changed) {
@@ -770,9 +775,10 @@ async function skipBug(fields, key, id, { now, env }) {
 }
 
 /**
- * The reveal at ship (POS-236): a town hand sets the three candidates Iris
- * painted, or the fixer picks one. One `reveal` act, carrying the post's whole
- * reveal after it; it mints nothing and moves no stage.
+ * The reveal at ship (POS-236, CORE-25): a town hand sets the critter's one
+ * portrait (its image at once, and a later one replaces it), or sets the three
+ * candidates of an older set for the fixer to pick one. One `reveal` act,
+ * carrying the post's whole reveal after it; it mints nothing and moves no stage.
  */
 export async function revealAtTown(fields, key, { now = Date.now(), env = process.env } = {}) {
   const id = String(fields?.post ?? "").trim();
@@ -798,7 +804,11 @@ export async function revealAtTown(fields, key, { now = Date.now(), env = proces
     await updatePost(client, row);
     const critter = prev.fields?.critter ? `"${prev.fields.critter}"` : "its critter";
     return { post: bugAnswer(row), act_id: actId, hand: actor, reveal,
-      receipt: reveal.pick
+      receipt: reveal.pick && reveal.candidates.length === 1 && prev.fields?.reveal?.pick
+        ? `revealed: ${id}'s critter ${critter} has a new portrait, set by ${actor}; it replaces the earlier one, and the jar shows it from now on`
+        : reveal.pick && reveal.candidates.length === 1
+        ? `revealed: ${id}'s critter ${critter} has its portrait, set by ${actor}; the jar shows it from now on`
+        : reveal.pick
         ? `revealed: ${id}'s critter ${critter} is candidate ${reveal.pick}, chosen by ${actor}; the jar shows it from now on`
         : `candidates set on ${id} by ${actor}'s hand: ${REVEAL_CANDIDATES} images for ${critter}; ${prev.fields?.named_by ?? "its fixer"} picks one with { post, pick }`,
       read: bugReadHint(id) };

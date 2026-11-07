@@ -7,7 +7,8 @@
 // something that is not a browser, and every number in it is DERIVED by the
 // same code the public reads already use — never a second copy.
 //
-// FOUR TENANTS, and the line between them:
+// FIVE TENANTS (four of them served by this file's exports), and the line
+// between them:
 //
 //   read: "stamps"  the ESTATE — your household's own books. read_stamps stays
 //                   the PUBLIC roster read; the split is public-record vs.
@@ -19,9 +20,15 @@
 //   do:   "stake"   the pot-mode stake write.
 //   do:   "fund-verify"  a tx hash becomes a witnessed receipt, or a refusal.
 //
+// The first four are this file's: `estateRead`, `questsRead`, `fundReadOf` and
+// `potStakeViaOffice`. `fund-verify` is not: household-apex.mjs's `do:
+// "fund-verify"` calls fund.mjs's `fundVerifyViaOffice` directly, and this file
+// holds no wrapper for it.
+//
 // NOTHING HERE FORKS A DERIVATION. stampsDetail, the quest board and potBoard are
-// the town index's existing reads (town-index-store.mjs); fundVerifyViaOffice is fund.mjs's eight-guard
-// implementation, wrapped and never reimplemented. Where this file computes at
+// the town index's existing reads (town-index-store.mjs); `fund-verify` is
+// fund.mjs's eight-guard implementation, called by the apex and never
+// reimplemented. Where this file computes at
 // all, it computes only the things no existing read computes: the estate roll-up
 // and the escrow split.
 

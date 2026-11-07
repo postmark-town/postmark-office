@@ -81,6 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: read # the gate reads which PR merged this commit (STAR-102)
     outputs:
       tag: ${{ steps.cut.outputs.tag }}
     steps:
@@ -96,6 +97,20 @@ jobs:
             echo "no train name in merge subject — no tag cut, and nothing deploys"
             exit 0
           fi
+          # THE APPROVED SHIP IS A PULL REQUEST, NOT A SUBJECT (STAR-102). On 2026-11-02 21:10 EST an update-branch
+          # merged the train into main; its subject named the train, and w45.3 was cut, deployed and restored. Only
+          # the merge commit of a train/<week> → main PR merged by a person cuts (tools/release-train-gate.mjs; its
+          # tests replay that commit). Exit 1 is "not the ship": nothing cut, nothing deploys. Exit 2 (GitHub
+          # unreadable) fails the job, so a cut that can't be checked is never made quietly.
+          set +e
+          GH_TOKEN="${{ github.token }}" node tools/release-train-gate.mjs "$(git rev-parse HEAD)" "$WEEK"
+          GATE=$?
+          set -e
+          if [ "$GATE" = 1 ]; then
+            echo "not the approved ship — no tag cut, and nothing deploys"
+            exit 0
+          fi
+          [ "$GATE" = 0 ] || exit "$GATE"
           # THE TAG IS NAMED FOR THE WEEK IT SHIPS IN, NOT FOR THE TRAIN IT CAME FROM.
           # The open train is always named for NEXT week (train/2026-w(NN+1) opens the
           # day w(NN) ships), so a mid-week ship merged from it is a patch of the

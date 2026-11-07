@@ -201,7 +201,7 @@ export function foldDifference(a, b) {
 //   households     SOURCE   the register rows at the seal (064) with the town at the
 //                           ledger position (its resolver, ADDRESS logins and dated
 //                           registry: lines), the crossing's own derivation
-//                           (tools/world-households-export.mjs § worldHouseholdsAt)
+//                           (src/household-logins.mjs § worldHouseholdsAt)
 //   houseFacts     SOURCE   the same two: each register house's `since`, and its
 //                           parcel purchases on the town ledger at town_sha
 //                           (parcel-room.mjs § houseFactsAt, POS-762)

@@ -32,7 +32,6 @@
 // it exists or not (REPORT_NOT_FOUND).
 
 import { refuse, INVITATION_MAX } from "./events.mjs";
-import { holdsHand } from "./named-hand.mjs";
 
 export const REPORT_CLASS = "report";
 
@@ -68,9 +67,6 @@ export const reportId = (hex8) => `${REPORT_CLASS}/${hex8}`;
 export const REPORT_POST_FIELDS = Object.freeze(["class", "about", "body", "asks", "handle"]);
 /** The fields `town { do: "advance" }` takes for a report. */
 export const REPORT_ADVANCE_FIELDS = Object.freeze(["post", "class", "to", "note", "handle"]);
-
-/** True when this key stands as one of the town's hands for reports. */
-export const isReportHand = (key) => REPORT_HANDS.some((h) => holdsHand(key, h));
 
 // ── the judges ──────────────────────────────────────────────────────────────
 

@@ -105,9 +105,6 @@ export async function vesselServiceFrom(worldState, { repo = WORLD_CLONE, vessel
   return out;
 }
 
-/** Drop the memoized services — for tests that rebuild a world in place. */
-export function resetServiceCache() { /* WeakMap: entries die with their marks array */ }
-
 // ── the stop answers ─────────────────────────────────────────────────────────
 //
 // The law (the-stop-answers, child of the timetable class, planted 2026-08-23):
@@ -420,11 +417,6 @@ export async function storedGoverningDepartures({ atMs = Date.now() } = {}) {
 /** One entity's stored records, oldest first. The per-handle slice of the above. */
 export async function storedRecordsFor(handle, opts = {}) {
   return (await storedDepartures(opts)).records.filter((r) => r.handle === handle);
-}
-
-/** The single governing record — the last one. Kept for surfaces that want only that. */
-export async function storedDepartureFor(handle, opts = {}) {
-  return (await storedRecordsFor(handle, opts)).at(-1) ?? null;
 }
 
 // ── POS-196 · THE WORLD REPO'S DEPARTURE RECORD, RENDERED FROM THE STORE ─────
@@ -822,27 +814,6 @@ export async function roadTerms({ handle, from, toward, worldState, repo = WORLD
   const warning = await gunwaleWarning(frameCarrier, toward, atMs, { carrierAt });
   if (!crossings.length && !warning) return null;
   return { crosses: crossings, ...(warning ? { leaving: warning } : {}) };
-}
-
-// ── the operator's surface ───────────────────────────────────────────────────
-
-export async function movementHealth(worldState, { repo = WORLD_CLONE, atMs = Date.now() } = {}) {
-  const { service, carriers, errors, reason } = await vesselServiceFrom(worldState, { repo });
-  const v = service ? await vesselPositionAt(worldState, atMs, { repo }) : null;
-  return {
-    enabled: movementV2Enabled(),
-    flags: { WORLD_MOVEMENT_V2: process.env.WORLD_MOVEMENT_V2 ?? null },
-    carriers: (carriers ?? []).map((c) => ({ id: c.id, mobility: c.mobility, class: c.className, declared_by: c.declaredBy })),
-    carrier_source: (await vesselServiceFrom(worldState, { repo })).carrierSource ?? null,
-    disclosed: (await vesselServiceFrom(worldState, { repo })).disclosed ?? [],
-    service: service
-      ? { mark: service.markId, vessel: service.vessel.markId, pace_km_per_crossing: service.pace, stops: service.stops.map((s) => s.markId) }
-      : null,
-    service_absent_reason: reason ?? null,
-    schedule_errors: errors ?? [],
-    vessel_now: v ? { x: v.x, y: v.y, berthed: v.berthed, at_stop: v.atStop } : null,
-    evaluated_at: new Date(atMs).toISOString(),
-  };
 }
 
 // ── DEC-5, THE WALK GUARD (founder-ruled 2026-09-03) ──────────────────────────

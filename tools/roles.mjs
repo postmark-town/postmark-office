@@ -62,8 +62,8 @@
 // ── WHICH BOOK (POS-271) ───────────────────────────────────────────────────
 //
 // With OFFICE_PAPERWORK_STORE=1 and the store's WORLD2_PG / WORLD2_PG_URL in
-// this shell, the tool writes the store's office_roles (and --db's file after
-// it, as the office's own mirror does). Without them it writes the file only.
+// this shell, the tool writes the store's office_roles only (the rollback's
+// mirror to the file is deleted, POS-271). Without them it writes the file only.
 // An office switched to the store reads only the store, so a grant written to
 // the file alone would grant nobody: every run prints which book it wrote, on
 // its first line, so the operator sees that before anything else.
@@ -153,8 +153,8 @@ function pinsIndex(clonePath) {
  * Logins the office has actually seen sign in.
  *
  * THE SAME SWITCH AS THE REGISTRY (POS-271). With OFFICE_PAPERWORK_STORE=1 the
- * sign-ins are the store's `oauth_tokens`, and oauth.db is only the rollback's
- * mirror, so the lookup asks the store. A store that cannot answer is said, not
+ * sign-ins are the store's `oauth_tokens` (oauth.db leaves the box with the
+ * rollback's mirror, POS-271), so the lookup asks the store. A store that cannot answer is said, not
  * read as "nobody signed in": that would turn an outage into "this login cannot
  * be resolved", which sends the operator looking for a typo. Unswitched, the
  * file is read as it always was, and an absent or unreadable file is an empty
@@ -333,10 +333,8 @@ async function main() {
   }
 }
 
-// The book this run wrote, said in full: the store, with the file it mirrors
-// to, or the file alone.
-const BOOK = (paper) => paper.onStore
-  ? `the store (office_roles)${paper.file ? `, mirrored to ${DB_PATH}` : ""}`
-  : DB_PATH;
+// The book this run wrote, said in full: the store, or the file alone (a
+// switched paper holds no file since the mirror was deleted, POS-271).
+const BOOK = (paper) => paper.onStore ? "the store (office_roles)" : DB_PATH;
 
 main().then(() => process.exit(0), (e) => die(String(e?.message ?? e)));

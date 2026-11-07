@@ -19,7 +19,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GANGWAY_STATES, gangwayState, insertGangwayAct, GANGWAY_PATH } from "./gangway.mjs";
 import { principalNow } from "./ops.mjs";
-import { trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { refuse } from "./fault-words.mjs"; // a refusal from GANGWAY_REFUSALS, as the error the door sends
 
 export async function callerMayGangway(key, ctx = {}) {
   return key?.ghId != null && (await principalNow(ctx?.rdb ?? null, key));
@@ -30,10 +30,6 @@ export const GANGWAY_REFUSALS = Object.freeze({
   REASON: { code: 422, defect: "raising or lowering the gangway needs a `reason`", hint: "it is written on the row, in the words chosen, for every arrival it holds to read" },
   ALREADY: { code: 409, defect: "the gangway is already in that state", hint: "nothing was written; a no-op row would read as a real change later" },
   NO_RECORD: { code: 503, defect: "the office cannot reach the town's record", hint: "nothing was written; the gangway is a row in the record" },
-});
-
-const refuse = (r, detail = null) => Object.assign(new Error(r.defect), {
-  code: r.code, defect: r.defect, hint: detail ? `${detail} — ${r.hint}` : r.hint,
 });
 
 export const townDate = (now = new Date()) =>
@@ -70,18 +66,8 @@ export async function gangwayUnderLock({ act, actorGhId = null, clone, env = pro
 const EXEC = join(dirname(fileURLToPath(import.meta.url)), "gangway-exec.mjs");
 
 async function runUnderTownLock(payload, { clone }) {
-  const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
-  let out;
-  try {
-    out = await execUnderTownLock(EXEC, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
-  } catch (e) {
-    if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
-    throw trippedError("the gangway act tripped", e); // its stderr goes to the log (POS-578)
-  }
-  const result = JSON.parse(out.trim().split("\n").at(-1));
-  if (result.error)
-    throw Object.assign(new Error(result.error.defect), { code: result.error.code ?? 500, defect: result.error.defect, hint: result.error.hint });
-  return result;
+  const { runLockedExec } = await import("./town-lock.mjs");
+  return runLockedExec(EXEC, payload, { clone, tripped: "the gangway act tripped" });
 }
 
 /** The door. `run` is the locked critical section, injected in tests. */

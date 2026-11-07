@@ -22,7 +22,7 @@ import { foldOwners, ownershipEvents, takeOwns } from "../src/ownership.mjs";
 import { holdRecordKeeper } from "../src/hold-record.mjs";
 import {
   isNamedForm, namedFormRefusal, madeRecordOf, foldMade, madeIdTaken, MAKE_FACE, CONSUME_FACE, SET_DOWN_FACE,
-  setDownNotByMaker, setDownHolding, setDownCandy, setDownDraftOf, setDownWords, SET_DOWN_EXTENT,
+  setDownNotByMaker, setDownCandy, setDownDraftOf, setDownWords, SET_DOWN_EXTENT,
 } from "../src/named-making.mjs";
 
 const SHA = "e".repeat(40);
@@ -228,7 +228,8 @@ test("consume { kind } draws pot luck over the counted and the named alike: with
 // ── THE RECORD THE READERS SHARE ────────────────────────────────────────────
 
 test("the store's reader: a make is a hold row (held), a consume ends it (detach); the frozen faces are unchanged", () => {
-  assert.deepEqual(ATTACHMENT_ACTIONS, ["legacy:attachment", "give", "drop", "take", "make", "consume", "set-down"]);
+  // WLD-138 B (Wright 2026-11-04T16:00:21Z): `put-back`, the one restoration face, is the last one in
+  assert.deepEqual(ATTACHMENT_ACTIONS, ["legacy:attachment", "give", "drop", "take", "make", "consume", "set-down", "put-back"]);
   const at = "2026-10-23T05:00:00.000Z";
   const m = attachmentRowOf({ id: 7, at, actor: LB, action: "make", payload: { thing: `${LB}/t`, holder: `${LB}/bag`, policy: "cascade", made: { id: `${LB}/t` } } });
   assert.deepEqual([m.era, m.row.entity, m.row.target, m.row.policy], ["live", `${LB}/bag`, `${LB}/t`, "cascade"]);
@@ -322,7 +323,7 @@ test("part 2 · the made record lets a set-down thing go: from its set-down act 
   ];
   assert.deepEqual([...foldMade(rows).keys()], [`${LB}/b`]);
   assert.deepEqual([...foldMade(rows.slice(2), foldMade(rows.slice(0, 2))).keys()], [`${LB}/b`], "a set-down in the window lets go of a make in the base");
-  assert.deepEqual(ATTACHMENT_ACTIONS.slice(-1), [SET_DOWN_FACE]);
+  assert.deepEqual(ATTACHMENT_ACTIONS.slice(-2), [SET_DOWN_FACE, "put-back"], "the set-down, and its one restoration (WLD-138 B)");
   const at = "2026-10-23T06:00:00.000Z";
   const row = attachmentRowOf({ id: 9, at, actor: LB, action: SET_DOWN_FACE, payload: { thing: `${LB}/a`, holder: null, policy: "detach" } });
   assert.deepEqual([row.row.entity, row.row.policy], [LB, "detach"], "the holding ends, with no place on the hold row");
@@ -330,7 +331,7 @@ test("part 2 · the made record lets a set-down thing go: from its set-down act 
 
 test("part 2 · the leave door's narrow read asks for set-downs too, so a set-down name is its draft's, and the draft rules apply", async () => {
   const { madeNamesRead, madeNamesParams } = await import("../src/named-making.mjs");
-  assert.deepEqual(madeNamesParams(["a/b"])[1], [MAKE_FACE, SET_DOWN_FACE]);
+  assert.deepEqual(madeNamesParams(["a/b"])[1], [MAKE_FACE, SET_DOWN_FACE, "put-back"], "and put-backs (WLD-138 B), which take a set-down name back");
   const rows = [{ id: 1, action: MAKE_FACE, object: "a/b", payload: { thing: "a/b", made: { id: "a/b", kind: "thing" } } }, { id: 2, action: SET_DOWN_FACE, object: "a/b", payload: { thing: "a/b" } }];
   const r = await madeNamesRead({ ids: ["a/b"], edgeOn: () => true, query: async (sql, params) => rows.filter((x) => params[1].includes(x.action)) });
   assert.equal(r.made.has("a/b"), false);
@@ -352,7 +353,6 @@ test("part 2 · the refusals say what can be done instead", () => {
   const a = setDownNotByMaker(`${LB}/x`, LB);
   assert.equal(a.code, 403);
   assert.match(a.hint, /Give it back to its maker's house to set down, or keep, give or eat it/);
-  assert.match(setDownHolding(`${LB}/bag`, 2).defect, /holds 2 things, and a holder is set down empty/);
   assert.ok(setDownCandy(`${LB}/c`, "pocket-comet").hint.includes(`eat it (consume { thing: "${LB}/c" }), give it, or give it into a bowl`));
 });
 

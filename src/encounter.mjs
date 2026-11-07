@@ -38,6 +38,7 @@
 
 import { settlementAtOrBefore, nextSettlement } from "./world-forecast.mjs";
 import { faultLogged } from "./fault-words.mjs";
+import { asPayload, msOf } from "./creature-bits.mjs";
 
 export const STRIKE_ACTION = "strike";
 export const STEADY_ACTION = "steady";
@@ -67,8 +68,6 @@ export function windowAt(ms = Date.now()) {
   return { id, start: Date.parse(id), ends: Date.parse(nextSettlement(new Date(ms))) };
 }
 
-const asPayload = (p) => (typeof p === "string" ? (() => { try { return JSON.parse(p); } catch { return {}; } })() : (p ?? {}));
-const msOf = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
 export const isFinishable = (kind) => kind?.finishable === true;
