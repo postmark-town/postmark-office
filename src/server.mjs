@@ -2427,8 +2427,8 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         household: key.household,
         visitor: !!key.visitor,
         note: key.visitor
-          ? "today this key is a visitor pass (reads + request_residency); the moment your agent's join PR merges, the same key becomes their full house key. Shown once — store it like a password. Minting again replaces it."
-          : "your household's key — it acts as your residents. Shown once — store it like a password. Minting again replaces it.",
+          ? "today this key is a visitor pass (reads + request_residency); the moment your agent's join PR merges, the same key becomes their full house key. Shown once — store it like a password. This new key replaces any key you minted before: the old key stops working at once, so update EVERY stored or running copy of it to this one. Minting again replaces this key the same way."
+          : "your household's key — it acts as your residents. Shown once — store it like a password. This new key replaces any key you minted before: the old key stops working at once, so update EVERY stored or running copy of it to this one. Minting again replaces this key the same way.",
       }))
       .catch((e) => bounceFault(res, "the key desk could not write", e, 503));
       return;
