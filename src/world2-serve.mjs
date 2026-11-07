@@ -201,6 +201,10 @@ export async function world2MyDrafts(key) {
   };
 }
 
+// What the portfolio says on `locked_unavailable` when no settled window can be read (POS-865): which standing marks a settlement has
+// carried cannot be told, so none is presented as carried by an established fact.
+const CARRIAGE_UNKNOWN = "the newest window a settlement closed could not be read, so which of your standing marks a settlement has carried cannot be told: a mark under `published` may still be waiting to be carried, and a locked one may not be listed here. That is not the same as every one being on the world.";
+
 /**
  * GET /world2/my-marks — the portfolio, out of rows. The SECOND key-scoped door
  * in this tier, and it is here beside `world2MyDrafts` for that function's own
@@ -284,52 +288,50 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
     .map((row) => backedRow(row, { mark: byId.get(row.mark), belongs }))
     .sort((a, b) => a.id.localeCompare(b.id) || a.holder.localeCompare(b.holder));
 
+  // WHICH STANDING MARKS A SETTLEMENT HAS CARRIED, by the receipt's own window rule (§ CARRIED, NOT MERELY STANDING; POS-865, bug post #4014).
+  // The reasoning is with the locked shelf below.
+  let settled = null;
+  try { settled = await storeSettlements(p); } catch { settled = null; }
+  const windowKnown = Boolean(settled) && Number.isFinite(settled.settledWindow);
+  const notYetCarried = (row) => windowKnown && row.locked_window != null && Number.isFinite(Number(row.locked_window)) && Number(row.locked_window) > settled.settledWindow;
+  const uncarriedIds = new Set(markRows.filter(notYetCarried).map((r) => r.slug));
+  const carriedRows = canonRows.filter((m) => !uncarriedIds.has(m.id));
+
+  // A standing mark no settlement has carried is not ON THE WORLD (POS-865): it is on the locked shelf below, once.
   const published = canonRows
-    .filter((m) => residents.includes(m.by) && !draftIds.has(m.id) && !backedIds.has(m.id))
+    .filter((m) => !uncarriedIds.has(m.id) && residents.includes(m.by) && !draftIds.has(m.id) && !backedIds.has(m.id))
     .sort((a, b) => a.id.localeCompare(b.id));
 
-  // ── THE LOCKED SHELF (bug post #4014) — the plumbing, and the one piece NOT built ──
+  // ── THE LOCKED SHELF (bug post #4014, POS-865) ───────────────────────────────
   //
   // The same one function 1.0 calls (claim-effects.mjs § myMarksLocked), handed
   // this door's roster: every handle the household has, not only the authors of
   // standing marks, so a household's first claim is not invisible. The shelf's
   // rows, counts, pager, label and disclosure are 1.0's own.
   //
-  // ⚑ STOPPED, ON ONE PIECE. Not a ruling: Wright's word as this lane's staffer,
-  // 2026-11-02, on the STOP ("If that `published` repair needs more than the canon
-  // check you already have, STOP on that one piece and build the rest"). The
-  // ruling itself will land at POS-865. What "canon" is, for the canon-absence
-  // rule, is the whole question here, and this door's answer is the one thing not
-  // built.
-  // 1.0's canon is the world at the newest blessing, so a locked claim is not in
-  // it until a settlement carries it. THIS door's `marks` table is "Materialized
-  // cleared state. Writer: clearing_job only, inside the window transaction"
-  // (world2/schema/001): the clearing writes a standing row at the lock, before
-  // any settlement carries it (this file's own receipt says so, § CARRIED, NOT
-  // MERELY STANDING). So `canonRows` is every locked mark too, and:
+  // WHAT "CANON" IS HERE (Wright, POS-865, 2026-11-05: "the twin adopts the
+  // receipt's window rule"). 1.0's canon is the world at the newest blessing, so a
+  // locked claim is not in it until a settlement carries it. THIS door's `marks`
+  // table is written at the lock (world2/schema/001: "Materialized cleared state.
+  // Writer: clearing_job only, inside the window transaction"), before any
+  // settlement carries it, so "standing in `marks`" alone would call a locked mark
+  // ON THE WORLD. The twin therefore reads CARRIED the way its own receipt does
+  // (§ CARRIED, NOT MERELY STANDING): a standing mark locked at a window beyond the
+  // newest window a settlement closed (`storeSettlements().settledWindow`, beside
+  // `marks.locked_window`) has not been carried, so it is not `published`; it
+  // is kept out of the shelf's canon, and the shelf lists it from its claim event.
+  // A mark at or before the settled window is carried and stays on its ordinary shelf.
   //
-  //   · `published` above lists a locked, uncarried mark as ON THE WORLD. It has
-  //     always done so; nothing here changes it.
-  //   · the shelf, handed `canonRows` as canon, excludes every mark the clearing
-  //     has locked, and stays empty. It is the correct plumbing over the wrong
-  //     canon, and it is kept off `published` by construction rather than
-  //     double-listing a mark on both.
+  // UNKNOWN IS NOT ESTABLISHED. When no settled window can be read (the table
+  // cannot be read, or names no window) carriage cannot be told, and the answer
+  // says so on the existing `locked_unavailable` rather than presenting every
+  // standing mark as carried; the marks stay where this door has always put them.
   //
-  // What the repair needs is more than a canon check: the newest window a
-  // settlement closed (`storeSettlements`, below) read beside each mark's
-  // `locked_window` (a column PORTFOLIO_MARKS_SQL does not select), which is the
-  // receipt's rule here ("newest claim LOCKED at a window beyond the newest
-  // window a settlement closed") and not 1.0's, so the two doors would carry
-  // "not yet carried" differently. That is a ruling (POS-865). When it lands,
-  // `carriedIds` replaces the `canonRows` ids below and both `published` and this
-  // shelf follow from it; test/world2-my-marks-reads.test.mjs holds the
-  // acceptance, skipped.
-  //
-  // Left alone for the same ruling: a mark locked, carried, then withdrawn inside
+  // Left alone, and not this rule's: a mark locked, carried, then withdrawn inside
   // the two crossings is retired in `marks`, so it leaves `canonRows` and its
   // `claim-locked` event puts it back on this shelf, while this file's receipt
   // (`carriedGone`) says it left after it was ruled.
-  const lockedBlock = await lockedReader([...handles], { key, canonIds: new Set(canonRows.map((m) => m.id)) });
+  const lockedBlock = await lockedReader([...handles], { key, canonIds: new Set(carriedRows.map((m) => m.id)) });
 
   const body = portfolio.portfolioAnswerFrom({
     household, residents, live: liveMarks, locked: lockedBlock.rows, published, backed, offset, pager: markPage,
@@ -347,7 +349,7 @@ export async function world2MyMarks(key, { offset = 0, p: injected = null, refus
     refused: await refusedReader(residents, { key }),
     // An unread docket is not an empty shelf — 1.0's own disclosure, on the
     // failing path only (world.mjs § worldMyMarks `locked_unavailable`).
-    ...(lockedBlock.unavailable ? { locked_unavailable: lockedBlock.unavailable } : {}),
+    ...(lockedBlock.unavailable || !windowKnown ? { locked_unavailable: [lockedBlock.unavailable, windowKnown ? null : CARRIAGE_UNKNOWN].filter(Boolean).join(" ") } : {}),
     // NAMED, NOT SILENT — and `backed` says which absence it is, because a
     // refusal and an empty ledger are different facts.
     ...(stakeRows == null ? { backed_unavailable:

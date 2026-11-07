@@ -371,15 +371,24 @@ export async function myMarksRefused(handles = [], { key = null, nowMs = Date.no
 // only then does a locked row say `locked`. So a locked claim whose mark canon
 // holds is `published`'s, and the shelf never lists it.
 //
-// WHAT THE RULING LEAVES, NAMED (none of it is new behaviour):
-//   · a locked AMEND of a mark canon already holds is not on the shelf (canon
-//     holds the id); it was invisible before and still is.
+// WHAT THE RULING LEAVES, NAMED (on 1.0 none of it is new behaviour; where the twin differs, it says so):
+//   · a locked AMEND of a mark canon already holds is not on the shelf on 1.0
+//     (canon holds the id); it was invisible before and still is. That is 1.0's
+//     (canon-absence); the twin (world2-serve.mjs § world2MyMarks, POS-865) hands
+//     this function only the marks it calls CARRIED, by the receipt's window rule
+//     on the NEWEST lock (`marks.locked_window` beyond the newest window a
+//     settlement closed), so a carried mark whose amend no settlement has carried
+//     yet is not in that canon: it is on the shelf (and off `published`) there
+//     until the amend is carried. The two callers differ here, by the ruling.
+//   · the two-crossing window is this function's, for both callers: a locked
+//     claim no settlement has carried, older than the window, is on no shelf (on
+//     the twin it is also off `published`, while a settlement is stalled).
 //   · a locked claim whose mark was withdrawn or swept after the candle reads as
 //     waiting until the two crossings pass. On 1.0 the focused read says the same:
 //     `readMarkReceipt` never passes `settled_window`, so `receiptFrom`'s
 //     closed-candle branch ("it left after it was ruled") never fires there. The
 //     twin's own receipt does pass it, so on the twin the bare read and the
-//     focused read differ for those crossings. Left alone; the ruling is POS-865.
+//     focused read differ for those crossings. Left alone: POS-865's carried-or-not window rule does not decide it.
 //   · a mark that is also on `docket` (an amend put forward over a locked
 //     claim) or in `backed` (it carries stamps) is listed on both shelves; each
 //     shelf is true of a different claim, and none of the existing lists
