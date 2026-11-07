@@ -95,6 +95,15 @@ test("COMPOSE: a published settlement binds every World file it changed, by dige
   assert.deepEqual([noTo.inventory.complete, noTo.inventory.why], [false, "the receipt names no world_to for a published settlement"]);
   const quietRegistry = settlementDecided({ receiptText: rec({ status: "quiet" }), attempt: "1", event: "e", sweep: world });
   assert.equal(quietRegistry.artifacts.length, 3, "a quiet settlement that still moved World (a registry refresh) binds what it changed");
+
+  // "COULDN'T READ" IS NEVER "NOT THERE" (Wright, 2026-11-07 00:51Z): a changed
+  // file whose bytes cannot be read is not signed as removed; the inventory is
+  // unread instead. The control above is the real removal (`gone.md`, null).
+  const blob = execFileSync("git", ["-C", world, "rev-parse", `${to}:WORLD.md`], { encoding: "utf8" }).trim();
+  rmSync(join(world, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+  const unread = settlementDecided({ receiptText: rec({}), attempt: "1", event: "e", sweep: world });
+  assert.deepEqual([unread.artifacts, unread.inventory.complete], [[], false], "no inventory signed with a false deletion in it");
+  assert.match(unread.inventory.why, /could not read WORLD\.md at [0-9a-f]{8}/);
 });
 
 // ── the tool, against a stub town witness ───────────────────────────────────

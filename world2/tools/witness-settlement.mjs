@@ -42,7 +42,8 @@ const sha256 = (b) => createHash("sha256").update(b).digest("hex");
 
 function git(repo, args) {
   const r = spawnSync("git", ["-C", repo, ...args], { maxBuffer: 512 * 1024 * 1024 });
-  return { status: r.status, stdout: r.stdout ?? Buffer.alloc(0), stderr: String(r.stderr ?? "") };
+  // A spawn error or a cut-off buffer (ENOBUFS) leaves status null: a failed read, named.
+  return { status: r.error ? null : r.status, stdout: r.stdout ?? Buffer.alloc(0), stderr: r.error ? `git ${args[0]}: ${r.error.code ?? "failed"}` : String(r.stderr ?? "") };
 }
 
 /**
@@ -52,13 +53,23 @@ function git(repo, args) {
  */
 export function worldArtifacts(sweep, worldFrom, worldTo) {
   if (!sweep || !HEX40.test(worldFrom ?? "") || !HEX40.test(worldTo ?? "") || worldFrom === worldTo) return { artifacts: [], why: null };
-  const diff = git(sweep, ["diff", "--name-only", "--no-renames", "-z", worldFrom, worldTo]);
-  if (diff.status !== 0) return { artifacts: [], why: `the sweep clone could not diff ${worldFrom.slice(0, 8)}..${worldTo.slice(0, 8)}: ${diff.stderr.trim()}` };
-  const paths = diff.stdout.toString("utf8").split("\0").filter(Boolean).sort();
-  const artifacts = paths.map((path) => {
+  // "COULDN'T READ" IS NEVER "NOT THERE" (Wright, 2026-11-07 00:51Z). A file is
+  // signed as removed (`sha256: null`) only when the diff itself says it was
+  // deleted; a blob that could not be read makes the whole inventory unread,
+  // so the record says so rather than sign a deletion that never happened.
+  const diff = git(sweep, ["diff", "--name-status", "--no-renames", "-z", worldFrom, worldTo]);
+  if (diff.status !== 0) return { artifacts: [], why: `the sweep clone could not diff ${worldFrom.slice(0, 8)}..${worldTo.slice(0, 8)}: ${diff.stderr.trim() || "no answer"}` };
+  const fields = diff.stdout.toString("utf8").split("\0").filter(Boolean);
+  const changes = [];
+  for (let i = 0; i + 1 < fields.length; i += 2) changes.push({ status: fields[i], path: fields[i + 1] });
+  changes.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const artifacts = [];
+  for (const { status, path } of changes) {
+    if (status === "D") { artifacts.push({ repo: "world", commit: worldTo, path, sha256: null }); continue; }
     const blob = git(sweep, ["cat-file", "blob", `${worldTo}:${path}`]);
-    return { repo: "world", commit: worldTo, path, sha256: blob.status === 0 ? sha256(blob.stdout) : null };
-  });
+    if (blob.status !== 0) return { artifacts: [], why: `the sweep clone could not read ${path} at ${worldTo.slice(0, 8)}: ${blob.stderr.trim() || "no answer"}` };
+    artifacts.push({ repo: "world", commit: worldTo, path, sha256: sha256(blob.stdout) });
+  }
   return { artifacts, why: null };
 }
 
