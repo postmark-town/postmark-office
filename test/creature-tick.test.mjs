@@ -25,7 +25,7 @@ import { readFileSync } from "node:fs";
 
 import {
   ABANDON_ACTION, CREATURE_TICK_MS, LOOKBACK_MS, PRIOR_ROW_SQL, REVEAL_ACTION, SEED_ACTION, TICK_ACTIONS, keyFingerprint,
-  creatureTick, startCreatureTick, stopCreatureTick, townRow, windowInputsAt, windowObject, writeOnce, UNSEAL_DUE_SQL,
+  creatureTick, startCreatureTick, stopCreatureTick, townRow, windowInputsAt, windowObject, writeOnce, UNSEAL_DUE_SQL, THING_STANDING_SQL,
 } from "../src/creature-tick.mjs";
 import { currentCrossing } from "../src/crossings.mjs";
 import { NO_WORLD, worldClone } from "./fixture-paths.mjs";
@@ -36,14 +36,24 @@ const KEY = "a test master key, never the box's";
 const W = NO_WORLD ? null : await windowInputsAt(PIN, { repo: worldClone() });
 /** The pin's law with every kind out in one window and no rotation: the 10-15 counts, for the mechanism cases. */
 const MANY = { bat: 3, raven: 4, wolf: 2 };
-const many = (w) => ({ ...w, law: { ...w.law, dials: { ...w.law.dials, counts: MANY, rotation: null } }, inputs: { ...w.inputs, dials: { ...w.inputs.dials, counts: MANY, rotation: null } } });
+// `named: []` (POS-896): these mechanism cases are about the window's seeded spawns. Until the world declared named creatures that CARRY a thing
+// (the candied kinds, from crossing 272), the pin's law had none, so a tick past the window's end had no named creature to spawn or hold; the fixture
+// says so explicitly instead of inheriting whatever the pinned world declares. The named path has its own cases below.
+const many = (w) => ({ ...w, law: { ...w.law, named: [], dials: { ...w.law.dials, counts: MANY, rotation: null } }, inputs: { ...w.inputs, dials: { ...w.inputs.dials, counts: MANY, rotation: null } } });
 /** That law with the launch dial at `from`. */
 const on = (from = 270, w = W) => { const m = many(w); return { ...m, law: { ...m.law, fromCrossing: from }, inputs: { ...m.inputs, fromCrossing: from } }; };
 /** The pin's own law with the launch dial written null: off. */
 const off = (w = W) => ({ ...w, law: { ...w.law, fromCrossing: null }, inputs: { ...w.inputs, fromCrossing: null } });
+/** The pin's own law with ONLY the launch dial turned on (POS-896): its counts, rotation and named declarations stay the world's. `on()` is not this: it
+ *  goes through `many()` and changes the counts to 3/4/2. */
+const ramp = (from = 259, w = W) => ({ ...w, law: { ...w.law, fromCrossing: from }, inputs: { ...w.inputs, fromCrossing: from } });
+/** A law with exactly these named declarations and the launch dial off, so the window's schedule seeds nothing and only the named path runs. */
+const withNamed = (named, w = W) => ({ ...off(w), law: { ...off(w).law, named } });
 const N = 271;
 const { startMs, endMs } = NO_WORLD ? {} : W.creaturesMod.windowOf(N);
 const MIN = 60_000;
+/** An invented named creature that CARRIES a thing, due from this window (a fake place and a fake key id; nothing real is read or held). */
+const NAMED = { id: "creature:bat-the-test-room", kind: "bat", x: 120, y: -340, carries: "the-town/a-test-room-key", from_crossing: N };
 
 /** An in-memory `acts`: the tick's read, and a write that holds (action, object) once, as writeOnce does. */
 function store() {
@@ -75,12 +85,20 @@ async function runThrough(s, from, to, step = 10 * MIN, over = {}) {
 
 test("the window's inputs are the world's, read at a sha: the ruled law, the kinds' start states, the Mists and the marks", () => {
   assert.equal(W.sha, PIN);
-  assert.deepEqual(W.law.dials.counts, { bat: 2, raven: 3, wolf: 1 }, "every kind every window: 2 bats, 3 ravens, 1 wolf (Darko, 10-19 20:05, WLD-84)");
+  // THE RAMP KINDS, from the ruling (spelled here, not read back from the law): 2 bats, 3 ravens, 1 wolf. EVERY OTHER KIND the law declares brings none
+  // a window (POS-896): the candied kinds are named creatures, declared once in their own rooms and never a window's spawn (their count_per_window is 0).
+  // A nonzero count on any other kind is not ignored: it reds here.
+  const RAMP = { bat: 2, raven: 3, wolf: 1 };
+  const counts = W.law.dials.counts;
+  assert.deepEqual(Object.fromEntries(Object.keys(RAMP).map((k) => [k, counts[k]])), RAMP, "every ramp kind every window: 2 bats, 3 ravens, 1 wolf (Darko, 10-19 20:05, WLD-84)");
+  assert.deepEqual(Object.entries(counts).filter(([k, n]) => !(k in RAMP) && n !== 0), [], "every other declared kind has window count 0 (named creatures, never a window's spawn)");
   assert.equal(W.law.dials.rotation, undefined, "no rotation: the ramp writes it null");
-  assert.equal(W.law.fromCrossing, 259, "from crossing 259");
-  // the pin's own law, through the world's scheduler: every window brings all six
+  // THE LAUNCH DIAL IS OFF AT THIS PIN (WLD-142; world commit d4dce118, "the creature class's launch dial is null after Halloween (Darko 2026-10-31 23:01 EDT)").
+  // It was 259 until then. This asserts the pinned law's published state; it is no permission to switch the creatures on.
+  assert.equal(W.law.fromCrossing, null, "the pinned law's launch dial is null (off): WLD-142, Darko 2026-10-31 23:01 EDT");
+  // the pin's own counts, through the world's scheduler with ONLY the launch dial turned on: every window brings all six
   for (const M of [259, 262, 271]) {
-    const sched = W.creaturesMod.scheduleFor(M, W.creaturesMod.secretFor(KEY, M), W.inputs);
+    const sched = W.creaturesMod.scheduleFor(M, W.creaturesMod.secretFor(KEY, M), ramp().inputs);
     const n = (k) => sched.spawns.filter((x) => x.kind === k).length;
     assert.deepEqual([n("bat"), n("raven"), n("wolf")], [2, 3, 1], `window ${M} brings 2 bats, 3 ravens and a wolf`);
   }
@@ -91,12 +109,25 @@ test("the window's inputs are the world's, read at a sha: the ruled law, the kin
   assert.equal(W.inputs.world_sha, PIN);
 });
 
-test("the pin's own law through the tick: every kind in the window, at its count (the ramp, WLD-84)", async () => {
+test("the pin's own counts through the tick, the launch dial turned on and nothing else: every kind in the window, at its count (the ramp, WLD-84)", async () => {
+  // Until WLD-142 the pin's own law WAS on (259), and this drove it as published. It is off now (see the first case), so the dial is the one thing this
+  // fixture turns on (`ramp()`); the counts, the rotation and the named declarations are the world's, unchanged. Not `on()`, which changes the counts.
   const s = store();
-  await runThrough(s, startMs, endMs - 1, 10 * MIN, { inputsAt: async () => W });
+  await runThrough(s, startMs, endMs - 1, 10 * MIN, { inputsAt: async () => ramp() });
   const spawns = s.acts.filter((a) => a.action === "spawn");
   const n = (k) => spawns.filter((a) => a.payload.kind === k).length;
   assert.deepEqual([n("bat"), n("raven"), n("wolf")], [2, 3, 1], `window ${N}: 2 bats, 3 ravens and a wolf`);
+  assert.equal(spawns.length, 6, "and nothing else comes out of the window (the candied kinds are no window's spawn)");
+});
+
+test("the pin's own law as published is OFF: the original window is neither seeded nor spawned into (WLD-142), the control for the case above", async () => {
+  const s = store();
+  await runThrough(s, startMs, endMs - 1, 10 * MIN, { inputsAt: async () => W });
+  assert.deepEqual(s.acts.filter((a) => a.action === SEED_ACTION || a.action === "spawn"), [], `window ${N}: no seed and no spawn under the law as the pin publishes it`);
+  // and the dial is the whole difference: the same window, the same ticks, with only the launch dial on, seeds and spawns
+  const on259 = store();
+  await runThrough(on259, startMs, endMs - 1, 10 * MIN, { inputsAt: async () => ramp() });
+  assert.equal(on259.acts.some((a) => a.action === SEED_ACTION), true, "the control can seed: only the dial moved");
 });
 
 test("off by the launch dial, or with no key: nothing is seeded or spawned", async () => {
@@ -258,6 +289,55 @@ test("the key's fingerprint: each seed names its key without telling it (L1)", a
   assert.match(a, /^[0-9a-f]{64}$/);
   assert.notEqual(a, W.creaturesMod.secretFor(KEY, N), "nor is it any window's secret");
   assert.ok(!JSON.stringify(s.acts).includes(KEY), "the key itself is never written");
+});
+
+// ── A NAMED CREATURE THAT CARRIES A THING (WLD-25; POS-896) ──────────────────────────────────────────────────────
+// The world now declares named creatures that carry a key (the candied kinds, from crossing 272); at the old pin it declared none, so the cases above
+// never reached the tick's hold path. It is driven here through the tick's own `hold` seam (holdTown's shape) with an INVENTED declaration and a fake key
+// id: no real town key, holding or service is read or written. The window's schedule is off (`withNamed` turns the dial off), so only the named path runs.
+
+/** A spy with holdTown's shape: what it was asked, and a store-free answer. */
+function holdSpy() {
+  const calls = [];
+  return { calls, hold: async (thing, creatureId, opts = {}) => { calls.push({ thing, creatureId, now: opts.now }); return { wrote: false }; } };
+}
+const spawnsOf = (s) => s.acts.filter((a) => a.action === "spawn");
+
+test("a named creature that carries a thing: written once, and the hold seam is asked once, for that thing and that creature", async () => {
+  const s = store();
+  const spy = holdSpy();
+  const r = await tickAt(s, startMs + MIN, { inputsAt: async () => withNamed([NAMED]), hold: spy.hold });
+  assert.equal(r.wrote.spawn, 1);
+  assert.deepEqual(spawnsOf(s).map((a) => a.object), [NAMED.id], "the declaration's own id, once");
+  const [row] = spawnsOf(s);
+  assert.equal(row.payload.kind, NAMED.kind);
+  assert.equal(row.payload.carries, NAMED.carries, "the spawn row names what it carries");
+  assert.equal(row.payload.stays, true, "a named creature stays until its settlement ends it");
+  assert.deepEqual(spy.calls.map((c) => [c.thing, c.creatureId, c.now]), [[NAMED.carries, NAMED.id, startMs + MIN]], "asked once: what it carries, whose it is, when");
+  await tickAt(s, startMs + 2 * MIN, { inputsAt: async () => withNamed([NAMED]), hold: spy.hold });
+  assert.equal(spawnsOf(s).length, 1, "a later tick writes it no second time (writeOnce)");
+});
+
+test("the same law with no named declaration asks the hold seam nothing and writes no named creature (the control)", async () => {
+  const s = store();
+  const spy = holdSpy();
+  const r = await tickAt(s, startMs + MIN, { inputsAt: async () => withNamed([]), hold: spy.hold });
+  assert.deepEqual([r.wrote.spawn, spy.calls.length, spawnsOf(s).length], [0, 0, 0]);
+});
+
+test("a named creature is due from its own crossing, not before: a declaration for the next window waits for it", async () => {
+  const later = { ...NAMED, from_crossing: N + 1 };
+  const s = store();
+  const spy = holdSpy();
+  await tickAt(s, startMs + MIN, { inputsAt: async () => withNamed([later]), hold: spy.hold });
+  assert.deepEqual([spy.calls.length, spawnsOf(s).length], [0, 0], `crossing ${N}: not yet due`);
+  await tickAt(s, endMs + MIN, { inputsAt: async () => withNamed([later]), hold: spy.hold });
+  assert.deepEqual([spy.calls.map((c) => c.creatureId), spawnsOf(s).map((a) => a.object)], [[NAMED.id], [NAMED.id]], `crossing ${N + 1}: due, written and held`);
+});
+
+test("the standing check holdTown makes is a read of `marks`, not of the creature acts (a CONSTANT pin: the seam above is a spy, so this proves no SQL ran)", () => {
+  assert.match(THING_STANDING_SQL, /FROM marks WHERE slug = \$1 AND status = 'standing'/);
+  assert.ok(!/class = 'creature'/.test(THING_STANDING_SQL), "it is a marks read; the store's strict creature-class assertion is for the acts reads and stays as it is");
 });
 
 test("the clock starts only in a writer with a store, a port and the key, and not when the operator says off", () => {

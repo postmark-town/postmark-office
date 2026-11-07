@@ -243,7 +243,7 @@ export function reloadLawSnapshot({ query = defaultQuery, force = false, deadlin
       const ask = session ? session.query : query;
       const pin = (await ask(PIN_SQL)).rows[0] ?? {};
       const key = `${pin.newest ?? "-"}/${pin.pinned ?? "-"}`;
-      if (newest() || n > state.publishedBy) state.seenPinned = pin.pinned ?? null;
+      if ((newest() || n > state.publishedBy) && pin.pinned != null && (state.seenPinned == null || Number(pin.pinned) > Number(state.seenPinned))) state.seenPinned = pin.pinned; // N8: forward only, as an act's own write (freshLaw) is
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: lawStanding() };

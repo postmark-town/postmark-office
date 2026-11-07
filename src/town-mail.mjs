@@ -493,6 +493,22 @@ async function sendRow(args, key, db, clone, odb, nonce) {
   const bad = await preflightEnvelope(clone, plan);
   if (bad) { const e = new Error(bad.defect); Object.assign(e, bad); throw e; }
 
+  // ONE SLUG PER CORRESPONDENT PER DAY, STANDING LETTERS INCLUDED (postmark#4447).
+  // `validateLetter`'s 409 reads the settled index, so a second letter with the
+  // same id written before the crossing was given a receipt, and the drain's
+  // resume check then took its row as already sent. The sender's own standing
+  // letters are the half the index cannot see. The lookup is `hotLetters`, as
+  // `spentNonce` uses, so the scope stays the mail law's. A withdrawn letter is
+  // not standing, so its id is free again; an amended one still holds it. The
+  // drain replays through `enqueueLetter`, so a replayed row never meets this.
+  const twin = (await hotLetters(odb, key, { handle: plan.from })).find((r) => r?.payload?.id === plan.id);
+  if (twin) {
+    const defect = "a letter with this id already exists today";
+    const e = new Error(defect);
+    Object.assign(e, { code: 409, defect, hint: "change the title, or write tomorrow — one slug per correspondent per day" });
+    throw e;
+  }
+
   const file = outboxRelPath(plan.from, plan.date, plan.to, plan.slug);
   const seq = await logLetter(odb, { args, key, from: plan.from, id: plan.id, file });
   return {

@@ -22,7 +22,7 @@
 // own (tools/stamp-mint.mjs, ballot, epoch-close, the ferry), exactly the pair
 // the box runs. `--town` defaults to this tree's `town-clone/`.
 //
-//   1. THE SANDBOX. A temp directory holding a `git clone --local` of the town
+//   1. THE SANDBOX. A temp directory holding a local `git clone` of the town
 //      checkout with its remotes REMOVED (nothing can push), SPARSE: the whole
 //      town less the letters dated before the synthetic clock's first day, which
 //      no step writes (POS-652, test/helpers/clone-sparse.mjs § standinPatterns;
@@ -82,7 +82,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { applySparse, standinClone, standinPatterns } from "../test/helpers/clone-sparse.mjs";
+import { standinClone } from "../test/helpers/clone-sparse.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -394,10 +394,9 @@ export async function openSandbox({ townSource, log = () => {} } = {}) {
   // ones are left out, and `git add` takes everything the script writes
   sb.before = clockStart((rel) => git(source, "show", `${sourceSha}:${rel}`));
   log(`cloning the town at ${sourceSha.slice(0, 9)} (${source}), less the letters dated before ${sb.before}`);
-  // LF as the box has it: a Windows machine's autocrlf must not rewrite the ledger's bytes
-  execFileSync("git", ["-c", "core.autocrlf=false", "clone", "--local", "--quiet", "--no-checkout", "--config", "core.autocrlf=false", source, sb.town]);
+  // LF as the box has it: standinClone keeps a Windows machine's autocrlf from rewriting the ledger's bytes
+  standinClone("town", source, sb.town, { before: sb.before });
   for (const r of git(sb.town, "remote").split("\n").filter(Boolean)) git(sb.town, "remote", "remove", r);
-  applySparse(sb.town, standinPatterns("town", source, { before: sb.before }), "standin-town");
   git(sb.town, "checkout", "-q", "-B", "sandbox", sourceSha);
   git(sb.town, "config", "user.name", BOT.BOT_NAME);
   git(sb.town, "config", "user.email", BOT.BOT_EMAIL);

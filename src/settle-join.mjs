@@ -19,6 +19,8 @@
 //   · the caller's key holds one of `SETTLE_JOIN_CALLERS` (checked at the
 //     household apex, which answers anyone else as it answers an act it has
 //     never heard of — the door is unlisted and does not advertise itself);
+//   · the handle wears no reserved prefix (berth-, human-of-: the town's one
+//     rule, vendor/tools/reserved-handles.mjs, POS-884), checked first;
 //   · the handle has no pin in the record yet (a pinned handle answers
 //     "already settled" and nothing is written — the idempotent re-call);
 //   · its join PR was opened by the office pen from `residency/<handle>` and
@@ -65,6 +67,7 @@ import { penCommit, landOrRefuse } from "./write.mjs";
 import { landSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
 import { holdsHand, REGISTRAR_HANDS } from "./named-hand.mjs";
 import { refuse } from "./fault-words.mjs"; // a refusal from SETTLE_REFUSALS, as the error the door sends
+import { reservedHandleRefusal } from "../vendor/tools/reserved-handles.mjs"; // POS-884: the town's one reserved-prefix rule
 
 // ── WHO MAY CALL IT ─────────────────────────────────────────────────────────
 //
@@ -97,6 +100,7 @@ export const SETTLE_REFUSALS = Object.freeze({
   NO_IDENTITY: { code: 409, defect: "the join PR carries no verified-identity block", hint: "the pen always writes one (`**Verified via GitHub sign-in:** `@login` (immutable id `n`)`); its absence is the finding, and a person reads the PR" },
   NO_ADDRESS: { code: 409, defect: "the handle has no ADDRESS on town main", hint: "settle-join binds a join the Registrar has merged; the card is what the merge put there" },
   NO_HOUSE: { code: 409, defect: "the card's household: names no house in the record", hint: "the join names the house it belongs to on its ADDRESS card; a house the record does not hold is a person's call" },
+  RESERVED: { code: 409, defect: "the handle wears a reserved prefix", hint: "nothing was written; a resident handle never begins with a prefix the town reserves — a person's call" },
   NOT_VOUCHED: { code: 409, defect: "the house has never listed this account", hint: "the verified account is not one of that house's accounts, so nothing proves it speaks for the house — a person's call (a sibling vouches by letter)" },
 });
 
@@ -243,6 +247,12 @@ function alreadySettled(handle, pin, registry) {
  */
 export async function settleUnderLock({ handle, ghId, ghLogin, pr, road = "pen", cardLogin = null, clone, env = process.env, date, adopt } = {}) {
   const h = String(handle ?? "").trim().toLowerCase();
+  // berth-* and human-of-*: the town's one reserved-prefix rule, vendored
+  // (vendor/tools/reserved-handles.mjs, POS-884). First, so every road that
+  // settles (the door, the tick's pass; pen and hand) refuses before any read
+  // or write decides anything.
+  const reservedPrefix = reservedHandleRefusal(h);
+  if (reservedPrefix) throw refuse(SETTLE_REFUSALS.RESERVED, reservedPrefix);
   if (!existsSync(join(clone, "WHITE_PAGES", h, "ADDRESS.md"))) throw refuse(SETTLE_REFUSALS.NO_ADDRESS, `WHITE_PAGES/${h}/ADDRESS.md`);
 
   const rows = await loadRegistryRows(env);

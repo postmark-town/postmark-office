@@ -23,7 +23,7 @@ import { join } from "node:path";
 
 import { LivingSet, loadCreatureLaw, reactTo, dial } from "../src/creatures.mjs";
 import {
-  AIMED_JEV_MS, AIMED_WAIT_MS, APPROACH_STOP, CREATURE_VERBS, SIGHT_M, WORDS_MAX,
+  AIMED_JEV_MS, AIMED_WAIT_MS, APPROACH_STOP, CREATURE_VERBS, FIGHT_VERBS, SIGHT_M, WORDS_MAX,
   creatureEntries, creaturePairs, whyNot, worldCreature,
 } from "../src/creature-verbs.mjs";
 import { canOn, canVerbs } from "../src/usable-verbs.mjs";
@@ -85,7 +85,10 @@ test("the law at the pin declares the afforded actions per kind, and the office 
   assert.deepEqual(LAW.affordedOf("bat").map((a) => a.action), ["watch", "approach", "shoo", "whisper"]);
   assert.deepEqual(LAW.affordedOf("raven").map((a) => a.action), ["watch", "approach", "shoo", "call", "offer"]);
   assert.deepEqual(LAW.affordedOf("wolf").map((a) => a.action), ["watch", "approach", "shoo", "call", "offer"]);
-  assert.deepEqual([...LAW.kindMod.AFFORDED_VERBS], [...CREATURE_VERBS], "the door's six are the world's six");
+  // Until the pin carried the fight (POS-896) this held the world's list equal to the six alone. The world now declares the fight's two
+  // as well, and the office keeps them apart (src/creature-verbs.mjs: FIGHT_VERBS, handed over only once the blessed law knows them),
+  // so the expectation is the office's own two lists joined, never the world's list read back.
+  assert.deepEqual([...LAW.kindMod.AFFORDED_VERBS], [...CREATURE_VERBS, ...FIGHT_VERBS], "the door's six and the fight's two are the world's eight");
   // a ref with no afforded actions (before the world half) reads none, and the law is otherwise whole
   const older = await loadCreatureLaw({ ref: "older", importTool: (f) => import(worldModuleUrl("tools", f)),
     readText: (path) => readFileSync(join(worldClone(), path), "utf8"), lawRecords: async () => { throw new Error("no marks here"); } });

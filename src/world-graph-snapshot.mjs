@@ -37,7 +37,8 @@
 // (act-law.mjs § ONE PIN QUESTION AT A TIME; Wright's Settled on POS-680,
 // 2026-11-03): it stands on a refresh in flight only if the graph it put in
 // force is the one the pin named, and loads a moved graph itself under the cap.
-// What the process knows of the pin moves only forward, by settlement (N6).
+// What the process knows of the pin moves only forward, by settlement (N6; N8:
+// the tick's own write too, with the settlement kept privately beside the key).
 
 import { readFileSync, statSync } from "node:fs";
 import { workerData } from "node:worker_threads";
@@ -77,7 +78,7 @@ export async function graphTablesAt(query, { tag_sha, office_sha }) {
 export const WORLD_GRAPH_REFRESH_DEADLINE_MS = Number(process.env.WORLD_GRAPH_REFRESH_DEADLINE_MS ?? 3_000);
 
 const fresh = () => ({ snap: null, key: null, inflight: null, lastError: null, timer: null, rowsRefused: null, atImport: null,
-  started: 0, publishedBy: 0, checkedAt: null, publishedAt: null, abandoned: 0, unhear: null, seenKey: null });
+  started: 0, publishedBy: 0, checkedAt: null, publishedAt: null, abandoned: 0, unhear: null, seenKey: null, seenSettlement: null });
 const state = fresh();
 const listeners = new Set();
 
@@ -156,7 +157,8 @@ export async function freshGraph({ query, deadlineMs, told } = {}) {
   const key = told?.key ?? null, settlement = told?.settlement ?? null;
   // N6: what the process knows moves only forward, by settlement. The known key carries no settlement,
   // so an act moves it only to a pin newer than the graph in force, and never while it is already ahead.
-  if (graphBehindOf(key, settlement) && (state.seenKey == null || state.seenKey === state.key)) state.seenKey = key;
+  // N8: the settlement the pin named rides beside the key (private; seenSettlement), so the tick's own write can be forward-only too.
+  if (graphBehindOf(key, settlement) && (state.seenKey == null || state.seenKey === state.key)) { state.seenKey = key; state.seenSettlement = settlement; }
   // behind if what this act was told, or what the process knows, is newer than the graph in force
   if (!(graphBehindOf(key, settlement) ?? worldGraphBehind())) return { snap: state.snap, behind: null };
   // a refresh in flight is stood on only if, once it lands, neither is
@@ -279,7 +281,9 @@ export function reloadWorldGraph({ query = defaultQuery, force = false, deadline
       const pin = (await ask(PIN_SQL)).rows[0] ?? null;
       if (!pin) { if (newest()) state.lastError = "the store holds no world graph snapshot yet"; return { changed: false, standing: worldGraphStanding() }; }
       const key = `${pin.tag_sha}/${pin.office_sha}`;
-      if (newest() || n > state.publishedBy) state.seenKey = key;
+      // N8: forward only, as an act's own write (freshGraph) is: the key moves with the settlement the same pin row names, never to an older
+      // one, and a pin row naming no settlement cannot clear what is known (the law's refresher, law-snapshot.mjs, guards its write the same way)
+      if ((newest() || n > state.publishedBy) && (state.seenSettlement == null || (pin.settlement != null && Number(pin.settlement) >= Number(state.seenSettlement)))) { state.seenKey = key; state.seenSettlement = pin.settlement ?? null; }
       if (!force && state.snap && key === state.key) {
         if (newest()) { state.lastError = null; state.checkedAt = new Date().toISOString(); }
         return { changed: false, standing: worldGraphStanding() };

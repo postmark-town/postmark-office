@@ -20,6 +20,14 @@ const MAX_BODY = 100_000; // size courtesy (bytes of markdown body)
 const slugify = (s) =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "letter";
 
+// What `thread:` may hold: `new`, or a letter id. A letter id is the grammar the ferry's envelope
+// demands of every id (town-clone/tools/envelope.mjs `classify`: one safe filename segment), and
+// the door mints ids from lowercase words, so every id it has made wears it. The value is written
+// straight into the letter's frontmatter, one line, so a space, a quote or a line break in it is
+// no id: it would be a second frontmatter line, or a line the crossing's parsers read slowly (POS-921).
+// 255 is the longest a filename segment can be.
+const THREAD_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+
 // The bounce vocabulary, one factory for the whole spine: `{ code, defect, hint }`
 // on an Error, which is the shape both doors catch and turn into an answer.
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
@@ -616,6 +624,13 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   const ix = probeOf(db);
   if (!ix.hasResident(to))
     throw bounce(422, `no resident "${to}"`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");
+  // THE THREAD IS AN ID OR `new`, NOTHING ELSE (POS-921). It is written into the letter's frontmatter
+  // as one line, and the crossing's parsers read that line, so it is judged here against the
+  // envelope's id grammar (THREAD_RE) before anything is looked up or written. The value is echoed
+  // back short and printable, never whole.
+  if (thread !== "new" && !(typeof thread === "string" && THREAD_RE.test(thread)))
+    throw bounce(422, `thread ${JSON.stringify(String(thread).slice(0, 40).replace(/[^ -~]/g, "?"))} is not a letter id`,
+      'set thread to "new", or to the exact id of the letter you are answering, as your inbox lists it: letters, digits and - . _ only, with no spaces, quotes or line breaks');
   // A COPY THAT HAS NOT CAUGHT UP NEVER REFUSES A REAL REPLY (POS-332). The
   // index is a copy of the town record, refreshed between crossings, so a
   // letter that sailed after it is a real id it does not hold yet: Nyx's three

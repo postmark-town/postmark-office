@@ -25,7 +25,8 @@ import { tmpdir } from "node:os";
 import { fixtureTown, putValues } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
-import { twinGolden } from "./helpers/twin-golden.mjs";
+import { twinGolden, steady } from "./helpers/twin-golden.mjs";
+import { overlayRegistry, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import * as store from "../src/town-index-store.mjs";
 import { estateRead, questsRead, fundReadOf } from "../src/household-stamps.mjs";
@@ -105,7 +106,24 @@ after(async () => {
 });
 
 // the bytes a door sends, key order included
-const same = async (label, newAnswer) => TWINS.equal(label, JSON.stringify(await newAnswer));
+const same = async (label, newAnswer) => eq(label, JSON.stringify(await newAnswer));
+
+// THE EXPECTED SIDE FOLLOWS THE PRISTINE REGISTRY (POS-896). The recorded twin answers hold the quest list and the pot
+// postings of the town the record was made on. The store reads the PINNED town's registry (put into `meta` in before()), so
+// when the pin moves it holds more quests and more bounty postings than the record, and the old comparison reddened although
+// the store was right. `expectedFor` is the record for this label with exactly those two branches following the registry FILE
+// (helpers/pos896-fixtures.mjs § overlayRegistry): the quest rows in the file's order (a row the record holds kept byte for
+// byte, a missing one built from the file's row, never from the store's answer), and the postings for the file's bounty ids
+// that have no pot in this fixture's pot table. Everything else stays the record's, compared as bytes.
+const FIXTURE_POT_IDS = ["darko-fund", "Keeping", "a-closed-pot"];   // the pots before() puts in the store; a bounty id outside it has no pot file
+const rawQuests = () => JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests;
+const expectedFor = (label) => overlayRegistry(TWINS.of(label), { rawQuests: rawQuests(), fixturePotIds: FIXTURE_POT_IDS });
+const eq = (label, value) => assert.equal(steady(value), expectedFor(label), label);
+const eqResponse = async (label, response, message = label) => {
+  const body = await response.text();
+  assert.equal(steady({ status: response.status, body: steady(body) }), expectedFor(label), message);
+  return body;
+};
 
 test("potBoard and standingFor answer as their office.db twins did", async (t) => {
   if (skip) return t.skip(skip);
@@ -134,7 +152,7 @@ test("GET /quests/{h} answers as the unswitched office did, and names the index 
   if (skip) return t.skip(skip);
   for (const door of ["/quests/wright", "/quests/limen", "/quests/nobody"]) {
     const b = await fetch(offices.switched.base + door);
-    await TWINS.equalResponse(`REST ${door}`, b, `${door}: status and body`);
+    await eqResponse(`REST ${door}`, b, `${door}: status and body`);
     assert.equal(b.headers.get("x-postmark-town-index-as-of"), "fixturesha000000000000000000000000000000", `${door}: names the index it read`);
   }
 });
@@ -158,7 +176,7 @@ test("read_quests through callTool answers as the unswitched office did", async 
     Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }); // the registry (POS-550)
     pen.__setPoolForTest(pool);
     for (const h of ["wright", null])
-      TWINS.equal(`read_quests ${h}`, norm(await callTool("read_quests", { handle: h }, { clone: TOWN })));
+      eq(`read_quests ${h}`, norm(await callTool("read_quests", { handle: h }, { clone: TOWN })));
   } finally {
     pen.__setPoolForTest(null); await pool.end();
     for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -179,7 +197,7 @@ test("household { read: stamps | quests | fund } answers through the store as it
   try {
     Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") }); // the registry (POS-550)
     pen.__setPoolForTest(pool);
-    for (const a of asks) TWINS.equal(`household ${JSON.stringify(a)}`, norm(await householdApex(a, KEY, CTX)));
+    for (const a of asks) eq(`household ${JSON.stringify(a)}`, norm(await householdApex(a, KEY, CTX)));
     // the store gone: a pool whose every connect fails
     pen.__setPoolForTest({ connect: async () => { throw new Error("ECONNREFUSED"); } });
     for (const a of asks) {
@@ -203,4 +221,81 @@ test("a switched reader that throws is answered with a 500, and the office stays
   assert.equal(r.status, 500, "the reader's own error is the office's 500, not an unanswered rejection");
   assert.match((await r.json()).defect, /tripped reading the town index/);
   assert.equal((await fetch(offices.switched.base + "/quests/wright")).status, 200, "and the office is still answering");
+});
+
+// ── THE DETECTORS (POS-896): an invented registry and an invented record, the pristine expectation held fixed ────────────────
+// `overlayRegistry` is the expected side; it never reads the answer. Each detector below compares an ANSWER that is wrong in one
+// way to that same pristine expectation, with the very comparison the suite makes (byte equality), and names the first place
+// they part. A positive case first shows the overlay follows a registry that gained a quest and a bounty.
+const INV_UNCOUNTED = { measured: false, progress: null, complete: null, counted: [], household: { size: 2, total: null, cap_shared: false } };
+const invRow = (id, over = {}) => ({ id, title: `Title of ${id}`, cadence: "one-time", validation: "automatic", target: 1, reward: "2 stamps", source: `Do ${id}.`, door: null, ...INV_UNCOUNTED, ...over });
+const INV_POSTING = (id) => ({ row_kind: "pot-posting", line: `quest-registry.json § ${id}`, reason: `the board posts a bounty for pot "${id}" but no WHITE_PAGES/pot-${id}.json stands behind it — the posting has no pot` });
+// the record: a registry of two quests and one bounty (no pot file for it), a bad pot file beside the posting
+const INV_LEGACY = {
+  handle: "inv", quests: [invRow("inv-a"), invRow("inv-b", { cadence: "daily", target: 3, progress: 1, complete: false, counted: ["x"], measured: true })],
+  pots: { invalid_rows: { list: [{ row_kind: "pot-file", line: "WHITE_PAGES/pot-bad.json", reason: "unparseable JSON" }, INV_POSTING("inv-fund-a")] } },
+};
+const INV_RAW = [
+  { id: "inv-a", title: "Title of inv-a", cadence: "one-time", validation: "automatic", target: 1, reward: "2 stamps", source: "Do inv-a." },
+  { id: "inv-b", title: "Title of inv-b", cadence: "daily", validation: "automatic", target: 3, reward: "2 stamps", source: "Do inv-b." },
+  { id: "inv-fund-a", title: "A pot", cadence: "ongoing", subtype: "bounty", validation: "needs-review" },
+];
+// the pristine registry later: one more needs-review milestone (after the two) and one more bounty (between the two postings' places)
+const INV_RAW_NEXT = [...INV_RAW.slice(0, 2),
+  { id: "inv-m", title: "A milestone", cadence: "milestone", validation: "needs-review", target: 1, reward: "5 stamps, once", source: "Tell us.", awaits: "a hand reads it" },
+  { id: "inv-fund-b", title: "Another pot", cadence: "ongoing", subtype: "bounty", validation: "needs-review" }, INV_RAW[2]];
+const invExpected = (rawQuests, legacy = INV_LEGACY) => overlayRegistry(steady(legacy), { rawQuests, fixturePotIds: [] });
+const NEXT = JSON.parse(invExpected(INV_RAW_NEXT));
+
+test("detector · the overlay at the SAME registry changes nothing, byte for byte (the record stands where the registry stands)", () => {
+  assert.equal(invExpected(INV_RAW), steady(INV_LEGACY));
+});
+
+test("detector · a registry that gained a milestone and a bounty: the new row is built from the file's row, in the file's order, and the posting follows the registry's order", () => {
+  assert.deepEqual(NEXT.quests.map((q) => q.id), ["inv-a", "inv-b", "inv-m"]);
+  assert.deepEqual(NEXT.quests[2], {
+    id: "inv-m", title: "A milestone", cadence: "milestone", validation: "needs-review", target: 1, reward: "5 stamps, once", source: "Tell us.",
+    door: null, awaits: "a hand reads it", progress: null, complete: null, counted: [], household: { size: 2, total: null, cap_shared: false }, measured: false,
+  });
+  assert.deepEqual(NEXT.quests.slice(0, 2), INV_LEGACY.quests, "the record's own rows are kept exactly");
+  assert.deepEqual(NEXT.pots.invalid_rows.list.map((r) => r.line), ["WHITE_PAGES/pot-bad.json", "quest-registry.json § inv-fund-b", "quest-registry.json § inv-fund-a"],
+    "the pot-file row keeps its place; the postings follow the registry's order (inv-fund-b before inv-fund-a), and the id is in the record's wording");
+  assert.ok(NEXT.pots.invalid_rows.list[1].reason.includes('pot "inv-fund-b"') && NEXT.pots.invalid_rows.list[1].reason.includes("pot-inv-fund-b.json"));
+});
+
+test("detector · a bounty that HAS a pot file is not a posting row", () => {
+  const withPot = JSON.parse(overlayRegistry(steady(INV_LEGACY), { rawQuests: INV_RAW_NEXT, fixturePotIds: ["inv-fund-b"] }));
+  assert.deepEqual(withPot.pots.invalid_rows.list.map((r) => r.line), ["WHITE_PAGES/pot-bad.json", "quest-registry.json § inv-fund-a"]);
+});
+
+test("detector · a counted row the record does not hold has no independent expectation and throws by name (it is never invented)", () => {
+  const counted = [...INV_RAW, { id: "inv-new-daily", title: "t", cadence: "daily", validation: "automatic", target: 2, reward: "1 stamp", source: "s" }];
+  assert.throws(() => invExpected(counted), /no independent expectation for registry quest "inv-new-daily"/);
+});
+
+test("detector · each wrong ANSWER is named against the fixed expectation: missing, duplicated, changed and misplaced quests; missing, extra and misnamed postings", () => {
+  const want = invExpected(INV_RAW_NEXT);
+  const answer = () => structuredClone(NEXT);   // the right answer, then ONE thing wrong per case
+  const parts = (mutate) => { const a = answer(); mutate(a); return firstDiffPath(steady(a), want); };
+  assert.equal(firstDiffPath(steady(answer()), want), null, "the control: the right answer equals the expectation");
+  assert.equal(parts((a) => a.quests.pop()), "$.quests.length", "the new quest missing");
+  assert.equal(parts((a) => a.quests.push({ ...a.quests[2] })), "$.quests.length", "the new quest twice");
+  assert.equal(parts((a) => { a.quests[2].reward = "6 stamps, once"; }), "$.quests[2].reward", "a changed reward");
+  assert.equal(parts((a) => { a.quests[2].measured = true; }), "$.quests[2].measured", "a row measured that is not");
+  assert.equal(parts((a) => { a.quests[0].progress = 4; }), "$.quests[0].progress", "a record row that moved");
+  assert.equal(parts((a) => a.quests.reverse()), "$.quests[0].id", "the registry's order lost");
+  assert.equal(parts((a) => a.pots.invalid_rows.list.pop()), "$.pots.invalid_rows.list.length", "a posting missing");
+  assert.equal(parts((a) => a.pots.invalid_rows.list.push(INV_POSTING("inv-ghost"))), "$.pots.invalid_rows.list.length", "an extra posting");
+  assert.equal(parts((a) => { a.pots.invalid_rows.list[1] = INV_POSTING("inv-fund-c"); }), "$.pots.invalid_rows.list[1].line", "a posting for the wrong id");
+  assert.equal(parts((a) => a.pots.invalid_rows.list.reverse()), "$.pots.invalid_rows.list[0].row_kind", "the postings before the pot-file row");
+});
+
+test("detector · the TOWN's board (no resident named) takes the new row with its registry fields and `door` only: no resident field, no `measured`", () => {
+  const rawTown = [INV_RAW[0], { id: "inv-m", title: "A milestone", cadence: "milestone", validation: "needs-review", target: 1, reward: "5 stamps, once", source: "Tell us.", awaits: "a hand reads it" }];
+  const legacy = { handle: null, quests: [{ id: "inv-a", title: "Title of inv-a", cadence: "one-time", validation: "automatic", target: 1, reward: "2 stamps", source: "Do inv-a.", door: null }] };
+  const want = JSON.parse(overlayRegistry(steady(legacy), { rawQuests: rawTown, fixturePotIds: [] }));
+  assert.deepEqual(want.quests[1], { id: "inv-m", title: "A milestone", cadence: "milestone", validation: "needs-review", target: 1, reward: "5 stamps, once", source: "Tell us.", door: null, awaits: "a hand reads it" });
+  assert.deepEqual(Object.keys(want.quests[1]).filter((k) => ["progress", "complete", "counted", "household", "measured"].includes(k)), []);
+  const answer = structuredClone(want); answer.quests[1].measured = false;
+  assert.equal(firstDiffPath(steady(answer), steady(want)), "$.quests[1].measured", "a resident-only key on the town's row is named (a key the expectation does not hold)");
 });

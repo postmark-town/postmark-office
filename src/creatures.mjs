@@ -1590,7 +1590,7 @@ async function creatureTurn(creature, act, distance_m, deps) {
     rows.push(...fought.rows);
     const written = await (deps.write ?? writeReaction)(rows);
     living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
-    if (enc) fleeTheSpent(written.rows, enc, deps, now);
+    if (enc) fleeTheSpent(written.rows, enc, deps, now, creature);
     // THE FIGHT MOVES ON when this act brought its set piece to an end (never fatal to the act's answer)
     const moved = fight ? await advanceFight(creature, kind, fight, { living, now, roster: enc?.roster ?? [], write: deps.writeOnce ?? null })
       .catch((e) => { faultLogged(`a fight's next set piece could not be written (${creature.id})`, e); return null; }) : null;
@@ -1963,16 +1963,17 @@ async function chargeOnly(creature, act, enc, deps, answered = []) {
     const hurl = asPayload(answered[0].payload).hurl;
     const got = await (deps.writeOnce ?? writeOnce)(answered, { lock: `creature-hurled:${hurl}`, prior: { sql: PRIOR_HURLED_SQL, params: [creature.id, String(hurl)] } });
     deps.living.fold(got.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
-    fleeTheSpent(got.rows, enc, deps, deps.now);
+    fleeTheSpent(got.rows, enc, deps, deps.now, creature);
   }
   if (!rows.length) return;
   const written = await (deps.writeCost ?? writeCost)(rows);
   deps.living.fold(written.rows.map((r) => ({ ...r, payload: asPayload(r.payload) })), { advance: false });
-  fleeTheSpent(written.rows, enc, deps, deps.now);
+  fleeTheSpent(written.rows, enc, deps, deps.now, creature);
 }
 
 /** Anyone a written nerve row took to 0 flees (encounter.mjs § queueFlee); never awaited on the act's path. */
-function fleeTheSpent(rows, enc, deps, now) {
+function fleeTheSpent(rows, enc, deps, now, creature) {
+  // `creature` is the one whose encounter this is (WLD-132): the id the exit act records as `fled_by`
   for (const h of new Set(rows.filter((r) => r.action === NERVE_ACTION).map((r) => r.object)))
-    if (nerveOf(deps.living, h, now) === 0) (deps.flee ?? queueFlee)(h, { household: enc.roster.find((r) => r.handle === h)?.slug ?? null });
+    if (nerveOf(deps.living, h, now) === 0) (deps.flee ?? queueFlee)(h, { household: enc.roster.find((r) => r.handle === h)?.slug ?? null, creature: creature.id });
 }

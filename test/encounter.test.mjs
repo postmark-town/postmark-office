@@ -34,6 +34,7 @@ import {
 } from "../src/encounter.mjs";
 import { encounterEntries, encounterPairs, encounterTick, settleResolve, worldEncounter, __resetEncounterTickForTest } from "../src/encounter-verbs.mjs";
 import { whyNot } from "../src/creature-verbs.mjs";
+import { queueFlee } from "../src/encounter.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
@@ -429,6 +430,59 @@ test("at 0 a resident flees: a press that empties them, and a strike that emptie
   const r = await worldEncounter({ act: "strike", creature: ID }, KEY, s.d);
   assert.deepEqual(s.fled, ["kai"]);
   assert.match(r.fled, /you flee, and stay out until the settlement/);
+});
+
+// ── WLD-132: the flee names the creature whose encounter took the nerve ─────────────────────────────
+
+const OTHER = "creature:bat-291-7"; // an invented second creature: it has spent the resident's nerve too, and most recently
+const otherSpent = (on, by, at = NOW - 30_000) => row(OTHER, NERVE_ACTION, on, { by, why: "press", act: "1", creature: OTHER }, at);
+
+test("WLD-132 · the producer hands the flee the creature of THIS encounter, not the one that last spent the nerve", async () => {
+  // a reaction's press: ren has 1 left after OTHER's newest row; this creature's press takes it
+  const living = livingWith(nerveRowOf("ren", -1, "act", NOW - 120_000), otherSpent("ren", -8, NOW + 5_000)); // OTHER's row is the newest on file
+  const fled = [];
+  const { d } = deps(living, { present: presentOf([["kai", 10], ["ren", 12]]), flee: (h, o) => fled.push([h, o.creature]),
+    env: { TYPESAFE_API_KEY: "k" }, ask: async () => ({ response: { answers: { reaction: { probabilities: { glare: 1 } }, press_on: { probabilities: { kai: 0, ren: 1 } } } } }) });
+  await reactTo(act({ actId: "9311" }), d);
+  assert.deepEqual(fled, [["ren", ID]], `named ${ID} (this encounter), never ${OTHER} (the latest nerve row)`);
+
+  // a strike that empties the striker
+  const striker = strikeDeps(livingWith(otherSpent("kai", -8)));
+  const hits = []; striker.d.flee = (h, o) => hits.push([h, o.creature]);
+  await worldEncounter({ act: "strike", creature: ID }, KEY, striker.d);
+  assert.deepEqual(hits, [["kai", ID]]);
+
+  // a steady that empties the one who steadies
+  const steadier = strikeDeps(livingWith(otherSpent("kai", -9)));
+  const aids = []; steadier.d.flee = (h, o) => aids.push([h, o.creature]);
+  await worldEncounter({ act: "steady", resident: "ren" }, KEY, steadier.d);
+  assert.deepEqual(aids, [["kai", ID]]);
+});
+
+test("WLD-132 · the tick's repair of a resident at 0 has no encounter in hand, so it names no creature", async () => {
+  __resetEncounterTickForTest();
+  const living = livingWith(otherSpent("mo", -10));
+  const asked = [];
+  const d = { strikes: async () => [], finish: async () => null, flee: async (h, o) => { asked.push([h, o]); return { fled: "nerve" }; },
+    creatures: async () => null, standpoint: async () => null, write: async () => null, answer: async () => [], answerRing: async () => [], freeze: () => null };
+  await encounterTick({ living, law: lawWith() }, { now: NOW, deps: d });
+  assert.deepEqual(asked, [["mo", {}]], "no latest-nerve guess: the options carry no creature");
+});
+
+test("WLD-132 · queueFlee captures the creature before it awaits, once per flight, and passes only a real id", async () => {
+  const seen = [];
+  let release; const gate = new Promise((r) => { release = r; });
+  const exit = async (h, hh, by) => { seen.push([h, hh, by]); await gate; return { fled: "nerve" }; };
+  const first = queueFlee("ann", { household: "hearth", exit, creature: ID });
+  const second = queueFlee("ann", { household: "hearth", exit, creature: OTHER }); // a later encounter, while the first is in flight
+  assert.equal(second, first, "one flight per resident");
+  release(); await first;
+  assert.deepEqual(seen, [["ann", "hearth", ID]], "the flight names the encounter that started it");
+  for (const bad of [undefined, null, "", 7, {}]) {
+    seen.length = 0;
+    await queueFlee("bo", { exit, creature: bad });
+    assert.equal(seen[0][2], null, `${JSON.stringify(bad)} is no creature`);
+  }
 });
 
 test("the tick repairs what a fault stopped: a strike's missing finish, and a resident at 0 not yet outside", async () => {

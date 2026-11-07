@@ -219,6 +219,20 @@ test("a second placement for Solace, whose first is live, is ACCEPTED too: the l
   assert.equal(out.ok, true, JSON.stringify(out));
 });
 
+// ── postmark#4441 · a top-level handle does not move a placement ────────────
+// A sited mark now reads its actor from the top-level handle, and a by naming
+// another of the key's residents is two actors, refused. A placer's by names a
+// resident the key does NOT hold, so that road is left exactly as it was: the
+// handle, the placer's own standpoint or the resident's name, changes nothing.
+test("a placement on a resident's behalf still lands as theirs when a top-level handle rides along (postmark#4441)", async () => {
+  for (const [handle, slug, x] of [["illuminator", "porch-placer-handle", 1500], ["solace", "porch-resident-handle", 1800]]) {
+    const out = await leave(porch({ handle, slug, at: { x, y: x } }), IRIS);
+    assert.equal(out.ok, true, `handle ${handle}: the placement must land: ${JSON.stringify(out)}`);
+    assert.equal(out.id, `solace/${slug}`, `handle ${handle}: the parcel is solace's`);
+    assert.equal(out.branch, "draft/Ana-Login", `handle ${handle}: under the resident's household`);
+  }
+});
+
 test("an amend on a resident's behalf is refused — never an amend", async () => {
   const out = await leave(porch({ amend: true }), IRIS);
   assert.equal(out.code, 422, JSON.stringify(out));

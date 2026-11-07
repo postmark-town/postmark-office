@@ -583,7 +583,7 @@ test("marks: the house's building in counts and two rows; the last crossing is t
   assert.deepEqual([m.drafts, m.pending, m.standing], [3, 1, 42]);
   assert.equal(m.last_crossing, "crossing 259: 2 published · 1 refused (architect/the-long-wall: it overlaps ground held first, and its holder has not welcomed it)",
     "the newest crossing that decided something of the house's, and only the house's (a refusal on its ground is not its own)");
-  assert.deepEqual(m.at_risk, ["illuminator/a-commons-lantern: ✦0, unpublished at the next settlement unless staked"], "what happens and why, by mark id");
+  assert.deepEqual(m.at_risk, ["illuminator/a-commons-lantern: ✦0, last-settlement risk; stake to keep"], "the exact snapshot-qualified risk row, by mark id");
   // Darko 18:04: the call that keeps one is named once, in the key
   assert.match(MARKS_KEY, /keep: world \{ do: "stake", args: \{ mark, stamps: 1, preview: true \} \}/);
   const many = marksBlock({ ...MARKS_MIX, atRisk: [{ mark: "a/x", escrow: 0 }, { mark: "a/y", escrow: 0 }, { mark: "a/z", escrow: 0 }] }).at_risk;
@@ -658,4 +658,26 @@ test("waiting.marks_at_risk and marks.at_risk agree on the same house: one sourc
   const odd = glanceV2({ ...p, marks: { ...p.marks, atRisk: [] }, needs: { ...p.needs, stakes_at_risk: { rows: [{ mark: "a/x", escrow: 0 }, { mark: "a/y", escrow: 0 }] } } }, { nowMs: NOW });
   assert.equal(odd.waiting.marks_at_risk, 2);
   assert.equal(odd.marks.at_risk.length, 2);
+});
+
+// ── WLD-51 (Wright 2026-11-04T12:01:08.880Z and 13:59:41.951Z) · the exact snapshot-qualified risk row at two rows ─────
+//
+// The glance's definite forecast became the exact row `<mark>: ✦<escrow>, last-settlement risk; stake to keep`, in the same
+// slot, with no frame appended. "It's a budget for that fixture, not a contract that every composition fits": the budgets
+// above are the ones the existing fixtures were sized for and they did not move; this case holds the row's CONTENT at two
+// at-risk rows (the fixture's own and an invented second) and part 1's budget at that cardinality. It adds no every-block
+// assertion at two rows and caps nothing.
+const SECOND_RISK = { mark: "mari/a-second-commons-lantern", escrow: 0, act: 'world { do: "stake", args: { mark: "mari/a-second-commons-lantern", stamps: 1 } }' };
+const TWO_RISKS = { ...MARKS_MIX, atRisk: [...MARKS_MIX.atRisk.map((r) => ({ ...r, escrow: 0 })), SECOND_RISK] };
+const EXACT_RISK_ROWS = ["illuminator/a-commons-lantern: ✦0, last-settlement risk; stake to keep", "mari/a-second-commons-lantern: ✦0, last-settlement risk; stake to keep"];
+
+test("WLD-51 · the exact risk row reaches the glance's marks block at two at-risk rows, and part 1 stays inside its budget there", (t) => {
+  const sf = glanceV2(partsFor(STARFORGE, { papersGaps: { architect: ["home", "window"], mari: ["parcel"] }, marks: TWO_RISKS }), { nowMs: NOW });
+  const one = glanceV2(partsFor(["kai"], { waiting: 3, marks: TWO_RISKS }), { nowMs: NOW });
+  for (const [name, g] of [["Starforge, 2 at-risk rows, part 1", sf], ["a house of one, 2 at-risk rows, part 1", one]]) {
+    t.diagnostic(`${name}: ${served(g)} characters (budget ${PART1_BUDGET})`);
+    assert.deepEqual(g.marks.at_risk, EXACT_RISK_ROWS, `${name}: both rows are the exact string`);
+    assert.ok(!JSON.stringify(g).includes("unpublished at the next settlement unless staked"), `${name}: the definite forecast is gone`);
+    assert.ok(served(g) <= PART1_BUDGET, `${name} is ${served(g)} characters as served`);
+  }
 });

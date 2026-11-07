@@ -29,8 +29,8 @@ test.after(() => { try { rmSync(TMP, { recursive: true, force: true }); } catch 
 const NEAR = "wright/a-thing-underfoot";
 const FAR = "wright/a-thing-across-town";
 
-/** A world store with two things: one at the caller's feet, one 900 m off. */
-async function storeWithThings(file) {
+/** A world store with two things: one at the caller's feet, one 900 m off. `by` is their author (the caller's own, unless a case says otherwise). */
+async function storeWithThings(file, by = "wright") {
   const { SCHEMA } = await import("../src/world-store.mjs");
   const path = join(TMP, file);
   rmSync(path, { force: true });
@@ -40,23 +40,37 @@ async function storeWithThings(file) {
   meta.run("hydration_status", "OK");
   meta.run("as_of_world", "f00dcafe");
   const node = db.prepare("INSERT INTO nodes (id, kind, subkind, tier, by, at_x, at_y, extent_w, extent_h, props) VALUES (?,?,?,?,?,?,?,?,?,?)");
-  node.run(NEAR, "mark", "sited", "market", "wright", 0, 0, 1, 1, JSON.stringify({ class: "thing", body: "A trued try-square." }));
-  node.run(FAR, "mark", "sited", "market", "wright", 900, 0, 1, 1, JSON.stringify({ class: "thing", body: "A thing across town." }));
+  node.run(NEAR, "mark", "sited", "market", by, 0, 0, 1, 1, JSON.stringify({ class: "thing", body: "A trued try-square." }));
+  node.run(FAR, "mark", "sited", "market", by, 900, 0, 1, 1, JSON.stringify({ class: "thing", body: "A thing across town." }));
   db.close();
   return path;
 }
 
+/** The SAME two things as marks of the office's world (the W2 form, as test/dungeon-reach.test.mjs builds them): the world the ground read's
+ *  reach filter (`reachableBy`) reads. POS-896: that filter reads `world()`, which is the PINNED CLONE's published world unless the test seam stands it
+ *  on something else; a store of invented rows beside the real clone's world is two worlds, and the day the clone gained a dungeon the filter began
+ *  to drop the invented things. The world stands on the rows' own marks here, so the test owns every input to the reach it drives. */
+const thingMark = (id, x, y, by) => ({ id, kind: "thing", by, household: by, tier: "market", at: { x, y }, extent: { w: 1, h: 1 }, body: id, date: "2026-09-02T00:00:00Z" });
+const worldOfThings = (by = "wright") => ({ marks: [thingMark(NEAR, 0, 0, by), thingMark(FAR, 900, 0, by)] });
+
 /** Run `fn` with the world published from a fresh store and the dynamic env at a temp pair.
  *  The world is the rows (POS-270 lane W 3a): world.db's path points nowhere. */
-async function withStore(file, fn) {
+async function withStore(file, fn, { marks = null, by = "wright", occupancy = null } = {}) {
   const prev = { store: process.env.WORLD_STORE_DB, dyn: process.env.WORLD_DYNAMIC_DB };
   const dir = mkdtempSync(join(TMP, "run-"));
   const { NO_WORLD_DB, withWorld } = await import("./helpers/world-rows.mjs");
-  const world = await storeWithThings(file);
+  const office = await import("../src/world.mjs");
+  const { __setOccupancyForTest } = await import("../src/creature-sight.mjs");
+  const world = await storeWithThings(file, by);
   process.env.WORLD_STORE_DB = NO_WORLD_DB;
   process.env.WORLD_DYNAMIC_DB = join(dir, "dynamic.db");
+  // the office's world stands on the invented marks (`marks`, or the two things), restored below with the environment
+  office.__setWorldForTest(marks ? { marks } : worldOfThings(by));
+  if (occupancy) __setOccupancyForTest(() => occupancy);
   try { return await withWorld(world, fn); }
   finally {
+    office.__setWorldForTest(null);
+    __setOccupancyForTest(null);
     for (const [k, v] of [["WORLD_STORE_DB", prev.store], ["WORLD_DYNAMIC_DB", prev.dyn]])
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
   }
@@ -184,6 +198,36 @@ test("WIRING 1 — the ground read is REACHED, and answers about the ground unde
     assert.equal(row.distance_m, 0);
     assert.ok(answer.reading_law, "the read must carry its own law, as every other read does");
   });
+});
+
+// ── THE REACH FILTER IS LIVE, AND THE WORLD THE GROUND READ STANDS ON IS THIS TEST'S OWN (POS-896) ──────────────────
+// WIRING 1 and its siblings above would also pass if the ground read ignored `reachableBy` altogether. These drive the REAL reachableBy
+// (src/world.mjs) through groundWithinReach over invented marks, the way test/dungeon-reach.test.mjs does: the same two things, once inside a room
+// of a dungeon the caller has not entered (hidden), once with the caller's stack holding that room (visible), once with no dungeon at all (visible).
+const KEEP = "fortholders/the-fort", ROOM = "fortholders/the-room";
+const roomMarks = () => [
+  { id: KEEP, kind: "dungeon", by: "fortholders", household: "fortholders", tier: "market", at: { x: 0, y: 0 }, extent: { w: 400, h: 400 }, body: KEEP, date: "2026-09-02T00:00:00Z" },
+  { id: ROOM, kind: "sited", by: "fortholders", household: "fortholders", tier: "market", at: { x: 0, y: 0 }, extent: { w: 60, h: 60 }, body: ROOM, date: "2026-09-02T00:00:00Z" },
+  thingMark(NEAR, 0, 0, "fortholders"), thingMark(FAR, 900, 0, "fortholders"),
+];
+async function groundIds() {
+  const { groundWithinReach } = await import("../src/world-apex.mjs");
+  const answer = await groundWithinReach({ standpoint: { x: 0, y: 0, handle: "wright" } }, { handles: new Set(["wright"]) });
+  assert.ok(!answer.unavailable, `the ground read was unavailable: ${answer.unavailable}`);
+  return (answer.things ?? []).map((t) => t.thing);
+}
+
+test("the ground read's reach filter is REAL: a thing in a room of a dungeon the caller has not entered is not on the ground; entered, it is; no dungeon, it is", async () => {
+  const opts = { by: "fortholders" };
+  await withStore("room-out.db", async () => {
+    assert.equal((await groundIds()).includes(NEAR), false, "hidden: the room is not in the caller's stack, so the thing underfoot is nobody's ground");
+  }, { ...opts, marks: roomMarks(), occupancy: new Map() });
+  await withStore("room-in.db", async () => {
+    assert.equal((await groundIds()).includes(NEAR), true, "the control: the caller's stack holds the dungeon and the room, so the same thing is ground");
+  }, { ...opts, marks: roomMarks(), occupancy: new Map([["wright", [KEEP, ROOM]]]) });
+  await withStore("room-none.db", async () => {
+    assert.equal((await groundIds()).includes(NEAR), true, "the counter case: the same rows with no dungeon in the world hide nothing");
+  }, { ...opts, marks: [thingMark(NEAR, 0, 0, "fortholders"), thingMark(FAR, 900, 0, "fortholders")] });
 });
 
 test("...and the take SHADOW carries the ground through — driven, so a discarded answer cannot hide", async () => {

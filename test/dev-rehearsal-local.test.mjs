@@ -85,15 +85,18 @@ test("one crossing, end to end, through the dev office's doors, the Mists at the
   const sandboxVerdict = async (sha) => ({ runs: 1, status: "completed", conclusion: "success", url: "(the local stand-in's verdict)", head_sha: sha });
   const r = await runRehearsal(target({ sandboxVerdict }), { log: (l) => lines.push(l) });
   const text = renderReport(r);
-  // ON FAILURE, THE REPORT GOES TO THE JOB TOO (POS-746): a test's own output lands only in its shard's
-  // artifact, which a rerun replaces, so a red step was lost once. CI's step summary is kept per attempt;
-  // locally the assertion below carries the report as before.
+  // ON FAILURE, THE REPORT GOES TO THE STEP SUMMARY TOO (POS-746): a test's own output lands only in its
+  // shard's artifact, which a rerun replaces, so a red step was lost once. CI's step summary is kept per
+  // attempt; locally the assertion below carries the report as before.
   if (!r.green && process.env.GITHUB_STEP_SUMMARY)
     try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### dev-rehearsal-local: not green\n\n~~~\n${text}\n~~~\n`); } catch { /* the assertion still says it */ }
   // the store's own database: w2_devsandbox_rehearsal, or on a pool tree t<pid>_<n>_w2_devsandbox_rehearsal (POS-479)
   assert.match(dev.store.database, /^(t\d+_\d+_)?w2_devsandbox_rehearsal$/);
   assert.match(lines[0], new RegExp(`^dev-rehearsal: target store ${dev.store.database} \\(the dev office's, from .*\\); not world2_dev$`));
-  assert.equal(r.green, true, text);
+  // THE FIRST LINE NAMES THE STEP (POS-926): the suite verdict prints only an error's first line
+  // (.github/scripts/suite-reporter.mjs), and the report's own first line is its guard, whatever went red.
+  const stopped = r.steps.find((s) => !s.ok);
+  assert.equal(r.green, true, `${stopped ? `RED at ${stopped.id}: ${stopped.problems[0]}` : `RED: ${r.error ?? "no step ran"}`}\n${text}`);
   const ran = r.steps.filter((s) => !s.pending).map((s) => s.id);
   assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand", "refused-alone", "stamp-sandbox"], text);
   assert.deepEqual(r.steps.filter((s) => s.pending).map((s) => s.id), [], "no step is pending (POS-356 landed in #427)");
@@ -117,7 +120,8 @@ test("the store names the rehearsal's own standing parcels as covered ground, by
     const [row] = await s.q("clearing_job", "SELECT slug, geometry FROM marks WHERE kind = 'parcel' AND status = 'standing' AND slug = $1", [`rh-${crossed.run}-a/rh-${crossed.run}-ground`]);
     assert.ok(row, "the rehearsal's parcel stands in the store");
     const taken = groundTakenIn(s, OVERLAP, boxOf);
-    const own = /^the standing (parcel|sited) "rh-[0-9a-z]+-[ab]\/rh-[0-9a-z]+-(ground|by-hand|lamp)"$/;
+    // the by-hand parcel is the second house's (handle -c, POS-896); the ground and the lamp are the first's (-a)
+    const own = /^the standing (parcel|sited) "rh-[0-9a-z]+-[ac]\/rh-[0-9a-z]+-(ground|by-hand|lamp)"$/;
     // the place it stands on: covered by it, the lamp on it, or the by-hand parcel beside it (one answer, LIMIT 1)
     assert.match((await taken(groundOf(row.geometry.at, 25))) ?? "", own);
     // a parcel's width east, sharing only an edge: still covered (the operator is inclusive)

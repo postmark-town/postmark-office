@@ -464,6 +464,9 @@ test("8 · end to end (Darko 2026-10-15 19:02): a stage re-credited to a FOUNDER
   async () => {
     setup();
     const id = await confirmed("carol", "The bell rings twice");
+    // POS-713: an advance moves one rung, so the unearned rung is recorded as skipped first, as the sibling cases above do
+    // (until the town carried --stage-recredit this case was skipped, and nobody saw it still went confirmed → diagnosed)
+    await advanceAtTown({ post: id, skip: "reproduced", reason: "the cause came with the report" }, WRIGHT, { now: NOW, roll: ROLL });
     await advanceAtTown({ post: id, to: "diagnosed", credit: "ada", link: ADA_LETTER }, WRIGHT, { now: NOW, roll: ROLL });
     const { repo, keyFile } = syntheticTown({ rooms: ["wright"] });
     try {
