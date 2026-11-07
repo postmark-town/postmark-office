@@ -334,20 +334,36 @@ test("canon's parcels answer for a place by name, the edge included, and the wal
 test("the rehearsal's ground keeps off the world's parcels when its store holds none (POS-928, the stand-in's store, the pinned world)", async () => {
   const { mistsAt } = await engine();
   const safe = mistsSafeBox(publishedSkeleton(WORLD).skeleton.mists, mistsAt);
-  const { loadMarks } = await import(pathToFileURL(join(WORLD, "tools", "marks-fold.mjs")).href);
-  const parcels = loadMarks(join(WORLD, "WORLD", "marks")).filter((m) => m.kind === "parcel" && m.at).map((m) => ({ id: m.id, at: m.at, extent: { w: m.extent?.w || 25, h: m.extent?.h || 25 } }));
-  const inCanon = groundTakenInCanon(parcels);
+  const { loadMarks, overlapArea, rect } = await import(pathToFileURL(join(WORLD, "tools", "marks-fold.mjs")).href);
+  const parcels = loadMarks(join(WORLD, "WORLD", "marks")).filter((m) => m.kind === "parcel" && m.at).map((m) => { const r = rect(m); return { id: m.id, r: { ...r, w: r.w || 25, h: r.h || 25 } }; });
+  // judged by the world's own overlap, the sweep's question, and not by the code under test
+  const onCanon = (f) => parcels.find((p) => overlapArea(p.r, rect(f)) > 0)?.id ?? null;
   // A run id whose first place puts the by-hand parcel on a parcel canon holds, found from the world at hand so no pin move can stale it.
   // findGround's walk from run 0 asks every place in order; the id naming place k is k in base 36.
   const places = [];
   await assert.rejects(findGround({ run: "0", safe, parcelM: 25, maxTries: Infinity, taken: async (f) => { places.push(f); return "covered"; } }));
-  const k = places.findIndex((f) => !inCanon(f.slice(0, 1)) && inCanon(f.slice(1, 2)));
+  const k = places.findIndex((f) => !onCanon(f[0]) && onCanon(f[1]));
   assert.ok(k >= 0, `some place of ${places.length} sets the by-hand parcel on one of canon's ${parcels.length} parcels`);
   const emptyStore = { q: async () => [] };
   const g = await rehearsalGround({ t: { officeRoot: OFFICE, worldClone: WORLD }, s: emptyStore, run: k.toString(36) });
-  assert.equal(inCanon(g.footprints), null, `the ground it answered stands on ${inCanon(g.footprints)}`);
+  for (const f of g.footprints) assert.equal(onCanon(f), null, `the ground it answered has ${f.name} on the canon parcel`);
   assert.ok(g.tried > 1, "the run's first place was walked past");
   assert.ok(g.line.includes(`clear of its ${parcels.length} parcels)`), g.line);
+});
+
+test("a world clone that reads no parcels refuses, by name: couldn't read is never a world with none (POS-928)", async () => {
+  // the world's own git and tools, and no WORLD/marks on disk: a half-failed checkout, or a sparse set that drops it. loadMarks answers [] and throws nothing.
+  const dir = mkdtempSync(join(tmpdir(), "dev-rehearsal-nomarks-"));
+  try {
+    const clone = join(dir, "world");
+    execFileSync("git", ["clone", "--quiet", "--no-checkout", WORLD, clone], { windowsHide: true });
+    execFileSync("git", ["-C", clone, "checkout", "HEAD", "--", "tools"], { windowsHide: true });
+    execFileSync("git", ["-C", clone, "update-ref", "refs/heads/main", "HEAD"], { windowsHide: true }); // the pool's clones sit detached, and the blessed read asks for main
+    const { loadMarks } = await import(pathToFileURL(join(clone, "tools", "marks-fold.mjs")).href);
+    assert.deepEqual(loadMarks(join(clone, "WORLD", "marks")), [], "the control: this clone's read finds nothing and does not throw");
+    await assert.rejects(rehearsalGround({ t: { officeRoot: OFFICE, worldClone: clone }, s: { q: async () => [] }, run: "abc1" }),
+      (e) => { assert.equal(e.refusal, true); assert.match(e.message, /reads no parcels \(is WORLD\/marks there\?\)/); return true; });
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
 });
 
 test("a world with no Mists keeps the old strip of ground, still asked for free ground", async () => {

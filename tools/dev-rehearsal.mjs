@@ -1076,7 +1076,7 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
   const files = git(ctx.worldBare, "ls-tree", "-r", "--name-only", head, "--", "WORLD/marks").split("\n");
   // the receipt rides the line: "quiet" (nothing eligible) and "published" both exit 0, and
   // CI keeps only this line, so a red that names no receipt cannot be read (POS-595's KF red,
-  // 6 times 10-12..10-17; read in POS-928: its ground stood on a parcel canon holds, § THE REHEARSAL'S GROUND)
+  // 6 times 10-12..10-17, cause unread)
   if (!files.some((f) => f.includes(`/${mark}/`) || f.endsWith(`/${mark}.md`))) p.push(`the copy's main (${head.slice(0, 9)}) carries no file for ${mark} after the crossing (receipt: ${receipt.status ?? "no status"}: ${String(receipt.detail ?? "").slice(0, 300)})`);
   if (receipt.docket_window != null && Number(receipt.docket_window) !== Number(window)) p.push(`the crossing folded window ${receipt.docket_window}, not ${window}`);
   return p;
@@ -1269,6 +1269,8 @@ export async function rehearsalGround(ctx) {
     canon = loadMarks(join(t.worldClone, "WORLD", "marks")).filter((m) => m.kind === "parcel" && m.at)
       .map((m) => ({ id: m.id, at: m.at, extent: { w: m.extent?.w || parcelM, h: m.extent?.h || parcelM } }));
   } catch (e) { refuse(`the rehearsal cannot read the parcels of the world at ${t.worldClone}, so it cannot find ground the settlement will take: ${thrown(e)}`); }
+  // loadMarks answers [] for a missing WORLD/marks and drops a record it cannot parse: no parcels is a read that failed, never a world with none
+  if (!canon.length) refuse(`the world at ${t.worldClone} reads no parcels (is WORLD/marks there?), so the rehearsal cannot find ground the settlement will take`);
   const inCanon = groundTakenInCanon(canon);
   const inStore = groundTakenIn(ctx.s, OVERLAP, boxOf);
   const g = await findGround({ run: ctx.run, safe, parcelM, taken: async (f) => inCanon(f) ?? inStore(f) });
