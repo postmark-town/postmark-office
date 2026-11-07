@@ -256,8 +256,15 @@ export function standpointForCrossing(here, who) {
  * the pool cannot be reached, and both land here as `[]` — which is the input
  * that makes the deposit rule decline to move the rider. That is the same
  * fail-safe this function has always had, now with one source rather than two.
+ *
+ * EXCEPT FOR THE EXIT'S DEPOSIT (POS-943): "decline to move the rider" is,
+ * after the exit is written, a rider out of the hull standing wherever the hull
+ * was (finch, 100 km out). `strict` lets an unreachable store THROW, so the
+ * vessel's exit refuses before it writes anything (`crossingDeps().actsStrict`).
+ * "Not configured" still answers `[]`: an office with no store has no boarding
+ * to read and never had a deposit to make.
  */
-async function actsOfActor(who) {
+async function actsOfActor(who, { strict = false } = {}) {
   try {
     const { actsQuery } = await import("./world2-acts.mjs");
     const rows = await actsQuery(
@@ -268,7 +275,7 @@ async function actsOfActor(who) {
     return rows.map((r) => ({
       action: r.action, object: r.object ?? null, payload: actPayload(r.payload),
     }));
-  } catch { return []; }
+  } catch (e) { if (strict) throw e; return []; }
 }
 
 /**
@@ -521,10 +528,14 @@ export function crossingDeps() {
     // THE ACTS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's one input
     // (world-ride.mjs § rideStateFrom). Read from the STORE (POS-152), which is
     // never truncated, so an entry older than the drain cursor is still here; a
-    // store that cannot be opened answers with no history, and the deposit rule
-    // then falls back to "you came in nowhere" and leaves a resident exactly
-    // where they are rather than setting them down somewhere they never earned.
+    // store that cannot be opened answers with no history here. The vessel
+    // exit's deposit reads `actsStrict` below instead (POS-943): "leave a
+    // resident exactly where they are" was, after the exit, a resident standing
+    // where the hull had been.
     acts: async (who) => actsOfActor(who),
+    // THE SAME READ FOR THE VESSEL EXIT'S DEPOSIT (POS-943): an unreachable store throws here, and the exit refuses
+    // with nothing written, rather than writing an exit that sets the rider down nowhere.
+    actsStrict: async (who) => actsOfActor(who, { strict: true }),
     // What the class of a mark LENDS, resolved for a resident — the § 5 roster.
     // It lives here and not in world-crossings.mjs because the roster is in the
     // hydrated store and that module is deliberately store-free.

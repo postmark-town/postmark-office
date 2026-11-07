@@ -195,6 +195,19 @@ export function rideMillis(distanceM, paceKmPerCrossing) {
  *                      (Keemin: "latest ride wins")
  *   exit  <vessel>   → nothing stands; the next enter starts the state again
  *
+ * AN ENTER IS A BOARDING ONLY IF IT BOARDED HER (POS-943). An enter act's
+ * `object` is the mark the resident ASKED to enter (world-crossings § enter
+ * records `mark: markId`), and its `lines` are what the enter actually did. finch
+ * boarded through the Snug Jetty (46971: `via` the jetty, its line "enters
+ * the-town/the-post-office"), then asked to enter her again the ordinary way
+ * seven seconds later (46973): she was already held, so that act's lines enter
+ * only the-town/the-town-centre and the-town/the-quay-reach, it names no stop,
+ * and its object is still her. Read as a boarding, it wiped the jetty; the exit
+ * then owed no deposit and set him down nowhere. So an enter of hers counts when
+ * it names a stop (`via`), or when its own lines record entering her; one whose
+ * lines enter only other marks boarded nothing and changes neither the stop nor
+ * a standing ride. An act with no lines reads as it always did.
+ *
  * Pure over (acts, vesselId) so a falsifier can hand it any history it likes.
  *
  * ⚑ WHAT THIS DOES NOT DECIDE: whether you are aboard. Occupancy is the
@@ -210,8 +223,10 @@ export function rideStateFrom(acts = [], { vesselId } = {}) {
     if (!a || String(a.object ?? "") !== String(vesselId ?? "")) continue;
     const action = String(a.action ?? "");
     const p = a.payload ?? {};
-    if (action === "enter") { entryStop = p.via ? String(p.via) : null; standingRide = null; }
-    else if (action === "ride") {
+    if (action === "enter") {
+      if (!boardedHer(p, vesselId)) continue;   // POS-943: its lines entered only other marks
+      entryStop = p.via ? String(p.via) : null; standingRide = null;
+    } else if (action === "ride") {
       standingRide = {
         origin: p.origin ? String(p.origin) : null,
         to: p.to ? String(p.to) : null,
@@ -223,6 +238,14 @@ export function rideStateFrom(acts = [], { vesselId } = {}) {
     } else if (action === "exit") { entryStop = null; standingRide = null; }
   }
   return { entryStop, standingRide };
+}
+
+/** Whether an enter act of hers boarded her (POS-943): it names a stop, or its own ledger lines record entering
+ *  her (`- <iso> · <handle> · enters <vessel> · …`). An act that carries no lines reads as it always did. */
+function boardedHer(p, vesselId) {
+  if (p.via) return true;
+  if (!Array.isArray(p.lines) || !p.lines.length) return true;
+  return p.lines.some((l) => String(l).includes(` · enters ${vesselId} · `));
 }
 
 /** Has the standing ride come due? Pure over (ride, clock). */
