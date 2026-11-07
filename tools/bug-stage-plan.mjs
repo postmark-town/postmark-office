@@ -59,6 +59,16 @@
 // and nothing is written: a burn is never partial and never from escrow. A
 // town whose stamp-mint carries no correction grammar holds every one.
 //
+// A SKIPPED STAGE'S CREDIT (POS-931/a). A recredit act marked `skipped` says
+// a stage the record shows skipped was earned after all. It owes ONE town line,
+// the stage's lawful amount (the ladder, with the act's grade at briefed) to
+// the credit, `post:<id>/<stage>-recredit`, with nothing to burn, written by
+// the town's `--stage-recredit --skipped`. It is owed only when this pass reads
+// the evidence itself: the post's skip act for that stage and no advance to it
+// in the acts, and a town ledger that is THERE and holds no line for that stage
+// and no correction of it. Anything else holds and says why, and nothing is
+// written: an unread or absent ledger is never "nothing was paid".
+//
 // ── THE PARSE IS BOUND (deploy/welcome-pass.mjs § THE PARSE IS BOUND) ────────
 //
 // --apply prints the plan, parses its own printed plan back, and refuses when
@@ -73,8 +83,8 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { BUG_CLASS, BUG_LADDER, CONFIRMED_CAP, STATE_CONFIRMED, stageAmount } from "../src/bugs.mjs";
-import { ACT_ADVANCE, ACT_RECREDIT } from "../src/events.mjs";
+import { BUG_CLASS, BUG_LADDER, CONFIRMED_CAP, SKIPPED_RECREDIT_STAGES, STATE_CONFIRMED, stageAmount } from "../src/bugs.mjs";
+import { ACT_ADVANCE, ACT_RECREDIT, ACT_SKIP } from "../src/events.mjs";
 
 const TZ = () => process.env.TOWN_TZ ?? "America/New_York";
 
@@ -156,10 +166,23 @@ export function planStages({ acts, houseOf, isMeep, paid = new Set(), payDate = 
  * `liquid` each handle's liquid balance (the town's foldBalances);
  * `canRecredit` whether the town carries --stage-recredit. One row per recredit
  * act: { post, stage, from, to, household, n, sig, hand, why, owed, act, date }.
+ *
+ * A skipped stage's credit (POS-931/a) is a row with `from` "(skipped)" and
+ * `sig` "nothing". It needs `ledgerRead` (the town's ledger file was there and
+ * read) and `canSkipCredit` (the town carries --stage-recredit --skipped); both
+ * default to false, so a caller that cannot say holds it.
  */
-export function planRecredits({ acts, houseOf, isMeep, stageLines, corrected, liquid, canRecredit = true, payDate = null, tz = TZ() }) {
+export function planRecredits({ acts, houseOf, isMeep, stageLines, corrected, liquid, canRecredit = true,
+  ledgerRead = false, canSkipCredit = false, payDate = null, tz = TZ() }) {
   const rows = [];
   const burning = new Map();   // handle -> stamps this pass already plans to burn from them
+  // The record's own evidence, per "<post>/<stage>": advanced, and skipped.
+  const advanced = new Set(), skippedOn = new Set(), skipPlanned = new Set();
+  for (const a of acts) {
+    if (a.action !== ACT_ADVANCE && a.action !== ACT_SKIP) continue;
+    const p = payloadOf(a);
+    (a.action === ACT_ADVANCE ? advanced : skippedOn).add(`${String(p.post ?? a.object)}/${p.to}`);
+  }
   for (const a of acts) {
     if (a.action !== ACT_RECREDIT) continue;
     const p = payloadOf(a);
@@ -167,6 +190,16 @@ export function planRecredits({ acts, houseOf, isMeep, stageLines, corrected, li
     const stage = p.to;
     const to = p.credit;
     const key = `${post}/${stage}`;
+    if (p.skipped === true) {
+      const row = planSkippedCredit({ a, p, post, stage, to, key, houseOf, isMeep, stageLines, corrected, ledgerRead, canSkipCredit,
+        advanced, skippedOn, payDate, tz });
+      // ONE LINE PER STAGE IN A PASS: the door's row lock allows one act per stage, and a second here (a
+      // lock that failed, a replayed act) is held, never a second line; the town's verb would refuse it too.
+      if (row.owed && skipPlanned.has(key)) { rows.push({ ...row, why: `held: a second credit of skipped post:${key} in one pass; the first is owed, and a person reads both`, owed: false }); continue; }
+      if (row.owed) skipPlanned.add(key);
+      rows.push(row);
+      continue;
+    }
     const line = stageLines.get(key) ?? null;
     const base = { post, stage, from: line?.handle ?? p.was ?? "(none)", to, household: houseOf(to) ?? "(none)",
       n: line?.n ?? (Number(p.paid) || 0), sig: line?.sig ?? "(none)", hand: p.hand ?? a.actor, act: Number(a.id), date: townDate(a.at, tz) };
@@ -184,6 +217,26 @@ export function planRecredits({ acts, houseOf, isMeep, stageLines, corrected, li
     rows.push({ ...base, why: "owed", owed: true });
   }
   return rows;
+}
+
+/** One skipped stage's credit, judged from what this pass read itself (POS-931/a). */
+function planSkippedCredit({ a, p, post, stage, to, key, houseOf, isMeep, stageLines, corrected, ledgerRead, canSkipCredit, advanced, skippedOn, payDate, tz }) {
+  const n = SKIPPED_RECREDIT_STAGES.includes(stage) ? stageAmount(stage, { grade: p.grade ?? null }) : 0;
+  const base = { post, stage, from: "(skipped)", to, household: houseOf(to) ?? "(none)", n, sig: "nothing",
+    hand: p.hand ?? a.actor, act: Number(a.id), date: townDate(a.at, tz) };
+  const held = (why) => ({ ...base, why, owed: false });
+  if (corrected.has(key)) return { ...base, why: "already corrected", owed: false };
+  if (!canSkipCredit) return held("held: this town's stamp-mint carries no skipped-stage credit (--stage-recredit --skipped); nothing is paid until it does");
+  if (!ledgerRead) return held(`held: the town's ledger was not read, so whether post:${key} was ever paid is unknown; nothing is paid on an unread ledger`);
+  if (!skippedOn.has(key)) return held(`held: the act says ${stage} was skipped, and the record holds no skip of post:${key}; a person reads both`);
+  if (advanced.has(key)) return held(`held: the act says ${stage} was skipped, and the record holds an advance to post:${key}; a person reads both`);
+  const line = stageLines.get(key);
+  if (line) return held(`held: the ledger paid post:${key} to ${line.handle}; a skipped stage's credit is for a stage the ledger never paid`);
+  if (!n) return held(`held: ${stage} has no lawful amount for this act (a skipped ${SKIPPED_RECREDIT_STAGES.join(" or ")} only, briefed with its grade)`);
+  if (p.paid != null && Number(p.paid) !== n) return held(`held: the act recorded ${p.paid} and the ladder pays ${n}; a person reads both`);
+  if (isMeep(to, base.date) || (payDate && isMeep(to, payDate))) return held("meep: a meep never receives stamps, so nothing is paid");
+  if (!houseOf(to)) return held(`unresolved: ${to} has no household on record; a person binds them, then the pass pays`);
+  return { ...base, why: "owed", owed: true };
 }
 
 // ── the plan, printed ───────────────────────────────────────────────────────
@@ -233,7 +286,8 @@ export function parseStagePlan(text) {
 
 const RC_HEADER_RE = /^bug recredit plan — (\d+) recredit\(s\) recorded, (\d+) already corrected, (\d+) held, (\d+) owed \((\d+) stamps\)$/;
 const RC_ROW = (r) => `  ${r.post}/${r.stage} · ${r.from} → ${r.to} · ${r.household} · ${r.n} · ${r.why} · by ${r.hand} · burns ${r.sig} · act ${r.act} on ${r.date}`;
-const RC_OWED_RE = /^ {2}(\S+)\/(diagnosed|briefed|fixed) · (\S+) → (\S+) · (\S+) · (\d+) · owed · by (\S+) · burns ([A-Za-z0-9_-]{86}) · act (\d+) on (\d{4}-\d{2}-\d{2})$/;
+// A skipped stage's credit (POS-931/a) prints `(skipped) → <credit>` and `burns nothing`; the two go together.
+const RC_OWED_RE = /^ {2}(\S+)\/(diagnosed|briefed|fixed) · (\S+) → (\S+) · (\S+) · (\d+) · owed · by (\S+) · burns ([A-Za-z0-9_-]{86}|nothing) · act (\d+) on (\d{4}-\d{2}-\d{2})$/;
 
 /** The corrections' plan as a person reads it; empty when no recredit was recorded. */
 export function renderRecredits(rows) {
@@ -271,7 +325,10 @@ export function parseRecreditPlan(text, { recorded }) {
       if (line.trim() === "") break;
       const m = RC_OWED_RE.exec(line);
       if (!m) throw new Error(`bug-stage-plan: unreadable recredit row: ${JSON.stringify(line)}`);
-      owed.push({ post: m[1], stage: m[2], from: m[3], to: m[4], household: m[5], n: Number(m[6]), hand: m[7], sig: m[8], act: Number(m[9]), date: m[10] });
+      if ((m[3] === "(skipped)") !== (m[8] === "nothing"))
+        throw new Error(`bug-stage-plan: a recredit row is a skipped stage's credit with nothing to burn, or a correction that burns a mint, never half of each: ${JSON.stringify(line)}`);
+      owed.push({ post: m[1], stage: m[2], from: m[3], to: m[4], household: m[5], n: Number(m[6]), hand: m[7], sig: m[8], act: Number(m[9]), date: m[10],
+        ...(m[8] === "nothing" ? { skipped: true } : {}) });
     }
   }
   if (owed.length !== claimed)
@@ -308,7 +365,9 @@ export async function townEngine(town) {
       throw new Error(`bug-stage-plan: the office's ladder pays ${stage} ${ours.join("/")} and the town's ${theirs.join("/") || "nothing"} — refusing until they agree`);
   }
   return { isMeep: (h, d) => meep(h, d), paid, stageLines, corrected, liquid: engine.foldBalances(entries),
-    canRecredit: typeof engine.stageRecreditLines === "function" };
+    canRecredit: typeof engine.stageRecreditLines === "function",
+    // POS-931/a: a skipped stage is paid only on a ledger that was there and read, by a town that carries the grammar
+    ledgerRead: existsSync(ledgerFile), canSkipCredit: typeof engine.stageSkippedCreditLine === "function" };
 }
 
 /**
@@ -337,9 +396,14 @@ export async function storeFacts({ env = process.env } = {}) {
 export const stageMintArgv = (town, r, { date, keyPath }) => [join(town, "tools", "stamp-mint.mjs"),
   "--stage-mint", r.handle, "--post", r.post, "--stage", r.stage, "--amount", String(r.n), "--date", date, "--key", keyPath, "--repo", town];
 
-/** The town's correction verb (POS-649): both lines or neither, with the plan's amount and wrong recipient as binds. */
+/**
+ * The town's correction verb (POS-649): both lines or neither, with the plan's amount and wrong recipient as binds.
+ * A skipped stage's credit (POS-931/a) is the same verb with --skipped: one line, nothing burned, refused by the
+ * town when its ledger holds a line for the stage.
+ */
 export const stageRecreditArgv = (town, r, { date, keyPath }) => [join(town, "tools", "stamp-mint.mjs"),
-  "--stage-recredit", r.to, "--post", r.post, "--stage", r.stage, "--by", r.hand, "--amount", String(r.n), "--from", r.from,
+  "--stage-recredit", r.to, "--post", r.post, "--stage", r.stage, "--by", r.hand, "--amount", String(r.n),
+  ...(r.skipped ? ["--skipped"] : ["--from", r.from]),
   "--date", date, "--key", keyPath, "--repo", town];
 
 const run = (town, argv) => spawnSync(process.execPath, argv, { cwd: town, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -369,7 +433,8 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
   const rows = planStages({ acts: store.acts, houseOf, isMeep: engine.isMeep, paid: engine.paid, payDate: date });
   const text = renderPlan(rows);
   const rcRows = planRecredits({ acts: store.acts, houseOf, isMeep: engine.isMeep, stageLines: engine.stageLines ?? new Map(),
-    corrected: engine.corrected ?? new Set(), liquid: engine.liquid ?? new Map(), canRecredit: engine.canRecredit !== false, payDate: date });
+    corrected: engine.corrected ?? new Set(), liquid: engine.liquid ?? new Map(), canRecredit: engine.canRecredit !== false,
+    ledgerRead: engine.ledgerRead === true, canSkipCredit: engine.canSkipCredit === true, payDate: date });
   const rcText = renderRecredits(rcRows);
   // --quiet (the tick's): the header and what this run pays, never the paid
   // past, which grows with every stage and would fill the journal each tick.
@@ -405,8 +470,11 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
   const rcRefused = [];
   for (const r of rcParsed.owed) {
     const out = spawn(town, stageRecreditArgv(town, r, { date, keyPath }));
-    if (out.status === 0) log(`[bug-stage-plan] re-credited ${r.n} → ${r.to} · post:${r.post}/${r.stage}-recredit, and burned ${r.from}'s ${r.n} (correction:${r.sig.slice(0, 16)}…)`);
-    else {
+    if (out.status === 0) {
+      log(r.skipped
+        ? `[bug-stage-plan] credited ${r.n} → ${r.to} · post:${r.post}/${r.stage}-recredit, a skipped stage: nothing burned`
+        : `[bug-stage-plan] re-credited ${r.n} → ${r.to} · post:${r.post}/${r.stage}-recredit, and burned ${r.from}'s ${r.n} (correction:${r.sig.slice(0, 16)}…)`);
+    } else {
       const why = (out.stderr ?? "").trim().split(/\r?\n/)[0] || `exit ${out.status}`;
       err(`[bug-stage-plan] REFUSED the correction of post:${r.post}/${r.stage} (${r.from} → ${r.to}) — ${why}`);
       rcRefused.push(r);
