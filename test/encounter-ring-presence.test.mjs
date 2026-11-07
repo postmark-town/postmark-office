@@ -98,7 +98,8 @@ test("the ring is presence's own: four at one point in the room are the ring (th
   try {
     assert.equal(typeof law.inCreatureRing, "function", "the pinned world's room clip");
     // inside one settlement window: the shield and the acts after it must share one
-    const now = Math.min(Date.now(), windowAt(Date.now()).ends - 120_000);
+    const wall = Date.now(); // one reading: a window's turn between two would leave `now` in its last moments
+    const now = Math.min(wall, windowAt(wall).ends - 120_000);
     const iso = (ms) => new Date(ms).toISOString();
     let n = 30000;
     const nextId = () => String(++n);

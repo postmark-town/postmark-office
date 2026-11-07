@@ -50,13 +50,14 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 // order it runs them, between settlements and positions (review-612). 27 since
 // review-593 c: the world snapshot (POS-268 5b) is a soft step, after hhkeys_log.
 // 28 since WLD-25: a named creature's ending, the same run's fifth soft step, after drops.
-test("the step list is the script's: 28 steps, 5 fatal and 23 soft, no step twice", () => {
-  assert.equal(STEPS.length, 28);
-  assert.equal(new Set(STEPS).size, 28);
+// 29 since POS-816: the invite pass, right after the welcome pass.
+test("the step list is the script's: 29 steps, 5 fatal and 24 soft, no step twice", () => {
+  assert.equal(STEPS.length, 29);
+  assert.equal(new Set(STEPS).size, 29);
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
-  assert.equal(STEPS[16], "snapshot");
+  assert.equal(STEPS[17], "snapshot", "after the fourteen locked soft steps (the invite pass among them since POS-816)");
   assert.deepEqual(STEPS.slice(-3), ["hhkeys_log", "world", "publish"]);
 });
 
@@ -303,7 +304,7 @@ test("the manifest validates the keep outcome on its own fields, with no dummy u
   assert.throws(loads({ ...KEEP_ROW, outcome: { history_path: "/fixture/x.jsonl" } }), /no unsettled_runs/);
 });
 
-test("the shipped manifest's keep row loads, judges the 23 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
+test("the shipped manifest's keep row loads, judges the 24 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
   const m = loadManifest(DEFAULT_MANIFEST);
   const keepRow = m.units.find((r) => r.unit === "postmark-office-keep.timer");
   // the keep row carries two blocks since POS-268 5b: this receipt, and the household-keys line

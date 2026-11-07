@@ -485,3 +485,80 @@ test("a refusal is logged and passed; a GitHub failure holds the cursor for the 
   assert.equal(out.cursor, "2026-09-29T10:00:00Z", "held at the merge GitHub could not answer for");
   assert.equal(readFileSync(cursorPath, "utf8").trim(), "2026-09-29T10:00:00Z");
 });
+
+// ── POS-884: THE RESERVED PREFIXES, ON EVERY ROAD THAT SETTLES ─────────────
+//
+// berth-* and human-of-* are the town's one reserved-prefix rule (vendored,
+// vendor/tools/reserved-handles.mjs). Each reserved join below is otherwise the
+// exact settling shape (merged, vouched or keyed by its author, card on main),
+// so the refusal it meets is the rule's and no other; the ordinary join beside
+// it settles. A refused join writes nothing: no pin, no membership, no commit.
+
+const RESERVED_HANDLES = [["berth-inv-tide", "berth-"], ["human-of-inv-reed", "human-of-"]];
+const ruleSentence = (h, prefix) => new RegExp(`^handle "${h}" wears the ${prefix} reserved prefix \\(the reserved-prefix rule: no resident handle begins with berth- or human-of-\\)`);
+const nothingFor = (pool, clone, h) => {
+  assert.equal(pool.state.pins.some((p) => p.handle === h), false, `${h}: no pin in the record`);
+  assert.equal(pool.state.households.some((r) => (r.residents ?? []).includes(h)), false, `${h}: no membership`);
+  assert.doesNotMatch(git(clone, "log", "--format=%s"), new RegExp(h), `${h}: no commit names it`);
+};
+
+test("POS-884 · the door: a pen join for each reserved prefix is refused by the rule's sentence and writes nothing; an ordinary one settles", async () => {
+  for (const [h, prefix] of RESERVED_HANDLES) {
+    pulls = [penPR({ handle: h })];
+    const clone = town({ cards: { [h]: "house-of-many-doors" } });
+    const head = git(clone, "rev-parse", "HEAD");
+    const { err, pool } = await settle(clone, REGISTRAR, h);
+    assert.equal(err?.defect, SETTLE_REFUSALS.RESERVED.defect, `${h}: ${err?.defect} — ${err?.hint}`);
+    assert.equal(err.code, 409);
+    assert.match(err.hint, ruleSentence(h, prefix));
+    assert.equal(pool.state.writes.pins + pool.state.writes.households, 0, `${h}: nothing reached the record`);
+    assert.equal(git(clone, "rev-parse", "HEAD"), head, `${h}: nothing reached the town`);
+    nothingFor(pool, clone, h);
+  }
+  pulls = [penPR({ handle: "inv-moss" })];
+  const clone = town({ cards: { "inv-moss": "house-of-many-doors" } });
+  const { out, err } = await settle(clone, REGISTRAR, "inv-moss");
+  assert.equal(err, undefined, err?.hint);
+  assert.equal(out.settled, true, "the ordinary handle settles through the same door");
+});
+
+test("POS-884 · the tick's pass: pen and hand joins for each reserved prefix are refused and logged by the rule; the ordinary pen and hand joins settle", async () => {
+  const reserved = RESERVED_HANDLES.flatMap(([h, prefix], i) => [
+    { pr: penPR({ n: 3401 + i, handle: h }), h, prefix, road: "pen" },
+    { pr: handPR({ n: 3411 + i, handle: `${h}-x` }), h: `${h}-x`, prefix, road: "hand" },
+  ]);
+  pulls = [...reserved.map((r) => r.pr), penPR({ n: 3421, handle: "inv-moss" }), handPR({ n: 3422, handle: "inv-fern" })];
+  files = Object.fromEntries([...reserved.filter((r) => r.road === "hand").map((r) => [r.pr.number, joinFiles(r.h)]), [3422, joinFiles("inv-fern")]]);
+  const handles = [...reserved.map((r) => r.h), "inv-moss", "inv-fern"];
+  cards = Object.fromEntries(handles.map((h) => [h, card(h, "house-of-many-doors")]));
+  users = { "commander-and-chief": 334016343 };
+  const clone = town({ cards: Object.fromEntries(handles.map((h) => [h, "house-of-many-doors"])) });
+  const cursorPath = join(tempDir("settle-cursor-"), "cursor");
+  const seed = git(clone, "rev-parse", "HEAD");
+  let pool, before;
+  const lines = [];
+  const out = await withRecordFrom(clone, (p) => {
+    pool = p;
+    before = { pins: p.state.pins.map((x) => x.handle).sort(), residents: p.state.households.map((x) => [x.slug, [...(x.residents ?? [])]]) };
+    return settlePass({ town: clone, cursorPath, pen: PEN, env: RECORD_ON, now: PASS_NOW, log: (l) => lines.push(l) });
+  });
+  assert.deepEqual(out.settled.sort(), ["inv-fern", "inv-moss"], lines.join("\n"));
+  assert.deepEqual(out.refused.sort(), reserved.map((r) => r.pr.number).sort(), lines.join("\n"));
+  for (const r of reserved) {
+    const line = lines.find((l) => l.startsWith(`[settle-pass] #${r.pr.number} ${r.h} REFUSED — ${SETTLE_REFUSALS.RESERVED.defect} (`));
+    assert.ok(line, `${r.road} ${r.h}: refused by the rule\n${lines.join("\n")}`);
+    assert.match(line.slice(line.indexOf(" (") + 2), ruleSentence(r.h, r.prefix));
+    nothingFor(pool, clone, r.h);
+  }
+  // THE PASS'S OWN EFFECTS, whole: every pin, membership and commit it made is a control's.
+  assert.deepEqual(pool.state.pins.map((x) => x.handle).sort(), [...before.pins, "inv-fern", "inv-moss"].sort(), "the only new pins are the two controls'");
+  assert.deepEqual(pool.state.households.map((x) => [x.slug, [...(x.residents ?? [])]]),
+    before.residents.map(([slug, rs]) => [slug, slug === "house-of-many-doors" ? [...rs, "inv-moss", "inv-fern"] : rs]),
+    "the only new memberships are the two controls', and no house was minted");
+  const made = git(clone, "log", "--format=%s", `${seed}..HEAD`).split("\n").filter(Boolean);
+  assert.equal(made.length, 2, made.join("\n"));
+  assert.ok(made.every((m) => /^address: inv-(moss|fern) settled /.test(m)), `every commit is a control's: ${made.join(" | ")}`);
+  const printed = JSON.parse(readFileSync(join(clone, PINS_PATH), "utf8"));
+  for (const r of reserved) assert.equal(printed[r.h], undefined, `${r.road} ${r.h}: not in the printed pins`);
+  assert.ok(printed["inv-moss"] && printed["inv-fern"], "the controls are");
+});

@@ -4,8 +4,10 @@
 // The hydrator used to build world.db and nothing else; the store's snapshot
 // (037/038) was then COPIED OUT OF THE FILE by graph-ingest. Now the hydrator
 // builds these tables, and each output is written FROM them: the store's
-// snapshot (graph-ingest's writer) and, until the last world.db reader has
-// moved, the file. Nothing reads the file to fill the store.
+// snapshot (graph-ingest's writer) and, on request, the rows as one JSON file
+// (`writeRowsFile`, `world-hydrate.mjs --rows-out`). The world.db file itself is
+// retired (POS-270 lane W 3b): the hydrator refuses `--db` and writes no sqlite
+// file. Nothing reads a file to fill the store.
 //
 // ⚑ THE ROWS KEEP THE FILE'S OWN ORDER, because the graph's iteration order
 // (and so the window's node list, and even the lints) follows the order the

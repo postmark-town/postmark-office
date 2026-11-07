@@ -93,8 +93,9 @@ const copyOf = (st) => ({ owner: st.owner, putIn: st.putIn, outing: st.outing ? 
  * (a `Map(thing → { owner, outing, putIn })`, copied, never mutated), so a kept
  * base and a window fold the same way a whole read does. PURE.
  *
- * `houseOf(handle)` → the handle's household key (sync); `opts.isHolder(id)`
- * says a holder id from a resident's handle (default: it is a mark id).
+ * `houseOf(handle)` → the handle's household key (sync; default: the handle
+ * itself). A holder id is told from a resident's handle by the module's own
+ * `isMarkId` (a string with a `/`) — not a parameter.
  */
 export function foldOwners(events = [], { houseOf = (h) => h, state = null } = {}) {
   const out = new Map(state ?? []);

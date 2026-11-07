@@ -19,7 +19,11 @@
 //
 // The deep shapes stay typed (Darko's 21:55 question): a member's typed row is
 // house-bundle.mjs § memberRow, the one the house read pages; this file only
-// says it in one line. v1 is untouched: nothing here runs without read_shape.
+// says it in one line. v1 is untouched, but the glance is not the only caller:
+// household-apex.mjs `householdGlance` runs this file under read_shape: "v2",
+// while `householdDeep` (the typed reads closer, correspondents, happened and
+// stamps' went) and `householdWaiting` (read: "waiting") call its helpers
+// without read_shape.
 
 import { memberRow } from "./house-bundle.mjs";
 import { HOUSEHOLD_LINES, usableActs } from "./door-read-shape.mjs";
@@ -27,7 +31,10 @@ import { encodeCursor, decodeCursor, moreLine } from "./read-grammar.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { PROFILE_FIELD_DOC } from "./edit.mjs"; // profile's fields have one owner (#677: pronouns)
 
-/** How many groups of what waits the glance shows: the oldest first (they have waited longest). */
+/**
+ * How many groups of what waits the glance shows: the largest first, ties
+ * oldest first (needGroups' order).
+ */
 export const NEEDS_FIRST = 2; // round 4 (Darko 15:06): two groups, paying for marks and posts
 /** With more waiting than a page holds, how many of the inbox's last rows are read on their own for the oldest groups. */
 export const TAIL_ROWS = 100;
@@ -43,6 +50,8 @@ export const humanPhrase = (houseName) => `${houseName || "the house"}'s human`;
 
 export const CAN_GROUPS = Object.freeze({
   answer: ["declare-stance-on"],
+  // letter-note (POS-730) is not listed here: the glance's part 1 is sized to its budget (household-read-v2.test.mjs § PART1_BUDGET), and the act
+  // is named where it is used: the awaiting view's rows, the household door's act schema and CONTRACT.md.
   write: ["send", "mark-all-read", "amend-letter", "withdraw-letter", "block", "unblock"],
   tend: ["address", "address-fields", "home", "profile", "window"],
   back: ["stake", "stake-vote", "fund-verify"],
@@ -156,19 +165,10 @@ export const needRow = (c) => ({
   since: c.date ?? null,
 });
 
-/**
- * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
- * marks over one place of yours is ONE row, `{ by, over, count, oldest,
- * newest, sample }`, the sample being the group's oldest body, whole. Groups
- * run oldest first, up to NEEDS_FIRST. `rows` is newest first, as the inbox
- * orders it.
- */
 /** The stance words the door takes (world-stance.mjs § the declare tool's enum). */
 export const STANCE_WORDS = "welcomed | neutral | opposed";
 /** How many of a group's mark ids the glance names, oldest first. */
 export const GROUP_IDS = 3;
-/** A ready-to-run answer to one waiting mark, as v1's rows carried it. */
-export const answerAct = (id) => `declare-stance-on { on: "${id}", stance: ${STANCE_WORDS} }`;
 /** How many ids one stance call takes (world-stance.mjs § STANCE_LIST_MAX). */
 export const STANCE_LIST_CAP = 100;
 /**
@@ -184,6 +184,13 @@ export function groupAct({ by, over, count }, ids) {
   return `household { read: "stances", args: { ${only}, limit: ${STANCE_LIST_CAP} } }, then declare-stance-on { on: <ids>, stance: ${STANCE_WORDS} }${count > STANCE_LIST_CAP ? `, ${STANCE_LIST_CAP} a call` : ""}`;
 }
 
+/**
+ * The waiting marks, grouped (Darko, 2026-10-20): a stream of one author's
+ * marks over one place of yours is ONE row, `{ by, over, count, oldest,
+ * newest, sample }`, the sample being the group's oldest body, whole. Groups
+ * run largest first, ties oldest first (round 4, Darko 16:49), up to `max`
+ * (NEEDS_FIRST by default). `rows` is newest first, as the inbox orders it.
+ */
 export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   const groups = new Map();
   for (const c of rows) {
@@ -199,7 +206,7 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
   }
   // eval round 1: a group a reader can act on, its oldest ids; round 3: one act answers the whole group
   return [...groups.values()]
-    // after round 4 (Darko 16:49): the largest group first, then the oldest of the rest, so a cut never hides the biggest stream
+    // after round 4 (Darko 16:49): the largest group first, ties oldest first, so a cut never hides the biggest stream
     .sort((a, b) => (b.count - a.count) || String(a.oldest ?? "").localeCompare(String(b.oldest ?? "")) || String(a.by).localeCompare(String(b.by)))
     .slice(0, max)
     .map((g) => {
@@ -214,8 +221,9 @@ export function needGroups(rows = [], { max = NEEDS_FIRST } = {}) {
 /**
  * The needs block from the inbox page (newest first, as stanceShadow orders it)
  * and needs-you's counts. `first` is the waiting marks grouped by author and
- * place, oldest group first. When more wait than the page holds, `tail` (the
- * inbox's last rows, read on their own) joins the page so the oldest are there.
+ * place, largest group first, ties oldest first (needGroups' order). When more
+ * wait than the page holds, `tail` (the inbox's last rows, read on their own)
+ * joins the page so the oldest are there.
  */
 export function needsBlock({ stances = {}, needs = {}, tail = null } = {}) {
   const page = stances.awaiting ?? [];
@@ -361,9 +369,10 @@ export const dayBefore = (nowMs, days) => new Date(nowMs - days * 86_400_000).to
  * them: the ledger's semantics. The office's read flag is not used: residents
  * who read through git never set it. `letters` are the window's rows, both
  * directions (to_h, from_h, thread, date, delivered_at); `house` is every
- * resident of the house.
+ * resident of the house. `noted` is the house's private letter notes
+ * (letter-notes.mjs), a Map or Set keyed by letter id: a marked letter is skipped.
  */
-export function unansweredOf(letters = [], { mine, house = mine } = {}) {
+export function unansweredOf(letters = [], { mine, house = mine, noted = null } = {}) {
   const ours = mine instanceof Set ? mine : new Set(mine ?? []);
   const home = house instanceof Set ? house : new Set(house ?? []);
   const when = (r) => String(r.delivered_at ?? r.date ?? "");
@@ -371,6 +380,8 @@ export function unansweredOf(letters = [], { mine, house = mine } = {}) {
   let n = 0;
   for (const r of letters) {
     if (!r.delivered_at || !ours.has(r.to_h) || home.has(r.from_h)) continue;
+    // a letter the house has marked "no reply needed" or "waiting on …" is not counted (POS-730, Darko 2026-11-06); it stays in the awaiting view
+    if (noted?.has?.(r.id)) continue;
     const answered = out.some((o) => o.thread === r.id || (o.to_h === r.from_h && when(o) >= when(r)));
     if (!answered) n += 1;
   }
@@ -386,9 +397,10 @@ export const MAIL_KEY = 'to_answer: last 14 days, no reply · boat: next crossin
  * letters sailing at the next crossing. Threads of any age where they wrote
  * last are read: "mail", view: "awaiting", never the glance.
  */
-export function mailBlock({ unanswered = null, bounced = null, standing = null } = {}) {
+export function mailBlock({ unanswered = null, bounced = null, standing = null, notesUnavailable = null } = {}) {
   // round 4 (Darko 15:51): the 14 days are the default, named once in the key
-  return { to_answer: unanswered, bounced, on_the_next_boat: standing, key: MAIL_KEY };
+  // POS-730: a house's letter notes that could not be read are said, never shown as none: the count may still hold marked letters
+  return { to_answer: unanswered, bounced, on_the_next_boat: standing, ...(notesUnavailable ? { notes_unavailable: notesUnavailable } : {}), key: MAIL_KEY };
 }
 
 /** The stamps block's key (eval rounds 1–3): about 100 characters, the four numbers reconciled in plain words; went joins it when the block carries a went count. */

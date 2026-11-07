@@ -1,8 +1,9 @@
 // doorstep-bundle.mjs — the doorstep, whole, for every door that serves it.
 //
 // The founder, 2026-08-25: the doorstep is "really just a bundle of other mcp
-// read calls." `queries.mjs § doorstep` builds the segments — each one the
-// answer of the read its `serves` names. This file adds the four blocks that
+// read calls." `queries.mjs § doorstepOf` builds the segments (from the rows
+// `town-index-store.mjs § doorstep` reads) — each one the answer of the read
+// its `serves` names. This file adds the four blocks that
 // are NOT segments because no other read serves them, and it exists so that
 // there is exactly ONE place where a doorstep is finished:
 //
@@ -58,8 +59,8 @@ export async function doorstepBundle(handle, ctx = {}) {
   // caller who passes nothing gets what it always got.
   //
   // It is spelled `nowMs`, not `now`, because both spellings already mean
-  // something in this chain and they are DIFFERENT TYPES: `queries.doorstep`
-  // takes `nowMs`, a number, and `doorstep-stakes.stakesFor` takes `now`, a
+  // something in this chain and they are DIFFERENT TYPES: the store's `doorstep`
+  // (town-index-store.mjs) takes `nowMs`, a number, and `doorstep-stakes.stakesFor` takes `now`, a
   // Date. One name for two types is how a caller hands a Date to arithmetic.
   // The conversion happens once, at the stakes seam below.
   //
@@ -474,6 +475,17 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
     try {
       const got = unread ?? await unreadFor([handle], { ix }).then((rows) => ({ rows }), (error) => ({ error }));
       d.unread = got.error ? unreadBlock(null, got.error) : unreadBlock(got.rows.get(handle) ?? []);
+    } catch { /* garnish only */ }
+    // THE HOUSEHOLD'S LETTER NOTES (POS-730): its own private marks ride the awaiting
+    // segment here, on the key that holds the resident and no other, so the segment
+    // and `household { read: "mail", view: "awaiting" }` (which it serves) agree.
+    try {
+      if (d.awaiting && typeof d.awaiting === "object") {
+        const { notesFor, inScope, annotateAwaiting } = await import("./letter-notes.mjs");
+        const got = await inScope(await notesFor([handle]), [...key.handles]);
+        d.awaiting = annotateAwaiting(d.awaiting, got.notes);
+        if (got.unavailable) d.awaiting = { ...d.awaiting, notes_unavailable: got.unavailable };
+      }
     } catch { /* garnish only */ }
     // The settling-in block (Keemin's grouping, 2026-08-15): what your house
     // still lacks. It retires itself the day the list empties.

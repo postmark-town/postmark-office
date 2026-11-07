@@ -74,7 +74,7 @@ import { singleLogEnabled } from "./dynamic-store.mjs";
 import { refShaFromDisk } from "./world-branches.mjs";
 import { mirrorAct, mirrorSettled, world2Enabled } from "./world2-acts.mjs";
 import { candleEnabled, claimEligible, claimHouseholdFor, claimTxFromJournal, docketSettled } from "./world2-claims.mjs";
-import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite, shadowWrite } from "./world2-pen.mjs";
+import { PenUnreachableError, laneFlipped, laneOf, penSettled, penWrite } from "./world2-pen.mjs";
 
 /**
  * Is this row a PRIVATE compose, whose act must not reach the public `acts`
@@ -343,9 +343,9 @@ const ROW_COLUMNS = "crossing, actor, action, object, at_anchor, at_dx, at_dy, w
  * thing that made the fire-and-forget defensible. Two sentences in this repo
  * said so before the deletion existed, and they are the whole argument:
  *
- *   world2-pen.mjs § shadowWrite — the queue is "fire-and-forget for the
- *   caller … acceptable ONLY because the sqlite journal is still the SoT on an
- *   unflipped lane"
+ *   world2-pen.mjs § shadowWrite (the since-deleted shadowWrite) — the queue is
+ *   "fire-and-forget for the caller … acceptable ONLY because the sqlite journal
+ *   is still the SoT on an unflipped lane"
  *
  *   world2-acts.mjs § WRITE DISCIPLINE — "the cutover rewrite awaits the
  *   insert and refuses at the door instead"
@@ -366,8 +366,9 @@ const ROW_COLUMNS = "crossing, actor, action, object, at_anchor, at_dx, at_dy, w
  * handle over, and that open was a WAL pragma, the whole DDL and a lock on every
  * say, walk, crossing, ride, stance and mark, taken for nothing. The parameter
  * stays because some forty test and tool call sites pass a store positionally.
- * The arena is the one caller that still WRITES sqlite, through its own named
- * function below.
+ * Nothing in this file writes sqlite: the arena was the last caller that did,
+ * and it closed on 2026-09-30 with its own `appendArenaRow` INSERT (see
+ * `CLASS_ARENA_ACT`).
  *
  * Returns the row as recorded. `seq` is `null` — there is no sqlite rowid any
  * more — and `actId` is the record's own id, which is the receipt a caller
@@ -395,7 +396,8 @@ export async function appendJournal(db, entry = {}, { guard = null } = {}) {
   // the world actually witnessed anything. The predicate is deliberately
   // narrow: ONLY an unstaked mark-class declaration defers.
   //
-  // ⚑ THE PRIVATE ARM RIDES THIS QUEUE, not a second one, and the reason is
+  // ⚑ THE PRIVATE ARM RIDES THIS PEN, not a second one (this said "queue" while
+  // one shared queue ordered it; the caller's await does now), and the reason is
   // measured rather than argued: it used to be its own pen on its own pool, and
   // an unstaked compose and its own withdrawal rode different queues with
   // nothing ordering them — the withdrawal's DELETE ran 113 ms ahead of the
@@ -434,12 +436,11 @@ export async function appendJournal(db, entry = {}, { guard = null } = {}) {
  * the resident the ruled refusal (D2): "the office's record cannot be
  * reached — nothing was written, and nothing was lost."
  *
- * After the commit, the sqlite journal receives the same row as the REVERSE
- * mirror (D3) — best-effort, after the record, never with a vote. While it
- * holds, every 1.0 read (the door guards included) stays valid, which is what
- * lets a lane flip before the R3 read ports land: the ports gate rule 6's
- * DELETION, not this flag. A reverse write that fails is loud and the parity
- * falsifier's reverse arm reds at the next check.
+ * Nothing follows the commit. D3's REVERSE mirror used to copy the row into the
+ * sqlite journal afterward, best-effort and never with a vote, so that every
+ * 1.0 read stayed valid while a lane flipped ahead of the R3 read ports. G1
+ * (POS-156, 2026-09-22) deleted it once those ports had landed; the account is
+ * at "THE REVERSE MIRROR IS GONE" in the body below.
  *
  * THE MARK LANE IS NO LONGER REFUSED HERE (wired 2026-09-04, runbook C6). It
  * was refused by name for UNREADINESS — "its candle half must ride penWrite's
@@ -451,30 +452,21 @@ export async function appendJournal(db, entry = {}, { guard = null } = {}) {
  * path, because a refusal left standing over a wired path is a lie in the other
  * direction.
  *
- * The ARENA lane is refused BY RULING, not by unreadiness (founder, 2026-08-29,
- * the birthday party's own night: "we can just keep the arena on sqlite for
- * now"). The combat machinery is scheduled to be rebuilt hardened and
- * 2.0-native rather than ported, so its lane stays sqlite-first deliberately —
- * no read port exists, no reverse-mirror deadline applies to it, and a
- * `W2_PEN=all` sweep must not carry it along by accident. Lifting this refusal
- * is a founder ruling plus the arena read ports, together.
+ * The ARENA lane is refused here, and was refused BY RULING, not by
+ * unreadiness (founder, 2026-08-29, the birthday party's own night: "we can
+ * just keep the arena on sqlite for now"): the combat machinery was to be
+ * rebuilt hardened and 2.0-native rather than ported, so no read port exists
+ * for it. The arena has since closed (Keemin, 2026-09-30) and writes
+ * nothing, which is what `FLIP_REFUSED.arena` says, and a `W2_PEN=all` sweep
+ * must not carry it along by accident, so the refusal stands.
  *
- * "No reverse-mirror deadline applies to it" was a sentence this file asserted
- * and no mechanism kept: `MIRROR_EXPIRES` was one date for the whole store, so
- * the parity falsifier would have reded the arena on 2026-10-01 with everything
- * else (the cutover runbook §8 named it; DEC-2 ruled it 2026-08-29 evening). It
- * is now true where it is checked: `LANE_MIRROR.arena.expires` is null in
- * src/world2-acts.mjs, carrying this same ruling in its own words.
- *
- * THE TWO REFUSALS WERE NOT THE SAME KIND, and the expiry is where the
- * difference bit. `mark` was refused for UNREADINESS, so it was governed by its
- * backstop exactly like the wired lanes — DEC-2, verbatim: "a lane in
- * `FLIP_REFUSED` by ruling is exempt; a lane refused by unreadiness is not."
- * Being un-wired must never be the thing that buys a lane immortality. With the
- * mark lane wired only the ruled refusal is left, which is the state DEC-2
- * describes: this table now holds exactly the lanes that are exempt BY RULING,
- * and `LANE_MIRROR.arena.expires` is null for the same reason and in its own
- * words (src/world2-acts.mjs). `mark` keeps its ordinary expiry.
+ * The reverse mirror's per-lane expiry (`MIRROR_EXPIRES`, then `LANE_MIRROR`
+ * with the arena's null `expires`) was deleted with the mirror in G1, and it
+ * took the arena's exemption from that map with it. The ruling is carried
+ * where it is implemented: `FLIP_REFUSED` here, and `EXEMPT_LANES` in
+ * src/world2-acts.mjs, which `world2/tools/state-log-rederive.mjs` reads
+ * through `exemptLanes()`. Only the ruled refusal is left in this table; the
+ * mark lane, once refused for unreadiness, is wired (above).
  */
 const FLIP_REFUSED = Object.freeze({
   arena: "the arena is closed (Keemin, 2026-09-30) and writes nothing; unset it from W2_PEN",
@@ -494,9 +486,9 @@ export async function appendActFlipped(db, entry = {}, { guard = null } = {}) {
   // lane could not flip by flag: doing so "would write acts with no docket,
   // which is F2 self-inflicted."
   //
-  // `seq` IS NULL HERE, AND THAT IS THE POINT. The reverse mirror runs after
-  // the awaited pen, so at this line the sqlite row does not exist and has no
-  // seq to carry. 001's own words: `journal_seq` is "the shadow-era pairing
+  // `seq` IS NULL HERE, AND THAT IS THE POINT. No sqlite row is written for
+  // this act (the reverse mirror that once followed the awaited pen is gone,
+  // below), so there is no seq to carry. 001's own words: `journal_seq` is "the shadow-era pairing
   // key, dying at cutover" — and "journal_seq is not an identity" is a lesson
   // this store has now learned three times. The closure falsifier pairs an act
   // to its claim by the claim's own slug and claimant, never by this column.
@@ -545,26 +537,6 @@ export function penFor(entry) {
 }
 
 export { PenUnreachableError, laneFlipped };
-
-/**
- * WHICH ACT LOG THIS OFFICE READS, named for a disclosure — one sentence, one
- * place, so two doors cannot name two different stores for the same fact.
- *
- * Exists because of a borrowed sentence (the office-halves review, repair 11):
- * the gathering and handoff shadows copied the subscription door's "the act
- * log this reads is Postgres, and this office is not pointed at it" — CORRECT
- * there, because that door has no journal arm and being un-pointed at Postgres
- * really is its only cause — and then grew a journal arm, after which the one
- * configuration the sentence blamed was the one that could not produce it. A
- * resident with a torn `dynamic.db` was sent to check a Postgres setting. The
- * after-a-repeal-grep-its-citations class: the journal arm repealed the
- * premise and the disclosure still cited it.
- */
-export function actLogNameFor(env = process.env) {
-  return world2Enabled(env)
-    ? "Postgres (this office is pointed at it: WORLD2_PG=1 with WORLD2_PG_URL)"
-    : "the sqlite journal (WORLD_DYNAMIC_DB, or dynamic.db beside world.db — this office is not pointed at Postgres, which is the ordinary working configuration)";
-}
 
 /**
  * ONE ROW, NORMALIZED — the whole of what a journal line IS, with no store in

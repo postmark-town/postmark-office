@@ -63,6 +63,8 @@
 // standing rows PLUS the candidate rows, which is the same walk step 7 runs, so
 // there is one definition of standing and not two.
 
+import { TOWN, townOwned } from "./standing.mjs";
+
 /** The sweep's own mapping, at `settlement-sweep.mjs:1147`. One line, cited. */
 export const rowClassOf = (cls) => (cls === "market" ? "commons" : cls);
 
@@ -78,9 +80,15 @@ export const rowClassOf = (cls) => (cls === "market" ? "commons" : cls);
 // constitution shortcut"). Measured 2026-10-19: all 48 marks the notary listed
 // as `escrow_unbacked` are the town's. So the exemption is the town's own hand,
 // the store's `marks.owner`, and not a tier.
-export const TOWN = "the-town";
+//
+// ONE PREDICATE (POS-701). POS-702 then made the walk itself say so: `standing.mjs
+// § markStanding` answers `constitution` for every mark by the town, through
+// `townOwned`, so 5.5 never reads a town claim as commons. This asks that same
+// predicate of a `marks` row (its `owner` is the record's `by`, `recordOf`'s
+// mapping) rather than keeping a second spelling of "the town's own".
+export { TOWN };
 /** Does this mark need somebody's stamps behind it at all? The town's own never does. */
-export const townsOwn = (row) => row?.owner === TOWN;
+export const townsOwn = (row) => row != null && townOwned({ by: row.owner ?? undefined });
 
 /** The check name this writes into `claims.refusal_check` — the prefix `causeOf` splits on. */
 export const ESCROW_ABSENT_CHECK = "escrow-absent";
