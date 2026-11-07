@@ -20,7 +20,7 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -309,6 +309,41 @@ export function worldStakeApply(repo, args, keyPem) {
     writeFileSync(join(tools, "world-stake.mjs"), real);
     rmSync(join(tools, "world-stake-real.mjs"), { force: true });
     git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the engine, unwrapped");
+  }
+});
+
+// A READ THAT FAILS IS NOT AN ABSENCE (Wright's review of #955). The writer
+// commits on top of B's stake commit, and then B's commit object cannot be
+// read: the stake's commit stands in the clone (HEAD's parent names it), but
+// the pen cannot read it. "Nothing was staked, try again" would invite a second
+// stake over one that may stand; the answer is the machinery's trip instead,
+// logged, never the no-effect refusal.
+test("A STAKE WHOSE OWN COMMIT CANNOT BE READ: no 'nothing was staked' refusal — the machinery's trip, logged", { skip }, async () => {
+  await seed();
+  const b = await markOf("south-keeper");
+  const moved = join(scratch("pos922-aside-"), "object");
+  const hook = join(FX.repo, ".git", "hooks", "post-commit");
+  writeFileSync(hook, `#!/bin/sh
+[ -e "${moved}" ] && exit 0
+git log -1 --format=%s | grep -q "${b}" || exit 0
+own=$(git rev-parse HEAD)
+mkdir -p WHITE_PAGES/paper && date +%N > WHITE_PAGES/paper/edit.md
+git add WHITE_PAGES/paper/edit.md
+git -c user.name=paper -c user.email=paper@test.invalid commit -q -m "paper: an edit on top"
+echo "$own" > "${moved}.sha"
+mv ".git/objects/$(echo $own | cut -c1-2)/$(echo $own | cut -c3-)" "${moved}"
+`, { mode: 0o755 });
+  try {
+    const rb = await stake(b);
+    assert.ok(readFileSync(`${moved}.sha`, "utf8").trim(), "the hook ran: B's commit was unreadable as the pen looked for it");
+    assert.ok(rb?.error, `it cannot name a commit it cannot read: ${JSON.stringify(rb)}`);
+    assert.doesNotMatch(String(rb.hint), /nothing was staked|nothing was recorded|safe to make again/,
+      `LAW (POS-922, Wright): "couldn't read" is never "nothing happened" — it answered ${JSON.stringify(rb)}`);
+    assert.equal(rb.code, 500, "the machinery's trip");
+  } finally {
+    rmSync(hook, { force: true });
+    // the object back where git keeps it: the scratch town is whole again
+    try { const own = readFileSync(`${moved}.sha`, "utf8").trim(); renameSync(moved, join(FX.repo, ".git", "objects", own.slice(0, 2), own.slice(2))); } catch { /* the hook never ran */ }
   }
 });
 
