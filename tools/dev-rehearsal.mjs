@@ -1076,7 +1076,7 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
   const files = git(ctx.worldBare, "ls-tree", "-r", "--name-only", head, "--", "WORLD/marks").split("\n");
   // the receipt rides the line: "quiet" (nothing eligible) and "published" both exit 0, and
   // CI keeps only this line, so a red that names no receipt cannot be read (POS-595's KF red,
-  // 6 times 10-12..10-17, cause unread)
+  // 6 times 10-12..10-17; read in POS-928: its ground stood on a parcel canon holds, § THE REHEARSAL'S GROUND)
   if (!files.some((f) => f.includes(`/${mark}/`) || f.endsWith(`/${mark}.md`))) p.push(`the copy's main (${head.slice(0, 9)}) carries no file for ${mark} after the crossing (receipt: ${receipt.status ?? "no status"}: ${String(receipt.detail ?? "").slice(0, 300)})`);
   if (receipt.docket_window != null && Number(receipt.docket_window) !== Number(window)) p.push(`the crossing folded window ${receipt.docket_window}, not ${window}`);
   return p;
@@ -1108,6 +1108,12 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
 //     and lamps in dev's copy of the town.
 //     The two parcels stand GROUND.parcelGapM apart, so they never meet; the lamp
 //     and the planted copy stand on the first parcel, the rehearsal's own ground.
+//   · FREE IN CANON TOO (POS-928). The world's parcels, read from the clone the
+//     settlement's bare copy is made of. A store can hold fewer than canon (the
+//     suite's stand-in seeds none), and then the clearing locks a parcel the
+//     sweep sets aside for overlapping one ("parcels never overlap", MARKS.md):
+//     a quiet crossing with no file for the mark. Parcels only: a new parcel over
+//     a resident's other marks crosses.
 //   · THE RUN ID picks where the walk over the places starts, so two runs on dev
 //     do not reach for the same spot.
 //   · NOTHING FITS: the preflight goes red, naming the box and how many places
@@ -1220,8 +1226,24 @@ export function groundTakenIn(s, OVERLAP, boxOf) {
   };
 }
 
-/** The preflight's ground for `ctx`: the safe box from the target's world, then free ground from its store. */
-async function rehearsalGround(ctx) {
+/**
+ * Canon's answer for one place (POS-928): null when free, else the parcel it touches. `parcels` is `[{ id, at, extent }]`,
+ * the parcels the world holds. Edges count, as the clearing's OVERLAP counts them; the sweep's test (an area above zero) is looser, so this is safe.
+ */
+export function groundTakenInCanon(parcels) {
+  const held = parcels.map((p) => ({ id: p.id, ...edgesOf(p) }));
+  return (footprints) => {
+    for (const f of footprints) {
+      const e = edgesOf(f);
+      const hit = held.find((p) => p.minX <= e.maxX && e.minX <= p.maxX && p.minY <= e.maxY && e.minY <= p.maxY);
+      if (hit) return `the canon parcel "${hit.id}"`;
+    }
+    return null;
+  };
+}
+
+/** The preflight's ground for `ctx`: the safe box from the target's world, then ground free in its canon and its store. */
+export async function rehearsalGround(ctx) {
   const t = ctx.t;
   const refuse = (msg) => { throw Object.assign(new Error(msg), { refusal: true }); };
   if (!t.worldClone || !existsSync(join(t.worldClone, ".git"))) refuse(`no world clone at ${t.worldClone}: the rehearsal cannot read the Mists to find its ground`);
@@ -1240,8 +1262,17 @@ async function rehearsalGround(ctx) {
   // the parcel dial, as the door reads it (src/world.mjs § parcelDial: the clone's marks-fold at the blessed ref)
   let parcelM = 25;
   try { parcelM = Number((await importFrom(join(materializeAtRef(t.worldClone, blessedRef(t.worldClone), "tools"), "tools", "marks-fold.mjs"))).PARCEL_EXTENT_M) || 25; } catch { /* the door's own fallback */ }
-  const g = await findGround({ run: ctx.run, safe, parcelM, taken: groundTakenIn(ctx.s, OVERLAP, boxOf) });
-  return { ...g, line: `ground: the parcels at (${g.parcelAt.x}, ${g.parcelAt.y}) and (${g.parcelAt2.x}, ${g.parcelAt2.y}), ${g.where}, place ${g.tried} of ${g.of} asked (${parcelM} m parcels, world ${ref})` };
+  // the parcels the settlement's sweep will hold a new parcel against, from the clone its bare copy is made of; fail closed, as above
+  let canon;
+  try {
+    const { loadMarks } = await importFrom(join(t.worldClone, "tools", "marks-fold.mjs"));
+    canon = loadMarks(join(t.worldClone, "WORLD", "marks")).filter((m) => m.kind === "parcel" && m.at)
+      .map((m) => ({ id: m.id, at: m.at, extent: { w: m.extent?.w || parcelM, h: m.extent?.h || parcelM } }));
+  } catch (e) { refuse(`the rehearsal cannot read the parcels of the world at ${t.worldClone}, so it cannot find ground the settlement will take: ${thrown(e)}`); }
+  const inCanon = groundTakenInCanon(canon);
+  const inStore = groundTakenIn(ctx.s, OVERLAP, boxOf);
+  const g = await findGround({ run: ctx.run, safe, parcelM, taken: async (f) => inCanon(f) ?? inStore(f) });
+  return { ...g, line: `ground: the parcels at (${g.parcelAt.x}, ${g.parcelAt.y}) and (${g.parcelAt2.x}, ${g.parcelAt2.y}), ${g.where}, place ${g.tried} of ${g.of} asked (${parcelM} m parcels, world ${ref}, clear of its ${canon.length} parcels)` };
 }
 
 // ── the run ──────────────────────────────────────────────────────────────────

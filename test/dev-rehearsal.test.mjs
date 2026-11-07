@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, findGround, githubStub, mistsSafeBox, parseEnvFile, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
+import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, findGround, githubStub, groundTakenInCanon, mistsSafeBox, parseEnvFile, rehearsalGround, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
 import { lastStandingCrossing, standingKeyframes } from "./helpers/mists-standing.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -304,6 +304,50 @@ test("the run id picks where the walk starts, so two runs a minute apart stand o
   const c = await findGround({ run: (1000).toString(36), safe, parcelM: 25, taken: twoCovered });
   assert.equal(c.tried, 3);
   assert.deepEqual(c.parcelAt, { x: a.parcelAt.x + 120, y: a.parcelAt.y });
+});
+
+// ── free in canon, not only in the store (POS-928) ───────────────────────────
+//
+// The suite's stand-in seeds its store with no marks, so the store called every
+// place free, and on about 0.7% of run ids one of the rehearsal's parcels stood on
+// a parcel the pinned world holds. The clearing locked it and the sweep set its
+// sketchbook aside: office #951's red, "the copy's main … carries no file for
+// rh-9kew-by-hand after the crossing (receipt: quiet: nothing eligible; …)".
+
+test("canon's parcels answer for a place by name, the edge included, and the walk goes past them", async () => {
+  const { mistsAt } = await engine();
+  const safe = mistsSafeBox(publishedSkeleton(WORLD).skeleton.mists, mistsAt);
+  const run = (1000).toString(36);
+  const free = await findGround({ run, safe, parcelM: 25, taken: async () => null });
+  const parcel = (at, id = "rei/a-parcel") => ({ id, at, extent: { w: 25, h: 25 } });
+  // on the by-hand parcel's ground alone: the first parcel is clear, and the walk still moves on
+  const byHand = groundTakenInCanon([parcel(free.parcelAt2)]);
+  assert.equal(byHand(free.footprints), `the canon parcel "rei/a-parcel"`);
+  // a parcel's width east of the first, sharing only an edge: covered, as the clearing's OVERLAP reads it; one metre on, free
+  assert.equal(groundTakenInCanon([parcel({ x: free.parcelAt.x + 25, y: free.parcelAt.y })])(free.footprints), `the canon parcel "rei/a-parcel"`);
+  assert.equal(groundTakenInCanon([parcel({ x: free.parcelAt.x + 26, y: free.parcelAt.y })])(free.footprints), null);
+  const g = await findGround({ run, safe, parcelM: 25, taken: async (f) => byHand(f) });
+  assert.equal(g.tried, 2);
+  assert.deepEqual(g.parcelAt, { x: free.parcelAt.x + 60, y: free.parcelAt.y });
+});
+
+test("the rehearsal's ground keeps off the world's parcels when its store holds none (POS-928, the stand-in's store, the pinned world)", async () => {
+  const { mistsAt } = await engine();
+  const safe = mistsSafeBox(publishedSkeleton(WORLD).skeleton.mists, mistsAt);
+  const { loadMarks } = await import(pathToFileURL(join(WORLD, "tools", "marks-fold.mjs")).href);
+  const parcels = loadMarks(join(WORLD, "WORLD", "marks")).filter((m) => m.kind === "parcel" && m.at).map((m) => ({ id: m.id, at: m.at, extent: { w: m.extent?.w || 25, h: m.extent?.h || 25 } }));
+  const inCanon = groundTakenInCanon(parcels);
+  // A run id whose first place puts the by-hand parcel on a parcel canon holds, found from the world at hand so no pin move can stale it.
+  // findGround's walk from run 0 asks every place in order; the id naming place k is k in base 36.
+  const places = [];
+  await assert.rejects(findGround({ run: "0", safe, parcelM: 25, maxTries: Infinity, taken: async (f) => { places.push(f); return "covered"; } }));
+  const k = places.findIndex((f) => !inCanon(f.slice(0, 1)) && inCanon(f.slice(1, 2)));
+  assert.ok(k >= 0, `some place of ${places.length} sets the by-hand parcel on one of canon's ${parcels.length} parcels`);
+  const emptyStore = { q: async () => [] };
+  const g = await rehearsalGround({ t: { officeRoot: OFFICE, worldClone: WORLD }, s: emptyStore, run: k.toString(36) });
+  assert.equal(inCanon(g.footprints), null, `the ground it answered stands on ${inCanon(g.footprints)}`);
+  assert.ok(g.tried > 1, "the run's first place was walked past");
+  assert.ok(g.line.includes(`clear of its ${parcels.length} parcels)`), g.line);
 });
 
 test("a world with no Mists keeps the old strip of ground, still asked for free ground", async () => {
