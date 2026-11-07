@@ -42,7 +42,6 @@
 import { officeRead, officeWrite } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
 import { refuse } from "./events.mjs";
-import { plainReason } from "./fault-words.mjs";
 
 export const NOTE_STATES = Object.freeze(["no-reply", "waiting"]);
 export const NOTE_ACTS = Object.freeze([...NOTE_STATES, "clear"]);
@@ -209,7 +208,7 @@ export async function notesFor(handles, { env = process.env } = {}) {
     return { notes };
   } catch (e) {
     if (e?.name === "NoRecordError" || isMissingTable(e)) return { notes: new Map() };
-    return { notes: new Map(), unavailable: `your household's letter notes could not be read (${plainReason(e, "record", "your letter notes")}) — they are unknown, not none, so marked letters may still be counted below` };
+    return { notes: new Map(), unavailable: `letter notes unreadable — marked letters may still be counted` };
   }
 }
 
