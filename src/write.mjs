@@ -261,15 +261,32 @@ function commitAndLand(clone, addPaths, message, { rebase = true } = {}) {
   // a save that changes nothing is a no-op, not a trip: nothing staged means
   // nothing to commit (git would exit 1 and read as an office error)
   if (!git(clone, "status", "--porcelain", "--", ...addPaths)) return null;
+  const base = git(clone, "rev-parse", "HEAD");
   git(clone, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
       "commit", "-q", "-m", message, "--author", `${name} <${email}>`);
-  return landCommit(clone, { rebase });
+  // THE COMMIT THIS WRITE NAMES IS THE ONE IT MADE (POS-922). HEAD is read, not
+  // remembered, so a clone reset or committed under this write between its
+  // commit and that read would hand it another write's sha, and the answer
+  // would claim a landing it never made (two stakes by one hand, 2026-11-06:
+  // one answered with the other's commit while its own line was gone). Its own
+  // commit sits on the base it was made on and carries its own message.
+  if (!ownCommit(clone, git(clone, "rev-parse", "HEAD"), base, message))
+    throw notLandedError("the town clone moved under this write between its commit and its receipt (another writer reset or committed it), so this write's own commit is not there to name");
+  return landCommit(clone, { rebase, message });
+}
+
+/** Is `sha` the commit this write made: one commit on `parent`, with this write's message? */
+function ownCommit(clone, sha, parent, message) {
+  try {
+    return git(clone, "rev-parse", `${sha}^`) === parent
+      && git(clone, "log", "-1", "--format=%B", sha).trim() === String(message).trim();
+  } catch { return false; }
 }
 
 // The landing half of the ceremony, shared with the batch (§ THE PEN BATCH):
 // HEAD is the commit just made; it returns that commit's sha once origin/main
 // holds it, or throws as the comments below say.
-function landCommit(clone, { rebase = true, push = ["push", "-q"] } = {}) {
+function landCommit(clone, { rebase = true, push = ["push", "-q"], message = null } = {}) {
   let commit = git(clone, "rev-parse", "HEAD");
   if (process.env.TOWN_PUSH === "1") {
     // THE PUSH IS NOT THE RECEIPT — THE REMOTE TIP IS. On 2026-08-26 a fund
@@ -289,8 +306,15 @@ function landCommit(clone, { rebase = true, push = ["push", "-q"] } = {}) {
       } catch { /* not on the remote yet */ }
       if (!rebase) throw lostRaceError(commit);
       if (attempt >= 3) throw notLandedError(`${commit} is not on origin/main after ${attempt} attempts, so the ceremony unmade it rather than call a local-only write success`);
+      const tip = git(clone, "rev-parse", "origin/main");
       git(clone, "rebase", "-q", "origin/main");
       commit = git(clone, "rev-parse", "HEAD");
+      // A commit that vanished (dropped by the rebase, or reset away under
+      // this write) leaves HEAD at the remote's tip, which is already landed:
+      // returning it would name someone else's write (POS-922). Only this
+      // write's own commit, rebased onto that tip, is an answer.
+      if (message !== null && !ownCommit(clone, commit, tip, message))
+        throw notLandedError(`this write's commit is not on the rebased clone (HEAD ${commit.slice(0, 8)} is not it), so it names no landing`);
     }
   }
   return commit;
