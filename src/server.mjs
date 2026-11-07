@@ -1781,8 +1781,16 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // read tier: speech is public the way street conversation is, and world_say
       // says so before anyone speaks. This is what the town's conversations page reads.
       if (path === "/world/conversations") {
-        try { return j(res, 200, worldConversations()); }
-        catch (e) { return bounceFault(res, "the world door tripped", e); }
+        // POS-779, SHOW EARLIER: the poll stays on the office's memory; a `?before=` page is read from the record where the store is
+        // engaged (so it reaches what memory no longer holds), else from memory, which says it is only memory (`earlier.source`).
+        try {
+          if (url.searchParams.get("before") && world2ServeEnabled()) {
+            const r = await world2Serve("/world2/conversations", url.searchParams);
+            if (r.code !== 200) return bounce(res, r.code, r.body.defect, r.body.hint);
+            return j(res, 200, worldConversations(null, r.body));
+          }
+          return j(res, 200, worldConversations(url.searchParams));
+        } catch (e) { return bounceFault(res, "the world door tripped", e); }
       }
       // GET /world/settlements — which settlements have actually LANDED, from
       // the world clone's own `settlement/S<n>` tags. The number counts
