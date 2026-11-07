@@ -48,7 +48,7 @@ const STOOL = "sbx-ana/a-stool";          // untyped and carriable: no class, so
 const CRATE = "sbx-eve/a-crate";          // a thing on eve's ground, entered in the frozen era
 // G1: a holder thing 4 m by 400 m whose footprint holds dee's point (1014, 10) and not cy's or eve's, its centre
 // 198 m south, behind the fixture's Mists wall (MISTS_WALL_Y): admission from dee's own point, not the centre
-const AWNING = "sbx-ana/a-market-awning";
+const AWNING = "sbx-dee/a-market-awning";
 const MISTS_WALL_Y = 150;
 const CY_HOME = "sbx-cy/home", EVE_HOME = "sbx-eve/home";
 const KEY = { household: "sbx-cy", handles: new Set(["sbx-cy"]) };
@@ -249,7 +249,9 @@ test("W3 · AT YOUR FEET, UNENTERED: exact centre (ana's bowl) and off centre (c
 });
 
 // LAW (Wright 2026-11-06 02:15Z): "for the at-feet ids only, max-sight, fog/Mists and line-of-sight admission use the resident's own point"
-test("G1 · AT YOUR FEET, ITS CENTRE BEHIND THE MISTS' WALL: dee stands on the long awning, unentered — it is seen at her feet and the hold door admits give and take; cy, off it, does not see it", { skip: skipB }, async () => {
+// The class's own ground grant (refill, `from: reach`) is the act that rides the eyes; give and take here are the
+// resident class's ambient grants, which reach the awning whether or not it is seen (measured: they land with G1 off).
+test("G1 · AT YOUR FEET, ITS CENTRE BEHIND THE MISTS' WALL: dee stands on her long awning, unentered — it is seen at her feet, its refill is in reach and lands at the door, and give and take land; cy, off it, does not see it", { skip: skipB }, async () => {
   await seed();
   await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: "sbx-dee" }, KEY_DEE);
   await withApex(async (worldApex) => {
@@ -258,11 +260,15 @@ test("G1 · AT YOUR FEET, ITS CENTRE BEHIND THE MISTS' WALL: dee stands on the l
     const read = await worldApex({}, KEY_DEE);
     assert.ok(!ids(read.within).includes(AWNING), `unentered, the awning is not within: ${ids(read.within)}`);
     assert.ok(ids(read.nearby).includes(AWNING), `LAW "admission use[s] the resident's own point": the awning at dee's feet is seen: ${ids(read.nearby)}`);
+    assert.deepEqual(read.actions.filter((a) => a.action === "refill").map((a) => a.via), ["in reach"], "its own refill is in reach, from where she stands");
+    const r = await worldApex({ do: "refill", args: { thing: AWNING, kind: "pocket-comet", count: 1 } }, KEY_DEE);
+    assert.ok(!r.error, JSON.stringify(r).slice(0, 300));
+    assert.equal(r.via, "in reach", "and the door admits it by the same via");
     const into = await callHoldTool("world_hold", { to: AWNING, kind: "pocket-comet", count: 1 }, KEY_DEE, { verb: "give" });
     assert.equal(into.did, "give", `the door admits a give into the awning at her feet: ${JSON.stringify(into).slice(0, 300)}`);
     const took = await callHoldTool("world_hold", { from: AWNING, count: 1 }, KEY_DEE, { verb: "take" });
     assert.equal(took.did, "take", `and a take from it: ${JSON.stringify(took).slice(0, 300)}`);
-  });
+  }, { verbs: ["leave-mark", "take", "give", "drop"], classes: [BOWL_CLASS], instances: [{ ...INSTANCE(AWNING, "halloween-candy-bowl", { x: 1014, y: 208 }), extent_w: 4, extent_h: 400 }] });
 });
 
 test("THE BUDGET · a small view still carries the things at your feet first; the door's default budget is its own, and admits each", { skip: skipB }, async () => {
