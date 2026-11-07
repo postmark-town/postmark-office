@@ -704,7 +704,7 @@
        "light",
        "heavy"
       ],
-      "description": "class \"bug\", to: \"briefed\" only — the bless's revision, light (10 stamps) or heavy (5)"
+      "description": "class \"bug\", to: \"briefed\" only — the bless's revision, light (10 stamps) or heavy (5); with recredit, only for a briefed that was skipped"
      },
      "of": {
       "type": "string",
@@ -716,7 +716,7 @@
      },
      "recredit": {
       "type": "boolean",
-      "description": "class \"bug\", wright or keemin only — true re-credits a stage already paid to the wrong resident: to names that stage (diagnosed, briefed or fixed), credit the resident whose work earned it, link that work, note why. Once per stage; the reviewed pass pays the new credit what the stage paid and burns the wrong mint, together"
+      "description": "class \"bug\", wright or keemin only — true re-credits a stage already paid to the wrong resident: to names that stage (diagnosed, briefed or fixed), credit the resident whose work earned it, link that work, note why. Once per stage; the reviewed pass pays the new credit what the stage paid and burns the wrong mint, together. It also credits a diagnosed or briefed that was SKIPPED by mistake (briefed with its grade): the skip stays on the history, and the pass pays the stage's amount with nothing to burn, only when the town's ledger holds no line for that stage. A skipped fixed is not re-credited"
      },
      "force": {
       "type": "string",

@@ -137,6 +137,13 @@ lawful AS (
     -- kept inline, with their reasons); no DELETE, because a hold is kept.
     ('office_api',   'invite_holds',     'INSERT'),
     ('office_api',   'invite_holds',     'UPDATE'),
+    -- 088_letter_notes.sql (POS-730), a household's private note on a letter it
+    -- received. Narrowed by its row policies to the acting household's own rows.
+    -- INSERT and UPDATE set or change a note; DELETE is what `clear` does, because
+    -- the condition's bytes are private and a cleared note is not kept.
+    ('office_api',   'letter_notes',     'INSERT'),
+    ('office_api',   'letter_notes',     'UPDATE'),
+    ('office_api',   'letter_notes',     'DELETE'),
     -- 026_events.sql, the earpiece's log (POS-209). One row per attempted
     -- wake, narrowed by its row policy to the resident's own household; INSERT
     -- only, because a log line is never edited or removed.
