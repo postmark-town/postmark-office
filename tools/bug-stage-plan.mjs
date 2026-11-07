@@ -346,7 +346,12 @@ export async function townEngine(town) {
   if (typeof engine.stageMintLine !== "function" || !engine.STAGE_LADDER)
     throw new Error("bug-stage-plan: this town's stamp-mint.mjs has no stage grammar (post:<id>/<stage>), so the plan cannot see what is already paid — the town must carry --stage-mint first");
   const ledgerFile = join(town, "WHITE_PAGES", "stamp-ledger.md");
-  const entries = existsSync(ledgerFile) ? engine.parseStampLedger(readFileSync(ledgerFile, "utf8")) : [];
+  // ONE decision, and `ledgerRead` IS it (POS-931, the lead's review): the ledger
+  // is read when it is there, a read that fails throws, and nothing asks again
+  // later, so a ledger that appears after this line can never be reported read
+  // while `entries` stayed empty.
+  const ledgerRead = existsSync(ledgerFile);
+  const entries = ledgerRead ? engine.parseStampLedger(readFileSync(ledgerFile, "utf8")) : [];
   const { laws } = engine.parseLaws(entries);
   const meep = engine.meepChecker(laws);
   const paid = new Set();
@@ -367,7 +372,7 @@ export async function townEngine(town) {
   return { isMeep: (h, d) => meep(h, d), paid, stageLines, corrected, liquid: engine.foldBalances(entries),
     canRecredit: typeof engine.stageRecreditLines === "function",
     // POS-931/a: a skipped stage is paid only on a ledger that was there and read, by a town that carries the grammar
-    ledgerRead: existsSync(ledgerFile), canSkipCredit: typeof engine.stageSkippedCreditLine === "function" };
+    ledgerRead, canSkipCredit: typeof engine.stageSkippedCreditLine === "function" };
 }
 
 /**

@@ -654,3 +654,54 @@ test("10 · end to end: a skipped diagnosed, recorded at the door, paid by the p
       assert.match(out.join("\n"), /\(skipped\) → ada · hh:the-harbor · 5 · held: the town's ledger was not read/);
     } finally { rmSync(bare.repo, { recursive: true, force: true }); }
   });
+
+// ── 11 · the plan's ledger-read flag is the read it made (POS-931, the lead's review of 097c7d12) ──
+//
+// `townEngine` decides once whether to read the town's ledger, and `ledgerRead`
+// is that decision. It used to ask the filesystem again at its return, so a
+// ledger that appeared in between was reported read while `entries` stayed
+// empty and unread: an evidence claim the plan never made. The race is made
+// certain here: the synthetic town's own engine is wrapped so that its
+// parseLaws, which townEngine calls after the read decision, writes the ledger.
+
+test("11 · townEngine's ledgerRead is its one read decision: a ledger that appears after it is never reported read, and no skipped credit plans on it; a present ledger reads, an absent one doesn't, an unreadable one refuses",
+  { skip: TOWN_HAS_VERB ? false : `the town at ${TOWN_SRC} has no stage grammar; set STAGE_MINT_TOWN to a town tree that carries it` },
+  async () => {
+    const { townEngine } = await import("../tools/bug-stage-plan.mjs");
+    const towns = [];
+    const fresh = () => { const t = syntheticTown(); towns.push(t.repo); return { ...t, ledger: join(t.repo, "WHITE_PAGES", "stamp-ledger.md") }; };
+    try {
+      // the controls: there and read; not there; there and unreadable
+      const present = fresh();
+      const read = await townEngine(present.repo);
+      assert.equal(read.ledgerRead, true, "a ledger that is there is read");
+      const absent = fresh();
+      rmSync(absent.ledger);
+      assert.equal((await townEngine(absent.repo)).ledgerRead, false, "a ledger that is not there is not read");
+      const unreadable = fresh();
+      rmSync(unreadable.ledger);
+      mkdirSync(unreadable.ledger);
+      await assert.rejects(townEngine(unreadable.repo), /EISDIR/, "a ledger that is there and cannot be read refuses the pass");
+
+      // THE RACE, made certain: the ledger appears after the read decision
+      const late = fresh();
+      const bytes = readFileSync(late.ledger, "utf8");
+      rmSync(late.ledger);
+      const tools = join(late.repo, "tools");
+      writeFileSync(join(tools, "stamp-mint-real.mjs"), readFileSync(join(tools, "stamp-mint.mjs"), "utf8"));
+      writeFileSync(join(tools, "stamp-mint.mjs"), `import { writeFileSync } from "node:fs";
+import * as real from "./stamp-mint-real.mjs";
+export * from "./stamp-mint-real.mjs";
+// townEngine calls parseLaws after it decided whether to read the ledger: the ledger appears now
+export function parseLaws(entries) { writeFileSync(${JSON.stringify(late.ledger)}, ${JSON.stringify(bytes)}); return real.parseLaws(entries); }
+`);
+      const raced = await townEngine(late.repo);
+      assert.ok(existsSync(late.ledger), "the ledger appeared after the read decision");
+      assert.equal(raced.ledgerRead, false, "LAW (POS-931): a ledger the plan did not read is never reported read");
+      assert.equal(raced.paid.size, 0, "and nothing was read from it");
+      // so a skipped stage's credit planned on that engine holds, even from a town that carries the grammar
+      const rows = planRecredits({ acts: [skipAct(1), skippedRc(2)], houseOf: HOUSE, isMeep: raced.isMeep, stageLines: raced.stageLines,
+        corrected: raced.corrected, liquid: raced.liquid, ledgerRead: raced.ledgerRead, canSkipCredit: true });
+      assert.deepEqual([rows[0].owed, rows[0].why.slice(0, 40)], [false, "held: the town's ledger was not read, so"]);
+    } finally { for (const r of towns) rmSync(r, { recursive: true, force: true }); }
+  });
