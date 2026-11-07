@@ -125,10 +125,11 @@ async function seeded(acts) {
   return c;
 }
 /** The pen's shape: the guard, then the insert, in one transaction. */
-async function penLike(c, guard, land) {
+async function penLike(c, guard, land, { afterGuard = null } = {}) {
   await c.query("BEGIN");
   try {
     await guard(c);
+    if (afterGuard) await afterGuard();
     await c.query("INSERT INTO acts (at, crossing, actor, action, object, class, payload, household) VALUES (now(), 1, 'finch', 'land', $1, 'move', $2, 'hh:finch')",
       [land.object, JSON.stringify(land.payload)]);
     await c.query("COMMIT");
@@ -161,7 +162,13 @@ test("on the store: two applies at once serialize on the repair's lock, and exac
   try {
     const newest = Number((await a.query(ACTS_SQL, ["finch"])).rows.at(-1).id);
     const guard = repairGuard({ rideStateFrom, expectLast: newest });
-    const results = await Promise.all([penLike(a, guard, repairLand(0)), penLike(b, guard, repairLand(0))]);
+    // A RACE THAT IS ONE: A has passed its guard and holds its transaction open while B's guard runs. Without the
+    // lock B reads no land and both write; with it, B waits for A's commit and then reads A's land.
+    let guarded;
+    const aGuarded = new Promise((ok) => { guarded = ok; });
+    const first = penLike(a, guard, repairLand(0), { afterGuard: async () => { guarded(); await new Promise((ok) => setTimeout(ok, 400)); } });
+    const second = aGuarded.then(() => penLike(b, guard, repairLand(0)));
+    const results = await Promise.all([first, second]);
     assert.deepEqual(results.filter((r) => r === "written").length, 1, JSON.stringify(results));
     assert.match(results.find((r) => r !== "written"), /^ALREADY REPAIRED/);
     assert.equal((await a.query("SELECT count(*)::int AS n FROM acts WHERE action = 'land'")).rows[0].n, 1);
