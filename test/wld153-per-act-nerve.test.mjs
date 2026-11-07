@@ -16,7 +16,7 @@ import { LivingSet, loadCreatureLaw, reactTo } from "../src/creatures.mjs";
 import { nerveOf, nerveSpentSaid, windowAt } from "../src/encounter.mjs";
 import { worldEncounter } from "../src/encounter-verbs.mjs";
 import { worldCreature } from "../src/creature-verbs.mjs";
-import { __setCreaturesForTest, creaturesAnswer } from "../src/creatures-hook.mjs";
+import { __setCreaturesForTest, answerWithin, creaturesAnswer } from "../src/creatures-hook.mjs";
 import { NO_WORLD, worldModuleUrl } from "./fixture-paths.mjs";
 
 const test = (name, fn) => nodeTest(name, { skip: NO_WORLD || false }, fn);
@@ -44,8 +44,8 @@ const KEEPER = NO_WORLD ? null : {
 const PLAIN = NO_WORLD ? null : { ...BASE.kindOf("keeper"), reactions: [reaction("notice", `act.verb == "say"`, [{ do: "nothing" }], "It notices {actor}.")] };
 const lawWith = () => ({
   ...BASE, kindOf: (n) => (n === "keeper" ? KEEPER : n === "plain" ? PLAIN : null),
-  afforded: { keeper: [] }, affordedOf: () => [{ action: "watch", from: "ring" }],
-  kindMod: { ...BASE.kindMod, ENCOUNTER_VERBS: ["strike", "steady", "shield"], PRESS_ON, AFFORDED_VERBS: [...BASE.kindMod.AFFORDED_VERBS, "watch"] },
+  afforded: { keeper: [] }, affordedOf: () => ["watch", "approach", "shoo", "call", "offer", "whisper"].map((action) => ({ action, from: "ring" })),
+  kindMod: { ...BASE.kindMod, ENCOUNTER_VERBS: ["strike", "steady", "shield"], PRESS_ON },
 });
 const NOW = Date.parse("2026-10-26T13:00:00Z");
 const iso = (ms) => new Date(ms).toISOString();
@@ -134,15 +134,23 @@ test("exhaustion: the act that takes the last nerve says so, and the flee is the
 
 // ── an act aimed at a creature ──────────────────────────────────────────────
 
-function door(living, here = { x: 10, y: 0 }) {
+// `gate`: a promise the creature's write waits on (a cost written later than the reply's deadline); `deadlineMs`: the reply's bound
+function door(living, here = { x: 10, y: 0 }, { gate = null, deadlineMs = null } = {}) {
   let next = 900;
+  const slow = (w) => async (rows) => { if (gate) await gate; return w(rows); };
   const deps = {
-    now: () => NOW, clock: () => NOW, env: { CREATURE_JUDGE: "code" }, freeze: () => null,
+    now: () => Date.now(), clock: () => Date.now(), env: { CREATURE_JUDGE: "code" }, freeze: () => null,
     creatures: async () => ({ living, law: living.law }), standpoint: async () => here,
-    householdOf: async () => "hh:kai", carryingConsumable: async () => false,
+    householdOf: async () => "hh:kai", carryingConsumable: async () => true,
     write: async () => ({ actId: String(++next + 8000), written_at: iso(NOW) }),
-    answer: async (act, d2) => reactTo(act, { ...d2, env: { CREATURE_JUDGE: "code" }, now: NOW, clock: () => NOW, around: async () => ({}), heardFor: async () => null,
-      write: store(), writeCost: store(), present: presentOf([["kai", 10]]), households: async () => lookup, flee: () => {} }),
+    offer: async (a) => ({ did: "offer", kind: "hoard-coins", seq: String(++next + 8000), written_at: iso(NOW), holds: { holder: "kai", shows: "nothing" },
+      offered: { kind: "hoard-coins", name: "hoard coins", body: "Hard-sugar coins." } }),
+    approach: async () => ({ result: { walked: true }, rows: [{ id: String(++next + 8000), action: "walk", actor: "kai", written_at: iso(NOW) }] }),
+    say: async () => ({ spoke: true }),
+    // the real hook's bounded wait (creatures-hook.mjs § answerWithin), over the same turn the office runs
+    answer: async (act, d2) => answerWithin(act, { ...d2, env: { CREATURE_JUDGE: "code" }, around: async () => ({}), heardFor: async () => null,
+      write: slow(store()), writeCost: slow(store()), present: presentOf([["kai", 10]]), households: async () => lookup, flee: () => {}, clock: Date.now,
+      ...(deadlineMs ? { deadline: Date.now() + deadlineMs } : { deadline: Date.now() + 1500 }) }),
     others: async () => [],
   };
   return (args) => worldCreature(args, { handles: new Set(["kai"]), household: "hh:kai" }, deps);
@@ -154,7 +162,7 @@ test("a watch aimed at the creature: its cost and what is left, first in the rep
   assert.equal(out.reaction.reaction, "regard");
   assert.equal(Object.keys(out)[0], "nerve_said");
   assert.equal(out.nerve_said, "That cost you 1 nerve; you have 9 of 10 left.");
-  const free = await door(livingWith(nerveRow("kai", -10, "press")))({ act: "watch", creature: ID });
+  const free = await door(livingWith(nerveRow("kai", -10, "press", nextId(), Date.now())))({ act: "watch", creature: ID });
   assert.equal("nerve_said" in free, false, "a resident with nothing left spends nothing");
 });
 
@@ -203,4 +211,89 @@ test("a strike that takes the last nerve says so; a refused strike (not enough n
   const short = encounterDoor(livingWith(nerveRow("kai", -9, "press")));
   await assert.rejects(short.run({ act: "strike", creature: ID }), (e) => e.code === 409 && !("nerve_said" in e));
   assert.equal(short.written.length, 0);
+});
+
+// ── every kind of act, through its own door ─────────────────────────────────
+
+test("every ring verb the world names, through the hook: the ones that charge say so with what is left", async () => {
+  const seen = {};
+  for (const verb of ["walk", "say", "take", "give", "drop", "leave-mark"]) {
+    const living = livingWith();
+    __setCreaturesForTest(living);
+    const walk = verb === "walk" ? { payload: JSON.stringify({ from: { x: 30, y: 0 }, toward: { x: 12, y: 0 } }), class: "move" } : verb === "say" ? {} : { class: "holding", payload: "{}" };
+    const out = await creaturesAnswer([penRow({ action: verb, ...walk })], { did: verb }, hookDeps());
+    seen[verb] = out.nerve_said ?? null;
+    assert.equal(nerveOf(living, "kai", Date.now()), seen[verb] ? 10 - Number(/cost you (\d+)/.exec(seen[verb])[1]) - (/press took (\d+)/.exec(seen[verb])?.[1] ?? 0) : 10, `${verb}: the line is the record's`);
+  }
+  assert.deepEqual(Object.keys(seen).filter((v) => seen[v] === null), [], "every ring verb inside the ring charges its 1, and says so");
+  assert.match(seen.say, /^That cost you 1 nerve, and the creature's press took 2 more; you have 7 of 10 left\.$/);
+  for (const v of ["walk", "take", "give", "drop", "leave-mark"]) assert.equal(seen[v], "That cost you 1 nerve; you have 9 of 10 left.", v);
+  __setCreaturesForTest(null);
+});
+
+test("every creature verb, through worldCreature: watch, shoo, call, whisper, offer and approach each say their cost; offer and approach use their own act ids", async () => {
+  for (const verb of ["watch", "shoo", "call", "whisper", "offer", "approach"]) {
+    const living = livingWith();
+    const here = verb === "approach" ? { x: 35, y: 0 } : { x: 10, y: 0 };
+    const out = await door(living, here)({ act: verb, creature: ID, ...(verb === "offer" ? { kind: "hoard-coins" } : {}) });
+    assert.equal(out.did, verb);
+    assert.equal(Object.keys(out)[0], "nerve_said", verb);
+    assert.equal(out.nerve_said, "That cost you 1 nerve; you have 9 of 10 left.", verb);
+    assert.equal(nerveOf(living, "kai", Date.now()), 9, `${verb}: charged once, as before`);
+  }
+});
+
+// ── the deadline: the answer keeps its bound and says the cost is not recorded yet ─────────
+
+const PENDING = /^The nerve this cost you is not recorded yet, so no amount is given; you have (\d+) of 10 left as recorded so far\.$/;
+const gateOf = () => { let open; const gate = new Promise((r) => { open = r; }); return { gate, open }; };
+
+test("DEADLINE, a ring act with a reaction: the reply keeps its bound, says the cost is not recorded yet with no amount, and the late write charges as ever", async () => {
+  const living = livingWith();
+  __setCreaturesForTest(living);
+  const { gate, open } = gateOf();
+  const t0 = Date.now();
+  const out = await creaturesAnswer([penRow()], { did: "say" }, hookDeps({ write: async (rows) => { await gate; return store()(rows); } }));
+  assert.ok(Date.now() - t0 < 2500, "the reply came inside the existing bound (ANSWER_WAIT_MS), not after the write");
+  assert.match(out.nerve_said, PENDING);
+  assert.equal(PENDING.exec(out.nerve_said)[1], "10", "left is what is recorded so far: nothing yet");
+  assert.doesNotMatch(out.nerve_said, /cost you \d/, "no invented amount");
+  assert.equal(out.creatures, undefined, "no fabricated reaction entry");
+  assert.equal(nerveOf(living, "kai", Date.now()), 10, "nothing is recorded yet");
+  open();
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(nerveOf(living, "kai", Date.now()), 7, "the late write lands: 1 for the act, 2 for the press, exactly the charges of the on-time case");
+  __setCreaturesForTest(null);
+});
+
+test("DEADLINE, a charged act with no reaction: pending too; and a free, out-of-ring or spent act is never called pending", async () => {
+  const living = livingWith();
+  __setCreaturesForTest(living);
+  const { gate, open } = gateOf();
+  const take = penRow({ action: "take", class: "holding", payload: "{}" });
+  const out = await creaturesAnswer([take], { did: "take" }, hookDeps({ writeCost: async (rows) => { await gate; return store()(rows); } }));
+  assert.match(out.nerve_said, PENDING);
+  open();
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(nerveOf(living, "kai", Date.now()), 9);
+  const gate2 = gateOf();
+  const slow = { write: async (rows) => { await gate2.gate; return store()(rows); }, writeCost: async (rows) => { await gate2.gate; return store()(rows); } };
+  __setCreaturesForTest(livingWith());
+  assert.equal("nerve_said" in (await creaturesAnswer([penRow({ at_dx: 900 })], { did: "say" }, hookDeps(slow))), false, "out of ring");
+  __setCreaturesForTest(livingWith(nerveRow("kai", -10, "press", nextId(), Date.now())));
+  assert.equal("nerve_said" in (await creaturesAnswer([penRow()], { did: "say" }, hookDeps(slow))), false, "already at 0");
+  gate2.open();
+  __setCreaturesForTest(null);
+});
+
+test("DEADLINE, through the aimed door: the reply says the cost is not recorded yet, then the late write charges 1", async () => {
+  const living = livingWith();
+  const { gate, open } = gateOf();
+  const out = await door(living, { x: 10, y: 0 }, { gate, deadlineMs: 150 })({ act: "watch", creature: ID });
+  assert.match(out.nerve_said, PENDING);
+  assert.equal(out.reaction, null, "no reaction is made up");
+  assert.equal(nerveOf(living, "kai", Date.now()), 10);
+  open();
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(nerveOf(living, "kai", Date.now()), 9, "charged 1, as on time");
 });

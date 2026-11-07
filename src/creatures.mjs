@@ -1510,6 +1510,8 @@ async function creatureTurn(creature, act, distance_m, deps) {
     if (isSetPiece(kind) && !fight) return null;
     const ft = enc && fight ? fightTurn(creature, kind, fight, act, enc, deps) : null;
     if (ft?.cost) enc.cost = ft.cost;
+    // WLD-153: a cost this turn will write; an answer that goes out before the write lands says "not recorded yet" (encounter.mjs § nerveSpentSaid)
+    if (enc && (enc.cost.length || ft?.early.length)) deps.owed?.add(String(act.actId));
     // WHAT IT COULD REPEAT (POS-672 D5): only a kind whose law reads heard.any is
     // asked, and the ear is bounded like the read; none heard is none to repeat
     const readsHeard = kind.reactions.some((r) => /\bheard\.any\b/.test(String(r.src ?? "")));

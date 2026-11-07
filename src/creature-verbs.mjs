@@ -432,12 +432,13 @@ async function aimAt({ d, args, key, verb, actor, id, here, cr }) {
   // THE REPLY IS THE REACTION (call 7): that creature alone, within AIMED_WAIT_MS
   const act = { actor, verb, actId: trigger.actId, atIso: trigger.atIso, point: here, approaching: verb === "approach",
     ...(offered ? { offered } : {}), ...(words ? { words } : {}) };
-  const [answer] = await d.answer(act, { ...cr, aimed: c, jevMs: AIMED_JEV_MS, deadline: d.clock() + AIMED_WAIT_MS });
+  const owed = new Set(); // WLD-153: a cost the creature's turn found but had not written when this reply went out
+  const [answer] = await d.answer(act, { ...cr, aimed: c, jevMs: AIMED_JEV_MS, deadline: d.clock() + AIMED_WAIT_MS, owed });
   // an approach is a walk: every other creature whose ring holds where you set out answers it as one
   let others = [];
   if (othersRows?.length) others = (await d.others(othersRows, id)) ?? [];
   // WLD-153: what this act cost you, said first, from the cost rows the creature's turn wrote (a charge with no reaction included)
-  const said = nerveSpentSaid(living, actor, trigger.actId, d.now());
+  const said = nerveSpentSaid(living, actor, trigger.actId, d.now(), owed);
   return {
     ...(said ? { nerve_said: said } : {}),
     did: verb, creature: id, kind: c.kind, ...extra,
