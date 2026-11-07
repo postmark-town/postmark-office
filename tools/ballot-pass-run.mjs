@@ -52,14 +52,16 @@ const OFFICE = "postmaster";
 
 // ── the town's own parsing and receipts (tools/ballot-pass.mjs), unchanged ───
 
-function parseFrontmatter(text) {
+export function parseFrontmatter(text) {
   const t = text.replace(/^﻿/, "").replace(/\r\n/g, "\n");
   if (!t.startsWith("---\n")) return null;
   const end = t.indexOf("\n---", 4);
   if (end === -1) return null;
   const fields = {};
   for (const line of t.slice(4, end).split("\n")) {
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line);
+    // The lookahead keeps the value from starting on a space `\s*` could have taken (POS-877); the
+    // old `\s*(.*)$` was quadratic on a line `.` can't finish. Trimmed below.
+    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(?!\s)(.*)$/.exec(line);
     if (m) fields[m[1]] = m[2].trim();
   }
   return fields;

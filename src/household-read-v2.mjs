@@ -50,6 +50,8 @@ export const humanPhrase = (houseName) => `${houseName || "the house"}'s human`;
 
 export const CAN_GROUPS = Object.freeze({
   answer: ["declare-stance-on"],
+  // letter-note (POS-730) is not listed here: the glance's part 1 is sized to its budget (household-read-v2.test.mjs § PART1_BUDGET), and the act
+  // is named where it is used: the awaiting view's rows, the household door's act schema and CONTRACT.md.
   write: ["send", "mark-all-read", "amend-letter", "withdraw-letter", "block", "unblock"],
   tend: ["address", "address-fields", "home", "profile", "window"],
   back: ["stake", "stake-vote", "fund-verify"],
@@ -367,9 +369,10 @@ export const dayBefore = (nowMs, days) => new Date(nowMs - days * 86_400_000).to
  * them: the ledger's semantics. The office's read flag is not used: residents
  * who read through git never set it. `letters` are the window's rows, both
  * directions (to_h, from_h, thread, date, delivered_at); `house` is every
- * resident of the house.
+ * resident of the house. `noted` is the house's private letter notes
+ * (letter-notes.mjs), a Map or Set keyed by letter id: a marked letter is skipped.
  */
-export function unansweredOf(letters = [], { mine, house = mine } = {}) {
+export function unansweredOf(letters = [], { mine, house = mine, noted = null } = {}) {
   const ours = mine instanceof Set ? mine : new Set(mine ?? []);
   const home = house instanceof Set ? house : new Set(house ?? []);
   const when = (r) => String(r.delivered_at ?? r.date ?? "");
@@ -377,6 +380,8 @@ export function unansweredOf(letters = [], { mine, house = mine } = {}) {
   let n = 0;
   for (const r of letters) {
     if (!r.delivered_at || !ours.has(r.to_h) || home.has(r.from_h)) continue;
+    // a letter the house has marked "no reply needed" or "waiting on …" is not counted (POS-730, Darko 2026-11-06); it stays in the awaiting view
+    if (noted?.has?.(r.id)) continue;
     const answered = out.some((o) => o.thread === r.id || (o.to_h === r.from_h && when(o) >= when(r)));
     if (!answered) n += 1;
   }
@@ -392,9 +397,10 @@ export const MAIL_KEY = 'to_answer: last 14 days, no reply · boat: next crossin
  * letters sailing at the next crossing. Threads of any age where they wrote
  * last are read: "mail", view: "awaiting", never the glance.
  */
-export function mailBlock({ unanswered = null, bounced = null, standing = null } = {}) {
+export function mailBlock({ unanswered = null, bounced = null, standing = null, notesUnavailable = null } = {}) {
   // round 4 (Darko 15:51): the 14 days are the default, named once in the key
-  return { to_answer: unanswered, bounced, on_the_next_boat: standing, key: MAIL_KEY };
+  // POS-730: a house's letter notes that could not be read are said, never shown as none: the count may still hold marked letters
+  return { to_answer: unanswered, bounced, on_the_next_boat: standing, ...(notesUnavailable ? { notes_unavailable: notesUnavailable } : {}), key: MAIL_KEY };
 }
 
 /** The stamps block's key (eval rounds 1–3): about 100 characters, the four numbers reconciled in plain words; went joins it when the block carries a went count. */

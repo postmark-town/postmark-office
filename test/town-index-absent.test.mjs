@@ -145,6 +145,10 @@ CHANGED["MCP household {}"].push(
 CHANGED["MCP household {}"].push(
   [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,
     `{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}},{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}}]`]);
+// AND A HOUSEHOLD NOTES A LETTER PRIVATELY (POS-730, Darko 2026-11-06 "good to go"): the act joins the index at the roster's end, after buy-parcel-room.
+CHANGED["MCP household {}"].push(
+  [`{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}}]`,
+    `{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note","teaches":"Note a letter.","fields":{"letter":{"required":true},"state":{"required":true},"on":{}}}]`]);
 // AND THE RSVP CARD TEACHES ITS REST CALL (POS-911, Darko 2026-11-05 21:18 EST, "Raise to 9,088 (rec)"): the card's last
 // sentence names the public address, which the recorded answer does not have. Nothing else in the row moves.
 CHANGED["MCP household {}"].push(
