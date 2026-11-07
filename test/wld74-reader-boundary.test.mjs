@@ -46,9 +46,14 @@ const CY_BOWL = "sbx-cy/a-door-bowl";     // cy's own bowl, centred 0.7 m east: 
 const LAMP = "sbx-ana/a-lamp";            // a DIRECT thing (class: thing), centred 0.6 m north
 const STOOL = "sbx-ana/a-stool";          // untyped and carriable: no class, so not a thing (stays within)
 const CRATE = "sbx-eve/a-crate";          // a thing on eve's ground, entered in the frozen era
+// G1: a holder thing 4 m by 400 m whose footprint holds dee's point (1014, 10) and not cy's or eve's, its centre
+// 198 m south, behind the fixture's Mists wall (MISTS_WALL_Y): admission from dee's own point, not the centre
+const AWNING = "sbx-ana/a-market-awning";
+const MISTS_WALL_Y = 150;
 const CY_HOME = "sbx-cy/home", EVE_HOME = "sbx-eve/home";
 const KEY = { household: "sbx-cy", handles: new Set(["sbx-cy"]) };
 const KEY_EVE = { household: "sbx-eve", handles: new Set(["sbx-eve"]) };
+const KEY_DEE = { household: "sbx-dee", handles: new Set(["sbx-dee"]) };
 
 const repo = mkdtempSync(join(tmpdir(), "wld74-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
@@ -104,11 +109,16 @@ export function sourceLabel() { return "home"; }
     rec(LAMP, { kind: "sited", class: "thing", at: { x: 1010, y: 10.6 }, extent: { w: 2, h: 2 } }, "A small lamp."),
     rec(STOOL, { kind: "sited", at: { x: 1010, y: 10 }, extent: { w: 4, h: 4 } }, "A three-legged stool."),
     rec(CRATE, { kind: "sited", class: "thing", at: { x: 1100, y: 10 }, extent: { w: 2, h: 2 } }, "A packing crate."),
+    rec(AWNING, { kind: "sited", class: "halloween-candy-bowl", portable: false, at: { x: 1014, y: 208 }, extent: { w: 4, h: 400 } }, "A long market awning that holds."),
   ];
   put("WORLD/marks/let-there-be-light/mark.md", markRecord(root, "Synthetic world frame."));
   for (const m of ms) put(`WORLD/marks/${m.rec.id}/mark.md`, markRecord(m.rec, m.body));
   put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec), ...CLASS_MARKS] }));
-  copyFileSync(join(WORLD, "WORLD", "skeleton.json"), join(repo, "WORLD", "skeleton.json"));
+  // the world's own skeleton, with the fixture's own Mists: a wall south of MISTS_WALL_Y from crossing 0 on, no
+  // fringe and no veil, so it cuts only what stands behind it (the awning's centre) and nothing any other arm reads
+  const skeleton = JSON.parse(readFileSync(join(WORLD, "WORLD", "skeleton.json"), "utf8"));
+  put("WORLD/skeleton.json", JSON.stringify({ ...skeleton, mists: { border_m: { minX: -5000, minY: -5000, maxX: 5000, maxY: MISTS_WALL_Y },
+    fringe_m: 0, wall_sight_m: 20, density: { from: 0, to: 0 }, schedule: [{ crossing: 0, front_m: 0, veil: 0 }] } }, null, 2));
   // THE FROZEN ERA holds eve's entry into her crate (an early passage, before the cutover)
   const { formatEnterExit } = await import(pathToFileURL(join(repo, "tools", "enter-exit.mjs")).href);
   put("WORLD/enter-exit-ledger-frozen.md", `# enter-exit ledger (frozen era)\n\n${formatEnterExit({ handle: "sbx-eve", act: "enters", mark: CRATE, at: 1, iso: "2026-08-01T00:00:00.000Z" })}\n`);
@@ -235,6 +245,23 @@ test("W3 · AT YOUR FEET, UNENTERED: exact centre (ana's bowl) and off centre (c
     const refilled = await callHoldTool("world_hold", { act: "refill", thing: CY_BOWL, kind: "pocket-comet", count: 2 }, KEY, { verb: "refill" });
     assert.equal(refilled.did, "refill");
     assert.deepEqual((await worldApex({ mark: CY_BOWL }, KEY)).focus?.can, ["take", "give", "refill"], "refilled, it holds two: take shows too");
+  });
+});
+
+// LAW (Wright 2026-11-06 02:15Z): "for the at-feet ids only, max-sight, fog/Mists and line-of-sight admission use the resident's own point"
+test("G1 · AT YOUR FEET, ITS CENTRE BEHIND THE MISTS' WALL: dee stands on the long awning, unentered — it is seen at her feet and the hold door admits give and take; cy, off it, does not see it", { skip: skipB }, async () => {
+  await seed();
+  await leaveMarkViaOffice(repo, { kind: "pocket-comet", count: 3, to: "sbx-dee" }, KEY_DEE);
+  await withApex(async (worldApex) => {
+    // THE PREMISE: the wall is live, so from cy's point (off the awning) its centre, behind the wall, is not seen
+    assert.ok(!ids((await worldApex({}, KEY)).nearby).includes(AWNING), "control: from cy's point the awning's centre is behind the wall");
+    const read = await worldApex({}, KEY_DEE);
+    assert.ok(!ids(read.within).includes(AWNING), `unentered, the awning is not within: ${ids(read.within)}`);
+    assert.ok(ids(read.nearby).includes(AWNING), `LAW "admission use[s] the resident's own point": the awning at dee's feet is seen: ${ids(read.nearby)}`);
+    const into = await callHoldTool("world_hold", { to: AWNING, kind: "pocket-comet", count: 1 }, KEY_DEE, { verb: "give" });
+    assert.equal(into.did, "give", `the door admits a give into the awning at her feet: ${JSON.stringify(into).slice(0, 300)}`);
+    const took = await callHoldTool("world_hold", { from: AWNING, count: 1 }, KEY_DEE, { verb: "take" });
+    assert.equal(took.did, "take", `and a take from it: ${JSON.stringify(took).slice(0, 300)}`);
   });
 });
 
