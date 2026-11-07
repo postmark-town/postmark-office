@@ -77,9 +77,11 @@
 //      line can't credit, because a line below the first is plain text: every body
 //      that hid it in any review round earns nothing, and credits with the same line
 //      first. A sample was read on GitHub's own renderer.
-//  20. (POS-867, POS-892; Wright 2026-11-05 15:41Z) Starforge's own Apps, by bot
-//      user id AND login, earn wright fixed and nothing else: no other stage, no
-//      other credit. A login or an id alone, a resident, and Truey never do.
+//  20. (POS-867, POS-892; Wright 2026-11-05 15:41Z, widened 2026-11-07 17:16:15Z)
+//      Starforge's own Apps, by bot user id AND login, credit wright only: an App's
+//      PR earns fixed, its issue comment diagnosed or briefed, and nothing else. A
+//      login or an id alone, a resident, keemin and Truey never do, and no App is a
+//      founder account (POS-931/b's rows came out; its § 18 test is re-pinned).
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -131,7 +133,7 @@ const GH_ACCOUNT = Object.freeze({
   doors: { id: 334016343, login: "commander-and-chief" },
   wright: { id: 306351151, login: "wright-starforge" },
   keemin: { id: 67605380, login: "keeminlee" },
-  // Starforge's own Apps, by the real ids of their bot users (20), and the forgeries that must not pass for one
+  // Starforge's own Apps, by the real ids of their bot users (20, and POS-931's 18), and the forgeries that must not pass for one
   rivetApp: { id: 340608403, login: "rivet-starforge[bot]" },
   bevelApp: { id: 341174930, login: "bevel-starforge[bot]" },
   jettoApp: { id: 342797059, login: "jetto-starforge[bot]" },
@@ -1318,12 +1320,10 @@ test("14 · a second recredit of the same stage is refused, whoever it names", a
   await refusedNothing(t, rc({ credit: "wayward-archivist", link: KINO_PLAN }), 409, /^"kinofire\/false-sweep-warning"'s briefed was already re-credited, to kinofire one recredit per post and stage, ever/);
 });
 
-test("14 · a stage never passed and a skipped stage are refused, and say what to do instead", async () => {
+test("14 · a stage never passed is refused, and says what to do instead (a skipped one is § 18's)", async () => {
   const t = await paidToWright();
   await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "fixed", recredit: true, credit: "kinofire", link: pull("kinofire"), note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
     /^"kinofire\/false-sweep-warning" never passed fixed it stands briefed; advance it to fixed, crediting the right resident, rather than re-crediting/);
-  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "diagnosed", recredit: true, credit: "kinofire", link: KINO_PLAN, note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
-    /never passed diagnosed diagnosed was skipped, and a skipped stage paid no one: there is nothing to re-credit/);
 });
 
 test("14 · (review-3842-578 § 1) the door never gates on the store's stamp chain: with no chain (prod today) or a chain without the stage's line, the act records with paid null, and the stage pass reads the ledger", async () => {
@@ -1364,7 +1364,9 @@ test("14 · the recredit's own law: wright and keemin only, a note, recredit tru
   await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN }, KINO), 403, /only the town's hands re-credit a bug's stage/);
   await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, note: "  " }), 422, /^a recredit says why note: what the stage's credit got wrong/);
   await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, recredit: "yes" }), 422, /^recredit is true, or left off/);
-  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, grade: "light" }), 422, /^a recredit takes no grade it pays the stage again at exactly what the stage paid/);
+  // a paid stage pays again exactly what it paid: grade is only a skipped briefed's (POS-931/a)
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, grade: "light" }), 422, /^briefed on "kinofire\/false-sweep-warning" was paid, and a recredit of a paid stage takes no grade/);
+  await refusedNothing(t, rc({ credit: "kinofire", link: KINO_PLAN, size: "S" }), 422, /^a recredit takes no size it pays the stage again at exactly what the stage paid/);
   await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "confirmed", recredit: true, credit: "kinofire", note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 422,
     /^only diagnosed, briefed, fixed are re-credited/);
   await refusedNothing(t, rc({ link: KINO_PLAN }), 422, /^a recredit names whom it credits/);
@@ -1577,11 +1579,6 @@ test("16 · skip and reason are the bug's alone: an idea or an event refuses the
   await refusedWith(advanceAtTown({ post: "errant/a-dance", class: "event", skip: "underway", reason: "r" }, WRIGHT, { now: NOW, roll: ROLL }), 422, /^skip is a bug's/);
 });
 
-test("16 · a skipped stage is never re-credited: it paid no one", async () => {
-  const t = await kinoBug("diagnosed");
-  await refusedNothing(t, advanceAtTown({ post: KINO_BUG, to: "diagnosed", recredit: true, credit: "kinofire", link: KINO_PLAN, note: NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
-    /never passed diagnosed diagnosed was skipped, and a skipped stage paid no one: there is nothing to re-credit/);
-});
 
 test("16 · grandfathered: a bug already past a gap before the rule advances on from where it stands, and its history is not back-filled", async () => {
   const { pen, posts } = setup();
@@ -2505,11 +2502,14 @@ test("19 · (a text pin, labelled: it reads the doc, not behaviour) the contract
   assert.doesNotMatch(bullets[0], NOT_CLAIMED);
 });
 
-// ── 20: Starforge's own Apps earn wright fixed ──────────────────────────────
+// ── 20: Starforge's own Apps earn wright fixed, and by a comment diagnosed or briefed ──────────────────────────────
 // LAW (POS-892, Wright 2026-11-05 15:41:22Z): "trusted Starforge Apps, identified by App ID (never a matching
-// login), may earn wright `fixed` only, never `diagnosed`, `briefed` or any resident's credit."
+// login), may earn wright `fixed` only, never `diagnosed`, `briefed` or any resident's credit." WIDENED (POS-867;
+// Darko 2026-11-07 12:12 EST, "One app rule, widened"; Wright 2026-11-07 17:16:15Z): all four Apps, by id and
+// login, crediting wright only, "and widened so an app's comment can earn diagnosed and briefed as well as an
+// app's PR earning fixed". Rivet's and Bevel's Apps are no longer founder accounts (POS-931/b's rows came out).
 const { judgeEarnedCredit } = await import("../src/bug-credit.mjs");
-const { HOUSE_APPS } = await import("../src/bugs.mjs");
+const { HOUSE_APPS, FOUNDER_ACCOUNTS } = await import("../src/bugs.mjs");
 const APP_REFUSES_CREDIT = (link, who, id) => `422 ${link} was written by one of Starforge's own Apps, GitHub account ${who} (id ${id}), and an App's work credits only wright`;
 
 test("20 · (the falsifier) a merged PR by each lead's App earns wright fixed, paid as a founder's own fix; the act is the ordinary one, and shipped proves its merge", async () => {
@@ -2556,15 +2556,78 @@ test("20 · an App's work earns only wright: at fixed, keemin and any resident r
     (e) => e.code === 422 && e.defect === "L was written by one of Starforge's own Apps, GitHub account rivet-starforge[bot] (id 340608403), and an App's work credits only wright");
 });
 
-test("20 · an App's work never earns diagnosed or briefed, for anyone, by a comment, an issue or a PR; a founder's comment still does, so the refusal is the App's", async () => {
-  const onlyFixed = (link, to) => new RegExp(`^${esc(link)} was written by one of Starforge's own Apps, GitHub account rivet-starforge\\[bot\\] \\(id 340608403\\), and an App's work earns only fixed, never ${to} `);
+test("20 · (the widened falsifier, POS-867 17:16Z) each App's issue comment earns wright diagnosed, and then briefed: the ordinary act, the comment its link", async () => {
+  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp"]) {
+    const t = await kinoBug();
+    const cause = comment(app);
+    const d = await adv({ to: "diagnosed", credit: "wright", link: cause });
+    assert.deepEqual([d.stage, d.credit, d.link], ["diagnosed", "wright", cause], `LAW (POS-867, 17:16Z): ${app}'s comment earns wright diagnosed`);
+    assert.deepEqual(JSON.parse(t.pen.rows().at(-1).payload).credit, "wright");
+    const brief = comment(app);
+    const b = await adv({ to: "briefed", grade: "light", credit: "wright", link: brief });
+    assert.deepEqual([b.stage, b.credit, b.link], ["briefed", "wright", brief], `LAW (POS-867, 17:16Z): ${app}'s comment earns wright briefed`);
+  }
+});
+
+test("20 · an App's comment credits wright only: keemin, the bug's own resident and a resident pinned to the App's bot user each refuse, at diagnosed and at briefed, and write nothing", async () => {
   const t = await kinoBug();
-  for (const link of [comment("rivetApp"), issue("rivetApp"), issue("rivetApp", { pr: true }), pull("rivetApp")])
+  for (const credit of ["keemin", "kinofire", "ada"]) {
+    const link = comment("bevelApp");
+    await refusedNothing(t, adv({ to: "diagnosed", credit, link }), 422,
+      new RegExp(`^${esc(link)} was written by one of Starforge's own Apps, GitHub account bevel-starforge\\[bot\\] \\(id 341174930\\), and an App's work credits only wright `));
+  }
+  const pinned = { registry: {}, pins: { ada: { id: 341174930 } } };
+  assert.throws(() => judgeEarnedCredit({ to: "briefed", credit: "ada", link: "L", earned: { kind: "comment" } }, { gh: { id: 341174930, login: "bevel-starforge[bot]", pull: false } }, pinned),
+    (e) => e.code === 422 && e.defect === "L was written by one of Starforge's own Apps, GitHub account bevel-starforge[bot] (id 341174930), and an App's work credits only wright");
+  await adv({ to: "diagnosed", credit: "wright", link: comment("bevelApp") });
+  await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "keemin", link: comment("bevelApp") }), 422, /and an App's work credits only wright /);
+});
+
+test("20 · only an App's comment is widened: its issue, and its PR (by the pulls or the issues API), still never earn diagnosed or briefed, for anyone; a founder's comment still does", async () => {
+  const notThis = (link) => new RegExp(`^${esc(link)} was written by one of Starforge's own Apps, GitHub account rivet-starforge\\[bot\\] \\(id 340608403\\), and an App's pull request earns only fixed, and its issue comment only diagnosed or briefed `);
+  const t = await kinoBug();
+  for (const link of [issue("rivetApp"), issue("rivetApp", { pr: true }), pull("rivetApp")])
     for (const credit of ["wright", "kinofire"])
-      await refusedNothing(t, adv({ to: "diagnosed", credit, link }), 422, onlyFixed(link, "diagnosed"));
+      await refusedNothing(t, adv({ to: "diagnosed", credit, link }), 422, notThis(link));
   assert.equal((await adv({ to: "diagnosed", credit: "wright", link: comment("wright") })).credit, "wright", "the control: the same stage, a founder's comment");
-  for (const link of [comment("rivetApp"), issue("rivetApp"), pull("rivetApp")])
-    await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link }), 422, onlyFixed(link, "briefed"));
+  for (const link of [issue("rivetApp"), pull("rivetApp")])
+    await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link }), 422, notThis(link));
+  // judged pure: a comment is the link's kind, never a PR; and fixed takes the App's PR, never a comment's author
+  const rivet = (pull) => ({ gh: { id: 340608403, login: "rivet-starforge[bot]", pull } });
+  const judged = (to, kind, pull) => {
+    try { judgeEarnedCredit({ to, credit: "wright", link: "L", earned: { kind } }, rivet(pull), { registry: {}, pins: {} }); return "ok"; }
+    catch (e) { return e.code; }
+  };
+  assert.deepEqual([judged("diagnosed", "comment", false), judged("briefed", "comment", false), judged("diagnosed", "comment", true),
+    judged("diagnosed", "issue", false), judged("briefed", "pull", true), judged("diagnosed", undefined, false), judged("fixed", "pull", true), judged("fixed", "comment", false)],
+  ["ok", "ok", 422, 422, 422, 422, "ok", 422]);
+});
+
+test("20 · identity at diagnosed and briefed is the bot user's id AND its login too: a matching login, a matching id, an App ID as an account id and Truey's App each comment as anyone else, for wright or keemin", async () => {
+  for (const to of ["diagnosed", "briefed"]) {
+    const t = await kinoBug(to === "briefed" ? "diagnosed" : "reproduced");
+    const at = to === "briefed" ? { grade: "light" } : {};
+    for (const who of ["appLoginOnly", "appIdOnly", "appIdNotBotId", "trueyApp"]) {
+      const { id, login } = GH_ACCOUNT[who];
+      const by = `GitHub account ${esc(login).replace(/[[\]]/g, "\\$&")} \\(id ${id}\\)`;
+      const link = comment(who);
+      await refusedNothing(t, adv({ to, ...at, credit: "wright", link }), 422,
+        new RegExp(`^only a founder's account or one of Starforge's own Apps earns wright ${to}, and ${esc(link)} was written by ${by}`));
+      await refusedNothing(t, adv({ to, ...at, credit: "keemin", link: comment(who) }), 422,
+        new RegExp(`^only a founder's account earns keemin a stage, and .* was written by ${by}`));
+    }
+  }
+});
+
+test("20 · no App is a founder account: the founders are the two people, so an App's id never reaches the founders' road (POS-931/b's two rows came out, POS-867)", () => {
+  assert.deepEqual(FOUNDER_ACCOUNTS, { 306351151: "wright-starforge", 67605380: "keeminlee" });
+  for (const a of HOUSE_APPS) assert.equal(Object.hasOwn(FOUNDER_ACCOUNTS, String(a.bot_id)), false, `${a.slug}'s bot user is a founder account`);
+  // the id alone, with any other login, is nobody's founder work: keemin and wright both refuse, at every stage
+  const idOnly = { gh: { id: 340608403, login: "not-rivet", pull: true } };
+  for (const to of ["diagnosed", "briefed", "fixed"])
+    for (const credit of ["wright", "keemin"])
+      assert.throws(() => judgeEarnedCredit({ to, credit, link: "L", earned: { kind: "pull" } }, idOnly, { registry: {}, pins: {} }),
+        (e) => e.code === 422 && /^only a founder's account /.test(e.defect), `${to} ${credit}`);
 });
 
 test("20 · identity is the bot user's id AND its login: a matching login, a matching id, an App ID standing as an account id, and Truey's App each refuse as anyone else's work", async () => {
@@ -2625,4 +2688,133 @@ test("20 · (the live record: skipped unless POSTMARK_OFFICE_LIVE_GITHUB is set;
     const bot = await read(`/users/${a.slug}%5Bbot%5D`);
     assert.deepEqual([bot.id, bot.login, bot.type], [a.bot_id, `${a.slug}[bot]`, "Bot"]);
   }
+});
+
+// ── 18 · a stage skipped by mistake, credited; the leads' apps (POS-931) ──
+// (POS-931's 18, beside POS-912's 18 above: both landed as 18, and other files cite this one as § 18)
+//
+// RULED, Darko 2026-11-06 21:32 EST, in the picker: /a "Extend the door", /b
+// "Add their apps"; /b is now the one App rule (group 20; POS-867, Wright 2026-11-07 17:16:15Z). Wright skipped Moose's diagnosed though Moose had named the
+// cause, and the door could not undo a skip. Now a recredit credits a stage the
+// record shows SKIPPED: the skip stays with its reason, the credit sits beside
+// it, and the reviewed pass pays the stage's amount with nothing to burn
+// (tools/bug-stage-plan.mjs; the town's --stage-recredit --skipped).
+
+const SKIP_NOTE = "the cause was in the reporter's letter; the skip was a hand's mistake";
+const rcSkipped = (fields, key = WRIGHT) => advanceAtTown({ post: KINO_BUG, recredit: true, note: SKIP_NOTE, ...fields }, key, { now: NOW, roll: ROLL });
+
+test("18 · a skipped diagnosed, credited to the cause's author: its own act, 5 owed with nothing to burn; the skip stays on the history with the credit beside it; the Hall counts it once paid", async () => {
+  const t = await kinoBug("diagnosed");   // confirmed; reproduced and diagnosed skipped
+  resetChainMemo();
+  t.ledger.lines = [];
+  const before = JSON.stringify(t.posts.get(KINO_BUG));
+  const r = await rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN });
+  assert.deepEqual([r.stage, r.recredit, r.skipped, r.was, r.credit, r.stamps, r.link], ["diagnosed", true, true, null, "kinofire", 5, KINO_PLAN]);
+  assert.match(r.receipt, /^re-credited: kinofire\/false-sweep-warning's skipped diagnosed to kinofire by wright's hand; .*The skip and its reason stay on the bug's history, with this credit beside them\. .*it pays kinofire 5 stamps \(post:kinofire\/false-sweep-warning\/diagnosed-recredit\), with nothing to burn; this act moves no stamps/);
+  const act = t.pen.rows().at(-1);
+  assert.deepEqual([act.class, act.action, act.actor, act.object], ["bug", "recredit", "wright", KINO_BUG]);
+  assert.deepEqual(JSON.parse(act.payload), { post: KINO_BUG, to: "diagnosed", was: null, credit: "kinofire", link: KINO_PLAN, note: SKIP_NOTE, paid: 5, hand: "wright", skipped: true });
+  assert.equal(JSON.stringify(t.posts.get(KINO_BUG)), before, "a recredit moved the stage or changed the post's row");
+  const out = await dryRun(t.pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+  const diagnosed = async () => (await postsAtOffice({ class: "bug", post: KINO_BUG }, { now: NOW, roll: ROLL })).post.history
+    .filter((h) => h.stage === "diagnosed").map(({ at, ...h }) => h);
+  // before the pass: the skip stands with its reason and says where the credit went; the credit is not paid yet
+  assert.deepEqual(await diagnosed(), [
+    { ...SKIPPED("diagnosed"), recredited_to: "kinofire" },
+    { stage: "diagnosed", state: "diagnosed", recredit: true, hand: "wright", credit: "kinofire", was: null, link: KINO_PLAN, note: SKIP_NOTE, stamps_paid: null },
+  ]);
+  // the pass has written its one line: the credit is paid, and the Hall counts it
+  resetChainMemo();
+  t.ledger.lines = [`- 2026-11-07 · MINT → kinofire · 5 · for: post:${KINO_BUG}/diagnosed-recredit · by: the-town`];
+  assert.equal((await diagnosed())[1].stamps_paid, 5);
+  const { catchers } = await postsAtOffice({ class: "bug" }, { now: NOW, roll: ROLL });
+  assert.deepEqual(catchers.find((c) => c.handle === "kinofire"), { handle: "kinofire", stamps: 5, bugs: 1 });
+});
+
+// The stub pen runs no row locks, so a race at the door is shown as 14 § 3 shows it: the lock's place in
+// the write. Money is once-only below it too: the pass plans one line per stage, and the town's verb and
+// verifier refuse a second (tools/bug-stage-plan.test.mjs § 9; the town's stamp-recredit.test.mjs § 5).
+test("18 · once per stage: the row lock comes before the acts read, and a second credit of the skipped stage is refused", async () => {
+  const t = await kinoBug("diagnosed");
+  const from = t.pen.asked().length;
+  await rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN });
+  const asked = t.pen.asked().slice(from);
+  const lock = asked.findIndex((q) => /^SELECT id FROM posts WHERE id = \$1 AND class = \$2 FOR UPDATE$/i.test(q));
+  const actsRead = asked.findIndex((q, i) => i > lock && /FROM acts WHERE class = \$1 AND object = ANY\(\$2\)/i.test(q));
+  const insert = asked.findIndex((q) => /^INSERT INTO acts/i.test(q));
+  assert.ok(lock >= 0 && actsRead > lock && insert > actsRead, `the lock (${lock}) must come before the acts read (${actsRead}) and the insert (${insert})`);
+  await refusedNothing(t, rcSkipped({ to: "diagnosed", credit: "wayward-archivist", link: KINO_PLAN }), 409, /'s diagnosed was already re-credited, to kinofire/);
+});
+
+test("18 · the hands and the evidence: the Bug Catcher's, a resident's and a stranger's hand are refused; a credit the linked work's author can't earn, a founder's PR, no link and no note are refused; each writes nothing", async () => {
+  const t = await kinoBug("diagnosed");
+  const ok = { to: "diagnosed", credit: "kinofire", link: KINO_PLAN };
+  await refusedNothing(t, rcSkipped(ok, BUGCATCHER), 403, /^only wright and keemin re-credit a stage/);
+  await refusedNothing(t, rcSkipped(ok, KINO), 403, /only the town's hands re-credit a bug's stage/);
+  await refusedNothing(t, rcSkipped(ok, ERRANT), 403, /only the town's hands re-credit a bug's stage/);
+  await refusedNothing(t, rcSkipped({ ...ok, credit: "finn" }), 422,
+    /^letter "kinofire-2026-10-12-to-wright-the-sweep-plan" is from kinofire, of hh:house-of-many-doors, and finn stands in solo:finn/);
+  await refusedNothing(t, rcSkipped({ ...ok, link: comment("errant") }), 422, /of hh:the-harbor, and kinofire stands in hh:house-of-many-doors/);
+  await refusedNothing(t, rcSkipped({ ...ok, link: pull("wright") }), 422, /is a founder's pull request \(GitHub account wright-starforge \(id 306351151\)\), and a founder's pull request never earns diagnosed/);
+  await refusedNothing(t, rcSkipped({ ...ok, link: undefined }), 422, /^diagnosed needs a link to the work that earned it/);
+  await refusedNothing(t, rcSkipped({ ...ok, note: "  " }), 422, /^a recredit says why/);
+});
+
+test("18 · what a skipped stage needs: briefed names its grade (light 10, heavy 5), diagnosed takes none; a skipped fixed is refused and says why; a chain showing the stage paid is refused", async () => {
+  const t = await kinoBug("briefed");   // reproduced, diagnosed and briefed skipped
+  const brief = { to: "briefed", credit: "kinofire", link: KINO_PLAN };
+  await refusedNothing(t, rcSkipped(brief), 422, /^briefed on "kinofire\/false-sweep-warning" was skipped, so its recredit names the grade/);
+  await refusedNothing(t, rcSkipped({ ...brief, grade: "medium" }), 422, /^grade is light or heavy/);
+  await refusedNothing(t, rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN, grade: "light" }), 422, /^grade is a skipped briefed's/);
+  const b = await rcSkipped({ ...brief, grade: "heavy" });
+  assert.deepEqual([b.stage, b.skipped, b.stamps, b.grade], ["briefed", true, 5, "heavy"]);
+  assert.deepEqual(JSON.parse(t.pen.rows().at(-1).payload), { post: KINO_BUG, to: "briefed", was: null, credit: "kinofire", link: KINO_PLAN, note: SKIP_NOTE, paid: 5, hand: "wright", skipped: true, grade: "heavy" });
+  assert.equal((await rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN })).stamps, 5, "each skipped stage is its own, once");
+
+  const f = await kinoBug("fixed");
+  await refusedNothing(f, rcSkipped({ to: "fixed", credit: "kinofire", link: pull("kinofire") }), 422,
+    /^fixed on "kinofire\/false-sweep-warning" was skipped, and a skipped fixed is not re-credited only a skipped diagnosed or briefed is: fixed carries the size, the critter its fixer names on the post, and the merge guard/);
+
+  const c = await kinoBug("diagnosed");
+  resetChainMemo();
+  c.ledger.lines = [stageLine("ada", 5, KINO_BUG, "diagnosed")];
+  await refusedNothing(c, rcSkipped({ to: "diagnosed", credit: "kinofire", link: KINO_PLAN }), 409,
+    /'s diagnosed is recorded skipped, and the chain shows it paid 5 a person reads both before anything is paid/);
+});
+
+test("18 · no evidenced skip, no credit: a stage with neither an advance nor a skip on the record (a gap from before every rung was recorded) is refused", async () => {
+  const { pen, posts } = setup();
+  await postAtTown(BUG, ERRANT, { now: NOW, roll: ROLL });
+  const brief = comment("finn");
+  const legacy = { post: ID, from: "reported", to: "briefed", credit: "finn", fields: { grade: "light", links: { briefed: brief } }, hand: "wright" };
+  const act = pen.seedAct({ class: "bug", action: "advance", actor: "wright", object: ID, payload: JSON.stringify(legacy), at: new Date(NOW).toISOString() });
+  posts.set(ID, { ...posts.get(ID), state: "briefed", fields: { links: { briefed: brief } }, last_act: act });
+  const n = pen.rows().length;
+  await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", recredit: true, credit: "finn", link: comment("finn"), note: SKIP_NOTE }, WRIGHT, { now: NOW, roll: ROLL }), 409,
+    /^"errant\/the-door-sticks" never passed diagnosed diagnosed has neither an advance nor a skip on the record/);
+  assert.equal(pen.rows().length, n, "a refused credit wrote an act");
+});
+
+test("18 · (POS-931/b, now the one App rule: POS-867) the leads' apps: their merged PR earns fixed for wright, never keemin or a resident's credit, and their PR never earns diagnosed or briefed for anyone", async () => {
+  const fix = { to: "fixed", size: "S", critter: "Sweepling" };
+  for (const app of ["rivetApp", "bevelApp"]) {
+    const who = `GitHub account ${GH_ACCOUNT[app].login.replace(/[[\]]/g, "\\$&")} \\(id ${GH_ACCOUNT[app].id}\\)`;
+    const t = await kinoBug("briefed");
+    for (const credit of ["kinofire", "keemin"])
+      await refusedNothing(t, adv({ ...fix, credit, link: pull(app) }), 422,
+        new RegExp(`was written by one of Starforge's own Apps, ${who}, and an App's work credits only wright`));
+    assert.equal((await adv({ ...fix, credit: "wright", link: pull(app) })).credit, "wright", `${app}'s merged PR earns fixed for wright`);
+
+    const d = await kinoBug("reproduced");
+    for (const credit of ["wright", "kinofire"])
+      await refusedNothing(d, adv({ to: "diagnosed", credit, link: pull(app) }), 422,
+        new RegExp(`was written by one of Starforge's own Apps, ${who}, and an App's pull request earns only fixed`));
+    const b = await kinoBug("diagnosed");
+    await refusedNothing(b, adv({ to: "briefed", grade: "light", credit: "wright", link: pull(app) }), 422,
+      new RegExp(`was written by one of Starforge's own Apps, ${who}, and an App's pull request earns only fixed`));
+  }
+  // nothing else moved: a resident's account still earns wright nothing
+  const t = await kinoBug("briefed");
+  await refusedNothing(t, adv({ ...fix, credit: "wright", link: pull("kinofire") }), 422, /^only a founder's account or one of Starforge's own Apps earns wright fixed/);
 });

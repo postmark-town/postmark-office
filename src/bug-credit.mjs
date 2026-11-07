@@ -15,8 +15,10 @@
 //                            of the same household.
 //   the founders             wright-starforge and keeminlee may credit only wright
 //                            or keemin, and only they may credit them.
-//   Starforge's Apps         the leads' Apps (bugs.mjs § HOUSE_APPS) earn wright
-//                            fixed, and nothing else for anyone (POS-867, POS-892).
+//   Starforge's Apps         the four Apps (bugs.mjs § HOUSE_APPS), by id AND
+//                            login, credit wright only: an App's pull request
+//                            earns fixed, and its issue comment diagnosed or
+//                            briefed; nothing else (POS-867, POS-892, POS-931).
 //
 // NEVER PASS ON DOUBT. GitHub unreachable, an author bound to no house, a
 // letter the store does not hold: each refuses, naming what could not be
@@ -355,16 +357,18 @@ export function householdsOfAccount(id, registry, pins) {
  * `{ gh: { id, login } }` or `{ letter: { id, from } }`; `registry` and `pins`
  * are the store's, folded. Throws the refusal, or returns nothing.
  */
-export function judgeEarnedCredit({ to, credit, link }, author, { registry, pins }) {
+export function judgeEarnedCredit({ to, credit, link, earned }, author, { registry, pins }) {
   const teach = EARNED_BY[to];
   const creditFounder = FOUNDER_HANDLES.includes(credit);
   if (author?.gh) {
     const { id, login } = author.gh;
     const who = `GitHub account ${login || "?"} (id ${id})`;
-    // Starforge's own Apps (bugs.mjs § HOUSE_APPS): their work earns wright fixed, and nothing else for anyone.
+    // Starforge's own Apps (bugs.mjs § HOUSE_APPS): an App's PR earns wright fixed, its issue comment wright
+    // diagnosed or briefed, and nothing else for anyone (POS-867; Wright, 2026-11-07 17:16:15Z).
     if (HOUSE_APPS.some((a) => a.bot_id === id && `${a.slug}[bot]` === login)) {
-      if (to !== STATE_FIXED)
-        throw refuse(422, `${link} was written by one of Starforge's own Apps, ${who}, and an App's work earns only fixed, never ${to}`, teach, { field: "link" });
+      const comment = earned?.kind === "comment" && !author.gh.pull;
+      if (to === STATE_FIXED ? !author.gh.pull : !comment)
+        throw refuse(422, `${link} was written by one of Starforge's own Apps, ${who}, and an App's pull request earns only fixed, and its issue comment only diagnosed or briefed`, teach, { field: "link" });
       if (credit !== HOUSE_APP_CREDIT)
         throw refuse(422, `${link} was written by one of Starforge's own Apps, ${who}, and an App's work credits only ${HOUSE_APP_CREDIT}`, teach, { field: "credit" });
       return;
@@ -377,8 +381,8 @@ export function judgeEarnedCredit({ to, credit, link }, author, { registry, pins
     if (authorFounder && !creditFounder)
       throw refuse(422, `${link} was written by a founder's account, ${who}, and a founder's work credits only ${FOUNDER_HANDLES.join(" or ")}`, teach, { field: "credit" });
     if (!authorFounder && creditFounder)
-      throw refuse(422, to === STATE_FIXED && credit === HOUSE_APP_CREDIT
-        ? `only a founder's account or one of Starforge's own Apps earns ${credit} fixed, and ${link} was written by ${who}`
+      throw refuse(422, credit === HOUSE_APP_CREDIT
+        ? `only a founder's account or one of Starforge's own Apps earns ${credit} ${to}, and ${link} was written by ${who}`
         : `only a founder's account earns ${credit} a stage, and ${link} was written by ${who}`, teach, { field: "credit" });
     if (authorFounder) return;
     const bound = householdsOfAccount(id, registry, pins);
