@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // pos-943-finch-set-down.mjs — set finch down at the Snug Jetty, the deposit his exit never made (POS-943).
 //
-//   node tools/pos-943-finch-set-down.mjs --boarded <act id> [--json]                              a DRY RUN (the default)
-//   node tools/pos-943-finch-set-down.mjs --boarded <act id> --apply --expect-last <act id> [--json]
+//   node tools/pos-943-finch-set-down.mjs --boarded <act id> [--expect-newest <act id>] [--json]          a DRY RUN (the default)
+//   node tools/pos-943-finch-set-down.mjs --boarded <act id> --expect-newest <act id> --apply --expect-last <act id> [--json]
 //
 // A ONE-OFF, FOR EXACTLY ONE AUTHORISED HAND REPAIR (Wright, 2026-11-07 21:41Z, on POS-943; Rivet's plan,
 // 16:41 EST). finch entered the-town/the-post-office through current-the-reader/the-snug-jetty, declared no
@@ -29,12 +29,16 @@
 //     ride (which would owe its own destination) and no land stands between the two;
 //   · ALREADY REPAIRED: any land of finch's after that exit (this repair, or any other set-down) refuses, so a
 //     second --apply is a no-op that says so;
-//   · nothing has moved him into anything: no enter or exit of finch's after that exit, and his occupancy now
-//     (DEC-5's read) is empty;
+//   · nothing has moved him into anything: no enter or exit of finch's after that exit; and each thing his
+//     occupancy now (DEC-5's read) holds him within must contain the landing point, by the clone's own
+//     containment (pointWithinMark: the mark's polygon, else its extent). Unknown or outside refuses; no exit is
+//     made (Wright, 22:11Z, "(b), narrowed": finch is within spar/the-doubled-coast, and the jetty lies in it);
 //   · the point: the deposit rule's own point for the Snug Jetty (world-ride § depositPointFor) is the
 //     authorised (-415, 4905);
 //   · STALE: --apply needs --expect-last, the id of finch's newest movement act (walk, land, enter, exit, ride)
-//     as the dry run printed it. Any later move invalidates the reviewed dry run: run it again.
+//     as the dry run printed it. Any later move invalidates the reviewed dry run: run it again;
+//   · NEWEST: --expect-newest names finch's newest act of ANY kind (Wright's go, 22:11Z, condition 1: "finds
+//     finch's newest act is still 47026"). A dry run given it refuses unless it still is, and --apply needs it.
 // On --apply the act-reading guards run again INSIDE the pen's own transaction (penWrite's `guard`), under an
 // advisory lock on this repair, so two applies can't both write.
 //
@@ -68,7 +72,7 @@ const idOf = (a) => Number(a.id);
  * rows, which is POS-943's class question, not this one's). Returns `{ ok: true, enter, exit, between, after,
  * newestMove, household }`, or `{ ok: false, why, already? }`.
  */
-export function judgeRepair(acts, { boarded, expectLast = null } = {}) {
+export function judgeRepair(acts, { boarded, expectLast = null, expectNewest = null } = {}) {
   const rows = (acts ?? []).map((a) => ({ ...a, id: idOf(a), payload: payloadOf(a) })).sort((a, b) => a.id - b.id);
   const enter = rows.find((a) => a.id === Number(boarded)) ?? null;
   if (!enter) return { ok: false, why: `act ${boarded} is not one of ${REPAIR.actor}'s acts` };
@@ -102,7 +106,11 @@ export function judgeRepair(acts, { boarded, expectLast = null } = {}) {
   const newestMove = rows.filter((a) => MOVE_ACTIONS.includes(a.action)).at(-1) ?? null;
   if (expectLast != null && Number(expectLast) !== newestMove?.id)
     return { ok: false, why: `STALE: ${REPAIR.actor}'s newest movement act is ${newestMove?.id ?? "none"}, not the ${expectLast} the reviewed dry run named: run the dry run again` };
-  return { ok: true, enter, exit, between, after, newestMove, household: exit.household ?? enter.household ?? null };
+  // WRIGHT'S CONDITION (1), 22:11Z: the newest act of ANY kind is the one his go named (47026, a say)
+  const newest = rows.at(-1) ?? null;
+  if (expectNewest != null && Number(expectNewest) !== newest?.id)
+    return { ok: false, why: `STALE: ${REPAIR.actor}'s newest act is ${newest?.id ?? "none"}${newest ? ` (${newest.action})` : ""}, not the ${expectNewest} Wright's go named: stop and post it` };
+  return { ok: true, enter, exit, between, after, newestMove, newest, household: exit.household ?? enter.household ?? null };
 }
 
 /** The point the deposit rule gives the stop, against the authorised one. PURE. */
@@ -114,6 +122,27 @@ export function judgePoint(point) {
   return { ok: true };
 }
 
+/**
+ * What finch is within now, against the landing point (Wright, 22:11Z: "(b), narrowed. The guard accepts a
+ * 'within' when the landing point lies inside that same thing. No exits, and nothing else loosened"). PURE.
+ * `within` is DEC-5's occupancy read; `marksById` the world's marks; `pointWithinMark` the clone's own
+ * containment (a mark's polygon when it has one, else its extent). Each held thing must be a mark this world
+ * holds and must contain the point, by an answer of true: unknown or outside refuses.
+ */
+export function judgeWithin(within, marksById, pointWithinMark) {
+  const seen = [];
+  for (const id of within ?? []) {
+    const m = marksById.get(id);
+    let inside = null;
+    try { inside = m ? pointWithinMark(REPAIR.at, m) : null; } catch { inside = null; }
+    seen.push({ id, inside: inside === true });
+    if (!m) return { ok: false, seen, why: `${REPAIR.actor} is within ${id} now, which this world holds no mark for: whether the landing lies inside it is unknown` };
+    if (inside !== true)
+      return { ok: false, seen, why: `${REPAIR.actor} is within ${id} now, and the landing point (${REPAIR.at.x}, ${REPAIR.at.y}) is ${inside === false ? "outside it" : "not provably inside it"}: a landing there would need exits this repair doesn't make` };
+  }
+  return { ok: true, seen };
+}
+
 /** The land act the repair writes, as landAt builds one but with the town's hand. PURE over its inputs. */
 export function repairEntry(landEntry, { crossing, writtenAt, household }) {
   return landEntry({ crossing, who: REPAIR.actor, at: REPAIR.at, via: REPAIR.stop, why: REPAIR.why, household, writtenAt, declaredBy: REPAIR.declaredBy });
@@ -123,10 +152,10 @@ export function repairEntry(landEntry, { crossing, writtenAt, household }) {
  * The pen's in-transaction guard: the lock, then finch's acts read on the pen's own client and judged again.
  * A refusal carries `defect`, so penWrite rolls back and hands it on as the guard's answer.
  */
-export const repairGuard = ({ boarded, expectLast }) => async (client) => {
+export const repairGuard = ({ boarded, expectLast, expectNewest = null }) => async (client) => {
   await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [REPAIR_LOCK]);
   const { rows } = await client.query(ACTS_SQL, [REPAIR.actor]);
-  const j = judgeRepair(rows, { boarded, expectLast });
+  const j = judgeRepair(rows, { boarded, expectLast, expectNewest });
   if (!j.ok) throw Object.assign(new Error(j.why), { code: 409, defect: j.why, already: j.already === true });
 };
 
@@ -139,14 +168,18 @@ if (isMain) {
   const valueOf = (flag) => { const k = argv.indexOf(flag); return k === -1 ? null : argv[k + 1] ?? ""; };
   const expectLast = valueOf("--expect-last");
   const boarded = valueOf("--boarded");
+  const expectNewest = valueOf("--expect-newest");
   const ID = /^[1-9][0-9]*$/;
-  const known = new Set(["--json", "--apply", "--expect-last", "--boarded"]);
-  const stray = argv.filter((a, k) => !known.has(a) && argv[k - 1] !== "--expect-last" && argv[k - 1] !== "--boarded");
-  if (stray.length || !ID.test(String(boarded ?? "")) || (expectLast != null && !ID.test(expectLast)) || (apply && expectLast == null)) {
-    console.error("usage: node tools/pos-943-finch-set-down.mjs --boarded <act id> [--json]   (a dry run)\n" +
-      "       node tools/pos-943-finch-set-down.mjs --boarded <act id> --apply --expect-last <act id> [--json]\n" +
+  const VALUED = ["--expect-last", "--boarded", "--expect-newest"];
+  const known = new Set(["--json", "--apply", ...VALUED]);
+  const stray = argv.filter((a, k) => !known.has(a) && !VALUED.includes(argv[k - 1]));
+  if (stray.length || !ID.test(String(boarded ?? "")) || [expectLast, expectNewest].some((v) => v != null && !ID.test(v))
+    || (apply && (expectLast == null || expectNewest == null))) {
+    console.error("usage: node tools/pos-943-finch-set-down.mjs --boarded <act id> [--expect-newest <act id>] [--json]   (a dry run)\n" +
+      "       node tools/pos-943-finch-set-down.mjs --boarded <act id> --expect-newest <act id> --apply --expect-last <act id> [--json]\n" +
       "--boarded is finch's boarding act (his enter of the Post Office via the Snug Jetty), and is always needed;\n" +
-      "--apply needs --expect-last: finch's newest movement act id, as the reviewed dry run printed it");
+      "--expect-newest is finch's newest act of any kind, which the run refuses unless it still is;\n" +
+      "--apply needs --expect-last: finch's newest movement act id, as the reviewed dry run printed it, and --expect-newest too");
     process.exit(2);
   }
   const out = (o, lines) => { console.log(json ? JSON.stringify(o) : lines.join("\n")); };
@@ -159,7 +192,7 @@ if (isMain) {
   catch (e) { console.error(`cannot read the store: ${String(e?.message ?? e).split("\n")[0]}`); process.exit(2); }
   if (!Array.isArray(acts)) { console.error("no store configured (WORLD2_PG / WORLD2_PG_URL): this runs with the office's own environment"); process.exit(2); }
 
-  const j = judgeRepair(acts, { boarded, expectLast });
+  const j = judgeRepair(acts, { boarded, expectLast, expectNewest });
   if (!j.ok) refuse(j.why, j.already ? { already: true } : {});
 
   // the world's reads: the deposit point, and that nothing holds him now
@@ -168,7 +201,7 @@ if (isMain) {
   const { crossingDeps } = await import("../src/world-apex.mjs");
   const { vesselServiceFrom } = await import("../src/world-movement.mjs");
   const deps = crossingDeps();
-  let point, within;
+  let point, within, law;
   try {
     const { service } = await vesselServiceFrom(await deps.world(), { repo: w.WORLD_CLONE });
     if (vesselIdOf(service) !== REPAIR.vessel) refuse(`the Post Office's vessel reads as ${vesselIdOf(service) ?? "nothing"}, not ${REPAIR.vessel}`);
@@ -176,12 +209,14 @@ if (isMain) {
   } catch (e) { refuse(`the Post Office's service could not be read, so the deposit point is unproven: ${String(e?.message ?? e).split("\n")[0]}`); }
   const p = judgePoint(point);
   if (!p.ok) refuse(p.why);
+  let held;
   try {
-    const law = await crossingLaw(w.WORLD_CLONE);
-    if (!law?.thresholds) throw new Error("the clone carries no enter/exit law");
+    law = await crossingLaw(w.WORLD_CLONE);
+    if (!law?.thresholds || typeof law.verbs?.pointWithinMark !== "function") throw new Error("the clone carries no enter/exit law or containment");
     within = await w.occupiedNowBy(REPAIR.actor, law.thresholds, deps);
+    held = within.length ? judgeWithin(within, new Map(((await deps.world())?.marks ?? []).map((m) => [m.id, m])), law.verbs.pointWithinMark) : { ok: true, seen: [] };
   } catch (e) { refuse(`${REPAIR.actor}'s occupancy could not be read: ${String(e?.message ?? e).split("\n")[0]}`); }
-  if (within.length) refuse(`${REPAIR.actor} is within ${within.join(", ")} now: a landing here would need exits this repair doesn't make`);
+  if (!held.ok) refuse(held.why);
 
   const fmt = (a) => a ? `act ${a.id} · ${new Date(a.at).toISOString()} · ${a.action} ${a.object ?? ""}`.trim() : "none";
   const nm = j.newestMove;
@@ -191,7 +226,8 @@ if (isMain) {
     between: j.between.map(fmt),
     since_exit: j.after.map(fmt),
     newest_move: nm ? { ...nm, payload: nm.payload } : null,
-    within: [], deposit_point: REPAIR.at,
+    newest_act: j.newest ? { id: j.newest.id, action: j.newest.action, at: j.newest.at } : null,
+    within: held.seen, deposit_point: REPAIR.at,
   };
   const { importEngineAt } = await import("../src/world-branches.mjs");
   const { fractionalCrossing } = await importEngineAt(w.WORLD_CLONE, "walk.mjs");
@@ -205,7 +241,8 @@ if (isMain) {
     `  exited:    ${seen.exit} (no set_down_at)`,
     `  since:     ${seen.since_exit.length ? seen.since_exit.join("\n             ") : "nothing"}`,
     `  newest movement act: ${nm ? `${nm.id} (${nm.action}${nm.payload?.toward ? `, toward (${nm.payload.toward.x}, ${nm.payload.toward.y})` : ""})` : "none"}`,
-    `  within now: nothing`,
+    `  newest act: ${j.newest ? `${j.newest.id} (${j.newest.action}, ${new Date(j.newest.at).toISOString()})` : "none"}${expectNewest != null ? ` — the ${expectNewest} expected` : ""}`,
+    `  within now: ${held.seen.length ? held.seen.map((s) => `${s.id} (the landing point lies inside it)`).join(", ") : "nothing"}`,
     `  the deposit rule's point for ${REPAIR.stop}: (${REPAIR.at.x}, ${REPAIR.at.y})`,
   ];
 
@@ -218,7 +255,7 @@ if (isMain) {
         `  payload ${JSON.stringify(entry.payload)}`,
         "  (the crossing, the instant and the witness stamp are taken again at --apply)",
         "",
-        `The guards pass. To write it, after Wright's word: --boarded ${boarded} --apply --expect-last ${nm?.id}`]);
+        `The guards pass. To write it, on Wright's word: --boarded ${boarded} --expect-newest ${j.newest?.id} --apply --expect-last ${nm?.id}`]);
     process.exit(0);
   }
 
@@ -226,7 +263,7 @@ if (isMain) {
   const { laneFlipped } = await import("../src/world2-pen.mjs");
   const { at: stampAt, witnesses } = await w.witnessStampAt(REPAIR.actor, REPAIR.at);
   entry.at = stampAt; entry.witnesses = witnesses;
-  const guard = repairGuard({ boarded, expectLast });
+  const guard = repairGuard({ boarded, expectLast, expectNewest });
   let row;
   try { row = laneFlipped("walk") ? await appendActFlipped(null, entry, { guard }) : await appendJournal(null, entry, { guard }); }
   catch (e) {

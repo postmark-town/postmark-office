@@ -21,7 +21,9 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { REPAIR, MOVE_ACTIONS, ACTS_SQL, judgeRepair, judgePoint, repairEntry, repairGuard } from "../tools/pos-943-finch-set-down.mjs";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { REPAIR, MOVE_ACTIONS, ACTS_SQL, judgeRepair, judgePoint, judgeWithin, repairEntry, repairGuard } from "../tools/pos-943-finch-set-down.mjs";
 import { landEntry } from "../src/world.mjs";
 import { CLASS_MOVE } from "../src/world-journal.mjs";
 import { DEPARTURE_ACTIONS, departureRecordOf } from "../world2/tools/live-reads.mjs";
@@ -125,6 +127,46 @@ test("STALE: --expect-last must be finch's newest movement act; a later walk inv
   assert.match(judge(walked, { expectLast: 46979 }).why, /^STALE: finch's newest movement act is 47040, not the 46979 the reviewed dry run named/);
 });
 
+test("NEWEST (Wright's go, condition 1): --expect-newest is finch's newest act of any kind, so a later say refuses too", () => {
+  const ok = judge(stranded(), { expectLast: 46979, expectNewest: 47026 });
+  assert.equal(ok.ok, true, ok.why);
+  assert.deepEqual([ok.newest.id, ok.newest.action], [47026, "say"]);
+  const spoke = [...stranded(), row(47031, "2026-11-07T22:12:00Z", "say", null, { text: "still here" })];
+  assert.equal(judge(spoke, { expectLast: 46979 }).ok, true, "the movement guard alone lets a say through");
+  assert.match(judge(spoke, { expectLast: 46979, expectNewest: 47026 }).why, /^STALE: finch's newest act is 47031 \(say\), not the 47026 Wright's go named: stop and post it/);
+});
+
+// ── what he is within (Wright, 22:11Z: "(b), narrowed") ──────────────────────
+const COAST = "spar/the-doubled-coast";
+const marks = new Map([
+  [COAST, { id: COAST, at: { x: -400, y: 4923 }, extent: { w: 1790, h: 1688 } }],
+  ["current-the-reader/the-snug-harbour", { id: "current-the-reader/the-snug-harbour", at: { x: -350, y: 4978 }, extent: { w: 30, h: 22 } }],
+]);
+const inRect = (p, m) => (m.extent ? Math.abs(p.x - m.at.x) <= m.extent.w / 2 && Math.abs(p.y - m.at.y) <= m.extent.h / 2 : null);
+
+test("within: each thing he is within must contain the landing point, by the containment answering true; outside, unknown or a refusing read refuses", () => {
+  assert.deepEqual(judgeWithin([], marks, inRect), { ok: true, seen: [] });
+  assert.deepEqual(judgeWithin([COAST], marks, inRect), { ok: true, seen: [{ id: COAST, inside: true }] }, "the Doubled Coast holds the jetty");
+  const outside = judgeWithin([COAST, "current-the-reader/the-snug-harbour"], marks, inRect);
+  assert.match(outside.why, /^finch is within current-the-reader\/the-snug-harbour now, and the landing point \(-415, 4905\) is outside it: a landing there would need exits/);
+  assert.match(judgeWithin(["spar/nowhere"], marks, inRect).why, /within spar\/nowhere now, which this world holds no mark for/);
+  assert.match(judgeWithin([COAST], marks, () => null).why, /is not provably inside it/);
+  assert.match(judgeWithin([COAST], marks, () => "yes").why, /is not provably inside it/, "only true is inside");
+  assert.match(judgeWithin([COAST], marks, () => { throw new Error("raster"); }).why, /is not provably inside it/);
+});
+
+test("within, on the pinned world clone with its own containment: spar/the-doubled-coast holds (-415, 4905), the Snug Harbour does not", async (t) => {
+  let ws, verbs;
+  try {
+    ws = JSON.parse(readFileSync(join(ROOT, "world-clone", "WORLD", "world-state.json"), "utf8"));
+    verbs = await import(pathToFileURL(join(ROOT, "world-clone", "tools", "world-verbs.mjs")).href);
+  } catch { t.skip("no world clone in this tree"); return; }
+  const byId = new Map((ws.marks ?? []).map((m) => [m.id, m]));
+  assert.ok(byId.has(COAST), "the clone holds the Doubled Coast under the id occupancy names");
+  assert.deepEqual(judgeWithin([COAST], byId, verbs.pointWithinMark), { ok: true, seen: [{ id: COAST, inside: true }] });
+  assert.equal(judgeWithin(["current-the-reader/the-snug-harbour"], byId, verbs.pointWithinMark).ok, false);
+});
+
 test("the point is the deposit rule's own for the jetty, and only the authorised one passes", () => {
   assert.deepEqual(judgePoint({ x: -415, y: 4905 }), { ok: true });
   assert.match(judgePoint({ x: -415, y: 4906 }).why, /at \(-415, 4906\), not the authorised \(-415, 4905\)/);
@@ -144,10 +186,11 @@ test("the act: one land, finch's, the town's hand, at from and toward (-415, 490
 test("the CLI: --boarded is always needed, --apply never runs without --expect-last, and a stray argument is refused, before any store is read", () => {
   const env = { ...process.env, WORLD2_PG: "", WORLD2_PG_URL: "" };
   for (const args of [[], ["--boarded"], ["--boarded", "x"], ["--boarded", "46971", "--apply"], ["--boarded", "46971", "--apply", "--expect-last"],
-    ["--boarded", "46971", "--apply", "--expect-last", "x"], ["--boarded", "46971", "--force"], ["--apply"]]) {
+    ["--boarded", "46971", "--apply", "--expect-last", "x"], ["--boarded", "46971", "--force"], ["--apply"],
+    ["--boarded", "46971", "--apply", "--expect-last", "46979"], ["--boarded", "46971", "--expect-newest", "x"]]) {
     const r = spawnSync(process.execPath, [TOOL, ...args], { encoding: "utf8", env });
     assert.equal(r.status, 2, `${args.join(" ")}: ${r.stderr}`);
-    assert.match(r.stderr, /--boarded is finch's boarding act .*\n--apply needs --expect-last/);
+    assert.match(r.stderr, /--boarded is finch's boarding act .*\n--expect-newest is finch's newest act .*\n--apply needs --expect-last/);
   }
   // with --boarded and nothing else, the dry run gets past usage, and says so when there is no store
   const r = spawnSync(process.execPath, [TOOL, "--boarded", "46971"], { encoding: "utf8", env });
@@ -194,7 +237,10 @@ test("on the store, its own rows: the guard reads the boarding act, passes once 
     assert.equal(typeof got[0].payload, "object", "and the jsonb payload as an object");
     assert.ok(got[0].at instanceof Date);
     const newest = await newestMoveOf(c);
-    assert.equal(await penLike(c, repairGuard({ boarded, expectLast: newest }), repairLand(0)), "written");
+    const newestAct = Number(got.at(-1).id);
+    assert.match(await penLike(c, repairGuard({ boarded, expectLast: newest, expectNewest: newestAct - 1 }), repairLand(0)), /^STALE: finch's newest act is \d+ \(say\), not the \d+ Wright's go named/,
+      "the newest-act condition holds inside the pen's transaction too");
+    assert.equal(await penLike(c, repairGuard({ boarded, expectLast: newest, expectNewest: newestAct }), repairLand(0)), "written");
     assert.match(await penLike(c, repairGuard({ boarded, expectLast: newest }), repairLand(0)), /^ALREADY REPAIRED: act \d+ set finch down/);
     assert.equal((await c.query("SELECT count(*)::int AS n FROM acts WHERE action = 'land'")).rows[0].n, 1, "one land, ever");
   } finally { await c.end(); }
