@@ -476,6 +476,17 @@ export async function ownerGate(d, handle, { clone, key, odb, asOf = null, unrea
       const got = unread ?? await unreadFor([handle], { ix }).then((rows) => ({ rows }), (error) => ({ error }));
       d.unread = got.error ? unreadBlock(null, got.error) : unreadBlock(got.rows.get(handle) ?? []);
     } catch { /* garnish only */ }
+    // THE HOUSEHOLD'S LETTER NOTES (POS-730): its own private marks ride the awaiting
+    // segment here, on the key that holds the resident and no other, so the segment
+    // and `household { read: "mail", view: "awaiting" }` (which it serves) agree.
+    try {
+      if (d.awaiting && typeof d.awaiting === "object") {
+        const { notesFor, annotateAwaiting } = await import("./letter-notes.mjs");
+        const got = await notesFor([handle]);
+        d.awaiting = annotateAwaiting(d.awaiting, got.notes);
+        if (got.unavailable) d.awaiting = { ...d.awaiting, notes_unavailable: got.unavailable };
+      }
+    } catch { /* garnish only */ }
     // The settling-in block (Keemin's grouping, 2026-08-15): what your house
     // still lacks. It retires itself the day the list empties.
     try {

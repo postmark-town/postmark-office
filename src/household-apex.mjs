@@ -184,6 +184,11 @@ const ACTS = {
   // doorstep's `unread.clears` say what it clears.
   "mark-all-read": { tool: null, residue: null,
     inline: "Mark all read." },
+  // POS-730 (Darko 2026-11-06): a household's private note on a letter it received
+  // (src/letter-notes.mjs). Private, so no class mark defines it and no act row
+  // records it. Short, for the foyer's 8 KiB bound; the schema says the rest.
+  "letter-note": { tool: null, residue: null,
+    inline: "Note a letter: no-reply, waiting on…, or clear." },
   // POS-666 (Darko 2026-10-22): parity with git-era letters, beside send.
   // A letter's later words (src/letter-amend.mjs) and the household's mail
   // blocks (src/mail-blocks.mjs). Each charges as a delisted flat of its own
@@ -358,6 +363,15 @@ export const APEX_ONLY_FIELDS = {
       handle: { type: "string", description: "one resident only; omit for all" },
     },
     required: [],
+  },
+  "letter-note": {
+    properties: {
+      letter: { type: "string", description: "the id of a letter delivered to one of your residents, as household { read: \"mail\" } names it" },
+      state: { type: "string", enum: ["no-reply", "waiting", "clear"], description: "no-reply: nothing is owed; waiting: needs `on`; clear: removes the note. Private to your household; a reply does not clear it" },
+      on: { type: "string", description: "with waiting only, and required there: what the letter waits on, at most 140 characters" },
+      handle: { type: "string", description: "which of your residents is noting it; defaults to the letter's recipient" },
+    },
+    required: ["letter", "state"],
   },
   // ── POS-666 · src/letter-amend.mjs and src/mail-blocks.mjs judge them ─────
   "amend-letter": {
@@ -1293,6 +1307,8 @@ async function householdGlance(args, key, ctx) {
   const houseOf = (h) => { try { const { slug } = resolveHouse(h, reg?.registry, reg?.pins); return slug ? (reg.registry.households?.[slug]?.name ?? slug) : null; } catch { return null; } };
   const closer = letters ? v2.closerRows(letters, { mine, house: house.members, houseOf }) : null;
 
+  // POS-730: the house's private letter notes (src/letter-notes.mjs): a marked letter is not counted in to_answer, and the awaiting read still lists it
+  const letterNotes = ashore.length ? await (await import("./letter-notes.mjs")).notesFor(ashore) : { notes: new Map() };
   const standing = await householdStanding(key, ctx);
   const needs = ashore.length
     ? await hb.needsYou({}, { key, clone, odb, asOf, ix, readers: { stances: async () => stances } })
@@ -1351,7 +1367,7 @@ async function householdGlance(args, key, ctx) {
     posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
     you, rows, gaps, stances, tail, needs, details,
-    mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members }) : null, standing: standingLetters },
+    mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members, noted: letterNotes.notes }) : null, standing: standingLetters, notesUnavailable: letterNotes.unavailable ?? null },
     quests: v2.questLines(board),
     standing,
     closer, happened, went, hw: acts?.hw ?? null,
@@ -1832,7 +1848,13 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
             awaitingOpts.standing = (await hotMailBlock(odb, key, { handle }))?.standing ?? null;
           } catch { /* the record's own answer still stands */ }
         }
-        return fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts));
+        const awaiting = await fromStore((c) => tis.mailAwaiting(c, handle, awaitingOpts));
+        // POS-730: the household's private notes ride the key that holds the resident, and nobody else's read.
+        if (key?.handles?.has?.(handle) !== true || !awaiting || awaiting.error) return awaiting;
+        const { notesFor, annotateAwaiting } = await import("./letter-notes.mjs");
+        const got = await notesFor([handle]);
+        const view = annotateAwaiting(awaiting, got.notes);
+        return got.unavailable ? { ...view, notes_unavailable: got.unavailable } : view;
       }
       // ── correspondents (walk #2 item 1, 2026-09-06) ───────────────────────
       //
@@ -2347,6 +2369,11 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "mark-all-read": {
         const { markAllReadAtOffice } = await import("./unread-store.mjs");
         result = await markAllReadAtOffice(fields, key);
+        break;
+      }
+      case "letter-note": {
+        const { letterNoteAtOffice } = await import("./letter-notes.mjs");
+        result = await letterNoteAtOffice(fields, key);
         break;
       }
       // ── a letter's later words, and the mail blocks (POS-666) ───────────
