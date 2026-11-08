@@ -2251,20 +2251,20 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       if ((m = /^\/quests\/([a-z0-9-]+)$/.exec(path))) {
         const handle = m[1];
         // POS-965: every 503 this route answers is logged with WHERE it failed (the pool/store, the board's own transaction, or its
-        // composition after the connection is back) and the pen pool's counts; until then only nginx saw it. The answer is unchanged.
+        // composition after the connection is back), the thread that ran it and that thread's event-loop lag; until then only nginx
+        // saw it. The answer is unchanged.
         let phase = "read";
-        const logFault = async (where, e) => {
+        const logFault = (where, e) => {
           try {
-            const { penPoolStanding } = await import("./world2-pen.mjs");
-            // the thread that answered (a read worker keeps its own pen pool and its own event loop) and how late that thread's loop
-            // ran in the last minute, so a 503 says whether its thread was stalled (src/loop-lag.mjs; a worker writes no file)
+            // the thread that ran the read (a read worker has its own event loop) and how late THAT thread's loop ran in its last
+            // minute, so a 503 says whether its thread was stalled (src/loop-lag.mjs; a worker writes no file of its own)
             const lag = loopLag.read().last_minute;
-            console.error(townIndexStore.boardFaultLine({ handle, phase: where, error: e, pool: penPoolStanding(), thread: threadId,
+            console.error(townIndexStore.boardFaultLine({ handle, phase: where, error: e, thread: threadId,
               lag: lag ? { max_ms: lag.max_ms, blocked_ms: lag.blocked_ms } : null }));
           } catch { /* a log line never fails the answer */ }
         };
         const unavailable = async (e) => {
-          await logFault(phase, e);
+          logFault(phase, e);
           return bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
         };
         return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable,

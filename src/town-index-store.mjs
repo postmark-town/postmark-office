@@ -1056,14 +1056,13 @@ export async function storeAnswer(fn, { env = process.env, then = null, statemen
  *   "store"   the index read could not get or keep a connection (the pool, the store: the 503 "town index cannot be reached");
  *   "read"    a query of the board's own transaction failed (a dead connection, a bent table);
  *   "compose" the board's composition after the connection was back (the quest tools, the household registry, the world read).
- * `pool` is world2-pen.mjs § penPoolStanding(), or null. The line carries the handle (a public path segment), the phase, the
- * error's name, code and message (cut), and the pen pool's counts. No row, no key, no human's details.
+ * The line carries the handle (a public path segment), the phase, the error's name, code and message (cut), the thread that ran the read and
+ * that thread's own event-loop lag for its last minute (src/loop-lag.mjs). No row, no key, no human's details.
  */
-export function boardFaultLine({ handle, phase, error, pool = null, thread = null, lag = null }) {
+export function boardFaultLine({ handle, phase, error, thread = null, lag = null }) {
   const name = String(error?.name ?? "Error");
   const code = error?.code != null ? ` ${String(error.code).slice(0, 40)}` : "";
   const why = errorSaid(error).replace(/\s+/g, " ").slice(0, 200); // the log's own reader of an error (fault-words.mjs), never an answer's words
-  const counts = pool ? ` pen pool max ${pool.max} total ${pool.total} idle ${pool.idle} waiting ${pool.waiting}` : " pen pool not built";
-  const where = (thread == null ? "" : ` thread t${thread}`) + (lag ? ` loop lag last minute max ${lag.max_ms} ms blocked ${lag.blocked_ms} ms` : thread == null ? "" : " loop lag no minute yet");
-  return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why};${counts}${where ? `;${where}` : ""}`;
+  const where = thread == null ? "" : `; thread t${thread}, ${lag ? `its event loop's last minute: max ${lag.max_ms} ms late, ${lag.blocked_ms} ms blocked` : "no event-loop minute recorded yet"}`;
+  return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why}${where}`;
 }

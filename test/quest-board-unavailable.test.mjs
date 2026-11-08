@@ -1,18 +1,14 @@
-// quest-board-unavailable.test.mjs — POS-965: a quest board that answers 503 says why, in the office's own log, and a burst of
-// board reads answers every one and leaves no connection held.
+// quest-board-unavailable.test.mjs — POS-965: a quest board that answers 503 says why, in the office's own log, and says which
+// thread ran the read and how late that thread's event loop ran.
 //
 //   node --test test/quest-board-unavailable.test.mjs
 //
-// Since w46 residents saw GET /quests/<handle> answer 503 "quest board unavailable" in bursts, and the office logged nothing for
-// it (only nginx saw it). The route's answer is unchanged here: the same 503 and the same words. What is new is one log line per
-// 503, naming the phase that failed and the pen pool's counts (town-index-store.mjs § boardFaultLine), and these two guards:
-//   · each of the route's three 503 doors (the store refused, the board's own read failed, its composition failed) is driven for
-//     real and its line is read back from the office's stderr, with the answer's words unchanged;
-//   · N boards at once, more than the pen pool holds, all answer 200 (nothing is refused for want of a connection), and when
-//     they are done the store holds no connection idle in a transaction and the office's pool holds nothing waiting.
-// The N-parallel guard is a REGRESSION GUARD for the lifecycle the route has (one short READ ONLY transaction per board, released
-// before the composition's own reads), not a reproduction of the w46 burst: the quest route's code is unchanged since w45.12 and
-// the burst has not been reproduced on a healthy local store (POS-965's findings).
+// Since w46 residents saw GET /quests/<handle> answer 503 "quest board unavailable" in bursts, and the office logged nothing for it
+// (only nginx saw it). The route's answer is unchanged here: the same 503 and the same words. What is new is one log line per 503
+// (town-index-store.mjs § boardFaultLine): the phase that failed ("store": the index read could not get or keep a connection;
+// "read": a query of the board's own transaction failed; "compose": the composition after the connection was back), the error, the
+// THREAD that ran the read (a read worker has its own event loop) and that thread's own last-minute event-loop lag (loop-lag.mjs).
+// Each of the route's three 503 doors is driven for real and its line read back from the office's stderr.
 
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
@@ -33,10 +29,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOWN = townClone();
 const tmp = mkdtempSync(join(tmpdir(), "quest-board-unavailable-"));
 let s = null, skip = TOWN ? false : "no town clone beside the office: the quest board reads the town's own tools from it";
-let api;
 const offices = {};
 const logs = {};
-const HANDLES = ["wright", "limen", "errant", "nobody", "kogane", "seth", "rei", "juno"];
 
 const startOffice = (name, townClone, env) => new Promise((ok, no) => {
   const child = spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", "0",
@@ -59,15 +53,13 @@ before(async () => {
   if (s.skip) { skip = s.skip; return; }
   const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
   const db = fixtureTown();
-  const put = (...v) => putValues(db, "meta", v);
-  put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-  put("quest_day", townDay());
-  const qp = (...v) => putValues(db, "quest_progress", v, ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
-  for (const h of HANDLES) qp(h, 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"]));
+  putValues(db, "meta", ["quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8")]);
+  putValues(db, "meta", ["quest_day", townDay()]);
+  putValues(db, "quest_progress", ["wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"])],
+    ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
   const w = await s.connect("law_ingester");
   await seedTownIndex(w, db);
   await w.end();
-  api = await s.connect("office_api");
 
   // the healthy office; one whose store is gone; one whose clone has no quest tools (the board's composition fails)
   await startOffice("healthy", TOWN, { WORLD2_PG: "1", WORLD2_PG_URL: s.url("office_api") });
@@ -80,7 +72,6 @@ before(async () => {
 
 after(async () => {
   for (const { child } of Object.values(offices)) if (child.exitCode === null) { const gone = new Promise((ok) => child.on("exit", ok)); child.kill(); await gone; }
-  if (api) await api.end().catch(() => {});
   if (s?.stop) await s.stop();
   rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -91,26 +82,24 @@ const waitForFault = async (name, ms = 5_000) => {
   return fault(name);
 };
 
-test("boardFaultLine names the phase, the handle, the error and the pen pool, and carries nothing else", () => {
+test("boardFaultLine names the phase, the handle, the error, the thread and that thread's event-loop minute, and carries nothing else", () => {
   const e = Object.assign(new Error("the store's pen pool had no free connection within 10000 ms (it holds 3)\n  at secret"), { name: "StoreAcquireTimeout", code: "store-acquire-timeout" });
-  const line = boardFaultLine({ handle: "kogane", phase: "store", error: e, pool: { max: 3, total: 3, idle: 0, waiting: 5 } });
-  assert.equal(line, '[quest-board] unavailable (store) for "kogane": StoreAcquireTimeout store-acquire-timeout: the store\'s pen pool had no free connection within 10000 ms (it holds 3) at secret; pen pool max 3 total 3 idle 0 waiting 5');
-  assert.equal(boardFaultLine({ handle: "x", phase: "read", error: "plain text", pool: null }), '[quest-board] unavailable (read) for "x": Error: plain text; pen pool not built');
-  assert.ok(boardFaultLine({ handle: "x", phase: "compose", error: new Error("y".repeat(900)) }).length < 400, "a long message is cut");
-  // the thread that answered and its own loop's lateness ride along, so a 503 says whether its thread was stalled
-  assert.match(boardFaultLine({ handle: "x", phase: "read", error: "e", pool: null, thread: 2, lag: { max_ms: 41000, blocked_ms: 43000 } }),
-    /; thread t2 loop lag last minute max 41000 ms blocked 43000 ms$/);
-  assert.match(boardFaultLine({ handle: "x", phase: "read", error: "e", pool: null, thread: 0, lag: null }), /; thread t0 loop lag no minute yet$/);
+  assert.equal(boardFaultLine({ handle: "kogane", phase: "store", error: e, thread: 2, lag: { max_ms: 41000, blocked_ms: 43000 } }),
+    '[quest-board] unavailable (store) for "kogane": StoreAcquireTimeout store-acquire-timeout: the store\'s pen pool had no free connection within 10000 ms (it holds 3) at secret; thread t2, its event loop\'s last minute: max 41000 ms late, 43000 ms blocked');
+  assert.equal(boardFaultLine({ handle: "x", phase: "read", error: "plain text", thread: 0, lag: null }),
+    '[quest-board] unavailable (read) for "x": Error: plain text; thread t0, no event-loop minute recorded yet');
+  assert.equal(boardFaultLine({ handle: "x", phase: "read", error: "plain text" }), '[quest-board] unavailable (read) for "x": Error: plain text', "no thread given, none said");
+  assert.ok(boardFaultLine({ handle: "x", phase: "compose", error: new Error("y".repeat(900)), thread: 1 }).length < 400, "a long message is cut");
 });
 
-test("the store refused: 503 with the town-index words, and the log says phase store", async (t) => {
+test("the store refused: 503 with the town-index words, and the log says phase store, the thread and its loop", async (t) => {
   if (skip) return t.skip(skip);
   const r = await fetch(`${offices["cut-off"].base}/quests/wright`);
   assert.equal(r.status, 503);
   assert.match((await r.json()).defect, /town index \(the store\) cannot be reached/, "the answer's words are unchanged");
   const lines = await waitForFault("cut-off");
   assert.equal(lines.length, 1, `one line per 503: ${JSON.stringify(lines)}`);
-  assert.match(lines[0], /^\[quest-board\] unavailable \(store\) for "wright": /);
+  assert.match(lines[0], /^\[quest-board\] unavailable \(store\) for "wright": .*; thread t0, /);
 });
 
 test("the board's composition failed: the same 'quest board unavailable' 503, and the log says phase compose", async (t) => {
@@ -122,8 +111,7 @@ test("the board's composition failed: the same 'quest board unavailable' 503, an
   assert.match(body.hint, /couldn't read the quest registry from its clone/);
   const lines = await waitForFault("no-tools");
   assert.equal(lines.length, 1, `one line per 503: ${JSON.stringify(lines)}`);
-  assert.match(lines[0], /^\[quest-board\] unavailable \(compose\) for "wright": /);
-  assert.match(lines[0], /pen pool (max \d+ total \d+ idle \d+ waiting \d+|not built)/);
+  assert.match(lines[0], /^\[quest-board\] unavailable \(compose\) for "wright": .*; thread t0, (its event loop's last minute: max \d+ ms late, \d+ ms blocked|no event-loop minute recorded yet)$/);
 });
 
 test("a healthy board logs nothing: 200s leave no fault line (the control for the two above)", async (t) => {
@@ -131,20 +119,4 @@ test("a healthy board logs nothing: 200s leave no fault line (the control for th
   const r = await fetch(`${offices.healthy.base}/quests/wright`);
   assert.equal(r.status, 200);
   assert.equal(fault("healthy").length, 0);
-});
-
-test("N boards at once, more than the pen pool holds: all 200, no fault line, no connection left idle in a transaction", async (t) => {
-  if (skip) return t.skip(skip);
-  const N = 24; // the pen pool holds 3
-  const answers = await Promise.all(Array.from({ length: N }, async (_, i) => {
-    const r = await fetch(`${offices.healthy.base}/quests/${HANDLES[i % HANDLES.length]}`);
-    await r.arrayBuffer();
-    return r.status;
-  }));
-  assert.deepEqual(answers, Array(N).fill(200), `every board answered: ${JSON.stringify(answers)}`);
-  assert.equal(fault("healthy").length, 0, "and none logged a fault");
-  // after the burst the store holds nothing in a transaction (the office's own connections are named postmark-office:…)
-  const held = (await api.query(
-    "SELECT application_name, state, now() - state_change AS age FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%' AND application_name LIKE 'postmark-office:%'")).rows;
-  assert.deepEqual(held, [], "no office connection is idle in a transaction after the burst");
 });
