@@ -642,10 +642,14 @@ const j = (res, code, obj, cause) => {
 // `then` is the part of an answer that is not the index (the quest board's
 // quest tools and world read): storeAnswer runs it after the connection is back,
 // because holding one across it is what stalled the office on 2026-10-04 (POS-370).
-async function fromTownIndex(res, fn, onNull = null, onError = null, then = null) {
+async function fromTownIndex(res, fn, onNull = null, onError = null, then = null, onRefused = null) {
   try {
     const r = await townIndexStore.storeAnswer(fn, { then });
-    if (r.refused) return bounce(res, 503, r.refused.defect, r.refused.hint);
+    if (r.refused) {
+      // `onRefused(cause)` lets a door log why the store was refused (POS-965); the answer's words are the same either way
+      if (onRefused) await onRefused(r.cause);
+      return bounce(res, 503, r.refused.defect, r.refused.hint);
+    }
     if (r.asOf) res.setHeader("x-postmark-town-index-as-of", r.asOf);
     if (r.out == null && onNull) return onNull();
     return j(res, 200, r.out);
@@ -2245,8 +2249,22 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // regex IS the arg validation; the board zeroes on a rolled TOWN_TZ day.
       if ((m = /^\/quests\/([a-z0-9-]+)$/.exec(path))) {
         const handle = m[1];
-        const unavailable = () => bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
-        return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable, (rows) => townIndexStore.questBoardOfRows(rows, TOWN_CLONE));
+        // POS-965: every 503 this route answers is logged with WHERE it failed (the pool/store, the board's own transaction, or its
+        // composition after the connection is back) and the pen pool's counts; until then only nginx saw it. The answer is unchanged.
+        let phase = "read";
+        const logFault = async (where, e) => {
+          try {
+            const { penPoolStanding } = await import("./world2-pen.mjs");
+            console.error(townIndexStore.boardFaultLine({ handle, phase: where, error: e, pool: penPoolStanding() }));
+          } catch { /* a log line never fails the answer */ }
+        };
+        const unavailable = async (e) => {
+          await logFault(phase, e);
+          return bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
+        };
+        return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable,
+          (rows) => { phase = "compose"; return townIndexStore.questBoardOfRows(rows, TOWN_CLONE); },
+          (cause) => logFault("store", cause));
       }
 
       if (path === "/bulletin") {

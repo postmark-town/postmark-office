@@ -165,6 +165,16 @@ export class PenUnreachableError extends Error {
  */
 export function __setPoolForTest(p) { state.pool = p; }
 
+/**
+ * The pen pool's own counts this instant (pg-pool's: connections it holds, idle, and callers waiting for one), or null before
+ * the pool has been built. For a fault line only (POS-965): a quest board that answers 503 says whether the pool was starved.
+ */
+export function penPoolStanding() {
+  const p = state.pool;
+  if (!p || typeof p !== "object") return null;
+  return { max: p.options?.max ?? null, total: p.totalCount ?? null, idle: p.idleCount ?? null, waiting: p.waitingCount ?? null };
+}
+
 class NoRecordError extends Error {
   constructor() {
     super("this office is not pointed at a record (WORLD2_PG / WORLD2_PG_URL are unset)");

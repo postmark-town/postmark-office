@@ -1036,10 +1036,32 @@ export async function storeAnswer(fn, { env = process.env, then = null, statemen
   // it "the store cannot be reached" would name the wrong thing.
   let own = null, r;
   try { r = await readTownIndex(async (c) => { try { return await fn(c); } catch (e) { own = e; throw e; } }, { env, statementTimeoutMs }); }
-  catch (e) { if (own && e === own) throw e; return { refused: UNREACHABLE }; }
+  catch (e) {
+    if (own && e === own) throw e;
+    // The refusal's words stay fixed; the error that caused it rides beside it, non-enumerable (a door that wants it for its log
+    // reads `.cause`; every comparison of the refusal sees the same two fields as before). POS-965.
+    return Object.defineProperty({ refused: UNREACHABLE }, "cause", { value: e, enumerable: false });
+  }
   // THE REST OF THE ANSWER, AFTER THE CONNECTION IS BACK (POS-370). `then` is
   // whatever the read needs that is not the index (the quest board's quest tools
   // and its world read): it runs here, holding nothing, and its errors are the
   // reader's own, never the store's absence.
   return then ? { ...r, out: await then(r.out) } : r;
+}
+
+/**
+ * The office log's one line for a quest board that answered 503 (POS-965). Until this the route answered "quest board
+ * unavailable" and said nothing anywhere, so only nginx saw it and nothing said WHY. `phase` is where it failed:
+ *   "store"   the index read could not get or keep a connection (the pool, the store: the 503 "town index cannot be reached");
+ *   "read"    a query of the board's own transaction failed (a dead connection, a bent table);
+ *   "compose" the board's composition after the connection was back (the quest tools, the household registry, the world read).
+ * `pool` is world2-pen.mjs § penPoolStanding(), or null. The line carries the handle (a public path segment), the phase, the
+ * error's name, code and message (cut), and the pen pool's counts. No row, no key, no human's details.
+ */
+export function boardFaultLine({ handle, phase, error, pool = null }) {
+  const name = String(error?.name ?? "Error");
+  const code = error?.code != null ? ` ${String(error.code).slice(0, 40)}` : "";
+  const why = String(error?.message ?? error ?? "(no error)").replace(/\s+/g, " ").slice(0, 200);
+  const counts = pool ? ` pen pool max ${pool.max} total ${pool.total} idle ${pool.idle} waiting ${pool.waiting}` : " pen pool not built";
+  return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why};${counts}`;
 }
