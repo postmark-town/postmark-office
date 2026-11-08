@@ -362,8 +362,8 @@ export function declareAttachment(db, { entity, target, policy = "cascade", decl
 // a THIRD writer of this table that POS-156's own measurement had not listed.
 //
 // `readMovements` STAYS, below, and so does the table. It holds the frozen era
-// and two historical readers still ask it for that history
-// (`tools/ledger-freeze.mjs`, `tools/state-to-r2.mjs`). A reader of history is
+// and a historical reader still asks it for that history
+// (`tools/ledger-freeze.mjs`). A reader of history is
 // not a shim; what G1 removes is the WRITE, so nothing is added to it again.
 
 /**

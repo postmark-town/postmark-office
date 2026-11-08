@@ -319,6 +319,48 @@ test("029 · the notary's export (snapshot_reader) never reads letter_opens", ()
   assert.doesNotMatch(exporter, /letter_opens/);
 });
 
+// ── 088's LETTER NOTES: office_api's alone, under 029's row-policy shape ─────
+//
+// POS-730, ruled 2026-11-06 (Darko, "Build that shape"): a household's private note on a letter it
+// received. Private in 029's way: no role but `office_api` is GRANTed anything on it, row level
+// security is enabled, and every policy is `TO office_api` and compares the acting household's spelling
+// set. SELECT + INSERT + UPDATE + DELETE: a note is set, changed and cleared (`clear` deletes the row, so
+// a cleared condition's bytes are not kept). The boundary itself is held against a real Postgres in
+// test/letter-notes.test.mjs; this reads the migration's text.
+const LNOTES = "letter_notes";
+
+test("088 · letter_notes is GRANTed to office_api alone — SELECT, INSERT, UPDATE, DELETE — and 003 lists the three writes", () => {
+  const named = allGrantsOn(LNOTES).filter((g) => !g.allTables);
+  assert.ok(named.length > 0, "088 grants nothing on letter_notes, or this test proves nothing");
+  assert.deepEqual([...new Set(named.map((g) => g.grantee))], ["office_api"]);
+  assert.deepEqual(named.map((g) => g.privilege).sort(), ["DELETE", "INSERT", "SELECT", "UPDATE"]);
+  for (const g of allGrantsOn(LNOTES).filter((x) => x.allTables))
+    assert.ok(Number(g.file.slice(0, 3)) < 88, `${g.file} grants ${g.privilege} on ALL TABLES after 088 — letter_notes would be in it`);
+  const lawful = lawfulList();
+  for (const p of ["INSERT", "UPDATE", "DELETE"]) assert.ok(lawful.has(`office_api|${LNOTES}|${p}`), `003 must list office_api ${p} on ${LNOTES}`);
+});
+
+test("088 · letter_notes has row level security, and every policy is TO office_api and compares app.household_keys", () => {
+  const sql = schemaFiles().find((f) => f.file === "088_letter_notes.sql").sql;
+  assert.match(sql, /ALTER TABLE letter_notes ENABLE ROW LEVEL SECURITY;/);
+  const policies = [...sql.matchAll(/CREATE POLICY\s+(\w+)\s+ON\s+letter_notes\s+FOR\s+(\w+)\s+TO\s+(\w+)([\s\S]*?);/gi)]
+    .map((m) => ({ name: m[1], cmd: m[2].toUpperCase(), to: m[3], body: m[4] }));
+  assert.deepEqual(policies.map((p) => p.cmd).sort(), ["DELETE", "INSERT", "SELECT", "UPDATE"]);
+  for (const p of policies) {
+    assert.equal(p.to, "office_api", `${p.name} is TO ${p.to}`);
+    assert.match(p.body, /household = ANY\(string_to_array\(NULLIF\(current_setting\('app\.household_keys', true\), ''\), ','\)\)/, `${p.name} does not compare the spelling set`);
+  }
+  const others = schemaFiles().flatMap(({ file, sql: s }) =>
+    [...s.matchAll(/CREATE POLICY\s+\w+\s+ON\s+letter_notes[\s\S]*?TO\s+(\w+)/gi)].map((m) => `${file}:${m[1]}`))
+    .filter((x) => !x.endsWith(":office_api"));
+  assert.deepEqual(others, []);
+});
+
+test("088 · the notary's export (snapshot_reader) never reads letter_notes", () => {
+  const exporter = readFileSync(join(HERE, "..", "world2", "tools", "snapshot-export.mjs"), "utf8");
+  assert.doesNotMatch(exporter, /letter_notes/);
+});
+
 // ── 063's NOTES: office_api's alone, under 026's row-policy shape ────────────
 //
 // POS-392: world_note is "one note to your returning self, replaced on every

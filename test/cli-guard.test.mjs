@@ -132,6 +132,10 @@ const ROSTER = {
   "src/world-store.mjs": { args: [], env: NO_PG, code: 1, needle: "no world graph" },
   // tools/
   "tools/backfill-home-shelf.mjs": { args: ["--manifest", NOWHERE], code: 2, needle: "no manifest at" },
+  // STAR-102: the release train's ship gate reads GitHub; bare, with no repo or token, it says its usage and asks nothing
+  "tools/release-train-gate.mjs": { args: [], env: { GITHUB_REPOSITORY: undefined, GH_TOKEN: undefined }, code: 2, needle: "usage: GITHUB_REPOSITORY" },
+  // POS-606: the town signpost's one amend; bare, it asks for --dry-run or --apply and loads nothing of the office
+  "tools/town-signpost-amend.mjs": { args: [], env: {}, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   // POS-219: refuses with neither --dry-run nor --apply before it imports a door or reads anything
   "tools/home-picture-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "tools/avatar-carry.mjs": { args: [], code: 2, needle: "pass exactly one of --dry-run or --apply" },
@@ -160,6 +164,8 @@ const ROSTER = {
   // POS-576: Wright's read of invited households. A bad --since refuses before
   // any store is asked; NO_PG on top, so a regression that reached for a
   // connection fails on it.
+  // POS-770: the arrivals read. A bad --days refuses before any log or store is read.
+  "tools/arrivals.mjs": { args: ["--days", "0"], env: NO_PG, code: 2, needle: "--days takes a whole number of days" },
   "tools/invites.mjs": { args: ["--since", "not-a-date"], env: NO_PG, code: 2, needle: "--since takes an ISO instant" },
   "tools/hydrate-equivalence.mjs": { args: ["--a", NOWHERE, "--b", `${NOWHERE}-b`], code: 2, needle: "not a world checkout:" },
   "tools/ledger-freeze.mjs": { args: ["--at", "not-a-date"], code: 2, needle: "unparseable --at" },
@@ -225,6 +231,7 @@ const ROSTER = {
   "deploy/registry-file.mjs": { args: [], code: 2, needle: "usage: registry-file.mjs <path>" },
   "deploy/keep-history.mjs": { args: [], code: 2, needle: "usage: keep-history.mjs write" },
   "deploy/welcome-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
+  "deploy/invite-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).

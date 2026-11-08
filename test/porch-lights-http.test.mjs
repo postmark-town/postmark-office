@@ -36,6 +36,31 @@ const DECLARED = HAVE_CLONE
   ? new Map(JSON.parse(readFileSync(join(CLONE, "WORLD", "world-state.json"), "utf8")).marks.map((m) => [m.id, m.declared_household]))
   : new Map();
 
+// THE HOUSES THIS STORE KNOWS (POS-896). The registry below is the one invented list of households the store is
+// seeded with, and it is also what decides a house's light: a house whose declared key is in it is known (lit or
+// dark), a house whose declared key is NOT in it is unknown to the store, and its light is `null` (never dark,
+// household-activity.mjs § litOf). The world clone puts whatever houses it carries in sight of the standpoint;
+// when the pin moves, new houses come into sight that this store has never heard of, and they are unknown. So
+// the expectation is a function of the seeded registry and of each house's declared key, not of the clone's list.
+const SEEDED_REGISTRY = { schema_version: 1, households: {
+  "shard-house": { residents: ["kogane", "kogane-kin"], accounts: [{ login: "kogane-gh", id: 301 }], since: "2026-06-12", declared_by: "kogane" },
+} };
+const KNOWN_KEYS = new Set(Object.keys(SEEDED_REGISTRY.households).map((slug) => `hh:${slug}`));
+const LIT_KEY = "hh:shard-house";   // the one household the store says acted now (see the act seeded in before())
+
+/** What a house in sight must say: lit/dark for a house the store knows, `null` for one it does not. */
+const expectedLit = (declaredKey, known = KNOWN_KEYS) => (known.has(declaredKey) ? declaredKey === LIT_KEY : null);
+
+/** Every house in `lits` (id -> lit) whose light is not what the seeded registry and its declared key say. Empty when right. */
+function litMismatches(lits, declaredOf, known = KNOWN_KEYS) {
+  const out = [];
+  for (const [id, lit] of Object.entries(lits)) {
+    const want = expectedLit(declaredOf(id), known);
+    if (lit !== want) out.push(`${id} (${declaredOf(id)}): lit ${JSON.stringify(lit)}, wanted ${JSON.stringify(want)}`);
+  }
+  return out;
+}
+
 let IX = null, child = null, tmp = null, BASE = null;
 
 before(async () => {
@@ -43,9 +68,7 @@ before(async () => {
   tmp = mkdtempSync(join(tmpdir(), "porch-lights-http-"));
   // the suite's town is rows in the store (POS-656): no office.db, no --db
   IX = await indexStore(fixtureTown(), { db: "porch_lights_http" });
-  await seedRegistry(IX.store, { schema_version: 1, households: {
-    "shard-house": { residents: ["kogane", "kogane-kin"], accounts: [{ login: "kogane-gh", id: 301 }], since: "2026-06-12", declared_by: "kogane" },
-  } }, {});
+  await seedRegistry(IX.store, SEEDED_REGISTRY, {});
   const c = await IX.store.connect("world2_owner");
   try {
     await c.query("INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('town', 'porch-http-1', now()) ON CONFLICT (repo) DO UPDATE SET sha = EXCLUDED.sha");
@@ -118,11 +141,14 @@ test("GET /world/eyes and GET /world/apex: no `dials`, no `activity`, no house m
     assert.ok(!r.error, `${what}: ${JSON.stringify(r).slice(0, 200)}`);
     for (const k of ["dials", "activity"]) assert.ok(!(k in r), `${what} carries \`${k}\``);
     assert.doesNotMatch(JSON.stringify(r), /kogane-kin|"house_of"|"households"/, `${what}: no member, no map`);
-    // every house in sight is lit exactly when its own declared key is the lit one —
+    // every house in sight is lit exactly when its own declared key is the lit one, dark when the store knows it and
+    // it did not act, and `null` (unknown, never dark) when the store's registry does not name it —
     // kogane's neighbour keith shares hh:shard-house on the clone, and is lit too
     const lits = litsOf(r);
     assert.ok(Object.keys(lits).length >= 1, `${what}: a house is in sight`);
-    for (const [id, lit] of Object.entries(lits)) assert.equal(lit, DECLARED.get(id) === "hh:shard-house", `${what}: ${id} (${DECLARED.get(id)}) lit ${lit}`);
+    assert.deepEqual(litMismatches(lits, (id) => DECLARED.get(id)), [], `${what}: every light is the seeded registry's answer`);
+    assert.ok(Object.keys(lits).some((id) => DECLARED.get(id) === LIT_KEY), `${what}: the lit house is in sight, so the loop above is not vacuous`);
+    // a per-house unknown is not the whole answer being unknown: the sentence is for a slow or unread store, or a past crossing
     assert.ok(!("lit_unknown" in r), `${what}: known lights need no sentence`);
     assert.ok(!Object.hasOwn(r.records ?? {}, "the-town/resident"), `${what}: no class by name`);
   }
@@ -138,4 +164,45 @@ test("GET /world/eyes and GET /world/apex: no `dials`, no `activity`, no house m
   const past = (await get(`/world/apex?${AT}&crossing=${C - 3}`)).body;
   assert.equal(litsOf(past)[PARCEL], null, "a past crossing's house is unknown, not dark");
   assert.match(past.lit_unknown, /activity isn't kept per crossing/);
+});
+
+// ── THE DETECTORS (POS-896): invented houses, the seeded registry held fixed, and a wrong light for each branch ──
+// No clone and no office: these run on the expectation alone, so they run (and can fail) wherever the file is read.
+const INVENTED = new Map([
+  ["invented/known-lit-house", "hh:shard-house"],      // in the registry, the household that acted now
+  ["invented/unknown-house", "hh:not-in-the-registry"], // declared to a household the store has never heard of
+]);
+const declaredOfInvented = (id) => INVENTED.get(id);
+
+test("detector · the right lights are accepted: a known acting house lit, a house the store does not name unknown (null)", () => {
+  assert.deepEqual(litMismatches({
+    "invented/known-lit-house": true, "invented/unknown-house": null,
+  }, declaredOfInvented), []);
+});
+
+test("detector · an unknown house reported dark is refused by name (an unknown house is null, never dark)", () => {
+  assert.deepEqual(litMismatches({ "invented/unknown-house": false }, declaredOfInvented),
+    ['invented/unknown-house (hh:not-in-the-registry): lit false, wanted null']);
+});
+
+test("detector · an unknown house reported lit is refused by name", () => {
+  assert.deepEqual(litMismatches({ "invented/unknown-house": true }, declaredOfInvented),
+    ['invented/unknown-house (hh:not-in-the-registry): lit true, wanted null']);
+});
+
+test("detector · a known acting house reported unknown or dark is refused by name", () => {
+  assert.deepEqual(litMismatches({ "invented/known-lit-house": null }, declaredOfInvented),
+    ['invented/known-lit-house (hh:shard-house): lit null, wanted true']);
+  assert.deepEqual(litMismatches({ "invented/known-lit-house": false }, declaredOfInvented),
+    ['invented/known-lit-house (hh:shard-house): lit false, wanted true']);
+});
+
+test("detector · a household added to the registry turns the same house from unknown (null) to known and dark (false): the expectation follows the registry, not the clone", () => {
+  const keys = (registry) => new Set(Object.keys(registry.households).map((slug) => `hh:${slug}`));
+  const withMoss = keys({ households: { ...SEEDED_REGISTRY.households, "moss-house": {} } });
+  const declaredOf = () => "hh:moss-house";
+  assert.deepEqual(litMismatches({ "invented/moss-house": null }, declaredOf), [], "the seeded registry does not name it: unknown is right");
+  assert.deepEqual(litMismatches({ "invented/moss-house": null }, declaredOf, withMoss),
+    ['invented/moss-house (hh:moss-house): lit null, wanted false'], "once the registry names it, unknown is wrong");
+  assert.deepEqual(litMismatches({ "invented/moss-house": false }, declaredOf, withMoss), [], "and dark is right");
 });

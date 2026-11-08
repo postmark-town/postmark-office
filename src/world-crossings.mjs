@@ -1,14 +1,21 @@
 // world-crossings.mjs — enter(mark) / exit(mark), the office's half.
 //
-// DEMO SLICE (step 5, `jetto/enter-exit-demo`). The law is the 2026-08-18
-// wind-down's: R14 (occupancy is a literal `contains` edge with an ENTITY
-// child; the handshake is one edge and two words), R15 (walk and entry are
-// fully decoupled axes — walking NEVER implies entry), R16 (the pair stays out
-// of production until the law is planted). Nothing here merges.
+// It began as a demo slice (step 5, `jetto/enter-exit-demo`) and is LIVE now:
+// the apex dispatches `enter` / `exit` through `enterViaOffice` /
+// `exitViaOffice` (world-apex.mjs § DISPATCH), world.mjs calls `crossingLaw`
+// and `exitViaOffice` (`enteredNow`, `exitWhatThisPointLeaves`, the walk's
+// enter-on-arrival), and the pen `CROSSING_EXEC` (crossing-exec.mjs) is run by
+// world-apex under the town lock. The law is the 2026-08-18 wind-down's: R14
+// (occupancy is a literal `contains` edge with an ENTITY child; the handshake
+// is one edge and two words), R15 (walk and entry are fully decoupled axes —
+// walking NEVER implies entry), R16 (the pair was to stay out of production
+// until the law was planted; it is in production now).
 //
 // THE DIVISION OF LABOUR, and it is the same one walk keeps:
-//   · the world clone owns the GRAMMAR and the DERIVATION (tools/thresholds.mjs
-//     — the acts' shape, the entry law's reading, occupancy from the acts) and
+//   · the world clone owns the GRAMMAR and the DERIVATION (tools/enter-exit.mjs
+//     — the acts' shape, the entry law's reading, occupancy from the acts; the
+//     retired name tools/thresholds.mjs is only a fallback in `crossingLaw`,
+//     for a clone one pull behind the rename) and
 //     the ADJUDICATION (tools/world-verbs.mjs — enter/exit/the chain/the scope);
 //   · this file owns WHO IS ACTING and refuses on that; the exec owns the pen.
 //

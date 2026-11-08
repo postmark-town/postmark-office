@@ -464,6 +464,9 @@ test("8 · end to end (Darko 2026-10-15 19:02): a stage re-credited to a FOUNDER
   async () => {
     setup();
     const id = await confirmed("carol", "The bell rings twice");
+    // POS-713: an advance moves one rung, so the unearned rung is recorded as skipped first, as the sibling cases above do
+    // (until the town carried --stage-recredit this case was skipped, and nobody saw it still went confirmed → diagnosed)
+    await advanceAtTown({ post: id, skip: "reproduced", reason: "the cause came with the report" }, WRIGHT, { now: NOW, roll: ROLL });
     await advanceAtTown({ post: id, to: "diagnosed", credit: "ada", link: ADA_LETTER }, WRIGHT, { now: NOW, roll: ROLL });
     const { repo, keyFile } = syntheticTown({ rooms: ["wright"] });
     try {
@@ -543,3 +546,162 @@ test("9 · (POS-713) a bug whose every rung was skipped to fixed owes nothing at
   assert.equal(facts.acts.filter((a) => a.action === "skip").length, 5);
   assert.deepEqual(planStages({ acts: facts.acts, houseOf: (h) => facts.houses.get(h) ?? null, isMeep: noMeeps }), []);
 });
+
+// ── 10 · a stage skipped by mistake, credited (POS-931/a, Darko 2026-11-06 "Extend the door") ──
+//
+// A recredit act marked `skipped` owes ONE town line, the stage's lawful amount
+// to its credit, with nothing to burn, through --stage-recredit --skipped. The
+// pass evidences it itself: the post's skip act and no advance for the stage,
+// and a town ledger that is THERE and holds no line for it. Anything else
+// holds, and nothing is written.
+
+const TOWN_HAS_SKIPPED = TOWN_HAS_RECREDIT && readFileSync(join(TOWN_SRC, "tools", "stamp-mint.mjs"), "utf8").includes("'--skipped'");
+const SKIP_POST = "carol/the-bell-rings-twice";
+const skipAct = (id, stage = "diagnosed", post = SKIP_POST) => ({ id, actor: "wright", action: "skip", object: post, at: "2026-11-06T17:00:00Z",
+  payload: { post, from: "reproduced", to: stage, skipped: true, reason: "no cause on the record", hand: "wright" } });
+const skippedRc = (id, over = {}) => ({ id, actor: "wright", action: "recredit", object: over.post ?? SKIP_POST, at: "2026-11-07T03:00:00Z",
+  payload: { post: SKIP_POST, to: "diagnosed", was: null, credit: "ada", link: ADA_LETTER, note: "ada named the cause", paid: 5, hand: "wright", skipped: true, ...over } });
+const skipPlan = (acts, over = {}) => planRecredits({ acts, houseOf: HOUSE, isMeep: () => false, stageLines: new Map(), corrected: new Set(),
+  liquid: new Map(), ledgerRead: true, canSkipCredit: true, ...over });
+
+test("10 · a skipped diagnosed: one row owed, 5 to its credit, nothing to burn; printed, read back, and handed the town's verb with --skipped", () => {
+  const rows = skipPlan([skipAct(1), skippedRc(2)]);
+  assert.deepEqual(rows, [{ post: SKIP_POST, stage: "diagnosed", from: "(skipped)", to: "ada", household: "hh:the-harbor", n: 5, sig: "nothing",
+    hand: "wright", act: 2, date: "2026-11-06", why: "owed", owed: true }]);
+  const text = renderRecredits(rows);
+  assert.match(text, /^bug recredit plan — 1 recredit\(s\) recorded, 0 already corrected, 0 held, 1 owed \(5 stamps\)$/m);
+  assert.match(text, /^ {2}carol\/the-bell-rings-twice\/diagnosed · \(skipped\) → ada · hh:the-harbor · 5 · owed · by wright · burns nothing · act 2 on 2026-11-06$/m);
+  const [r] = parseRecreditPlan(text, { recorded: true }).owed;
+  assert.equal(r.skipped, true);
+  assert.deepEqual(stageRecreditArgv("/town", r, { date: "2026-11-07", keyPath: "/k.pem" }), [join("/town", "tools", "stamp-mint.mjs"),
+    "--stage-recredit", "ada", "--post", SKIP_POST, "--stage", "diagnosed", "--by", "wright", "--amount", "5", "--skipped",
+    "--date", "2026-11-07", "--key", "/k.pem", "--repo", "/town"], "no --from: there is no wrong mint");
+  // briefed pays by its grade
+  const b = skipPlan([skipAct(1, "briefed"), skippedRc(2, { to: "briefed", grade: "light", paid: 10 })]);
+  assert.deepEqual([b[0].n, b[0].why], [10, "owed"]);
+});
+
+test("10 · nothing is paid on doubt: an unread ledger, a town without the grammar, no skip act, an advance to the stage, a ledger line for it, no grade, a mismatched amount, fixed, a meep, an unresolved credit; a corrected stage is done; a second act for the stage is held", () => {
+  const why = (acts, over = {}) => skipPlan(acts, over).map((r) => r.why);
+  const base = [skipAct(1), skippedRc(2)];
+  assert.match(why(base, { ledgerRead: false })[0], /^held: the town's ledger was not read, so whether post:carol\/the-bell-rings-twice\/diagnosed was ever paid is unknown/);
+  assert.match(why(base, { canSkipCredit: false })[0], /^held: this town's stamp-mint carries no skipped-stage credit/);
+  assert.match(why([skippedRc(2)])[0], /^held: the act says diagnosed was skipped, and the record holds no skip of post:/);
+  const advance = { id: 1, actor: "wright", action: "advance", object: SKIP_POST, at: "2026-11-06T17:00:00Z", payload: { post: SKIP_POST, to: "diagnosed", credit: "carol" } };
+  assert.match(why([skipAct(0), advance, skippedRc(2)])[0], /^held: the act says diagnosed was skipped, and the record holds an advance to post:/);
+  assert.match(why(base, { stageLines: new Map([[`${SKIP_POST}/diagnosed`, { handle: "carol", n: 5, sig: "S".repeat(86) }]]) })[0],
+    /^held: the ledger paid post:carol\/the-bell-rings-twice\/diagnosed to carol; a skipped stage's credit is for a stage the ledger never paid/);
+  assert.match(why([skipAct(1, "briefed"), skippedRc(2, { to: "briefed", paid: 10 })])[0], /^held: briefed has no lawful amount for this act/);
+  assert.match(why([skipAct(1), skippedRc(2, { paid: 10 })])[0], /^held: the act recorded 10 and the ladder pays 5/);
+  assert.match(why([skipAct(1, "fixed"), skippedRc(2, { to: "fixed", paid: 10 })])[0], /^held: fixed has no lawful amount for this act/);
+  assert.match(why(base, { isMeep: (h) => h === "ada" })[0], /^meep:/);
+  assert.match(why([skipAct(1), skippedRc(2, { credit: "dan" })])[0], /^unresolved: dan has no household on record/);
+  assert.equal(why(base, { corrected: new Set([`${SKIP_POST}/diagnosed`]) })[0], "already corrected");
+  const twice = skipPlan([...base, skippedRc(3, { credit: "carol" })]);
+  assert.deepEqual(twice.map((r) => [r.act, r.owed]), [[2, true], [3, false]]);
+  assert.match(twice[1].why, /^held: a second credit of skipped post:carol\/the-bell-rings-twice\/diagnosed in one pass/);
+});
+
+test("10 · the corrections' bind: a row is a skipped stage's credit with nothing to burn, or a correction that burns a mint, never half of each", () => {
+  const head = "bug recredit plan — 1 recredit(s) recorded, 0 already corrected, 0 held, 1 owed (5 stamps)\n\nRECREDIT OWED\n";
+  assert.throws(() => parseRecreditPlan(`${head}  ${SKIP_POST}/diagnosed · (skipped) → ada · hh:the-harbor · 5 · owed · by wright · burns ${WRONG_SIG} · act 2 on 2026-11-06\n`, { recorded: true }),
+    /never half of each/);
+  assert.throws(() => parseRecreditPlan(`${head}  ${SKIP_POST}/diagnosed · carol → ada · hh:the-harbor · 5 · owed · by wright · burns nothing · act 2 on 2026-11-06\n`, { recorded: true }),
+    /never half of each/);
+});
+
+// The door's recredit act, as test/bug-post.test.mjs § 18 asserts the door writes it (this pen stub serves
+// the advance and the skip, not the recredit's reads, so § 8's way: the act joins the store's facts).
+const withSkippedCredit = (facts, post) => ({ ...facts, acts: [...facts.acts, { id: 9998, actor: "wright", action: "recredit", object: post, at: new Date(NOW).toISOString(),
+  payload: JSON.stringify({ post, to: "diagnosed", was: null, credit: "ada", link: ADA_LETTER, note: "ada's letter named the cause", paid: 5, hand: "wright", skipped: true }) }],
+  houses: new Map([...facts.houses, ["ada", "hh:the-harbor"]]) });
+
+test("10 · end to end: a skipped diagnosed, recorded at the door, paid by the pass through the town's verb: one line, nothing burned, the verifier green; a second pass writes nothing; a town with no ledger holds it",
+  { skip: TOWN_HAS_SKIPPED ? false : `the town at ${TOWN_SRC} has no --stage-recredit --skipped yet (postmark pos-931-skipped-stage-recredit); set STAGE_MINT_TOWN to a town tree that carries it` },
+  async () => {
+    setup();
+    const id = await confirmed("carol", "The bell rings twice");
+    await advanceAtTown({ post: id, skip: "reproduced", reason: "the report carried the steps" }, WRIGHT, { now: NOW, roll: ROLL });
+    await advanceAtTown({ post: id, skip: "diagnosed", reason: "no cause on the record" }, WRIGHT, { now: NOW, roll: ROLL });
+    const facts = async () => withSkippedCredit(await storeFacts(), id);
+    const { repo, keyFile } = syntheticTown();
+    try {
+      const argv = ["--town", repo, "--apply", "--key", keyFile, "--date", "2026-11-07"];
+      const before = readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").trimEnd().split(/\r?\n/).length;
+      const out = [];
+      assert.equal(await main(argv, { facts: await facts(), log: (s) => out.push(s), err: (s) => out.push(`ERR ${s}`) }), 0, out.join("\n"));
+      assert.match(out.join("\n"), /credited 5 → ada · post:carol\/the-bell-rings-twice\/diagnosed-recredit, a skipped stage: nothing burned/);
+      const lines = readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").trimEnd().split(/\r?\n/);
+      const added = lines.slice(before).map((l) => l.replace(/ · sig: \S+$/, ""));
+      assert.ok(added.includes(`- 2026-11-07 · MINT → ada · 5 · for: post:${id}/diagnosed-recredit · by: the-town`), added.join("\n"));
+      assert.ok(!added.some((l) => / → BURN · /.test(l)), "a skipped stage's credit burned something");
+      assert.ok(!added.some((l) => l.includes(`post:${id}/diagnosed `)), "the skipped stage was paid as a stage line too");
+      const verify = spawnSync(process.execPath, [join(repo, "tools", "stamp-verify.mjs"), "--repo", repo], { encoding: "utf8" });
+      assert.equal(verify.status, 0, verify.stdout + verify.stderr);
+
+      const again = [];
+      assert.equal(await main(argv, { facts: await facts(), log: (s) => again.push(s), err: (s) => again.push(`ERR ${s}`) }), 0, again.join("\n"));
+      assert.match(again.join("\n"), /1 already corrected, 0 held, 0 owed/);
+      assert.equal(readFileSync(join(repo, "WHITE_PAGES", "stamp-ledger.md"), "utf8").trimEnd().split(/\r?\n/).length, lines.length, "a second pass wrote a line");
+    } finally { rmSync(repo, { recursive: true, force: true }); }
+
+    // a town whose ledger is not there: the credit holds, and says why
+    const bare = syntheticTown();
+    try {
+      rmSync(join(bare.repo, "WHITE_PAGES", "stamp-ledger.md"));
+      const out = [];
+      await main(["--town", bare.repo, "--date", "2026-11-07"], { facts: await facts(), log: (s) => out.push(s), err: (s) => out.push(`ERR ${s}`) });
+      assert.match(out.join("\n"), /\(skipped\) → ada · hh:the-harbor · 5 · held: the town's ledger was not read/);
+    } finally { rmSync(bare.repo, { recursive: true, force: true }); }
+  });
+
+// ── 11 · the plan's ledger-read flag is the read it made (POS-931, the lead's review of 097c7d12) ──
+//
+// `townEngine` decides once whether to read the town's ledger, and `ledgerRead`
+// is that decision. It used to ask the filesystem again at its return, so a
+// ledger that appeared in between was reported read while `entries` stayed
+// empty and unread: an evidence claim the plan never made. The race is made
+// certain here: the synthetic town's own engine is wrapped so that its
+// parseLaws, which townEngine calls after the read decision, writes the ledger.
+
+test("11 · townEngine's ledgerRead is its one read decision: a ledger that appears after it is never reported read, and no skipped credit plans on it; a present ledger reads, an absent one doesn't, an unreadable one refuses",
+  { skip: TOWN_HAS_VERB ? false : `the town at ${TOWN_SRC} has no stage grammar; set STAGE_MINT_TOWN to a town tree that carries it` },
+  async () => {
+    const { townEngine } = await import("../tools/bug-stage-plan.mjs");
+    const towns = [];
+    const fresh = () => { const t = syntheticTown(); towns.push(t.repo); return { ...t, ledger: join(t.repo, "WHITE_PAGES", "stamp-ledger.md") }; };
+    try {
+      // the controls: there and read; not there; there and unreadable
+      const present = fresh();
+      const read = await townEngine(present.repo);
+      assert.equal(read.ledgerRead, true, "a ledger that is there is read");
+      const absent = fresh();
+      rmSync(absent.ledger);
+      assert.equal((await townEngine(absent.repo)).ledgerRead, false, "a ledger that is not there is not read");
+      const unreadable = fresh();
+      rmSync(unreadable.ledger);
+      mkdirSync(unreadable.ledger);
+      await assert.rejects(townEngine(unreadable.repo), /EISDIR/, "a ledger that is there and cannot be read refuses the pass");
+
+      // THE RACE, made certain: the ledger appears after the read decision
+      const late = fresh();
+      const bytes = readFileSync(late.ledger, "utf8");
+      rmSync(late.ledger);
+      const tools = join(late.repo, "tools");
+      writeFileSync(join(tools, "stamp-mint-real.mjs"), readFileSync(join(tools, "stamp-mint.mjs"), "utf8"));
+      writeFileSync(join(tools, "stamp-mint.mjs"), `import { writeFileSync } from "node:fs";
+import * as real from "./stamp-mint-real.mjs";
+export * from "./stamp-mint-real.mjs";
+// townEngine calls parseLaws after it decided whether to read the ledger: the ledger appears now
+export function parseLaws(entries) { writeFileSync(${JSON.stringify(late.ledger)}, ${JSON.stringify(bytes)}); return real.parseLaws(entries); }
+`);
+      const raced = await townEngine(late.repo);
+      assert.ok(existsSync(late.ledger), "the ledger appeared after the read decision");
+      assert.equal(raced.ledgerRead, false, "LAW (POS-931): a ledger the plan did not read is never reported read");
+      assert.equal(raced.paid.size, 0, "and nothing was read from it");
+      // so a skipped stage's credit planned on that engine holds, even from a town that carries the grammar
+      const rows = planRecredits({ acts: [skipAct(1), skippedRc(2)], houseOf: HOUSE, isMeep: raced.isMeep, stageLines: raced.stageLines,
+        corrected: raced.corrected, liquid: raced.liquid, ledgerRead: raced.ledgerRead, canSkipCredit: true });
+      assert.deepEqual([rows[0].owed, rows[0].why.slice(0, 40)], [false, "held: the town's ledger was not read, so"]);
+    } finally { for (const r of towns) rmSync(r, { recursive: true, force: true }); }
+  });

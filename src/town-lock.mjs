@@ -27,6 +27,7 @@ import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -95,6 +96,29 @@ export const LOCK_BUSY = {
   defect: "the office pen is busy — other writes hold the town lock",
   hint: "nothing was recorded; the pen frees in seconds — try again",
 };
+
+// Run one door's exec under the town lock and read its one JSON answer line:
+// the settle-join, standing, gangway and join-bind doors all ran this by hand.
+//   · a busy lock is LOCK_BUSY; any other failure is the door's `tripped`
+//     sentence (its stderr goes to the log, POS-578);
+//   · an answer carrying `error` is thrown as the refusal it relays, its code
+//     defaulting to 500; `keepField` carries the answer's `field` too (join-bind).
+export async function runLockedExec(exec, payload, { clone, tripped, keepField = false }) {
+  let out;
+  try {
+    out = await execUnderTownLock(exec, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
+  } catch (e) {
+    if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
+    throw trippedError(tripped, e);
+  }
+  const result = JSON.parse(out.trim().split("\n").at(-1));
+  if (result.error)
+    throw Object.assign(new Error(result.error.defect), {
+      code: result.error.code ?? 500, ...(keepField ? { field: result.error.field ?? null } : {}),
+      defect: result.error.defect, hint: result.error.hint,
+    });
+  return result;
+}
 
 // ── THE LOCK HELD AROUND AN IN-PROCESS SECTION (POS-666) ────────────────────
 //

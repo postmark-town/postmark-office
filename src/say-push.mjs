@@ -23,12 +23,46 @@
 // So fifty waiters cost one room per voice. `voices.room.stats` counts it, and
 // the falsifier (test/say-push.test.mjs) holds the count.
 //
-// ── WHAT A WAITER IS NOT ────────────────────────────────────────────────────
+// ── WHERE A WAITER STANDS (POS-887) ─────────────────────────────────────────
 //
-// It does not re-derive where it stands while it waits: the ear is fixed when
-// the wait (or the stream) opens. A 25-second wait cannot outwalk it; a stream
-// that has walked should reopen, and every event carries `where` so the page
-// can see the ear it is listening from.
+// A waiter opens in a room (the dungeon room its reader is entered in, or the
+// open), and it is served only there: hearing stops at a room's walls, both
+// ways (voices.mjs § heardBy, WLD-74). So before it serves anyone it reads where
+// its reader stands NOW, from the same `standing` a listen uses, for the body it
+// opened with (`standAs`, which is not always the handle: the human stands
+// beside a housemate). A reader who has left that room, or whose place cannot
+// be read, has the waiter ended rather than served: a wait answers empty at
+// once, a stream closes its connection, and the ordinary reconnect buys the room
+// they stand in now. In the same room the ear walks with its reader (position
+// and boat are refreshed), so an answer is built from where they are.
+//
+// The read is made after the snapshot it serves, so a waiter is never served a
+// voice on a standing older than that voice; and that holds for a stream's FIRST
+// event too: its room is one snapshot taken before the read that authorizes it,
+// and a reader who has left by then is sent no first event at all. A room that
+// cannot be told (the world or the enter ledger unreadable) is not the open: the
+// waiter is refused at the open and ended after it (voices.mjs `standing`, strict).
+//
+// A reader who has walked is found when a voice reaches the ear they left, or at
+// the stream's next beat. A beat refreshes WHERE THE EAR STANDS; it delivers
+// nothing. What a reader walked into earshot of is served with the next voice that
+// reaches that ear (a wait is bound by its own 25 s deadline and its re-call's
+// arrival check), so a moved ear can wait for another voice. That is a delay in
+// lawful hearing, not a reach.
+//
+// A WAITER HOLDS A CONSTANT AMOUNT OF WORK: the run in progress and one pending
+// slot (the newest snapshot). A standing read that never settles cannot grow a
+// queue, and the pending slot is taken up when the read resumes. A run ends and
+// publishes idle in ONE synchronous step, so a request accepted at any moment is
+// either taken by the run or owns the next one; nothing cleans up later.
+//
+// WHAT IS ON THE BOOKS: every owner of heavy work (a stream still opening, a live
+// waiter, a waiter that has ended while a read it started is still out) holds a
+// reservation from admission until that work really ends, and the existing caps
+// (WAITERS_MAX, WAITERS_PER_HANDLE) count reservations. A waiter's end drops the
+// snapshots it owns; a read already under way still holds the one it was handed
+// until it settles (nothing here cancels a read). The fan-out's own snapshot, built
+// once per landed voice, is outside this accounting and is the base design's.
 //
 // It lives in the process that holds the voices log. A wait is a listen, but
 // it is woken by a say, so it must be served where the say lands — a reader
@@ -59,6 +93,12 @@ export function createSayPush({
 } = {}) {
   const room = voices.room;
   const waiters = new Set();
+  // THE RESERVATIONS (POS-887). Every owner of heavy work holds one from admission until that work REALLY ends: a stream still opening (a snapshot in
+  // hand while its standing read is out), a live waiter, and a waiter that has ended while a read it started has not settled. The existing caps
+  // (WAITERS_MAX, WAITERS_PER_HANDLE) count these, not only the live ears, so an ended connection cannot make a hung read vanish from the books and a
+  // client cannot re-open past the caps while earlier reads still hang. A release is idempotent (a Set delete), so a double release cannot give a slot back twice.
+  const held = new Set();
+  const hold = (handle) => { const token = { handle }; held.add(token); return { release: () => { held.delete(token); } }; };
   const stats = { fanouts: 0, woken: 0, timed_out: 0 };
   let pending = null;
 
@@ -73,29 +113,153 @@ export function createSayPush({
     pending = null; // a voice landing while this runs schedules the next one
     if (waiters.size === 0) return;
     const t = room.now();
-    const snap = await room.snapshot(t);
+    let snap = await room.snapshot(t);
     stats.fanouts += 1;
+    // The cheap cut, by where each ear last stood: whom this room could reach.
+    // `serve` then reads where each of them stands now, before anything is sent.
     const due = [...waiters].filter((w) => room.heard(w.here, snap, w.since).length > 0);
     if (due.length === 0) return;
+    const ears = due.map((w) => ({ at: w.here.at, aboard: Boolean(w.here.aboard), room: w.here.room ?? null }));
     let lists = null;
     if (nearbyMany) {
-      try { lists = await nearbyMany(due.map((w) => ({ at: w.here.at, aboard: Boolean(w.here.aboard), room: w.here.room ?? null })), t); }
+      try { lists = await nearbyMany(ears, t); }
       catch { lists = null; }
     }
-    for (const [i, w] of due.entries()) {
-      if (!waiters.has(w)) continue; // answered or gone while the room was being read
-      const r = await room.reply(w.handle, w.here, t, w.since, { snap, ...(Array.isArray(lists) ? { presentIn: lists[i] ?? null } : {}) });
-      stats.woken += 1;
-      w.deliver(r);
+    const runs = due.map((w, i) => serve(w, snap, t, Array.isArray(lists) ? { ear: ears[i], list: lists[i] ?? null } : null));
+    snap = null; // the fan-out keeps no reference of its own: each waiter owns the one it serves, and drops it at its end
+    await Promise.all(runs);
+  }
+
+  /**
+   * One ear, kept in `waiters` until it ends. `end()` is the single way out and
+   * is safe to reach twice; its hooks run once (the stream's connection hangs
+   * its own on it). The caller adds `deliver(reply)` and `leave(standing)`.
+   * `asked` counts the standing reads started and `applied` the newest one
+   * kept, so a slow older read cannot overwrite a newer one.
+   *
+   * THE WORK A WAITER HOLDS IS BOUNDED (POS-887): `busy` is the one run in
+   * progress and `next` the ONE request that arrived meanwhile, the newest
+   * snapshot (an older one's voices are all in it). Nothing is queued per
+   * arrival, so a read that never settles holds a constant amount, and `end`
+   * clears it. `fail(e)` is what a throw while serving does: end the waiter.
+   */
+  function watcher({ handle, standAs, here, since }) {
+    const w = { handle, standAs, here, since, roomAt: here.room ?? null, ended: false, hooks: [], busy: null, runs: 0, next: null, ops: 0, refs: new Set(), asked: 0, applied: 0 };
+    w.token = hold(handle); // reserved before any heavy work, released when the waiter has ended AND nothing it started is still out
+    w.settle = () => { if (w.ended && w.ops === 0) w.token.release(); };
+    w.fail = (e) => {
+      console.error(`[say-push] serving a waiter tripped (${String(e?.message ?? e).slice(0, 160)}) — it is ended`);
+      w.end();
+    };
+    w.end = () => {
+      if (w.ended) return;
+      w.ended = true;
+      for (const r of w.refs) r.snap = null; // the snapshots it owns are dropped now; a read already under way still holds its own until it settles
+      w.refs.clear();
+      w.next = null; // pending work is not kept past the end
+      waiters.delete(w);
+      for (const f of w.hooks.splice(0)) {
+        try { f(); } catch { /* one hook failing must not strand the rest */ }
+      }
+      w.settle();
+    };
+    return w;
+  }
+
+  /**
+   * Where `w`'s reader stands now, made fresh for every caller: a read already
+   * under way began before this caller's need and may predate the reader's move,
+   * so none is shared. Answers the standing while the watcher is still in the
+   * room it opened in; otherwise ends it (`leave`) and answers null, as it does
+   * for a watcher already ended, a reader the world can no longer place, and a
+   * read that trips. No old room is ever assumed in their place.
+   */
+  async function stand(w) {
+    if (w.ended) return null;
+    const mine = ++w.asked;
+    let now = null;
+    try { now = await room.standing(w.standAs, { strict: true }); } catch { now = null; } // strict: a room that cannot be told ends it, it is never read as the open
+    if (w.ended) return null; // ended while the read was out: a close, or another look that found the reader gone
+    if (!now || now.bounce || (now.room ?? null) !== w.roomAt) { w.leave(now); return null; }
+    if (mine > w.applied) { w.applied = mine; w.here = now; }
+    return now;
+  }
+
+  /**
+   * One watcher's answer to the voices in `snap`, built from where its reader
+   * stands now. A watcher is served one request at a time, so overlapping
+   * fan-outs and the arrival check cannot both build from the same cursor and
+   * hand the same voice over twice, and the cursor only moves forward. A request
+   * that arrives while one is running is NOT queued: it replaces the one pending
+   * slot (the newest snapshot holds the older's voices), and the run takes it up
+   * when it finishes, so a voice that landed during a slow read is still
+   * considered without another voice having to unstick it. `asked` is the
+   * batch's presence answer for the ear it was read for; it is used only while
+   * the reader still stands at that ear, else the reply reads its own.
+   */
+  /** A request's snapshot, owned by the watcher so that its end can drop it (a read already under way still holds the one it was handed). */
+  function own(w, snap, t, asked = null) {
+    const h = { snap, t, asked };
+    w.refs.add(h);
+    return h;
+  }
+  const disown = (w, h) => { h.snap = null; w.refs.delete(h); };
+
+  async function attempt(w, h) {
+    const here = await stand(w);
+    if (!here || !h.snap || room.heard(here, h.snap, w.since).length === 0) return;
+    const asked = h.asked;
+    const sameEar = asked && asked.ear.at.x === here.at.x && asked.ear.at.y === here.at.y && asked.ear.aboard === Boolean(here.aboard);
+    const r = await room.reply(w.handle, here, h.t, w.since, { snap: h.snap, ...(sameEar ? { presentIn: asked.list } : {}) });
+    if (w.ended) return; // closed while the reply was built: nothing is sent after the end
+    stats.woken += 1;
+    w.deliver(r);
+  }
+
+  /**
+   * THE HANDOFF IS ONE SYNCHRONOUS STEP. The run reads the pending slot and, when
+   * it is empty, returns; its `finally` runs in that same step (nothing awaits
+   * between a return and its finally), so "no more work" and "idle" are published
+   * together. A request accepted a moment later finds `busy` clear and owns a new
+   * run; one accepted a moment earlier was in the slot and is taken by this run.
+   * No cleanup runs later, so none can erase a slot written after the run ended;
+   * and `busy` is a run id, so a stale run can only ever clear its own.
+   */
+  function serve(w, snap, t, asked = null) {
+    if (w.ended) return Promise.resolve();
+    if (w.busy) { // coalesced into the one pending slot (replacing, and dropping, the one before it)
+      if (w.next) disown(w, w.next);
+      w.next = own(w, snap, t, null);
+      return Promise.resolve();
     }
+    const id = ++w.runs;
+    w.busy = id;
+    w.ops += 1;
+    let h = own(w, snap, t, asked);
+    return (async () => {
+      try {
+        for (;;) {
+          try { await attempt(w, h); } catch (e) { w.fail(e); return; }
+          disown(w, h);
+          const more = w.next;
+          w.next = null;
+          if (!more || w.ended) { if (more) disown(w, more); return; }
+          h = more;
+        }
+      } finally {
+        if (w.busy === id) w.busy = null;
+        w.ops -= 1;
+        w.settle();
+      }
+    })();
   }
 
   function admit(handle) {
-    if (waiters.size >= WAITERS_MAX)
+    if (held.size >= WAITERS_MAX)
       return bounce("the office is holding as many open ears as it keeps",
         `call again without wait: (a plain listen), or in a moment — the office holds at most ${WAITERS_MAX} waiting listens at once`);
     let mine = 0;
-    for (const w of waiters) if (w.handle === handle) mine += 1;
+    for (const k of held) if (k.handle === handle) mine += 1;
     if (mine >= WAITERS_PER_HANDLE)
       return bounce(`${handle} already has ${mine} open ears`,
         `a resident may hold ${WAITERS_PER_HANDLE} waiting listens or streams at once — close one, or listen without wait:`);
@@ -109,33 +273,39 @@ export function createSayPush({
    * first call buys the room); `waitMs` is the caller's, already held to
    * WAIT_MAX_S by `waitMsOf`. Answers the say's
    * own delta the moment a new voice lands in earshot, or an empty answer at
-   * the deadline with the cursor unmoved.
+   * the deadline with the cursor unmoved. A reader who stops standing in the
+   * room it began in is answered the same empty way at once.
    */
   async function wait(handle, { standAs = handle, since, waitMs } = {}) {
     const t0 = room.now();
-    const here = await room.standing(standAs);
+    const here = await room.standing(standAs, { strict: true }); // a room that cannot be told refuses the wait, it does not open it in the open
     if (here.bounce) return here.bounce;
     const refused = admit(handle);
     if (refused) return refused;
     room.listened(handle, here, t0);
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let timer = null;
-      const w = {
-        handle, here, since,
-        deliver(r) {
-          if (!waiters.delete(w)) return;
-          clearTimer(timer);
-          resolve({ ...r, waited_ms: room.now() - t0 });
-        },
+      const w = watcher({ handle, standAs, here, since });
+      const finish = (body) => {
+        w.end();
+        clearTimer(timer);
+        resolve({ ...body, waited_ms: room.now() - t0 });
       };
+      w.deliver = finish;
+      w.fail = (e) => { w.end(); clearTimer(timer); reject(e); }; // a throw while serving ends the wait and is the caller's error, as a plain listen's would be
+      w.leave = (now) => finish({
+        where: whereOf(now?.at ? now : w.here), voices: [], spoke: false, latest: since,
+        note: "you no longer stand where this listen began, or where you stand could not be read — call again with the same since (your cursor has not moved) to listen from where you stand now",
+      });
       // Registered BEFORE the arrival check, so a voice landing while the
       // check reads the room is not lost between the two.
       waiters.add(w);
       timer = setTimer(() => {
-        if (!waiters.delete(w)) return;
+        if (w.ended) return;
+        w.end();
         stats.timed_out += 1;
         resolve({
-          where: whereOf(here), voices: [], spoke: false, latest: since,
+          where: whereOf(w.here), voices: [], spoke: false, latest: since,
           waited_ms: room.now() - t0,
           note: `nothing new within earshot in ${Math.round(waitMs / 1000)}s — call again with the same since (your cursor has not moved). The room's lists ride with the next voice, or on a call without wait:`,
         });
@@ -143,12 +313,14 @@ export function createSayPush({
       // THE ARRIVAL CHECK costs a room only when the log holds a voice newer
       // than the cursor — otherwise there is nothing this ear could have missed.
       if (room.latestAt() > since) {
+        w.ops += 1; // the check is work the waiter has started: its reservation outlives an end until the read settles
         (async () => {
-          const t = room.now();
-          const snap = await room.snapshot(t);
-          if (waiters.has(w) && room.heard(here, snap, since).length > 0)
-            w.deliver(await room.reply(handle, here, t, since, { snap }));
-        })().catch(() => { /* the deadline still answers */ });
+          try {
+            const t = room.now();
+            let snap = await room.snapshot(t);
+            if (!w.ended) { const run = serve(w, snap, t); snap = null; await run; }
+          } finally { w.ops -= 1; w.settle(); }
+        })().catch((e) => w.fail(e));
       }
     });
   }
@@ -157,41 +329,78 @@ export function createSayPush({
    * THE STREAM, for the page. `send(reply)` is called with the room as a
    * say-read answers it (the full room without `since`, the delta with it),
    * then with each delta as voices land in earshot; the cursor advances with
-   * each. Returns `{ close, beat }` or a bounce. `beat` keeps the ear counted
-   * as present (listening is presence) without reading anything.
+   * each. Returns `{ close, beat, onEnd }` or a bounce. `beat()` looks at the
+   * reader again and keeps the ear counted as present where they stand now,
+   * without reading the room; it answers whether the stream is still open.
+   * `onEnd(fn)` runs `fn` once when the stream ends, however it ends, so the
+   * connection can end with it. A reader who stops standing in the room the
+   * stream began in has it ended, and reconnects to the room they stand in.
    */
   async function stream(handle, { standAs = handle, since = null } = {}, send) {
     const t = room.now();
-    const here = await room.standing(standAs);
+    const here = await room.standing(standAs, { strict: true }); // a room that cannot be told refuses the stream, it does not open it in the open
     if (here.bounce) return here.bounce;
     const refused = admit(handle);
     if (refused) return refused;
-    room.listened(handle, here, t);
-    const w = {
-      handle, here, since,
-      deliver(r) {
-        if (!waiters.has(w)) return;
-        if (Number.isFinite(r?.latest)) w.since = r.latest;
-        send(r);
-      },
+    const w = watcher({ handle, standAs, here, since }); // takes the reservation, before any heavy work
+    w.ops += 1; // the whole opening is work in flight: it counts until it really ends, ended connection or not
+    w.deliver = (r) => {
+      if (Number.isFinite(r?.latest)) w.since = r.latest;
+      send(r);
     };
-    // The first event is sent BEFORE the ear joins the fan-out, so a voice
-    // landing while it is read cannot overtake it and move the cursor back; a
-    // voice that landed in that gap is caught by the same arrival check the
-    // wait makes.
-    const first = await room.reply(handle, here, t, since, {});
-    if (Number.isFinite(first?.latest)) w.since = first.latest;
-    send(first);
-    waiters.add(w);
-    if (room.latestAt() > w.since) {
-      const t1 = room.now();
-      const snap = await room.snapshot(t1);
-      if (waiters.has(w) && room.heard(here, snap, w.since).length > 0)
-        w.deliver(await room.reply(handle, here, t1, w.since, { snap }));
+    w.leave = () => w.end();
+    try {
+      room.listened(handle, here, t);
+      // THE FIRST EVENT IS BUILT FROM ONE SNAPSHOT, TAKEN BEFORE THE READ THAT
+      // AUTHORIZES IT (POS-887). The snapshot is the room as it stands (voices,
+      // and the record's clusters, which are not bound by the instant); the
+      // standing read after it says whether this reader is still where the
+      // stream opened. Then the reply is dressed from THAT snapshot and no
+      // newer one, so no voice spoken after the reader left can reach it in its
+      // record, its count or its cursor. A reader who has left, cannot be placed
+      // or whose room cannot be told gets NO first event: the stream ends and
+      // they reconnect to the room they stand in. (This is a lawful snapshot
+      // read, not atomic delivery: a reader who leaves after the check is in the
+      // same position as one who leaves while a frame is on the wire.)
+      const tSnap = room.now();
+      const o = own(w, null, tSnap);
+      o.snap = await room.snapshot(tSnap); // owned from the moment it lands: the stream's end drops it
+      if (w.ended) o.snap = null;
+      const now = await stand(w);
+      if (now && o.snap) {
+        const first = await room.reply(handle, now, tSnap, since, { snap: o.snap });
+        disown(w, o);
+        if (!w.ended) {
+          if (Number.isFinite(first?.latest)) w.since = first.latest;
+          // The first event is sent BEFORE the ear joins the fan-out, so a voice
+          // landing while it is read cannot overtake it and move the cursor back;
+          // a voice that landed in that gap is caught by the arrival check below,
+          // which stands the reader again before it serves them.
+          send(first);
+          waiters.add(w);
+          if (room.latestAt() > w.since) {
+            const t1 = room.now();
+            let snap1 = await room.snapshot(t1);
+            if (!w.ended) { const run = serve(w, snap1, t1); snap1 = null; await run; }
+          }
+        }
+      }
+    } catch (e) {
+      w.end(); // nothing the stream registered outlives a throw while it opened
+      throw e;
+    } finally {
+      w.ops -= 1;
+      w.settle();
     }
     return {
-      close: () => { waiters.delete(w); },
-      beat: () => room.listened(handle, here, room.now()),
+      close: () => w.end(),
+      onEnd: (fn) => { if (w.ended) fn(); else w.hooks.push(fn); },
+      beat: async () => {
+        const now = await stand(w);
+        if (!now || w.ended) return false;
+        room.listened(handle, now, room.now());
+        return true;
+      },
     };
   }
 
@@ -222,29 +431,62 @@ export function waitMsOf(args = {}) {
 
 /**
  * Serve one stream as Server-Sent Events. `open(send)` is `stream(...)` bound
- * to the caller; it answers `{ close, beat }` or a bounce, which is written as
- * the ordinary JSON refusal before any event. Each event is `event: room` with
- * the reply as its data; a comment line every STREAM_BEAT_MS keeps proxies
- * from closing an idle room and keeps the ear counted as present.
+ * to the caller; it answers `{ close, beat, onEnd }` or a bounce, which is
+ * written as the ordinary JSON refusal before any event. Each event is
+ * `event: room` with the reply as its data; a comment line every STREAM_BEAT_MS
+ * keeps proxies from closing an idle room and keeps the ear counted as present,
+ * once the stream has looked again at where its reader stands.
+ *
+ * The response ends, and its beat stops, when the client goes, when the
+ * response fails, and when the stream ends itself (its reader left the room it
+ * began in). Any of them may come twice, or before `open` has answered; nothing
+ * is written after the end.
  */
 export async function serveSayStream(req, res, open, { beatMs = STREAM_BEAT_MS, onBounce } = {}) {
   let started = false;
+  let over = false;
+  let opened = null;
+  let beat = null;
+  const head = () => {
+    if (started) return;
+    started = true;
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+  };
   const send = (r) => {
-    if (!started) {
-      started = true;
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        connection: "keep-alive",
-        "x-accel-buffering": "no",
-      });
-    }
+    if (over) return;
+    head();
     res.write(`event: room\ndata: ${JSON.stringify(r)}\n\n`);
   };
-  const opened = await open(send);
-  if (opened?.error) return onBounce(opened);
-  const beat = setInterval(() => { opened.beat(); res.write(": beat\n\n"); }, beatMs);
-  const end = () => { clearInterval(beat); opened.close(); };
-  req.on("close", end);
-  res.on("error", end);
+  const finish = () => {
+    if (over) return;
+    over = true;
+    clearInterval(beat);
+    if (!opened) return; // gone before the stream opened: it is closed the moment it does
+    opened.close();
+    head(); // a stream that ends before its first event still ends as a stream
+    res.end();
+  };
+  req.on("close", finish);
+  res.on("error", finish);
+  const got = await open(send);
+  if (got?.error) {
+    if (!over) onBounce(got);
+    return;
+  }
+  opened = got;
+  if (over) { opened.close(); return; }
+  let looking = false;
+  beat = setInterval(async () => {
+    if (looking || over) return; // one look at the reader at a time, never a pile of them
+    looking = true;
+    try { if ((await opened.beat()) && !over) res.write(": beat\n\n"); }
+    catch { finish(); }
+    finally { looking = false; }
+  }, beatMs);
+  opened.onEnd(finish);
 }

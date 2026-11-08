@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 
 import {
   refuseOutOfReach, refuseGiveOfUnheld, whereThingStands, holdEffectsFrom,
-  liveHolder, PROPAGATION, nearestIds,
+  liveHolder, PROPAGATION, nearestIds, HOLD_TOOLS,
 } from "../src/world-hold.mjs";
 import { standsWithin, withinArmsLength, metresBetween, bearingWord, EARSHOT_M } from "../src/reach.mjs";
 
@@ -324,8 +324,17 @@ test("WALK #12 item 1 — a take from 536 m is REFUSED, naming the distance and 
   assert.equal(e.code, 409);
   assert.match(e.defect, /you are not standing where wright\/a-trued-spinning-top-for-little-m stands/);
   assert.match(e.defect, /54\d m|53\d m/, "the refusal names the distance the walk measured");
-  assert.match(e.hint, /a take is a threshold act/);
+  // WLD-79 (world #370): until 2026-11-06 this asserted "a take is a threshold act"; the law now says takes reach 60 m, the same as a give
+  assert.match(e.hint, /takes reach 60 m, the same as a give/);
+  assert.doesNotMatch(e.hint, /a take is a threshold act/, "the old words contradict the law");
   assert.match(e.hint, /mode: "center"/, "the refusal must hand back the walk that closes the distance");
+});
+
+test("WLD-79 — world_hold's own description says the same words as the refusal's hint: takes reach 60 m, the same as a give", () => {
+  const d = HOLD_TOOLS.find((t) => t.name === "world_hold")?.description ?? "";
+  assert.ok(d.length > 0, "the tool is found (control that the description was read)");
+  assert.match(d, /takes reach 60 m, the same as a give/);
+  assert.doesNotMatch(d, /a take is a threshold act/, "the old words contradict the law");
 });
 
 test("WALK #12 item 1, the other side — a take from INSIDE the extent stands, and says which leg admitted it", async () => {
@@ -554,9 +563,9 @@ test("an unmeasurable distance is NOT a short one", () => {
 });
 
 test("the bearing is the compass word a resident reads in a walk answer", () => {
-  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: 10 }), "N");
+  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: 10 }), "S");
   assert.equal(bearingWord({ x: 0, y: 0 }, { x: 10, y: 0 }), "E");
-  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: -10 }), "S");
+  assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: -10 }), "N");
   assert.equal(bearingWord({ x: 0, y: 0 }, { x: -10, y: 0 }), "W");
   assert.equal(bearingWord({ x: 0, y: 0 }, { x: 0, y: 0 }), null);
 });
@@ -935,7 +944,7 @@ test("POS-806 — a 61 m refusal says walk 1 m; the walk it names always lands i
     ctx: ctxOf(top, { x: 0, y: 0 }),
   }));
   assert.ok(e);
-  assert.match(e.defect, /; walk 1 m N to be within 60 m of it/);
+  assert.match(e.defect, /; walk 1 m S to be within 60 m of it/);
   // falsifier for an off-by-rounding: walking exactly the named metres toward it must stand
   const after = { x: 0, y: 1 };
   assert.equal(standsWithin(after, top).stands, true);

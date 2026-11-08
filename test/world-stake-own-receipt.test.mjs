@@ -1,0 +1,364 @@
+// world-stake-own-receipt.test.mjs — POS-922: a stake's answer names its own
+// write, or refuses.
+//
+//   node --test --test-timeout=180000 test/world-stake-own-receipt.test.mjs
+//
+// THE REPORT (Wright, 2026-11-06, POS-922): two parallel batches of stakes under
+// one hand; lane B's stake on one mark answered `applied 1` with the SAME commit
+// as lane A's stake on another, made at about the same moment, and B's stake was
+// not on the ledger. "The answer must name its own write, or refuse."
+//
+// THE FALSIFIER (the description's): two concurrent stakes by one hand on two
+// marks, through the REAL lock, exec, town engine and pen (runExec spawns
+// src/world-stake-exec.mjs under the flock, exactly as the door does). For every
+// answer that says it moved stamps, its commit must hold THAT mark's stake line,
+// and the ledger must hold exactly the lines the answers claim.
+//
+// Synthetic handles and marks; a scratch town, store and remote.
+
+import { after, test } from "node:test";
+import assert from "node:assert/strict";
+import { generateKeyPairSync } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
+import { NO_TOWN, townClone } from "./fixture-paths.mjs";
+import { copyTownTools } from "./helpers/town-tools.mjs";
+import { startStore } from "./helpers/embedded-store.mjs";
+
+const TOWN = townClone();
+const litter = [];
+after(() => { for (const d of litter) { try { rmSync(d, { recursive: true, force: true }); } catch { /* litter */ } } });
+const scratch = (p) => { const d = mkdtempSync(join(tmpdir(), p)); litter.push(d); return d; };
+const git = (repo, ...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+const world = scratch("pos922-world-");
+mkdirSync(join(world, "WORLD"), { recursive: true });
+writeFileSync(join(world, "WORLD", "world-state.json"), JSON.stringify({ tick: 0, dials: {}, marks: [] }));
+writeFileSync(join(world, "WORLD", "skeleton.json"), JSON.stringify({ features: [], physics_registry: {} }));
+execFileSync("git", ["init", "-q", "-b", "main", world]);
+git(world, "add", "-A"); git(world, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "an empty world");
+
+const DAY = "2026-10-13";
+const HAND = "sbx-ana";
+const FX = TOWN ? (() => {
+  const repo = scratch("pos922-town-");
+  mkdirSync(join(repo, "WHITE_PAGES"), { recursive: true });
+  copyTownTools(TOWN, repo);
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  writeFileSync(join(repo, "tools", "stamp-pubkey.pem"), publicKey.export({ type: "spki", format: "pem" }));
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+  const keyFile = join(scratch("pos922-key-"), "stamp-key.pem");
+  writeFileSync(keyFile, pem);
+  execFileSync("git", ["init", "-q", "-b", "main", repo]);
+  return { repo, pem, keyFile };
+})() : null;
+
+const store = await startStore({ db: "pos922_own_receipt_test" });
+const skip = (store.skip ?? false) || (!FX && NO_TOWN) || false;
+
+const savedEnv = {};
+const setEnv = (k, v) => { if (!(k in savedEnv)) savedEnv[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+if (!skip) {
+  setEnv("WORLD_CLONE", world);
+  setEnv("TOWN_CLONE", FX.repo);
+  setEnv("TOWN_LOCK", join(scratch("pos922-lock-"), "town.lock"));
+  setEnv("STAMP_KEY", FX.keyFile);
+  setEnv("BOT_NAME", "fixture"); setEnv("BOT_EMAIL", "fixture@test.invalid");
+  setEnv("TOWN_PUSH", undefined); setEnv("STAMP_LINES", undefined);
+  setEnv("WORLD2_PG", "1"); setEnv("WORLD2_PG_URL", store.url("office_api"));
+}
+
+const MINT = FX ? await import(pathToFileURL(join(FX.repo, "tools", "stamp-mint.mjs"))) : null;
+if (FX) {
+  MINT.appendSigned(FX.repo, [MINT.giftLine({ date: "2026-09-01", handle: HAND, n: 200, slug: "seed", by: "the-town" })], FX.pem);
+  git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "fixture town");
+}
+
+const { currentCrossing } = await import("../src/crossings.mjs");
+const { runExec } = await import("../src/world-stake.mjs");
+
+after(async () => {
+  for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  if (!(store.skip ?? false)) await store.stop();
+});
+
+async function owner(fn) { const c = await store.connect("world2_owner"); try { return await fn(c); } finally { await c.end(); } }
+const WIN = 300;
+let marks = 0;
+async function seed() {
+  await owner(async (c) => {
+    await c.query("TRUNCATE acts, claims, marks, windows, settlements, households, household_pins CASCADE");
+    await c.query(`INSERT INTO windows (id, opens_at, closes_at, status) VALUES ($1, now() - interval '2 days', now() + interval '2 days', 'open')`, [WIN]);
+    await c.query(`INSERT INTO households (slug, ord, name, residents, since, declared_by) VALUES ($1, 0, $1, ARRAY[$1], '2026-08-01', $1)`, [HAND]);
+  });
+}
+/** A pending mark of the hand's, as the pen files it. */
+async function markOf(slug) {
+  const mark = `${HAND}/${slug}-${++marks}`;
+  await owner(async (c) => {
+    await c.query(`INSERT INTO acts (at, crossing, actor, action, object, class, payload, household) VALUES (now(), $1, $2, 'leave-mark', $3, 'mark', '{}', $4)`, [currentCrossing(), HAND, mark, `hh:${HAND}`]);
+    await c.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
+              VALUES ($1, 'sited', $2, $3, 'pending', 'A mark.', $5, '((39,-1),(41,1))', 0, $6, $4)`,
+    [WIN, HAND, `hh:${HAND}`, mark, JSON.stringify({ slug: mark, at: { x: 40, y: 0 }, extent: { w: 2, h: 2 } }), JSON.stringify({ by: HAND })]);
+  });
+  return mark;
+}
+
+const stake = (mark) => runExec({ verb: "stake", handle: HAND, mark, n: 1, via: "api", date: DAY });
+const ledgerAt = (ref) => git(FX.repo, "show", `${ref}:WHITE_PAGES/stamp-ledger.md`);
+/** The stake lines a commit ADDED (its own write), mark by mark. */
+const addedStakeMarks = (commit) => git(FX.repo, "diff", `${commit}^`, commit, "--", "WHITE_PAGES/stamp-ledger.md")
+  .split("\n").filter((l) => l.startsWith("+- ")).map((l) => /stake:world-mark\/(\S+)/.exec(l)?.[1]).filter(Boolean);
+
+/**
+ * THE ASSERTION, per answer: a success's commit is a commit, it ADDED this
+ * mark's stake line, and the ledger holds that line; a refusal claims nothing.
+ */
+function assertOwnWrite(answer, mark, label) {
+  if (answer?.error) {
+    assert.ok(!answer.applied, `${label}: a refusal claims nothing moved`);
+    return 0;
+  }
+  assert.ok(answer.applied >= 1, `${label}: ${JSON.stringify(answer)}`);
+  assert.match(String(answer.commit ?? ""), /^[0-9a-f]{40}$/, `${label}: a stake that moved stamps names its commit`);
+  assert.deepEqual(addedStakeMarks(answer.commit), [mark],
+    `${label}: LAW (POS-922): "a stake's answer names its own write" — commit ${String(answer.commit).slice(0, 8)} must add ${mark}'s stake line and no other`);
+  assert.match(ledgerAt("HEAD"), new RegExp(`stake:world-mark/${mark.replace(/[/.]/g, "\\$&")}\\b`), `${label}: the line is on the ledger`);
+  return answer.applied;
+}
+
+async function race(rounds, label) {
+  for (let i = 0; i < rounds; i++) {
+    const a = await markOf("buttress");
+    const b = await markOf("south-keeper");
+    const [ra, rb] = await Promise.all([stake(a), stake(b)]);
+    assertOwnWrite(ra, a, `${label} round ${i} lane A`);
+    assertOwnWrite(rb, b, `${label} round ${i} lane B`);
+    if (!ra?.error && !rb?.error) assert.notEqual(ra.commit, rb.commit, `${label} round ${i}: two landed stakes are two commits`);
+  }
+}
+
+// ── THE MECHANISM (measured, POS-922) ───────────────────────────────────────
+//
+// The stake execs are serialized by the town lock, and the two races above
+// pass at the train's tip: two stakes alone never cross. What crosses them is
+// a writer the lock does not cover. The server's paper doors write TOWN_CLONE
+// in-process without town.lock (write.mjs § THE PEN BATCH), and a refused one
+// is put back by `restore`, which may `reset --hard` the clone to the HEAD it
+// recorded. Landing between a stake's commit and its receipt, that reset
+// takes the stake's commit away and leaves HEAD at the previous write — and
+// the pen used to read HEAD as its own commit. The other stake's commit was on
+// main, so the receipt "landed": `applied 1`, someone else's sha, a line gone.
+//
+// The hook below is that writer, at that instant: once, right after lane B's
+// stake commit, it resets the clone to the commit before it (as `restore`
+// would to its recorded head). Everything under test is real: the lock, the
+// exec, the town engine, the pen and its landing.
+function resetUnderTheNextCommitOf(mark) {
+  const marker = join(scratch("pos922-hook-"), "fired");
+  const hook = join(FX.repo, ".git", "hooks", "post-commit");
+  writeFileSync(hook, `#!/bin/sh\n[ -e "${marker}" ] && exit 0\ngit log -1 --format=%s | grep -q "${mark}" || exit 0\n: > "${marker}"\ngit reset -q --hard HEAD~1\n`, { mode: 0o755 });
+  return { fired: () => { try { readFileSync(marker); return true; } catch { return false; } }, remove: () => rmSync(hook, { force: true }) };
+}
+
+for (const pushing of [false, true]) {
+  test(`A WRITER RESETS THE CLONE UNDER LANE B (${pushing ? "pushing" : "local"} pen): B refuses rather than answer with A's commit, and A stands`, { skip }, async () => {
+    await seed();
+    if (pushing) {
+      const origin = join(scratch("pos922-origin-"), "town.git");
+      execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+      try { git(FX.repo, "remote", "remove", "origin"); } catch { /* none yet */ }
+      git(FX.repo, "remote", "add", "origin", origin);
+      git(FX.repo, "push", "-q", "-u", "origin", "main");
+      setEnv("TOWN_PUSH", "1");
+    }
+    const a = await markOf("buttress");
+    const b = await markOf("south-keeper");
+    const writer = resetUnderTheNextCommitOf(b);
+    try {
+      const [ra, rb] = await Promise.all([stake(a), stake(b)]);
+      assert.ok(writer.fired(), "the foreign reset landed between B's commit and its receipt");
+      assertOwnWrite(ra, a, "lane A");
+      assert.ok(rb?.error, `LAW (POS-922): "names its own write, or refuses" — lane B's own commit is gone, so it must refuse; it answered ${JSON.stringify(rb)}`);
+      assert.doesNotMatch(ledgerAt("HEAD"), new RegExp(`stake:world-mark/${b.replace(/[/.]/g, "\\$&")}\\b`), "and B's line is truly not on the ledger");
+    } finally {
+      writer.remove();
+      if (pushing) delete process.env.TOWN_PUSH;
+    }
+  });
+}
+
+// ── THE OTHER SHAPE: A WRITER COMMITS ON TOP (the independent review, 2026-11-07) ──
+//
+// The unlocked writer's ordinary act is not a reset but a commit of its own,
+// right on top of the stake's, and a push. Then HEAD is not the stake's commit,
+// yet the stake's commit IS on the clone and, once pushed, on origin/main. The
+// stake must answer with ITS OWN sha, never the writer's on top, and never the
+// "nothing was recorded, safe to repeat" refusal (that invites a double stake).
+// In store mode (the box's) a landed stake must also keep its store rows.
+function commitOnTopOfTheNextCommitOf(mark, { push = false } = {}) {
+  const marker = join(scratch("pos922-ontop-"), "fired");
+  const hook = join(FX.repo, ".git", "hooks", "post-commit");
+  writeFileSync(hook, `#!/bin/sh
+[ -e "${marker}" ] && exit 0
+git log -1 --format=%s | grep -q "${mark}" || exit 0
+: > "${marker}"
+mkdir -p WHITE_PAGES/paper && date +%N > WHITE_PAGES/paper/edit.md
+git add WHITE_PAGES/paper/edit.md
+git -c user.name=paper -c user.email=paper@test.invalid commit -q -m "paper: an edit on top"
+${push ? "git push -q origin HEAD:main" : ""}
+exit 0
+`, { mode: 0o755 });
+  return { fired: () => { try { readFileSync(marker); return true; } catch { return false; } }, remove: () => rmSync(hook, { force: true }) };
+}
+
+function withOrigin() {
+  const origin = join(scratch("pos922-origin-"), "town.git");
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+  try { git(FX.repo, "remote", "remove", "origin"); } catch { /* none yet */ }
+  git(FX.repo, "remote", "add", "origin", origin);
+  git(FX.repo, "push", "-q", "-u", "origin", "main");
+  setEnv("TOWN_PUSH", "1");
+  return origin;
+}
+
+for (const mode of ["local", "pushing", "store"]) {
+  test(`A WRITER COMMITS ON TOP OF LANE B'S COMMIT (${mode} pen): B answers its OWN commit, not the one on top, and is never told "nothing was recorded"`, { skip }, async () => {
+    await seed();
+    if (mode !== "local") withOrigin();
+    if (mode === "store") { setEnv("STAMP_LINES", "store"); await owner((c) => c.query("DELETE FROM stamp_lines")); }
+    const a = await markOf("buttress");
+    const b = await markOf("south-keeper");
+    const writer = commitOnTopOfTheNextCommitOf(b, { push: mode !== "local" });
+    try {
+      const [ra, rb] = await Promise.all([stake(a), stake(b)]);
+      assert.ok(writer.fired(), "the other writer committed on top of B's commit");
+      assertOwnWrite(ra, a, "lane A");
+      assert.ok(!rb?.error, `LAW (POS-922): a stake whose own commit stands is no "nothing was recorded" refusal — it answered ${JSON.stringify(rb)}`);
+      assertOwnWrite(rb, b, "lane B");
+      assert.notEqual(git(FX.repo, "log", "-1", "--format=%s", rb.commit), "paper: an edit on top", "its own sha, not the writer's on top");
+      if (mode !== "local") assert.equal(spawnSync("git", ["-C", FX.repo, "merge-base", "--is-ancestor", rb.commit, "origin/main"]).status, 0, "and that sha is landed");
+      if (mode === "store") {
+        const rows = await owner(async (c) => (await c.query("SELECT canonical FROM stamp_lines ORDER BY seq")).rows.map((r) => r.canonical));
+        assert.ok(rows.some((l) => l.includes(`world-mark/${b}`)), "the landed stake keeps its store row: the store agrees with the public ledger");
+      }
+    } finally {
+      writer.remove();
+      delete process.env.TOWN_PUSH;
+      delete process.env.STAMP_LINES;
+    }
+  });
+}
+
+test("A WRITER RESETS THE CLONE UNDER LANE B (store pen): B refuses, and the store holds no row the ledger lacks", { skip }, async () => {
+  await seed();
+  withOrigin();
+  setEnv("STAMP_LINES", "store");
+  await owner((c) => c.query("DELETE FROM stamp_lines"));
+  const a = await markOf("buttress");
+  const b = await markOf("south-keeper");
+  const writer = resetUnderTheNextCommitOf(b);
+  try {
+    const [ra, rb] = await Promise.all([stake(a), stake(b)]);
+    assert.ok(writer.fired());
+    assertOwnWrite(ra, a, "lane A");
+    assert.ok(rb?.error, `B's commit is gone, so it refuses: ${JSON.stringify(rb)}`);
+    assert.match(rb.hint, /took its commit away before it landed|nothing was staked|nothing was recorded/);
+    const rows = await owner(async (c) => (await c.query("SELECT canonical FROM stamp_lines ORDER BY seq")).rows.map((r) => r.canonical));
+    assert.ok(!rows.some((l) => l.includes(`world-mark/${b}`)), "no store row for a stake the ledger does not hold");
+  } finally {
+    writer.remove();
+    delete process.env.TOWN_PUSH;
+    delete process.env.STAMP_LINES;
+  }
+});
+
+// The same writer one step earlier: its reset lands after the engine appended
+// the stake's line and before the pen stages it. The pen then finds nothing to
+// commit and names no commit; the stake moved nothing on the ledger, so it must
+// refuse rather than answer `applied` with no write behind it. The town engine
+// in the fixture clone is wrapped (the real engine, then that reset), switched
+// on for one mark by POS922_RESET_AFTER_APPLY.
+test("A WRITER RESETS THE CLONE BEFORE THE PEN STAGES LANE B's LINE: B refuses rather than answer applied with no commit", { skip }, async () => {
+  await seed();
+  const tools = join(FX.repo, "tools");
+  const real = readFileSync(join(tools, "world-stake.mjs"), "utf8");
+  writeFileSync(join(tools, "world-stake-real.mjs"), real);
+  writeFileSync(join(tools, "world-stake.mjs"), `import { execFileSync } from "node:child_process";
+import * as engine from "./world-stake-real.mjs";
+export * from "./world-stake-real.mjs";
+export function worldStakeApply(repo, args, keyPem) {
+  const out = engine.worldStakeApply(repo, args, keyPem);
+  if (process.env.POS922_RESET_AFTER_APPLY && args.mark === process.env.POS922_RESET_AFTER_APPLY)
+    execFileSync("git", ["-C", repo, "checkout", "-q", "HEAD", "--", "WHITE_PAGES/stamp-ledger.md"]);
+  return out;
+}
+`);
+  git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the engine, wrapped for one test");
+  const b = await markOf("south-keeper");
+  setEnv("POS922_RESET_AFTER_APPLY", b);
+  try {
+    const rb = await stake(b);
+    assert.ok(rb?.error, `LAW (POS-922): "names its own write, or refuses" — it answered ${JSON.stringify(rb)}`);
+    assert.match(rb.hint, /nothing was staked and your stamps are untouched/);
+  } finally {
+    delete process.env.POS922_RESET_AFTER_APPLY;
+    writeFileSync(join(tools, "world-stake.mjs"), real);
+    rmSync(join(tools, "world-stake-real.mjs"), { force: true });
+    git(FX.repo, "add", "-A"); git(FX.repo, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "the engine, unwrapped");
+  }
+});
+
+// A READ THAT FAILS IS NOT AN ABSENCE (Wright's review of #955). The writer
+// commits on top of B's stake commit, and then B's commit object cannot be
+// read: the stake's commit stands in the clone (HEAD's parent names it), but
+// the pen cannot read it. "Nothing was staked, try again" would invite a second
+// stake over one that may stand; the answer is the machinery's trip instead,
+// logged, never the no-effect refusal.
+test("A STAKE WHOSE OWN COMMIT CANNOT BE READ: no 'nothing was staked' refusal — the machinery's trip, logged", { skip }, async () => {
+  await seed();
+  const b = await markOf("south-keeper");
+  const moved = join(scratch("pos922-aside-"), "object");
+  const hook = join(FX.repo, ".git", "hooks", "post-commit");
+  writeFileSync(hook, `#!/bin/sh
+[ -e "${moved}" ] && exit 0
+git log -1 --format=%s | grep -q "${b}" || exit 0
+own=$(git rev-parse HEAD)
+mkdir -p WHITE_PAGES/paper && date +%N > WHITE_PAGES/paper/edit.md
+git add WHITE_PAGES/paper/edit.md
+git -c user.name=paper -c user.email=paper@test.invalid commit -q -m "paper: an edit on top"
+echo "$own" > "${moved}.sha"
+mv ".git/objects/$(echo $own | cut -c1-2)/$(echo $own | cut -c3-)" "${moved}"
+`, { mode: 0o755 });
+  try {
+    const rb = await stake(b);
+    assert.ok(readFileSync(`${moved}.sha`, "utf8").trim(), "the hook ran: B's commit was unreadable as the pen looked for it");
+    assert.ok(rb?.error, `it cannot name a commit it cannot read: ${JSON.stringify(rb)}`);
+    assert.doesNotMatch(String(rb.hint), /nothing was staked|nothing was recorded|safe to make again/,
+      `LAW (POS-922, Wright): "couldn't read" is never "nothing happened" — it answered ${JSON.stringify(rb)}`);
+    assert.equal(rb.code, 500, "the machinery's trip");
+  } finally {
+    rmSync(hook, { force: true });
+    // the object back where git keeps it: the scratch town is whole again
+    try { const own = readFileSync(`${moved}.sha`, "utf8").trim(); renameSync(moved, join(FX.repo, ".git", "objects", own.slice(0, 2), own.slice(2))); } catch { /* the hook never ran */ }
+  }
+});
+
+test("TWO CONCURRENT STAKES BY ONE HAND, the pen local: each answer names its own write, or refuses", { skip }, async () => {
+  await seed();
+  await race(6, "local");
+});
+
+test("TWO CONCURRENT STAKES BY ONE HAND, the pen pushing to a remote (TOWN_PUSH=1): each answer names its own write, or refuses", { skip }, async () => {
+  await seed();
+  const origin = join(scratch("pos922-origin-"), "town.git");
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+  try { git(FX.repo, "remote", "remove", "origin"); } catch { /* none yet */ }
+  git(FX.repo, "remote", "add", "origin", origin);
+  git(FX.repo, "push", "-q", "-u", "origin", "main");
+  setEnv("TOWN_PUSH", "1");
+  try { await race(6, "pushing"); } finally { setEnv("TOWN_PUSH", undefined); process.env.TOWN_PUSH = undefined; delete process.env.TOWN_PUSH; }
+});

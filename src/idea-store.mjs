@@ -22,7 +22,7 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { officeRead, officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
+import { officeWrite, insertAct, PenUnreachableError } from "./world2-pen.mjs";
 import { householdKeyFor } from "./world2-claims.mjs";
 import { rungWords } from "./post-words.mjs";
 import { apiUrl } from "./public-base.mjs";
@@ -62,12 +62,6 @@ function on(env) {
 export async function ideaRow(client, id) {
   const { rows } = await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE id = $1 AND class = $2`, [id, IDEA_CLASS]);
   return rowOf(rows[0]);
-}
-
-/** Is this id an idea post? For the class router; a store that cannot be read answers no. */
-export async function isIdeaPost(id, { env = process.env } = {}) {
-  try { return Boolean(await officeRead((client) => ideaRow(client, String(id)), { env })); }
-  catch { return false; }
 }
 
 function actRow({ action, actor, object, payload, now }) {
