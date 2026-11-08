@@ -2249,13 +2249,21 @@ not fail the notary**: the certification is the notary's job, and this finding i
 about the register. The alarm is the roll-call's outcome rule on the
 `postmark-world2-notary.timer` row (`alarm_on_nonempty` on its lists, and
 `alarm_on_false` on `escrow_checked` — a read that could not run is never a
-clean town). The escrow list holds only **judgeable** zeros: a commons mark
-locked at a window whose town sha the escrow projection never held — every
-window before 181, migration 014's first ingest — is **unjudgeable**, written
-on the line as `escrow_unjudgeable` with the oldest projected sha beside it,
-and printed by the row's `report_counts` as a count, never an alarm
-(postmark#2935; before it, 227 such marks alarmed every morning for eight
-nights while the true unbacked count was zero).
+clean town). The escrow list holds only **judgeable** zeros, and a mark is
+unbacked only if it has no backing **now** (POS-808/b; Darko, 2026-11-08: "Only
+what's unbacked today"): its stake is read at the store's current town read,
+`projection_heads['town']`, not at the town sha of the window that locked it, so
+a mark locked at zero and staked since is not listed. The window and sha that
+locked it stay on the row as history. If that current read is unnamed or the
+escrow projection holds no rows for it, nothing can be judged that night: every
+eligible commons mark is **unjudgeable**, written on the line as
+`escrow_unjudgeable` with the oldest projected sha beside it, and printed by
+the row's `report_counts` as a count, never an alarm — so a GREEN line with a
+non-zero count is a night the escrow judgement did not run, not a clean town.
+Before POS-808/b
+this class was marks locked before window 181, migration 014's first ingest,
+whose locking sha was never projected (postmark#2935; 227 such marks alarmed
+every morning for eight nights while the true unbacked count was zero).
 
 At the G1 swap the class becomes structurally impossible — the fold writes what
 the candle locked — and the read stays as the detector.
