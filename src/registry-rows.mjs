@@ -166,8 +166,11 @@ export const LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "word
 // `invited_by` (migration 085, POS-576) is the fourth: one object with a FIXED
 // shape (the declaration builds it, src/arrival-invite.mjs), the inviting house
 // first. NULL when nobody invited, and a NULL renders as no key at all, so
-// nothing moves on the first crossing after the column lands.
-export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at"]);
+// nothing moves on the first crossing after the column lands. A house that names
+// its inviter after joining (POS-947) also carries `backfill: true`, its `at` then
+// being when it named them; a house invited at joining carries no such key, so its
+// printed bytes are unchanged.
+export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
 const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS });
 
 // A pin's column names are the file's key names except one: `id` is a reserved

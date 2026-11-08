@@ -157,6 +157,87 @@ const REFUSED = Object.freeze({
   law: "could not be judged: the town's meep law is unreadable right now, so no invitation is credited",
 });
 
+// ── NAMED AFTER JOINING (POS-947) ───────────────────────────────────────────
+//
+// RULED (Darko 2026-11-07 23:05 EST, POS-816/c): "yeah i think we can actually
+// open to any amount of time for the backfill for referrals, and we just check
+// basic logic preventing loops (which would be impossible)"; and 2026-11-08
+// 09:02 EST, POS-947/b: "joined before" is "The order the town recorded
+// households", `households.ord`, never the `since` dates (not in order).
+//
+// A household that joined without naming anyone names its inviter later with
+// `household { do: "invited-by", args: { invited_by } }`, once, with no window
+// (src/invite-name.mjs writes it). Unlike the join, this act IS the naming, so a
+// bad name refuses it by name and writes nothing. Judged as the join judges
+// (judgeInvite: own, town, meep, unknown, an unreadable law), and also:
+//   · already: its record names an inviter already; named once, never changed;
+//   · younger: the house named was recorded after this one (or is it), so a loop
+//     can never close.
+// The credit is the join's own shape plus `backfill: true`, and its `at` is the
+// naming: the town's judge counts its pay clock from the house's join day and
+// holds the 10-in-all cap on it (the town's stamp-mint.mjs § INVITE_BACKFILL_CAP).
+export const LATE_INVITE_ACT = "invited-by";
+
+/**
+ * Judge a naming made after joining. `own` is `{ slug, handle }`, the naming
+ * house and its acting resident; `ordOf(slug)` is the house's place in the
+ * order the town recorded households (`households.ord`), or null; `current` is
+ * the house's own `invited_by` now. Answers `{ by, named }`, or `{ refused,
+ * named, by? }` naming why.
+ */
+export function judgeLateInvite(args, { registry, own = {}, isMeep, ordOf, current = null } = {}) {
+  const named = inviteNamed(args);
+  if (!named) return { refused: "none", named: null };
+  if (current?.by) return { refused: "already", named, by: current.by };
+  const judged = judgeInvite(args, { registry, own, isMeep });
+  if (judged.refused) return judged;
+  const theirs = ordOf(judged.by), mine = ordOf(own.slug);
+  if (!Number.isInteger(theirs) || !Number.isInteger(mine) || theirs >= mine) return { refused: "younger", named, by: judged.by };
+  return judged;
+}
+
+/**
+ * Could this house lawfully name anyone at all? (Wright 2026-11-08 19:56Z: "suppress the offer when no household could
+ * lawfully be named", by the EXISTING rule, "A test each way".) Asks `judgeLateInvite` itself, once per house as
+ * hh:<slug>, so the offer and the act can never disagree: true at the first house it would credit. A house's own
+ * slug is never a meep's handle, so the meep law plays no part here; the act still judges it anew.
+ */
+export function anyLawfulInviter({ registry, own = {}, ordOf, current = null } = {}) {
+  if (current?.by) return false;
+  return Object.keys(registry?.households ?? {}).some((slug) =>
+    !judgeLateInvite({ invited_by: `${HOUSE_PREFIX}${slug}` }, { registry, own, isMeep: () => false, ordOf, current }).refused);
+}
+
+/** The credit a naming after joining writes: the join's shape, `at` the naming, and `backfill`. */
+export const lateInvitedBy = (judged, at = new Date()) =>
+  ({ by: judged.by, named: judged.named, at: at instanceof Date ? at.toISOString() : at, backfill: true });
+
+const LATE_REFUSED = Object.freeze({
+  none: [422, "which household invited you?", "invited_by: the handle of the resident who invited you, or hh:<slug> for a household"],
+  already: [409, "your household's record already names who invited it", "an invitation is named once and never changed"],
+  younger: [409, "can name only a household that joined before yours", "the town's order of recording households decides it, so no two households can name each other"],
+  meep: [422, "is one of the town's meeps, and meeps can't be named", "name a resident who isn't a meep, or their household as hh:<slug>"],
+});
+
+/** A naming's refusal, `{ code, defect, hint, field }`, in the join's words where they apply. */
+export function lateInviteRefusal(judged) {
+  const r = judged.refused;
+  if (r === "none") return { code: LATE_REFUSED.none[0], defect: LATE_REFUSED.none[1], hint: LATE_REFUSED.none[2], field: "invited_by" };
+  if (r === "already") return { code: 409, defect: `${LATE_REFUSED.already[1]} (${judged.by})`, hint: LATE_REFUSED.already[2], field: "invited_by" };
+  if (r === "younger") return { code: 409, defect: `"${judged.named}" is ${judged.by}, and you ${LATE_REFUSED.younger[1]}`, hint: LATE_REFUSED.younger[2], field: "invited_by" };
+  if (r === "meep") return { code: 422, defect: `"${judged.named}" ${LATE_REFUSED.meep[1]}`, hint: LATE_REFUSED.meep[2], field: "invited_by" };
+  if (r === "law") return { code: 503, defect: `"${judged.named}" ${REFUSED.law}`, hint: "nothing was written; ask again shortly", field: "invited_by" };
+  return { code: r === "unknown" ? 404 : 422, defect: `"${judged.named}" ${REFUSED[r]}`, hint: "nothing was written", field: "invited_by" };
+}
+
+/** The answer's sentence for a naming that landed. */
+export const lateInviteReceipt = (judged) => {
+  const plain = judged.named === judged.by || judged.named === `${HOUSE_PREFIX}${judged.by}`;
+  return `Recorded publicly: invited by ${judged.by}${plain ? "" : ` (${judged.named})`}, named after you joined. `
+    + "Your household gets its 5 more once its welcome is on the ledger. Theirs gets 10 a week after this naming, "
+    + "if your household sent its first letter or claimed its home within 30 days of joining, unless the town holds it for review.";
+};
+
 /**
  * The one sentence the declaration's answer carries about the invite, or null.
  *
