@@ -21,7 +21,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { STANDING_SELECT, ESCROW_BY_SHA_SELECT, canonLockFindings } from "../world2/tools/canon-locks.mjs";
+import { STANDING_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_HEAD_SELECT, canonLockFindings } from "../world2/tools/canon-locks.mjs";
 
 const store = await startStore({ db: "canon_locks_held_test" });
 after(() => store.stop());
@@ -36,12 +36,14 @@ const HELD_ID = "c0000000-0000-4000-8000-000000000001", PLACED_ID = "c0000000-00
 async function seed({ lampHeld, extras = [] }) {
   const c = await store.connect("world2_owner");
   try {
-    await c.query("TRUNCATE escrow_projection, claims, marks, windows CASCADE");
+    await c.query("TRUNCATE escrow_projection, projection_heads, claims, marks, windows CASCADE");
     await c.query(`INSERT INTO windows (id, opens_at, closes_at, status, cleared_at, town_sha)
                    VALUES ($1, '2026-10-19T00:00:00Z', '2026-10-19T12:00:00Z', 'closed', '2026-10-19T12:00:00Z', $2)`, [WIN, SHA]);
-    // the projection holds the locking sha (another mark is staked there), so a zero here is JUDGEABLE
+    // the projection holds the locking sha (another mark is staked there), and the store's town head stands at it (POS-808/b: the
+    // alarm judges backing at the CURRENT read, here the same sha), so a zero here is JUDGEABLE
     await c.query(`INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k)
                    VALUES ($1, 'somebody/else', 'sbx-cy', 'hh:cy', 'hh:other', 4, 1)`, [SHA]);
+    await c.query(`INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('town', $1, now())`, [SHA]);
     const place = JSON.stringify({ at: { x: 10, y: 10 }, extent: { w: 1, h: 1 } });
     await c.query(`INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
                    VALUES ($1, $2, 'thing', 'sbx-ana', 'hh:ana', 'A placed lamp.', $3, '((9.5,9.5),(10.5,10.5))'::box, 'standing', $4, $5)`,
@@ -75,9 +77,10 @@ async function notary(extraSlugs = []) {
   try {
     const { rows } = await c.query(STANDING_SELECT);
     const { rows: e } = await c.query(ESCROW_BY_SHA_SELECT);
+    const { rows: head } = await c.query(ESCROW_HEAD_SELECT);
     const escrowBySha = new Map(e.map((r) => [`${r.town_sha}|${r.mark}`, Number(r.n)]));
     const register = { slugs: new Set([HELD, PLACED, ...extraSlugs]), sha: "0".repeat(40) };
-    return { rows, findings: canonLockFindings(rows, register, { unmaterializedRows: [], escrowBySha }) };
+    return { rows, findings: canonLockFindings(rows, register, { unmaterializedRows: [], escrowBySha, currentTownSha: head[0]?.town_sha ?? null }) };
   } finally { await c.end(); }
 }
 
@@ -113,4 +116,51 @@ test("POS-765 · the stored holder arrives as the JSON VALUE it is, so a placed 
   assert.strictEqual(of(HELD), "sbx-bo");
   assert.deepEqual(findings.unbacked.map((u) => u.slug).sort(), [PLACED, "sbx-ana/with-false", "sbx-ana/with-none", "sbx-ana/with-object"].sort(),
     "a non-string holder is no holder under the existing contract; the string \"false\" and the real holder are held");
+});
+
+// ── POS-808/b through the real store: the alarm counts what is unbacked at the store's CURRENT town read ──
+// Darko 2026-11-08: "Only what's unbacked today." The head is the `projection_heads['town']` row, never the lexically newest sha:
+// the newer read below sorts BEFORE the locking sha on purpose.
+const NEWER = "0aa1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3";
+
+async function moveHead(sha, stakes = []) {
+  const c = await store.connect("world2_owner");
+  try {
+    for (const mark of stakes)
+      await c.query(`INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, $2, 'sbx-cy', 'hh:cy', 'hh:other', 2, 1)`, [sha, mark]);
+    await c.query(`INSERT INTO projection_heads (repo, sha, ingested_at) VALUES ('town', $1, now())
+                   ON CONFLICT (repo) DO UPDATE SET sha = EXCLUDED.sha, ingested_at = EXCLUDED.ingested_at`, [sha]);
+  } finally { await c.end(); }
+}
+
+test("POS-808/b · locked at zero, staked at the current read: not unbacked; the locked window and sha stay on the standing row", { skip }, async () => {
+  await seed({ lampHeld: false });
+  await moveHead(NEWER, [PLACED, HELD, "somebody/else"]);   // the town moved on; both lamps are staked now
+  const { rows, findings } = await notary();
+  assert.deepEqual(findings.unbacked, [], "backed now, so absent from the alarm");
+  assert.equal(findings.escrow_compared, 2);
+  const placed = rows.find((r) => r.slug === PLACED);
+  assert.equal(placed.locked_window, WIN, "the locked window is untouched evidence");
+  assert.equal(placed.locking_town_sha, SHA, "and so is the sha that locked it");
+});
+
+test("POS-808/b · nothing staked at the current read: still unbacked, even though the locking sha had a stake on it", { skip }, async () => {
+  await seed({ lampHeld: false });
+  const c = await store.connect("world2_owner");
+  try {   // an older read DID back the lamp: that is history, not backing
+    await c.query(`INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, $2, 'sbx-cy', 'hh:cy', 'hh:other', 3, 1)`, [SHA, PLACED]);
+  } finally { await c.end(); }
+  await moveHead(NEWER, ["somebody/else"]);                 // the current read holds rows, none for the lamps
+  const { findings } = await notary();
+  assert.deepEqual(findings.unbacked.map((u) => u.slug).sort(), [HELD, PLACED].sort());
+});
+
+test("POS-808/b · the store names no current read: nothing is judged and every commons mark is unjudgeable, never ✦0", { skip }, async () => {
+  await seed({ lampHeld: false });
+  const c = await store.connect("world2_owner");
+  try { await c.query("DELETE FROM projection_heads WHERE repo = 'town'"); } finally { await c.end(); }
+  const { findings } = await notary();
+  assert.deepEqual(findings.unbacked, []);
+  assert.equal(findings.unjudgeable.length, 2);
+  assert.equal(findings.escrow_compared, 0);
 });

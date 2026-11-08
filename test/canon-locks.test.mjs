@@ -31,7 +31,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonLockFindings, projectedShas, unjudgeableByWindow, STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_OLDEST_SELECT } from "../world2/tools/canon-locks.mjs";
+import { canonLockFindings, projectedShas, unjudgeableByWindow, STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_HEAD_SELECT, ESCROW_OLDEST_SELECT } from "../world2/tools/canon-locks.mjs";
 
 const register = (...slugs) => ({ slugs: new Set(slugs), sha: "0123456789abcdef0123456789abcdef01234567" });
 
@@ -158,27 +158,75 @@ const DRIFT = {
 const anyRegister = { slugs: new Set(["lupi/the-drift-room"]), sha: "0".repeat(40) };
 
 test("a standing COMMONS mark with nothing staked at its locking sha is unbacked", () => {
-  const r = canonLockFindings([DRIFT], anyRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]) });
+  const r = canonLockFindings([DRIFT], anyRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]), currentTownSha: "723005e5" });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"]);
   assert.equal(r.escrow_checked, true);
   assert.equal(r.escrow_compared, 1);
   assert.deepEqual(r.absent, [], "canon carries it in this fixture — the two classes are independent");
 });
 
-test("the stake is read at the LOCKING window's town sha, not at another one", () => {
-  // Staked at a DIFFERENT sha: that is a fact about a different read of the
-  // ledger and must not excuse this mark. The first shape I considered keyed the
-  // map on the mark alone, which would have silently passed this.
-  //
-  // MOVED 2026-09-18 (postmark#2935): the map also carries a row for the LOCKING
-  // sha, on another mark. Before, this fixture's locking sha had no rows at all
-  // — which now reads as unjudgeable, not unbacked (the block below) — and the
-  // question this test asks needs a sha the projection actually holds.
-  const r = canonLockFindings([DRIFT], anyRegister,
-    { escrowBySha: new Map([["e34e5fa0|lupi/the-drift-room", 9], ["723005e5|somebody/else", 4]]) });
+// ── POS-808/b: THE ALARM COUNTS ONLY WHAT IS UNBACKED NOW (Darko 2026-11-08: "Only what's unbacked today") ──
+//
+// Wright, 19:20Z: "the notary's nightly alarm counts a mark as escrow_unbacked only if it has no backing now. The notary's
+// own record keeps the locked-sha history exactly as it is (nothing rewritten); only what the alarm counts changes."
+// The backing is read at the store's CURRENT town read (projection_heads['town'], passed as `currentTownSha`), not at the sha
+// of the window that locked the mark. The rows are invented. The locked window and its sha ride on every finding as supplied.
+//
+// THE CAN-FAIL FLIP: in `canon-locks.mjs § canonLockFindings`, judge `escrowBySha.get(\`${r.locking_town_sha}|${r.slug}\`)` and
+// test `projected.has(r.locking_town_sha)` again (the old selector). The next two tests red; the controls stay green.
+
+const LOCKED_AT = "723005e5";    // DRIFT's locking sha: the town read when the mark locked, at zero
+const NOW_SHA = "9aa11bb2";      // the store's current town read
+const CURRENT = (extra = []) => new Map([[`${LOCKED_AT}|somebody/else`, 4], [`${NOW_SHA}|somebody/else`, 4], ...extra]);
+
+test("POS-808/b · locked at zero, staked SINCE: not counted unbacked now (the old locking-sha read counted it)", () => {
+  const r = canonLockFindings([DRIFT], anyRegister, { escrowBySha: CURRENT([[`${NOW_SHA}|lupi/the-drift-room`, 3]]), currentTownSha: NOW_SHA });
+  assert.deepEqual(r.unbacked, [], "backed now, so absent from the alarm, whatever it was at window 177");
+  assert.equal(r.escrow_compared, 1, "it WAS judged: a mark that is backed now is a comparison that happened");
+  assert.deepEqual(r.unjudgeable, []);
+  assert.equal(r.escrow_checked, true);
+});
+
+test("POS-808/b · no backing NOW stays unbacked, even if an older read had backing", () => {
+  // staked at the locking sha and at an older one; nothing at the current read
+  const r = canonLockFindings([DRIFT], anyRegister, { escrowBySha: CURRENT([[`${LOCKED_AT}|lupi/the-drift-room`, 5], ["e34e5fa0|lupi/the-drift-room", 9]]), currentTownSha: NOW_SHA });
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"], "a stake that has since been withdrawn is not backing today");
+  assert.equal(r.escrow_compared, 1);
+});
+
+test("POS-808/b · the historical evidence is the row as supplied: the locked window and its sha are not rewritten or dropped", () => {
+  const supplied = { ...DRIFT };
+  const r = canonLockFindings([supplied], anyRegister, { escrowBySha: CURRENT(), currentTownSha: NOW_SHA });
+  assert.equal(r.unbacked.length, 1);
+  assert.strictEqual(r.unbacked[0], supplied, "the finding IS the supplied row, untouched");
+  assert.deepEqual(r.unbacked[0], DRIFT);
+  assert.equal(r.unbacked[0].locked_window, 177);
+  assert.equal(r.unbacked[0].locking_town_sha, LOCKED_AT, "the locking sha still rides the finding, as evidence and not as the judge");
+});
+
+test("POS-808/b · UNAVAILABLE IS NOT ZERO: no current read named, or one the projection holds no rows for, judges nothing", () => {
+  const stakes = CURRENT();
+  for (const [name, currentTownSha] of [["none named", null], ["named but undefined", undefined], ["named, never projected", "feedface"]]) {
+    const r = canonLockFindings([DRIFT], anyRegister, { escrowBySha: stakes, currentTownSha });
+    assert.deepEqual(r.unbacked, [], `${name}: not listed as unbacked`);
+    assert.deepEqual(r.unjudgeable.map((u) => u.slug), ["lupi/the-drift-room"], `${name}: counted unjudgeable instead`);
+    assert.equal(r.escrow_compared, 0, `${name}: no comparison happened`);
+    assert.equal(r.escrow_checked, true, `${name}: the projection exists; the current read is what is unanswered`);
+  }
+});
+
+test("POS-808/b · the sha order decides nothing: the current read is the one the store NAMES, not the lexically newest", () => {
+  // `ffff0000` sorts after the named current read and holds a stake; the store says NOW_SHA is current, which holds none
+  const r = canonLockFindings([DRIFT], anyRegister, { escrowBySha: CURRENT([["ffff0000|lupi/the-drift-room", 8]]), currentTownSha: NOW_SHA });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"]);
-  const ok = canonLockFindings([DRIFT], anyRegister, { escrowBySha: new Map([["723005e5|lupi/the-drift-room", 1]]) });
-  assert.deepEqual(ok.unbacked, [], "staked at its OWN locking sha, so it stands");
+  const named = canonLockFindings([DRIFT], anyRegister, { escrowBySha: CURRENT([["ffff0000|lupi/the-drift-room", 8]]), currentTownSha: "ffff0000" });
+  assert.deepEqual(named.unbacked, [], "and when the store names that sha, its stake is backing now");
+});
+
+test("POS-808/b · ESCROW_HEAD_SELECT reads the store's own binding of the town read, never a newest-looking sha", () => {
+  assert.match(ESCROW_HEAD_SELECT, /FROM projection_heads WHERE repo = 'town'/);
+  assert.match(ESCROW_HEAD_SELECT, /sha AS town_sha/);
+  assert.doesNotMatch(ESCROW_HEAD_SELECT, /ORDER BY|max\(|min\(/i, "no ordering of shas, no clock");
 });
 
 test("own ground and town law are never unbacked — the class exempts them", () => {
@@ -258,20 +306,28 @@ const PROJECTION = new Map([
 ]);
 const bigRegister = { slugs: new Set([ORIENT.slug, PEAK.slug, PETIT.slug, DRIFT.slug]), sha: "0".repeat(40) };
 
-test("THE BRIEF'S FALSIFIER: a sha the projection never held is UNJUDGEABLE; a held sha with ✦0 is UNBACKED", () => {
-  const r = canonLockFindings([ORIENT, DRIFT], bigRegister, { escrowBySha: PROJECTION });
-  assert.deepEqual(r.unjudgeable.map((u) => u.slug), ["the-town/orient"], "150's sha has no rows at all — not judged, never ✦0");
-  assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"], "177's sha IS held (on another mark) and carries nothing for this slug — a judgeable zero");
-  assert.equal(r.escrow_checked, true, "the projection exists; unjudgeable is a fact about ONE sha, not the whole read");
-  assert.equal(r.escrow_compared, 1, "only the judgeable mark is compared — an unjudgeable one is not a comparison that happened");
+// POS-808/b: the #2935 carve-out ("a LOCKING sha the projection never held is unjudgeable") is superseded. Backing is read at the
+// store's CURRENT town read, which the projection holds, so a mark locked before the projection began is judged by what backs it
+// now. Unjudgeable is what is left of the idea: the current read itself cannot answer (the POS-808/b test above).
+const CUR = "422dbe6f2b5b4fc0eaae69c5f2c8058d259d8d98";   // PETIT's sha, here the store's current read
+
+test("POS-808/b · a mark locked before the projection began is judged at the current read: zero now is unbacked, backed now is not", () => {
+  const r = canonLockFindings([ORIENT, DRIFT], bigRegister, { escrowBySha: PROJECTION, currentTownSha: CUR });
+  assert.deepEqual(r.unjudgeable, [], "150's sha never held rows, and that no longer matters: the question is asked of the current read");
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["the-town/orient", "lupi/the-drift-room"], "both hold nothing now");
+  assert.equal(r.escrow_compared, 2);
+  const backed = canonLockFindings([ORIENT], bigRegister, { escrowBySha: new Map([...PROJECTION, [`${CUR}|the-town/orient`, 2]]), currentTownSha: CUR });
+  assert.deepEqual(backed.unbacked, [], "staked since, even though its locking sha never held a row");
 });
 
 test("the backed specimen stays backed, and the counts partition the commons rows", () => {
-  const r = canonLockFindings([ORIENT, PEAK, PETIT, DRIFT], bigRegister, { escrowBySha: PROJECTION });
-  assert.deepEqual(r.unjudgeable.map((u) => u.slug).sort(), ["the-town/orient", "vermillion/pando-peak-home"]);
-  assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"]);
-  assert.equal(r.escrow_compared, 2, "PETIT and DRIFT were judged; ORIENT and PEAK were not");
+  const r = canonLockFindings([ORIENT, PEAK, PETIT, DRIFT], bigRegister, { escrowBySha: PROJECTION, currentTownSha: CUR });
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["the-town/orient", "vermillion/pando-peak-home", "lupi/the-drift-room"]);
+  assert.equal(r.escrow_compared, 4, "all four commons rows were judged at the current read; PETIT is the backed one");
   assert.equal(r.unjudgeable.length + r.escrow_compared, 4, "every commons row is exactly one of judged or unjudgeable");
+  const none = canonLockFindings([ORIENT, PEAK, PETIT, DRIFT], bigRegister, { escrowBySha: PROJECTION, currentTownSha: null });
+  assert.equal(none.unjudgeable.length + none.escrow_compared, 4, "and still a partition when the current read cannot answer");
+  assert.equal(none.unjudgeable.length, 4);
 });
 
 test("with the projection ABSENT nothing is unjudgeable either — that is escrow_checked:false, the whole read's word", () => {
@@ -381,14 +437,14 @@ const RESIDENT = { ...DRIFT, owner: "lupi" };
 const townRegister = { slugs: new Set([TOWN_LAW.slug, TOWN_THING.slug, RESIDENT.slug]), sha: "0".repeat(40) };
 
 test("FALSIFIER, POS-696: the town's own marks at ✦0 are never unbacked; a resident's commons mark at ✦0 still is", () => {
-  const r = canonLockFindings([TOWN_LAW, TOWN_THING, RESIDENT], townRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]) });
+  const r = canonLockFindings([TOWN_LAW, TOWN_THING, RESIDENT], townRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]), currentTownSha: "723005e5" });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["lupi/the-drift-room"]);
   assert.equal(r.escrow_compared, 1, "the town's marks are not judged at all");
 });
 
 test("the town's own marks are not counted unjudgeable either: the question is never asked of them", () => {
   const old = { ...TOWN_LAW, locking_town_sha: "830a69963d8e4801ad4ed8bb80da38e79fd3fdbf" };   // a sha the projection never held
-  const r = canonLockFindings([old], townRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]) });
+  const r = canonLockFindings([old], townRegister, { escrowBySha: new Map([["723005e5|somebody/else", 4]]), currentTownSha: "723005e5" });
   assert.deepEqual(r.unjudgeable, []);
   assert.deepEqual(r.unbacked, []);
 });
@@ -423,7 +479,7 @@ const PROJECTED = new Map([["723005e5|somebody/else", 4]]);   // the locking sha
 test("POS-765 · a HELD thing at ✦0 is not unbacked; the same thing placed (no holder) at ✦0 still is", () => {
   const held = LAMP({ held_by: "sbx-bo" });
   const placed = LAMP({ slug: "sbx-ana/a-placed-lamp" });
-  const r = canonLockFindings([held, placed], heldRegister(held, placed), { escrowBySha: PROJECTED });
+  const r = canonLockFindings([held, placed], heldRegister(held, placed), { escrowBySha: PROJECTED, currentTownSha: "723005e5" });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/a-placed-lamp"], "the alarm still catches the real case");
   assert.equal(r.escrow_compared, 1, "the held thing is not compared at all");
   assert.deepEqual(r.unjudgeable, []);
@@ -431,29 +487,30 @@ test("POS-765 · a HELD thing at ✦0 is not unbacked; the same thing placed (no
 
 test("POS-765 · the held guard asks the office's one held contract: a blank, null or absent holder is not held", () => {
   const rows = [LAMP({ slug: "sbx-ana/l1", held_by: null }), LAMP({ slug: "sbx-ana/l2", held_by: "" }), LAMP({ slug: "sbx-ana/l3", held_by: "   " }), LAMP({ slug: "sbx-ana/l4" })];
-  const r = canonLockFindings(rows, heldRegister(...rows), { escrowBySha: PROJECTED });
+  const r = canonLockFindings(rows, heldRegister(...rows), { escrowBySha: PROJECTED, currentTownSha: "723005e5" });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/l1", "sbx-ana/l2", "sbx-ana/l3", "sbx-ana/l4"], "no new type or normalisation policy: an unheld row is judged as ever");
 });
 
 test("POS-765 · a thing that moves from held to placed is judged at its NEXT read, with no memory of having been held", () => {
   const was = LAMP({ held_by: "sbx-bo" });
   const next = LAMP();   // the store row after the set-down: same slug, no holder
-  assert.deepEqual(canonLockFindings([was], heldRegister(was), { escrowBySha: PROJECTED }).unbacked, []);
-  assert.deepEqual(canonLockFindings([next], heldRegister(next), { escrowBySha: PROJECTED }).unbacked.map((u) => u.slug), ["sbx-ana/a-brass-lamp"]);
+  assert.deepEqual(canonLockFindings([was], heldRegister(was), { escrowBySha: PROJECTED, currentTownSha: "723005e5" }).unbacked, []);
+  assert.deepEqual(canonLockFindings([next], heldRegister(next), { escrowBySha: PROJECTED, currentTownSha: "723005e5" }).unbacked.map((u) => u.slug), ["sbx-ana/a-brass-lamp"]);
   // and the other way: placed, then taken
-  assert.deepEqual(canonLockFindings([was], heldRegister(was), { escrowBySha: PROJECTED }).unbacked, []);
+  assert.deepEqual(canonLockFindings([was], heldRegister(was), { escrowBySha: PROJECTED, currentTownSha: "723005e5" }).unbacked, []);
 });
 
-test("POS-765 · controls stay: a held thing is still canon-checked; backed, home and town rows are as before; an unprojected locking sha is still unjudgeable for a placed row", () => {
+test("POS-765 · controls stay: a held thing is still canon-checked; backed, home and town rows are as before; a placed row whose locking sha was never projected is judged at the current read (POS-808/b)", () => {
   const held = LAMP({ held_by: "sbx-bo" });
-  assert.deepEqual(canonLockFindings([held], { slugs: new Set(), sha: "0".repeat(40) }, { escrowBySha: PROJECTED }).absent.map((a) => a.slug), ["sbx-ana/a-brass-lamp"], "the exemption is from the stake, not from the register");
+  assert.deepEqual(canonLockFindings([held], { slugs: new Set(), sha: "0".repeat(40) }, { escrowBySha: PROJECTED, currentTownSha: "723005e5" }).absent.map((a) => a.slug), ["sbx-ana/a-brass-lamp"], "the exemption is from the stake, not from the register");
   const backed = LAMP({ slug: "sbx-ana/backed" }), home = LAMP({ slug: "sbx-ana/home", tier: "home" }), town = LAMP({ slug: "the-town/lamp", owner: "the-town" });
   const stakes = new Map([["723005e5|sbx-ana/backed", 2], ["723005e5|somebody/else", 4]]);
-  const r = canonLockFindings([backed, home, town], heldRegister(backed, home, town), { escrowBySha: stakes });
+  const r = canonLockFindings([backed, home, town], heldRegister(backed, home, town), { escrowBySha: stakes, currentTownSha: "723005e5" });
   assert.deepEqual(r.unbacked, []);
   const old = LAMP({ slug: "sbx-ana/old", locking_town_sha: "830a69963d8e4801ad4ed8bb80da38e79fd3fdbf" });
-  const u = canonLockFindings([old], heldRegister(old), { escrowBySha: PROJECTED });
-  assert.deepEqual(u.unjudgeable.map((x) => x.slug), ["sbx-ana/old"]);
+  const u = canonLockFindings([old], heldRegister(old), { escrowBySha: PROJECTED, currentTownSha: "723005e5" });
+  assert.deepEqual(u.unjudgeable, [], "its locking sha was never held, which no longer makes it unjudgeable (POS-808/b)");
+  assert.deepEqual(u.unbacked.map((x) => x.slug), ["sbx-ana/old"], "it holds nothing at the current read, so it is counted");
   assert.deepEqual(canonLockFindings([LAMP({ held_by: "sbx-bo", locking_town_sha: null })], heldRegister(held), { escrowBySha: new Map() }).unbacked, []);
 });
 
@@ -465,6 +522,6 @@ test("POS-765 · STANDING_SELECT carries the stored holder in the same row as th
 test("POS-765 · the guard reads the stored VALUE under the office's one contract: a JSON false or object is no holder, a non-blank string is", () => {
   const rows = [LAMP({ slug: "sbx-ana/b1", held_by: false }), LAMP({ slug: "sbx-ana/b2", held_by: { by: "sbx-bo" } }), LAMP({ slug: "sbx-ana/b3", held_by: true }), LAMP({ slug: "sbx-ana/b4", held_by: 7 })];
   const strung = LAMP({ slug: "sbx-ana/s1", held_by: "false" });   // a non-blank STRING is a holder reference, whatever it says: no value blacklist
-  const r = canonLockFindings([...rows, strung], heldRegister(...rows, strung), { escrowBySha: PROJECTED });
+  const r = canonLockFindings([...rows, strung], heldRegister(...rows, strung), { escrowBySha: PROJECTED, currentTownSha: "723005e5" });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/b1", "sbx-ana/b2", "sbx-ana/b3", "sbx-ana/b4"], "a non-string value is not a holder; the string \"false\" is held");
 });

@@ -110,7 +110,7 @@ import { causeOf } from "../../src/mark-receipt.mjs";
 // script: it exits at the top on a missing argument, so anything that imported it
 // to test the judgement would be killed by it. `canon-locks.mjs` is the pure half
 // and `test/canon-locks.test.mjs` is what watches the rules.
-import { STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_OLDEST_SELECT, canonLockFindings, unjudgeableByWindow } from "./canon-locks.mjs";
+import { STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_HEAD_SELECT, ESCROW_OLDEST_SELECT, canonLockFindings, unjudgeableByWindow } from "./canon-locks.mjs";
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
 const has = (n) => process.argv.includes(n);
@@ -141,6 +141,8 @@ try {
   // The boundary the unjudgeable count is measured against — the projection's
   // oldest sha, named on the line so the count can be read without the store.
   let oldestProjected = null;
+  // POS-808/b: the town sha the store stands at NOW (projection_heads['town']). Null when it names none: then no mark is judged.
+  let currentTownSha = null;
   try {
     const { rows: has } = await client.query("SELECT to_regclass('public.escrow_projection') IS NOT NULL AS ok");
     if (has[0]?.ok) {
@@ -149,12 +151,14 @@ try {
         escrowBySha = new Map(e.map((r) => [`${r.town_sha}|${r.mark}`, Number(r.n)]));
         const { rows: o } = await client.query(ESCROW_OLDEST_SELECT);
         if (o[0]) oldestProjected = { town_sha: o[0].town_sha, ingested_at: o[0].ingested_at, window: o[0].window_id ?? null };
+        const { rows: head } = await client.query(ESCROW_HEAD_SELECT);
+        currentTownSha = head[0]?.town_sha ?? null;
       }
     }
   } catch { /* an unreadable projection is an unanswered question, not an empty one */ }
 
   const { absent, unbacked, unjudgeable, unmaterialized, compared, escrow_compared, escrow_checked } =
-    canonLockFindings(rows, register, { unmaterializedRows, escrowBySha });
+    canonLockFindings(rows, register, { unmaterializedRows, escrowBySha, currentTownSha });
   if (!compared) die(
     `no standing mark carries a slug, so nothing was compared against the register at ${register.sha.slice(0, 8)} — ` +
     "an empty comparison is not a pass");
@@ -178,6 +182,8 @@ try {
     })),
     unmaterialized: unmaterialized.map((r) => ({ slug: r.slug, claim_id: r.claim_id, window: r.window_id })),
     escrow_checked, escrow_compared,
+    // POS-808/b: the town sha every escrow_unbacked row was judged at (the store's current read); null when none could be
+    escrow_judged_at: escrow_checked ? currentTownSha : null,
     escrow_unbacked: unbacked.map((r) => ({
       slug: r.slug, tier: r.tier, locked_window: r.locked_window, town_sha: r.locking_town_sha,
     })),
@@ -232,11 +238,11 @@ else {
     const oldest = o
       ? `${String(o.town_sha).slice(0, 8)}${o.window != null ? ` (window ${o.window}` : " ("}${o.ingested_at ? `, ingested ${new Date(o.ingested_at).toISOString()})` : ")"}`
       : "unknown";
-    console.log(`  ⚑ escrow: ${out.escrow_unjudgeable} commons mark(s) UNJUDGEABLE — locked at ${out.escrow_unjudgeable_windows.length} window(s) whose town sha the projection holds no rows for (${windows}); ` +
+    console.log(`  ⚑ escrow: ${out.escrow_unjudgeable} commons mark(s) UNJUDGEABLE — the store's current town read is not one the projection holds rows for, so what is backed now cannot be said (locked at ${out.escrow_unjudgeable_windows.length} window(s): ${windows}); ` +
       `the oldest projected town sha is ${oldest}. Unavailable, never ✦0 — a count, not a finding.`);
   }
   for (const u of out.escrow_unbacked)
-    console.log(`  ✗ ESCROW-ABSENT · ${u.slug} stands as ${u.tier} (commons), locked at window ${u.locked_window}, with nothing staked on it at that window's town ${String(u.town_sha).slice(0, 8)}`);
+    console.log(`  ✗ ESCROW-ABSENT · ${u.slug} stands as ${u.tier} (commons), locked at window ${u.locked_window} (town ${String(u.town_sha).slice(0, 8)}), with nothing staked on it NOW (the store's current town ${String(out.escrow_judged_at).slice(0, 8)})`);
   for (const a of out.absent)
     console.log(`  ✗ CANON-ABSENT · ${a.slug} stands in the register, locked at window ${a.locked_window ?? a.window ?? "?"} ` +
       `(claim ${a.claim_id ? a.claim_id.slice(0, 8) : "none"}${a.claimant ? `, ${a.claimant}` : ""}), and canon carries no file for it at ${out.canon_sha.slice(0, 8)} — a resident reading this mark is told "${a.cause}"`);

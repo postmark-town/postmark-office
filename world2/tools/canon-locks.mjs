@@ -56,14 +56,27 @@ export const STANDING_SELECT = `
 /**
  * The open stamps per (town sha, mark), for the escrow class below.
  *
- * Grouped by SHA as well as by mark because each standing mark is judged at the
- * town sha of the window that LOCKED IT, not at today's — a mark locked at
- * window 150 and a mark locked at 177 are answerable to different reads of the
- * ledger, and collapsing them would judge August's marks against September's
- * town.
+ * Grouped by SHA as well as by mark because the projection keeps more than one
+ * town sha. WHICH sha answers the alarm is not this query's question: since
+ * POS-808/b (Darko 2026-11-08: "Only what's unbacked today"; Wright: "the notary's
+ * nightly alarm counts a mark as escrow_unbacked only if it has no backing now")
+ * it is the store's CURRENT town read, named by ESCROW_HEAD_SELECT below. A mark
+ * is no longer answerable to the sha of the window that locked it: a stake made
+ * since then is backing now, and the alarm no longer counts the mark.
  */
 export const ESCROW_BY_SHA_SELECT = `
   SELECT town_sha, mark, sum(n)::int AS n FROM escrow_projection GROUP BY town_sha, mark`;
+
+/**
+ * THE CURRENT TOWN READ (POS-808/b): the town sha the store's projections stand at
+ * right now. `projection_heads` has one row per source repo and `stamp-ingest.mjs`
+ * moves the `town` row in the SAME transaction that replaces that sha's escrow
+ * rows, so this is the store's own binding of "now" for escrow. It is read from the
+ * binding, never inferred from the newest-looking sha (shas do not sort) or from
+ * the clock.
+ */
+export const ESCROW_HEAD_SELECT = `
+  SELECT sha AS town_sha, ingested_at FROM projection_heads WHERE repo = 'town'`;
 
 /**
  * The projection's OLDEST town sha — the boundary the unjudgeable count is
@@ -171,13 +184,16 @@ export const UNMATERIALIZED_SELECT = `
  * founder retires it, and the HOLD on it is the conductor's
  * (`docs/2026-09-08/jetto-candle-refusal-report.md` § finding 5).
  */
-export function canonLockFindings(rows, register, { unmaterializedRows = [], escrowBySha = null } = {}) {
+export function canonLockFindings(rows, register, { unmaterializedRows = [], escrowBySha = null, currentTownSha = null } = {}) {
   const absent = [];
   const unbacked = [];
   const unjudgeable = [];
   let compared = 0;
   let escrowCompared = 0;
   const projected = projectedShas(escrowBySha);
+  // THE CURRENT READ CAN ANSWER only when the store names it AND the projection holds rows for it. Otherwise the question
+  // is unavailable for every mark and none is judged: unavailable, never ✦0 (§ the unjudgeable window, below).
+  const currentProjected = currentTownSha != null && projected.has(currentTownSha);
   for (const r of rows) {
     // A mark row with no slug is not a thing canon could carry.
     if (!r.slug) continue;
@@ -187,10 +203,13 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
 
     // ── THE ESCROW CLASS (postmark#2594's second half) ──────────────────────
     //
-    // A standing COMMONS mark with nothing staked on it at the town sha of the
-    // window that locked it. The candle's step 5.5 stops a new one; this is the
-    // standing read for the ones already in the register, and it is judged at
-    // each mark's OWN locking sha rather than at today's town.
+    // A standing COMMONS mark with nothing staked on it NOW. The candle's step 5.5
+    // stops a new one; this is the standing read for the ones already in the
+    // register. POS-808/b (Darko 2026-11-08: "Only what's unbacked today"): it is
+    // judged at the store's CURRENT town read (`currentTownSha`), not at the sha of
+    // the window that locked it, so a mark locked at zero and staked since is not
+    // counted. The locked window and its sha still ride on every row as evidence
+    // and nothing about them is rewritten; they simply no longer decide the count.
     //
     // `escrowBySha === null` means the projection cannot answer (migration 014
     // absent, or nothing ingested) — nothing is judged, and the caller reports
@@ -209,7 +228,7 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
     // a placed commons zero that carries one is still judged.
     if (heldBy(r)) continue;
     if (rowClassOf(r.tier) !== "commons") continue;
-    if (!r.locking_town_sha) continue;   // a mark whose window pinned no town read cannot be judged
+    if (!r.locking_town_sha) continue;   // a mark whose window pinned no town read is still not judged (unchanged by POS-808/b, which keeps the locking evidence as supplied)
 
     // ── THE UNJUDGEABLE WINDOW (postmark#2935) ─────────────────────────────
     //
@@ -229,16 +248,21 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
     // unavailable, never ✦0. It is the same distinction `escrow_checked: false`
     // draws for the whole projection, drawn per sha — and it is NOT a grace or
     // a hold: nothing about the mark is excused, the question is simply one the
-    // store cannot answer for that window. A mark leaves this count only when
-    // it is retired or re-locked by an amend at a projected window (which is
-    // how `current-the-reader/the-taproom` left it on 09-18), never by a stake
-    // — a stake today is read at today's sha, not at the locking one.
+    // store cannot answer. (POS-808/b moved WHICH sha that is: it was each mark's
+    // locking sha, so a stake today could never move a mark out of this count; it
+    // is now the store's current town read, so this class is the whole-store case
+    // of an unnamed or unprojected current read, and a stake today is backing now.)
     //
-    // `unbacked` below therefore lists ONLY judgeable zeros: a sha the
+    // `unbacked` below therefore lists ONLY judgeable zeros: the current sha the
     // projection holds rows for and none for this slug.
-    if (!projected.has(r.locking_town_sha)) { unjudgeable.push(r); continue; }
+    //
+    // POS-808/b: the sha that must be held is now the CURRENT one. A store that names no current town read, or whose
+    // projection holds no rows for it, cannot say what is backed now, so no mark is judged and each is counted unjudgeable:
+    // unavailable, never ✦0. A mark locked before the projection began is no longer unjudgeable for that reason; its backing
+    // now is a fact the current read holds.
+    if (!currentProjected) { unjudgeable.push(r); continue; }
     escrowCompared += 1;
-    const n = Number(escrowBySha.get(`${r.locking_town_sha}|${r.slug}`) ?? 0);
+    const n = Number(escrowBySha.get(`${currentTownSha}|${r.slug}`) ?? 0);
     if (n === 0) unbacked.push(r);
   }
   return {
