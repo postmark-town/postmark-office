@@ -2900,3 +2900,14 @@ Darko, 2026-10-21 08:26 EDT, "737 agreed": a daily office sweep deletes an uploa
    sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && node tools/media-takedown.mjs --url <media url> --reason "<why>" --by <your handle> --oauth-db /srv/postmark-office/oauth.db'
    ```
    It prints the receipt (the objects, the uploader, the reason, who, when); the row keeps it, and the upload door refuses the same bytes in every household from then on.
+
+## Two site rebuilds per run, not three (POS-944, 2026-11-08)
+
+On the evening of 2026-11-07 the town kept moving while the site built, so the refresh rebuilt up to three times per run, and each pass took 12 to 22 minutes. The unit's 45-minute limit (`TimeoutStartSec`) killed the 22:10Z run in its third pass, before its report step, and the sentinel read the missing report as stale. Darko ruled the cap (2026-11-07 22:06 EST, POS-944/a: "Cap at 2 rebuilds per run"). Installed on the box at 03:08Z on 11-08:
+
+```sh
+sudo install -m 0644 deploy/postmark-site-refresh.service-dropin-max-two-passes.conf /etc/systemd/system/postmark-site-refresh.service.d/max-two-passes.conf
+sudo systemctl daemon-reload
+```
+
+A run that spends both passes still publishes what it built, and its report says so ("2 passes are spent — the next tick takes it"). The next tick, 30 minutes later, builds what's left. To check: `systemctl show postmark-site-refresh -p Environment` carries `SITE_REFRESH_MAX_PASSES=2`.
