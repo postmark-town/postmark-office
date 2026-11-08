@@ -1303,6 +1303,22 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // arithmetic beside this one. The three office-db twin goldens are not re-recorded:
   // their tests derive their expectations from their own pristine inputs (POS-896).
   //
+  // ⚠ AND RE-CAPTURED A TWENTY-THIRD TIME, 2026-11-08 (lane POS-953), because the PR moved the clone pins to the
+  // CURRENT sandbox/seed pair: town e1af5b1a -> be71875e4 and world 8ed486ed -> 217c9f1ff (the S158 seeds; dev's seed
+  // advance had put them past the old pins, and CI's tag pruning drops a seed a pin does not hold). The source is this PR's
+  // own, with no doorstep segment changed: tools/capture-doorstep-golden.mjs unchanged at GOLDEN_NOW_MS, run once, exit 0,
+  // on CI-shaped clones (suite-clones.sh's own fetch at the new pins: HEAD and origin/main at the pins, 1 town tag and 160
+  // world tags, the counts CI's prepare printed). The diff was run leaf by leaf against the previous golden BEFORE it was
+  // replaced: 7211 -> 7203 leaves, and the moved leaves sit in three segments on both skins, the other 24 byte-identical:
+  //   1. `stances`, the world's own data at the pin: the count awaiting 76 -> 87, the awaiting rows (4 added, 8 gone, the
+  //      rest changed) and the `ground` marks (183 leaves changed).
+  //   2. `stakes`, one leaf: wright's published mark in row 276, `kind` "dungeon" -> "sited" (the world's record).
+  //   3. `mists`, one leaf: `season_ends` 282 -> 289 (the world skeleton's schedule at S158).
+  // Nothing else moved: no key removed, no other segment's byte.
+  //
+  //   full  137716 -> 137469 (-247) · slim  135277 -> 135030 (-247) · the file 273215 -> 272713 B,
+  //   sha256 cbd912c3ef251622c07d6d2e8de021d3dcb7f93254db9843e2de0bee5be2446b
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
