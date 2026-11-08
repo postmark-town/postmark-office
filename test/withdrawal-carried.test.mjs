@@ -62,8 +62,11 @@ const DRAFT = "current/a-draft-that-never-crossed";
 const FIREPLACE = "kino/the-fireplace";
 const IDS = { bed: "d0000000-0000-4000-8000-000000000001", garland: "d0000000-0000-4000-8000-000000000002", fireplace: "d0000000-0000-4000-8000-000000000003" };
 const REGISTRY = {
-  households: { current: "gh:7", mari: "gh:8", kino: "gh:9" },
+  households: { current: "hh:current", mari: "hh:mari", kino: "hh:kino" },   // the real export's spelling (hh:<slug>), the same house the pinned account binds
   logins: { "current-hub": "gh:7", "mari-hub": "gh:8", "kino-hub": "gh:9" },
+  // WLD-122 (the S158 world's sweep): a `gh:<id>` login binds a house only through the registry's `pinned_ids` table, and an
+  // account the table does not hold is "known but pinned to no household", which publishes and withdraws nothing
+  pinned_ids: { 7: "hh:current", 8: "hh:mari", 9: "hh:kino" },
 };
 const record = (by, x, body) =>
   `---\nkind: sited\nby: ${by}\ndate: 2026-10-14\nat: { x: ${x}, y: 10 }\nextent: { w: 3, h: 3 }\n---\n\n${body}\n`;
