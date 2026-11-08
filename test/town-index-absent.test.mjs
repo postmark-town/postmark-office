@@ -41,7 +41,7 @@ const KEY = "absent-test-key";
 // steps read the town's own quest tools from it, and without one they never
 // reach the index rows they read (the quest registry, progress and standing).
 const TOWN = townClone();
-let store = null, skip = false;
+let store = null, skip = false, fixtureDay = null;
 const offices = {};
 
 function office(name, env) {
@@ -72,7 +72,8 @@ before(async () => {
     const { townDay } = await import(townModuleUrl("tools", "quest-progress.mjs"));
     const put = (...v) => putValues(db, "meta", v);
     put("quest_registry", readFileSync(join(TOWN, "quest-registry.json"), "utf8"));
-    put("quest_day", townDay());
+    fixtureDay = townDay();
+    put("quest_day", fixtureDay);
     putValues(db, "quest_progress", ["wright", 2, 1, 1, 2, 1, JSON.stringify(["limen"]), JSON.stringify(["limen"])], ["handle", "send", "receive", "house_size", "house_send", "house_receive", "sent_to", "heard_from"]);
     putValues(db, "quest_standing", ["wright", JSON.stringify({ facts: { address: true }, since: {} })]);
   }
@@ -182,7 +183,18 @@ const CLOCKED = { "REST /": (a) => a?.body?.["<json>"]?.crossing };
 // the record stands and is compared as before. The substitutions above are applied first and are untouched.
 const pristine = (was) => {
   if (!TOWN) return was;
-  const rawQuests = JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests;
+  // POS-857 (the town past the S158 seed pin): a row with `ends` is offered through that town day, inclusive, and the board
+  // drops it after; spelled here from the fixture's day (the `quest_day` put in before()), not through the town's board code.
+  const allQuests = JSON.parse(readFileSync(join(TOWN, "quest-registry.json"), "utf8")).quests;
+  const past = (q) => typeof q.ends === "string" && typeof fixtureDay === "string" && fixtureDay > q.ends;
+  const rawQuests = allQuests.filter((q) => !past(q));
+  // the doorstep's next steps offer the board's quests too, so a quest past its `ends` is no step in the expectation either
+  const gone = new Set(allQuests.filter(past).map((q) => q.id));
+  const dropSteps = (node) => Array.isArray(node) ? node.map(dropSteps)
+    : node && typeof node === "object" ? Object.fromEntries(Object.entries(node).map(([k, v]) =>
+      [k, k === "steps" && Array.isArray(v) ? v.filter((s) => !(s?.kind === "quest" && gone.has(s.id))).map(dropSteps) : dropSteps(v)]))
+    : node;
+  if (gone.size) { try { was = JSON.stringify(dropSteps(JSON.parse(was))); } catch { /* not JSON: nothing to drop */ } }
   const card = readFileSync(join(TOWN, "WHITE_PAGES", "wright", "ADDRESS.md"), "utf8");
   const fields = { architecture: frontMatterScalar(card, "architecture"), note: frontMatterScalar(card, "note") };
   return overlayCard(overlayRegistry(was, { rawQuests, fixturePotIds: [] }), { handle: "wright", fields });
