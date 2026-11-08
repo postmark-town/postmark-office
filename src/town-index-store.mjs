@@ -43,6 +43,7 @@ import { isResidentHandle } from "./residency.mjs"; // the door's admission gram
 import { lastActiveFor } from "./last-active.mjs"; // a resident's newest act, from acts and town_letters (POS-481)
 import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
+import { errorSaid } from "./fault-words.mjs"; // an error's text for the LOG only (the quest board's fault line, POS-965)
 
 import { freshnessFor, composeHome, composeFoundedHome } from "./paper-fresh.mjs"; // the freshness ladder, as home below uses it
 
@@ -1036,10 +1037,32 @@ export async function storeAnswer(fn, { env = process.env, then = null, statemen
   // it "the store cannot be reached" would name the wrong thing.
   let own = null, r;
   try { r = await readTownIndex(async (c) => { try { return await fn(c); } catch (e) { own = e; throw e; } }, { env, statementTimeoutMs }); }
-  catch (e) { if (own && e === own) throw e; return { refused: UNREACHABLE }; }
+  catch (e) {
+    if (own && e === own) throw e;
+    // The refusal's words stay fixed; the error that caused it rides beside it, non-enumerable (a door that wants it for its log
+    // reads `.cause`; every comparison of the refusal sees the same two fields as before). POS-965.
+    return Object.defineProperty({ refused: UNREACHABLE }, "cause", { value: e, enumerable: false });
+  }
   // THE REST OF THE ANSWER, AFTER THE CONNECTION IS BACK (POS-370). `then` is
   // whatever the read needs that is not the index (the quest board's quest tools
   // and its world read): it runs here, holding nothing, and its errors are the
   // reader's own, never the store's absence.
   return then ? { ...r, out: await then(r.out) } : r;
+}
+
+/**
+ * The office log's one line for a quest board that answered 503 (POS-965). Until this the route answered "quest board
+ * unavailable" and said nothing anywhere, so only nginx saw it and nothing said WHY. `phase` is where it failed:
+ *   "store"   the index read could not get or keep a connection (the pool, the store: the 503 "town index cannot be reached");
+ *   "read"    a query of the board's own transaction failed (a dead connection, a bent table);
+ *   "compose" the board's composition after the connection was back (the quest tools, the household registry, the world read).
+ * The line carries the handle (a public path segment), the phase, the error's name, code and message (cut), the thread that ran the read and
+ * that thread's own event-loop lag for its last minute (src/loop-lag.mjs). No row, no key, no human's details.
+ */
+export function boardFaultLine({ handle, phase, error, thread = null, lag = null }) {
+  const name = String(error?.name ?? "Error");
+  const code = error?.code != null ? ` ${String(error.code).slice(0, 40)}` : "";
+  const why = errorSaid(error).replace(/\s+/g, " ").slice(0, 200); // the log's own reader of an error (fault-words.mjs), never an answer's words
+  const where = thread == null ? "" : `; thread t${thread}, ${lag ? `its event loop's last minute: max ${lag.max_ms} ms late, ${lag.blocked_ms} ms blocked` : "no event-loop minute recorded yet"}`;
+  return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why}${where}`;
 }
