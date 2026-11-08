@@ -43,6 +43,7 @@ import { isResidentHandle } from "./residency.mjs"; // the door's admission gram
 import { lastActiveFor } from "./last-active.mjs"; // a resident's newest act, from acts and town_letters (POS-481)
 import { CROSSING_SEAL_SUBJECT, copyCrossing, notInCopyDefect } from "./crossings.mjs"; // the crossing's closing commit, and its words (POS-332)
 import { holdStoreProbe, UNREACHABLE_DEFECT, UNREACHABLE_HINT } from "./index-probe.mjs";
+import { errorSaid } from "./fault-words.mjs"; // an error's text for the LOG only (the quest board's fault line, POS-965)
 
 import { freshnessFor, composeHome, composeFoundedHome } from "./paper-fresh.mjs"; // the freshness ladder, as home below uses it
 
@@ -1061,7 +1062,7 @@ export async function storeAnswer(fn, { env = process.env, then = null, statemen
 export function boardFaultLine({ handle, phase, error, pool = null }) {
   const name = String(error?.name ?? "Error");
   const code = error?.code != null ? ` ${String(error.code).slice(0, 40)}` : "";
-  const why = String(error?.message ?? error ?? "(no error)").replace(/\s+/g, " ").slice(0, 200);
+  const why = errorSaid(error).replace(/\s+/g, " ").slice(0, 200); // the log's own reader of an error (fault-words.mjs), never an answer's words
   const counts = pool ? ` pen pool max ${pool.max} total ${pool.total} idle ${pool.idle} waiting ${pool.waiting}` : " pen pool not built";
   return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why};${counts}`;
 }
