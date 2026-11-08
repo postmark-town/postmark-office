@@ -19,18 +19,21 @@
 // clone, never vendored). That is the same fold `tools/world-stake.mjs
 // § worldStakeState` performs for balances — the fold the CLIP itself reads —
 // and the same one the town index's derivation (`src/town-index.mjs` §
-// stampFold) performs to fill the index's `stamps` table.
+// stampFold) performs to fill the store's `town_stamps` table.
 //
-// ⚑ AND IT IS DELIBERATELY NOT THE INDEX. The lane brief says "from the same
-// fold the estate read uses", and the estate read (`household-stamps.mjs
-// § estateRead`) goes through `queries.stampsDetail`, which reads the SQLite
-// index — a SNAPSHOT of this fold, refreshed at rehydrate. A preview exists to
-// say what THIS act will do to your stamps; taken from a snapshot, its `after`
-// arithmetic would be wrong by exactly whatever the ledger has done since the
-// last rehydrate, in the one case the preview is for. The clip's own source is
-// the live ledger, so the preview reads the live ledger. The index stays the
-// estate read's, which is a different question ("what do my books say") asked at
-// a different door.
+// ⚑ AND IT IS DELIBERATELY NOT THE INDEX ALONE. The lane brief says "from the
+// same fold the estate read uses", and the estate read (`household-stamps.mjs
+// § estateRead`) goes through `stampsDetail` over the store (`town-index-store.mjs
+// § stampsDetail`), which reads `town_stamps` — a SNAPSHOT of this fold, as of
+// the town-index ingest's last run. A preview exists to say what THIS act will
+// do to your stamps; taken from that snapshot alone, its `after` arithmetic
+// would be wrong by exactly whatever the ledger has done since the ingest, in
+// the one case the preview is for. The clip's own source is the live ledger, so
+// the preview reads the live ledger: `heldFor` below starts from `town_stamps`
+// for speed but adds the ledger's tail after the ingest's `stamps_tip`
+// (`stamp-tail.mjs § heldFromIndex`, POS-314), and folds the whole file when it
+// cannot vouch for that. The snapshot alone stays the estate read's, which is a
+// different question ("what do my books say") asked at a different door.
 //
 // ── THE CLIP, AND THE ONE COPY THIS FILE ADMITS TO ──────────────────────────
 //

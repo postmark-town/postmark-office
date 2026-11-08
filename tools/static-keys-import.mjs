@@ -53,9 +53,9 @@
 // ── WHICH BOOK (POS-271) ────────────────────────────────────────────────────
 //
 // With OFFICE_PAPERWORK_STORE=1 and the store's WORLD2_PG / WORLD2_PG_URL in
-// the environment, the rows go to the store's oauth_tokens (070 must have run)
-// and then to the file, as the office's own mirror does. Without them, to the
-// file only. The first line says which.
+// the environment, the rows go to the store's oauth_tokens only (070 must have
+// run; the rollback's mirror to the file is deleted, POS-271). Without them, to
+// the file only. The first line says which.
 
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -90,9 +90,7 @@ async function main() {
       ? `static-keys-import: could not reach the store (OFFICE_PAPERWORK_STORE=1): ${String(e?.message ?? e)}`
       : `static-keys-import: could not open ${OAUTH_DB}: ${String(e?.message ?? e)}`);
   }
-  const book = paper.onStore
-    ? `the store (oauth_tokens)${paper.file ? `, mirrored to ${OAUTH_DB}` : ""}`
-    : OAUTH_DB;
+  const book = paper.onStore ? "the store (oauth_tokens)" : OAUTH_DB;
 
   let out;
   try { out = await importStaticKeys(paper, spec, { dry: DRY }); }

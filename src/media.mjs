@@ -101,9 +101,10 @@ export function ensureMediaTable(odb) {
       household TEXT NOT NULL, sha TEXT NOT NULL, ext TEXT NOT NULL,
       bytes INTEGER NOT NULL, by_handle TEXT NOT NULL, created INTEGER NOT NULL,
       PRIMARY KEY (household, sha))`);
-  // The states (POS-737) on the file too: the switched office mirrors every
-  // store write to it, and a mirrored UPDATE naming a column the file lacks is
-  // a MIRROR FAILED line on every sweep.
+  // The states (POS-737) on the file too, so an unswitched office's ledger
+  // carries the same columns as the store's 080 (mediaLedgerHasStates reads
+  // them off the file). Until POS-271 deleted the rollback's mirror, this was
+  // also what kept a mirrored UPDATE from failing on a column the file lacked.
   const file = paper?.file;
   if (file && !paper.readOnly && !fileStatesAdded.has(file)) {
     const have = new Set(file.prepare("PRAGMA table_info(media)").all().map((c) => c.name));

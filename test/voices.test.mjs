@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 process.env.WORLD_CLONE = join(tmpdir(), "postmark-no-world-clone-xyz");
-const { createVoices, EARSHOT_M, HEAR_MAX } = await import("../src/voices.mjs");
+const { createVoices, EARSHOT_M, HEAR_MAX, CLOSE_MS } = await import("../src/voices.mjs");
 const { WORLD_TOOLS, worldSay } = await import("../src/world.mjs");
 
 const DIR = mkdtempSync(join(tmpdir(), "postmark-voices-"));
@@ -108,10 +108,10 @@ test("hearing lasts to the settlement — and the log keeps what hearing dropped
   tick(1 * MIN);
   const late = await store.hear("wright");
   assert.deepEqual(late.voices, [], "a settlement later it is gone from hearing");
-  // the EAR is empty but the ROOM is still mid-conversation (the record rides
-  // the reply since party night) — the note says so
-  assert.match(late.note, /mid-conversation/);
-  assert.equal(late.conversation.voice_count, 1);
+  // the settlement ends the conversation as it ends hearing (POS-779): the same
+  // edge, so the room has no open conversation to ride the reply
+  assert.equal(late.conversation, undefined);
+  assert.match(late.note, /nobody within earshot/);
 
   const lines = readFileSync(path, "utf8").trim().split("\n").map((l) => JSON.parse(l));
   assert.equal(lines.length, 1);
@@ -187,35 +187,89 @@ test("a chained circle is ONE conversation — the ends need not hear each other
   assert.equal(live[0].voice_count, 3);
 });
 
-test("a lull is not a goodbye: the record chains across a quiet gap the ear has already lost", async () => {
-  // Two clocks (Keemin, sailing night): a lull across a settlement is PAST hearing but
-  // still ONE conversation on the record — the maiden crossing shattered the
-  // deck into serial threads when closure reused the hearing fade.
+test("no lull inside a settlement: hours of silence at one spot are still ONE conversation (POS-779)", async () => {
+  // Darko 2026-10-24: "just covering time spanning the settlement". The Twin
+  // Veils picnic rendered as fragments because the record split on a 30-minute lull.
+  const { store, tick } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
+  await store.say("rei", "the first remark");
+  tick(5 * 60 * MIN);
+  await store.say("wright", "five hours later, same room");
+  const c = store.conversations();
+  assert.equal(c.live.length, 1, "one conversation across five silent hours");
+  assert.equal(c.closed.length, 0);
+  assert.deepEqual(c.live[0].voices.map((v) => v.said), ["the first remark", "five hours later, same room"]);
+  assert.equal(c.close_minutes, null, "the retired lull is null, kept a month for notice (POS-779)");
+  assert.match(c.close_minutes_deprecated, /settlement_since/);
+});
+
+test("a settlement splits the thread — the same edge hearing has (POS-779)", async () => {
   const { store, tick, settle } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
   await store.say("rei", "the first remark");
   tick(3 * MIN);
   settle();
   tick(3 * MIN);
   const heard = await store.hear("wright");
-  assert.deepEqual(heard.voices, [], "the ear lost it — a settlement fell inside the lull");
-  await store.say("rei", "the lull survived");
-  const c = store.conversations();
-  assert.equal(c.live.length, 1, "one conversation across the lull");
-  assert.equal(c.closed.length, 0);
-  assert.deepEqual(c.live[0].voices.map((v) => v.said), ["the first remark", "the lull survived"]);
-});
-
-test("thirty-one silent minutes at the same spot start a NEW conversation", async () => {
-  const { store, tick } = bench({ rei: { x: 0, y: 0 } });
-  await store.say("rei", "the first evening");
-  tick(31 * MIN);
-  await store.say("rei", "a different night");
+  assert.deepEqual(heard.voices, [], "the ear lost it at the settlement");
+  await store.say("rei", "after the settlement");
   const c = store.conversations();
   assert.equal(c.live.length, 1);
-  assert.equal(c.closed.length, 1);
-  assert.equal(c.live[0].voices.at(-1).said, "a different night");
-  assert.equal(c.closed[0].voices.at(-1).said, "the first evening");
+  assert.equal(c.closed.length, 1, "the earlier settlement's thread is closed, and stays browsable");
+  assert.deepEqual(c.live[0].voices.map((v) => v.said), ["after the settlement"]);
+  assert.deepEqual(c.closed[0].voices.map((v) => v.said), ["the first remark"]);
   assert.notEqual(c.live[0].id, c.closed[0].id);
+  assert.equal(c.settlement_since, new Date(T0 + 3 * MIN).toISOString());
+});
+
+test("the settlements the office keeps split a thread too, not only the newest (POS-779)", async () => {
+  const edges = [T0 + 1 * MIN, T0 + 2 * MIN];
+  const { store, tick } = bench({ rei: { x: 0, y: 0 } }, { settlements: () => edges });
+  await store.say("rei", "epoch zero");
+  tick(90_000);
+  await store.say("rei", "epoch one");
+  tick(60_000);
+  await store.say("rei", "epoch two");
+  const c = store.conversations();
+  assert.equal(c.live.length + c.closed.length, 3, "three settlements, three threads");
+  assert.deepEqual(c.live.map((t) => t.voices[0].said), ["epoch two"]);
+});
+
+test("hear before the settlements are read says so, rather than reading every conversation as open (POS-779)", async () => {
+  const { store } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } }, { hearingWindow: () => null });
+  await store.say("rei", "before git answered");
+  const heard = await store.hear("wright");
+  assert.match(heard.conversation.settlement_disclosed, /settlements not yet read/);
+  const known = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 } });
+  await known.store.say("rei", "with a settlement known");
+  assert.equal((await known.store.hear("wright")).conversation.settlement_disclosed, undefined);
+});
+
+test("the SAY card tells agents a conversation is open since the last settlement, not for half an hour (POS-779)", async () => {
+  const { SAY_DESCRIPTION } = await import("../src/world.mjs");
+  assert.ok(SAY_DESCRIPTION.includes("since the last settlement), the reply also carries"));
+  assert.doesNotMatch(SAY_DESCRIPTION, /half hour/);
+});
+
+test("no settlement known: the record is ONE epoch and says so (POS-779)", async () => {
+  const { store, tick } = bench({ rei: { x: 0, y: 0 } }, { hearingWindow: () => null });
+  await store.say("rei", "one");
+  tick(48 * 60 * MIN);
+  await store.say("rei", "two");
+  const c = store.conversations();
+  assert.equal(c.live.length, 1);
+  assert.equal(c.settlement_since, null);
+  assert.match(c.settlement_disclosed, /ONE settlement/);
+});
+
+test("different places in one settlement are different threads: the grouping is the earshot's, only the time split is gone (POS-779)", async () => {
+  const { store, tick } = bench({ rei: { x: 0, y: 0 }, wright: { x: 500, y: 500 } });
+  await store.say("rei", "here");
+  tick(3 * 60 * MIN);
+  await store.say("wright", "there");
+  tick(3 * 60 * MIN);
+  await store.say("rei", "here again");
+  const c = store.conversations();
+  assert.equal(c.live.length, 2);
+  assert.deepEqual(c.live.map((t) => t.voice_count).sort(), [1, 2]);
 });
 
 test("the deck is one place even though it moves — aboard voices chain past the drift", async () => {
@@ -278,10 +332,12 @@ test("a thread carries its ground: the extent boxes every voice, aboard rides th
 });
 
 test("a closed conversation stays browsable, and survives a restart of the office", async () => {
-  const { store, path, tick } = bench({ rei: { x: 12, y: -8 }, wright: { x: 20, y: -8 } });
+  const { store, path, tick, settle } = bench({ rei: { x: 12, y: -8 }, wright: { x: 20, y: -8 } });
   await store.say("rei", "goodnight then");
   await store.say("wright", "goodnight");
-  tick(31 * MIN);
+  tick(MIN);
+  settle(); // a settlement closes it (POS-779); silence alone no longer does
+  tick(MIN);
   const c = store.conversations();
   assert.deepEqual(c.live, []);
   assert.equal(c.closed.length, 1);
@@ -292,7 +348,8 @@ test("a closed conversation stays browsable, and survives a restart of the offic
 
   // a second store over the same log is the office coming back up
   const fresh = bench({ rei: { x: 12, y: -8 } }, { log: path });
-  fresh.tick(31 * MIN);
+  fresh.clock.settledAt = T0 + MIN; // the same settlement, as the restarted office reads it
+  fresh.tick(2 * MIN);
   const after = fresh.store.conversations();
   assert.equal(after.closed.length, 1);
   assert.deepEqual(after.closed[0].voices.map((v) => v.said), ["goodnight then", "goodnight"]);
@@ -458,23 +515,23 @@ test("worldSayHuman with: must name a housemate", async () => {
   assert.match(r.hint, /vex, alaric/);
 });
 
-test("arriving mid-lull reads the room: hearing is empty, the conversation rides the reply", async () => {
+test("arriving mid-conversation reads the room: hearing is empty, the conversation rides the reply", async () => {
+  // Hearing is a page of the newest twenty; the conversation is the room's whole
+  // record. Silence does not end it (POS-779): only a settlement does.
   const { store, tick, settle } = bench({ rei: { x: 0, y: 0 }, wright: { x: 10, y: 0 }, late: { x: 20, y: 0 } });
   await store.say("rei", "the first course");
   tick(16_000);
   await store.say("wright", "and the second");
-  tick(5 * MIN);
-  settle();
-  tick(5 * MIN); // past hearing (a settlement fell), inside the conversation's half hour
-  const heard = await store.hear("late");
-  assert.deepEqual(heard.voices, [], "the ear lost it");
+  tick(3 * 60 * MIN); // three silent hours, no settlement fell
+  const heard = await store.hear("late", { before: T0 }); // an ear paged to before everything: no voices
+  assert.deepEqual(heard.voices, []);
   assert.ok(heard.conversation, "the room's record rides the reply");
   assert.equal(heard.conversation.voice_count, 2);
   assert.deepEqual(heard.conversation.participants, ["rei", "wright"]);
   assert.deepEqual(heard.conversation.record.map((v) => v.said), ["the first course", "and the second"]);
-  assert.match(heard.note, /mid-conversation/);
 
-  tick(25 * MIN); // now the conversation is closed too
+  settle(); // the settlement ends the conversation, as it ends hearing
+  tick(MIN);
   const empty = await store.hear("late");
   assert.equal(empty.conversation, undefined);
   assert.match(empty.note, /nobody within earshot/);
@@ -962,18 +1019,17 @@ test("POS-226: a voice 61 m away is not heard, however long the window", async (
   assert.deepEqual((await store.hear("ear")).voices.map((v) => v.said), ["exactly sixty"]);
 });
 
-test("POS-226: the thread grammar is unchanged — twenty-nine silent minutes stay one conversation, thirty-one start another", async () => {
+test("POS-226 / POS-779: silence never closes a thread inside a settlement; the display fade still rides the read", async () => {
   const { store, tick } = bench({ rei: { x: 0, y: 0 } });
   await store.say("rei", "one");
   tick(29 * MIN);
   await store.say("rei", "still one");
   assert.equal(store.conversations().live.length, 1);
-  assert.equal(store.conversations().closed.length, 0);
   tick(31 * MIN);
-  await store.say("rei", "another");
+  await store.say("rei", "and still one, an hour on");
   const c = store.conversations();
-  assert.deepEqual([c.live.length, c.closed.length], [1, 1]);
-  assert.equal(c.close_minutes, 30);
+  assert.deepEqual([c.live.length, c.closed.length], [1, 0]);
+  assert.equal(c.live[0].voice_count, 3);
   assert.ok("fade_minutes" in c, "the display fade still rides the conversations read");
   assert.ok("hearable_since" in c);
 });
@@ -1094,4 +1150,163 @@ test("POS-806 — the human's say stands WITH a housemate's body: that housemate
   const said = await store.say("human-of-the-drift", "we made it", { standAs: "vex" });
   assert.equal(said.spoke, true);
   assert.equal(said.heard_by, 0, "the only body in earshot is the one the human stands with");
+});
+
+// ── POS-886 · the conversation a reader reads is grouped from their own room's voices ──
+//
+// LAW (WLD-74, createVoices' `roomOf`): "Hearing stops at a dungeon room's walls, both ways: a voice is heard only by an ear in the
+// room it was spoken in (null is the open), and its record is shown only to readers in that room."
+//
+// A voice chains into a conversation with any voice within earshot of it, so a voice from another room that sits between two circles
+// would join them in a reader's record unless it is left out BEFORE the grouping. These drive the real createVoices (say and hear),
+// with invented residents, and compare the reader's WHOLE reply across worlds that differ only in the voice that is not theirs to read.
+
+const HALL = "the-great-room";
+const KEEP = "the-keep";
+const RING_OF = (names) => Object.fromEntries(names.map((n, i) => [n, [
+  { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 2 * EARSHOT_M - 10, y: 0 }, { x: 2 * EARSHOT_M - 15, y: 0 },
+][i]]));
+const BRIDGE_AT = { x: EARSHOT_M, y: 0 }; // within earshot of the near edge of each circle, which are out of earshot of each other
+const roomBench = (at, rooms, more = {}) => bench(at, { roomOf: async (h) => rooms[h] ?? null, ...more });
+
+/**
+ * Speak a circle pair in order, a voice every 16 s. `bridge` speaks from BRIDGE_AT right after the voice at index `bridgeAfter`
+ * (-1: before them all). A bridge that is not the reader's to read does not advance the clock, so the readable voices keep the
+ * very instants they have in the world without it; a readable one does.
+ */
+async function speakCircles({ store, tick }, names, { bridge = null, bridgeAfter = 1, readable = false } = {}) {
+  for (let i = -1; i < names.length; i++) {
+    if (i >= 0) { await store.say(names[i], `${names[i]} speaks`); tick(16_000); }
+    if (bridge && i === bridgeAfter) { await store.say(bridge, `${bridge} speaks`); if (readable) tick(16_000); }
+  }
+}
+
+test("POS-886 — the geometry the tests stand on: two circles out of earshot of each other, one voice between them in earshot of both", () => {
+  const ring = RING_OF(["a1", "a2", "b1", "b2"]);
+  const d = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  for (const a of ["a1", "a2"]) for (const b of ["b1", "b2"]) assert.ok(d(ring[a], ring[b]) > EARSHOT_M, `${a} and ${b} are out of earshot`);
+  assert.ok(d(ring.a2, BRIDGE_AT) <= EARSHOT_M && d(ring.b2, BRIDGE_AT) <= EARSHOT_M && d(ring.b1, BRIDGE_AT) <= EARSHOT_M, "the bridge reaches both");
+});
+
+test("POS-886 — hear: a voice spoken inside a room, wherever it falls between two open circles, leaves an outside reader's whole reply unchanged", async () => {
+  const circles = ["a1", "a2", "b1", "b2"];
+  const alone = roomBench({ ...RING_OF(circles), rd: { x: 5, y: 0 } }, {});
+  await speakCircles(alone, circles);
+  alone.tick(16_000);
+  const without = await alone.store.hear("rd");
+  assert.deepEqual(without.conversation.participants, ["a1", "a2"], "the reader's conversation is circle A alone");
+  assert.equal(without.conversation.voice_count, 2);
+
+  // the admitting control: a voice that IS the reader's to read, in the same spot, does join the two circles
+  const open = roomBench({ ...RING_OF(circles), pub: BRIDGE_AT, rd: { x: 5, y: 0 } }, {});
+  await speakCircles(open, circles, { bridge: "pub", readable: true });
+  open.tick(16_000);
+  const joined = await open.store.hear("rd");
+  assert.deepEqual([...joined.conversation.participants].sort(), ["a1", "a2", "b1", "b2", "pub"], "an open bridge joins them");
+  assert.equal(joined.conversation.voice_count, 5);
+
+  // the same voice from inside a room: before the circles, between them, after them. Every verdict is collected, so one red
+  // does not hide the others.
+  const replies = [];
+  for (const bridgeAfter of [-1, 1, 3]) {
+    const w = roomBench({ ...RING_OF(circles), warden: BRIDGE_AT, rd: { x: 5, y: 0 } }, { warden: HALL });
+    await speakCircles(w, circles, { bridge: "warden", bridgeAfter });
+    w.tick(16_000);
+    replies.push(await w.store.hear("rd"));
+  }
+  assert.deepEqual(replies, [without, without, without], "the room's voice, before, between or after the circles, changes nothing the outside reader is told");
+});
+
+test("POS-886 — say: the reply to an outside say is the same with or without a voice from a room between the circles", async () => {
+  const circles = ["a1", "a2", "b1", "b2"];
+  const reply = async (extraAt, rooms, bridge) => {
+    const w = roomBench({ ...RING_OF(circles), ...extraAt, rd: { x: 5, y: 0 } }, rooms);
+    await speakCircles(w, circles, bridge ? { bridge, bridgeAfter: 1 } : {});
+    w.tick(16_000);
+    return w.store.say("rd", "a word from beside circle A");
+  };
+  const without = await reply({}, {}, null);
+  assert.equal(without.spoke, true);
+  assert.deepEqual(without.conversation.participants, ["a1", "a2", "rd"], "the speaker joins circle A and nobody else");
+  const withRoom = await reply({ warden: BRIDGE_AT }, { warden: HALL }, "warden");
+  assert.deepEqual(withRoom, without, "the say reply carries no trace of the room's voice");
+});
+
+test("POS-886 — a reader inside a room reads that room's conversation; a bridge from the open or from another room does not join it; one from their own room does", async () => {
+  const circles = ["h1", "h2", "h3", "h4"];
+  const inHall = Object.fromEntries(circles.map((h) => [h, HALL]));
+  const alone = roomBench({ ...RING_OF(circles), hr: { x: 5, y: 0 } }, { ...inHall, hr: HALL });
+  await speakCircles(alone, circles);
+  alone.tick(16_000);
+  const without = await alone.store.hear("hr");
+  assert.deepEqual(without.conversation.participants, ["h1", "h2"], "inside the room they read the room's own conversation");
+  assert.equal(without.conversation.voice_count, 2);
+
+  // a voice from the open and a voice from another room, each between the hall's two circles (every verdict collected)
+  const replies = [];
+  for (const [handle, room] of [["out", null], ["keep", KEEP]]) {
+    const w = roomBench({ ...RING_OF(circles), [handle]: BRIDGE_AT, hr: { x: 5, y: 0 } }, { ...inHall, hr: HALL, [handle]: room });
+    await speakCircles(w, circles, { bridge: handle, bridgeAfter: 1 });
+    w.tick(16_000);
+    replies.push(await w.store.hear("hr"));
+  }
+  assert.deepEqual(replies, [without, without], "a voice from the open, or from another room, between the hall's circles changes nothing the hall reader is told");
+
+  // the admitting control: a bridge spoken inside their own room does join the two circles
+  const own = roomBench({ ...RING_OF(circles), hb: BRIDGE_AT, hr: { x: 5, y: 0 } }, { ...inHall, hb: HALL, hr: HALL });
+  await speakCircles(own, circles, { bridge: "hb", bridgeAfter: 1, readable: true });
+  own.tick(16_000);
+  const joined = await own.store.hear("hr");
+  assert.equal(joined.conversation.voice_count, 5, "a bridge from their own room joins the room's two circles");
+  assert.deepEqual([...joined.conversation.participants].sort(), ["h1", "h2", "h3", "h4", "hb"]);
+});
+
+test("POS-886 — one snapshot, two readers: the outside reader and the room's reader each read their own conversation, in either order", async () => {
+  const at = { a1: { x: 0, y: 0 }, a2: { x: 10, y: 0 }, h1: { x: 0, y: 0 }, h2: { x: 10, y: 0 }, rd: { x: 5, y: 0 }, hr: { x: 5, y: 0 } };
+  const { store, tick } = roomBench(at, { h1: HALL, h2: HALL, hr: HALL });
+  for (const h of ["a1", "h1", "a2", "h2"]) { await store.say(h, `${h} speaks`); tick(16_000); }
+  const t = store.room.now();
+  const hereOut = await store.room.standing("rd");
+  const hereHall = await store.room.standing("hr");
+  assert.equal(hereOut.room, undefined);
+  assert.equal(hereHall.room, HALL);
+  // each order gets its own snapshot, and every reader reads from it twice or once, so a reply built from another reader's
+  // clusters, or from whoever read first, shows up as a difference between two replies that must be equal
+  const read = async (order) => {
+    const snap = await store.room.snapshot(t);
+    const replies = [];
+    for (const who of order) replies.push(await store.room.reply(who, who === "rd" ? hereOut : hereHall, t, null, { snap }));
+    return replies;
+  };
+  const [outA, hallA, outB] = await read(["rd", "hr", "rd"]);
+  const [hallC, outC, hallD] = await read(["hr", "rd", "hr"]);
+  for (const out of [outA, outB, outC]) assert.deepEqual(out.conversation.participants, ["a1", "a2"], "the outside reader reads the open conversation, not the room's");
+  for (const hall of [hallA, hallC, hallD]) assert.deepEqual(hall.conversation.participants, ["h1", "h2"], "the room's reader reads the room's, not the open one");
+  assert.deepEqual([outB, outC], [outA, outA], "who reads first from a snapshot changes no outside answer");
+  assert.deepEqual([hallC, hallD], [hallA, hallA], "and no room answer");
+
+  // the ear alone needs no clusters (POS-632 W4): a snapshot taken without them hands a reply no conversation
+  const bare = await store.room.reply("rd", hereOut, t, null, { snap: await store.room.snapshot(t, { clusters: false }) });
+  assert.equal("conversation" in bare, false, "the no-cluster path stays skipped");
+  assert.equal(bare.voices.length, 2, "and the ear still hears");
+});
+
+// Until 2026-11-06 this asserted a lull: a later room voice must not keep a quiet open conversation from closing at the
+// 30-minute lull. POS-779 retired the lull (a conversation lasts the settlement), so the property is now that a later voice
+// from a room changes nothing in the outside reader's conversation, while a later open voice does join it.
+test("POS-886 — speech from a room later than the open voices leaves the open conversation as it was", async () => {
+  const circles = ["a1", "a2"];
+  const run = async (who, rooms) => {
+    const w = roomBench({ ...RING_OF(circles), ...(who ? { [who]: { x: 20, y: 0 } } : {}), rd: { x: 5, y: 0 } }, rooms);
+    await speakCircles(w, circles);
+    w.tick(40 * MIN); // well past the former 30-minute lull, inside one settlement
+    if (who) await w.store.say(who, `${who} speaks`);
+    w.tick(6 * MIN);
+    return w.store.hear("rd");
+  };
+  const without = await run(null, {});
+  assert.deepEqual(without.conversation.participants, ["a1", "a2"], "the open conversation outlasts the former lull, inside one settlement");
+  assert.deepEqual((await run("warden", { warden: HALL })).conversation, without.conversation, "a later voice from a room changes nothing in it");
+  const later = await run("pub", {});
+  assert.deepEqual(later.conversation.participants, ["a1", "a2", "pub"], "the admitting control: a later open voice joins it");
 });

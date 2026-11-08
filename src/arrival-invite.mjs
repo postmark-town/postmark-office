@@ -53,21 +53,25 @@ import { setHouseholdInvitedBy } from "./registry-store.mjs";
 import { isReservedHandle } from "./residency.mjs";
 
 export const INVITE_MAX = 64;
-/** The town's own house: its stamps are the town's, never a referral's. */
-export const TOWN_HOUSE = "the-town";
 /**
- * THE FOUNDERS NEVER EARN (POS-576/e, Darko 2026-10-22 22:07): the founders'
- * household and the town's own. An invitation that resolves into either is
- * refused with its own reason and pays neither side: the invitee joins and
- * settles as anyone does, on the ordinary bundle. the-town and hh:the-town
- * read "founders" too, so the receipt and the read say one word for it.
+ * The town's own house: its stamps are the town's, never a referral's. An
+ * invitation that resolves into it is refused as "town" and pays neither side:
+ * the invitee joins and settles as anyone does, on the ordinary bundle. A
+ * refusal carries `named`, NEVER `by` (the follow-up review of #751): `by` is
+ * the field a credit pays, so a caller that read judged.by without checking
+ * `refused` could pay it.
  *
- * A FOUNDERS' REFUSAL CARRIES `house`, NEVER `by` (the follow-up review of
- * #751): `by` is the field a credit pays, so a caller that read judged.by
- * without checking `refused` could pay the founders. The house it resolved
- * into rides as `house`, for the log.
+ * THE FOUNDERS PAY LIKE ANY OTHER HOUSEHOLD (POS-816/d, Darko 2026-11-03 09:31
+ * EDT: "this should pay like any other under the new NOMOS"). Until 2026-11-03
+ * this module held FOUNDERS = ["starforge", "the-town"] (POS-576/e, 2026-10-22
+ * 22:07, "No, never"): an invitation naming the Starforge household was refused
+ * with its own reason and paid neither side. That half is repealed; the town's
+ * own house stays out, and so do meeps (POS-655, "meeps are credited, not
+ * paid"), who live in both houses: a meep named by handle is refused as "meep"
+ * below, and a house named whole pays a resident who is not one
+ * (invite-pay.mjs § inviterRecipient).
  */
-export const FOUNDERS = Object.freeze(["starforge", TOWN_HOUSE]);
+export const TOWN_HOUSE = "the-town";
 
 export const INVITE_GROUP = Object.freeze({
   "x-group": "invite",
@@ -76,7 +80,7 @@ export const INVITE_GROUP = Object.freeze({
 });
 export const INVITE_FIELDS = Object.freeze({
   invited_by: { type: "string", title: "Who invited you?", ...INVITE_GROUP, "x-multiline": false, maxLength: INVITE_MAX, examples: ["wright"],
-    description: "Optional: the handle of the resident who invited you, or hh:<slug> for a household (an invitation link fills it in). This is a public credit: it shows on your household's record. When your household settles you get 10 stamps instead of 5, and they get 10 when you write your first letter or claim your home parcel within 30 days. Your own household, the founders' household (it never earns invitation stamps), a meep or a name the town doesn't know records nothing, and your join goes through either way." },
+    description: "Optional: the handle of the resident who invited you, or hh:<slug> for a household (an invitation link fills it in). This is a public credit: it shows on your household's record. You get 10 stamps instead of 5 when your household settles. Theirs gets 10 a week after your first letter or home (within 30 days), unless the town holds it for review. Your own household, the town's own household, a meep or a name the town doesn't know records nothing, and your join goes through either way." },
 });
 export const INVITE_FIELD_NAMES = Object.freeze(Object.keys(INVITE_FIELDS));
 
@@ -106,8 +110,7 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
   const refuse = (refused) => ({ refused, named });
   const house = named.startsWith(HOUSE_PREFIX) ? named.slice(HOUSE_PREFIX.length) : null;
   if (named === own.handle || named === own.slug || (house != null && house === own.slug)) return refuse("own");
-  const founders = (h) => ({ refused: "founders", named, house: h });
-  if (named === TOWN_HOUSE || (house != null && FOUNDERS.includes(house))) return founders(house ?? named);
+  if (named === TOWN_HOUSE || house === TOWN_HOUSE) return refuse("town");
   if (isReservedHandle(named)) return refuse("town");
   if (typeof isMeep !== "function") return refuse("law");
   const houses = registry?.households ?? {};
@@ -123,7 +126,7 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
   }
   if (!owner) return refuse("unknown");
   if (owner === own.slug) return refuse("own");
-  if (FOUNDERS.includes(owner)) return founders(owner);
+  if (owner === TOWN_HOUSE) return refuse("town");
   return { by: owner, named };
 }
 
@@ -132,11 +135,6 @@ export function judgeInvite(args, { registry, own = {}, isMeep } = {}) {
  * throws, answers what happened. `write` is the store's one writer.
  */
 export async function recordInvite({ slug, judged, at = new Date(), write = setHouseholdInvitedBy, env = process.env, log = console.error } = {}) {
-  // A founders' invite is a miss with its own reason, logged like the others (POS-576/e): nothing is written.
-  if (judged?.refused === "founders") {
-    log(`[arrival-invite] ${slug}: not kept (by ${judged.house}, named ${judged.named}, at ${at instanceof Date ? at.toISOString() : at}) — the founders never earn invitation stamps (POS-576/e)`);
-    return { kept: false, why: "founders" };
-  }
   if (!judged?.by) return { kept: false };
   const invitedBy = { by: judged.by, named: judged.named, at: at instanceof Date ? at.toISOString() : at };
   try {
@@ -155,15 +153,24 @@ export async function recordInvite({ slug, judged, at = new Date(), write = setH
 const REFUSED = Object.freeze({
   own: "names your own household",
   town: "names the town's own house, which is not credited for invitations",
-  meep: "names a meep, and meeps can't be credited for invitations",
   unknown: "names nobody the town knows: give a resident's handle, or hh:<slug> for a household",
   law: "could not be judged: the town's meep law is unreadable right now, so no invitation is credited",
-  founders: "names the founders' household, which never earns invitation stamps, so this invitation pays neither side",
 });
 
-/** The one sentence the declaration's answer carries about the invite, or null. */
+/**
+ * The one sentence the declaration's answer carries about the invite, or null.
+ *
+ * A MEEP INVITER (POS-816/d, Darko 2026-11-03 09:31 EDT; the line is the
+ * founders' option A, in the town's meeps' words): meeps earn no stamps
+ * (POS-655), so the invitation is not recorded and the newcomer keeps the
+ * standard 5. Until 2026-11-03 this said `Not recorded: "<handle>" names a
+ * meep, and meeps can't be credited for invitations.`, and the founders' household
+ * had its own line: `names the founders' household, which never earns invitation
+ * stamps, so this invitation pays neither side`.
+ */
 export function inviteReceipt(judged, outcome) {
   if (!judged) return null;
+  if (judged.refused === "meep") return `"${judged.named}" is one of the town's meeps, so this invitation doesn't earn stamps: you get the standard 5. Your join is unaffected.`;
   if (judged.refused) return `Not recorded: "${judged.named}" ${REFUSED[judged.refused]}. Your join is unaffected.`;
   if (!outcome?.kept) return `Not recorded this time: "${judged.named}" could not be written to your household's record. Your join is unaffected.`;
   const plain = judged.named === judged.by || judged.named === `${HOUSE_PREFIX}${judged.by}`;

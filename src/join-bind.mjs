@@ -36,7 +36,8 @@ import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN, REFUSALS } fro
 import { penCommit, landOrRefuse } from "./write.mjs";
 import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
 import { recordAshore } from "./ashore.mjs";
-import { faultLogged, isHttpStatus, trippedError } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
+import { landSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
+import { faultLogged, isHttpStatus } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
 export const BIND_REFUSALS = Object.freeze({
   NO_RECORD: Object.freeze({
@@ -147,11 +148,18 @@ export async function bindUnderLock({ args, key, clone, db, env = process.env, d
   const { drain, paths: printed } = collectingDrain({ clone, env });
   let joined;
   try {
-    if (plan.action === "created")
+    if (plan.action === "created") {
       await mintHousehold({
         slug: plan.slug, name: plan.houseLine, coSign, residents: [...(plan.siblings ?? [])],
         since: date, declaredBy: plan.registry.households[plan.slug].declared_by, drain: NO_DRAIN, env,
       });
+      // WHERE THEY CAME FROM (POS-770): this road founds a house, so the outreach
+      // tag parked against the founder's GitHub id lands as its came_from, privately.
+      // At the founding, not the commit: the house is in the record from here, and
+      // a retry that finds it standing plans `appended` and would never land it.
+      // Best-effort, never refuses, never in the answer.
+      await landSource({ ghId: key.ghId, household: plan.slug, env });
+    }
     if (plan.action === "chosen")
       await mintHousehold({
         slug: plan.to, name: plan.houseLine, coSign, since: date,
@@ -193,18 +201,6 @@ const EXEC = join(dirname(fileURLToPath(import.meta.url)), "join-bind-exec.mjs")
 
 /** The default runner: the exec, as a child under the town lock. */
 export async function runBindUnderTownLock(payload, { clone }) {
-  const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
-  let out;
-  try {
-    out = await execUnderTownLock(EXEC, JSON.stringify(payload), { ...process.env, TOWN_CLONE: clone });
-  } catch (e) {
-    if (lockTimedOut(e)) throw Object.assign(new Error(LOCK_BUSY.defect), LOCK_BUSY);
-    throw trippedError("the join pass tripped", e); // its stderr goes to the log (POS-578)
-  }
-  const result = JSON.parse(out.trim().split("\n").at(-1));
-  if (result.error)
-    throw Object.assign(new Error(result.error.defect), {
-      code: result.error.code ?? 500, field: result.error.field ?? null, defect: result.error.defect, hint: result.error.hint,
-    });
-  return result;
+  const { runLockedExec } = await import("./town-lock.mjs");
+  return runLockedExec(EXEC, payload, { clone, tripped: "the join pass tripped", keepField: true });
 }

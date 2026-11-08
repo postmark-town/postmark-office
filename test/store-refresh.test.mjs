@@ -1,6 +1,8 @@
 // store-refresh.test.mjs — the poll's store read: one in flight, bounded in
-// Postgres, and never more than its own two connections (POS-639; the reviews
-// of office#591 and #595).
+// Postgres, and never more than its own one connection (POS-639; the reviews
+// of office#591 and #595; one connection since POS-815, which serialised the
+// probe and the roll: test/store-refresh-serialization.test.mjs holds that
+// against server.mjs itself).
 //
 // THE DEFECTS THIS CLOSES. office#591 gave the poll a guard so a tick skips
 // while the last roll+probe pair is still reading, with no time bound: one hung
@@ -11,7 +13,7 @@
 // read carries statement_timeout, and the guard waits for the read to settle.
 //
 // THE FLIPS: free the guard at the JS bound again (the #595 shape) and § 4's
-// connection count passes 2; drop the statement timeout and § 4's reads never
+// connection count passes 1; drop the statement timeout and § 4's reads never
 // settle while the store is locked.
 
 import test, { before, after } from "node:test";
@@ -87,7 +89,7 @@ after(async () => {
   if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-test("4 · a store that will not answer never lets the poll hold more than its two connections, and Postgres frees them at the bound", { timeout: 30_000 }, async (t) => {
+test("4 · a store that will not answer never lets the poll hold more than its one connection, and Postgres frees it at the bound", { timeout: 30_000 }, async (t) => {
   if (skip) return t.skip(skip);
   const { default: pg } = await import("pg");
   const tis = await import("../src/town-index-store.mjs");
@@ -113,10 +115,13 @@ test("4 · a store that will not answer never lets the poll hold more than its t
   const lines = [];
   let reads = 0, applied = 0;
   const r = storeRefresher({
-    read: () => { reads++; return Promise.all([
-      tis.refreshStoreRoll({ statementTimeoutMs: BOUND }).catch(() => {}),
-      tis.refreshStoreProbe({ statementTimeoutMs: BOUND }).catch(() => {}),
-    ]); },
+    // the office's own read (server.mjs § THE PROBE, THEN THE ROLL, POS-815):
+    // one after the other, each refused on its own, so one connection at a time
+    read: async () => {
+      reads++;
+      await tis.refreshStoreProbe({ statementTimeoutMs: BOUND }).catch(() => {});
+      await tis.refreshStoreRoll({ statementTimeoutMs: BOUND }).catch(() => {});
+    },
     onRead: () => { applied++; },
     boundMs: BOUND,
     log: (l) => lines.push(l),
@@ -136,9 +141,9 @@ test("4 · a store that will not answer never lets the poll hold more than its t
   await Promise.race([Promise.all(ticks), new Promise((ok) => setTimeout(ok, BOUND * 4))]);
   clearInterval(sample);
 
-  assert.ok(maxHeld <= 2, `the poll held ${maxHeld} of the pen's three connections; it may hold its pair's two, never more`);
-  assert.equal(maxWaiting, 0, "no tick queued for a connection behind the poll's own pair");
-  assert.ok(reads >= 3, `the store's statement timeout ended each read at the bound, so the poll read again (${reads} reads in 2 s)`);
+  assert.ok(maxHeld <= 1, `the poll held ${maxHeld} of the pen's three connections; it may hold one, never more`);
+  assert.equal(maxWaiting, 0, "no tick queued for a connection behind the poll's own");
+  assert.ok(reads >= 2, `the store's statement timeout ended each statement at the bound, so the poll read again (${reads} reads in 2 s)`);
   assert.ok(lines.length >= 1 && /has not answered within 0\.3s/.test(lines[0]), "the bound is named in the journal");
 
   // the store answers again: the next tick reads the index

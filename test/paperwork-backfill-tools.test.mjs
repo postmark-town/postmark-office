@@ -2,9 +2,10 @@
 // oauth.db and roles.db read the store when the office is switched.
 //
 // #265 moved the office onto the store (OFFICE_PAPERWORK_STORE=1) and left the
-// tools reading the files. A switched office keeps the files only as the
-// rollback's mirror, so a tool still reading them answers from the store's
-// past. Each falsifier here runs one tool twice from ONE fixture: unswitched
+// tools reading the files. A switched office reads only the store (the
+// rollback's mirror to the files is deleted and the files leave the box,
+// POS-271), so a tool still reading them answers from the store's past, or
+// from nothing. Each falsifier here runs one tool twice from ONE fixture: unswitched
 // over the files, and switched over the store the import filled from those
 // same files. The two answers must be equal, and the switched run is pointed
 // at file paths that do not exist, so it cannot have read a file and passed.

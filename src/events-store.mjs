@@ -44,7 +44,7 @@ import {
   QUEST_NO_AMEND, QUEST_NO_ADVANCE,
 } from "./quests.mjs";
 import {
-  BUG_CLASS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
+  BUG_CLASS, BUG_FIELDS, BUG_FINISHED, BUG_LADDER, BUG_STAGES, BUG_HANDS, STATE_REPORTED, stageAmount,
   judgeBugText, judgeBugHand, judgeHandleField, judgeAdvance, judgeReveal, REVEAL_CANDIDATES, BUG_NO_STAKE, BUG_NO_CLOSE,
   RECREDIT_HANDS, FORCE_HANDS, judgeRecreditFields, judgeRecredit, judgeSkip,
 } from "./bugs.mjs";
@@ -52,6 +52,7 @@ import { githubAuthorOf, judgeEarnedCreditVia } from "./bug-credit.mjs";
 import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
+import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -384,6 +385,8 @@ function bodyOf(fields) {
 async function classOf(fields, id, env) {
   // a report's id says its class (POS-757): report/<hex>, never a public row
   if (String(fields.class ?? "").trim() === REPORT_CLASS || REPORT_ID_RE.test(id)) return REPORT_CLASS;
+  // and an invitation's (POS-816): invite:<the invited household's slug>, never a public row
+  if (INVITE_ID_RE.test(id)) return INVITE_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
   const { ideaRow } = await ideaPen();
@@ -432,10 +435,12 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
  * `close`. A quest's one move is `close` too. A bug advances (bugs.mjs), by
  * the town's hands, and so does an idea (ideas.mjs), to any named stage.
  */
-export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null } = {}) {
+export async function advanceAtTown(fields, key, { now = Date.now(), env = process.env, roll = null, clone = null } = {}) {
   const id = postId(fields);
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) return (await import("./report-store.mjs")).advanceReport(fields, key, id, { now, env });
+  // POS-816: the hands hold, lift or cancel an inviter's payout (invite-hold-store.mjs); anyone else learns nothing
+  if (cls === INVITE_CLASS) return (await import("./invite-hold-store.mjs")).advanceInvite(fields, key, id, { now, env, clone });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
@@ -631,7 +636,7 @@ async function amendBug(fields, key, id, { now, env }) {
         `a reporter amends until the bug is confirmed; tell ${BUG_HANDS.join(", ")} what changed, by letter`);
     const now_ = { title: text.title ?? prev.title, body: text.body ?? prev.body, ...prev.fields, ...text.fields };
     const was = { title: prev.title, body: prev.body, ...prev.fields };
-    const changed = ["title", "body", "issue", "steps", "record"].filter((k) => k in now_ && now_[k] !== was[k]);
+    const changed = ["title", "body", ...BUG_FIELDS].filter((k) => k in now_ && now_[k] !== was[k]);
     if (!changed.length) throw refuse(422, "nothing to amend", `every field you sent already stands on "${id}"`);
     const payload = { post: id, changed };
     for (const k of changed) {
@@ -661,9 +666,10 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
   if (!RECREDIT_HANDS.includes(hand))
     throw refuse(403, `only ${RECREDIT_HANDS.join(" and ")} re-credit a stage`, "a recredit burns a mint the town paid, and only the founders move money");
   const r = judgeRecreditFields(fields, roll);
+  // The advance, the skip (POS-931/a: a skipped stage is re-credited only on its skip act) and any recredit.
   const stageActs = (c) => c.query(
     "SELECT id, object, action, payload FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id", [BUG_CLASS, [id]])
-    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_RECREDIT)));
+    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_SKIP || a.action === ACT_RECREDIT)));
   const { postPaymentsVia } = await import("./post-history.mjs");
   // As at the advance: the stage is judged, then its linked work is read from
   // GitHub before the write's transaction opens.
@@ -681,12 +687,24 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     await client.query("SELECT id FROM posts WHERE id = $1 AND class = $2 FOR UPDATE", [id, BUG_CLASS]);
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
-    const { was, n } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
+    const { was, n, skipped, grade } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
     await judgeEarnedCreditVia(client, r, gh);
-    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand };
+    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand,
+      ...(skipped ? { skipped: true, ...(grade !== undefined ? { grade } : {}) } : {}) };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
+    if (skipped) {
+      return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, skipped: true, was: null, credit: r.credit, stamps: n, link: r.link,
+        ...(grade !== undefined ? { grade } : {}),
+        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. The skip and its reason stay on the bug's history, with this credit beside them. `
+          + `The reviewed stage pass reads the town's ledger: when it holds no line for ${r.to}, it pays ${r.credit} ${n} stamps (post:${id}/${r.to}-recredit), with nothing to burn; this act moves no stamps. `
+          + `If the ledger cannot be read, or holds a line for that stage, the pass holds the credit and says why.`,
+        read: bugReadHint(id) };
+    }
     return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
-      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. `
+      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}`
+        // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${r.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
+        + ". "
         + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
         + `If the ledger holds no such line paid to ${was}, or ${was} no longer holds its amount in liquid stamps, the pass holds the correction and says why.`,
       read: bugReadHint(id) };
@@ -741,6 +759,8 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
       read: bugReadHint(id) };
   }, env);
@@ -770,9 +790,10 @@ async function skipBug(fields, key, id, { now, env }) {
 }
 
 /**
- * The reveal at ship (POS-236): a town hand sets the three candidates Iris
- * painted, or the fixer picks one. One `reveal` act, carrying the post's whole
- * reveal after it; it mints nothing and moves no stage.
+ * The reveal at ship (POS-236, CORE-25): a town hand sets the critter's one
+ * portrait (its image at once, and a later one replaces it), or sets the three
+ * candidates of an older set for the fixer to pick one. One `reveal` act,
+ * carrying the post's whole reveal after it; it mints nothing and moves no stage.
  */
 export async function revealAtTown(fields, key, { now = Date.now(), env = process.env } = {}) {
   const id = String(fields?.post ?? "").trim();
@@ -798,7 +819,11 @@ export async function revealAtTown(fields, key, { now = Date.now(), env = proces
     await updatePost(client, row);
     const critter = prev.fields?.critter ? `"${prev.fields.critter}"` : "its critter";
     return { post: bugAnswer(row), act_id: actId, hand: actor, reveal,
-      receipt: reveal.pick
+      receipt: reveal.pick && reveal.candidates.length === 1 && prev.fields?.reveal?.pick
+        ? `revealed: ${id}'s critter ${critter} has a new portrait, set by ${actor}; it replaces the earlier one, and the jar shows it from now on`
+        : reveal.pick && reveal.candidates.length === 1
+        ? `revealed: ${id}'s critter ${critter} has its portrait, set by ${actor}; the jar shows it from now on`
+        : reveal.pick
         ? `revealed: ${id}'s critter ${critter} is candidate ${reveal.pick}, chosen by ${actor}; the jar shows it from now on`
         : `candidates set on ${id} by ${actor}'s hand: ${REVEAL_CANDIDATES} images for ${critter}; ${prev.fields?.named_by ?? "its fixer"} picks one with { post, pick }`,
       read: bugReadHint(id) };

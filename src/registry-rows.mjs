@@ -13,11 +13,15 @@
 // `renderRegistry` is the PRIVATE unfold: every column the store holds,
 // `human` included. It is the round trip below, and it stays exact.
 // `renderPublicRegistry` is what the drain PRINTS into the town repo, which
-// is public: the same bytes with each house's private `human` KEY left out
-// (src/registry-public.mjs; Darko 2026-10-05, Wright 2026-10-12). The store,
-// the fold and the private render keep the name; only the printout drops it.
-// So the town's files equal the PUBLIC render, and the private law below is
-// proved against the fold, not against today's printout.
+// is public: the registry and the pins cut to the keys named public at every
+// level (src/registry-public.mjs; Darko 2026-10-05 and Wright 2026-10-12 for
+// `human`, POS-726's named list for the rest). On well-formed rows that is the
+// private bytes with each house's `human` key left out, and any house picture
+// whose resident no longer lives there (which `homePictureIn` below already
+// reads as none). The store, the fold and
+// the private render keep everything; only the printout is cut. So the town's
+// files equal the PUBLIC render, and the private law below is proved against
+// the fold, not against today's printout.
 //
 // ── THE LAW THIS FILE EXISTS TO SATISFY ─────────────────────────────────────
 //
@@ -59,7 +63,7 @@
 // Nothing derives that order, so it is a column.
 //
 // The PIN order is derived: the file is sorted by handle, and the town's own
-// `serializePins` (residency.mjs:148) sorts on every write. A column for it
+// `serializePins` (src/residency.mjs) sorts on every write. A column for it
 // would be a second answer to a settled question.
 //
 // ── ONE SERIALIZER, NOT A SECOND ────────────────────────────────────────────
@@ -70,31 +74,33 @@
 // does not spell JSON. If the pen's spelling ever moves, the drain moves with
 // it in the same breath, because it is literally the same function.
 //
-// NOTE, FOR WHOEVER TOUCHES `serializePins` NEXT: there are two spellings of it
-// in this repo today and only one sorts. `src/residency.mjs:148` sorts;
-// `src/declare.mjs:455` does not, and `src/declare.mjs:411` is what the
-// declaration ceremony commits through. The live file IS sorted, so the sorted
-// spelling is the one that matches today's bytes and the one this module uses —
-// but a declaration landing through declare.mjs's unsorted writer would append
-// its new handle at the END of the file and `--check` would red on the next
-// crossing. That divergence is older than this lane and is named in the PR
-// rather than fixed in it.
+// NOTE, FOR WHOEVER TOUCHES `serializePins` NEXT: there is one spelling of it
+// in this repo now, and it sorts: `serializePins` in `src/residency.mjs`. The
+// live file IS sorted, so that is the spelling that matches today's bytes and
+// the one this module uses. `src/declare.mjs` once had a second, unsorted
+// `serializePins` (a declaration landing through it would have appended its new
+// handle at the END of the file, and `--check` would have redded on the next
+// crossing); POS-158 removed it, so there is no second spelling to keep in step.
 
 import { serializeRegistry, serializePins } from "./residency.mjs";
-import { publicRegistry } from "./registry-public.mjs";
+import { publicRegistry, publicPins } from "./registry-public.mjs";
 
 // The two key templates, stated once. Every renderer below walks these in
 // order and skips what the row does not carry; every reader above checks its
 // input against them. They are the file's grammar, and they are the only place
-// that grammar is written down.
+// that grammar is written down. Grammar is not publication: a key added here
+// reaches the PRIVATE render, and the public printout and GET /households
+// carry it only once src/registry-public.mjs names it (POS-726).
 //
-// THE TAIL OF THIS TEMPLATE IS TWO COLUMNS THAT USUALLY RENDER NOTHING, and
-// they are appended in the order their migrations landed so that no standing
-// key ever moves: `formerly` (POS-158, migration 020) after `declared_by`, then
-// `provisional` (POS-159, migration 021) after that. 0/118 live rows carry
-// either — measured on the town's own files, twice, a day apart.
+// THE TAIL OF THIS TEMPLATE IS FIVE COLUMNS, and they are appended in the order
+// their migrations landed so that no standing key ever moves: `formerly`
+// (POS-158, migration 020) after `declared_by`, then `provisional` (POS-159,
+// migration 021) after that, then `home_images`, `likeness` and `invited_by`
+// (each described beside NESTED_KEYS below). The first two usually render
+// nothing: 0/118 live rows carried either — measured on the town's own files,
+// twice, a day apart, when they landed.
 //
-// Both are keys an ordinary value must NOT render, which is why `isAbsent`
+// Those two are keys an ordinary value must NOT render, which is why `isAbsent`
 // alone is not enough for this template. A house rendering `"formerly": []` or
 // `"provisional": false` would diff, and 118 of them would rewrite the whole
 // file on the first crossing. An empty alias list and a NULL are the same fact
@@ -138,9 +144,10 @@ export const PIN_KEYS = Object.freeze([
 export const ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 
 // Which household columns carry nested objects, and the template each one's
-// objects are ordered by. `accounts` is the only one: `residents` and
+// objects are ordered by. Four columns carry them (NESTED_KEYS below):
+// `accounts`, `home_images`, `likeness` and `invited_by`. `residents` and
 // `formerly` are `text[]` of strings (no keys to reorder) and every other
-// column is a scalar. If a later migration adds a second jsonb column, it
+// column is a scalar. If a later migration adds another jsonb column, it
 // arrives with its row here in the same commit, or the drain renders it in
 // Postgres's order and reds on the first crossing.
 //
@@ -223,9 +230,9 @@ const rendersAsAbsent = (key, v) =>
  * is running the seed and can add the column. Here the value came out of a
  * `jsonb` column that accepts any shape, on a drain that may be running at
  * 05:45 at a crossing — so an unrecognised account key renders in a stable
- * place and shows up as a diff a person reads, instead of vanishing from the
- * town's file. It will be in the wrong PLACE, and `--check` will say so; it
- * will not be missing.
+ * place in the PRIVATE render rather than vanishing from it. The town's file is
+ * the PUBLIC render, which carries only the nested keys src/registry-public.mjs
+ * names (POS-726), so there an unnamed key is left out on purpose.
  */
 const orderNested = (v, template) => {
   if (Array.isArray(v)) return v.map((x) => orderNested(x, template));
@@ -309,19 +316,6 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
 }
 
 /**
- * The rows -> the registry OBJECT, in the file's own key order.
- *
- * This is the shape `src/declare-exec.mjs` and `src/declare.mjs` read off the
- * clone today — `{ schema_version, note, households: { <slug>: { … } } }` — so
- * a store read can be handed straight to `houseForAccount`, `houseForName`,
- * `conformance` and `planRegistryJoin` with nothing in between.
- *
- * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`
- * before the object is built, because a `SELECT` with no `ORDER BY` returns
- * whatever the planner liked that morning and the file's bytes would then
- * depend on the weather.
- */
-/**
  * The house picture a household's record keeps for one resident (POS-219,
  * migration 050), read off the registry OBJECT — the store's fold or the
  * town's rendered households.json, which are the same thing. Only an entry for
@@ -339,6 +333,19 @@ export function homePictureIn(registry, handle) {
   return null;
 }
 
+/**
+ * The rows -> the registry OBJECT, in the file's own key order.
+ *
+ * This is the shape `src/declare.mjs` reads off the store (`loadRegistry`)
+ * today — `{ schema_version, note, households: { <slug>: { … } } }` — so a
+ * store read can be handed straight to `houseForAccount`, `houseForName`,
+ * `conformance` and `planRegistryJoin` with nothing in between.
+ *
+ * ORDER IS RESTORED HERE, not assumed from the query: rows are sorted by `ord`
+ * before the object is built, because a `SELECT` with no `ORDER BY` returns
+ * whatever the planner liked that morning and the file's bytes would then
+ * depend on the weather.
+ */
 export function registryFromRows(rows) {
   const out = {};
   for (const [k, v] of Object.entries(rows?.meta ?? {})) {
@@ -398,24 +405,25 @@ export function pinsFromRows(rows) {
  * the round-trip falsifier proves against the real files.
  */
 export function renderRegistry(rows) {
-  return renderOf(registryFromRows(rows), rows);
+  return renderOf(registryFromRows(rows), pinsFromRows(rows));
 }
 
 /**
- * The rows -> the two files as the town repo PRINTS them (POS-394): the
- * private render with each house's `human` key left out, every other byte the
- * same (pins exactly). What `registry-drain.mjs` checks against and writes.
+ * The rows -> the two files as the town repo PRINTS them (POS-394, POS-726):
+ * the registry and the pins each cut to the keys named public
+ * (src/registry-public.mjs), through the same two serializers. What
+ * `registry-drain.mjs` checks against and writes.
  */
 export function renderPublicRegistry(rows) {
-  return renderOf(publicRegistry(registryFromRows(rows)), rows);
+  return renderOf(publicRegistry(registryFromRows(rows)), publicPins(pinsFromRows(rows)));
 }
 
 // THE ONE PLACE THE TWO SERIALIZERS ARE CALLED (test/registry-no-file-writer
 // holds it): both renders go through here, so the bytes are made in one spot.
-function renderOf(registry, rows) {
+function renderOf(registry, pins) {
   return {
     households: serializeRegistry(registry),
-    pins: serializePins(pinsFromRows(rows)),
+    pins: serializePins(pins),
   };
 }
 

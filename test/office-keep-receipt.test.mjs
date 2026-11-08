@@ -102,6 +102,8 @@ import { writeFileSync } from "node:fs";
 const town = process.argv[process.argv.indexOf("--town") + 1];
 if (process.env.STUB_WELCOME) appendFileSync(join(town, ${JSON.stringify(LEDGER)}), process.env.STUB_WELCOME + "\\n");
 if (process.env.STUB_LOCK_INDEX) writeFileSync(join(town, ".git", "index.lock"), "");`),
+  // Bring a neighbour's pass (POS-816), after the welcome pass
+  "deploy/invite-pass.mjs": plain("invite"),
   "tools/bug-stage-plan.mjs": plain("bugstage"),
   "tools/ballots-backfill.mjs": plain("ballots"),
   // STAMP_LINES=store: the store's mint pass appends and commits its own lines
@@ -282,7 +284,7 @@ const steps = (r) => Object.fromEntries(Object.entries(r.steps).map(([k, v]) => 
 // The quiet tick with one row owed: everything ok, the switch off.
 const GREEN = {
   lock: "ok", pull: "ok", fetch: "ok", registry: "ok", settle: "ok", standing: "ok", gangway: "ok",
-  mint: "ok", welcome: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
+  mint: "ok", welcome: "ok", invite: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
   sync: "ok:switch-off", rollback: "ok:not-needed", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok",
   hhkeys: "ok", hhkeys_log: "ok", world: "ok", publish: "ok",
 };
@@ -330,6 +332,7 @@ const SOFT = [
   ["standing", { STUB_FAIL: "standing" }, { standing: "refused:exit:7" }],
   ["gangway", { STUB_FAIL: "gangway" }, { gangway: "refused:exit:7" }],
   ["welcome (its row still lands, a later success)", { STUB_FAIL: "welcome", STUB_WELCOME: "welcome row 4" }, { welcome: "refused:exit:7" }],
+  ["invite", { STUB_FAIL: "invite" }, { invite: "refused:exit:7" }],
   ["bugstage", { STUB_FAIL: "bugstage" }, { bugstage: "refused:exit:7" }],
   ["ballots", { STUB_FAIL: "ballots" }, { ballots: "refused:exit:7" }],
   // a failed run prints no soft-step lines, so carried and amends never ran
@@ -371,7 +374,7 @@ test("mint · a ledger that arrives red: mint refused ledger-red (exit 0 is not 
   const r = run(fx, { ...OWED, STUB_WELCOME: "a welcome" });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(steps(receipt(fx)), {
-    ...GREEN, mint: "refused:ledger-red", welcome: "notrun", bugstage: "notrun", ballots: "notrun",
+    ...GREEN, mint: "refused:ledger-red", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
     verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
   });
   assert.deepEqual(calls(fx).slice(0, 6), ["registry", "settle", "standing", "gangway", "verify", "settlements"]);
@@ -387,7 +390,7 @@ test("mint · the pass cannot make its arrival copy (HOLD): mint refused prep-fa
   const r = run(fx, { ...OWED, STUB_HOLD_FAIL: "1" });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(steps(receipt(fx)), {
-    ...GREEN, mint: "refused:prep-failed", welcome: "notrun", bugstage: "notrun", ballots: "notrun",
+    ...GREEN, mint: "refused:prep-failed", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
     verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
   });
   assert.equal(calls(fx).includes("mint"), false, "nothing was minted without an arrival copy");
@@ -401,7 +404,7 @@ test("mint · the mint itself fails: mint-failed, the roll-back runs, nothing af
   const r = run(fx, { ...OWED, STUB_FAIL: "mint" });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(steps(receipt(fx)), {
-    ...GREEN, mint: "refused:mint-failed", welcome: "notrun", bugstage: "notrun", ballots: "notrun",
+    ...GREEN, mint: "refused:mint-failed", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
     verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:rolled-back",
   });
   assert.equal(status(fx), "", "the appended row was put back");

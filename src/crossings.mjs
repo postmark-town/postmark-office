@@ -10,8 +10,8 @@
 //    off-timetable catch-up boats) are operational history, not the calendar.
 //    Crossing 100 lands 2026-08-01 00:00 UTC."
 //
-// WHY IT MOVED. `world.mjs` is 1,600 lines that open a sqlite store, resolve a
-// world clone, and pull in graphology at import — so a small tool that needs
+// WHY IT MOVED. `world.mjs` is a very large module that opens a sqlite store,
+// resolves a world clone, and pulls in graphology at import — so a small tool that needs
 // nothing but "how many crossings old is this?" could not import it without
 // dragging the whole world in. The two honest options were a second copy of the
 // arithmetic (which is how two clocks are born) or this file. `world.mjs` now

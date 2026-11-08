@@ -261,16 +261,95 @@ function commitAndLand(clone, addPaths, message, { rebase = true } = {}) {
   // a save that changes nothing is a no-op, not a trip: nothing staged means
   // nothing to commit (git would exit 1 and read as an office error)
   if (!git(clone, "status", "--porcelain", "--", ...addPaths)) return null;
+  const base = git(clone, "rev-parse", "HEAD");
   git(clone, "-c", `user.name=${name}`, "-c", `user.email=${email}`,
       "commit", "-q", "-m", message, "--author", `${name} <${email}>`);
-  return landCommit(clone, { rebase });
+  // THE COMMIT THIS WRITE NAMES IS THE ONE IT MADE (POS-922). HEAD is not it:
+  // a writer outside the town lock can move the clone between this commit and
+  // its receipt, by a reset that takes the commit away or by a commit of its
+  // own on top. Reading HEAD named the other write's sha (two stakes by one
+  // hand, 2026-11-06: one answered with the other's commit while its own line
+  // was gone). So the write finds ITS commit, the one on `base` with its
+  // message, wherever it now stands, and answers from that:
+  //   · landed (on origin/main, whatever is on top of it): its own sha;
+  //   · present but not landed: it keeps landing it;
+  //   · genuinely absent (reset away before anyone pushed it): it refuses,
+  //     and only then says nothing was recorded.
+  // A READ THAT FAILS IS NOT AN ABSENCE (POS-922, Wright's review of #955).
+  // Every ownership and landing read below answers yes, no, or throws: git's
+  // own error, the machinery's path (an exec trip, logged), never the "nothing
+  // was recorded, safe to make again" refusal, which only a read that
+  // succeeded and found nothing may give.
+  const own = findOwnCommit(clone, { base, message });
+  if (!own) throw movedCloneError("the town clone was reset under this write between its commit and its receipt, and its commit is in neither the clone nor origin/main");
+  return landCommit(clone, { rebase, own: { sha: own, base, msg: message } }); // `msg`: a commit's message, not an error's
+}
+
+/** The refusal for a write whose own commit is genuinely gone (POS-922): the pen's not-landed answer, with its true cause. */
+const movedCloneError = (detail) => Object.assign(notLandedError(detail), {
+  hint: "another writer moved the town clone under this write and took its commit away before it landed, so nothing was recorded and nothing is left behind — the same request is safe to make again",
+});
+
+/** git's own cleanup of a `-m` message (its whitespace mode), so the comparison is with what git stored. */
+const cleanMessage = (clone, message) =>
+  execFileSync("git", ["-C", clone, "stripspace"], { input: String(message), encoding: "utf8" }).trim();
+const messageOf = (clone, sha) => git(clone, "log", "-1", "--format=%B", sha).trim();
+/** `merge-base --is-ancestor`: exit 0 is yes, exit 1 without stderr is no; a read error (including old git's exit 1 with stderr) throws. */
+const isAncestor = (clone, a, b) => {
+  try { git(clone, "merge-base", "--is-ancestor", a, b); return true; }
+  catch (e) { if (e?.status === 1 && !String(e.stderr ?? "").trim()) return false; throw e; }
+};
+/** git's patch id of a commit's change (`diffArgs`: e.g. `-U0`, its lines without their surroundings). */
+const patchIdOf = (clone, sha, ...diffArgs) => {
+  const diff = execFileSync("git", ["-C", clone, "diff-tree", "-p", ...diffArgs, sha], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return (execFileSync("git", ["-C", clone, "patch-id", "--stable"], { input: diff, encoding: "utf8" }).split(" ")[0] || "").trim();
+};
+
+/**
+ * This write's own commit, wherever it now stands: in base..HEAD, or, pushing
+ * (carried there by another writer's push before the clone moved), in
+ * base..origin/main. It is the commit whose one parent is `base` and whose
+ * message is this write's. Null only when the reads succeeded and it is in
+ * neither; a read that fails throws.
+ */
+function findOwnCommit(clone, { base, message, refs = pushing() ? ["HEAD", "origin/main"] : ["HEAD"] }) {
+  const want = cleanMessage(clone, message);
+  for (const ref of refs) {
+    for (const line of git(clone, "rev-list", "--parents", `${base}..${ref}`).split("\n").filter(Boolean)) {
+      const [sha, ...parents] = line.split(" ");
+      if (parents.length === 1 && parents[0] === base && messageOf(clone, sha) === want) return sha;
+    }
+  }
+  return null;
+}
+
+/**
+ * After a rebase onto `tip`: this write's rebased copy of `sha` in tip..HEAD.
+ * Its message is this write's AND it carries the same change (the patch id of
+ * the lines it adds and removes, which a rebase moves but does not alter), so
+ * another write with the same message is never taken for it. Null only when
+ * the reads succeeded and no commit is both; a read that fails throws.
+ */
+function findRebased(clone, { tip, sha, message }) {
+  const want = cleanMessage(clone, message);
+  const change = patchIdOf(clone, sha, "-U0");
+  return git(clone, "rev-list", `${tip}..HEAD`).split("\n").filter(Boolean)
+    .find((s) => messageOf(clone, s) === want && patchIdOf(clone, s, "-U0") === change) ?? null;
+}
+
+/** A commit already on origin/main that carries exactly this write's change (a rebase drops ours as a duplicate of it). A read that fails throws. */
+function upstreamEquivalent(clone, { sha, base }) {
+  const mine = patchIdOf(clone, sha);
+  if (!mine) return null;
+  return git(clone, "rev-list", `${base}..origin/main`).split("\n").filter(Boolean).find((s) => patchIdOf(clone, s) === mine) ?? null;
 }
 
 // The landing half of the ceremony, shared with the batch (§ THE PEN BATCH):
-// HEAD is the commit just made; it returns that commit's sha once origin/main
-// holds it, or throws as the comments below say.
-function landCommit(clone, { rebase = true, push = ["push", "-q"] } = {}) {
-  let commit = git(clone, "rev-parse", "HEAD");
+// the commit to land is this write's own (`own.sha`, POS-922), or HEAD for the
+// batch's one commit; it returns that commit's sha once origin/main holds it,
+// or throws as the comments below say.
+function landCommit(clone, { rebase = true, push = ["push", "-q"], own = null } = {}) {
+  let commit = own ? own.sha : git(clone, "rev-parse", "HEAD");
   if (process.env.TOWN_PUSH === "1") {
     // THE PUSH IS NOT THE RECEIPT — THE REMOTE TIP IS. On 2026-08-26 a fund
     // receipt's push lost a race with the town's own mail traffic, and this
@@ -283,14 +362,25 @@ function landCommit(clone, { rebase = true, push = ["push", "-q"] } = {}) {
     for (let attempt = 1; ; attempt++) {
       try { git(clone, ...push); } catch { /* verified below, not here */ }
       git(clone, "fetch", "-q", "origin", "main");
-      try {
-        git(clone, "merge-base", "--is-ancestor", commit, "origin/main");
-        break; // landed — the only exit that returns
-      } catch { /* not on the remote yet */ }
+      // Landed is THIS commit on origin/main, whatever another writer put on
+      // top of it (POS-922): its own sha is the answer.
+      if (isAncestor(clone, commit, "origin/main")) break; // landed — the only exit that returns
       if (!rebase) throw lostRaceError(commit);
       if (attempt >= 3) throw notLandedError(`${commit} is not on origin/main after ${attempt} attempts, so the ceremony unmade it rather than call a local-only write success`);
+      // Gone from the clone and not on the remote: reset away under this write.
+      if (own && !isAncestor(clone, commit, "HEAD")) throw movedCloneError(`this write's commit ${commit.slice(0, 8)} was reset out of the clone before it landed`);
+      const tip = git(clone, "rev-parse", "origin/main");
       git(clone, "rebase", "-q", "origin/main");
-      commit = git(clone, "rev-parse", "HEAD");
+      if (!own) { commit = git(clone, "rev-parse", "HEAD"); continue; }
+      // This write's commit after the rebase: its rebased copy (HEAD may be
+      // another writer's commit on top of it), or, if the rebase dropped it as a
+      // duplicate, the commit already upstream that carries its change. Never
+      // HEAD for its own sake: HEAD at the remote's tip is someone else's write.
+      const rebased = findRebased(clone, { tip, sha: commit, message: own.msg });
+      if (rebased) { commit = rebased; continue; }
+      const upstream = upstreamEquivalent(clone, { sha: commit, base: own.base });
+      if (upstream) { commit = upstream; break; }
+      throw movedCloneError(`this write's commit is not on the rebased clone and its change is not upstream, so it names no landing`);
     }
   }
   return commit;

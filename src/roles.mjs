@@ -92,7 +92,10 @@ import { DatabaseSync } from "node:sqlite";
 import { join, resolve } from "node:path";
 import { asPaper } from "./paperwork.mjs";
 
-// THIS MODULE IMPORTS NOTHING BUT NODE BUILTINS, ON PURPOSE.
+// THIS MODULE IMPORTS NOTHING BUT NODE BUILTINS AND THE PAPERWORK DOOR, ON
+// PURPOSE. (`./paperwork.mjs` since POS-271 is the one admitted office module:
+// the registry reaches its store through it, and that module's own imports are
+// node builtins, so the edge into world code still cannot exist.)
 //
 // The office root has a home — `world-store.mjs § OFFICE_ROOT` — and the
 // one-home rule would normally say import it. It is re-derived here instead,
@@ -132,16 +135,21 @@ export function normalizeSubject(ghId) {
 }
 
 /** A login for the display column: trimmed, lowercased, or null. Never a key. */
-export const displayLogin = (login) => {
+const displayLogin = (login) => {
   const s = String(login ?? "").trim().toLowerCase();
   return s === "" ? null : s;
 };
 
 // ── storage ─────────────────────────────────────────────────────────────────
 
-// `readOnly` for the read worker (runbook DEC-4, G3), same shape and same
-// reason as `openOauthDb`'s: `roleGate` is a SELECT, so a worker must be able
-// to run it, and the schema plus its additive migrations belong to the writer.
+// `readOnly` was written for the read worker (runbook DEC-4, G3), same shape and
+// same reason as `openOauthDb`'s: `roleGate` is a SELECT, so a worker must be
+// able to run it, and the schema plus its additive migrations belong to the
+// writer. But the server does not open the book through this function: it calls
+// `openPaper(…, { readOnly: READ_ONLY_ROLE, schema: rolesSchema })` (server.mjs,
+// where `rdb` is opened; POS-271), and `rolesSchema` below is what it hands
+// over. The only callers of `openRolesDb` are tests, and none passes `readOnly`,
+// so that branch is not reached in production; it is left in place.
 // With OFFICE_ROLE_GATES unset — the default, and every office today — no door
 // consults this handle at all, so a worker that could not open it would still
 // serve every route; opening it read-only keeps the gated case working without
@@ -242,7 +250,7 @@ export async function grantRole(rdb, { subject, role = ROLE_SUBSCRIBER, actor, n
  * Fires only when the label actually differs, so the common request writes
  * nothing.
  */
-export async function refreshLogin(rdb, subject, login) {
+async function refreshLogin(rdb, subject, login) {
   const s = normalizeSubject(subject);
   const who = displayLogin(login);
   if (!rdb || !s || !who) return false;
@@ -353,11 +361,11 @@ export async function hasRole(rdb, ghId, role = ROLE_SUBSCRIBER) {
 // predicate, and a bounce that says the whole truth.
 //
 // THE FLAG DEFAULTS OFF, AND OFF MEANS OPEN. With `OFFICE_ROLE_GATES` unset —
-// which is every office today — `roleGated` is `false` for every caller, every
-// role, every door, without so much as opening the database. Wiring a door
-// therefore changes nothing for anybody until the founder designates real gated
-// surfaces. WHICH doors get gated for real is a product decision and is not
-// this module's, nor its author's, to make.
+// which is every office today — `roleGatesOn()` is `false` and `roleGate` answers
+// null for every caller, every role, every door, without so much as opening
+// the database. Wiring a door therefore changes nothing for anybody until the
+// founder designates real gated surfaces. WHICH doors get gated for real is a
+// product decision and is not this module's, nor its author's, to make.
 
 export const roleGatesOn = () => process.env.OFFICE_ROLE_GATES === "1";
 

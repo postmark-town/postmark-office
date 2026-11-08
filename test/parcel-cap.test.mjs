@@ -59,23 +59,75 @@ test("THE LAW IS THE WORLD'S OWN OBJECT, not an equal copy of it", async () => {
   assert.match(law.sha, /^[0-9a-f]{40}$/, "a refusal must be able to name the law it refused against");
 });
 
-test("THE SENTENCE MATCHES THE FOLD'S OWN TEMPLATE, read out of the world's source", () => {
-  // Both of the fold's cap sites compose this inline. Extract the literal and
-  // substitute what the fold would substitute, then compare to what this side
-  // composes. Re-wording either holder turns this red.
-  const literals = [...FOLD_SRC.matchAll(/`parcel claim capped[^`]*`/g)].map((m) => m[0]);
-  assert.ok(literals.length >= 2,
-    `expected the fold's two cap sites to carry the sentence; found ${literals.length}`);
-  assert.equal(new Set(literals).size, 1,
-    "the fold's own two holders have drifted from each other — that is the world's to repair before this side mirrors either");
+// ── THE SENTENCE MATCHES THE FOLD'S OWN TEMPLATE (POS-896) ─────────────────────────────────────────────────────────
+// Until the world's POS-762 the fold composed this sentence INLINE at its two cap sites, and this case required every `parcel claim capped` template
+// in marks-fold.mjs to be one string. The fold now has ONE helper, `parcelCapRefusal(held, room)`, called at both sites, with two branches that are
+// two sentences ON PURPOSE: at the cap, the 07-30 sentence (unchanged, and the one this side mirrors); below the cap, the November law (room, the
+// 10-31 cutoff, the price). Two literals beginning `parcel claim capped` are no longer drift, so the case selects the helper and its AT-CAP branch.
 
-  const rendered = literals[0]
-    .slice(1, -1)
-    .replaceAll("${held}", "5")
-    .replaceAll("${PARCEL_CLAIM_CAP}", String(law.cap))
-    .replaceAll("${PARCEL_CAP_LAW_DATE}", law.lawDate);
-  assert.equal(rendered.includes("${"), false, "an unsubstituted placeholder means the fold's template grew a field this test does not bind");
-  assert.equal(parcelCapCheck(MARI, 5, law), `${PARCEL_CAP_CHECK}: ${MARI} — ${rendered}`);
+/** A source with its comments gone, so a mention in prose is not a call. */
+const codeOf = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+/** The body of `export function <name>(…) { … }` in `src`, braces matched (the template literals' `${…}` are balanced); null when absent. */
+function bodyOf(src, name) {
+  const at = src.indexOf(`export function ${name}(`);
+  if (at < 0) return null;
+  const open = src.indexOf("{", src.indexOf(")", at));
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}" && --depth === 0) return src.slice(open + 1, i);
+  }
+  return null;
+}
+/** The helper's AT-CAP literal, as written (the template between the backticks), or null. */
+const atCapLiteralOf = (src) => bodyOf(codeOf(src), "parcelCapRefusal")?.match(/if \(room >= PARCEL_CLAIM_CAP\)\s*return `([^`]*)`/)?.[1] ?? null;
+/** That literal rendered the way the fold renders it, for a household holding 5. */
+const renderedAtCap = (src) => atCapLiteralOf(src)
+  ?.replaceAll("${held}", "5").replaceAll("${PARCEL_CLAIM_CAP}", String(law.cap)).replaceAll("${PARCEL_CAP_LAW_DATE}", law.lawDate) ?? null;
+/** How many places in the fold's CODE enforce the cap by calling the helper: `errors.push({ mark: …, error: parcelCapRefusal(held, room) })`. */
+const capSitesOf = (src) => [...codeOf(src).matchAll(/errors\.push\(\{\s*mark: [^,]+,\s*error: parcelCapRefusal\(held, room\)\s*\}\)/g)].length;
+const officeAtCap = () => parcelCapCheck(MARI, 5, law);
+
+test("THE SENTENCE MATCHES THE FOLD'S OWN TEMPLATE, read out of the world's source: the helper's at-cap branch, bound exactly", () => {
+  const body = bodyOf(codeOf(FOLD_SRC), "parcelCapRefusal");
+  assert.ok(body && body.length > 100, "the fold's cap helper, parcelCapRefusal, is in the world's source and is not empty");
+  const literal = atCapLiteralOf(FOLD_SRC);
+  assert.ok(literal, "the helper's at-cap branch (`if (room >= PARCEL_CLAIM_CAP) return …`) carries a template literal");
+  assert.ok(literal.startsWith("parcel claim capped"), "and it is the capped sentence");
+  const rendered = renderedAtCap(FOLD_SRC);
+  assert.equal(rendered.includes("${"), false, "an unsubstituted placeholder means the fold's at-cap template grew a field this test does not bind");
+  assert.equal(officeAtCap(), `${PARCEL_CAP_CHECK}: ${MARI} — ${rendered}`);
+});
+
+test("BOTH of the fold's cap sites route through the helper, and none composes the sentence inline any more", () => {
+  assert.equal(capSitesOf(FOLD_SRC), 2, "the two enforcement sites each push `parcelCapRefusal(held, room)` (code, not a mention in a comment)");
+  const outside = codeOf(FOLD_SRC).replace(bodyOf(codeOf(FOLD_SRC), "parcelCapRefusal") ?? "", "");
+  assert.equal(/`parcel claim capped/.test(outside), false, "no cap site composes the sentence inline: the helper is the one holder");
+  assert.ok(codeOf(FOLD_SRC).length < FOLD_SRC.length && codeOf(FOLD_SRC).includes("export function parcelCapRefusal("), "the control: the comment strip ate comments and left the code");
+});
+
+test("PARITY AGAINST THE WORLD'S OWN FUNCTION: at the cap the office's sentence is the fold's, below the cap the fold's sentence is another that keeps the protocol prefix", async () => {
+  const mod = await import(pathToFileURL(join(WORLD_CLONE, "tools", "marks-fold.mjs")).href);
+  assert.equal(typeof mod.parcelCapRefusal, "function", "the world exports its cap helper");
+  const atCap = mod.parcelCapRefusal(5, mod.PARCEL_CLAIM_CAP);
+  assert.equal(officeAtCap(), `${PARCEL_CAP_CHECK}: ${MARI} — ${atCap}`, "the office's cap sentence is what the fold's function says at the cap, for the same household");
+  assert.equal(renderedAtCap(FOLD_SRC), atCap, "and the literal read out of the source is what the function returns when run: the pin and the behaviour agree");
+  const below = mod.parcelCapRefusal(1, 1);
+  assert.ok(below.startsWith("parcel claim capped"), "below the cap the fold still says `parcel claim capped` first: the words the settlement cites the claim cap by");
+  assert.notEqual(below, mod.parcelCapRefusal(1, mod.PARCEL_CLAIM_CAP), "and it is another sentence (the November law), not the at-cap one");
+  assert.ok(below.includes("has room for 1"), "which names the household's room");
+});
+
+test("THE SOURCE PIN CAN FAIL: a copy of the world's source with the at-cap literal re-worded, or one cap site inlined, no longer matches", () => {
+  const literal = atCapLiteralOf(FOLD_SRC);
+  const reworded = FOLD_SRC.replace(literal, literal.replace("per household", "for each household"));
+  assert.notEqual(reworded, FOLD_SRC, "the copy differs (the mutation applied)");
+  assert.notEqual(renderedAtCap(reworded), renderedAtCap(FOLD_SRC));
+  assert.notEqual(officeAtCap(), `${PARCEL_CAP_CHECK}: ${MARI} — ${renderedAtCap(reworded)}`, "re-worded at the cap: the office's sentence no longer equals the copy's");
+  const site = /errors\.push\(\{\s*mark: [^,]+,\s*error: parcelCapRefusal\(held, room\)\s*\}\)/;
+  const inlined = FOLD_SRC.replace(site, "errors.push({ mark: mk.id, error: `parcel claim capped — inline` })");
+  assert.notEqual(inlined, FOLD_SRC);
+  assert.equal(capSitesOf(inlined), 1, "one site inlined: the routing check counts one, not two");
 });
 
 test("THE BRIEF'S FALSIFIER: a household at the cap claiming a fourth parcel is refused, with the cap's sentence", () => {

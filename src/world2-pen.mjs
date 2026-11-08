@@ -11,11 +11,15 @@
 //        with nothing joining them — DESIGN §2 R1's two named instances) ends
 //        here: both eras' Postgres writes route through `officeWrite`.
 //
-//   R2 — THE WRITE CAN REFUSE, BECAUSE IT COMES FIRST. For a FLIPPED lane the
-//        Postgres commit precedes the sqlite write and is awaited; failure is
-//        a typed refusal the door turns into the ruled bounce, and NOTHING has
-//        been written anywhere. For a SHADOW lane nothing changes: sqlite
-//        first, Postgres queued, loud on failure, parity-falsified.
+//   R2 — THE WRITE CAN REFUSE, BECAUSE IT COMES FIRST. The Postgres commit is
+//        awaited; failure is a typed refusal the door turns into the ruled
+//        bounce, and NOTHING has been written anywhere. (As born, R2 said this
+//        of a FLIPPED lane, which committed before its sqlite write, and left
+//        a SHADOW lane as it was: sqlite first, Postgres queued, loud on
+//        failure, parity-falsified. G1 / POS-156 took the sqlite journal, and
+//        the shadow arm, `shadowWrite`, went with it: every journal act is now
+//        written by `penWrite`, and the few arms that insert into `acts`
+//        directly are listed at `penWrite`.)
 //
 // ── THE LANE FLAG (D1, per lane) ────────────────────────────────────────────
 // W2_PEN names the lanes whose pen is Postgres, comma-separated, or "all":
@@ -27,20 +31,21 @@
 //     W2_PEN=all
 //
 // Lane names are the lane-closure falsifier's own census vocabulary: an act
-// class maps to exactly one lane (`laneOf`), and a lane not named here keeps
-// the shadow-era path bit for bit.
+// class maps to exactly one lane (`laneOf`). A lane not named here is written
+// by the door's `appendJournal` rather than `appendActFlipped`
+// (src/world-journal.mjs § penFor), and both end in `penWrite` since G1.
 //
-// ── THE REVERSE MIRROR (D3) ─────────────────────────────────────────────────
-// After a flipped lane's COMMIT, the sqlite journal still receives its row —
-// best-effort, AFTER the record, never with a vote (DESIGN §3 step 7: "a
-// rollback convenience, not a record"). It rides the mirror expiry exactly as
-// the forward mirror does and dies at the replay-parity gate — and since DEC-2
-// was ruled (2026-08-29 evening) that expiry is PER LANE: this lane's reverse
-// mirror dies when THIS lane's read ports land and its deletion is ruled, not on
-// a store-wide date (src/world2-acts.mjs § LANE_MIRROR). While it holds,
-// every 1.0 read — guards included — stays valid, which is what lets a lane
-// flip before the R3 read ports land: the ports gate the DELETION (rule 6),
-// not the flag.
+// ── THE REVERSE MIRROR (D3) — GONE (G1 / POS-156, 2026-09-22) ───────────────
+// As ruled, after a flipped lane's COMMIT the sqlite journal still received its
+// row — best-effort, AFTER the record, never with a vote (DESIGN §3 step 7: "a
+// rollback convenience, not a record"). It rode a mirror expiry, PER LANE once
+// DEC-2 was ruled (2026-08-29 evening; then src/world2-acts.mjs § LANE_MIRROR):
+// it was to die when THIS lane's read ports landed and its deletion was ruled,
+// and until then every 1.0 read — guards included — stayed valid, which is what
+// let a lane flip before the R3 read ports landed: the ports gated the
+// DELETION (rule 6), not the flag. Every port has landed and the mirror is
+// deleted; nothing follows the COMMIT now (src/world-journal.mjs §
+// appendActFlipped, "THE REVERSE MIRROR IS GONE").
 //
 // ── THE REFUSAL (D2, verbatim from the ruling) ──────────────────────────────
 // "the office's record cannot be reached — nothing was written, and nothing
@@ -125,9 +130,12 @@ export function lateCrossingGuard(row, { now = Date.now(), env = process.env, la
 
 const state = {
   pool: null,
+  starting: null, // the pool being built, shared by callers that arrive meanwhile (pool())
   // ONE queue for the shadow era's unified writes — the two old queues
-  // (world2-acts / world2-claims) collapse onto this one so an act and its
-  // claim can share a transaction while keeping journal order.
+  // (world2-acts / world2-claims) collapsed onto this one so an act and its
+  // claim could share a transaction while keeping journal order. Only
+  // `shadowWrite` chained onto it, and it is deleted; the queue now stays the
+  // resolved promise it starts as (`penSettled`), and `failed` is never raised.
   queue: Promise.resolve(),
   written: 0, failed: 0, refused: 0, lastError: null,
 };
@@ -181,12 +189,23 @@ async function pool(env = process.env) {
   // that the cause now says "not pointed at a record" instead of ECONNREFUSED
   // against a port the operator never chose.
   if (!world2Enabled(env)) throw new NoRecordError();
-  const { default: pg } = await import("pg");
-  // POS-370: the acquire timeout and the server's idle-transaction limit ride
-  // every connection (store-pool.mjs § storePoolOptions), and an idle
-  // connection's failure is logged, never an unheard 'error' event.
-  state.pool = watchPoolErrors(new pg.Pool(storePoolOptions(env, { name: "pen", max: 3 })), "pen");
-  return state.pool;
+  // ONE POOL, WHOEVER ASKS FIRST (POS-821). `await import("pg")` yields, so two
+  // callers that arrive before the first has finished both used to pass the
+  // check above and each build a pool, the second replacing the first and
+  // leaving it, with its connections, to the process. Callers in that window
+  // now share one construction. A failed construction is forgotten, so the next
+  // caller builds afresh instead of inheriting the rejection.
+  state.starting ??= (async () => {
+    try {
+      const { default: pg } = await import("pg");
+      // POS-370: the acquire timeout and the server's idle-transaction limit ride
+      // every connection (store-pool.mjs § storePoolOptions), and an idle
+      // connection's failure is logged, never an unheard 'error' event.
+      state.pool = watchPoolErrors(new pg.Pool(storePoolOptions(env, { name: "pen", max: 3 })), "pen");
+      return state.pool;
+    } finally { state.starting = null; }
+  })();
+  return state.starting;
 }
 
 // ── the lane census ─────────────────────────────────────────────────────────
@@ -269,23 +288,6 @@ export async function penLockConnection(env = process.env) {
   return (await pool(env)).connect();
 }
 
-/** The one acts INSERT, both eras. `seq` is null for a flipped or lane act —
- *  001's own words: the shadow-era pairing key, dying at cutover.
- *
- *  ── ONE SPELLING OF THE HOUSEHOLD (Wright-ruled 2026-08-28, ENFORCED here
- *  2026-08-29 after the guards lane measured the drift live: acts held the
- *  office key's NAME — 'darko' ×12 — while claims held the resolved KEY, and
- *  the draft overlay reading both tables lost every deleted mark silently).
- *  The row's `household` is resolved through `householdKeyFor` — the docket
- *  pen's own resolver — so the two columns cannot spell one fact two ways.
- *  NULL-PRESERVING, deliberately: a row that named no household stays NULL
- *  rather than being backfilled from the actor (the claims pen backfills
- *  because a claimant must have a household; an act need not, and inventing
- *  one here would break parity with every null-household journal row). The
- *  journal keeps 1.0's name spelling; the parity falsifier applies this
- *  mapping as its fourth lawful departure. A gh:<id> can no longer enter by this road either
- *  (the arena tee): whatever a caller passes, the identities projection
- *  answers, and a non-roster name resolves to solo:<name>, never verbatim. */
 /**
  * R1's home, read side. Run `fn(client)` inside ONE `BEGIN READ ONLY` — the
  * shape B1's guard reads take (`src/world2-guards.mjs`).
@@ -340,6 +342,25 @@ export async function officeRead(fn, { env = process.env, pool: given = null, by
 // (store-pool.mjs § NestedStoreError), and a connection that cannot be had in
 // WORLD2_PG_ACQUIRE_MS is a refusal too, never a wait.
 
+/** The one acts INSERT (it served both eras). `seq` is accepted and ignored —
+ *  `acts.journal_seq` is dropped, and 001's own words for it were: the
+ *  shadow-era pairing key, dying at cutover.
+ *
+ *  ── ONE SPELLING OF THE HOUSEHOLD (Wright-ruled 2026-08-28, ENFORCED here
+ *  2026-08-29 after the guards lane measured the drift live: acts held the
+ *  office key's NAME — 'darko' ×12 — while claims held the resolved KEY, and
+ *  the draft overlay reading both tables lost every deleted mark silently).
+ *  The row's `household` is resolved through `actHouseholdFor`
+ *  (world2-claims.mjs) — the resolver the docket pen's `claimHouseholdFor`
+ *  asks too — so the two columns cannot spell one fact two ways.
+ *  NULL-PRESERVING, deliberately: a row that named no household stays NULL
+ *  rather than being backfilled from the actor (the claims pen backfills
+ *  because a claimant must have a household; an act need not, and inventing
+ *  one here would break parity with every null-household journal row). The
+ *  journal keeps 1.0's name spelling; the parity falsifier applies this
+ *  mapping as its fourth lawful departure. A gh:<id> can no longer enter by this road either
+ *  (the arena tee): whatever a caller passes, the identities projection
+ *  answers, and a non-roster name resolves to solo:<name>, never verbatim. */
 export async function insertAct(client, rowIn, seq = null, { lateArrival = null } = {}) {
   // `lateArrival` is the caller's standing reason for a row whose crossing has
   // fallen behind the open window (§ lateCrossingGuard). Absent it, this still
@@ -399,20 +420,27 @@ export function actsInsert(row, household, { provenance = null } = {}) {
 }
 
 /**
- * THE FLIPPED WRITE — Postgres first, awaited, refusable.
+ * THE WRITE (born THE FLIPPED WRITE) — Postgres first, awaited, refusable. Since
+ * G1 / POS-156 every journal act is written here: `appendJournal` and
+ * `appendActFlipped` both end in this function. A few arms still insert into
+ * `acts` themselves: `mirrorAct` (world2-acts.mjs, reached through
+ * world-journal's `mirrorLaneAct` from world.mjs § mirrorVoiceAct, the
+ * unflipped `say` arm), `holdTown` (creature-tick.mjs), the undo inserts of
+ * drop-recovery.mjs, and the adopt step of solo-adoption.mjs.
  *
  * `claimFn(client, actId, household)` is the candle half when the act is
  * mark-class: same client, same transaction (R1). Throws PenUnreachableError on
  * any failure to reach or commit — by which point NOTHING is written: the
- * transaction rolled back, and the sqlite reverse mirror has not run because
- * the caller only runs it after this returns.
+ * transaction rolled back. (When this was born the caller then ran the sqlite
+ * reverse mirror, only after this returned; that mirror was deleted in G1.)
  *
  * ── THREE ARGUMENTS, NOT TWO (the mark lane, 2026-09-04) ────────────────────
  *
  * `claimFn` is handed the household as its third argument, which is the shape
- * `shadowWrite` has always used. Before the mark lane needed this path the two
- * spellings could differ unnoticed, because the only claimFn in the tree rode
- * the shadow arm; the flipped arm's two-argument call would have handed
+ * the shadow arm (`shadowWrite`, since deleted) always used. Before the mark
+ * lane needed this path the two spellings could differ unnoticed, because the
+ * only claimFn in the tree rode the shadow arm; the flipped arm's two-argument
+ * call would have handed
  * `claimTxFromJournal` an `undefined` household and written a draft row scoped
  * to nobody — which 007's `claims_insert` WITH CHECK refuses outright, so the
  * first live private draft on a flipped lane would have bounced. One spelling,
@@ -434,8 +462,10 @@ export function actsInsert(row, household, { provenance = null } = {}) {
  * meant to remove, five times out of five on fresh stores, leaving the
  * resident's withdrawn draft standing on the docket with its slug still taken
  * (jetto-b1-guards-report 2026-09-03 § Finding 1). `act: false` is what lets
- * the private arm ride THIS queue and THIS transaction, so a compose and its
- * own withdrawal cannot overtake each other in either era.
+ * the private arm ride THIS pen and THIS transaction, so a compose and its own
+ * withdrawal cannot overtake each other. (At the time that was said of one
+ * shared queue, in either era; G1 removed the queue and the second era, and the
+ * caller's await is the order now: test/pen-flip-mark.test.mjs (c2).)
  */
 // `guard(client)` (WLD-27, chest-lock.mjs): a check that must hold INSIDE this
 // write's transaction — it takes its own lock and reads there, and a refusal it
@@ -443,10 +473,10 @@ export function actsInsert(row, household, { provenance = null } = {}) {
 // reaches the door as that refusal, never as "the pen is unreachable".
 export async function penWrite(row, { claimFn = null, household = null, act = true, guard = null, env = process.env } = {}) {
   try {
-    // A resolver, resolved BEFORE the transaction opens — same reason
-    // `shadowWrite` does it there: officeWrite declares `app.household` at
-    // BEGIN, and a resolver running inside would be a query on a second
-    // connection while this one holds the transaction open.
+    // A resolver, resolved BEFORE the transaction opens — the same reason the
+    // shadow arm (`shadowWrite`, since deleted) did it there: officeWrite
+    // declares `app.household` at BEGIN, and a resolver running inside would be
+    // a query on a second connection while this one holds the transaction open.
     const hh = typeof household === "function" ? await household() : household;
     return await officeWrite(async (client) => {
       if (guard) await guard(client);
@@ -465,39 +495,6 @@ export async function penWrite(row, { claimFn = null, household = null, act = tr
   }
 }
 
-/**
- * THE SHADOW WRITE, UNIFIED — same queue discipline the two old pens had,
- * but one transaction per act (R1 for the shadow era). Fire-and-forget for
- * the caller, loud on failure, parity-falsified; acceptable ONLY because the
- * sqlite journal is still the SoT on an unflipped lane (world2-acts.mjs §
- * WRITE DISCIPLINE — that sentence keeps governing this path).
- */
-export function shadowWrite(row, seq, { claimFn = null, household = null, act = true, env = process.env } = {}) {
-  if (!world2Enabled(env)) return;
-  state.queue = state.queue.then(async () => {
-    try {
-      // `household` may be a value or an async resolver — resolved HERE, inside
-      // the queue but before the transaction opens, because officeWrite
-      // declares it at BEGIN and a resolver that ran inside the transaction
-      // would be a query on a second connection while this one holds BEGIN.
-      const hh = typeof household === "function" ? await household() : household;
-      await officeWrite(async (client) => {
-        // `act: false` is the private draft (penWrite § the same option): its
-        // claim rides this queue so it is ORDERED against its own withdrawal,
-        // and its body never reaches the table that leaves the box.
-        const actId = act ? await insertAct(client, row, seq) : null;
-        if (claimFn) await claimFn(client, actId, hh);
-      }, { household: hh, env });
-      state.written += 1;
-    } catch (err) {
-      state.failed += 1;
-      state.lastError = String(err?.message ?? err);
-      console.error(`[world2-pen] SHADOW WRITE FAILED (seq ${seq}): ${state.lastError}`);
-    }
-  });
-  return state.queue;
-}
-
 export function penStatus() {
   const { written, failed, refused, lastError } = state;
   return {
@@ -506,9 +503,11 @@ export function penStatus() {
     // `expires` and `lane_expiry` are GONE with the map that fed them (G1 /
     // POS-156). They were the reverse mirror's backstop dates, and the reverse
     // mirror is deleted -- `appendActFlipped` writes no sqlite row. Same
-    // removal, same reason, as `mirrorStatus()`.
+    // removal, same reason, as the acts mirror's status answer (since deleted).
   };
 }
 
-/** Await the unified shadow queue (tests, settleShadowPens). */
+/** Await the pen's queue (tests, settleShadowPens, docketSettled). Nothing chains
+ *  onto it since `shadowWrite` was deleted, so it is the already-resolved promise
+ *  it started as; callers keep awaiting it as the pen's settle point. */
 export function penSettled() { return state.queue; }

@@ -87,7 +87,7 @@ let seq = 0;
  * POS-350 `tools/world-households-export.mjs` renders that store alone
  * (`identities`, the pins, the declared houses) and reads no town ledger.
  */
-function crossing(label, { env = {}, pins = null, reuse = null, breakExport = false } = {}) {
+function crossing(label, { env = {}, pins = null, declared = null, reuse = null, breakExport = false } = {}) {
   if (reuse) return runCrossing(reuse, { env });
 
   const root = join(scratch, `${label}-${++seq}`);
@@ -194,6 +194,8 @@ process.stdout.write(JSON.stringify({
     [NEWCOMER]: { login: NEWCOMER_LOGIN, id: NEWCOMER_ID },
   };
   writeFileSync(join(townSeed, "tools", "github-ids.json"), `${JSON.stringify(pinRows, null, 2)}\n`);
+  // The declared houses, when a test names some (seed-registry-cli.mjs reads them into the store).
+  if (declared) writeFileSync(join(townSeed, "tools", "households.json"), `${JSON.stringify(declared, null, 2)}\n`);
   // NO ENGINE (POS-350): the export renders the STORE's registry, which
   // `runCrossing` re-states from this seed's pins, and reads no town ledger, so
   // the fixture town carries no `stamp-mint.mjs` for it to fall back on.
@@ -248,6 +250,45 @@ function moveTownWithoutMovingTheMapping(root, note) {
   const after = g("rev-parse", "main").trim();
   assert.notEqual(after, before, "the fixture town must actually move, or this proves nothing");
   return { before, after };
+}
+
+/**
+ * RE-STATE THE TOWN'S PINS (and its declared houses), commit and push, so the
+ * next crossing pins a town whose store says something new. Answers the new sha.
+ */
+function restateTown(root, { pins = null, declared = null }) {
+  const townSeed = join(root, "town-seed");
+  const g = (...a) => execFileSync("git", ["-C", townSeed, ...a], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "seed", GIT_AUTHOR_EMAIL: "seed@postmark.invalid",
+      GIT_COMMITTER_NAME: "seed", GIT_COMMITTER_EMAIL: "seed@postmark.invalid",
+    },
+  });
+  if (pins) writeFileSync(join(townSeed, "tools", "github-ids.json"), `${JSON.stringify(pins, null, 2)}\n`);
+  if (declared) writeFileSync(join(townSeed, "tools", "households.json"), `${JSON.stringify(declared, null, 2)}\n`);
+  g("add", "-A");
+  g("commit", "-qm", "the town's pins move");
+  g("push", "-q", "origin", "main");
+  return g("rev-parse", "main").trim();
+}
+
+/**
+ * PUT A REGISTRY ON WORLD MAIN BY HAND (through a scratch clone of the
+ * fixture's origin): the state of a world whose file was rendered before the
+ * export carried `pinned_ids`.
+ */
+function publishRegistry(root, registry) {
+  const dir = join(root, `hand-${++seq}`);
+  execFileSync("git", ["clone", "-q", join(root, "world.git"), dir], { stdio: "ignore" });
+  const g = (...a) => execFileSync("git", ["-C", dir, ...a], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_AUTHOR_NAME: "hand", GIT_AUTHOR_EMAIL: "hand@postmark.invalid", GIT_COMMITTER_NAME: "hand", GIT_COMMITTER_EMAIL: "hand@postmark.invalid" },
+  });
+  writeFileSync(join(dir, "WORLD", "households.json"), `${JSON.stringify(registry, null, 2)}\n`);
+  g("commit", "-qam", "a registry rendered before pinned_ids");
+  g("push", "-q", "origin", "main");
 }
 
 function runCrossing(root, { env = {} } = {}) {
@@ -557,4 +598,71 @@ test("F7 · the refresh runs on a STORE crossing too, because the wall and the l
     "the registry refresh is not git-mode only — under `store` the same three readers still read this file");
   assert.equal(c.receipt.registry.changed, true);
   assert.equal(c.receipt.registry.households, 2);
+});
+
+// ── PINNED IDS ARE SUBSTANCE (WLD-122, office#796 review F1) ─────────────────
+//
+// The PR lane binds an author by `pinned_ids` alone (World tools/lane-author.mjs).
+// While the comparator above read only households, logins and admins, a crossing
+// that moved nothing else never rendered the field onto main, and an id that was
+// re-pinned or left out kept its authority on main. Each test below runs the real
+// export through a real crossing and reads what reached origin, with households,
+// logins and admins shown unchanged, so `pinned_ids` is the only thing that moved.
+// THE FLIP: drop `pinned_ids` from `substance` in deploy/settlement-registry.mjs
+// and all three go red.
+
+const sameOtherMaps = (a, b, why) => {
+  assert.deepEqual(a.households, b.households, `${why}: households must not have moved`);
+  assert.deepEqual(a.logins, b.logins, `${why}: logins must not have moved`);
+  assert.deepEqual(a.admins ?? [], b.admins ?? [], `${why}: admins must not have moved`);
+};
+
+test("P1 · a world rendered before pinned_ids gets them on the next crossing, even a quiet one", { skip: !SH_OK && "no POSIX sh" }, () => {
+  const first = crossing("pins-materialise", { env: { SETTLEMENT_SOURCE: "git" } });
+  assert.equal(first.res.status, 0, first.res.stderr);
+  assert.ok(first.published.pinned_ids && Object.keys(first.published.pinned_ids).length, "the export renders pinned_ids");
+  const { pinned_ids, pinned_ids_note, ...before } = first.published;
+  publishRegistry(first.root, before); // stamped, the same mapping, no pinned_ids: world main before #796
+  moveTownWithoutMovingTheMapping(first.root, "pins");
+  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  assert.equal(second.res.status, 0, second.res.stderr);
+  sameOtherMaps(second.published, before, "a quiet crossing");
+  assert.equal(second.receipt.registry.changed, true, "pinned_ids moved, so the registry is rewritten");
+  assert.deepEqual(second.published.pinned_ids, pinned_ids, "and world main now carries them");
+});
+
+// A house that lists two accounts under one login: the login keeps binding the
+// house when its pin moves from one account to the other, so only the id moves.
+const KILN = { schema_version: 1, households: { "kiln-house": {
+  name: "Kiln House", since: "2026-01-01", declared_by: "alpha", residents: ["alpha"],
+  accounts: [{ login: "alpha-hub", id: 900000401 }, { login: "alpha-hub", id: 900000402 }],
+} } };
+const KILN_PINS = (id) => ({ alpha: { login: "alpha-hub", id }, [NEWCOMER]: { login: NEWCOMER_LOGIN, id: NEWCOMER_ID } });
+
+test("P2 · a re-pin to another account of the same house moves the id on main, and the old id binds nothing", { skip: !SH_OK && "no POSIX sh" }, () => {
+  const first = crossing("pins-repin", { env: { SETTLEMENT_SOURCE: "git" }, pins: KILN_PINS(900000401), declared: KILN });
+  assert.equal(first.res.status, 0, first.res.stderr);
+  assert.equal(first.published.pinned_ids["900000401"], "hh:kiln-house");
+  restateTown(first.root, { pins: KILN_PINS(900000402) });
+  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  assert.equal(second.res.status, 0, second.res.stderr);
+  sameOtherMaps(second.published, first.published, "a re-pin within the house");
+  assert.equal(second.receipt.registry.changed, true);
+  assert.equal(second.published.pinned_ids["900000402"], "hh:kiln-house", "the new account binds the house");
+  assert.equal(Object.hasOwn(second.published.pinned_ids, "900000401"), false, "the old account binds nothing on main");
+});
+
+test("P3 · an id the export stops binding (now on two houses' lists) is gone from main", { skip: !SH_OK && "no POSIX sh" }, () => {
+  const first = crossing("pins-conflict", { env: { SETTLEMENT_SOURCE: "git" }, pins: KILN_PINS(900000401), declared: KILN });
+  assert.equal(first.res.status, 0, first.res.stderr);
+  assert.equal(first.published.pinned_ids["900000401"], "hh:kiln-house");
+  // a second house lists the same account: the export leaves the id out, and names it
+  const ash = { "ash-house": { name: "Ash House", since: "2026-01-01", declared_by: "ash", residents: [], accounts: [{ login: "ash-hub", id: 900000401 }] } };
+  restateTown(first.root, { declared: { schema_version: 1, households: { ...ash, ...KILN.households } } });
+  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  assert.equal(second.res.status, 0, second.res.stderr);
+  sameOtherMaps(second.published, first.published, "a conflict on the account lists");
+  assert.equal(second.receipt.registry.changed, true);
+  assert.equal(Object.hasOwn(second.published.pinned_ids, "900000401"), false, "a conflicted id binds nothing on main");
+  assert.equal(second.published.pinned_ids[String(NEWCOMER_ID)], first.published.pinned_ids[String(NEWCOMER_ID)], "the other bindings stand");
 });

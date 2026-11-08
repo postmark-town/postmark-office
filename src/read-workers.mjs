@@ -59,12 +59,13 @@ export const IN_READ_WORKER = !isMainThread && workerData?.readWorker === true;
  *                          the main thread.
  *   /household           — the standing read carries `world_writes`, the
  *                          bouncer's live budget, which is main-thread RAM.
+ *   /world/say/stream    — POS-265's push waits on new voices, and voices land
+ *                          on the main thread: served from a worker, the stream
+ *                          would open and never hear a word.
  *
  * A read not named here, not refused by `workerSafe` and not the REST listen
  * (`listensToVoices` below) goes to a worker.
  */
-// /world/say/stream (POS-265's push) waits on new voices, and voices land on the
-// main thread: served from a worker, the stream would open and never hear a word.
 export const MAIN_ONLY_READS = new Set(["/world/conversations", "/world/dynamic", "/household", "/world/say/stream"]);
 
 /**
@@ -265,8 +266,8 @@ export function serveReadsInWorker(handle) {
  * is safe to ask again), else answered 503.
  */
 export function startReadPool({ size, entry, argv = [], env = process.env, respawnMs = 250, log = console } = {}) {
-  const workers = []; // { w, ready, inflight: Map<id, pending>, n }
-  const pending = new Map(); // id -> { res, head, tries, slot }
+  const workers = []; // by slot: { w, ready, inflight: Set<id>, slot, served, cause }
+  const pending = new Map(); // id -> { res, msg, tries }
   let nextId = 1;
   const bootFailures = new Array(size).fill(0); // per slot: exits before ready, in a row
   const down = new Array(size).fill(null);      // per slot: why it was given up, once it was

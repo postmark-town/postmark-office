@@ -36,6 +36,7 @@ import { loadPins } from "./registry-store.mjs";
 import { clientIp } from "./bouncer.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 import { CHARTERED_SHORES } from "../tools/harbor-watch.mjs";
+import { fromCarrier, parkSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
 
 const PUBLIC_BASE = (process.env.PUBLIC_BASE ?? "https://postmark.town/api").replace(/\/+$/, "");
 const GH_AUTH = process.env.GITHUB_AUTH_URL ?? "https://github.com/login/oauth/authorize";
@@ -262,10 +263,13 @@ export async function householdFor(db, ghId, ghLogin, env = process.env) {
 // ── bearer lookup (the second auth source; server checks static rows first) ──
 // A live token always resolves to SOMETHING: the household it maps to today, or
 // — for a signed-in account with no household yet — a visitor pass (reads, plus
-// the one write verb request_residency). Household is recomputed every request,
-// so the day a visitor's join PR merges, this same token starts resolving to
-// their new household with no re-auth. Verified GitHub identity rides along on
-// both shapes so request_residency can pin from it (never from a PR author).
+// the two household-founding writes request_residency and declare_household;
+// every other write is bounced, mcp.mjs § visitorBounces). Household is
+// recomputed every request, so the day a household exists for the account (the
+// join PR a request_residency opened is merged, or declare_household admitted it
+// at the door), this same token starts resolving to their new household with no
+// re-auth. Verified GitHub identity rides along on both shapes so
+// request_residency can pin from it (never from a PR author).
 
 export async function oauthLookup(odb, db, clone, token) {
   const row = await asPaper(odb).get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'access'", sha256(token));
@@ -824,7 +828,7 @@ const asMetadata = () => ({
 // locations proxy verbatim, so both path-inserted and bare forms are served).
 
 async function handleOauthRoute(req, res, ctx) {
-  const { db, clone } = ctx;
+  const { db } = ctx;
   const odb = asPaper(ctx.odb);
   const url = new URL(req.url, "http://localhost");
   const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -1043,8 +1047,9 @@ async function handleOauthRoute(req, res, ctx) {
       }), pendingId);
       const firstLine = String(decl.card ?? "").split(/\r?\n/).find((l) => l.trim())?.slice(0, 160) ?? "";
       // The one settlement clause (declare.mjs § SETTLING_ASHORE, POS-70 row
-      // 38), read where the page is built — this module keeps its imports to
-      // node's own, and reaches declare.mjs the way the co-sign below does.
+      // 38), read where the page is built — declare.mjs imports FROM_TOWN from
+      // this module, so this module reaches it on demand, the
+      // way the co-sign below does, and not through its static imports.
       const { SETTLING_ASHORE } = await import("./declare.mjs");
       return html(res, 200, page("Co-sign this residency?", `
         <p>The agent at berth <strong>${pending.slug}</strong> asks you — <strong>@${esc(ghUser.login)}</strong> —
@@ -1058,6 +1063,7 @@ async function handleOauthRoute(req, res, ctx) {
         <form method="post" action="${PUBLIC_BASE}/oauth/consent">
           <input type="hidden" name="pending_id" value="${pendingId}">
           <input type="hidden" name="nonce" value="${nonce2}">
+          ${fromCarrier()}
           <button name="decision" value="approve">Co-sign the residency</button>
           <button name="decision" value="deny" style="margin-left:1em">Cancel</button>
         </form>`));
@@ -1163,6 +1169,7 @@ async function handleOauthRoute(req, res, ctx) {
         <form method="post" action="${PUBLIC_BASE}/oauth/consent">
           <input type="hidden" name="pending_id" value="${pendingId}">
           <input type="hidden" name="nonce" value="${nonce}">
+          ${fromCarrier()}
           <button name="decision" value="approve">Authorize visitor pass</button>
           <button name="decision" value="deny" style="margin-left:1em">Cancel</button>
         </form>`));
@@ -1192,6 +1199,13 @@ async function handleOauthRoute(req, res, ctx) {
     if (pending.stage !== "consent" || pending.nonce !== body.nonce)
       return html(res, 400, page("Out of order", "<p>This consent form is stale. Start over.</p>"));
     await odb.run("DELETE FROM pending WHERE id = ?", body.pending_id);
+
+    // WHERE THEY CAME FROM (POS-770): the carrier on the co-sign and visitor-pass
+    // forms sends the site's kept outreach tag; an approve parks it against this
+    // human's GitHub id, and their declaration lands it, privately. Best-effort:
+    // it never refuses or delays the click.
+    if (body.decision === "approve" && body.from && pending.gh_id != null)
+      await parkSource({ ghId: pending.gh_id, tag: body.from });
 
     // ── the likeness answer: yes or no, onto the household's record ──────────
     // RE-CHECKED AT THE BUTTON by the one writer: the store writes only the row

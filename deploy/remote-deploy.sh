@@ -221,8 +221,19 @@ systemctl is-active --quiet "$SERVICE" || die "$SERVICE is not active after the 
 # ── 6. the town's own door still answers ─────────────────────────────────────
 # The release probe proves the new code booted; this proves it can still do the
 # job. /town is the read the whole site is built on, and DEPLOY.md's own smoke.
-curl -fsS --max-time 10 "http://127.0.0.1:$PORT/town" >/dev/null \
-  || die "$SERVICE booted the new release but GET /town does not answer. The office is up and broken — this is the state to roll back from (deploy/DEPLOY.md: 'Rollback: systemctl stop postmark-office')."
+# Patient like the release probe (2026-11-03, release/2026-w45.4: the restart landed
+# in the 06:00Z settlement window, the one 10 s try timed out on a cold /town, and a
+# healthy deploy read DEPLOY FAILED; /town answered 200 in 2.6 s 40 s later). It
+# retries for 90 s, each try 20 s; only a door that never answers in the window is
+# "up and broken".
+deadline=$(( $(date +%s) + 90 ))
+town_ok=""
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  if curl -fsS --max-time 20 "http://127.0.0.1:$PORT/town" >/dev/null 2>&1; then town_ok=1; break; fi
+  sleep 5
+done
+[ -n "$town_ok" ] \
+  || die "$SERVICE booted the new release but GET /town did not answer within 90s. The office is up and broken — this is the state to roll back from (deploy/DEPLOY.md: 'Rollback: systemctl stop postmark-office'). Last try: $(curl -sS -o /dev/null -w '%{http_code} in %{time_total}s' --max-time 20 "http://127.0.0.1:$PORT/town" 2>&1 | head -c 200)"
 say "GET /town answers"
 
 echo "== deployed $TAG @ ${SHA:0:12} to $SERVICE =="

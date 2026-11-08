@@ -72,6 +72,10 @@ async function main() {
               ? `unstake: ${payload.handle} <- world-mark/${payload.mark} · ${result.applied}`
               : `stake: ${payload.handle} -> world-mark/${payload.mark} · ${result.applied} (via ${payload.via ?? "api"})`);
           if (commit?.error) return commit;
+          // A stake that moved stamps wrote a line; no commit means the line is
+          // not in the clone any more (another writer reset it before the pen
+          // staged it). Its answer names its own write or refuses (POS-922).
+          if (!commit) return { error: { code: 503, defect: "the stake's line did not reach the ledger", hint: verb === "unstake" ? "nothing was returned and your stake stands — try again" : "nothing was staked and your stamps are untouched — try again" } };
           result.commit = commit;
         }
         result.verb = verb;

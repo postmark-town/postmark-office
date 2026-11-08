@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 import { LivingSet, loadCreatureLaw } from "../src/creatures.mjs";
 import { windowAt } from "../src/encounter.mjs";
 import { PHASE_ACTION, HURL_ACTION, PERSUADE_ACTION } from "../src/set-pieces.mjs";
-import { FIGHT_VERBS, creatureEntries, creaturePairs, worldCreature, readCreatureVerb } from "../src/creature-verbs.mjs";
+import { CREATURE_VERBS, FIGHT_VERBS, creatureEntries, creaturePairs, worldCreature, readCreatureVerb } from "../src/creature-verbs.mjs";
 import { ENCOUNTER_CALLS, classOfVerb, encounterEntries, encounterPairs, readEncounterVerb, worldEncounter, worldSpeakFor } from "../src/encounter-verbs.mjs";
 import { __setCreaturesForTest } from "../src/creatures-hook.mjs";
 import { __setOccupancyForTest } from "../src/creature-sight.mjs";
@@ -65,7 +65,10 @@ const lawWith = ({ fight = true, encounter = true, walls = false } = {}) => (NO_
   ...(walls ? { inCreatureRing: (p) => Number(p.x) <= 5 } : {}),
   kindMod: { ...BASE.kindMod,
     ENCOUNTER_VERBS: encounter ? ["strike", "steady", "shield"] : undefined,
-    AFFORDED_VERBS: fight ? [...BASE.kindMod.AFFORDED_VERBS, "dodge", "persuade"] : BASE.kindMod.AFFORDED_VERBS },
+    // The older law is the office's six alone, spelled here from the office's own list, and the fight's law adds the office's FIGHT_VERBS
+    // to them. Neither reads the pinned world's list: once the world declares the fight's two itself (POS-896), a fixture built from it
+    // would carry them into the law meant to omit the fight.
+    AFFORDED_VERBS: fight ? [...CREATURE_VERBS, ...FIGHT_VERBS] : [...CREATURE_VERBS] },
 });
 
 const NOW = Date.parse("2026-10-26T08:00:00Z");
@@ -201,6 +204,10 @@ test("the bare read's fight cards carry blurb, class and fields, and every adver
 
 test("until the law knows the fight's verbs, their reads answer exactly as before: not through the creature read door", async () => {
   const law = lawWith({ fight: false });
+  // the precondition that makes the refusal below mean something: this law knows none of the fight's verbs, whatever the pinned world declares
+  assert.deepEqual([...law.kindMod.AFFORDED_VERBS], [...CREATURE_VERBS], "the older law is the six alone");
+  assert.ok(FIGHT_VERBS.every((v) => !law.kindMod.AFFORDED_VERBS.includes(v)), "no fight verb in the older law");
+  assert.ok(FIGHT_VERBS.every((v) => lawWith().kindMod.AFFORDED_VERBS.includes(v)), "control: the fight's law holds both");
   const living = livingOf(law, piece(2), hurl("kai"));
   const { worldApex } = await apexWith(living);
   const { deps, calls } = seams(law, living);

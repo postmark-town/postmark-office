@@ -401,3 +401,70 @@ test("the town's marks are still canon-checked: the exemption is from the stake,
 test("STANDING_SELECT reads the owner, which is what townsOwn asks", () => {
   assert.match(STANDING_SELECT, /m\.owner/);
 });
+
+// ── A HELD THING IS NOT A COMMONS MARK (POS-765) ─────────────────────────────
+//
+// A held thing is published by its holder and stands in no place (LOGOS § the transfer edge), so the
+// market-to-commons escrow judgement has nothing to ask of it. `held_by` rides in the standing row beside
+// the tier (STANDING_SELECT) and the escrow branch skips a row that has one. ESCROW ONLY: the canon check
+// is untouched. Every record here is invented; none is a real cohort.
+//
+// THE CAN-FAIL FLIPS (each reds its own tests below):
+//   delete `if (heldBy(r)) continue;` in canonLockFindings        → the held ✦0 thing is listed unbacked
+//   (the column drop is proved on a real store, canon-locks-held-delivery.test.mjs)
+
+const LAMP = (over = {}) => ({
+  slug: "sbx-ana/a-brass-lamp", owner: "sbx-ana", mark_status: "standing", tier: "market",
+  locked_window: 177, locking_town_sha: "723005e5", claim_id: "ab12cd34", claim_status: "locked", window_id: 177, ...over,
+});
+const heldRegister = (...rows) => ({ slugs: new Set(rows.map((r) => r.slug)), sha: "0".repeat(40) });
+const PROJECTED = new Map([["723005e5|somebody/else", 4]]);   // the locking sha is held by the projection, on another mark
+
+test("POS-765 · a HELD thing at ✦0 is not unbacked; the same thing placed (no holder) at ✦0 still is", () => {
+  const held = LAMP({ held_by: "sbx-bo" });
+  const placed = LAMP({ slug: "sbx-ana/a-placed-lamp" });
+  const r = canonLockFindings([held, placed], heldRegister(held, placed), { escrowBySha: PROJECTED });
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/a-placed-lamp"], "the alarm still catches the real case");
+  assert.equal(r.escrow_compared, 1, "the held thing is not compared at all");
+  assert.deepEqual(r.unjudgeable, []);
+});
+
+test("POS-765 · the held guard asks the office's one held contract: a blank, null or absent holder is not held", () => {
+  const rows = [LAMP({ slug: "sbx-ana/l1", held_by: null }), LAMP({ slug: "sbx-ana/l2", held_by: "" }), LAMP({ slug: "sbx-ana/l3", held_by: "   " }), LAMP({ slug: "sbx-ana/l4" })];
+  const r = canonLockFindings(rows, heldRegister(...rows), { escrowBySha: PROJECTED });
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/l1", "sbx-ana/l2", "sbx-ana/l3", "sbx-ana/l4"], "no new type or normalisation policy: an unheld row is judged as ever");
+});
+
+test("POS-765 · a thing that moves from held to placed is judged at its NEXT read, with no memory of having been held", () => {
+  const was = LAMP({ held_by: "sbx-bo" });
+  const next = LAMP();   // the store row after the set-down: same slug, no holder
+  assert.deepEqual(canonLockFindings([was], heldRegister(was), { escrowBySha: PROJECTED }).unbacked, []);
+  assert.deepEqual(canonLockFindings([next], heldRegister(next), { escrowBySha: PROJECTED }).unbacked.map((u) => u.slug), ["sbx-ana/a-brass-lamp"]);
+  // and the other way: placed, then taken
+  assert.deepEqual(canonLockFindings([was], heldRegister(was), { escrowBySha: PROJECTED }).unbacked, []);
+});
+
+test("POS-765 · controls stay: a held thing is still canon-checked; backed, home and town rows are as before; an unprojected locking sha is still unjudgeable for a placed row", () => {
+  const held = LAMP({ held_by: "sbx-bo" });
+  assert.deepEqual(canonLockFindings([held], { slugs: new Set(), sha: "0".repeat(40) }, { escrowBySha: PROJECTED }).absent.map((a) => a.slug), ["sbx-ana/a-brass-lamp"], "the exemption is from the stake, not from the register");
+  const backed = LAMP({ slug: "sbx-ana/backed" }), home = LAMP({ slug: "sbx-ana/home", tier: "home" }), town = LAMP({ slug: "the-town/lamp", owner: "the-town" });
+  const stakes = new Map([["723005e5|sbx-ana/backed", 2], ["723005e5|somebody/else", 4]]);
+  const r = canonLockFindings([backed, home, town], heldRegister(backed, home, town), { escrowBySha: stakes });
+  assert.deepEqual(r.unbacked, []);
+  const old = LAMP({ slug: "sbx-ana/old", locking_town_sha: "830a69963d8e4801ad4ed8bb80da38e79fd3fdbf" });
+  const u = canonLockFindings([old], heldRegister(old), { escrowBySha: PROJECTED });
+  assert.deepEqual(u.unjudgeable.map((x) => x.slug), ["sbx-ana/old"]);
+  assert.deepEqual(canonLockFindings([LAMP({ held_by: "sbx-bo", locking_town_sha: null })], heldRegister(held), { escrowBySha: new Map() }).unbacked, []);
+});
+
+test("POS-765 · STANDING_SELECT carries the stored holder in the same row as the tier", () => {
+  assert.match(STANDING_SELECT, /m\.data->'held_by' AS held_by/);
+  assert.doesNotMatch(STANDING_SELECT, /->>'held_by'/, "the holder travels as the JSON value it is stored as, never cast to text");
+});
+
+test("POS-765 · the guard reads the stored VALUE under the office's one contract: a JSON false or object is no holder, a non-blank string is", () => {
+  const rows = [LAMP({ slug: "sbx-ana/b1", held_by: false }), LAMP({ slug: "sbx-ana/b2", held_by: { by: "sbx-bo" } }), LAMP({ slug: "sbx-ana/b3", held_by: true }), LAMP({ slug: "sbx-ana/b4", held_by: 7 })];
+  const strung = LAMP({ slug: "sbx-ana/s1", held_by: "false" });   // a non-blank STRING is a holder reference, whatever it says: no value blacklist
+  const r = canonLockFindings([...rows, strung], heldRegister(...rows, strung), { escrowBySha: PROJECTED });
+  assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/b1", "sbx-ana/b2", "sbx-ana/b3", "sbx-ana/b4"], "a non-string value is not a holder; the string \"false\" is held");
+});

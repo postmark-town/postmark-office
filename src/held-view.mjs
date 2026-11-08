@@ -52,9 +52,6 @@ export async function heldView() {
   } catch { return null; }
 }
 
-/** Tests only: forget the kept cutoff and places. */
-export function __resetHeldViewForTest() { kept = { key: null, at: 0, from: null, through: null, placed: new Map() }; }
-
 /**
  * The same view, read from ONE STORE the caller names (the store twin's pool,
  * world2-serve.mjs): its hold rows, its cutoffs and its places, never the

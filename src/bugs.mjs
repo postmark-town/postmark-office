@@ -197,7 +197,8 @@ export const EARNED_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED, STAT
 export const EARNED_BY = Object.freeze({
   [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, the letter, or the resident's own pull request that names it; its author is who's credited, and a founder's pull request never earns it",
   [STATE_BRIEFED]: "briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it",
-  [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited",
+  // POS-912 W2 (Wright, settled 2026-11-05 17:51:47Z): a carried fix links its merged carrier (bug-credit.mjs § A CARRIED FIX)
+  [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited. A fix carried onto another pull request links the merged carrier, whose body's first line is \"carries: <repo>#<n>\": the carried pull request's author is who's credited, when the two make the same change by whole patch-id (context included) and byte for byte in the changed lines. Hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations",
 });
 const EARNED_SHAPES = Object.freeze({
   [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", or a letter\'s id',
@@ -211,9 +212,29 @@ const EARNED_KINDS = Object.freeze({
 });
 const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue", pull: "a pull request", letter: "a letter" });
 
-/** The founders' GitHub accounts, by id (the login is a label), and the handles they credit. */
+/**
+ * The founders' GitHub accounts, by id (the login is a label), and the handles they credit.
+ * The leads' Apps are not here (POS-931/b's two rows were taken out, POS-867): § HOUSE_APPS judges them.
+ */
 export const FOUNDER_ACCOUNTS = Object.freeze({ 306351151: "wright-starforge", 67605380: "keeminlee" });
 export const FOUNDER_HANDLES = Object.freeze(["wright", "keemin"]);
+
+// STARFORGE'S OWN APPS (POS-867, POS-892; Wright, 2026-11-05 15:41Z: "trusted Starforge Apps, identified by
+// App ID (never a matching login)"). WIDENED (Darko, 2026-11-07 12:12 EST, "One app rule, widened"; Wright,
+// 2026-11-07 17:16:15Z): all four Apps, matched by id and login, credit wright only, and "an app's comment can
+// earn diagnosed and briefed as well as an app's PR earning fixed". Nothing else: an App's issue, an App's PR at
+// diagnosed or briefed, keemin or any resident's credit all refuse. This rule replaces POS-931/b's founder rows
+// for Rivet's and Bevel's Apps. The leads' pods push as these Apps, and "Plumb builds, Wright is credited" (Darko, 2026-10-07). A
+// pull request's JSON names no App ID, only the App's bot user, so each row binds the App ID to its bot user's
+// account id and the login GitHub gives it, `<slug>[bot]` (GET /apps/{slug} and /users/{slug}%5Bbot%5D, read
+// 2026-11-06; a test re-reads them on request). An author is one of these only by that id AND that login: a
+// login alone is a label. Truey reviews and never builds, so it isn't here.
+export const HOUSE_APPS = Object.freeze([
+  Object.freeze({ slug: "rivet-starforge", app_id: 5263298, bot_id: 340608403 }),
+  Object.freeze({ slug: "bevel-starforge", app_id: 5279270, bot_id: 341174930 }),
+  Object.freeze({ slug: "jetto-starforge", app_id: 5325007, bot_id: 342797059 }),
+  Object.freeze({ slug: "arti-starforge", app_id: 5573296, bot_id: 351277522 }),
+]);
 
 // A repo name never starts with a dot, so `.` and `..` can never steer the API path (review-649 § 6).
 const REPO = "([A-Za-z0-9_-][A-Za-z0-9._-]*)";
@@ -361,8 +382,8 @@ export function judgeForce(v) {
 /**
  * Judge an advance against the post's current state. Returns the payload's
  * judged parts: `{ to, credit, size?, critter?, grade?, of?, link?, earned? }`
- * (`earned`: what an earned stage's link names, for bug-credit.mjs). `reporter` is the post's
- * author, the credit a `confirmed` defaults to.
+ * (`earned`: what an earned stage's link names, for bug-credit.mjs). The credit
+ * a `confirmed` defaults to is `prev.author`, the reporter.
  */
 export function judgeAdvance(fields, prev, roll) {
   const to = typeof fields?.to === "string" ? fields.to.trim() : "";
@@ -428,8 +449,9 @@ export function judgeAdvance(fields, prev, roll) {
 // stage, the hand and why. It credits no one, takes no link, size, grade or
 // critter, and pays nothing (the stage pass reads advances only). Only the
 // paid rungs are skipped: reported is the post itself, and shipped is the
-// finish, advanced to when the fix is live. A skipped stage is never
-// re-credited (judgeRecredit: "a skipped stage paid no one").
+// finish, advanced to when the fix is live. A skip stays on the record; a
+// skip made by mistake at diagnosed or briefed is corrected by a recredit
+// beside it (§ THE RECREDIT, POS-931), never undone.
 export const SKIP_STAGES = PAID_STAGES;
 export const SKIP_REASON_MAX = BODY_MAX;
 const SKIP_HOW = 'a stage no one earned is skipped with town { do: "advance", args: { post, skip: "<stage>", reason } }, one stage per call, in order; it credits no one and pays nothing';
@@ -480,22 +502,48 @@ export function judgeSkip(fields, prev) {
 // author check as an advance (bug-credit.mjs). Only diagnosed, briefed and
 // fixed; only a stage the post passed and that paid someone; once per stage.
 //
+// A STAGE SKIPPED BY MISTAKE (POS-931/a, RULED Darko 2026-11-06 21:32 EST,
+// "Extend the door"; Wright's skip of Moose's stated cause, act 46312). The same
+// act re-credits a stage the record shows SKIPPED (its `skip` act, POS-713),
+// when someone did earn it after all: `{ post, to, recredit: true, credit,
+// link, note }`, plus `grade` at briefed. The skip and its reason stay on the
+// history, with the credit beside them. The reviewed pass then writes ONE
+// town line, the stage's lawful amount to the credit (the same
+// `post:<id>/<stage>-recredit` line), with nothing to burn, and only when the
+// town's ledger holds no line for that stage (stamp-mint.mjs --stage-recredit
+// --skipped). The stages: diagnosed (5, nothing more needed) and briefed (the
+// grade picks 10 or 5, as at the advance). Not fixed: fixed carries the size,
+// the critter its fixer names on the post, and the merge guard, none of which
+// a recredit writes, so a skipped fixed is refused and says so. A stage with
+// neither an advance nor a skip act (a gap before POS-713) is no evidenced
+// skip, and is refused.
+//
 // The hands are wright and keemin only: a recredit burns stamps, and the town
 // gives moving money to them alone (AWARD_HANDS, its CORRECTION_HANDS).
 export const RECREDIT_HANDS = Object.freeze(["wright", "keemin"]);
 export const RECREDIT_NOTE_MAX = BODY_MAX;
-const RECREDIT_HOW = `town { do: "advance", args: { post, to: "${EARNED_STAGES.join("\" | \"")}", recredit: true, credit, link, note } }`;
+/** The stages a skip made by mistake may be re-credited at (POS-931/a). */
+export const SKIPPED_RECREDIT_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED]);
+const RECREDIT_HOW = `town { do: "advance", args: { post, to: "${EARNED_STAGES.join("\" | \"")}", recredit: true, credit, link, note } } — and grade, for a briefed that was skipped`;
 const payloadOfAct = (a) => (typeof a.payload === "string" ? JSON.parse(a.payload) : (a.payload ?? {}));
 
-/** A recredit's own fields, judged before the store is read: `{ to, credit, link, earned, note }`. */
+/**
+ * A recredit's own fields, judged before the store is read:
+ * `{ to, credit, link, earned, note, grade? }`. `grade` is a skipped briefed's
+ * (judgeRecredit decides whether the stage was skipped or paid).
+ */
 export function judgeRecreditFields(fields, roll) {
   if (fields.recredit !== true) throw refuse(422, "recredit is true, or left off", RECREDIT_HOW, { field: "recredit" });
   const to = typeof fields.to === "string" ? fields.to.trim() : "";
   if (!EARNED_STAGES.includes(to))
     throw refuse(422, `only ${EARNED_STAGES.join(", ")} are re-credited`, `to: the stage whose credit was wrong — ${RECREDIT_HOW}`, { field: "to" });
-  for (const k of ["size", "grade", "critter", "of", "force"])
+  for (const k of ["size", "critter", "of", "force"])
     if (fields[k] !== undefined)
       throw refuse(422, `a recredit takes no ${k}`, `it pays the stage again at exactly what the stage paid — ${RECREDIT_HOW}`, { field: k });
+  if (fields.grade !== undefined && to !== STATE_BRIEFED)
+    throw refuse(422, "grade is a skipped briefed's", `only a recredit of a briefed the record shows skipped takes grade (${BUG_GRADES.join(" or ")}) — ${RECREDIT_HOW}`, { field: "grade" });
+  if (fields.grade !== undefined && !BUG_GRADES.includes(fields.grade))
+    throw refuse(422, "grade is light or heavy", `grade: ${BUG_GRADES.join(" or ")} — the bless's revision (${BUG_GRADES.map((g) => `${g} ${BUG_LADDER.briefed.n[g]}`).join(", ")})`, { field: "grade" });
   if (fields.credit === undefined)
     throw refuse(422, "a recredit names whom it credits", `credit: the resident whose work earned ${to} — ${RECREDIT_HOW}`, { field: "credit" });
   const credit = judgeHandleField("credit", fields.credit, roll);
@@ -508,29 +556,36 @@ export function judgeRecreditFields(fields, roll) {
     throw refuse(422, "a recredit says why", `note: what the stage's credit got wrong, at most ${RECREDIT_NOTE_MAX} characters; it stays on the bug's history beside both credits`, { field: "note" });
   if (note.length > RECREDIT_NOTE_MAX)
     throw refuse(422, `a recredit's note is at most ${RECREDIT_NOTE_MAX} characters`, `this one is ${note.length}`, { field: "note" });
-  return { to, credit, link: e.link, earned: e.ref, note };
+  return { to, credit, link: e.link, earned: e.ref, note, ...(fields.grade !== undefined ? { grade: fields.grade } : {}) };
 }
 
 /**
- * Judge a recredit against the bug. `acts` are the post's advance and recredit
- * acts, oldest first; `paid` is what the chain's stage lines paid,
+ * Judge a recredit against the bug. `acts` are the post's advance, skip and
+ * recredit acts, oldest first; `paid` is what the chain's stage lines paid,
  * Map("<post>/<stage>" → n), or null when the chain can't be read. Returns
- * `{ was, n }`: the stage's credit now, and what the chain says it paid (null
- * when the chain doesn't say; the stage pass reads the ledger either way).
+ * `{ was, n, skipped }`. For a stage the post passed: its credit now, and what
+ * the chain says it paid (null when the chain doesn't say; the stage pass reads
+ * the ledger either way). For a stage its skip act shows skipped (POS-931/a):
+ * `was` null, `n` the stage's lawful amount, `skipped` true, and `grade` at
+ * briefed; the pass pays it only on a ledger it read that holds no line for it.
  */
 export function judgeRecredit(r, prev, acts, paid) {
   const id = prev.id;
   judgeOnBugIssue(r.to, r.link, r.earned, prev);
   const adv = acts.find((a) => a.action === ACT_ADVANCE && payloadOfAct(a).to === r.to);
-  if (!adv) {
+  const skip = adv ? null : acts.find((a) => a.action === ACT_SKIP && payloadOfAct(a).to === r.to);
+  if (!adv && !skip) {
     const ahead = BUG_STAGES.indexOf(prev.state) < BUG_STAGES.indexOf(r.to);
     throw refuse(409, `"${id}" never passed ${r.to}`, ahead
       ? `it stands ${prev.state}; advance it to ${r.to}, crediting the right resident, rather than re-crediting`
-      : `${r.to} was skipped, and a skipped stage paid no one: there is nothing to re-credit`, { field: "to" });
+      : `${r.to} has neither an advance nor a skip on the record (a gap from before every rung was recorded), so there is no stage and no skip to correct`, { field: "to" });
   }
   const done = acts.find((a) => a.action === ACT_RECREDIT && payloadOfAct(a).to === r.to);
   if (done)
-    throw refuse(409, `"${id}"'s ${r.to} was already re-credited, to ${payloadOfAct(done).credit}`, "one recredit per post and stage, ever: the town burns a mint once", { field: "to" });
+    throw refuse(409, `"${id}"'s ${r.to} was already re-credited, to ${payloadOfAct(done).credit}`, "one recredit per post and stage, ever: the town pays a correction once", { field: "to" });
+  if (skip) return judgeSkippedRecredit(r, id, paid);
+  if (r.grade !== undefined)
+    throw refuse(422, `${r.to} on "${id}" was paid, and a recredit of a paid stage takes no grade`, "it pays again exactly what the stage paid; grade is for a briefed the record shows skipped", { field: "grade" });
   const was = payloadOfAct(adv).credit ?? null;
   if (r.credit === was)
     throw refuse(422, `${r.to} on "${id}" already credits ${was}`, "a recredit names someone else: the resident whose work earned the stage", { field: "credit" });
@@ -539,7 +594,28 @@ export function judgeRecredit(r, prev, acts, paid) {
   // on it refused every recredit. The act records what the chain says when it
   // can (`n`, else null), and the stage pass reads the town's ledger itself:
   // it corrects only a stage line paid to `was`, and holds anything else.
-  return { was, n: paid?.get(`${id}/${r.to}`) ?? null };
+  return { was, n: paid?.get(`${id}/${r.to}`) ?? null, skipped: false };
+}
+
+/**
+ * A stage the record shows skipped (POS-931/a): the lawful amount for its
+ * credit, from the ladder and the recredit's own fields, never guessed. A
+ * chain that shows the stage paid contradicts the skip and refuses; a chain
+ * that cannot be read decides nothing here, because the pass pays only on a
+ * town ledger it read with no line for the stage.
+ */
+function judgeSkippedRecredit(r, id, paid) {
+  if (!SKIPPED_RECREDIT_STAGES.includes(r.to))
+    throw refuse(422, `${r.to} on "${id}" was skipped, and a skipped ${r.to} is not re-credited`,
+      `only a skipped ${SKIPPED_RECREDIT_STAGES.join(" or ")} is: fixed carries the size, the critter its fixer names on the post, and the merge guard, and a recredit writes none of them`, { field: "to" });
+  if (r.to === STATE_BRIEFED && r.grade === undefined)
+    throw refuse(422, `${r.to} on "${id}" was skipped, so its recredit names the grade`, `grade: ${BUG_GRADES.join(" or ")} — the bless's revision (${BUG_GRADES.map((g) => `${g} ${BUG_LADDER.briefed.n[g]}`).join(", ")})`, { field: "grade" });
+  const chain = paid?.get(`${id}/${r.to}`);
+  if (chain != null)
+    throw refuse(409, `"${id}"'s ${r.to} is recorded skipped, and the chain shows it paid ${chain}`, "a person reads both before anything is paid", { field: "to" });
+  const n = stageAmount(r.to, { grade: r.grade ?? null });
+  if (!n) throw refuse(422, `${r.to} pays nothing at these fields`, RECREDIT_HOW, { field: "to" });
+  return { was: null, n, skipped: true, ...(r.grade !== undefined ? { grade: r.grade } : {}) };
 }
 
 // ── THE REVEAL AT SHIP (Keemin, 2026-09-26, on POS-236) ─────────────────────
@@ -550,10 +626,23 @@ export function judgeRecredit(r, prev, acts, paid) {
 // town hand (the Bug Catcher, who keeps the jar) sets them on the post, and the
 // fixer who named the critter picks one. Each is one `reveal` act; the post's
 // `fields.reveal` holds { candidates, pick, image, picked_by }, and the jar reads
-// the picked image off the post. Chosen once: a picked reveal takes no second act.
+// the picked image off the post. A pick is made once: a picked reveal takes no
+// second pick and no set of three.
+//
+// ONE PORTRAIT (Darko, 2026-10-27 09:14 EDT and 2026-10-29 00:04 EDT, CORE-25/a:
+// "one portrait plus a certificate letter (no pick from three)"). A town hand
+// that sends exactly one candidate sets it as the critter's image at once: the
+// reveal is written already picked (pick 1, image that URL, picked_by the hand),
+// so the jar reads it as it reads a chosen one and no pick step follows. The
+// three-and-pick road stays for any set already out.
+//
+// THE REDRAW (Darko, 2026-11-06, CORE-25/d: "Let a town hand's reveal replace the
+// image"). The same one-portrait reveal on a critter that already has an image
+// replaces it, with no counter: the whole reveal is rewritten (candidates, image,
+// picked_by). Only a town hand does it. Every guard above still runs first.
 
 export const REVEAL_CANDIDATES = 3;
-const REVEAL_HOW = `town { do: "reveal", args: { post, candidates: [three media URLs] } } by the town's hands (${BUG_HANDS.join(", ")}), then { post, pick: 1–${REVEAL_CANDIDATES} } by the fixer who named the critter`;
+const REVEAL_HOW = `town { do: "reveal", args: { post, candidates: [one media URL] } } by the town's hands (${BUG_HANDS.join(", ")}) sets the critter's portrait at once; the older road is { post, candidates: [three media URLs] }, then { post, pick: 1–${REVEAL_CANDIDATES} } by the fixer who named the critter`;
 
 /**
  * Judge a reveal against the post. Returns `{ actor, reveal }`: who acts, and the
@@ -567,22 +656,27 @@ export function judgeReveal(fields, prev, key, { urlOk }) {
   if (prev.state !== STATE_SHIPPED)
     throw refuse(409, `"${prev.id}" stands ${prev.state}, and a critter is revealed when its fix ships`, "advance it to shipped first");
   const was = prev.fields?.reveal ?? null;
-  if (was?.pick) throw refuse(409, `"${prev.id}"'s critter is revealed`, "its image was chosen once, by its fixer");
+  const revealed = Boolean(was?.pick);
+  const REVEALED = [409, `"${prev.id}"'s critter is revealed`, "its image is set; only a town hand's one-portrait reveal replaces it (candidates: [one media URL])"];
 
   if (has("candidates")) {
     const actor = judgeBugHand(fields, key, { act: "set a critter's candidates" });
     const list = Array.isArray(fields.candidates) ? fields.candidates.map((u) => (typeof u === "string" ? u.trim() : u)) : null;
-    if (!list || list.length !== REVEAL_CANDIDATES)
-      throw refuse(422, `a reveal holds ${REVEAL_CANDIDATES} candidates`, "candidates: the three media URLs Iris answered with", { field: "candidates" });
+    if (!list || (list.length !== 1 && list.length !== REVEAL_CANDIDATES))
+      throw refuse(422, `a reveal holds one portrait, or ${REVEAL_CANDIDATES} candidates`, "candidates: the one media URL Iris answered with", { field: "candidates" });
     const bad = list.find((u) => !urlOk(u));
     if (bad !== undefined)
       throw refuse(422, "a candidate is a media URL", `each is a URL the media door answered with (upload_media); "${String(bad).slice(0, 80)}" is not`, { field: "candidates" });
     if (new Set(list).size !== list.length) throw refuse(422, "the candidates are three different images", "candidates: three distinct URLs", { field: "candidates" });
+    // a set of three on a critter that already has its image is refused; one portrait replaces it (CORE-25/d, no counter)
+    if (revealed && list.length !== 1) throw refuse(...REVEALED);
+    if (list.length === 1) return { actor, reveal: { candidates: list, pick: 1, image: list[0], picked_by: actor } };
     return { actor, reveal: { candidates: list, pick: null, image: null, picked_by: null } };
   }
 
+  if (revealed) throw refuse(...REVEALED);
   const fixer = prev.fields?.named_by ?? null;
-  if (!was?.candidates) throw refuse(409, `"${prev.id}" has no candidates yet`, "Iris paints three once the fix ships; a town hand sets them on the post");
+  if (!was?.candidates) throw refuse(409, `"${prev.id}" has no candidates yet`, "a town hand sets the critter's portrait first: candidates: [one media URL], or the three of an older set");
   if (!fixer) throw refuse(409, `"${prev.id}" names no fixer to choose`, "the critter's namer, set at fixed, makes the pick");
   const held = [...(key?.handles ?? [])];
   const named = typeof fields?.handle === "string" ? fields.handle.trim() : "";

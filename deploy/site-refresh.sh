@@ -114,9 +114,11 @@
 #
 # Env (unit): SITE_REFRESH_ROOT, SITE_WEBROOT, SITE_REMOTE, TOWN_REMOTE,
 #             WORLD_REMOTE, POSTMARK_API, SITE_REFRESH_REPORT,
-#             SITE_REFRESH_KEEP, SITE_REFRESH_MAX_PASSES, GH_TOKEN (optional).
+#             SITE_REFRESH_KEEP, SITE_REFRESH_MAX_PASSES,
+#             SITE_REFRESH_MAX_MINUTES, GH_TOKEN (optional).
 # Cwd: irrelevant — every path is absolute.
-# Exit: 0 published / quiet / stood down behind the lock · 1 the build failed.
+# Exit: 0 published / quiet / stood down behind the lock · 1 the build failed
+#       · 143 stopped by the unit's TERM (the board says so first).
 #
 # ── INSTALL (Wright's hand; this script never touches the box itself) ────────
 #
@@ -243,6 +245,12 @@ API="${POSTMARK_API:-http://127.0.0.1:4390}"
 OUT="${SITE_REFRESH_REPORT:-/srv/postmark-harbor/site-refresh.json}"
 KEEP="${SITE_REFRESH_KEEP:-5}"
 MAX_PASSES="${SITE_REFRESH_MAX_PASSES:-3}"
+# THE TIME BUDGET (STAR-135), beside the pass budget and under the unit's
+# TimeoutStartSec=45min. A busy evening's pass takes 12-20 min, so three passes
+# can outrun the unit, and on 2026-11-05 one did: systemd killed the run at 45:00
+# and no report was written. Another pass starts only when the run's elapsed time
+# plus the last pass's duration still fits inside this many minutes.
+MAX_MINUTES="${SITE_REFRESH_MAX_MINUTES:-40}"
 
 TOWN="$ROOT/town"          # our own town clone — never the office's, never locked
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # where this script and its helpers live (POS-601)
@@ -253,6 +261,7 @@ STATE="$ROOT/state.json"
 LOCK="$ROOT/refresh.lock"
 
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_START="$(date -u +%s)"   # the time budget's clock (STAR-135)
 TOWN_SHA=""; SITE_MAIN=""; TAG=""; PUBLISHED=""; PASSES=0
 
 mkdir -p "$ROOT" "$RELEASES" "$(dirname "$OUT")"
@@ -304,6 +313,25 @@ die() { report failed "$1"; echo "[site-refresh] FAILED: $1" >&2; exit 1; }
 # their own better message.
 on_err() { local rc=$?; report failed "the run stopped unexpectedly at line $1 (exit $rc) — see journalctl -u postmark-site-refresh"; echo "[site-refresh] FAILED at line $1 (exit $rc)" >&2; exit 1; }
 trap 'on_err $LINENO' ERR
+
+# A TERM WRITES THE BOARD TOO (STAR-135). systemd stops the unit with SIGTERM at
+# TimeoutStartSec, and the ERR trap does not see a signal. On 2026-11-05 a
+# three-pass run was killed at exactly 45:00, no report was written, and the
+# board kept the previous run's "quiet" stamp until the sentinel read STALE over
+# a site that was fresh. A run that published before the stop says "published"
+# and names the release; one that published nothing says "failed". Either way
+# it exits 143, as a TERM'd process does.
+on_term() {
+  trap - ERR TERM
+  if [ -n "$PUBLISHED" ]; then
+    report published "stopped at the unit's limit after $PASSES pass(es); last published $(basename "$PUBLISHED") — the next tick takes the rest"
+  else
+    report failed "stopped at the unit's limit after $PASSES pass(es); nothing was published this run — the standing release keeps serving"
+  fi
+  echo "[site-refresh] STOPPED: TERM at the unit's limit after $PASSES pass(es)" >&2
+  exit 143
+}
+trap on_term TERM
 
 # PREFLIGHT (POS-601): the pin helper travels beside this script. Missing, every
 # publish would stop at the pin step, so say so at the top of every tick, by name,
@@ -711,7 +739,9 @@ build_once() {
 # worse than one that lands a minute late; the next tick picks up the remainder.
 while :; do
   BUILT_TOWN="$TOWN_SHA"; BUILT_KEY="$KEY"
+  PASS_START="$(date -u +%s)"
   build_once
+  PASS_SECS=$(( $(date -u +%s) - PASS_START ))
   survey
   if [ "$KEY" = "$BUILT_KEY" ]; then
     report published "converged after $PASSES pass(es) at town $(echo "$BUILT_TOWN" | cut -c1-8)"
@@ -721,6 +751,14 @@ while :; do
   if [ "$PASSES" -ge "$MAX_PASSES" ]; then
     report published "published at town $(echo "$BUILT_TOWN" | cut -c1-8); the town moved again mid-build and $MAX_PASSES passes are spent — the next tick takes it"
     say "the town moved again and the pass budget is spent — the next tick converges"
+    break
+  fi
+  # The time budget (STAR-135): a pass that would end past it is not started,
+  # so the run ends on its own report rather than on the unit's kill.
+  RUN_SECS=$(( $(date -u +%s) - RUN_START ))
+  if [ $(( RUN_SECS + PASS_SECS )) -gt $(( MAX_MINUTES * 60 )) ]; then
+    report published "published at town $(echo "$BUILT_TOWN" | cut -c1-8); the town moved again mid-build and the run's time is spent ($((RUN_SECS / 60)) min gone, the last pass took $((PASS_SECS / 60)), the budget is $MAX_MINUTES) — the next tick takes it"
+    say "the town moved again and the time budget is spent — the next tick converges"
     break
   fi
   say "the town moved during the build ($(echo "$BUILT_TOWN" | cut -c1-8) -> $(echo "$TOWN_SHA" | cut -c1-8)) — building once more"

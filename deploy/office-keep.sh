@@ -290,6 +290,17 @@ REGISTRY_FILE="$SNAP/registry.json"
     else keep_step welcome refused "exit:$?"
       echo "[office-keep] welcome pass had refusals (non-fatal) — the lines above name each one; the household keeps its claim and the next crossing asks again" >&2
     fi
+    # Bring a neighbour (POS-816, Darko 2026-10-28: the invite mint is
+    # deterministic). AFTER the welcome pass, because an invited household's 5
+    # more follows its welcome on the ledger and the town refuses it otherwise;
+    # BEFORE the verify and the commit below, with the same key and the store's
+    # registry, so its lines are verified and pushed with the rest. Its exit is
+    # swallowed like the welcome pass's: a refusal is an invitation waiting a tick.
+    if node /srv/postmark-office/deploy/invite-pass.mjs \
+        --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem; then keep_step invite ok
+    else keep_step invite refused "exit:$?"
+      echo "[office-keep] invite pass had refusals (non-fatal) — the lines above name each one; each invitation keeps its claim and the next tick asks again" >&2
+    fi
     # The bug ladder's stage pass (Darko, 2026-10-07: payment "rides on the
     # acceptance"). Every stage an advance recorded and the ledger has not paid
     # is minted through the town's own --stage-mint verb, one line per post and
