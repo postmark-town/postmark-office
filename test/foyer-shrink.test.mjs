@@ -824,6 +824,9 @@ test("F19 · the advertised enum IS the accepted set — every name on it answer
   // NOTHING ACCEPTED IS LEFT OFF: every read name and every act name is on it.
   for (const r of HOUSEHOLD_READABLE) assert.ok(HOUSEHOLD_READ_ENUM.includes(r), `read "${r}" is served and unadvertised`);
   for (const a of HOUSEHOLD_DISPATCHABLE) assert.ok(HOUSEHOLD_READ_ENUM.includes(a), `act "${a}" reads back its card and is unadvertised`);
+  // POS-947/c: a one-off act (off every menu, offered in v2's first_steps) still reads back its card by name.
+  const { HOUSEHOLD_OFFERED } = await import("../src/household-apex.mjs");
+  for (const a of HOUSEHOLD_OFFERED) assert.ok(HOUSEHOLD_READ_ENUM.includes(a), `one-off act "${a}" reads back its card and is unadvertised`);
   // AND NOTHING ADVERTISED IS REFUSED: the door answers every name it lists,
   // which is the half an enum usually gets wrong — asked at the live door, not
   // asserted against the same table the enum came from.
@@ -835,20 +838,23 @@ test("F19 · the advertised enum IS the accepted set — every name on it answer
 });
 
 test("F19b · the enum carries each name ONCE — three names are both an act and a read at this door", async () => {
-  const { HOUSEHOLD_READ_ENUM, HOUSEHOLD_READABLE } = await import("../src/household-apex.mjs");
+  const { HOUSEHOLD_READ_ENUM, HOUSEHOLD_READABLE, HOUSEHOLD_OFFERED } = await import("../src/household-apex.mjs");
   assert.equal(HOUSEHOLD_READ_ENUM.length, new Set(HOUSEHOLD_READ_ENUM).size, "a duplicated enum entry is a malformed schema");
-  assert.equal(HOUSEHOLD_READ_ENUM.length, HOUSEHOLD_READABLE.length + HOUSEHOLD_DISPATCHABLE.length - ACT_SHADOW_READS.length,
+  // POS-947/c: plus the one-off acts' cards (HOUSEHOLD_OFFERED), which no read shadows.
+  assert.equal(HOUSEHOLD_READ_ENUM.length, HOUSEHOLD_READABLE.length + HOUSEHOLD_DISPATCHABLE.length + HOUSEHOLD_OFFERED.length - ACT_SHADOW_READS.length,
     "the union is deduped by exactly the shadow reads — the town door's flat spread would double them here");
 });
 
 test("F19c · THE DRIFT GUARD CAN FAIL — an unadvertised act and a phantom name are both refused", async () => {
-  const { assertReadEnumMatchesDoor, HOUSEHOLD_READ_ENUM } = await import("../src/household-apex.mjs");
-  assert.equal(assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, HOUSEHOLD_DISPATCHABLE), true, "the door as it stands");
+  const { assertReadEnumMatchesDoor, HOUSEHOLD_READ_ENUM, HOUSEHOLD_OFFERED } = await import("../src/household-apex.mjs");
+  // POS-947/c: the door's acts are the menu's and the one-offs' (household-apex.mjs § OFFERED_ACTS)
+  const ACTS_ALL = [...HOUSEHOLD_DISPATCHABLE, ...HOUSEHOLD_OFFERED];
+  assert.equal(assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, ACTS_ALL), true, "the door as it stands");
   // a new act born unadvertised — the exact drift the guard exists for
-  assert.throws(() => assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, [...HOUSEHOLD_DISPATCHABLE, "brand-new-act"]),
+  assert.throws(() => assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, [...ACTS_ALL, "brand-new-act"]),
     /unadvertised: \[brand-new-act\]/, "an act the enum never learned about must throw at module load, not surprise a caller");
   // and a name advertised that the door would refuse
-  assert.throws(() => assertReadEnumMatchesDoor([...HOUSEHOLD_READ_ENUM, "phantom"], HOUSEHOLD_READS, HOUSEHOLD_DISPATCHABLE),
+  assert.throws(() => assertReadEnumMatchesDoor([...HOUSEHOLD_READ_ENUM, "phantom"], HOUSEHOLD_READS, ACTS_ALL),
     /advertised but refused: \[phantom\]/, "an enum entry the read branch bounces is the door lying about itself");
 });
 
