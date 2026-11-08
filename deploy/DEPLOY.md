@@ -2259,8 +2259,8 @@ escrow projection holds no rows for it, nothing can be judged that night: every
 eligible commons mark is **unjudgeable**, written on the line as
 `escrow_unjudgeable` with the oldest projected sha beside it, and printed by
 the row's `report_counts` as a count, never an alarm — so a GREEN line with a
-non-zero count is a night the escrow judgement did not run, not a clean town
-(whether that night should alarm is Wright's separate ruling). Before POS-808/b
+non-zero count is a night the escrow judgement did not run, not a clean town.
+Before POS-808/b
 this class was marks locked before window 181, migration 014's first ingest,
 whose locking sha was never projected (postmark#2935; 227 such marks alarmed
 every morning for eight nights while the true unbacked count was zero).
