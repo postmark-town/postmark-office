@@ -97,6 +97,10 @@ test("boardFaultLine names the phase, the handle, the error and the pen pool, an
   assert.equal(line, '[quest-board] unavailable (store) for "kogane": StoreAcquireTimeout store-acquire-timeout: the store\'s pen pool had no free connection within 10000 ms (it holds 3) at secret; pen pool max 3 total 3 idle 0 waiting 5');
   assert.equal(boardFaultLine({ handle: "x", phase: "read", error: "plain text", pool: null }), '[quest-board] unavailable (read) for "x": Error: plain text; pen pool not built');
   assert.ok(boardFaultLine({ handle: "x", phase: "compose", error: new Error("y".repeat(900)) }).length < 400, "a long message is cut");
+  // the thread that answered and its own loop's lateness ride along, so a 503 says whether its thread was stalled
+  assert.match(boardFaultLine({ handle: "x", phase: "read", error: "e", pool: null, thread: 2, lag: { max_ms: 41000, blocked_ms: 43000 } }),
+    /; thread t2 loop lag last minute max 41000 ms blocked 43000 ms$/);
+  assert.match(boardFaultLine({ handle: "x", phase: "read", error: "e", pool: null, thread: 0, lag: null }), /; thread t0 loop lag no minute yet$/);
 });
 
 test("the store refused: 503 with the town-index words, and the log says phase store", async (t) => {

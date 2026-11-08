@@ -1059,10 +1059,11 @@ export async function storeAnswer(fn, { env = process.env, then = null, statemen
  * `pool` is world2-pen.mjs § penPoolStanding(), or null. The line carries the handle (a public path segment), the phase, the
  * error's name, code and message (cut), and the pen pool's counts. No row, no key, no human's details.
  */
-export function boardFaultLine({ handle, phase, error, pool = null }) {
+export function boardFaultLine({ handle, phase, error, pool = null, thread = null, lag = null }) {
   const name = String(error?.name ?? "Error");
   const code = error?.code != null ? ` ${String(error.code).slice(0, 40)}` : "";
   const why = errorSaid(error).replace(/\s+/g, " ").slice(0, 200); // the log's own reader of an error (fault-words.mjs), never an answer's words
   const counts = pool ? ` pen pool max ${pool.max} total ${pool.total} idle ${pool.idle} waiting ${pool.waiting}` : " pen pool not built";
-  return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why};${counts}`;
+  const where = (thread == null ? "" : ` thread t${thread}`) + (lag ? ` loop lag last minute max ${lag.max_ms} ms blocked ${lag.blocked_ms} ms` : thread == null ? "" : " loop lag no minute yet");
+  return `[quest-board] unavailable (${phase}) for ${JSON.stringify(String(handle).slice(0, 64))}: ${name}${code}: ${why};${counts}${where ? `;${where}` : ""}`;
 }

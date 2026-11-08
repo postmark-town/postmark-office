@@ -85,6 +85,7 @@ import { dynamicHealth, dynamicDbPath, dynamicRetired } from "./dynamic-store.mj
 import { servedEnterExitLedger, DEPRECATED_DOOR } from "./enter-exit-ledger.mjs"; // the passages, derived from the frozen era + the journal (2026-08-26)
 import { Bouncer, DOORSTEPS_PER_READ, bulkCost, listParam, boxLocal, clientIp, keyIdForToken, worldWriteVerbForRest, worldWriteCost, worldWriteHolder } from "./bouncer.mjs";
 import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread keeps a caller waiting
+import { threadId } from "node:worker_threads"; // POS-965: which thread answered, in the quest board's fault line
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
@@ -2255,7 +2256,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         const logFault = async (where, e) => {
           try {
             const { penPoolStanding } = await import("./world2-pen.mjs");
-            console.error(townIndexStore.boardFaultLine({ handle, phase: where, error: e, pool: penPoolStanding() }));
+            // the thread that answered (a read worker keeps its own pen pool and its own event loop) and how late that thread's loop
+            // ran in the last minute, so a 503 says whether its thread was stalled (src/loop-lag.mjs; a worker writes no file)
+            const lag = loopLag.read().last_minute;
+            console.error(townIndexStore.boardFaultLine({ handle, phase: where, error: e, pool: penPoolStanding(), thread: threadId,
+              lag: lag ? { max_ms: lag.max_ms, blocked_ms: lag.blocked_ms } : null }));
           } catch { /* a log line never fails the answer */ }
         };
         const unavailable = async (e) => {
