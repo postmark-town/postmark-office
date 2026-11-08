@@ -31,7 +31,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonLockFindings, projectedShas, unjudgeableByWindow, STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_HEAD_SELECT, ESCROW_OLDEST_SELECT } from "../world2/tools/canon-locks.mjs";
+import { canonLockFindings, projectedShas, unjudgeableByWindow, STANDING_SELECT, UNMATERIALIZED_SELECT, ESCROW_BY_SHA_SELECT, ESCROW_HEAD_SELECT, ESCROW_OLDEST_SELECT, escrowGreenClause, escrowUnbackedLine } from "../world2/tools/canon-locks.mjs";
 
 const register = (...slugs) => ({ slugs: new Set(slugs), sha: "0123456789abcdef0123456789abcdef01234567" });
 
@@ -245,10 +245,44 @@ test("NO PROJECTION IS NOT A CLEAN TOWN — nothing is judged and the run says s
   assert.equal(r.escrow_compared, 0);
 });
 
-test("a commons mark whose window pinned no town read cannot be judged, and is not guessed", () => {
-  const r = canonLockFindings([{ ...DRIFT, locking_town_sha: null }], anyRegister, { escrowBySha: new Map() });
+// POS-808/b (frontier review B2): a mark whose window pinned no town read, or that has no locked window at all, is NOT skipped.
+// Its backing is read at the current read; the locking sha is evidence, and its absence is evidence too (null, as supplied).
+const NO_LOCK_READ = { ...DRIFT, locking_town_sha: null };
+const NO_WINDOW = { ...DRIFT, slug: "lupi/no-window-mark", locked_window: null, window_id: null, locking_town_sha: null };
+const REG2 = { slugs: new Set([DRIFT.slug, NO_WINDOW.slug]), sha: "0".repeat(40) };
+const NOW_READ = "9aa11bb2";
+const NOW_ROWS = [[`${NOW_READ}|somebody/else`, 4]];
+
+test("POS-808/b · a mark with no locking town read, at zero NOW, is listed with its null evidence as supplied (it was silently skipped before)", () => {
+  const supplied = [{ ...NO_LOCK_READ }, { ...NO_WINDOW }];
+  const r = canonLockFindings(supplied, REG2, { escrowBySha: new Map(NOW_ROWS), currentTownSha: NOW_READ });
+  assert.deepEqual(r.unbacked.map((u) => u.slug).sort(), [DRIFT.slug, NO_WINDOW.slug].sort(), "a known current zero is counted, whatever its history lacks");
+  assert.equal(r.escrow_compared, 2, "both were compared");
+  assert.deepEqual(r.unjudgeable, [], "a known current zero is never recategorized as unjudgeable");
+  assert.strictEqual(r.unbacked.find((u) => u.slug === NO_WINDOW.slug), supplied[1], "the finding IS the supplied row");
+  assert.equal(r.unbacked.find((u) => u.slug === NO_WINDOW.slug).locking_town_sha, null, "null historical evidence is kept, not filled in");
+  assert.equal(r.unbacked.find((u) => u.slug === NO_WINDOW.slug).locked_window, null);
+});
+
+test("POS-808/b · a mark with no locking town read, staked NOW, is cleared: current backing decides, the null history does not", () => {
+  const r = canonLockFindings([{ ...NO_LOCK_READ }, { ...NO_WINDOW }], REG2,
+    { escrowBySha: new Map([...NOW_ROWS, [`${NOW_READ}|${DRIFT.slug}`, 2], [`${NOW_READ}|${NO_WINDOW.slug}`, 1]]), currentTownSha: NOW_READ });
   assert.deepEqual(r.unbacked, []);
-  assert.equal(r.escrow_compared, 0);
+  assert.equal(r.escrow_compared, 2);
+});
+
+test("POS-808/b · with no current read, a mark with no locking town read is counted unjudgeable, not dropped unseen", () => {
+  const r = canonLockFindings([{ ...NO_LOCK_READ }], REG2, { escrowBySha: new Map(NOW_ROWS), currentTownSha: null });
+  assert.deepEqual(r.unjudgeable.map((u) => u.slug), [DRIFT.slug]);
+  assert.deepEqual(r.unbacked, []);
+});
+
+test("POS-808/b (B3) · escrow_judged_at names the town sha only when something was judged at it", () => {
+  const rows = [{ ...DRIFT }];
+  assert.equal(canonLockFindings(rows, anyRegister, { escrowBySha: new Map(NOW_ROWS), currentTownSha: NOW_READ }).escrow_judged_at, NOW_READ);
+  for (const [name, currentTownSha] of [["unnamed", null], ["named but never projected", "feedface"]])
+    assert.equal(canonLockFindings(rows, anyRegister, { escrowBySha: new Map(NOW_ROWS), currentTownSha }).escrow_judged_at, null, `${name}: nothing was judged at any sha`);
+  assert.equal(canonLockFindings(rows, anyRegister, { escrowBySha: null, currentTownSha: NOW_READ }).escrow_judged_at, null, "no projection at all");
 });
 
 test("STANDING_SELECT reads the tier and the LOCKING window's town sha", () => {
@@ -524,4 +558,25 @@ test("POS-765 · the guard reads the stored VALUE under the office's one contrac
   const strung = LAMP({ slug: "sbx-ana/s1", held_by: "false" });   // a non-blank STRING is a holder reference, whatever it says: no value blacklist
   const r = canonLockFindings([...rows, strung], heldRegister(...rows, strung), { escrowBySha: PROJECTED, currentTownSha: "723005e5" });
   assert.deepEqual(r.unbacked.map((u) => u.slug), ["sbx-ana/b1", "sbx-ana/b2", "sbx-ana/b3", "sbx-ana/b4"], "a non-string value is not a holder; the string \"false\" is held");
+});
+
+// ── POS-808/b (frontier review B1): the alarm's own words describe the CURRENT-read rule ──
+
+test("POS-808/b · the GREEN line says a judgement that could not run did not run, and never explains it by the old locking-window cause", () => {
+  const unran = escrowGreenClause({ escrow_checked: true, escrow_unjudgeable: 3, escrow_compared: 0, escrow_judged_at: null });
+  assert.match(unran, /the escrow judgement could NOT run/);
+  assert.match(unran, /current town read is unnamed or unprojected/);
+  assert.match(unran, /3 commons mark\(s\) were not judged \(unavailable, never ✦0\)/);
+  assert.doesNotMatch(unran, /lock before the projection|oldest sha|all 0 judgeable/, "no stale cause, and no all-zero reassurance on a night nothing was judged");
+  const ran = escrowGreenClause({ escrow_checked: true, escrow_unjudgeable: 0, escrow_compared: 12, escrow_judged_at: "9aa11bb2deadbeef" });
+  assert.equal(ran, ", and all 12 commons mark(s) judged at the store's current town read 9aa11bb2 carry a stake");
+  assert.equal(escrowGreenClause({ escrow_checked: false, escrow_unjudgeable: null, escrow_compared: 0, escrow_judged_at: null }), " — but escrow was NOT checked");
+});
+
+test("POS-808/b · the ESCROW-ABSENT line says NOW and the current town; a mark with no locking read says so instead of printing null", () => {
+  const withLock = escrowUnbackedLine({ slug: "lupi/the-drift-room", tier: "market", locked_window: 177, town_sha: "723005e5abc" }, "9aa11bb2ff");
+  assert.equal(withLock, "  ✗ ESCROW-ABSENT · lupi/the-drift-room stands as market (commons), locked at window 177 (town 723005e5), with nothing staked on it NOW (the store's current town 9aa11bb2)");
+  const noLock = escrowUnbackedLine({ slug: "lupi/no-window-mark", tier: "market", locked_window: null, town_sha: null }, "9aa11bb2ff");
+  assert.match(noLock, /locked at window \? \(no locking town read\), with nothing staked on it NOW/);
+  assert.doesNotMatch(noLock, /null|undefined/);
 });

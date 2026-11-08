@@ -228,7 +228,9 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
     // a placed commons zero that carries one is still judged.
     if (heldBy(r)) continue;
     if (rowClassOf(r.tier) !== "commons") continue;
-    if (!r.locking_town_sha) continue;   // a mark whose window pinned no town read is still not judged (unchanged by POS-808/b, which keeps the locking evidence as supplied)
+    // POS-808/b (frontier review B2): there is NO locking-sha skip. A mark whose window pinned no town read (or that has no locked
+    // window) used to be passed over silently because its backing was read AT that sha; backing is read at the current read now, and
+    // the locking sha is evidence only, so such a row is judged like any other and listed with its null evidence as supplied.
 
     // ── THE UNJUDGEABLE WINDOW (postmark#2935) ─────────────────────────────
     //
@@ -268,6 +270,26 @@ export function canonLockFindings(rows, register, { unmaterializedRows = [], esc
   return {
     absent, unbacked, unjudgeable, compared, escrow_compared: escrowCompared,
     escrow_checked: Boolean(escrowBySha),
+    // the town sha the judgement was made at: null unless the current read was named AND projected (nothing was judged otherwise)
+    escrow_judged_at: escrowBySha && currentProjected ? currentTownSha : null,
     unmaterialized: unmaterializedRows.filter((r) => r.slug),
   };
+}
+
+/**
+ * THE WORDS THE READ SAYS ABOUT ESCROW, pure so the sentence that decides whether a night reads clean is watched by a test
+ * (POS-808/b, frontier review B1). Both describe the CURRENT-read rule: backing is read at the store's current town read, and
+ * "unjudgeable" now means that read is unnamed or unprojected, so tonight nothing could be judged: unavailable, never ✦0.
+ */
+export function escrowUnbackedLine(u, judgedAt) {
+  const lock = u.town_sha ? `town ${String(u.town_sha).slice(0, 8)}` : "no locking town read";
+  return `  ✗ ESCROW-ABSENT · ${u.slug} stands as ${u.tier} (commons), locked at window ${u.locked_window ?? "?"} (${lock}), with nothing staked on it NOW (the store's current town ${String(judgedAt).slice(0, 8)})`;
+}
+
+/** The clause the GREEN line carries about escrow. A judgement that could not run is said to have not run, on a line that reads green. */
+export function escrowGreenClause({ escrow_checked, escrow_unjudgeable, escrow_compared, escrow_judged_at }) {
+  if (!escrow_checked) return " — but escrow was NOT checked";
+  if (escrow_unjudgeable)
+    return `, but the escrow judgement could NOT run: the store's current town read is unnamed or unprojected, so ${escrow_unjudgeable} commons mark(s) were not judged (unavailable, never ✦0)`;
+  return `, and all ${escrow_compared} commons mark(s) judged at the store's current town read ${String(escrow_judged_at).slice(0, 8)} carry a stake`;
 }
