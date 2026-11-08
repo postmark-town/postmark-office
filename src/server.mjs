@@ -85,6 +85,7 @@ import { dynamicHealth, dynamicDbPath, dynamicRetired } from "./dynamic-store.mj
 import { servedEnterExitLedger, DEPRECATED_DOOR } from "./enter-exit-ledger.mjs"; // the passages, derived from the frozen era + the journal (2026-08-26)
 import { Bouncer, DOORSTEPS_PER_READ, bulkCost, listParam, boxLocal, clientIp, keyIdForToken, worldWriteVerbForRest, worldWriteCost, worldWriteHolder } from "./bouncer.mjs";
 import { loopLag } from "./loop-lag.mjs"; // POS-267: how long the one thread keeps a caller waiting
+import { threadId } from "node:worker_threads"; // POS-965: which thread answered, in the quest board's fault line
 import { storeTxnWatch } from "./store-txn-watch.mjs"; // POS-370: does any office connection sit idle inside a transaction
 import { readReleaseStamp } from "./release.mjs"; // POS-60: the deploy receipt the auto-deploy probes
 import { currentCrossing, CROSSING_DERIVATION } from "./crossings.mjs"; // the town clock, served at the door
@@ -642,10 +643,14 @@ const j = (res, code, obj, cause) => {
 // `then` is the part of an answer that is not the index (the quest board's
 // quest tools and world read): storeAnswer runs it after the connection is back,
 // because holding one across it is what stalled the office on 2026-10-04 (POS-370).
-async function fromTownIndex(res, fn, onNull = null, onError = null, then = null) {
+async function fromTownIndex(res, fn, onNull = null, onError = null, then = null, onRefused = null) {
   try {
     const r = await townIndexStore.storeAnswer(fn, { then });
-    if (r.refused) return bounce(res, 503, r.refused.defect, r.refused.hint);
+    if (r.refused) {
+      // `onRefused(cause)` lets a door log why the store was refused (POS-965); the answer's words are the same either way
+      if (onRefused) await onRefused(r.cause);
+      return bounce(res, 503, r.refused.defect, r.refused.hint);
+    }
     if (r.asOf) res.setHeader("x-postmark-town-index-as-of", r.asOf);
     if (r.out == null && onNull) return onNull();
     return j(res, 200, r.out);
@@ -2245,8 +2250,26 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // regex IS the arg validation; the board zeroes on a rolled TOWN_TZ day.
       if ((m = /^\/quests\/([a-z0-9-]+)$/.exec(path))) {
         const handle = m[1];
-        const unavailable = () => bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
-        return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable, (rows) => townIndexStore.questBoardOfRows(rows, TOWN_CLONE));
+        // POS-965: every 503 this route answers is logged with WHERE it failed (the pool/store, the board's own transaction, or its
+        // composition after the connection is back), the thread that ran it and that thread's event-loop lag; until then only nginx
+        // saw it. The answer is unchanged.
+        let phase = "read";
+        const logFault = (where, e) => {
+          try {
+            // the thread that ran the read (a read worker has its own event loop) and how late THAT thread's loop ran in its last
+            // minute, so a 503 says whether its thread was stalled (src/loop-lag.mjs; a worker writes no file of its own)
+            const lag = loopLag.read().last_minute;
+            console.error(townIndexStore.boardFaultLine({ handle, phase: where, error: e, thread: threadId,
+              lag: lag ? { max_ms: lag.max_ms, blocked_ms: lag.blocked_ms } : null }));
+          } catch { /* a log line never fails the answer */ }
+        };
+        const unavailable = async (e) => {
+          logFault(phase, e);
+          return bounce(res, 503, "quest board unavailable", "the office couldn't read the quest registry from its clone — retry shortly");
+        };
+        return fromTownIndex(res, (c) => townIndexStore.questIndexRows(c, handle), null, unavailable,
+          (rows) => { phase = "compose"; return townIndexStore.questBoardOfRows(rows, TOWN_CLONE); },
+          (cause) => logFault("store", cause));
       }
 
       if (path === "/bulletin") {
