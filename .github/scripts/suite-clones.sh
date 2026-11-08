@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# POS-953 CONTROL (throwaway, never to merge): this comment line only changes the clones cache key.
 # suite-clones.sh — fetch the town and world checkouts the office suite reads,
 # at the shas test/clone-pins.json names (POS-417). Workflow machinery for
 # .github/workflows/suite.yml.
