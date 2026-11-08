@@ -19,7 +19,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { CROSSING, PROD_DB, SANDBOX_CHECK, carried, databaseOf, findGround, githubStub, groundTakenInCanon, mistsSafeBox, parseEnvFile, rehearsalGround, sandboxProblems, sandboxVerdictFromGitHub, storeGuard, treeTables } from "../tools/dev-rehearsal.mjs";
-import { lastStandingCrossing, standingKeyframes } from "./helpers/mists-standing.mjs";
+import { lastStandingCrossing, standingKeyframes, withdrawnFrom } from "./helpers/mists-standing.mjs";
 
 const OFFICE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "dev-rehearsal.mjs");
@@ -251,6 +251,10 @@ test("ground chosen at crossing 244 is still clear of the wall and its fringe at
     const g = await findGround({ run, safe, parcelM: 25, taken: async () => null });
     for (const crossing of [244, 260, 272, last, 400]) {
       const m = mistsAt(crossing, skeleton.mists);
+      // WLD-147 (the S158 world names `withdrawn_from`): from that crossing the engine answers null, no Mists at all, so
+      // there is no wall or fringe to stand in; the probe is the engine's own null, and every standing crossing is still read
+      if (crossing >= withdrawnFrom(skeleton.mists)) { assert.equal(m, null, `crossing ${crossing} is past the withdrawal, so the engine answers no Mists`); continue; }
+      assert.ok(m, `crossing ${crossing} stands, so the engine answers a state to probe`);
       for (const f of g.footprints) for (const q of corners(f)) {
         const h = mistsHere(q, m);
         assert.equal(h.inWall, false, `run ${run}: ${f.name}'s corner (${q.x}, ${q.y}) is behind the wall at crossing ${crossing}`);
