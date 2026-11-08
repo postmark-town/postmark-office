@@ -31,7 +31,7 @@ import { FROM_TOWN } from "./oauth.mjs";
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
 import { apiUrl } from "./public-base.mjs"; // POS-911: the rsvp card names the public address
 import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arrival-heard.mjs";
-import { INVITE_FIELD_NAMES, inviteNamed, TOWN_HOUSE, LATE_INVITE_ACT } from "./arrival-invite.mjs";
+import { INVITE_FIELD_NAMES, inviteNamed, TOWN_HOUSE, LATE_INVITE_ACT, anyLawfulInviter } from "./arrival-invite.mjs";
 // The join ceremony's refusal vocabulary (POS-158). Static is safe here:
 // `ceremony.mjs` reaches `residency.mjs` through `tools/registry-drain.mjs`
 // and nothing in that graph reaches back to this door.
@@ -1396,8 +1396,10 @@ async function householdGlance(args, key, ctx) {
     posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
     // THE NAMING (POS-947/c): offered in first_steps while the house's record (the store's registry, read above)
-    // names no inviter, never for the town's own house, and not while the harbor gate would bounce the act.
-    naming: house.rec.invited_by == null && house.slug !== TOWN_HOUSE && !harborGated(key, OFFERED_ACTS[LATE_INVITE_ACT].tool),
+    // names no inviter, never for the town's own house, and not while the harbor gate would bounce the act; and
+    // (Wright 19:56Z) only when some household could lawfully be named, by the act's own judge (anyLawfulInviter).
+    naming: house.rec.invited_by == null && house.slug !== TOWN_HOUSE && !harborGated(key, OFFERED_ACTS[LATE_INVITE_ACT].tool)
+      && anyLawfulInviter({ registry: house.registry, own: { slug: house.slug }, ordOf: (s) => house.ords?.get(s) ?? null }),
     you, rows, gaps, stances, tail, needs, details,
     mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members, noted: letterNotes.notes }) : null, standing: standingLetters, notesUnavailable: letterNotes.unavailable ?? null },
     quests: v2.questLines(board),

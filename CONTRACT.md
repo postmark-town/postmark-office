@@ -175,7 +175,8 @@ answers under `result`.
   Darko: "acts should be reserved for always-relevant verbs; not one-offs"): it is not in the
   bare answer's `acts`, the connector's index or the glance's `can`. The glance
   (`read_shape: "v2"`) offers it as the last of `house.first_steps` only while the house's
-  record names no inviter, and the offer is gone once it is named. It stays in the tool
+  record names no inviter and some household could lawfully be named by the act's own rule
+  (none can for the first house recorded after the town's), and the offer is gone once it is named. It stays in the tool
   schema's `do` and `read` enums, and `household { read: "invited-by" }` answers its full card.
 - **The town verb has a plain door:** `GET /town/apex?read=…` (keyless) and
   `POST /town/apex` with `{ "do": "post" | "stake" | "unstake", "args": { … } }`

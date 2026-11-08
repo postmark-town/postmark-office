@@ -196,6 +196,18 @@ export function judgeLateInvite(args, { registry, own = {}, isMeep, ordOf, curre
   return judged;
 }
 
+/**
+ * Could this house lawfully name anyone at all? (Wright 2026-11-08 19:56Z: "suppress the offer when no household could
+ * lawfully be named", by the EXISTING rule, "A test each way".) Asks `judgeLateInvite` itself, once per house as
+ * hh:<slug>, so the offer and the act can never disagree: true at the first house it would credit. A house's own
+ * slug is never a meep's handle, so the meep law plays no part here; the act still judges it anew.
+ */
+export function anyLawfulInviter({ registry, own = {}, ordOf, current = null } = {}) {
+  if (current?.by) return false;
+  return Object.keys(registry?.households ?? {}).some((slug) =>
+    !judgeLateInvite({ invited_by: `${HOUSE_PREFIX}${slug}` }, { registry, own, isMeep: () => false, ordOf, current }).refused);
+}
+
 /** The credit a naming after joining writes: the join's shape, `at` the naming, and `backfill`. */
 export const lateInvitedBy = (judged, at = new Date()) =>
   ({ by: judged.by, named: judged.named, at: at instanceof Date ? at.toISOString() : at, backfill: true });

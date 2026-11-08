@@ -30,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 
-import { judgeLateInvite, lateInvitedBy, lateInviteRefusal, lateInviteReceipt, LATE_INVITE_ACT, TOWN_HOUSE } from "../src/arrival-invite.mjs";
+import { judgeLateInvite, lateInvitedBy, lateInviteRefusal, lateInviteReceipt, anyLawfulInviter, LATE_INVITE_ACT, TOWN_HOUSE } from "../src/arrival-invite.mjs";
 import { namingHouse, nameInviterUnderLock, nameInviterViaOffice } from "../src/invite-name.mjs";
 import { notLandedError } from "../src/write.mjs";
 import { householdApex, APEX_ONLY_FIELDS, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_OFFERED, HOUSEHOLD_READ_ENUM, HOUSEHOLD_TOOL, capabilityIndex } from "../src/household-apex.mjs";
@@ -142,6 +142,21 @@ test("N2c · refused by name: a second naming, your own house or housemate, the 
   const codes = Object.fromEntries(["none", "already", "younger", "own", "town", "meep", "unknown", "law"]
     .map((r) => [r, lateInviteRefusal({ refused: r, named: "x", by: "y" }).code]));
   assert.deepEqual(codes, { none: 422, already: 409, younger: 409, own: 422, town: 422, meep: 422, unknown: 404, law: 503 });
+});
+
+test("N2d · WHETHER ANYONE COULD BE NAMED (Wright 19:56Z), by the act's own judge: not the first house after the town's; yes once an older one exists", () => {
+  const reg = REGISTRY();
+  assert.equal(anyLawfulInviter({ registry: reg, own: { slug: "lantern-row" }, ordOf }), false,
+    "lantern-row was recorded first after the town's own house: no household could lawfully be named");
+  assert.equal(anyLawfulInviter({ registry: reg, own: { slug: "quill-hall" }, ordOf }), true, "quill-hall could name lantern-row");
+  assert.equal(anyLawfulInviter({ registry: reg, own: { slug: "late-house" }, ordOf }), true);
+  assert.equal(anyLawfulInviter({ registry: reg, own: { slug: "late-house" }, ordOf, current: { by: "quill-hall" } }), false, "a house already named names nobody");
+  assert.equal(anyLawfulInviter({ registry: reg, own: { slug: "late-house" }, ordOf: () => null }), false, "an order it cannot read offers nothing");
+  // the same judge as the act, house for house: what it says is lawful the act credits, and the converse
+  for (const own of Object.keys(ORD)) {
+    const lawful = Object.keys(ORD).filter((s) => !late(`hh:${s}`, { slug: own }).refused);
+    assert.equal(anyLawfulInviter({ registry: reg, own: { slug: own }, ordOf }), lawful.length > 0, own);
+  }
 });
 
 // ── N3–N5 the real road ─────────────────────────────────────────────────────
@@ -381,6 +396,12 @@ test("N7 · OFFERED IN first_steps to the house that names nobody, and only it; 
   assert.deepEqual(offer(nell), [], "named at joining: no offer");
   const harbor = await householdApex(V2, { ...FERN, harbor: true }, SLIM());
   assert.deepEqual(offer(harbor), [], "at the harbor the act would bounce, so it is not offered");
+  // A TEST EACH WAY (Wright 19:56Z): no household it could lawfully name, no offer; one it could, the offer
+  const first = await householdApex(V2, { household: "lantern-row", handles: new Set(["wick"]), ghId: 9401, ghLogin: "lr-gh" }, SLIM());
+  assert.equal(first.error, undefined, JSON.stringify(first).slice(0, 300));
+  assert.deepEqual(offer(first), [], "lantern-row, first after the town's own house, names no inviter and could name none: no offer");
+  const second = await householdApex(V2, { household: "quill-hall", handles: new Set(["quill"]), ghId: 9402, ghLogin: "qh-gh" }, SLIM());
+  assert.equal(offer(second).length, 1, "quill-hall names no inviter and could name lantern-row: offered");
 
   // NAMING REMOVES IT, and the act stays callable and guarded
   const did = await householdApex({ do: "invited-by", args: { invited_by: "hh:quill-hall" } }, FERN, { clone, canWrite: true });
