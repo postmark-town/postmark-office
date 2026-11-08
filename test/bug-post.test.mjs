@@ -64,6 +64,24 @@
 //      whose fixed was skipped are untouched; force: "<why>" is wright's and
 //      keemin's alone and writes the reason and what it went past on the act.
 //      GitHub is the stub above: pull() serves a merged PR, tagFor() a tag.
+//  18. (POS-912 W2, Wright settled 2026-11-05 17:51:47Z) a merged carrier whose body's
+//      FIRST LINE is `carries: <repo>#<n>` credits the CARRIED PR's author through
+//      the same judge, when both net diffs agree by patch-id AND byte for byte in
+//      what they change; the fixed link stays the carrier and the act gains no
+//      field. "ab" for "a b" (one patch-id) refuses; so do a self, cross-repo or
+//      chained declaration, an unmerged carrier (force or not), a changed context
+//      line, a partial carry, a binary, rename or mode change, an empty diff, a diff
+//      that is not the PR's own count, a hunk cut short, and anything GitHub can't
+//      show. carryPull() serves a PR's JSON and its diff at its base and head.
+//      (Wright 19:57, answer 2, and his 2026-11-06 22:01Z call on POS-867) a hidden
+//      line can't credit, because a line below the first is plain text: every body
+//      that hid it in any review round earns nothing, and credits with the same line
+//      first. A sample was read on GitHub's own renderer.
+//  20. (POS-867, POS-892; Wright 2026-11-05 15:41Z, widened 2026-11-07 17:16:15Z)
+//      Starforge's own Apps, by bot user id AND login, credit wright only: an App's
+//      PR earns fixed, its issue comment diagnosed or briefed, and nothing else. A
+//      login or an id alone, a resident, keemin and Truey never do, and no App is a
+//      founder account (POS-931/b's rows came out; its § 18 test is re-pinned).
 //
 // ⚑ THE STORE IS A JS STUB (`acts-pen-stub.mjs`), as in quest-posts.test.mjs:
 // this proves which acts and rows the pen writes and what the reads make of
@@ -84,6 +102,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { installActsPen, uninstallActsPen, RECORD_ON } from "./acts-pen-stub.mjs";
 import { holdMedia } from "./helpers/media-ledger.mjs";
@@ -114,9 +133,15 @@ const GH_ACCOUNT = Object.freeze({
   doors: { id: 334016343, login: "commander-and-chief" },
   wright: { id: 306351151, login: "wright-starforge" },
   keemin: { id: 67605380, login: "keeminlee" },
-  // POS-931/b: the leads' apps, their real ids (GitHub users API, 2026-11-07)
-  rivet: { id: 340608403, login: "rivet-starforge[bot]" },
-  bevel: { id: 341174930, login: "bevel-starforge[bot]" },
+  // Starforge's own Apps, by the real ids of their bot users (20, and POS-931's 18), and the forgeries that must not pass for one
+  rivetApp: { id: 340608403, login: "rivet-starforge[bot]" },
+  bevelApp: { id: 341174930, login: "bevel-starforge[bot]" },
+  jettoApp: { id: 342797059, login: "jetto-starforge[bot]" },
+  artiApp: { id: 351277522, login: "arti-starforge[bot]" },
+  trueyApp: { id: 350924601, login: "truey-starforge[bot]" },
+  appLoginOnly: { id: 1004, login: "rivet-starforge[bot]" },
+  appIdOnly: { id: 340608403, login: "not-rivet" },
+  appIdNotBotId: { id: 5263298, login: "rivet-starforge[bot]" },
 });
 // whose account a resident's own work on GitHub comes from
 const ACCOUNT_OF = { errant: "harbor", ada: "harbor", finn: "finn", kinofire: "doors", "wayward-archivist": "doors", wright: "wright", keemin: "keemin" };
@@ -131,9 +156,13 @@ const PINS = [{ handle: "finn", login: "finn-gh", gh_id: 1002 }];
 const ROLL = new Set(["wright", "keemin", "errant", "ada", "finn", "kinofire", "wayward-archivist", "mari"]);
 
 // ── GitHub, stubbed: the one GET an earned advance makes (bug-credit.mjs) ────
-const GITHUB = new Map();   // API path -> { status, body }
+const GITHUB = new Map();   // API path -> { status, body }, or { status, text } for a diff (18)
 const github = createServer((req, res) => {
+  // no reused socket: a synchronous git call (18's premise) can outlast the server's 5 s keep-alive, and fetch then reuses a closed socket and reads as GitHub down
+  res.shouldKeepAlive = false;
   const hit = GITHUB.get(req.url) ?? { status: 404, body: { message: "Not Found" } };
+  // a diff is served as GitHub serves one asked for application/vnd.github.diff: the text itself
+  if (hit.text !== undefined) { res.writeHead(hit.status, { "content-type": "text/plain; charset=utf-8" }); res.end(hit.text); return; }
   res.writeHead(hit.status, { "content-type": "application/json" });
   res.end(JSON.stringify(hit.body));
 });
@@ -1175,8 +1204,9 @@ test("13 · fixed: an issue-comment link is refused; a founder's PR crediting a 
   await refusedNothing(t, adv({ ...fix, credit: "mari", link: pull("keemin") }), 422,
     /was written by a founder's account, GitHub account keeminlee \(id 67605380\), and a founder's work credits only wright or keemin/);
   // and only a founder's account earns a founder a stage
+  // (until 2026-11-06 this read "only a founder's account earns wright a stage"; POS-867 gave wright's fixed a second door, and the refusal stays: group 20)
   await refusedNothing(t, adv({ ...fix, credit: "wright", link: pull("kinofire") }), 422,
-    /^only a founder's account earns wright a stage, and .* was written by GitHub account commander-and-chief \(id 334016343\)/);
+    /^only a founder's account or one of Starforge's own Apps earns wright fixed, and .* was written by GitHub account commander-and-chief \(id 334016343\)/);
   const ok = await adv({ ...fix, credit: "wayward-archivist", link: pull("kinofire") });
   assert.deepEqual([ok.credit, ok.stamps], ["wayward-archivist", 10]);
   // a founder's own PR crediting a founder passes (Darko 10-07: fixed on our own builds is ours)
@@ -1881,10 +1911,790 @@ test("17 · force is for fixed and shipped only: on any other stage it is refuse
   await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: comment("finn"), force: "x" }, WRIGHT, at17), 422, /^force is for fixed and shipped only/);
 });
 
-// ── 18 · a stage skipped by mistake, credited; the leads' apps as founder authors (POS-931) ──
+// ── 18 · a carried fix credits the carried PR's author (POS-912 W2) ─────────
+//
+// LAW (Wright, settled 2026-11-05 17:51:47Z): "Link the CARRIER, credit the carried PR's author.
+// The `fixed` link is the merged carrying PR … so the merge and shipped proofs work as they do
+// today. The credit goes to the author of the PR it declares in `carries:`", and "Patch-id AND
+// exact changed-content agreement; refuse anything else. Patch-id is whitespace-blind … so the
+// carried diff must agree byte-for-byte in its changed content, with no whitespace normalization.
+// Anything ambiguous or unsupported (a rebase that touched the hunks, a partial carry, binary
+// changes) refuses, with a reason naming the mismatch". Every diff here is invented; none is a
+// resident's real patch. GitHub is the stub above: a PR's JSON, and its net diff at its base and
+// head commits, as the compare API serves it asked for application/vnd.github.diff.
+
+const { execFileSync } = await import("node:child_process");
+/** git's own stable patch-id of a diff, the test's instrument (never the office's code). */
+const patchIdOf = (diff) => execFileSync("git", ["patch-id", "--stable"], { input: diff, encoding: "utf8" }).split(" ")[0];
+// measured once with git 2.43.0 (2026-11-05): the "a b" and "ab" diffs below share it
+const PID_GREETING = "f4f6d0bf4d558f4de37239ae3e6dc1662f00f289";
+
+/** An invented one-file diff: greet()'s text goes from "hello" to `text`, under `fn`, at line `at`. */
+const greeting = (text, { fn = "export function greet() {", at = 1, index = "1111111..2222222" } = {}) => [
+  "diff --git a/src/greeting.mjs b/src/greeting.mjs",
+  `index ${index} 100644`,
+  "--- a/src/greeting.mjs",
+  "+++ b/src/greeting.mjs",
+  `@@ -${at},3 +${at},3 @@`,
+  ` ${fn}`,
+  '-  const text = "hello";',
+  `+  const text = "${text}";`,
+  "   return text;",
+  "",
+].join("\n");
+/** A second, new file: what a partial carry leaves out, or a carrier brings in besides. */
+const FAREWELL = [
+  "diff --git a/src/farewell.mjs b/src/farewell.mjs",
+  "new file mode 100644",
+  "index 0000000..3333333",
+  "--- /dev/null",
+  "+++ b/src/farewell.mjs",
+  "@@ -0,0 +1 @@",
+  '+export const bye = "bye";',
+  "",
+].join("\n");
+const ONE = { files: 1, add: 1, del: 1 };
+const shaFor = (what, n) => createHash("sha1").update(`${what}:${n}`).digest("hex");
+
+/**
+ * A pull request on postmark-office as GitHub serves it for a carry: its JSON (its opener, its
+ * merge, its body, its base and head commits and the counts GitHub states for it) and its net
+ * diff at those two commits. `{ n, ref, link }`.
+ */
+function carryPull(who, { n, merged = true, body = "", diff = greeting("a b"), counts = ONE } = {}) {
+  const base = shaFor("base", n), head = shaFor("head", n);
+  GITHUB.set(`/repos/postmark-town/postmark-office/pulls/${n}`, { status: 200, body: { number: n, user: userOf(who), draft: false,
+    state: "closed", merged, merge_commit_sha: merged ? shaOf(n) : null, body,
+    base: { sha: base }, head: { sha: head }, changed_files: counts.files, additions: counts.add, deletions: counts.del } });
+  GITHUB.set(`/repos/postmark-town/postmark-office/compare/${base}...${head}`, { status: 200, text: diff });
+  return { n, ref: `postmark-office#${n}`, link: `https://github.com/postmark-town/postmark-office/pull/${n}` };
+}
+/** ada's own fix (her household's account, harbor-human), closed unmerged as a carried PR is. */
+const adaFix = (n, over = {}) => carryPull("ada", { n, merged: false, ...over });
+/** wright's merged hotfix carrying #`of`, the same change at other line numbers. */
+const carrierOf = (n, of, over = {}) => carryPull("wright", { n, body: `carries: office#${of}\r\n\r\nCarried from the harbor's fix onto a hotfix branch.\r\n`,
+  diff: greeting("a b", { at: 7, index: "6666666..2222222" }), ...over });
+/** One fixed advance on a fresh bug standing briefed: "ok <credit>", or "<code> <defect>". */
+async function fixedVerdict(link, over = {}) {
+  const { pen, posts } = setup();
+  await toBriefed();
+  const n = pen.rows().length;
+  try {
+    const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "ada", link, ...over }) }, WRIGHT, at17);
+    return `ok ${ok.credit}`;
+  } catch (e) {
+    assert.equal(pen.rows().length, n, `a refused fixed wrote an act: ${e.defect}`);
+    assert.equal(posts.get(ID).state, "briefed");
+    return `${e.code} ${e.defect}`;
+  }
+}
+
+test("18 · the premise, by git itself: \"a b\" and \"ab\" are ONE stable patch-id with the same file and counts; line numbers and the index line are outside it, a context line is inside it", () => {
+  assert.equal(patchIdOf(greeting("a b")), PID_GREETING);
+  assert.equal(patchIdOf(greeting("ab")), PID_GREETING, "patch-id is whitespace-blind");
+  assert.equal(patchIdOf(greeting("a b", { at: 7, index: "6666666..2222222" })), PID_GREETING, "a carrier at other line numbers is the same patch");
+  assert.notEqual(patchIdOf(greeting("a b", { fn: "export function welcome() {" })), PID_GREETING, "a context line is in the patch-id");
+  assert.equal(patchIdOf(""), "", "an empty diff has no patch-id");
+});
+
+test("18 · a merged founder carrier that declares carries: credits the carried PR's author, ada by her household's account harbor-human; the fixed link stays the carrier, the act gains no field, and shipped proves the carrier's merge", async () => {
+  // the control, the old rule: a founder's carrier with no declaration is the founder's work, refused as ever
+  const bare = carryPull("wright", { n: 9101, diff: greeting("a b") });
+  assert.equal(await fixedVerdict(bare.link),
+    `422 ${bare.link} was written by a founder's account, GitHub account wright-starforge (id 306351151), and a founder's work credits only wright or keemin`);
+
+  const { pen, posts } = setup();
+  await toBriefed();
+  const carried = adaFix(9102);
+  const carrier = carrierOf(9103, carried.n);
+  const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "ada", link: carrier.link }) }, WRIGHT, at17);
+  assert.deepEqual([ok.stage, ok.credit, ok.link, ok.stamps], ["fixed", "ada", carrier.link, 25]);
+  // the advance answer says whose work earned it, in plain words (the ruling: "the advance answer say so")
+  assert.match(ok.receipt, new RegExp(`; fixed points at ${esc(carrier.link)}; ${esc(carrier.ref)} carries ${esc(carried.ref)}, `
+    + `so ada's credit was judged against its author, GitHub account harbor-human \\(id 1001\\), on the same patch-id and the same changed bytes(?:\\. |$)`)); // POS-912 20:38Z: was anchored at the end (bytes$); the receipt now goes on to name its limits (group 19), and this teaching must not depend on them
+  assert.equal(posts.get(ID).fields.links.fixed, carrier.link, "the fixed link is the merged carrier");
+  const act = JSON.parse(pen.rows().at(-1).payload);
+  assert.deepEqual(Object.keys(act).sort(), ["credit", "fields", "from", "hand", "post", "to"], "no new field on the act: the body's declaration is not recorded");
+  assert.deepEqual([act.credit, act.fields.links.fixed], ["ada", carrier.link]);
+  // shipped reads the carrier's merge, as for any fix
+  const ship = await advanceAtTown({ post: ID, to: "shipped", link: tagFor(carrier.link) }, WRIGHT, at17);
+  assert.equal(ship.stage, "shipped");
+  // the acts alone derive the same post
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));
+});
+
+test("18 · THE EXACT GUARD: a carrier adding \"ab\" where the carried PR adds \"a b\" (one stable patch-id, the same file, +1 −1 each) is refused, naming where the bytes differ, and writes nothing", async () => {
+  const carried = adaFix(9111, { diff: greeting("a b") });
+  const carrier = carrierOf(9112, carried.n, { diff: greeting("ab") });
+  assert.equal(patchIdOf(greeting("ab")), patchIdOf(greeting("a b")), "the premise: patch-id alone would pass it");
+  assert.equal(await fixedVerdict(carrier.link),
+    `422 ${carrier.ref} and ${carried.ref} change different bytes in src/greeting.mjs (compared byte for byte, whitespace counted), though their patch-ids agree`);
+});
+
+// LAW (Wright, 2026-11-06 22:01Z, POS-867): "a `carries:` declaration counts only as the body's first line ... A line placed lower is plain text: it earns nothing and refuses nobody."
+test("18 · the declaration is the whole of the body's first line, read as data: the plain line credits, and any line ending ends it; anything else on the line or before it, a second line, and a leading blank line are no declaration, and the old rule judges the carrier; itself, another repo, and a carried PR whose own first line declares each refuse by name", async () => {
+  adaFix(9121);
+  adaFix(9122, { body: "carries: office#9121" });   // a carried PR that declares a carry of its own
+  adaFix(9123, { body: "Carried on from the harbor.\n\ncarries: office#9121" });   // one that only uses the word, below its first line
+  const bodies = {
+    // must credit: the first line, plain
+    short: "carries: office#9121",
+    full: "carries: postmark-office#9121",
+    "text below": "carries: office#9121\n\nCarried from the harbor's fix.",
+    "ended by lf": "carries: office#9121\nCarried.",
+    "ended by crlf": "carries: office#9121\r\n\r\nCarried.",
+    "ended by a bare cr": "carries: office#9121\rCarried.",
+    "a second line, the same": "carries: office#9121\ncarries: office#9121",
+    "a second line, another pull": "carries: office#9121\ncarries: office#9999",
+    "a carried PR using the word below": "carries: office#9123",
+    // must not credit: no declaration, so the old rule judges the carrier's own author
+    none: "Carried from the harbor's fix.",
+    empty: "",
+    prose: "This hotfix carries: the harbor's fix, as reviewed (office#9121).",
+    "second line": "Carried.\ncarries: office#9121",
+    "second line, crlf": "Carried.\r\ncarries: office#9121",
+    "second line, a bare cr": "Carried.\rcarries: office#9121",
+    "second paragraph": "Carried.\n\ncarries: office#9121",
+    "a leading blank line": "\ncarries: office#9121",
+    "a leading blank line, crlf": "\r\ncarries: office#9121",
+    "a leading blank line, a bare cr": "\rcarries: office#9121",
+    "a leading line of spaces": "  \ncarries: office#9121",
+    "a leading line of nbsp": " \ncarries: office#9121",
+    "text before it on the line": "see carries: office#9121",
+    "a comment before it on the line": "<!-- x --> carries: office#9121",
+    "a leading space": " carries: office#9121",
+    "a leading tab": "\tcarries: office#9121",
+    "a leading bom": "﻿carries: office#9121",
+    indented: "    carries: office#9121",
+    quoted: "> carries: office#9121",
+    "in a list": "- carries: office#9121",
+    "in a heading": "# carries: office#9121",
+    "inside a comment": "<!-- carries: office#9121 -->",
+    "inside a comment, over lines": "<!--\ncarries: office#9121\n-->",
+    "inside details": "<details>\ncarries: office#9121\n</details>",
+    "inside details, one line": "<details>carries: office#9121</details>",
+    fenced: "```\ncarries: office#9121\n```",
+    "a code span": "`carries: office#9121`",
+    capital: "Carries: office#9121",
+    "no space": "carries:office#9121",
+    "two spaces": "carries:  office#9121",
+    "a trailing space": "carries: office#9121 ",
+    "trailing text": "carries: office#9121, as reviewed",
+    "a form feed ends no line": "carries: office#9121\f\nCarried.",
+    "a line separator ends no line": "carries: office#9121 Carried.",
+    zero: "carries: office#0",
+    padded: "carries: office#09121",
+    huge: "carries: office#1234567890",
+    // the form, naming what can't be carried: refused by name
+    itself: "carries: office#{self}",   // the carrier's own number, filled in below
+    site: "carries: site#9121",
+    world: "carries: postmark-world#9121",
+    chained: "carries: office#9122",
+  };
+  const verdicts = {}, refs = {};
+  let n = 9300;
+  for (const [name, body] of Object.entries(bodies)) {
+    const carrier = carryPull("wright", { n: ++n, body: body.replace("{self}", String(n)) });
+    refs[name] = carrier;
+    verdicts[name] = await fixedVerdict(carrier.link);
+  }
+  const r = (name) => refs[name].ref;
+  const founder = (name) => `422 ${refs[name].link} was written by a founder's account, GitHub account wright-starforge (id 306351151), and a founder's work credits only wright or keemin`;
+  assert.deepEqual(verdicts, {
+    short: "ok ada",
+    full: "ok ada",
+    "text below": "ok ada",
+    "ended by lf": "ok ada",
+    "ended by crlf": "ok ada",
+    "ended by a bare cr": "ok ada",
+    "a second line, the same": "ok ada",
+    "a second line, another pull": "ok ada",
+    "a carried PR using the word below": "ok ada",
+    none: founder("none"),
+    empty: founder("empty"),
+    prose: founder("prose"),
+    "second line": founder("second line"),
+    "second line, crlf": founder("second line, crlf"),
+    "second line, a bare cr": founder("second line, a bare cr"),
+    "second paragraph": founder("second paragraph"),
+    "a leading blank line": founder("a leading blank line"),
+    "a leading blank line, crlf": founder("a leading blank line, crlf"),
+    "a leading blank line, a bare cr": founder("a leading blank line, a bare cr"),
+    "a leading line of spaces": founder("a leading line of spaces"),
+    "a leading line of nbsp": founder("a leading line of nbsp"),
+    "text before it on the line": founder("text before it on the line"),
+    "a comment before it on the line": founder("a comment before it on the line"),
+    "a leading space": founder("a leading space"),
+    "a leading tab": founder("a leading tab"),
+    "a leading bom": founder("a leading bom"),
+    indented: founder("indented"),
+    quoted: founder("quoted"),
+    "in a list": founder("in a list"),
+    "in a heading": founder("in a heading"),
+    "inside a comment": founder("inside a comment"),
+    "inside a comment, over lines": founder("inside a comment, over lines"),
+    "inside details": founder("inside details"),
+    "inside details, one line": founder("inside details, one line"),
+    fenced: founder("fenced"),
+    "a code span": founder("a code span"),
+    capital: founder("capital"),
+    "no space": founder("no space"),
+    "two spaces": founder("two spaces"),
+    "a trailing space": founder("a trailing space"),
+    "trailing text": founder("trailing text"),
+    "a form feed ends no line": founder("a form feed ends no line"),
+    "a line separator ends no line": founder("a line separator ends no line"),
+    zero: founder("zero"),
+    padded: founder("padded"),
+    huge: founder("huge"),
+    itself: `422 ${r("itself")} declares it carries itself`,
+    site: `422 ${r("site")} declares it carries site#9121, and a carrier carries a pull request on its own repo, postmark-office`,
+    world: `422 ${r("world")} declares it carries postmark-world#9121, and a carrier carries a pull request on its own repo, postmark-office`,
+    chained: `422 postmark-office#9122, which ${r("chained")} carries, declares a carry of its own, and a carried pull request is never carried again`,
+  });
+});
+
+// LAW (Wright, settled 2026-11-05 19:57:03Z, answer 2): "A hidden declaration doesn't count … the `carries:` declaration has to be visible to
+// anyone reading the PR. A declaration inside an HTML comment (`<!-- … -->`), or anywhere else the rendered body hides, refuses with a reason
+// naming it"; and 2026-11-06 22:01Z: only the first line counts, so a hidden line can't credit. `hidden` holds every body a review round found the
+// page hiding (a collapsed <details>, the line gone, only in an attribute, or only as a diagram's or a math block's source), read on GitHub's renderer,
+// POST /markdown in mode gfm, on 2026-11-06.
+// `lower` is what the rule costs: the page shows the line in each of these, and it earns nothing. Until 2026-11-06 many of them credited.
+test("18 · (19:57, answer 2; the first-line rule) a hidden line can't credit: every body from every review round earns nothing, and so does a line the page shows below the first; the same line put first, above the same body, credits", async () => {
+  adaFix(9601);
+  const line = "carries: office#9601";
+  const hidden = {
+    // the first rounds: a comment, and an element that collapses
+    "comment, multi-line": `Carried.\n\n<!--\n${line}\n-->`,
+    "comment, one line": `Carried.\n\n<!-- ${line} -->`,
+    "comment, unclosed": `Carried.\n\n<!-- notes for the reviewer\n\n${line}`,
+    "details, no blank line": `<details><summary>Notes</summary>\n${line}\n</details>`,
+    "details, blank lines": `<details>\n<summary>Notes</summary>\n\n${line}\n\n</details>`,
+    "details, unclosed": `Carried.\n\n<details>\n\n${line}`,
+    "details, one line": `<details><summary>Notes</summary>${line}</details>`,
+    // the review at f9adbdf9, F1
+    "a self-closed details": `<details/>\n\n${line}`,
+    "a /> inside an attribute": `<details title="/>">\n\n${line}`,
+    "an escaped backtick": `\\\`<details>\`\n\n${line}`,
+    "an autolink taking the backtick": `<http://a\`b> <details> \` >\n\n${line}`,
+    "a tag taking the backtick": `<a title="\`"/> <details> \`/>\n\n${line}`,
+    "an hr's block, then a span": `<hr>\n\`<details>\`\n\n${line}`,
+    "a br's block, then a span": `<br>\n\`<details>\`\n\n${line}`,
+    "a close tag's block, then a span": `</div>\n\`<details>\`\n\n${line}`,
+    "an hr's block, then a fence": `<hr>\n\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    "a self-closed tag's block, then a fence": `<widget/>\n\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    details: `<details>\n\n${line}`,
+    "details, split": `<details\n>\n\n${line}\n\n</details>`,
+    // an HTML parser ends a comment at <!-->, <!---> and --!>, and a fence in a list ends with the list
+    "a comment closed early by <!-->": `<!--> <details> -->\n\n${line}`,
+    "a comment closed early by <!--->": `<!---> <details> -->\n\n${line}`,
+    "a comment closed early by --!>": `<!-- a --!> <details> -->\n\n${line}`,
+    "a comment closed early, a tag on its own line": `<!-->\n\n<details>\n\n-->\n\n${line}`,
+    "a comment opened in a fence a list ended": `- a\n\n  \`\`\`\n<!--\n  \`\`\`\n\n${line}`,
+    "a tag in a fence a list ended": `- a\n\n  \`\`\`\n<details>\n  \`\`\`\n\n${line}`,
+    "a close tag holding the line in an attribute": `</div x="\n\n${line}\n\n">`,
+    "a tag on a comment's closing line": `<!--\n--> <details>\n\n${line}`,
+    "a tag after a closed comment": `<!-- x --> <details>\n\n${line}`,
+    "processing instruction": `<?\n${line}\n?>`,
+    cdata: `<![CDATA[\n${line}\n]]>`,
+    "processing instruction, blank lines": `<?\n\n${line}\n\n?>`,
+    "cdata, blank lines": `<![CDATA[\n\n${line}\n\n]]>`,
+    "close tag in a code span": `<details>\n\n\`\` \`</details>\` \`\`\n\n${line}`,
+    "close tag in a fence": `<details>\n\n\`\`\`\n</details>\n\`\`\`\n\n${line}`,
+    "close tag, indented as code": `<details>\n\n    </details>\n\n${line}`,
+    "start tag past a run with no partner": `\`<details>\`\`\n\n${line}`,
+    "start tag past a span over lines": `x \`y\nz\` <details> \`w\`\n\n${line}`,
+    "start tag past a line that is no fence": `\`\`\` a\`b\n<details>\n\`\`\`\nx\n\`\`\`\n\`\`\` i\n\`\`\`\n\n${line}`,
+    // a title or a label running on from the text above
+    "reference title": `[notes]: https://example.com "notes\n${line}\n"`,
+    "reference title, label over lines": `[no\ntes]: https://example.com "notes\n${line}\n"`,
+    "reference title, in a list": `- [notes]: https://example.com "notes\n${line}\n"`,
+    "a link title": `see [a](/u "b\n${line}\n")`,
+    "an image alt": `![a\n${line}\n](x.png)`,
+    // the review at d4f8eb75, F1: a comment opened in a quote or a list ends with it, and the --> outside is only text
+    "a comment opened in a quote": `> <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a list": `- <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a numbered list": `1. <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a list in a quote": `> - <!-- a\n\n-->\n\n${line}`,
+    "a comment opened in a list's second block": `- a\n\n  <!-- b\n\n-->\n\n${line}`,
+    "a comment opened in a quote, closed mid-line": `> <!-- a\n\nb --> c\n\n${line}`,
+    "a comment opened in a quote, closed on the next line": `> <!-- a\n-->\n\n${line}`,
+    // the same review, F2: a line of Unicode space isn't blank on the page
+    "a title over a line of nbsp": `[a]: /u "\n \n${line}\n"`,
+    "a title over a line of u3000": `[a]: /u "\n　\n${line}\n"`,
+    "a title over a line of ufeff": `[a]: /u "\n﻿\n${line}\n"`,
+    "a title over a line of u2003": `[a]: /u "\n \n${line}\n"`,
+    "a title over a line of form feed": `[a]: /u "\n\f\n${line}\n"`,
+    "a title over a line of vertical tab": `[a]: /u "\n\v\n${line}\n"`,
+    "a link title over a line of nbsp": `[a](/u "\n \n${line}\n")`,
+    "an image alt over a line of nbsp": `![a\n \n${line}\n](x.png)`,
+    "a footnote over a line of nbsp": `[^1]: x\n \n${line}`,
+    "a label over a line of nbsp": `[\n \n${line}\n]: /u`,
+    // and F3: a bare CR ends a line on the page
+    "a bare cr, then a mermaid fence": `a\r\`\`\`mermaid\n\n${line}\n\n\`\`\``,
+    "a bare cr, then a math fence": `a\r\`\`\`math\n\n${line}\n\n\`\`\``,
+  };
+  const lower = {
+    plain: `Carried from the harbor's fix.\n\n${line}`,
+    "running on from prose": `Carried.\n${line}`,
+    "a closed template comment": `<!-- Describe what this PR changes. -->\n\n${line}`,
+    "a comment over lines": `<!--\nA note for the author.\n-->\n\n${line}`,
+    "a closed comment holding a tag": `<!-- <details> -->\n\n${line}`,
+    "closed details": `<details><summary>Notes</summary>\n\nThe long notes.\n\n</details>\n\n${line}`,
+    "a code span holding a tag": `Use \`<details>\` for notes.\n\n${line}`,
+    "a code span naming the form": `The line is \`carries: <repo>#<n>\`, so:\n\n${line}`,
+    "a closed fence with no tag": `\`\`\`\nplain text\n\`\`\`\n\n${line}`,
+    "a closed fence holding a tag": `\`\`\`\n<details>\n\`\`\`\n\n${line}`,
+    "a < that starts nothing": `a < b\n\n${line}`,
+    "an autolink": `<https://example.com>\n\n${line}`,
+    "a void tag": `First.<br>\n\n${line}`,
+    "a self-closed tag": `<widget/>\n\n${line}`,
+    "a stray close tag": `</details>\n\n${line}`,
+    "a generic": `Map<string, number> holds it.\n\n${line}`,
+    "a comparison with no space": `Refuses when count<limit, as before.\n\n${line}`,
+    "a reference definition": `[x]: https://example.com\n\n${line}`,
+    "a span over lines closed above": `a \`b\nc\` d\n\n${line}`,
+    "a declaration span": `<!x\n${line}\n>`,
+    script: `<script>\n${line}\n</script>`,
+    style: `Carried.\n\n<style>\n\n${line}\n`,
+    "in a fence, an info string closing nothing": `\`\`\`\n\`\`\`js\n${line}\n\`\`\``,
+    "in a fence in a list, out of step": `- a\n  \`\`\`\nb\n\n\`\`\`\n\n${line}\n\n\`\`\``,
+    "above a setext line": `Carried.\n\n${line}\n---`,
+  };
+  const verdicts = {}, firsts = {}, links = {};
+  let n = 12000;
+  for (const [name, body] of Object.entries({ ...hidden, ...lower })) {
+    const carrier = carrierOf(++n, 9601, { body });
+    links[name] = carrier.link;
+    verdicts[name] = await fixedVerdict(carrier.link);
+    firsts[name] = await fixedVerdict(carrierOf(++n, 9601, { body: `${line}\n\n${body}` }).link);
+  }
+  const names = Object.keys(links);
+  assert.equal(names.length, Object.keys(hidden).length + Object.keys(lower).length, "no row shares a name");
+  assert.deepEqual(verdicts, Object.fromEntries(names.map((name) => [name, `422 ${links[name]} was written by a founder's account, GitHub account wright-starforge (id 306351151), and a founder's work credits only wright or keemin`])),
+    "a line below the first is plain text, so the old rule judges the carrier");
+  assert.deepEqual(firsts, Object.fromEntries(names.map((name) => [name, "ok ada"])), "nothing below a first line takes its credit away");
+});
+
+test("18 · a credit refused because there's no declaration says a carry is declared on the body's first line, whoever's carrier it is; and an honest PR that uses the word is plain text: it refuses nobody, whatever stands above it", async () => {
+  const body = "Carried.\n\ncarries: office#9501";
+  adaFix(9501);
+  const hints = {};
+  for (const [who, n] of [["wright", 9502], ["rivetApp", 9503], ["finn", 9504]]) {
+    const { link } = carryPull(who, { n, body });
+    setup();
+    await toBriefed();
+    await assert.rejects(advanceAtTown({ post: ID, ...FIX({ credit: "ada", link }) }, WRIGHT, at17), (e) => { hints[who] = e.code === 422 && /first line/.test(e.hint); return true; });
+  }
+  assert.deepEqual(hints, { wright: true, rivetApp: true, finn: true }, "LAW (Wright, 2026-11-06): the reason says a carry is declared on the body's first line");
+  // an honest resident's own fix, using the word: each credits her, as it would with no such line
+  const honest = {
+    "below a void tag": "First.<br>\n\nThis carries: the fix for #4441",
+    "below an element": "<details>log</details>\n\nThis carries: the fix for #4441",
+    "a comment": "<!-- note: carries: see #12 -->",
+    "the first line, no declaration": "Carries: nothing of note",
+    "a line of the form, lower": "The fix.\n\ncarries: office#9501",
+  };
+  const verdicts = {};
+  let n = 9510;
+  for (const [name, text] of Object.entries(honest)) verdicts[name] = await fixedVerdict(carryPull("ada", { n: ++n, body: text }).link);
+  assert.deepEqual(verdicts, Object.fromEntries(Object.keys(honest).map((name) => [name, "ok ada"])));
+});
+
+test("18 · (a text pin, labelled: it reads the doc, not behaviour) the contract's carried-fix bullet says the declaration is the body's first line, that a first line not of the form declares nothing, and that a line below is plain text", () => {
+  const doc = readFileSync(new URL("../docs/posts-contract.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const [bullet] = doc.split("\n").filter((l) => l.startsWith("  - **A carried fix credits the carried PR's author"));
+  assert.match(bullet, /\bfirst line\b/);
+  assert.match(bullet, /\bfirst line that isn't the form, whole\b/, "or a reader expects a 422 for a malformed line, from \"Everything else refuses\"");
+  assert.match(bullet, /\bplain text\b/);
+  assert.doesNotMatch(bullet, /line of its own|could start markup/, "the old scan's words are gone");
+});
+
+test("18 · the carried author is judged as any author: another household's account, an unbound one and a founder's each refuse, naming the carried PR and its carrier, and write nothing", async () => {
+  const cases = { finn: ["finn", 9141, 9142], drifter: ["drifter", 9143, 9144], keemin: ["keemin", 9145, 9146] };
+  const verdicts = {}, links = {};
+  for (const [name, [who, c, k]] of Object.entries(cases)) {
+    const carried = carryPull(who, { n: c, merged: false });
+    const carrier = carrierOf(k, c);
+    links[name] = `${carried.link} (carried by ${carrier.link})`;
+    verdicts[name] = await fixedVerdict(carrier.link, name === "keemin" ? { credit: "mari" } : {});
+  }
+  assert.deepEqual(verdicts, {
+    finn: `422 ${links.finn} was written by GitHub account finn-gh (id 1002), of solo:finn, and ada stands in hh:the-harbor`,
+    drifter: `422 ${links.drifter} was written by GitHub account drifter (id 1003), which is bound to no household here`,
+    keemin: `422 ${links.keemin} was written by a founder's account, GitHub account keeminlee (id 67605380), and a founder's work credits only wright or keemin`,
+  });
+});
+
+test("18 · the carrier must be merged: unmerged it waits at the stage guard, and a founder's force past the guard still never credits a carry", async () => {
+  const carried = adaFix(9151);
+  const open = carrierOf(9152, carried.n, { merged: false });
+  assert.equal(await fixedVerdict(open.link), `409 fixed waits for the PR to merge: ${open.ref} is closed without merging`);
+  assert.equal(await fixedVerdict(open.link, { force: "the hotfix is live" }), `409 a carried credit waits for its carrier to merge: ${open.ref} is not merged`);
+});
+
+test("18 · the change must be the same, or it is refused naming the mismatch: a changed context line, a partial carry either way, a binary change, a rename, a mode change and an empty diff", async () => {
+  const BINARY = ["diff --git a/img/door.png b/img/door.png", "index 4444444..5555555 100644", "Binary files a/img/door.png and b/img/door.png differ", ""].join("\n");
+  const RENAME = ["diff --git a/src/greeting.mjs b/src/greet.mjs", "similarity index 100%", "rename from src/greeting.mjs", "rename to src/greet.mjs", ""].join("\n");
+  const MODE = ["diff --git a/src/greeting.mjs b/src/greeting.mjs", "old mode 100644", "new mode 100755", ""].join("\n");
+  const TWO = { files: 2, add: 2, del: 1 };
+  // [the carried PR's diff and counts, the carrier's]
+  const cases = {
+    context: [[greeting("a b"), ONE], [greeting("a b", { fn: "export function welcome() {" }), ONE]],
+    "carrier brings more": [[greeting("a b"), ONE], [greeting("a b") + FAREWELL, TWO]],
+    "carrier carries part": [[greeting("a b") + FAREWELL, TWO], [greeting("a b"), ONE]],
+    binary: [[greeting("a b"), ONE], [BINARY, { files: 1, add: 0, del: 0 }]],
+    rename: [[RENAME, { files: 1, add: 0, del: 0 }], [greeting("a b"), ONE]],
+    mode: [[greeting("a b"), ONE], [MODE, { files: 1, add: 0, del: 0 }]],
+    empty: [[greeting("a b"), ONE], ["", { files: 0, add: 0, del: 0 }]],
+  };
+  const verdicts = {}, refs = {};
+  let n = 9160;
+  for (const [name, [[dd, dc], [rd, rc]]] of Object.entries(cases)) {
+    const carried = adaFix(++n, { diff: dd, counts: dc });
+    const carrier = carrierOf(++n, carried.n, { diff: rd, counts: rc });
+    refs[name] = [carrier.ref, carried.ref];
+    verdicts[name] = await fixedVerdict(carrier.link);
+  }
+  const notSame = (name) => {
+    const [c, d] = refs[name];
+    return `422 ${c} and ${d} are not the same patch (their patch-ids differ): a rebase that touched the hunks, a partial carry, or another change`;
+  };
+  assert.deepEqual(verdicts, {
+    context: notSame("context"),
+    "carrier brings more": notSame("carrier brings more"),
+    "carrier carries part": notSame("carrier carries part"),
+    binary: `422 ${refs.binary[0]}'s diff holds a binary change (img/door.png), which the office does not compare, so the carry can't be checked`,
+    rename: `422 ${refs.rename[1]}'s diff holds a rename or copy (src/greeting.mjs), which the office does not compare, so the carry can't be checked`,
+    mode: `422 ${refs.mode[0]}'s diff holds a mode change (src/greeting.mjs), which the office does not compare, so the carry can't be checked`,
+    empty: `422 ${refs.empty[0]}'s diff changes nothing, so there is no patch to carry`,
+  });
+});
+
+test("18 · no pass on doubt: a carried PR GitHub doesn't have, one with no commits to diff, a diff GitHub won't serve, a diff that is not the PR's own count and a hunk cut short each refuse and write nothing", async () => {
+  const verdicts = {};
+  // the carried PR is not on GitHub
+  verdicts.missing = await fixedVerdict(carrierOf(9181, 9180).link);
+  // the carried PR answers without its head commit
+  const headless = adaFix(9182);
+  const path = `/repos/postmark-town/postmark-office/pulls/${headless.n}`;
+  GITHUB.set(path, { status: 200, body: { ...GITHUB.get(path).body, head: null } });
+  verdicts.headless = await fixedVerdict(carrierOf(9183, headless.n).link);
+  // GitHub errs serving the carrier's diff
+  const down = carrierOf(9185, adaFix(9184).n);
+  GITHUB.set(`/repos/postmark-town/postmark-office/compare/${shaFor("base", 9185)}...${shaFor("head", 9185)}`, { status: 500, body: { message: "boom" } });
+  verdicts.down = await fixedVerdict(down.link);
+  // the carrier's diff is one file where GitHub counts two: cut short, or against another base
+  verdicts.short = await fixedVerdict(carrierOf(9187, adaFix(9186).n, { counts: { files: 2, add: 2, del: 1 } }).link);
+  // a hunk whose header promises three lines on each side and holds two (the counts still agree)
+  const cut = greeting("a b").replace("   return text;\n", "");
+  verdicts.cut = await fixedVerdict(carrierOf(9189, adaFix(9188).n, { diff: cut }).link);
+  assert.deepEqual(verdicts, {
+    missing: `422 postmark-office#9180, which postmark-office#9181 declares it carries, is not on GitHub`,
+    headless: `503 GitHub could not show postmark-office#9182's commits, so the office cannot prove postmark-office#9183 carries postmark-office#9182`,
+    down: `503 GitHub could not serve postmark-office#9185's diff (too large, unreadable or GitHub down), so the office cannot prove postmark-office#9185 carries postmark-office#9184`,
+    short: `422 postmark-office#9187's diff (1 file, +1 −1) is not the pull request's own (2 files, +2 −1): cut short, or against another base, so the carry can't be checked`,
+    cut: `422 postmark-office#9189's diff has a hunk shorter than its header in src/greeting.mjs: cut short, so the carry can't be checked`,
+  });
+});
+
+test("18 · only fixed reads a carry: a PR linked at diagnosed is judged by its own author, whatever its body declares; and a recredit of fixed may link a carrier, under the same proof", async () => {
+  setup();
+  await postAtTown(BUG, ERRANT, at17);
+  await skipThrough(ID, "reproduced");
+  // finn's PR, declaring it carries ada's: at diagnosed the carry is not read, so ada is refused and finn passes
+  adaFix(9191);
+  const finnPr = carryPull("finn", { n: 9192, body: "carries: office#9191" });
+  await refusedWith(advanceAtTown({ post: ID, to: "diagnosed", credit: "ada", link: finnPr.link }, WRIGHT, at17), 422,
+    new RegExp(`^${esc(finnPr.link)} was written by GitHub account finn-gh \\(id 1002\\), of solo:finn, and ada stands in hh:the-harbor`));
+  assert.equal((await advanceAtTown({ post: ID, to: "diagnosed", credit: "finn", link: finnPr.link }, WRIGHT, at17)).credit, "finn");
+
+  // fixed credited to finn by finn's own PR, then re-credited to ada by a carrier of her fix
+  setup();
+  await toBriefed();
+  await advanceAtTown({ post: ID, ...FIX({ link: pull("finn", { n: 9193 }) }) }, WRIGHT, at17);
+  const carried = adaFix(9194);
+  const recredit = (link) => advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "ada", link, note: "the fix was the harbor's, carried onto a hotfix" }, WRIGHT, at17);
+  await refusedWith(recredit(carrierOf(9195, carried.n, { diff: greeting("ab") }).link), 422, /change different bytes in src\/greeting\.mjs/);
+  const ok = await recredit(carrierOf(9196, carried.n).link);
+  assert.deepEqual([ok.recredit, ok.was, ok.credit], [true, "finn", "ada"]);
+  assert.match(ok.receipt, /; postmark-office#9196 carries postmark-office#9194, so ada's credit was judged against its author, GitHub account harbor-human \(id 1001\), on the same patch-id and the same changed bytes\. /);
+});
+
+// ── 19 · POS-912, Wright's 20:38:59Z word: the location limit is NAMED, beside the body-mutability one ──────────────────────────
+//
+// LAW (Wright, settled 2026-11-05 20:38:59Z): "Yes, keep whole patch-id, context included ... a carry whose context drifted beyond
+// whitespace refuses, fails closed, and a founder handles it by hand." And: "Two identical edits in two identical windows of one file
+// share a patch-id and changed bytes, because hunk coordinates aren't compared. With whole patch-id, that needs the context to match
+// too, so it only happens with truly duplicated code ... Name it in the ladder's docs and the advance answer as an explicit limit,
+// beside the body-mutability one from 17:51Z, so Darko sees both at his money look."
+//
+// WORDS ONLY: nothing here changes what credits. The surfaces that carry the words are read where a caller reads them: the advance
+// answer's receipt and the recredit's (through the real door), the fixed stage's own help (the refusal that teaches what earns it),
+// and the contract's carried-fix bullet (a TEXT PIN, labelled: it reads a doc, not behaviour). Each clause is its own regex,
+// independent of any sentence, and each surface's verdict is compared as one map, so a red names the missing clause. The question is
+// not called open and the meaning is not called proved: the words state a limit, nothing more.
+const LOCATION_CLAUSES = {
+  repeatedWindows: /\brepeated\b[^.;]*\bwindows?\b/i,                              // identical changes in identical repeated windows of one file
+  differentLocations: /\bdifferent (?:locations|places)\b/i,                        // ... can match at different locations
+  coordinatesNotCompared: /\bcoordinates\b[^.;]*\bnot compared\b|\bnot compared\b[^.;]*\bcoordinates\b/i, // because hunk coordinates are not compared
+  contextKept: /\bcontext\b[^.;]*\bpatch-id\b|\bpatch-id\b[^.;]*\bcontext\b/i,       // whole patch-id, context included, stays
+};
+const BY_HAND_CLAUSE = { founderByHand: /\bfounder\b[^.;]*\bby hand\b/i };          // a refused carry is handled by a founder by hand
+const MUTABILITY_CLAUSE = { bodyEditedAfter: /\b(?:edited|changed) afterwards?\b/i }; // the body's declaration can be edited afterwards (17:51Z, kept)
+const allTrue = (clauses) => Object.fromEntries(Object.keys(clauses).map((k) => [k, true]));
+const verdictOfText = (text, clauses) => Object.fromEntries(Object.entries(clauses).map(([k, re]) => [k, re.test(String(text))]));
+const NOT_CLAIMED = /\b(?:proves?|proved|guarantees?|verifies|verified) (?:the |that the )?(?:location|locations)\b/i;
+
+test("19 · the advance answer for a carried fix names the location limit beside the body-mutability one, and the carry still credits the same way", async () => {
+  const { pen, posts } = setup();
+  await toBriefed();
+  // the limit as it happens: the carried PR edits the window at line 1, the carrier makes the byte-identical edit in another window of the file
+  const carried = adaFix(9201, { diff: greeting("a b", { at: 1 }) });
+  const carrier = carrierOf(9202, carried.n, { diff: greeting("a b", { at: 40, index: "6666666..2222222" }) });
+  const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "ada", link: carrier.link }) }, WRIGHT, at17);
+  // nothing that credits moved: the stage, the credit, the link, the stamps, and the act's keys
+  assert.deepEqual([ok.stage, ok.credit, ok.link, ok.stamps], ["fixed", "ada", carrier.link, 25]);
+  assert.deepEqual(Object.keys(JSON.parse(pen.rows().at(-1).payload)).sort(), ["credit", "fields", "from", "hand", "post", "to"]);
+  assert.equal(posts.get(ID).fields.links.fixed, carrier.link);
+  // the kept teaching: whose work, and on what comparison
+  assert.match(ok.receipt, new RegExp(`${esc(carrier.ref)} carries ${esc(carried.ref)}, so ada's credit was judged against its author, GitHub account harbor-human \\(id 1001\\), on the same patch-id and the same changed bytes`));
+  const want = { ...LOCATION_CLAUSES, ...BY_HAND_CLAUSE, ...MUTABILITY_CLAUSE };
+  assert.deepEqual(verdictOfText(ok.receipt, want), allTrue(want),
+    `LAW (POS-912, 20:38Z): the location limit is named in the advance answer, beside the body-mutability one — the receipt was: ${ok.receipt}`);
+  assert.doesNotMatch(ok.receipt, NOT_CLAIMED, "and the words claim no proof of location");
+});
+
+test("19 · the recredit's answer names the same two limits", async () => {
+  setup();
+  await toBriefed();
+  await advanceAtTown({ post: ID, ...FIX({ link: pull("finn", { n: 9203 }) }) }, WRIGHT, at17);
+  const carried = adaFix(9204, { diff: greeting("a b", { at: 1 }) });
+  const carrier = carrierOf(9205, carried.n, { diff: greeting("a b", { at: 40, index: "6666666..2222222" }) });
+  const ok = await advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "ada", link: carrier.link, note: "the fix was the harbor's, carried onto a hotfix" }, WRIGHT, at17);
+  assert.deepEqual([ok.recredit, ok.was, ok.credit], [true, "finn", "ada"]);
+  assert.match(ok.receipt, /on the same patch-id and the same changed bytes\. /, "the kept teaching, and the receipt's next sentence");
+  const want = { ...LOCATION_CLAUSES, ...BY_HAND_CLAUSE, ...MUTABILITY_CLAUSE };
+  assert.deepEqual(verdictOfText(ok.receipt, want), allTrue(want),
+    `LAW (POS-912, 20:38Z): the recredit answer names the two limits too — the receipt was: ${ok.receipt}`);
+  assert.match(ok.receipt, /The reviewed stage pass reads the town's ledger/, "and the sentence after it is kept");
+});
+
+test("19 · the fixed stage's own help (the refusal that teaches what earns it) does not promise more than the comparison proves: it names the location limit", async () => {
+  setup();
+  await toBriefed();
+  let said = "";
+  await assert.rejects(advanceAtTown({ post: ID, ...FIX({ credit: "ada" }) }, WRIGHT, at17), (e) => { said = `${e.defect} ${e.hint}`; return e.code === 422; });
+  assert.match(said, /^fixed needs a link to the work that earned it fixed is earned by the fix: link its pull request/, "the kept opening of the help");
+  assert.deepEqual(verdictOfText(said, LOCATION_CLAUSES), allTrue(LOCATION_CLAUSES),
+    `LAW (POS-912, 20:38Z): EARNED_BY.fixed must not promise more than the comparison proves — the help was: ${said}`);
+  assert.doesNotMatch(said, NOT_CLAIMED);
+});
+
+test("19 · (a text pin, labelled: it reads the doc, not behaviour) the contract's carried-fix bullet names the location limit beside the body-mutability one", () => {
+  const doc = readFileSync(new URL("../docs/posts-contract.md", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const bullets = doc.split("\n").filter((l) => l.startsWith("  - **A carried fix credits the carried PR's author"));
+  assert.equal(bullets.length, 1, "the contract has exactly one carried-fix bullet");
+  const want = { ...LOCATION_CLAUSES, ...BY_HAND_CLAUSE, ...MUTABILITY_CLAUSE };
+  assert.deepEqual(verdictOfText(bullets[0], want), allTrue(want),
+    `LAW (POS-912, 20:38Z): the ladder's docs name the location limit beside the body-mutability one`);
+  assert.doesNotMatch(bullets[0], NOT_CLAIMED);
+});
+
+// ── 20: Starforge's own Apps earn wright fixed, and by a comment diagnosed or briefed ──────────────────────────────
+// LAW (POS-892, Wright 2026-11-05 15:41:22Z): "trusted Starforge Apps, identified by App ID (never a matching
+// login), may earn wright `fixed` only, never `diagnosed`, `briefed` or any resident's credit." WIDENED (POS-867;
+// Darko 2026-11-07 12:12 EST, "One app rule, widened"; Wright 2026-11-07 17:16:15Z): all four Apps, by id and
+// login, crediting wright only, "and widened so an app's comment can earn diagnosed and briefed as well as an
+// app's PR earning fixed". Rivet's and Bevel's Apps are no longer founder accounts (POS-931/b's rows came out).
+const { judgeEarnedCredit } = await import("../src/bug-credit.mjs");
+const { HOUSE_APPS, FOUNDER_ACCOUNTS } = await import("../src/bugs.mjs");
+const APP_REFUSES_CREDIT = (link, who, id) => `422 ${link} was written by one of Starforge's own Apps, GitHub account ${who} (id ${id}), and an App's work credits only wright`;
+
+test("20 · (the falsifier) a merged PR by each lead's App earns wright fixed, paid as a founder's own fix; the act is the ordinary one, and shipped proves its merge", async () => {
+  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp"]) {
+    const { pen, posts } = setup();
+    await toBriefed();
+    const link = pull(app);
+    const ok = await advanceAtTown({ post: ID, ...FIX({ credit: "wright", link }) }, WRIGHT, at17);
+    assert.deepEqual([ok.stage, ok.credit, ok.stamps, ok.link], ["fixed", "wright", 25, link], `LAW (POS-892): ${app}'s merged PR earns wright fixed`);
+    assert.equal(posts.get(ID).fields.links.fixed, link);
+    assert.deepEqual(Object.keys(JSON.parse(pen.rows().at(-1).payload)).sort(), ["credit", "fields", "from", "hand", "post", "to"]);
+    assert.equal((await advanceAtTown({ post: ID, to: "shipped", link: tagFor(link) }, WRIGHT, at17)).stage, "shipped");
+  }
+  // the town's repo too: limen's post, town#4294, by Rivet's App, was this refusal (POS-867)
+  assert.equal(await fixedVerdict(pull("rivetApp", { repo: "postmark" }), { credit: "wright" }), "ok wright");
+});
+
+test("20 · (the control) a resident's PR is unchanged: it credits its own household, and still never earns wright; an App's PR is still held to the merge", async () => {
+  const harbor = pull("ada");
+  assert.equal(await fixedVerdict(harbor), "ok ada");
+  assert.equal(await fixedVerdict(harbor, { credit: "wright" }),
+    `422 only a founder's account or one of Starforge's own Apps earns wright fixed, and ${harbor} was written by GitHub account harbor-human (id 1001)`);
+  assert.equal(await fixedVerdict(harbor, { credit: "keemin" }),
+    `422 only a founder's account earns keemin a stage, and ${harbor} was written by GitHub account harbor-human (id 1001)`);
+  const open = pull("rivetApp", { n: 9701, state: "open" });
+  assert.equal(await fixedVerdict(open, { credit: "wright" }), "409 fixed waits for the PR to merge: postmark-office#9701 is open");
+});
+
+test("20 · an App's work earns only wright: at fixed, keemin and any resident refuse, even a resident whose handle is pinned to the App's bot user", async () => {
+  const link = pull("rivetApp");
+  const who = ["rivet-starforge[bot]", 340608403];
+  assert.deepEqual({
+    keemin: await fixedVerdict(link, { credit: "keemin" }),
+    ada: await fixedVerdict(link, { credit: "ada" }),
+    finn: await fixedVerdict(link, { credit: "finn" }),
+  }, {
+    keemin: APP_REFUSES_CREDIT(link, ...who),
+    ada: APP_REFUSES_CREDIT(link, ...who),
+    finn: APP_REFUSES_CREDIT(link, ...who),
+  });
+  // the binding never reaches the judge's household road: pinned or not, an App credits no resident
+  const pinned = { registry: {}, pins: { ada: { id: 340608403 } } };
+  assert.throws(() => judgeEarnedCredit({ to: "fixed", credit: "ada", link: "L" }, { gh: { id: 340608403, login: "rivet-starforge[bot]", pull: true } }, pinned),
+    (e) => e.code === 422 && e.defect === "L was written by one of Starforge's own Apps, GitHub account rivet-starforge[bot] (id 340608403), and an App's work credits only wright");
+});
+
+test("20 · (the widened falsifier, POS-867 17:16Z) each App's issue comment earns wright diagnosed, and then briefed: the ordinary act, the comment its link", async () => {
+  for (const app of ["rivetApp", "bevelApp", "jettoApp", "artiApp"]) {
+    const t = await kinoBug();
+    const cause = comment(app);
+    const d = await adv({ to: "diagnosed", credit: "wright", link: cause });
+    assert.deepEqual([d.stage, d.credit, d.link], ["diagnosed", "wright", cause], `LAW (POS-867, 17:16Z): ${app}'s comment earns wright diagnosed`);
+    assert.deepEqual(JSON.parse(t.pen.rows().at(-1).payload).credit, "wright");
+    const brief = comment(app);
+    const b = await adv({ to: "briefed", grade: "light", credit: "wright", link: brief });
+    assert.deepEqual([b.stage, b.credit, b.link], ["briefed", "wright", brief], `LAW (POS-867, 17:16Z): ${app}'s comment earns wright briefed`);
+  }
+});
+
+test("20 · an App's comment credits wright only: keemin, the bug's own resident and a resident pinned to the App's bot user each refuse, at diagnosed and at briefed, and write nothing", async () => {
+  const t = await kinoBug();
+  for (const credit of ["keemin", "kinofire", "ada"]) {
+    const link = comment("bevelApp");
+    await refusedNothing(t, adv({ to: "diagnosed", credit, link }), 422,
+      new RegExp(`^${esc(link)} was written by one of Starforge's own Apps, GitHub account bevel-starforge\\[bot\\] \\(id 341174930\\), and an App's work credits only wright `));
+  }
+  const pinned = { registry: {}, pins: { ada: { id: 341174930 } } };
+  assert.throws(() => judgeEarnedCredit({ to: "briefed", credit: "ada", link: "L", earned: { kind: "comment" } }, { gh: { id: 341174930, login: "bevel-starforge[bot]", pull: false } }, pinned),
+    (e) => e.code === 422 && e.defect === "L was written by one of Starforge's own Apps, GitHub account bevel-starforge[bot] (id 341174930), and an App's work credits only wright");
+  await adv({ to: "diagnosed", credit: "wright", link: comment("bevelApp") });
+  await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "keemin", link: comment("bevelApp") }), 422, /and an App's work credits only wright /);
+});
+
+test("20 · only an App's comment is widened: its issue, and its PR (by the pulls or the issues API), still never earn diagnosed or briefed, for anyone; a founder's comment still does", async () => {
+  const notThis = (link) => new RegExp(`^${esc(link)} was written by one of Starforge's own Apps, GitHub account rivet-starforge\\[bot\\] \\(id 340608403\\), and an App's pull request earns only fixed, and its issue comment only diagnosed or briefed `);
+  const t = await kinoBug();
+  for (const link of [issue("rivetApp"), issue("rivetApp", { pr: true }), pull("rivetApp")])
+    for (const credit of ["wright", "kinofire"])
+      await refusedNothing(t, adv({ to: "diagnosed", credit, link }), 422, notThis(link));
+  assert.equal((await adv({ to: "diagnosed", credit: "wright", link: comment("wright") })).credit, "wright", "the control: the same stage, a founder's comment");
+  for (const link of [issue("rivetApp"), pull("rivetApp")])
+    await refusedNothing(t, adv({ to: "briefed", grade: "light", credit: "wright", link }), 422, notThis(link));
+  // judged pure: a comment is the link's kind, never a PR; and fixed takes the App's PR, never a comment's author
+  const rivet = (pull) => ({ gh: { id: 340608403, login: "rivet-starforge[bot]", pull } });
+  const judged = (to, kind, pull) => {
+    try { judgeEarnedCredit({ to, credit: "wright", link: "L", earned: { kind } }, rivet(pull), { registry: {}, pins: {} }); return "ok"; }
+    catch (e) { return e.code; }
+  };
+  assert.deepEqual([judged("diagnosed", "comment", false), judged("briefed", "comment", false), judged("diagnosed", "comment", true),
+    judged("diagnosed", "issue", false), judged("briefed", "pull", true), judged("diagnosed", undefined, false), judged("fixed", "pull", true), judged("fixed", "comment", false)],
+  ["ok", "ok", 422, 422, 422, 422, "ok", 422]);
+});
+
+test("20 · identity at diagnosed and briefed is the bot user's id AND its login too: a matching login, a matching id, an App ID as an account id and Truey's App each comment as anyone else, for wright or keemin", async () => {
+  for (const to of ["diagnosed", "briefed"]) {
+    const t = await kinoBug(to === "briefed" ? "diagnosed" : "reproduced");
+    const at = to === "briefed" ? { grade: "light" } : {};
+    for (const who of ["appLoginOnly", "appIdOnly", "appIdNotBotId", "trueyApp"]) {
+      const { id, login } = GH_ACCOUNT[who];
+      const by = `GitHub account ${esc(login).replace(/[[\]]/g, "\\$&")} \\(id ${id}\\)`;
+      const link = comment(who);
+      await refusedNothing(t, adv({ to, ...at, credit: "wright", link }), 422,
+        new RegExp(`^only a founder's account or one of Starforge's own Apps earns wright ${to}, and ${esc(link)} was written by ${by}`));
+      await refusedNothing(t, adv({ to, ...at, credit: "keemin", link: comment(who) }), 422,
+        new RegExp(`^only a founder's account earns keemin a stage, and .* was written by ${by}`));
+    }
+  }
+});
+
+test("20 · no App is a founder account: the founders are the two people, so an App's id never reaches the founders' road (POS-931/b's two rows came out, POS-867)", () => {
+  assert.deepEqual(FOUNDER_ACCOUNTS, { 306351151: "wright-starforge", 67605380: "keeminlee" });
+  for (const a of HOUSE_APPS) assert.equal(Object.hasOwn(FOUNDER_ACCOUNTS, String(a.bot_id)), false, `${a.slug}'s bot user is a founder account`);
+  // the id alone, with any other login, is nobody's founder work: keemin and wright both refuse, at every stage
+  const idOnly = { gh: { id: 340608403, login: "not-rivet", pull: true } };
+  for (const to of ["diagnosed", "briefed", "fixed"])
+    for (const credit of ["wright", "keemin"])
+      assert.throws(() => judgeEarnedCredit({ to, credit, link: "L", earned: { kind: "pull" } }, idOnly, { registry: {}, pins: {} }),
+        (e) => e.code === 422 && /^only a founder's account /.test(e.defect), `${to} ${credit}`);
+});
+
+test("20 · identity is the bot user's id AND its login: a matching login, a matching id, an App ID standing as an account id, and Truey's App each refuse as anyone else's work", async () => {
+  const forged = {};
+  for (const who of ["appLoginOnly", "appIdOnly", "appIdNotBotId", "trueyApp"]) {
+    const link = pull(who);
+    const { id, login } = GH_ACCOUNT[who];
+    forged[who] = (await fixedVerdict(link, { credit: "wright" })).replace(link, "<link>");
+    assert.equal(forged[who], `422 only a founder's account or one of Starforge's own Apps earns wright fixed, and <link> was written by GitHub account ${login} (id ${id})`);
+  }
+  assert.equal(Object.keys(forged).length, 4);
+  assert.equal(await fixedVerdict(pull("rivetApp"), { credit: "wright" }), "ok wright", "the control: the real App, the same door");
+});
+
+test("20 · the table is the four leads' Apps: no fifth, no Truey, each App ID beside its own bot user, and neither number standing for the other", () => {
+  assert.deepEqual(HOUSE_APPS.map((a) => [a.slug, a.app_id, a.bot_id]), [
+    ["rivet-starforge", 5263298, 340608403],
+    ["bevel-starforge", 5279270, 341174930],
+    ["jetto-starforge", 5325007, 342797059],
+    ["arti-starforge", 5573296, 351277522],
+  ]);
+  for (const a of HOUSE_APPS) assert.notEqual(a.app_id, a.bot_id);
+});
+
+test("20 · a recredit of fixed by an App's PR may name wright, under the same judge, and may not name a resident", async () => {
+  const { posts } = setup();
+  await toBriefed();
+  await advanceAtTown({ post: ID, ...FIX({ credit: "finn", link: pull("finn") }) }, WRIGHT, at17);
+  const app = pull("bevelApp");
+  await assert.rejects(advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "ada", link: app, note: "the wrong hand" }, WRIGHT, at17),
+    (e) => e.code === 422 && /and an App's work credits only wright$/.test(e.defect));
+  const ok = await advanceAtTown({ post: ID, to: "fixed", recredit: true, credit: "wright", link: app, note: "our own build" }, WRIGHT, at17);
+  assert.deepEqual([ok.recredit, ok.was, ok.credit], [true, "finn", "wright"]);
+  assert.equal(posts.get(ID).state, "fixed");
+});
+
+test("20 · with a carry: an App's merged carrier credits the resident it carries, and an App's carried PR earns wright and no resident", async () => {
+  const body = (n) => `carries: office#${n}\n\nCarried.`;
+  const carrierDiff = greeting("a b", { at: 7, index: "6666666..2222222" });
+  const adas = adaFix(9711);
+  const appCarrier = carryPull("rivetApp", { n: 9712, body: body(adas.n), diff: carrierDiff });
+  assert.equal(await fixedVerdict(appCarrier.link), "ok ada", "the carried PR's author is judged, not the App that carried it");
+  assert.equal(await fixedVerdict(appCarrier.link, { credit: "wright" }),
+    `422 only a founder's account or one of Starforge's own Apps earns wright fixed, and ${adas.link} (carried by ${appCarrier.link}) was written by GitHub account harbor-human (id 1001)`);
+
+  const appFix = carryPull("rivetApp", { n: 9713, merged: false });
+  const founderCarrier = carrierOf(9714, appFix.n);
+  assert.equal(await fixedVerdict(founderCarrier.link, { credit: "wright" }), "ok wright");
+  assert.equal(await fixedVerdict(founderCarrier.link),
+    APP_REFUSES_CREDIT(`${appFix.link} (carried by ${founderCarrier.link})`, "rivet-starforge[bot]", 340608403));
+});
+
+test("20 · (the live record: skipped unless POSTMARK_OFFICE_LIVE_GITHUB is set; it reads api.github.com, so no suite depends on it) GitHub still binds each App ID to its slug and each bot user to its login", { skip: !process.env.POSTMARK_OFFICE_LIVE_GITHUB }, async () => {
+  const read = async (path) => (await fetch(`https://api.github.com${path}`, { headers: { accept: "application/vnd.github+json", "user-agent": "postmark-office" } })).json();
+  for (const a of HOUSE_APPS) {
+    const app = await read(`/apps/${a.slug}`);
+    assert.deepEqual([app.id, app.slug, app.owner?.login], [a.app_id, a.slug, "keeminlee"]);
+    const bot = await read(`/users/${a.slug}%5Bbot%5D`);
+    assert.deepEqual([bot.id, bot.login, bot.type], [a.bot_id, `${a.slug}[bot]`, "Bot"]);
+  }
+});
+
+// ── 18 · a stage skipped by mistake, credited; the leads' apps (POS-931) ──
+// (POS-931's 18, beside POS-912's 18 above: both landed as 18, and other files cite this one as § 18)
 //
 // RULED, Darko 2026-11-06 21:32 EST, in the picker: /a "Extend the door", /b
-// "Add their apps". Wright skipped Moose's diagnosed though Moose had named the
+// "Add their apps"; /b is now the one App rule (group 20; POS-867, Wright 2026-11-07 17:16:15Z). Wright skipped Moose's diagnosed though Moose had named the
 // cause, and the door could not undo a skip. Now a recredit credits a stage the
 // record shows SKIPPED: the skip stays with its reason, the credit sits beside
 // it, and the reviewed pass pays the stage's amount with nothing to burn
@@ -1986,24 +2796,25 @@ test("18 · no evidenced skip, no credit: a stage with neither an advance nor a 
   assert.equal(pen.rows().length, n, "a refused credit wrote an act");
 });
 
-test("18 · (POS-931/b) the leads' apps are founder authors: their merged PR earns fixed for wright, never a resident's credit, and never diagnosed or briefed for anyone", async () => {
+test("18 · (POS-931/b, now the one App rule: POS-867) the leads' apps: their merged PR earns fixed for wright, never keemin or a resident's credit, and their PR never earns diagnosed or briefed for anyone", async () => {
   const fix = { to: "fixed", size: "S", critter: "Sweepling" };
-  for (const app of ["rivet", "bevel"]) {
+  for (const app of ["rivetApp", "bevelApp"]) {
     const who = `GitHub account ${GH_ACCOUNT[app].login.replace(/[[\]]/g, "\\$&")} \\(id ${GH_ACCOUNT[app].id}\\)`;
     const t = await kinoBug("briefed");
-    await refusedNothing(t, adv({ ...fix, credit: "kinofire", link: pull(app) }), 422,
-      new RegExp(`was written by a founder's account, ${who}, and a founder's work credits only wright or keemin`));
+    for (const credit of ["kinofire", "keemin"])
+      await refusedNothing(t, adv({ ...fix, credit, link: pull(app) }), 422,
+        new RegExp(`was written by one of Starforge's own Apps, ${who}, and an App's work credits only wright`));
     assert.equal((await adv({ ...fix, credit: "wright", link: pull(app) })).credit, "wright", `${app}'s merged PR earns fixed for wright`);
 
     const d = await kinoBug("reproduced");
     for (const credit of ["wright", "kinofire"])
       await refusedNothing(d, adv({ to: "diagnosed", credit, link: pull(app) }), 422,
-        new RegExp(`is a founder's pull request \\(${who}\\), and a founder's pull request never earns diagnosed`));
+        new RegExp(`was written by one of Starforge's own Apps, ${who}, and an App's pull request earns only fixed`));
     const b = await kinoBug("diagnosed");
     await refusedNothing(b, adv({ to: "briefed", grade: "light", credit: "wright", link: pull(app) }), 422,
-      new RegExp(`is a founder's pull request \\(${who}\\), and a founder's pull request never earns briefed`));
+      new RegExp(`was written by one of Starforge's own Apps, ${who}, and an App's pull request earns only fixed`));
   }
   // nothing else moved: a resident's account still earns wright nothing
   const t = await kinoBug("briefed");
-  await refusedNothing(t, adv({ ...fix, credit: "wright", link: pull("kinofire") }), 422, /^only a founder's account earns wright a stage/);
+  await refusedNothing(t, adv({ ...fix, credit: "wright", link: pull("kinofire") }), 422, /^only a founder's account or one of Starforge's own Apps earns wright fixed/);
 });

@@ -197,7 +197,8 @@ export const EARNED_STAGES = Object.freeze([STATE_DIAGNOSED, STATE_BRIEFED, STAT
 export const EARNED_BY = Object.freeze({
   [STATE_DIAGNOSED]: "diagnosed is earned by the cause: link the issue comment, the issue, the letter, or the resident's own pull request that names it; its author is who's credited, and a founder's pull request never earns it",
   [STATE_BRIEFED]: "briefed is earned by the brief: link the issue comment, the issue, the letter, or the resident's own pull request that holds it; its author is who's credited, and a founder's pull request never earns it",
-  [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited",
+  // POS-912 W2 (Wright, settled 2026-11-05 17:51:47Z): a carried fix links its merged carrier (bug-credit.mjs § A CARRIED FIX)
+  [STATE_FIXED]: "fixed is earned by the fix: link its pull request; its author is who's credited. A fix carried onto another pull request links the merged carrier, whose body's first line is \"carries: <repo>#<n>\": the carried pull request's author is who's credited, when the two make the same change by whole patch-id (context included) and byte for byte in the changed lines. Hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations",
 });
 const EARNED_SHAPES = Object.freeze({
   [STATE_DIAGNOSED]: 'link: "https://github.com/postmark-town/<repo>/issues/<n>#issuecomment-<id>", ".../issues/<n>", ".../pull/<n>", or a letter\'s id',
@@ -213,20 +214,27 @@ const KIND_NAME = Object.freeze({ comment: "an issue comment", issue: "an issue"
 
 /**
  * The founders' GitHub accounts, by id (the login is a label), and the handles they credit.
- *
- * THE LEADS' APPS ARE FOUNDER AUTHORS (POS-931/b, RULED Darko 2026-11-06 21:32
- * EST, "Add their apps"; Darko 10-07: "Plumb builds, Wright is credited"). A
- * PR that Rivet's or Bevel's lane opens is authored by its app, so it is a
- * founder's work: it may earn fixed for wright or keemin, never diagnosed or
- * briefed, and it never credits a resident. This list is read for that
- * attribution only (bug-credit.mjs § judgeEarnedCredit); it grants no hand,
- * door or other power.
+ * The leads' Apps are not here (POS-931/b's two rows were taken out, POS-867): § HOUSE_APPS judges them.
  */
-export const FOUNDER_ACCOUNTS = Object.freeze({
-  306351151: "wright-starforge", 67605380: "keeminlee",
-  340608403: "rivet-starforge[bot]", 341174930: "bevel-starforge[bot]",
-});
+export const FOUNDER_ACCOUNTS = Object.freeze({ 306351151: "wright-starforge", 67605380: "keeminlee" });
 export const FOUNDER_HANDLES = Object.freeze(["wright", "keemin"]);
+
+// STARFORGE'S OWN APPS (POS-867, POS-892; Wright, 2026-11-05 15:41Z: "trusted Starforge Apps, identified by
+// App ID (never a matching login)"). WIDENED (Darko, 2026-11-07 12:12 EST, "One app rule, widened"; Wright,
+// 2026-11-07 17:16:15Z): all four Apps, matched by id and login, credit wright only, and "an app's comment can
+// earn diagnosed and briefed as well as an app's PR earning fixed". Nothing else: an App's issue, an App's PR at
+// diagnosed or briefed, keemin or any resident's credit all refuse. This rule replaces POS-931/b's founder rows
+// for Rivet's and Bevel's Apps. The leads' pods push as these Apps, and "Plumb builds, Wright is credited" (Darko, 2026-10-07). A
+// pull request's JSON names no App ID, only the App's bot user, so each row binds the App ID to its bot user's
+// account id and the login GitHub gives it, `<slug>[bot]` (GET /apps/{slug} and /users/{slug}%5Bbot%5D, read
+// 2026-11-06; a test re-reads them on request). An author is one of these only by that id AND that login: a
+// login alone is a label. Truey reviews and never builds, so it isn't here.
+export const HOUSE_APPS = Object.freeze([
+  Object.freeze({ slug: "rivet-starforge", app_id: 5263298, bot_id: 340608403 }),
+  Object.freeze({ slug: "bevel-starforge", app_id: 5279270, bot_id: 341174930 }),
+  Object.freeze({ slug: "jetto-starforge", app_id: 5325007, bot_id: 342797059 }),
+  Object.freeze({ slug: "arti-starforge", app_id: 5573296, bot_id: 351277522 }),
+]);
 
 // A repo name never starts with a dot, so `.` and `..` can never steer the API path (review-649 § 6).
 const REPO = "([A-Za-z0-9_-][A-Za-z0-9._-]*)";
