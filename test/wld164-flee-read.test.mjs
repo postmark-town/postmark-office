@@ -8,7 +8,10 @@
 //
 // TWO READS, EACH FROM THE RECORD:
 //   · the act that took them to 0 (a creature's reaction press, creatures.mjs): its answer's `pressed` entry for that resident
-//     says they flee. The actor's own nerve is WLD-153's `nerve_said`, unchanged, and never said twice.
+//     says their nerve is gone and that the office puts them outside a dungeon they stand in. It says nothing the record does not
+//     hold yet: the exit is queued after the answer goes out, and written only inside a dungeon, so the answer never says they
+//     fled or stay out (that is the exit's own record, in their happened). The actor's own nerve is WLD-153's `nerve_said`,
+//     unchanged, and never said twice.
 //   · their happened (creatures-read.mjs § fleeEventsOf, riding creatureToYou like every creature's effect on you): the office's
 //     own exit act, which records `fled: "nerve"` and `fled_by`. A flee not recorded is not claimed.
 // Invented creatures, residents and rows throughout; the record is injected, as in test/wld153-per-act-nerve.test.mjs.
@@ -68,7 +71,7 @@ const deps = (fled, over = {}) => ({ centreOf: () => null, around: async () => (
   present: async () => ({ residents: [{ handle: "kai", distance_m: 10 }, { handle: "mo", distance_m: 12 }, { handle: "lu", distance_m: 14 }] }),
   households: async () => lookup, flee: (h, o) => fled.push({ h, ...o }), ...over });
 
-test("the act whose press takes a HOUSEMATE to 0 says they flee, beside who paid; the actor and the others carry no such line", async () => {
+test("the act whose press takes a HOUSEMATE to 0 says their nerve is gone and what the office does, beside who paid; the actor and the others carry no such line", async () => {
   // mo has 1 nerve left; kai's say costs kai 1 and the glare's 2 is split kai 1 / mo 1 (the payer takes the larger half)
   const living = livingWith(nerveRow("mo", -9, "press"));
   __setCreaturesForTest(living);
@@ -78,17 +81,18 @@ test("the act whose press takes a HOUSEMATE to 0 says they flee, beside who paid
   assert.deepEqual(pressed.map((p) => p.on).sort(), ["kai", "mo"], "the press landed on both housemates");
   assert.equal(nerveOf(living, "mo", Date.now()), 0, "the control: the record has taken mo to 0");
   const mo = pressed.find((p) => p.on === "mo"), kai = pressed.find((p) => p.on === "kai");
-  assert.equal(mo.fled, "their nerve is gone: they flee, and stay out until the settlement", "the act that took them to 0 says so");
-  assert.equal("fled" in kai, false, "the actor still has nerve: nothing said");
+  assert.equal(mo.nerve_gone, "their nerve is gone: if they stand inside a dungeon the office puts them outside it, and their happened says when that is recorded", "the act that took them to 0 says so");
+  assert.equal("nerve_gone" in kai, false, "the actor still has nerve: nothing said");
+  assert.doesNotMatch(mo.nerve_gone, /\bfled\b|stay out/, "and claims no exit: none is recorded when the answer goes out");
   assert.deepEqual(fled.map((f) => [f.h, f.creature]), [["mo", ID]], "and the flee is the one the record already makes, once, naming the creature");
   assert.match(out.nerve_said, /^That cost you 1 nerve, and the creature's press took 1 more; you have 8 of 10 left\.$/, "WLD-153's per-act line is as it was");
   __setCreaturesForTest(null);
 });
 
-test("controls: nobody at 0, and the ACTOR taken to 0 by their own act (nerve_said's, not said twice), carry no pressed.fled", async () => {
+test("controls: nobody at 0, and the ACTOR taken to 0 by their own act (nerve_said's, not said twice), carry no pressed.nerve_gone", async () => {
   __setCreaturesForTest(livingWith());
   const none = await creaturesAnswer([sayRow("kai")], { did: "say" }, deps([]));
-  assert.equal(none.creatures[0].pressed.some((p) => "fled" in p), false, "no one is at 0: no flee said");
+  assert.equal(none.creatures[0].pressed.some((p) => "nerve_gone" in p), false, "no one is at 0: nothing said");
   __setCreaturesForTest(null);
   // kai at 2: the say costs 1, the press takes 1 of the 2 -> kai at 0 with his own act
   const living = livingWith(nerveRow("kai", -8, "press"));
@@ -96,8 +100,25 @@ test("controls: nobody at 0, and the ACTOR taken to 0 by their own act (nerve_sa
   const own = await creaturesAnswer([sayRow("kai")], { did: "say" }, deps([]));
   assert.equal(nerveOf(living, "kai", Date.now()), 0);
   assert.match(own.nerve_said, /Your nerve is gone: you flee, and stay out until the settlement\.$/, "the actor's own flee is WLD-153's line");
-  assert.equal(own.creatures[0].pressed.some((p) => "fled" in p), false, "and is not repeated in the pressed entry");
+  assert.equal(own.creatures[0].pressed.some((p) => "nerve_gone" in p), false, "and is not repeated in the pressed entry");
   __setCreaturesForTest(null);
+});
+
+test("a flee that does not happen (outside a dungeon, or the exit fails) is never claimed: the answer promises only what is true, and nothing is recorded for their happened", async () => {
+  // the office's flee outside a dungeon answers { fled: false, note } and writes nothing (world-crossings.mjs); a failed one is
+  // swallowed by queueFlee. Either way the answer to the act has already gone out, so it can only say what the record holds.
+  for (const flee of [() => ({ fled: false, note: "not within a dungeon: nothing to flee through" }), async () => null /* queueFlee's own answer to a fault it logged: nothing was recorded */]) {
+    const living = livingWith(nerveRow("mo", -9, "press"));
+    __setCreaturesForTest(living);
+    const out = await creaturesAnswer([sayRow("kai")], { did: "say" }, deps([], { flee }));
+    const mo = out.creatures[0].pressed.find((p) => p.on === "mo");
+    assert.match(mo.nerve_gone, /^their nerve is gone: if they stand inside a dungeon /, "conditional on the dungeon: true whether or not an exit follows");
+    assert.doesNotMatch(JSON.stringify(out), /you flee|they flee|stay out until|\bfled\b/i, "no completed, failed or in-flight exit is claimed anywhere in the answer");
+    __setCreaturesForTest(null);
+  }
+  // and their happened has no event for it: the exit record holds nothing, and nothing is read as a flee
+  const cur = { living: livingWith(), law: lawWith() };
+  assert.deepEqual(creaturesRead.creatureToYou(cur, "mo", { sinceMs: SINCE, nowMs: NOW, fled: [] }).events.filter((e) => e.kind === "fled"), []);
 });
 
 // ── the happened: the flee the record holds ─────────────────────────────────
