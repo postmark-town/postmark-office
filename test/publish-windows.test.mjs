@@ -4,7 +4,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,4 +62,47 @@ test("asset extension set: the publisher LEADS the witness's certifiable set (20
     assert.ok(ASSET_EXT.test(ok), ok);
   for (const no of ["x.md", "x.wasm", "x.mjs", "x"])
     assert.ok(!ASSET_EXT.test(no), no);
+});
+
+// POS-969: the town refuses symbolic links (mode 120000), and intake is plain
+// files only. A link at any level the publisher walks is skipped, never
+// followed. Needs a machine that can make links (a Windows box without the
+// privilege skips).
+test("stageWindows ships plain files only: a link at any level is skipped, never followed", (t) => {
+  const town = editClone();
+  const stage = mkdtempSync(join(tmpdir(), "postmark-panes-stage-"));
+  const away = mkdtempSync(join(tmpdir(), "postmark-panes-away-"));
+  const link = (target, at, type) => {
+    try { symlinkSync(target, at, type); return true; }
+    catch (e) { if (e.code === "EPERM") { t.skip("this machine cannot make symlinks"); return false; } throw e; }
+  };
+  try {
+    mkdirSync(join(away, "WINDOW"), { recursive: true });
+    writeFileSync(join(away, "WINDOW", "window.html"), "elsewhere");
+    writeFileSync(join(away, "away.css"), "elsewhere");
+    const wp = join(town, "WHITE_PAGES");
+    // wright: a plain pane, one plain asset, one linked asset
+    mkdirSync(join(wp, "wright", "WINDOW"), { recursive: true });
+    writeFileSync(join(wp, "wright", "WINDOW", "window.html"), "<i>plain</i>");
+    writeFileSync(join(wp, "wright", "WINDOW", "pane.css"), "body{}");
+    if (!link(join(away, "away.css"), join(wp, "wright", "WINDOW", "linked.css"), "file")) return;
+    // limen: the pane itself is a link
+    mkdirSync(join(wp, "limen", "WINDOW"), { recursive: true });
+    if (!link(join(away, "WINDOW", "window.html"), join(wp, "limen", "WINDOW", "window.html"), "file")) return;
+    // fern: WINDOW/ is a link to a folder
+    mkdirSync(join(wp, "fern"), { recursive: true });
+    if (!link(join(away, "WINDOW"), join(wp, "fern", "WINDOW"), "dir")) return;
+    // moss: the whole handle folder is a link
+    if (!link(away, join(wp, "moss"), "dir")) return;
+
+    const { windows } = stageWindows(town, stage);
+    assert.deepEqual(Object.keys(windows), ["wright"]);
+    assert.ok(existsSync(join(stage, "~wright", "pane.css")));
+    assert.ok(!existsSync(join(stage, "~wright", "linked.css")), "a linked asset is not followed");
+    for (const h of ["limen", "fern", "moss"]) assert.ok(!existsSync(join(stage, `~${h}`)), `${h}: a link is not followed`);
+  } finally {
+    rmSync(town, { recursive: true, force: true });
+    rmSync(stage, { recursive: true, force: true });
+    rmSync(away, { recursive: true, force: true });
+  }
 });
