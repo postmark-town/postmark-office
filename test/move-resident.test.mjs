@@ -28,6 +28,9 @@
 //       then another ceremony's drain prints the move; the rerun still corrects
 //       the card and berth and writes the key line once, never moving the store
 //   M5c the same for a resident with no sealed line naming the source
+//   M5d a rekey is not a move: a renamed target's former key refuses by name
+//   M5e no history, no guess: a shallow clone refuses by name, writing nothing
+//   M5f a resumed card naming neither house refuses before any write
 //   M6  the transaction re-reads under its lock: a house that changed since the
 //       plan refuses, and rolls back
 //   M6b an invitation credit that appears after the plan refuses under the lock
@@ -51,6 +54,7 @@ import { notLandedError, penTransaction, penCommit } from "../src/write.mjs";
 import { collectingDrain } from "../src/ceremony.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 import { moveResident, planMove, describe, main, MOVE_REFUSALS } from "../tools/move-resident.mjs";
+import { rekeyHousehold } from "../tools/rekey-household.mjs";
 
 const TOWN = townClone();
 const HAS_ENGINE = Boolean(TOWN) && existsSync(join(TOWN, "tools", "household-keys.mjs"));
@@ -392,9 +396,68 @@ test("M5c · the same, for a resident who still mints under their human's gh:<id
   assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "moss", "ADDRESS.md"), "utf8"), /^household: Harbor Lights$/m);
   assert.deepEqual(registryLines(t.dir), [KEYED[0], `- ${D} · registry: moss = hh:harbor-lights`], "one key line");
   assert.deepEqual(VERIFY.verifyStampLedger(t.dir).problems ?? [], []);
-  // a resident of the target who was never moved there is not "resumed"
+  // lamp, keyed hh:harbor-lights by a sealed line, is simply a resident there (a gh:-keyed one is M5d's)
   await assert.rejects(withPen(t, () => moveResident({ handle: "lamp", to: "harbor-lights", clone: t.dir, date: D, ...NO_WRITERS })),
     (e) => e.defect === MOVE_REFUSALS.SAME_HOUSE.defect);
+});
+
+test("M5d · A REKEY IS NOT A MOVE (second review, finding 1): a gh:-keyed resident of a renamed target refuses by name, signing nothing", { skip: SKIP }, async () => {
+  const houses = { "harbor-old": { ...HOUSES()["harbor-lights"], name: "Harbor Old" }, zeds: HOUSES().zeds };
+  const t = await town({ houses, ledger: [] });
+  // the target is re-keyed by the real tool: harbor-old -> harbor-lights, formerly ["harbor-old"]; lamp has no sealed line
+  const rekeyed = await withPen(t, () => rekeyHousehold({ from: "harbor-old", to: "harbor-lights", name: "Harbor Lights", clone: t.dir, date: D }));
+  assert.match(rekeyed.commit, /^[0-9a-f]{40}$/);
+  assert.deepEqual(rekeyed.ledger, [], "lamp has no sealed line, so the rekey signed none");
+  const before = await storeRows();
+  const h0 = head(t.dir);
+  const lines = registryLines(t.dir);
+  for (const dryRun of [true, false])
+    await assert.rejects(withPen(t, () => moveResident({ handle: "lamp", to: "harbor-lights", clone: t.dir, date: D, dryRun, ...NO_WRITERS })),
+      (e) => e.defect === MOVE_REFUSALS.NO_MOVE_EVIDENCE.defect && /harbor-old beside harbor-lights/.test(e.detail), `dry run ${dryRun}`);
+  assert.deepEqual(registryLines(t.dir), lines, "no signed line");
+  assert.deepEqual(await storeRows(), before);
+  assert.equal(head(t.dir), h0);
+  assert.ok(clean(t.dir));
+});
+
+test("M5e · NO HISTORY, NO GUESS (second review, finding 2): a shallow clone after another drain refuses by name, with no stranded card and no signed line", { skip: SKIP }, async () => {
+  const t = await town({ berth: true });
+  await assert.rejects(stall(t), (e) => e.code === 503);
+  await otherDrainLands(t.dir);
+  const shallowDir = mkdtempSync(join(tmpdir(), "pm-move-resident-shallow-"));
+  dirs.push(shallowDir);
+  execFileSync("git", ["clone", "-q", "--depth", "1", `file://${t.dir}`, join(shallowDir, "town")], { encoding: "utf8" });
+  const shallow = join(shallowDir, "town");
+  const before = await storeRows();
+  const h0 = head(shallow);
+  const lines = registryLines(shallow);
+  await assert.rejects(withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: shallow, date: D, ...NO_WRITERS })),
+    (e) => e.defect === MOVE_REFUSALS.NO_MOVE_EVIDENCE.defect && /a shallow clone may not reach it/.test(e.detail));
+  assert.deepEqual(registryLines(shallow), lines, "no signed completion");
+  assert.equal(head(shallow), h0);
+  assert.ok(clean(shallow), "no file written");
+  assert.deepEqual(await storeRows(), before);
+  // the full clone, which holds the history, still resumes: the genuine interrupted move is not lost
+  const full = await withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, dryRun: true, ...NO_WRITERS }));
+  assert.equal(full.plan.from, "new-nook");
+});
+
+test("M5f · A RESUMED CARD MUST MATCH (second review, finding 2): a household line naming neither house refuses, naming the card, before any write", { skip: SKIP }, async () => {
+  const t = await town();
+  await assert.rejects(stall(t), (e) => e.code === 503);
+  await otherDrainLands(t.dir);
+  const card = join(t.dir, "WHITE_PAGES", "moss", "ADDRESS.md");
+  writeFileSync(card, readFileSync(card, "utf8").replace("household: New Nook", "household: Our Little Cottage"));
+  git(t.dir, "commit", "-qam", "moss's own words");
+  const before = await storeRows();
+  const h0 = head(t.dir);
+  const lines = registryLines(t.dir);
+  await assert.rejects(withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, ...NO_WRITERS })),
+    (e) => e.defect === MOVE_REFUSALS.CARD_UNMATCHED.defect && e.detail === "WHITE_PAGES/moss/ADDRESS.md: household: Our Little Cottage");
+  assert.deepEqual(registryLines(t.dir), lines, "the key line is not written, so nothing marks the act complete");
+  assert.equal(head(t.dir), h0);
+  assert.ok(clean(t.dir));
+  assert.deepEqual(await storeRows(), before);
 });
 
 // ── M6 the lock ─────────────────────────────────────────────────────────────

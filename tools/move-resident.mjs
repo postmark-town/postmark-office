@@ -50,12 +50,15 @@
 // drain may then print the move before this act publishes. Running the same
 // command again decides from durable facts alone (planMove § RESUMING): the
 // store holds the resident in the target, and the sealed ledger does not yet
-// key them `hh:<target>`. It then finishes each missing step, each a no-op
-// where already done: the drain, the card (named against the source's last
-// printed name, from the printout's git history), and the key line, planned
-// from the clone's own ledger so it is never written twice. Only once the
-// ledger keys the resident to the target does a run refuse (`SAME_HOUSE`)
-// and write nothing.
+// key them `hh:<target>`; and it resumes only on evidence of this move, a
+// printout that shows the source beside the target holding the resident (a
+// rename never prints one). It then finishes each missing step, each a no-op
+// where already done: the drain, the card (matched against that printout's
+// source name, and refused by name if it names neither house), and the key
+// line, planned from the clone's own ledger so it is never written twice. No
+// evidence, more than one source, or a card it cannot match refuses and writes
+// nothing. Only once the ledger keys the resident to the target does a run
+// refuse `SAME_HOUSE`.
 
 import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -77,6 +80,9 @@ export const MOVE_REFUSALS = Object.freeze({
   NO_TARGET: { code: 404, defect: "no household stands at --to" },
   NOT_HOUSED: { code: 404, defect: "--handle lives in no household" },
   SAME_HOUSE: { code: 409, defect: "--handle already lives in --to, and no house it left is waiting to be published" },
+  NO_MOVE_EVIDENCE: { code: 409, defect: "--handle lives in --to, but nothing this clone holds shows this tool moved them there — nothing was written" },
+  AMBIGUOUS: { code: 409, defect: "more than one former house of --to shows --handle moved from it — a person reads them; nothing was written" },
+  CARD_UNMATCHED: { code: 409, defect: "a card of --handle names a household that is neither --to nor the house they left — a person reads it; nothing was written" },
   NOT_EMPTY: { code: 409, defect: "the household --handle leaves has other residents: this tool retires only a house that the move leaves empty" },
   CREDIT: { code: 409, defect: "the household --handle leaves carries an invitation credit (invited_by): moving or dropping it is a payout ruling, not this tool's" },
   COLLATERAL: { code: 409, defect: "printing the registry would change more than the two households — the town's files are behind the store elsewhere; run the registry drain first" },
@@ -92,21 +98,24 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 const gitOut = (clone, args) => execFileSync("git", ["-C", clone, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
 
 /**
- * A house as the town's printout last showed it, read from the printout's own
- * git history: the latest commit that added or removed its `"<slug>": {` line,
- * and that commit's parent when it was the removal. Later drains never rewrite
- * history, so this survives them. Null when the clone never printed it.
+ * The households of the LAST printout that still held `slug`: the clone's file
+ * when it holds it, else the version just before the commit that removed its
+ * `"<slug>": {` line, read from the printout's own git history (which later
+ * drains never rewrite). Null when the clone holds no such version (it never
+ * printed the house, or a shallow clone does not reach back that far).
  */
-export function lastPrintedHouse(clone, slug) {
+export function lastPrintedHolding(clone, slug) {
   if (!SLUG_RE.test(slug)) return null;
+  const now = filesHouses(clone);
+  if (now[slug]) return now;
   let rev;
   try { rev = gitOut(clone, ["log", "-n", "1", "--format=%H", "-G", `^    "${slug}": `, "--", REGISTRY_PATH]); } catch { return null; }
   if (!rev) return null;
   for (const r of [rev, `${rev}^`]) {
     try {
-      const house = JSON.parse(gitOut(clone, ["show", `${r}:${REGISTRY_PATH}`])).households?.[slug];
-      if (house) return house;
-    } catch { /* the parent of a root commit, or a file that did not parse there */ }
+      const houses = JSON.parse(gitOut(clone, ["show", `${r}:${REGISTRY_PATH}`])).households ?? {};
+      if (houses[slug]) return houses;
+    } catch { /* the parent of a root or shallow commit, or a file that did not parse there */ }
   }
   return null;
 }
@@ -139,14 +148,19 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
   // one to land after a stalled publication erases the source's printed row.
   //   · sealed `hh:<to>`: the key line rode the act's one commit beside the
   //     card, so the publication is complete; nothing to do (SAME_HOUSE);
-  //   · otherwise the move's publication is unfinished. The house it came from
-  //     is a former key of the target the store no longer has: the one the
-  //     sealed line names (`hh:<source>`), or, for a resident who still mints
-  //     under their human's `gh:<id>` and so has no such line, the one the
-  //     town's printout last showed holding them (its git history, which later
-  //     drains do not rewrite). Its display name comes from that history too,
-  //     the store having retired the row.
-  //   · a resident of the target with no such house was never moved here.
+  //   · otherwise a candidate source is a former key of the target the store no
+  //     longer has: the one the sealed line names (`hh:<source>`), or, for a
+  //     resident who still mints under their human's `gh:<id>` and so has no
+  //     such line, any of them.
+  //   · A CANDIDATE IS RESUMED ONLY ON EVIDENCE OF THIS MOVE (the second review
+  //     of #985, finding 1): the last printout that still held it shows it
+  //     standing BESIDE the target and holding the resident, whom the target did
+  //     not hold. A move prints that version (the source retires after the
+  //     target already stood); a rename never does (the old key and the new
+  //     one never stand together). The source's display name comes from that
+  //     same version. No such version (a rename, a resident never moved here,
+  //     or a clone too shallow to reach it) refuses by name, as does more than
+  //     one: nothing is written and no line is signed on a guess.
   const resuming = (target.residents ?? []).includes(handle);
   let from, source;
   if (resuming) {
@@ -154,14 +168,17 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
     if (sealed === `hh:${to}`) throw refuse(MOVE_REFUSALS.SAME_HOUSE, `${handle} lives in ${to}, and the ledger keys them there`);
     const gone = (target.formerly ?? []).filter((s) => !byslug.has(s) && SLUG_RE.test(s));
     const named = sealed?.startsWith("hh:") ? sealed.slice(3) : null;
-    let printedAs = null;
-    if (named && gone.includes(named)) { from = named; printedAs = lastPrintedHouse(clone, named); }
-    else if (!sealed?.startsWith("hh:")) {
-      const held = gone.map((s) => [s, lastPrintedHouse(clone, s)]).filter(([, h]) => (h?.residents ?? []).includes(handle));
-      if (held.length === 1) [from, printedAs] = held[0];
-    }
-    if (!from) throw refuse(MOVE_REFUSALS.SAME_HOUSE, `${handle} lives in ${to}; the ledger keys them ${sealed ?? "under their human's account"}, and no former house of ${to} held them`);
-    source = { slug: from, residents: [handle], name: printedAs?.name ?? null };
+    const candidates = named ? gone.filter((s) => s === named) : gone;
+    const proven = candidates.map((s) => [s, lastPrintedHolding(clone, s)]).filter(([s, houses]) =>
+      houses?.[to] && (houses[s]?.residents ?? []).includes(handle) && !(houses[to].residents ?? []).includes(handle));
+    if (!proven.length)
+      throw refuse(MOVE_REFUSALS.NO_MOVE_EVIDENCE, `${handle} lives in ${to}; the ledger keys them ${sealed ?? "under their human's account"}; `
+        + (candidates.length ? `no printout this clone holds shows ${candidates.join(" or ")} beside ${to} holding ${handle} (a rename never does; a shallow clone may not reach it)`
+          : `${to} has no retired former key${named ? ` named ${named}` : ""}`));
+    if (proven.length > 1) throw refuse(MOVE_REFUSALS.AMBIGUOUS, proven.map(([s]) => s).join(", "));
+    const [[slug, houses]] = proven;
+    from = slug;
+    source = { slug: from, residents: [handle], name: houses[from].name ?? null };
   } else {
     source = rows.households.find((r) => (r.residents ?? []).includes(handle)) ?? null;
     if (!source) throw refuse(MOVE_REFUSALS.NOT_HOUSED, handle);
@@ -198,6 +215,14 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
   const cards = [];
   for (const rel of [`WHITE_PAGES/${handle}/ADDRESS.md`, `HARBOR/berths/${handle}.md`]) {
     const text = read(clone, rel);
+    // A RESUMED CARD MUST BE MATCHABLE (the second review of #985, finding 2): a
+    // `household:` line naming neither the target nor the house they left would
+    // be left stale while the key line marks the act complete, so it refuses here,
+    // before anything is written. (A first run leaves such a line as the
+    // resident's own words, as rekey-household does.)
+    const said = text == null ? null : frontHouseLine(text);
+    if (resuming && said != null && said !== name && !oldValues.includes(said))
+      throw refuse(MOVE_REFUSALS.CARD_UNMATCHED, `${rel}: household: ${said}`);
     const next = text == null || !oldValues.length ? null : withHouseLine(text, { oldValues, name });
     if (next != null && next !== text) cards.push({ path: rel, before: houseLineOf(text), after: houseLineOf(next), content: next });
   }
@@ -223,6 +248,11 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
 
 const pick = (r) => ({ residents: r.residents ?? [], accounts: r.accounts ?? [], formerly: r.formerly ?? [], home_images: r.home_images ?? {} });
 const houseLineOf = (text) => /^household:[ \t]*(.*)$/m.exec(String(text ?? ""))?.[1]?.trim() ?? null;
+/** The frontmatter's `household:` value, read as withHouseLine reads it, or null. */
+const frontHouseLine = (text) => {
+  const fm = /^(---\r?\n)([\s\S]*?)(\r?\n---)/.exec(text);
+  return fm ? (/^household:[ \t]*(.*)$/m.exec(fm[2])?.[1]?.trim() ?? null) : null;
+};
 
 // ── the act ─────────────────────────────────────────────────────────────────
 
