@@ -95,7 +95,10 @@ elif [ "$FROM_S3" = true ]; then
   [ -n "${W2_S3_BUCKET:-}" ] || { echo "--from-s3 needs W2_S3_BUCKET" >&2; exit 2; }
   command -v aws >/dev/null 2>&1 || { echo "--from-s3 needs the aws CLI" >&2; exit 2; }
   TMPCLONE="$(mktemp -d /tmp/w2-restore-XXXXXX)"
-  NIGHT="$(aws s3 ls "s3://$W2_S3_BUCKET/world2/" 2>/dev/null | awk '$1 == "PRE" { sub("/$", "", $2); print $2 }' | sort | tail -n1)"
+  # The newest night is a plain string sort, which is time order only because world2-backup.sh's $STAMP is
+  # fixed-width UTC (%Y%m%dT%H%M%SZ). So only prefixes of exactly that shape count: a stray prefix (a letter
+  # sorts after every digit) can never be taken for the newest night (Wright's check, STAR-118, 11-05).
+  NIGHT="$(aws s3 ls "s3://$W2_S3_BUCKET/world2/" 2>/dev/null | awk '$1 == "PRE" { sub("/$", "", $2); print $2 }' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort | tail -n1)"
   [ -n "$NIGHT" ] || { echo "no night under s3://$W2_S3_BUCKET/world2/ — the S3 copy could not be found, which IS the finding" >&2; exit 1; }
   say "== copy the S3 night s3://$W2_S3_BUCKET/world2/$NIGHT/"
   aws s3 cp --recursive --only-show-errors --no-progress "s3://$W2_S3_BUCKET/world2/$NIGHT/" "$TMPCLONE/s3/" || {
