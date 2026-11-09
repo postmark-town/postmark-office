@@ -2643,14 +2643,14 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
       try {
         const { actsQuery } = await import("./world2-acts.mjs");
         fled = await readFleeRows(who, (sql, params) => actsQuery(sql, params));
-      } catch (e) { fledUnread = String(e?.message ?? e).slice(0, 160); }
+      } catch (e) { fledUnread = plainReason(e, "record", "the exit record"); faultLogged("a resident's recorded flee could not be read for their happened", e); }
       // whenever the law is read here, an empty fold included: a since older than
       // the fold's reach is then said incomplete rather than silently whole (review-574 C1)
       if (cur?.living)
         creatureEffects = creatureToYou(cur, who, { sinceMs, fled });
       else if (fled.length) creatureEffects = { events: fleeEventsOf(fled, { sinceMs, nowMs: Date.now() }), readable: true };
       if (fledUnread && creatureEffects?.readable !== false)
-        creatureEffects = { events: creatureEffects?.events ?? [], readable: false, missing: "your flee at 0 nerve", reason: `the exit record could not be read (${fledUnread})` };
+        creatureEffects = { events: creatureEffects?.events ?? [], readable: false, missing: "your flee at 0 nerve", reason: `the exit record could not be read (${fledUnread}): this is not an answer about whether you fled` };
     } catch { creatureEffects = null; }
 
     const block = happenedBlock({
