@@ -250,6 +250,39 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "deploying $TAG @ $SHA"
 
+      # ── the rollback guard (POS-971) ────────────────────────────────────────
+      # 2026-11-09 01:28Z: a release tag cut by hand at an old commit (4a823b9f,
+      # from before w46) was pushed, and this workflow deployed it; prod ran the
+      # old code for about 1m10s until w46.1 was redeployed by dispatch. A push
+      # (the train's own cut, or a tag pushed by hand) now deploys only a commit
+      # that descends from the one prod runs. workflow_dispatch is the deliberate
+      # way back and is not measured. Every push targets prod (the lane step), so
+      # dev is never measured here: only a dispatch reaches dev.
+      #
+      # This step runs from the TAG's own copy of this file, so a tag cut before
+      # it existed never runs it. The half that stops those is on the box:
+      # remote-deploy.sh comes from main on every run, old workflows included,
+      # and its preflight refuses a caller that does not pass the sha and event.
+      - name: The rollback guard (POS-971)
+        if: steps.lane.outputs.deploy == 'true' && github.event_name != 'workflow_dispatch'
+        env:
+          TAG: ${{ steps.pin.outputs.tag }}
+          SHA: ${{ steps.pin.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Only the top-level sha of a stamped office: /release also carries
+          # law.sha and world_graph.office_sha, and an unstamped office has none.
+          LIVE=""
+          if body=$(curl -fsS --max-time 10 https://postmark.town/api/release); then
+            LIVE=$(printf '%s' "$body" | node -e '
+              let raw = ""; process.stdin.on("data", (d) => { raw += d; });
+              process.stdin.on("end", () => { let s; try { s = JSON.parse(raw); } catch { return; }
+                if (s && s.deployed === true && typeof s.sha === "string") process.stdout.write(s.sha); });
+            ') || LIVE=""
+          fi
+          echo "prod runs ${LIVE:-<unreadable>}; this run brings $TAG @ $SHA"
+          bash deploy/release-guard.sh "$SHA" "$LIVE"
+
       # ── the payload: exactly the tag's tracked tree ─────────────────────────
       # `git archive` rather than the checked-out working tree, so nothing the
       # runner happened to create can ride along. This is the "FROM THE TAG"
@@ -370,16 +403,22 @@ jobs:
           ROOT: ${{ steps.lane.outputs.root }}
           SERVICE: ${{ steps.lane.outputs.service }}
           PORT: ${{ steps.lane.outputs.port }}
+          SHA: ${{ steps.pin.outputs.sha }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # Run-unique path: dev and prod live in DIFFERENT concurrency groups and
           # can therefore be in flight at the same time. A fixed /tmp name would
           # let one run's script be overwritten under the other's feet.
+          #
+          # The sha and event are the rollback guard's box-side half (POS-971):
+          # preflight refuses a call without them, which is every workflow older
+          # than the guard.
           REMOTE="/tmp/postmark-remote-deploy.${{ github.run_id }}.sh"
           echo "REMOTE_SCRIPT=$REMOTE" >> "$GITHUB_ENV"
           SSH="ssh -i $HOME/.ssh/deploy_key -o BatchMode=yes"
           scp -i ~/.ssh/deploy_key -o BatchMode=yes remote-deploy.sh "$USER@$HOST:$REMOTE"
-          $SSH "$USER@$HOST" "chmod +x '$REMOTE' && '$REMOTE' preflight '$ROOT' '$SERVICE' '$PORT'"
+          $SSH "$USER@$HOST" "chmod +x '$REMOTE' && '$REMOTE' preflight '$ROOT' '$SERVICE' '$PORT' '$SHA' '$EVENT'"
 
       # ── the copy ────────────────────────────────────────────────────────────
       # As the deploy user, never through sudo. deploy/DEPLOY.md § The one-hand

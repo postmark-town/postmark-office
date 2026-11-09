@@ -46,13 +46,22 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # USAGE
-#   remote-deploy.sh preflight <root> <service> <port>
+#   remote-deploy.sh preflight <root> <service> <port> <sha> <event>
 #   remote-deploy.sh apply     <root> <service> <port> <tag> <sha>
 #
 # Preflight runs BEFORE the rsync on purpose. Every reason a deploy can fail for
 # permissions is knowable before a single byte is copied, and finding out
 # afterwards is how you end up with new code on disk and the old process serving
 # it — the one state worse than not deploying at all.
+#
+# THE ROLLBACK GUARD'S BOX-SIDE HALF (POS-971). A tag push runs the workflow file
+# as it stands in the tagged commit, so a tag cut at an old commit runs an old
+# workflow, one with no rollback guard (2026-11-09 01:28Z: 4a823b9f, from before
+# w46, deployed to prod for about 1m10s). Every version of that workflow takes
+# THIS script from main and runs preflight before a byte moves, and none before
+# POS-971 passes <sha> and <event>. So preflight refuses a call without them,
+# first, before any box check: the run that makes it predates the guard and
+# cannot be checked against what is live.
 
 set -euo pipefail
 
@@ -66,7 +75,14 @@ say() { echo "  $*"; }
 
 # ── preflight ────────────────────────────────────────────────────────────────
 if [ "$MODE" = "preflight" ]; then
+  BRINGS="${5:-}"
+  EVENT="${6:-}"
+  [ -n "$BRINGS" ] && [ -n "$EVENT" ] \
+    || die "this run's workflow predates the rollback guard (POS-971): it calls preflight without the commit it brings, so that commit cannot be checked against what is live. A release tag cut at an old commit runs its own old workflow, and this is where it stops. To deploy on purpose, run release-train.yml by workflow_dispatch from main, naming the tag."
+  [[ "$BRINGS" =~ ^[0-9a-f]{40}$ ]] \
+    || die "preflight was handed '$BRINGS' as the commit this run brings; the rollback guard (POS-971) needs the full 40-character sha."
   echo "== preflight: $SERVICE at $ROOT (loopback :$PORT) =="
+  say "brings $BRINGS ($EVENT)"
 
   [ -d "$ROOT" ] || die "$ROOT does not exist on this box. This deploy does not create an office; the one-time setup in deploy/DEPLOY.md does."
   [ -d "$ROOT/src" ] || die "$ROOT/src is missing — this does not look like an office tree."
