@@ -151,7 +151,7 @@ const NO_WRITERS = { owner: NEVER("the owner's connection"), move: NEVER("the st
 
 // ── M1 the dry run ──────────────────────────────────────────────────────────
 
-test("M1 · the dry run names every row and file the move would touch, and reaches no store, file or Git writer", { skip: SKIP }, async () => {
+test("M1 · the dry run names every row and file the move would touch, and reaches no store, file or Git writer", { skip: SKIP }, async (tc) => {
   const t = await town({ berth: true });
   const before = await storeRows();
   const h0 = head(t.dir);
@@ -181,13 +181,18 @@ test("M1 · the dry run names every row and file the move would touch, and reach
   assert.equal(head(t.dir), h0);
   assert.ok(clean(t.dir), "no file in the clone changed");
 
-  // the printed dry run names each of them
+  // the printed dry run names each of them; the synthetic example for the tool look is this text
   const text = describe(plan, { dryRun: true });
+  for (const line of text.split("\n")) tc.diagnostic(`dry-run | ${line}`);
   for (const s of ["DRY RUN — nothing written.", "pin: household_pins moss — unchanged", "UPDATE households harbor-lights:",
     'residents   ["lamp"] -> ["lamp","moss"]', "DELETE households new-nook (its only resident is moss)", "tools/households.json: new-nook leaves the printout",
     "tools/github-ids.json: unchanged", "WHITE_PAGES/moss/ADDRESS.md: household: New Nook -> Harbor Lights", "HARBOR/berths/moss.md: household: new-nook -> Harbor Lights",
     `- ${D} · registry: moss = hh:harbor-lights · sig: <the office pen>`])
     assert.ok(text.includes(s), `the dry run says: ${s}\n${text}`);
+  // the human's own name is never printed (the public registry keeps it out too)
+  const withHuman = describe({ ...plan, store: { ...plan.store, retire: { ...plan.store.retire, row: { ...plan.store.retire.row, human: "Some Private Name" } } } }, { dryRun: true });
+  assert.doesNotMatch(withHuman, /Some Private Name/);
+  assert.match(withHuman, /"human":"\(set; private, not printed\)"/);
 });
 
 test("M1b · the command's --dry-run, as the operator runs it, prints the plan and writes nothing", { skip: SKIP }, async () => {

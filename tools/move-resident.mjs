@@ -239,7 +239,9 @@ export function describe(plan, { dryRun }) {
     out.push(`    formerly    ${JSON.stringify(before.formerly)} -> ${JSON.stringify(after.formerly)}`);
     out.push(`    home_images ${JSON.stringify(Object.keys(before.home_images))} -> ${JSON.stringify(Object.keys(after.home_images))}`);
     out.push(`  DELETE households ${plan.from} (its only resident is ${plan.handle}); the row as it stands:`);
-    out.push(`    ${JSON.stringify(plan.store.retire.row)}`);
+    // the human's own name stays out of the print, as the public registry keeps it out (POS-394)
+    const { human, ...row } = plan.store.retire.row;
+    out.push(`    ${JSON.stringify(human == null ? row : { ...row, human: "(set; private, not printed)" })}`);
     out.push(`  rows spelled hh:${plan.from} or its accounts' gh:<id> keep their spelling; ${plan.to}'s spelling set carries them`);
   } else out.push("store: no change (already moved)");
   out.push(`town files (one pen commit):`);
