@@ -82,7 +82,8 @@ const PUBLIC_HOUSE_KEYS = Object.freeze([
 const PUBLIC_PIN_KEYS = Object.freeze(["login", "id", "pinned", "renamed", "note", "retired", "renamed_to"]);
 const PUBLIC_ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 const PUBLIC_LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "words"]);
-const PUBLIC_INVITED_BY_KEYS = Object.freeze(["by", "named", "at"]);
+// `backfill` (POS-947): a credit named after joining says so in public, and the town's judge reads it (its pay clock and cap differ)
+const PUBLIC_INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
 
 // The named house keys that are jsonb and cut by `cut`, and which of an object's keys may ride in each.
 // `accounts` and `home_images` have shapes of their own (`publicAccounts`, `publicHomeImages`).
