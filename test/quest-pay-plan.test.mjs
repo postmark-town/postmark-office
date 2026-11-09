@@ -304,8 +304,8 @@ test("hearth: the rows: once per household, the house's first resident who is no
   assert.match(by["hearth:fox-hearth-2"].why, /^duplicate: the household's hearth:fox-hearth is the one paid/);
   assert.deepEqual([by["hearth:lone-wolf"].why, by["hearth:lone-wolf"].handle, by["hearth:lone-wolf"].household], ["owed", "wolf", "gh:30"]);
   assert.match(by["hearth:broken"].why, /^not an entry: no hearth\.html/);
-  assert.match(by["hearth:default"].why, /^unbound: the author "postmark" is no household with a resident here/, "the town's own designs pay no one");
-  assert.match(by["hearth:ghost"].why, /^unbound: the author "ghost-house" is no household with a resident here/, "a household with no resident who has a room");
+  assert.match(by["hearth:default"].why, /^unbound: the author "postmark" is no resident here and no household with a resident here/, "the town's own designs pay no one");
+  assert.match(by["hearth:ghost"].why, /^unbound: the author "ghost-house" is no resident here and no household with a resident here/, "a household with no resident who has a room");
   assert.match(by["hearth:nameless"].why, /^unbound: its hearth\.md names no author/);
   assert.equal(rows.filter((r) => r.owed).reduce((s, r) => s + r.n, 0), 20, "LAW: 10 a household, two households");
   assert.equal(by["hearth:fox-hearth"].line, hLineOf({ date: "2026-11-14", handle: "alden", quest: HQ, household: "gh:20" }));
@@ -358,6 +358,45 @@ test("hearth: the pass refuses a --discussion, and takes a hearth ref in --rejec
   assert.match(out.join("\n"), /no tools\/stamp-mint\.mjs/);
 });
 
+// The author line (Truey's FIX on #995 at ebe968a). The README said "author
+// (you)", and on the real roll most residents' handles are not their
+// household's slug; three handles (moth, mari, ember) are another household's
+// slug. Synthetic names, the same shapes:
+//   corwin — a housemate's handle, not a slug (alden's case on the real roll)
+//   wisp   — a resident of the-burrow AND the slug of another household (moth's)
+//   lone-wolf — a house of one named after its only resident: both readings, one house
+//   drifter — a resident with a room and no line in the roll
+const AROLL = {
+  "fox-hearth": { residents: ["fox-meep", "alden", "corwin"] },
+  "the-burrow": { residents: ["wisp", "bramble"] },
+  wisp: { residents: ["glow"] },
+  "lone-wolf": { residents: ["lone-wolf"] },
+};
+const AKEYS = { "fox-meep": "gh:20", alden: "gh:20", corwin: "gh:20", wisp: "gh:40", bramble: "gh:40", glow: "gh:41", "lone-wolf": "gh:30", drifter: "solo:drifter" };
+const aHouseOf = housesFromRoll(AROLL, { keyOf: (h) => AKEYS[h], hasRoom: (h) => h in AKEYS, date: "2026-11-14" });
+const aRows = (authors) => planQuestPays({ items: hearthItems(authors.map((a, i) => E(`e${i}-${a}`, a, "2026-11-12")), { source: HSOURCE }), quest: HQ, terms: HTERMS,
+  houseOf: aHouseOf, isMeep: (h) => h === "fox-meep", lineOf: hLineOf, date: "2026-11-14" });
+
+test("hearth: the author line takes a resident's handle (that household, the author paid) or a household's slug", () => {
+  const [byHandle, bySlug, solo] = aRows(["corwin", "the-burrow", "drifter"]);
+  assert.deepEqual([byHandle.why, byHandle.handle, byHandle.household], ["owed", "corwin", "gh:20"], "a housemate's handle pays its own household, to the author (alden's case)");
+  assert.deepEqual([bySlug.why, bySlug.handle, bySlug.household], ["owed", "wisp", "gh:40"], "a slug pays the household's first resident who is not a meep");
+  assert.deepEqual([solo.why, solo.handle, solo.household], ["owed", "drifter", "solo:drifter"], "a resident with a room and no line in the roll is its own house");
+  assert.match(aRows(["fox-hearth"])[0].why, /^owed$/);
+  assert.equal(aRows(["fox-hearth"])[0].handle, "alden", "the slug still skips the meep listed first");
+});
+
+test("hearth: a handle that is also another household's slug is ambiguous and pays nothing; a house of one named after its resident pays", () => {
+  const [wisp, glow, wolf] = aRows(["wisp", "glow", "lone-wolf"]);
+  assert.deepEqual([wisp.owed, wisp.n, wisp.why], [false, 0, 'ambiguous: "wisp" is a household\'s slug and the handle of a resident of another household; a hand decides'],
+    "moth's case: never paid to either house without a hand");
+  assert.deepEqual([glow.why, glow.handle, glow.household], ["owed", "glow", "gh:41"], "the slug wisp's own resident, by handle, is paid");
+  assert.deepEqual([wolf.why, wolf.handle, wolf.household], ["owed", "lone-wolf", "gh:30"], "both readings name one household: no ambiguity (Wright, 2026-11-09)");
+  // an ambiguous row never holds the house: the-burrow's next entry, by a plain handle, is the one paid
+  const held = aRows(["wisp", "bramble"]);
+  assert.deepEqual(held.map((r) => [r.owed, r.handle ?? null]), [[false, null], [true, "bramble"]]);
+});
+
 // The entries, read from a real git history: a throwaway town repo whose main
 // takes one entry by a merge commit and one by a direct commit, plus the
 // infrastructure folder, a folder with no hearth.html and an uncommitted one.
@@ -387,20 +426,36 @@ function hearthTown() {
   put(`${H}/lone-wolf/hearth.html`, "<hearth-house></hearth-house>\n");
   put(`${H}/lone-wolf/hearth.md`, "---\nauthor: lone-wolf\n---\nOne wolf.\n");
   g(["add", "."]); g(["commit", "-q", "-m", "lone-wolf: a Hearth (#8)"], "2026-11-12T15:00:00Z");
+  const merge = g(["rev-parse", "HEAD~1"]).trim();
+  const direct = g(["rev-parse", "HEAD"]).trim();
+  // a later PR rewrites fox-hearth's author line: the row shows the merge, so the author is read there
+  put(`${H}/fox-hearth/hearth.md`, "---\ntitle: The den\nauthor: thief-house\n---\nA den in the snow.\n");
+  g(["add", "."]); g(["commit", "-q", "-m", "a later PR: fox-hearth's author line"], "2026-11-13T12:00:00Z");
+  // an entry whose hearth.css is a link (mode 120000), staged by index so no filesystem link is needed
+  put(`${H}/linked/hearth.html`, "<hearth-house></hearth-house>\n");
+  put(`${H}/linked/hearth.md`, "---\nauthor: lone-wolf\n---\nA linked style.\n");
+  g(["add", `${H}/linked/hearth.html`, `${H}/linked/hearth.md`]);
+  const target = execFileSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], { encoding: "utf8", input: "../lone-wolf/hearth.css" }).trim();
+  g(["update-index", "--add", "--cacheinfo", `120000,${target},${H}/linked/hearth.css`]);
+  g(["commit", "-q", "-m", "linked: a Hearth with a linked style"], "2026-11-13T16:00:00Z");
   put(`${H}/drafty/hearth.html`, "<hearth-house></hearth-house>\n"); // never committed: not on main
-  return { dir, merge: g(["rev-parse", "HEAD~1"]).trim(), direct: g(["rev-parse", "HEAD"]).trim() };
+  return { dir, merge, direct };
 }
 
 test("hearth: the entries come from the town's main: a folder with hearth.html, not in capitals, dated by the commit that merged it, in the town's time", () => {
   const { dir, merge, direct } = hearthTown();
   try {
     const got = hearthEntries(dir, HSOURCE);
-    assert.deepEqual(got.map((e) => e.id), ["broken", "default", "fox-hearth", "lone-wolf"], "STARTER is infrastructure; drafty was never committed");
+    assert.deepEqual(got.map((e) => e.id), ["broken", "default", "fox-hearth", "linked", "lone-wolf"], "STARTER is infrastructure; drafty was never committed");
     const by = Object.fromEntries(got.map((e) => [e.id, e]));
     assert.match(by.broken.problem, /^not an entry: no hearth\.html/);
-    assert.deepEqual([by["fox-hearth"].author, by["fox-hearth"].line, by["fox-hearth"].date, by["fox-hearth"].commit, by["fox-hearth"].subject],
-      ["fox-hearth", "A den in the snow.", "2026-11-09", merge, "Merge pull request #7 from fox-hearth/hearth"],
+    assert.deepEqual([by["fox-hearth"].date, by["fox-hearth"].commit, by["fox-hearth"].subject],
+      ["2026-11-09", merge, "Merge pull request #7 from fox-hearth/hearth"],
       "the merge onto main, on its town day: not the branch commit's 11-07, and not 11-10 in UTC");
+    assert.deepEqual([by["fox-hearth"].author, by["fox-hearth"].line], ["fox-hearth", "A den in the snow."],
+      "the author at the merge the row shows, not thief-house from the later PR at HEAD");
+    assert.deepEqual([by.linked.problem, by.linked.author], ["not an entry: its hearth.css is not a plain file (the site refuses it and skips the whole entry)", undefined],
+      "a linked hearth.css: the site skips the entry, so the plan pays nothing");
     assert.deepEqual([by["lone-wolf"].date, by["lone-wolf"].commit], ["2026-11-12", direct]);
     assert.equal(by.default.author, "postmark");
     const rows = planQuestPays({ items: hearthItems(got, { source: HSOURCE }), quest: HQ, terms: HTERMS, houseOf: hHouseOf, isMeep: (h) => h === "fox-meep", lineOf: hLineOf, date: "2026-11-14" });

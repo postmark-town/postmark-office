@@ -82,17 +82,20 @@
 // clone's HEAD (its main), the way the site registers an entry
 // (postmark-site tools/sync-hearths.mjs): a folder PROJECTS/household-hearths/
 // <name>/ holding hearth.html, not named in capitals (STARTER is
-// infrastructure). Its hearth.md `author:` names the household, by its slug in
-// the town's tools/households.json; the residents with a room and the house's
-// key are its handles, and the first that is not a meep is paid. Its day is
-// the town day of the first-parent commit that brought its hearth.html to
-// main. An entry merged before the quest opened still pays once it is open (it
+// infrastructure), whose hearth.html, hearth.css and hearth.md are plain files.
+// Its day is the town day of the first-parent commit that brought its
+// hearth.html to main, and its hearth.md `author:` is read at that same commit.
+// The author line takes a resident's handle (that resident's household, the
+// author paid) or a household's slug in the town's tools/households.json (its
+// first resident who is not a meep paid); a string that is both, naming two
+// different households, pays nothing and is left to the hand (housesFromRoll).
+// An entry merged before the quest opened still pays once it is open (it
 // is an entry all the same); one merged after `until`, when that is set, does
 // not. A hand opens each owed entry before the apply (needs-review): the
 // household named must be the one that made it, or --reject hearth:<name>.
-// The rows add two reasons: "not an entry" (a folder with no hearth.html,
-// which the site skips too) and "unread" (the clone's history does not say
-// when it merged).
+// The rows add three reasons: "not an entry" (no hearth.html, or one of the
+// three files not plain, which the site skips too), "ambiguous" and "unread"
+// (the clone's history does not say when it merged).
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -170,19 +173,39 @@ export function hearthItems(entries, { source }) {
 }
 
 /**
- * item → { household (the town's key at `date`), handles } or null, for a Hearth
- * entry: its `author` is a household's slug in the town's tools/households.json
- * (`households`), and the house's residents with a room that hold the first
- * one's key are its handles. PURE.
+ * item → { household (the town's key at `date`), handles }, { refuse }, or null,
+ * for a Hearth entry. Its `author` is read two ways (Truey's FIX on #995: the
+ * README says "author (you)", and most residents' handles are not their
+ * household's slug):
+ *   · a resident's handle (one with a room): that resident's household, with
+ *     the author first among its handles, so the author is the one paid;
+ *   · a household's slug in the town's tools/households.json (`households`):
+ *     its residents with a room that hold the first one's key.
+ * Either alone is used. When both readings exist and name different
+ * households (a handle that is also another household's slug), it is
+ * { refuse }: ambiguous, left to the hand. When both name the same household
+ * (a house of one named after its only resident), it pays as usual (Wright,
+ * 2026-11-09). PURE.
  */
 export function housesFromRoll(households, { keyOf, hasRoom, date }) {
+  const roll = households && typeof households === "object" ? households : {};
+  const residentsOf = (slug) => (Object.hasOwn(roll, slug) && Array.isArray(roll[slug]?.residents) ? roll[slug].residents : []);
+  const slugOfHandle = new Map();
+  for (const slug of Object.keys(roll)) for (const h of residentsOf(slug)) if (!slugOfHandle.has(h)) slugOfHandle.set(h, slug);
+  // the house a set of residents makes, keyed by `lead`'s key (lead first among its handles)
+  const houseOf = (residents, lead) => {
+    const household = keyOf(lead, date);
+    return { household, handles: [lead, ...residents.filter((h) => h !== lead && keyOf(h, date) === household)] };
+  };
   return (item) => {
-    const slug = item?.author;
-    const rec = slug && households && Object.hasOwn(households, slug) ? households[slug] : null;
-    const residents = (Array.isArray(rec?.residents) ? rec.residents : []).filter(hasRoom);
-    if (!residents.length) return null;
-    const household = keyOf(residents[0], date);
-    return { household, handles: residents.filter((h) => keyOf(h, date) === household) };
+    const author = item?.author;
+    if (!author) return null;
+    const slugResidents = residentsOf(author).filter(hasRoom);
+    const bySlug = slugResidents.length ? houseOf(slugResidents, slugResidents[0]) : null;
+    const byHandle = hasRoom(author) ? houseOf(residentsOf(slugOfHandle.get(author) ?? "").filter(hasRoom), author) : null;
+    if (bySlug && byHandle && bySlug.household !== byHandle.household)
+      return { refuse: `ambiguous: "${author}" is a household's slug and the handle of a resident of another household; a hand decides` };
+    return byHandle ?? bySlug;
   };
 }
 
@@ -211,11 +234,13 @@ export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new
     const house = houseOf(d);
     if (!house) {
       nothing(d.source === "letter" ? `unbound: ${d.author} has no room here`
-        : d.source === "hearth" ? (d.author ? `unbound: the author "${d.author}" is no household with a resident here` : "unbound: its hearth.md names no author")
+        : d.source === "hearth" ? (d.author ? `unbound: the author "${d.author}" is no resident here and no household with a resident here` : "unbound: its hearth.md names no author")
         : `unbound: ${d.author} binds no resident here`);
       continue;
     }
-    // A Hearth entry pays its house's first resident who is not a meep: it names no one.
+    if (house.refuse) { nothing(house.refuse); continue; }
+    // A Hearth entry pays its house's first resident who is not a meep: the
+    // author, when the author line names a resident (housesFromRoll puts it first).
     const handle = d.source === "letter" ? d.sender : d.source === "hearth" ? (house.handles.find((h) => !isMeep(h, date)) ?? house.handles[0]) : recipientOf(d, house);
     const at = { household: house.household, handle };
     const was = paid.get(house.household);
@@ -372,28 +397,35 @@ export function readHearthMeta(raw) {
  * through git, so only what is committed counts and a sparse clone reads them
  * too. One row per folder under `source.dir` not named in capitals:
  * { id, author, line, date, commit, subject }, where the date is the town day
- * of the first-parent commit that brought its hearth.html to main; or
- * { id, problem } for a folder with no hearth.html (not an entry: the site
- * skips it) or with no commit that says when it merged. A link is never read:
- * only a tree is a folder and only a plain file is a file (the site refuses links).
+ * of the first-parent commit that brought its hearth.html to main, and the
+ * author and line are its hearth.md AT THAT COMMIT: the merge the row shows,
+ * so a later change to the author line cannot move the 10 while the hand
+ * opens the original PR (Truey's FIX on #995). Or { id, problem } for a folder
+ * with no hearth.html, or whose hearth.html, hearth.css or hearth.md is not a
+ * plain file on main (not an entry: the site refuses such a file and skips the
+ * whole entry, postmark-site tools/sync-hearths.mjs), or with no commit that
+ * says when it merged. Only a tree is a folder.
  */
+const ENTRY_FILES = Object.freeze(["hearth.html", "hearth.css", "hearth.md"]);
 export function hearthEntries(town, source, { run = (...a) => git(town, ...a) } = {}) {
-  const list = (path) => run("ls-tree", "-z", "HEAD", "--", `${path}/`).split("\0").filter(Boolean).map((l) => {
+  const list = (rev, path) => new Map(run("ls-tree", "-z", rev, "--", `${path}/`).split("\0").filter(Boolean).map((l) => {
     const m = /^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]*)$/.exec(l);
-    return m && { mode: m[1], type: m[2], sha: m[3], name: m[4].slice(m[4].lastIndexOf("/") + 1) };
-  }).filter(Boolean);
+    return m && [m[4].slice(m[4].lastIndexOf("/") + 1), { mode: m[1], type: m[2], sha: m[3] }];
+  }).filter(Boolean));
+  const plain = (f) => f?.type === "blob" && (f.mode === "100644" || f.mode === "100755");
   const out = [];
-  for (const folder of list(source.dir)) {
+  for (const [id, folder] of list("HEAD", source.dir)) {
     if (folder.type !== "tree") continue;
-    const id = folder.name;
     if (id === id.toUpperCase()) continue; // STARTER: infrastructure, not an entry (the site's own rule)
-    const files = new Map(list(`${source.dir}/${id}`).filter((f) => f.type === "blob" && (f.mode === "100644" || f.mode === "100755")).map((f) => [f.name, f]));
+    const files = list("HEAD", `${source.dir}/${id}`);
     if (!files.has("hearth.html")) { out.push({ id, problem: "not an entry: no hearth.html (the site skips it too)" }); continue; }
-    const md = files.get("hearth.md");
-    const meta = md ? readHearthMeta(run("cat-file", "blob", md.sha)) : { author: null, line: "" };
+    const odd = ENTRY_FILES.find((n) => files.has(n) && !plain(files.get(n)));
+    if (odd) { out.push({ id, problem: `not an entry: its ${odd} is not a plain file (the site refuses it and skips the whole entry)` }); continue; }
     const merged = run("log", "--first-parent", "--diff-merges=first-parent", "--no-patch", "--diff-filter=A", "--format=%H%x09%cI%x09%s", "HEAD", "--", `${source.dir}/${id}/hearth.html`)
       .split(/\r?\n/).filter(Boolean).at(-1)?.split("\t");
-    if (!merged) { out.push({ id, ...meta, problem: "unread: the clone's history does not say when its hearth.html reached main" }); continue; }
+    if (!merged) { out.push({ id, problem: "unread: the clone's history does not say when its hearth.html reached main" }); continue; }
+    const md = list(merged[0], `${source.dir}/${id}`).get("hearth.md");
+    const meta = plain(md) ? readHearthMeta(run("cat-file", "blob", md.sha)) : { author: null, line: "" };
     out.push({ id, ...meta, date: townDate(Date.parse(merged[1])), commit: merged[0], subject: merged.slice(2).join("\t") });
   }
   return out;
