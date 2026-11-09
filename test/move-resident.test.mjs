@@ -24,8 +24,13 @@
 //   M5  RESUMABLE: a push that cannot land leaves the store moved; the same
 //       command publishes the rest without moving the store again or writing a
 //       second key line; then there is nothing to do
+//   M5b RESUMED FROM DURABLE FACTS (the review of #985): a failed publication,
+//       then another ceremony's drain prints the move; the rerun still corrects
+//       the card and berth and writes the key line once, never moving the store
+//   M5c the same for a resident with no sealed line naming the source
 //   M6  the transaction re-reads under its lock: a house that changed since the
 //       plan refuses, and rolls back
+//   M6b an invitation credit that appears after the plan refuses under the lock
 //
 //   node --import ./test/helpers/sparse-guard.mjs --test test/move-resident.test.mjs
 
@@ -42,7 +47,8 @@ import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-unde
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { loadRegistryRows, moveResidentInStore, MOVE_ROW_REFUSALS } from "../src/registry-store.mjs";
 import { renderPublicRegistry } from "../src/registry-rows.mjs";
-import { notLandedError, penTransaction } from "../src/write.mjs";
+import { notLandedError, penTransaction, penCommit } from "../src/write.mjs";
+import { collectingDrain } from "../src/ceremony.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
 import { moveResident, planMove, describe, main, MOVE_REFUSALS } from "../tools/move-resident.mjs";
 
@@ -339,7 +345,73 @@ test("M5 · RESUMABLE: a push that cannot land leaves the store moved; the same 
   assert.equal(registryLines(t.dir).length, KEYED.length + 1);
 });
 
+// THE INTERLEAVING the review of #985 ran (finding 1): the act's publication fails, then ANOTHER
+// ceremony's ordinary drain lands first and prints the move, erasing the source's printed row.
+const otherDrainLands = async (dir) => {
+  const { drain, paths } = collectingDrain({ clone: dir });
+  await drain({ note: "an unrelated ceremony's drain" });
+  return penCommit(dir, paths, "registry: an unrelated ceremony's drain (fixture)");
+};
+const stall = (t) => withPen(t, () => penTransaction(t.dir, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, owner: asOwner,
+  commit: () => { throw notLandedError("a fixture race"); } })));
+
+test("M5b · RESUMED FROM THE STORE AND THE SEALED LEDGER: publication fails, another drain prints the move, the rerun still finishes it", { skip: SKIP }, async () => {
+  const t = await town({ berth: true });
+  await assert.rejects(stall(t), (e) => e.code === 503);
+  const moved = await storeRows();
+  assert.match(await otherDrainLands(t.dir), /^[0-9a-f]{40}$/, "another ceremony's drain landed in between");
+  const printed = readFileSync(join(t.dir, REGISTRY_PATH), "utf8");
+  assert.equal(JSON.parse(printed).households["new-nook"], undefined, "the source's printed row is gone");
+  assert.doesNotMatch(printed, /"New Nook"/, "and so is its display name");
+  assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "moss", "ADDRESS.md"), "utf8"), /^household: New Nook$/m, "the card is still unpublished");
+
+  const again = await withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D,
+    owner: NEVER("the owner's connection"), move: NEVER("the store transaction") }));
+  assert.equal(again.plan.resuming, true);
+  assert.equal(again.plan.from, "new-nook", "named by the sealed ledger: moss = hh:new-nook, a former key the store no longer has");
+  assert.deepEqual(await storeRows(), moved, "the store did not move again");
+  assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "moss", "ADDRESS.md"), "utf8"), /^household: Harbor Lights$/m,
+    "the card is corrected, though the source's name is no longer in the printed registry");
+  assert.match(readFileSync(join(t.dir, "HARBOR", "berths", "moss.md"), "utf8"), /^household: Harbor Lights$/m, "and the berth");
+  assert.deepEqual(registryLines(t.dir), [...KEYED, `- ${D} · registry: moss = hh:harbor-lights`], "the signed key line, exactly once");
+  assert.deepEqual(VERIFY.verifyStampLedger(t.dir).problems ?? [], []);
+  assert.ok(clean(t.dir));
+
+  await assert.rejects(withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, ...NO_WRITERS })),
+    (e) => e.defect === MOVE_REFUSALS.SAME_HOUSE.defect && /the ledger keys them there/.test(e.detail), "SAME_HOUSE only once the ledger keys moss to the target");
+  assert.equal(registryLines(t.dir).length, KEYED.length + 1);
+});
+
+test("M5c · the same, for a resident who still mints under their human's gh:<id> (no sealed line names the source): the printout's history names it", { skip: SKIP }, async () => {
+  const t = await town({ ledger: [KEYED[0]] });
+  await assert.rejects(stall(t), (e) => e.code === 503);
+  await otherDrainLands(t.dir);
+  const again = await withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D,
+    owner: NEVER("the owner's connection"), move: NEVER("the store transaction") }));
+  assert.equal(again.plan.from, "new-nook");
+  assert.match(readFileSync(join(t.dir, "WHITE_PAGES", "moss", "ADDRESS.md"), "utf8"), /^household: Harbor Lights$/m);
+  assert.deepEqual(registryLines(t.dir), [KEYED[0], `- ${D} · registry: moss = hh:harbor-lights`], "one key line");
+  assert.deepEqual(VERIFY.verifyStampLedger(t.dir).problems ?? [], []);
+  // a resident of the target who was never moved there is not "resumed"
+  await assert.rejects(withPen(t, () => moveResident({ handle: "lamp", to: "harbor-lights", clone: t.dir, date: D, ...NO_WRITERS })),
+    (e) => e.defect === MOVE_REFUSALS.SAME_HOUSE.defect);
+});
+
 // ── M6 the lock ─────────────────────────────────────────────────────────────
+
+test("M6b · AN INVITATION CREDIT THAT APPEARS AFTER THE PLAN refuses under the lock and rolls back: the credit is never dropped unruled", { skip: SKIP }, async () => {
+  const t = await town();
+  const plan = await withPen(t, async () => planMove({ handle: "moss", to: "harbor-lights", rows: await loadRegistryRows(), clone: t.dir, date: D }));
+  const c = await asOwner();
+  try { await c.query(`UPDATE households SET invited_by = '{"by":"zeds","named":"zed","at":"2026-11-09T12:00:00.000Z"}'::jsonb WHERE slug = 'new-nook'`); } finally { await c.end(); }
+  const before = await storeRows();
+  const owner = await asOwner();
+  try {
+    await assert.rejects(moveResidentInStore(owner, { handle: "moss", from: plan.from, to: "harbor-lights" }),
+      (e) => e.defect === MOVE_ROW_REFUSALS.MOVED.defect && /now carries an invitation credit \(invited by zeds\)/.test(e.detail));
+  } finally { await owner.end(); }
+  assert.deepEqual(await storeRows(), before, "nothing moved, and the credit stands on its own row");
+});
 
 test("M6 · the transaction re-reads under its lock: a house changed since the plan refuses, and the transaction rolls back", { skip: SKIP }, async () => {
   const t = await town();

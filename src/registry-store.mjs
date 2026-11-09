@@ -564,13 +564,19 @@ export async function moveResidentInStore(client, { handle, from, to }) {
   await client.query("BEGIN");
   try {
     const { rows } = await client.query(
-      `SELECT slug, residents, accounts, formerly, home_images FROM households WHERE slug = ANY($1::text[]) ORDER BY slug FOR UPDATE`,
+      `SELECT slug, residents, accounts, formerly, home_images, to_jsonb(households) -> 'invited_by' AS invited_by
+         FROM households WHERE slug = ANY($1::text[]) ORDER BY slug FOR UPDATE`,
       [[from, to]]);
     const source = rows.find((r) => r.slug === from);
     const target = rows.find((r) => r.slug === to);
     const sourceRes = source?.residents ?? [];
     if (!source || !target || sourceRes.length !== 1 || sourceRes[0] !== handle || (target.residents ?? []).includes(handle))
       throw refuse(MOVE_ROW_REFUSALS.MOVED, `${from}: ${source ? `[${sourceRes.join(", ")}]` : "gone"} · ${to}: ${target ? `[${(target.residents ?? []).join(", ")}]` : "gone"}`);
+    // AN INVITATION CREDIT THAT APPEARED AFTER THE PLAN (the review of #985, finding 2): the plan refuses a
+    // source carrying one (how a credit moves is a payout ruling), and so does the lock, or the delete below
+    // would drop it unruled.
+    if (source.invited_by != null)
+      throw refuse(MOVE_ROW_REFUSALS.MOVED, `${from} now carries an invitation credit (invited by ${asJson(source.invited_by)?.by ?? "?"})`);
     const after = movedTargetRow({ handle,
       source: { ...source, accounts: asJson(source.accounts), home_images: asJson(source.home_images) },
       target: { ...target, accounts: asJson(target.accounts), home_images: asJson(target.home_images) } });

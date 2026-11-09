@@ -46,12 +46,16 @@
 //     either house was paid; any history row.
 //
 // RESUMABLE. The store moves before the commit, so a push that cannot land
-// leaves the store moved and the clone as it was. Running the same command
-// again finds the resident already in the target, with a house the town's
-// files still print and the target's `formerly` carries: that is the source,
-// and the run publishes what is left, without moving the store again. The key
-// line is planned from the clone's own ledger, so a line that landed is never
-// written twice. A run with nothing left refuses (`SAME_HOUSE`) and writes nothing.
+// leaves the store moved and the clone as it was, and any other ceremony's
+// drain may then print the move before this act publishes. Running the same
+// command again decides from durable facts alone (planMove § RESUMING): the
+// store holds the resident in the target, and the sealed ledger does not yet
+// key them `hh:<target>`. It then finishes each missing step, each a no-op
+// where already done: the drain, the card (named against the source's last
+// printed name, from the printout's git history), and the key line, planned
+// from the clone's own ledger so it is never written twice. Only once the
+// ledger keys the resident to the target does a run refuse (`SAME_HOUSE`)
+// and write nothing.
 
 import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -63,7 +67,7 @@ import { collectingDrain } from "../src/ceremony.mjs";
 import { planHouseKey, appendHouseKey, registryWith, LEDGER_REL } from "../src/house-key.mjs";
 import { penCommit, penTransaction, landOrRefuse } from "../src/write.mjs";
 import { REGISTRY_PATH, PINS_PATH } from "../src/residency.mjs";
-import { withHouseLine, easternDate } from "./rekey-household.mjs";
+import { withHouseLine, easternDate, ledgerRegistry } from "./rekey-household.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -84,6 +88,31 @@ const refuse = (r, detail = null) => Object.assign(new Error(r.defect), { code: 
 
 const read = (clone, rel) => { try { return readFileSync(join(clone, rel), "utf8"); } catch { return null; } };
 const filesHouses = (clone) => JSON.parse(read(clone, REGISTRY_PATH) ?? "{}").households ?? {};
+const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+const gitOut = (clone, args) => execFileSync("git", ["-C", clone, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).trim();
+
+/**
+ * A house as the town's printout last showed it, read from the printout's own
+ * git history: the latest commit that added or removed its `"<slug>": {` line,
+ * and that commit's parent when it was the removal. Later drains never rewrite
+ * history, so this survives them. Null when the clone never printed it.
+ */
+export function lastPrintedHouse(clone, slug) {
+  if (!SLUG_RE.test(slug)) return null;
+  let rev;
+  try { rev = gitOut(clone, ["log", "-n", "1", "--format=%H", "-G", `^    "${slug}": `, "--", REGISTRY_PATH]); } catch { return null; }
+  if (!rev) return null;
+  for (const r of [rev, `${rev}^`]) {
+    try {
+      const house = JSON.parse(gitOut(clone, ["show", `${r}:${REGISTRY_PATH}`])).households?.[slug];
+      if (house) return house;
+    } catch { /* the parent of a root commit, or a file that did not parse there */ }
+  }
+  return null;
+}
+
+/** The clone's HEAD, which a dry run names: it reads the clone as it stands and never pulls. */
+const cloneHead = (clone) => { try { return gitOut(clone, ["rev-parse", "HEAD"]); } catch { return null; } };
 
 // ── the plan ────────────────────────────────────────────────────────────────
 
@@ -103,18 +132,36 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
   }
   const files = filesHouses(clone);
 
-  // RESUMING: the resident already lives in the target, and the town's files
-  // still print a house holding them that the target's `formerly` carries and
-  // the store no longer has. Everything the move publishes lands in ONE pen
-  // commit, so that printed house is exactly what is left: the registry, the
-  // card and the key line together. With no such house, the move (if there
-  // ever was one) is published whole, and there is nothing to do.
+  // RESUMING, decided from DURABLE facts only (the review of #985, finding 1):
+  // the STORE says the resident lives in the target, and the SEALED LEDGER says
+  // whether the act's record landed. Never the current printout: every other
+  // ceremony's drain reprints the whole registry from the store, so the first
+  // one to land after a stalled publication erases the source's printed row.
+  //   · sealed `hh:<to>`: the key line rode the act's one commit beside the
+  //     card, so the publication is complete; nothing to do (SAME_HOUSE);
+  //   · otherwise the move's publication is unfinished. The house it came from
+  //     is a former key of the target the store no longer has: the one the
+  //     sealed line names (`hh:<source>`), or, for a resident who still mints
+  //     under their human's `gh:<id>` and so has no such line, the one the
+  //     town's printout last showed holding them (its git history, which later
+  //     drains do not rewrite). Its display name comes from that history too,
+  //     the store having retired the row.
+  //   · a resident of the target with no such house was never moved here.
   const resuming = (target.residents ?? []).includes(handle);
   let from, source;
   if (resuming) {
-    from = Object.keys(files).find((s) => s !== to && !byslug.has(s) && (target.formerly ?? []).includes(s) && (files[s]?.residents ?? []).includes(handle)) ?? null;
-    if (!from) throw refuse(MOVE_REFUSALS.SAME_HOUSE, `${handle} lives in ${to}`);
-    source = { slug: from, residents: [handle], name: files[from]?.name ?? null };
+    const sealed = ledgerRegistry(read(clone, LEDGER_REL)).latest.get(handle) ?? null;
+    if (sealed === `hh:${to}`) throw refuse(MOVE_REFUSALS.SAME_HOUSE, `${handle} lives in ${to}, and the ledger keys them there`);
+    const gone = (target.formerly ?? []).filter((s) => !byslug.has(s) && SLUG_RE.test(s));
+    const named = sealed?.startsWith("hh:") ? sealed.slice(3) : null;
+    let printedAs = null;
+    if (named && gone.includes(named)) { from = named; printedAs = lastPrintedHouse(clone, named); }
+    else if (!sealed?.startsWith("hh:")) {
+      const held = gone.map((s) => [s, lastPrintedHouse(clone, s)]).filter(([, h]) => (h?.residents ?? []).includes(handle));
+      if (held.length === 1) [from, printedAs] = held[0];
+    }
+    if (!from) throw refuse(MOVE_REFUSALS.SAME_HOUSE, `${handle} lives in ${to}; the ledger keys them ${sealed ?? "under their human's account"}, and no former house of ${to} held them`);
+    source = { slug: from, residents: [handle], name: printedAs?.name ?? null };
   } else {
     source = rows.households.find((r) => (r.residents ?? []).includes(handle)) ?? null;
     if (!source) throw refuse(MOVE_REFUSALS.NOT_HOUSED, handle);
@@ -162,7 +209,7 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
   if (keyed?.refusal) throw refuse(MOVE_REFUSALS.HOUSE_KEY, `${keyed.refusal.defect}${keyed.detail ? ` — ${keyed.detail}` : ""}`);
 
   return {
-    handle, from, to, resuming, date,
+    handle, from, to, resuming, date, clone_head: cloneHead(clone),
     pin: { handle, untouched: true },
     store: resuming ? null : {
       update: { table: "households", slug: to, before: pick(target), after: pick({ ...target, ...movedTargetRow({ handle, source, target }) }) },
@@ -231,6 +278,8 @@ export function describe(plan, { dryRun }) {
   const out = [];
   out.push(`${dryRun ? "DRY RUN — nothing written." : "MOVED."}${plan.resuming ? " (resuming: the store had already moved)" : ""}`);
   out.push(`resident: ${plan.handle}  ·  from: ${plan.from}  ·  to: ${plan.to}  ·  date: ${plan.date}`);
+  // the review of #985's note: the dry run reads the clone as it stands (it never pulls); the real run pulls first under TOWN_PUSH=1
+  if (dryRun) out.push(`town clone: ${plan.clone_head ?? "(no HEAD)"} — read as it stands, not pulled; the real run pulls first when TOWN_PUSH=1`);
   out.push(`pin: household_pins ${plan.handle} — unchanged (handle, login and GitHub id stay bound)`);
   if (plan.store) {
     const { before, after } = plan.store.update;
