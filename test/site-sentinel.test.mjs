@@ -581,11 +581,47 @@ const GREEN_TABLE = {
   "https://dev.postmark.town/": { status: 302, headers: { location: "https://x.cloudflareaccess.com/cdn-cgi/access/login/dev.postmark.town" }, body: "" },
 };
 
+// §14–§19 (POS-968) read the box's journal, its failed units and the certificates nginx serves through `exec`, the
+// seam every tick here already drives, so stubExec answers journalctl, systemctl and openssl as well: green unless a
+// test hands it something else. The journal is one ordinary office line five minutes before the fixed clock, so the
+// reader can see the journal and nothing in it is a kill or a trip.
+const JOURNAL_LINE = (atMs, message) => JSON.stringify({ __REALTIME_TIMESTAMP: String(Math.round(atMs * 1000)), MESSAGE: message });
+const GREEN_JOURNAL = [JOURNAL_LINE(T0 - 5 * MINUTE, "[office] index reloaded — as-of 17338e0a6fc1 (was 1939f69d30e6)")];
+// A self-signed certificate naming every host CONFIG.certs lists, valid to 2036-11-06, made for this suite with
+// openssl (its key was not kept). The §16 tests read its notAfter back rather than restate it.
+const FIXTURE_CERT = `-----BEGIN CERTIFICATE-----
+MIICfTCCAiOgAwIBAgIUf1CX4pSWYXZAjyBCajjusMLJ1+YwCgYIKoZIzj0EAwIw
+GDEWMBQGA1UEAwwNcG9zdG1hcmsudG93bjAeFw0yNjExMDkwMDM3MjNaFw0zNjEx
+MDYwMDM3MjNaMBgxFjAUBgNVBAMMDXBvc3RtYXJrLnRvd24wWTATBgcqhkjOPQIB
+BggqhkjOPQMBBwNCAAR/xG4W6jgtqrlVmU02VdrdxeNYXdgk7T+K7FU6l9JOczlg
+TW/CcnTNV/8d5qNxGi9QBrx8qiR1d9MHS+yC7p5Xo4IBSTCCAUUwHQYDVR0OBBYE
+FM+gMY6hAXZL+u93/wwgc2hDMqP/MB8GA1UdIwQYMBaAFM+gMY6hAXZL+u93/wwg
+c2hDMqP/MA8GA1UdEwEB/wQFMAMBAf8wgfEGA1UdEQSB6TCB5oINcG9zdG1hcmsu
+dG93boIRd3d3LnBvc3RtYXJrLnRvd26CEWRldi5wb3N0bWFyay50b3dughNwYW5l
+cy5wb3N0bWFyay50b3duggoxZjRlZS50b3dugg53d3cuMWY0ZWUudG93boIMbWVl
+cG8ub25saW5lghB3d3cubWVlcG8ub25saW5lghBzdGFyc3Rvcnkub25saW5lghR3
+d3cuc3RhcnN0b3J5Lm9ubGluZYIYc3RhcmZvcmdlLWF0ZWxpZXIub25saW5lghx3
+d3cuc3RhcmZvcmdlLWF0ZWxpZXIub25saW5lMAoGCCqGSM49BAMCA0gAMEUCIQC4
+cuxAM6Xia/TncaM2Bh0rgaCUTHuD4Sm+jemajt6wrQIgNN2ADkNgFgJslXW/8A9I
+NORGYmukSt2nuNeUaWIjCDg=
+-----END CERTIFICATE-----`;
+// What `openssl s_client` prints on stdout around the server's certificate, in the shape the box's openssl 3 prints it.
+const S_CLIENT = (pem) => `CONNECTED(00000003)\n---\nCertificate chain\n---\nServer certificate\n${pem}\nsubject=CN = postmark.town\nissuer=CN = postmark.town\n---\n`;
+
 // git ls-remote, stubbed: main tip, then the release tag list.
 // The world's settlement tags too (§11): annotated, so each lists twice, and the
 // newest by number is S50, peeled to `settleSha` — the fixture receipt's world.
-const stubExec = ({ siteTip = "sitetip0000", townTip = "towntip0000", relSha = "relsha00000", settleSha = "worldtip0000" } = {}) =>
+// And the box's three readers for §14–§19 (above): `journal` is journalctl's json lines, `failed` is systemctl's
+// failed-units text, and `cert(host)` is the PEM openssl prints for a host, or an Error it dies with.
+const stubExec = ({ siteTip = "sitetip0000", townTip = "towntip0000", relSha = "relsha00000", settleSha = "worldtip0000", journal = GREEN_JOURNAL, failed = "", cert = () => FIXTURE_CERT } = {}) =>
   (_bin, args) => {
+    if (_bin === "journalctl") return journal.map((l) => `${l}\n`).join("");
+    if (_bin === "systemctl") return failed;
+    if (_bin === "openssl") {
+      const c = cert(args[args.indexOf("-servername") + 1]);
+      if (c instanceof Error) throw c;
+      return S_CLIENT(c);
+    }
     const repo = args.find((a) => a.startsWith("https://")) ?? "";
     if (repo.includes("postmark-world")) {
       return [
@@ -656,8 +692,28 @@ _wf(_settle, JSON.stringify({ at: "2026-08-25T06:00:02Z", status: "published", w
 // ONLY, for the clock-walking tests; its own verdicts are pinned in §12 below.
 const _law = join(_wdir, "ingest-law.json");
 _wf(_law, JSON.stringify({ at: new Date(T0 - 60_000).toISOString(), mode: "law", status: "ok", law: { exit: 0, sha: "a".repeat(40) }, detail: "law: ingested law" }));
+// §14, §15 and §18 fixtures (POS-968), same discipline: real temp files, so the healthy tick exercises each probe and
+// the suite never reads the box's own /srv files. The store watch looks every minute and the access log carries the
+// sentinel's own GET /api/ every five, from an hour before the fixed clock to three hours after it, so the tests that
+// walk the clock forward always find a fresh minute and a fresh line (each probe reads nothing past its own clock).
+// The backup shipped at 08:00Z, four hours before it.
+const _txn = join(_wdir, "store-txn-4380.json");
+const TXN_MINUTE = (atMs, over = {}) => ({ at: new Date(atMs).toISOString(), looked: true, stuck: 0, stuck_sessions: [], sessions: { idle: 24, active: 1 }, ...over });
+const TXN_RECORD = (minutes) => JSON.stringify({ stuck_after_s: 5, judged_on: "a minute is calm when …", started_at: new Date(T0 - 2 * HOUR).toISOString(), calm_at: minutes.at(-1).at, last_minute: minutes.at(-1), worst_24h: null, minutes }, null, 1);
+_wf(_txn, TXN_RECORD(Array.from({ length: 240 }, (_, i) => TXN_MINUTE(T0 - HOUR + i * MINUTE))));
+const _access = join(_wdir, "telemetry");
+const ACCESS_LINE = (startMs, over = {}) => JSON.stringify({ ts: new Date(startMs).toISOString(), ip: "127.0.0.1", method: "GET", path: "/", status: 200, ms: 4, ua: "postmark-site-sentinel", household: null, mcp: null, ...over });
+import { mkdirSync as _mk } from "node:fs";
+_mk(_access, { recursive: true });
+_wf(join(_access, "access-2026-08-25.jsonl"), Array.from({ length: 48 }, (_, i) => ACCESS_LINE(T0 - HOUR + i * 5 * MINUTE)).join("\n") + "\n");
+const _backup = join(_wdir, "backup.json");
+const BACKUP = (over = {}) => JSON.stringify({ at: "2026-08-25T08:00:00Z", status: "shipped", database: "world2_dev", dump_bytes: 117391155, toc_entries: 444, basebackup_ok: true, ...over });
+_wf(_backup, BACKUP());
 const FIXTURE_CONFIG = {
   ..._CFG,
+  storeHealth: { ..._CFG.storeHealth, path: _txn },
+  accessLog: { dir: _access },
+  backup: { ..._CFG.backup, path: _backup },
   lawPen: { ..._CFG.lawPen, path: _law, staleAfterMs: 6 * 60 * 60_000 },
   settlement: { ..._CFG.settlement, receipt: _settle },
   clones: [{ key: "town_clone", label: "the office's town clone", path: _clone }],
@@ -2393,4 +2449,611 @@ test("§13 N1: a failed runs read keeps the repo's memory, so the blip costs no 
   const three = await tick({ token: FIXTURE_TOKEN, fetchImpl: f, exec: stubExec(), state: two.nextState, nowMs: T0 + 20 * MINUTE, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
   assert.equal(three.probes.find((p) => p.key === "linear_handler_postmark_world").verdict, "DOWN");
   assert.equal(f.handler().length, 6, "the remembered attempt is not read again");
+});
+
+// ── §14–§21: the store, the residents' 5xx, the certificates, the units, the backup, the trips, the change log and
+//    the acknowledgement (POS-968, the STAR-161 sitting) ─────────────────────────────────────────────────────────────
+//
+// LAW (Darko, 2026-11-08 17:24 EST, verbatim, the condition over the whole sitting): "make sure that we don't
+// accidentally drop any alarms in the move. false alarms are fine as long as we iterate and fix them as we find them."
+// LAW (the sitting's call 2, option (i), ruled as the packet recommended, verbatim from the packet): "DOWN when
+// residents get 5 or more 5xx on one route in a 10-minute run, or a kill coincides with a 500; WARN on a kill with no
+// 500."
+// THE INSTANCES these hold, measured on the box (G:/Starstory/docs/2026-11-08/alarms/packet.md § 2):
+//   POS-965  GET /quests/<h> answered 503 70 times in the 18:00Z hour of 11-08, in bursts, with nothing ringing.
+//   POS-963  a resident's GET /residents/<h> started 18:09:03.551Z and was answered 500 after 46,728 ms, beside
+//            Postgres's idle-in-transaction kill, which the office logged at 18:09:50.275Z.
+// The residents' handles are not in these fixtures: a route is masked on the board, and so it is here.
+
+import {
+  mostInWindow, routeOf, answeredAt, readAccessErrors, parseJournalJson, readOfficeJournal,
+  classifyStoreHealth, classifyResident5xx, readServedCert, classifyCert, manifestUnitNames, parseFailedUnits,
+  classifyFailedUnits, TRANSIENT_UNIT, classifyBackup, tripDoor, classifyOfficeTripped, judgeAcks, findingOf, applyAck,
+  ACK_MAX_MS, appendHistory, besideState, readAcks,
+} from "../tools/site-sentinel.mjs";
+import { X509Certificate } from "node:crypto";
+import { readdirSync as _rd } from "node:fs";
+
+const OFFICE_ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+const NEW_PROBE = /^(store_health|resident_5xx|cert_|failed_units|backup_outcome|office_tripped)/;
+const newAlerts = (t) => t.alerts.filter((a) => NEW_PROBE.test(a.key)).map((a) => `${a.key}:${a.alert.kind}`);
+const probeOf = (t, key) => t.probes.find((p) => p.key === key);
+const at11 = (hms) => Date.parse(`2026-11-08T${hms}Z`);
+
+// POS-965, the 70 quest-board 503s of 11-08 18:00Z, as the office's access log has them: each request's start and
+// how long it took (start+ms).
+const POS965 = `
+  18:05:34.939+50 18:05:35.571+81 18:09:04.989+1085 18:10:14.531+3274 18:14:38.406+33 18:14:38.554+177
+  18:14:38.750+156 18:14:39.059+157 18:14:44.577+27 18:14:49.375+14 18:17:34.917+215 18:17:41.168+24 18:17:41.395+184
+  18:26:53.196+30 18:26:54.228+64 18:27:36.231+27 18:27:36.422+146 18:28:10.123+105 18:29:24.063+80 18:29:24.640+21
+  18:30:04.185+106 18:30:04.875+754 18:30:04.877+758 18:30:04.877+764 18:30:08.141+9833 18:30:54.603+93
+  18:30:55.817+80 18:34:45.548+61 18:34:46.065+56 18:34:46.560+13 18:35:53.964+160 18:35:53.965+205 18:35:53.964+236
+  18:37:36.901+223 18:37:49.164+15 18:41:27.852+242 18:41:27.864+232 18:41:28.156+235 18:41:28.978+372
+  18:41:35.808+211 18:41:35.808+215 18:41:35.813+227 18:41:37.166+10303 18:42:36.332+138 18:42:36.986+368
+  18:42:36.508+880 18:42:36.666+723 18:44:20.229+118 18:44:22.534+62 18:44:33.646+26 18:44:33.646+38 18:44:33.709+87
+  18:46:41.121+372 18:46:41.122+376 18:46:41.146+353 18:46:41.156+343 18:46:41.164+335 18:46:41.174+348
+  18:46:41.501+1842 18:46:41.530+1918 18:46:41.543+1933 18:46:48.388+2574 18:47:03.251+16 18:47:21.370+95
+  18:48:55.580+144 18:48:56.072+52 18:52:37.947+67 18:52:39.972+46 18:59:51.801+17 18:59:52.851+1889`
+  .trim().split(/\s+/).map((s, i) => {
+    const [hms, ms] = s.split("+");
+    return { ts: `2026-11-08T${hms}Z`, method: "GET", path: `/quests/resident-${i % 7}`, status: 503, ms: Number(ms) };
+  });
+const POS963_500 = { ts: "2026-11-08T18:09:03.551Z", method: "GET", path: "/residents/a-resident", status: 500, ms: 46728 };
+const KILL_MSG = "[store-pool pen] a held connection failed (officeRead): terminating connection due to idle-in-transaction timeout";
+const POS963_KILL = JOURNAL_LINE(at11("18:09:50.275"), KILL_MSG);
+const POS963_REST_TRIP = JOURNAL_LINE(at11("18:09:50.325"), "[office] answered 500 (the office tripped): Client has encountered a connection error and is not queryable");
+const rowsOf = (lines) => lines.map((r) => ({ at: answeredAt(r), method: r.method, path: r.path, status: r.status }));
+
+/**
+ * The box at any clock: the store watch looks every minute and the sentinel's own GET /api/ lands every five, from
+ * half an hour before `fromMs` to `toMs`, beside the test's own access lines; the backup shipped four hours before
+ * `fromMs`. The probes outside §14–§19 that read the clock are left out; the rest keep their green fixtures.
+ */
+function boxAt(fromMs, toMs, { access = [], minutes = null, backup = null } = {}) {
+  const dir = tempDir("sentinel-box-");
+  const txn = join(dir, "store-txn-4380.json");
+  const start = fromMs - 30 * MINUTE;
+  _wf(txn, TXN_RECORD(minutes ?? Array.from({ length: Math.floor((toMs - start) / MINUTE) + 1 }, (_, i) => TXN_MINUTE(start + i * MINUTE))));
+  const tel = join(dir, "telemetry");
+  _mk(tel, { recursive: true });
+  const own = Array.from({ length: Math.floor((toMs - start) / (5 * MINUTE)) + 1 }, (_, i) => JSON.parse(ACCESS_LINE(start + i * 5 * MINUTE)));
+  const byDay = new Map();
+  for (const r of [...own, ...access].sort((a, b) => answeredAt(a) - answeredAt(b))) {
+    const day = new Date(answeredAt(r)).toISOString().slice(0, 10);
+    byDay.set(day, [...(byDay.get(day) ?? []), JSON.stringify(r)]);
+  }
+  for (const [day, lines] of byDay) _wf(join(tel, `access-${day}.jsonl`), lines.join("\n") + "\n");
+  const bk = join(dir, "backup.json");
+  _wf(bk, backup ?? BACKUP({ at: new Date(fromMs - 4 * HOUR).toISOString().replace(/\.\d{3}Z$/, "Z") }));
+  return {
+    ...FIXTURE_CONFIG, settlement: null, linearHandler: null, lawPen: null, meeps: null, watchers: [], siteRefresh: null, clones: [], disk: null,
+    storeHealth: { ...CONFIG.storeHealth, path: txn }, accessLog: { dir: tel }, backup: { ...CONFIG.backup, path: bk },
+  };
+}
+const boxTick = (config, nowMs, { state = {}, acks = null, ...execOpts } = {}) =>
+  tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(execOpts), state, nowMs, config, acks });
+
+test("§14–§19 the healthy tick carries every new probe, and every one is green", async () => {
+  const t = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const mine = t.probes.filter((p) => NEW_PROBE.test(p.key));
+  assert.deepEqual(mine.map((p) => p.key), [
+    "store_health", "resident_5xx", ...CONFIG.certs.hosts.map((h) => `cert_${h.replace(/[^a-z0-9]+/g, "_")}`), "failed_units", "backup_outcome", "office_tripped",
+  ]);
+  assert.deepEqual(mine.filter((p) => p.verdict !== "OK").map((p) => `${p.key}:${p.verdict} ${p.reason}`), []);
+  assert.equal(CONFIG.certs.hosts.length, 12);
+  assert.deepEqual(newAlerts(t), []);
+});
+
+// ── §15 ──
+
+test("§15 routeOf masks every segment past the door, and the town's namespaced doors keep their second", () => {
+  assert.equal(routeOf("GET", "/quests/ari"), "GET /quests/<h>");
+  assert.equal(routeOf("GET", "/residents/ari/sheet"), "GET /residents/<h>/<h>");
+  assert.equal(routeOf("POST", "/world/apex"), "POST /world/apex");
+  assert.equal(routeOf("GET", "/world/conversations/t1794005139810-joy"), "GET /world/conversations/<h>");
+  assert.equal(routeOf("GET", "/.well-known/oauth-protected-resource/api/mcp"), "GET /.well-known/oauth-protected-resource/<h>/<h>");
+  assert.equal(routeOf("POST", "/mcp"), "POST /mcp");
+  assert.equal(routeOf("GET", "/"), "GET /");
+  assert.notEqual(routeOf("GET", "/world/apex"), routeOf("GET", "/world/walkers"), "two doors, not one door and a handle");
+});
+
+test("§15 mostInWindow counts the busiest span, its edges inside it", () => {
+  assert.equal(mostInWindow([0, MINUTE, 2 * MINUTE, 11 * MINUTE], 10 * MINUTE), 3);
+  assert.equal(mostInWindow([0, 10 * MINUTE], 10 * MINUTE), 2, "ten minutes apart is inside ten minutes");
+  assert.equal(mostInWindow([0, 10 * MINUTE + 1], 10 * MINUTE), 1);
+  assert.equal(mostInWindow([5, 1, 3], 10), 3, "unsorted in, counted sorted");
+  assert.equal(mostInWindow([], 10 * MINUTE), 0);
+});
+
+test("§15 POS-965: the quest board's 503s are DOWN by 18:20Z, eleven inside ten minutes, named by route and never by handle", () => {
+  const classify = (nowMs) => classifyResident5xx({ rows: rowsOf(POS965).filter((r) => r.at <= nowMs && r.at >= nowMs - CONFIG.events.lookbackMs), newestMs: nowMs - MINUTE, nowMs, sinceMs: nowMs - CONFIG.events.lookbackMs, windowMs: CONFIG.events.windowMs, threshold: CONFIG.resident5xx.threshold });
+  const early = classify(at11("18:10:00"));
+  assert.equal(early.verdict, "OK", "three by 18:10Z is under the ruled line");
+  assert.match(early.reason, /^3 5xx answers in the last 25m, none 5 times on one route inside 10m: GET \/quests\/<h> 503 ×3$/);
+  const r = classify(at11("18:20:00"));
+  assert.equal(r.verdict, "DOWN", 'LAW (call 2 (i)): "5 or more 5xx on one route in a 10-minute run"');
+  assert.equal(r.reason, "the office answered residents 5 or more 5xx on one route inside 10m: GET /quests/<h> 503 ×13 (11 inside 10m, the latest at 18:17:41Z)");
+  assert.doesNotMatch(r.reason, /resident-\d/, "the board is public: no handle");
+  assert.equal(r.finding, "GET /quests/<h> 503");
+  assert.equal(r.detail.routes[0].most_in_window, 11);
+});
+
+test("§15 THE TICK replays 11-08 18:00Z every ten minutes: DOWN at 18:20Z, silent while it holds, recovered at 19:20Z", async () => {
+  const config = boxAt(at11("18:00:00"), at11("19:40:00"), { access: POS965 });
+  let state = {};
+  const said = [];
+  for (let m = 10; m <= 90; m += 10) {
+    const nowMs = at11("18:00:00") + m * MINUTE;
+    const t = await boxTick(config, nowMs, { state });
+    said.push(`${new Date(nowMs).toISOString().slice(11, 16)} ${probeOf(t, "resident_5xx").verdict} ${newAlerts(t).join(",")}`.trim());
+    state = t.nextState;
+  }
+  assert.deepEqual(said, [
+    "18:10 OK", "18:20 DOWN resident_5xx:onset", "18:30 DOWN", "18:40 DOWN", "18:50 DOWN", "19:00 DOWN", "19:10 DOWN",
+    "19:20 OK resident_5xx:recovered", "19:30 OK",
+  ], "one bark within ten minutes of the burst, the same DOWN silent, one recovery");
+});
+
+test("§15 a burst split across two ticks is counted whole on the second (Darko: \"don't accidentally drop any alarms\")", async () => {
+  const tickA = at11("12:00:00");
+  const burst = [-3, -2, -1, 2, 3, 4].map((m) => ({ ts: new Date(tickA + m * MINUTE).toISOString(), method: "GET", path: "/mail/someone", status: 502, ms: 10 }));
+  const config = boxAt(tickA, tickA + 20 * MINUTE, { access: burst });
+  const a = await boxTick(config, tickA);
+  assert.equal(probeOf(a, "resident_5xx").verdict, "OK", "three before the tick");
+  const b = await boxTick(config, tickA + 10 * MINUTE, { state: a.nextState });
+  assert.equal(probeOf(b, "resident_5xx").verdict, "DOWN", "six inside seven minutes, though only three landed since tick A");
+  assert.match(probeOf(b, "resident_5xx").reason, /GET \/mail\/<h> 502 ×6 \(6 inside 10m/);
+});
+
+test("§15 under the line is named and never alarmed: 4 on one route, 5 over two routes, 5 on one route 11 minutes apart", () => {
+  const nowMs = at11("12:30:00");
+  const r = (spec) => classifyResident5xx({ rows: spec.map(([min, path, status = 503]) => ({ at: nowMs - min * MINUTE, method: "GET", path, status })), newestMs: nowMs, nowMs, sinceMs: nowMs - 25 * MINUTE, windowMs: 10 * MINUTE, threshold: 5 });
+  assert.equal(r([[1, "/me"], [2, "/me"], [3, "/me"], [4, "/me"]]).verdict, "OK");
+  const two = r([[1, "/me"], [2, "/me"], [3, "/me"], [1, "/mail/a"], [2, "/mail/b"]]);
+  assert.equal(two.verdict, "OK");
+  assert.match(two.reason, /GET \/me 503 ×3; GET \/mail\/<h> 503 ×2/);
+  assert.equal(r([[1, "/me"], [2, "/me"], [3, "/me"], [13, "/me"], [14, "/me"]]).verdict, "OK", "five in the lookback, never five inside ten minutes");
+  assert.equal(r([[1, "/me"], [2, "/me"], [3, "/me"], [9, "/me"], [10, "/me"]]).verdict, "DOWN");
+  assert.equal(r([[1, "/me", 500], [2, "/me", 502], [3, "/me", 503], [4, "/me", 504], [5, "/me", 500]]).verdict, "DOWN", "any 5xx counts, mixed");
+});
+
+test("§15 an unread log and a silent log are STALE, never OK; the day files read cover a request answered past midnight", () => {
+  const nowMs = Date.parse("2026-11-09T00:10:00Z");
+  const sinceMs = nowMs - 25 * MINUTE;
+  const unread = classifyResident5xx({ rows: null, readError: "EACCES", nowMs, sinceMs });
+  assert.equal(unread.verdict, "STALE");
+  assert.match(unread.reason, /could not read the office's access log \(EACCES\)/);
+  const silent = classifyResident5xx({ rows: [], newestMs: null, nowMs, sinceMs, dir: "/srv/postmark-office/telemetry" });
+  assert.equal(silent.verdict, "STALE");
+  assert.match(silent.reason, /has no line answered in the last 25m/);
+
+  const empty = tempDir("sentinel-access-none-");
+  const none = readAccessErrors(empty, { sinceMs, nowMs });
+  assert.equal(none.rows, null);
+  assert.match(none.error, /no access log in .* for 2026-11-08 or 2026-11-09/);
+
+  // A request that started 23:59:59 and was answered 00:00:01 lands in the next day's file, and is counted.
+  const dir = tempDir("sentinel-access-midnight-");
+  _wf(join(dir, "access-2026-11-08.jsonl"), `${ACCESS_LINE(Date.parse("2026-11-08T23:50:00Z"), { status: 503, path: "/me" })}\n`);
+  _wf(join(dir, "access-2026-11-09.jsonl"), [
+    ACCESS_LINE(Date.parse("2026-11-08T23:59:59Z"), { status: 500, path: "/me", ms: 2000 }),
+    ACCESS_LINE(Date.parse("2026-11-09T00:05:00Z")),
+    `{"ts":"2026-11-09T00:06:00.000Z","method":"GET","path":"/me","stat`,
+  ].join("\n") + "\n");
+  const read = readAccessErrors(dir, { sinceMs, nowMs });
+  assert.deepEqual(read.rows.map((r) => `${new Date(r.at).toISOString()} ${r.status}`), ["2026-11-08T23:50:00.004Z 503", "2026-11-09T00:00:01.000Z 500"]);
+  assert.equal(read.newestMs, Date.parse("2026-11-09T00:06:00.000Z"), "a torn last line throws nothing, and its ts still says the log is being written");
+});
+
+// ── §14 ──
+
+const STORE_AT = (nowMs, over = {}) => classifyStoreHealth({
+  txnRaw: TXN_RECORD(Array.from({ length: 30 }, (_, i) => TXN_MINUTE(nowMs - 29 * MINUTE + i * MINUTE))),
+  kills: [], answered500: [], nowMs, sinceMs: nowMs - 25 * MINUTE, windowMs: 10 * MINUTE, staleAfterMs: 5 * MINUTE, path: "/srv/postmark-office/telemetry/store-txn-4380.json", ...over,
+});
+
+test("§14 POS-963: the kill at 18:09:50Z beside the resident's 500 is DOWN; the 20:09Z kill with no 500 beside it is a WARN", () => {
+  const r = STORE_AT(at11("18:12:00"), { kills: [at11("18:09:50.275")], answered500: [answeredAt(POS963_500)] });
+  assert.equal(r.verdict, "DOWN", 'LAW (call 2 (i)): "a kill coincides with a 500"');
+  assert.equal(r.reason, "Postgres killed 1 office connection for idling in a transaction (18:09:50Z) and the office answered a resident 500 beside it (18:09:50Z): POS-963's shape");
+  assert.deepEqual(r.detail.answered_500_beside, ["2026-11-08T18:09:50.279Z"]);
+  const alone = STORE_AT(at11("20:12:00"), { kills: [at11("20:09:24.943")] });
+  assert.equal(alone.verdict, "WARN", 'LAW (call 2 (i)): "WARN on a kill with no 500"');
+  assert.match(alone.reason, /^Postgres killed 1 office connection for idling in a transaction \(20:09:24Z\), with no 500 within 10m of it$/);
+  // a 500 eleven minutes from the kill is not beside it
+  assert.equal(STORE_AT(at11("18:30:00"), { kills: [at11("18:09:50")], answered500: [at11("18:21:00")] }).verdict, "WARN");
+  // and an access log it could not read cannot pair: still a WARN, saying why
+  const blind = STORE_AT(at11("18:12:00"), { kills: [at11("18:09:50")], answered500: null, accessError: "EACCES" });
+  assert.equal(blind.verdict, "WARN");
+  assert.match(blind.reason, /the access log could not be read to say whether a 500 came of it \(EACCES\)/);
+});
+
+test("§14 the store watch: a stuck minute is a WARN naming the pid and the pool, never the query; an unasked minute too", () => {
+  const nowMs = at11("18:12:00");
+  const minutes = Array.from({ length: 30 }, (_, i) => TXN_MINUTE(nowMs - 29 * MINUTE + i * MINUTE + 10_605));
+  // the store watch's worst_24h of 11-08, in its own words
+  minutes[26] = TXN_MINUTE(at11("18:09:10.605"), { stuck: 1, stuck_sessions: [{ pid: 1730459, application_name: "postmark-office:pen:t2", state: "idle in transaction", idle_s: 6, xact_s: 6, query: "SELECT json FROM town_residents WHERE handle = $1" }] });
+  const r = STORE_AT(nowMs, { txnRaw: TXN_RECORD(minutes) });
+  assert.equal(r.verdict, "WARN");
+  assert.equal(r.reason, "1 minute in the last 25m found a session idle inside a transaction for 5 s or more, the most at 18:09:10Z: 1 session, pid 1730459 (postmark-office:pen:t2) idle 6 s");
+  assert.doesNotMatch(r.reason, /SELECT|town_residents/, "the board is public: no query");
+  minutes[27] = TXN_MINUTE(at11("18:10:10.605"), { looked: false, error: "timeout expired" });
+  const both = STORE_AT(nowMs, { txnRaw: TXN_RECORD(minutes) });
+  assert.match(both.reason, /; 1 minute in the last 25m the store watch could not ask the store, the latest at 18:10:10Z$/);
+  assert.doesNotMatch(both.reason, /timeout expired/);
+  // a stuck minute beside a kill and a 500: DOWN leads, and the stuck minute is still said
+  const down = STORE_AT(nowMs, { txnRaw: TXN_RECORD(minutes), kills: [at11("18:09:50.275")], answered500: [answeredAt(POS963_500)] });
+  assert.equal(down.verdict, "DOWN");
+  assert.match(down.reason, /^Postgres killed .*POS-963's shape; 1 minute .*idle 6 s; 1 minute .*could not ask the store/);
+});
+
+test("§14 a missing, torn or stale store watch, and an unread journal, are STALE: unread is never calm", () => {
+  const nowMs = at11("18:12:00");
+  const missing = STORE_AT(nowMs, { txnRaw: null, txnError: "ENOENT" });
+  assert.equal(missing.verdict, "STALE");
+  assert.match(missing.reason, /^there is no store watch record at \/srv\/postmark-office\/telemetry\/store-txn-4380\.json \(ENOENT\)/);
+  assert.equal(STORE_AT(nowMs, { txnRaw: "{ half" }).verdict, "STALE");
+  const old = STORE_AT(nowMs, { txnRaw: TXN_RECORD([TXN_MINUTE(nowMs - 6 * MINUTE)]) });
+  assert.equal(old.verdict, "STALE");
+  assert.match(old.reason, /last looked 6m ago, against a minute's cadence \(stale after 5m\)/);
+  assert.equal(STORE_AT(nowMs, { txnRaw: TXN_RECORD([TXN_MINUTE(nowMs - 4 * MINUTE)]) }).verdict, "OK");
+  const deaf = STORE_AT(nowMs, { kills: null, journalWhy: "spawnSync journalctl ENOENT" });
+  assert.equal(deaf.verdict, "STALE");
+  assert.match(deaf.reason, /the office's journal could not be read for Postgres's idle-in-transaction kills \(spawnSync journalctl ENOENT\)/);
+  assert.equal(STORE_AT(nowMs).verdict, "OK");
+  assert.match(STORE_AT(nowMs).reason, /^no session stuck in a transaction and no kill in the last 25m \(the watch looked at 18:12:00Z: 24 idle, 1 active\)$/);
+});
+
+test("§14 THE TICK, POS-963 end to end: the store reads DOWN, the REST door's trip WARNs, and §15 alone would have stayed OK", async () => {
+  const nowMs = at11("18:12:00");
+  const before = POS965.filter((r) => answeredAt(r) <= nowMs);
+  const config = boxAt(at11("17:50:00"), nowMs, { access: [POS963_500, ...before] });
+  const t = await boxTick(config, nowMs, { journal: [...GREEN_JOURNAL, POS963_KILL, POS963_REST_TRIP] });
+  assert.equal(probeOf(t, "store_health").verdict, "DOWN");
+  assert.match(probeOf(t, "store_health").reason, /POS-963's shape/);
+  assert.equal(probeOf(t, "resident_5xx").verdict, "OK", "one 500 and four 503s are under the ruled line, so the store probe is the one that catches it");
+  assert.equal(probeOf(t, "office_tripped").verdict, "WARN");
+  assert.match(probeOf(t, "office_tripped").reason, /a REST door \(answered 500\) ×1 \(18:09:50Z\)/);
+  assert.deepEqual(newAlerts(t), ["store_health:onset", "office_tripped:warn"]);
+  const msg = composeMessage({ alerts: t.alerts, board: composeBoard({ probes: t.probes, nowIso: t.nowIso, alerting: {} }), nowIso: t.nowIso });
+  assert.match(msg, /DOWN — the office's store: Postgres killed 1 office connection/);
+  assert.match(msg, /the office's tripped doors: warning: the office tripped 1 time/);
+  // a kill beside only 503s is a WARN, by the ruling's word 500
+  const only503 = await boxTick(boxAt(at11("17:50:00"), nowMs, { access: before }), nowMs, { journal: [...GREEN_JOURNAL, POS963_KILL] });
+  assert.equal(probeOf(only503, "store_health").verdict, "WARN");
+});
+
+test("§14/§19 a journal this user cannot see is STALE on both, and so is one journalctl cannot read", async () => {
+  const nowMs = at11("18:12:00");
+  const config = boxAt(at11("17:50:00"), nowMs);
+  const blind = await boxTick(config, nowMs, { journal: [] });
+  for (const key of ["store_health", "office_tripped"]) {
+    assert.equal(probeOf(blind, key).verdict, "STALE", key);
+    assert.match(probeOf(blind, key).reason, /journalctl shows no line of postmark-office\.service at all, so this user cannot see its journal/);
+  }
+  const quiet = readOfficeJournal("postmark-office.service", nowMs - 25 * MINUTE, { exec: stubExec() });
+  assert.deepEqual([quiet.entries.length, quiet.seen], [1, true], "an old line proves sight: a quiet window is calm");
+  const dead = readOfficeJournal("postmark-office.service", nowMs, { exec: () => { throw Object.assign(new Error("spawnSync journalctl ENOENT"), { code: "ENOENT" }); } });
+  assert.deepEqual([dead.entries, dead.error], [null, "spawnSync journalctl ENOENT"]);
+  assert.deepEqual(parseJournalJson(`${JSON.stringify({ __REALTIME_TIMESTAMP: "1794183242495395", MESSAGE: [104, 105] })}\nnot json\n`), [{ atMs: 1794183242495.395, message: "hi" }], "a MESSAGE of bytes is read as text");
+});
+
+// ── §16 ──
+
+const CERT_NOT_AFTER = Date.parse(new X509Certificate(FIXTURE_CERT).validTo);
+const DAY_MS = 24 * HOUR;
+
+test("§16 readServedCert reads what openssl prints: the expiry, whether it names the host, and why it could not", () => {
+  const read = readServedCert("dev.postmark.town", { exec: stubExec() });
+  assert.deepEqual([read.notAfterMs, read.matches], [CERT_NOT_AFTER, true]);
+  assert.equal(readServedCert("pages.postmark.town", { exec: stubExec() }).matches, false, "the fixture does not name pages, as 1f4ee's certificate does not");
+  const refused = readServedCert("postmark.town", { exec: () => { throw Object.assign(new Error("Command failed: openssl s_client"), { stdout: "", stderr: "40C70C24EC7E0000:error:8000006F:system library:BIO_connect:Connection refused:../crypto/bio/bio_sock2.c:114:calling connect()\n" }); } });
+  assert.match(refused.error, /^40C70C24EC7E0000:error:8000006F:system library:BIO_connect:Connection refused/);
+  assert.match(readServedCert("postmark.town", { exec: () => "CONNECTED(00000003)\n---\nno peer certificate available\n" }).error, /printed no certificate/);
+  assert.match(readServedCert("postmark.town", { exec: () => S_CLIENT("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----") }).error, /does not parse/);
+});
+
+test("§16 the lines: under 21 days WARN, under 7 days or expired DOWN, a certificate that does not name its host DOWN, unread STALE", () => {
+  const at = (daysLeft) => classifyCert({ host: "postmark.town", notAfterMs: CERT_NOT_AFTER, matches: true, nowMs: CERT_NOT_AFTER - daysLeft * DAY_MS, warnDays: 21, downDays: 7 });
+  assert.equal(at(21.1).verdict, "OK");
+  assert.equal(at(20.9).verdict, "WARN");
+  assert.equal(at(7.1).verdict, "WARN");
+  assert.equal(at(6.9).verdict, "DOWN");
+  assert.equal(at(-1).verdict, "DOWN");
+  assert.match(at(-1).reason, /^the certificate served for postmark\.town expired 1d ago \(2036-11-06T00:37:23\.000Z\)$/);
+  const wrong = classifyCert({ host: "pages.postmark.town", notAfterMs: CERT_NOT_AFTER, matches: false, names: "DNS:1f4ee.town, DNS:www.1f4ee.town", nowMs: CERT_NOT_AFTER - 60 * DAY_MS });
+  assert.equal(wrong.verdict, "DOWN", "a far expiry does not save a certificate that names another host");
+  assert.match(wrong.reason, /serves pages\.postmark\.town a certificate that does not name it \(it names DNS:1f4ee\.town, DNS:www\.1f4ee\.town\)/);
+  assert.equal(classifyCert({ host: "x", error: "Connection refused", nowMs: 0 }).verdict, "STALE");
+  assert.equal(classifyCert({ host: "x", matches: true, notAfterMs: NaN, nowMs: 0 }).verdict, "STALE");
+});
+
+test("§16 dev's origin certificate as it stood on 11-09: a WARN now, DOWN from 11-12 22:42Z, STAR-151's deadline", () => {
+  const dev = (nowIso) => classifyCert({ host: "dev.postmark.town", notAfterMs: Date.parse("2026-11-19T22:42:14Z"), matches: true, nowMs: Date.parse(nowIso), warnDays: CONFIG.certs.warnDays, downDays: CONFIG.certs.downDays });
+  const now = dev("2026-11-09T00:46:31Z");
+  assert.equal(now.verdict, "WARN");
+  assert.equal(now.reason, "the certificate served for dev.postmark.town expires in 10.9 days (2026-11-19T22:42:14.000Z), under 21 days");
+  assert.equal(dev("2026-11-12T22:41:00Z").verdict, "WARN");
+  assert.equal(dev("2026-11-12T22:43:00Z").verdict, "DOWN");
+});
+
+test("§16 the host list covers every 443 server_name this repo's nginx files serve, and never pages.postmark.town", () => {
+  const served = new Set();
+  for (const f of _rd(join(OFFICE_ROOT, "deploy")).filter((n) => /^nginx-.*\.conf$/.test(n))) {
+    const text = readFileSync(join(OFFICE_ROOT, "deploy", f), "utf8").replace(/#.*$/gm, "");
+    for (const block of text.split(/^\s*server\s*\{/m).slice(1)) {
+      if (!/^\s*listen\s+(\[::\]:)?443\b/m.test(block)) continue;
+      for (const name of /^\s*server_name\s+([^;]+);/m.exec(block)?.[1].trim().split(/\s+/) ?? []) served.add(name);
+    }
+  }
+  assert.ok(served.size >= 6, `read ${[...served]}; the parse is wrong`);
+  for (const name of served) assert.ok(CONFIG.certs.hosts.includes(name), `${name} is served on 443 by deploy/nginx-*.conf and CONFIG.certs does not watch it`);
+  assert.ok(!CONFIG.certs.hosts.includes("pages.postmark.town"), "pages has no DNS and no block of its own");
+});
+
+test("§16 THE TICK: one row per host, so a host that goes wrong speaks alone", async () => {
+  const t = await tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec({ cert: (h) => (h === "meepo.online" ? new Error("Command failed: openssl s_client -connect 127.0.0.1:443 -servername meepo.online") : FIXTURE_CERT) }), state: {}, nowMs: T0, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const rows = t.probes.filter((p) => p.kind === "cert");
+  assert.equal(rows.length, 12);
+  assert.deepEqual(rows.filter((p) => p.verdict !== "OK").map((p) => `${p.key}:${p.verdict}`), ["cert_meepo_online:STALE"]);
+  assert.equal(probeOf(t, "cert_meepo_online").label, "the certificate for meepo.online");
+  assert.deepEqual(newAlerts(t), ["cert_meepo_online:onset"]);
+});
+
+// ── §17 ──
+
+const RUN_U = [30367, 30370, 33555, 33565, 33566, 33570, 35758, 35860, 41136, 41158, 49892, 49901, 50323, 54397, 55707, 67445, 67468]
+  .map((n) => `run-u${n}.service                  loaded failed failed /usr/bin/node a one-off by hand`);
+const FAILED_1109 = ["certbot.service                     loaded failed failed Certbot", ...RUN_U,
+  "wright-rerun-s83-1790426624.service loaded failed failed /usr/bin/systemctl start postmark-settlement.service"].join("\n") + "\n";
+const MANIFEST = JSON.parse(readFileSync(CONFIG.failedUnits.manifest, "utf8"));
+
+test("§17 the box's list of 11-09: certbot and a leftover rerun are a WARN, and 17 run-u* units are counted, never alarmed", () => {
+  const r = classifyFailedUnits({ text: FAILED_1109, manifestNames: manifestUnitNames(MANIFEST) });
+  assert.equal(r.verdict, "WARN");
+  assert.equal(r.reason, "2 units outside the manifest failed: certbot.service; wright-rerun-s83-1790426624.service; and 17 transient run-u* units (counted, never alarmed)");
+  assert.deepEqual(r.detail, { failed: ["certbot.service", "wright-rerun-s83-1790426624.service"], transient: 17 });
+  const transientOnly = classifyFailedUnits({ text: RUN_U.join("\n"), manifestNames: manifestUnitNames(MANIFEST) });
+  assert.equal(transientOnly.verdict, "OK", "a transient unit is never DOWN, nor a WARN");
+  assert.match(transientOnly.reason, /^no unit has failed; and 17 transient run-u\* units/);
+});
+
+test("§17 a unit the roll-call manifest names is DOWN, by the service its timer starts: the 11-04 backup's failure", () => {
+  const r = classifyFailedUnits({ text: "● postmark-world2-backup.service loaded failed failed World 2.0 durability\ncertbot.service loaded failed failed Certbot\n", manifestNames: manifestUnitNames(MANIFEST) });
+  assert.equal(r.verdict, "DOWN");
+  assert.equal(r.reason, "1 unit the roll-call manifest names failed: postmark-world2-backup.service (the World 2.0 durability lane); 1 unit outside the manifest failed: certbot.service");
+  const names = manifestUnitNames(MANIFEST);
+  for (const row of MANIFEST.units) {
+    assert.ok(names.has(row.unit), row.unit);
+    assert.ok(names.has(row.unit.replace(/\.timer$/, ".service")), `${row.unit}'s service`);
+  }
+  assert.ok(MANIFEST.units.length > 20);
+  assert.ok(TRANSIENT_UNIT.test("run-u30367.service") && TRANSIENT_UNIT.test("run-r6f3e9a.scope"));
+  assert.ok(!TRANSIENT_UNIT.test("postmark-run-u1.service") && !TRANSIENT_UNIT.test("runner.service"));
+  assert.deepEqual(parseFailedUnits("● a.service loaded failed failed A\n  b.timer loaded failed failed B\n\n"), ["a.service", "b.timer"]);
+});
+
+test("§17 none failed is OK; a systemctl that cannot answer is STALE; an unread manifest is STALE and still names the units", () => {
+  assert.equal(classifyFailedUnits({ text: "", manifestNames: new Map() }).verdict, "OK");
+  const blind = classifyFailedUnits({ text: null, error: "System has not been booted with systemd as init system (PID 1). Can't operate." });
+  assert.equal(blind.verdict, "STALE");
+  assert.match(blind.reason, /could not list the box's failed units \(System has not been booted/);
+  const noManifest = classifyFailedUnits({ text: "certbot.service loaded failed failed Certbot\n", manifestNames: null, manifestError: "ENOENT", manifestPath: "/srv/postmark-office/deploy/box-rollcall-manifest.json" });
+  assert.equal(noManifest.verdict, "STALE");
+  assert.match(noManifest.reason, /box-rollcall-manifest\.json could not be read \(ENOENT\) to say which matter: certbot\.service/);
+});
+
+// ── §18 ──
+
+test("§18 shipped is OK; the 11-04 failure is DOWN by its stage, its stderr kept off the board; a dump without its base backup WARNs", () => {
+  const nowMs = Date.parse("2026-11-04T09:00:00Z");
+  const r = (over) => classifyBackup({ raw: BACKUP(over), nowMs, staleAfterMs: CONFIG.backup.staleAfterMs, path: CONFIG.backup.path });
+  const ok = r({ at: "2026-11-04T08:15:20Z" });
+  assert.equal(ok.verdict, "OK");
+  assert.equal(ok.reason, "shipped, a 112M dump off the box 44m ago (2026-11-04T08:15:20Z)");
+  const failed = r({ at: "2026-11-04T08:12:02Z", status: "failed", stage: "ship", detail: "push failed — the dump is on the box and NOWHERE ELSE" });
+  assert.equal(failed.verdict, "DOWN");
+  assert.equal(failed.reason, "the nightly backup failed at its ship stage (2026-11-04T08:12:02Z): the store has no off-box copy of that night, and the receipt's detail and journalctl -u postmark-world2-backup say why");
+  assert.doesNotMatch(failed.reason, /NOWHERE/, "a tool's stderr stays off the public board");
+  assert.equal(r({ at: "2026-11-04T08:15:20Z", status: "shipped-no-basebackup" }).verdict, "WARN");
+  assert.equal(r({ at: "2026-11-04T08:15:20Z", status: "skipped" }).verdict, "DOWN", "a word that is not shipped is read as not shipped");
+  assert.equal(r({ at: "2026-11-04T08:15:20Z", status: undefined }).verdict, "DOWN");
+});
+
+test("§18 past the roll-call's 1,560-minute allowance is STALE, a failure outranks its age, and an unread receipt is STALE", () => {
+  const row = MANIFEST.units.find((u) => u.unit === CONFIG.backup.unit);
+  assert.equal(CONFIG.backup.staleAfterMs, row.heartbeat.stale_after_minutes * MINUTE, `the allowance is ${CONFIG.backup.unit}'s row in the roll-call manifest`);
+  const at = Date.parse("2026-11-04T08:15:20Z");
+  const r = (over, nowMs) => classifyBackup({ raw: BACKUP({ at: "2026-11-04T08:15:20Z", ...over }), nowMs, staleAfterMs: CONFIG.backup.staleAfterMs });
+  assert.equal(r({}, at + 1559 * MINUTE).verdict, "OK");
+  const stale = r({}, at + 1561 * MINUTE);
+  assert.equal(stale.verdict, "STALE");
+  assert.match(stale.reason, /last shipped 1d 2h ago \(2026-11-04T08:15:20Z\), past its 1d 2h allowance: the lane has stopped/);
+  const oldFail = r({ status: "failed", stage: "dump" }, at + 30 * HOUR);
+  assert.equal(oldFail.verdict, "DOWN");
+  assert.match(oldFail.reason, /; and nothing has run since, 1d 6h by its own at \(allowance 1d 2h\)$/);
+  assert.equal(classifyBackup({ raw: null, readError: "ENOENT", nowMs: at }).verdict, "STALE");
+  assert.equal(classifyBackup({ raw: "{ half", nowMs: at }).verdict, "STALE");
+  assert.equal(classifyBackup({ raw: JSON.stringify({ status: "shipped" }), nowMs: at }).verdict, "STALE");
+});
+
+// ── §19 ──
+
+const TRIP = (iso, door = "mcp household") => ({ atMs: Date.parse(iso), door });
+
+test("§19 Wright's first instance: two trips at the household door are a WARN, naming the door and never the error", () => {
+  const lines = parseJournalJson([
+    JOURNAL_LINE(Date.parse("2026-11-09T00:01:04Z"), "[office] mcp household: the office tripped: error: cannot pull with rebase: You have unstaged changes."),
+    JOURNAL_LINE(Date.parse("2026-11-09T00:01:21Z"), "[office] mcp household: the office tripped: error: cannot pull with rebase: You have unstaged changes."),
+  ].join("\n"));
+  const nowMs = Date.parse("2026-11-09T00:05:00Z");
+  const r = classifyOfficeTripped({ trips: lines.map((e) => ({ atMs: e.atMs, door: tripDoor(e.message) })), nowMs, sinceMs: nowMs - 25 * MINUTE, windowMs: 10 * MINUTE, threshold: CONFIG.officeTripped.threshold });
+  assert.equal(r.verdict, "WARN");
+  assert.equal(r.reason, "the office tripped 2 times in the last 25m: mcp household ×2 (00:01:04Z; 00:01:21Z)");
+  assert.doesNotMatch(r.reason, /rebase|unstaged/, "the error stays off the public board");
+});
+
+test("§19 five on one door inside ten minutes is DOWN; five over two doors is a WARN; no trip is OK; an unread journal STALE", () => {
+  const nowMs = Date.parse("2026-11-09T00:20:00Z");
+  const c = (trips) => classifyOfficeTripped({ trips, nowMs, sinceMs: nowMs - 25 * MINUTE, windowMs: 10 * MINUTE, threshold: 5 });
+  const five = ["00:10:00", "00:11:00", "00:12:00", "00:13:00", "00:19:59"].map((t) => TRIP(`2026-11-09T${t}Z`));
+  const down = c(five);
+  assert.equal(down.verdict, "DOWN");
+  assert.match(down.reason, /^a door tripped 5 or more times inside 10m: mcp household ×5 \(00:10:00Z; 00:11:00Z; 00:12:00Z; 00:13:00Z; and 1 more\)$/);
+  assert.equal(c([...five.slice(0, 3), TRIP("2026-11-09T00:14:00Z", "mcp world"), TRIP("2026-11-09T00:15:00Z", "mcp world")]).verdict, "WARN");
+  assert.equal(c([]).verdict, "OK");
+  assert.equal(classifyOfficeTripped({ trips: null, journalWhy: "spawnSync journalctl ENOENT", nowMs, sinceMs: nowMs }).verdict, "STALE");
+  assert.equal(tripDoor("[office] mcp household: the office tripped: error: x"), "mcp household");
+  assert.equal(tripDoor("[office] answered 500 (the office tripped): Client has encountered a connection error"), "a REST door (answered 500)");
+  assert.equal(tripDoor("[office] something new about the office tripped"), "a door the line does not name");
+});
+
+// ── §21 the acknowledgement ──
+
+const ACK = (over = {}) => ({ probe: "failed_units", issue: "STAR-151", until: new Date(T0 + 6 * DAY_MS).toISOString(), ...over });
+
+test("§21 judgeAcks: an issue and an expiry within 7 days, or refused with a note on the board", () => {
+  const keys = new Set(["failed_units", "cert_dev_postmark_town"]);
+  const j = (rows, over = {}) => judgeAcks({ acks: rows }, { nowMs: T0, keys, ...over });
+  assert.deepEqual([...j([ACK()]).live], [["failed_units", { issue: "STAR-151", until: new Date(T0 + 6 * DAY_MS).toISOString() }]]);
+  assert.equal(j([ACK({ issue: "https://linear.app/postmark-town/issue/POS-968" })]).live.size, 1, "a link is an issue too");
+  const refused = j([
+    ACK({ issue: "" }), ACK({ issue: "soon" }), ACK({ until: new Date(T0 + ACK_MAX_MS + MINUTE).toISOString() }),
+    ACK({ until: new Date(T0 - MINUTE).toISOString() }), ACK({ probe: "no_such_probe" }), ACK({ until: "whenever" }), { issue: "STAR-1" },
+  ]);
+  assert.equal(refused.live.size, 0);
+  assert.deepEqual(refused.notes.map((n) => n.replace(/^acks\[\d\] (\(\w+\) )?/, "")), [
+    "carries no issue link or id; refused", "carries no issue link or id; refused",
+    `runs to ${new Date(T0 + ACK_MAX_MS + MINUTE).toISOString()}, more than 7 days out; refused`,
+    `expired at ${new Date(T0 - MINUTE).toISOString()} and applies to nothing; take it out of the file`,
+    "names a probe the board does not carry; refused", "has no readable until; refused", "names no probe; refused",
+  ]);
+  assert.equal(j([ACK(), ACK({ issue: "POS-1" })]).notes[0], "acks[1] (failed_units) is a second ack for one probe; the first stands");
+  assert.deepEqual(judgeAcks(null, { nowMs: T0 }), { live: new Map(), notes: [] });
+  assert.match(judgeAcks(null, { nowMs: T0, error: "acks.json could not be read (Unexpected token)" }).notes[0], /^acks: acks\.json could not be read .*; no acknowledgement applies until it reads$/);
+  assert.match(judgeAcks({ nope: 1 }, { nowMs: T0 }).notes[0], /holds no `acks` list/);
+});
+
+test("§21 with no ack and none held, applyAck hands back transition's own answer, untouched", () => {
+  const cases = [
+    [null, { verdict: "DOWN", reason: "x" }, T0],
+    [{ verdict: "DOWN", reason: "x", since: T0, last_alert_at: T0 }, { verdict: "DOWN", reason: "x" }, T0 + 12 * HOUR],
+    [{ verdict: "DOWN", reason: "x", since: T0, last_alert_at: T0 }, { verdict: "OK", reason: "y" }, T0 + HOUR],
+    [{ verdict: "OK", reason: "y", since: T0, last_alert_at: null }, { verdict: "WARN", reason: "w" }, T0 + HOUR],
+    [{ verdict: "OK", reason: "y", since: T0, last_alert_at: null }, { verdict: "OK", reason: "y" }, T0 + HOUR],
+  ];
+  for (const [prev, next, nowMs] of cases) {
+    const t = transition({ prev, next, nowMs });
+    const a = applyAck({ prev, next, alert: t.alert, state: t.state, ack: null, nowMs });
+    assert.equal(a.alert, t.alert);
+    assert.equal(a.state, t.state);
+  }
+  assert.equal(findingOf({ verdict: "DOWN", reason: "at 87% used (4.9G free)" }), "DOWN: at #% used (#.#G free)", "a number in the sentence is not a change");
+  assert.equal(findingOf({ verdict: "WARN", reason: "r", finding: "|certbot.service" }), "WARN: |certbot.service");
+});
+
+test("§21 THE TICK: an acked standing red reads as before and says nothing, its reminder is held, and a change in its finding re-barks", async () => {
+  const one = "postmark-world2-backup.service loaded failed failed World 2.0 durability\n";
+  const two = `${one}postmark-ferry.service loaded failed failed the ferry\n`;
+  const acks = { acks: [ACK({ issue: "POS-968" })] };
+  const at = (failed, state, nowMs, a = acks) => tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec({ failed }), state, nowMs, config: FIXTURE_CONFIG, readDisk: GREEN_DISK, acks: a });
+  const fu = (t) => t.alerts.filter((x) => x.key === "failed_units").map((x) => x.alert.kind);
+  const t1 = await at(one, {}, T0, null);
+  assert.deepEqual(fu(t1), ["onset"]);
+  const t2 = await at(one, t1.nextState, T0 + 10 * MINUTE);
+  assert.deepEqual(fu(t2), []);
+  const p2 = probeOf(t2, "failed_units");
+  assert.equal(p2.verdict, "DOWN", "it reads on the board as before");
+  assert.deepEqual(p2.ack, { issue: "POS-968", until: ACK().until, finding: "DOWN: postmark-world2-backup.service|" });
+  // Twelve hours on, the reminder an unacked DOWN would send is held, and the change log says it was.
+  const t3 = await at(one, t2.nextState, T0 + 12 * HOUR);
+  assert.deepEqual(fu(t3), []);
+  assert.deepEqual(t3.history.filter((h) => h.key === "failed_units").map((h) => [h.alert, h.held_by_ack, h.ack]), [[null, "reminder", "POS-968"]]);
+  // A second unit fails: the finding changed, so it barks, says why, and the ack is spent.
+  const t4 = await at(two, t3.nextState, T0 + 12 * HOUR + 10 * MINUTE);
+  assert.deepEqual(fu(t4), ["onset"]);
+  const msg = composeMessage({ alerts: t4.alerts.filter((x) => x.key === "failed_units"), board: { summary: "s" }, nowIso: t4.nowIso });
+  assert.match(msg, /DOWN — the box's failed units: 2 units the roll-call manifest names failed: .*\. Its acknowledgement \(POS-968\) covered an earlier finding, so this one barks\./);
+  assert.equal(probeOf(t4, "failed_units").ack, undefined, "a spent ack is not shown as holding anything");
+  // Spent: the same two units now say nothing more, as any DOWN that stays the same.
+  const t5 = await at(two, t4.nextState, T0 + 12 * HOUR + 20 * MINUTE);
+  assert.deepEqual(fu(t5), []);
+});
+
+test("§21 an ack that expires while its finding stands barks once at once, and then the probe is an ordinary DOWN", async () => {
+  const one = "postmark-world2-backup.service loaded failed failed World 2.0 durability\n";
+  const acks = { acks: [ACK({ until: new Date(T0 + HOUR).toISOString() })] };
+  const at = (state, nowMs, failed = one) => tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec({ failed }), state, nowMs, config: FIXTURE_CONFIG, readDisk: GREEN_DISK, acks });
+  const fu = (t) => t.alerts.filter((x) => x.key === "failed_units").map((x) => `${x.alert.kind} ${x.alert.ack_note ?? ""}`.trim());
+  const t1 = await at({}, T0);
+  assert.deepEqual(fu(t1), [], "acked from its first tick: bound to the finding as it stands, so even the onset is held");
+  const t2 = await at(t1.nextState, T0 + 70 * MINUTE);
+  assert.deepEqual(fu(t2), [`onset Its acknowledgement (STAR-151) ended at ${new Date(T0 + HOUR).toISOString()} and it still reads DOWN.`]);
+  assert.ok(t2.notes.some((n) => /expired at .* take it out of the file/.test(n)));
+  const t3 = await at(t2.nextState, T0 + 80 * MINUTE);
+  assert.deepEqual(fu(t3), []);
+  // a recovery under an ack still says so
+  const back = await at(t1.nextState, T0 + 20 * MINUTE, "");
+  assert.deepEqual(fu(back), ["recovered"]);
+});
+
+// ── §20 the change log ──
+
+test("§20 run() keeps the change log beside the state: every probe on its first tick, then only what moved or spoke, with delivery", async () => {
+  assert.equal(besideState("/srv/postmark-sentinel/state.json", "history.jsonl"), "/srv/postmark-sentinel/history.jsonl");
+  assert.equal(besideState("/srv/postmark-sentinel/state.json", "acks.json"), "/srv/postmark-sentinel/acks.json");
+  assert.equal(besideState("/x/.site-sentinel-state.json", "history.jsonl"), "/x/.site-sentinel-history.jsonl");
+  assert.equal(besideState("/x/s", "acks.json"), "/x/s.acks.json");
+
+  const dir = tempDir("sentinel-history-");
+  const statePath = join(dir, "state.json");
+  const history = join(dir, "history.jsonl");
+  const go = (nowMs) => run({
+    argv: ["node", "site-sentinel.mjs", "--state", statePath, "--out", join(dir, "status.json")],
+    env: { SENTINEL_DISCORD_WEBHOOK: "https://discord.test/hook" },
+    fetchImpl: stubFetch({ ...GREEN_TABLE, "https://postmark.town/daily/": { status: 502, body: "" }, "https://discord.test/hook": { status: 204 } }),
+    exec: stubExec(), nowMs, log: () => {}, errLog: () => {}, readDisk: GREEN_DISK,
+  });
+  const r1 = await go(T0);
+  const lines1 = readFileSync(history, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.equal(lines1.length, r1.board.probes.length, "the first tick is every probe's first verdict");
+  const daily = lines1.find((h) => h.key === "site_daily");
+  assert.deepEqual([daily.from, daily.to, daily.alert, daily.delivered], [null, "DOWN", "onset", true]);
+  assert.ok(lines1.every((h) => h.at === new Date(T0).toISOString() && typeof h.reason === "string"));
+  await go(T0 + 10 * MINUTE);
+  const lines2 = readFileSync(history, "utf8").trim().split("\n").slice(lines1.length).map((l) => JSON.parse(l));
+  assert.ok(lines2.every((h) => h.from !== h.to || h.alert), JSON.stringify(lines2));
+  assert.ok(!lines2.some((h) => h.key === "site_daily"), "the same DOWN ten minutes on is not a change");
+});
+
+test("§20 appendHistory keeps a year and stays inside its byte cap", () => {
+  const dir = tempDir("sentinel-history-prune-");
+  const path = join(dir, "history.jsonl");
+  const now = Date.parse("2027-11-09T00:00:00Z");
+  _wf(path, [
+    { at: "2026-11-01T00:00:00Z", key: "old", to: "DOWN" }, { at: "2026-11-20T00:00:00Z", key: "kept", to: "OK" },
+  ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  assert.deepEqual(appendHistory(path, [{ at: "2027-11-09T00:00:00Z", key: "new", to: "OK" }], { nowMs: now }), { appended: 1, pruned: true });
+  assert.deepEqual(readFileSync(path, "utf8").trim().split("\n").map((l) => JSON.parse(l).key), ["kept", "new"], "354 days back is kept, 373 is not");
+  assert.deepEqual(appendHistory(path, [{ at: "2027-11-09T00:10:00Z", key: "next", to: "OK" }], { nowMs: now }), { appended: 1, pruned: false }, "an ordinary tick only appends");
+  assert.deepEqual(appendHistory(path, [], { nowMs: now }), { appended: 0, pruned: false });
+  // the byte cap: past it, the next append keeps the newest lines inside half of it
+  const capped = join(dir, "capped.jsonl");
+  for (let i = 0; i < 40; i++) appendHistory(capped, [{ at: "2027-11-09T00:00:00Z", key: `k${i}`, reason: "x".repeat(40) }], { nowMs: now, maxBytes: 1000 });
+  const kept = readFileSync(capped, "utf8").trim().split("\n");
+  assert.ok(Buffer.byteLength(readFileSync(capped)) <= 1000, "never past the cap");
+  assert.equal(JSON.parse(kept.at(-1)).key, "k39", "the newest line is always kept");
+});
+
+test("§21 the ack file beside the state: none is no acks; one that cannot be read is said on the board, and nothing is acked", async () => {
+  const dir = tempDir("sentinel-acks-");
+  assert.deepEqual(readAcks(join(dir, "acks.json")), { acks: null, error: null });
+  _wf(join(dir, "acks.json"), "{ not json");
+  assert.match(readAcks(join(dir, "acks.json")).error, /acks\.json could not be read/);
+  const { board } = await run({
+    argv: ["node", "site-sentinel.mjs", "--state", join(dir, "state.json"), "--out", join(dir, "status.json")],
+    env: {}, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec(), nowMs: T0, log: () => {}, errLog: () => {}, readDisk: GREEN_DISK,
+  });
+  assert.ok(board.alerting.notes.some((n) => /^acks: .*acks\.json could not be read .*no acknowledgement applies until it reads$/.test(n)), board.alerting.notes.join(" | "));
+  assert.ok(!board.probes.some((p) => p.ack));
 });

@@ -1319,6 +1319,78 @@ cat /srv/postmark-sentinel/status.json | head -40
   If this box is down or the timer is masked, nothing here alarms. That needs an
   off-box heartbeat and is deliberately out of scope.
 
+### The store, residents' 5xx, certificates, failed units, the backup and trips (POS-968)
+
+Six more probes run inside the same 10-minute tick (`tools/site-sentinel.mjs`
+§14–§19), from the STAR-161 sitting (Darko, 2026-11-08): *"make sure that we
+don't accidentally drop any alarms in the move. false alarms are fine as long as
+we iterate and fix them as we find them."* Each reads something the box already
+writes, as meepo. No unit, timer or webhook is added. A source the sentinel
+cannot read makes its probe STALE, never OK. Every reason is written for the
+public board, so none carries a resident's handle, a query or an error's text.
+
+The store, residents' 5xx and trip probes count events over the last 25 minutes,
+in any 10-minute span of them. The span is the ruled window. The lookback is
+longer than one tick, so a burst that straddles two ticks is counted whole. A
+finished burst reads DOWN for one tick longer before it recovers.
+
+| Probe | Reads | Says |
+|---|---|---|
+| `store_health` | `/srv/postmark-office/telemetry/store-txn-4380.json` (the office's store watch, each minute) and the office's journal (`journalctl -u postmark-office.service`) for `terminating connection due to idle-in-transaction timeout` | **DOWN:** a kill with an office 500 within 10 min of it (POS-963). **WARN:** a kill with no 500 beside it; a session idle in a transaction for 5 s or more; a minute the watch could not ask the store. **STALE:** the watch older than 5 min, or the record or the journal unreadable. |
+| `resident_5xx` | `/srv/postmark-office/telemetry/access-YYYY-MM-DD.jsonl`, by the moment each request was answered, routes masked (`GET /quests/<h>`) | **DOWN:** 5 or more 5xx on one route within 10 min (POS-965). Fewer are named and not alarmed. **STALE:** no log, or no line in 25 min (the sentinel's own `GET /api/` lands one each tick). |
+| `cert_<host>` (one row per host) | The certificate nginx serves, read with `openssl s_client -connect 127.0.0.1:443 -servername <host>` | **WARN:** under 21 days. **DOWN:** under 7 days, expired, or a certificate that does not name the host. **STALE:** the handshake printed none. |
+| `failed_units` | `systemctl list-units --failed --plain --no-legend`, against `deploy/box-rollcall-manifest.json` | **DOWN:** a unit the manifest names (a timer's row covers its service). **WARN:** any other failed unit. Transient `run-u*` units are counted in the reason and never alarm. |
+| `backup_outcome` | `/srv/world2-lab/state/backup.json` | **DOWN:** `failed` (it names the stage), or any status that is not `shipped`. **WARN:** `shipped-no-basebackup`. **STALE:** older than 1,560 min, the roll-call's allowance. |
+| `office_tripped` | The office's journal: `the office tripped` lines, counted by door (`mcp household`, a REST door) | **WARN:** any trip. **DOWN:** 5 or more on one door within 10 min, the same line as `resident_5xx`. The MCP door wraps a trip in HTTP 200, so `resident_5xx` cannot see it. |
+
+The hosts are `CONFIG.certs.hosts`: every `listen 443` server name. The test reads
+this repo's `deploy/nginx-*.conf` and refuses a name missing from the list.
+meepo.online, starstory.online and starforge-atelier.online are served from nginx
+files that exist only on the box, so a host added there is added to the list by
+hand. pages.postmark.town is not on it. It has no DNS and no block of its own.
+
+**What the sentinel's user cannot read.** The Postgres log is `postgres:adm` and
+meepo is not in adm, so the kills come from the office's own journal line
+instead. That journal is meepo's (the office runs as meepo). A 502 or 504 that
+nginx answers for an office that is down or slow never reaches the office's
+access log, and nginx's log is adm's too. The doors probes catch an office that
+is down, and a slow one is not counted.
+
+**The change log.** Every tick appends one line to
+`/srv/postmark-sentinel/history.jsonl` for each probe whose verdict changed or
+that spoke: `at`, `key`, `from`, `to`, `reason`, `alert`, and `delivered` when a
+post went out. It keeps 366 days, and at most 64 MB. Read the last day's changes with:
+
+```sh
+tail -n 200 /srv/postmark-sentinel/history.jsonl | jq -r '"\(.at) \(.key) \(.from) -> \(.to) \(.alert // "")"'
+```
+
+**Acknowledging a standing red.** The operator writes
+`/srv/postmark-sentinel/acks.json` (readable by meepo), beside `state.json`:
+
+```json
+{ "acks": [
+  { "probe": "failed_units", "issue": "STAR-151", "until": "2026-11-15T00:00:00Z" }
+] }
+```
+
+- `probe` is the board's key. `issue` is an issue id or a link. `until` is no more than 7 days out. An ack that runs further is refused, not shortened.
+- The first tick that reads an ack binds it to the probe's finding as it stands. While that finding holds, the probe reads on the board as before (with `ack` beside it) and posts nothing: no onset, no 12-hour reminder.
+- Any change in the finding posts at once and spends the ack. A new ack, with a new `until`, binds to the new finding.
+- An ack that expires, or is taken out of the file, while its finding stands posts once at once.
+- An ack that is refused, expired or unreadable is named in the board's `alerting.notes`, and it applies to nothing.
+
+The six probes above show their finding on the board as `finding`. Any other
+probe's finding is its verdict and its reason with every number masked, so a
+clock in the sentence is not a change. Check the acks and the new rows after a
+deploy with:
+
+```sh
+sudo -u meepo systemctl start postmark-site-sentinel
+jq -r '.probes[] | select(.key|test("^(store_health|resident_5xx|cert_|failed_units|backup_outcome|office_tripped)")) | "\(.key) \(.verdict) \(.reason)"' /srv/postmark-sentinel/status.json
+jq -r '.alerting.notes[]?' /srv/postmark-sentinel/status.json
+```
+
 ## The operator dashboards (`/ops/`, hub generated since 2026-08-11)
 
 Seven static surfaces under `/ops/`, all written to `/var/www/postmark-ops/`
