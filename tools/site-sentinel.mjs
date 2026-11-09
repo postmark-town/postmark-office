@@ -19,7 +19,8 @@
 // posture: "This script only reads and reports — it never writes to any world."
 // It writes to no clone (§8 READS the office's town clone, with git's optional
 // locks off), holds no pen, takes no lock. Its only writes are its own
-// state file, its own status board, and an HTTP POST to a Discord webhook.
+// state file, its own status board, its own change log (§20), and an HTTP POST
+// to a Discord webhook.
 //
 // ── WHAT IT WILL NOT DO, AND WHY ────────────────────────────────────────────
 //
@@ -151,6 +152,26 @@
 //                 or it is DOWN, naming the repo, the run and the failed job's
 //                 annotation. No run yet is INFO; a repo the token cannot see
 //                 (postmark-telemetry is private) is UNKNOWN (POS-631).
+// 14–19. POS-968 (the STAR-161 sitting, Darko 2026-11-08), each reading
+//                 something the box already writes:
+// 14. STORE     — the office's store watch (telemetry/store-txn-4380.json)
+//                 and Postgres's idle-in-transaction kills as the office's
+//                 journal logs them. A kill beside an office 500 is DOWN; a
+//                 kill alone, or a session stuck idle in a transaction, WARN.
+// 15. 5XX       — the office's own access log, per route with the handle
+//                 masked: 5 or more 5xx on one route inside 10 minutes is DOWN.
+// 16. CERTS     — the certificate nginx SERVES for each host, over TLS to
+//                 127.0.0.1:443: under 21 days WARN, under 7 days or expired
+//                 DOWN, and one that does not name its host DOWN.
+// 17. UNITS     — systemctl's failed units: one the roll-call manifest names
+//                 is DOWN, any other WARN, a transient run-u* only counted.
+// 18. BACKUP    — the nightly backup's own receipt: not shipped is DOWN, past
+//                 the roll-call's 1,560-minute allowance STALE.
+// 19. TRIPS     — "the office tripped" lines in the office's journal, by door:
+//                 any is WARN, 5 on one door inside 10 minutes DOWN. The MCP
+//                 door wraps a trip in HTTP 200, so §15 cannot see it.
+// §20 is the change log every transition is appended to, and §21 the
+// acknowledgement a standing red may carry.
 //
 // ── ONE ALARM ROUTE (POS-556) ───────────────────────────────────────────────
 //
@@ -192,10 +213,13 @@
 // Usage:
 //   node tools/site-sentinel.mjs [--state <state.json>] [--out <status.json>]
 //                                [--json] [--dry-run] [--now <iso>]
+//                                [--history <history.jsonl>] [--acks <acks.json>]
+//   (§20's history and §21's acks default to files beside the state.)
 
-import { readFileSync, writeFileSync, mkdirSync, statSync, statfsSync, existsSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, statSync, statfsSync, existsSync, realpathSync, appendFileSync, renameSync, openSync, readSync, closeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { X509Certificate } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // The town clock, imported rather than restated. crossings.mjs was split out of
 // world.mjs for exactly this: a small tool that needs "how many crossings old is
@@ -396,6 +420,77 @@ export const CONFIG = {
     step: "linear",
     perPage: 10,
   },
+
+  // §14–§19 (POS-968). The events the store, 5xx and trip probes count are
+  // judged over the last `lookbackMs`, in any `windowMs` span of it. Ten
+  // minutes is the ruled window. The lookback is longer than one tick, on
+  // purpose: the timer fires every 10 minutes with up to 45 s of jitter, and a
+  // request's line lands when it is answered, so a burst that straddles two
+  // ticks is counted whole on the second rather than halved across both (Darko
+  // 2026-11-08 17:24, "don't accidentally drop any alarms"). The cost is that a
+  // finished burst reads DOWN for one tick longer before it recovers.
+  events: { windowMs: 10 * MINUTE, lookbackMs: 25 * MINUTE },
+  // The prod office's journal: its kill and trip lines. It runs as meepo, as
+  // this does, so journald keeps its lines in a journal meepo can read without
+  // adm (measured 2026-11-09).
+  officeJournal: { unit: "postmark-office.service" },
+  // The prod office's access log, one file per UTC day, named by the moment
+  // each request was ANSWERED (src/telemetry.mjs); `ts` is when it started.
+  accessLog: { dir: "/srv/postmark-office/telemetry" },
+
+  // §14 — written every minute by the office's src/store-txn-watch.mjs, named
+  // by the prod office's port (deploy/postmark-office.service, --port 4380).
+  // Five minutes is the roll-call's own allowance for this file's calm_at.
+  storeHealth: {
+    key: "store_health", label: "the office's store",
+    path: "/srv/postmark-office/telemetry/store-txn-4380.json",
+    staleAfterMs: 5 * MINUTE,
+  },
+
+  // §15 — the ruled line: 5 or more 5xx on one route inside the window.
+  resident5xx: { key: "resident_5xx", label: "the residents' 5xx", threshold: 5 },
+
+  // §16 — every host nginx serves over TLS on this box: the server_name of
+  // every `listen 443` block. test/site-sentinel.test.mjs reads this repo's
+  // deploy/nginx-*.conf and refuses a 443 name missing here. meepo.online,
+  // starstory.online and starforge-atelier.online are served from nginx files
+  // that live only on the box (sites-enabled/mio-web, meepo, starforge-atelier;
+  // read 2026-11-09), so the test cannot read them: add a host here when one is
+  // added there. pages.postmark.town is not here: it has no DNS and no block of
+  // its own, and nginx answers its name with 1f4ee.town's certificate.
+  certs: {
+    keyPrefix: "cert",
+    connect: "127.0.0.1:443",
+    warnDays: 21,
+    downDays: 7,
+    timeoutMs: 10_000,
+    hosts: [
+      "postmark.town", "www.postmark.town", "dev.postmark.town", "panes.postmark.town",
+      "1f4ee.town", "www.1f4ee.town",
+      "meepo.online", "www.meepo.online", "starstory.online", "www.starstory.online",
+      "starforge-atelier.online", "www.starforge-atelier.online",
+    ],
+  },
+
+  // §17 — the roll-call's manifest is the list of units that matter. The box
+  // runs this file from the office tree, so the manifest beside it is the one
+  // the roll-call reads.
+  failedUnits: {
+    key: "failed_units", label: "the box's failed units",
+    manifest: join(HERE, "..", "deploy", "box-rollcall-manifest.json"),
+  },
+
+  // §18 — `unit` is not decoration: the allowance is the roll-call manifest
+  // row's stale_after_minutes for this unit, and the test refuses a mismatch.
+  backup: {
+    key: "backup_outcome", label: "the nightly backup",
+    path: "/srv/world2-lab/state/backup.json",
+    unit: "postmark-world2-backup.timer",
+    staleAfterMs: 1560 * MINUTE,
+  },
+
+  // §19 — the same line as §15, on the door §15 cannot see (see classifyOfficeTripped).
+  officeTripped: { key: "office_tripped", label: "the office's tripped doors", threshold: 5 },
 
   requestTimeoutMs: 20_000,
   // One reminder every twelve hours while a probe stays bad. Not per tick —
@@ -1471,6 +1566,667 @@ export function judgeQuietRange(cmp) {
     : { covered: true, held: null, error: null };
 }
 
+// ── §14–§19 what nothing watched (POS-968, the STAR-161 sitting) ─────────────
+//
+// THE RULING (Darko, 2026-11-08 17:13–17:24 EST): one alarm system, and this
+// file stays the town's half of it and its one Discord route. These probes are
+// the box's gaps the sitting's packet measured: Postgres killed an office read
+// and a resident got a 500 with nothing ringing (POS-963), the quest board
+// answered residents 503 in bursts all evening with nothing ringing (POS-965),
+// certbot failed on every run while dev's origin certificate ran out, a unit
+// failed 52 times unseen, and a backup that did not ship reached nobody. The
+// condition over all of it, verbatim: "make sure that we don't accidentally
+// drop any alarms in the move. false alarms are fine as long as we iterate and
+// fix them as we find them."
+//
+// So each starts at full strength, and AN UNREAD SOURCE IS STALE, never OK and
+// never UNKNOWN, for the reason the meeps and the law pen give: UNKNOWN never
+// alerts here and /fleet barks only on DOWN or STALE, so an unread source
+// read as UNKNOWN would be a blind probe read as silence.
+//
+// Each reads something the box already writes; nothing new runs. THE BOARD IS
+// PUBLIC (/ops/sentinel.json), so no reason below carries a handle, a query,
+// an error's text or a unit's name: a route is masked, a trip is named by its
+// door, a stuck session by its pid and pool, and the failed units by count (their
+// names ride `said`, which only the post, the change log and state.json carry) (POS-568 keeps the raw error out of what a
+// resident reads, and the board is read by anyone).
+
+/** The most events inside any one `windowMs` span. PURE: two pointers over the sorted times. */
+export function mostInWindow(times, windowMs) {
+  const t = [...(times ?? [])].filter(Number.isFinite).sort((a, b) => a - b);
+  let best = 0;
+  for (let lo = 0, hi = 0; hi < t.length; hi++) {
+    while (t[hi] - t[lo] > windowMs) lo++;
+    best = Math.max(best, hi - lo + 1);
+  }
+  return best;
+}
+
+const hhmmssZ = (ms) => `${new Date(ms).toISOString().slice(11, 19)}Z`;
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/** Up to `n` items, then how many were held back: a remainder that is not counted is a silent truncation. */
+const listSome = (items, n = 3) => `${items.slice(0, n).join("; ")}${items.length > n ? `; and ${items.length - n} more` : ""}`;
+
+// ── §14/§19 the office's journal: one read for the kills and the trips ───────
+//
+// The office logs Postgres's kill of an idle transaction as
+// `[store-pool pen] a held connection failed (officeRead): terminating
+// connection due to idle-in-transaction timeout`, and every last-resort catch
+// as `[office] <door>: the office tripped: <error>` (src/fault-words.mjs
+// faultLogged) or, at a REST door, `[office] answered 500 (the office tripped):
+// <error>` (src/server.mjs bounce). Postgres's own log is `postgres:adm 0640`
+// and this runs as meepo, which is not in adm; the office's journal is
+// meepo's, so this is the source the sentinel can read (measured 2026-11-09).
+export const KILL_LINE = /terminating connection due to idle-in-transaction timeout/;
+export const TRIP_LINE = /the office tripped/;
+
+/** journalctl's `-o json` lines, as { atMs, message }. MESSAGE is an array of bytes when it is not text. */
+export function parseJournalJson(text) {
+  const out = [];
+  for (const line of String(text ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    const atMs = Number(e?.__REALTIME_TIMESTAMP) / 1000;
+    const m = e?.MESSAGE;
+    const message = Array.isArray(m) ? Buffer.from(m).toString("utf8") : String(m ?? "");
+    if (Number.isFinite(atMs)) out.push({ atMs, message });
+  }
+  return out;
+}
+
+/**
+ * The unit's journal since `sinceMs`: { entries, seen, error }.
+ *
+ * AN EMPTY WINDOW IS TWO ANSWERS. A quiet office logs nothing for a while; a
+ * reader that cannot see the office's journal at all gets nothing either, and
+ * journalctl exits 0 for both (it only prints a hint for the second). So an
+ * empty window asks once more for the newest line of any age: one line means
+ * the reader can see, none means it is blind (`seen: false`), which §14 and
+ * §19 read as STALE.
+ */
+export function readOfficeJournal(unit, sinceMs, { exec = execFileSync, timeoutMs = CONFIG.requestTimeoutMs } = {}) {
+  const ask = (args) => String(exec("journalctl", ["-q", "-u", unit, ...args, "-o", "json", "--output-fields=MESSAGE", "--no-pager"], {
+    encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 * 2 ** 20, stdio: ["ignore", "pipe", "pipe"],
+  }));
+  try {
+    const entries = parseJournalJson(ask(["--since", `@${Math.floor(sinceMs / 1000)}`]));
+    if (entries.length) return { entries, seen: true, error: null };
+    return { entries, seen: parseJournalJson(ask(["-n", "1"])).length > 0, error: null };
+  } catch (e) {
+    return { entries: null, seen: false, error: (firstLine(e?.stderr) || firstLine(e?.message ?? e)).slice(0, 160) };
+  }
+}
+
+// ── §15 the office's access log ─────────────────────────────────────────────
+
+/** When a request was ANSWERED: its start plus its duration. A line lands in the log at that moment. */
+export function answeredAt(row) {
+  const t = Date.parse(row?.ts ?? "");
+  return Number.isFinite(t) ? t + (Number.isFinite(row?.ms) ? row.ms : 0) : NaN;
+}
+
+/**
+ * A route as the board may name it: the method, the door, and every segment
+ * past it masked. `/quests/<h>` is one route however many residents knock on
+ * it, which is the whole point (POS-965 was 398 503s spread across handles).
+ * The town's namespaced doors keep their second segment, since `/world/apex`
+ * and `/world/walkers` are different doors, not one door and a handle.
+ */
+const NAMESPACED = new Set(["world", "world2", "town", "ops", "oauth", ".well-known"]);
+export function routeOf(method, path) {
+  const segs = String(path ?? "").split("/").filter(Boolean);
+  const keep = segs.length && NAMESPACED.has(segs[0]) ? 2 : 1;
+  return `${method ?? "?"} /${segs.map((s, i) => (i < keep ? s : "<h>")).join("/")}`;
+}
+
+/**
+ * Every 5xx the office answered between `sinceMs` and `nowMs`, from the day
+ * files those moments fall in: { rows, newestMs, error }. `newestMs` is the
+ * newest line of any status answered in that span, or null: the sentinel's
+ * own GET /api/ lands one every tick, so an office that is answering is never
+ * without one, and none is a blind log, not a calm one.
+ *
+ * Reads whole day files (about 18 MB at a day's end), parsing only the lines a
+ * cheap test says are 5xx. Unread (a file that exists and cannot be read, or no
+ * file at all for the span) is `rows: null` with the reason.
+ */
+export function readAccessErrors(dir, { sinceMs, nowMs, read = readFileSync } = {}) {
+  const DAY = 24 * HOUR;
+  const days = [];
+  for (let d = Math.floor(sinceMs / DAY) * DAY; d <= nowMs; d += DAY) days.push(new Date(d).toISOString().slice(0, 10));
+  const rows = [];
+  let newestMs = null, found = 0;
+  for (const day of days) {
+    const file = join(dir, `access-${day}.jsonl`);
+    let text;
+    try { text = String(read(file, "utf8")); } catch (e) {
+      if (e?.code === "ENOENT") continue;
+      return { rows: null, newestMs: null, error: `${file} could not be read (${e?.code ?? e?.message ?? e})` };
+    }
+    found++;
+    const lines = text.split("\n");
+    for (const line of lines) {
+      if (!line.includes('"status":5')) continue;
+      let r;
+      try { r = JSON.parse(line); } catch { continue; }
+      if (!(r?.status >= 500 && r.status < 600)) continue;
+      const at = answeredAt(r);
+      if (at >= sinceMs && at <= nowMs) rows.push({ at, method: r.method ?? null, path: r.path ?? "", status: r.status });
+    }
+    // The newest line answered inside the span. Lines land in answer order, so
+    // the walk back from the end stops at the first one older than the span.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i]) continue;
+      const ts = /"ts":"([^"]*)"/.exec(lines[i])?.[1];
+      const ms = Number(/"ms":(\d+)/.exec(lines[i])?.[1] ?? 0);
+      const at = Date.parse(ts ?? "") + ms;
+      if (!Number.isFinite(at) || at > nowMs) continue;
+      if (at >= sinceMs) newestMs = Math.max(newestMs ?? at, at);
+      break;
+    }
+  }
+  if (!found) return { rows: null, newestMs: null, error: `there is no access log in ${dir} for ${days.join(" or ")}` };
+  return { rows, newestMs, error: null };
+}
+
+// ── §14 the store ───────────────────────────────────────────────────────────
+//
+// THE RULE (the sitting's call 2, option (i), ruled as recommended): "DOWN when
+// residents get 5 or more 5xx on one route in a 10-minute run, or a kill
+// coincides with a 500; WARN on a kill with no 500." This is the second half;
+// §15 is the first. A kill COINCIDES with a 500 when the office answered a 500
+// within the window of it: the journal and the access log share no request id,
+// so nearness in time is the one honest pairing. POS-963 is the shape: the read
+// started 18:09:03Z, Postgres killed its connection at 18:09:33Z, the office
+// logged the kill at 18:09:50Z and answered the resident 500 the same second.
+// A kill beside only 503s is a WARN here, by the ruling's word "500"; the 503s
+// are §15's to count.
+//
+// The store watch (src/store-txn-watch.mjs) adds what the kill line cannot: a
+// session idle inside a transaction for 5 s or more is a WARN the minute it is
+// seen, before the 30 s timeout kills it (it saw 18:09:10Z, pid 1730459, the
+// session Postgres killed at 18:09:33Z). A minute the watch could not ask the
+// store is a WARN too, in the watch's own words: it is not calm.
+//
+// PURE: `kills` and `answered500` are times (ms), or null when their source
+// was unread, with `journalWhy` / `accessError` saying why.
+const RANK = { DOWN: 4, STALE: 3, WARN: 2, OK: 1 };
+const worstOf = (parts) => parts.reduce((w, p) => (RANK[p.verdict] > RANK[w] ? p.verdict : w), "OK");
+const sayParts = (parts) => [...parts].sort((a, b) => RANK[b.verdict] - RANK[a.verdict]).map((p) => p.text).join("; ");
+
+export function classifyStoreHealth({
+  txnRaw = null, txnError = null, kills = null, journalWhy = null, answered500 = null, accessError = null,
+  nowMs, sinceMs, windowMs = 10 * MINUTE, staleAfterMs = 5 * MINUTE, path = "the store watch's record",
+} = {}) {
+  const parts = [];
+  const lookback = humanDuration(nowMs - sinceMs);
+
+  // The store watch's record. Its minutes past `nowMs` are not read, so a test can replay an hour against one file.
+  let txn = null;
+  let unread = null;
+  if (txnRaw == null) unread = `there is no store watch record at ${path}${txnError ? ` (${String(txnError).slice(0, 80)})` : ""}`;
+  else {
+    try { txn = JSON.parse(txnRaw); } catch (e) { unread = `the store watch record at ${path} does not parse (${String(e?.message ?? e).slice(0, 80)})`; }
+  }
+  const minutes = [...(Array.isArray(txn?.minutes) ? txn.minutes : []), ...(txn?.last_minute ? [txn.last_minute] : [])]
+    .filter((m) => Number.isFinite(Date.parse(m?.at ?? "")) && Date.parse(m.at) <= nowMs);
+  const lastMs = minutes.length ? Math.max(...minutes.map((m) => Date.parse(m.at))) : null;
+  if (!unread && lastMs == null) unread = `the store watch record at ${path} carries no minute it looked`;
+  if (unread) {
+    parts.push({ verdict: "STALE", tag: "watch-unread", text: `${unread}, so nothing is watching for sessions stuck in a transaction` });
+  } else if (nowMs - lastMs > staleAfterMs) {
+    parts.push({ verdict: "STALE", tag: "watch-stale", text: `the office's store watch last looked ${humanDuration(nowMs - lastMs)} ago, against a minute's cadence (stale after ${humanDuration(staleAfterMs)}): the office is down, is not pointed at the store, or its watch stopped` });
+  } else {
+    const recent = minutes.filter((m) => Date.parse(m.at) >= sinceMs);
+    const seen = new Set();
+    const once = recent.filter((m) => !seen.has(m.at) && seen.add(m.at));
+    const stuck = once.filter((m) => m.looked === true && Number(m.stuck) > 0);
+    const blind = once.filter((m) => m.looked === false);
+    if (stuck.length) {
+      const worst = stuck.reduce((w, m) => (Number(m.stuck) > Number(w.stuck) ? m : w));
+      const s = Array.isArray(worst.stuck_sessions) ? worst.stuck_sessions[0] : null;
+      const who = s ? `, pid ${s.pid} (${String(s.application_name ?? "no pool named").slice(0, 60)}) idle ${s.idle_s} s` : "";
+      parts.push({ verdict: "WARN", tag: "stuck", text: `${plural(stuck.length, "minute")} in the last ${lookback} found a session idle inside a transaction for ${txn.stuck_after_s ?? 5} s or more, the most at ${hhmmssZ(Date.parse(worst.at))}: ${plural(Number(worst.stuck), "session")}${who}` });
+    }
+    if (blind.length) {
+      parts.push({ verdict: "WARN", tag: "unasked", text: `${plural(blind.length, "minute")} in the last ${lookback} the store watch could not ask the store, the latest at ${hhmmssZ(Date.parse(blind.at(-1).at))}` });
+    }
+  }
+
+  // The kills, and the 500s beside them.
+  const detail = { last_minute_at: lastMs == null ? null : new Date(lastMs).toISOString(), kills: [], answered_500_beside: [] };
+  if (kills == null) {
+    parts.push({ verdict: "STALE", tag: "journal-unread", text: `the office's journal could not be read for Postgres's idle-in-transaction kills (${journalWhy ?? "no reason given"})` });
+  } else if (kills.length) {
+    const ks = [...kills].sort((a, b) => a - b);
+    const beside = answered500 == null ? [] : [...new Set(answered500.filter((r) => ks.some((k) => Math.abs(r - k) <= windowMs)))].sort((a, b) => a - b);
+    detail.kills = ks.map((k) => new Date(k).toISOString());
+    detail.answered_500_beside = beside.map((r) => new Date(r).toISOString());
+    const killed = `Postgres killed ${plural(ks.length, "office connection")} for idling in a transaction (${listSome(ks.map(hhmmssZ))})`;
+    if (beside.length) {
+      parts.push({ verdict: "DOWN", tag: "kill+500", text: `${killed} and the office answered a resident 500 beside it (${listSome(beside.map(hhmmssZ))}): POS-963's shape` });
+    } else {
+      const why = answered500 == null ? `, and the access log could not be read to say whether a 500 came of it (${String(accessError ?? "no reason given").slice(0, 120)})` : `, with no 500 within ${humanDuration(windowMs)} of it`;
+      parts.push({ verdict: "WARN", tag: "kill", text: `${killed}${why}` });
+    }
+  }
+
+  const verdict = worstOf(parts);
+  if (verdict === "OK") {
+    const last = minutes.find((m) => Date.parse(m.at) === lastMs);
+    const sessions = last?.sessions && typeof last.sessions === "object"
+      ? Object.entries(last.sessions).map(([k, n]) => `${n} ${k}`).join(", ") : "no session count";
+    return { verdict, reason: `no session stuck in a transaction and no kill in the last ${lookback} (the watch looked at ${hhmmssZ(lastMs)}: ${sessions})`, finding: "ok", detail };
+  }
+  return { verdict, reason: sayParts(parts), finding: parts.map((p) => p.tag).sort().join(" "), detail };
+}
+
+// ── §15 the residents' 5xx ─────────────────────────────────────────────────
+//
+// The office_api door (§1) reads GET /api/, an in-memory manifest that never
+// touches the store, so it stays green while a store-backed route fails. This
+// counts what residents were actually answered, from the office's own log.
+// THE LINE IS THE RULING'S: 5 or more 5xx on one route inside 10 minutes is
+// DOWN. Fewer is named and not alarmed. POS-965 is the instance: GET
+// /quests/<h> answered 503 70 times in the 18:00 hour on 11-08, and 11 inside
+// ten minutes by 18:17Z, with nothing ringing.
+//
+// WHAT IT CANNOT SEE, named: a 502 or 504 nginx answers for an office that is
+// down or slow never reaches the office's log (nginx's own log is adm's). The
+// doors (§1) catch the office down; a slow one is not counted here.
+export function classifyResident5xx({ rows = null, newestMs = null, readError = null, nowMs, sinceMs, windowMs = 10 * MINUTE, threshold = 5, dir = "the office's telemetry" } = {}) {
+  const lookback = humanDuration(nowMs - sinceMs);
+  if (rows == null) {
+    return { verdict: "STALE", reason: `could not read the office's access log (${String(readError ?? "no reason given").slice(0, 160)}), so the 5xx residents were answered cannot be counted`, finding: "unread" };
+  }
+  if (newestMs == null) {
+    return { verdict: "STALE", reason: `the office's access log in ${dir} has no line answered in the last ${lookback}: the office is not answering, or not writing its log, so its 5xx cannot be counted`, finding: "silent" };
+  }
+  const byRoute = new Map();
+  for (const r of rows) {
+    const route = routeOf(r.method, r.path);
+    const g = byRoute.get(route) ?? { route, times: [], statuses: {} };
+    g.times.push(r.at);
+    g.statuses[r.status] = (g.statuses[r.status] ?? 0) + 1;
+    byRoute.set(route, g);
+  }
+  const groups = [...byRoute.values()].map((g) => ({
+    ...g, count: g.times.length, most: mostInWindow(g.times, windowMs), last: Math.max(...g.times),
+    said: Object.entries(g.statuses).map(([s, n]) => `${s} ×${n}`).join(", "),
+  })).sort((a, b) => b.most - a.most || b.count - a.count || a.route.localeCompare(b.route));
+  const detail = {
+    since: new Date(sinceMs).toISOString(), total_5xx: rows.length,
+    routes: groups.map((g) => ({ route: g.route, count: g.count, most_in_window: g.most, statuses: g.statuses, last: new Date(g.last).toISOString() })),
+  };
+  const over = groups.filter((g) => g.most >= threshold);
+  if (over.length) {
+    return {
+      verdict: "DOWN",
+      reason: `the office answered residents ${threshold} or more 5xx on one route inside ${humanDuration(windowMs)}: ${listSome(over.map((g) => `${g.route} ${g.said} (${g.most} inside ${humanDuration(windowMs)}, the latest at ${hhmmssZ(g.last)})`))}`,
+      finding: over.map((g) => `${g.route} ${Object.keys(g.statuses).sort().join("/")}`).sort().join("; "),
+      detail,
+    };
+  }
+  if (!rows.length) return { verdict: "OK", reason: `no 5xx answered in the last ${lookback}`, finding: "ok", detail };
+  return {
+    verdict: "OK",
+    reason: `${plural(rows.length, "5xx answer")} in the last ${lookback}, none ${threshold} times on one route inside ${humanDuration(windowMs)}: ${listSome(groups.map((g) => `${g.route} ${g.said}`))}`,
+    finding: "ok",
+    detail,
+  };
+}
+
+// ── §16 the certificates nginx serves ───────────────────────────────────────
+//
+// What is SERVED is what a browser meets, so it is read over TLS from nginx
+// itself, not from /etc/letsencrypt (root's): on 11-08 panes had been renewed
+// on disk while nginx still served the old one, because the webroot renewals
+// have no deploy hook. One row per host, as §13 is one row per repo: alerts
+// are per row, so one shared row would hide a second host failing behind the
+// first. A certificate that does not name its host is DOWN whatever its date:
+// that is nginx answering the name from a block that is not its own. A served
+// certificate that cannot be read is STALE, never a guess.
+//
+// openssl, not node:tls, because `exec` is the seam every falsifier already
+// drives; the PEM it prints is parsed here with node:crypto.
+const PEM = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/;
+
+/** The certificate served for `host`: { host, notAfterMs, matches, names } or { host, error }. */
+export function readServedCert(host, { exec = execFileSync, connect = "127.0.0.1:443", timeoutMs = 10_000 } = {}) {
+  let out;
+  try {
+    out = String(exec("openssl", ["s_client", "-connect", connect, "-servername", host], {
+      input: "", encoding: "utf8", timeout: timeoutMs, stdio: ["pipe", "pipe", "pipe"],
+    }));
+  } catch (e) {
+    out = String(e?.stdout ?? "");
+    if (!PEM.test(out)) return { host, error: (firstLine(e?.stderr) || firstLine(e?.message ?? e)).slice(0, 160) };
+  }
+  const pem = PEM.exec(out)?.[0];
+  if (!pem) return { host, error: `the handshake with ${connect} for ${host} printed no certificate` };
+  try {
+    const c = new X509Certificate(pem);
+    return { host, notAfterMs: Date.parse(c.validTo), matches: c.checkHost(host) !== undefined, names: c.subjectAltName ?? c.subject ?? null };
+  } catch (e) {
+    return { host, error: `the served certificate does not parse (${firstLine(e?.message ?? e).slice(0, 120)})` };
+  }
+}
+
+export function classifyCert({ host, notAfterMs = null, matches = null, names = null, error = null, nowMs, warnDays = 21, downDays = 7, connect = "127.0.0.1:443" } = {}) {
+  const DAY = 24 * HOUR;
+  if (error) return { verdict: "STALE", reason: `could not read the certificate ${connect} serves for ${host}: ${error}`, finding: "unread" };
+  if (matches === false) {
+    return { verdict: "DOWN", reason: `${connect} serves ${host} a certificate that does not name it (it names ${String(names ?? "nothing readable").slice(0, 160)}), so a browser refuses it`, finding: "mismatch" };
+  }
+  if (!Number.isFinite(notAfterMs)) return { verdict: "STALE", reason: `the certificate ${connect} serves for ${host} carries no readable expiry`, finding: "unread" };
+  const at = new Date(notAfterMs).toISOString();
+  const left = notAfterMs - nowMs;
+  const detail = { host, not_after: at, days_left: Math.floor((left / DAY) * 10) / 10 };
+  if (left <= 0) return { verdict: "DOWN", reason: `the certificate served for ${host} expired ${humanDuration(-left)} ago (${at})`, finding: `expired ${at}`, detail };
+  const days = `${(Math.floor((left / DAY) * 10) / 10).toFixed(1)} days`;
+  if (left < downDays * DAY) return { verdict: "DOWN", reason: `the certificate served for ${host} expires in ${days} (${at}), under ${downDays} days`, finding: `under-${downDays} ${at}`, detail };
+  if (left < warnDays * DAY) return { verdict: "WARN", reason: `the certificate served for ${host} expires in ${days} (${at}), under ${warnDays} days`, finding: `under-${warnDays} ${at}`, detail };
+  return { verdict: "OK", reason: `valid to ${at} (${days})`, finding: "ok", detail };
+}
+
+// ── §17 the box's failed units ──────────────────────────────────────────────
+//
+// `systemctl list-units --failed` is readable by any user. The roll-call's
+// manifest is the allowlist of units that matter, so one it names that failed
+// is DOWN. One it does not name is still a failure nobody manifested (on 11-04
+// starstory-sync failed 49 times and nobody saw), so it is a WARN: named, said
+// once, never an outage. A transient unit systemd-run made by hand (run-u*) is
+// counted in the reason and never alarmed: those are a person's one-off
+// commands, and they stay failed until somebody resets them.
+//
+// NO UNIT'S NAME REACHES THE PUBLIC BOARD (Wright, #978 review, 11-09). The
+// `reason` and `detail` the board prints carry only counts and the verdict.
+// `said` names the units, and goes where only the operators read: the
+// Discord post, the change log and state.json (tick routes it there). A change
+// in the set of failed units re-barks (see rebarkOnChange): a standing WARN must
+// not hide a second unit failing under it.
+//
+// The manifest is read as data here, not through tools/box-rollcall.mjs: this
+// file is the one alarm route, and it must not fail to load because the
+// roll-call or anything it imports did.
+export const TRANSIENT_UNIT = /^run-(u\d+|r[0-9a-f]+|p\d+-i\d+)\.(service|scope)$/;
+
+/** Every unit name the manifest's units[] rows mean: the row's own, the service a timer starts, and `triggers`. */
+export function manifestUnitNames(manifest) {
+  const names = new Map();
+  for (const row of Array.isArray(manifest?.units) ? manifest.units : []) {
+    if (typeof row?.unit !== "string") continue;
+    const label = String(row.label ?? row.unit);
+    for (const n of [row.unit, row.unit.replace(/\.timer$/, ".service"), row.triggers]) if (typeof n === "string" && n) names.set(n, label);
+  }
+  return names;
+}
+
+/** The failed units' names, from `--plain --no-legend` lines (one can lead with a "●"). */
+export function parseFailedUnits(text) {
+  return String(text ?? "").split("\n").map((l) => l.replace(/^[\s●*]+/, "").split(/\s+/)[0]).filter(Boolean);
+}
+
+export function classifyFailedUnits({ text = null, error = null, manifestNames = null, manifestError = null, manifestPath = "the roll-call manifest" } = {}) {
+  if (text == null) return { verdict: "STALE", reason: `could not list the box's failed units (${String(error ?? "no reason given").slice(0, 160)})`, finding: "unread" };
+  const failed = parseFailedUnits(text);
+  const transient = failed.filter((u) => TRANSIENT_UNIT.test(u));
+  const rest = failed.filter((u) => !TRANSIENT_UNIT.test(u)).sort();
+  const counted = transient.length ? `; and ${plural(transient.length, "transient run-u* unit")} (counted, never alarmed)` : "";
+  if (!rest.length) return { verdict: "OK", reason: `no unit has failed${counted}`, finding: "ok", detail: { failed: 0, transient: transient.length } };
+  const units = plural(rest.length, "failed unit");
+  if (manifestNames == null) {
+    const why = `the roll-call manifest could not be read (${String(manifestError ?? "no reason given").slice(0, 120)}) to say which matter`;
+    return {
+      verdict: "STALE", reason: `${units}, and ${why}${counted}`,
+      said: `${plural(rest.length, "unit")} failed, and ${manifestPath} could not be read (${String(manifestError ?? "no reason given").slice(0, 120)}) to say which matter: ${listSome(rest, 6)}${counted}`,
+      finding: rest.join(" "), detail: { failed: rest.length, transient: transient.length },
+    };
+  }
+  const named = rest.filter((u) => manifestNames.has(u));
+  const other = rest.filter((u) => !manifestNames.has(u));
+  const said = [];
+  if (named.length) said.push(`${plural(named.length, "unit")} the roll-call manifest names failed: ${listSome(named.map((u) => `${u} (${manifestNames.get(u)})`), 6)}`);
+  if (other.length) said.push(`${plural(other.length, "unit")} outside the manifest failed: ${listSome(other, 6)}`);
+  return {
+    verdict: named.length ? "DOWN" : "WARN",
+    reason: `${units}, ${named.length ? named.length : "none"} the roll-call manifest names${counted}`,
+    said: `${said.join("; ")}${counted}`,
+    finding: `${named.join(" ")}|${other.join(" ")}`,
+    detail: { failed: rest.length, in_manifest: named.length, transient: transient.length },
+  };
+}
+
+// ── §18 the nightly backup's outcome ────────────────────────────────────────
+//
+// The roll-call reads this receipt's `at` only, so on 11-04 a dump over
+// GitHub's 100 MB limit failed to ship and reached nobody. deploy/world2-
+// backup.sh writes the receipt on every run: `shipped`, `shipped-no-basebackup`
+// (the dump shipped off-box, the on-box base backup did not), or `failed` with
+// its stage and detail. Not shipped is DOWN, and a failure outranks its age,
+// as §7's does. A shipped receipt older than the roll-call's allowance is
+// STALE: the lane stopped. A dump that shipped without its base backup is a
+// WARN: the off-box copy is there, the on-box restore point is not. The
+// failure's detail stays off the board (it is a tool's stderr); its stage is
+// the reason.
+export function classifyBackup({ raw = null, readError = null, nowMs, staleAfterMs = 1560 * MINUTE, path = "the backup receipt" } = {}) {
+  if (raw == null) return { verdict: "STALE", reason: `there is no backup receipt at ${path}${readError ? ` (${String(readError).slice(0, 80)})` : ""}, so nothing says the store has an off-box copy`, finding: "unread" };
+  let b;
+  try { b = JSON.parse(raw); } catch (e) { return { verdict: "STALE", reason: `the backup receipt at ${path} does not parse (${String(e?.message ?? e).slice(0, 80)})`, finding: "unread" }; }
+  const at = Date.parse(b?.at ?? "");
+  if (!Number.isFinite(at)) return { verdict: "STALE", reason: `the backup receipt at ${path} carries no readable at, so it cannot say when the store was last copied off the box`, finding: "unread" };
+  const age = nowMs - at;
+  const stale = age > staleAfterMs;
+  const status = typeof b.status === "string" ? b.status : null;
+  const detail = { at: b.at, status, stage: b.stage ?? null, dump_bytes: Number.isFinite(b.dump_bytes) ? b.dump_bytes : null };
+  const oldTail = stale ? `; and nothing has run since, ${humanDuration(age)} by its own at (allowance ${humanDuration(staleAfterMs)})` : "";
+  if (status === "failed") {
+    return { verdict: "DOWN", reason: `the nightly backup failed${b.stage ? ` at its ${b.stage} stage` : ""} (${b.at}): the store has no off-box copy of that night, and the receipt's detail and journalctl -u postmark-world2-backup say why${oldTail}`, finding: `failed ${b.stage ?? ""}`.trim(), detail };
+  }
+  if (status !== "shipped" && status !== "shipped-no-basebackup") {
+    return { verdict: "DOWN", reason: `the nightly backup's receipt reads ${JSON.stringify(status)} (${b.at}), not shipped: read as not shipped rather than as healthy${oldTail}`, finding: `status ${status}`, detail };
+  }
+  if (stale) return { verdict: "STALE", reason: `the nightly backup last shipped ${humanDuration(age)} ago (${b.at}), past its ${humanDuration(staleAfterMs)} allowance: the lane has stopped`, finding: "stale", detail };
+  const size = Number.isFinite(b.dump_bytes) ? `, a ${humanBytes(b.dump_bytes)} dump` : "";
+  if (status === "shipped-no-basebackup") return { verdict: "WARN", reason: `the nightly backup shipped${size} off the box ${humanDuration(age)} ago, but its on-box base backup failed`, finding: "no-basebackup", detail };
+  return { verdict: "OK", reason: `shipped${size} off the box ${humanDuration(age)} ago (${b.at})`, finding: "ok", detail };
+}
+
+// ── §19 the office tripped ──────────────────────────────────────────────────
+//
+// Added by Wright, 11-09 00:2xZ (POS-968, under STAR-163's rule): the first
+// instance was 00:01:04Z and 00:01:21Z, `mcp household: the office tripped:
+// error: cannot pull with rebase: You have unstaged changes`. A trip is the
+// office's last resort: a resident's act or read failed with no refusal of its
+// own. THE MCP DOOR WRAPS IT IN HTTP 200 (src/mcp.mjs, the answer), so §15's
+// count of 5xx never sees it.
+//
+// THE THRESHOLDS. Any trip is a WARN: it is a bug a resident met, worth saying
+// once, and a WARN is said once per episode, never as an outage. Five on one
+// door inside ten minutes is DOWN: that is §15's ruled line for one route,
+// held here for the door §15 cannot see, because a trip at the MCP door is a
+// 500 in all but its status code. A REST door's trip is a 500 that §15 counts
+// too; it is counted here as well, under its own name.
+//
+// The door is the words before ": the office tripped"; the error after it stays
+// off the board (POS-568: it can be a SQL fragment or a path on the box).
+export function tripDoor(message) {
+  const m = String(message ?? "");
+  const named = /^\[office\] (.+?): the office tripped\b/.exec(m);
+  if (named) return named[1].slice(0, 80);
+  const rest = /^\[office\] answered (\d{3}) \(the office tripped/.exec(m);
+  if (rest) return `a REST door (answered ${rest[1]})`;
+  return "a door the line does not name";
+}
+
+export function classifyOfficeTripped({ trips = null, journalWhy = null, nowMs, sinceMs, windowMs = 10 * MINUTE, threshold = 5 } = {}) {
+  const lookback = humanDuration(nowMs - sinceMs);
+  if (trips == null) return { verdict: "STALE", reason: `the office's journal could not be read for "the office tripped" (${journalWhy ?? "no reason given"})`, finding: "unread" };
+  if (!trips.length) return { verdict: "OK", reason: `no door tripped in the last ${lookback}`, finding: "ok" };
+  const byDoor = new Map();
+  for (const t of trips) byDoor.set(t.door, [...(byDoor.get(t.door) ?? []), t.atMs]);
+  const doors = [...byDoor.entries()].map(([door, times]) => ({ door, count: times.length, most: mostInWindow(times, windowMs), times: [...times].sort((a, b) => a - b) }))
+    .sort((a, b) => b.most - a.most || b.count - a.count || a.door.localeCompare(b.door));
+  const said = (d) => `${d.door} ×${d.count} (${listSome(d.times.map(hhmmssZ), 4)})`;
+  const detail = { doors: doors.map((d) => ({ door: d.door, count: d.count, most_in_window: d.most, at: d.times.map((t) => new Date(t).toISOString()) })) };
+  const over = doors.filter((d) => d.most >= threshold);
+  if (over.length) {
+    return { verdict: "DOWN", reason: `a door tripped ${threshold} or more times inside ${humanDuration(windowMs)}: ${listSome(over.map(said))}`, finding: `down ${over.map((d) => d.door).sort().join(", ")}`, detail };
+  }
+  return { verdict: "WARN", reason: `the office tripped ${plural(trips.length, "time")} in the last ${lookback}: ${listSome(doors.map(said))}`, finding: `warn ${doors.map((d) => d.door).sort().join(", ")}`, detail };
+}
+
+// ── §21 the acknowledgement a standing red may carry (POS-968, call 4) ──────
+//
+// THE RULING (the sitting's call 4, option (b), ruled as recommended): a
+// standing red carries an acknowledgement with an issue link and an expiry
+// within a week, so it cannot go stale, and any change re-barks. Until this a
+// red that never cleared, the notary's or certbot's, said nothing new and
+// trained the reader to stop reading.
+//
+// The operator writes /srv/postmark-sentinel/acks.json (beside state.json):
+//     { "acks": [ { "probe": "failed_units", "issue": "STAR-151",
+//                   "until": "2026-11-15T00:00:00Z" } ] }
+// `issue` is a link or an issue's id; `until` is no more than 7 days out, and
+// an ack that runs further is refused, not shortened. An ack that is refused,
+// expired or unreadable says so in the board's notes and applies to nothing:
+// the probe barks as if it were not there.
+//
+// WHAT IT DOES. The first tick that reads an ack binds it to the probe's
+// finding as it stands (its verdict, and the probe's `finding` or, for a probe
+// that names none, its reason with every number masked, so a clock in the
+// sentence is not a change). While that finding holds, the probe reads on the
+// board exactly as before, with the ack beside it, and says nothing: no
+// onset, no reminder. ANY CHANGE IN THE FINDING RE-BARKS, and spends the ack:
+// it covered the finding it was given, and a new one is new news. An ack that
+// expires, or is taken out of the file, while its finding still stands barks
+// once at once, so a standing red never goes quiet by an ack running out.
+export const ACK_MAX_MS = 7 * 24 * HOUR;
+const ISSUE_LINK = /^(https?:\/\/\S+|[A-Z][A-Z0-9]*-\d+)$/;
+
+/** The acks that apply this tick: { live: Map(probe → { issue, until }), notes }. PURE. */
+export function judgeAcks(raw, { nowMs, keys = null, error = null } = {}) {
+  const live = new Map();
+  const notes = [];
+  if (error) { notes.push(`acks: ${error}; no acknowledgement applies until it reads`); return { live, notes }; }
+  if (raw == null) return { live, notes };
+  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.acks) ? raw.acks : null;
+  if (!rows) { notes.push("acks: the file holds no `acks` list; no acknowledgement applies"); return { live, notes }; }
+  rows.forEach((r, i) => {
+    const who = `acks[${i}]${typeof r?.probe === "string" ? ` (${r.probe})` : ""}`;
+    const untilMs = Date.parse(r?.until ?? "");
+    if (typeof r?.probe !== "string" || !r.probe) return notes.push(`${who} names no probe; refused`);
+    if (keys && !keys.has(r.probe)) return notes.push(`${who} names a probe the board does not carry; refused`);
+    if (!ISSUE_LINK.test(String(r?.issue ?? ""))) return notes.push(`${who} carries no issue link or id; refused`);
+    if (!Number.isFinite(untilMs)) return notes.push(`${who} has no readable until; refused`);
+    if (untilMs <= nowMs) return notes.push(`${who} expired at ${r.until} and applies to nothing; take it out of the file`);
+    if (untilMs - nowMs > ACK_MAX_MS) return notes.push(`${who} runs to ${r.until}, more than 7 days out; refused`);
+    if (live.has(r.probe)) return notes.push(`${who} is a second ack for one probe; the first stands`);
+    live.set(r.probe, { issue: String(r.issue), until: new Date(untilMs).toISOString() });
+  });
+  return { live, notes };
+}
+
+/** What an ack binds to: the verdict, and the probe's own finding or its reason with every number masked. */
+export const findingOf = (p) => `${p.verdict}: ${p.finding ?? String(p.reason ?? "").replace(/\d+/g, "#")}`;
+
+/**
+ * Apply one probe's ack, if any, to what transition() decided. PURE. With no
+ * ack and none held, it returns transition's answer untouched, so a probe
+ * nobody acknowledged speaks exactly as it did before acks existed.
+ */
+export function applyAck({ prev = null, next, alert, state, ack = null, nowMs }) {
+  const held = prev?.ack ?? null;
+  const loud = (note) => (BAD.has(next.verdict) ? { kind: "onset", verdict: next.verdict, reason: next.reason, since: state.since, note }
+    : next.verdict === "WARN" ? { kind: "warn", verdict: "WARN", reason: next.reason, since: state.since, note } : null);
+  if (!ack) {
+    if (held && !held.spent) {
+      const note = `Its acknowledgement (${held.issue}) ended at ${held.until} and it still reads ${next.verdict}.`;
+      const out = alert ? { ...alert, note } : loud(note);
+      if (out && alert?.kind !== "recovered") return { alert: out, state: { ...state, last_alert_at: nowMs } };
+    }
+    return { alert, state };
+  }
+  const bound = held && held.issue === ack.issue && held.until === ack.until
+    ? held : { issue: ack.issue, until: ack.until, finding: findingOf(next), spent: false };
+  if (bound.spent) return { alert, state: { ...state, ack: bound } };
+  if (bound.finding === findingOf(next)) return { alert: null, state: { ...state, ack: bound }, acked: true, suppressed: alert?.kind ?? null };
+  const spent = { ...bound, spent: true };
+  if (alert?.kind === "recovered") return { alert, state: { ...state, ack: spent } };
+  const note = `Its acknowledgement (${bound.issue}) covered an earlier finding, so this one barks.`;
+  if (alert) return { alert: { ...alert, note }, state: { ...state, ack: spent } };
+  const fresh = loud(note);
+  return { alert: fresh, state: { ...state, ack: spent, ...(fresh ? { last_alert_at: nowMs } : {}) } };
+}
+
+/**
+ * ANY CHANGE IN WHAT IT NAMES RE-BARKS, for a probe that lists things (§17's
+ * failed units; Wright, #978 review). transition() speaks on a change of
+ * verdict and a WARN speaks once per episode, so a second unit failing under a
+ * standing WARN said nothing: the 11-04 starstory-sync shape. This is call 4's
+ * rule for acks ("any change re-barks"), held for the probe itself. PURE: the
+ * finding rides in state.json (never the public board), and a change while it
+ * is bad or a warning speaks once, naming what came and went. A probe with no
+ * finding remembered yet (the first tick after an upgrade) says nothing new.
+ */
+const UNIT_NAME = /\.(service|timer|socket|mount|automount|scope|path|target|slice|swap|device)$/;
+export function rebarkOnChange({ prev = null, next, alert, state, acked = false, nowMs }) {
+  const out = { alert, state: { ...state, finding: next.finding } };
+  const was = prev?.finding;
+  if (alert || acked || was == null || was === next.finding) return out;
+  if (!BAD.has(next.verdict) && next.verdict !== "WARN") return out;
+  const units = (f) => new Set(String(f ?? "").split(/[|\s]+/).filter((u) => UNIT_NAME.test(u)));
+  const before = units(was), now = units(next.finding);
+  const came = [...now].filter((u) => !before.has(u)), went = [...before].filter((u) => !now.has(u));
+  const what = [came.length ? `newly failed: ${came.join(", ")}` : "", went.length ? `no longer failed: ${went.join(", ")}` : ""].filter(Boolean).join("; ");
+  const note = `What it names changed since it last spoke${what ? ` (${what})` : ""}.`;
+  out.alert = BAD.has(next.verdict)
+    ? { kind: "onset", verdict: next.verdict, reason: next.reason, since: state.since, note }
+    : { kind: "warn", verdict: "WARN", reason: next.reason, since: state.since, note };
+  out.state.last_alert_at = nowMs;
+  return out;
+}
+
+// ── §20 the change log (POS-968, call 7) ────────────────────────────────────
+//
+// Until this the sentinel kept only its last verdict per probe; its history
+// was the journal's, capped at 300 MB, so the sitting's packet could count its
+// barks back only to 10-26 23:35Z. Every tick appends one line per probe whose
+// verdict changed or that spoke (an alert, or one an ack held back) to
+// history.jsonl beside state.json, and the run adds whether the post was
+// delivered. It is kept a year: when the oldest line is past 366 days, or the
+// file past HISTORY_MAX_BYTES, the next append rewrites it with the year's
+// newest lines inside half the cap, so it is bounded both ways.
+export const HISTORY_KEEP_MS = 366 * 24 * HOUR;
+export const HISTORY_MAX_BYTES = 64 * 2 ** 20;
+
+export function appendHistory(path, entries, { nowMs = Date.now(), keepMs = HISTORY_KEEP_MS, maxBytes = HISTORY_MAX_BYTES } = {}) {
+  if (!entries?.length) return { appended: 0, pruned: false };
+  mkdirSync(dirname(path), { recursive: true });
+  const add = entries.map((e) => JSON.stringify(e)).join("\n") + "\n";
+  let size = 0, head = "";
+  try {
+    size = statSync(path).size;
+    const fd = openSync(path, "r");
+    try { const buf = Buffer.alloc(Math.min(size, 4096)); readSync(fd, buf, 0, buf.length, 0); head = buf.toString("utf8"); } finally { closeSync(fd); }
+  } catch { size = 0; }
+  const atOf = (line) => { try { return Date.parse(JSON.parse(line)?.at ?? ""); } catch { return NaN; } };
+  const firstAt = head ? atOf(head.split("\n")[0]) : NaN;
+  const cutoff = nowMs - keepMs;
+  if (!size || ((!Number.isFinite(firstAt) || firstAt >= cutoff) && size + add.length <= maxBytes)) {
+    appendFileSync(path, add);
+    return { appended: entries.length, pruned: false };
+  }
+  const kept = String(readFileSync(path, "utf8")).split("\n").filter((l) => l && atOf(l) >= cutoff);
+  let bytes = kept.reduce((n, l) => n + l.length + 1, 0);
+  while (kept.length && bytes + add.length > maxBytes / 2) bytes -= kept.shift().length + 1;
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, (kept.length ? `${kept.join("\n")}\n` : "") + add);
+  renameSync(tmp, path);
+  return { appended: entries.length, pruned: true };
+}
+
 // What alarms, reminds and recovers. WARN is deliberately not in it (POS-838): a
 // warning is not an outage, and every alert BAD makes is shaped like one. A WARN
 // has its own, quieter post in transition: once, with no reminder and no recovery.
@@ -1561,16 +2317,19 @@ export function composeMessage({ alerts, board, nowIso }) {
   else lines.push(`**📮 Postmark sentinel** — recovered, as of ${nowIso}.`);
   lines.push("");
 
+  // An alert an acknowledgement (§21) or a changed finding (rebarkOnChange)
+  // shaped says so at its end; every other line is unchanged.
+  const acked = (alert) => (alert.note ? ` ${alert.note}` : "");
   for (const { label, alert } of bad) {
     const tail = alert.kind === "reminder" ? ` Still bad after ${humanDuration(Date.parse(nowIso) - alert.since)}; this is the twelve-hourly reminder.`
       : alert.kind === "changed" ? ` (it was ${alert.from} before this)`
       : "";
-    lines.push(`${alert.verdict} — ${label}: ${alert.reason}.${tail}`);
+    lines.push(`${alert.verdict} — ${label}: ${alert.reason}.${tail}${acked(alert)}`);
   }
   for (const { label, alert } of notices) {
-    lines.push(alert.kind === "eased"
+    lines.push((alert.kind === "eased"
       ? `${label}: no longer ${String(alert.from).toLowerCase()} after ${humanDuration(alert.downFor)}, still a warning: ${alert.reason}.`
-      : `${label}: warning: ${alert.reason}.`);
+      : `${label}: warning: ${alert.reason}.`) + acked(alert));
   }
   for (const { label, alert } of back) {
     lines.push(`RECOVERED — ${label} is healthy again after ${humanDuration(alert.downFor)}: ${alert.reason}.`);
@@ -1722,11 +2481,33 @@ export async function ghJson(path, { fetchImpl = fetch, token = null } = {}) {
   return res.json();
 }
 
+/**
+ * A post that fits Discord's limit and still says how many alerts it left out
+ * (Wright, #978 review): the lines composeMessage writes are kept whole from
+ * the top until the next one would not fit, and the post ends "…and N more".
+ * The board and the journal (run's errLog on a refused post) carry every one.
+ */
+export const DISCORD_MAX = 1900;
+export function fitMessage(content, max = DISCORD_MAX) {
+  const text = String(content ?? "");
+  if (text.length <= max) return text;
+  const lines = text.split("\n");
+  // composeMessage's shape: the header, a blank, one line per alert, a blank, the board's sentence.
+  const head = lines.slice(0, 2), body = lines.slice(2, -2), foot = lines.slice(-2);
+  for (let keep = body.length - 1; keep >= 0; keep--) {
+    const more = `…and ${body.length - keep} more not shown here; the board has every one.`;
+    const out = [...head, ...body.slice(0, keep), ...foot, more].join("\n");
+    if (out.length <= max) return out;
+  }
+  const more = `\n…and ${Math.max(body.length, 1)} more not shown here; the board has every one.`;
+  return text.slice(0, max - more.length) + more;
+}
+
 export async function postDiscord(webhook, content, { fetchImpl = fetch } = {}) {
   const res = await fetchImpl(webhook, {
     method: "POST",
     headers: { "content-type": "application/json", "user-agent": CONFIG.userAgent },
-    body: JSON.stringify({ content: content.slice(0, 1900), allowed_mentions: { parse: [] } }),
+    body: JSON.stringify({ content: fitMessage(content), allowed_mentions: { parse: [] } }),
     signal: AbortSignal.timeout(CONFIG.requestTimeoutMs),
   });
   if (!res.ok) throw new Error(`webhook -> HTTP ${res.status}`);
@@ -1750,6 +2531,8 @@ export async function tick({
   token = null,
   readClone = readCloneState,
   readDisk = readDiskState,
+  acks = null,
+  acksError = null,
 } = {}) {
   const nowIso = new Date(nowMs).toISOString();
   const probes = [];
@@ -2079,17 +2862,114 @@ export async function tick({
     stamps.linear_handler = nextMemo;
   }
 
-  // the edges
+  // §14–§19 (POS-968). Local reads and one journalctl call, no network and no
+  // REST budget. The journal serves both §14's kills and §19's trips; the
+  // access log serves §15, and §14's 500s.
+  const ev = config.events ?? { windowMs: 10 * MINUTE, lookbackMs: 25 * MINUTE };
+  const sinceMs = nowMs - ev.lookbackMs;
+  // What a probe says only where operators read (the Discord post, the change
+  // log, state.json): its finding, and for §17 the text that names the units.
+  // The board's probe objects never carry either; it is public.
+  const inner = new Map();
+  const keep = (key, r, more = {}) => inner.set(key, { said: r.said ?? r.reason, finding: r.finding, ...more });
+  let journal = null, journalWhy = "no office journal is configured";
+  if (config.officeJournal && (config.storeHealth || config.officeTripped)) {
+    const j = readOfficeJournal(config.officeJournal.unit, sinceMs, { exec });
+    if (j.error) journalWhy = j.error;
+    else if (!j.seen) journalWhy = `journalctl shows no line of ${config.officeJournal.unit} at all, so this user cannot see its journal`;
+    else { journalWhy = null; journal = j.entries.filter((e) => e.atMs >= sinceMs && e.atMs <= nowMs); }
+  }
+  const access = config.accessLog && (config.resident5xx || config.storeHealth) ? readAccessErrors(config.accessLog.dir, { sinceMs, nowMs }) : null;
+
+  if (config.storeHealth) {
+    const sh = config.storeHealth;
+    let raw = null, readError = null;
+    try { raw = readFileSync(sh.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
+    const r = classifyStoreHealth({
+      txnRaw: raw, txnError: readError,
+      kills: journal ? journal.filter((e) => KILL_LINE.test(e.message)).map((e) => e.atMs) : null, journalWhy,
+      answered500: access?.rows ? access.rows.filter((x) => x.status === 500).map((x) => x.at) : null, accessError: access?.error ?? "no access log is configured",
+      nowMs, sinceMs, windowMs: ev.windowMs, staleAfterMs: sh.staleAfterMs, path: sh.path,
+    });
+    probes.push({ key: sh.key, label: sh.label, kind: "store", verdict: r.verdict, reason: r.reason, detail: r.detail });
+    keep(sh.key, r);
+  }
+
+  if (config.resident5xx) {
+    const rx = config.resident5xx;
+    const r = classifyResident5xx({ rows: access?.rows ?? null, newestMs: access?.newestMs ?? null, readError: access?.error ?? "no access log is configured", nowMs, sinceMs, windowMs: ev.windowMs, threshold: rx.threshold, dir: config.accessLog?.dir });
+    probes.push({ key: rx.key, label: rx.label, kind: "errors", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(rx.key, r);
+  }
+
+  if (config.certs) {
+    const c = config.certs;
+    for (const host of c.hosts) {
+      const r = classifyCert({ ...readServedCert(host, { exec, connect: c.connect, timeoutMs: c.timeoutMs }), nowMs, warnDays: c.warnDays, downDays: c.downDays, connect: c.connect });
+      const key = `${c.keyPrefix}_${slug(host)}`;
+      probes.push({ key, label: `the certificate for ${host}`, kind: "cert", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+      keep(key, r);
+    }
+  }
+
+  if (config.failedUnits) {
+    const fu = config.failedUnits;
+    let text = null, error = null, manifestNames = null, manifestError = null;
+    try {
+      text = String(exec("systemctl", ["list-units", "--failed", "--plain", "--no-legend"], { encoding: "utf8", timeout: config.requestTimeoutMs, stdio: ["ignore", "pipe", "pipe"] }));
+    } catch (e) { error = (firstLine(e?.stderr) || firstLine(e?.message ?? e)).slice(0, 160); }
+    try { manifestNames = manifestUnitNames(JSON.parse(readFileSync(fu.manifest, "utf8"))); } catch (e) { manifestError = e?.code ?? firstLine(e?.message ?? e); }
+    const r = classifyFailedUnits({ text, error, manifestNames, manifestError, manifestPath: fu.manifest });
+    probes.push({ key: fu.key, label: fu.label, kind: "units", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(fu.key, r, { rebark: true });
+  }
+
+  if (config.backup) {
+    const bk = config.backup;
+    let raw = null, readError = null;
+    try { raw = readFileSync(bk.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
+    const r = classifyBackup({ raw, readError, nowMs, staleAfterMs: bk.staleAfterMs, path: bk.path });
+    probes.push({ key: bk.key, label: bk.label, kind: "backup", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(bk.key, r);
+  }
+
+  if (config.officeTripped) {
+    const ot = config.officeTripped;
+    const trips = journal ? journal.filter((e) => TRIP_LINE.test(e.message)).map((e) => ({ atMs: e.atMs, door: tripDoor(e.message) })) : null;
+    const r = classifyOfficeTripped({ trips, journalWhy, nowMs, sinceMs, windowMs: ev.windowMs, threshold: ot.threshold });
+    probes.push({ key: ot.key, label: ot.label, kind: "trips", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(ot.key, r);
+  }
+
+  // the edges. An acknowledgement (§21) may shape what a probe says, a probe
+  // that lists things re-barks when the list changes, and the change log (§20)
+  // records every probe whose verdict moved or that spoke. Each sees the
+  // probe's private text and finding where it has one; the board does not.
   const prevProbes = state.probes ?? {};
   const nextProbes = {};
   const alerts = [];
+  const history = [];
+  const ackBook = judgeAcks(acks, { nowMs, keys: new Set(probes.map((p) => p.key)), error: acksError });
+  notes.push(...ackBook.notes);
   for (const p of probes) {
-    const { alert, state: st } = transition({ prev: prevProbes[p.key] ?? null, next: p, nowMs, reminderMs: config.reminderMs });
+    const prev = prevProbes[p.key] ?? null;
+    const own = inner.get(p.key);
+    const seen = own ? { ...p, reason: own.said, finding: own.finding } : p;
+    const t = transition({ prev, next: seen, nowMs, reminderMs: config.reminderMs });
+    let { alert, state: st, acked = false, suppressed = null } = applyAck({ prev, next: seen, alert: t.alert, state: t.state, ack: ackBook.live.get(p.key) ?? null, nowMs });
+    if (own?.rebark) ({ alert, state: st } = rebarkOnChange({ prev, next: seen, alert, state: st, acked, nowMs }));
     nextProbes[p.key] = st;
     if (alert) alerts.push({ key: p.key, label: p.label, alert });
+    if (acked) p.ack = { issue: st.ack.issue, until: st.ack.until };
+    if (!prev || prev.verdict !== p.verdict || alert || suppressed) {
+      history.push({
+        at: nowIso, key: p.key, label: p.label, from: prev?.verdict ?? null, to: p.verdict, reason: seen.reason,
+        alert: alert?.kind ?? null, ...(suppressed ? { held_by_ack: suppressed } : {}), ...(st.ack ? { ack: st.ack.issue } : {}),
+      });
+    }
   }
 
-  return { probes, alerts, notes, nextState: { schema: 1, probes: nextProbes, stamps, last_run: nowIso }, nowIso };
+  return { probes, alerts, notes, history, nextState: { schema: 1, probes: nextProbes, stamps, last_run: nowIso }, nowIso };
 }
 
 async function readText(url, { fetchImpl = fetch } = {}) {
@@ -2109,6 +2989,16 @@ async function readJson(url, opts) {
 
 export const readState = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return {}; } };
 export function writeJson(p, o) { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify(o, null, 2) + "\n"); }
+
+/** A file beside the state: /srv/postmark-sentinel/state.json → …/history.jsonl; any other name gains a suffix. */
+export const besideState = (statePath, name) => (/state\.json$/.test(statePath) ? statePath.replace(/state\.json$/, name) : `${statePath}.${name}`);
+
+/** The operator's ack file (§21): { acks } parsed, or { error } when it exists and cannot be read. None at all is no acks. */
+export function readAcks(path) {
+  try { return { acks: JSON.parse(readFileSync(path, "utf8")), error: null }; } catch (e) {
+    return e?.code === "ENOENT" ? { acks: null, error: null } : { acks: null, error: `${path} could not be read (${firstLine(e?.message ?? e).slice(0, 120)})` };
+  }
+}
 
 /**
  * Whether the alert channel exists, said as data.
@@ -2155,6 +3045,9 @@ export async function run({
   };
   const statePath = a("state", join(HERE, "..", ".site-sentinel-state.json"));
   const outPath = a("out", null);
+  // §20 and §21 live beside the state, so the unit needs no new flag.
+  const historyPath = a("history", besideState(statePath, "history.jsonl"));
+  const acksPath = a("acks", besideState(statePath, "acks.json"));
   const dryRun = argv.includes("--dry-run");
   const at = nowMs ?? (a("now") ? Date.parse(a("now")) : Date.now());
 
@@ -2167,7 +3060,8 @@ export async function run({
   let token = null;
   try { token = readFileSync(env.SENTINEL_GITHUB_TOKEN_FILE ?? "/srv/postmark-office/git-metrics-token", "utf8").trim() || null; } catch { token = null; }
 
-  const { probes, alerts, notes, nextState, nowIso } = await tick({ fetchImpl, exec, state: readState(statePath), nowMs: at, token, readDisk });
+  const ackFile = readAcks(acksPath);
+  const { probes, alerts, notes, history, nextState, nowIso } = await tick({ fetchImpl, exec, state: readState(statePath), nowMs: at, token, readDisk, acks: ackFile.acks, acksError: ackFile.error });
   const board = composeBoard({ probes, nowIso, alerting: { ...alerting, notes } });
   if (outPath) { board.published_at = outPath; writeJson(outPath, board); }
 
@@ -2184,6 +3078,11 @@ export async function run({
   // must not re-announce an onset it already announced once. The failure is
   // loud on stderr and the journal keeps it.
   writeJson(statePath, nextState);
+  // The change log (§20). A log that cannot be written is said on stderr and
+  // never stops the run: the board and the state are already written.
+  try {
+    appendHistory(historyPath, history.map((h) => (h.alert ? { ...h, delivered } : h)), { nowMs: at });
+  } catch (e) { errLog(`site-sentinel: the change log at ${historyPath} could not be written (${e.message}); the board and the state were`); }
 
   if (argv.includes("--json")) { log(JSON.stringify(board, null, 2)); return { board, alerts, delivered, message }; }
   log(`site-sentinel: ${board.headline}`);

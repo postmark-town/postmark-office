@@ -483,6 +483,9 @@ export async function setHouseholdLikeness({ slug, likeness }, env = process.env
  *
  * Returns `{ slug }` of the row written, `null` when the office is not pointed
  * at the record, or `{ slug: null }` when no row was written.
+ *
+ * A household that joined without naming anyone writes it later, once, through
+ * the same NULL-only statement (POS-947, src/invite-name.mjs).
  */
 export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.env) {
   const r = await actsQuery(
@@ -494,4 +497,20 @@ export async function setHouseholdInvitedBy({ slug, invitedBy }, env = process.e
     [slug, JSON.stringify(invitedBy)], env);
   if (r === null) return null;
   return { slug: r.length ? r[0].slug : null };
+}
+
+/**
+ * Take back a naming made after joining that never reached the town's printout
+ * (POS-947, src/invite-name.mjs): the drain refused, or the commit could not
+ * land, so the credit is unpublished and the store and the printed registry
+ * would disagree. Only the exact credit that act wrote, compared whole, goes
+ * back to NULL; anything else stands. It runs inside the same town flock as the
+ * write, and the invite pass pays only inside that flock, so nothing can have
+ * paid on it.
+ */
+export async function unsetUnpublishedInvitedBy({ slug, invitedBy }, env = process.env) {
+  const r = await actsQuery(
+    `UPDATE households SET invited_by = NULL WHERE slug = $1 AND invited_by = $2::jsonb RETURNING slug`,
+    [slug, JSON.stringify(invitedBy)], env);
+  return r === null ? null : { slug: r.length ? r[0].slug : null };
 }
