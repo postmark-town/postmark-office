@@ -48,7 +48,7 @@ const OPERATOR = "an operator's tool, pass or panel, never a resident's read";
 const OWN_URL = "what a household's own url answered (Wright's G4: like media.mjs, it stays)";
 const ALLOWED = {
   "ashore.mjs": [1, `${OWN}: a backfill's why, printed by its tool`],
-  "ballots-store.mjs": [5, `${OWN}: LateCrossingError's ruled message (x2), an UNREACHABLE refusal's \`cause\` field (x3, never sent)`],
+  "ballots-store.mjs": [7, `${OWN}: LateCrossingError's ruled message (x3: the write, the stake, a hand's ballot act), an UNREACHABLE refusal's \`cause\` field (x4, never sent)`],
   "ceremony.mjs": [1, `${OWN}: a log variable`],
   "crossing-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
   "declare-exec.mjs": [1, `${OWN}: mintRefusal relays a refusal (an HTTP status) by its own defect; any other error, codeless or foreign, is FAULT_LOGGED above it`],

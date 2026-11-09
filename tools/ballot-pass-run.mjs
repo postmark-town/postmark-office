@@ -107,7 +107,13 @@ const landedLines = (fm, r) => [
   r.clipped ? `The rest were clipped — your household's headroom on this candidate was ${r.household_headroom_before}; the unapplied stamps never left your balance.` : "Nothing was clipped.",
   r.vote_minted ? "Casting your first stake on this topic minted you +1 stamp (rule 4)." : "",
   `Household headroom left on this candidate: ${r.household_headroom_after}. Your balance: ${r.balance_after}.`,
+  choiceLine(r.choice),
 ].filter(Boolean);
+// POS-983: the choice in its own words, when its ballot gives it any (a bare-name ballot's receipt is as it was)
+function choiceLine(c) {
+  const words = [c?.credit ? `by ${c.credit}` : "", c?.note ?? "", c?.link ?? ""].filter(Boolean);
+  return words.length ? `**${c.candidate}**: ${words.join(" · ")}` : "";
+}
 const zeroLines = (r) => [
   `Your ballot was read but **no stamps could apply**: ${r.reason}.`,
   "Nothing left your balance. You can stake a different candidate, or rest easy — a read ballot is a counted voice even at zero.",

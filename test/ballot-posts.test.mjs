@@ -117,6 +117,19 @@ const votesOf = async (topic) => (await ballotWithVotes(topic))?.votes ?? [];
 
 const KEY = { household: "keemin", handles: new Set(["wright", "rei"]) };
 
+// POS-983: the office's tally carries the engine's own row (candidate, staked, households) and, beside it,
+// backing_households and the choice's words. The engine compared is the pinned town clone's, which may
+// predate POS-983, so the comparison is of the engine's own fields, and the households count is checked
+// against the households the same row names.
+const engineRows = (rows) => rows.map(({ candidate, staked, households }) => ({ candidate, staked, households }));
+function sameAsEngine(rows, engine, msg) {
+  assert.deepEqual(engineRows(rows), engineRows(engine), msg);
+  for (const r of rows) assert.equal(r.backing_households, r.households.filter((h) => h.applied > 0).length, `${r.candidate}: backing households`);
+}
+/** A bare-name ballot's choice as GET /votes answers it since POS-983: no words, and its count. */
+const bare = (candidate, staked, backing_households) =>
+  ({ candidate, credit: null, link: null, note: null, added: null, staked, backing_households });
+
 // ── 1 · the ingest ──────────────────────────────────────────────────────────
 
 test("1 · the founder's file is taken in as the town's post, moves forward with it, and never back", async () => {
@@ -184,13 +197,13 @@ test("2 · the stake writes the vote and the line together; the reads answer the
   const { ballot } = await townEngine(dir);
   const engine = ballot.tally(dir, t);
   const view = await voteView(dir, t, KEY);
-  assert.deepEqual(view.candidates, engine.candidates, "the store's tally IS the engine's");
+  sameAsEngine(view.candidates, engine.candidates, "the store's tally IS the engine's");
   assert.deepEqual([view.topic, view.status, view.cap_per_household_per_candidate, view.window],
     [engine.topic, engine.status, engine.cap_per_household_per_candidate, engine.window]);
   assert.deepEqual(view.your_household.headroom, { lumen: 0, brightwork: 12 });
   const list = await voteList(dir);
   const mine = list.topics.find((x) => x.topic === t);
-  assert.deepEqual(mine.candidates, [{ candidate: "lumen", staked: 12 }, { candidate: "brightwork", staked: 0 }]);
+  assert.deepEqual(mine.candidates, [bare("lumen", 12, 1), bare("brightwork", 0, 0)]);
   const door = (await doorstepVotes(dir, "rei")).find((x) => x.topic === t);
   assert.deepEqual(door.candidates.lumen, { household_applied: 12, headroom: 0 });
   assert.equal(await voteView(dir, "no-such-topic", KEY), null);
@@ -396,7 +409,7 @@ test("6 · a ballot staked, mailed and closed the old way backfills to the same 
 
   const one = await ballotWithVotes(t);
   assert.equal(one.post.state, "closed");
-  assert.deepEqual(tallyOf(one.post, one.votes).candidates, engine.candidates, "the store's tally IS the engine's, households and all");
+  sameAsEngine(tallyOf(one.post, one.votes).candidates, engine.candidates, "the store's tally IS the engine's, households and all");
   assert.equal(stakesOf(one.votes).find((s) => s.handle === "wright").mint_key, stakesOf(one.votes).find((s) => s.handle === "rei").mint_key);
 
   const again = await backfill(dir, { hand: "keemin", apply: true });
@@ -439,7 +452,7 @@ test("7 · a ballot the tick has not taken in is never read as gone; the tick ta
   assert.equal(tick.status, 0, `${tick.stdout}${tick.stderr}`);
   const list = await voteList(dir);
   const mine = list.topics.find((x) => x.topic === t);
-  assert.deepEqual([mine.status, mine.candidates], ["closed", [{ candidate: "lumen", staked: 5 }, { candidate: "brightwork", staked: 3 }]]);
+  assert.deepEqual([mine.status, mine.candidates], ["closed", [bare("lumen", 5, 1), bare("brightwork", 3, 1)]]);
   assert.ok(list.topics.some((x) => x.topic === fresh), "the fresh ballot is listed once it is taken in");
   assert.equal(list.awaiting_intake, undefined);
   assert.equal((await check(dir)).equal, true);
