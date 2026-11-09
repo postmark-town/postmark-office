@@ -15,6 +15,9 @@
 //   T2  no bypass, on the same real canon: a resident's mark standing on the town's constitutional ground is not
 //       carried by it, and a NEW town mark in the Centre (a leave, not an amend) is not put forward by it
 //   T3  the verdict's controls: no backing, a ground with nothing behind it, and a leave all decide as before
+//   T4  the ground verdict on synthetic grounds (the canon holds no such case): only the actor's own
+//       constitution-tier, non-parcel ground it stands on is named; a resident, a non-constitution ground, a mark
+//       elsewhere, and a town mark nested in a parcel inside it are not
 //
 //   node --import ./test/helpers/sparse-guard.mjs --test --test-concurrency=1 test/town-centre-amend.test.mjs
 
@@ -96,6 +99,27 @@ test("T2 · no bypass on the same canon: a resident's mark on the town's constit
   assert.equal(fresh?.preview, true, `the new town mark previews: ${JSON.stringify(fresh).slice(0, 300)}`);
   assert.equal(fresh.parent, CENTRE);
   assert.equal(fresh.put_forward, false, "a leave is not an amend: nothing carries a new mark but its own stake");
+});
+
+test("T4 · the ground verdict on synthetic grounds: only the actor's own constitution-tier, non-parcel nesting ground is named as backing", { skip: SKIP }, async () => {
+  const { __groundMinimumStakeForTest: ground } = await import("../src/world.mjs");
+  // the served canon holds no non-constitution town ground and no fit resident case, so these grounds are synthetic,
+  // far from any real mark, judged by the real containment engine
+  const square = (over = {}) => ({ id: "the-town/a-test-square", by: "the-town", household: "the-town", kind: "sited", tier: "constitution",
+    at: { x: 10000, y: 10000 }, extent: { w: 100, h: 100 }, points: [[9950, 9950], [10050, 9950], [10050, 10050], [9950, 10050]], ...over });
+  const canonOf = (...marks) => ({ marks, byId: new Map(marks.map((m) => [m.id, m])), ids: new Set(marks.map((m) => m.id)) });
+  const sign = (by = "the-town") => ({ slug: "a-test-sign", by, kind: "sited", at: { x: 10010, y: 10010 }, extent: { w: 3, h: 2 } });
+  const g = await ground(sign(), canonOf(square()));
+  assert.equal(g.backing, "the-town/a-test-square", "the town's own constitutional ground it stands on");
+  assert.equal(g.min, 1, "no parcel: the minimum is unchanged");
+  assert.equal(g.ground, null, "and it is not called the actor's ground");
+  assert.equal((await ground(sign("moss"), canonOf(square()))).backing, undefined, "a resident's mark there is the commons it always was");
+  assert.equal((await ground(sign(), canonOf(square({ tier: "market" })))).backing, undefined, "a town ground that is not constitution-tier is not");
+  assert.equal((await ground({ ...sign(), at: { x: 20000, y: 20000 } }, canonOf(square()))).backing, undefined, "a mark standing elsewhere is not");
+  // "that ground" is the one it STANDS ON, never a wider one around it: inside a resident's parcel within the square
+  const parcel = { id: "moss/a-test-plot", by: "moss", household: "moss", kind: "parcel", tier: "home",
+    at: { x: 10010, y: 10010 }, extent: { w: 20, h: 20 }, points: [[10000, 10000], [10020, 10000], [10020, 10020], [10000, 10020]] };
+  assert.equal((await ground(sign(), canonOf(square(), parcel))).backing, undefined, "a town mark nested in someone's parcel is not backed by the square around it");
 });
 
 test("T3 · the verdict's controls: no backing, a backing of nothing, a leave, and a stake decide exactly as before", async () => {

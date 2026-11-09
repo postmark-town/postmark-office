@@ -4361,6 +4361,8 @@ async function groundMinimumStake(clean, canon) {
   // (the mark stays a draft); `markStandsOnOwnGround` must not take it as "commons".
   return { ...commons, own, ...(constitutional ? { backing: constitutional.id } : {}), ...(houses ? {} : { registry_unread: true }) };
 }
+/** Tests only (POS-952): the ground verdict itself, for grounds the served canon does not hold. */
+export const __groundMinimumStakeForTest = (clean, canon) => groundMinimumStake(clean, canon);
 
 /**
  * WHAT A DROP STAKES, BY THIS SAME RULE (POS-688 D4 step 3, Darko 2026-10-19
