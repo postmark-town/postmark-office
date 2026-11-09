@@ -47,10 +47,13 @@ ssh "$BOX" "node -e '
   }, null, 2) + \"\\n\");
 ' && cat '$STAGE/release.json'"
 
-# 3. the box-side script, from origin/main, and its preflight
+# 3. the box-side script, from origin/main, and its preflight. The preflight
+# needs the commit and the event (POS-971). The workflow's rollback guard is not
+# run for a hand-carry: it carries a train branch to dev, and a train is never
+# an ancestor of what prod runs.
 REMOTE="/tmp/wright-remote-deploy.$$.sh"
 git show origin/main:deploy/remote-deploy.sh | ssh "$BOX" "cat > '$REMOTE' && chmod +x '$REMOTE'"
-ssh "$BOX" "'$REMOTE' preflight '$ROOT' '$SERVICE' '$PORT'"
+ssh "$BOX" "'$REMOTE' preflight '$ROOT' '$SERVICE' '$PORT' '$FULL' hand-carry"
 
 # 4. the rsync, on the box, stage -> root (the workflow's two halves)
 ssh "$BOX" "set -euo pipefail
