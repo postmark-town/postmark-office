@@ -78,7 +78,7 @@ set -e
 
 case "$rc" in
   0)
-    echo "rollback guard (POS-971): $WHAT descends from $BASE_NAME ($BASE); it moves prod forward"
+    echo "rollback guard (POS-971): $WHAT is or descends from $BASE_NAME ($BASE); prod does not move back"
     exit 0
     ;;
   1)

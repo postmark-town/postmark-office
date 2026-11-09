@@ -79,7 +79,7 @@ test("the guard passes a candidate that descends from what prod runs, and the on
   const { dir, B, C } = tagged();
   const forward = guard(dir, C, B);
   assert.equal(forward.status, 0, forward.stdout + forward.stderr);
-  assert.match(forward.stdout, new RegExp(`descends from the commit prod runs \\(${B}\\)`));
+  assert.match(forward.stdout, new RegExp(`is or descends from the commit prod runs \\(${B}\\)`));
   const same = guard(dir, B, B);
   assert.equal(same.status, 0, same.stdout + same.stderr);
 });
@@ -111,7 +111,7 @@ test("with prod unreadable, the guard measures against the newest release tag th
   // the newest tag, w46.2, stands in for C, and C descends from it
   const next = guard(dir, C, "");
   assert.equal(next.status, 0, next.stdout + next.stderr);
-  assert.match(next.stdout, /descends from release\/2026-w46\.2, the newest other release tag/);
+  assert.match(next.stdout, /is or descends from release\/2026-w46\.2, the newest other release tag/);
   // a live sha this repository does not hold is measured the same way
   const unknown = guard(dir, C, "f".repeat(40));
   assert.equal(unknown.status, 0, unknown.stdout + unknown.stderr);
