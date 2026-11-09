@@ -189,7 +189,7 @@ function runRehearsalBlock(rolesDir, liveDb) {
   writeFileSync(harness, [
     "set -uo pipefail",
     "say() { printf '%s\\n' \"$*\"; }",
-    "bad=0; drift_lines=''; FROM_REMOTE=false; TMPCLONE=''",
+    "bad=0; drift_lines=''; FROM_REMOTE=false; FROM_S3=false; TMPCLONE=''",
     `W2_ROLES_DB="${liveDb}"; WORLD2_LAB="${rolesDir}"; WORLD2_OFFICE="${liveDb}"`,
     block,
     'echo "BAD=$bad"',
