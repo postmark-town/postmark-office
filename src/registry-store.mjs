@@ -51,11 +51,13 @@ import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 // name, so this read answers the same on a store that has not taken 081 yet: a
 // missing column reads as NULL, "never answered", instead of failing every
 // registry read (sign-in among them) between a deploy and its migration.
-// `invited_by` (085, POS-576) is read the same way, for the same reason.
+// `invited_by` (085, POS-576) is read the same way, for the same reason, and so is `likeness_state`
+// (092, POS-726 slice B): a store that has not taken 092 yet reads it as NULL.
 const HOUSEHOLDS_SQL = `
   SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly,
          provisional, home_images, to_jsonb(households) -> 'likeness' AS likeness,
-         to_jsonb(households) -> 'invited_by' AS invited_by
+         to_jsonb(households) -> 'invited_by' AS invited_by,
+         to_jsonb(households) -> 'likeness_state' AS likeness_state
     FROM households
    ORDER BY ord`;
 
@@ -222,8 +224,9 @@ const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since
 // EMPTY table from the town's files, carries it in with the rest of the row.
 // `likeness` (081, WLD-83) is kept out for the same reason, and has one writer
 // of its own, `setHouseholdLikeness` below. `invited_by` (085, POS-576) too:
-// its one writer is `setHouseholdInvitedBy`, at the declaration.
-const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by"];
+// its one writer is `setHouseholdInvitedBy`, at the declaration. `likeness_state`
+// (092, POS-726 slice B) too: its one writer is `setLikenessState`, from the signed-in form.
+const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
@@ -243,7 +246,7 @@ const valuesOf = (row, cols) => cols.map((c) => {
   if (c === "accounts") return JSON.stringify(row[c] ?? []);
   if (c === "provisional") return row[c] === true;
   if (c === "home_images") return JSON.stringify(row[c] ?? {});
-  if (c === "likeness" || c === "invited_by") return row[c] == null ? null : JSON.stringify(row[c]);
+  if (c === "likeness" || c === "invited_by" || c === "likeness_state") return row[c] == null ? null : JSON.stringify(row[c]);
   return row[c] ?? null;
 });
 
@@ -468,6 +471,44 @@ export async function setHouseholdLikeness({ slug, likeness }, env = process.env
         AND accounts @> jsonb_build_array(jsonb_build_object('id', ($3)::bigint))
   RETURNING slug`,
     [slug, JSON.stringify(likeness), likeness?.gh_id], env);
+  if (r === null) return null;
+  return { slug: r.length ? r[0].slug : null };
+}
+
+/**
+ * A household's likeness STATE, written onto its row (POS-726 slice B, migration 092): the request, the selected proof, the official
+ * pointer and its history, beside the answer (src/household-likeness-state.mjs is the shape).
+ *
+ * The ONE store writer of `likeness_state`; `src/likeness.mjs` is the one caller, from the signed-in form. It replaces the whole state (it is
+ * one fact the caller computed from the one before it) and touches no other column.
+ *
+ * ONE STATEMENT, THREE CHECKS (STORE-CONCURRENCY: the row decides, not a read the caller made earlier):
+ *   - the row is found by its slug AND by the signed-in account being one of its `accounts`, so an account the record stopped binding writes
+ *     nothing (as setHouseholdLikeness);
+ *   - the state written over is the state the caller COMPUTED FROM (`likeness_state IS NOT DISTINCT FROM $from`), so two writers at once
+ *     cannot both win: the second sees no row and the caller reads again;
+ *   - when `needsYes` is set (a request or a selection), the household's answer is yes IN THE ROW, at the write, so a no that landed between
+ *     the form and the button blocks it. A withdrawal never needs a yes.
+ *
+ * Returns `{ slug }` of the row written, `null` when the office is not pointed at the record, `{ slug: null }` when no row matched (the
+ * caller tells the four causes apart by reading again), or `{ missingColumn: true }` when the store has not taken 092.
+ */
+export async function setLikenessState({ slug, from, to, ghId, needsYes }, env = process.env) {
+  let r;
+  try {
+    r = await actsQuery(
+      `UPDATE households
+          SET likeness_state = $2::jsonb
+        WHERE slug = $1
+          AND accounts @> jsonb_build_array(jsonb_build_object('id', ($3)::bigint))
+          AND likeness_state IS NOT DISTINCT FROM $4::jsonb
+          AND (NOT $5::boolean OR likeness ->> 'answer' = 'yes')
+    RETURNING slug`,
+      [slug, JSON.stringify(to), ghId, from == null ? null : JSON.stringify(from), needsYes === true], env);
+  } catch (e) {
+    if (e?.code === "42703") return { missingColumn: true };   // undefined_column: 092 is not on this store yet
+    throw e;
+  }
   if (r === null) return null;
   return { slug: r.length ? r[0].slug : null };
 }

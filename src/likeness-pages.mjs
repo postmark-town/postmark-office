@@ -69,6 +69,12 @@ body{margin:0;background:var(--night);color:var(--ink);font:17px/1.6 Georgia,"Io
 .answer .yes{background:var(--night2);color:var(--cream)}
 .answer .no{background:transparent;color:var(--night2)}
 .thanks{font-size:1.15em}
+.picture{margin-top:1.6em;padding-top:1.2em;border-top:1px solid #e2d6bd}
+.picture h3{margin:.2em 0 .5em;font-size:1.1em;color:#1b2340}
+.picture dl{margin:.4em 0 1em;display:grid;grid-template-columns:8em 1fr;gap:.2em .8em}
+.picture dt{color:var(--muted)}.picture dd{margin:0;overflow-wrap:anywhere}
+.picture form{margin:.8em 0}.picture input[type=text],.picture select{font:inherit;padding:.45em .6em;max-width:100%;width:24em}
+.picture button{font:inherit;padding:.5em 1.2em;border-radius:999px;cursor:pointer;border:2px solid var(--night2);background:transparent;color:var(--night2)}
 @media (max-width:520px){body{font-size:16px}.card{margin:-36px 12px 28px;padding:22px 16px}.top h1{font-size:1.35em}.answer button{flex:1 1 100%}}
 `;
 
@@ -86,10 +92,40 @@ const galleryHtml = (entries) => entries.length ? `
   </div>` : "";
 
 /**
+ * The household's likeness PICTURE, beside its answer (POS-726 slice B): what it has asked for, what it has chosen, what is official now,
+ * and the three things it may do. Shown to the signed-in household only, and only while the answer is yes (a no or no answer blocks a
+ * request and a choice; a withdrawal is offered whenever something is official). `state` is ownerLikeness()'s answer. Every value is escaped.
+ */
+export function pictureBlock({ state, residents = [], action, pendingId, nonce }) {
+  if (!state) return "";
+  const yes = state.answer === "yes";
+  if (!yes && !state.official) return "";
+  const hidden = `<input type="hidden" name="pending_id" value="${esc(pendingId)}"><input type="hidden" name="nonce" value="${esc(nonce)}">`;
+  const day = (t) => esc(String(t ?? "").slice(0, 10));
+  const rows = [];
+  if (state.request) rows.push(`<dt>asked for</dt><dd>a likeness of <strong>${esc(state.request.depicts)}</strong>, ${day(state.request.at)}, by @${esc(state.request.by ?? "")}</dd>`);
+  if (state.official) rows.push(`<dt>official now</dt><dd>version ${esc(state.official.version)}: ${esc(state.official.proof)}, since ${day(state.official.since)}${yes ? "" : " (not in use while your answer is no)"}</dd>`);
+  if (state.history?.length) rows.push(`<dt>before that</dt><dd>${state.history.map((h) => `version ${esc(h.version)} (${esc(h.ended)} ${day(h.until)})`).join("; ")}</dd>`);
+  const forms = [];
+  if (yes) {
+    forms.push(`<form method="post" action="${esc(action)}">${hidden}
+      <label>Ask for a likeness of <select name="depicts">${residents.map((h) => `<option value="${esc(h)}"${state.request?.depicts === h ? " selected" : ""}>${esc(h)}</option>`).join("")}</select></label>
+      <button name="decision" value="request">${state.request ? "Ask again" : "Ask for a likeness"}</button></form>`);
+    if (state.request) forms.push(`<form method="post" action="${esc(action)}">${hidden}
+      <label>Choose the proof you were shown <input type="text" name="proof" placeholder="https://media.postmark.town/…" autocomplete="off"></label>
+      <button name="decision" value="select">Make it the official likeness</button></form>`);
+  }
+  if (state.official) forms.push(`<form method="post" action="${esc(action)}">${hidden}<button name="decision" value="withdraw">Withdraw the official likeness</button></form>`);
+  return `<section class="picture"><h3>The likeness picture</h3>
+  <p class="muted">Your answer above is the only permission. Asking, choosing a proof and the official picture are separate steps, and only a proof you choose can become official. Withdrawing stops future use; it cannot recall what was already released.</p>
+  ${rows.length ? `<dl>${rows.join("")}</dl>` : ""}${forms.join("")}</section>`;
+}
+
+/**
  * The question. Every ruled sentence is LIKENESS_WORDS whole; `gallery` is
  * galleryFor's answer; `standing` and `when` are the house's current answer.
  */
-export function questionPage({ login, houseName, residents = [], answer = null, at = null, by = null, gallery = [], action, pendingId, nonce }) {
+export function questionPage({ login, houseName, residents = [], answer = null, at = null, by = null, gallery = [], action, pendingId, nonce, state = null }) {
   const W = LIKENESS_WORDS;
   const who = residents.length ? residents.map((h) => `<strong>${esc(h)}</strong>`).join(", ") : "(none yet)";
   const standing = answer === "yes" ? "<strong>yes</strong>" : answer === "no" ? "<strong>no</strong>" : "not answered yet, which reads as <strong>no</strong>";
@@ -106,7 +142,7 @@ export function questionPage({ login, houseName, residents = [], answer = null, 
     <input type="hidden" name="nonce" value="${esc(nonce)}">
     <button class="yes" name="decision" value="yes">Yes, you may</button>
     <button class="no" name="decision" value="no">No</button>
-  </form>`);
+  </form>${pictureBlock({ state, residents, action, pendingId, nonce })}`);
 }
 
 // Darko, 2026-10-22 15:41: the yes page thanks them, in his words.
@@ -121,6 +157,17 @@ export function answeredPage({ answer, rendered, at, login }) {
     : `<p>Your answer is <strong>no</strong>. Nothing new will be made from your residents' likeness. Their own picture and appearance still show in town as before.</p>`;
   return shell("Answered", answer === "yes" ? "Thank you" : "Answered", `${said}
   <p class="muted">${kept} You can change it any time from the same link. Answered ${esc(at)} as @${esc(login)}.</p>`);
+}
+
+/** The page after a request, a choice or a withdrawal: what was kept, said plainly. */
+export function stateChangedPage({ kind, state, official, rendered, login }) {
+  const said = kind === "request"
+    ? `<p>Your household has <strong>asked for a likeness of ${esc(state?.request?.depicts)}</strong>. Nothing is official yet: only a proof you choose can become official.</p>`
+    : kind === "select"
+      ? `<p>You chose that proof. It is now your household's <strong>official likeness, version ${esc(state?.official?.version)}</strong>, and the one before it (if any) is kept in the history.</p>`
+      : `<p>Your household's official likeness is <strong>withdrawn</strong>: nothing new will use it. We cannot recall what was already released.</p>`;
+  const shown = kind === "request" ? "" : (rendered ? " The official picture on the town's public record has changed." : " The town's public file will follow at the next crossing.");
+  return shell("Kept", "Kept", `${said}<p class="muted">Kept as @${esc(login)}.${shown} Open the same link to do more.</p>`);
 }
 
 /** A refusal or a fault, in the same look. `body` is already-escaped HTML. */

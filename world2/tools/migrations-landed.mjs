@@ -145,6 +145,7 @@ export const LANDED = {
   // 087 (POS-816): the hands' hold on an inviter's payout, private, office_api its only reader.
   "087_invite_holds.sql":       { probe: `${rel("invite_holds")} AND has_table_privilege('office_api', 'invite_holds', 'UPDATE') AND NOT has_table_privilege('snapshot_reader', 'invite_holds', 'SELECT')` },
   "088_letter_notes.sql":        { probe: rel("letter_notes") },
+  "092_household_likeness_state.sql": { probe: col("households", "likeness_state") },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
