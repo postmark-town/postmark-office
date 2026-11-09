@@ -140,7 +140,9 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
     if (k === from || k === to) continue;
     if (JSON.stringify(files[k]) !== JSON.stringify(printedHouses[k])) moved.push(k);
   }
-  if ((read(clone, PINS_PATH) ?? "") !== printed.pins) moved.push(PINS_PATH);
+  // (read here, never written: the drain is the registers' one writer, test/registry-no-file-writer.test.mjs)
+  const pinsBehind = (read(clone, PINS_PATH) ?? "") !== printed.pins;
+  if (pinsBehind) moved.push("tools/github-ids.json");
   if (moved.length) throw refuse(MOVE_REFUSALS.COLLATERAL, moved.slice(0, 8).join(", ") + (moved.length > 8 ? `, +${moved.length - 8} more` : ""));
 
   // The resident's card and berth, where they named the source by name or key.
@@ -245,8 +247,10 @@ export function describe(plan, { dryRun }) {
     out.push(`  rows spelled hh:${plan.from} or its accounts' gh:<id> keep their spelling; ${plan.to}'s spelling set carries them`);
   } else out.push("store: no change (already moved)");
   out.push(`town files (one pen commit):`);
-  out.push(`  ${REGISTRY_PATH}: ${plan.registry.retired} leaves the printout; ${plan.to} printed as ${JSON.stringify(plan.registry.after)}`);
-  out.push(`  ${PINS_PATH}: unchanged`);
+  // the drain writes the registers; these two lines only say what it will print
+  const registryText = `  ${REGISTRY_PATH}: ${plan.registry.retired} leaves the printout; ${plan.to} printed as ${JSON.stringify(plan.registry.after)}`;
+  const pinsText = `  ${PINS_PATH}: unchanged`;
+  out.push(registryText, pinsText);
   for (const c of plan.cards) out.push(`  ${c.path}: household: ${c.before} -> ${c.after}`);
   if (!plan.cards.length) out.push("  no card line to change");
   if (plan.ledger.lines.length) {
