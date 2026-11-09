@@ -247,6 +247,17 @@ test("M2b · the key is judged first: a line the ledger's tail would precede, or
   assert.ok(clean(t.dir));
 });
 
+test("M2c · a printout behind the store for ANOTHER house refuses (rekey-household's collateral rule): the move never carries a change unasked", { skip: SKIP }, async () => {
+  const t = await town();
+  const c = await asOwner();
+  try { await c.query("UPDATE households SET name = 'Zeds Renamed' WHERE slug = 'zeds'"); } finally { await c.end(); }
+  const before = await storeRows();
+  await assert.rejects(withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, ...NO_WRITERS })),
+    (e) => e.defect === MOVE_REFUSALS.COLLATERAL.defect && e.detail === "zeds");
+  assert.deepEqual(await storeRows(), before);
+  assert.ok(clean(t.dir));
+});
+
 // ── M3 the move ─────────────────────────────────────────────────────────────
 
 test("M3 · THE MOVE: pin kept, membership and accounts moved, only the empty source retired; registry, card and signed key line in one commit, green", { skip: SKIP }, async () => {
