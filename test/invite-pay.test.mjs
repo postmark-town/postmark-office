@@ -217,7 +217,8 @@ test("the hold's moves: each needs a reason, cancelled is final, and only the na
   assert.match(judgeHoldMove({ to: "lifted", note: "x" }, "cancelled").defect, /cancelled payout is final/);
   assert.match(judgeHoldMove({ to: "paid", note: "x" }, "open").defect, /is not a move/);
   assert.match(judgeHoldMove({ to: "held", note: "x".repeat(601) }, "open").defect, /over 600/);
-  assert.deepEqual(INVITE_HOLD_HANDS, ["little-bird", "keemin"], "Little Bird, and Darko as her backup");
+  // POS-947: Darko's household holds no keemin, so his backup is the wright hand too; until then ["little-bird", "keemin"]
+  assert.deepEqual(INVITE_HOLD_HANDS, ["little-bird", "keemin", "wright"], "Little Bird, and Darko as her backup by either founder hand");
   assert.ok(INVITE_ID_RE.test("invite:the-keep") && !INVITE_ID_RE.test("invite:../x") && !INVITE_ID_RE.test("report/12345678"));
   // A resident whose handle is "invite" posts as invite/<slug>: an ordinary post, never an invitation
   assert.equal(INVITE_ID_RE.test("invite/the-keep"), false, "a resident's post id can never be routed to the hold");
@@ -319,4 +320,95 @@ test("the recipient: the inviter's resident the join named, else that house's fi
   assert.equal(one(planWith(nookLedger()), "nook").inviter_side.to, "architect", "the control: without the law the first resident is chosen, which is what the law moves");
   const nobody = planInvitePay({ rows, houses: houses.map((h) => (h.slug === "castle" ? { ...h, residents: [] } : h)), facts: { letters: new Map([["keep", ACTIVATED]]) }, ledger: ledgerOf(WELCOME), holds: new Map(), now: new Date("2026-11-05T00:00:00.000Z") });
   assert.equal(one(nobody).inviter_side.status, "waiting", "a house with no resident on record receives nothing yet");
+});
+
+// ── named after joining (POS-947) ───────────────────────────────────────────
+//
+// Darko 2026-11-07 23:05 EST: "open to any amount of time for the backfill for referrals", and "let's say 10 max for
+// the backfill"; 2026-11-08 09:02 EST, "The town's judge too": the pay clock from the join day and the 10-per-inviter
+// cap in all, which the town's judge also holds (tools/stamp-mint.mjs § INVITE_BACKFILL_CAP). Wright: "An old
+// activation waits until the next tick after the naming's week"; "an additional lifetime bound on paid backfilled
+// invitations, not a reset each month"; "Invitations named at joining keep the ordinary monthly cap of 10."
+const NAMED = "2026-11-08T15:00:00.000Z";
+const late = (slug, since = "2026-09-01", at = NAMED, by = "castle", named = "cleo") =>
+  ({ slug, name: slug, residents: [`${slug}-r`], since, invited_by: { by, named, at, backfill: true } });
+const lateLine = (date, slug, activated = "2026-09-10") => `- ${date} · MINT → cleo · 10 · for: invite:hh:${slug}/hh:castle/inviter/${activated} · by: the-town`;
+
+test("named after joining: the 30 days count from the JOIN day, so an old first letter activates it; the naming's own day does not", () => {
+  const r = late("hollow", "2026-09-01");
+  const p = plan({ r: [r], letters: new Map([["hollow", "2026-09-10T12:00:00.000Z"]]), now: new Date("2026-11-20T12:00:00.000Z"), ledger: ledgerOf() });
+  const row = one(p, "hollow");
+  assert.equal(row.activation.status, "activated", "a first letter nine days after joining, two months before the naming");
+  assert.equal(row.backfill, true);
+  assert.equal(row.joined, "2026-09-01");
+  assert.equal(row.at, NAMED, "the row keeps the naming's own instant: truthful provenance");
+  // the control: the same letter against an invitation named AT that instant is outside its window
+  const atJoin = plan({ r: [invited("hollow", "castle", "cleo", NAMED)], letters: new Map([["hollow", "2026-09-10T12:00:00.000Z"]]), now: new Date("2026-11-20T12:00:00.000Z"), ledger: ledgerOf() });
+  assert.notEqual(one(atJoin, "hollow").activation.status, "activated");
+  // a first letter 31 town days after joining is late, even though it is within 30 days of nothing else
+  const tooLate = plan({ r: [late("hollow", "2026-09-01")], letters: new Map([["hollow", "2026-10-02T12:00:00.000Z"]]), now: new Date("2026-11-20T12:00:00.000Z"), ledger: ledgerOf() });
+  assert.equal(one(tooLate, "hollow").inviter_side.status, "late");
+  // a late record with no join day cannot be counted: it waits, and says why, rather than guess a clock
+  const undated = plan({ r: [{ ...late("hollow"), since: null }], letters: new Map([["hollow", "2026-09-10T12:00:00.000Z"]]), now: new Date("2026-11-20T12:00:00.000Z"), ledger: ledgerOf() });
+  assert.equal(one(undated, "hollow").inviter_side.status, "waiting");
+  assert.match(one(undated, "hollow").inviter_side.why, /no join day/);
+});
+
+test("named after joining: an OLD activation waits a week from the NAMING, never paying sooner; a recent one waits its own week", () => {
+  const letters = new Map([["hollow", "2026-09-10T12:00:00.000Z"]]);
+  const at = (now) => one(plan({ r: [late("hollow")], letters, now: new Date(now), ledger: ledgerOf() }), "hollow").inviter_side;
+  const due = settlementAtOrAfter(new Date(Date.parse(NAMED) + INVITE_HOLD_MS));
+  assert.equal(due, "2026-11-15T18:00:00.000Z", "the first settlement a week after the naming");
+  assert.deepEqual(at("2026-11-09T00:00:00.000Z"), { status: "in-week", due }, "the activation two months old does not bypass the naming's week");
+  assert.deepEqual(at("2026-11-15T17:59:59.999Z"), { status: "in-week", due }, "not a moment before");
+  assert.equal(at("2026-11-15T18:00:00.000Z").status, "owed");
+  // an activation AFTER the naming counts its own week, as any invitation's does
+  const after = one(plan({ r: [late("hollow", "2026-11-01")], letters: new Map([["hollow", "2026-11-12T12:00:00.000Z"]]), now: new Date("2026-11-30T00:00:00.000Z"), ledger: ledgerOf() }), "hollow");
+  assert.equal(after.inviter_side.due, inviterDueAt("2026-11-12T12:00:00.000Z"));
+});
+
+test("named after joining: at most 10 paid to an inviter IN ALL, across months, never reset; at-join invitations keep only their monthly 10", () => {
+  // ten late-named invitations already paid to castle, in OCTOBER
+  const paid = Array.from({ length: 10 }, (_, i) => late(`old${i}`));
+  const october = paid.map((r, i) => lateLine(`2026-10-${String(10 + i).padStart(2, "0")}`, r.slug));
+  const fresh = late("eleventh");
+  const atJoin = invited("ordinary", "castle", "cleo", "2026-11-01T12:00:00.000Z");
+  const letters = new Map([["eleventh", "2026-09-10T12:00:00.000Z"], ["ordinary", "2026-11-02T12:00:00.000Z"]]);
+  const r = [...paid, fresh, atJoin];
+  const p = plan({ r, letters, now: new Date("2026-11-20T12:00:00.000Z"), ledger: ledgerOf(...october) });
+  assert.deepEqual(one(p, "eleventh").inviter_side, { status: "over-backfill-cap", due: "2026-11-15T18:00:00.000Z", paid_backfilled: 10, cap: 10 },
+    "the eleventh paid backfill stays capped in November: October's ten count, the month does not reset it");
+  assert.deepEqual(one(p, "eleventh").inviter_paid_backfilled, { paid: 10, cap: 10 });
+  assert.equal(one(p, "ordinary").inviter_side.status, "owed", "an invitation named at joining is not held by the backfill cap");
+  for (const s of paid.map((x) => x.slug)) assert.equal(one(p, s).inviter_side.status, "paid", "and the ten paid are never paid again");
+  assert.deepEqual(owedLines(p).filter((l) => l.side === "inviter").map((l) => l.invited), ["hh:ordinary"], "the one owed inviter line is the at-join one");
+  // and a year on: still capped (no reset, ever)
+  const later = plan({ r, letters, now: new Date("2027-11-20T12:00:00.000Z"), ledger: ledgerOf(...october) });
+  assert.equal(one(later, "eleventh").inviter_side.status, "over-backfill-cap");
+
+  // within one tick: twelve late-named invitations due together, none paid yet: ten placed, the eleventh and twelfth capped
+  const twelve = Array.from({ length: 12 }, (_, i) => late(`late${String(i + 1).padStart(2, "0")}`));
+  const allLetters = new Map(twelve.map((x) => [x.slug, "2026-09-10T12:00:00.000Z"]));
+  const tick = plan({ r: twelve, letters: allLetters, now: new Date("2026-11-20T12:00:00.000Z"), ledger: ledgerOf() });
+  const st = twelve.map((x) => one(tick, x.slug).inviter_side.status);
+  assert.equal(st.filter((s) => s === "owed").length, 10);
+  assert.deepEqual(st.slice(10), ["over-backfill-cap", "over-backfill-cap"], "the backfill cap binds before the month's, so the two wait for nothing");
+  // the town's same cap: an at-join invitation paid in the month still takes its monthly place beside late ones
+  assert.equal(INVITE_CAP_PER_MONTH, 10);
+});
+
+test("named after joining: the newcomer's 5 more is owed once, beside its welcome; a retry repays neither side", () => {
+  const welcome = "- 2026-09-02 · MINT → hollow-r · 5 · for: welcome:hh:hollow · by: the-town";
+  const letters = new Map([["hollow", "2026-09-10T12:00:00.000Z"]]);
+  const now = new Date("2026-11-20T12:00:00.000Z");
+  const first = plan({ r: [late("hollow")], letters, now, ledger: ledgerOf(welcome) });
+  assert.equal(one(first, "hollow").invited_side.status, "owed", "the 5 more the join would have carried");
+  assert.equal(one(first, "hollow").inviter_side.status, "owed");
+  const paidBoth = ledgerOf(welcome,
+    "- 2026-11-15 · MINT → hollow-r · 5 · for: invite:hh:hollow/hh:castle/invited · by: the-town",
+    lateLine("2026-11-15", "hollow"));
+  const retry = plan({ r: [late("hollow")], letters, now, ledger: paidBoth });
+  assert.equal(one(retry, "hollow").invited_side.status, "paid");
+  assert.equal(one(retry, "hollow").inviter_side.status, "paid");
+  assert.deepEqual(owedLines(retry), [], "a tick after both lines landed asks for nothing");
 });
