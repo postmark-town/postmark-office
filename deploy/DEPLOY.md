@@ -147,6 +147,16 @@ env), run by hand after the ship.
   cannot re-trigger a workflow (it is made with `GITHUB_TOKEN`), which is
   precisely why the deploy job chains onto the tag-cutting job inside one run
   rather than living in a separate tag-triggered file that would never fire.
+- **The rollback guard (POS-971)** refuses a push-triggered deploy (the train's
+  own cut or a hand-pushed tag) whose commit is not a descendant of the one prod
+  runs, read from `GET /release` (`deploy/release-guard.sh`; when prod can't be
+  read, the newest other `release/*` tag stands in). A tag cut at an old commit
+  runs its own old workflow, which has no such step, so the box-side preflight,
+  which every workflow takes from main, refuses any run that doesn't pass the
+  commit it brings and a known event (`push`, `workflow_dispatch`, or
+  `hand-carry` from `deploy/dev-office-carry.sh`, which carries a train to dev
+  and isn't measured). Going back is deliberate: `workflow_dispatch` from main,
+  target `prod`, with the tag named.
 
 ### The dev rehearsal (POS-354, POS-366; first run Saturday 2026-10-10)
 
@@ -289,23 +299,52 @@ into the train before the ship (SHIPPING.md), or, once `sandbox.yml` is on main,
 by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
 
 **Before each later rehearsal** (the nightly freshen stands the clone back on
-the seed and the store keeps the last rehearsal's rows):
-- the stamp chain is trimmed to the seed, then checked. The re-sign is the same
-  every night, so the store's first N lines are the seed's exactly. In a box shell:
-  ```sh
-  N=$(sudo -u meepo node --input-type=module -e 'const e = await import("/srv/postmark-office-dev/town-clone/tools/stamp-mint.mjs"); const { readFileSync } = await import("node:fs"); console.log(e.parseStampLedger(readFileSync("/srv/postmark-office-dev/town-clone/WHITE_PAGES/stamp-ledger.md", "utf8")).length)')
-  sudo -u postgres psql -d w2_devsandbox_20260925 -v ON_ERROR_STOP=1 -c "SET ROLE world2_owner; DELETE FROM stamp_lines WHERE seq > $N"
-  sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-office-dev.env -p WorkingDirectory=/srv/postmark-office-dev --pipe --wait \
-    node world2/tools/stamp-lines.mjs --verify --clone /srv/postmark-office-dev/town-clone
-  ```
-- then step 7 again (the index at the clone's head), and step 10.
+the seed and the store keeps the last rehearsal's rows): run the seed advance
+below with the seed's current pair, then the rehearsal. The pair, read from origin
+in a box shell, since a clone's local tags are only as new as its last fetch:
+```sh
+for c in town-clone world-clone; do sudo -u meepo git -C /srv/postmark-office-dev/$c ls-remote origin refs/tags/sandbox/seed 'refs/tags/sandbox/seed^{}' | tail -n1 | cut -f1; done
+```
 
-This trim is a recurring hand repair, and dev's stamped writes refuse every
-night until someone runs it. Folding it into the freshen (or a dev-only unit
-after it) is proposed, not built: it would give a dev unit the owner's DELETE on
-`stamp_lines`, which is Wright's call
+Dev's stamped writes refuse every night until the trim runs. Folding it into the
+freshen (or a dev-only unit after it) is proposed, not built: it would give a dev
+unit the owner's DELETE on `stamp_lines`, which is Wright's call
 (`G:/Starstory/docs/2026-10-09/rail/plumb-dev-rehearsal/NOTES.md` § Proposal: the trim
 in the freshen).
+
+### The dev seed advance (POS-791)
+
+Moving dev's `sandbox/seed` is its own step, one tool, run by hand on its own day
+and never on ship morning. No unit or timer runs it. It finishes with the full
+rehearsal green on the current train, so the ship's rehearsal starts from a
+known-good dev. Carry the train first (§ The dev rehearsal, step 2): the script
+comes with it. In a box shell, without `--go` for the plan:
+```sh
+cd /srv/postmark-office-dev && WORLD2_DB=w2_devsandbox_20260925 bash deploy/dev-seed-advance.sh --town <full sha> --world <full sha> --go
+```
+It refuses before anything writes unless the database is dev's and both clones are
+dev's. Then, in order, stopping at the first failure and naming it:
+1. **The retag.** The freshen reads the pair from origin, and a dev clone can't
+   push, so this reads origin's tag. If it isn't the pair given, the script stops,
+   having written nothing, and prints the retag for someone whose clone can push.
+   Run it, then run the script again.
+2. **The freshen** stands the clones on the seed and re-signs.
+3. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
+   `stamp-lines --sync` records the seed's lines past them, then `--verify`.
+4. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
+   head already exists).
+5. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
+   that sha. A world sha that doesn't descend from the pin stops here, and the stop
+   prints the line that clears the pin.
+6. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
+   as the law pen). Nothing else writes dev's snapshot, and the preflight doesn't read it.
+7. **The preflight.** The script's last line then names the full rehearsal, which is yours.
+
+Every step is safe to repeat, so after a stop, fix the cause and run the same line.
+
+No testers on dev during an advance. The dev office stays up, and the trim doesn't
+take the lock its stamped writes take, so a tester's act between the trim and the
+sync can be refused.
 
 ### Repo secrets it needs
 
@@ -1290,6 +1329,84 @@ cat /srv/postmark-sentinel/status.json | head -40
   If this box is down or the timer is masked, nothing here alarms. That needs an
   off-box heartbeat and is deliberately out of scope.
 
+### The store, residents' 5xx, certificates, failed units, the backup and trips (POS-968)
+
+Six more probes run inside the same 10-minute tick (`tools/site-sentinel.mjs`
+§14–§19), from the STAR-161 sitting (Darko, 2026-11-08): *"make sure that we
+don't accidentally drop any alarms in the move. false alarms are fine as long as
+we iterate and fix them as we find them."* Each reads something the box already
+writes, as meepo. No unit, timer or webhook is added. A source the sentinel
+cannot read makes its probe STALE, never OK. Every reason is written for the
+public board, so none carries a resident's handle, a query, an error's text or
+a unit's name. Where a probe has more to say (the failed units' names), it says
+it only in the Discord post, the change log and `state.json`.
+
+A post longer than 1,900 characters keeps its lines whole from the top and ends
+"…and N more not shown here; the board has every one."
+
+The store, residents' 5xx and trip probes count events over the last 25 minutes,
+in any 10-minute span of them. The span is the ruled window. The lookback is
+longer than one tick, so a burst that straddles two ticks is counted whole. A
+finished burst reads DOWN for one tick longer before it recovers.
+
+| Probe | Reads | Says |
+|---|---|---|
+| `store_health` | `/srv/postmark-office/telemetry/store-txn-4380.json` (the office's store watch, each minute) and the office's journal (`journalctl -u postmark-office.service`) for `terminating connection due to idle-in-transaction timeout` | **DOWN:** a kill with an office 500 within 10 min of it (POS-963). **WARN:** a kill with no 500 beside it; a session idle in a transaction for 5 s or more; a minute the watch could not ask the store. **STALE:** the watch older than 5 min, or the record or the journal unreadable. |
+| `resident_5xx` | `/srv/postmark-office/telemetry/access-YYYY-MM-DD.jsonl`, by the moment each request was answered, routes masked (`GET /quests/<h>`) | **DOWN:** 5 or more 5xx on one route within 10 min (POS-965). Fewer are named and not alarmed. **STALE:** no log, or no line in 25 min (the sentinel's own `GET /api/` lands one each tick). |
+| `cert_<host>` (one row per host) | The certificate nginx serves, read with `openssl s_client -connect 127.0.0.1:443 -servername <host>` | **WARN:** under 21 days. **DOWN:** under 7 days, expired, or a certificate that does not name the host. **STALE:** the handshake printed none. |
+| `failed_units` | `systemctl list-units --failed --plain --no-legend`, against `deploy/box-rollcall-manifest.json` | **DOWN:** a unit the manifest names (a timer's row covers its service). **WARN:** any other failed unit. Transient `run-u*` units are counted in the reason and never alarm. The board says only the counts ("2 failed units, 1 the roll-call manifest names"); the post and the change log name them. **Any change in the set of failed units posts again**, saying which came and which went, so a second unit failing under a standing WARN is heard. |
+| `backup_outcome` | `/srv/world2-lab/state/backup.json` | **DOWN:** `failed` (it names the stage), or any status that is not `shipped`. **WARN:** `shipped-no-basebackup`. **STALE:** older than 1,560 min, the roll-call's allowance. |
+| `office_tripped` | The office's journal: `the office tripped` lines, counted by door (`mcp household`, a REST door) | **WARN:** any trip. **DOWN:** 5 or more on one door within 10 min, the same line as `resident_5xx`. The MCP door wraps a trip in HTTP 200, so `resident_5xx` cannot see it. |
+
+The hosts are `CONFIG.certs.hosts`: every `listen 443` server name. The test reads
+this repo's `deploy/nginx-*.conf` and refuses a name missing from the list.
+meepo.online, starstory.online and starforge-atelier.online are served from nginx
+files that exist only on the box, so a host added there is added to the list by
+hand. pages.postmark.town is not on it. It has no DNS and no block of its own.
+
+**What the sentinel's user cannot read.** The Postgres log is `postgres:adm` and
+meepo is not in adm, so the kills come from the office's own journal line
+instead. That journal is meepo's (the office runs as meepo). A 502 or 504 that
+nginx answers for an office that is down or slow never reaches the office's
+access log, and nginx's log is adm's too. The doors probes catch an office that
+is down, and a slow one is not counted.
+
+**The change log.** Every tick appends one line to
+`/srv/postmark-sentinel/history.jsonl` for each probe whose verdict changed or
+that spoke: `at`, `key`, `from`, `to`, `reason`, `alert`, and `delivered` when a
+post went out. It keeps 366 days, and at most 64 MB. Read the last day's changes with:
+
+```sh
+tail -n 200 /srv/postmark-sentinel/history.jsonl | jq -r '"\(.at) \(.key) \(.from) -> \(.to) \(.alert // "")"'
+```
+
+**Acknowledging a standing red.** The operator writes
+`/srv/postmark-sentinel/acks.json` (readable by meepo), beside `state.json`:
+
+```json
+{ "acks": [
+  { "probe": "failed_units", "issue": "STAR-151", "until": "2026-11-15T00:00:00Z" }
+] }
+```
+
+- `probe` is the board's key. `issue` is an issue id or a link. `until` is no more than 7 days out. An ack that runs further is refused, not shortened.
+- The first tick that reads an ack binds it to the probe's finding as it stands. While that finding holds, the probe reads on the board as before (with `ack` beside it) and posts nothing: no onset, no 12-hour reminder.
+- Any change in the finding posts at once and spends the ack. A new ack, with a new `until`, binds to the new finding.
+- An ack that expires, or is taken out of the file, while its finding stands posts once at once.
+- An ack that is refused, expired or unreadable is named in the board's `alerting.notes`, and it applies to nothing.
+
+A probe's finding is kept in `state.json`, never on the board: for the six
+probes above it is their own (for `failed_units`, the names), and for any other
+probe it is its verdict and its reason with every number masked, so a clock in
+the sentence is not a change. The board's `ack` shows the issue and `until`.
+Check the acks and the new rows after a deploy with:
+
+```sh
+sudo -u meepo systemctl start postmark-site-sentinel
+jq -r '.probes[] | select(.key|test("^(store_health|resident_5xx|cert_|failed_units|backup_outcome|office_tripped)")) | "\(.key) \(.verdict) \(.reason)"' /srv/postmark-sentinel/status.json
+jq -r '.alerting.notes[]?' /srv/postmark-sentinel/status.json
+```
+
 ## The operator dashboards (`/ops/`, hub generated since 2026-08-11)
 
 Seven static surfaces under `/ops/`, all written to `/var/www/postmark-ops/`
@@ -2220,13 +2337,21 @@ not fail the notary**: the certification is the notary's job, and this finding i
 about the register. The alarm is the roll-call's outcome rule on the
 `postmark-world2-notary.timer` row (`alarm_on_nonempty` on its lists, and
 `alarm_on_false` on `escrow_checked` — a read that could not run is never a
-clean town). The escrow list holds only **judgeable** zeros: a commons mark
-locked at a window whose town sha the escrow projection never held — every
-window before 181, migration 014's first ingest — is **unjudgeable**, written
-on the line as `escrow_unjudgeable` with the oldest projected sha beside it,
-and printed by the row's `report_counts` as a count, never an alarm
-(postmark#2935; before it, 227 such marks alarmed every morning for eight
-nights while the true unbacked count was zero).
+clean town). The escrow list holds only **judgeable** zeros, and a mark is
+unbacked only if it has no backing **now** (POS-808/b; Darko, 2026-11-08: "Only
+what's unbacked today"): its stake is read at the store's current town read,
+`projection_heads['town']`, not at the town sha of the window that locked it, so
+a mark locked at zero and staked since is not listed. The window and sha that
+locked it stay on the row as history. If that current read is unnamed or the
+escrow projection holds no rows for it, nothing can be judged that night: every
+eligible commons mark is **unjudgeable**, written on the line as
+`escrow_unjudgeable` with the oldest projected sha beside it, and printed by
+the row's `report_counts` as a count, never an alarm — so a GREEN line with a
+non-zero count is a night the escrow judgement did not run, not a clean town.
+Before POS-808/b
+this class was marks locked before window 181, migration 014's first ingest,
+whose locking sha was never projected (postmark#2935; 227 such marks alarmed
+every morning for eight nights while the true unbacked count was zero).
 
 At the G1 swap the class becomes structurally impossible — the fold writes what
 the candle locked — and the read stays as the detector.
@@ -2871,3 +2996,14 @@ Darko, 2026-10-21 08:26 EDT, "737 agreed": a daily office sweep deletes an uploa
    sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && node tools/media-takedown.mjs --url <media url> --reason "<why>" --by <your handle> --oauth-db /srv/postmark-office/oauth.db'
    ```
    It prints the receipt (the objects, the uploader, the reason, who, when); the row keeps it, and the upload door refuses the same bytes in every household from then on.
+
+## Two site rebuilds per run, not three (POS-944, 2026-11-08)
+
+On the evening of 2026-11-07 the town kept moving while the site built, so the refresh rebuilt up to three times per run, and each pass took 12 to 22 minutes. The unit's 45-minute limit (`TimeoutStartSec`) killed the 22:10Z run in its third pass, before its report step, and the sentinel read the missing report as stale. Darko ruled the cap (2026-11-07 22:06 EST, POS-944/a: "Cap at 2 rebuilds per run"). Installed on the box at 03:08Z on 11-08:
+
+```sh
+sudo install -m 0644 deploy/postmark-site-refresh.service-dropin-max-two-passes.conf /etc/systemd/system/postmark-site-refresh.service.d/max-two-passes.conf
+sudo systemctl daemon-reload
+```
+
+A run that spends both passes still publishes what it built, and its report says so ("2 passes are spent — the next tick takes it"). The next tick, 30 minutes later, builds what's left. To check: `systemctl show postmark-site-refresh -p Environment` carries `SITE_REFRESH_MAX_PASSES=2`.

@@ -110,7 +110,9 @@ function box({ canonDuplicate = false } = {}) {
     "---\nkind: sited\nby: the-town\ntier: constitution\nat: { x: 0, y: 0 }\n"
     + "extent: { w: 320000, h: 320000 }\ndate: 2026-07-01\n---\n\nthe frame\n");
   put(seed, "WORLD/households.json",
-    `${JSON.stringify({ town_sha: "a".repeat(40), households: { xf3s: "gh:1" }, logins: { xf3s: "gh:1" } }, null, 2)}\n`);
+    // WLD-122 (the S158 world's sweep): the drawer's `gh:1` login binds a house only through `pinned_ids`; without it the
+    // account is "known but pinned to no household", its drawer publishes nothing, and the git rehearsal cannot express the finding
+    `${JSON.stringify({ town_sha: "a".repeat(40), households: { xf3s: "hh:xf3s" }, logins: { xf3s: "gh:1" }, pinned_ids: { 1: "hh:xf3s" } }, null, 2)}\n`);
   // The suite step is not under test here; the world's own suite is the shadow's
   // later phase and would take minutes over a fixture it was not written for.
   put(seed, "package.json", JSON.stringify({ name: "world-fixture", type: "module", scripts: { test: "node -e 0" } }));

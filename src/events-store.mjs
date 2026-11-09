@@ -666,9 +666,10 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
   if (!RECREDIT_HANDS.includes(hand))
     throw refuse(403, `only ${RECREDIT_HANDS.join(" and ")} re-credit a stage`, "a recredit burns a mint the town paid, and only the founders move money");
   const r = judgeRecreditFields(fields, roll);
+  // The advance, the skip (POS-931/a: a skipped stage is re-credited only on its skip act) and any recredit.
   const stageActs = (c) => c.query(
     "SELECT id, object, action, payload FROM acts WHERE class = $1 AND object = ANY($2) ORDER BY id", [BUG_CLASS, [id]])
-    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_RECREDIT)));
+    .then((x) => x.rows.filter((a) => a.object === id && (a.action === ACT_ADVANCE || a.action === ACT_SKIP || a.action === ACT_RECREDIT)));
   const { postPaymentsVia } = await import("./post-history.mjs");
   // As at the advance: the stage is judged, then its linked work is read from
   // GitHub before the write's transaction opens.
@@ -686,12 +687,24 @@ async function recreditBug(fields, key, id, { now, env, roll }) {
     await client.query("SELECT id FROM posts WHERE id = $1 AND class = $2 FOR UPDATE", [id, BUG_CLASS]);
     const prev = await bugRow(client, id);
     if (!prev) throw refuse(404, `no bug "${id}"`, 'town { read: "posts", args: { class: "bug" } } lists them');
-    const { was, n } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
+    const { was, n, skipped, grade } = judgeRecredit(r, prev, await stageActs(client), (await postPaymentsVia(client)).paid);
     await judgeEarnedCreditVia(client, r, gh);
-    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand };
+    const payload = { post: id, to: r.to, was, credit: r.credit, link: r.link, note: r.note, paid: n, hand,
+      ...(skipped ? { skipped: true, ...(grade !== undefined ? { grade } : {}) } : {}) };
     const actId = await insertAct(client, bugActRow({ action: ACT_RECREDIT, actor: hand, object: id, payload, now }));
+    if (skipped) {
+      return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, skipped: true, was: null, credit: r.credit, stamps: n, link: r.link,
+        ...(grade !== undefined ? { grade } : {}),
+        receipt: `re-credited: ${id}'s skipped ${r.to} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. The skip and its reason stay on the bug's history, with this credit beside them. `
+          + `The reviewed stage pass reads the town's ledger: when it holds no line for ${r.to}, it pays ${r.credit} ${n} stamps (post:${id}/${r.to}-recredit), with nothing to burn; this act moves no stamps. `
+          + `If the ledger cannot be read, or holds a line for that stage, the pass holds the credit and says why.`,
+        read: bugReadHint(id) };
+    }
     return { post: id, act_id: actId, hand, ...rungWords(r.to), recredit: true, was, credit: r.credit, stamps: n, link: r.link,
-      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}. `
+      receipt: `re-credited: ${id}'s ${r.to} from ${was} to ${r.credit} by ${hand}'s hand; ${r.to} points at ${r.link}`
+        // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${r.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
+        + ". "
         + `The reviewed stage pass reads the town's ledger: it pays ${r.credit} what ${r.to}'s line paid ${was}${n ? ` (${n} stamps, by the office's chain)` : ""} (post:${id}/${r.to}-recredit) and burns that mint, together or not at all; this act moves no stamps. `
         + `If the ledger holds no such line paid to ${was}, or ${was} no longer holds its amount in liquid stamps, the pass holds the correction and says why.`,
       read: bugReadHint(id) };
@@ -746,6 +759,8 @@ async function advanceBug(fields, key, id, { now, env, roll }) {
     return { post: bugAnswer(row), act_id: actId, hand, ...rungWords(j.to), ...(j.credit ? { credit: j.credit } : {}), stamps: n,
       ...(j.critter ? { critter: j.critter } : {}), ...(j.link ? { link: j.link } : {}), ...(forced ? { forced } : {}),
       receipt: `advanced: ${id} ${prev.state} → ${j.to} by ${hand}'s hand; ${pays}${j.critter ? `; its critter is "${j.critter}", named by ${j.credit}` : ""}${j.link ? `; ${j.to} points at ${j.link}` : ""}`
+        // a carried fix (POS-912, bug-credit.mjs § A CARRIED FIX): whose work the credit was judged against
+        + (gh?.carried ? `; ${gh.carried.by} carries ${gh.carried.ref}, so ${j.credit}'s credit was judged against its author, GitHub account ${gh.login} (id ${gh.id}), on the same patch-id and the same changed bytes. Limits: the carrier's declaration and both diffs are read live from GitHub at this advance, and a body can be edited afterwards, the office keeps no copy; patch-id is whole, context included, so context that drifts beyond whitespace refuses and a founder credits by hand, but hunk coordinates are not compared, so identical changes in identical repeated windows of one file can match at different locations` : "")
         + (forced ? `; FORCED past the stage guard because "${forced.reason}" (it went past: ${forced.past})` : ""),
       read: bugReadHint(id) };
   }, env);

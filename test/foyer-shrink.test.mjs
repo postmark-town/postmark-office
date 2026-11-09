@@ -293,7 +293,10 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 // SLIM_CEILING to 9,088 (+128), superseding POS-666/h's 8,960 for the connector; REST_CEILING stays 28,672. Measured by F5c below on
 // the final wording (not trimmed to fit): connector bare 9,038 B (+87 B, the sentence), REST bare 28,216 B.
 const REST_CEILING = 28_672;
-const SLIM_CEILING = 9_088;
+// POS-730 (2026-11-07, RULED by Darko 21:31 EST on 11-06 in the picker, POS-730/b, "Raise to 9,216"; Wright AUTH 02:31Z): the letter-note
+// act card joins the connector's bare roster (about 121 B), so SLIM_CEILING to 9,216 (+128), superseding POS-911's 9,088; REST_CEILING
+// stays 28,672. Measured by F5c below on the final wording (not trimmed to fit): connector bare 9,159 B UTF-8 (+121 B over the 9,038 B before the card), REST bare 28,611 B.
+const SLIM_CEILING = 9_216;
 
 test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
   const { shapeOf } = await import("../tools/capture-household-golden.mjs");
@@ -301,6 +304,14 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-07 FOR POS-730 (Darko 2026-11-06 14:32 EDT, "Build that shape"): the household
+  // gained the act `letter-note`, a household's private note on a letter it received. ADDITIVE and proven
+  // so: the capture diff added exactly `/acts/21/{act,blurb,teaches,dispatches_to}` and
+  // `/acts/21/fields/{letter,on,state}/…` (13 leaves) and removed or retyped none; the base capture equalled
+  // the committed golden before the change. The card is appended at the END of the roster, as every act
+  // since POS-666 has been, so no existing act's index moves. PSA for the release notes: "household
+  // { do: "letter-note", args: { letter, state: no-reply | waiting | clear, on? } } marks a letter you
+  // received, privately: to_answer skips it and the awaiting view still shows it with its mark and age."
   // ⚑ REGENERATED 2026-10-23 FOR POS-762/e (Darko 09:51 EDT, "Buy room ahead"):
   // the household gained the act `buy-parcel-room`, a household declared after
   // 2026-10-31 buying parcel room ahead. ADDITIVE and proven so: the capture diff
@@ -661,7 +672,7 @@ test("F7 · an unknown read bounces naming BOTH namespaces — the reads and the
   assert.match(r.hint, /reads back its own full card/);
 });
 
-test("F7b · the NINETEEN acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
+test("F7b · the TWENTY-ONE acts that own their name answer their card; the THREE that are also reads keep their read", async () => {
   // ⚠ THE ROUND ASKED FOR A DISJOINTNESS GUARD. It fired on the live door:
   // `address`, `home` and `window` have been both an act and a read since long
   // before this branch, because a read here IS that act's shadow. At the world
@@ -700,7 +711,10 @@ test("F7b · the NINETEEN acts that own their name answer their card; the THREE 
   // ⚑ NINETEEN → TWENTY, 2026-10-23 (POS-762/e): `buy-parcel-room` joined as a
   // BARE act. What it buys is read on the parcel room quote (its own preview),
   // not at a household read of its name.
-  assert.equal(bare.length, 20);
+  //
+  // ⚑ TWENTY → TWENTY-ONE, 2026-11-07 (POS-730): `letter-note` joined as a BARE act. What it marks is
+  // shown on the awaiting view's rows (`read: "mail", view: "awaiting"`), not at a household read of its name.
+  assert.equal(bare.length, 21);
   for (const act of bare) {
     const r = await householdApex({ read: act }, KEY, ctx({ slim: true, schemas: SCHEMAS, schemaRequired: REQUIRED }));
     assert.equal(r.error, undefined, `read: "${act}" bounced — an act nobody can read is an act nobody can learn`);
@@ -810,6 +824,9 @@ test("F19 · the advertised enum IS the accepted set — every name on it answer
   // NOTHING ACCEPTED IS LEFT OFF: every read name and every act name is on it.
   for (const r of HOUSEHOLD_READABLE) assert.ok(HOUSEHOLD_READ_ENUM.includes(r), `read "${r}" is served and unadvertised`);
   for (const a of HOUSEHOLD_DISPATCHABLE) assert.ok(HOUSEHOLD_READ_ENUM.includes(a), `act "${a}" reads back its card and is unadvertised`);
+  // POS-947/c: a one-off act (off every menu, offered in v2's first_steps) still reads back its card by name.
+  const { HOUSEHOLD_OFFERED } = await import("../src/household-apex.mjs");
+  for (const a of HOUSEHOLD_OFFERED) assert.ok(HOUSEHOLD_READ_ENUM.includes(a), `one-off act "${a}" reads back its card and is unadvertised`);
   // AND NOTHING ADVERTISED IS REFUSED: the door answers every name it lists,
   // which is the half an enum usually gets wrong — asked at the live door, not
   // asserted against the same table the enum came from.
@@ -821,20 +838,23 @@ test("F19 · the advertised enum IS the accepted set — every name on it answer
 });
 
 test("F19b · the enum carries each name ONCE — three names are both an act and a read at this door", async () => {
-  const { HOUSEHOLD_READ_ENUM, HOUSEHOLD_READABLE } = await import("../src/household-apex.mjs");
+  const { HOUSEHOLD_READ_ENUM, HOUSEHOLD_READABLE, HOUSEHOLD_OFFERED } = await import("../src/household-apex.mjs");
   assert.equal(HOUSEHOLD_READ_ENUM.length, new Set(HOUSEHOLD_READ_ENUM).size, "a duplicated enum entry is a malformed schema");
-  assert.equal(HOUSEHOLD_READ_ENUM.length, HOUSEHOLD_READABLE.length + HOUSEHOLD_DISPATCHABLE.length - ACT_SHADOW_READS.length,
+  // POS-947/c: plus the one-off acts' cards (HOUSEHOLD_OFFERED), which no read shadows.
+  assert.equal(HOUSEHOLD_READ_ENUM.length, HOUSEHOLD_READABLE.length + HOUSEHOLD_DISPATCHABLE.length + HOUSEHOLD_OFFERED.length - ACT_SHADOW_READS.length,
     "the union is deduped by exactly the shadow reads — the town door's flat spread would double them here");
 });
 
 test("F19c · THE DRIFT GUARD CAN FAIL — an unadvertised act and a phantom name are both refused", async () => {
-  const { assertReadEnumMatchesDoor, HOUSEHOLD_READ_ENUM } = await import("../src/household-apex.mjs");
-  assert.equal(assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, HOUSEHOLD_DISPATCHABLE), true, "the door as it stands");
+  const { assertReadEnumMatchesDoor, HOUSEHOLD_READ_ENUM, HOUSEHOLD_OFFERED } = await import("../src/household-apex.mjs");
+  // POS-947/c: the door's acts are the menu's and the one-offs' (household-apex.mjs § OFFERED_ACTS)
+  const ACTS_ALL = [...HOUSEHOLD_DISPATCHABLE, ...HOUSEHOLD_OFFERED];
+  assert.equal(assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, ACTS_ALL), true, "the door as it stands");
   // a new act born unadvertised — the exact drift the guard exists for
-  assert.throws(() => assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, [...HOUSEHOLD_DISPATCHABLE, "brand-new-act"]),
+  assert.throws(() => assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, [...ACTS_ALL, "brand-new-act"]),
     /unadvertised: \[brand-new-act\]/, "an act the enum never learned about must throw at module load, not surprise a caller");
   // and a name advertised that the door would refuse
-  assert.throws(() => assertReadEnumMatchesDoor([...HOUSEHOLD_READ_ENUM, "phantom"], HOUSEHOLD_READS, HOUSEHOLD_DISPATCHABLE),
+  assert.throws(() => assertReadEnumMatchesDoor([...HOUSEHOLD_READ_ENUM, "phantom"], HOUSEHOLD_READS, ACTS_ALL),
     /advertised but refused: \[phantom\]/, "an enum entry the read branch bounces is the door lying about itself");
 });
 
@@ -1288,6 +1308,22 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   // office added; the ceiling it moves is stated here so the next capture prints its
   // arithmetic beside this one. The three office-db twin goldens are not re-recorded:
   // their tests derive their expectations from their own pristine inputs (POS-896).
+  //
+  // ⚠ AND RE-CAPTURED A TWENTY-THIRD TIME, 2026-11-08 (lane POS-953), because the PR moved the clone pins to the
+  // CURRENT sandbox/seed pair: town e1af5b1a -> be71875e4 and world 8ed486ed -> 217c9f1ff (the S158 seeds; dev's seed
+  // advance had put them past the old pins, and CI's tag pruning drops a seed a pin does not hold). The source is this PR's
+  // own, with no doorstep segment changed: tools/capture-doorstep-golden.mjs unchanged at GOLDEN_NOW_MS, run once, exit 0,
+  // on CI-shaped clones (suite-clones.sh's own fetch at the new pins: HEAD and origin/main at the pins, 1 town tag and 160
+  // world tags, the counts CI's prepare printed). The diff was run leaf by leaf against the previous golden BEFORE it was
+  // replaced: 7211 -> 7203 leaves, and the moved leaves sit in three segments on both skins, the other 24 byte-identical:
+  //   1. `stances`, the world's own data at the pin: the count awaiting 76 -> 87, the awaiting rows (4 added, 8 gone, the
+  //      rest changed) and the `ground` marks (183 leaves changed).
+  //   2. `stakes`, one leaf: wright's published mark in row 276, `kind` "dungeon" -> "sited" (the world's record).
+  //   3. `mists`, one leaf: `season_ends` 282 -> 289 (the world skeleton's schedule at S158).
+  // Nothing else moved: no key removed, no other segment's byte.
+  //
+  //   full  137716 -> 137469 (-247) · slim  135277 -> 135030 (-247) · the file 273215 -> 272713 B,
+  //   sha256 cbd912c3ef251622c07d6d2e8de021d3dcb7f93254db9843e2de0bee5be2446b
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

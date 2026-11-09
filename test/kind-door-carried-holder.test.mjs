@@ -35,6 +35,8 @@ const POUCH = "sbx-cy/a-small-pouch";
 // pinned pre-W1 world has no consumable class and no resident holding word to carry, so it says so.
 const KEEPING = "WORLD/marks/let-there-be-light/the-town-centre/the-keeping-works/postmark-node";
 const PART2_WORLD = Boolean(WORLD) && existsSync(join(WORLD, KEEPING, "mark/thing/consumable/mark.md"));
+// WLD-74 B, read off the engine this suite copies: a thing is within only once entered (mark-kind isThingIn is its mark)
+const B_ENGINE = Boolean(WORLD) && /export const isThingIn\b/.test(readFileSync(join(WORLD, "tools", "mark-kind.mjs"), "utf8"));
 const notPart2 = PART2_WORLD ? false : "the world clone predates LOGOS v2 part 2 (no the-town/consumable): its law has nothing of part 2 to drive";
 const repo = mkdtempSync(join(tmpdir(), "o2-carried-"));
 const put = (p, content) => { const f = join(repo, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, content); };
@@ -108,7 +110,10 @@ export function sourceLabel() { return "home"; }
     const folded = fold({ marks: [read(root.id, "WORLD/marks/let-there-be-light/mark.md"), read(POUCH, `WORLD/marks/${POUCH}/mark.md`)], terrain: { features: [] }, stakes: [], tick: 1 });
     published = folded.marks.find((m) => m.id === POUCH);
   }
-  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec), published] }));
+  // the class marks the town's published state carries beside its instances (kind: class, the town's, `extends`), from
+  // this file's own law: the world engine asks a thing's lineage of them (WLD-74 E1), as it does of the published world
+  const classMarks = LAW.filter((r) => r.kind === "class").map((r) => ({ id: `the-town/${r.key}`, kind: "class", by: "the-town", household: "the-town", tier: "constitution", ...r.data }));
+  put("WORLD/world-state.json", JSON.stringify({ tick: 0, dials: {}, marks: [root, ...ms.map((m) => m.rec), published, ...classMarks] }));
   copyFileSync(join(WORLD, "WORLD", "skeleton.json"), join(repo, "WORLD", "skeleton.json"));
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   execFileSync("git", ["-C", repo, "add", "-A", "WORLD", "tools"]);
@@ -339,8 +344,12 @@ test("QA fail 4 · standing on a set-out bowl: the bare read, the close look's c
     const into = await callHoldTool("world_hold", { to: ANA_DOOR_BOWL, kind: "pocket-comet", count: 1 }, KEY, { verb: "give" });
     assert.equal(into.did, "give", "the door admits a give into ana's open bowl under cy's feet");
     const read = await worldApex({}, KEY);
-    assert.ok((read.within ?? []).some((m) => m.id === ANA_DOOR_BOWL), `the bowl is under cy's feet, in her spine: ${(read.within ?? []).map((m) => m.id)}`);
-    assert.ok(!(read.nearby ?? []).some((o) => o.id === ANA_DOOR_BOWL), "and not among what the eyes see (the case the matrix missed)");
+    const inSpine = (read.within ?? []).some((m) => m.id === ANA_DOOR_BOWL), seen = (read.nearby ?? []).some((o) => o.id === ANA_DOOR_BOWL);
+    const where = `within ${(read.within ?? []).map((m) => m.id)}; nearby ${(read.nearby ?? []).map((o) => o.id)}`;
+    // WLD-74 B: the unentered bowl is not where she is; it is what she sees at her feet. An older engine put it in
+    // her spine and not among the eyes (the case the matrix missed). Either way the verbs below must show.
+    if (B_ENGINE) assert.ok(!inSpine && seen, `B: the bowl under cy's feet is seen, and not in her spine: ${where}`);
+    else assert.ok(inSpine && !seen, `before B: the bowl under cy's feet is in her spine, not among the eyes: ${where}`);
     const acts = read.actions.map((e) => e.action);
     for (const v of ["take", "give", "refill"]) assert.ok(acts.includes(v), `${v} is admitted here, so it shows (${acts})`);
     // the close look's column, one bowl at a time

@@ -263,8 +263,15 @@ export function standpointForCrossing(here, who) {
  * the pool cannot be reached, and both land here as `[]` — which is the input
  * that makes the deposit rule decline to move the rider. That is the same
  * fail-safe this function has always had, now with one source rather than two.
+ *
+ * EXCEPT FOR THE EXIT'S DEPOSIT (POS-943): "decline to move the rider" is,
+ * after the exit is written, a rider out of the hull standing wherever the hull
+ * was (finch, 100 km out). `strict` lets an unreachable store THROW, so the
+ * vessel's exit refuses before it writes anything (`crossingDeps().actsStrict`).
+ * "Not configured" still answers `[]`: an office with no store has no boarding
+ * to read and never had a deposit to make.
  */
-async function actsOfActor(who) {
+async function actsOfActor(who, { strict = false } = {}) {
   try {
     const { actsQuery } = await import("./world2-acts.mjs");
     const rows = await actsQuery(
@@ -275,7 +282,7 @@ async function actsOfActor(who) {
     return rows.map((r) => ({
       action: r.action, object: r.object ?? null, payload: actPayload(r.payload),
     }));
-  } catch { return []; }
+  } catch (e) { if (strict) throw e; return []; }
 }
 
 /**
@@ -528,10 +535,14 @@ export function crossingDeps() {
     // THE ACTS THIS ACTOR HAS WRITTEN, oldest first — the ride fold's one input
     // (world-ride.mjs § rideStateFrom). Read from the STORE (POS-152), which is
     // never truncated, so an entry older than the drain cursor is still here; a
-    // store that cannot be opened answers with no history, and the deposit rule
-    // then falls back to "you came in nowhere" and leaves a resident exactly
-    // where they are rather than setting them down somewhere they never earned.
+    // store that cannot be opened answers with no history here. The vessel
+    // exit's deposit reads `actsStrict` below instead (POS-943): "leave a
+    // resident exactly where they are" was, after the exit, a resident standing
+    // where the hull had been.
     acts: async (who) => actsOfActor(who),
+    // THE SAME READ FOR THE VESSEL EXIT'S DEPOSIT (POS-943): an unreachable store throws here, and the exit refuses
+    // with nothing written, rather than writing an exit that sets the rider down nowhere.
+    actsStrict: async (who) => actsOfActor(who, { strict: true }),
     // What the class of a mark LENDS, resolved for a resident — the § 5 roster.
     // It lives here and not in world-crossings.mjs because the roster is in the
     // hydrated store and that module is deliberately store-free.
@@ -2622,13 +2633,24 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
     // THE CREATURES' ANSWERS TO YOU (POS-637 PR-C; C1): v2's live read only.
     let creatureEffects = null;
     if (who && live) try {
-      const { creaturesForRead, creatureToYou } = await import("./creatures-read.mjs");
+      const { creaturesForRead, creatureToYou, readFleeRows, fleeEventsOf } = await import("./creatures-read.mjs");
       const { CROSSING_EPOCH_UTC, CROSSING_MS } = await import("./crossings.mjs");
       const cur = await creaturesForRead({ as: who });
+      const sinceMs = cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS;
+      // THE FLEE THE OFFICE MADE FOR YOU AT 0 NERVE (WLD-164): its exit act is in the record with its cause, and is said here
+      // from that record alone. An unreadable record is said incomplete, never read as "you did not flee"
+      let fled = [], fledUnread = null;
+      try {
+        const { actsQuery } = await import("./world2-acts.mjs");
+        fled = await readFleeRows(who, (sql, params) => actsQuery(sql, params));
+      } catch (e) { fledUnread = plainReason(e, "record", "the exit record"); faultLogged("a resident's recorded flee could not be read for their happened", e); }
       // whenever the law is read here, an empty fold included: a since older than
       // the fold's reach is then said incomplete rather than silently whole (review-574 C1)
       if (cur?.living)
-        creatureEffects = creatureToYou(cur, who, { sinceMs: cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS });
+        creatureEffects = creatureToYou(cur, who, { sinceMs, fled });
+      else if (fled.length) creatureEffects = { events: fleeEventsOf(fled, { sinceMs, nowMs: Date.now() }), readable: true };
+      if (fledUnread && creatureEffects?.readable !== false)
+        creatureEffects = { events: creatureEffects?.events ?? [], readable: false, missing: "your flee at 0 nerve", reason: `the exit record could not be read (${fledUnread}): this is not an answer about whether you fled` };
     } catch { creatureEffects = null; }
 
     const block = happenedBlock({

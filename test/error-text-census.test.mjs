@@ -64,6 +64,7 @@ const ALLOWED = {
   "gift-exec.mjs": [1, `${OWN}: classifyFatal's input (its last word is FAULT_LOGGED)`],
   "idea-store.mjs": [2, `${OWN}: LateCrossingError's ruled message; PenUnreachableError's ruled sentence, as the 503's defect`],
   "join-bind-exec.mjs": [1, `${OWN}: a refusal (an HTTP status) relayed by its own defect, else its message (KEPT, POS-617: an integer HTTP code is only ever set by the office, so the message is the office's own sentence)`],
+  "invite-name-exec.mjs": [1, `${OWN}: join-bind-exec's catch, line for line (POS-947): a refusal (an HTTP status) relayed by its own defect, else its message; anything else goes to faultLogged`],
   "join-bind.mjs": [2, `${OWN}: relay, a refusal (a defect or an HTTP status) in its own words`],
   "leave-exec.mjs": [1, "the push error a receipt discloses (the 409's sketchbook-checkout error is FAULT_LOGGED since POS-617)"],
   "media.mjs": [1, "a 502 quoting the fetch of the resident's own URL (Wright's G4: it stays)"],
@@ -103,7 +104,7 @@ const ALLOWED = {
   "world.mjs": [7, `${OWN}: PenUnreachableError's ruled sentence (x4); and ${OWN_URL} (the media host's answer about a picture's url, x3). A walk's entry refusal moved to arrival-entries.mjs § refusalOf, which relays a refusal by its defect and logs anything else (WLD-5)`],
   "world2-acts.mjs": [1, `${OWN}: a status field`],
   "world2-pen.mjs": [1, `${OWN}: a status field (penWrite's lastError)`],
-  "write.mjs": [1, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723)`],
+  "write.mjs": [2, `${OPERATOR} (the pen batch's held line: a refused landing's defect, else its first line, onto a held act in the drain's report, POS-723); ${OWN}: the ancestry classifier checks whether git's exit 1 carries stderr, never puts that text in an answer (POS-922)`],
 };
 
 const walk = (d) => readdirSync(d).flatMap((n) => {
