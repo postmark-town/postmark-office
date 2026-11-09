@@ -1585,9 +1585,10 @@ export function judgeQuietRange(cmp) {
 // read as UNKNOWN would be a blind probe read as silence.
 //
 // Each reads something the box already writes; nothing new runs. THE BOARD IS
-// PUBLIC (/ops/sentinel.json), so no reason below carries a handle, a query or
-// an error's text: a route is masked, a trip is named by its door, and a stuck
-// session by its pid and pool (POS-568 keeps the raw error out of what a
+// PUBLIC (/ops/sentinel.json), so no reason below carries a handle, a query,
+// an error's text or a unit's name: a route is masked, a trip is named by its
+// door, a stuck session by its pid and pool, and the failed units by count (their
+// names ride `said`, which only the post, the change log and state.json carry) (POS-568 keeps the raw error out of what a
 // resident reads, and the board is read by anyone).
 
 /** The most events inside any one `windowMs` span. PURE: two pointers over the sorted times. */
@@ -1939,6 +1940,13 @@ export function classifyCert({ host, notAfterMs = null, matches = null, names = 
 // counted in the reason and never alarmed: those are a person's one-off
 // commands, and they stay failed until somebody resets them.
 //
+// NO UNIT'S NAME REACHES THE PUBLIC BOARD (Wright, #978 review, 11-09). The
+// `reason` and `detail` the board prints carry only counts and the verdict.
+// `said` names the units, and goes where only the operators read: the
+// Discord post, the change log and state.json (tick routes it there). A change
+// in the set of failed units re-barks (see rebarkOnChange): a standing WARN must
+// not hide a second unit failing under it.
+//
 // The manifest is read as data here, not through tools/box-rollcall.mjs: this
 // file is the one alarm route, and it must not fail to load because the
 // roll-call or anything it imports did.
@@ -1966,17 +1974,28 @@ export function classifyFailedUnits({ text = null, error = null, manifestNames =
   const transient = failed.filter((u) => TRANSIENT_UNIT.test(u));
   const rest = failed.filter((u) => !TRANSIENT_UNIT.test(u)).sort();
   const counted = transient.length ? `; and ${plural(transient.length, "transient run-u* unit")} (counted, never alarmed)` : "";
-  const detail = { failed: rest, transient: transient.length };
-  if (!rest.length) return { verdict: "OK", reason: `no unit has failed${counted}`, finding: "ok", detail };
+  if (!rest.length) return { verdict: "OK", reason: `no unit has failed${counted}`, finding: "ok", detail: { failed: 0, transient: transient.length } };
+  const units = plural(rest.length, "failed unit");
   if (manifestNames == null) {
-    return { verdict: "STALE", reason: `${plural(rest.length, "unit")} failed, and ${manifestPath} could not be read (${String(manifestError ?? "no reason given").slice(0, 120)}) to say which matter: ${listSome(rest, 6)}${counted}`, finding: rest.join(" "), detail };
+    const why = `the roll-call manifest could not be read (${String(manifestError ?? "no reason given").slice(0, 120)}) to say which matter`;
+    return {
+      verdict: "STALE", reason: `${units}, and ${why}${counted}`,
+      said: `${plural(rest.length, "unit")} failed, and ${manifestPath} could not be read (${String(manifestError ?? "no reason given").slice(0, 120)}) to say which matter: ${listSome(rest, 6)}${counted}`,
+      finding: rest.join(" "), detail: { failed: rest.length, transient: transient.length },
+    };
   }
   const named = rest.filter((u) => manifestNames.has(u));
   const other = rest.filter((u) => !manifestNames.has(u));
   const said = [];
   if (named.length) said.push(`${plural(named.length, "unit")} the roll-call manifest names failed: ${listSome(named.map((u) => `${u} (${manifestNames.get(u)})`), 6)}`);
   if (other.length) said.push(`${plural(other.length, "unit")} outside the manifest failed: ${listSome(other, 6)}`);
-  return { verdict: named.length ? "DOWN" : "WARN", reason: `${said.join("; ")}${counted}`, finding: `${named.join(" ")}|${other.join(" ")}`, detail };
+  return {
+    verdict: named.length ? "DOWN" : "WARN",
+    reason: `${units}, ${named.length ? named.length : "none"} the roll-call manifest names${counted}`,
+    said: `${said.join("; ")}${counted}`,
+    finding: `${named.join(" ")}|${other.join(" ")}`,
+    detail: { failed: rest.length, in_manifest: named.length, transient: transient.length },
+  };
 }
 
 // ── §18 the nightly backup's outcome ────────────────────────────────────────
@@ -2119,12 +2138,12 @@ export const findingOf = (p) => `${p.verdict}: ${p.finding ?? String(p.reason ??
  */
 export function applyAck({ prev = null, next, alert, state, ack = null, nowMs }) {
   const held = prev?.ack ?? null;
-  const loud = (note) => (BAD.has(next.verdict) ? { kind: "onset", verdict: next.verdict, reason: next.reason, since: state.since, ack_note: note }
-    : next.verdict === "WARN" ? { kind: "warn", verdict: "WARN", reason: next.reason, since: state.since, ack_note: note } : null);
+  const loud = (note) => (BAD.has(next.verdict) ? { kind: "onset", verdict: next.verdict, reason: next.reason, since: state.since, note }
+    : next.verdict === "WARN" ? { kind: "warn", verdict: "WARN", reason: next.reason, since: state.since, note } : null);
   if (!ack) {
     if (held && !held.spent) {
       const note = `Its acknowledgement (${held.issue}) ended at ${held.until} and it still reads ${next.verdict}.`;
-      const out = alert ? { ...alert, ack_note: note } : loud(note);
+      const out = alert ? { ...alert, note } : loud(note);
       if (out && alert?.kind !== "recovered") return { alert: out, state: { ...state, last_alert_at: nowMs } };
     }
     return { alert, state };
@@ -2136,9 +2155,37 @@ export function applyAck({ prev = null, next, alert, state, ack = null, nowMs })
   const spent = { ...bound, spent: true };
   if (alert?.kind === "recovered") return { alert, state: { ...state, ack: spent } };
   const note = `Its acknowledgement (${bound.issue}) covered an earlier finding, so this one barks.`;
-  if (alert) return { alert: { ...alert, ack_note: note }, state: { ...state, ack: spent } };
+  if (alert) return { alert: { ...alert, note }, state: { ...state, ack: spent } };
   const fresh = loud(note);
   return { alert: fresh, state: { ...state, ack: spent, ...(fresh ? { last_alert_at: nowMs } : {}) } };
+}
+
+/**
+ * ANY CHANGE IN WHAT IT NAMES RE-BARKS, for a probe that lists things (§17's
+ * failed units; Wright, #978 review). transition() speaks on a change of
+ * verdict and a WARN speaks once per episode, so a second unit failing under a
+ * standing WARN said nothing: the 11-04 starstory-sync shape. This is call 4's
+ * rule for acks ("any change re-barks"), held for the probe itself. PURE: the
+ * finding rides in state.json (never the public board), and a change while it
+ * is bad or a warning speaks once, naming what came and went. A probe with no
+ * finding remembered yet (the first tick after an upgrade) says nothing new.
+ */
+const UNIT_NAME = /\.(service|timer|socket|mount|automount|scope|path|target|slice|swap|device)$/;
+export function rebarkOnChange({ prev = null, next, alert, state, acked = false, nowMs }) {
+  const out = { alert, state: { ...state, finding: next.finding } };
+  const was = prev?.finding;
+  if (alert || acked || was == null || was === next.finding) return out;
+  if (!BAD.has(next.verdict) && next.verdict !== "WARN") return out;
+  const units = (f) => new Set(String(f ?? "").split(/[|\s]+/).filter((u) => UNIT_NAME.test(u)));
+  const before = units(was), now = units(next.finding);
+  const came = [...now].filter((u) => !before.has(u)), went = [...before].filter((u) => !now.has(u));
+  const what = [came.length ? `newly failed: ${came.join(", ")}` : "", went.length ? `no longer failed: ${went.join(", ")}` : ""].filter(Boolean).join("; ");
+  const note = `What it names changed since it last spoke${what ? ` (${what})` : ""}.`;
+  out.alert = BAD.has(next.verdict)
+    ? { kind: "onset", verdict: next.verdict, reason: next.reason, since: state.since, note }
+    : { kind: "warn", verdict: "WARN", reason: next.reason, since: state.since, note };
+  out.state.last_alert_at = nowMs;
+  return out;
 }
 
 // ── §20 the change log (POS-968, call 7) ────────────────────────────────────
@@ -2270,8 +2317,9 @@ export function composeMessage({ alerts, board, nowIso }) {
   else lines.push(`**📮 Postmark sentinel** — recovered, as of ${nowIso}.`);
   lines.push("");
 
-  // An alert an acknowledgement shaped (§21) says so at its end; every other line is unchanged.
-  const acked = (alert) => (alert.ack_note ? ` ${alert.ack_note}` : "");
+  // An alert an acknowledgement (§21) or a changed finding (rebarkOnChange)
+  // shaped says so at its end; every other line is unchanged.
+  const acked = (alert) => (alert.note ? ` ${alert.note}` : "");
   for (const { label, alert } of bad) {
     const tail = alert.kind === "reminder" ? ` Still bad after ${humanDuration(Date.parse(nowIso) - alert.since)}; this is the twelve-hourly reminder.`
       : alert.kind === "changed" ? ` (it was ${alert.from} before this)`
@@ -2433,11 +2481,33 @@ export async function ghJson(path, { fetchImpl = fetch, token = null } = {}) {
   return res.json();
 }
 
+/**
+ * A post that fits Discord's limit and still says how many alerts it left out
+ * (Wright, #978 review): the lines composeMessage writes are kept whole from
+ * the top until the next one would not fit, and the post ends "…and N more".
+ * The board and the journal (run's errLog on a refused post) carry every one.
+ */
+export const DISCORD_MAX = 1900;
+export function fitMessage(content, max = DISCORD_MAX) {
+  const text = String(content ?? "");
+  if (text.length <= max) return text;
+  const lines = text.split("\n");
+  // composeMessage's shape: the header, a blank, one line per alert, a blank, the board's sentence.
+  const head = lines.slice(0, 2), body = lines.slice(2, -2), foot = lines.slice(-2);
+  for (let keep = body.length - 1; keep >= 0; keep--) {
+    const more = `…and ${body.length - keep} more not shown here; the board has every one.`;
+    const out = [...head, ...body.slice(0, keep), ...foot, more].join("\n");
+    if (out.length <= max) return out;
+  }
+  const more = `\n…and ${Math.max(body.length, 1)} more not shown here; the board has every one.`;
+  return text.slice(0, max - more.length) + more;
+}
+
 export async function postDiscord(webhook, content, { fetchImpl = fetch } = {}) {
   const res = await fetchImpl(webhook, {
     method: "POST",
     headers: { "content-type": "application/json", "user-agent": CONFIG.userAgent },
-    body: JSON.stringify({ content: content.slice(0, 1900), allowed_mentions: { parse: [] } }),
+    body: JSON.stringify({ content: fitMessage(content), allowed_mentions: { parse: [] } }),
     signal: AbortSignal.timeout(CONFIG.requestTimeoutMs),
   });
   if (!res.ok) throw new Error(`webhook -> HTTP ${res.status}`);
@@ -2797,6 +2867,11 @@ export async function tick({
   // access log serves §15, and §14's 500s.
   const ev = config.events ?? { windowMs: 10 * MINUTE, lookbackMs: 25 * MINUTE };
   const sinceMs = nowMs - ev.lookbackMs;
+  // What a probe says only where operators read (the Discord post, the change
+  // log, state.json): its finding, and for §17 the text that names the units.
+  // The board's probe objects never carry either; it is public.
+  const inner = new Map();
+  const keep = (key, r, more = {}) => inner.set(key, { said: r.said ?? r.reason, finding: r.finding, ...more });
   let journal = null, journalWhy = "no office journal is configured";
   if (config.officeJournal && (config.storeHealth || config.officeTripped)) {
     const j = readOfficeJournal(config.officeJournal.unit, sinceMs, { exec });
@@ -2816,20 +2891,24 @@ export async function tick({
       answered500: access?.rows ? access.rows.filter((x) => x.status === 500).map((x) => x.at) : null, accessError: access?.error ?? "no access log is configured",
       nowMs, sinceMs, windowMs: ev.windowMs, staleAfterMs: sh.staleAfterMs, path: sh.path,
     });
-    probes.push({ key: sh.key, label: sh.label, kind: "store", verdict: r.verdict, reason: r.reason, finding: r.finding, detail: r.detail });
+    probes.push({ key: sh.key, label: sh.label, kind: "store", verdict: r.verdict, reason: r.reason, detail: r.detail });
+    keep(sh.key, r);
   }
 
   if (config.resident5xx) {
     const rx = config.resident5xx;
     const r = classifyResident5xx({ rows: access?.rows ?? null, newestMs: access?.newestMs ?? null, readError: access?.error ?? "no access log is configured", nowMs, sinceMs, windowMs: ev.windowMs, threshold: rx.threshold, dir: config.accessLog?.dir });
-    probes.push({ key: rx.key, label: rx.label, kind: "errors", verdict: r.verdict, reason: r.reason, finding: r.finding, ...(r.detail ? { detail: r.detail } : {}) });
+    probes.push({ key: rx.key, label: rx.label, kind: "errors", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(rx.key, r);
   }
 
   if (config.certs) {
     const c = config.certs;
     for (const host of c.hosts) {
       const r = classifyCert({ ...readServedCert(host, { exec, connect: c.connect, timeoutMs: c.timeoutMs }), nowMs, warnDays: c.warnDays, downDays: c.downDays, connect: c.connect });
-      probes.push({ key: `${c.keyPrefix}_${slug(host)}`, label: `the certificate for ${host}`, kind: "cert", verdict: r.verdict, reason: r.reason, finding: r.finding, ...(r.detail ? { detail: r.detail } : {}) });
+      const key = `${c.keyPrefix}_${slug(host)}`;
+      probes.push({ key, label: `the certificate for ${host}`, kind: "cert", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+      keep(key, r);
     }
   }
 
@@ -2841,7 +2920,8 @@ export async function tick({
     } catch (e) { error = (firstLine(e?.stderr) || firstLine(e?.message ?? e)).slice(0, 160); }
     try { manifestNames = manifestUnitNames(JSON.parse(readFileSync(fu.manifest, "utf8"))); } catch (e) { manifestError = e?.code ?? firstLine(e?.message ?? e); }
     const r = classifyFailedUnits({ text, error, manifestNames, manifestError, manifestPath: fu.manifest });
-    probes.push({ key: fu.key, label: fu.label, kind: "units", verdict: r.verdict, reason: r.reason, finding: r.finding, ...(r.detail ? { detail: r.detail } : {}) });
+    probes.push({ key: fu.key, label: fu.label, kind: "units", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(fu.key, r, { rebark: true });
   }
 
   if (config.backup) {
@@ -2849,18 +2929,22 @@ export async function tick({
     let raw = null, readError = null;
     try { raw = readFileSync(bk.path, "utf8"); } catch (e) { readError = e?.code ?? e?.message ?? String(e); }
     const r = classifyBackup({ raw, readError, nowMs, staleAfterMs: bk.staleAfterMs, path: bk.path });
-    probes.push({ key: bk.key, label: bk.label, kind: "backup", verdict: r.verdict, reason: r.reason, finding: r.finding, ...(r.detail ? { detail: r.detail } : {}) });
+    probes.push({ key: bk.key, label: bk.label, kind: "backup", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(bk.key, r);
   }
 
   if (config.officeTripped) {
     const ot = config.officeTripped;
     const trips = journal ? journal.filter((e) => TRIP_LINE.test(e.message)).map((e) => ({ atMs: e.atMs, door: tripDoor(e.message) })) : null;
     const r = classifyOfficeTripped({ trips, journalWhy, nowMs, sinceMs, windowMs: ev.windowMs, threshold: ot.threshold });
-    probes.push({ key: ot.key, label: ot.label, kind: "trips", verdict: r.verdict, reason: r.reason, finding: r.finding, ...(r.detail ? { detail: r.detail } : {}) });
+    probes.push({ key: ot.key, label: ot.label, kind: "trips", verdict: r.verdict, reason: r.reason, ...(r.detail ? { detail: r.detail } : {}) });
+    keep(ot.key, r);
   }
 
-  // the edges. An acknowledgement (§21) may shape what a probe says; the change
-  // log (§20) records every probe whose verdict moved or that spoke.
+  // the edges. An acknowledgement (§21) may shape what a probe says, a probe
+  // that lists things re-barks when the list changes, and the change log (§20)
+  // records every probe whose verdict moved or that spoke. Each sees the
+  // probe's private text and finding where it has one; the board does not.
   const prevProbes = state.probes ?? {};
   const nextProbes = {};
   const alerts = [];
@@ -2869,14 +2953,17 @@ export async function tick({
   notes.push(...ackBook.notes);
   for (const p of probes) {
     const prev = prevProbes[p.key] ?? null;
-    const t = transition({ prev, next: p, nowMs, reminderMs: config.reminderMs });
-    const { alert, state: st, acked = false, suppressed = null } = applyAck({ prev, next: p, alert: t.alert, state: t.state, ack: ackBook.live.get(p.key) ?? null, nowMs });
+    const own = inner.get(p.key);
+    const seen = own ? { ...p, reason: own.said, finding: own.finding } : p;
+    const t = transition({ prev, next: seen, nowMs, reminderMs: config.reminderMs });
+    let { alert, state: st, acked = false, suppressed = null } = applyAck({ prev, next: seen, alert: t.alert, state: t.state, ack: ackBook.live.get(p.key) ?? null, nowMs });
+    if (own?.rebark) ({ alert, state: st } = rebarkOnChange({ prev, next: seen, alert, state: st, acked, nowMs }));
     nextProbes[p.key] = st;
     if (alert) alerts.push({ key: p.key, label: p.label, alert });
-    if (acked) p.ack = { issue: st.ack.issue, until: st.ack.until, finding: st.ack.finding };
+    if (acked) p.ack = { issue: st.ack.issue, until: st.ack.until };
     if (!prev || prev.verdict !== p.verdict || alert || suppressed) {
       history.push({
-        at: nowIso, key: p.key, label: p.label, from: prev?.verdict ?? null, to: p.verdict, reason: p.reason,
+        at: nowIso, key: p.key, label: p.label, from: prev?.verdict ?? null, to: p.verdict, reason: seen.reason,
         alert: alert?.kind ?? null, ...(suppressed ? { held_by_ack: suppressed } : {}), ...(st.ack ? { ack: st.ack.issue } : {}),
       });
     }

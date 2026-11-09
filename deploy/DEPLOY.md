@@ -1327,7 +1327,12 @@ don't accidentally drop any alarms in the move. false alarms are fine as long as
 we iterate and fix them as we find them."* Each reads something the box already
 writes, as meepo. No unit, timer or webhook is added. A source the sentinel
 cannot read makes its probe STALE, never OK. Every reason is written for the
-public board, so none carries a resident's handle, a query or an error's text.
+public board, so none carries a resident's handle, a query, an error's text or
+a unit's name. Where a probe has more to say (the failed units' names), it says
+it only in the Discord post, the change log and `state.json`.
+
+A post longer than 1,900 characters keeps its lines whole from the top and ends
+"…and N more not shown here; the board has every one."
 
 The store, residents' 5xx and trip probes count events over the last 25 minutes,
 in any 10-minute span of them. The span is the ruled window. The lookback is
@@ -1339,7 +1344,7 @@ finished burst reads DOWN for one tick longer before it recovers.
 | `store_health` | `/srv/postmark-office/telemetry/store-txn-4380.json` (the office's store watch, each minute) and the office's journal (`journalctl -u postmark-office.service`) for `terminating connection due to idle-in-transaction timeout` | **DOWN:** a kill with an office 500 within 10 min of it (POS-963). **WARN:** a kill with no 500 beside it; a session idle in a transaction for 5 s or more; a minute the watch could not ask the store. **STALE:** the watch older than 5 min, or the record or the journal unreadable. |
 | `resident_5xx` | `/srv/postmark-office/telemetry/access-YYYY-MM-DD.jsonl`, by the moment each request was answered, routes masked (`GET /quests/<h>`) | **DOWN:** 5 or more 5xx on one route within 10 min (POS-965). Fewer are named and not alarmed. **STALE:** no log, or no line in 25 min (the sentinel's own `GET /api/` lands one each tick). |
 | `cert_<host>` (one row per host) | The certificate nginx serves, read with `openssl s_client -connect 127.0.0.1:443 -servername <host>` | **WARN:** under 21 days. **DOWN:** under 7 days, expired, or a certificate that does not name the host. **STALE:** the handshake printed none. |
-| `failed_units` | `systemctl list-units --failed --plain --no-legend`, against `deploy/box-rollcall-manifest.json` | **DOWN:** a unit the manifest names (a timer's row covers its service). **WARN:** any other failed unit. Transient `run-u*` units are counted in the reason and never alarm. |
+| `failed_units` | `systemctl list-units --failed --plain --no-legend`, against `deploy/box-rollcall-manifest.json` | **DOWN:** a unit the manifest names (a timer's row covers its service). **WARN:** any other failed unit. Transient `run-u*` units are counted in the reason and never alarm. The board says only the counts ("2 failed units, 1 the roll-call manifest names"); the post and the change log name them. **Any change in the set of failed units posts again**, saying which came and which went, so a second unit failing under a standing WARN is heard. |
 | `backup_outcome` | `/srv/world2-lab/state/backup.json` | **DOWN:** `failed` (it names the stage), or any status that is not `shipped`. **WARN:** `shipped-no-basebackup`. **STALE:** older than 1,560 min, the roll-call's allowance. |
 | `office_tripped` | The office's journal: `the office tripped` lines, counted by door (`mcp household`, a REST door) | **WARN:** any trip. **DOWN:** 5 or more on one door within 10 min, the same line as `resident_5xx`. The MCP door wraps a trip in HTTP 200, so `resident_5xx` cannot see it. |
 
@@ -1380,10 +1385,11 @@ tail -n 200 /srv/postmark-sentinel/history.jsonl | jq -r '"\(.at) \(.key) \(.fro
 - An ack that expires, or is taken out of the file, while its finding stands posts once at once.
 - An ack that is refused, expired or unreadable is named in the board's `alerting.notes`, and it applies to nothing.
 
-The six probes above show their finding on the board as `finding`. Any other
-probe's finding is its verdict and its reason with every number masked, so a
-clock in the sentence is not a change. Check the acks and the new rows after a
-deploy with:
+A probe's finding is kept in `state.json`, never on the board: for the six
+probes above it is their own (for `failed_units`, the names), and for any other
+probe it is its verdict and its reason with every number masked, so a clock in
+the sentence is not a change. The board's `ack` shows the issue and `until`.
+Check the acks and the new rows after a deploy with:
 
 ```sh
 sudo -u meepo systemctl start postmark-site-sentinel

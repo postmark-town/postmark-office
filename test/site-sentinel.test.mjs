@@ -2811,8 +2811,9 @@ const MANIFEST = JSON.parse(readFileSync(CONFIG.failedUnits.manifest, "utf8"));
 test("§17 the box's list of 11-09: certbot and a leftover rerun are a WARN, and 17 run-u* units are counted, never alarmed", () => {
   const r = classifyFailedUnits({ text: FAILED_1109, manifestNames: manifestUnitNames(MANIFEST) });
   assert.equal(r.verdict, "WARN");
-  assert.equal(r.reason, "2 units outside the manifest failed: certbot.service; wright-rerun-s83-1790426624.service; and 17 transient run-u* units (counted, never alarmed)");
-  assert.deepEqual(r.detail, { failed: ["certbot.service", "wright-rerun-s83-1790426624.service"], transient: 17 });
+  assert.equal(r.reason, "2 failed units, none the roll-call manifest names; and 17 transient run-u* units (counted, never alarmed)", "the public text: counts and the verdict, no name");
+  assert.equal(r.said, "2 units outside the manifest failed: certbot.service; wright-rerun-s83-1790426624.service; and 17 transient run-u* units (counted, never alarmed)", "the private text names them");
+  assert.deepEqual(r.detail, { failed: 2, in_manifest: 0, transient: 17 });
   const transientOnly = classifyFailedUnits({ text: RUN_U.join("\n"), manifestNames: manifestUnitNames(MANIFEST) });
   assert.equal(transientOnly.verdict, "OK", "a transient unit is never DOWN, nor a WARN");
   assert.match(transientOnly.reason, /^no unit has failed; and 17 transient run-u\* units/);
@@ -2821,7 +2822,9 @@ test("§17 the box's list of 11-09: certbot and a leftover rerun are a WARN, and
 test("§17 a unit the roll-call manifest names is DOWN, by the service its timer starts: the 11-04 backup's failure", () => {
   const r = classifyFailedUnits({ text: "● postmark-world2-backup.service loaded failed failed World 2.0 durability\ncertbot.service loaded failed failed Certbot\n", manifestNames: manifestUnitNames(MANIFEST) });
   assert.equal(r.verdict, "DOWN");
-  assert.equal(r.reason, "1 unit the roll-call manifest names failed: postmark-world2-backup.service (the World 2.0 durability lane); 1 unit outside the manifest failed: certbot.service");
+  assert.equal(r.reason, "2 failed units, 1 the roll-call manifest names");
+  assert.equal(r.said, "1 unit the roll-call manifest names failed: postmark-world2-backup.service (the World 2.0 durability lane); 1 unit outside the manifest failed: certbot.service");
+  assert.equal(r.finding, "postmark-world2-backup.service|certbot.service");
   const names = manifestUnitNames(MANIFEST);
   for (const row of MANIFEST.units) {
     assert.ok(names.has(row.unit), row.unit);
@@ -2840,7 +2843,8 @@ test("§17 none failed is OK; a systemctl that cannot answer is STALE; an unread
   assert.match(blind.reason, /could not list the box's failed units \(System has not been booted/);
   const noManifest = classifyFailedUnits({ text: "certbot.service loaded failed failed Certbot\n", manifestNames: null, manifestError: "ENOENT", manifestPath: "/srv/postmark-office/deploy/box-rollcall-manifest.json" });
   assert.equal(noManifest.verdict, "STALE");
-  assert.match(noManifest.reason, /box-rollcall-manifest\.json could not be read \(ENOENT\) to say which matter: certbot\.service/);
+  assert.equal(noManifest.reason, "1 failed unit, and the roll-call manifest could not be read (ENOENT) to say which matter");
+  assert.match(noManifest.said, /box-rollcall-manifest\.json could not be read \(ENOENT\) to say which matter: certbot\.service/);
 });
 
 // ── §18 ──
@@ -2964,7 +2968,8 @@ test("§21 THE TICK: an acked standing red reads as before and says nothing, its
   assert.deepEqual(fu(t2), []);
   const p2 = probeOf(t2, "failed_units");
   assert.equal(p2.verdict, "DOWN", "it reads on the board as before");
-  assert.deepEqual(p2.ack, { issue: "POS-968", until: ACK().until, finding: "DOWN: postmark-world2-backup.service|" });
+  assert.deepEqual(p2.ack, { issue: "POS-968", until: ACK().until }, "the board shows the ack, never the finding it binds (it names units)");
+  assert.equal(t2.nextState.probes.failed_units.ack.finding, "DOWN: postmark-world2-backup.service|", "the binding sees the names, in state.json");
   // Twelve hours on, the reminder an unacked DOWN would send is held, and the change log says it was.
   const t3 = await at(one, t2.nextState, T0 + 12 * HOUR);
   assert.deepEqual(fu(t3), []);
@@ -2984,7 +2989,7 @@ test("§21 an ack that expires while its finding stands barks once at once, and 
   const one = "postmark-world2-backup.service loaded failed failed World 2.0 durability\n";
   const acks = { acks: [ACK({ until: new Date(T0 + HOUR).toISOString() })] };
   const at = (state, nowMs, failed = one) => tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec({ failed }), state, nowMs, config: FIXTURE_CONFIG, readDisk: GREEN_DISK, acks });
-  const fu = (t) => t.alerts.filter((x) => x.key === "failed_units").map((x) => `${x.alert.kind} ${x.alert.ack_note ?? ""}`.trim());
+  const fu = (t) => t.alerts.filter((x) => x.key === "failed_units").map((x) => `${x.alert.kind} ${x.alert.note ?? ""}`.trim());
   const t1 = await at({}, T0);
   assert.deepEqual(fu(t1), [], "acked from its first tick: bound to the finding as it stands, so even the onset is held");
   const t2 = await at(t1.nextState, T0 + 70 * MINUTE);
@@ -3056,4 +3061,101 @@ test("§21 the ack file beside the state: none is no acks; one that cannot be re
   });
   assert.ok(board.alerting.notes.some((n) => /^acks: .*acks\.json could not be read .*no acknowledgement applies until it reads$/.test(n)), board.alerting.notes.join(" | "));
   assert.ok(!board.probes.some((p) => p.ack));
+});
+
+// ── #978 review (Wright, 11-09): no unit's name on the public board, a changed failed list re-barks, the post's cut ──
+
+import { fitMessage, postDiscord, DISCORD_MAX, rebarkOnChange } from "../tools/site-sentinel.mjs";
+
+const MANIFEST_FAILED = "● postmark-world2-backup.service loaded failed failed World 2.0 durability\n";
+const UNIT_NAMES = ["postmark-world2-backup.service", "certbot.service", "wright-rerun-s83-1790426624.service", "run-u30367", "the World 2.0 durability lane"];
+
+test("§17 THE PUBLIC BOARD names no unit, on any probe, acked or not; the post, the change log and state.json do", async () => {
+  // LAW (Wright, #978 review, 11-09, blocking): the public text carries only the count and the verdict; the names go
+  // to the change log, the Discord post and state.json's ack binding. /ops/sentinel.json is served to anyone.
+  const dir = tempDir("sentinel-public-");
+  const posted = [];
+  const fetchImpl = async (url, init) => {
+    if (String(url) === "https://discord.test/hook") { posted.push(JSON.parse(init.body).content); return { ok: true, status: 204 }; }
+    return stubFetch(GREEN_TABLE)(url, init);
+  };
+  const go = (nowMs) => run({
+    argv: ["node", "site-sentinel.mjs", "--state", join(dir, "state.json"), "--out", join(dir, "status.json")],
+    env: { SENTINEL_DISCORD_WEBHOOK: "https://discord.test/hook" }, fetchImpl,
+    exec: stubExec({ failed: MANIFEST_FAILED + FAILED_1109 }), nowMs, log: () => {}, errLog: () => {}, readDisk: GREEN_DISK,
+  });
+  await go(T0);
+  _wf(join(dir, "acks.json"), JSON.stringify({ acks: [ACK({ issue: "POS-968" })] }));
+  await go(T0 + 10 * MINUTE);
+  const board = readFileSync(join(dir, "status.json"), "utf8");
+  const fu = JSON.parse(board).probes.find((p) => p.key === "failed_units");
+  assert.equal(fu.verdict, "DOWN");
+  assert.equal(fu.reason, "3 failed units, 1 the roll-call manifest names; and 17 transient run-u* units (counted, never alarmed)");
+  assert.deepEqual(fu.ack, { issue: "POS-968", until: ACK().until }, "the ack is on the board, its finding is not");
+  for (const name of UNIT_NAMES) assert.ok(!board.includes(name), `the public board carries "${name}"`);
+  // and where only operators read, the names are there
+  assert.match(posted[0], /DOWN — the box's failed units: 1 unit the roll-call manifest names failed: postmark-world2-backup\.service \(the World 2\.0 durability lane\); 2 units outside the manifest failed: certbot\.service; wright-rerun-s83-1790426624\.service/);
+  assert.ok(readFileSync(join(dir, "history.jsonl"), "utf8").includes("certbot.service"), "the change log names them");
+  assert.match(JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).probes.failed_units.ack.finding, /postmark-world2-backup\.service\|certbot\.service wright-rerun-s83-1790426624\.service/);
+});
+
+test("§17 a change in the set of failed units re-barks: a second unit failing under a standing WARN speaks, and so does one clearing", async () => {
+  // LAW (Wright, #978 review, 11-09, as the lead relayed it): "Make a change in the set of failed units a new finding
+  // that re-barks, the same rule call 4 gives acks ('any change re-barks')." The 11-04 shape: starstory-sync, outside
+  // the manifest, failed 52 times under a WARN that had already spoken.
+  const line = (u) => `${u} loaded failed failed x\n`;
+  const at = (failed, state, nowMs) => tick({ token: FIXTURE_TOKEN, fetchImpl: stubFetch(GREEN_TABLE), exec: stubExec({ failed }), state, nowMs, config: FIXTURE_CONFIG, readDisk: GREEN_DISK });
+  const said = (t) => t.alerts.filter((a) => a.key === "failed_units").map((a) => (a.alert.note ? `${a.alert.kind}: ${a.alert.note}` : a.alert.kind));
+  const t1 = await at(line("certbot.service"), {}, T0);
+  assert.deepEqual(said(t1), ["warn"]);
+  const t2 = await at(line("certbot.service"), t1.nextState, T0 + 10 * MINUTE);
+  assert.deepEqual(said(t2), [], "the same WARN says nothing more");
+  const t3 = await at(line("certbot.service") + line("starstory-sync.service"), t2.nextState, T0 + 20 * MINUTE);
+  assert.deepEqual(said(t3), ["warn: What it names changed since it last spoke (newly failed: starstory-sync.service)."]);
+  const msg = composeMessage({ alerts: t3.alerts.filter((a) => a.key === "failed_units"), board: { summary: "s" }, nowIso: t3.nowIso });
+  assert.match(msg, /the box's failed units: warning: 2 units outside the manifest failed: certbot\.service; starstory-sync\.service\. What it names changed since it last spoke \(newly failed: starstory-sync\.service\)\./);
+  assert.deepEqual(said(await at(line("certbot.service") + line("starstory-sync.service"), t3.nextState, T0 + 30 * MINUTE)), []);
+  const t5 = await at(line("starstory-sync.service"), t3.nextState, T0 + 40 * MINUTE);
+  assert.deepEqual(said(t5), ["warn: What it names changed since it last spoke (no longer failed: certbot.service)."], "any change, a clearing too");
+  // WARN to DOWN is transition's own onset, said once; a second manifest unit under the DOWN re-barks
+  const t6 = await at(line("starstory-sync.service") + MANIFEST_FAILED, t5.nextState, T0 + 50 * MINUTE);
+  assert.deepEqual(said(t6), ["onset"]);
+  const t7 = await at(line("starstory-sync.service") + MANIFEST_FAILED + line("postmark-ferry.service"), t6.nextState, T0 + 60 * MINUTE);
+  assert.deepEqual(said(t7), ["onset: What it names changed since it last spoke (newly failed: postmark-ferry.service)."]);
+  assert.equal(t7.nextState.probes.failed_units.last_alert_at, T0 + 60 * MINUTE, "and the twelve-hour reminder counts from it");
+  // the first tick after an upgrade remembers no finding yet, so it invents no change
+  const upgraded = structuredClone(t6.nextState);
+  delete upgraded.probes.failed_units.finding;
+  assert.deepEqual(said(await at(line("starstory-sync.service") + MANIFEST_FAILED + line("postmark-ferry.service"), upgraded, T0 + 60 * MINUTE)), []);
+  // PURE: with an alert already made, or an ack holding the finding, it adds nothing
+  const st = { verdict: "WARN", since: T0, last_alert_at: T0 };
+  const next = { verdict: "WARN", reason: "r", finding: "|a.service b.service" };
+  assert.equal(rebarkOnChange({ prev: { ...st, finding: "|a.service" }, next, alert: null, state: st, acked: true, nowMs: T0 }).alert, null);
+  const own = { kind: "warn", verdict: "WARN", reason: "r", since: T0 };
+  assert.equal(rebarkOnChange({ prev: { ...st, finding: "|a.service" }, next, alert: own, state: st, nowMs: T0 }).alert, own);
+});
+
+test("§1 THE POST'S CUT: past 1,900 characters the post keeps whole lines and ends \"…and N more\", so the count survives", async () => {
+  // Wright, #978 review: postDiscord cut at 1,900 characters with nothing to say what was cut, and twelve certificate
+  // rows going STALE at once can fill a post. The board and the journal carry every alert; the post says how many it left.
+  const alerts = Array.from({ length: 30 }, (_, i) => ({ key: `k${i}`, label: `the certificate for host-${i}.example`, alert: { kind: "onset", verdict: "STALE", reason: `could not read the certificate 127.0.0.1:443 serves for host-${i}.example: 40C70C24EC7E0000:error:8000006F:system library:BIO_connect:Connection refused`, since: T0 } }));
+  const full = composeMessage({ alerts, board: { summary: "0 down, 30 stale, 12 green.", published_at: "/srv/postmark-sentinel/status.json" }, nowIso: "2026-11-09T02:00:00Z" });
+  assert.ok(full.length > DISCORD_MAX, "the fixture is long enough to be cut");
+  const cut = fitMessage(full);
+  assert.ok(cut.length <= DISCORD_MAX, `${cut.length} characters`);
+  const m = /\n…and (\d+) more not shown here; the board has every one\.$/.exec(cut);
+  assert.ok(m, `the post ends with the count: ${cut.slice(-120)}`);
+  const kept = cut.split("\n").filter((l) => l.startsWith("STALE — ")).length;
+  assert.equal(kept + Number(m[1]), 30, "every alert is either in the post or counted");
+  assert.ok(cut.startsWith(full.split("\n")[0]), "the header stays");
+  assert.ok(cut.includes("0 down, 30 stale, 12 green."), "and the board's sentence");
+  assert.ok(cut.split("\n").every((l) => full.includes(l) || l.startsWith("…and ")), "no line is cut in half");
+  // a post that fits is untouched; one line too long for any post still ends with the count
+  assert.equal(fitMessage("short"), "short");
+  const huge = fitMessage(`**h**\n\nDOWN — x: ${"y".repeat(3000)}.\n\nboard.`);
+  assert.ok(huge.length <= DISCORD_MAX && /…and 1 more not shown here; the board has every one\.$/.test(huge));
+  // and postDiscord sends the fitted post
+  let body = null;
+  await postDiscord("https://discord.test/hook", full, { fetchImpl: async (_u, init) => { body = JSON.parse(init.body).content; return { ok: true, status: 204 }; } });
+  assert.equal(body, cut);
 });
