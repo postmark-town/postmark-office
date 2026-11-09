@@ -330,6 +330,7 @@ const ROSTER = {
   // POS-392's import: no mode, so it refuses before it reads a clone or dials the store.
   "world2/tools/notes-import.mjs": { args: [], env: NO_PG, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "world2/tools/window-reanchor.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: window-reanchor.mjs --dry-run | --apply" },
+  "world2/tools/witness-settlement.mjs": { args: [], env: NO_PG, code: 2, needle: "witness-settlement: --receipt, --event and --town are required" },
 };
 
 // ── the scan: which files carry an entry guard at all ────────────────────────
