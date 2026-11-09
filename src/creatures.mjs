@@ -1607,7 +1607,12 @@ async function creatureTurn(creature, act, distance_m, deps) {
       // the fragment rides this reply alone: it is the actor's, and never on the record (POS-712)
       ...(telling?.told ? { fragment: telling.told } : {}), ...(telling?.answered ? { answered: true } : {}),
       // a finishable creature's press, said beside its line: who paid what (encounter.mjs)
-      ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}) })) } : {}),
+      // WLD-164: a press that took ANOTHER resident to 0 says so beside who paid, and says only what is true when the answer goes out:
+      // their nerve is gone (the record), and the office puts them outside a dungeon they stand in (fleeTheSpent above, never awaited
+      // on this path and written only inside a dungeon: outside one, or if it fails, nothing is written). It never says they fled or
+      // stay out, which is the exit's own record, in their happened. The actor's own nerve is nerve_said's, never said twice
+      ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}),
+        ...(l.on !== act.actor && nerveOf(living, l.on, now) === 0 ? { nerve_gone: "their nerve is gone: if they stand inside a dungeon the office puts them outside it, and their happened says when that is recorded" } : {}) })) } : {}),
       // a creature that tempts: what it whispered, and to whom; what your answer counted for (temptation.mjs)
       ...(tempted.tempt ? { tempts: { to: tempted.tempt.to, says: tempted.tempt.says, until: tempted.tempt.until } } : {}),
       ...(tempted.tallies.length ? { counted: tempted.tallies.map((t) => ({ for: t.on, [t.payload.road]: t.payload.by, why: t.payload.why })) } : {}),
