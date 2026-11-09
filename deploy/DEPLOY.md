@@ -153,7 +153,9 @@ env), run by hand after the ship.
   read, the newest other `release/*` tag stands in). A tag cut at an old commit
   runs its own old workflow, which has no such step, so the box-side preflight,
   which every workflow takes from main, refuses any run that doesn't pass the
-  commit it brings. Going back is deliberate: `workflow_dispatch` from main,
+  commit it brings and a known event (`push`, `workflow_dispatch`, or
+  `hand-carry` from `deploy/dev-office-carry.sh`, which carries a train to dev
+  and isn't measured). Going back is deliberate: `workflow_dispatch` from main,
   target `prod`, with the tag named.
 
 ### The dev rehearsal (POS-354, POS-366; first run Saturday 2026-10-10)

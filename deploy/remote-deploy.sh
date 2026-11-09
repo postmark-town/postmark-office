@@ -60,8 +60,11 @@
 # w46, deployed to prod for about 1m10s). Every version of that workflow takes
 # THIS script from main and runs preflight before a byte moves, and none before
 # POS-971 passes <sha> and <event>. So preflight refuses a call without them,
-# first, before any box check: the run that makes it predates the guard and
-# cannot be checked against what is live.
+# first, before any box check: the caller predates the guard and cannot be
+# checked against what is live. <event> is one the callers name: push and
+# workflow_dispatch from release-train.yml, hand-carry from
+# deploy/dev-office-carry.sh. test/release-guard.test.mjs finds every preflight
+# caller in the repo and requires all five arguments of each.
 
 set -euo pipefail
 
@@ -78,9 +81,13 @@ if [ "$MODE" = "preflight" ]; then
   BRINGS="${5:-}"
   EVENT="${6:-}"
   [ -n "$BRINGS" ] && [ -n "$EVENT" ] \
-    || die "this run's workflow predates the rollback guard (POS-971): it calls preflight without the commit it brings, so that commit cannot be checked against what is live. A release tag cut at an old commit runs its own old workflow, and this is where it stops. To deploy on purpose, run release-train.yml by workflow_dispatch from main, naming the tag."
+    || die "this run's workflow predates the rollback guard (POS-971): it calls preflight without the commit it brings and its event, so that commit cannot be checked against what is live. A release tag cut at an old commit runs its own old workflow, and this is where it stops. To deploy on purpose, run release-train.yml by workflow_dispatch from main, naming the tag. A hand-carry to dev passes its commit and the event hand-carry (deploy/dev-office-carry.sh)."
   [[ "$BRINGS" =~ ^[0-9a-f]{40}$ ]] \
     || die "preflight was handed '$BRINGS' as the commit this run brings; the rollback guard (POS-971) needs the full 40-character sha."
+  case "$EVENT" in
+    push|workflow_dispatch|hand-carry) ;;
+    *) die "preflight was handed '$EVENT' as the event; the rollback guard (POS-971) knows push and workflow_dispatch (release-train.yml) and hand-carry (deploy/dev-office-carry.sh)." ;;
+  esac
   echo "== preflight: $SERVICE at $ROOT (loopback :$PORT) =="
   say "brings $BRINGS ($EVENT)"
 

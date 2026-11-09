@@ -257,7 +257,9 @@ jobs:
       # (the train's own cut, or a tag pushed by hand) now deploys only a commit
       # that descends from the one prod runs. workflow_dispatch is the deliberate
       # way back and is not measured. Every push targets prod (the lane step), so
-      # dev is never measured here: only a dispatch reaches dev.
+      # dev is never measured here: only a dispatch reaches dev from this file,
+      # and the hand-carry (deploy/dev-office-carry.sh, event hand-carry) from
+      # outside it.
       #
       # This step runs from the TAG's own copy of this file, so a tag cut before
       # it existed never runs it. The half that stops those is on the box:

@@ -12,7 +12,10 @@
 //                       the newest release tag that is not the candidate's own.
 //   the box's half      deploy/remote-deploy.sh preflight, which every version of
 //                       release-train.yml takes from main. Called the old way,
-//                       with three arguments, it refuses before any box check.
+//                       with three arguments, or with an event no caller names,
+//                       it refuses before any box check.
+//   every caller        each preflight call in the tree (the workflow, the dev
+//                       hand-carry, any later one) passes all five arguments.
 //   the wiring          release-train.yml runs the guard after the tag resolves
 //                       and before the door to the box opens, skips it only for
 //                       workflow_dispatch, reads only the top-level sha of a
@@ -153,6 +156,84 @@ test("preflight refuses a sha that is not a full commit id, and admits a full on
   assert.notEqual(full.status, 0);
   assert.match(full.stdout, new RegExp(`brings ${"a".repeat(40)} \\(push\\)`));
   assert.match(full.stderr, /\/nonexistent does not exist on this box/, "the existing checks run unchanged after the guard");
+});
+
+test("preflight admits the events its callers name and refuses any other", { skip }, () => {
+  for (const event of ["push", "workflow_dispatch", "hand-carry"]) {
+    const r = preflight("/nonexistent", "svc", "1", "a".repeat(40), event);
+    assert.match(r.stdout, new RegExp(`brings ${"a".repeat(40)} \\(${event}\\)`), `${event}: ${r.stderr}`);
+    assert.match(r.stderr, /\/nonexistent does not exist on this box/, `${event} reaches the existing checks`);
+  }
+  for (const event of ["pull_request", "schedule", "Push", "push;true"]) {
+    const r = preflight("/nonexistent", "svc", "1", "a".repeat(40), event);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /as the event; the rollback guard \(POS-971\) knows push and workflow_dispatch/, event);
+    assert.doesNotMatch(r.stdout, /== preflight:/, `${event}: nothing past the guard ran`);
+  }
+});
+
+// ── every preflight caller in the repo passes all five arguments ────────────
+// A caller the guard was never meant to stop is a deploy path it breaks: the dev
+// hand-carry (deploy/dev-office-carry.sh) still called preflight with three
+// arguments when the box half was first written. So every call in the tree is
+// found and counted: a word naming the script (`remote-deploy.sh`, a shell
+// variable holding its path on the box, or `bash -s [--]` reading it from stdin)
+// followed by `preflight`. test/ is left out, since this file calls it the old
+// way on purpose.
+function preflightCalls(text) {
+  const calls = [];
+  text.split("\n").forEach((line, i) => {
+    for (const m of line.matchAll(/(\S+)[ \t]+preflight\b([^;&|\n]*)/g)) {
+      const script = m[1].replace(/^['"]+|['"]+$/g, "");
+      if (!/remote-deploy\.sh$/.test(script) && !/^\$\{?[A-Za-z_]\w*\}?$/.test(script) && !/^(-s|--)$/.test(script)) continue;
+      // The arguments end at a redirection (`< deploy/remote-deploy.sh`, but not a
+      // usage placeholder like `<sha>`), or at the word holding the unpaired quote
+      // or backtick that closes the command (`'$PORT'"`, or `<port>`` in a doc).
+      const args = [];
+      for (const w of m[2].trim().split(/\s+/).filter(Boolean)) {
+        if (/^\d*[<>]/.test(w) && !/^<\w+>/.test(w)) break;
+        const closes = ['"', "`"].some((q) => (w.split(q).length - 1) % 2 === 1);
+        const arg = closes ? w.replace(/["`]+$/, "") : w;
+        if (arg) args.push(arg);
+        if (closes) break;
+      }
+      calls.push({ line: i + 1, text: line.trim(), args });
+    }
+  });
+  return calls;
+}
+
+test("the caller scan finds a call in each shape it is written in, and counts its arguments", () => {
+  const counted = (text) => preflightCalls(text).map((c) => c.args.length);
+  assert.deepEqual(counted(`$SSH "$U@$H" "chmod +x '$REMOTE' && '$REMOTE' preflight '$ROOT' '$SERVICE' '$PORT'"`), [3], "the old workflow's call");
+  assert.deepEqual(counted(`ssh "$BOX" "'$REMOTE' preflight '$ROOT' '$SERVICE' '$PORT'"`), [3], "the old hand-carry's call");
+  assert.deepEqual(counted(`bash deploy/remote-deploy.sh preflight /srv/postmark-office postmark-office 4380 "$SHA" push && echo ok`), [5]);
+  assert.deepEqual(counted(`"\${R}" preflight a b c d e; rm -f x`), [5]);
+  assert.deepEqual(counted(`ssh "$BOX" "bash -s -- preflight '$ROOT' '$SERVICE' '$PORT'" < deploy/remote-deploy.sh`), [3], "the script piped over ssh");
+  assert.deepEqual(counted("#   remote-deploy.sh preflight <root> <service> <port> <sha> <event>"), [5], "the usage line");
+  assert.deepEqual(counted("run `deploy/remote-deploy.sh preflight <root> <service> <port>` on the box"), [3], "a command in a doc");
+  assert.deepEqual(counted(`node tools/dev-rehearsal.mjs --user meepo --only preflight`), [], "the dev rehearsal's own preflight is another command");
+  assert.deepEqual(counted("the preflight runs first, and its preflight refuses a caller"), [], "prose is not a call");
+  assert.deepEqual(counted(`if [ "$MODE" = "preflight" ]; then`), [], "the script's own dispatch is not a call");
+});
+
+test("every preflight caller in the repo passes the root, service, port, sha and event", () => {
+  const files = execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" }).split("\0").filter((f) => f && !f.startsWith("test/"));
+  const calls = [];
+  for (const f of files) {
+    let text;
+    try { text = readFileSync(join(ROOT, f), "utf8"); } catch { continue; }
+    if (text.includes("\0")) continue;
+    for (const c of preflightCalls(text)) calls.push({ ...c, file: f });
+  }
+  const where = (c) => `${c.file}:${c.line}: ${c.text}`;
+  const callers = new Set(calls.map((c) => c.file));
+  for (const known of [".github/workflows/release-train.yml", "deploy/dev-office-carry.sh", "deploy/remote-deploy.sh"]) {
+    assert.ok(callers.has(known), `the scan found no preflight call in ${known}; it is reading the tree wrong, and its green would mean nothing`);
+  }
+  const short = calls.filter((c) => c.args.length !== 5);
+  assert.deepEqual(short.map(where), [], "a preflight caller without all five arguments is refused on the box (POS-971)");
+  assert.match(where(calls.find((c) => c.file === "deploy/dev-office-carry.sh")), /'\$FULL' hand-carry"$/);
 });
 
 // ── the wiring in release-train.yml ─────────────────────────────────────────
