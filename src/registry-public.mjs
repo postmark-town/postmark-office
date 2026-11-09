@@ -77,7 +77,7 @@ export const PRIVATE_HOUSE_KEYS = Object.freeze(["human"]);
 const PUBLIC_REGISTRY_KEYS = Object.freeze(["schema_version", "note", "households"]);
 const PUBLIC_HOUSE_KEYS = Object.freeze([
   "name", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness", "invited_by",
+  "provisional", "home_images", "likeness", "invited_by", "hearth",
 ]);
 const PUBLIC_PIN_KEYS = Object.freeze(["login", "id", "pinned", "renamed", "note", "retired", "renamed_to"]);
 const PUBLIC_ACCOUNT_KEYS = Object.freeze(["login", "id"]);
