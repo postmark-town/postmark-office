@@ -52,7 +52,7 @@ import { POST_COLUMNS, rowOf, insertPost, updatePost } from "./events-store.mjs"
 import {
   BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, BALLOT_STATES, STATE_STAKING, STATE_CLOSED, STATE_SUBMISSIONS,
   ballotPostId, ballotFileName, ballotFilePath, ballotFromFile, changedTerms, headroomOf, tallyOf, TOPIC_RE,
-  judgeTermsMove, composeBallotAct, choiceOf, topicOfPost,
+  judgeTermsMove, composeBallotAct, choiceStanding, topicOfPost,
 } from "./ballots.mjs";
 import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { planStampedCommit, landPlannedVia } from "./stamp-lines.mjs";
@@ -442,9 +442,10 @@ export async function stakeInStore({ clone, keyPem, payload, prepare = null, com
 
       const balance = state.balances.get(handle) ?? 0;
       const applied = Math.min(n, room, balance);
-      // POS-983: the answer names the choice in its own words (credit, link, note), as every reader does
+      // POS-983: the answer names the choice in its own words (credit, link, note) and its standing
+      // (staked, backing_households), as every reader does: here as it stood, and once the vote lands, with it
       const result = { requested: n, applied, clipped: applied < n,
-        household_headroom_before: room, balance_before: balance, vote_minted: false, choice: choiceOf(post.fields, candidate) };
+        household_headroom_before: room, balance_before: balance, vote_minted: false, choice: choiceStanding(post, votes, candidate) };
       if (applied <= 0) {
         result.reason = room <= 0
           ? "your household has no headroom left on this candidate"
@@ -460,6 +461,9 @@ export async function stakeInStore({ clone, keyPem, payload, prepare = null, com
       const lines = mint.appendSigned(clone, canonicals, keyPem);
       result.household_headroom_after = room - applied;
       result.balance_after = balance - applied + (result.vote_minted ? 1 : 0);
+      // the choice's standing WITH this stake, judged here, before `prepare` writes the mail receipt from it:
+      // the landing below refuses and judges again if the ballot moved, so what lands is what this says
+      result.choice = choiceStanding(post, [...votes, { handle, fields: { stakes: [{ act: Number.MAX_SAFE_INTEGER, candidate, n: applied, mint_key: mintKey }] } }], candidate);
       const prepared = prepare ? await prepare(result) : null;
       if (prepared?.error) throw refuse(prepared.error.code ?? 503, prepared.error.defect, prepared.error.hint, prepared.error.held ? { held: true } : {});
       const plan = commit ? await planStampedCommit(clone, { env, engine: mint }) : null;

@@ -202,7 +202,8 @@ test("2 · a credited choice joins while staking runs; direct and mail stakes la
   // stakes on the original choices
   const s1 = await stakeViaOffice(dir, { from: "wright", topic: t, candidate: "lumen", stamps: 4 }, HANDS);
   assert.equal(s1.applied, 4);
-  assert.deepEqual(s1.choice, { candidate: "lumen", credit: null, link: null, note: null, added: s1.choice.added });
+  assert.deepEqual(s1.choice, { candidate: "lumen", credit: null, link: null, note: null, added: s1.choice.added, staked: 4, backing_households: 1 },
+    "the answer carries the choice's standing with this stake in it");
 
   // a credited choice joins while staking runs
   const vela = { name: "vela", credit: "ada", link: "https://github.com/postmark-town/postmark/pull/2", note: "a quiet one" };
@@ -221,16 +222,23 @@ test("2 · a credited choice joins while staking runs; direct and mail stakes la
   // THE CAP: wright and rei are one engine household — 20 on vela between them, clipped, never bounced
   const s2 = await stakeViaOffice(dir, { from: "wright", topic: t, candidate: "vela", stamps: 9 }, HANDS);
   assert.deepEqual([s2.applied, s2.clipped], [9, false]);
-  assert.deepEqual(s2.choice, { candidate: "vela", credit: "ada", link: vela.link, note: "a quiet one", added: s2.choice.added }, "the stake's answer names the choice in its words");
+  assert.deepEqual(s2.choice, { candidate: "vela", credit: "ada", link: vela.link, note: "a quiet one", added: s2.choice.added, staked: 9, backing_households: 1 },
+    "the stake's answer names the choice in its words, and its standing");
   const s3 = await stakeViaOffice(dir, { from: "rei", topic: t, candidate: "vela", stamps: 14 }, HANDS);
   assert.deepEqual([s3.requested, s3.applied, s3.clipped, s3.household_headroom_before, s3.household_headroom_after], [14, 11, true, 11, 0],
     "rei's 14 clips to the 11 the household has left of 20 on vela");
+  assert.deepEqual([s3.choice.staked, s3.choice.backing_households], [20, 1], "rei backs vela in wright's household: still ONE household, not two");
+  // a stake with nothing left to apply is an answer, and it still names the choice and its standing
+  const s3b = await stakeViaOffice(dir, { from: "rei", topic: t, candidate: "vela", stamps: 2 }, HANDS);
+  assert.deepEqual([s3b.applied, s3b.reason], [0, "your household has no headroom left on this candidate"]);
+  assert.deepEqual([s3b.choice.credit, s3b.choice.note, s3b.choice.staked, s3b.choice.backing_households], ["ada", "a quiet one", 20, 1]);
   // …and another choice has its own 20: rei's stake on lumen is not touched by vela's
   const s4 = await stakeViaOffice(dir, { from: "rei", topic: t, candidate: "lumen", stamps: 3 }, HANDS);
   assert.deepEqual([s4.applied, s4.household_headroom_before], [3, 16], "lumen's headroom is 20 less wright's 4 there, nothing of vela's");
   // ada's own household has its own 20 on vela
   const s5 = await stakeViaOffice(dir, { from: "ada", topic: t, candidate: "vela", stamps: 2 }, ADA);
   assert.deepEqual([s5.applied, s5.household_headroom_before], [2, 20]);
+  assert.deepEqual([s5.choice.staked, s5.choice.backing_households], [22, 2], "ada's is a second household");
 
   // BY MAIL, on the old choice and the new
   const inbox = join(dir, "WHITE_PAGES", "postmaster", "inbox");
@@ -239,14 +247,23 @@ test("2 · a credited choice joins while staking runs; direct and mail stakes la
     `---\nid: ${lid}\nfrom: ${from}\nto: postmaster\nstake_topic: ${t}\nstake_candidate: ${cand}\nstake_stamps: ${stamps}\n---\n\nmy ballot\n`);
   letter("ada-2026-11-09-to-postmaster-vela", "ada", "vela", 3);
   letter("ada-2026-11-09-to-postmaster-bright", "ada", "brightwork", 1);
+  // rei's household has nothing left on vela: this one applies zero
+  letter("rei-2026-11-09-to-postmaster-vela", "rei", "vela", 2);
   git(dir, "add", "-A");
-  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "two ballots by mail");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "three ballots by mail");
   const mail = await ballotPassRun(dir, PEM, "2026-11-09");
-  assert.deepEqual([mail.processed, mail.receipts, mail.held], [2, 2, []]);
+  assert.deepEqual([mail.processed, mail.receipts, mail.held], [3, 3, []]);
   const outbox = join(dir, "WHITE_PAGES", "postmaster", "outbox");
-  const receipt = readdirSync(outbox).map((f) => readFileSync(join(outbox, f), "utf8")).find((s) => s.includes("receipt_for: ada-2026-11-09-to-postmaster-vela"));
+  const receiptFor = (lid) => readdirSync(outbox).map((f) => readFileSync(join(outbox, f), "utf8")).find((s) => s.includes(`receipt_for: ${lid}`));
+  const receipt = receiptFor("ada-2026-11-09-to-postmaster-vela");
   assert.match(receipt, /\*\*3 of 3\*\* stamp\(s\) staked on \*\*vela\*\*/);
-  assert.match(receipt, /\*\*vela\*\*: by ada · a quiet one · https:\/\/github\.com\/postmark-town\/postmark\/pull\/2/, "the mail receipt names the choice in its words");
+  assert.match(receipt, /^\*\*vela\*\*: by ada · a quiet one · https:\/\/github\.com\/postmark-town\/postmark\/pull\/2 · 2 households backing it, 25 stamp\(s\) staked$/m,
+    "the mail receipt names the choice in its words and its standing, this stake in it");
+  assert.match(receiptFor("ada-2026-11-09-to-postmaster-bright"), /^\*\*brightwork\*\*: by dot · 1 household backing it, 1 stamp\(s\) staked$/m);
+  const zero = receiptFor("rei-2026-11-09-to-postmaster-vela");
+  assert.match(zero, /no stamps could apply/);
+  assert.match(zero, /^\*\*vela\*\*: by ada · a quiet one · https:\/\/github\.com\/postmark-town\/postmark\/pull\/2 · 2 households backing it, 25 stamp\(s\) staked$/m,
+    "a zero-applied receipt keeps the choice's words and its standing; rei's house is counted once");
 
   // THE POST, THE ENGINE AND THE VERIFIER AGREE
   assert.equal(verifies(dir).status, 0, `the town's verifier: ${verifies(dir).stdout}${verifies(dir).stderr}`);

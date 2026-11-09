@@ -157,6 +157,17 @@ export function choiceOf(fields, name) {
   return { candidate: name, credit: w.credit ?? null, link: w.link ?? null, note: w.note ?? null, added: w.added ?? null };
 }
 
+/**
+ * One choice in its words and its standing, as a stake's answer and its mail
+ * receipt give it (POS-983 point 6): the stamps staked on it and how many
+ * households back it, counted by the tally itself (§ tallyOf), so a second
+ * resident of one engine household is never a second household.
+ */
+export function choiceStanding(post, voteRows, name) {
+  const row = tallyOf(post, voteRows).candidates.find((c) => c.candidate === name);
+  return { ...choiceOf(post.fields, name), staked: row?.staked ?? 0, backing_households: row?.backing_households ?? 0 };
+}
+
 /** Every choice on a ballot post, in the file's order. */
 export const choicesOf = (fields) => (fields?.candidates ?? []).map((c) => choiceOf(fields, c));
 

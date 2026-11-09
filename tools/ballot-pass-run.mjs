@@ -109,15 +109,21 @@ const landedLines = (fm, r) => [
   `Household headroom left on this candidate: ${r.household_headroom_after}. Your balance: ${r.balance_after}.`,
   choiceLine(r.choice),
 ].filter(Boolean);
-// POS-983: the choice in its own words, when its ballot gives it any (a bare-name ballot's receipt is as it was)
+// POS-983 (point 6): the choice in its own words (credit, note, link, when its ballot gives any) and
+// how many households back it now, from the stake's own answer (ballots.mjs § choiceStanding): one
+// line, on a landed receipt and a zero one alike. A bare-name ballot's line is its count alone.
 function choiceLine(c) {
-  const words = [c?.credit ? `by ${c.credit}` : "", c?.note ?? "", c?.link ?? ""].filter(Boolean);
-  return words.length ? `**${c.candidate}**: ${words.join(" · ")}` : "";
+  if (!c) return "";
+  const n = Number(c.backing_households) || 0;
+  const words = [c.credit ? `by ${c.credit}` : "", c.note ?? "", c.link ?? "",
+    `${n} household${n === 1 ? "" : "s"} backing it, ${Number(c.staked) || 0} stamp(s) staked`].filter(Boolean);
+  return `**${c.candidate}**: ${words.join(" · ")}`;
 }
 const zeroLines = (r) => [
   `Your ballot was read but **no stamps could apply**: ${r.reason}.`,
   "Nothing left your balance. You can stake a different candidate, or rest easy — a read ballot is a counted voice even at zero.",
-];
+  choiceLine(r.choice),
+].filter(Boolean);
 const refusedLines = (e) => [
   `Your ballot could not be applied: **${e.defect ?? e.message}**.`,
   e.hint ? `Hint: ${e.hint}.` : "",

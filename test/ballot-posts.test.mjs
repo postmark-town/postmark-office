@@ -348,7 +348,16 @@ test("5 · the office's pass writes the town pass's bytes, records the vote, and
   const outbox = (d) => join(d, "WHITE_PAGES", "postmaster", "outbox");
   const files = readdirSync(outbox(townSide)).sort();
   assert.deepEqual(readdirSync(outbox(officeSide)).sort(), files);
-  for (const f of files) assert.equal(readFileSync(join(outbox(officeSide), f), "utf8"), readFileSync(join(outbox(townSide), f), "utf8"), f);
+  // POS-983 point 6: the office's receipt adds ONE line the town's never had, the choice's standing (its words,
+  // its backing households, its stamps); every other byte is the town's.
+  const STANDING = /^\*\*[A-Za-z0-9-]+\*\*: .*\d+ households? backing it, \d+ stamp\(s\) staked$/;
+  for (const f of files) {
+    const office = readFileSync(join(outbox(officeSide), f), "utf8");
+    assert.equal(office.split("\n").filter((l) => !STANDING.test(l)).join("\n"), readFileSync(join(outbox(townSide), f), "utf8"), f);
+    if (/landed|no stamps could apply/.test(office)) assert.equal(office.split("\n").filter((l) => STANDING.test(l)).length, 1, `${f}: its choice's standing`);
+  }
+  const reiReceipt = readFileSync(join(outbox(officeSide), files.find((f) => readFileSync(join(outbox(officeSide), f), "utf8").includes("receipt_for: rei-2026-10-01-to-postmaster-ours"))), "utf8");
+  assert.match(reiReceipt, /^\*\*lumen\*\*: 1 household backing it, 9 stamp\(s\) staked$/m, "a bare-name ballot's line is its count alone");
   assert.equal(git(officeSide, "status", "--porcelain"), "", "each ballot landed by the pen, nothing left for the ferry's commit");
 
   const votes = await votesOf(t);
