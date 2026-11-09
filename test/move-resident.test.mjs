@@ -48,7 +48,7 @@ import { execFileSync } from "node:child_process";
 import { fixtureTown } from "./fixture.mjs";
 import { indexStore, seedRegistry, recordInProcess } from "./helpers/office-under-test.mjs";
 import { NO_TOWN, townClone, townModuleUrl } from "./fixture-paths.mjs";
-import { loadRegistryRows, moveResidentInStore, MOVE_ROW_REFUSALS } from "../src/registry-store.mjs";
+import { loadRegistryRows, moveResidentInStore, likenessStateHeld, MOVE_ROW_REFUSALS } from "../src/registry-store.mjs";
 import { renderPublicRegistry } from "../src/registry-rows.mjs";
 import { notLandedError, penTransaction, penCommit } from "../src/write.mjs";
 import { collectingDrain } from "../src/ceremony.mjs";
@@ -491,4 +491,101 @@ test("M6 · the transaction re-reads under its lock: a house changed since the p
     assert.equal(tx.fresh, true, "no transaction is left open on the client");
   } finally { await owner.end(); }
   assert.deepEqual(await storeRows(), before, "nothing moved");
+});
+
+// ── M7 likeness state (092, POS-726) ────────────────────────────────────────
+//
+// Wright, 2026-11-09 12:43Z, on #985: "If the source household has any likeness state, refuse by name,
+// rechecked under the lock, before any write or output, and never print it in the dump. No transfer or
+// discard policy is invented." This branch's schema predates 092, so these legs add the column to the test
+// store as its owner (exactly 092's one statement), and drop it after: every leg above runs pre-092.
+// The state is SYNTHETIC, carrying a marker no output may ever contain.
+const MARK = "SYNTHETIC-PRIVATE-PROOF-7f3a";
+const STATE = {
+  request: { at: "2026-11-09T12:00:00.000Z", by: "moss-gh", gh_id: 502, depicts: ["moss"] },
+  selected: { proof: `https://media.postmark.town/new-nook/${MARK}.png`, at: "2026-11-09T12:05:00.000Z", by: "moss-gh", gh_id: 502 },
+};
+const ownerQuery = async (sql, params = []) => { const c = await asOwner(); try { return (await c.query(sql, params)).rows; } finally { await c.end(); } };
+const with092 = async (fn) => {
+  await ownerQuery("ALTER TABLE households ADD COLUMN IF NOT EXISTS likeness_state jsonb");
+  try { return await fn(); }
+  finally { await ownerQuery("ALTER TABLE households DROP COLUMN IF EXISTS likeness_state"); }
+};
+const setState = (slug, state) => ownerQuery("UPDATE households SET likeness_state = $2::jsonb WHERE slug = $1", [slug, state == null ? null : JSON.stringify(state)]);
+const stateOf = async (slug) => (await ownerQuery("SELECT likeness_state FROM households WHERE slug = $1", [slug]))[0]?.likeness_state ?? null;
+const discloses = (x) => JSON.stringify(x, Object.getOwnPropertyNames(x ?? {})).includes(MARK) || String(x?.message ?? "").includes(MARK) || String(x?.detail ?? "").includes(MARK);
+
+test("M7 · A SOURCE HOLDING LIKENESS STATE refuses by name before any output or write, dry run and real, and never discloses it", { skip: SKIP }, async () => {
+  await with092(async () => {
+    const t = await town();
+    await setState("new-nook", STATE);
+    const before = await storeRows();
+    const h0 = head(t.dir);
+    for (const dryRun of [true, false])
+      await assert.rejects(withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, dryRun, ...NO_WRITERS })),
+        (e) => e.defect === MOVE_REFUSALS.LIKENESS_STATE.defect && e.detail === "new-nook" && !discloses(e), `dry run ${dryRun}`);
+    // the command as the operator runs it: the refusal, and no plan printed at all
+    const log = [], err = [];
+    const code = await withPen(t, () => main(["--handle", "moss", "--to", "harbor-lights", "--dry-run"],
+      { env: { ...process.env, TOWN_CLONE: t.dir }, log: (s) => log.push(s), err: (s) => err.push(s),
+        act: (a) => moveResident({ ...a, date: D, ...NO_WRITERS }) }));
+    assert.equal(code, 1);
+    assert.deepEqual(log, [], "no row or file printed");
+    assert.match(err.join("\n"), /REFUSED — the household the resident leaves holds likeness state .*\(new-nook\)/);
+    assert.ok(!err.join("\n").includes(MARK) && !err.join("\n").includes("SYNTHETIC"), "the state's contents are never printed");
+    assert.deepEqual(await storeRows(), before);
+    assert.deepEqual(await stateOf("new-nook"), STATE, "the state stands, untouched");
+    assert.equal(head(t.dir), h0);
+    assert.ok(clean(t.dir));
+  });
+});
+
+test("M7b · LIKENESS STATE THAT ARRIVES AFTER THE PLAN refuses under the same row lock and rolls back, naming only the house", { skip: SKIP }, async () => {
+  await with092(async () => {
+    const t = await town();
+    const plan = await withPen(t, async () => planMove({ handle: "moss", to: "harbor-lights", rows: await loadRegistryRows(), clone: t.dir, date: D }));
+    await setState("new-nook", STATE);
+    const before = await storeRows();
+    const owner = await asOwner();
+    try {
+      await assert.rejects(moveResidentInStore(owner, { handle: "moss", from: plan.from, to: "harbor-lights" }),
+        (e) => e.defect === MOVE_ROW_REFUSALS.LIKENESS_STATE.defect && e.detail === "new-nook" && !discloses(e));
+      const { rows: [tx] } = await owner.query("SELECT now() = statement_timestamp() AS fresh");
+      assert.equal(tx.fresh, true, "rolled back: no transaction left open");
+    } finally { await owner.end(); }
+    assert.deepEqual(await storeRows(), before, "nothing moved");
+    assert.deepEqual(await stateOf("new-nook"), STATE, "and the state stands on its own row");
+  });
+});
+
+test("M7c · the dry run's formatter never prints likeness state, even handed a plan that carries it", { skip: SKIP }, async () => {
+  const t = await town();
+  const { plan } = await withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, dryRun: true, ...NO_WRITERS }));
+  assert.equal("likeness_state" in plan.store.retire.row, false, "the plan never carries it");
+  const handed = { ...plan, store: { ...plan.store, retire: { ...plan.store.retire,
+    row: { ...plan.store.retire.row, likeness_state: STATE, likeness_official: { version: 1, proof: `https://media.postmark.town/x/${MARK}.png` } } } } };
+  const text = describe(handed, { dryRun: true });
+  assert.ok(!text.includes(MARK), "no proof, request or pointer in the dump");
+  assert.doesNotMatch(text, /likeness_state|likeness_official/);
+  assert.match(text, /DELETE households new-nook/, "the dump is otherwise whole");
+});
+
+test("M7d · COMPATIBLE: without 092 the check answers none; with 092 a state-free source moves, and the target's own state is untouched", { skip: SKIP }, async () => {
+  const pre = await town();
+  assert.equal(await likenessStateHeld("new-nook"), false, "a store without the column holds no state, and the read does not fail");
+  assert.deepEqual(await storeRows(), await storeRows());
+  void pre;
+  await with092(async () => {
+    const t = await town();
+    await setState("harbor-lights", { official: { version: 1, proof: "https://media.postmark.town/harbor-lights/cc.png", since: "2026-11-01", depicts: ["lamp"] } });
+    const targetState = await stateOf("harbor-lights");
+    assert.equal(await likenessStateHeld("new-nook"), false, "the source holds none (SQL NULL)");
+    await setState("new-nook", null);
+    const out = await withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, owner: asOwner }));
+    assert.match(out.commit, /^[0-9a-f]{40}$/);
+    const s = await storeRows();
+    assert.deepEqual(s.households.map((h) => h.slug), ["harbor-lights", "zeds"], "the state-free source moved and retired");
+    assert.deepEqual(await stateOf("harbor-lights"), targetState, "the target's own likeness state is not touched");
+    assert.deepEqual(VERIFY.verifyStampLedger(t.dir).problems ?? [], []);
+  });
 });

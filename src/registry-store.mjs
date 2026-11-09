@@ -538,7 +538,21 @@ export async function unsetUnpublishedInvitedBy({ slug, invitedBy }, env = proce
 export const MOVE_ROW_REFUSALS = Object.freeze({
   NOT_OWNER: { code: 403, defect: "the move writes as the store's owner (world2_owner), and this connection is another role" },
   MOVED: { code: 409, defect: "the households changed since the plan was read" },
+  LIKENESS_STATE: { code: 409, defect: "the household the resident leaves holds likeness state (a request, a selection or an official pointer): this tool neither moves nor discards it — nothing was written" },
 });
+
+// LIKENESS STATE (092, POS-726 slice B; Wright 2026-11-09 12:43Z, on #985: "If the source household has any likeness
+// state, refuse by name, rechecked under the lock, before any write or output, and never print it in the dump. No
+// transfer or discard policy is invented"). Read through the row's own jsonb, so a store without 092 answers "none"
+// rather than failing, and answered as a BOOLEAN only: the state is private, and nothing here reads its contents.
+const LIKENESS_STATE_HELD = `(to_jsonb(households) -> 'likeness_state') IS NOT NULL
+  AND jsonb_typeof(to_jsonb(households) -> 'likeness_state') <> 'null'`;
+
+/** Does this household hold likeness state? `true`/`false`, or `null` when the office is not pointed at the record. */
+export async function likenessStateHeld(slug, env = process.env) {
+  const r = await actsQuery(`SELECT ${LIKENESS_STATE_HELD} AS held FROM households WHERE slug = $1`, [slug], env);
+  return r === null ? null : Boolean(r[0]?.held);
+}
 
 /** The target row as it stands after the move: pure, so the plan and the transaction compute it alike. */
 export function movedTargetRow({ handle, source, target }) {
@@ -564,7 +578,8 @@ export async function moveResidentInStore(client, { handle, from, to }) {
   await client.query("BEGIN");
   try {
     const { rows } = await client.query(
-      `SELECT slug, residents, accounts, formerly, home_images, to_jsonb(households) -> 'invited_by' AS invited_by
+      `SELECT slug, residents, accounts, formerly, home_images, to_jsonb(households) -> 'invited_by' AS invited_by,
+              ${LIKENESS_STATE_HELD} AS likeness_state_held
          FROM households WHERE slug = ANY($1::text[]) ORDER BY slug FOR UPDATE`,
       [[from, to]]);
     const source = rows.find((r) => r.slug === from);
@@ -577,6 +592,9 @@ export async function moveResidentInStore(client, { handle, from, to }) {
     // would drop it unruled.
     if (source.invited_by != null)
       throw refuse(MOVE_ROW_REFUSALS.MOVED, `${from} now carries an invitation credit (invited by ${asJson(source.invited_by)?.by ?? "?"})`);
+    // LIKENESS STATE, RECHECKED UNDER THE LOCK (Wright 12:43Z): state that arrived after the plan refuses here and
+    // rolls back, named by the house alone; its contents are never read.
+    if (source.likeness_state_held === true) throw refuse(MOVE_ROW_REFUSALS.LIKENESS_STATE, from);
     const after = movedTargetRow({ handle,
       source: { ...source, accounts: asJson(source.accounts), home_images: asJson(source.home_images) },
       target: { ...target, accounts: asJson(target.accounts), home_images: asJson(target.home_images) } });

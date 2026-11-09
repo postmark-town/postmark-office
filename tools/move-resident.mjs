@@ -64,7 +64,7 @@ import { readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
-import { loadRegistryRows, movedTargetRow, moveResidentInStore } from "../src/registry-store.mjs";
+import { loadRegistryRows, movedTargetRow, moveResidentInStore, likenessStateHeld, MOVE_ROW_REFUSALS } from "../src/registry-store.mjs";
 import { registryFromRows, renderPublicRegistry } from "../src/registry-rows.mjs";
 import { collectingDrain } from "../src/ceremony.mjs";
 import { planHouseKey, appendHouseKey, registryWith, LEDGER_REL } from "../src/house-key.mjs";
@@ -85,6 +85,9 @@ export const MOVE_REFUSALS = Object.freeze({
   CARD_UNMATCHED: { code: 409, defect: "a card of --handle names a household that is neither --to nor the house they left — a person reads it; nothing was written" },
   NOT_EMPTY: { code: 409, defect: "the household --handle leaves has other residents: this tool retires only a house that the move leaves empty" },
   CREDIT: { code: 409, defect: "the household --handle leaves carries an invitation credit (invited_by): moving or dropping it is a payout ruling, not this tool's" },
+  // Wright 2026-11-09 12:43Z (POS-726, on #985): "If the source household has any likeness state, refuse by name,
+  // rechecked under the lock, before any write or output, and never print it in the dump."
+  LIKENESS_STATE: MOVE_ROW_REFUSALS.LIKENESS_STATE,
   COLLATERAL: { code: 409, defect: "printing the registry would change more than the two households — the town's files are behind the store elsewhere; run the registry drain first" },
   HOUSE_KEY: { code: 409, defect: "the house's key line cannot be written today" },
   DRAIN_REFUSED: { code: 409, defect: "the registry drain refused to print" },
@@ -185,6 +188,9 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
     from = source.slug;
     if ((source.residents ?? []).length !== 1) throw refuse(MOVE_REFUSALS.NOT_EMPTY, `${from}: ${source.residents.join(", ")}`);
     if (source.invited_by != null) throw refuse(MOVE_REFUSALS.CREDIT, `${from} was invited by ${source.invited_by.by ?? "?"}`);
+    // A row that carries the state (a train whose parser reads 092) refuses here too; moveResident has already asked
+    // the store directly, because an older parser omits the column and its absence here proves nothing.
+    if (holdsLikenessState(source)) throw refuse(MOVE_REFUSALS.LIKENESS_STATE, from);
   }
 
   // The rows as they will stand: the target moved, the source gone.
@@ -238,7 +244,7 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
     pin: { handle, untouched: true },
     store: resuming ? null : {
       update: { table: "households", slug: to, before: pick(target), after: pick({ ...target, ...movedTargetRow({ handle, source, target }) }) },
-      retire: { table: "households", slug: from, row: source },
+      retire: { table: "households", slug: from, row: withoutPrivate(source) },
     },
     registry: { retired: files[from] ? from : null, before: files[to] ?? null, after: printedHouses[to] ?? null },
     cards,
@@ -247,6 +253,11 @@ export function planMove({ handle, to, rows, clone, date, keyPlan = planHouseKey
 }
 
 const pick = (r) => ({ residents: r.residents ?? [], accounts: r.accounts ?? [], formerly: r.formerly ?? [], home_images: r.home_images ?? {} });
+// THE PRIVATE LIKENESS STATE (092, POS-726): a row carries it as `likeness_state`, and a printed file as its public
+// projection `likeness_official`. Neither is ever part of the plan or the dry run.
+const PRIVATE_LIKENESS = ["likeness_state", "likeness_official"];
+const holdsLikenessState = (row) => PRIVATE_LIKENESS.some((k) => row?.[k] != null);
+const withoutPrivate = (row) => Object.fromEntries(Object.entries(row ?? {}).filter(([k]) => !PRIVATE_LIKENESS.includes(k)));
 const houseLineOf = (text) => /^household:[ \t]*(.*)$/m.exec(String(text ?? ""))?.[1]?.trim() ?? null;
 /** The frontmatter's `household:` value, read as withHouseLine reads it, or null. */
 const frontHouseLine = (text) => {
@@ -264,9 +275,19 @@ const frontHouseLine = (text) => {
  * test.
  */
 export async function moveResident({ handle, to, clone, env = process.env, date = easternDate(), dryRun = false,
-  keyPlan = planHouseKey, owner = ownerClient, move = moveResidentInStore, drainWith = collectingDrain, commit = penCommit } = {}) {
+  keyPlan = planHouseKey, owner = ownerClient, move = moveResidentInStore, drainWith = collectingDrain, commit = penCommit,
+  stateHeld = likenessStateHeld } = {}) {
   const rows = await loadRegistryRows(env);
   if (rows === null) throw refuse(MOVE_REFUSALS.NO_RECORD);
+  // LIKENESS STATE, BEFORE ANY OUTPUT OR WRITE (Wright 12:43Z): asked of the store itself, through the row's own jsonb,
+  // so it holds on a store with 092 whatever this office's row parser reads, and on one without it (none). The
+  // house named is the one the resident would leave; the refusal names it and never the state.
+  const leaving = rows.households.find((r) => r.slug !== to && (r.residents ?? []).includes(handle));
+  if (leaving) {
+    const held = await stateHeld(leaving.slug, env);
+    if (held === null) throw refuse(MOVE_REFUSALS.NO_RECORD, "the likeness-state check could not read the record");
+    if (held) throw refuse(MOVE_REFUSALS.LIKENESS_STATE, leaving.slug);
+  }
   const plan = planMove({ handle, to, rows, clone, date, keyPlan });
   if (dryRun) return { dryRun: true, plan };
 
@@ -321,7 +342,8 @@ export function describe(plan, { dryRun }) {
     out.push(`    home_images ${JSON.stringify(Object.keys(before.home_images))} -> ${JSON.stringify(Object.keys(after.home_images))}`);
     out.push(`  DELETE households ${plan.from} (its only resident is ${plan.handle}); the row as it stands:`);
     // the human's own name stays out of the print, as the public registry keeps it out (POS-394)
-    const { human, ...row } = plan.store.retire.row;
+    // and likeness state is never printed, even from a plan that carries it (Wright 12:43Z)
+    const { human, ...row } = withoutPrivate(plan.store.retire.row);
     out.push(`    ${JSON.stringify(human == null ? row : { ...row, human: "(set; private, not printed)" })}`);
     out.push(`  rows spelled hh:${plan.from} or its accounts' gh:<id> keep their spelling; ${plan.to}'s spelling set carries them`);
   } else out.push("store: no change (already moved)");
