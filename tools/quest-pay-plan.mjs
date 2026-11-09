@@ -548,7 +548,7 @@ export async function main(argv = process.argv.slice(2), { facts = null, spawn =
 
   const out = apply ? await penTransaction(town, pass) : await pass();
   if (out?.error) { err(out.error); return 1; }
-  if (out.planOnly) { log("[quest-pay-plan] the plan only — nothing written, nothing signed. Read every owed comment and letter, then --apply."); return 0; }
+  if (out.planOnly) { log(`[quest-pay-plan] the plan only — nothing written, nothing signed. Read every owed ${hearth ? "entry" : "comment and letter"}, then --apply.`); return 0; }
   if (!out.written.length) { log("[quest-pay-plan] nothing owed"); return 0; }
   for (const r of out.written) log(`[quest-pay-plan] minted ${r.n} → ${r.handle} · quest:${quest}/${r.household} (${r.ref})`);
   return 0;

@@ -431,5 +431,6 @@ test("hearth: over the town's own engine, once open, the plan prints and its hin
     assert.deepEqual(HEARTH_TERMS.amount, 10);
     assert.match(out.join("\n"), /quest pay plan for hearth-entry — 0 Hearth entr\(ies\) qualify/);
     assert.match(out.join("\n"), /apply exactly this plan with:\n.*--quest hearth-entry --date/);
+    assert.match(out.join("\n"), /Read every owed entry, then --apply/);
     assert.doesNotMatch(out.join("\n"), /--discussion/);
   });
