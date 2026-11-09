@@ -39,6 +39,7 @@
 #   extract-town.mjs --town               same
 #   fetch-town.mjs --town                 same
 #   sync-renditions.mjs --town            same
+#   sync-hearths.mjs --town               same
 #   commit + push to main                 NOT DONE — see "no commit" below
 #
 #   deploy.yml (release lane)             this script
@@ -498,6 +499,11 @@ build_once() {
   say "extract: approved renditions"
   ( cd "$SITE" && node tools/sync-renditions.mjs --town "$TOWN" ) \
     || die "sync-renditions.mjs tripped"
+  # sync-atlas.yml's "Sync registered Hearth entries" (POS-959): merged entries into
+  # src/data/postmark/hearths.json, which the overlay below carries into the build.
+  say "extract: registered Hearth entries"
+  ( cd "$SITE" && node tools/sync-hearths.mjs --town "$TOWN" ) \
+    || die "sync-hearths.mjs tripped"
 
   # ── the build tree: site @ the newest release tag ─────────────────────────
   #
