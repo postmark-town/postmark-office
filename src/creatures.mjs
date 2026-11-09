@@ -1607,7 +1607,10 @@ async function creatureTurn(creature, act, distance_m, deps) {
       // the fragment rides this reply alone: it is the actor's, and never on the record (POS-712)
       ...(telling?.told ? { fragment: telling.told } : {}), ...(telling?.answered ? { answered: true } : {}),
       // a finishable creature's press, said beside its line: who paid what (encounter.mjs)
-      ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}) })) } : {}),
+      // WLD-164: a press that took ANOTHER resident to 0 says so beside who paid (the office flees them, fleeTheSpent above); the
+      // actor's own nerve is said by nerve_said, so it is never said twice
+      ...(landed.length ? { pressed: landed.map((l) => ({ on: l.on, nerve: l.by, ...(l.shield ? { shielding: l.shielded } : {}),
+        ...(l.on !== act.actor && nerveOf(living, l.on, now) === 0 ? { fled: "their nerve is gone: they flee, and stay out until the settlement" } : {}) })) } : {}),
       // a creature that tempts: what it whispered, and to whom; what your answer counted for (temptation.mjs)
       ...(tempted.tempt ? { tempts: { to: tempted.tempt.to, says: tempted.tempt.says, until: tempted.tempt.until } } : {}),
       ...(tempted.tallies.length ? { counted: tempted.tallies.map((t) => ({ for: t.on, [t.payload.road]: t.payload.by, why: t.payload.why })) } : {}),
