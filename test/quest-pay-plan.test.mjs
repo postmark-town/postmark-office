@@ -385,7 +385,7 @@ test("hearth: the author line takes a resident's handle (that household, the aut
   assert.deepEqual([byHandle.why, byHandle.handle, byHandle.household], ["owed", "corwin", "gh:20"], "a housemate's handle pays its own household, to the author (alden's case)");
   assert.deepEqual([bySlug.why, bySlug.handle, bySlug.household], ["owed", "wisp", "gh:40"], "a slug pays the household's first resident who is not a meep");
   // until f7e8a9b this asserted drifter paid as its own house; a name off the roll is paid nothing (Truey's FIX)
-  for (const [name, row] of [["drifter", aRows(["drifter"])[0]], ["old-name", aRows(["old-name"])[0]]]) {
+  for (const [name, row] of [["old-name", aRows(["old-name"])[0]], ["drifter", aRows(["drifter"])[0]]]) {
     assert.deepEqual([row.owed, row.n, row.handle ?? null, row.household ?? null], [false, 0, null, null], `${name}: a name off the roll pays no one`);
     assert.equal(row.why, `unbound: the author "${name}" is no resident on the roll and no household with a resident here`);
   }
