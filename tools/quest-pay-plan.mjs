@@ -163,12 +163,12 @@ export function recipientOf(d, house) {
   return house.handles.find((h) => named.includes(h)) ?? house.handles[0];
 }
 
-/** The registered Hearth entries as items. `entries` are hearthEntries' rows: { id, author, line, date, commit, subject, problem? }. PURE. */
+/** The registered Hearth entries as items. `entries` are hearthEntries' rows: { id, author, line, date, commit, subject, problem?, later? }. PURE. */
 export function hearthItems(entries, { source }) {
   return (entries ?? []).map((e) => ({
     ref: `hearth:${e.id}`, source: "hearth", link: `https://github.com/${source.owner}/${source.repo}/tree/main/${source.dir}/${e.id}`,
     via: e.commit ? `${e.commit.slice(0, 9)} "${e.subject ?? ""}"` : "no commit read", date: e.date ?? null, body: e.line ?? "",
-    author: e.author ?? null, ...(e.problem ? { problem: e.problem } : {}),
+    author: e.author ?? null, ...(e.problem ? { problem: e.problem } : {}), ...(e.later ? { later: e.later } : {}),
   }));
 }
 
@@ -177,7 +177,7 @@ export function hearthItems(entries, { source }) {
  * for a Hearth entry. Its `author` is read two ways (Truey's FIX on #995: the
  * README says "author (you)", and most residents' handles are not their
  * household's slug):
- *   · a resident's handle (one with a room): that resident's household, with
+ *   · a resident's handle (on the roll, with a room): that resident's household, with
  *     the author first among its handles, so the author is the one paid;
  *   · a household's slug in the town's tools/households.json (`households`):
  *     its residents with a room that hold the first one's key.
@@ -202,7 +202,10 @@ export function housesFromRoll(households, { keyOf, hasRoom, date }) {
     if (!author) return null;
     const slugResidents = residentsOf(author).filter(hasRoom);
     const bySlug = slugResidents.length ? houseOf(slugResidents, slugResidents[0]) : null;
-    const byHandle = hasRoom(author) ? houseOf(residentsOf(slugOfHandle.get(author) ?? "").filter(hasRoom), author) : null;
+    // A handle counts only when it is on the roll: hasRoom alone also holds the
+    // retired pins in github-ids.json, names the town no longer resolves to a
+    // resident (Truey's FIX at f7e8a9b).
+    const byHandle = slugOfHandle.has(author) && hasRoom(author) ? houseOf(residentsOf(slugOfHandle.get(author) ?? "").filter(hasRoom), author) : null;
     if (bySlug && byHandle && bySlug.household !== byHandle.household)
       return { refuse: `ambiguous: "${author}" is a household's slug and the handle of a resident of another household; a hand decides` };
     return byHandle ?? bySlug;
@@ -232,13 +235,17 @@ export function planQuestPays({ items, quest, terms, houseOf, isMeep, paid = new
     if (rejected.has(d.ref)) { nothing(d.source === "hearth" ? "rejected: a hand read it — not this household's own Hearth" : "rejected: a hand read it — not feedback"); continue; }
     if (d.source === "letter" && d.body == null) { nothing(`no letter on file: the ledger delivered it, and WHITE_PAGES/${d.to}/inbox holds no ${d.link} for a hand to read`); continue; }
     const house = houseOf(d);
+    // The author is read at the merge, so a later fix to the line pays nothing by
+    // itself; an unbound or ambiguous Hearth row names that later commit and what
+    // the line says now, for the hand to decide (Truey's FIX at f7e8a9b).
+    const later = d.later ? ` · a later commit, ${d.later.commit.slice(0, 9)} "${d.later.subject}", changed the author line to ${d.later.author ? `"${d.later.author}"` : "nothing"}; a hand decides` : "";
     if (!house) {
       nothing(d.source === "letter" ? `unbound: ${d.author} has no room here`
-        : d.source === "hearth" ? (d.author ? `unbound: the author "${d.author}" is no resident here and no household with a resident here` : "unbound: its hearth.md names no author")
+        : d.source === "hearth" ? (d.author ? `unbound: the author "${d.author}" is no resident on the roll and no household with a resident here${later}` : `unbound: its hearth.md names no author${later}`)
         : `unbound: ${d.author} binds no resident here`);
       continue;
     }
-    if (house.refuse) { nothing(house.refuse); continue; }
+    if (house.refuse) { nothing(`${house.refuse}${later}`); continue; }
     // A Hearth entry pays its house's first resident who is not a meep: the
     // author, when the author line names a resident (housesFromRoll puts it first).
     const handle = d.source === "letter" ? d.sender : d.source === "hearth" ? (house.handles.find((h) => !isMeep(h, date)) ?? house.handles[0]) : recipientOf(d, house);
@@ -400,7 +407,10 @@ export function readHearthMeta(raw) {
  * of the first-parent commit that brought its hearth.html to main, and the
  * author and line are its hearth.md AT THAT COMMIT: the merge the row shows,
  * so a later change to the author line cannot move the 10 while the hand
- * opens the original PR (Truey's FIX on #995). Or { id, problem } for a folder
+ * opens the original PR (Truey's FIX on #995). When a later first-parent
+ * commit changed the author line, the row also carries
+ * `later: { commit, subject, author }` (the line as it reads now), which pays
+ * nothing by itself. Or { id, problem } for a folder
  * with no hearth.html, or whose hearth.html, hearth.css or hearth.md is not a
  * plain file on main (not an entry: the site refuses such a file and skips the
  * whole entry, postmark-site tools/sync-hearths.mjs), or with no commit that
@@ -426,7 +436,13 @@ export function hearthEntries(town, source, { run = (...a) => git(town, ...a) } 
     if (!merged) { out.push({ id, problem: "unread: the clone's history does not say when its hearth.html reached main" }); continue; }
     const md = list(merged[0], `${source.dir}/${id}`).get("hearth.md");
     const meta = plain(md) ? readHearthMeta(run("cat-file", "blob", md.sha)) : { author: null, line: "" };
-    out.push({ id, ...meta, date: townDate(Date.parse(merged[1])), commit: merged[0], subject: merged.slice(2).join("\t") });
+    // The newest first-parent commit to touch hearth.md: when it is not the merge
+    // and the author line now differs, the row can name it (`later`).
+    const last = run("log", "-1", "--first-parent", "--diff-merges=first-parent", "--no-patch", "--format=%H%x09%s", "HEAD", "--", `${source.dir}/${id}/hearth.md`).split("\t");
+    const now = files.get("hearth.md");
+    const nowAuthor = plain(now) ? readHearthMeta(run("cat-file", "blob", now.sha)).author : null;
+    const later = last[0] && last[0] !== merged[0] && nowAuthor !== meta.author ? { commit: last[0], subject: last.slice(1).join("\t"), author: nowAuthor } : null;
+    out.push({ id, ...meta, date: townDate(Date.parse(merged[1])), commit: merged[0], subject: merged.slice(2).join("\t"), ...(later ? { later } : {}) });
   }
   return out;
 }
