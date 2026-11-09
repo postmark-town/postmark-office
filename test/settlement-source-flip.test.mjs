@@ -320,6 +320,12 @@ function normalize(commands, root) {
     .replace(/[A-Za-z]:[\\/][^\s]*[Tt]emp[\\/][^\s]*/g, "<tmp>")
     .replace(/\b[0-9a-f]{40}\b/g, "<sha>")
     .replace(/\b[0-9a-f]{7,12}\b/g, "<sha>")
+    // The witness record's run-specific arguments (POS-907): the shell's own pid
+    // and the crossing's event time differ on every run. Once the witness reached
+    // the open train, both runs issue these lines, and an unmasked pid or second
+    // made the train's read as "missing" from the rollback (the 11-09 train red).
+    .replace(/--pid \d+/g, "--pid <pid>")
+    .replace(/--event \S+/g, "--event <event>")
     // Path separators last, and on both sequences equally: on Windows the
     // wrappers log `<root>\sweep` where the script's own literals read
     // `<root>/sweep`, so a pattern written either way matches only on one
