@@ -147,6 +147,16 @@ env), run by hand after the ship.
   cannot re-trigger a workflow (it is made with `GITHUB_TOKEN`), which is
   precisely why the deploy job chains onto the tag-cutting job inside one run
   rather than living in a separate tag-triggered file that would never fire.
+- **The rollback guard (POS-971)** refuses a push-triggered deploy (the train's
+  own cut or a hand-pushed tag) whose commit is not a descendant of the one prod
+  runs, read from `GET /release` (`deploy/release-guard.sh`; when prod can't be
+  read, the newest other `release/*` tag stands in). A tag cut at an old commit
+  runs its own old workflow, which has no such step, so the box-side preflight,
+  which every workflow takes from main, refuses any run that doesn't pass the
+  commit it brings and a known event (`push`, `workflow_dispatch`, or
+  `hand-carry` from `deploy/dev-office-carry.sh`, which carries a train to dev
+  and isn't measured). Going back is deliberate: `workflow_dispatch` from main,
+  target `prod`, with the tag named.
 
 ### The dev rehearsal (POS-354, POS-366; first run Saturday 2026-10-10)
 
