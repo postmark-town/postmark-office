@@ -558,6 +558,14 @@ test("M7b · LIKENESS STATE THAT ARRIVES AFTER THE PLAN refuses under the same r
   });
 });
 
+test("M7e · on a train whose row parser reads 092, a source row carrying likeness state refuses in the plan itself", { skip: SKIP }, async () => {
+  const t = await town();
+  const rows = await loadRegistryRows();
+  const carried = { ...rows, households: rows.households.map((r) => (r.slug === "new-nook" ? { ...r, likeness_state: STATE } : r)) };
+  assert.throws(() => planMove({ handle: "moss", to: "harbor-lights", rows: carried, clone: t.dir, date: D, keyPlan: () => { throw new Error("planned past the guard"); } }),
+    (e) => e.defect === MOVE_REFUSALS.LIKENESS_STATE.defect && e.detail === "new-nook" && !discloses(e));
+});
+
 test("M7c · the dry run's formatter never prints likeness state, even handed a plan that carries it", { skip: SKIP }, async () => {
   const t = await town();
   const { plan } = await withPen(t, () => moveResident({ handle: "moss", to: "harbor-lights", clone: t.dir, date: D, dryRun: true, ...NO_WRITERS }));
