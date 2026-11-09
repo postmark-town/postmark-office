@@ -4,6 +4,9 @@
 // judged by that ground's standing and backing. groundMinimumStake counts the Town Centre, not only the actor's
 // parcels, and putForwardVerdict reads the Centre's backing, so POS-606's signpost amend previews publishes: true.
 // Add a test that's red on today's code (release/2026-w46.3) and green after. Nothing more."
+// And 14:11Z, the cut: "Town Centre only … an amend to a mark on the Town Centre's ground is judged by the Centre's
+// standing and backing; nothing else changes. The test that's red on today's code stays; add one that a non-Centre
+// town mark is still judged as before." (T5.)
 //
 // THE ORACLE IS THE REAL ONE: POS-606's own tool plan (tools/town-signpost-amend.mjs § amendPlan) handed to the
 // office's own amend, `journalLeaveMark`, as a preview, against this tree's pinned world clone (the Town Centre is
@@ -15,9 +18,11 @@
 //   T2  no bypass, on the same real canon: a resident's mark standing on the town's constitutional ground is not
 //       carried by it, and a NEW town mark in the Centre (a leave, not an amend) is not put forward by it
 //   T3  the verdict's controls: no backing, a ground with nothing behind it, and a leave all decide as before
-//   T4  the ground verdict on synthetic grounds (the canon holds no such case): only the actor's own
-//       constitution-tier, non-parcel ground it stands on is named; a resident, a non-constitution ground, a mark
-//       elsewhere, and a town mark nested in a parcel inside it are not
+//   T4  the ground verdict on synthetic grounds (the canon holds no such case): only the Town Centre, the town's own
+//       constitution-tier, non-parcel ground the mark stands on, is named; the same ground under another id, a
+//       resident, a non-constitution ground, a mark elsewhere, and a town mark nested in a parcel inside it are not
+//   T5  TOWN CENTRE ONLY (Wright 14:11Z): a town mark on another constitutional town ground (the Think Tank, which
+//       HOLDS escrow, so the control is not vacuous) is judged as before, and a real one amended end to end too
 //
 //   node --import ./test/helpers/sparse-guard.mjs --test --test-concurrency=1 test/town-centre-amend.test.mjs
 
@@ -101,16 +106,19 @@ test("T2 · no bypass on the same canon: a resident's mark on the town's constit
   assert.equal(fresh.put_forward, false, "a leave is not an amend: nothing carries a new mark but its own stake");
 });
 
-test("T4 · the ground verdict on synthetic grounds: only the actor's own constitution-tier, non-parcel nesting ground is named as backing", { skip: SKIP }, async () => {
-  const { __groundMinimumStakeForTest: ground } = await import("../src/world.mjs");
+test("T4 · the ground verdict on synthetic grounds: only the Town Centre, the town's own constitution-tier ground the mark stands on, is named as backing", { skip: SKIP }, async () => {
+  const { __groundMinimumStakeForTest: ground, TOWN_CENTRE } = await import("../src/world.mjs");
+  assert.equal(TOWN_CENTRE, CENTRE);
   // the served canon holds no non-constitution town ground and no fit resident case, so these grounds are synthetic,
-  // far from any real mark, judged by the real containment engine
-  const square = (over = {}) => ({ id: "the-town/a-test-square", by: "the-town", household: "the-town", kind: "sited", tier: "constitution",
+  // far from any real mark, judged by the real containment engine. The square IS the Centre by id unless told otherwise.
+  const square = (over = {}) => ({ id: CENTRE, by: "the-town", household: "the-town", kind: "sited", tier: "constitution",
     at: { x: 10000, y: 10000 }, extent: { w: 100, h: 100 }, points: [[9950, 9950], [10050, 9950], [10050, 10050], [9950, 10050]], ...over });
   const canonOf = (...marks) => ({ marks, byId: new Map(marks.map((m) => [m.id, m])), ids: new Set(marks.map((m) => m.id)) });
   const sign = (by = "the-town") => ({ slug: "a-test-sign", by, kind: "sited", at: { x: 10010, y: 10010 }, extent: { w: 3, h: 2 } });
   const g = await ground(sign(), canonOf(square()));
-  assert.equal(g.backing, "the-town/a-test-square", "the town's own constitutional ground it stands on");
+  assert.equal(g.backing, CENTRE, "the Town Centre it stands on");
+  assert.equal((await ground(sign(), canonOf(square({ id: "the-town/a-test-square" })))).backing, undefined,
+    "Town Centre only (Wright 14:11Z): the same constitutional town ground under any other id is judged as before");
   assert.equal(g.min, 1, "no parcel: the minimum is unchanged");
   assert.equal(g.ground, null, "and it is not called the actor's ground");
   assert.equal((await ground(sign("moss"), canonOf(square()))).backing, undefined, "a resident's mark there is the commons it always was");
@@ -120,6 +128,40 @@ test("T4 · the ground verdict on synthetic grounds: only the actor's own consti
   const parcel = { id: "moss/a-test-plot", by: "moss", household: "moss", kind: "parcel", tier: "home",
     at: { x: 10010, y: 10010 }, extent: { w: 20, h: 20 }, points: [[10000, 10000], [10020, 10000], [10020, 10020], [10000, 10020]] };
   assert.equal((await ground(sign(), canonOf(square(), parcel))).backing, undefined, "a town mark nested in someone's parcel is not backed by the square around it");
+});
+
+test("T5 · TOWN CENTRE ONLY (Wright 14:11Z): a town mark on another constitutional town ground is judged as before, even where that ground HAS escrow", { skip: SKIP }, async () => {
+  const { canonForGuards, journalLeaveMark, putForwardVerdict, __groundMinimumStakeForTest: ground } = await import("../src/world.mjs");
+  const { worldStakeRead } = await import("../src/world-stake.mjs");
+  const canon = canonForGuards();
+  // THE THINK TANK: constitution-tier, sited, the town's, not the Centre, and it HOLDS escrow on the pinned ledger, so
+  // this control cannot pass for want of backing: the general reading would carry a town amend there, this one must not.
+  const TANK = "the-town/the-think-tank";
+  const tank = canon.byId.get(TANK);
+  assert.deepEqual([tank?.by, tank?.tier, tank?.kind], ["the-town", "constitution", "sited"]);
+  const tankEscrow = Number((await worldStakeRead({ mark: TANK })).escrow) || 0;
+  assert.ok(tankEscrow >= 1, `the Think Tank holds escrow (✦1 at the pin): ${tankEscrow}`);
+  const inTank = { slug: "pos-952-a-probe-in-the-tank", by: "the-town", kind: "sited", at: { ...tank.at }, extent: { w: 2, h: 2 } };
+  const here = await journalLeaveMark({ ...inTank, body: "probe", household: "the-town", date: new Date().toISOString(), preview: true });
+  assert.equal(here.parent, TANK, "a town mark at that spot stands on the Think Tank (the preview's own nesting answer)");
+  const g = await ground(inTank, canon);
+  assert.equal(g.backing, undefined, "the Think Tank is not named as backing: only the Centre is");
+  assert.equal(g.min, 1);
+  // the verdict the amend chain forms from that answer, the tank's escrow notwithstanding: a draft, as before
+  const v = putForwardVerdict({ amending: true, escrowBehind: 0, groundMin: g.min, backedBy: g.backing ?? null, groundBacking: g.backing ? tankEscrow : 0 });
+  assert.equal(v.put_forward, false, "judged as before: the mark's own escrow, of which it has none");
+  // and END TO END on a real town mark standing on another constitutional ground (the Keeping Works, unbacked):
+  // the amend preview carries nothing from its ground
+  let probed = null;
+  for (const m of canon.marks.filter((x) => x.by === "the-town" && x.kind === "sited" && x.at && x.id !== CENTRE).slice(0, 60)) {
+    const r = await journalLeaveMark({ slug: m.id.slice("the-town/".length), kind: "sited", at: m.at, extent: m.extent, points: m.points,
+      body: `${m.body ?? ""} (amended)`, by: "the-town", household: "the-town", date: new Date().toISOString(), amend: true, preview: true });
+    const p = canon.byId.get(r?.parent);
+    if (r?.preview && r.parent !== CENTRE && p?.by === "the-town" && p?.tier === "constitution") { probed = { m, r }; break; }
+  }
+  assert.ok(probed, "a real town mark standing on a constitutional town ground other than the Centre");
+  assert.notEqual(probed.r._verdict?.carried_by, "ground-backing", `${probed.m.id} on ${probed.r.parent}: not carried by its ground`);
+  assert.equal(probed.r._verdict?.backed_by, undefined);
 });
 
 test("T3 · the verdict's controls: no backing, a backing of nothing, a leave, and a stake decide exactly as before", async () => {

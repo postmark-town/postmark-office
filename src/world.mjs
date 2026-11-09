@@ -4342,25 +4342,28 @@ async function groundMinimumStake(clean, canon) {
     if (marksContain(g, { at: clean.at, extent: clean.extent, points: clean.points }))
       return { min: 0, ground: g.id, own };
   }
-  // THE TOWN'S OWN CONSTITUTIONAL GROUND (POS-952; Wright 2026-11-09: "an amend to a mark on the town's own
-  // constitutional ground (the Town Centre) is judged by that ground's standing and backing. groundMinimumStake
-  // counts the Town Centre, not only the actor's parcels, and putForwardVerdict reads the Centre's backing").
-  // The Centre is `sited` at the constitution tier, not a parcel, so the scan above never sees it. "That ground" is
-  // the one the mark STANDS ON: its nesting parent in canon, by the fold's own containment rule (§ nestingParent,
-  // the same answer the preview prints as where it nests), never some wider constitutional ground around it. When
-  // that ground is constitution-tier, not a parcel, and of the ACTOR'S OWN household, it is named as the mark's
-  // `backing`: an amendment there is put forward by the escrow behind that ground (§ putForwardVerdict), never for
-  // free. The minimum and `ground` are unchanged (it is no parcel; `ground` is what the door calls "your ground").
-  // Anyone else's mark on that ground, or a town mark standing on anything else, is judged as it always was.
+  // THE TOWN CENTRE, AND ONLY THE TOWN CENTRE (POS-952; Wright 2026-11-09 14:11Z: "Town Centre only … an amend to
+  // a mark on the Town Centre's ground is judged by the Centre's standing and backing; nothing else changes …
+  // Keep the existing judgment everywhere else." The general reading, every constitutional town ground, is a law
+  // question for Darko, not this fix). The Centre is `sited` at the constitution tier, not a parcel, so the scan
+  // above never sees it. "Its ground" is the one the mark STANDS ON: its nesting parent in canon, by the fold's own
+  // containment rule (§ nestingParent, the same answer the preview prints as where it nests), so a mark standing on
+  // a ground INSIDE the Centre (the Keeping Works, the Think Tank) stands there, not on the Centre. When that ground
+  // is the Town Centre, still constitution-tier, not a parcel, and of the ACTOR'S OWN household, it is named as the
+  // mark's `backing`: an amendment there is put forward by the escrow behind the Centre (§ putForwardVerdict),
+  // never for free. The minimum and `ground` are unchanged (it is no parcel; `ground` is what the door calls "your
+  // ground"). Anyone else's mark there, and every mark on any other ground, is judged as it always was.
   const self = clean.slug ? `${clean.by}/${clean.slug}` : null;
   const standsOn = canon.byId.get(await nestingParent({ ...clean, id: self }, canon.marks) ?? "") ?? null;
-  const constitutional = standsOn && standsOn.tier === "constitution" && standsOn.kind !== "parcel"
+  const constitutional = standsOn && standsOn.id === TOWN_CENTRE && standsOn.tier === "constitution" && standsOn.kind !== "parcel"
     && credOf(standsOn.by ?? standsOn.household) === mine ? standsOn : null;
   // A COMMONS ANSWER READ WITHOUT THE REGISTRY IS A GUESS, NOT A FINDING: the
   // solo grain cannot see a housemate's parcel. The act takes the safe read
   // (the mark stays a draft); `markStandsOnOwnGround` must not take it as "commons".
   return { ...commons, own, ...(constitutional ? { backing: constitutional.id } : {}), ...(houses ? {} : { registry_unread: true }) };
 }
+/** The Town Centre: the one ground whose backing carries the town's amendments there (POS-952, Wright 14:11Z). */
+export const TOWN_CENTRE = "the-town/the-town-centre";
 /** Tests only (POS-952): the ground verdict itself, for grounds the served canon does not hold. */
 export const __groundMinimumStakeForTest = (clean, canon) => groundMinimumStake(clean, canon);
 
@@ -4433,8 +4436,8 @@ export function putForwardVerdict({ staking = false, stamps = 0, amending = fals
   const behind = Number(escrowBehind) || 0;
   const byStake = staking === true && Number(stamps) >= min;
   const byStanding = amending === true && behind >= min;
-  // POS-952 (Wright 2026-11-09): an amendment on the town's own constitutional ground is judged by THAT ground's
-  // backing (`backedBy`, named by groundMinimumStake; `groundBacking`, the escrow behind it). Reported apart from
+  // POS-952 (Wright 2026-11-09, "Town Centre only"): an amendment on the Town Centre's ground is judged by the
+  // Centre's backing (`backedBy`, named by groundMinimumStake; `groundBacking`, the escrow behind it). Reported apart from
   // the mark's own escrow, which it is not: escrow_behind and escrow_after stay the mark's.
   const backing = Number(groundBacking) || 0;
   const byGround = amending === true && typeof backedBy === "string" && backing >= min;
