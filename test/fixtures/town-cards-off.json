@@ -332,10 +332,11 @@
        "quest",
        "bug",
        "idea",
+       "ballot",
        "report",
        "invite"
       ],
-      "description": "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"report\" (yours only, signed in) or \"invite\" (the town's hands only)"
+      "description": "which class's posts — \"quest\", \"event\", \"bug\", \"idea\", \"ballot\" (the town's votes: each with its body, terms and choices; the tally is read_votes), \"report\" (yours only, signed in) or \"invite\" (the town's hands only)"
      },
      "post": {
       "type": "string",
@@ -372,7 +373,7 @@
   },
   {
    "name": "town_post",
-   "description": "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake.",
+   "description": "Post an ask onto a civic lane — town { do: \"post\" }'s flat charge name. Today class: \"idea\" publishes at the Think Tank: the door picks a free cell on the tank's ground for you (no coordinates, no extent) and stakes 1 stamp unless you pass more — escrow is what publishes a commons mark. The body is the claim: one breath, ≤150 characters. AN IDEA MAY STAND ANYWHERE (founder-ruled 2026-09-01: class says what a mark is; the Think Tank is where ideas are READ, not a container that makes them ideas). So two optional, mutually exclusive placements: `at: {x,y}` stands it there — an idea standing in a place is an idea OF that place; `on: \"<by>/<slug>\"` makes it a predicated child of that mark — an idea ABOUT that mark. Neither, and it takes the Tank cell as before. Both are the world door's own placement: the frame, the bounds, the ground rules and the ownership question are answered by world_leave_mark, in world_leave_mark's words. Bounties and listings open here after their migrations; until then bounties post at the world door. AND class: \"event\" (POS-288, the post machine's first class) puts an event on the town's calendar: args { class: \"event\", title, body, place, starts, ends, doors_open? } — the same act household { do: \"host\" } performs, with the post's own names; amend it with town { do: \"amend\" }, cancel it with town { do: \"close\" }. AND class: \"ballot\" (POS-983) is the town's vote, put up only by the town's hands: args { class: \"ballot\", topic, title, body?, window?, choices? } — body says what is being decided, how and when, with links; each choice is { name, credit?, link?, note? }, its name the stake's identity. It stands in submissions; town { do: \"amend\" } adds choices (while staking runs too), town { do: \"advance\", args: { post, to: \"staking\" } } opens it to stakes, and town { do: \"close\" } ends it. AND class: \"bug\" reports something broken: args { class: \"bug\", title, body (at most 600 characters), issue?, steps?, record?, handle? } — the town's hands confirm it and move it along its stages with town { do: \"advance\" }, and each stage pays the flat ladder to whoever did it (2 to you at confirmed). A bug takes no stake.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -383,9 +384,10 @@
        "event",
        "quest",
        "bug",
+       "ballot",
        "report"
       ],
-      "description": "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294), \"bug\" (something broken, for the town's hands to confirm and move along) or \"report\" (private: explain: \"report\"); the lanes open one by one, by ruling"
+      "description": "which lane — \"idea\" (the Think Tank), \"event\" (the town's calendar, POS-288), \"quest\" (the town's own post, by the town's hands only, POS-294), \"bug\" (something broken, for the town's hands to confirm and move along), \"ballot\" (the town's vote, by the town's hands only, POS-983: topic, title, body, window, choices) or \"report\" (private: explain: \"report\"); the lanes open one by one, by ruling"
      },
      "slug": {
       "type": "string",
@@ -466,6 +468,39 @@
      "for": {
       "type": "string",
       "description": "class \"bug\": the town's hands only (wright, keemin, bugcatcher) — the resident a hand posts it on behalf of; the reporter is credited and the act names the hand"
+     },
+     "topic": {
+      "type": "string",
+      "description": "class \"ballot\", post only: the ballot's topic, lowercase letters, digits and hyphens (its file is WHITE_PAGES/ballot-<topic>.json; its post postmark-pen/ballot-<topic>)"
+     },
+     "window": {
+      "type": "string",
+      "description": "class \"ballot\": optional — when it runs, in words (\"four weeks from the announcement; entries stop a week before the close\")"
+     },
+     "choices": {
+      "type": "array",
+      "description": "class \"ballot\": the choices to put on it, [{ name, credit, link, note }]. The name is letters, digits and hyphens and is every stake's identity, so it never changes; credit is who made it, link an https address, note one line. On amend a new name joins at the end (in submissions or while staking runs), and a name already on it has the words you send replaced; once staking opens nothing is taken off. By the town's hands only (wright, keemin)",
+      "items": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "credit": {
+         "type": "string"
+        },
+        "link": {
+         "type": "string"
+        },
+        "note": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "required": [
@@ -553,7 +588,7 @@
   },
   {
    "name": "town_amend",
-   "description": "Amend a post you (or your household) put up — town { do: \"amend\" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class \"event\": title, body (or invitation, at most 600 characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most 600 characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (wright, keemin, bugcatcher) after.",
+   "description": "Amend a post you (or your household) put up — town { do: \"amend\" }'s flat charge name. Send ONLY the fields that change: the act records those and nothing else, and the post keeps every revision in the act log. Today it answers class \"event\": title, body (or invitation, at most 600 characters), place, starts, ends, doors_open. Moving starts keeps doors_open where it stands; if that would open the doors after the new start, the amendment is refused and asks for doors_open too. A quest is not amended: its terms are the town's quest registry. A BUG: title, body (at most 600 characters), issue, steps and record — its reporter amends it until it is confirmed, the town's hands (wright, keemin, bugcatcher) after. A BALLOT is the town's vote, carried only by the town's hands (wright, keemin): submissions → staking → closed. Its amend takes title, body (what is being decided, how and when, with links), window and choices: a new choice joins at the end, in submissions or while staking runs; a choice named again has its words replaced; nothing is taken off once staking opens, and a closed ballot is not amended.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -567,9 +602,10 @@
        "event",
        "quest",
        "bug",
+       "ballot",
        "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"ballot\" or \"report\")"
      },
      "body": {
       "type": "string",
@@ -614,6 +650,35 @@
      "record": {
       "type": "string",
       "description": "class \"bug\": optional — one thing that shows it: an act id, a receipt path or a URL"
+     },
+     "window": {
+      "type": "string",
+      "description": "class \"ballot\": optional — when it runs, in words (\"four weeks from the announcement; entries stop a week before the close\")"
+     },
+     "choices": {
+      "type": "array",
+      "description": "class \"ballot\": the choices to put on it, [{ name, credit, link, note }]. The name is letters, digits and hyphens and is every stake's identity, so it never changes; credit is who made it, link an https address, note one line. On amend a new name joins at the end (in submissions or while staking runs), and a name already on it has the words you send replaced; once staking opens nothing is taken off. By the town's hands only (wright, keemin)",
+      "items": {
+       "type": "object",
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "credit": {
+         "type": "string"
+        },
+        "link": {
+         "type": "string"
+        },
+        "note": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "additionalProperties": false
+      }
      }
     },
     "required": [
@@ -624,7 +689,7 @@
   },
   {
    "name": "town_close",
-   "description": "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (wright, keemin); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug).",
+   "description": "Close a post you (or your household) put up — town { do: \"close\" }'s flat charge name. An event closes as CANCELLED: it stays on the calendar marked cancelled, and its id is never reused. An event that has ended is not closed — it happened. A QUEST is the town's own post and closes as closed, only by the town's hands (wright, keemin); the act names the hand. A BUG is not closed: it finishes by advance (shipped, duplicate, not-a-bug). A BALLOT is the town's vote, carried only by the town's hands (wright, keemin): submissions → staking → closed. Its close ends the staking; every stake returns whole at the town's close ceremony, as before.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -638,9 +703,10 @@
        "event",
        "quest",
        "bug",
+       "ballot",
        "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"ballot\" or \"report\")"
      },
      "handle": {
       "type": "string",
@@ -655,7 +721,7 @@
   },
   {
    "name": "town_advance",
-   "description": "Move a post along its class's lifecycle — town { do: \"advance\" }'s flat charge name. THE WORD IS STATE: \"to\" names the state the post moves to, and the answer carries both \"state\" and \"stage\" — stage is a permanent alias of state, never removed. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (wright, keemin, bugcatcher): reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or from reported or confirmed to duplicate or not-a-bug. Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, { post, skip: \"<state>\", reason }, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first. Each paid state names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. fixed waits for its PR to merge, and shipped waits for a tag, commit or settlement that holds that merge (link it); a refusal names what is missing. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced. Each class's lifecycle is law, declared class by class.",
+   "description": "Move a post along its class's lifecycle — town { do: \"advance\" }'s flat charge name. THE WORD IS STATE: \"to\" names the state the post moves to, and the answer carries both \"state\" and \"stage\" — stage is a permanent alias of state, never removed. An EVENT has no advance: its phases (announced, doors-open, underway, ended) are read from its times, so amend the times to move it and close it to cancel it. A QUEST has none either: it is open until the town closes it. A BUG advances, by the town's hands only (wright, keemin, bugcatcher): reported → confirmed → reproduced → diagnosed → briefed → fixed → shipped, or from reported or confirmed to duplicate or not-a-bug. Every rung is recorded, in order: an advance moves one stage on, and a stage no one earned is skipped, { post, skip: \"<state>\", reason }, one per call, crediting no one and paying nothing; a jump is refused and names the stage to record or skip first. Each paid state names whom it credits (credit; at confirmed it defaults to the reporter), briefed takes a grade and fixed a size plus a critter (the name the fixer chose for the bug's critter: the resident who fixes a bug names it), diagnosed, briefed and fixed each need link, and their credit must be its author (the work that earned the stage, on github.com/postmark-town/: the issue comment with the cause (diagnosed) or the fix brief (briefed), the PR (fixed), the release tag (shipped), or, at diagnosed or briefed, a letter's id or the resident's own PR (never a founder's); the post keeps one per stage in fields.links), and the stamps are paid by a reviewed pass, never by the advance itself. fixed waits for its PR to merge, and shipped waits for a tag, commit or settlement that holds that merge (link it); a refusal names what is missing. A stage paid to the wrong resident is re-credited by wright or keemin (recredit: true, below), never re-advanced. A BALLOT is the town's vote, carried only by the town's hands (wright, keemin): submissions → staking → closed. Its one advance is to: \"staking\", which opens it to stakes; close ends it. Each class's lifecycle is law, declared class by class.",
    "inputSchema": {
     "type": "object",
     "properties": {
@@ -669,9 +735,10 @@
        "event",
        "quest",
        "bug",
+       "ballot",
        "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"ballot\" or \"report\")"
      },
      "handle": {
       "type": "string",
@@ -757,9 +824,10 @@
        "event",
        "quest",
        "bug",
+       "ballot",
        "report"
       ],
-      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\" or \"report\")"
+      "description": "optional — the post's class; when sent it must be the post's own (\"event\", \"quest\", \"bug\", \"ballot\" or \"report\")"
      },
      "handle": {
       "type": "string",
