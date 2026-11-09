@@ -177,8 +177,8 @@ export const LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "word
 // printed bytes are unchanged.
 export const INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
 //
-// `likeness_state` (migration 092, POS-726 slice B) is the fifth: the household's likeness request, selected proof and official pointer,
-// beside its answer (src/household-likeness-state.mjs). One object with a FIXED top level (request, selected, official, history), NULL
+// `likeness_state` (migration 092, POS-726 slice B) is the fifth: the household's likeness request and its READ-ONLY official pointer,
+// beside its answer (src/household-likeness-state.mjs). One object with a FIXED top level (request, official, history), NULL
 // until a household asks, and a NULL renders as no key at all, so nothing moves on the first crossing after the column lands. It is the
 // PRIVATE column: the public print carries only its official-use projection, `likeness_official` (src/registry-public.mjs).
 const NESTED_KEYS = Object.freeze({ accounts: ACCOUNT_KEYS, home_images: Object.freeze([]), likeness: LIKENESS_KEYS, invited_by: INVITED_BY_KEYS, likeness_state: LIKENESS_STATE_KEYS });

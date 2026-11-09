@@ -92,33 +92,26 @@ const galleryHtml = (entries) => entries.length ? `
   </div>` : "";
 
 /**
- * The household's likeness PICTURE, beside its answer (POS-726 slice B): what it has asked for, what it has chosen, what is official now,
- * and the three things it may do. Shown to the signed-in household only, and only while the answer is yes (a no or no answer blocks a
- * request and a choice; a withdrawal is offered whenever something is official). `state` is ownerLikeness()'s answer. Every value is escaped.
+ * The household's likeness REQUEST, beside its answer (POS-726 slice B): what it has asked for, what is official now (READ-ONLY: there is
+ * no door here that chooses, changes or withdraws it), and the one thing it may do, ask. Shown to the signed-in household only, and the form
+ * only while the answer is yes. It shows nothing official until a pointer exists. `state` is ownerLikeness()'s answer. Every value is escaped.
  */
 export function pictureBlock({ state, residents = [], action, pendingId, nonce }) {
   if (!state) return "";
   const yes = state.answer === "yes";
-  if (!yes && !state.official) return "";
+  if (!yes && !state.request && !state.official) return "";
   const hidden = `<input type="hidden" name="pending_id" value="${esc(pendingId)}"><input type="hidden" name="nonce" value="${esc(nonce)}">`;
   const day = (t) => esc(String(t ?? "").slice(0, 10));
   const rows = [];
-  if (state.request) rows.push(`<dt>asked for</dt><dd>a likeness of <strong>${esc(state.request.depicts)}</strong>, ${day(state.request.at)}, by @${esc(state.request.by ?? "")}</dd>`);
-  if (state.official) rows.push(`<dt>official now</dt><dd>version ${esc(state.official.version)}: ${esc(state.official.proof)}, since ${day(state.official.since)}${yes ? "" : " (not in use while your answer is no)"}</dd>`);
-  if (state.history?.length) rows.push(`<dt>before that</dt><dd>${state.history.map((h) => `version ${esc(h.version)} (${esc(h.ended)} ${day(h.until)})`).join("; ")}</dd>`);
-  const forms = [];
-  if (yes) {
-    forms.push(`<form method="post" action="${esc(action)}">${hidden}
-      <label>Ask for a likeness of <select name="depicts">${residents.map((h) => `<option value="${esc(h)}"${state.request?.depicts === h ? " selected" : ""}>${esc(h)}</option>`).join("")}</select></label>
-      <button name="decision" value="request">${state.request ? "Ask again" : "Ask for a likeness"}</button></form>`);
-    if (state.request) forms.push(`<form method="post" action="${esc(action)}">${hidden}
-      <label>Choose the proof you were shown <input type="text" name="proof" placeholder="https://media.postmark.town/…" autocomplete="off"></label>
-      <button name="decision" value="select">Make it the official likeness</button></form>`);
-  }
-  if (state.official) forms.push(`<form method="post" action="${esc(action)}">${hidden}<button name="decision" value="withdraw">Withdraw the official likeness</button></form>`);
+  if (state.request) rows.push(`<dt>asked for</dt><dd>a likeness of <strong>${esc((state.request.depicts ?? []).join(", "))}</strong>, ${day(state.request.at)}, by @${esc(state.request.by ?? "")}</dd>`);
+  if (state.official) rows.push(`<dt>official now</dt><dd>version ${esc(state.official.version)}, of ${esc((state.official.depicts ?? []).join(", "))}, since ${day(state.official.since)}${yes ? "" : " (not in use while your answer is no)"}</dd>`);
+  const asked = new Set(state.request?.depicts ?? []);
+  const form = yes ? `<form method="post" action="${esc(action)}">${hidden}
+      <label>Ask for a likeness of <select name="depicts">${residents.map((h) => `<option value="${esc(h)}"${asked.has(h) ? " selected" : ""}>${esc(h)}</option>`).join("")}</select></label>
+      <button name="decision" value="request">${state.request ? "Ask again" : "Ask for a likeness"}</button></form>` : "";
   return `<section class="picture"><h3>The likeness picture</h3>
-  <p class="muted">Your answer above is the only permission. Asking, choosing a proof and the official picture are separate steps, and only a proof you choose can become official. Withdrawing stops future use; it cannot recall what was already released.</p>
-  ${rows.length ? `<dl>${rows.join("")}</dl>` : ""}${forms.join("")}</section>`;
+  <p class="muted">Your answer above is the only permission. Asking is a request, nothing more: it does not choose a picture and it changes nothing official.</p>
+  ${rows.length ? `<dl>${rows.join("")}</dl>` : ""}${form}</section>`;
 }
 
 /**
@@ -159,15 +152,10 @@ export function answeredPage({ answer, rendered, at, login }) {
   <p class="muted">${kept} You can change it any time from the same link. Answered ${esc(at)} as @${esc(login)}.</p>`);
 }
 
-/** The page after a request, a choice or a withdrawal: what was kept, said plainly. */
-export function stateChangedPage({ kind, state, official, rendered, login }) {
-  const said = kind === "request"
-    ? `<p>Your household has <strong>asked for a likeness of ${esc(state?.request?.depicts)}</strong>. Nothing is official yet: only a proof you choose can become official.</p>`
-    : kind === "select"
-      ? `<p>You chose that proof. It is now your household's <strong>official likeness, version ${esc(state?.official?.version)}</strong>, and the one before it (if any) is kept in the history.</p>`
-      : `<p>Your household's official likeness is <strong>withdrawn</strong>: nothing new will use it. We cannot recall what was already released.</p>`;
-  const shown = kind === "request" ? "" : (rendered ? " The official picture on the town's public record has changed." : " The town's public file will follow at the next crossing.");
-  return shell("Kept", "Kept", `${said}<p class="muted">Kept as @${esc(login)}.${shown} Open the same link to do more.</p>`);
+/** The page after a request: what was kept, said plainly. Nothing official changes. */
+export function stateChangedPage({ state, login }) {
+  const who = (state?.request?.depicts ?? []).join(", ");
+  return shell("Kept", "Kept", `<p>Your household has <strong>asked for a likeness of ${esc(who)}</strong>. Nothing is official yet, and asking does not make it so.</p><p class="muted">Kept as @${esc(login)}. Open the same link to ask again.</p>`);
 }
 
 /** A refusal or a fault, in the same look. `body` is already-escaped HTML. */

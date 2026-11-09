@@ -127,9 +127,9 @@ const publicHomeImages = (v, residents) => {
 /**
  * One house row, cut to its named keys; key order kept. A house that is not an object reads as null.
  *
- * `likeness_state` (092, POS-726 slice B) is NOT named, so the request, the selected proof, the history and who clicked are private. What
+ * `likeness_state` (092, POS-726 slice B) is NOT named, so the request, the history and who clicked are private. What
  * the public answer carries of it is ONE derived key, `likeness_official`: the current official pointer ({ version, proof, since, depicts }),
- * present only while the household's answer is yes (src/household-likeness-state.mjs § officialUse). Naming a projection is not naming
+ * present only while the household's answer is yes and the pointer is well formed (src/household-likeness-state.mjs § officialUse); nothing of a request is copied into it. Naming a projection is not naming
  * its source: the column stays private, and a no or no answer takes the key away without touching the stored pointer.
  */
 export function publicHouse(rec) {
@@ -143,7 +143,7 @@ export function publicHouse(rec) {
     else if (isLeaves(v)) out[k] = v;
   }
   const official = officialUse(rec);
-  if (official) out.likeness_official = cut(official, (k) => PUBLIC_OFFICIAL_KEYS.includes(k));
+  if (official) out.likeness_official = Object.fromEntries(PUBLIC_OFFICIAL_KEYS.filter((k) => Object.hasOwn(official, k)).map((k) => [k, official[k]]));   // officialUse already holds it to its shape; `depicts` is a list of handles
   return out;
 }
 

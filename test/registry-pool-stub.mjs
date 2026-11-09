@@ -196,18 +196,22 @@ export function makePool(seed) {
         row.likeness = JSON.parse(likeness);
         return { rows: [{ slug: row.slug }] };
       }
-      // THE LIKENESS STATE (POS-726, 092): one compare-and-swap UPDATE: the named slug, a bound account, the state the writer computed
-      // from (IS NOT DISTINCT FROM, so null matches null) and, when asked, a yes in the row — or no row at all.
+      // THE LIKENESS REQUEST (POS-726, 092): one compare-and-swap UPDATE: the named slug, a bound account, the state the writer computed from
+      // (IS NOT DISTINCT FROM, so null matches null), a yes in the row, every depicted handle on the row's roster, and a new state whose
+      // `official` and `history` equal the row's own — or no row at all.
       if (/^\s*UPDATE households\s+SET likeness_state = /.test(text)) {
         state.writes.households++;
-        const [slug, to, ghId, from, needsYes] = params;
+        const [slug, to, ghId, from, depicts] = params;
         // jsonb equality ignores key order, so this does too.
         const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
-        const same = (a, b) => JSON.stringify(canon(a ?? null)) === JSON.stringify(canon(b == null ? null : JSON.parse(b)));
+        const same = (a, b) => JSON.stringify(canon(a ?? null)) === JSON.stringify(canon(b ?? null));
+        const next = JSON.parse(to);
         const row = state.households.find((r) => r.slug === slug && (r.accounts ?? []).some((a) => Number(a.id) === Number(ghId))
-          && same(r.likeness_state, from) && (!needsYes || r.likeness?.answer === "yes"));
+          && same(r.likeness_state, from == null ? null : JSON.parse(from)) && r.likeness?.answer === "yes"
+          && (depicts ?? []).every((h) => (r.residents ?? []).includes(h))
+          && same(next?.official, r.likeness_state?.official) && same(next?.history, r.likeness_state?.history));
         if (!row) return { rows: [] };
-        row.likeness_state = JSON.parse(to);
+        row.likeness_state = next;
         return { rows: [{ slug: row.slug }] };
       }
       // THE INVITATION CREDIT (POS-576, 085): written on the named row only while

@@ -225,7 +225,7 @@ const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since
 // `likeness` (081, WLD-83) is kept out for the same reason, and has one writer
 // of its own, `setHouseholdLikeness` below. `invited_by` (085, POS-576) too:
 // its one writer is `setHouseholdInvitedBy`, at the declaration. `likeness_state`
-// (092, POS-726 slice B) too: its one writer is `setLikenessState`, from the signed-in form.
+// (092, POS-726 slice B) too: its one writer is `setLikenessRequest` (a request only), from the signed-in form.
 const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
@@ -476,24 +476,26 @@ export async function setHouseholdLikeness({ slug, likeness }, env = process.env
 }
 
 /**
- * A household's likeness STATE, written onto its row (POS-726 slice B, migration 092): the request, the selected proof, the official
- * pointer and its history, beside the answer (src/household-likeness-state.mjs is the shape).
+ * A household's likeness REQUEST, written onto its row (POS-726 slice B, migration 092): the `request` fact of `likeness_state`, beside the
+ * answer (src/household-likeness-state.mjs is the shape).
  *
- * The ONE store writer of `likeness_state`; `src/likeness.mjs` is the one caller, from the signed-in form. It replaces the whole state (it is
- * one fact the caller computed from the one before it) and touches no other column.
+ * The ONE store writer of `likeness_state`; `src/likeness.mjs` is the one caller, from the signed-in form. It is a REQUEST writer: the
+ * official pointer (`official`) and its `history` have NO writer in this slice, and this statement refuses to be one: it matches only when the
+ * state it writes carries the pointer and the history exactly as the row holds them now.
  *
- * ONE STATEMENT, THREE CHECKS (STORE-CONCURRENCY: the row decides, not a read the caller made earlier):
+ * ONE STATEMENT, FIVE CHECKS (STORE-CONCURRENCY: the row decides, not a read the caller made earlier):
  *   - the row is found by its slug AND by the signed-in account being one of its `accounts`, so an account the record stopped binding writes
  *     nothing (as setHouseholdLikeness);
  *   - the state written over is the state the caller COMPUTED FROM (`likeness_state IS NOT DISTINCT FROM $from`), so two writers at once
  *     cannot both win: the second sees no row and the caller reads again;
- *   - when `needsYes` is set (a request or a selection), the household's answer is yes IN THE ROW, at the write, so a no that landed between
- *     the form and the button blocks it. A withdrawal never needs a yes.
+ *   - the household's answer is yes IN THE ROW, at the write, so a no that landed between the form and the button blocks it;
+ *   - every handle the request names is a resident of THIS row now (`residents @> $depicts`);
+ *   - the pointer and its history in the new state equal the row's own: no request write can set, change or remove either.
  *
  * Returns `{ slug }` of the row written, `null` when the office is not pointed at the record, `{ slug: null }` when no row matched (the
- * caller tells the four causes apart by reading again), or `{ missingColumn: true }` when the store has not taken 092.
+ * caller tells the causes apart by reading again), or `{ missingColumn: true }` when the store has not taken 092.
  */
-export async function setLikenessState({ slug, from, to, ghId, needsYes }, env = process.env) {
+export async function setLikenessRequest({ slug, from, to, ghId, depicts }, env = process.env) {
   let r;
   try {
     r = await actsQuery(
@@ -502,9 +504,12 @@ export async function setLikenessState({ slug, from, to, ghId, needsYes }, env =
         WHERE slug = $1
           AND accounts @> jsonb_build_array(jsonb_build_object('id', ($3)::bigint))
           AND likeness_state IS NOT DISTINCT FROM $4::jsonb
-          AND (NOT $5::boolean OR likeness ->> 'answer' = 'yes')
+          AND likeness ->> 'answer' = 'yes'
+          AND residents @> $5::text[]
+          AND ($2::jsonb -> 'official') IS NOT DISTINCT FROM (likeness_state -> 'official')
+          AND ($2::jsonb -> 'history') IS NOT DISTINCT FROM (likeness_state -> 'history')
     RETURNING slug`,
-      [slug, JSON.stringify(to), ghId, from == null ? null : JSON.stringify(from), needsYes === true], env);
+      [slug, JSON.stringify(to), ghId, from == null ? null : JSON.stringify(from), depicts], env);
   } catch (e) {
     if (e?.code === "42703") return { missingColumn: true };   // undefined_column: 092 is not on this store yet
     throw e;

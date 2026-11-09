@@ -1213,15 +1213,15 @@ async function handleOauthRoute(req, res, ctx) {
     // RE-CHECKED AT THE BUTTON by the one writer: the store writes only the row
     // with this slug that still binds the signed-in account (setHouseholdLikeness).
     if (pending.kind === "likeness") {
-      // THE LIKENESS PICTURE (POS-726 slice B): request, select, withdraw, by this same signed-in account and no other road. The writer
-      // re-reads the row, judges the answer and the binding again, and writes one statement (likeness.mjs § changeLikenessState).
-      if (body.decision === "request" || body.decision === "select" || body.decision === "withdraw") {
+      // THE LIKENESS REQUEST (POS-726 slice B), by this same signed-in account and no other road. It is a request and nothing else: no
+      // decision here chooses, changes or withdraws an official picture. The writer re-reads the row, judges the answer, the binding and the
+      // roster again, and writes one statement (likeness.mjs § requestLikenessState).
+      if (body.decision === "request") {
         try {
-          const { changeLikenessState } = await import("./likeness.mjs");
-          const done = await changeLikenessState({ slug: pending.slug, kind: body.decision, args: { depicts: body.depicts, proof: body.proof }, ghId: pending.gh_id, ghLogin: pending.gh_login },
-            { clone: ctx.clone });
+          const { requestLikenessState } = await import("./likeness.mjs");
+          const done = await requestLikenessState({ slug: pending.slug, depicts: body.depicts, ghId: pending.gh_id, ghLogin: pending.gh_login });
           const { stateChangedPage } = await import("./likeness-pages.mjs");
-          return html(res, 200, stateChangedPage({ kind: done.kind, state: done.likeness, official: done.official, rendered: done.registry.rendered, login: pending.gh_login }));
+          return html(res, 200, stateChangedPage({ state: done.likeness, login: pending.gh_login }));
         } catch (e) {
           if (e?.code && e.code < 500)
             return html(res, e.code, page("Not kept", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
