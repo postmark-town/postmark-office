@@ -4342,11 +4342,30 @@ async function groundMinimumStake(clean, canon) {
     if (marksContain(g, { at: clean.at, extent: clean.extent, points: clean.points }))
       return { min: 0, ground: g.id, own };
   }
+  // THE TOWN CENTRE, AND ONLY THE TOWN CENTRE (POS-952; Wright 2026-11-09 14:11Z: "Town Centre only … an amend to
+  // a mark on the Town Centre's ground is judged by the Centre's standing and backing; nothing else changes …
+  // Keep the existing judgment everywhere else." The general reading, every constitutional town ground, is a law
+  // question for Darko, not this fix). The Centre is `sited` at the constitution tier, not a parcel, so the scan
+  // above never sees it. "Its ground" is the one the mark STANDS ON: its nesting parent in canon, by the fold's own
+  // containment rule (§ nestingParent, the same answer the preview prints as where it nests), so a mark standing on
+  // a ground INSIDE the Centre (the Keeping Works, the Think Tank) stands there, not on the Centre. When that ground
+  // is the Town Centre, still constitution-tier, not a parcel, and of the ACTOR'S OWN household, it is named as the
+  // mark's `backing`: an amendment there is put forward by the escrow behind the Centre (§ putForwardVerdict),
+  // never for free. The minimum and `ground` are unchanged (it is no parcel; `ground` is what the door calls "your
+  // ground"). Anyone else's mark there, and every mark on any other ground, is judged as it always was.
+  const self = clean.slug ? `${clean.by}/${clean.slug}` : null;
+  const standsOn = canon.byId.get(await nestingParent({ ...clean, id: self }, canon.marks) ?? "") ?? null;
+  const constitutional = standsOn && standsOn.id === TOWN_CENTRE && standsOn.tier === "constitution" && standsOn.kind !== "parcel"
+    && credOf(standsOn.by ?? standsOn.household) === mine ? standsOn : null;
   // A COMMONS ANSWER READ WITHOUT THE REGISTRY IS A GUESS, NOT A FINDING: the
   // solo grain cannot see a housemate's parcel. The act takes the safe read
   // (the mark stays a draft); `markStandsOnOwnGround` must not take it as "commons".
-  return { ...commons, own, ...(houses ? {} : { registry_unread: true }) };
+  return { ...commons, own, ...(constitutional ? { backing: constitutional.id } : {}), ...(houses ? {} : { registry_unread: true }) };
 }
+/** The Town Centre: the one ground whose backing carries the town's amendments there (POS-952, Wright 14:11Z). */
+export const TOWN_CENTRE = "the-town/the-town-centre";
+/** Tests only (POS-952): the ground verdict itself, for grounds the served canon does not hold. */
+export const __groundMinimumStakeForTest = (clean, canon) => groundMinimumStake(clean, canon);
 
 /**
  * WHAT A DROP STAKES, BY THIS SAME RULE (POS-688 D4 step 3, Darko 2026-10-19
@@ -4412,17 +4431,23 @@ async function escrowBehindMark(mark) {
  * nothing behind it — the same reason `stamps: 0` is a deliberate putting-
  * forward there and not a no-op.
  */
-export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1 } = {}) {
+export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1, backedBy = null, groundBacking = 0 } = {}) {
   const min = Number(groundMin);
   const behind = Number(escrowBehind) || 0;
   const byStake = staking === true && Number(stamps) >= min;
   const byStanding = amending === true && behind >= min;
+  // POS-952 (Wright 2026-11-09, "Town Centre only"): an amendment on the Town Centre's ground is judged by the
+  // Centre's backing (`backedBy`, named by groundMinimumStake; `groundBacking`, the escrow behind it). Reported apart from
+  // the mark's own escrow, which it is not: escrow_behind and escrow_after stay the mark's.
+  const backing = Number(groundBacking) || 0;
+  const byGround = amending === true && typeof backedBy === "string" && backing >= min;
   return {
-    put_forward: byStake || byStanding,
+    put_forward: byStake || byStanding || byGround,
     // WHICH FACT CARRIED IT, for the sentence and for a reader of the log. Not
     // a tiebreak: a staked amendment on a backed mark is both, and the stake is
     // named because it is the thing the author just did.
-    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : null,
+    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : byGround ? "ground-backing" : null,
+    ...(byGround && !byStake && !byStanding ? { backed_by: backedBy, ground_backing: backing } : {}),
     escrow_behind: amending === true ? behind : 0,
     // WHAT THE CALL LEAVES (postmark#3593, kogane; Darko 2026-10-09). `stamps:`
     // ADDS to the stake, so the escrow behind the mark after this act is what
@@ -4451,6 +4476,9 @@ export function amendmentPublishNote(verdict) {
       ? `✦${after} will stand in escrow behind it after this act: ✦${behind} already there and ✦${staked} added now, because stamps: adds to the stake and does not set it. The amendment publishes at the next crossing.`
       : `✦${after} will stand in escrow behind it after this act, all of it added now. The amendment publishes at the next crossing.`;
   }
+  // POS-952: carried by the ground's backing, so the sentence names that ground and its escrow, not the mark's
+  if (verdict.carried_by === "ground-backing" && verdict.backed_by)
+    return `✦${Number(verdict.ground_backing) || 0} stand in escrow behind ${verdict.backed_by}, the town's constitutional ground it stands on — the amendment publishes at the next crossing.`;
   return behind > 0
     ? `✦${behind} already stand in escrow behind it — the amendment publishes at the next crossing.`
     : "it stands on your own household's ground, where nothing needs buying — the amendment publishes at the next crossing.";
@@ -4725,8 +4753,12 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     const groundMin = groundRead.min;
     const groundOwn = groundRead.own ?? [];
     const escrowBehind = amending ? await escrowBehindMark(id) : 0;
+    // POS-952: on the town's own constitutional ground (groundMinimumStake's `backing`), an amendment the mark's
+    // own escrow does not carry is judged by the escrow behind that ground, read by the same door and as safely.
+    const backedBy = amending && ground?.backing && escrowBehind < (ground?.min ?? 1) ? ground.backing : null;
+    const groundBacking = backedBy ? await escrowBehindMark(backedBy) : 0;
     const verdict = putForwardVerdict({
-      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1 });
+      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1, backedBy, groundBacking });
     const putForward = verdict.put_forward;
 
     // The refusal is a refusal to PUBLISH, never a refusal to save: the

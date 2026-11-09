@@ -47,10 +47,13 @@ test("dry run, the gate, and the write: nothing on the preview, one act as the t
   assert.equal(preview.parent, "the-town/the-town-centre", "declared sited, it nests where the record's placementParent already does");
   assert.equal(preview.dir, "the-town/how-ideas-enter", "at the same path");
   assert.deepEqual(await actsFor(), [], "the dry run wrote nothing");
-  // this store holds no ground registry, so the town owns no ground here and the preview says the amend would not
-  // publish: the tool's --apply refuses on that, writing nothing (the box's own dry run reads the real ground)
-  assert.equal(preview.put_forward, false);
-  assert.match(applyGate(preview), /private draft and not publish/);
+  // POS-952 (Wright 2026-11-09): the amend stands on the Town Centre, the town's own constitutional ground, and is
+  // judged by that ground's backing (the town clone's ledger holds escrow behind it), so the preview publishes and
+  // the tool's gate passes. Until POS-952 this asserted `put_forward: false` and the gate's refusal, which is what
+  // Jetto's prod dry run read on 11-08. test/town-centre-amend.test.mjs is the regression in full.
+  assert.equal(preview.put_forward, true);
+  assert.equal(preview._verdict.backed_by, "the-town/the-town-centre");
+  assert.equal(applyGate(preview), null);
 
   // the office's write itself, as the tool's apply makes it once the gate passes: one act, as the town
   await journalLeaveMark(plan.clean);

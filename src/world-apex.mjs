@@ -2633,13 +2633,24 @@ export async function happenedFor(oriented, args, key, { town = true, live = fal
     // THE CREATURES' ANSWERS TO YOU (POS-637 PR-C; C1): v2's live read only.
     let creatureEffects = null;
     if (who && live) try {
-      const { creaturesForRead, creatureToYou } = await import("./creatures-read.mjs");
+      const { creaturesForRead, creatureToYou, readFleeRows, fleeEventsOf } = await import("./creatures-read.mjs");
       const { CROSSING_EPOCH_UTC, CROSSING_MS } = await import("./crossings.mjs");
       const cur = await creaturesForRead({ as: who });
+      const sinceMs = cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS;
+      // THE FLEE THE OFFICE MADE FOR YOU AT 0 NERVE (WLD-164): its exit act is in the record with its cause, and is said here
+      // from that record alone. An unreadable record is said incomplete, never read as "you did not flee"
+      let fled = [], fledUnread = null;
+      try {
+        const { actsQuery } = await import("./world2-acts.mjs");
+        fled = await readFleeRows(who, (sql, params) => actsQuery(sql, params));
+      } catch (e) { fledUnread = plainReason(e, "record", "the exit record"); faultLogged("a resident's recorded flee could not be read for their happened", e); }
       // whenever the law is read here, an empty fold included: a since older than
       // the fold's reach is then said incomplete rather than silently whole (review-574 C1)
       if (cur?.living)
-        creatureEffects = creatureToYou(cur, who, { sinceMs: cursor ? cursor.ms : CROSSING_EPOCH_UTC + since * CROSSING_MS });
+        creatureEffects = creatureToYou(cur, who, { sinceMs, fled });
+      else if (fled.length) creatureEffects = { events: fleeEventsOf(fled, { sinceMs, nowMs: Date.now() }), readable: true };
+      if (fledUnread && creatureEffects?.readable !== false)
+        creatureEffects = { events: creatureEffects?.events ?? [], readable: false, missing: "your flee at 0 nerve", reason: `the exit record could not be read (${fledUnread}): this is not an answer about whether you fled` };
     } catch { creatureEffects = null; }
 
     const block = happenedBlock({
