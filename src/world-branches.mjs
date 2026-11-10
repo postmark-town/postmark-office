@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 
 import { NEWEST_SETTLEMENT_FORMAT, newestSettlementFromRefLines } from "./settlements.mjs";
 import { answerFrom, askRefresher, refresherBehind, replay } from "./world-refresher.mjs";
+import { ENGINE_CHECKOUTS, pinEntry, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the cache prunes itself
 
 const HOUSEHOLD_RE = /^[a-z0-9][a-z0-9._-]*$/i;
 const viewCache = new Map();
@@ -517,7 +518,8 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
   const sha = onDisk || git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
   const dir = join(cacheRoot, `${sha}--${subdir.replace(/[^\w.-]/g, "_")}`);
   const stamp = join(dir, ".materialized");
-  if (existsSync(stamp)) return dir;
+  const name = basename(dir);
+  if (existsSync(stamp) && usedEngine(cacheRoot, name)) return dir;
   const listing = git(repo, ["ls-tree", "-r", "--name-only", "-z", sha, "--", subdir]);
   const files = listing.split("\0").filter(Boolean);
   if (!files.length) throw new Error(`no files under ${subdir} at ${ref}`);
@@ -527,7 +529,19 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
     writeFileSync(out, git(repo, ["show", `${sha}:${rel}`], { encoding: "buffer" }));
   }
   writeFileSync(stamp, `${sha}\n${ref}\n`);
+  usedEngine(cacheRoot, name);
+  void pruneSoon(cacheRoot, ENGINE_CHECKOUTS);   // a new entry is the growth event: prune the stale ones, in the background
   return dir;
+}
+
+// THE ENGINE CHECKOUT IS IN USE FOR THE LIFE OF THIS PROCESS (POS-989). What a caller gets back is a path it imports from, and an
+// imported module can load a sibling file long after the lookup that found it, so the lookup takes a process-lifetime lease (once
+// per entry) and refreshes the entry's `.used` stamp (a stat per call). A pruner in ANY process sharing the root then keeps it
+// (cache-lifecycle.mjs). `false` when the entry was removed or is being claimed: the caller rebuilds it.
+function usedEngine(cacheRoot, name) {
+  if (!pinEntry(cacheRoot, name, ENGINE_CHECKOUTS)) return false;
+  touchUsed(cacheRoot, name);
+  return true;
 }
 
 // THE ENGINE THE DOORS RUN, AT THE BLESSING. The walk door, the land pen and
