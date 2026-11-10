@@ -234,6 +234,8 @@ const ROSTER = {
   "deploy/invite-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
+  // POS-788: no --handle or --to, so it refuses on usage before it reads the store, a key or a clone.
+  "tools/move-resident.mjs": { args: [], code: 2, needle: "--handle <handle> --to <household> are required" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
   // POS-354: --help only; any other run reads the dev office's env files and dials its store.
@@ -330,6 +332,7 @@ const ROSTER = {
   // POS-392's import: no mode, so it refuses before it reads a clone or dials the store.
   "world2/tools/notes-import.mjs": { args: [], env: NO_PG, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "world2/tools/window-reanchor.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: window-reanchor.mjs --dry-run | --apply" },
+  "world2/tools/witness-settlement.mjs": { args: [], env: NO_PG, code: 2, needle: "witness-settlement: --receipt, --event and --town are required" },
 };
 
 // ── the scan: which files carry an entry guard at all ────────────────────────

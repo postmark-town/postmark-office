@@ -468,9 +468,10 @@ test("household: BOTH do and read are enum'd from the tables — the same union 
   // that union, so the same grammar was being advertised two ways at two doors:
   // one handing connectors a real enum, the other non-constraining `examples`.
   // Founder-ruled 2026-08-31: one grammar, advertised once.
-  const { HOUSEHOLD_TOOL, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_READ_ENUM } = await import("../src/household-apex.mjs");
+  const { HOUSEHOLD_TOOL, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_OFFERED, HOUSEHOLD_READ_ENUM } = await import("../src/household-apex.mjs");
   const p = HOUSEHOLD_TOOL.inputSchema.properties;
-  assert.deepEqual(p.do.enum, HOUSEHOLD_DISPATCHABLE);
+  // POS-947/c: the do: enum is the menu's acts and the one-offs (household-apex.mjs § OFFERED_ACTS), every act the door dispatches
+  assert.deepEqual(p.do.enum, [...HOUSEHOLD_DISPATCHABLE, ...HOUSEHOLD_OFFERED]);
   assert.deepEqual(p.read.enum, [...HOUSEHOLD_READ_ENUM], "the reads AND the act names — the roster the door actually accepts");
   assert.equal(p.read.examples, undefined, "`examples` was the weaker advertisement; it does not ride beside the enum that replaced it");
 });
