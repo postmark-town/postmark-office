@@ -53,6 +53,7 @@ import { stageProofOf } from "./bug-stage-guard.mjs";
 import { ideaPostsOn } from "./ideas.mjs";
 import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./reports.mjs"; // POS-757: a report is amended and closed by no one
 import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
+import { BALLOT_CLASS, topicOfPost } from "./ballots.mjs"; // POS-983: a ballot is put up and carried by the town's hands (ballot-acts.mjs)
 import {
   EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
@@ -352,8 +353,10 @@ export async function cancelAtOffice(fields, key, { now = Date.now(), env = proc
 // class "idea" (POS-290) joins behind IDEA_POSTS; its pen is idea-store.mjs,
 // loaded when an idea act arrives (it imports this file's row helpers).
 const IDEA_CLASS = "idea";
-const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS];
+// POS-983: class "ballot" joins, the town's own, put up and carried by its hands (ballot-acts.mjs)
+const POST_MACHINE_CLASSES = [EVENT_CLASS, QUEST_CLASS, BUG_CLASS, BALLOT_CLASS];
 const ideaPen = () => import("./idea-store.mjs");
+const ballotPen = () => import("./ballot-acts.mjs");
 
 function judgeClass(fields, { required, env = process.env }) {
   const c = fields.class == null ? "" : String(fields.class).trim();
@@ -361,8 +364,8 @@ function judgeClass(fields, { required, env = process.env }) {
   // act naming class "idea" is refused exactly as it was before the class existed.
   const ideas = ideaPostsOn(env);
   const classes = ideas ? [...POST_MACHINE_CLASSES, IDEA_CLASS] : POST_MACHINE_CLASSES;
-  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
-  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug" or "idea", not "${c}"` : `this act answers class "event", "quest" or "bug", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
+  if (!c && required) throw refuse(422, "post needs a class", 'class: "event" puts it on the calendar; class: "quest" is the town\'s own; class: "bug" reports something broken; class: "ballot" is the town\'s vote, by its hands' + (ideas ? '; class: "idea" puts an idea up' : ""), { field: "class" });
+  if (c && !classes.includes(c)) throw refuse(422, ideas ? `this act answers class "event", "quest", "bug", "ballot" or "idea", not "${c}"` : `this act answers class "event", "quest", "bug" or "ballot", not "${c}"`, "the post machine's classes join it one by one", { field: "class" });
   return c || null;
 }
 function postId(fields) {
@@ -389,6 +392,8 @@ async function classOf(fields, id, env) {
   if (INVITE_ID_RE.test(id)) return INVITE_CLASS;
   const c = judgeClass(fields, { required: false, env });
   if (c) return c;
+  // and a ballot's (POS-983): postmark-pen/ballot-<topic>, the pen's by the file's name
+  if (topicOfPost(id)) return BALLOT_CLASS;
   const { ideaRow } = await ideaPen();
   return read(async (client) => ((await questRow(client, id)) ? QUEST_CLASS
     : (await bugRow(client, id)) ? BUG_CLASS : (await ideaRow(client, id)) ? IDEA_CLASS : EVENT_CLASS), env);
@@ -397,6 +402,7 @@ async function classOf(fields, id, env) {
 export async function postAtTown(fields, key, { now = Date.now(), env = process.env, registry = undefined, roll = null, titleOf = null } = {}) {
   const cls = judgeClass(fields, { required: true, env });
   if (cls === QUEST_CLASS) return postQuest(fields, key, { now, env, registry });
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("post", fields, key, { now });
   if (cls === BUG_CLASS) return postBug(fields, key, { now, env, roll });
   if (cls === IDEA_CLASS) return (await ideaPen()).postIdea(fields, key, { now, env, roll, titleOf });
   const handle = standpointHandle(fields, key);
@@ -409,6 +415,7 @@ export async function amendAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) throw REPORT_NO_AMEND();
   if (cls === QUEST_CLASS) throw QUEST_NO_AMEND();
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("amend", fields, key, { now });
   if (cls === BUG_CLASS) return amendBug(fields, key, id, { now, env });
   if (cls === IDEA_CLASS) return (await ideaPen()).amendIdea(fields, key, id, { now, env });
   const handle = standpointHandle(fields, key);
@@ -421,6 +428,7 @@ export async function closeAtTown(fields, key, { now = Date.now(), env = process
   const cls = await classOf(fields, id, env);
   if (cls === REPORT_CLASS) throw REPORT_NO_CLOSE();
   if (cls === QUEST_CLASS) return closeQuest(fields, key, id, { now, env });
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("close", fields, key, { now });
   if (cls === BUG_CLASS) throw BUG_NO_CLOSE(id);
   if (cls === IDEA_CLASS) throw refuse(422, `"${id}" is an idea, and an idea is not closed`,
     "it finishes by advance: town { do: \"advance\", args: { post, to: \"shipped\" | \"declined\" | \"duplicate\" } }, by the town's hands");
@@ -442,6 +450,7 @@ export async function advanceAtTown(fields, key, { now = Date.now(), env = proce
   // POS-816: the hands hold, lift or cancel an inviter's payout (invite-hold-store.mjs); anyone else learns nothing
   if (cls === INVITE_CLASS) return (await import("./invite-hold-store.mjs")).advanceInvite(fields, key, id, { now, env, clone });
   if (cls === QUEST_CLASS) throw QUEST_NO_ADVANCE();
+  if (cls === BALLOT_CLASS) return (await ballotPen()).ballotAtTown("advance", fields, key, { now, ...(clone ? { clone } : {}) });
   if (cls === BUG_CLASS) return advanceBug(fields, key, id, { now, env, roll });
   // POS-713: skip and its reason are the bug's ladder; no other class reads them, so none takes them silently.
   for (const k of ["skip", "reason"])

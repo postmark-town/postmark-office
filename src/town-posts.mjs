@@ -31,7 +31,8 @@
 //
 // ── THE CLASSES ─────────────────────────────────────────────────────────────
 //
-// event, quest, bug and idea. An idea is a post since POS-290 (behind
+// event, quest, bug, idea and ballot (POS-983: the town's vote, put up and
+// carried by its hands; each row carries its body, terms and choices). An idea is a post since POS-290 (behind
 // IDEA_POSTS for the acts; the read reports what the store holds, which is
 // nothing until the switch has been on). The Think Tank's marks stay marks and
 // are read at town { read: "ideas" }, beside these posts.
@@ -86,7 +87,8 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { officeRead } from "./world2-pen.mjs";
-import { postRowsOf, postOrder, TERMINAL_STATES, FIELDS } from "./household-posts.mjs";
+import { postRowsOf, postOrder, TERMINAL_STATES, FIELDS, BODY } from "./household-posts.mjs";
+import { BALLOT_CLASS, BALLOT_STATES, STATE_CLOSED as BALLOT_CLOSED, choicesOf } from "./ballots.mjs";
 import { EVENT_CLASS, refuse } from "./events.mjs";
 import { QUEST_CLASS, QUEST_FINISHED, readQuestRegistry, questTerms } from "./quests.mjs";
 import { BUG_CLASS, BUG_FINISHED, bugCatchersOf, bugJarOrder } from "./bugs.mjs";
@@ -112,12 +114,26 @@ export const POST_CLASSES = Object.freeze({
   [IDEA_CLASS]: Object.freeze({ finished: IDEA_FINISHED }),
 });
 
+/**
+ * Every class this public read answers: POST_CLASSES, and the ballot
+ * (POS-983), the town's vote, put up and carried by its hands. A ballot is not
+ * in POST_CLASSES, which is also the household's own posts read's list
+ * (household-posts.mjs § householdPosts): a household's part in a vote is read
+ * at votes (and on its doorstep's votes), so that read and the morning page
+ * are as they were.
+ */
+export const READ_CLASSES = Object.freeze({
+  ...POST_CLASSES,
+  [BALLOT_CLASS]: Object.freeze({ finished: Object.freeze([BALLOT_CLOSED]) }),
+});
+
 /** Every state a class of post stands in (an event's come from its clock: household-posts.mjs). */
 export const CLASS_STATES = Object.freeze({
   [EVENT_CLASS]: Object.freeze(["announced", "live", "ended", "cancelled"]),
   [QUEST_CLASS]: Object.freeze([...QUEST_STATES]),
   [BUG_CLASS]: Object.freeze([...BUG_STATES]),
   [IDEA_CLASS]: Object.freeze([...IDEA_STAGES]),
+  [BALLOT_CLASS]: Object.freeze([...BALLOT_STATES]),
 });
 
 /** The query parameters the posts list takes over HTTP; stage is state's permanent alias (POS-778). */
@@ -182,8 +198,8 @@ function judgePostsClass(fields) {
   // A REPORT IS PRIVATE (POS-757): never in POST_CLASSES, so never on this
   // public, keyless read; the filer's household reads its own with its key.
   if (c === REPORT_CLASS) throw REPORT_IS_PRIVATE();
-  if (!c) throw refuse(422, "which class?", `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
-  if (!Object.hasOwn(POST_CLASSES, c)) throw refuse(422, `"${c}" is not a post class`, `class: one of ${Object.keys(POST_CLASSES).join(", ")}`, { field: "class" });
+  if (!c) throw refuse(422, "which class?", `class: one of ${Object.keys(READ_CLASSES).join(", ")}`, { field: "class" });
+  if (!Object.hasOwn(READ_CLASSES, c)) throw refuse(422, `"${c}" is not a post class`, `class: one of ${Object.keys(READ_CLASSES).join(", ")}`, { field: "class" });
   return c;
 }
 
@@ -271,6 +287,15 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), body: extras.bodies.get(r.id) ?? "", fields: { ...(r[FIELDS] ?? {}) },
       history: historyOf(r.id), awards: history.awardsByPost.get(r.id) ?? [],
       ...ideaResponsesOf(extras.responses.get(r.id) ?? []) }));
+  } else if (cls === BALLOT_CLASS) {
+    // A ballot (POS-983) carries its body (what is being decided, how and when),
+    // its terms and each choice in its own words, in the file's order. The
+    // count is the vote read's (town { read: "votes" }), from the same record.
+    posts = [...rows].sort(postOrder).map((r) => {
+      const f = r[FIELDS] ?? {};
+      return { ...plain(r), body: r[BODY] ?? "", fields: { ...f }, choices: choicesOf(f), history: historyOf(r.id),
+        votes: `town { read: "votes", args: { topic: "${f.topic}" } }` };
+    });
   } else {
     posts = [...rows].sort(postOrder).map((r) => ({ ...plain(r), history: historyOf(r.id) }));
   }
@@ -291,7 +316,7 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
     posts = posts.filter((p) => wanted.states.includes(p.state));
     if (wanted.alias) filterNote = ALIAS_NOTE;
   }
-  const head = { as_of: new Date(now).toISOString(), class: cls, finished: [...POST_CLASSES[cls].finished],
+  const head = { as_of: new Date(now).toISOString(), class: cls, finished: [...READ_CLASSES[cls].finished],
     ...(unavailable ? { unavailable } : {}) };
   const listHead = { ...head, ...(wanted.states && !one ? { state: wanted.states } : {}), counts_by_state,
     ...(filterNote ? { note: filterNote } : {}) };
