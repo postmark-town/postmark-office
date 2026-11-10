@@ -2606,7 +2606,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           if (!judged) return;
           if (!canWrite || !votesAvailable(TOWN_CLONE))
             return bounce(res, 409, "not-yet-open", "the office has no town clone with the ballot engine");
-          const result = await stakeViaOffice(TOWN_CLONE, judged.fields, key);
+          const result = await stakeViaOffice(TOWN_CLONE, judged.fields, key, { channel });
           return j(res, 200, withRenamed(result, judged.renamed));
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);

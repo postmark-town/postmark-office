@@ -459,6 +459,7 @@ export const TOOLS = [
       topic: { type: "string", description: "an open ballot topic — see read_votes" },
       candidate: { type: "string", description: "a candidate on that ballot" },
       stamps: { type: "number", description: "how many to stake (whole number; clips to headroom + balance)" },
+      preview: { type: "boolean", description: "optional — true asks what this stake would do (applied, headroom and balance after, the first-stake mint) and writes nothing; send it again without preview to stake" },
     }, required: ["from", "topic", "candidate", "stamps"], additionalProperties: false } },
   // `request_blessing` was DELISTED 2026-08-15 (Keemin-ruled, the slim): a tool
   // whose only answer was "not yet open" documented a future instead of serving

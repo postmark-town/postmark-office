@@ -286,11 +286,14 @@ const fingerprintOf = (post, votes) => JSON.stringify([post.state, post.last_act
  * for the caller to commit. `prepare` answers `{ paths?, undo? }` or
  * `{ error }` (a refusal, nothing written).
  *
+ * `preview: true` (POS-502) answers step 2's judgement and stops there: no
+ * key is needed, and nothing is signed, written, locked or committed.
+ *
  * Answers the town engine's clip result (requested, applied, clipped, the
  * headroom and balance before and after, vote_minted), plus `act_id` and
  * `commit` when it wrote. Throws `{ code, defect, hint }` for a refusal.
  */
-export async function stakeInStore({ clone, keyPem, payload, prepare = null, commit = null, land = null, now = Date.now(), env = process.env }) {
+export async function stakeInStore({ clone, keyPem, payload, prepare = null, commit = null, land = null, preview = false, now = Date.now(), env = process.env }) {
   const { handle, topic, candidate, via, date } = payload ?? {};
   if (!handle || !topic || !candidate || !via || !date)
     throw refuse(422, "incomplete stake", "required: handle, topic, candidate, n, via, date");
@@ -344,6 +347,14 @@ export async function stakeInStore({ clone, keyPem, payload, prepare = null, com
         result.reason = room <= 0
           ? "your household has no headroom left on this candidate"
           : "your balance has no stamps free to stake";
+        return result;
+      }
+      // POS-502: the preview is this judgement, every check above, and nothing past it: no line is
+      // signed, no file touched, no lock or transaction taken. What the stake would add is said.
+      if (preview) {
+        result.vote_minted = !state.voteMinted.has(`${handle}|${topic}`) && state.lawAt(date).rules === "stamps-v2";
+        result.household_headroom_after = room - applied;
+        result.balance_after = balance - applied + (result.vote_minted ? 1 : 0);
         return result;
       }
 
