@@ -497,8 +497,9 @@ test("M6 · the transaction re-reads under its lock: a house changed since the p
 //
 // Wright, 2026-11-09 12:43Z, on #985: "If the source household has any likeness state, refuse by name,
 // rechecked under the lock, before any write or output, and never print it in the dump. No transfer or
-// discard policy is invented." This branch's schema predates 092, so these legs add the column to the test
-// store as its owner (exactly 092's one statement), and drop it after: every leg above runs pre-092.
+// discard policy is invented." These legs run on a store WITH or WITHOUT 092: on a train that predates it (#985 alone) a leg
+// adds the column as the store's owner (exactly 092's one statement) and drops it after; on one that carries 092 (with #986)
+// the column is already there and is left in place (with092 below).
 // The state is SYNTHETIC, carrying a marker no output may ever contain.
 const MARK = "SYNTHETIC-PRIVATE-PROOF-7f3a";
 const STATE = {
@@ -506,10 +507,17 @@ const STATE = {
   selected: { proof: `https://media.postmark.town/new-nook/${MARK}.png`, at: "2026-11-09T12:05:00.000Z", by: "moss-gh", gh_id: 502 },
 };
 const ownerQuery = async (sql, params = []) => { const c = await asOwner(); try { return (await c.query(sql, params)).rows; } finally { await c.end(); } };
+// The column is 092's, so a store on a branch that carries 092 (the pair with #986) already HAS it, and a store on one that
+// does not has not. A leg owns the column only if IT added it: it adds it when absent and drops it after only in that case,
+// never a column that was there before (the first form dropped 092's own column, and the legs after it, which read the real
+// row parser, then failed on "column likeness_state does not exist").
+const likenessColumnPresent = async () => (await ownerQuery(
+  "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'households' AND column_name = 'likeness_state'")).length > 0;
 const with092 = async (fn) => {
-  await ownerQuery("ALTER TABLE households ADD COLUMN IF NOT EXISTS likeness_state jsonb");
+  const added = !(await likenessColumnPresent());
+  if (added) await ownerQuery("ALTER TABLE households ADD COLUMN likeness_state jsonb");
   try { return await fn(); }
-  finally { await ownerQuery("ALTER TABLE households DROP COLUMN IF EXISTS likeness_state"); }
+  finally { if (added) await ownerQuery("ALTER TABLE households DROP COLUMN IF EXISTS likeness_state"); }
 };
 const setState = (slug, state) => ownerQuery("UPDATE households SET likeness_state = $2::jsonb WHERE slug = $1", [slug, state == null ? null : JSON.stringify(state)]);
 const stateOf = async (slug) => (await ownerQuery("SELECT likeness_state FROM households WHERE slug = $1", [slug]))[0]?.likeness_state ?? null;
