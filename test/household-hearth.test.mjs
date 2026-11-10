@@ -28,6 +28,7 @@ import { fixtureTown } from "./fixture.mjs";
 import { bootOnFreePort } from "./spawn-office.mjs";
 import { indexStore, seedRegistry } from "./helpers/office-under-test.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // static keys are store rows (POS-352)
+import { openOauthDb, mintHouseholdKey } from "../src/oauth.mjs"; // the key desk's own mint, for the credential class (POS-962 lead FIX)
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TMP = mkdtempSync(join(tmpdir(), "postmark-hearth-"));
@@ -195,8 +196,24 @@ test("§ 3 PATCH /households/<slug>/hearth: a signed-in human of the house choos
   const ix = await indexStore(fixtureTown(), { db: "hearth_door" });
   CLEANUP.push(() => ix.stop());
   await seedRegistry(ix.store, REGISTRY, PINS);
+  // Ember Lane is ashore, as a declared house is (ashore.mjs § recordAshore, the row every landing road writes): a
+  // MINTED key resolves its household from the store's pins and the ashore record, where a static key names it outright.
+  {
+    const c = await ix.store.connect("world2_owner");
+    const landed = git("rev-parse", "HEAD").trim();   // the registry's commit in this clone: the house landed there
+    try { for (const h of ["ash", "birch"]) await c.query("INSERT INTO ashore (handle, at, sha, road) VALUES ($1, now(), $2, 'declare')", [h, landed]); }
+    finally { await c.end(); }
+  }
   const KEYS = { A: "hearth-key-a", B: "hearth-key-b", R: "hearth-key-resident" };
-  const { child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p), "--oauth-db", seedStaticKeys(join(TMP, "oauth-door.db"), `${KEYS.A}=ember-lane#${KEEPER.id}:ash,birch;${KEYS.B}=frost-hall#${STRANGER.id}:fern;${KEYS.R}=ember-lane:ash`)], {
+  const oauthPath = seedStaticKeys(join(TMP, "oauth-door.db"), `${KEYS.A}=ember-lane#${KEEPER.id}:ash,birch;${KEYS.B}=frost-hall#${STRANGER.id}:fern;${KEYS.R}=ember-lane:ash`);
+  // THE CREDENTIAL CLASS THE LEAD REVIEW FOUND (POS-962): keys MINTED by the office's own key desk
+  // (oauth.mjs § mintHouseholdKey), one in resident ash's own hand and one in the human's. Both carry the human's
+  // GitHub account, the account Ember Lane's record binds, so the bound-account check alone cannot tell them apart.
+  const minted = openOauthDb(oauthPath);
+  KEYS.AGENT = await mintHouseholdKey(minted, KEEPER.id, KEEPER.login, { claimedHandle: "ash", cosignedBy: { id: KEEPER.id, login: KEEPER.login } });
+  KEYS.HUMAN = await mintHouseholdKey(minted, KEEPER.id, KEEPER.login);
+  minted.close();
+  const { child, port } = await bootOnFreePort((p) => spawn(process.execPath, [join(ROOT, "src", "server.mjs"), "--port", String(p), "--oauth-db", oauthPath], {
     env: { ...process.env, WORLD2_PG: ix.env.WORLD2_PG, WORLD2_PG_URL: ix.env.WORLD2_PG_URL, TOWN_INDEX_READS: ix.env.TOWN_INDEX_READS ?? "",
       TOWN_CLONE: clone, TOWN_PUSH: "", OFFICE_READ_WORKERS: "0", WORLD_GRAPH_NONE: "1",
       OFFICE_KEYS: "",
@@ -215,7 +232,14 @@ test("§ 3 PATCH /households/<slug>/hearth: a signed-in human of the house choos
   assert.equal((await patch("/households/ember-lane/hearth", null, { hearth: "ledger" })).status, 401, "no credential");
   assert.equal((await patch("/households/ember-lane/hearth", KEYS.R, { hearth: "ledger" })).status, 403, "a resident key has no account behind it: not the human's act");
   assert.equal((await patch("/households/ember-lane/hearth", KEYS.B, { hearth: "ledger" })).status, 403, "B's valid session cannot choose for A");
+  // the minted agent-held key: the right account, in an agent's hand. Refused at the door, before the law, nothing kept
+  const byAgent = await patch("/households/ember-lane/hearth", KEYS.AGENT, { hearth: "ledger" });
+  assert.equal(byAgent.status, 403, JSON.stringify(byAgent.body));
+  assert.match(byAgent.body.defect, /chosen by the household's human/);
+  assert.match(byAgent.body.hint, /an agent's own/);
+  assert.equal((await patch("/households/ember-lane/hearth", KEYS.AGENT, { hearth: null })).status, 403, "nor may it unset one");
   assert.equal(await savedFor("ember-lane"), null, "nothing was kept by the refusals");
+  assert.doesNotMatch(git("log", "-1", "--format=%B"), /Hearth/, "and no commit was made for them");
 
   const ok = await patch("/households/ember-lane/hearth", KEYS.A, { hearth: "ledger" });
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
@@ -234,4 +258,12 @@ test("§ 3 PATCH /households/<slug>/hearth: a signed-in human of the house choos
   assert.equal((await patch("/households/ember-lane/hearth", KEYS.A, { hearth: null })).status, 200);
   assert.equal(await savedFor("ember-lane"), null, "unset again: the default");
   assert.equal(onFile()["ember-lane"].hearth, undefined);
+
+  // the human's own MINTED household key is the human's: it chooses, as a sign-in does
+  const byHuman = await patch("/households/ember-lane/hearth", KEYS.HUMAN, { hearth: "orchard" });
+  assert.equal(byHuman.status, 200, JSON.stringify(byHuman.body));
+  assert.equal(await savedFor("ember-lane"), "orchard");
+  // and the agent's key still cannot move what the human chose
+  assert.equal((await patch("/households/ember-lane/hearth", KEYS.AGENT, { hearth: "ledger" })).status, 403);
+  assert.equal(await savedFor("ember-lane"), "orchard", "the human's choice stands");
 });

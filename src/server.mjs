@@ -55,6 +55,7 @@ import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finishe
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
+import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
@@ -2370,8 +2371,13 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // (households.hearth, 093); the site's page reads it signed-out and the signed-in human picks it from the site's band. NOT a new grant: the
     // credential must carry a GitHub account the household's own record binds (the likeness answer's test), and the store write repeats it.
     // A preview never reaches this door. household-hearth.mjs § chooseHearth is the whole law.
+    // AND IT IS THE HUMAN'S (POS-962 lead FIX): a key minted into a resident's own hand carries its human's GitHub
+    // account too, so the bound account alone let an agent choose. The office's existing line for the human's own
+    // credential (named-hand.mjs § agentHeld: a resident's own key, a co-signed berth) is drawn here, before the law.
     const hearthDoor = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/hearth$/.exec(path) : null;
     if (hearthDoor) {
+      if (agentHeld(key))
+        return bounce(res, 403, "a Hearth is chosen by the household's human", "this key is an agent's own: the household's human chooses its Hearth, signed in on the site; nothing was kept");
       readJsonBody(req, 4_000).then(async (raw) => {
         try {
           const body = JSON.parse(raw || "{}");
