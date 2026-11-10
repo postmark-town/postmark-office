@@ -421,6 +421,15 @@ test("F-git · SETTLEMENT_SOURCE=git matches the open train and runs the ghost s
   const minus = (a, b) => { const c = [...b]; return a.filter((x) => { const i = c.indexOf(x); if (i === -1) return true; c.splice(i, 1); return false; }); };
   let missing = minus(trainCmds, branchCmds);
   let added = minus(branchCmds, trainCmds);
+  // THE OPEN TRAIN AHEAD OF MAIN (2026-11-09): train/2026-w47 carries POS-907's witness record (#950), which main
+  // gets only when that train ships. Until then a MAIN checkout runs the crossing without it, and that is a
+  // feature not yet shipped, not a rollback dropping behaviour. Only these two named lines are let through;
+  // when w47 ships, main carries them and the train's own copy of this test replaces this block.
+  const TRAIN_AHEAD = [
+    /^node witness-settlement\.mjs --open --attempt \S* --event \S+ --town town --pid \S+$/,
+    /^node witness-settlement\.mjs --receipt settlement-auto\.json --attempt \S* --event \S+ --town town --sweep sweep --lock town\.lock$/,
+  ];
+  missing = missing.filter((c) => !TRAIN_AHEAD.some((re) => re.test(c)));
   for (const [was, now] of SUBSTITUTIONS) {
     const iWas = missing.findIndex((c) => was.test(c));
     const iNow = added.findIndex((c) => now.test(c));
