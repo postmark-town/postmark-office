@@ -71,7 +71,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { firstClaimedBySlug, snapshotFoldArgs } from "./world-snapshot.mjs";
-import { TOWN_CLONES, leaseEntry, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the town clones prune themselves
+import { TOWN_CLONES, leaseEntry, ownedRoot, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the town clones prune themselves
 import { extendsFromMarks, isSited, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
@@ -154,9 +154,12 @@ const townShaOk = (sha) => {
 // `withTownAtSha`, which hold a lease on the clone until the reads are done.
 export function townAtSha(townClone, sha, root = TOWN_ROOT) {
   townShaOk(sha);
-  const dir = join(root, sha);
-  if (existsSync(join(dir, ".git"))) { touchUsed(root, sha); return dir; }
-  mkdirSync(root, { recursive: true });
+  // THE PRUNABLE AREA IS A VERSIONED SUBFOLDER OF THE EXISTING ROOT (`<root>/lease-v1/<sha>`, POS-989 lead review of d995401f):
+  // an older helper reads `<root>/<sha>` with no lease, so those clones are never read, copied or pruned by this code.
+  const owned = ownedRoot(root);
+  const dir = join(owned, sha);
+  if (existsSync(join(dir, ".git"))) { touchUsed(owned, sha); return dir; }
+  mkdirSync(owned, { recursive: true });
   const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
   try {
     execFileSync("git", ["-c", "core.autocrlf=false", "-c", "core.longpaths=true", "clone", "-q", "--shared", "--no-checkout", townClone, tmp], { stdio: ["ignore", "pipe", "pipe"] });
@@ -166,8 +169,8 @@ export function townAtSha(townClone, sha, root = TOWN_ROOT) {
   } finally {
     if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
   }
-  touchUsed(root, sha);
-  void pruneSoon(root, TOWN_CLONES);   // a new clone is the growth event: prune the stale ones, in the background
+  touchUsed(owned, sha);
+  void pruneSoon(owned, TOWN_CLONES);   // a new clone is the growth event: prune the stale ones, in the background
   return dir;
 }
 
@@ -176,7 +179,7 @@ export function openTownAtSha(townClone, sha, root = TOWN_ROOT) {
   townShaOk(sha);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const dir = townAtSha(townClone, sha, root);
-    const release = leaseEntry(root, sha, TOWN_CLONES);
+    const release = leaseEntry(ownedRoot(root), sha, TOWN_CLONES);
     if (release) return { dir, release };   // null: it was removed or claimed between the two steps; ask again, which rebuilds it
   }
   throw new Error(`the town at ${sha} could not be held: it kept being removed while it was asked for`);

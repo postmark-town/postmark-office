@@ -7,6 +7,11 @@
 // DISPOSABLE: its name is its key, so a removed one is rebuilt on the next ask. This file keeps what is recent or in use
 // and removes the rest, whole. It is the one small lifecycle both owners share; it is not a framework and runs no daemon.
 //
+// IT PRUNES ONLY WHAT IT OWNS. The entries (and their leases) live in a versioned subfolder of each existing root,
+// `<root>/lease-v1/<key>` (`ownedRoot`), with the same sha/subdir keys. An older helper (a staged or one-shot process on the
+// same host) reads `<root>/<key>` and takes no lease, so those paths are never read, copied or pruned here, and a seven-day
+// grace is never claimed to be liveness for them. Callers use the path a lookup returns, not the layout.
+//
 // WHAT "RECENT" AND "IN USE" MEAN HERE, AND WHY AGE ALONE IS NOT ENOUGH
 //   recent   `<root>/.cache-state/<name>.used`'s mtime, touched on every lookup (throttled), within RETENTION_MS (seven days).
 //            An entry that has never been touched is dated by its own marker file (`.git`, `.materialized`).
@@ -27,10 +32,15 @@
 
 import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, utimesSync, writeSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { threadId } from "node:worker_threads";
 
 export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const STATE_DIR = ".cache-state";
+/** The versioned subfolder of an existing cache root that holds the entries this file prunes; an older helper's paths beside it are never touched. */
+export const LEASE_NAMESPACE = "lease-v1";
+export const ownedRoot = (root) => join(root, LEASE_NAMESPACE);
 const TOUCH_EVERY_MS = 60 * 60 * 1000;       // a lookup refreshes `.used` at most this often (a stat per call, a write per hour)
 const CLAIM_STALE_MS = 10 * 60 * 1000;       // a pruner's claim older than this is a crashed pruner's
 const TOMBSTONE_STALE_MS = 60 * 60 * 1000;
@@ -53,7 +63,7 @@ const mtimeOf = (path) => { try { return statSync(path).mtimeMs; } catch { retur
 const sleepSync = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* no wait available: spin once */ } };
 
 /** The pid a state file names (`<name>.lease.<pid>.<n>`, `<name>.claim` holding its pid), or null. */
-const leasePid = (file, name) => { const m = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.lease\\.(\\d+)\\.\\d+$`).exec(file); return m ? Number(m[1]) : null; };
+const leasePid = (file, name) => { const m = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.lease\\.(\\d+)\\.\\d+\\.[0-9a-f]+$`).exec(file); return m ? Number(m[1]) : null; };
 
 function claimLive(root, name, now) {
   const file = claimFile(root, name);
@@ -80,7 +90,6 @@ export function liveLeases(root, name) {
   return pids;
 }
 
-let leaseSeq = 0;
 const pinned = new Set();   // `${root}\0${name}` this process holds for its whole life
 
 /**
@@ -89,7 +98,9 @@ const pinned = new Set();   // `${root}\0${name}` this process holds for its who
  */
 export function leaseEntry(root, name, spec, { now = Date.now } = {}) {
   mkdirSync(stateDir(root), { recursive: true });
-  const file = join(stateDir(root), `${leasePrefix(name)}${process.pid}.${++leaseSeq}`);
+  // UNIQUE ACROSS PROCESSES AND ACROSS WORKER ISOLATES: the Office's read workers are worker_threads, which share a pid and
+  // not a module-local counter, so the name carries the thread id and a random token; a release removes only ITS file.
+  const file = join(stateDir(root), `${leasePrefix(name)}${process.pid}.${threadId}.${randomBytes(6).toString("hex")}`);
   const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o644);
   try { writeSync(fd, String(process.pid)); } finally { closeSync(fd); }
   const drop = () => { try { unlinkSync(file); } catch { /* already gone */ } };

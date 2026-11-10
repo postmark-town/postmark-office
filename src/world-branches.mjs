@@ -25,7 +25,7 @@ import { createHash } from "node:crypto";
 
 import { NEWEST_SETTLEMENT_FORMAT, newestSettlementFromRefLines } from "./settlements.mjs";
 import { answerFrom, askRefresher, refresherBehind, replay } from "./world-refresher.mjs";
-import { ENGINE_CHECKOUTS, pinEntry, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the cache prunes itself
+import { ENGINE_CHECKOUTS, ownedRoot, pinEntry, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the cache prunes itself
 
 const HOUSEHOLD_RE = /^[a-z0-9][a-z0-9._-]*$/i;
 const viewCache = new Map();
@@ -516,22 +516,37 @@ export function materializeAtRef(repo, ref, subdir, cacheRoot = ENGINE_CACHE) {
   // a tag still asks git, because a cache key must be the PEELED commit.
   const onDisk = /^refs\/(heads|remotes)\//.test(ref) ? refShaFromDisk(repo, ref) : undefined;
   const sha = onDisk || git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
-  const dir = join(cacheRoot, `${sha}--${subdir.replace(/[^\w.-]/g, "_")}`);
+  // THE PRUNABLE AREA IS A VERSIONED SUBFOLDER OF THE EXISTING ROOT (POS-989, lead review of d995401f): same sha/subdir keys, one
+  // level down (`<cacheRoot>/lease-v1/<key>`). An older helper (a staged or one-shot process on the same host's tmp) reads
+  // `<cacheRoot>/<key>` with no lease, so those paths are never read, copied or pruned here: only entries this code made, and
+  // leases, live under `lease-v1`. Callers use the returned path, not a layout.
+  const owned = ownedRoot(cacheRoot);
+  const dir = join(owned, `${sha}--${subdir.replace(/[^\w.-]/g, "_")}`);
   const stamp = join(dir, ".materialized");
   const name = basename(dir);
-  if (existsSync(stamp) && usedEngine(cacheRoot, name)) return dir;
-  const listing = git(repo, ["ls-tree", "-r", "--name-only", "-z", sha, "--", subdir]);
-  const files = listing.split("\0").filter(Boolean);
-  if (!files.length) throw new Error(`no files under ${subdir} at ${ref}`);
-  for (const rel of files) {
-    const out = join(dir, rel);
-    mkdirSync(dirname(out), { recursive: true });
-    writeFileSync(out, git(repo, ["show", `${sha}:${rel}`], { encoding: "buffer" }));
+  let built = false;
+  // The entry is returned only once this process HOLDS it (usedEngine): a pin that fails because the entry was removed or is
+  // being claimed means the path is not safe to hand out, so it is rebuilt and asked again, and refused if it keeps failing
+  // (engineDirAt's existing fallback then takes its working tree, as for any failed materialisation).
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!existsSync(stamp)) {
+      const listing = git(repo, ["ls-tree", "-r", "--name-only", "-z", sha, "--", subdir]);
+      const files = listing.split("\0").filter(Boolean);
+      if (!files.length) throw new Error(`no files under ${subdir} at ${ref}`);
+      for (const rel of files) {
+        const out = join(dir, rel);
+        mkdirSync(dirname(out), { recursive: true });
+        writeFileSync(out, git(repo, ["show", `${sha}:${rel}`], { encoding: "buffer" }));
+      }
+      writeFileSync(stamp, `${sha}\n${ref}\n`);
+      built = true;
+    }
+    if (usedEngine(owned, name)) {
+      if (built) void pruneSoon(owned, ENGINE_CHECKOUTS);   // a new entry is the growth event: prune the stale ones, in the background
+      return dir;
+    }
   }
-  writeFileSync(stamp, `${sha}\n${ref}\n`);
-  usedEngine(cacheRoot, name);
-  void pruneSoon(cacheRoot, ENGINE_CHECKOUTS);   // a new entry is the growth event: prune the stale ones, in the background
-  return dir;
+  throw new Error(`the engine checkout ${name} could not be held: it kept being removed while it was asked for`);
 }
 
 // THE ENGINE CHECKOUT IS IN USE FOR THE LIFE OF THIS PROCESS (POS-989). What a caller gets back is a path it imports from, and an
