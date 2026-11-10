@@ -109,7 +109,7 @@ import { publicRegistry, publicPins } from "./registry-public.mjs";
 // exactly as a NULL `name` does — see the two narrow predicates below.
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness", "invited_by",
+  "provisional", "home_images", "likeness", "invited_by", "hearth",
 ]);
 export const PIN_KEYS = Object.freeze([
   "login", "id", "pinned", "renamed", "note", "retired", "renamed_to",
@@ -299,6 +299,8 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       likeness: rec?.likeness ?? null,
       // And `invited_by` (085): no key folds to NULL, "nobody invited".
       invited_by: rec?.invited_by ?? null,
+      // And `hearth` (093, POS-962): no key folds to NULL, "the household chose nothing": the default Hearth.
+      hearth: rec?.hearth ?? null,
     });
   }
 

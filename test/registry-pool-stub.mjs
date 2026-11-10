@@ -133,7 +133,7 @@ export function makePool(seed) {
           slug: params[0], ord, name: params[1], human: params[2],
           accounts: JSON.parse(params[3]), residents: params[4] ?? [], since: params[5],
           member_of: params[6], declared_by: params[7], formerly: params[8] ?? [],
-          provisional: params[9] === true, home_images: {}, likeness: null, invited_by: null,
+          provisional: params[9] === true, home_images: {}, likeness: null, invited_by: null, hearth: null,
         };
         if (state.households.some((r) => r.slug === row.slug))
           throw new Error(`duplicate key value violates unique constraint "households_pkey"`);
@@ -157,6 +157,8 @@ export function makePool(seed) {
         row.likeness = params.length > 12 ? (params[12] == null ? null : JSON.parse(params[12])) : (at >= 0 ? state.households[at].likeness ?? null : null);
         // `invited_by` (085) rides only the seed's insert too, as its fourteenth column.
         row.invited_by = params.length > 13 ? (params[13] == null ? null : JSON.parse(params[13])) : (at >= 0 ? state.households[at].invited_by ?? null : null);
+        // `hearth` (093) rides only the seed's insert too, as its fifteenth column.
+        row.hearth = params.length > 14 ? (params[14] ?? null) : (at >= 0 ? state.households[at].hearth ?? null : null);
         if (at >= 0) state.households[at] = row; else state.households.push(row);
         return { rows: [] };
       }
@@ -194,6 +196,15 @@ export function makePool(seed) {
         row.likeness = JSON.parse(likeness);
         return { rows: [{ slug: row.slug }] };
       }
+      // THE HOUSEHOLD'S HEARTH (POS-962, 093): the id, on the row whose slug is named AND whose accounts hold the signed-in id — or on none.
+      if (/^\s*UPDATE households\s+SET hearth = /.test(text)) {
+        state.writes.households++;
+        const [slug, hearth, ghId] = params;
+        const row = state.households.find((r) => r.slug === slug && (r.accounts ?? []).some((a) => Number(a.id) === Number(ghId)));
+        if (!row) return { rows: [] };
+        row.hearth = hearth ?? null;
+        return { rows: [{ slug: row.slug }] };
+      }
       // THE INVITATION CREDIT (POS-576, 085): written on the named row only while
       // it holds none — or on no row at all.
       if (/^\s*UPDATE households\s+SET invited_by = /.test(text)) {
@@ -229,7 +240,7 @@ export function makePool(seed) {
       // in `test/jsonb-key-order.mjs`, and every registry suite now reads what
       // the box reads.
       if (/FROM households/.test(text))
-        return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord), accounts: asJsonbReturns(r.accounts), home_images: asJsonbReturns(r.home_images ?? {}), likeness: r.likeness == null ? null : asJsonbReturns(r.likeness), invited_by: r.invited_by == null ? null : asJsonbReturns(r.invited_by) })) };
+        return { rows: [...state.households].sort((a, b) => a.ord - b.ord).map((r) => ({ ...r, ord: Number(r.ord), accounts: asJsonbReturns(r.accounts), home_images: asJsonbReturns(r.home_images ?? {}), likeness: r.likeness == null ? null : asJsonbReturns(r.likeness), invited_by: r.invited_by == null ? null : asJsonbReturns(r.invited_by), hearth: r.hearth ?? null })) };
       if (/FROM household_pins/.test(text))
         return { rows: [...state.pins].sort((a, b) => (a.handle < b.handle ? -1 : 1)).map((r) => ({ ...r, gh_id: String(r.gh_id) })) };
       if (/FROM registry_meta/.test(text))
