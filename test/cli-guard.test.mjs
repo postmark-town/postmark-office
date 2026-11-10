@@ -234,6 +234,8 @@ const ROSTER = {
   "deploy/invite-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "deploy/settle-pass.mjs": { args: [], code: 1, needle: "--town <town-clone> is required" },
   "tools/rekey-household.mjs": { args: [], code: 1, needle: "--from <slug> --to <slug> --name" },
+  // POS-788: no --handle or --to, so it refuses on usage before it reads the store, a key or a clone.
+  "tools/move-resident.mjs": { args: [], code: 2, needle: "--handle <handle> --to <household> are required" },
   // --help: the usage line, before any clone, key or Postgres (a bare run builds the whole sandbox).
   "tools/stamp-sandbox.mjs": { args: ["--help"], code: 0, needle: "usage: node tools/stamp-sandbox.mjs" },
   // POS-354: --help only; any other run reads the dev office's env files and dials its store.
