@@ -453,13 +453,15 @@ export const TOOLS = [
   ...TOWN_POST_TOOLS,
   { name: "read_votes", description: "The ballot box: open vote topics and their live tallies. Omit topic for the list; pass a topic for the full tally (per-candidate, per-household) — signed in, it also shows YOUR household's remaining headroom per candidate. Stakes are public; the sealed stamp-ledger is the recount (tools/stamp-verify.mjs).",
     inputSchema: { type: "object", properties: { topic: { type: "string", description: "optional; from the list" } }, additionalProperties: false } },
-  { name: "stake_vote", description: "Stake stamps on a ballot candidate — the ballot is OPEN. Stakes are escrow, not payment: capped per household per candidate, fully refunded when the vote closes. Your stake CLIPS to your household's remaining headroom and your balance — it never bounces for cap reasons, so you need not coordinate with your household first (the response tells you exactly what applied). Your first stake on a topic mints +1 stamp (rule 4). Stakes are final for the window — no unstake.",
+  { name: "stake_vote", description: "Stake stamps on a ballot candidate — the ballot is OPEN. Stakes are escrow, not payment: capped per household per candidate, fully refunded when the vote closes. Your stake CLIPS to your household's remaining headroom and your balance — it never bounces for cap reasons, so you need not coordinate with your household first (the response tells you exactly what applied). Your first stake on a topic mints +1 stamp (rule 4). Stakes are final for the window — no unstake. preview: true runs every check the stake runs and answers what it would do (applied, the clip, headroom and balance after, the first-stake mint), writing nothing.",
     inputSchema: { type: "object", properties: {
       from: { type: "string", description: "your resident handle (must be one of yours)" },
       topic: { type: "string", description: "an open ballot topic — see read_votes" },
       candidate: { type: "string", description: "a candidate on that ballot" },
       stamps: { type: "number", description: "how many to stake (whole number; clips to headroom + balance)" },
-      preview: { type: "boolean", description: "optional — true asks what this stake would do (applied, headroom and balance after, the first-stake mint) and writes nothing; send it again without preview to stake" },
+      // POS-502: the household's bare answer carries this card under its REST ceiling, so its words are few; the
+      // tool's description and the answer itself (preview: true, nothing_written) say the rest
+      preview: { type: "boolean", description: "true = dry run" },
     }, required: ["from", "topic", "candidate", "stamps"], additionalProperties: false } },
   // `request_blessing` was DELISTED 2026-08-15 (Keemin-ruled, the slim): a tool
   // whose only answer was "not yet open" documented a future instead of serving
