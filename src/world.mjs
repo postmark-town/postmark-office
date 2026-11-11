@@ -4912,7 +4912,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
 }
 
 /** withdraw, as one later entry. The terminal supersession (edit-law § withdraw) — nothing is deleted, a row says it ended. */
-export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false, refusedHolder = false }, { crossing = currentCrossing() } = {}) {
+export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false, refusedHolder = false, heldMade = null }, { crossing = currentCrossing() } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${by}/${slug}`;
   const canon = canonForGuards();
@@ -4925,6 +4925,13 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // canon, and its withdrawal is its way home: `refusedHolder` is passed only with the put-back guard that proves
     // it in this write (set-down-return.mjs § putBackGuard, `expect`), which refuses unless it writes the return.
     if (!refusedHolder && !live.some((m) => m.id === id) && !wasPublished) {
+      // A THING MADE IN HAND (POS-992; Darko 2026-11-11 09:21 EST, POS-992/a: "withdraw owns it") is in no live
+      // layer and not in canon: it lives as the hold lane's `make` record, and every read calls it published. So
+      // "no mark" was false for it (postmark#4559). `heldMade` is passed by the public door's own withdrawal only
+      // (withdrawMarkViaOffice), never by a set-down's undo or a dropped unit's return: asked here, where the
+      // answer would otherwise be that false 404, the made record is read or refused (a 503, never a guess), and
+      // a name it holds is withdrawn as a held thing (world-kinds.mjs § withdrawHeldMade).
+      if (heldMade && (await madeMarksOrRefuse([id], bounce)).has(id)) return await heldMade();
       // A retired mark is named as one (POS-241 phase 1), not as a mark that never was.
       const { markStandingStatus, withdrawRetiredRefusal } = await import("./world2-claims.mjs");
       const retired = withdrawRetiredRefusal(id, await markStandingStatus({ slug: id }).catch(() => null));
@@ -5853,7 +5860,10 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
       const viaHolder = await withdrawSetDownHolder({ mark, by, household, key, caller: by, guard,
         withdraw: ({ guard: g, holderReturns, refused }) => journalWithdraw({ by, slug, household, guard: g, contentsKept: holderReturns === true, refusedHolder: refused === true }) }, units?.setDownHolder ? units : await liveUnitDeps());
       if (viaHolder) return viaHolder;
-      return await journalWithdraw({ by, slug, household, guard });
+      // A THING MADE IN HAND (POS-992): asked only where the answer would otherwise be "no mark" (journalWithdraw §
+      // heldMade). It carries no stake (a make is free), so the escrow guard has nothing to hold for it.
+      const heldMade = async () => (await import("./world-kinds.mjs")).withdrawHeldMade({ thing: mark, maker: by, key, deps: units ?? await liveUnitDeps() });
+      return await journalWithdraw({ by, slug, household, guard, heldMade });
     }
     catch (e) { if (e?.code) throw e; throw bounce(500, "the withdrawal tripped", faultLogged("the withdrawal tripped", e)); } // its error goes to the log (POS-578)
   }

@@ -44,7 +44,7 @@ const LAST_WORD_SQL = `
 // in hand: a holder whose newest hold row is a put-back is not leaving the world.
 const LAST_HOLD_SQL = `
   SELECT action FROM acts
-   WHERE class = 'holding' AND object = $1 AND action IN ('give', 'drop', 'take', 'make', 'consume', 'set-down', 'put-back')
+   WHERE class = 'holding' AND object = $1 AND action IN ('give', 'drop', 'take', 'make', 'consume', 'set-down', 'put-back', 'withdraw')
    ORDER BY id DESC LIMIT 1`;
 
 /**

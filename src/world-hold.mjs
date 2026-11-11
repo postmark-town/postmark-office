@@ -979,7 +979,9 @@ export function holdEffectsFrom({ rows = [], handles = [], sinceCrossing, nowCro
           ? `${r.actor} took up ${thing}`
           : action === "put-back" // WLD-138 B: withdrawn before it published, back whole where it was set down from
             ? `${thing} came back to ${p.holder ?? "somebody"}, whole, its draft withdrawn before it published`
-            : `${r.actor} handed ${thing} to ${p.holder ?? "somebody"}`,
+            : action === "withdraw" // POS-992: a thing made in hand, withdrawn by its maker from their own hands; never eaten
+              ? `${r.actor} withdrew ${thing}: withdrawn by its maker, it is gone, and its name is never made again`
+              : `${r.actor} handed ${thing} to ${p.holder ?? "somebody"}`,
       read_it: `world { mark: "${thing}" }`,
     });
   }

@@ -173,6 +173,19 @@ test("an unknown thing is held by nobody, and that is not a refusal", () => {
   assert.equal(guards.pgHolderOf([], "nobody/nothing"), null);
 });
 
+test("POS-992 · `withdraw` is a hold face AND a mark's and a creature's action: the attachment reads take live faces in class holding only, and keep the legacy arm as it was", () => {
+  assert.ok(guards.HOLD_FACES.includes("withdraw"));
+  assert.equal(guards.ATTACHMENT_CLASS_SQL, "(action = 'legacy:attachment' OR class = 'holding')");
+  // why the class is asked: a mark withdrawal names no thing, so the strict fold would refuse it, and every holder read with it
+  const markWithdraw = { id: 70, at: new Date("2026-11-11T15:00:00Z"), actor: "alfa", action: "withdraw", class: "mark", payload: { by: "alfa", slug: "shed", was_published: false } };
+  assert.equal(guards.attachmentRowOf(markWithdraw).refused, true);
+  assert.throws(() => guards.attachmentRecords([markWithdraw]), /the WRONG RESIDENT|naming no thing/);
+  // the hold lane's own withdraw reads as the end of a holding (detach), the holder being nobody
+  const held = holdingAct(71, { at: "2026-11-11T15:00:01.000Z", actor: "alfa", action: "withdraw", thing: "alfa/pebble", holder: null, previousHolder: "alfa", policy: "detach" });
+  const r = guards.attachmentRowOf(held);
+  assert.deepEqual([r.era, r.row.target, r.row.policy], ["live", "alfa/pebble", "detach"]);
+});
+
 test("a holding act matching no era is REFUSED, never skipped", () => {
   const forged = { id: 99, at: new Date(), actor: "alfa", action: "legacy:attachment", payload: { some: "future-pen" } };
   const r = guards.attachmentRowOf(forged);
