@@ -422,10 +422,9 @@ export const CROSSING = [
     run: (ctx) => officeJob(ctx, "world2/tools/quest-snapshot-run.mjs", ["--clone", ctx.t.townClone]), commit: "quests: crossing leaderboard" },
   { phase: "ferry", name: "quests", box: "town:tools/quest-progress.mjs", when: "git",
     run: (ctx) => townJob(ctx, "tools/quest-progress.mjs", ["--snapshot"]), commit: "quests: crossing leaderboard" },
-  { phase: "ferry", name: "seal", box: "town:PROJECTS/the-town-seal/seal.mjs",
-    run: (ctx) => townJob(ctx, "PROJECTS/the-town-seal/seal.mjs", []) },
-  { phase: "ferry", name: "seal-verify", box: "town:PROJECTS/the-town-seal/verify.mjs",
-    run: (ctx) => townJob(ctx, "PROJECTS/the-town-seal/verify.mjs", []), commit: "seal: re-seal at the crossing" },
+  // POS-988: the seal and its verify run in postmark-town-seal@.service, reached through its socket, as on the box
+  { phase: "ferry", name: "seal", box: "tools/town-seal-sandbox.mjs",
+    run: (ctx) => officeJob(ctx, "tools/town-seal-sandbox.mjs", ["--clone", ctx.t.townClone]), commit: "seal: re-seal at the crossing" },
   // the keep tick under its lock: the store's registry for the town's tools (deploy/registry-file.mjs, never
   // the printouts), the binds, the two store-to-file drains, then the mint block
   { phase: "keep", name: "registry-file", box: "deploy/registry-file.mjs",

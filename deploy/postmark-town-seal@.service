@@ -1,0 +1,53 @@
+[Unit]
+Description=Postmark town seal — one sandboxed seal and verify, for the ferry (POS-988)
+# Started by postmark-town-seal.socket, one instance per connection, with the
+# connection on stdin and stdout. It runs the serve half of
+# tools/town-seal-sandbox.mjs: the town's PROJECTS/the-town-seal/seal.mjs and
+# verify.mjs, sent over the socket by the ferry, run in a scratch tree under
+# this unit's private /tmp, and the two outputs sent back only when both exit 0.
+#
+# WHAT IT IS DENIED, AND WHY EACH LINE IS HERE. The pair is town repo code,
+# from PROJECTS/, run at every crossing. Measured on POS-988 (2026-11-10), it
+# needs no environment, no credential, no network and no child process, so it
+# gets none:
+#   · no EnvironmentFile: none of the office's keys and tokens;
+#   · DynamicUser: a uid that owns nothing, so meepo's 0600 files (the stamp
+#     key, the push credential) are unreadable even where they are visible;
+#   · TemporaryFileSystem=/srv:ro: the office tree, its clones and the world2
+#     lab are out of sight, all but this one tool, bound read-only;
+#   · PrivateNetwork and RestrictAddressFamilies: no network; AF_UNIX only for
+#     what node itself needs;
+#   · ProtectSystem=strict, ProtectHome and PrivateTmp: it writes only its own /tmp.
+# MemoryDenyWriteExecute is NOT set: node's JIT needs it.
+
+[Service]
+ExecStart=/usr/bin/node /srv/postmark-office/tools/town-seal-sandbox.mjs serve
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+DynamicUser=yes
+TemporaryFileSystem=/srv:ro
+BindReadOnlyPaths=/srv/postmark-office/tools/town-seal-sandbox.mjs
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+RuntimeMaxSec=20min

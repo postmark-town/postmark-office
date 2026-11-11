@@ -1668,6 +1668,58 @@ saved COMPLETE`). `systemctl show postmark-crossing-save.service -p Result` read
 `systemctl restart postmark-crossing-save.timer`. The save is idempotent, so a
 crossing saved by either shape reads the same.
 
+### The seal runs in its own sandbox (POS-988)
+
+The ferry's seal stage used to run the town's `PROJECTS/the-town-seal/seal.mjs`
+and `verify.mjs` inside `postmark-ferry.service`, as meepo, with the office env,
+the stamp key, the town push credential and the network in reach. Measured on
+POS-988 (2026-11-10), the pair needs none of it. Now the stage runs
+`tools/town-seal-sandbox.mjs --clone`, which sends the pair's four inputs to
+`postmark-town-seal.socket` (meepo only, 0600). Each connection starts one
+`postmark-town-seal@.service`: a DynamicUser with no environment, no network
+and `/srv` hidden but for the one tool. Only a green seal and verify send the two
+outputs back. The stage, the ferry's undo, the witness record and the ferry's
+own commit are unchanged. The why and the exchange are in the tool's header.
+
+**Install (by hand, away from a crossing: not 23:50–00:40 or 11:50–12:40 UTC),
+and only after the release carrying this change is live**, so that
+`/srv/postmark-office/tools/town-seal-sandbox.mjs` exists. Install the socket
+FIRST: a ferry unit that calls a missing socket refuses its seal stage at every
+crossing. (The undo then puts the clone back, and nothing before the seal is lost.)
+```sh
+sudo cp /srv/postmark-office/deploy/postmark-town-seal.socket \
+        /srv/postmark-office/deploy/postmark-town-seal@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now postmark-town-seal.socket
+sudo cp /etc/systemd/system/postmark-ferry.service /var/backups/postmark-ferry.service.pre-pos988   # the rollback copy
+sudo cp /srv/postmark-office/deploy/postmark-ferry.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+The ferry's own drop-ins under `postmark-ferry.service.d/` are untouched.
+Nothing is started by hand: the next crossing is the first sandboxed seal.
+
+**Prove it (writes nothing in the town clone):** seal a scratch copy of the four
+inputs through the socket, and compare the outputs with the committed ones. They
+are byte-identical when the ledger hasn't moved since the last seal.
+```sh
+systemctl show postmark-town-seal.socket -p ActiveState -p Listen    # active, /run/postmark-town-seal.sock (Stream)
+stat -c '%U %a' /run/postmark-town-seal.sock                          # meepo 600
+d=$(sudo -u meepo mktemp -d)
+for f in PROJECTS/the-town-seal/seal.mjs PROJECTS/the-town-seal/verify.mjs PROJECTS/the-town-seal/seal.json WHITE_PAGES/mail-ledger.md; do
+  sudo -u meepo install -D -m 644 "/srv/postmark-office/town-clone/$f" "$d/$f"; done
+sudo -u meepo node /srv/postmark-office/tools/town-seal-sandbox.mjs --clone "$d"; echo "exit $?"   # [seal] sealed in the sandbox: …, exit 0
+for f in seal.json the-town-seal.html; do cmp "$d/PROJECTS/the-town-seal/$f" "/srv/postmark-office/town-clone/PROJECTS/the-town-seal/$f" && echo "$f same"; done
+journalctl -u 'postmark-town-seal@*' --since -5min --no-pager | tail -5   # [town-seal] seal: exit 0, verify: exit 0
+```
+Then remove `$d` by name. After the next crossing, `journalctl -u postmark-ferry`
+shows `[seal] sealed in the sandbox`, and the witness record names `--stage done`.
+
+**Rollback:** `sudo cp /var/backups/postmark-ferry.service.pre-pos988
+/etc/systemd/system/postmark-ferry.service && sudo systemctl daemon-reload`. The
+seal runs in the ferry again, as before. The socket can stay. To take it away,
+run `sudo systemctl disable --now postmark-town-seal.socket` and remove its two
+unit files.
+
 ### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
 
 This is the prod order for `STAMP_LINES=store`. The dev rehearsal's steps 6–8

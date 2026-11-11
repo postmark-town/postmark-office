@@ -215,6 +215,8 @@ const ROSTER = {
   // a credential, a clone, PayPal or the ledger.
   "tools/paypal-watch.mjs": { args: [], env: { ...NO_PG, PAYPAL_ENV: undefined, PAYPAL_CLIENT_ID: undefined, PAYPAL_SECRET: undefined }, code: 1, needle: "PAYPAL_ENV must be live or sandbox" },
   "tools/stripe-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
+  // POS-988: the sandboxed seal's client refuses with no --clone before it reads a file or a socket.
+  "tools/town-seal-sandbox.mjs": { args: [], code: 2, needle: "usage: town-seal-sandbox.mjs --clone" },
   "tools/train-week-check.mjs": { args: [], code: 2, needle: "usage: node tools/train-week-check.mjs" },
   "tools/usdc-watch.mjs": { args: ["--clone", NOWHERE], code: 1, needle: "no town clone with the funding seam" },
   "tools/vessel-parity.mjs": { args: ["--world", NOWHERE], env: NO_PG, code: 9, needle: "vessel-parity tripped" },
