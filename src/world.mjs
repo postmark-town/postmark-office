@@ -4912,7 +4912,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
 }
 
 /** withdraw, as one later entry. The terminal supersession (edit-law § withdraw) — nothing is deleted, a row says it ended. */
-export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false, refusedHolder = false }, { crossing = currentCrossing() } = {}) {
+export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false, refusedHolder = false, heldMade = null }, { crossing = currentCrossing() } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${by}/${slug}`;
   const canon = canonForGuards();
@@ -4925,6 +4925,13 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // canon, and its withdrawal is its way home: `refusedHolder` is passed only with the put-back guard that proves
     // it in this write (set-down-return.mjs § putBackGuard, `expect`), which refuses unless it writes the return.
     if (!refusedHolder && !live.some((m) => m.id === id) && !wasPublished) {
+      // A THING MADE IN HAND (POS-992; Darko 2026-11-11 09:21 EST, POS-992/a: "withdraw owns it") is in no live
+      // layer and not in canon: it lives as the hold lane's `make` record, and every read calls it published. So
+      // "no mark" was false for it (postmark#4559). `heldMade` is passed by the public door's own withdrawal only
+      // (withdrawMarkViaOffice), never by a set-down's undo or a dropped unit's return: asked here, where the
+      // answer would otherwise be that false 404, the made record is read or refused (a 503, never a guess), and
+      // a name it holds is withdrawn as a held thing (world-kinds.mjs § withdrawHeldMade).
+      if (heldMade && (await madeMarksOrRefuse([id], bounce)).has(id)) return await heldMade();
       // A retired mark is named as one (POS-241 phase 1), not as a mark that never was.
       const { markStandingStatus, withdrawRetiredRefusal } = await import("./world2-claims.mjs");
       const retired = withdrawRetiredRefusal(id, await markStandingStatus({ slug: id }).catch(() => null));
@@ -4936,7 +4943,7 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
       // returned or retracted through it. Once published, the unit comes back by
       // take-back like any published unit (test/withdraw-dropped-unit.test.mjs §
       // ORIGINAL HOUSEHOLD). No visibility is widened to make it reachable.
-      throw bounce(404, `no mark "${id}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts and your published marks; check world_my_marks");
+      throw bounce(404, `no mark "${id}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts, your published marks and a thing you made in hand and still hold; check world_my_marks");
     }
 
     // The store's answer to `holdsChildren`: a withdrawal may not strand what
@@ -5853,7 +5860,10 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
       const viaHolder = await withdrawSetDownHolder({ mark, by, household, key, caller: by, guard,
         withdraw: ({ guard: g, holderReturns, refused }) => journalWithdraw({ by, slug, household, guard: g, contentsKept: holderReturns === true, refusedHolder: refused === true }) }, units?.setDownHolder ? units : await liveUnitDeps());
       if (viaHolder) return viaHolder;
-      return await journalWithdraw({ by, slug, household, guard });
+      // A THING MADE IN HAND (POS-992): asked only where the answer would otherwise be "no mark" (journalWithdraw §
+      // heldMade). It carries no stake (a make is free), so the escrow guard has nothing to hold for it.
+      const heldMade = async () => (await import("./world-kinds.mjs")).withdrawHeldMade({ thing: mark, maker: by, key, deps: units ?? await liveUnitDeps() });
+      return await journalWithdraw({ by, slug, household, guard, heldMade });
     }
     catch (e) { if (e?.code) throw e; throw bounce(500, "the withdrawal tripped", faultLogged("the withdrawal tripped", e)); } // its error goes to the log (POS-578)
   }
@@ -7473,7 +7483,7 @@ export const WORLD_TOOLS = [
       into: { type: "string", description: "with enter_on_arrival, at a portal that leads more than one way: which way, one of the ids its answer lists in `choose`." },
     }, additionalProperties: false } },
   { name: "world_withdraw_mark",
-    description: "Withdraw your own mark — the terminal supersession (edit-law's revision family). The mark leaves your sketchbook now and canon at the next crossing (the settlement unpublishes it); its whole life stays in the log — nothing is erased. Guards: only the hand that left a mark may withdraw it; a mark still holding other marks inside it refuses (move or withdraw the children first); a mark with escrow on it refuses (staked stamps anchor it — your own come back with world_unstake, another resident's must be unstaked by its owner). To CHANGE a mark rather than remove it, use world_leave_mark with amend: true — a withdrawal is for marks that should stop standing.",
+    description: "Withdraw your own mark — the terminal supersession (edit-law's revision family). The mark leaves your sketchbook now and canon at the next crossing (the settlement unpublishes it); its whole life stays in the log — nothing is erased. A thing you made in hand (leave-mark { slug, body, to }) and still hold is withdrawn at once and for good: its holding ends, it leaves the world now, the record keeps its making, and its name is never made again; a holder goes only empty. Guards: only the hand that left a mark may withdraw it; a mark still holding other marks inside it refuses (move or withdraw the children first); a mark with escrow on it refuses (staked stamps anchor it — your own come back with world_unstake, another resident's must be unstaked by its owner). To CHANGE a mark rather than remove it, use world_leave_mark with amend: true — a withdrawal is for marks that should stop standing.",
     inputSchema: { type: "object", properties: {
       mark: { type: "string", description: "your mark's id, <by>/<slug> — the by must be a resident on your key" },
       handle: { type: "string", description: "unused — the mark id's own <by> names the hand; kept for callers that pass it reflexively" },

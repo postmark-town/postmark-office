@@ -688,7 +688,7 @@ export function g5Breaks({ oracle, portAttachments, devPool }) {
       const c = await devPool.connect();
       try {
         const { rows } = await c.query(
-          "SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1) ORDER BY acts.id DESC", [guards.ATTACHMENT_ACTIONS]);
+          `SELECT id, at, actor, action, payload FROM acts WHERE action = ANY($1) AND ${guards.ATTACHMENT_CLASS_SQL} ORDER BY acts.id DESC`, [guards.ATTACHMENT_ACTIONS]);
         const recs = rows.map((r) => guards.attachmentRowOf(r)).filter((r) => !r.refused).map((r) => ({ ...r.row, era: r.era }));
         const moved = recs.filter((r, i) => r.born_at !== portAttachments.rows[i]?.born_at).length;
         return { bit: moved, findings: g5Holdings(oracle.rows, recs).findings };
