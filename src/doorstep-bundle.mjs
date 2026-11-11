@@ -257,12 +257,14 @@ export async function doorstepBundle(handle, ctx = {}) {
     // `ctx.stakesReaders` is the stakes report's own reader seam (doorstep-stakes.mjs § stakesFor), for a test's invented world; the live doors pass none.
     const whole = await doorstepStakes(handle, { key, now: new Date(nowMs), limit: DOORSTEP_STAKES, ...(ctx.stakesReaders ?? {}) });
     const { rule: _rule, read_the_rest: _rest, later_stakes: _later, ...trimmed } = whole;
+    // the segment IS the read at its `args` (the bundle law): a report that was cut is the read at `limit`; one that fit is the bare read, as it always was
+    const stakesArgs = "limit" in whole ? { handle, limit: DOORSTEP_STAKES } : { handle };
     d.stakes = slim
-      ? { serves: "household.stakes", args: { handle, limit: DOORSTEP_STAKES }, ...trimmed, teach_at: STAKES_TEACH_POINTER,
+      ? { serves: "household.stakes", args: stakesArgs, ...trimmed, teach_at: STAKES_TEACH_POINTER,
           abridged: "the sweep's rule and the pointers to the portfolio and the stake door are the same sentences for every resident every day, so the connector skin drops `rule` and `read_the_rest` and names the door instead (`teach_at` above), and `later_stakes` with them. household { read: \"stakes\" } answers it whole. " + SNAPSHOT_LIMIT }
-      : { serves: "household.stakes", args: { handle, limit: DOORSTEP_STAKES }, ...whole };
+      : { serves: "household.stakes", args: stakesArgs, ...whole };
   } catch (e) {
-    d.stakes = { serves: "household.stakes", args: { handle, limit: DOORSTEP_STAKES },
+    d.stakes = { serves: "household.stakes", args: { handle },
       unavailable: `what stands behind your marks could not be read (${plainReason(e, "record", "the doorstep's stakes")}) — unknown, not zero`,
       count: 0, at_risk: null, rows: [] };
   }
@@ -334,26 +336,12 @@ export async function doorstepBundle(handle, ctx = {}) {
     if (world2Enabled()) d.holds = { serves: "world.holdings", args: { handle },
       unavailable: `what ${handle} holds could not be read (${plainReason(e, "record", "the doorstep's holdings")}) — unknown, not empty` };
   }
-  // ── WHEN THE MISTS REACH THE HOUSE'S MARKS (WLD-38) — beside the segments ─
+  // ── THE MISTS BLOCK IS GONE FROM THE DOORSTEP (POS-902) ───────────────────────────────────────
   //
-  // `mists`: for every published mark the household's residents made that the
-  // advancing Mists reach within their schedule, the first crossing the FRINGE
-  // reaches it (sight shortened) and the first the WALL does (hidden), each
-  // with its date — or that it stands there now — and that it stays theirs and
-  // comes back when they lift. One forecast, the World engine's own reading,
-  // computed at this read with this page's one clock; nothing is stored or
-  // sent (mists-forecast.mjs). Published marks only, so a stranger's view
-  // shows nothing the map does not. Like `holds`: only when there is something
-  // to say, and an office pointed at a world it cannot read says
-  // `mists-forecast-unavailable`, never a quiet clear.
-  try {
-    const { householdMistsForecast } = await import("./mists-forecast.mjs");
-    const m = await householdMistsForecast(handle, { nowMs });
-    if (m) d.mists = m;
-  } catch (e) {
-    const { MISTS_FORECAST_UNAVAILABLE } = await import("./mists-forecast.mjs");
-    d.mists = { serves: "world.mists", args: { handle }, unavailable: `${MISTS_FORECAST_UNAVAILABLE}: ${plainReason(e, "files", "the doorstep's Mists forecast")}` };
-  }
+  // WLD-38 put `mists` here: when the advancing Mists reach the house's published marks. The published skeleton now carries `mists.withdrawn_from`
+  // (S163: crossing 289; the Mists are withdrawn from that crossing on), so mists-forecast.mjs § householdMistsForecast answers nothing for any house
+  // and the block's only remaining cargo was an old fixture's reaches, not a true sentence about today. Wright 2026-11-11 03:48Z: remove it from the
+  // doorstep, add no new read. The forecast itself (mists-forecast.mjs) and the placement warning that uses it are untouched.
   // The manifest, republished now that every segment is on the page. A reader
   // walks `segments` to find them, so it must name all ten or none.
   d.segments = [...DOORSTEP_SEGMENTS];

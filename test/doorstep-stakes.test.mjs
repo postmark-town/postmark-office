@@ -571,10 +571,11 @@ test("POS-902 · THE CONTINUATION RETURNS THE OMITTED ROWS: the bare read is eve
 
 test("POS-902 · an ordinary house fits whole (complete, no continuation named); an empty one and an unreadable one keep their honest meaning", async () => {
   const ord = await stakesFor([EXPECTED.ordinary.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
-  assert.deepEqual([ord.count, ord.at_risk, ord.shown, ord.total, ord.complete], [8, 1, 8, 8, true]);
-  assert.equal(ord.more_note, undefined, "nothing was cut, so nothing says where the rest is");
+  assert.deepEqual([ord.count, ord.at_risk, ord.rows.length], [8, 1, 8]);
+  for (const k of ["shown", "total", "limit", "complete", "order", "more_note"]) assert.equal(k in ord, false, `nothing was cut, so there is no ${k}: the page is what it always was`);
+  assert.equal(ord.rows[0].at_risk, true, "and in the report's own order, at-risk first");
   const none = await stakesFor([EXPECTED.empty.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
-  assert.deepEqual([none.count, none.rows.length, none.complete], [0, 0, true]);
+  assert.deepEqual([none.count, none.rows.length, "complete" in none], [0, 0, false]);
   assert.match(none.note, /no published mark of yours stands on world main/, "empty stays 'none', with its own note");
   const down = await stakesFor([EXPECTED.prolific.handle], await pos902Readers({ limit: DOORSTEP_STAKES, escrow: async () => ({ townSha: HEAD, byMark: null, reason: "the docket store is down — unknown, not zero" }) }));
   assert.match(down.unavailable, /unknown, not zero/);
@@ -592,7 +593,7 @@ test("POS-902 · newestFirst / previewOf: dated marks newest first, undated or u
   assert.deepEqual(newestFirst(rows, (id) => dates[id]).map((r) => r.mark), ["b", "a", "c", "d"], "undated rows last, in id order");
   assert.deepEqual(previewOf(rows), { rows, meta: {} });
   assert.equal(previewOf(rows, { limit: 0, dateOf: (id) => dates[id] }).rows.length, 1, "a zero limit is not an empty preview");
-  assert.equal(previewOf(rows, { limit: 9, dateOf: (id) => dates[id] }).meta.complete, true);
+  assert.deepEqual(previewOf(rows, { limit: 9, dateOf: (id) => dates[id] }), { rows, meta: {} }, "a list that fits is answered whole, in its own order");
 });
 
 // ── on the finished doorstep, both skins ────────────────────────────────────────────────────────────────────────────────────

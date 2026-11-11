@@ -193,7 +193,7 @@ export function newestFirst(rows, dateOf) {
 
 /**
  * A PREVIEW OF THE ROWS, or all of them. With no `limit` the report is whole, in its own order (at-risk first, then mark id), and carries nothing
- * extra, exactly as before. With a `limit` it answers the NEWEST `limit` rows (newest first) and says what it is: `shown` of `total`, whether it is
+ * extra, exactly as before. With a `limit` that cuts something it answers the NEWEST `limit` rows (newest first) and says what it is (a report that fits is answered whole, in its own order, with no preview fields): `shown` of `total`, whether it is
  * `complete`, the `order` of THIS preview, and where the rest is: the same read with no limit, which is every row in the report's own order. The
  * report's `count` and `at_risk` stay the whole report's, never the preview's, and when at-risk rows are not among the shown rows the note says
  * how many of the omitted ones are at risk (the preview is by date, not by risk, and must never read as "these are the at-risk ones").
@@ -203,13 +203,14 @@ export function previewOf(rows, { limit = null, dateOf = () => null } = {}) {
   const lim = Math.max(Math.floor(Number(limit)) || 0, 1);
   const shown = newestFirst(rows, dateOf).slice(0, lim);
   const omitted = rows.length - shown.length;
+  if (omitted <= 0) return { rows, meta: {} };   // nothing is left out, so nothing is disclosed: the page is what it always was, in the report's own order
   const riskLeft = rows.filter((r) => r.at_risk === true).length - shown.filter((r) => r.at_risk === true).length;
   return {
     rows: shown,
     meta: {
-      total: rows.length, shown: shown.length, limit: lim, complete: omitted <= 0,
+      total: rows.length, shown: shown.length, limit: lim, complete: false,
       order: "the newest published marks first, by the mark's own date (not printed); the whole report is at-risk first, then by mark id",
-      ...(omitted > 0 ? { more_note: `${omitted} further${riskLeft > 0 ? ` (${riskLeft} of them at risk)` : ""} — household { read: "stakes" } with no limit is every row` } : {}),
+      more_note: `${omitted} further${riskLeft > 0 ? ` (${riskLeft} of them at risk)` : ""} — household { read: "stakes" } with no limit is every row`,
     },
   };
 }
