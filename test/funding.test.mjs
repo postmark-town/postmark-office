@@ -522,10 +522,24 @@ test("THE MONEY MOMENT says holo votes, and names the cap in the same breath", (
     "it says the stamps vote, because they do — a vote is a stake and clips against a fungible balance");
   assert.match(WHAT_THIS_BUYS, /capped/,
     "AND it names the bound in the same breath: a patron told their stamps vote and NOT told their share is capped has been told half the truth");
-  assert.match(WHAT_THIS_BUYS, /ownership and memory/,
-    "the two things that did not change are still promised");
-  assert.match(WHAT_THIS_BUYS, /converts to real value only if the town someday does/,
-    "and so is the conversion caveat, which this ruling never touched");
+  // CHANGED 2026-11-11 (POS-1001), NOMOS II.4: "Stamps are not money. They
+  // can't be bought … Stamps never turn into money." and II.6.1: NOMOS "grants
+  // no claim" on owning Postmark or on money outside the town. Until
+  // 2026-11-11 the next two asserted the sentence still promised "ownership
+  // and memory" and "converts to real value only if the town someday does";
+  // both offered something outside the town for money, so both are now
+  // asserted ABSENT, and the sentence is held to the site's twin word for word.
+  assert.doesNotMatch(WHAT_THIS_BUYS, /ownership/,
+    "the money moment offers no ownership: NOMOS grants no claim on owning Postmark");
+  assert.doesNotMatch(WHAT_THIS_BUYS, /converts to real value/,
+    "and no conversion to real value: stamps never turn into money");
+  assert.match(WHAT_THIS_BUYS, /stamps never turn into money/,
+    "it says so, in NOMOS II.4.5's own words");
+  // written out rather than imported: the site's fine print says this sentence
+  // (postmark-site town/pages/fund/[pot].astro), capitalized and with a stop
+  assert.equal(WHAT_THIS_BUYS,
+    "a gift pays a bill and is written down in your name. If the town staked on this pot, the close thanks you in stamps that work like any stamp, including vote; money's share of your household is capped, and stamps never turn into money",
+    "the office's disclosure is the site's, word for word");
 });
 
 test("minted · for keeping reads as its own section — no liquid coin, and no fifth tense", async () => {

@@ -189,8 +189,17 @@ export const HOLO_CAPTION = "a record of contribution, not a promise of profit";
 export const HOLO_EXPANSION = "short for holographic stamp — the collector's shiny kind, kept in the album and shown; unlike the collector's, this one still spends.";
 
 // THE DISCLOSURE AT THE MONEY MOMENT — what a patron is told their dollars buy,
-// at the instant they are about to send them. The world carries the same
-// sentence in `LOGOS/the-derivation.md § 10`; this is its live instance.
+// at the instant they are about to send them. The SITE ships the twin of this
+// sentence (postmark-site town/pages/fund/[pot].astro, the fine print) and
+// moves with it: one sentence, two repos, never two spellings.
+//
+// CHANGED 2026-11-11 (POS-1001) to fit NOMOS II.4 ("Stamps are not money. They
+// can't be bought") and II.6.1 (NOMOS "grants no claim" on owning Postmark or on
+// money outside the town). Until then it read "this buys stamps that do
+// everything a stamp does, including vote, plus ownership and memory; money's
+// share of your household is capped, and it converts to real value only if the
+// town someday does", the same sentence `LOGOS/the-derivation.md § 10` carries
+// in the world.
 //
 // AMENDED 2026-09-17 at the founder's ruling, verbatim: "holo does anything a
 // normal stamp can; staking vs voting is a nondistiction." It read "this buys
@@ -207,7 +216,7 @@ export const HOLO_EXPANSION = "short for holographic stamp — the collector's s
 // cross-checking the copies — the exact drift shape the 2026-09-17 citation
 // sweep found between this repo and the site. One sentence, one home, two
 // callers.
-export const WHAT_THIS_BUYS = "this buys stamps that do everything a stamp does, including vote, plus ownership and memory; money's share of your household is capped, and it converts to real value only if the town someday does";
+export const WHAT_THIS_BUYS = "a gift pays a bill and is written down in your name. If the town staked on this pot, the close thanks you in stamps that work like any stamp, including vote; money's share of your household is capped, and stamps never turn into money";
 
 // Teach lines — agents learn at the point of contact, so every new surface
 // carries one short self-describing sentence. One home for the wording.
