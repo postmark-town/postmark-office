@@ -27,14 +27,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { sealSkip, startSealSocket, stopSealSockets } from "./helpers/seal-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(join(tmpdir(), "postmark-ferry-witness-"));
-after(() => { try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
+after(() => { stopSealSockets(); try { rmSync(scratch, { recursive: true, force: true, maxRetries: 5 }); } catch { /* litter */ } });
 
 const works = (shell) => spawnSync(shell, ["-c", "true"], { stdio: "ignore" }).status === 0;
 const SH = works("dash") ? "dash" : works("sh") ? "sh" : null;
 const skip = SH ? false : "no POSIX shell on this machine";
+// A crossing that gets past the quests reaches the seal stage, which needs the socket stand-in (POSIX only).
+const fskip = skip || sealSkip;
 const fwd = (p) => p.replace(/\\/g, "/");
 
 const LEDGER = "WHITE_PAGES/stamp-ledger.md";
@@ -75,8 +78,6 @@ if (report) writeFileSync(report, JSON.stringify({ ran: true, crossing: 293, del
 process.exit(Number(process.env.STUB_FERRY_EXIT || 0));
 `,
   "tools/quest-progress.mjs": `import { call } from "./stub-calls.mjs"; call("quests");\n`,
-  "PROJECTS/the-town-seal/seal.mjs": `import { call } from "../../tools/stub-calls.mjs"; call("seal");\n`,
-  "PROJECTS/the-town-seal/verify.mjs": `import { call } from "../../tools/stub-calls.mjs"; call("seal-verify");\n`,
   // THE WITNESS, stubbed: records its verb and arguments, whether the clone was
   // clean when it was called, and exits with STUB_WITNESS_<VERB>_EXIT.
   "tools/witness-chain.mjs": `
@@ -90,9 +91,32 @@ process.exit(Number(process.env["STUB_WITNESS_" + verb.replace("-", "_").toUpper
 `,
   "TOWN_BULLETIN/quests.md": "quests at the founding\n",
   "PROJECTS/the-town-seal/seal.json": "{\"seal\":\"founding\"}\n",
+  "PROJECTS/the-town-seal/the-town-seal.html": "<p>founding</p>\n",
+  "WHITE_PAGES/mail-ledger.md": "the mail ledger at the founding\n",
 };
+// POS-988: the seal pair runs in the sandbox, which is sent only its own four
+// files and no environment, so these stubs stand alone and take their orders
+// from a control file at a fixed path that runFerry() writes. They rewrite the
+// two outputs unchanged, as a mail-less crossing's real seal does.
+const sealStubs = (ctl) => ({
+  "PROJECTS/the-town-seal/seal.mjs": `
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const ctl = existsSync(${JSON.stringify(ctl)}) ? JSON.parse(readFileSync(${JSON.stringify(ctl)}, "utf8")) : {};
+if (ctl.calls) appendFileSync(ctl.calls, "seal\\n");
+writeFileSync("PROJECTS/the-town-seal/seal.json", readFileSync("PROJECTS/the-town-seal/seal.json"));
+writeFileSync("PROJECTS/the-town-seal/the-town-seal.html", "<p>founding</p>\\n");
+`,
+  "PROJECTS/the-town-seal/verify.mjs": `
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+const ctl = existsSync(${JSON.stringify(ctl)}) ? JSON.parse(readFileSync(${JSON.stringify(ctl)}, "utf8")) : {};
+if (ctl.calls) appendFileSync(ctl.calls, "seal-verify\\n");
+process.exit(Number(ctl.verifyExit || 0));
+`,
+});
 const OFFICE_FILES = {
   "stamp-key.pem": "not a key\n",
+  // POS-988: the real client, which sends the seal to the socket stand-in
+  "tools/town-seal-sandbox.mjs": readFileSync(join(OFFICE, "tools", "town-seal-sandbox.mjs"), "utf8"),
   "tools/stamp-verify-owed.mjs": readFileSync(join(OFFICE, "tools", "stamp-verify-owed.mjs"), "utf8"),
   // STUB_DRAIN_HANG names a marker: the drain writes it and then hangs, so a test
   // can kill the crossing mid-run, as an OOM or a stop timeout would.
@@ -130,7 +154,7 @@ function fixture({ ledger = ["row 1"], witnessTool = true, realWitness = false }
   const town = join(root, "town");
   const office = join(root, "office");
   const g = (...a) => execFileSync("git", a, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...GIT_ENV } });
-  const tools = { ...TOWN_TOOLS };
+  const tools = { ...TOWN_TOOLS, ...sealStubs(fwd(join(root, "seal-ctl.json"))) };
   if (!witnessTool || realWitness) delete tools["tools/witness-chain.mjs"];
   let key = null;
   if (realWitness) {
@@ -166,10 +190,12 @@ function ferryPayload() {
 }
 
 function runFerry(fx, extra = {}) {
+  fx.sealSocket ??= startSealSocket(join(fx.root, "seal.sock"));
+  writeFileSync(join(fx.root, "seal-ctl.json"), JSON.stringify({ calls: join(fx.root, "calls.txt"), verifyExit: extra.STUB_SEAL_VERIFY_EXIT }));
   const script = ferryPayload().replaceAll("/usr/bin/node", "node").replaceAll("/srv/postmark-office", fwd(fx.office));
   const res = spawnSync(SH, ["-c", script], {
     cwd: fx.office, encoding: "utf8", timeout: 120000,
-    env: { ...process.env, ...GIT_ENV, TOWN_CLONE: fwd(fx.town), STUB_CALLS: join(fx.root, "calls.txt"), INVOCATION_ID: "inv-1", ...extra },
+    env: { ...process.env, ...GIT_ENV, TOWN_CLONE: fwd(fx.town), STUB_CALLS: join(fx.root, "calls.txt"), INVOCATION_ID: "inv-1", TOWN_SEAL_SOCKET: fx.sealSocket, ...extra },
   });
   const calls = existsSync(join(fx.root, "calls.txt")) ? readFileSync(join(fx.root, "calls.txt"), "utf8").trim().split("\n") : [];
   return { ...res, calls, witness: calls.filter((c) => c.startsWith("witness ")) };
@@ -184,7 +210,7 @@ test("payload: the witness lines carry nothing systemd would expand before sh re
   assert.match(p, /witness "\$rc"/, "the witness rides the exit trap");
 });
 
-test("NOT CONFIGURED: no witness key, no witness call; the crossing is what it was", { skip }, () => {
+test("NOT CONFIGURED: no witness key, no witness call; the crossing is what it was", { skip: fskip }, () => {
   const fx = fixture();
   const r = runFerry(fx);
   assert.equal(r.status, 0, r.stderr);
@@ -192,7 +218,7 @@ test("NOT CONFIGURED: no witness key, no witness call; the crossing is what it w
   assert.match(r.stderr, /\[witness\] not configured \(WITNESS_KEY, WITNESS_OWED\): this crossing owes no record/);
 });
 
-test("A CLEAN CROSSING is owed with its stage and exit, from a clean clone, and then published", { skip }, () => {
+test("A CLEAN CROSSING is owed with its stage and exit, from a clean clone, and then published", { skip: fskip }, () => {
   const fx = fixture();
   const env = CONFIGURED(fx);
   const r = runFerry(fx, env);
@@ -227,7 +253,19 @@ test("A CROSSING REFUSED AT THE DRAIN names the drain, before any mail moved", {
   assert.match(r.witness[1], /--exit 1 --stage drain /);
 });
 
-test("KEEP RUNNING: a witness that cannot owe or publish changes nothing about the crossing", { skip }, () => {
+// POS-988: the seal runs in its sandbox, and stays a stage of the crossing, so a
+// refusal there is the crossing's refusal at `seal`, witnessed after the undo.
+test("A CROSSING REFUSED AT THE SANDBOXED SEAL is witnessed at the seal stage, after the clone is put back", { skip: fskip }, () => {
+  const fx = fixture();
+  const r = runFerry(fx, { ...CONFIGURED(fx), STUB_SEAL_VERIFY_EXIT: "1" });
+  assert.equal(r.status, 1, "the sandbox's refusal is the crossing's");
+  assert.ok(r.calls.includes("seal") && r.calls.includes("seal-verify"), r.calls.join("\n"));
+  assert.match(r.stderr, /\[seal\] the sandboxed seal refused at verify \(exit 1\)/);
+  assert.match(r.witness[1], /^witness owe-mail .* --exit 1 --stage seal .*\[clean clone\]$/, r.calls.join("\n"));
+  assert.match(r.witness[2], /^witness publish /);
+});
+
+test("KEEP RUNNING: a witness that cannot owe or publish changes nothing about the crossing", { skip: fskip }, () => {
   const fx = fixture();
   const r = runFerry(fx, { ...CONFIGURED(fx), STUB_WITNESS_OWE_MAIL_EXIT: "1", STUB_WITNESS_PUBLISH_EXIT: "3" });
   assert.equal(r.status, 0, 'LAW: "the town keeps running"');
@@ -269,7 +307,7 @@ test(`A CROSSING KILLED MID-RUN (SIGKILL: no trap runs) leaves its open entry, a
     'LAW: "the record is owed" — the crossing that died is in the chain, said to be incomplete');
 });
 
-test("A TOWN CLONE WITHOUT THE WITNESS TOOL (before the town half ships) is a no-op, said once", { skip }, () => {
+test("A TOWN CLONE WITHOUT THE WITNESS TOOL (before the town half ships) is a no-op, said once", { skip: fskip }, () => {
   const fx = fixture({ witnessTool: false });
   const r = runFerry(fx, CONFIGURED(fx));
   assert.equal(r.status, 0, r.stderr);

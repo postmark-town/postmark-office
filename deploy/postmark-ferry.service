@@ -98,6 +98,14 @@ WorkingDirectory=/srv/postmark-office
 # a mail-less crossing diffs clean and commits nothing. Same mint discipline:
 # only a green verify commits; a seal failure exits loud but sits AFTER the
 # mint block, so mail + stamps are never held hostage by it.
+# THE SEAL RUNS WITH NONE OF THIS UNIT'S RIGHTS (POS-988, 2026-11-10). seal.mjs
+# and verify.mjs are town code from PROJECTS/, and they need no environment, no
+# credential and no network, so they no longer run here as meepo with the office
+# env, the stamp key and the push credential in reach. tools/town-seal-sandbox.mjs
+# sends their four inputs to postmark-town-seal.socket and writes back the two
+# outputs only when the sandboxed seal and verify both exit 0; anything else
+# exits 1 here. The stage, the undo, the witness record and this shell's commit
+# are unchanged. The sandbox is deploy/postmark-town-seal@.service.
 # THE TOWN-LOG DRAIN RIDES FIRST (POS-44 wave 4, the ferry bridge). Flag-on,
 # a join, a paper edit and a sent letter are ROWS in the office's town log, and
 # this is the step that turns them into the record. Three things pin it to this
@@ -213,8 +221,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   { git diff --quiet -- TOWN_BULLETIN/quests.md || { \
       git add TOWN_BULLETIN/quests.md && \
       git commit -qm "quests: crossing leaderboard" && git push -q; }; } && \
-  wstage=seal && node PROJECTS/the-town-seal/seal.mjs && \
-  node PROJECTS/the-town-seal/verify.mjs && \
+  wstage=seal && /usr/bin/node /srv/postmark-office/tools/town-seal-sandbox.mjs --clone "$TOWN_CLONE" && \
   { git diff --quiet -- PROJECTS/the-town-seal || { \
       git add PROJECTS/the-town-seal/seal.json PROJECTS/the-town-seal/the-town-seal.html && \
       git commit -qm "seal: re-seal at the crossing" && git push -q; }; } && \
