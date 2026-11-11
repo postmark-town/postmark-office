@@ -60,10 +60,17 @@ export async function lockedChestUse(client, chest, { also = [] } = {}) {
   const fold = foldUnits((await pgHoldingRows(client, {})).filter(isUnitRow));
   const { rows: held } = await pgAttachmentsFor(client);
   const word = (await client.query(LAST_WORD_SQL, [String(chest)])).rows[0]?.action ?? null;
-  const putBack = word === "withdraw" && (await client.query(LAST_HOLD_SQL, [String(chest)])).rows[0]?.action === "put-back";
+  const lastHold = (await client.query(LAST_HOLD_SQL, [String(chest)])).rows[0]?.action ?? null;
+  const putBack = word === "withdraw" && lastHold === "put-back";
+  // A HOLDER ENDED ON THE HOLD LANE (POS-992, independent review of #1009, finding 1): a thing made in hand ends by
+  // its own hold row, its maker's `withdraw` or an eat's `consume`, and no mark-class word is ever written for it. A
+  // holder whose newest hold row ends it is leaving the world as surely as a withdrawn chest, so it takes nothing
+  // more: an add racing its end is refused here, under the lock the ending took, and nothing is stranded in it.
+  const endedBy = lastHold === "withdraw" || lastHold === "consume" ? lastHold : null;
   const up = liveHolders(held);
   const loadOf = (h) => totalOf(fold, h) + wholeLoadOf({ up, holder: h, unitsOf: (x) => totalOf(fold, x) });
-  return { units: totalOf(fold, chest), things: thingsIn(held, chest), load: loadOf(chest), loads: also.map(loadOf), withdrawn: word === "withdraw" && !putBack };
+  return { units: totalOf(fold, chest), things: thingsIn(held, chest), load: loadOf(chest), loads: also.map(loadOf),
+    withdrawn: (word === "withdraw" && !putBack) || endedBy != null, endedBy };
 }
 
 const bounce = (code, defect, hint, extra = {}) => {
@@ -89,7 +96,8 @@ const bounce = (code, defect, hint, extra = {}) => {
 export const chestRoomGuard = ({ chest, capacity, adding, above = [] }) => async (client) => {
   const used = await lockedChestUse(client, chest, { also: above.map((a) => a.holder) });
   if (used.withdrawn)
-    throw bounce(409, `${chest} was withdrawn`, "its maker took it off the world before this reached it; it takes nothing more. Nothing was recorded.", { room: 0 });
+    throw bounce(409, `${chest} was ${used.endedBy === "consume" ? "eaten" : "withdrawn"}`,
+      `${used.endedBy === "consume" ? "it was eaten" : "its maker took it off the world"} before this reached it; it takes nothing more. Nothing was recorded.`, { room: 0 });
   const total = used.load;
   if (total + adding > capacity)
     throw bounce(409, `${chest} has room for ${Math.max(capacity - total, 0)}, not ${adding}`,

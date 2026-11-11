@@ -81,8 +81,9 @@ test("#4559 · the reported case: a plain thing made in hand is no consumable, a
   const id = `${LB}/pebble`;
   await makeInto(o, LB, thing(LB, "pebble"));
   assert.equal((await o.deps.markById(id))?.held_by, LB, "made in hand: held, live, on the world");
-  // consume still refuses it, exactly as before: a plain thing is not becoming edible
-  await assert.rejects(callKinds("consume", { thing: id }, KEY(LB), LB, o.deps), (e) => /a thing is not a consumable/.test(e.defect));
+  // consume still refuses it, exactly as before: a plain thing is not becoming edible. Its maker is pointed at withdraw (#4559's step 2)
+  await assert.rejects(callKinds("consume", { thing: id }, KEY(LB), LB, o.deps),
+    (e) => /a thing is not a consumable/.test(e.defect) && e.hint.includes(`You made it and hold it, so you can withdraw it for good instead: withdraw { mark: "${id}" }.`));
 
   const before = o.acts.length;
   const r = await withdraw(o, id, LB);
@@ -120,6 +121,9 @@ test("refused, writing nothing: a made thing in another's hands, one in a holder
   await assert.rejects(withdraw(o, given, FIVE), (e) => e.code === 403 && e.defect === `${given} was made by ${LB}, and a thing made in hand is withdrawn only by its maker`, "the one who holds it did not make it");
   assert.equal(o.acts.length, n, "nothing was written");
   assert.equal((await o.deps.markById(given))?.held_by, FIVE, "still where it was");
+  // holding a plain thing another made, consume is refused with no pointer to a door that would refuse its holder
+  await assert.rejects(callKinds("consume", { thing: given }, KEY(FIVE), FIVE, o.deps),
+    (e) => /a thing is not a consumable/.test(e.defect) && !e.hint.includes("withdraw"));
 
   const own = `${LB}/once`;
   await makeInto(o, LB, thing(LB, "once"));
@@ -148,6 +152,13 @@ test("a name never made in hand is no business of this act: 404, nothing written
   const o = office();
   await assert.rejects(withdraw(o, `${LB}/never-made`, LB), (e) => e.code === 404 && /no mark/.test(e.defect));
   assert.equal(o.acts.length, 0);
+});
+
+test("the withdraw door teaches it: its tool says a thing made in hand goes at once and for good, unlike canon at the next crossing", async () => {
+  const { WORLD_TOOLS } = await import("../src/world.mjs");
+  const tool = WORLD_TOOLS.find((t) => t.name === "world_withdraw_mark");
+  assert.match(tool.description, /canon at the next crossing/, "a published mark is unpublished at the crossing, as before");
+  assert.match(tool.description, /A thing you made in hand \(leave-mark \{ slug, body, to \}\) and still hold is withdrawn at once and for good: its holding ends, it leaves the world now, the record keeps its making, and its name is never made again; a holder goes only empty\./);
 });
 
 test("the store's reader and the history: a withdraw is a hold face, read as the end of the holding, and told as withdrawn by its maker, never eaten", () => {

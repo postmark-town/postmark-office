@@ -641,7 +641,9 @@ export async function callKinds(route, args, key, actor, deps) {
               holder == null ? "Nothing was changed." : `consume eats from your own hands${String(holder).includes("/") ? `; take it out of ${holder} first` : ""}. Nothing was changed.`);
           const klass = String(made.get(thing).kind ?? "thing");
           if (!isEdible(klass))
-            throw bounce(422, `a ${klass} is not a consumable`, `consume uses up what is made to be used up (a consumable, as candy is); ${thing} is a ${klass}. Nothing was changed.`);
+            throw bounce(422, `a ${klass} is not a consumable`, `consume uses up what is made to be used up (a consumable, as candy is); ${thing} is a ${klass}.${
+              // POS-992 (postmark#4559's step 2): its maker, holding it, is pointed at the door that ends it
+              String(made.get(thing).by ?? String(thing).split("/")[0]) === String(actor) ? ` You made it and hold it, so you can withdraw it for good instead: withdraw { mark: "${thing}" }.` : ""} Nothing was changed.`);
           refuseIfStolenNow(deps, () => klass);
           const w = await eatNamed(deps, key, actor, attachments, thing);
           const after = [...attachments, { entity: String(actor), target: thing, policy: "detach", born_at: new Date().toISOString() }];

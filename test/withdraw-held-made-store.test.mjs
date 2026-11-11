@@ -106,7 +106,8 @@ test("#4559 · the reported case at the real door: a plain thing made in hand is
   assert.equal((await worldMarkById(id)).mark, null, "gone from the world");
   await assert.rejects(make(who, "pebble"), (e) => e.code === 409, "its name is never made again");
   // and what is never made in hand still gets the true 404
-  await assert.rejects(withdrawMarkViaOffice(repo, { mark: `${who}/never-was` }, keyOf(who)), (e) => e.code === 404 && /no mark/.test(e.defect));
+  await assert.rejects(withdrawMarkViaOffice(repo, { mark: `${who}/never-was` }, keyOf(who)),
+    (e) => e.code === 404 && /no mark/.test(e.defect) && e.hint.includes("a thing you made in hand and still hold"));
 });
 
 test("the attachment reads after a mixed record: a legacy attachment (class legacy), a mark's withdraw, a creature's withdraw and a hold-lane withdraw; the holder reads still answer, the legacy row is read, and the mark and creature withdrawals are not", { skip }, async () => {
@@ -151,6 +152,42 @@ test("refused, writing nothing in any table: another house's key, an eaten thing
   assert.equal((await worldMarkById(slip)).mark?.held_by, bag, "the slip is still inside the bag");
   assert.equal((await worldMarkById(bag)).mark?.held_by, who);
   assert.equal((await worldMarkById(pebble)).mark?.held_by, who);
+});
+
+// THE FIX (independent review of #1009 at 406e8929, finding 1): a give planned into a made holder before its
+// withdrawal, reaching the chest's lock after it, landed in a holder no one holds, stranded for good. The under-lock
+// liveness (chest-lock.mjs § lockedChestUse) now reads the holder's own newest hold row: deterministic here, no timing.
+test("FIX · ended under the lock: after a made holder's withdraw, the real chest room guard refuses an add (409) and a real append through the pen writes nothing; a live made holder still accepts", { skip }, async () => {
+  const who = "sbx-pa", bag = `${who}/bag`, box = `${who}/box`, slip = `${who}/slip`;
+  await make(who, "bag", { holder: true });
+  await make(who, "box", { holder: true });
+  await make(who, "slip");
+  assert.equal((await withdrawMarkViaOffice(repo, { mark: bag }, keyOf(who))).withdrawn, true, "empty, it is withdrawn");
+  const { chestRoomGuard } = await import("../src/chest-lock.mjs");
+  const g = await store.connect("office_api");
+  try {
+    await g.query("BEGIN");
+    await assert.rejects(chestRoomGuard({ chest: bag, capacity: 30, adding: 1 })(g), (e) => e.code === 409 && e.defect === `${bag} was withdrawn` && /takes nothing more/.test(e.hint));
+    await g.query("ROLLBACK");
+    await g.query("BEGIN");
+    await chestRoomGuard({ chest: box, capacity: 30, adding: 1 })(g);   // the live one: no refusal
+    await g.query("ROLLBACK");
+  } finally { await g.end(); }
+
+  // the give a racing door would write, planned before the withdrawal, appended now under the guard it carries
+  const { liveUnitDeps, thingHoldingEntry } = await import("../src/world-units.mjs");
+  const deps = await liveUnitDeps();
+  const giveInto = async (holder) => {
+    const { attachments } = await deps.readRows();
+    const { entry } = await thingHoldingEntry(deps, keyOf(who), who, attachments, { did: "give", thing: slip, holder, previous: who, madeBy: who });
+    return deps.append(entry, { guard: chestRoomGuard({ chest: holder, capacity: 30, adding: 1 }) });
+  };
+  const image = await storeImage();
+  await assert.rejects(giveInto(bag), (e) => e.code === 409 && e.defect === `${bag} was withdrawn`);
+  assert.deepEqual(await storeImage(), image, "the refused append wrote nothing in any table");
+  assert.equal((await worldMarkById(slip)).mark?.held_by, who, "the slip is still in hand, never stranded");
+  await giveInto(box);
+  assert.equal((await worldMarkById(slip)).mark?.held_by, box, "into a live made holder it lands");
 });
 
 test("withdrawn for good: a second withdraw is refused, a put-back finds nothing to revive, and an empty made holder withdraws", { skip }, async () => {

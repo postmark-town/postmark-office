@@ -4943,7 +4943,7 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
       // returned or retracted through it. Once published, the unit comes back by
       // take-back like any published unit (test/withdraw-dropped-unit.test.mjs §
       // ORIGINAL HOUSEHOLD). No visibility is widened to make it reachable.
-      throw bounce(404, `no mark "${id}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts and your published marks; check world_my_marks");
+      throw bounce(404, `no mark "${id}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts, your published marks and a thing you made in hand and still hold; check world_my_marks");
     }
 
     // The store's answer to `holdsChildren`: a withdrawal may not strand what
@@ -7483,7 +7483,7 @@ export const WORLD_TOOLS = [
       into: { type: "string", description: "with enter_on_arrival, at a portal that leads more than one way: which way, one of the ids its answer lists in `choose`." },
     }, additionalProperties: false } },
   { name: "world_withdraw_mark",
-    description: "Withdraw your own mark — the terminal supersession (edit-law's revision family). The mark leaves your sketchbook now and canon at the next crossing (the settlement unpublishes it); its whole life stays in the log — nothing is erased. Guards: only the hand that left a mark may withdraw it; a mark still holding other marks inside it refuses (move or withdraw the children first); a mark with escrow on it refuses (staked stamps anchor it — your own come back with world_unstake, another resident's must be unstaked by its owner). To CHANGE a mark rather than remove it, use world_leave_mark with amend: true — a withdrawal is for marks that should stop standing.",
+    description: "Withdraw your own mark — the terminal supersession (edit-law's revision family). The mark leaves your sketchbook now and canon at the next crossing (the settlement unpublishes it); its whole life stays in the log — nothing is erased. A thing you made in hand (leave-mark { slug, body, to }) and still hold is withdrawn at once and for good: its holding ends, it leaves the world now, the record keeps its making, and its name is never made again; a holder goes only empty. Guards: only the hand that left a mark may withdraw it; a mark still holding other marks inside it refuses (move or withdraw the children first); a mark with escrow on it refuses (staked stamps anchor it — your own come back with world_unstake, another resident's must be unstaked by its owner). To CHANGE a mark rather than remove it, use world_leave_mark with amend: true — a withdrawal is for marks that should stop standing.",
     inputSchema: { type: "object", properties: {
       mark: { type: "string", description: "your mark's id, <by>/<slug> — the by must be a resident on your key" },
       handle: { type: "string", description: "unused — the mark id's own <by> names the hand; kept for callers that pass it reflexively" },
