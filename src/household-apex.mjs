@@ -561,7 +561,7 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
              over: { type: "string", description: "only the marks lying over this ground of yours — the `over` of a waiting group; the answer's `ids` then go straight into declare-stance-on { on: [...] }" } },
   outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
-  stakes: {},
+  stakes: { limit: { type: "number", description: "the newest N rows (the doorstep shows a few); omit for every row" } },
   address: {},
   home: {},
   standing: {},
@@ -2123,7 +2123,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (!(named || held.length))
         return bounce(422, "whose marks?", "pass handle: — or call with a key that holds a resident; this is derived from the marks your household has published");
       const { doorstepStakes } = await import("./doorstep-stakes.mjs");
-      return doorstepStakes(named || null, { key });
+      // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview; bare, the read is every row in its own order, as it always was.
+      return doorstepStakes(named || null, { key, limit: f.limit ?? null });
     }
     // ── the doorstep, at the door where your standing lives ─────────────────
     // THE SAME BUNDLE the flat read_doorstep answers — one implementation, and

@@ -1331,6 +1331,10 @@ export const DOORSTEP_SEGMENTS = Object.freeze([...INDEX_SEGMENTS, "stances", "o
  *  `serves` pointer names the read that walks the rest. */
 export const DOORSTEP_STANCES = 5;
 
+/** How many stake rows the morning page shows (POS-902). A preview: `count` and `at_risk` are the whole report's, and the segment's
+ *  `serves`/`args` name the read that returns every row. */
+export const DOORSTEP_STAKES = 10;
+
 // ⚠ THE LAW WAS RE-STRUNG 2026-08-31 (ruled by Wright in-lane under the founder's parity ruling; founder informed with an override window, no override), and the previous sentence
 // is kept here so the change is visible rather than silent. It read:
 //

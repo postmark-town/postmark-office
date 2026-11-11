@@ -21,7 +21,7 @@
 // to see, not theirs to be seen by"). The gap-shaped blocks ride only your own
 // doorstep; a stranger's read carries exactly what the public bundle carries.
 
-import { nextStepsFor, DOORSTEP_SEGMENTS, DOORSTEP_STANCES } from "./queries.mjs";
+import { nextStepsFor, DOORSTEP_SEGMENTS, DOORSTEP_STANCES, DOORSTEP_STAKES } from "./queries.mjs";
 import { renamedRow } from "./one-contract.mjs";
 import { hotTenseBlock } from "./town-updates.mjs";
 import { hotMailBlock, outboxTense } from "./town-mail.mjs";
@@ -254,14 +254,15 @@ export async function doorstepBundle(handle, ctx = {}) {
     // THE ONE CONVERSION. `stakesFor` reads calendar fields off a Date
     // (`nextSettlement` calls `getUTCFullYear`), so the page's instant becomes
     // a Date here and nowhere else — see the `nowMs` note at the top.
-    const whole = await doorstepStakes(handle, { key, now: new Date(nowMs) });
+    // `ctx.stakesReaders` is the stakes report's own reader seam (doorstep-stakes.mjs § stakesFor), for a test's invented world; the live doors pass none.
+    const whole = await doorstepStakes(handle, { key, now: new Date(nowMs), limit: DOORSTEP_STAKES, ...(ctx.stakesReaders ?? {}) });
     const { rule: _rule, read_the_rest: _rest, later_stakes: _later, ...trimmed } = whole;
     d.stakes = slim
-      ? { serves: "household.stakes", args: { handle }, ...trimmed, teach_at: STAKES_TEACH_POINTER,
+      ? { serves: "household.stakes", args: { handle, limit: DOORSTEP_STAKES }, ...trimmed, teach_at: STAKES_TEACH_POINTER,
           abridged: "the sweep's rule and the pointers to the portfolio and the stake door are the same sentences for every resident every day, so the connector skin drops `rule` and `read_the_rest` and names the door instead (`teach_at` above), and `later_stakes` with them. household { read: \"stakes\" } answers it whole. " + SNAPSHOT_LIMIT }
-      : { serves: "household.stakes", args: { handle }, ...whole };
+      : { serves: "household.stakes", args: { handle, limit: DOORSTEP_STAKES }, ...whole };
   } catch (e) {
-    d.stakes = { serves: "household.stakes", args: { handle },
+    d.stakes = { serves: "household.stakes", args: { handle, limit: DOORSTEP_STAKES },
       unavailable: `what stands behind your marks could not be read (${plainReason(e, "record", "the doorstep's stakes")}) — unknown, not zero`,
       count: 0, at_risk: null, rows: [] };
   }

@@ -182,6 +182,39 @@ export function stakesRowsFrom({ handles = [], marks = [], registry = {}, byMark
 }
 
 /**
+ * THE NEWEST FEW (POS-902; Wright: "every growing list shows its newest few, with its true total and how to get the rest"). The chronology is the
+ * MARK'S OWN `date` on the published world (src/doorstep-stakes.mjs reads it off `state.marks`; it is not printed and nothing is invented): a mark
+ * with no readable date sorts after every dated one, and ties fall back to the mark id. Newest first.
+ */
+export function newestFirst(rows, dateOf) {
+  const at = (r) => { const t = Date.parse(dateOf(r.mark)); return Number.isFinite(t) ? t : -Infinity; };
+  return [...rows].sort((x, y) => (at(y) - at(x)) || x.mark.localeCompare(y.mark));
+}
+
+/**
+ * A PREVIEW OF THE ROWS, or all of them. With no `limit` the report is whole, in its own order (at-risk first, then mark id), and carries nothing
+ * extra, exactly as before. With a `limit` it answers the NEWEST `limit` rows (newest first) and says what it is: `shown` of `total`, whether it is
+ * `complete`, the `order` of THIS preview, and where the rest is: the same read with no limit, which is every row in the report's own order. The
+ * report's `count` and `at_risk` stay the whole report's, never the preview's, and when at-risk rows are not among the shown rows the note says
+ * how many of the omitted ones are at risk (the preview is by date, not by risk, and must never read as "these are the at-risk ones").
+ */
+export function previewOf(rows, { limit = null, dateOf = () => null } = {}) {
+  if (limit == null) return { rows, meta: {} };
+  const lim = Math.max(Math.floor(Number(limit)) || 0, 1);
+  const shown = newestFirst(rows, dateOf).slice(0, lim);
+  const omitted = rows.length - shown.length;
+  const riskLeft = rows.filter((r) => r.at_risk === true).length - shown.filter((r) => r.at_risk === true).length;
+  return {
+    rows: shown,
+    meta: {
+      total: rows.length, shown: shown.length, limit: lim, complete: omitted <= 0,
+      order: "the newest published marks first, by the mark's own date (not printed); the whole report is at-risk first, then by mark id",
+      ...(omitted > 0 ? { more_note: `${omitted} further${riskLeft > 0 ? ` (${riskLeft} of them at risk)` : ""} — household { read: "stakes" } with no limit is every row` } : {}),
+    },
+  };
+}
+
+/**
  * The segment's domain for a set of handles. Every input is a reader the
  * caller may replace: `world` answers `{ state, ref }` for world main, `registry`
  * the sweep's file at that ref, `escrow` the `{ townSha, byMark, reason }`
@@ -196,6 +229,7 @@ export async function stakesFor(handles, {
   rule = defaultRule,
   pathAt = defaultPathAt,
   now = new Date(),
+  limit = null,
 } = {}) {
   const scope = [...new Set((handles ?? []).filter(Boolean))];
   const at = nextSettlement(now);
@@ -224,6 +258,8 @@ export async function stakesFor(handles, {
   try { pathOnMain = (await pathAt(ref)) ?? pathOnMain; } catch { /* every registered path reads unread: null, disclosed by the rows */ }
 
   const rows = stakesRowsFrom({ handles: scope, marks: state?.marks ?? [], registry: published, byMark: esc?.byMark ?? null, rule: verdict, pathOnMain });
+  const dates = new Map((state?.marks ?? []).map((m) => [m?.id, m?.date]));
+  const page = previewOf(rows, { limit, dateOf: (id) => dates.get(id) });
   const escrowRead = esc?.byMark instanceof Map;
   const measured = escrowRead && !ruleNote;
   const atRisk = measured ? rows.filter((r) => r.at_risk === true).length : null;
@@ -242,11 +278,12 @@ export async function stakesFor(handles, {
     later_stakes: LATER_STAKES,
     count: rows.length,
     at_risk: atRisk,
+    ...page.meta,
     ...(measured && atRisk === 0 && unjudged === 0 && rows.length
       ? { note: "nothing of yours is at risk as of the town head named above. " + SNAPSHOT_LIMIT } : {}),
     ...(rows.length === 0 ? { note: "no published mark of yours stands on world main — drafts and the docket are at world { read: \"leave-mark\" }" } : {}),
     read_the_rest: 'world { read: "leave-mark" } is the whole portfolio — drafts, the docket, what you have backed; world { read: "stake", args: { mark: "<by>/<slug>" } } is one mark\'s escrow with its holders',
-    rows,
+    rows: page.rows,
   };
 }
 
