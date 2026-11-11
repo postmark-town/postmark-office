@@ -105,6 +105,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { prodKeyRefusal, publicOf } from "./dev-ledger-resign.mjs";
+import { SOCKET as SEAL_SOCKET } from "./town-seal-sandbox.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OFFICE = resolve(HERE, "..");
@@ -422,8 +423,12 @@ export const CROSSING = [
     run: (ctx) => officeJob(ctx, "world2/tools/quest-snapshot-run.mjs", ["--clone", ctx.t.townClone]), commit: "quests: crossing leaderboard" },
   { phase: "ferry", name: "quests", box: "town:tools/quest-progress.mjs", when: "git",
     run: (ctx) => townJob(ctx, "tools/quest-progress.mjs", ["--snapshot"]), commit: "quests: crossing leaderboard" },
-  // POS-988: the seal and its verify run in postmark-town-seal@.service, reached through its socket, as on the box
+  // POS-988: the seal and its verify run in postmark-town-seal@.service, reached through its socket, as on the box.
+  // The socket installs only after the release that carries it is live (DEPLOY.md § The seal runs in its own
+  // sandbox), so a pre-tag rehearsal on a box without it skips this one job and says so in its notes.
   { phase: "ferry", name: "seal", box: "tools/town-seal-sandbox.mjs",
+    skipIf: () => existsSync(process.env.TOWN_SEAL_SOCKET || SEAL_SOCKET) ? null
+      : `${process.env.TOWN_SEAL_SOCKET || SEAL_SOCKET} is not here: postmark-town-seal.socket installs after the release that carries it is live (POS-988), so the seal is not rehearsed on this box yet`,
     run: (ctx) => officeJob(ctx, "tools/town-seal-sandbox.mjs", ["--clone", ctx.t.townClone]), commit: "seal: re-seal at the crossing" },
   // the keep tick under its lock: the store's registry for the town's tools (deploy/registry-file.mjs, never
   // the printouts), the binds, the two store-to-file drains, then the mint block
@@ -667,6 +672,8 @@ export function plan() {
         for (const job of CROSSING) {
           if (job.when && job.when !== (ctx.storeMint ? "store" : "git")) continue;
           if (job.onlyIf && !job.onlyIf(ctx)) continue;
+          const skipped = job.skipIf?.(ctx);
+          if (skipped) { steps.push([job.name, { code: 0, out: "", skipped }, job]); continue; }
           const r = await job.run(ctx);
           steps.push([job.name, r, job]);
           if (r.code !== 0 && !job.nonFatal) break; // the unit's `&&`: the first refusal stops the chain
@@ -680,6 +687,7 @@ export function plan() {
       async check(ctx, steps, rec) {
         const p = [];
         for (const [name, r, job] of steps) {
+          if (r.skipped) { rec.notes.push(`${name} SKIPPED: ${r.skipped}`); continue; }
           if (r.code === 0) continue;
           if (job.nonFatal) rec.notes.push(`${name} exited ${r.code} (the box runs it non-fatal): ${tail(r.out, 6)}`);
           else p.push(`${name} exited ${r.code}: ${tail(r.out)}`);

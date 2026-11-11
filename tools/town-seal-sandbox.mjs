@@ -36,8 +36,23 @@
 // file set that is not exactly its own list, so neither can be made to read or
 // write any other path. The client writes only the two OUTPUTS, by name.
 //
+// ── NO SYMLINK IS FOLLOWED (Truey's review of #1007) ────────────────────────
+// The client runs as meepo, so the paths it reads and writes in the clone are
+// the one place town content could still steer meepo's rights: a committed
+// symlink at an input (to the stamp key, say) would have the client read it
+// and hand it to the sandbox, and one at an output, or at any directory above
+// one, would have the client write the sandbox's answer through it. So before
+// it connects, the client walks every one of the six paths from the clone's
+// realpath down with lstat: each directory must be a real directory and each
+// file a regular file, with no symlink anywhere. It reads each input through
+// O_NOFOLLOW and writes each output to a temp file in its checked directory,
+// then renames it over the name, so a link is replaced and never followed. A
+// refusal names the path and exits 1, like the others, before anything is
+// written. (The town refusing symlinks on main is POS-969; this holds without it.)
+//
 // Exit codes (client): 0 sealed and written; 1 a refusal (the sandbox's, a
-// missing socket, a malformed answer), named on stderr; 2 bad arguments.
+// missing socket, a malformed answer, a symlink or a non-regular file in the
+// clone), named on stderr; 2 bad arguments.
 //
 // TOWN_SEAL_SOCKET overrides the socket path, for the tests' stand-in of the
 // socket unit; on the box it is unset and the client uses SOCKET below.
@@ -47,9 +62,12 @@
 
 import { createConnection, Socket } from "node:net";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync,
+  renameSync, rmSync, writeFileSync, writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const SOCKET = "/run/postmark-town-seal.sock";
@@ -61,6 +79,56 @@ export const OUTPUTS = ["PROJECTS/the-town-seal/seal.json", "PROJECTS/the-town-s
 const MAX_BYTES = 256 * 1024 * 1024;
 const STEP_MS = 10 * 60 * 1000;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+// 0 on Windows, where node has no O_NOFOLLOW; the lstat walk below still holds there.
+const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+
+/**
+ * The absolute path of `rel` under `clone`, or a throw naming the first part of it
+ * that is a symlink, a non-directory above the leaf, or a non-regular leaf. A
+ * missing leaf is allowed only when `mayBeMissing` (an output the seal creates).
+ */
+export function plainPath(clone, rel, mayBeMissing = false) {
+  const parts = rel.split("/");
+  let at = realpathSync(clone);
+  for (let i = 0; i < parts.length; i++) {
+    at = join(at, parts[i]);
+    const shown = parts.slice(0, i + 1).join("/");
+    const leaf = i === parts.length - 1;
+    let st;
+    try {
+      st = lstatSync(at);
+    } catch (e) {
+      if (e?.code === "ENOENT" && leaf && mayBeMissing) return at;
+      throw new Error(`${shown}: ${e?.code ?? e?.message ?? e}`);
+    }
+    if (st.isSymbolicLink()) throw new Error(`${shown} is a symlink`);
+    if (leaf ? !st.isFile() : !st.isDirectory()) throw new Error(`${shown} is not a ${leaf ? "regular file" : "directory"}`);
+  }
+  return at;
+}
+
+function readPlain(path) {
+  const fd = openSync(path, constants.O_RDONLY | O_NOFOLLOW);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error(`${path} is not a regular file`);
+    return readFileSync(fd);
+  } finally { closeSync(fd); }
+}
+
+function writePlain(path, bytes) {
+  // the ferry's clean covers WHITE_PAGES only, so a temp file left behind here would dirty the clone
+  const tmp = join(dirname(path), `.${basename(path)}.seal-${process.pid}`);
+  const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | O_NOFOLLOW, 0o644);
+  try {
+    try {
+      for (let off = 0; off < bytes.length;) off += writeSync(fd, bytes, off, bytes.length - off);
+    } finally { closeSync(fd); }
+    renameSync(tmp, path);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
 
 /** Exactly `names`, each a base64 string, or a throw naming what is wrong. */
 export function checkFiles(files, names, what) {
@@ -126,10 +194,12 @@ export async function serve() {
 /** The ferry's half: send the clone's inputs, write the two outputs back, or exit 1 naming why. */
 export async function client(clone, socketPath = process.env.TOWN_SEAL_SOCKET || SOCKET) {
   let files;
+  const out = {};
   try {
-    files = Object.fromEntries(INPUTS.map((rel) => [rel, readFileSync(join(clone, rel)).toString("base64")]));
+    files = Object.fromEntries(INPUTS.map((rel) => [rel, readPlain(plainPath(clone, rel)).toString("base64")]));
+    for (const rel of OUTPUTS) out[rel] = plainPath(clone, rel, true);
   } catch (e) {
-    console.error(`[seal] the seal's inputs are not all in ${clone}: ${e?.message ?? e}`);
+    console.error(`[seal] refused in the clone ${clone}: ${e?.message ?? e}; nothing sent, nothing written`);
     return 1;
   }
   let body;
@@ -158,7 +228,12 @@ export async function client(clone, socketPath = process.env.TOWN_SEAL_SOCKET ||
     console.error(`[seal] ${e.message}: nothing written`);
     return 1;
   }
-  for (const rel of OUTPUTS) writeFileSync(join(clone, rel), Buffer.from(answer.files[rel], "base64"));
+  try {
+    for (const rel of OUTPUTS) writePlain(out[rel], Buffer.from(answer.files[rel], "base64"));
+  } catch (e) {
+    console.error(`[seal] writing the seal's outputs failed: ${e?.message ?? e}`);
+    return 1;
+  }
   console.log(`[seal] sealed in the sandbox: ${OUTPUTS.join(", ")}`);
   return 0;
 }

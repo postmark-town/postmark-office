@@ -36,7 +36,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -527,7 +527,10 @@ test("ferry · a red verify after the ballot pass removes the receipt it created
   assert.equal(ledgerAt(fx), "row 1\nmint row 2\n");
 });
 
-test("ferry · a refusing seal verify puts the re-seal back", { skip: fskip }, () => {
+// POS-988: a refusal inside the sandbox writes nothing into the clone (the
+// client writes only on a green answer), so this holds the "nothing written"
+// half. The undo at the seal stage is the next test's.
+test("ferry · a refusing sandboxed seal verify writes nothing into the clone", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);
   const r = run(fx, ["-c", ferryScript(fx)], { STUB_SEAL: "a bad seal", STUB_SEAL_VERIFY_EXIT: "1" });
   assert.notEqual(r.status, 0);
@@ -545,6 +548,26 @@ test("ferry · a refusing seal verify puts the re-seal back", { skip: fskip }, (
 // THE CAN-FAIL FLIPS: put `node PROJECTS/the-town-seal/seal.mjs` back in the
 // chain (the seal sees GH_TOKEN and the rest), or let the client exit 0 when
 // the socket does not answer (the crossing goes green with a stale seal).
+
+// THE CAN-FAIL FLIP for the undo at the seal stage: take `trap undo EXIT` out of
+// the payload and the re-seal stays on disk.
+test("ferry · a seal stage that wrote both outputs and then refused at its commit is put back by the undo (POS-988)", { skip: fskip }, () => {
+  const fx = fixture(["row 1"]);
+  // A planted hook refuses the seal's commit and nothing else: the client has
+  // written both outputs into the clone by then, so only the undo can take them back.
+  const hook = join(fx.town, ".git", "hooks", "pre-commit");
+  writeFileSync(hook, "#!/bin/sh\nif git diff --cached --name-only | grep -q '^PROJECTS/the-town-seal/'; then echo 'planted hook: the seal commit refused' >&2; exit 1; fi\nexit 0\n");
+  chmodSync(hook, 0o755);
+  const r = run(fx, ["-c", ferryScript(fx)], { STUB_FERRY_DELIVER: "letter-1", STUB_QUESTS: "quests moved", STUB_SEAL: "resealed" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stdout, /\[seal\] sealed in the sandbox/, "the client wrote the outputs before the commit refused");
+  assert.match(r.stderr, /planted hook: the seal commit refused/);
+  assert.match(r.stderr, /\[ferry\] a gate refused \(exit 1\)/);
+  assert.equal(status(fx), "", "the undo took the written outputs back");
+  assert.equal(readFileSync(join(fx.town, "PROJECTS", "the-town-seal", "seal.json"), "utf8"), "{\"seal\":\"founding\"}\n");
+  assert.equal(readFileSync(join(fx.town, "PROJECTS", "the-town-seal", "the-town-seal.html"), "utf8"), "<p>founding</p>\n");
+  assert.equal(fx.g("-C", fx.town, "log", "--format=%s", "-1").trim(), "quests: crossing leaderboard", "the passes before the seal stay committed");
+});
 
 test("ferry · the seal runs with none of the ferry's environment (POS-988)", { skip: fskip }, () => {
   const fx = fixture(["row 1"]);

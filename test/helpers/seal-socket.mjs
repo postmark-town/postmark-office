@@ -24,6 +24,9 @@ export const sealSkip = process.platform === "win32" ? "the sandboxed seal reads
 
 const servers = [];
 
+/** What serve is started with here: PATH, plus values a seal must never see. */
+export const DECOY_ENV = { PATH: process.env.PATH, GH_TOKEN: "decoy-not-a-token", TOWN_CLONE: "/decoy/town-clone", STAMP_KEY: "/decoy/stamp-key.pem" };
+
 /** Start a stand-in socket at `path`; returns `path` once it is listening. */
 export function startSealSocket(path) {
   const child = spawn(process.execPath, [HERE, path], { stdio: ["ignore", "ignore", "inherit"], env: { PATH: process.env.PATH } });
@@ -44,7 +47,9 @@ export function stopSealSockets() {
 if (process.argv[1] === HERE) {
   const path = process.argv[2];
   createServer({ allowHalfOpen: true, pauseOnConnect: true }, (conn) => {
-    const child = spawn(process.execPath, [TOOL, "serve"], { stdio: [conn, conn, "inherit"], env: { PATH: process.env.PATH } });
+    // DECOY: serve itself is started with what a careless unit could hand it, so the
+    // tests see serve's own scrub (its children get PATH only), not this stand-in's.
+    const child = spawn(process.execPath, [TOOL, "serve"], { stdio: [conn, conn, "inherit"], env: DECOY_ENV });
     child.on("spawn", () => conn.destroy());
   }).listen(path);
 }

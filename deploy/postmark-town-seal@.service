@@ -17,8 +17,16 @@ Description=Postmark town seal — one sandboxed seal and verify, for the ferry 
 #     lab are out of sight, all but this one tool, bound read-only;
 #   · PrivateNetwork and RestrictAddressFamilies: no network; AF_UNIX only for
 #     what node itself needs;
-#   · ProtectSystem=strict, ProtectHome and PrivateTmp: it writes only its own /tmp.
-# MemoryDenyWriteExecute is NOT set: node's JIT needs it.
+#   · TemporaryFileSystem=/run:ro and /var:ro: no filesystem socket to connect
+#     to (a database's, the system bus), since AF_UNIX stays open. The
+#     connection arrives as an inherited fd and the journal as stderr, so
+#     neither needs /run;
+#   · ProtectSystem=strict, ProtectHome and PrivateTmp: it writes only its own
+#     /tmp, and MemoryMax, TasksMax and LimitFSIZE bound how much of it;
+#   · CollectMode=inactive-or-failed: a refused seal's instance is unloaded once
+#     it ends, so no failed per-connection instance lingers for the roll-call.
+# MemoryDenyWriteExecute is NOT set: node's JIT needs it. What stays readable is
+# what any user can read under /etc and /usr; every secret on the box is 0600.
 
 [Service]
 ExecStart=/usr/bin/node /srv/postmark-office/tools/town-seal-sandbox.mjs serve
@@ -27,6 +35,8 @@ StandardOutput=socket
 StandardError=journal
 DynamicUser=yes
 TemporaryFileSystem=/srv:ro
+TemporaryFileSystem=/run:ro
+TemporaryFileSystem=/var:ro
 BindReadOnlyPaths=/srv/postmark-office/tools/town-seal-sandbox.mjs
 PrivateNetwork=yes
 IPAddressDeny=any
@@ -51,3 +61,7 @@ LockPersonality=yes
 SystemCallArchitectures=native
 UMask=0077
 RuntimeMaxSec=20min
+MemoryMax=2G
+TasksMax=64
+LimitFSIZE=512M
+CollectMode=inactive-or-failed

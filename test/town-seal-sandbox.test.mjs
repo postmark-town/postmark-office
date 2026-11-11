@@ -21,11 +21,12 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkFiles, client, INPUTS, OUTPUTS, SOCKET } from "../tools/town-seal-sandbox.mjs";
+import { DECOY_ENV } from "./helpers/seal-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TOOL = join(OFFICE, "tools", "town-seal-sandbox.mjs");
@@ -53,6 +54,9 @@ test("the sandbox unit: no environment, a DynamicUser, no network, and /srv hidd
     "DynamicUser=yes", "PrivateNetwork=yes", "IPAddressDeny=any", "RestrictAddressFamilies=AF_UNIX",
     "TemporaryFileSystem=/srv:ro", "ProtectSystem=strict", "ProtectHome=yes", "PrivateTmp=yes", "NoNewPrivileges=yes",
     "CapabilityBoundingSet=",
+    // Truey's review of #1007: AF_UNIX stays open for node, so no filesystem socket may be in sight
+    "TemporaryFileSystem=/run:ro", "TemporaryFileSystem=/var:ro",
+    "MemoryMax=2G", "TasksMax=64", "LimitFSIZE=512M", "CollectMode=inactive-or-failed",
   ]) assert.ok(s.includes(line), `the sandbox unit carries ${line}`);
   assert.deepEqual(s.filter((l) => /^(BindPaths|BindReadOnlyPaths|ReadWritePaths|ReadOnlyPaths)=/.test(l)),
     ["BindReadOnlyPaths=/srv/postmark-office/tools/town-seal-sandbox.mjs"], "the one path under /srv it can see is the tool, read-only");
@@ -88,7 +92,7 @@ test("checkFiles takes exactly its list, each as base64", () => {
 /** One serve, wired with pipes, sent `request`; resolves its answer and exit. POSIX: it reads fd 0 as a socket-like stream. */
 function serveOnce(request) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [TOOL, "serve"], { stdio: ["pipe", "pipe", "pipe"], env: { PATH: process.env.PATH } });
+    const child = spawn(process.execPath, [TOOL, "serve"], { stdio: ["pipe", "pipe", "pipe"], env: DECOY_ENV });
     let out = "", err = "";
     child.stdout.on("data", (c) => { out += c; });
     child.stderr.on("data", (c) => { err += c; });
@@ -131,15 +135,17 @@ writeFileSync("PROJECTS/the-town-seal/the-town-seal.html", Buffer.from([0xff, 0x
   assert.deepEqual(red.answer, { ok: false, stage: "verify", exit: 3 });
 });
 
-/** A fake sandbox that answers every connection with `answer`. */
+/** A fake sandbox that answers every connection with `answer`, and keeps what each one sent in `received`. */
 async function fakeSandbox(answer) {
   const path = process.platform === "win32" ? `\\\\.\\pipe\\postmark-seal-test-${process.pid}-${Math.random().toString(36).slice(2)}` : join(scratch, `fake-${Math.random().toString(36).slice(2)}.sock`);
+  const received = [];
   const server = createServer({ allowHalfOpen: true }, (conn) => {
-    conn.on("data", () => {});
-    conn.on("end", () => conn.end(typeof answer === "string" ? answer : JSON.stringify(answer)));
+    let got = "";
+    conn.on("data", (c) => { got += c; });
+    conn.on("end", () => { received.push(got); conn.end(typeof answer === "string" ? answer : JSON.stringify(answer)); });
   });
   await new Promise((r) => server.listen(path, r));
-  return { path, close: () => new Promise((r) => server.close(r)) };
+  return { path, received, close: () => new Promise((r) => server.close(r)) };
 }
 
 function cloneWithInputs() {
@@ -176,4 +182,62 @@ test("the client exits 1 on a refusal, a malformed answer, or no sandbox at all"
   const missing = process.platform === "win32" ? "\\\\.\\pipe\\postmark-seal-no-such" : join(scratch, "no-such.sock");
   assert.equal(await client(clone, missing), 1);
   assert.equal(await client(join(scratch, "no-clone-here"), missing), 1, "a clone without the inputs is a refusal too");
+});
+
+// ── NO SYMLINK IS FOLLOWED (Truey's review of #1007, the blocker) ──────────
+// The client runs as meepo: a committed symlink at an input would have it read
+// what the link names (the stamp key) and hand it to the sandbox, and one at an
+// output, or at a directory above one, would have it write the sandbox's answer
+// through the link (office code). Each case plants one, against a fake sandbox
+// that records what it received, and holds the link's target byte-unchanged.
+// THE CAN-FAIL FLIP: make plainPath return join(clone, rel) without the walk;
+// all three cases go red (the marker reaches the sandbox, the targets change).
+
+const GOOD = { ok: true, files: { [OUTPUTS[0]]: b64("written by the answer\n"), [OUTPUTS[1]]: b64("<p>written by the answer</p>\n") } };
+
+test("a symlink at an output: refused, nothing sent, and the link's target untouched", { skip: posix }, async () => {
+  const clone = cloneWithInputs();
+  const target = join(scratch, `office-code-${Math.random().toString(36).slice(2)}.mjs`);
+  writeFileSync(target, "office code\n");
+  symlinkSync(target, join(clone, OUTPUTS[1]));
+  const s = await fakeSandbox(GOOD);
+  try { assert.equal(await client(clone, s.path), 1); } finally { await s.close(); }
+  assert.equal(readFileSync(target, "utf8"), "office code\n", "the answer was never written through the link");
+  assert.deepEqual(s.received, [], "the client refused before it connected");
+  assert.equal(readFileSync(join(clone, OUTPUTS[0]), "utf8"), `${OUTPUTS[0]} at the founding\n`, "and wrote no other output either");
+});
+
+test("a symlinked directory above the outputs: refused, and the directory it names untouched", { skip: posix }, async () => {
+  const clone = cloneWithInputs();
+  const elsewhere = mkdtempSync(join(scratch, "elsewhere-"));
+  const dir = dirname(join(clone, OUTPUTS[0]));
+  for (const rel of INPUTS.filter((r) => r.startsWith("PROJECTS/the-town-seal/"))) writeFileSync(join(elsewhere, basename(rel)), `${rel} elsewhere\n`);
+  rmSync(dir, { recursive: true });
+  symlinkSync(elsewhere, dir, "dir");
+  const s = await fakeSandbox(GOOD);
+  try { assert.equal(await client(clone, s.path), 1); } finally { await s.close(); }
+  assert.equal(readFileSync(join(elsewhere, "seal.json"), "utf8"), "PROJECTS/the-town-seal/seal.json elsewhere\n");
+  assert.equal(existsSync(join(elsewhere, "the-town-seal.html")), false);
+  assert.deepEqual(s.received, []);
+});
+
+test("a symlink at an input: refused, and what it names never reaches the sandbox", { skip: posix }, async () => {
+  const clone = cloneWithInputs();
+  const secret = join(scratch, `stamp-key-${Math.random().toString(36).slice(2)}.pem`);
+  writeFileSync(secret, "MARKER-NOT-A-KEY\n");
+  rmSync(join(clone, INPUTS[3]));
+  symlinkSync(secret, join(clone, INPUTS[3]));
+  const s = await fakeSandbox(GOOD);
+  try { assert.equal(await client(clone, s.path), 1); } finally { await s.close(); }
+  const sent = s.received.join("");
+  assert.ok(!sent.includes(b64("MARKER-NOT-A-KEY\n")) && !sent.includes("MARKER-NOT-A-KEY"), "the marker never left the client");
+  assert.deepEqual(s.received, []);
+
+  // the control: the same clone with a regular file there is accepted
+  rmSync(join(clone, INPUTS[3]));
+  writeFileSync(join(clone, INPUTS[3]), "the ledger\n");
+  const ok = await fakeSandbox(GOOD);
+  try { assert.equal(await client(clone, ok.path), 0); } finally { await ok.close(); }
+  assert.equal(ok.received.length, 1, "one request went out");
+  assert.equal(readFileSync(join(clone, OUTPUTS[1]), "utf8"), "<p>written by the answer</p>\n");
 });
