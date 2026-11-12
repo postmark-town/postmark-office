@@ -1124,6 +1124,7 @@ async function handleOauthRoute(req, res, ctx) {
     // decide, the same test the store's write repeats at the button.
     if (pending.kind === "likeness") {
       const { likenessRegistry, accountBinds } = await import("./likeness.mjs");
+      const { ownerLikeness } = await import("./household-likeness-state.mjs");
       const reg = await likenessRegistry().catch(() => null);
       const rec = reg?.houses?.[pending.slug];
       if (!rec) return html(res, 409, page("The record is closed", "<p>The office can't read this household's record just now. Nothing was changed; try the link again shortly.</p>"));
@@ -1143,6 +1144,7 @@ async function handleOauthRoute(req, res, ctx) {
         login: ghUser.login, houseName: rec.name ?? pending.slug, residents: rec.residents ?? [],
         answer: rec.likeness?.answer ?? null, at: rec.likeness?.at ?? null, by: rec.likeness?.by ?? null,
         gallery: pages.galleryFor(reg.houses), action: `${PUBLIC_BASE}/oauth/consent`, pendingId, nonce: nonceL,
+        state: ownerLikeness(rec),               // the household's OWN view, to the account its row binds and no one else
       }));
     }
 
@@ -1211,6 +1213,23 @@ async function handleOauthRoute(req, res, ctx) {
     // RE-CHECKED AT THE BUTTON by the one writer: the store writes only the row
     // with this slug that still binds the signed-in account (setHouseholdLikeness).
     if (pending.kind === "likeness") {
+      // THE LIKENESS REQUEST (POS-726 slice B), by this same signed-in account and no other road. It is a request and nothing else: no
+      // decision here chooses, changes or withdraws an official picture. The writer re-reads the row, judges the answer, the binding and the
+      // roster again, and writes one statement (likeness.mjs § requestLikenessState).
+      if (body.decision === "request") {
+        try {
+          const { requestLikenessState } = await import("./likeness.mjs");
+          const done = await requestLikenessState({ slug: pending.slug, depicts: body.depicts, ghId: pending.gh_id, ghLogin: pending.gh_login });
+          const { stateChangedPage } = await import("./likeness-pages.mjs");
+          return html(res, 200, stateChangedPage({ state: done.likeness, login: pending.gh_login }));
+        } catch (e) {
+          if (e?.code && e.code < 500)
+            return html(res, e.code, page("Not kept", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
+          if (e?.code === 503)
+            return html(res, 503, page("Not kept", `<p><strong>${esc(e.defect)}</strong></p><p class="muted">${esc(e.hint ?? "")}</p><p>Nothing was changed.</p>`));
+          return html(res, 502, page("Not kept", `<p>The office couldn't keep that. ${faultLogged("the likeness state could not be kept", e)}</p><p>Nothing was changed.</p>`));
+        }
+      }
       if (body.decision !== "yes" && body.decision !== "no")
         return html(res, 400, page("No answer given", "<p>Nothing was changed. Open the link again to answer yes or no.</p>"));
       try {
