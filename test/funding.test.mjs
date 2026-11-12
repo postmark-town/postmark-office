@@ -521,8 +521,8 @@ test("THE MONEY MOMENT says holo votes, and names the cap in the same breath", (
     "it says the stamps vote, because they do — a vote is a stake and clips against a fungible balance");
   assert.match(WHAT_THIS_BUYS, /capped/,
     "AND it names the bound in the same breath: a patron told their stamps vote and NOT told their share is capped has been told half the truth");
-  // CHANGED 2026-11-11 (POS-1001), NOMOS II.4: "Stamps are not money. They
-  // can't be bought … Stamps never turn into money." and II.6.1: NOMOS "grants
+  // CHANGED 2026-11-11 (POS-1001). NOMOS's definition of Stamp: "Stamps are not
+  // money. They can't be bought"; II.4.5: "Stamps never turn into money."; and II.6.1: NOMOS "grants
   // no claim" on owning Postmark or on money outside the town. Until
   // 2026-11-11 the next two asserted the sentence's earlier wording; NOMOS
   // grants nothing outside the town for money, so both are now asserted

@@ -193,8 +193,8 @@ export const HOLO_EXPANSION = "short for holographic stamp — the collector's s
 // sentence (postmark-site town/pages/fund/[pot].astro, the fine print) and
 // moves with it: one sentence, two repos, never two spellings.
 //
-// REWORDED 2026-11-11 (POS-1001) to fit NOMOS II.4 ("Stamps are not money. They
-// can't be bought") and II.6.1 (NOMOS "grants no claim" on owning Postmark or on
+// REWORDED 2026-11-11 (POS-1001) to fit NOMOS's definition of Stamp ("Stamps are
+// not money. They can't be bought") and II.6.1 (NOMOS "grants no claim" on owning Postmark or on
 // money outside the town). It now says a gift pays a bill and is written down
 // in the giver's name; that if the town staked on the pot, the close thanks the
 // giver in stamps that work like any stamp, vote included; that money's share
