@@ -2225,15 +2225,21 @@ next reader will have:
 **Restoring it is a file copy**, which is the whole restore path:
 
 ```
-cp roles/<newest>.db /srv/postmark-office/roles.db   # the office opens it at boot
+aws s3 cp s3://<bucket>/world2/<stamp>/roles-<stamp>.db /srv/postmark-office/roles.db   # the office opens it at boot
 ```
+
+Since 2026-11-11 the roles live in the store (`office_roles`, `office_role_audit`; POS-271) and ride
+inside the dump, so an in-store night ships no `roles-*.db`: restoring the dump restores them.
 
 `world2-restore-rehearse.sh` counts the shipped copy's `role_audit` against the
 live registry on every rehearsal, under the same drift rule as the Postgres
 tables: the live side may have gained rows (the town kept selling), but the copy
 holding MORE rows than live cannot be explained by the clock and is the finding.
-Prefer `--from-remote`, which reads the copy out of the off-box clone rather than
-the box's own disk — the local one only proves the copier ran.
+Prefer `--from-s3`, which reads the copy out of the S3 bucket rather than the
+box's own disk — the local one only proves the copier ran. With the roles in the
+store, the rehearsal counts `office_roles` and `office_role_audit` with the dump's
+other tables. (`--from-remote` reads the GitHub repo, archived at STAR-118 with
+every night up to the git ship's retirement.)
 
 ### The law pen keeps its own clock (2026-09-19, postmark#2893)
 
@@ -2541,11 +2547,14 @@ stamp pen the founder parked.
     /srv/world2-lab/state/          one JSON per lane — the roll-call heartbeats
     /srv/world2-lab/private-dumps/  pg_dump output, 0700, outside every checkout
     /srv/world2-lab/basebackups/    pg_basebackup output, 0700
-    /srv/world2-lab/backup-repo/    the off-box dump repo's checkout
+    /srv/world2-lab/backup-repo/    the git ship's checkout, RETIRED with it (STAR-118);
+                                    it no longer grows, and its removal is
+                                    POS-1009's call. The off-box copy is S3.
     /srv/world2-lab/notary/         the notary checkout, pushed to its OWN repo
     /srv/world2-lab/ingest-clones/  persistent world/town checkouts, reset per run
     /srv/world2-lab/.ssh/           two deploy keys + a pinned known_hosts:
                                     w2-backups -> postmark-world2-backups
+                                                  (the retired git ship's key)
                                     w2-notary  -> postmark-world2-notary
                                     NEITHER key can read the other's repo, and
                                     that is DEC-7 rather than tidiness (below)
