@@ -55,6 +55,7 @@ import { paperDoor } from "./town-updates.mjs";
 // just a comment.
 import { MEDIA_BASE, mediaUrlOk, readHouseFile, uploadMedia, assertMediaHeld } from "./media.mjs";
 import { setHomePicture } from "./home-picture.mjs";
+import { nameRefusal } from "./resident-name.mjs"; // POS-1005
 
 const MAX_BODY = 50_000;     // a face, not an archive
 const MAX_WINDOW = 150_000;  // a pane, not an app — and Ferry reads every pane
@@ -385,6 +386,13 @@ function updateAddressFieldsUnlogged(args, key, db, clone, { defer = false } = {
     const raw = fields[k];
     if (raw != null && typeof raw !== "string") throw bounce(422, `${k} must be a string`, `send text, or "" to clear it back to "${CLEARED}"`);
     const value = String(raw ?? "").trim() || CLEARED;
+    // THE NAME (POS-1005): a NEW or CHANGED `agent` is judged by the one name rule (48 reader-characters, then the byte ceiling behind them), before the card is
+    // touched. The name already on file is not: an unchanged name, however long (a legacy one), passes through an unrelated edit as it was.
+    if (k === "agent") {
+      const onFile = lines.find((l) => /^agent:/.test(l))?.replace(/^agent:\s*/, "").trim();
+      const refused = value === CLEARED || value === onFile ? null : nameRefusal(value);
+      if (refused) throw bounce(refused.code, refused.defect, refused.hint);
+    }
     sizeOk(value, k, 500);
     // one line per field, replaced in place so the file's own order survives —
     // a resident's card should not reshuffle because they amended one line
