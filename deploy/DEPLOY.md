@@ -1329,6 +1329,84 @@ cat /srv/postmark-sentinel/status.json | head -40
   If this box is down or the timer is masked, nothing here alarms. That needs an
   off-box heartbeat and is deliberately out of scope.
 
+### The store, residents' 5xx, certificates, failed units, the backup and trips (POS-968)
+
+Six more probes run inside the same 10-minute tick (`tools/site-sentinel.mjs`
+§14–§19), from the STAR-161 sitting (Darko, 2026-11-08): *"make sure that we
+don't accidentally drop any alarms in the move. false alarms are fine as long as
+we iterate and fix them as we find them."* Each reads something the box already
+writes, as meepo. No unit, timer or webhook is added. A source the sentinel
+cannot read makes its probe STALE, never OK. Every reason is written for the
+public board, so none carries a resident's handle, a query, an error's text or
+a unit's name. Where a probe has more to say (the failed units' names), it says
+it only in the Discord post, the change log and `state.json`.
+
+A post longer than 1,900 characters keeps its lines whole from the top and ends
+"…and N more not shown here; the board has every one."
+
+The store, residents' 5xx and trip probes count events over the last 25 minutes,
+in any 10-minute span of them. The span is the ruled window. The lookback is
+longer than one tick, so a burst that straddles two ticks is counted whole. A
+finished burst reads DOWN for one tick longer before it recovers.
+
+| Probe | Reads | Says |
+|---|---|---|
+| `store_health` | `/srv/postmark-office/telemetry/store-txn-4380.json` (the office's store watch, each minute) and the office's journal (`journalctl -u postmark-office.service`) for `terminating connection due to idle-in-transaction timeout` | **DOWN:** a kill with an office 500 within 10 min of it (POS-963). **WARN:** a kill with no 500 beside it; a session idle in a transaction for 5 s or more; a minute the watch could not ask the store. **STALE:** the watch older than 5 min, or the record or the journal unreadable. |
+| `resident_5xx` | `/srv/postmark-office/telemetry/access-YYYY-MM-DD.jsonl`, by the moment each request was answered, routes masked (`GET /quests/<h>`) | **DOWN:** 5 or more 5xx on one route within 10 min (POS-965). Fewer are named and not alarmed. **STALE:** no log, or no line in 25 min (the sentinel's own `GET /api/` lands one each tick). |
+| `cert_<host>` (one row per host) | The certificate nginx serves, read with `openssl s_client -connect 127.0.0.1:443 -servername <host>` | **WARN:** under 21 days. **DOWN:** under 7 days, expired, or a certificate that does not name the host. **STALE:** the handshake printed none. |
+| `failed_units` | `systemctl list-units --failed --plain --no-legend`, against `deploy/box-rollcall-manifest.json` | **DOWN:** a unit the manifest names (a timer's row covers its service). **WARN:** any other failed unit. Transient `run-u*` units are counted in the reason and never alarm. The board says only the counts ("2 failed units, 1 the roll-call manifest names"); the post and the change log name them. **Any change in the set of failed units posts again**, saying which came and which went, so a second unit failing under a standing WARN is heard. |
+| `backup_outcome` | `/srv/world2-lab/state/backup.json` | **DOWN:** `failed` (it names the stage), or any status that is not `shipped`. **WARN:** `shipped-no-basebackup`. **STALE:** older than 1,560 min, the roll-call's allowance. |
+| `office_tripped` | The office's journal: `the office tripped` lines, counted by door (`mcp household`, a REST door) | **WARN:** any trip. **DOWN:** 5 or more on one door within 10 min, the same line as `resident_5xx`. The MCP door wraps a trip in HTTP 200, so `resident_5xx` cannot see it. |
+
+The hosts are `CONFIG.certs.hosts`: every `listen 443` server name. The test reads
+this repo's `deploy/nginx-*.conf` and refuses a name missing from the list.
+meepo.online, starstory.online and starforge-atelier.online are served from nginx
+files that exist only on the box, so a host added there is added to the list by
+hand. pages.postmark.town is not on it. It has no DNS and no block of its own.
+
+**What the sentinel's user cannot read.** The Postgres log is `postgres:adm` and
+meepo is not in adm, so the kills come from the office's own journal line
+instead. That journal is meepo's (the office runs as meepo). A 502 or 504 that
+nginx answers for an office that is down or slow never reaches the office's
+access log, and nginx's log is adm's too. The doors probes catch an office that
+is down, and a slow one is not counted.
+
+**The change log.** Every tick appends one line to
+`/srv/postmark-sentinel/history.jsonl` for each probe whose verdict changed or
+that spoke: `at`, `key`, `from`, `to`, `reason`, `alert`, and `delivered` when a
+post went out. It keeps 366 days, and at most 64 MB. Read the last day's changes with:
+
+```sh
+tail -n 200 /srv/postmark-sentinel/history.jsonl | jq -r '"\(.at) \(.key) \(.from) -> \(.to) \(.alert // "")"'
+```
+
+**Acknowledging a standing red.** The operator writes
+`/srv/postmark-sentinel/acks.json` (readable by meepo), beside `state.json`:
+
+```json
+{ "acks": [
+  { "probe": "failed_units", "issue": "STAR-151", "until": "2026-11-15T00:00:00Z" }
+] }
+```
+
+- `probe` is the board's key. `issue` is an issue id or a link. `until` is no more than 7 days out. An ack that runs further is refused, not shortened.
+- The first tick that reads an ack binds it to the probe's finding as it stands. While that finding holds, the probe reads on the board as before (with `ack` beside it) and posts nothing: no onset, no 12-hour reminder.
+- Any change in the finding posts at once and spends the ack. A new ack, with a new `until`, binds to the new finding.
+- An ack that expires, or is taken out of the file, while its finding stands posts once at once.
+- An ack that is refused, expired or unreadable is named in the board's `alerting.notes`, and it applies to nothing.
+
+A probe's finding is kept in `state.json`, never on the board: for the six
+probes above it is their own (for `failed_units`, the names), and for any other
+probe it is its verdict and its reason with every number masked, so a clock in
+the sentence is not a change. The board's `ack` shows the issue and `until`.
+Check the acks and the new rows after a deploy with:
+
+```sh
+sudo -u meepo systemctl start postmark-site-sentinel
+jq -r '.probes[] | select(.key|test("^(store_health|resident_5xx|cert_|failed_units|backup_outcome|office_tripped)")) | "\(.key) \(.verdict) \(.reason)"' /srv/postmark-sentinel/status.json
+jq -r '.alerting.notes[]?' /srv/postmark-sentinel/status.json
+```
+
 ## The operator dashboards (`/ops/`, hub generated since 2026-08-11)
 
 Seven static surfaces under `/ops/`, all written to `/var/www/postmark-ops/`
@@ -1589,6 +1667,91 @@ saved COMPLETE`). `systemctl show postmark-crossing-save.service -p Result` read
 **Rollback:** copy the three files back from `/var/backups/`, `daemon-reload`,
 `systemctl restart postmark-crossing-save.timer`. The save is idempotent, so a
 crossing saved by either shape reads the same.
+
+### The seal runs in its own sandbox (POS-988)
+
+The ferry's seal stage used to run the town's `PROJECTS/the-town-seal/seal.mjs`
+and `verify.mjs` inside `postmark-ferry.service`, as meepo, with the office env,
+the stamp key, the town push credential and the network in reach. Measured on
+POS-988 (2026-11-10), the pair needs none of it. Now the stage runs
+`tools/town-seal-sandbox.mjs --clone`, which sends the pair's four inputs to
+`postmark-town-seal.socket` (meepo only, 0600). Each connection starts one
+`postmark-town-seal@.service`: a DynamicUser with no environment, no network
+and `/srv` hidden but for the one tool. Only a green seal and verify send the two
+outputs back. The stage, the ferry's undo, the witness record and the ferry's
+own commit are unchanged. The why and the exchange are in the tool's header.
+
+**The rehearsal before the tag.** Until step 1 below, the box has no socket, so
+the w47 pre-tag dev rehearsal skips its seal job by name. Its record carries
+`seal SKIPPED: /run/postmark-town-seal.sock is not here …` among the notes,
+which is expected, and the job is not red. Every other job runs as before. From
+step 1 on, the rehearsal runs the seal through the socket like the ferry does.
+
+**Install (by hand, away from a crossing: not 23:50–00:40 or 11:50–12:40 UTC),
+and only after the release carrying this change is live**, so that
+`/srv/postmark-office/tools/town-seal-sandbox.mjs` exists. The order is: the
+socket, then the proof, and only then the ferry unit. A failed proof costs
+nothing, because no crossing has met the new ferry yet. A ferry unit that calls
+a missing socket would refuse its seal stage at every crossing. (The undo would
+put the clone back, and nothing before the seal would be lost.)
+
+**1. The socket.**
+```sh
+sudo cp /srv/postmark-office/deploy/postmark-town-seal.socket \
+        /srv/postmark-office/deploy/postmark-town-seal@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now postmark-town-seal.socket
+systemctl show postmark-town-seal.socket -p ActiveState -p Listen    # active, /run/postmark-town-seal.sock (Stream)
+stat -c '%U %a' /run/postmark-town-seal.sock                          # meepo 600
+```
+
+**2. The proof, which writes nothing in the town clone.** (a) Seal a scratch
+copy of the four inputs through the socket, and compare the outputs with the
+committed ones. They are byte-identical when the ledger hasn't moved since the
+last seal. (b) Send a probe in the seal's place. It records only whether it
+could reach each thing (an error code, or `REACHED`), never what it read.
+```sh
+d=$(sudo -u meepo mktemp -d)
+for f in PROJECTS/the-town-seal/seal.mjs PROJECTS/the-town-seal/verify.mjs PROJECTS/the-town-seal/seal.json WHITE_PAGES/mail-ledger.md; do
+  sudo -u meepo install -D -m 644 "/srv/postmark-office/town-clone/$f" "$d/$f"; done
+sudo -u meepo node /srv/postmark-office/tools/town-seal-sandbox.mjs --clone "$d"; echo "exit $?"   # [seal] sealed in the sandbox: …, exit 0
+for f in seal.json the-town-seal.html; do cmp "$d/PROJECTS/the-town-seal/$f" "/srv/postmark-office/town-clone/PROJECTS/the-town-seal/$f" && echo "$f same"; done
+# (b) the probe: every line must read ENOENT, EACCES, EROFS or EAFNOSUPPORT, and env must be ["PATH"]
+sudo -u meepo tee "$d/PROJECTS/the-town-seal/verify.mjs" >/dev/null <<<'process.exit(0)'
+sudo -u meepo tee "$d/PROJECTS/the-town-seal/seal.mjs" >/dev/null <<'PROBE'
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
+const code = (f) => { try { f(); return "REACHED"; } catch (e) { return e.code; } };
+const sock = (o) => new Promise((ok) => { const s = connect(o); const d = (v) => { s.destroy(); ok(v); }; s.on("connect", () => d("REACHED")); s.on("error", (e) => d(e.code)); setTimeout(() => d("TIMEOUT"), 3000); });
+const out = { env: Object.keys(process.env).sort(),
+  stamp_key: code(() => readFileSync("/srv/postmark-office/stamp-key.pem")), push_credential: code(() => readFileSync("/srv/postmark-office/.git-credentials")),
+  office_env: code(() => readFileSync("/etc/postmark-office.env")), town_clone: code(() => readdirSync("/srv/postmark-office/town-clone")),
+  write_etc: code(() => writeFileSync("/etc/postmark-seal-probe", "x")), postgres: await sock({ path: "/run/postgresql/.s.PGSQL.5432" }),
+  system_bus: await sock({ path: "/run/dbus/system_bus_socket" }), network: await sock({ host: "1.1.1.1", port: 443 }) };
+writeFileSync("PROJECTS/the-town-seal/seal.json", JSON.stringify(out, null, 1) + "\n");
+writeFileSync("PROJECTS/the-town-seal/the-town-seal.html", "probe\n");
+PROBE
+sudo -u meepo node /srv/postmark-office/tools/town-seal-sandbox.mjs --clone "$d" && sudo -u meepo cat "$d/PROJECTS/the-town-seal/seal.json"
+journalctl -u 'postmark-town-seal@*' --since -5min --no-pager | tail -5   # [town-seal] seal: exit 0, verify: exit 0
+```
+Then remove `$d` and its files by name. If (a) differs or (b) reads `REACHED`
+anywhere, stop here: the ferry still runs the seal itself, and nothing has changed for it.
+**3. The ferry unit.**
+```sh
+sudo cp -n /etc/systemd/system/postmark-ferry.service /var/backups/postmark-ferry.service.pre-pos988   # the rollback copy; -n keeps the first one
+sudo cp /srv/postmark-office/deploy/postmark-ferry.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+The ferry's own drop-ins under `postmark-ferry.service.d/` are untouched.
+Nothing is started by hand: the next crossing is the first sandboxed seal.
+After it, `journalctl -u postmark-ferry` shows `[seal] sealed in the sandbox`,
+and the witness record names `--stage done`.
+
+**Rollback:** `sudo cp /var/backups/postmark-ferry.service.pre-pos988
+/etc/systemd/system/postmark-ferry.service && sudo systemctl daemon-reload`. The
+seal runs in the ferry again, as before. The socket can stay. To take it away,
+run `sudo systemctl disable --now postmark-town-seal.socket` and remove its two
+unit files.
 
 ### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
 
@@ -2259,13 +2422,21 @@ not fail the notary**: the certification is the notary's job, and this finding i
 about the register. The alarm is the roll-call's outcome rule on the
 `postmark-world2-notary.timer` row (`alarm_on_nonempty` on its lists, and
 `alarm_on_false` on `escrow_checked` — a read that could not run is never a
-clean town). The escrow list holds only **judgeable** zeros: a commons mark
-locked at a window whose town sha the escrow projection never held — every
-window before 181, migration 014's first ingest — is **unjudgeable**, written
-on the line as `escrow_unjudgeable` with the oldest projected sha beside it,
-and printed by the row's `report_counts` as a count, never an alarm
-(postmark#2935; before it, 227 such marks alarmed every morning for eight
-nights while the true unbacked count was zero).
+clean town). The escrow list holds only **judgeable** zeros, and a mark is
+unbacked only if it has no backing **now** (POS-808/b; Darko, 2026-11-08: "Only
+what's unbacked today"): its stake is read at the store's current town read,
+`projection_heads['town']`, not at the town sha of the window that locked it, so
+a mark locked at zero and staked since is not listed. The window and sha that
+locked it stay on the row as history. If that current read is unnamed or the
+escrow projection holds no rows for it, nothing can be judged that night: every
+eligible commons mark is **unjudgeable**, written on the line as
+`escrow_unjudgeable` with the oldest projected sha beside it, and printed by
+the row's `report_counts` as a count, never an alarm — so a GREEN line with a
+non-zero count is a night the escrow judgement did not run, not a clean town.
+Before POS-808/b
+this class was marks locked before window 181, migration 014's first ingest,
+whose locking sha was never projected (postmark#2935; 227 such marks alarmed
+every morning for eight nights while the true unbacked count was zero).
 
 At the G1 swap the class becomes structurally impossible — the fold writes what
 the candle locked — and the read stays as the detector.
