@@ -198,8 +198,11 @@ export const HOLO_EXPANSION = "short for holographic stamp — the collector's s
 // money outside the town). It now says a gift pays a bill and is written down
 // in the giver's name; that if the town staked on the pot, the close thanks the
 // giver in stamps that work like any stamp, vote included; that money's share
-// of a household is capped (never above half, NOMOS II.4.5.1); and that stamps
-// never turn into money. Earlier wordings are in git history.
+// of a household is capped; and that stamps never turn into money. The cap's
+// ceiling is NOMOS's, not the sentence's: never above half (NOMOS II.4.5.1).
+// Earlier wordings are in git history. The World carries the same sentence in
+// `LOGOS/the-derivation.md § 10` (postmark-town/postmark-world#386 rewords it
+// to these words).
 //
 // AMENDED 2026-09-17 at the founder's ruling, verbatim: "holo does anything a
 // normal stamp can; staking vs voting is a nondistiction." Before it, the
