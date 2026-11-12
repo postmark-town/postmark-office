@@ -71,6 +71,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { firstClaimedBySlug, snapshotFoldArgs } from "./world-snapshot.mjs";
+import { TOWN_CLONES, leaseEntry, ownedRoot, pruneSoon, touchUsed } from "./cache-lifecycle.mjs"; // POS-989: the town clones prune themselves
 import { extendsFromMarks, isSited, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class in both forms (LOGOS v2, O1)
 import { faultLogged, plainReason } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
@@ -142,11 +143,23 @@ const TOWN_PATHS = ["/tools/", "/ECONOMY-DIALS.json", "/WHITE_PAGES/stamp-ledger
 const TOWN_ROOT = join(tmpdir(), "postmark-settlement-town");
 const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, "-c", "core.autocrlf=false", ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-export function townAtSha(townClone, sha, root = TOWN_ROOT) {
+const townShaOk = (sha) => {
   if (!/^[0-9a-f]{40}$/.test(String(sha ?? ""))) throw new Error(`the snapshot names no town sha to read the ledger at (${sha ?? "none"})`);
-  const dir = join(root, sha);
-  if (existsSync(join(dir, ".git"))) return dir;
-  mkdirSync(root, { recursive: true });
+};
+
+// THE CACHE PRUNES ITSELF (POS-989). One clone per settlement sha grew by about 0.35 G a settlement and nothing removed one
+// (7.3 G by 2026-11-10); a clone is disposable, its name is its key, so a stale unused one is removed whole and rebuilt on the
+// next ask (cache-lifecycle.mjs: seven days since last use, never one under a live lease). `townAtSha` is the UNSCOPED form: it
+// returns the path and refreshes the clone's use stamp, and a caller that reads across awaits uses `openTownAtSha` /
+// `withTownAtSha`, which hold a lease on the clone until the reads are done.
+export function townAtSha(townClone, sha, root = TOWN_ROOT) {
+  townShaOk(sha);
+  // THE PRUNABLE AREA IS A VERSIONED SUBFOLDER OF THE EXISTING ROOT (`<root>/lease-v1/<sha>`, POS-989 lead review of d995401f):
+  // an older helper reads `<root>/<sha>` with no lease, so those clones are never read, copied or pruned by this code.
+  const owned = ownedRoot(root);
+  const dir = join(owned, sha);
+  if (existsSync(join(dir, ".git"))) { touchUsed(owned, sha); return dir; }
+  mkdirSync(owned, { recursive: true });
   const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
   try {
     execFileSync("git", ["-c", "core.autocrlf=false", "-c", "core.longpaths=true", "clone", "-q", "--shared", "--no-checkout", townClone, tmp], { stdio: ["ignore", "pipe", "pipe"] });
@@ -156,7 +169,26 @@ export function townAtSha(townClone, sha, root = TOWN_ROOT) {
   } finally {
     if (existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
   }
+  touchUsed(owned, sha);
+  void pruneSoon(owned, TOWN_CLONES);   // a new clone is the growth event: prune the stale ones, in the background
   return dir;
+}
+
+/** The town at a sha, LEASED: `{ dir, release }`. The lease is taken before the first read and kept until `release()`, so a pruner in any process leaves it. */
+export function openTownAtSha(townClone, sha, root = TOWN_ROOT) {
+  townShaOk(sha);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const dir = townAtSha(townClone, sha, root);
+    const release = leaseEntry(ownedRoot(root), sha, TOWN_CLONES);
+    if (release) return { dir, release };   // null: it was removed or claimed between the two steps; ask again, which rebuilds it
+  }
+  throw new Error(`the town at ${sha} could not be held: it kept being removed while it was asked for`);
+}
+
+/** Run `fn(dir)` with the town at `sha` leased for the whole call, awaited reads included. */
+export async function withTownAtSha(townClone, sha, fn, root = TOWN_ROOT) {
+  const { dir, release } = openTownAtSha(townClone, sha, root);
+  try { return await fn(dir); } finally { release(); }
 }
 
 /**
@@ -182,8 +214,11 @@ export async function settlementFoldInputs(p, header, { worldRepo, townRepo }) {
   // none) folds from the store's escrow at town_sha and the printed roster at
   // law_sha, as `--verify` does without --town-repo. Which one a World came
   // from is read off its header (`register_digest`), never guessed.
-  const town = townRepo && header.register_digest ? townAtSha(townRepo, header.town_sha) : null;
-  const { args, stakesSource, householdsSource } = await snapshotFoldArgs(p, header, { townRepo: town, filing: filingAt(worldRepo, header.law_sha) });
+  // The clone is LEASED for the reads (they are awaited): a pruner in any process leaves it until they are done (POS-989).
+  const foldArgs = (town) => snapshotFoldArgs(p, header, { townRepo: town, filing: filingAt(worldRepo, header.law_sha) });
+  const { args, stakesSource, householdsSource } = townRepo && header.register_digest
+    ? await withTownAtSha(townRepo, header.town_sha, foldArgs)
+    : await foldArgs(null);
   const inputs = {
     fold: engine.fold, args, stakesSource, householdsSource,
     // world#146: an engine that knows the town's words exports them. An older

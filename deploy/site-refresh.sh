@@ -244,6 +244,12 @@ WORLD_REMOTE="${WORLD_REMOTE:-https://github.com/postmark-town/postmark-world.gi
 # there is not charged (src/bouncer.mjs boxLocal).
 API="${POSTMARK_API:-http://127.0.0.1:4390}"
 OUT="${SITE_REFRESH_REPORT:-/srv/postmark-harbor/site-refresh.json}"
+# A HAND BUILD FOR DEV (POS-986; Darko, 2026-11-09 16:13 EST: dev's site built on the box by hand, one run per
+# carry, against dev's office and the walk's branches). SITE_REFRESH_CODE_REF builds that site BRANCH instead of
+# the newest release/* tag, and SITE_REFRESH_SITE_BRANCH extracts the data from that branch instead of main.
+# Prod's unit sets neither, so prod builds exactly as before.
+CODE_BRANCH="${SITE_REFRESH_CODE_REF:-}"
+DATA_BRANCH="${SITE_REFRESH_SITE_BRANCH:-main}"
 KEEP="${SITE_REFRESH_KEEP:-5}"
 MAX_PASSES="${SITE_REFRESH_MAX_PASSES:-3}"
 # THE TIME BUDGET (STAR-135), beside the pass budget and under the unit's
@@ -263,7 +269,7 @@ LOCK="$ROOT/refresh.lock"
 
 STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN_START="$(date -u +%s)"   # the time budget's clock (STAR-135)
-TOWN_SHA=""; SITE_MAIN=""; TAG=""; PUBLISHED=""; PASSES=0
+TOWN_SHA=""; SITE_MAIN=""; TAG=""; CODEREF=""; PUBLISHED=""; PASSES=0
 
 mkdir -p "$ROOT" "$RELEASES" "$(dirname "$OUT")"
 
@@ -362,15 +368,20 @@ survey() {
   git -C "$TOWN" fetch -q --prune origin
   TOWN_SHA="$(git -C "$TOWN" rev-parse origin/main)"
   git -C "$SITE" fetch -q --prune --tags --force origin
-  SITE_MAIN="$(git -C "$SITE" rev-parse origin/main)"
+  SITE_MAIN="$(git -C "$SITE" rev-parse "origin/$DATA_BRANCH")"
   # Newest release tag, by the same rule deploy.yml uses (creatordate, newest
   # first). No tag at all is deploy.yml's own sleeping case, not an error.
-  TAG="$(git -C "$SITE" tag -l 'release/*' --sort=-creatordate | head -1)"
+  # A dev hand build names its branch instead (SITE_REFRESH_CODE_REF, above).
+  if [ -n "$CODE_BRANCH" ]; then
+    TAG="$CODE_BRANCH"; CODEREF="refs/remotes/origin/$CODE_BRANCH"
+  else
+    TAG="$(git -C "$SITE" tag -l 'release/*' --sort=-creatordate | head -1)"; CODEREF="refs/tags/$TAG"
+  fi
   # The settlement listing, hashed. One ls-remote, no clone: enough to notice a
   # blessing, cheap enough to spend on every quiet tick. The real decision (the
   # three guardrails) is still resolve-world-pin.mjs's, inside the build.
   WORLD_TAGS="$(git ls-remote "$WORLD_REMOTE" 'refs/tags/settlement/*' 2>/dev/null | sha1sum | cut -d' ' -f1)"
-  KEY="town:$TOWN_SHA site:$SITE_MAIN tag:$TAG@$(git -C "$SITE" rev-parse -q --verify "refs/tags/$TAG^{commit}" 2>/dev/null || echo none) world:$WORLD_TAGS"
+  KEY="town:$TOWN_SHA site:$SITE_MAIN tag:$TAG@$(git -C "$SITE" rev-parse -q --verify "$CODEREF^{commit}" 2>/dev/null || echo none) world:$WORLD_TAGS"
 }
 
 survey
@@ -521,10 +532,10 @@ build_once() {
   git -C "$SITE" worktree prune >/dev/null 2>&1 || true
   if [ ! -e "$BUILD/.git" ]; then
     rm -rf "$BUILD"   # a killed run can leave a half-made tree that `add` refuses
-    git -C "$SITE" worktree add -f --detach "$BUILD" "refs/tags/$TAG" >/dev/null \
+    git -C "$SITE" worktree add -f --detach "$BUILD" "$CODEREF" >/dev/null \
       || die "could not make the build worktree at $BUILD"
   fi
-  git -C "$BUILD" checkout -qf --detach "refs/tags/$TAG" || die "could not check out $TAG in the build tree"
+  git -C "$BUILD" checkout -qf --detach "$CODEREF" || die "could not check out $TAG in the build tree"
   git -C "$BUILD" clean -qfd -e node_modules
 
   # THE OVERLAY — deploy.yml's `git checkout origin/main -- public/atelier/postmark
