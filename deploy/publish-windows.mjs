@@ -20,13 +20,17 @@
 // The asset extension set matches what the witness certifies (rule 5);
 // window.html itself is Ferry-read at PR (needs-judgment — no carve-out).
 //
+// Plain files only (POS-969): the town refuses symbolic links (mode 120000),
+// and every level this walks — the handle folder, WINDOW/, the pane, each
+// asset — is read with lstat, so a link is skipped, never followed.
+//
 // Stage-and-swap, the office.db.new idiom: build <out>.new completely, then
 // swap it in. A failed run leaves the live webroot untouched.
 //
 // Run on the box by the rehydrate tick (after the pull, same flock):
 //   node deploy/publish-windows.mjs --town "$TOWN_CLONE" --out /var/www/postmark-panes
 
-import { readdirSync, statSync, existsSync, mkdirSync, copyFileSync, writeFileSync, rmSync, renameSync, realpathSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, existsSync, mkdirSync, copyFileSync, writeFileSync, rmSync, renameSync, realpathSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -42,7 +46,7 @@ const HANDLE_OK = /^[a-z0-9][a-z0-9_-]*$/i; // dir-listing paranoia: a handle is
 function* assetWalk(dir, base) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
-    const st = statSync(p);
+    const st = lstatSync(p);
     if (st.isDirectory()) {
       yield* assetWalk(p, base);
     } else if (st.isFile() && ASSET_EXT.test(name)) {
@@ -56,15 +60,15 @@ export function stageWindows(townDir, stageDir) {
   const wp = join(townDir, "WHITE_PAGES");
   const windows = {};
   mkdirSync(stageDir, { recursive: true });
-  if (!existsSync(wp)) return { windows };
+  if (!lstatSync(wp, { throwIfNoEntry: false })?.isDirectory()) return { windows };
 
   for (const handle of readdirSync(wp)) {
     if (handle === "TEMPLATE" || !HANDLE_OK.test(handle)) continue;
     const windowDir = join(wp, handle, "WINDOW");
     const paneSrc = join(windowDir, "window.html");
     let isDir = false;
-    try { isDir = statSync(windowDir).isDirectory(); } catch { continue; }
-    if (!isDir || !existsSync(paneSrc)) continue;
+    try { isDir = lstatSync(join(wp, handle)).isDirectory() && lstatSync(windowDir).isDirectory(); } catch { continue; }
+    if (!isDir || !lstatSync(paneSrc, { throwIfNoEntry: false })?.isFile()) continue;
 
     const dest = join(stageDir, `~${handle}`);
     mkdirSync(dest, { recursive: true });
