@@ -5,11 +5,17 @@
 #  WHAT IS BACKED UP WHERE, AND THE RPO OF EACH — say the number, not "nightly"
 # ════════════════════════════════════════════════════════════════════════════
 #
-#  OFF-BOX (git, private)          pg_dump --format=custom, pushed to
-#                                  wright-starforge/postmark-world2-backups.
+#  OFF-BOX (S3, private)           pg_dump --format=custom, uploaded whole with
+#                                  its sha256 to s3://<bucket>/world2/<stamp>/
+#                                  (the bucket is the unit's W2_S3_BUCKET).
 #                                  RPO ≤ 24h. THIS IS THE ONE THAT SURVIVES
 #                                  LOSING THE BOX, and it is the one the
-#                                  restore rehearsal exercises.
+#                                  restore rehearsal exercises (--from-s3).
+#                                  The bucket keeps about 90 nights; older
+#                                  ones, up to the git ship's retirement on
+#                                  STAR-118, are in the archived GitHub repo.
+#                                  The cold restore is DEPLOY.md § The S3
+#                                  route.
 #
 #  THE NOTARY, ELSEWHERE ON PURPOSE  Until 2026-09-03 this lane also shipped a
 #                                  git bundle of the notary checkout, because
@@ -54,10 +60,12 @@
 # makes the WAL a restore path instead of a habit.
 #
 # ── THE OFF-BOX DESTINATION, DISCLOSED ──────────────────────────────────────
-# NOW (STAR-118, 2026-11-12): s3://postmark-world2-backups/world2/<stamp>/, in the box's own AWS account, written
-# by the instance role (no key on disk; it can't delete). § 4 is the one route. The GitHub repository below was the
-# destination from 2026-08-29 until the git ship's retirement, and it is archived with the retirement, never deleted:
-# its history holds every night until then. What follows is its record.
+# NOW (STAR-118): s3://<bucket>/world2/<stamp>/, in the box's own AWS account, written by the instance role (no key
+# on disk; it can put, get and list, never delete). Versioning keeps an overwritten object, and the bucket's lifecycle
+# trims: about 90 nights are kept. DEPLOY.md § The S3 route has the settings, what a rebuilt box needs, and the cold
+# restore. § 4 is the one route. The GitHub repository below was the destination from 2026-08-29 until the git ship's
+# retirement, and it is archived with the retirement, never deleted: its history holds every night until then. What
+# follows is its record.
 #
 # github.com/wright-starforge/postmark-world2-backups — PRIVATE, created
 # 2026-08-29 for this lane, with keeminlee invited as admin so the ownership
@@ -94,10 +102,10 @@
 # history that never forgets, which is a repository that dies of it.
 #
 # So WAL is local-only and its off-box lane is a NAMED GAP with a number
-# attached, not an oversight: give the box a private object-storage bucket and
-# shipping the spool is a dozen lines. Until then the honest sentence is the one
-# at the top — losing the box costs up to 24 hours, and the dump is what comes
-# back.
+# attached, not an oversight. The box has a private bucket now (STAR-118), so
+# shipping the spool is a dozen lines, and they're not written. Until they are,
+# the honest sentence is the one at the top — losing the box costs up to 24
+# hours, and the dump is what comes back.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -106,7 +114,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DUMPS="$WORLD2_LAB/private-dumps"          # outside every checkout and webroot
 BASEBACKUPS="$WORLD2_LAB/basebackups"
 WAL="${W2_WAL_ARCHIVE:-/srv/world2-wal}"
-KEEP_DUMPS="${W2_KEEP_DUMPS:-14}"          # nights of dumps kept on the box (S3 keeps every night)
+KEEP_DUMPS="${W2_KEEP_DUMPS:-14}"          # nights of dumps kept on the box (the bucket's lifecycle keeps about 90)
 KEEP_BASE="${W2_KEEP_BASE:-3}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DB="$(w2_db)"
@@ -157,9 +165,9 @@ TOC_ENTRIES=$(pg_restore --list "$DUMP" 2>/dev/null | grep -c '^[0-9]')
 #    LOSING roles.db LOSES WHO PAID. … a backup discipline for this one file is
 #    an operations decision that is not this module's to make, only to state."
 #
-# This is operations making it. The file rides in THIS lane's commit instead of
-# a unit of its own: it wants the same nightly clock, the same private repo and
-# the same deploy key, and a second lane for one small file would be a second
+# This is operations making it. The file rides in THIS lane's night instead of
+# a unit of its own: it wants the same nightly clock, the same private bucket and
+# the same instance role, and a second lane for one small file would be a second
 # thing to watch and a second thing to forget. No new credential, no new unit,
 # no new roll-call row — the row this lane already has now covers this file too.
 #
@@ -241,7 +249,7 @@ rm -f "$ROLES_ERR"
 #   wallets       /srv/postmark-wallets/registrations.jsonl: which Base address
 #                 belongs to which household (src/wallet-registry.mjs). Kept off
 #                 the town repo by the founder's 2026-08-25 ruling, so this
-#                 private repo is its only other copy.
+#                 lane's private bucket is its only other copy.
 #   stripe        /srv/postmark-stripe/stripe-intake.jsonl, and
 #   paypal        /srv/postmark-paypal/paypal-intake.jsonl: every payment each
 #                 card watcher has SEEN, including the ones still in their grace
@@ -249,7 +257,7 @@ rm -f "$ROLES_ERR"
 #   usdc          /srv/postmark-usdc/state.json: the USDC watch's cursor and its
 #                 unresolved arrivals.
 #
-# They ride in the SAME commit as the dump, like roles.db. They become store rows
+# They ride in the SAME night as the dump, like roles.db. They become store rows
 # later, which is the issue's larger half; this is the smaller half, first. Each
 # is append-only or rewritten whole by one writer, so a plain copy is a sound
 # copy: at worst it misses a line appended during the copy, which the next night
@@ -331,14 +339,16 @@ fi
 # ── 4 · off-box: the S3 bucket, the one route (STAR-118) ────────────────────
 # Darko 2026-11-04 09:03: "the real solution is 2", an S3 bucket in the box's own account. It ran beside the git
 # ship from 2026-11-09 until it proved itself: four nightly ships on their own (11-09 → 11-12) and a --from-s3
-# rehearsal on 11-12 (851,046 rows across 87 tables restored, every table matching or explained). Then the git ship
-# came out (Wright's pass 2026-11-12, after Darko's look). Its GitHub repository is archived, never deleted: its
-# history holds every night up to the retirement, and world2-restore-rehearse.sh --from-remote still reads it.
+# rehearsal on 11-12 (851,046 rows across 87 tables restored, every table matching or explained). On Wright's pass
+# that day, office #1013 took the git ship out. Its GitHub repository is archived, never deleted: its history holds
+# every night up to the retirement, and world2-restore-rehearse.sh --from-remote still reads it.
 #
 # The whole dump goes as one object (S3 has no 100 MB file limit), with the sum of the whole beside it, the roles
-# copy when there is one, the intake files and LATEST.json, under world2/<stamp>/. The instance's role writes and
-# reads that one bucket and can't delete. With S3 the only route, an unset bucket or a failed upload is the night
-# the dump stays on the box and NOWHERE ELSE, so either one fails the unit.
+# copy when there is one, the intake files and LATEST.json, under world2/<stamp>/. LATEST.json goes LAST, so a night
+# with a LATEST.json is a night whose upload finished (the cold restore reads it that way). The instance's role puts,
+# gets and lists in that one bucket and can't delete. With S3 the only route, an unset bucket or a failed upload is
+# the night the dump stays on the box and NOWHERE ELSE, so either one fails the unit
+# (test/backup-ships-to-s3-or-fails.test.mjs runs both, and the shipped night).
 [ -n "${W2_S3_BUCKET:-}" ] || fail "W2_S3_BUCKET is unset — there is no off-box route, so the dump is on the box and NOWHERE ELSE" ship
 SHIP="$(mktemp -d -t w2-ship.XXXXXX)"; trap 'rm -rf "$SHIP"' EXIT   # the sum and LATEST.json, staged; gone on any exit
 DUMP_NAME="$(basename "$DUMP")"
