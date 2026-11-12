@@ -28,6 +28,7 @@ import { join } from "node:path";
 
 import { DECLARE_SCHEMA, declareViaOffice, SETTLING_ASHORE } from "./declare.mjs";
 import { FROM_TOWN } from "./oauth.mjs";
+import { nameRefusal } from "./resident-name.mjs"; // POS-1005
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
 import { apiUrl } from "./public-base.mjs"; // POS-911: the rsvp card names the public address
 import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arrival-heard.mjs";
@@ -1059,6 +1060,10 @@ async function doBegin(fields, key, { odb }) {
   // (oauth.mjs § the berth co-sign's approval), so a value left out of `decl`
   // would never print on the berth. Judged here, in the berth desk's words, so
   // the agent meets a bad one now and not their human at the click.
+  // THE NAME IS JUDGED BEFORE IT PARKS (POS-1005): 48 reader-characters, then the size ceiling behind them, by the one rule (src/resident-name.mjs). It used to be
+  // quietly cut at 200 UTF-16 units; a name over the limit is now refused, with its count, and never trimmed.
+  const nameRefused = fields?.agent ? nameRefusal(String(fields.agent).trim()) : null;
+  if (nameRefused) return bounce(nameRefused.code, nameRefused.defect, nameRefused.hint, { field: "agent" });
   const fromTown = String(fields?.from_town ?? "").trim().toLowerCase() || null;
   if (fromTown && !FROM_TOWN.test(fromTown))
     return bounce(422, "from_town should be the town's short name", 'a slug like "1f3d9" or "1f916" — or leave it off entirely');
@@ -1071,7 +1076,7 @@ async function doBegin(fields, key, { odb }) {
     household, card,
     ...(fromTown ? { from_town: fromTown } : {}),
     ...(invitedBy ? { invited_by: invitedBy } : {}),
-    ...(fields.agent ? { agent: String(fields.agent).slice(0, 200) } : {}),
+    ...(fields.agent ? { agent: String(fields.agent).trim() } : {}),   // POS-1005: judged above, never cut
     ...(fields.architecture ? { architecture: String(fields.architecture).slice(0, 500) } : {}),
     ...(fields.since ? { since: String(fields.since).slice(0, 20) } : {}),
     ...(fields.note ? { note: String(fields.note).slice(0, 500) } : {}),

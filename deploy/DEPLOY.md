@@ -2190,7 +2190,7 @@ is a hand-run, deliberately: it drops and recreates a database, and nothing that
 does that belongs on a clock.
 
 **The backup lane also carries `roles.db` since POS-185 (2026-09-21)**, and it is
-the only file in that commit that is not the world store. It is there because
+the only file in that night that is not the world store or an intake journal. It is there because
 `src/roles.mjs:71-82` says so in its own voice and then declines to act on it,
 correctly — the module states the gap, operations decides the discipline:
 
@@ -2215,7 +2215,7 @@ next reader will have:
   — `VACUUM INTO` writes only to the target — so the backup lane never holds a
   pen over who paid.
 - **No new unit, no new credential, no new roll-call row.** Same timer, same
-  private repo, same deploy key, and the `postmark-world2-backup.timer` row's
+  private bucket, same instance role, and the `postmark-world2-backup.timer` row's
   receipt now carries `roles_status`, `roles_db_bytes` and `role_audit_rows`.
   `roles_status: absent` is legal and does not redden: `OFFICE_ROLE_GATES` is
   unset on every office today (`src/server.mjs:170`), so a box that has never
@@ -2225,15 +2225,21 @@ next reader will have:
 **Restoring it is a file copy**, which is the whole restore path:
 
 ```
-cp roles/<newest>.db /srv/postmark-office/roles.db   # the office opens it at boot
+aws s3 cp s3://<bucket>/world2/<stamp>/roles-<stamp>.db /srv/postmark-office/roles.db   # the office opens it at boot
 ```
+
+Since 2026-11-11 the roles live in the store (`office_roles`, `office_role_audit`; POS-271) and ride
+inside the dump, so an in-store night ships no `roles-*.db`: restoring the dump restores them.
 
 `world2-restore-rehearse.sh` counts the shipped copy's `role_audit` against the
 live registry on every rehearsal, under the same drift rule as the Postgres
 tables: the live side may have gained rows (the town kept selling), but the copy
 holding MORE rows than live cannot be explained by the clock and is the finding.
-Prefer `--from-remote`, which reads the copy out of the off-box clone rather than
-the box's own disk — the local one only proves the copier ran.
+Prefer `--from-s3`, which reads the copy out of the S3 bucket rather than the
+box's own disk — the local one only proves the copier ran. With the roles in the
+store, the rehearsal counts `office_roles` and `office_role_audit` with the dump's
+other tables. (`--from-remote` reads the GitHub repo, archived at STAR-118 with
+every night up to the git ship's retirement.)
 
 ### The law pen keeps its own clock (2026-09-19, postmark#2893)
 
@@ -2541,11 +2547,14 @@ stamp pen the founder parked.
     /srv/world2-lab/state/          one JSON per lane — the roll-call heartbeats
     /srv/world2-lab/private-dumps/  pg_dump output, 0700, outside every checkout
     /srv/world2-lab/basebackups/    pg_basebackup output, 0700
-    /srv/world2-lab/backup-repo/    the off-box dump repo's checkout
+    /srv/world2-lab/backup-repo/    the git ship's checkout, RETIRED with it (STAR-118);
+                                    it no longer grows, and its removal is
+                                    POS-1009's call. The off-box copy is S3.
     /srv/world2-lab/notary/         the notary checkout, pushed to its OWN repo
     /srv/world2-lab/ingest-clones/  persistent world/town checkouts, reset per run
     /srv/world2-lab/.ssh/           two deploy keys + a pinned known_hosts:
                                     w2-backups -> postmark-world2-backups
+                                                  (the retired git ship's key)
                                     w2-notary  -> postmark-world2-notary
                                     NEITHER key can read the other's repo, and
                                     that is DEC-7 rather than tidiness (below)
@@ -2566,6 +2575,85 @@ stamp pen the founder parked.
 > enables it would recommit a ruling by muscle memory. `law-ingest` takes its
 > place — the law half, split out on postmark#2893, section below. The parked
 > unit's files still ship, so `scp`ing them is right; enabling it is not.
+
+### The S3 route: the bucket, a rebuilt box, the cold restore (STAR-118)
+
+Since STAR-118 the backup lane's one off-box copy is an S3 bucket in the box's
+own AWS account. The bucket's name is the unit's `W2_S3_BUCKET` (the drop-in
+below), and this page writes it as `<bucket>`.
+
+**What the bucket keeps.** These are Darko's settings from his AWS setup on
+2026-11-08, as Wright relayed them on STAR-118 (2026-11-09 01:14Z). They aren't
+read back from the box, because its role can't read the bucket's configuration
+(`GetBucketVersioning` and `GetLifecycleConfiguration` are denied, read
+2026-11-12).
+- Region us-east-2, with **versioning on**.
+- **Lifecycle `trim-old-nights`:** current versions expire at 90 days, and
+  noncurrent versions at 7. So **the bucket keeps about the last 90 nights**, and
+  a night's objects are gone about 97 days after it shipped.
+- Nights from 2026-08-29 up to the git ship's retirement are in the archived
+  GitHub repo `wright-starforge/postmark-world2-backups`, in parts
+  (`cat dumps/<file>.part-* > <file>`).
+- **The box's access is the instance role `postmark-box-backup`.** Its one
+  policy, `postmark-world2-backup-nodelete`, gives `s3:ListBucket` on the bucket
+  and `s3:PutObject` and `s3:GetObject` on its objects. It has no delete and no
+  bucket settings, so the box can write and read but never destroy, and the
+  lifecycle does the trimming.
+
+**What a box needs before the lane can ship.** A box rebuilt from § Install
+alone fails every night at `ship`, because the lane won't run without a bucket:
+1. **The instance profile `postmark-box-backup`** is attached to the instance
+   (EC2 → the instance → Actions → Security → Modify IAM role; this is Darko's
+   AWS act). As meepo, `aws sts get-caller-identity` then names
+   `assumed-role/postmark-box-backup/…`.
+2. **The AWS CLI v2, where the unit can find it.** Run
+   `sudo snap install aws-cli --classic`, then
+   `sudo ln -s /snap/bin/aws /usr/local/bin/aws`, since the unit's PATH has no
+   `/snap/bin`.
+3. **The drop-in** `/etc/systemd/system/postmark-world2-backup.service.d/s3.conf`:
+
+       [Service]
+       Environment=W2_S3_BUCKET=<bucket>
+
+   Then run `sudo systemctl daemon-reload`.
+4. **Check it:** as meepo, `aws s3 ls s3://<bucket>/world2/` exits 0. Then run
+   the unit once by hand (`sudo systemctl start postmark-world2-backup.service`);
+   `state/backup.json` should read `shipped`, with its `s3` field naming the
+   night.
+
+**The cold restore, when the box is gone.** This runs on a new box with
+Postgres, the store's roles and an empty database (§ Install, § The one Postgres
+change), or on any machine that can read the bucket:
+
+    aws s3 ls s3://<bucket>/world2/                  # nights are fixed-width UTC stamps, so sort order is time order
+    aws s3 ls s3://<bucket>/world2/<stamp>/          # take the newest night that HAS a LATEST.json:
+                                                     # it uploads last, so a night without one didn't finish
+    aws s3 cp --recursive s3://<bucket>/world2/<stamp>/ ./night/
+    cd night && sha256sum -c world2-<stamp>.dump.sha256     # it must say OK before anything reads the dump
+    pg_restore --clean --if-exists --no-owner --no-acl -d <db> world2-<stamp>.dump
+
+Then put back what rode beside the dump, as `LATEST.json` names it:
+- **The intake files** (`<name>-<file>`) go to the source paths under `intake`.
+  Each watcher reads its file whole on its next tick.
+- **A `roles-<stamp>.db`**, if the night has one, goes to
+  `/srv/postmark-office/roles.db`. An in-store night (since 2026-11-11) has none,
+  because its roles are in the dump.
+
+What comes back is up to 24 hours old (the dump's RPO), since the WAL and the
+base backups don't leave the box. **The grants are a named gap.** The dump is
+taken `--no-owner --no-acl`, so it carries the schema and the rows but not the
+pens' grants. They live in the schema files (`world2/schema/*.sql`), and
+re-applying them to a restored store has not been rehearsed.
+
+**`world2-restore-rehearse.sh --from-s3` is not the cold tool.** It restores
+into a scratch database and compares that with a live store, so it needs one
+running. It proves the cold path while the box is alive. Run it by hand the way
+the unit runs, so the root-only env file loads before it drops to meepo (the
+2026-11-12 rehearsal ran exactly this):
+
+    sudo systemd-run --uid=meepo -p EnvironmentFile=/etc/postmark-world2-dev.env \
+      -p "Environment=W2_S3_BUCKET=<bucket>" -p Environment=WORLD2_OFFICE=/srv/postmark-office \
+      --pipe --wait --collect /bin/bash /srv/postmark-office/deploy/world2-restore-rehearse.sh --from-s3
 
 ### ONE TREE PER BOX — the office-tree drop-in (2026-09-10)
 
@@ -2743,9 +2831,10 @@ records the measurement.
 
 1. **The WAL does not ride off-box.** Measured at ~163 MB/day raw (2026-08-29,
    a heavy build day), which no git history survives. The dump ships; the WAL and
-   the base backups stay on the box. Giving the box a private object-storage
-   bucket turns that into about a dozen lines — see `world2-backup.sh` § *the
-   off-box destination* for what was tried and why each was refused.
+   the base backups stay on the box. The box has a private bucket now (STAR-118,
+   § The S3 route), so the WAL ship is about a dozen lines, and they're not
+   written. See `world2-backup.sh` § *the off-box destination* for what was tried
+   before the bucket and why each was refused.
 
 ## 069: the seal records its town words (POS-362)
 
