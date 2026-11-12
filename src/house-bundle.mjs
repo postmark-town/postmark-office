@@ -102,7 +102,9 @@ export async function registryFor(clone, readers = {}) {
   let rows;
   try { rows = await loadRegistryRows(); } catch { return null; }
   if (!rows) return null;
-  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), from: "the registry store" };
+  // `ords`: the order the town recorded households (`households.ord`), which the registry's rendering does not carry
+  // (POS-947/b: "joined before" is this order, never `since`)
+  return { registry: registryFromRows(rows), pins: pinsFromRows(rows), ords: new Map(rows.households.map((r) => [r.slug, r.ord])), from: "the registry store" };
 }
 
 /**
@@ -126,7 +128,7 @@ export async function houseMembers({ household, key, clone, readers = {} }) {
     if (!slug) return { refused: [422, "which household?", "pass household: <slug> — or call with a key that holds a declared house"] };
   }
   const rec = houses[slug] ?? {};
-  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from };
+  return { slug, rec, members: [...new Set((rec.residents ?? []).map(String))], from: reg.from, registry: reg.registry, ords: reg.ords ?? null };
 }
 
 // ── THE READERS, EACH ASKED ONCE FOR THE HOUSE ───────────────────────────────

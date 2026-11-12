@@ -73,11 +73,12 @@ test("FALSIFIER: Little Bird holds an inviter's payout through the town door, wi
   assert.equal(Number((await asOwner("SELECT count(*)::int AS n FROM acts WHERE object = 'invite:keep'"))[0].n), 0, "never an act: acts are published");
 });
 
-test("checked by account: a resident, the inviter itself, and a hand's housemate's own key are refused, and learn nothing", { skip }, async () => {
+test("checked by account: a resident, the inviter itself, and a hand's housemate's own key naming another's hand are refused, and learn nothing", { skip }, async () => {
   await fresh();
+  // (until POS-947 Wright's own resident key naming no hand was refused here too: `wright` was no hand; it is now, below)
   for (const [who, key, handle] of [["a resident", resident], ["the inviting house", inviter],
     ["Wright's own resident key, naming Darko's hand", wrightsOwnKey, "keemin"],
-    ["Wright's own resident key, naming no hand (its house holds keemin; the key does not)", wrightsOwnKey, undefined]]) {
+    ["a resident naming the wright hand in the request (its key does not hold it)", resident, "wright"]]) {
     const r = await move("invite:keep", "held", "trying", key, handle);
     const b = bounceOf(r);
     assert.ok(b, `${who}: refused`);
@@ -88,6 +89,26 @@ test("checked by account: a resident, the inviter itself, and a hand's housemate
   // the control: Darko's own sign-in, his backup, may
   const r = await move("invite:keep", "held", "Little Bird is away; holding for her", darko, "keemin");
   assert.equal(r.result?.to, "held", JSON.stringify(r).slice(0, 300));
+});
+
+test("POS-947: wright is a hand. Darko's sign-in for a Starforge with no keemin resident holds as wright, by its credential; a key that only names wright does not", { skip }, async () => {
+  // Jetto's dev walk (2026-11-08 04:02Z): INVITE_HOLD_HANDS was ["little-bird", "keemin"], and Darko's
+  // household holds no keemin, so his ruled backup could not place a hold. This is that sign-in.
+  const darkosStarforge = { household: "the-founders", handles: new Set(["wright", "jetto"]) };
+  await fresh();
+  const held = await move("invite:keep", "held", "Little Bird is away; holding for her", darkosStarforge);
+  assert.equal(held.result?.by, "wright", JSON.stringify(held).slice(0, 300));
+  assert.equal(held.result?.to, "held");
+  assert.equal((await move("invite:keep", "lifted", "checked with them", darkosStarforge, "wright")).result?.to, "lifted", "and lifts, naming the hand its key holds");
+  // never body text: the same request from a key that does not hold wright is the not-found answer
+  await fresh();
+  const forged = bounceOf(await move("invite:keep", "held", "I am wright", resident, "wright"));
+  assert.equal(forged?.code, 404);
+  assert.equal(await holdRow(), null, "nothing written");
+  // Wright's own resident key holds its own hand now, and still not Darko's
+  assert.equal((await move("invite:keep", "held", "holding", wrightsOwnKey)).result?.by, "wright");
+  await fresh();
+  assert.equal(bounceOf(await move("invite:keep", "held", "holding", wrightsOwnKey, "keemin"))?.code, 404);
 });
 
 test("every move carries a reason; held waits until lifted; cancelled is final", { skip }, async () => {

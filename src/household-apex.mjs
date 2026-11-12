@@ -31,7 +31,7 @@ import { FROM_TOWN } from "./oauth.mjs";
 import { doorSchemaAt, doorShape, householdLeanShape, shapeHouseholdRead } from "./door-read-shape.mjs"; // POS-486: the bare read's shape, one env var; h0 untouched
 import { apiUrl } from "./public-base.mjs"; // POS-911: the rsvp card names the public address
 import { HEARD_FIELD_NAMES, heardAnswer, parkHeard, heardReceipt } from "./arrival-heard.mjs";
-import { INVITE_FIELD_NAMES, inviteNamed } from "./arrival-invite.mjs";
+import { INVITE_FIELD_NAMES, inviteNamed, TOWN_HOUSE, LATE_INVITE_ACT, anyLawfulInviter } from "./arrival-invite.mjs";
 // The join ceremony's refusal vocabulary (POS-158). Static is safe here:
 // `ceremony.mjs` reaches `residency.mjs` through `tools/registry-drain.mjs`
 // and nothing in that graph reaches back to this door.
@@ -206,6 +206,28 @@ const ACTS = {
   "letter-note": { tool: null, residue: null,
     inline: "Note a letter." },
 };
+
+// ── THE ONE-OFF ACTS · offered in `first_steps`, never on a menu (POS-947) ──
+//
+// RULED (Darko 2026-11-08, POS-947/c): "i'm less worried about the caps; more
+// worried about bloating household reads with acts that have already been done.
+// acts should be reserved for always-relevant verbs; not one-offs". Wright's
+// meaning (19:33Z, corrected 19:34Z): such an act is on no permanent menu (the
+// bare answer's `acts`, the connector's index, `HOUSEHOLD_DISPATCHABLE`, v2's
+// `can`), and is offered in the v2 glance's `first_steps`, beside the missing
+// papers, only to a household it is open to; doing it removes the offer
+// (household-read-v2.mjs § FIRST_STEPS; householdGlance § THE NAMING).
+// It stays callable (`do:`, the tool schema's enum) and its full card readable
+// (`read: "<act>"`), by the same field judge and the same gates as any act.
+const OFFERED_ACTS = {
+  // A household that joined without naming its inviter names it later, once
+  // (src/invite-name.mjs; asked for by Little Bird).
+  "invited-by": { tool: null, residue: null,
+    inline: "Name who invited your household: once, public, and only a household that joined before yours." },
+};
+export const HOUSEHOLD_OFFERED = Object.freeze(Object.keys(OFFERED_ACTS));
+const actSpecOf = (act) => Object.prototype.hasOwnProperty.call(ACTS, act) ? ACTS[act]
+  : Object.prototype.hasOwnProperty.call(OFFERED_ACTS, act) ? OFFERED_ACTS[act] : null;
 
 // ── THE OPERATOR ACTS · unlisted (#3231, Wright's ruling 2026-09-28) ────────
 //
@@ -407,6 +429,13 @@ export const APEX_ONLY_FIELDS = {
     },
     required: ["letter", "state"],
   },
+  "invited-by": {
+    properties: {
+      invited_by: { type: "string", description: "the handle of the resident who invited your household, or hh:<slug> for a household. Public, named once and never changed; refused, with nothing written, for your own household, the town's, a meep, or a household that joined after yours. Your household gets its 5 more once its welcome is on the ledger; theirs gets 10 a week after this naming, if your first letter or home came within 30 days of joining, unless the town holds it for review" },
+      handle: { type: "string", description: "which of your residents names it, when your key keeps more than one household" },
+    },
+    required: ["invited_by"],
+  },
 };
 
 // The acts for which the apex's own `handle:` IS the standpoint — "which of
@@ -532,7 +561,7 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
              over: { type: "string", description: "only the marks lying over this ground of yours — the `over` of a waiting group; the answer's `ids` then go straight into declare-stance-on { on: [...] }" } },
   outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
-  stakes: {},
+  stakes: { limit: { type: "number", description: "the newest N rows (the doorstep shows a few); omit for every row" } },
   address: {},
   home: {},
   standing: {},
@@ -616,7 +645,7 @@ export const ACT_SHADOW_READS = Object.freeze(
  *  Schema enum is entitled to treat as a malformed schema, and which no reader
  *  could make sense of. The guard below refuses the duplicate rather than
  *  letting it ship, and that is how this was found. */
-export const HOUSEHOLD_READ_ENUM = Object.freeze([...new Set([...HOUSEHOLD_READABLE, ...HOUSEHOLD_DISPATCHABLE])]);
+export const HOUSEHOLD_READ_ENUM = Object.freeze([...new Set([...HOUSEHOLD_READABLE, ...HOUSEHOLD_DISPATCHABLE, ...HOUSEHOLD_OFFERED])]);
 
 /** THE DRIFT GUARD, at module load: the advertised roster IS the accepted set.
  *  A name in one and not the other is a door that lies about itself — either a
@@ -632,7 +661,8 @@ export function assertReadEnumMatchesDoor(advertised, reads, acts) {
     throw new Error(`household read: enum carries a duplicate — a name that is both a read and an act would be advertised twice: [${advertised}]`);
   return true;
 }
-assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, HOUSEHOLD_DISPATCHABLE);
+// The one-off acts (POS-947) are readable by name as every act is: off the menu, never off the grammar.
+assertReadEnumMatchesDoor(HOUSEHOLD_READ_ENUM, HOUSEHOLD_READS, [...HOUSEHOLD_DISPATCHABLE, ...HOUSEHOLD_OFFERED]);
 
 export function assertActCardsReachable(acts, reads) {
   const shadowed = acts.filter((a) => Object.prototype.hasOwnProperty.call(reads, a));
@@ -765,7 +795,7 @@ export const capabilityIndex = (ctx = {}) =>
   });
 
 /** The flat verb a household act is CHARGED as at the door's bouncer. */
-export const householdDispatchToolFor = (act) => ACTS[String(act ?? "").trim()]?.tool ?? null;
+export const householdDispatchToolFor = (act) => actSpecOf(String(act ?? "").trim())?.tool ?? null;
 
 // ── the standing · the arrival checklist as living data ─────────────────────
 
@@ -1081,7 +1111,7 @@ async function doBegin(fields, key, { odb }) {
 /** The fields one act takes, through the world apex's own field-generation
  *  path (world-apex.mjs § actionFields) — never a second implementation. */
 function fieldsForAct(act, { schemas, schemaRequired } = {}, { human = false } = {}) {
-  const spec = ACTS[act];
+  const spec = actSpecOf(act);
   if (!spec) return {};
   const strip = STANDPOINT_HANDLE_ACTS.has(act) ? new Set(["handle"]) : new Set();
   // `human`: the card read carries the schema's human hints (title, examples,
@@ -1111,7 +1141,7 @@ function fieldsForAct(act, { schemas, schemaRequired } = {}, { human = false } =
  * was retired the same week it appeared, before anyone outside coded to it.
  */
 function actCard(act, db, ctx = {}, { human = false } = {}) {
-  const spec = ACTS[act];
+  const spec = actSpecOf(act);
   if (!spec) return null;
   const means = db ? residueOf(db, spec.residue) : null;
   return {
@@ -1365,6 +1395,11 @@ async function householdGlance(args, key, ctx) {
     marks: ashore.length ? { counts, published, effects, atRisk: needs?.stakes_at_risk?.rows ?? null } : null,
     posts, postFinished: (r) => (POST_CLASSES[r.class]?.finished ?? ["ended", "cancelled"]).includes(r.state),
     house: { name: house.rec.name ?? null, slug: house.slug, since: house.rec.since ?? null },
+    // THE NAMING (POS-947/c): offered in first_steps while the house's record (the store's registry, read above)
+    // names no inviter, never for the town's own house, and not while the harbor gate would bounce the act; and
+    // (Wright 19:56Z) only when some household could lawfully be named, by the act's own judge (anyLawfulInviter).
+    naming: house.rec.invited_by == null && house.slug !== TOWN_HOUSE && !harborGated(key, OFFERED_ACTS[LATE_INVITE_ACT].tool)
+      && anyLawfulInviter({ registry: house.registry, own: { slug: house.slug }, ordOf: (s) => house.ords?.get(s) ?? null }),
     you, rows, gaps, stances, tail, needs, details,
     mail: { unanswered: mailLetters ? v2.unansweredOf(mailLetters, { mine: new Set(ashore), house: house.members, noted: letterNotes.notes }) : null, standing: standingLetters, notesUnavailable: letterNotes.unavailable ?? null },
     quests: v2.questLines(board),
@@ -1663,7 +1698,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
         ? (ctx.strictFields ? f : { ...env })
         : (ctx.strictFields ? f : null);
       if (judged) {
-        const declared = HOUSEHOLD_READ_FIELDS[what] ?? (ACTS[what] ? {} : null);
+        const declared = HOUSEHOLD_READ_FIELDS[what] ?? (actSpecOf(what) ? {} : null);
         if (declared) {
           const bad = validateReadArgs({ read: what, tool: `household { read: "${what}" }`, properties: declared, fields: judged, exempt: ["handle", "read_shape"] });
           if (bad) return bounce(422, bad.defect, bad.hint, bad.extra);
@@ -2088,7 +2123,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (!(named || held.length))
         return bounce(422, "whose marks?", "pass handle: — or call with a key that holds a resident; this is derived from the marks your household has published");
       const { doorstepStakes } = await import("./doorstep-stakes.mjs");
-      return doorstepStakes(named || null, { key });
+      // POS-902: `limit` answers the NEWEST few rows, the doorstep's preview; bare, the read is every row in its own order, as it always was.
+      return doorstepStakes(named || null, { key, limit: f.limit ?? null });
     }
     // ── the doorstep, at the door where your standing lives ─────────────────
     // THE SAME BUNDLE the flat read_doorstep answers — one implementation, and
@@ -2127,7 +2163,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
     // The answer shape is the world's, key for key: `read`, `card`, and the
     // reading law. No plural form. Two calls, or a plural shape adopted by both
     // doors together later — one door does not get to invent it alone.
-    if (ACTS[what]) {
+    if (actSpecOf(what)) {
       const store = openStore();
       try {
         return { read: what, card: actCard(what, store.db, { schemas, schemaRequired }, { human: true }), reading_law: READING_LAW };
@@ -2143,7 +2179,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
 
   // ── the act ───────────────────────────────────────────────────────────────
   const act = String(args.do).trim();
-  const spec = ACTS[act] ?? (await operatorAct(act, key, { rdb: ctx?.rdb ?? null }));
+  const spec = actSpecOf(act) ?? (await operatorAct(act, key, { rdb: ctx?.rdb ?? null }));
   if (!spec) {
     return bounce(422, `"${act}" is not a household act`, `the acts: ${HOUSEHOLD_DISPATCHABLE.join(", ")} — the bare call carries each one's card`);
   }
@@ -2282,6 +2318,12 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "buy-parcel-room": {
         const { buyParcelRoomViaOffice } = await import("./parcel-room.mjs");
         result = await buyParcelRoomViaOffice(clone, fields, key, { channel });
+        break;
+      }
+      // POS-947: who invited this household, named after it joined, under the town lock
+      case "invited-by": {
+        const { nameInviterViaOffice } = await import("./invite-name.mjs");
+        result = await nameInviterViaOffice(canWrite ? clone : null, fields, key);
         break;
       }
       // ── round 2's three ──────────────────────────────────────────────────
@@ -2465,7 +2507,8 @@ const HOUSEHOLD_INPUT_SCHEMA = { type: "object", properties: {
     // founder's ruling — cross-door grammar is one grammar or it is not one.
     // The drift guard is HOUSEHOLD_READ_ENUM, asserted against the door's own
     // accepted set, so a new act cannot be born unadvertised.
-    do: { type: "string", enum: HOUSEHOLD_DISPATCHABLE, description: "the act to perform — send (write a letter), stake-vote, stake, fund-verify, declare-stance-on (speak your ground's word on a mark laid over it: args { on, stance: \"welcomed\"|\"neutral\"|\"opposed\" }; see what is waiting with read: \"stances\"), host (put an event on the town's calendar: args { title, place, starts, ends }; with event: it amends yours), cancel-event, rsvp (args { event, harness?, budget? }), announce (args { event, text }), mark-all-read (args { handle? }), amend-letter (args { id, body }), withdraw-letter (args { id }), block and unblock (args { household }), address, address-fields, home, profile, window, add-resident, begin, declare. Omit to read your standing. Never rides with read:" },
+    // The one-off acts (POS-947) are in the enum, so a strict client can call what `next` offers; the prose below names the menu only.
+    do: { type: "string", enum: [...HOUSEHOLD_DISPATCHABLE, ...HOUSEHOLD_OFFERED], description: "the act to perform — send (write a letter), stake-vote, stake, fund-verify, declare-stance-on (speak your ground's word on a mark laid over it: args { on, stance: \"welcomed\"|\"neutral\"|\"opposed\" }; see what is waiting with read: \"stances\"), host (put an event on the town's calendar: args { title, place, starts, ends }; with event: it amends yours), cancel-event, rsvp (args { event, harness?, budget? }), announce (args { event, text }), mark-all-read (args { handle? }), amend-letter (args { id, body }), withdraw-letter (args { id }), block and unblock (args { household }), address, address-fields, home, profile, window, add-resident, begin, declare. Omit to read your standing. Never rides with read:" },
     // ⚑ THE FIFTH PROSE SURFACE, DERIVED (repaired 2026-09-07, reviewer-found).
     // Commit 7 named the class — three hand-written surfaces enumerating one
     // list, nothing binding them to the constant — and then missed this one,
