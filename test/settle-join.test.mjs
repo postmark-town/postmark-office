@@ -309,7 +309,8 @@ test("no join PR at all refuses", async () => {
 const forkPR = ({ n = 4642, handle = "inv-fern", merged_at = "2026-11-12T07:12:00Z", repo = "inv-applicant/postmark" } = {}) =>
   ({ ...handPR({ n, handle, author: { id: 900001012, login: "inv-applicant" }, ref: "main", merged_at }), head: { ref: "main", repo: { full_name: repo } } });
 const TODAYS = (h) => `no PR from residency/${h} — ${SETTLE_REFUSALS.NO_PR.hint}`;   // the refusal as the door sends it today: the detail, then the hint
-const FORK_WORDS = /made by hand from a fork.*does not settle those.*keep tick.*within about fifteen minutes.*nothing needs retrying.*nothing was written/;
+// the COMPLETE positive hint, literally: losing the qualification ("normally", "valid hand joins"), the scope ("through this door") or the half-hour/person action must fail
+const FORK_HINT = (h) => `no PR from residency/${h} — this join was made by hand from a fork, and this door does not settle those; the office's keep tick normally settles valid hand joins within about fifteen minutes. Nothing needs retrying through this door, and this call wrote nothing. If the resident's card still reads solo: half an hour after the merge, ask a person to check it`;
 const unchanged = async (clone, pool) => {
   assert.equal(git(clone, "status", "--porcelain", "--untracked-files=all"), "", "the clone is untouched");
   assert.deepEqual(pool.state.pins.map((p) => p.handle).sort(), ["kinofire", "registrar", "wright"], "no pin written");
@@ -322,7 +323,7 @@ test("POS-1012 · a merged join from a fork gets the plain hint, same 409 and de
   const { err, pool } = await settle(clone, REGISTRAR, "inv-fern");
   assert.equal(err?.code, 409);
   assert.equal(err?.defect, SETTLE_REFUSALS.NO_PR.defect, "the defect is today's");
-  assert.match(err?.hint, FORK_WORDS);
+  assert.equal(err?.hint, FORK_HINT("inv-fern"), "the whole positive hint, literally");
   assert.notEqual(err?.hint, TODAYS("inv-fern"));
   await unchanged(clone, pool);
 });
