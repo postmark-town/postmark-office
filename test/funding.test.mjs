@@ -508,9 +508,8 @@ test("a household with holo reads four tenses that sum sanely — and holo is IN
 test("THE MONEY MOMENT says holo votes, and names the cap in the same breath", () => {
   // THE FOUNDER, 2026-09-17, verbatim: "holo does anything a normal stamp can;
   //   staking vs voting is a nondistiction."
-  // THE SENTENCE THIS REPEALS, which was live on this door until today: "this
-  //   buys ownership and memory, NEVER VOICE, and converts to real value only
-  //   if the town someday does."
+  // Until that ruling the sentence on this door withheld the vote from a
+  //   giver's stamps (its wording is in git history).
   //
   // This is the one place the office made a promise about VOICE, and it made it
   // at the instant a patron is about to send money. A test that only compared
@@ -525,10 +524,9 @@ test("THE MONEY MOMENT says holo votes, and names the cap in the same breath", (
   // CHANGED 2026-11-11 (POS-1001), NOMOS II.4: "Stamps are not money. They
   // can't be bought … Stamps never turn into money." and II.6.1: NOMOS "grants
   // no claim" on owning Postmark or on money outside the town. Until
-  // 2026-11-11 the next two asserted the sentence still promised "ownership
-  // and memory" and "converts to real value only if the town someday does";
-  // both offered something outside the town for money, so both are now
-  // asserted ABSENT, and the sentence is held to the site's twin word for word.
+  // 2026-11-11 the next two asserted the sentence's earlier wording; NOMOS
+  // grants nothing outside the town for money, so both are now asserted
+  // ABSENT, and the sentence is held to the site's twin word for word.
   assert.doesNotMatch(WHAT_THIS_BUYS, /ownership/,
     "the money moment offers no ownership: NOMOS grants no claim on owning Postmark");
   assert.doesNotMatch(WHAT_THIS_BUYS, /converts to real value/,

@@ -193,23 +193,23 @@ export const HOLO_EXPANSION = "short for holographic stamp — the collector's s
 // sentence (postmark-site town/pages/fund/[pot].astro, the fine print) and
 // moves with it: one sentence, two repos, never two spellings.
 //
-// CHANGED 2026-11-11 (POS-1001) to fit NOMOS II.4 ("Stamps are not money. They
+// REWORDED 2026-11-11 (POS-1001) to fit NOMOS II.4 ("Stamps are not money. They
 // can't be bought") and II.6.1 (NOMOS "grants no claim" on owning Postmark or on
-// money outside the town). Until then it read "this buys stamps that do
-// everything a stamp does, including vote, plus ownership and memory; money's
-// share of your household is capped, and it converts to real value only if the
-// town someday does", the same sentence `LOGOS/the-derivation.md § 10` carries
-// in the world.
+// money outside the town). It now says a gift pays a bill and is written down
+// in the giver's name; that if the town staked on the pot, the close thanks the
+// giver in stamps that work like any stamp, vote included; that money's share
+// of a household is capped (never above half, NOMOS II.4.5.1); and that stamps
+// never turn into money. Earlier wordings are in git history.
 //
 // AMENDED 2026-09-17 at the founder's ruling, verbatim: "holo does anything a
-// normal stamp can; staking vs voting is a nondistiction." It read "this buys
-// ownership and memory, NEVER VOICE" — the repealed law, stated on the live
-// door at the one moment it most matters. A vote is a stake (`stake:vote/…`)
-// clipping against a fungible balance no door can sort by origin, so the
-// stamps money earns vote; what bounds money is rho, the cap on its share of a
-// household, and the disclosure now says THAT instead of promising a verb
-// withheld. Naming the cap is not optional here: a patron told their stamps
-// vote and not told their share is bounded has been told half the truth.
+// normal stamp can; staking vs voting is a nondistiction." Before it, the
+// sentence withheld the vote from a giver's stamps, at the one moment it most
+// matters. A vote is a stake (`stake:vote/…`) clipping against a fungible
+// balance no door can sort by origin, so a giver's stamps vote; what bounds
+// money is rho, the cap on its share of a household, and the disclosure says
+// THAT instead of promising a verb withheld. Naming the cap is not optional
+// here: a patron told their stamps vote and not told their share is bounded
+// has been told half the truth.
 //
 // HOISTED to one owner in the same commit. It was typed out twice in
 // src/fund.mjs (the verify receipt and the intake card) with nothing
