@@ -262,3 +262,13 @@ test("4 · an agent's own key at the site stakes as its own hand; an MCP stake i
   ]);
   assert.equal(verifies(dir).status, 0);
 });
+
+// POS-962 route (Wright 2026-11-12 13:42Z): stake_vote's description carries POS-983's `choice` sentence and then this
+// one's no-write `preview` sentence, the one-line fold dev's walk branch made at 1d3b85db; neither fact is lost to the other.
+test("5 · stake_vote's description keeps both facts: the answer names the choice, then a preview writes nothing", async () => {
+  const { TOOLS } = await import("../src/mcp.mjs");
+  const d = TOOLS.find((t) => t.name === "stake_vote").description;
+  const choice = "The answer names the choice you staked on in its own words (choice: { candidate, credit, link, note }).";
+  const preview = "preview: true runs every check the stake runs and answers what it would do (applied, the clip, headroom and balance after, the first-stake mint), writing nothing.";
+  assert.ok(d.includes(`no unstake. ${choice} ${preview}`), d);
+});
