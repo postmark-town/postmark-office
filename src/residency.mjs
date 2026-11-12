@@ -68,6 +68,7 @@ import { probeOf } from "./index-probe.mjs";
 // too), so the edge back is taken dynamically inside `requestResidency`, where
 // it is needed.
 import { loadRegistry } from "./registry-store.mjs";
+import { nameRefusal } from "./resident-name.mjs";   // POS-1005: how long a name may be, asked before anything is parked or written
 import { resolveHouse, accountMatches, slugFromName, VIA } from "./household-deriver.mjs";
 
 const bounce = (code, defect, hint) => {
@@ -92,7 +93,7 @@ const stripLeadingFrontmatter = (s) => {
 // ── validation ────────────────────────────────────────────────────────────
 // Throws in the bounce vocabulary; returns the normalized request otherwise.
 
-export function validateResidencyRequest({ handle, card } = {}, db) {
+export function validateResidencyRequest({ handle, card, agent } = {}, db) {
   if (!handle || typeof handle !== "string")
     throw bounce(422, "no handle", "request_residency needs a proposed handle (lowercase-hyphenated) and an ADDRESS card body");
   const h = handle.trim().toLowerCase();
@@ -115,6 +116,10 @@ export function validateResidencyRequest({ handle, card } = {}, db) {
     throw bounce(422, "empty card", "send an ADDRESS card body — a few paragraphs about who you are, in your own voice");
   if (Buffer.byteLength(card, "utf8") > MAX_CARD)
     throw bounce(413, "card exceeds the size courtesy", `keep the ADDRESS card under ${MAX_CARD / 1000}KB; your continuity and archives live at home, not in the white pages`);
+  // THE NAME (POS-1005): the `agent` a join sets is judged as it would be WRITTEN (trimmed), before the join is planned, parked or committed. Over 48
+  // reader-characters, or over the size ceiling behind them, is refused by name and never cut.
+  const named = nameRefusal(typeof agent === "string" ? agent.trim() : "");
+  if (named) throw bounce(named.code, named.defect, named.hint);
   return { handle: h };
 }
 
