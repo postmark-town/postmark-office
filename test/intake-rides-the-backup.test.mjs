@@ -10,8 +10,9 @@
 //   absent      a rail that never ran has no file, and that is legal
 //   unreadable  a source that exists and can't be copied is NAMED, and the lane
 //               reddens at the end, after the dump has shipped
-//   it ships    § 4 puts the copies in the repo under one name each, and the
-//               receipt (LATEST.json, the state file) carries the statuses
+//   it ships    § 4 puts the copies in the night's S3 prefix under one name
+//               each, and the receipt (LATEST.json, the state file) carries
+//               the statuses
 //
 //   node --test test/intake-rides-the-backup.test.mjs
 
@@ -74,11 +75,13 @@ test("present files are copied whole, a missing one is absent, an uncopyable one
   assert.equal(readFileSync(join(r.stage, "stripe-stripe-intake.jsonl"), "utf8"), readFileSync(stripe, "utf8"), "copied whole, byte for byte");
 });
 
-test("the copies ship in the dump's commit, the receipt carries them, and an unreadable one reddens the unit", () => {
-  assert.match(LANE, /cp "\$INTAKE_STAGE"\/\* "\$REPO\/intake\/"/, "§ 4 copies the staged intake files into the backup repo");
+test("the copies ship in the dump's night, the receipt carries them, and an unreadable one reddens the unit", () => {
+  const ship = LANE.split("\n").find((l) => /w2_ship_s3 "\$W2_S3_BUCKET"/.test(l));
+  assert.ok(ship, "§ 4 has no S3 ship: the off-box route moved and this test measures nothing");
+  assert.match(ship, /"\$INTAKE_STAGE"\/\*/, "§ 4 ships the staged intake files to S3 with the dump");
   assert.match(LANE, /"intake": \{\$INTAKE_STATUS\}/, "LATEST.json carries the intake statuses");
   assert.match(LANE, /"intake":\{%s\}/, "the state file carries them too, for the roll-call row that watches this lane");
   const tail = LANE.slice(LANE.lastIndexOf("# ── 5 · local retention"));
-  assert.match(tail, /\[ -z "\$INTAKE_UNREAD" \] \|\| \{[^}]*exit 1; \}/, "an unreadable intake file exits 1, after the push");
-  assert.ok(LANE.indexOf('[ -z "$INTAKE_UNREAD" ]') > LANE.indexOf('push -q origin HEAD:main'), "it reddens AFTER the dump has shipped, never instead of it");
+  assert.match(tail, /\[ -z "\$INTAKE_UNREAD" \] \|\| \{[^}]*exit 1; \}/, "an unreadable intake file exits 1, after the ship");
+  assert.ok(LANE.indexOf('[ -z "$INTAKE_UNREAD" ]') > LANE.indexOf('w2_ship_s3 "$W2_S3_BUCKET"'), "it reddens AFTER the dump has shipped, never instead of it");
 });
