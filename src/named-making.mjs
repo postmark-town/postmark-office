@@ -46,6 +46,13 @@ export const SET_DOWN_FACE = "set-down";
  * transaction (set-down-return.mjs § putBackGuard).
  */
 export const PUT_BACK_FACE = "put-back";
+/**
+ * The hold face that withdraws one (POS-992; Darko 2026-11-11 09:21 EST, POS-992/a: "withdraw owns it"; Wright
+ * 14:47Z: "each hold face names the act that happened"): its maker withdraws a thing it made and still holds. The
+ * holding ends the way an eaten thing's does (policy detach, with no place), the made record keeps the make and its
+ * name stays taken, and it is ended for good: a put-back never revives it, as it never revives an eaten one.
+ */
+export const WITHDRAW_FACE = "withdraw";
 
 /**
  * What makes a `to:` call the NAMED form: any field of the mark's own. `kind`
@@ -145,6 +152,9 @@ export const madeWords = ({ actor, id, to }) => (String(to) === String(actor)
 
 /** A sentence for eating one. */
 export const eatenWords = ({ actor, id }) => `${actor} consumed ${id}; it is used up and gone, and its name is never made again`;
+
+/** A sentence for withdrawing one (POS-992): withdrawn by its maker, never eaten; the name stays taken. */
+export const withdrawnWords = ({ actor, id }) => `${actor} withdrew ${id}: withdrawn by its maker from their own hands, it is gone from the world; the record keeps its making, and its name is never made again`;
 
 // ── SETTING ONE DOWN (POS-766/e; P2-a..e on the lead's word, 2026-10-23) ─────
 

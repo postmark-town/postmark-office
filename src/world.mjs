@@ -4342,11 +4342,30 @@ async function groundMinimumStake(clean, canon) {
     if (marksContain(g, { at: clean.at, extent: clean.extent, points: clean.points }))
       return { min: 0, ground: g.id, own };
   }
+  // THE TOWN CENTRE, AND ONLY THE TOWN CENTRE (POS-952; Wright 2026-11-09 14:11Z: "Town Centre only … an amend to
+  // a mark on the Town Centre's ground is judged by the Centre's standing and backing; nothing else changes …
+  // Keep the existing judgment everywhere else." The general reading, every constitutional town ground, is a law
+  // question for Darko, not this fix). The Centre is `sited` at the constitution tier, not a parcel, so the scan
+  // above never sees it. "Its ground" is the one the mark STANDS ON: its nesting parent in canon, by the fold's own
+  // containment rule (§ nestingParent, the same answer the preview prints as where it nests), so a mark standing on
+  // a ground INSIDE the Centre (the Keeping Works, the Think Tank) stands there, not on the Centre. When that ground
+  // is the Town Centre, still constitution-tier, not a parcel, and of the ACTOR'S OWN household, it is named as the
+  // mark's `backing`: an amendment there is put forward by the escrow behind the Centre (§ putForwardVerdict),
+  // never for free. The minimum and `ground` are unchanged (it is no parcel; `ground` is what the door calls "your
+  // ground"). Anyone else's mark there, and every mark on any other ground, is judged as it always was.
+  const self = clean.slug ? `${clean.by}/${clean.slug}` : null;
+  const standsOn = canon.byId.get(await nestingParent({ ...clean, id: self }, canon.marks) ?? "") ?? null;
+  const constitutional = standsOn && standsOn.id === TOWN_CENTRE && standsOn.tier === "constitution" && standsOn.kind !== "parcel"
+    && credOf(standsOn.by ?? standsOn.household) === mine ? standsOn : null;
   // A COMMONS ANSWER READ WITHOUT THE REGISTRY IS A GUESS, NOT A FINDING: the
   // solo grain cannot see a housemate's parcel. The act takes the safe read
   // (the mark stays a draft); `markStandsOnOwnGround` must not take it as "commons".
-  return { ...commons, own, ...(houses ? {} : { registry_unread: true }) };
+  return { ...commons, own, ...(constitutional ? { backing: constitutional.id } : {}), ...(houses ? {} : { registry_unread: true }) };
 }
+/** The Town Centre: the one ground whose backing carries the town's amendments there (POS-952, Wright 14:11Z). */
+export const TOWN_CENTRE = "the-town/the-town-centre";
+/** Tests only (POS-952): the ground verdict itself, for grounds the served canon does not hold. */
+export const __groundMinimumStakeForTest = (clean, canon) => groundMinimumStake(clean, canon);
 
 /**
  * WHAT A DROP STAKES, BY THIS SAME RULE (POS-688 D4 step 3, Darko 2026-10-19
@@ -4412,17 +4431,23 @@ async function escrowBehindMark(mark) {
  * nothing behind it — the same reason `stamps: 0` is a deliberate putting-
  * forward there and not a no-op.
  */
-export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1 } = {}) {
+export function putForwardVerdict({ staking = false, stamps = 0, amending = false, escrowBehind = 0, groundMin = 1, backedBy = null, groundBacking = 0 } = {}) {
   const min = Number(groundMin);
   const behind = Number(escrowBehind) || 0;
   const byStake = staking === true && Number(stamps) >= min;
   const byStanding = amending === true && behind >= min;
+  // POS-952 (Wright 2026-11-09, "Town Centre only"): an amendment on the Town Centre's ground is judged by the
+  // Centre's backing (`backedBy`, named by groundMinimumStake; `groundBacking`, the escrow behind it). Reported apart from
+  // the mark's own escrow, which it is not: escrow_behind and escrow_after stay the mark's.
+  const backing = Number(groundBacking) || 0;
+  const byGround = amending === true && typeof backedBy === "string" && backing >= min;
   return {
-    put_forward: byStake || byStanding,
+    put_forward: byStake || byStanding || byGround,
     // WHICH FACT CARRIED IT, for the sentence and for a reader of the log. Not
     // a tiebreak: a staked amendment on a backed mark is both, and the stake is
     // named because it is the thing the author just did.
-    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : null,
+    carried_by: byStake ? "stake" : byStanding ? "standing-escrow" : byGround ? "ground-backing" : null,
+    ...(byGround && !byStake && !byStanding ? { backed_by: backedBy, ground_backing: backing } : {}),
     escrow_behind: amending === true ? behind : 0,
     // WHAT THE CALL LEAVES (postmark#3593, kogane; Darko 2026-10-09). `stamps:`
     // ADDS to the stake, so the escrow behind the mark after this act is what
@@ -4451,6 +4476,9 @@ export function amendmentPublishNote(verdict) {
       ? `✦${after} will stand in escrow behind it after this act: ✦${behind} already there and ✦${staked} added now, because stamps: adds to the stake and does not set it. The amendment publishes at the next crossing.`
       : `✦${after} will stand in escrow behind it after this act, all of it added now. The amendment publishes at the next crossing.`;
   }
+  // POS-952: carried by the ground's backing, so the sentence names that ground and its escrow, not the mark's
+  if (verdict.carried_by === "ground-backing" && verdict.backed_by)
+    return `✦${Number(verdict.ground_backing) || 0} stand in escrow behind ${verdict.backed_by}, the town's constitutional ground it stands on — the amendment publishes at the next crossing.`;
   return behind > 0
     ? `✦${behind} already stand in escrow behind it — the amendment publishes at the next crossing.`
     : "it stands on your own household's ground, where nothing needs buying — the amendment publishes at the next crossing.";
@@ -4725,8 +4753,12 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
     const groundMin = groundRead.min;
     const groundOwn = groundRead.own ?? [];
     const escrowBehind = amending ? await escrowBehindMark(id) : 0;
+    // POS-952: on the town's own constitutional ground (groundMinimumStake's `backing`), an amendment the mark's
+    // own escrow does not carry is judged by the escrow behind that ground, read by the same door and as safely.
+    const backedBy = amending && ground?.backing && escrowBehind < (ground?.min ?? 1) ? ground.backing : null;
+    const groundBacking = backedBy ? await escrowBehindMark(backedBy) : 0;
     const verdict = putForwardVerdict({
-      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1 });
+      staking, stamps: stakeN, amending, escrowBehind, groundMin: ground?.min ?? 1, backedBy, groundBacking });
     const putForward = verdict.put_forward;
 
     // The refusal is a refusal to PUBLISH, never a refusal to save: the
@@ -4880,7 +4912,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
 }
 
 /** withdraw, as one later entry. The terminal supersession (edit-law § withdraw) — nothing is deleted, a row says it ended. */
-export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false, refusedHolder = false }, { crossing = currentCrossing() } = {}) {
+export async function journalWithdraw({ by, slug, household, cause = null, guard: asked = null, contentsKept = false, refusedHolder = false, heldMade = null }, { crossing = currentCrossing() } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${by}/${slug}`;
   const canon = canonForGuards();
@@ -4893,6 +4925,13 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
     // canon, and its withdrawal is its way home: `refusedHolder` is passed only with the put-back guard that proves
     // it in this write (set-down-return.mjs § putBackGuard, `expect`), which refuses unless it writes the return.
     if (!refusedHolder && !live.some((m) => m.id === id) && !wasPublished) {
+      // A THING MADE IN HAND (POS-992; Darko 2026-11-11 09:21 EST, POS-992/a: "withdraw owns it") is in no live
+      // layer and not in canon: it lives as the hold lane's `make` record, and every read calls it published. So
+      // "no mark" was false for it (postmark#4559). `heldMade` is passed by the public door's own withdrawal only
+      // (withdrawMarkViaOffice), never by a set-down's undo or a dropped unit's return: asked here, where the
+      // answer would otherwise be that false 404, the made record is read or refused (a 503, never a guess), and
+      // a name it holds is withdrawn as a held thing (world-kinds.mjs § withdrawHeldMade).
+      if (heldMade && (await madeMarksOrRefuse([id], bounce)).has(id)) return await heldMade();
       // A retired mark is named as one (POS-241 phase 1), not as a mark that never was.
       const { markStandingStatus, withdrawRetiredRefusal } = await import("./world2-claims.mjs");
       const retired = withdrawRetiredRefusal(id, await markStandingStatus({ slug: id }).catch(() => null));
@@ -4904,7 +4943,7 @@ export async function journalWithdraw({ by, slug, household, cause = null, guard
       // returned or retracted through it. Once published, the unit comes back by
       // take-back like any published unit (test/withdraw-dropped-unit.test.mjs §
       // ORIGINAL HOUSEHOLD). No visibility is widened to make it reachable.
-      throw bounce(404, `no mark "${id}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts and your published marks; check world_my_marks");
+      throw bounce(404, `no mark "${id}" in your world`, "ids are <by>/<slug> — you can withdraw your drafts, your published marks and a thing you made in hand and still hold; check world_my_marks");
     }
 
     // The store's answer to `holdsChildren`: a withdrawal may not strand what
@@ -5821,7 +5860,10 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
       const viaHolder = await withdrawSetDownHolder({ mark, by, household, key, caller: by, guard,
         withdraw: ({ guard: g, holderReturns, refused }) => journalWithdraw({ by, slug, household, guard: g, contentsKept: holderReturns === true, refusedHolder: refused === true }) }, units?.setDownHolder ? units : await liveUnitDeps());
       if (viaHolder) return viaHolder;
-      return await journalWithdraw({ by, slug, household, guard });
+      // A THING MADE IN HAND (POS-992): asked only where the answer would otherwise be "no mark" (journalWithdraw §
+      // heldMade). It carries no stake (a make is free), so the escrow guard has nothing to hold for it.
+      const heldMade = async () => (await import("./world-kinds.mjs")).withdrawHeldMade({ thing: mark, maker: by, key, deps: units ?? await liveUnitDeps() });
+      return await journalWithdraw({ by, slug, household, guard, heldMade });
     }
     catch (e) { if (e?.code) throw e; throw bounce(500, "the withdrawal tripped", faultLogged("the withdrawal tripped", e)); } // its error goes to the log (POS-578)
   }
@@ -7441,7 +7483,7 @@ export const WORLD_TOOLS = [
       into: { type: "string", description: "with enter_on_arrival, at a portal that leads more than one way: which way, one of the ids its answer lists in `choose`." },
     }, additionalProperties: false } },
   { name: "world_withdraw_mark",
-    description: "Withdraw your own mark — the terminal supersession (edit-law's revision family). The mark leaves your sketchbook now and canon at the next crossing (the settlement unpublishes it); its whole life stays in the log — nothing is erased. Guards: only the hand that left a mark may withdraw it; a mark still holding other marks inside it refuses (move or withdraw the children first); a mark with escrow on it refuses (staked stamps anchor it — your own come back with world_unstake, another resident's must be unstaked by its owner). To CHANGE a mark rather than remove it, use world_leave_mark with amend: true — a withdrawal is for marks that should stop standing.",
+    description: "Withdraw your own mark — the terminal supersession (edit-law's revision family). The mark leaves your sketchbook now and canon at the next crossing (the settlement unpublishes it); its whole life stays in the log — nothing is erased. A thing you made in hand (leave-mark { slug, body, to }) and still hold is withdrawn at once and for good: its holding ends, it leaves the world now, the record keeps its making, and its name is never made again; a holder goes only empty. Guards: only the hand that left a mark may withdraw it; a mark still holding other marks inside it refuses (move or withdraw the children first); a mark with escrow on it refuses (staked stamps anchor it — your own come back with world_unstake, another resident's must be unstaked by its owner). To CHANGE a mark rather than remove it, use world_leave_mark with amend: true — a withdrawal is for marks that should stop standing.",
     inputSchema: { type: "object", properties: {
       mark: { type: "string", description: "your mark's id, <by>/<slug> — the by must be a resident on your key" },
       handle: { type: "string", description: "unused — the mark id's own <by> names the hand; kept for callers that pass it reflexively" },

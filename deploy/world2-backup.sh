@@ -5,11 +5,17 @@
 #  WHAT IS BACKED UP WHERE, AND THE RPO OF EACH — say the number, not "nightly"
 # ════════════════════════════════════════════════════════════════════════════
 #
-#  OFF-BOX (git, private)          pg_dump --format=custom, pushed to
-#                                  wright-starforge/postmark-world2-backups.
+#  OFF-BOX (S3, private)           pg_dump --format=custom, uploaded whole with
+#                                  its sha256 to s3://<bucket>/world2/<stamp>/
+#                                  (the bucket is the unit's W2_S3_BUCKET).
 #                                  RPO ≤ 24h. THIS IS THE ONE THAT SURVIVES
 #                                  LOSING THE BOX, and it is the one the
-#                                  restore rehearsal exercises.
+#                                  restore rehearsal exercises (--from-s3).
+#                                  The bucket keeps about 90 nights; older
+#                                  ones, up to the git ship's retirement on
+#                                  STAR-118, are in the archived GitHub repo.
+#                                  The cold restore is DEPLOY.md § The S3
+#                                  route.
 #
 #  THE NOTARY, ELSEWHERE ON PURPOSE  Until 2026-09-03 this lane also shipped a
 #                                  git bundle of the notary checkout, because
@@ -21,8 +27,8 @@
 #                                  why keeping it would have been the wrong kind
 #                                  of spare.
 #
-#  OFF-BOX (git, private)          roles.db, copied with VACUUM INTO, in the
-#                                  SAME commit as the dump. RPO <= 24h. It is
+#  OFF-BOX (S3, private)           roles.db, copied with VACUUM INTO, in the
+#                                  SAME night as the dump. RPO <= 24h. It is
 #                                  here because it is the one office file with
 #                                  authored state and no other copy anywhere:
 #                                  src/roles.mjs:71-82, "losing roles.db loses
@@ -54,6 +60,13 @@
 # makes the WAL a restore path instead of a habit.
 #
 # ── THE OFF-BOX DESTINATION, DISCLOSED ──────────────────────────────────────
+# NOW (STAR-118): s3://<bucket>/world2/<stamp>/, in the box's own AWS account, written by the instance role (no key
+# on disk; it can put, get and list, never delete). Versioning keeps an overwritten object, and the bucket's lifecycle
+# trims: about 90 nights are kept. DEPLOY.md § The S3 route has the settings, what a rebuilt box needs, and the cold
+# restore. § 4 is the one route. The GitHub repository below was the destination from 2026-08-29 until the git ship's
+# retirement, and it is archived with the retirement, never deleted: its history holds every night until then. What
+# follows is its record.
+#
 # github.com/wright-starforge/postmark-world2-backups — PRIVATE, created
 # 2026-08-29 for this lane, with keeminlee invited as admin so the ownership
 # transfer is one click rather than a migration.
@@ -89,10 +102,10 @@
 # history that never forgets, which is a repository that dies of it.
 #
 # So WAL is local-only and its off-box lane is a NAMED GAP with a number
-# attached, not an oversight: give the box a private object-storage bucket and
-# shipping the spool is a dozen lines. Until then the honest sentence is the one
-# at the top — losing the box costs up to 24 hours, and the dump is what comes
-# back.
+# attached, not an oversight. The box has a private bucket now (STAR-118), so
+# shipping the spool is a dozen lines, and they're not written. Until they are,
+# the honest sentence is the one at the top — losing the box costs up to 24
+# hours, and the dump is what comes back.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -101,20 +114,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DUMPS="$WORLD2_LAB/private-dumps"          # outside every checkout and webroot
 BASEBACKUPS="$WORLD2_LAB/basebackups"
 WAL="${W2_WAL_ARCHIVE:-/srv/world2-wal}"
-REPO="$WORLD2_LAB/backup-repo"
-KEEP_DUMPS="${W2_KEEP_DUMPS:-14}"          # in the working tree; history keeps all
+KEEP_DUMPS="${W2_KEEP_DUMPS:-14}"          # nights of dumps kept on the box (the bucket's lifecycle keeps about 90)
 KEEP_BASE="${W2_KEEP_BASE:-3}"
-PART_BYTES="${W2_PART_BYTES:-90M}"         # each shipped part stays under GitHub's 100 MB file limit (STAR-118)
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DB="$(w2_db)"
-
-# The host key is PINNED to the lane's own known_hosts, verified against
-# GitHub's published SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU on
-# install. StrictHostKeyChecking=yes with the system known_hosts would pass
-# for meepo and fail for anyone else (it did, on the first rehearsal run as
-# root) — a lane whose security depends on which user happens to run it is
-# not pinned, it is lucky.
-export GIT_SSH_COMMAND="ssh -i $WORLD2_LAB/.ssh/w2-backups -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$WORLD2_LAB/.ssh/known_hosts"
 
 mkdir -p "$DUMPS" "$BASEBACKUPS"
 chmod 700 "$DUMPS" "$BASEBACKUPS"
@@ -162,9 +165,9 @@ TOC_ENTRIES=$(pg_restore --list "$DUMP" 2>/dev/null | grep -c '^[0-9]')
 #    LOSING roles.db LOSES WHO PAID. … a backup discipline for this one file is
 #    an operations decision that is not this module's to make, only to state."
 #
-# This is operations making it. The file rides in THIS lane's commit instead of
-# a unit of its own: it wants the same nightly clock, the same private repo and
-# the same deploy key, and a second lane for one small file would be a second
+# This is operations making it. The file rides in THIS lane's night instead of
+# a unit of its own: it wants the same nightly clock, the same private bucket and
+# the same instance role, and a second lane for one small file would be a second
 # thing to watch and a second thing to forget. No new credential, no new unit,
 # no new roll-call row — the row this lane already has now covers this file too.
 #
@@ -246,7 +249,7 @@ rm -f "$ROLES_ERR"
 #   wallets       /srv/postmark-wallets/registrations.jsonl: which Base address
 #                 belongs to which household (src/wallet-registry.mjs). Kept off
 #                 the town repo by the founder's 2026-08-25 ruling, so this
-#                 private repo is its only other copy.
+#                 lane's private bucket is its only other copy.
 #   stripe        /srv/postmark-stripe/stripe-intake.jsonl, and
 #   paypal        /srv/postmark-paypal/paypal-intake.jsonl: every payment each
 #                 card watcher has SEEN, including the ones still in their grace
@@ -254,7 +257,7 @@ rm -f "$ROLES_ERR"
 #   usdc          /srv/postmark-usdc/state.json: the USDC watch's cursor and its
 #                 unresolved arrivals.
 #
-# They ride in the SAME commit as the dump, like roles.db. They become store rows
+# They ride in the SAME night as the dump, like roles.db. They become store rows
 # later, which is the issue's larger half; this is the smaller half, first. Each
 # is append-only or rewritten whole by one writer, so a plain copy is a sound
 # copy: at worst it misses a line appended during the copy, which the next night
@@ -333,92 +336,34 @@ if [ -d "$WORLD2_LAB/notary/.git" ]; then
   fi
 fi
 
-# ── 4 · off-box ─────────────────────────────────────────────────────────────
-[ -d "$REPO/.git" ] || fail "no backup checkout at $REPO — see DEPLOY.md § The world2 backup lane" ship
-git -C "$REPO" fetch -q origin main   || fail "backup repo fetch failed (deploy key? network?)" ship
-git -C "$REPO" reset -q --hard origin/main
-mkdir -p "$REPO/dumps"
-# IN PARTS UNDER GITHUB'S 100 MB FILE LIMIT (STAR-118, 2026-11-04). The dump
-# grows about 2 MB a night and crossed 100 MB on 11-04 (101.40 MB), and GitHub
-# refuses any single file past 100 MB, so that night's push failed and the dump
-# stayed on the box alone. It ships as `<dump>.part-NN` of PART_BYTES each, with
-# `<dump>.sha256` of the WHOLE dump beside them: the restore line cats the parts
-# back in order and checks that sum before pg_restore reads a byte. A dump
-# under the part size ships as one part, so there is one shape every night.
-# This is a bridge, not the destination: history keeps every night's ~100 MB,
-# and a git host is the wrong home for that (STAR-118's call for Darko).
+# ── 4 · off-box: the S3 bucket, the one route (STAR-118) ────────────────────
+# Darko 2026-11-04 09:03: "the real solution is 2", an S3 bucket in the box's own account. It ran beside the git
+# ship from 2026-11-09 until it proved itself: four nightly ships on their own (11-09 → 11-12) and a --from-s3
+# rehearsal on 11-12 (851,046 rows across 87 tables restored, every table matching or explained). On Wright's pass
+# that day, office #1013 took the git ship out. Its GitHub repository is archived, never deleted: its history holds
+# every night up to the retirement, and world2-restore-rehearse.sh --from-remote still reads it.
+#
+# The whole dump goes as one object (S3 has no 100 MB file limit), with the sum of the whole beside it, the roles
+# copy when there is one, the intake files and LATEST.json, under world2/<stamp>/. LATEST.json goes LAST, so a night
+# with a LATEST.json is a night whose upload finished (the cold restore reads it that way). The instance's role puts,
+# gets and lists in that one bucket and can't delete. With S3 the only route, an unset bucket or a failed upload is
+# the night the dump stays on the box and NOWHERE ELSE, so either one fails the unit
+# (test/backup-ships-to-s3-or-fails.test.mjs runs both, and the shipped night).
+[ -n "${W2_S3_BUCKET:-}" ] || fail "W2_S3_BUCKET is unset — there is no off-box route, so the dump is on the box and NOWHERE ELSE" ship
+SHIP="$(mktemp -d -t w2-ship.XXXXXX)"; trap 'rm -rf "$SHIP"' EXIT   # the sum and LATEST.json, staged; gone on any exit
 DUMP_NAME="$(basename "$DUMP")"
-( cd "$DUMPS" && sha256sum "$DUMP_NAME" ) > "$REPO/dumps/$DUMP_NAME.sha256" || fail "could not sum $DUMP" ship
-split -b "$PART_BYTES" -d -a 2 "$DUMP" "$REPO/dumps/$DUMP_NAME.part-" || fail "could not split $DUMP into parts" ship
-DUMP_PARTS=$(ls -1 "$REPO/dumps/$DUMP_NAME".part-* | wc -l)
-# roles.db rides in the SAME commit as the dump it is filed beside, so a clone
-# on the one night anybody clones it carries who paid as well as what happened.
-# Its own directory: a reader who finds this repo must not have to tell a 3 MB
-# Postgres archive from a 24 KB SQLite file by reading the extension.
-if [ "$ROLES_STATUS" = copied ]; then
-  mkdir -p "$REPO/roles"
-  cp "$ROLES_COPY" "$REPO/roles/"
-fi
-# The intake files (§ 1c) keep ONE name each, overwritten nightly: they are whole
-# journals that only grow, so the repo's history is their archive and a stamped
-# copy per night would put every past night's whole journal in the tree again.
-if ls "$INTAKE_STAGE"/* >/dev/null 2>&1; then
-  mkdir -p "$REPO/intake"
-  cp "$INTAKE_STAGE"/* "$REPO/intake/"
-fi
-
-# The bundles this lane shipped before 2026-09-03 stay in the repo's history and
-# in its tree, untouched. They are a closed record, not a stale copy pretending
-# to be current, and a marker beside them says so — written once, after the
-# reset so it lands in the tree this run commits, because a reader who finds
-# notary/ in a clone three months from now must not have to date the filenames
-# to learn which repo is live.
-if [ -d "$REPO/notary" ] && [ ! -f "$REPO/notary/RETIRED.md" ]; then
-  cat > "$REPO/notary/RETIRED.md" <<'RETIRED'
-# These bundles are a closed record (frozen 2026-09-03)
-
-Until 2026-09-03 the World 2.0 notary had no git remote, so `world2-backup.sh`
-shipped its checkout here as a git bundle. That stopgap ended with DEC-7.
-
-**The live certifications are at `wright-starforge/postmark-world2-notary`** —
-a separate private repository, written by `world2-notary.sh` over a deploy key
-scoped to that repo alone. It is separate ON PURPOSE: a certification stored
-beside the backup it certifies cannot be the thing that catches the backup.
-
-The bundles beside this file are whole repositories in one file each and still
-open with `git clone <bundle> notary`, but they stopped at 2026-09-03 and
-nothing adds to them. Verify against the notary repository, not against these.
-RETIRED
-fi
-
-# Working-tree retention. History keeps every dump forever — that is the point
-# of a git destination — but the tree stays small so a clone is quick when it
-# matters, which is the one night anybody clones it.
-# Kept by NIGHT, not by file (STAR-118): a night is its dump's stem, whatever
-# it ships as (one whole .dump before 11-04; parts and a .sha256 after), so
-# KEEP_DUMPS still means fourteen nights.
-ls -1 "$REPO/dumps" 2>/dev/null | sed -E 's/\.dump(\.part-[0-9]+|\.sha256)?$//' | sort -u | head -n -"$KEEP_DUMPS" | while read -r n; do
-  for f in "$REPO/dumps/$n".dump "$REPO/dumps/$n".dump.part-* "$REPO/dumps/$n".dump.sha256; do
-    [ -e "$f" ] || continue
-    git -C "$REPO" rm -q --cached "dumps/$(basename "$f")" >/dev/null 2>&1; rm -f "$f"
-  done
-done
-ls -1 "$REPO/roles"  2>/dev/null | sort | head -n -"$KEEP_DUMPS" | while read -r f; do git -C "$REPO" rm -q --cached "roles/$f" >/dev/null 2>&1; rm -f "$REPO/roles/$f"; done
-# NO retention pass over $REPO/notary any more, and its absence is deliberate:
-# nothing adds to that directory now, so a count-based prune would only ever
-# delete from a closed record — and RETIRED.md sorts before every bundle
-# filename, so the first thing it would eat is the note explaining the rest.
+S3_PREFIX="world2/$STAMP"
+( cd "$DUMPS" && sha256sum "$DUMP_NAME" ) > "$SHIP/$DUMP_NAME.sha256" || fail "could not sum $DUMP" ship
 
 WAL_BYTES=$(du -sb "$WAL" 2>/dev/null | cut -f1); WAL_BYTES=${WAL_BYTES:-0}
 WAL_FILES=$(find "$WAL" -type f 2>/dev/null | wc -l)
 
-cat > "$REPO/LATEST.json" <<JSON
+cat > "$SHIP/LATEST.json" <<JSON
 {
   "at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "database": "$DB",
-  "dump": "dumps/$(basename "$DUMP")",
-  "dump_parts": $DUMP_PARTS,
-  "dump_shipped_as": "dumps/$(basename "$DUMP").part-00 … in order, and dumps/$(basename "$DUMP").sha256 for the whole",
+  "dump": "s3://$W2_S3_BUCKET/$S3_PREFIX/$DUMP_NAME",
+  "dump_shipped_as": "one object, with $DUMP_NAME.sha256 for the whole beside it",
   "dump_bytes": $DUMP_BYTES,
   "dump_toc_entries": $TOC_ENTRIES,
   "notary": {
@@ -437,32 +382,26 @@ cat > "$REPO/LATEST.json" <<JSON
   "roles_db": {
     "status": "$ROLES_STATUS",
     "source": "$ROLES_SRC",
-    "file": $([ "$ROLES_STATUS" = copied ] && printf '"roles/%s"' "$(basename "$ROLES_COPY")" || echo null),
+    "file": $([ "$ROLES_STATUS" = copied ] && printf '"%s"' "$(basename "$ROLES_COPY")" || echo null),
     "roles_db_bytes": $ROLES_BYTES,
     "role_audit_rows": $ROLES_AUDIT,
     "grant_rows": $ROLES_GRANTS,
     "how": "VACUUM INTO through node:sqlite from a READ-ONLY handle — never cp, which tears a live SQLite file",
     "why": "src/roles.mjs:71-82 — a grant exists nowhere else in the world, no repo holds it and no fold recomputes it; losing roles.db loses who paid",
     "read": "role_audit is append-only, so its count only ever grows; grant_rows is live standing and falls on a revoke",
-    "absent_is_legal": "OFFICE_ROLE_GATES is unset on every office today (src/server.mjs:170), so a box that has never granted a role has no file to copy"
+    "absent_is_legal": "OFFICE_ROLE_GATES is unset on every office today (src/server.mjs:170), so a box that has never granted a role has no file to copy; since 2026-11-11 the roles live in the store (in-store) and ride in the dump"
   },
   "intake": {$INTAKE_STATUS},
   "intake_why": "POS-346: wallet registrations and each rail's seen-but-unwitnessed payments exist on the box and nowhere else until they become store rows",
-  "restore": "cat dumps/<file>.part-* > <file> && sha256sum -c dumps/<file>.sha256 && pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file> (before 2026-11-04 a night shipped whole: dumps/<file>)",
-  "restore_roles": "cp roles/<file> /srv/postmark-office/roles.db (the office opens it at boot; it is a whole database, not a delta)",
-  "restore_intake": "cp intake/<name>-<file> back to the source path named under intake (each watcher reads its file whole on its next tick)"
+  "restore": "aws s3 cp s3://<bucket>/world2/<stamp>/<file> . && aws s3 cp s3://<bucket>/world2/<stamp>/<file>.sha256 . && sha256sum -c <file>.sha256 && pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file> (nights before the git ship's retirement are also in the archived GitHub repo, in parts: cat dumps/<file>.part-* > <file>)",
+  "restore_roles": "aws s3 cp the roles-<stamp>.db beside the dump to /srv/postmark-office/roles.db (the office opens it at boot; it is a whole database, not a delta); an in-store night has no file, its roles are in the dump",
+  "restore_intake": "aws s3 cp each <name>-<file> back to the source path named under intake (each watcher reads its file whole on its next tick)"
 }
 JSON
 
-git -C "$REPO" add -A
-if git -C "$REPO" diff --cached --quiet; then
-  echo "[world2-backup] nothing changed — not committing"
-else
-  git -C "$REPO" commit -q -m "world2 $DB backup $STAMP ($(numfmt --to=iec "$DUMP_BYTES"), $TOC_ENTRIES toc entries)" \
-    || fail "commit failed" ship
-fi
-git -C "$REPO" push -q origin HEAD:main || fail "push failed — the dump is on the box and NOWHERE ELSE" ship
-REMOTE_TIP=$(git -C "$REPO" ls-remote origin refs/heads/main | cut -f1)
+S3_FILES=$(w2_ship_s3 "$W2_S3_BUCKET" "$S3_PREFIX" "$DUMP" "$SHIP/$DUMP_NAME.sha256" "${ROLES_COPY:-}" "$INTAKE_STAGE"/* "$SHIP/LATEST.json") \
+  || fail "S3 upload to s3://$W2_S3_BUCKET/$S3_PREFIX failed — the dump is on the box and NOWHERE ELSE" ship
+S3_STATUS="s3://$W2_S3_BUCKET/$S3_PREFIX ($S3_FILES files)"
 
 # ── 5 · local retention ─────────────────────────────────────────────────────
 ls -1t "$DUMPS"/world2-*.dump 2>/dev/null | tail -n +$((KEEP_DUMPS + 1)) | xargs -r rm -f
@@ -504,12 +443,12 @@ WAL_FILES=$(find "$WAL" -type f 2>/dev/null | wc -l)   # recounted AFTER the pru
 # distinguishes the two silences a reader must never confuse — `absent` (no role
 # was ever granted on this box) from a copy that FAILED, which exits 1 above and
 # never reaches this line at all.
-w2_state backup.json "$(printf '"status":"%s","database":"%s","dump_bytes":%d,"toc_entries":%d,"basebackup_ok":%s,"basebackup_bytes":%d,"wal_bytes":%d,"wal_files":%d,"roles_status":"%s","roles_db_bytes":%d,"role_audit_rows":%d,"grant_rows":%d,"intake":{%s},"remote_tip":"%s","destination":"github.com/wright-starforge/postmark-world2-backups (private)"' \
+w2_state backup.json "$(printf '"status":"%s","database":"%s","dump_bytes":%d,"toc_entries":%d,"basebackup_ok":%s,"basebackup_bytes":%d,"wal_bytes":%d,"wal_files":%d,"roles_status":"%s","roles_db_bytes":%d,"role_audit_rows":%d,"grant_rows":%d,"intake":{%s},"destination":"s3://%s/world2/ (private, the one route since STAR-118)","s3":"%s"' \
   "$([ "$BASE_OK" = true ] && echo shipped || echo shipped-no-basebackup)" \
   "$DB" "$DUMP_BYTES" "$TOC_ENTRIES" "$BASE_OK" "$BASE_BYTES" "$WAL_BYTES_AFTER" "$WAL_FILES" \
-  "$ROLES_STATUS" "$ROLES_BYTES" "$ROLES_AUDIT" "$ROLES_GRANTS" "$INTAKE_STATUS" "$REMOTE_TIP")"
+  "$ROLES_STATUS" "$ROLES_BYTES" "$ROLES_AUDIT" "$ROLES_GRANTS" "$INTAKE_STATUS" "$W2_S3_BUCKET" "$S3_STATUS")"
 
-echo "[world2-backup] $DB → $(numfmt --to=iec "$DUMP_BYTES") dump, $TOC_ENTRIES toc entries; remote main = $REMOTE_TIP"
+echo "[world2-backup] $DB → $(numfmt --to=iec "$DUMP_BYTES") dump, $TOC_ENTRIES toc entries; off-box: $S3_STATUS"
 echo "[world2-backup] on-box: basebackup=$BASE_OK ($(numfmt --to=iec "$BASE_BYTES")), wal $WAL_FILES files $(numfmt --to=iec "$WAL_BYTES_AFTER")"
 echo "[world2-backup] roles.db: $ROLES_STATUS — $ROLES_AUDIT audit rows, $ROLES_GRANTS live grants, $(numfmt --to=iec "$ROLES_BYTES")"
 echo "[world2-backup] intake: {$INTAKE_STATUS}"

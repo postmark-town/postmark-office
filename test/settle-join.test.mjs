@@ -303,6 +303,57 @@ test("no join PR at all refuses", async () => {
   assert.equal(err?.defect, SETTLE_REFUSALS.NO_PR.defect);
 });
 
+// ── POS-1012: the NO_PR hint says so when the join was made by hand from a fork (Wright, 2026-11-12 09:30Z) ──
+// Refusal SELECTION only: the same 409 and defect; lookup, caller gate and settlement are untouched. Positive evidence of a MERGED join for THIS handle from ANOTHER
+// repository is required; every other NO_PR keeps today's hint exactly. Fictional handles and fork; nothing is written in either case.
+const forkPR = ({ n = 4642, handle = "inv-fern", merged_at = "2026-11-12T07:12:00Z", repo = "inv-applicant/postmark" } = {}) =>
+  ({ ...handPR({ n, handle, author: { id: 900001012, login: "inv-applicant" }, ref: "main", merged_at }), head: { ref: "main", repo: { full_name: repo } } });
+const TODAYS = (h) => `no PR from residency/${h} — ${SETTLE_REFUSALS.NO_PR.hint}`;   // the refusal as the door sends it today: the detail, then the hint
+// the COMPLETE positive hint, literally: losing the qualification ("normally", "valid hand joins"), the scope ("through this door") or the half-hour/person action must fail
+const FORK_HINT = (h) => `no PR from residency/${h} — this join was made by hand from a fork, and this door does not settle those; the office's keep tick normally settles valid hand joins within about fifteen minutes. Nothing needs retrying through this door, and this call wrote nothing. If the resident's card still reads solo: half an hour after the merge, ask a person to check it`;
+const unchanged = async (clone, pool) => {
+  assert.equal(git(clone, "status", "--porcelain", "--untracked-files=all"), "", "the clone is untouched");
+  assert.deepEqual(pool.state.pins.map((p) => p.handle).sort(), ["kinofire", "registrar", "wright"], "no pin written");
+  assert.ok(asked.every((a) => a.startsWith("GET ")), "only reads were asked of GitHub");
+};
+
+test("POS-1012 · a merged join from a fork gets the plain hint, same 409 and defect, and nothing is written", async () => {
+  pulls = [forkPR()]; files = { 4642: joinFiles("inv-fern") };
+  const clone = town();
+  const { err, pool } = await settle(clone, REGISTRAR, "inv-fern");
+  assert.equal(err?.code, 409);
+  assert.equal(err?.defect, SETTLE_REFUSALS.NO_PR.defect, "the defect is today's");
+  assert.equal(err?.hint, FORK_HINT("inv-fern"), "the whole positive hint, literally");
+  assert.notEqual(err?.hint, TODAYS("inv-fern"));
+  await unchanged(clone, pool);
+});
+
+test("POS-1012 · no join at all keeps today's refusal exactly, and nothing is written", async () => {
+  pulls = []; files = {};
+  const clone = town();
+  const { err, pool } = await settle(clone, REGISTRAR, "inv-fern");
+  assert.deepEqual([err?.code, err?.defect, err?.hint], [SETTLE_REFUSALS.NO_PR.code, SETTLE_REFUSALS.NO_PR.defect, TODAYS("inv-fern")]);
+  await unchanged(clone, pool);
+});
+
+test("POS-1012 · only POSITIVE evidence changes the words: another handle's fork join, an unmerged one, a same-repository one, an unreadable one all keep today's hint", async () => {
+  const cases = {
+    "another handle's merged fork join": [[forkPR({ handle: "inv-other" })], { 4642: joinFiles("inv-other") }],
+    "a fork join closed without merging": [[{ ...forkPR(), merged_at: null }], { 4642: joinFiles("inv-fern") }],
+    "a merged join from this very repository": [[{ ...forkPR(), head: { ref: "add-inv-fern", repo: { full_name: "postmark-town/postmark" } } }], { 4642: joinFiles("inv-fern") }],
+    "a fork PR that is not a join": [[forkPR()], { 4642: [{ filename: "README.md", status: "modified" }] }],
+    "a fork PR whose files cannot be read": [[forkPR()], {}],
+    "a PR whose fork is gone (no head repository)": [[{ ...forkPR(), head: { ref: "main", repo: null } }], { 4642: joinFiles("inv-fern") }],
+  };
+  for (const [what, [list, f]] of Object.entries(cases)) {
+    pulls = list; files = f;
+    const clone = town();
+    const { err, pool } = await settle(clone, REGISTRAR, "inv-fern");
+    assert.equal(err?.hint, TODAYS("inv-fern"), what);
+    await unchanged(clone, pool);
+  }
+});
+
 test("a handle with no ADDRESS on town main refuses", async () => {
   pulls = [penPR()];
   const { err } = await settle(town({ cards: {} }));
