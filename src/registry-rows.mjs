@@ -110,7 +110,7 @@ import { STATE_KEYS as LIKENESS_STATE_KEYS } from "./household-likeness-state.mj
 // exactly as a NULL `name` does — see the two narrow predicates below.
 export const HOUSEHOLD_KEYS = Object.freeze([
   "name", "human", "accounts", "residents", "since", "member_of", "declared_by", "formerly",
-  "provisional", "home_images", "likeness", "invited_by", "likeness_state",
+  "provisional", "home_images", "likeness", "invited_by", "likeness_state", "hearth",
 ]);
 // `likeness_official` (POS-726 slice B) is the one key a PRINTED file may carry that is no column of its own: the public official-use
 // projection of `likeness_state.official` (src/registry-public.mjs § publicHouse prints it, and only while the answer is yes). It is folded
@@ -315,6 +315,8 @@ export function rowsFromRegistry(householdsJson, pinsJson) {
       // And `likeness_state` (092): no key folds to NULL, "nothing asked". A printed file carries only the public pointer
       // (`likeness_official`); read back, it is the state's `official` and nothing else, the history and the request being private.
       likeness_state: rec?.likeness_state ?? (isAbsent(rec?.likeness_official) ? null : { official: rec.likeness_official }),
+      // And `hearth` (093, POS-962): no key folds to NULL, "the household chose nothing": the default Hearth.
+      hearth: rec?.hearth ?? null,
     });
   }
 

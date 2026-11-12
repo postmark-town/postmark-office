@@ -80,6 +80,8 @@ const COUNTED = new Set(["standing", "accepted"]);
 const ACT_WORD = Object.freeze({ host: "post", "amend-event": "amend", "cancel-event": "close" });
 
 const POST_COLUMNS = "id, class, title, author, household, starts, ends, fields, state, last_act";
+/** The classes whose rows carry their body to a class reader (§ BODY): the ballot's is its resources (POS-983). */
+const BODY_CLASSES = new Set(["ballot"]);
 
 /** An event's state from the clock: announced | live | ended, or cancelled. */
 export function eventState(row, now) {
@@ -143,7 +145,7 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
   const { rows: posts } = WINDOWED.has(cls)
     ? await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 AND ends > $2 ORDER BY starts, id`,
       [cls, new Date(now - ENDED_LIST_DAYS * DAY_MS).toISOString()])
-    : await client.query(`SELECT ${POST_COLUMNS} FROM posts WHERE class = $1 ORDER BY id`, [cls]);
+    : await client.query(`SELECT ${POST_COLUMNS}${BODY_CLASSES.has(cls) ? ", body" : ""} FROM posts WHERE class = $1 ORDER BY id`, [cls]);
   if (!posts.length) return [];
   const { rows: responses } = await client.query(
     "SELECT post, handle, state FROM responses WHERE post = ANY($1) ORDER BY post, handle", [posts.map((p) => p.id)]);
@@ -173,6 +175,7 @@ export async function postRowsOf(client, cls, now, { keep = null } = {}) {
     [STARTS]: p.starts == null ? null : new Date(p.starts).toISOString(),
     [RESPONDENTS]: who.get(p.id) ?? [],
     [FIELDS]: typeof p.fields === "string" ? JSON.parse(p.fields) : (p.fields ?? {}),
+    [BODY]: p.body ?? "",
   }));
 }
 
@@ -307,6 +310,8 @@ async function ideaRows(members, whose, { townClone }) {
 const STARTS = Symbol("starts");
 /** A post's class `fields`, for a class reader that joins them (a quest's registry id); never on this read's answer. */
 export const FIELDS = Symbol("fields");
+/** A post's body, for a class reader that answers it (a ballot's, POS-983); never on this read's answer. */
+export const BODY = Symbol("body");
 export const TERMINAL_STATES = Object.freeze(["ended", STATE_CANCELLED]);
 const terminal = (r) => TERMINAL_STATES.includes(r.state);
 const newest = (a, b) => String(b.latest?.at ?? "").localeCompare(String(a.latest?.at ?? ""));
@@ -337,7 +342,7 @@ export async function householdPosts(handle, { now = Date.now(), env = process.e
   const rows = [...halves.flatMap((x) => x.rows ?? []), ...(ideas.rows ?? [])].sort(postOrder);
   const list = (role) => {
     const all = rows.filter((r) => r.role === role);
-    const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, ...r }) => r;
+    const plain = ({ [STARTS]: _starts, [RESPONDENTS]: _who, [FIELDS]: _fields, [BODY]: _body, ...r }) => r;
     return { total: all.length, shown: Math.min(all.length, POSTS_CAP), rows: all.slice(0, POSTS_CAP).map(plain) };
   };
   // a half that cannot be read is said, in class order, unless its class is closed (QUIET_WHEN_CLOSED)

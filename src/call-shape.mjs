@@ -38,7 +38,7 @@ import { APEX_ONLY_FIELDS, HOUSEHOLD_DISPATCHABLE, HOUSEHOLD_OFFERED, HOUSEHOLD_
 import { TOWN_TOOL } from "./town-apex.mjs";
 import { READ_SHAPES } from "./world-read-shape.mjs";
 import { RESIDENT_WORDS } from "./town-stance.mjs";
-import { POST_CLASSES } from "./town-posts.mjs";
+import { READ_CLASSES } from "./town-posts.mjs";
 import { BUG_STAGES, BUG_SIDE_EXITS } from "./bugs.mjs";
 import { IDEA_STAGES } from "./ideas.mjs";
 import { isHttpStatus } from "./fault-words.mjs";
@@ -93,7 +93,7 @@ function knownNames() {
       stance: [set(RESIDENT_WORDS), null],
       // `class` and `to` are fixed sets at the town door only: elsewhere `to` is a
       // recipient's handle and `class` a mark's class id, and neither is ever written.
-      class: [set(Object.keys(POST_CLASSES)), "town"],
+      class: [set(Object.keys(READ_CLASSES)), "town"],   // POS-983: the ballot is read and acted on at the town door too
       to: [set(BUG_STAGES, BUG_SIDE_EXITS, IDEA_STAGES), "town"],
     },
   };
