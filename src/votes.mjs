@@ -8,6 +8,11 @@
 // window, cap_per_household_per_candidate, candidates[].{candidate, staked}})
 // reads them unchanged.
 //
+// POS-983: beside those, each topic carries its post's title and body (what is
+// being decided, how and when), and each candidate its choice's words
+// (credit, link, note, added; null on a bare-name ballot) and its
+// backing_households, in the count's order (src/ballots.mjs § tallyOf).
+//
 // The town's engine (tools/ballot.mjs, imported live from the checkout) is
 // still asked one thing on a read: which household a signed-in resident's
 // stake would count in, today (the cap's household is the engine's mint key,
@@ -20,7 +25,7 @@ import { join, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execUnderTownLock, lockTimedOut, LOCK_BUSY } from "./town-lock.mjs";
 import { ballotsWithVotes, ballotWithVotes, tallyOf } from "./ballots-store.mjs";
-import { headroomOf, appliedBy, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
+import { headroomOf, appliedBy, choiceOf, STATE_STAKING, STATE_CLOSED } from "./ballots.mjs";
 import { refuse } from "./events.mjs";
 import { faultLogged } from "./fault-words.mjs"; // the office's own words for its own fault (POS-578)
 
@@ -63,6 +68,9 @@ async function intakeOwed(clone, posts) {
   const staked = new Set(b.ballotState(clone).stakes.map((s) => s.topic));
   return { missing, staked: missing.filter((t) => staked.has(t)) };
 }
+/** A choice's words as every vote reader answers them (POS-983): candidate, credit, link, note, added; null where a bare-name ballot has none. */
+const wordsOf = (post, name) => choiceOf(post.fields, name);
+
 const notTakenIn = (topic) => refuse(503, `the office has not taken ballot "${topic}" into its record yet`, INTAKE_HINT, { awaiting_intake: [topic] });
 
 // GET /votes — every ballot with its tally
@@ -77,7 +85,9 @@ export async function voteList(clone, { env = process.env } = {}) {
         topic: full.topic, status: full.status,
         cap_per_household_per_candidate: full.cap_per_household_per_candidate,
         window: full.window,
-        candidates: full.candidates.map((c) => ({ candidate: c.candidate, staked: c.staked })),
+        // POS-983: the ballot's own words, and each choice's beside its count (candidate and staked as they were)
+        title: post.title, body: post.body ?? "", post: post.id,
+        candidates: full.candidates.map((c) => ({ ...wordsOf(post, c.candidate), staked: c.staked, backing_households: c.backing_households })),
       };
     }),
     ...(owed.missing.length ? { awaiting_intake: owed.missing, awaiting_intake_note: INTAKE_HINT } : {}),
@@ -92,7 +102,10 @@ export async function voteView(clone, topic, key, { env = process.env } = {}) {
     if (votesAvailable(clone) && (await engine(clone)).listBallots(clone).includes(topic)) throw notTakenIn(topic);
     return null;
   }
-  const t = tallyOf(one.post, one.votes);
+  const tally = tallyOf(one.post, one.votes);
+  // POS-983: the ballot's words, and each choice's, beside the engine's own tally shape
+  const t = { ...tally, title: one.post.title, body: one.post.body ?? "", post: one.post.id,
+    candidates: tally.candidates.map((c) => ({ ...wordsOf(one.post, c.candidate), ...c })) };
   if (key && key.handles?.size) {
     const handle = [...key.handles][0];
     const mk = await mintKeyOf(clone, handle, townDay());
