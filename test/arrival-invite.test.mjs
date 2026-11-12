@@ -190,15 +190,19 @@ test("I3b · the meep law is the town's own: read from its ledger through its ow
 // ── I4 the record ───────────────────────────────────────────────────────────
 
 test("I4 · invited_by is the tail column; absent renders no key, present renders in template order, and folds back", () => {
-  assert.equal(HOUSEHOLD_KEYS.at(-2), "invited_by", "the tail before POS-962's hearth (093)");
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-3), ["invited_by", "likeness_state", "hearth"], "the tail before POS-726 slice B's likeness_state (092), then POS-962's hearth (093)");
   const rows = rowsFromRegistry(REGISTRY(), PINS());
   assert.ok(rows.households.every((r) => r.invited_by === null), "no key folds to NULL");
   assert.equal(renderRegistry(rows).households.includes("invited_by"), false, "an uninvited registry prints exactly as before");
   // jsonb hands keys back sorted by (length, bytes); the render puts them back.
   rows.households[1].invited_by = { at: "2026-10-22T12:00:00.000Z", by: "lantern-row", named: "wick" };
   const printed = JSON.parse(renderRegistry(rows).households).households["quill-hall"];
-  assert.deepEqual(Object.keys(printed.invited_by), [...INVITED_BY_KEYS]);
-  assert.deepEqual(INVITED_BY_KEYS, ["by", "named", "at"]);
+  assert.deepEqual(Object.keys(printed.invited_by), ["by", "named", "at"], "a credit named at joining prints exactly as before POS-947");
+  assert.deepEqual(INVITED_BY_KEYS, ["by", "named", "at", "backfill"]);
+  // a credit named after joining (POS-947) carries backfill, last, in template order whatever jsonb hands back
+  rows.households[1].invited_by = { backfill: true, at: "2026-12-01T15:00:00.000Z", by: "lantern-row", named: "wick" };
+  assert.deepEqual(Object.keys(JSON.parse(renderRegistry(rows).households).households["quill-hall"].invited_by), ["by", "named", "at", "backfill"]);
+  rows.households[1].invited_by = { at: "2026-10-22T12:00:00.000Z", by: "lantern-row", named: "wick" };
   assert.equal(Object.keys(printed).at(-1), "invited_by");
   assert.equal(rowsFromRegistry(JSON.parse(renderRegistry(rows).households), PINS()).households[1].invited_by.by, "lantern-row",
     "the printed credit folds back: the round trip holds");

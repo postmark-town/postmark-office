@@ -114,7 +114,7 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
 
   const { marksFromRows } = await import("../../src/world2-fold.mjs");
   const { withClaimedAt, foldHouseholds, registerRowsNow } = await import("../../src/world-snapshot.mjs");
-  const { limitOppositions, townAtSha } = await import("../../src/world-settlement.mjs");
+  const { limitOppositions, openTownAtSha } = await import("../../src/world-settlement.mjs");
   const { rows: standing } = await q.query(
     "SELECT id, slug, kind, owner, body, geometry, NULL::uuid AS parent, data FROM marks WHERE kind = 'parcel' AND status = 'standing'");
   const bySlug = new Map(standing.map((r) => [r.slug, r]));
@@ -124,18 +124,22 @@ export async function limitsAtClearing(q, { worldRepo = null, townRepo = null, c
   // THE HOUSEHOLDS AT THE INGESTED TOWN SHA, the one the settlement seals and
   // groups at (world-settlement.mjs § townAtSha), never the --town-repo HEAD.
   const { rows: [townHead] } = await q.query("SELECT sha FROM projection_heads WHERE repo = 'town'");
-  let town = null, townNote = "";
+  let town = null, townNote = "", releaseTown = () => {};
   if (townRepo && townHead?.sha) {
     try {
-      town = townAtSha(townRepo, townHead.sha);
+      // LEASED until the reads below are done (POS-989): the cached clone is pruned when stale and unused, never under a lease
+      ({ dir: town, release: releaseTown } = openTownAtSha(townRepo, townHead.sha));
     } catch (e) {
       townNote = ` (the town at the ingested sha ${String(townHead.sha).slice(0, 12)} could not be read: ${String(e?.message ?? e).slice(0, 120)})`;
     }
   }
-  const grouped = await foldHouseholds(q, { lawSha, townRepo: town, registerRows: () => registerRowsNow(q) });
+  let grouped, ranAt;
+  try {
+    grouped = await foldHouseholds(q, { lawSha, townRepo: town, registerRows: () => registerRowsNow(q) });
+    // The receipt names the sha the resolver actually ran at, read from that checkout.
+    ranAt = town ? execFileSync("git", ["-C", town, "rev-parse", "HEAD"], { encoding: "utf8" }).trim() : null;
+  } finally { releaseTown(); }
   const households = grouped.households;
-  // The receipt names the sha the resolver actually ran at, read from that checkout.
-  const ranAt = town ? execFileSync("git", ["-C", town, "rev-parse", "HEAD"], { encoding: "utf8" }).trim() : null;
   const householdsSource = (ranAt ? `${grouped.source}, town ${ranAt.slice(0, 12)}` : grouped.source) + townNote;
   // THE FALLBACK NAMES ITSELF (Wright's review of #441). Without the town at the
   // ingested sha the households are the printed roster at the law, or nobody's

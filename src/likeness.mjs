@@ -36,7 +36,8 @@
 // answer for it, and the record names which one did.
 
 import { penTransaction } from "./write.mjs";
-import { loadRegistryRows, setHouseholdLikeness } from "./registry-store.mjs";
+import { loadRegistryRows, setHouseholdLikeness, setLikenessRequest } from "./registry-store.mjs";
+import { requestLikeness, answerOf, ownerLikeness, officialUseFor } from "./household-likeness-state.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { resolveHouse } from "./household-deriver.mjs";
 import { drainRegistry } from "../tools/registry-drain.mjs";
@@ -227,6 +228,61 @@ export async function setLikeness({ slug, answer, ghId, ghLogin } = {},
     registry: drained?.refused ? { rendered: false, refused: drained.refused } : { rendered: Boolean(drained?.ran) },
     commit: drained?.commit ?? null,
   };
+}
+
+// ── THE LIKENESS REQUEST, and the read-only official pointer's use gate (POS-726 slice B) ─────────────────────────────────────
+//
+// The answer above stays the ONE permission. A household that has said yes may REQUEST a likeness (naming whom it depicts), SELECT a proof
+// (which makes that proof the next version of the one official pointer), and WITHDRAW the official one. The shapes and their rules are
+// src/household-likeness-state.mjs (pure); this is the writer, and it has the answer's own road: ONLY the signed-in form
+// (src/oauth.mjs § /oauth/likeness, after a GitHub sign-in by an account the household's row binds). No key reaches it, the household's
+// own included, and no resident token or Iris delegation gains a setter here.
+
+/**
+ * THE REQUEST WRITER of the household's likeness state, by the signed-in account (POS-726 slice B). It is the ONLY writer of
+ * `likeness_state`, and it writes a request and nothing else: the official pointer is read-only here (no select, no withdraw, no media URL).
+ *
+ * It reads the row, judges the request against what the row holds (the binding, the answer, the roster), and writes ONE statement that names
+ * the slug, the binding account, the state it computed from, a yes in the row and the roster handles
+ * (registry-store.mjs § setLikenessRequest). If the row moved under it, it reads again, a few times, and then says so. A request changes
+ * nothing the town prints, so it never drains.
+ *
+ * @returns {Promise<{ household, likeness }>} `likeness` is the household's OWN view (the signed-in form shows it to the account its row binds).
+ */
+export async function requestLikenessState({ slug, depicts, ghId, ghLogin } = {},
+  { env = process.env, write = setLikenessRequest, now = () => new Date(), attempts = 3 } = {}) {
+  const s = String(slug ?? "").trim();
+  if (!s) throw bounce(422, "which household?", "a likeness is asked for one household");
+  if (ghId == null) throw bounce(401, "no signed-in account", "a likeness is asked for after a GitHub sign-in, never with a key");
+  for (let i = 0; i < attempts; i++) {
+    const rows = await loadRegistryRows(env);
+    if (rows === null) throw bounce(409, "the household record is not open", "the office is not pointed at the town's record right now: nothing was kept; try again shortly");
+    const rec = registryFromRows(rows).households?.[s];
+    if (!rec) throw bounce(404, `no household "${s}"`, "a likeness is asked for a household the town keeps");
+    if (!accountBinds(rec, ghId)) throw bounce(403, `this account does not keep "${s}"`, "only an account the town's record binds to this household can ask for its likeness");
+    const raw = rec.likeness_state ?? null;                       // what the row holds, for the compare-and-swap
+    const next = requestLikeness(raw, { depicts }, { answer: answerOf(rec), residents: rec.residents ?? [], now: now(), ghId, ghLogin });
+    const written = await write({ slug: s, from: raw, to: next, ghId: Number(ghId), depicts: next.request.depicts }, env);
+    if (written === null) throw bounce(409, "the household record is not open", "the office is not pointed at the town's record right now: nothing was kept; try again shortly");
+    if (written.missingColumn) throw bounce(503, "the household likeness state is not on this store yet", "the migration world2/schema/092_household_likeness_state.sql has not been applied here: nothing was kept");
+    if (!written.slug) continue;                                  // the row moved (or the answer, the roster, or the binding): read it again and judge afresh
+    return { household: s, likeness: ownerLikeness({ ...rec, likeness_state: next }) };
+  }
+  throw bounce(409, "the household's record changed while this was being written", "nothing was kept; read the page again and repeat what you meant to do");
+}
+
+/**
+ * THE USE GATE (§ 4: "future use checks the latest answer and pointer"): the official likeness a maker may use for THIS RESIDENT, or null.
+ * A yes, a well-formed pointer, and the pointer NAMING this handle; the household's other residents, a no, no answer, no pointer, an
+ * unreadable record or an unknown resident are null. `{ household, version, proof, since, depicts }`.
+ */
+export async function officialLikenessFor(handle, { registry = null, env = process.env } = {}) {
+  let reg = registry;
+  try { reg ??= await likenessRegistry(env); } catch { return null; }
+  if (!reg) return null;
+  const slug = reg.houseOf(handle);
+  const official = slug ? officialUseFor(reg.houses[slug], handle) : null;
+  return official ? { household: slug, ...official } : null;
 }
 
 const bounce = (code, defect, hint) => Object.assign(new Error(defect), { code, defect, hint });

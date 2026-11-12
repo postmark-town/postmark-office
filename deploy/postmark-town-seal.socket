@@ -1,0 +1,28 @@
+[Unit]
+Description=Postmark town seal — the socket the ferry's seal stage calls (POS-988)
+# The ferry's seal stage (deploy/postmark-ferry.service, `wstage=seal`) runs
+# tools/town-seal-sandbox.mjs --clone, which connects here. Each connection
+# starts one postmark-town-seal@.service: the town's seal.mjs and verify.mjs,
+# run with no environment, no network and /srv out of sight. The why and the
+# exchange are in the header of tools/town-seal-sandbox.mjs.
+#
+# Only meepo (the ferry's user) and root can connect: the socket is meepo's,
+# 0600. meepo gains no right by it; it only connects to a socket, and connect()
+# works from the ferry's ProtectSystem=strict mount (a socket is not a file it
+# writes). One connection at a time, since only the ferry calls it and the
+# ferry runs under town.lock.
+#
+# Installed BEFORE the ferry unit that calls it, or that crossing's seal stage
+# refuses ("the seal sandbox did not answer"); the undo then puts the clone
+# back, and nothing else in the crossing is lost. DEPLOY.md § POS-988.
+
+[Socket]
+ListenStream=/run/postmark-town-seal.sock
+Accept=yes
+SocketUser=meepo
+SocketGroup=meepo
+SocketMode=0600
+MaxConnections=1
+
+[Install]
+WantedBy=sockets.target

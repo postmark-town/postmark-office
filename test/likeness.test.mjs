@@ -74,7 +74,7 @@ const AT = () => new Date("2026-10-21T12:00:00.000Z");
 // ── § 1 the record ──────────────────────────────────────────────────────────
 
 test("§ 1 likeness is the tail column; unanswered renders no key, answered renders in template order", () => {
-  assert.deepEqual(HOUSEHOLD_KEYS.slice(-3), ["likeness", "invited_by", "hearth"], "an optional column joins the tail; 085's invited_by (POS-576) came after it");
+  assert.deepEqual(HOUSEHOLD_KEYS.slice(-4), ["likeness", "invited_by", "likeness_state", "hearth"], "an optional column joins the tail; 085's invited_by (POS-576) came after it, 092's likeness_state (POS-726 slice B) after that, then 093's hearth (POS-962)");
   const rows = seed();
   assert.ok(rows.households.every((r) => r.likeness === null), "no key folds to NULL: never answered");
   assert.equal(renderRegistry(rows).households.includes("likeness"), false, "an unanswered registry prints exactly as before");

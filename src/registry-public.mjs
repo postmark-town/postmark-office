@@ -71,6 +71,8 @@
 // (a caller may hold them, a memo may share them), so a projection that deleted
 // a key in place would take it out of the PRIVATE answer too.
 
+import { officialUse, PUBLIC_OFFICIAL_KEYS } from "./household-likeness-state.mjs";
+
 /** The one key POS-394 named private. Since POS-726 the cut is the named list below, so a key on neither list is private too. */
 export const PRIVATE_HOUSE_KEYS = Object.freeze(["human"]);
 
@@ -82,7 +84,8 @@ const PUBLIC_HOUSE_KEYS = Object.freeze([
 const PUBLIC_PIN_KEYS = Object.freeze(["login", "id", "pinned", "renamed", "note", "retired", "renamed_to"]);
 const PUBLIC_ACCOUNT_KEYS = Object.freeze(["login", "id"]);
 const PUBLIC_LIKENESS_KEYS = Object.freeze(["answer", "at", "by", "gh_id", "words"]);
-const PUBLIC_INVITED_BY_KEYS = Object.freeze(["by", "named", "at"]);
+// `backfill` (POS-947): a credit named after joining says so in public, and the town's judge reads it (its pay clock and cap differ)
+const PUBLIC_INVITED_BY_KEYS = Object.freeze(["by", "named", "at", "backfill"]);
 
 // The named house keys that are jsonb and cut by `cut`, and which of an object's keys may ride in each.
 // `accounts` and `home_images` have shapes of their own (`publicAccounts`, `publicHomeImages`).
@@ -121,7 +124,14 @@ const publicHomeImages = (v, residents) => {
   return Object.keys(out).length ? out : undefined;
 };
 
-/** One house row, cut to its named keys; key order kept. A house that is not an object reads as null. */
+/**
+ * One house row, cut to its named keys; key order kept. A house that is not an object reads as null.
+ *
+ * `likeness_state` (092, POS-726 slice B) is NOT named, so the request, the history and who clicked are private. What
+ * the public answer carries of it is ONE derived key, `likeness_official`: the current official pointer ({ version, proof, since, depicts }),
+ * present only while the household's answer is yes and the pointer is well formed (src/household-likeness-state.mjs § officialUse); nothing of a request is copied into it. Naming a projection is not naming
+ * its source: the column stays private, and a no or no answer takes the key away without touching the stored pointer.
+ */
 export function publicHouse(rec) {
   if (!isRecord(rec)) return null;
   const out = {};
@@ -132,6 +142,8 @@ export function publicHouse(rec) {
     else if (Object.hasOwn(JSONB_SHAPES, k)) out[k] = cut(v, JSONB_SHAPES[k]);
     else if (isLeaves(v)) out[k] = v;
   }
+  const official = officialUse(rec);
+  if (official) out.likeness_official = Object.fromEntries(PUBLIC_OFFICIAL_KEYS.filter((k) => Object.hasOwn(official, k)).map((k) => [k, official[k]]));   // officialUse already holds it to its shape; `depicts` is a list of handles
   return out;
 }
 

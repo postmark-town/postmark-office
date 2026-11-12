@@ -237,7 +237,7 @@ test("the manifest names ten, `stakes` is the ninth, and `household read: \"stak
   assert.equal(DOORSTEP_SEGMENTS.at(8), "stakes");
   assert.ok(HOUSEHOLD_READABLE.includes("stakes"), "the door accepts it");
   assert.ok(HOUSEHOLD_READ_ENUM.includes("stakes"), "and the tool schema advertises it");
-  assert.deepEqual(HOUSEHOLD_READ_FIELDS.stakes, {}, "it takes no field but the standpoint handle");
+  assert.deepEqual(Object.keys(HOUSEHOLD_READ_FIELDS.stakes), ["limit"], "it takes a preview size (POS-902) and no other field but the standpoint handle");
   assert.match(HOUSEHOLD_READS.stakes, /Not the pot stake/, "the gloss keeps it apart from do: \"stake\" and read: \"stamps\"");
   assert.equal(REGISTRY_PATH, "WORLD/settlement-publications.json", "the sweep's own file");
 });
@@ -253,7 +253,7 @@ test("the finished doorstep carries the segment, always — serves, args, and th
       const d = await doorstepBundle("wright", { ...ctx, slim });
       assert.ok(d.segments.includes("stakes"));
       assert.equal(d.stakes.serves, "household.stakes");
-      assert.deepEqual(d.stakes.args, { handle: "wright" });
+      assert.deepEqual(d.stakes.args, { handle: "wright", limit: 10 }, "the pointer names the preview it is (POS-902); the read at these args is this segment");
       assert.ok(Array.isArray(d.stakes.rows));
       assert.ok(typeof d.stakes.next_settlement?.at === "string");
       assert.ok("at_risk" in d.stakes);
@@ -527,4 +527,134 @@ test("WLD-51 · THE CONTROLS the note must not touch: an unheld ✦0 commons row
   assert.equal(empty.count, 0);
   assert.match(empty.note, /^no published mark of yours stands on world main/, "an empty page keeps its own note");
   assert.ok(!empty.note.includes(FRAME), "and carries no frame");
+});
+
+// ── POS-902 · the doorstep's stakes are the NEWEST FEW, and the whole report is one read away ───────────────────────────────
+
+import { DOORSTEP_STAKES } from "../src/queries.mjs";
+import { previewOf, newestFirst } from "../src/doorstep-stakes.mjs";
+import { EXPECTED, readers as pos902Readers } from "./fixtures/pos902-doorstep.mjs";
+
+// independent of the code under test: by the fixture's own dates, the ten newest marks are risk-02, risk-01, risk-00 (Nov 22, 21, 20), then backed-17 … backed-11 (Nov 18 … 12)
+const NEWEST_TEN = ["risk-02", "risk-01", "risk-00", ...Array.from({ length: 7 }, (_, i) => `backed-${17 - i}`)].map((s) => `${EXPECTED.prolific.handle}/${s}`);
+
+test("POS-902 · a prolific house's preview is the newest DOORSTEP_STAKES rows by the mark's own date; the counts, the at-risk number and every clock stay the whole report's", async () => {
+  const E = EXPECTED.prolific;
+  const whole = await stakesFor([E.handle], await pos902Readers());
+  const seg = await stakesFor([E.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
+  assert.equal(DOORSTEP_STAKES, 10, "a small named limit");
+  assert.deepEqual(seg.rows.map((r) => r.mark), NEWEST_TEN, "newest first, by date");
+  assert.equal(seg.count, E.count, "count is the whole report's: 60 published marks");
+  assert.equal(seg.at_risk, E.atRisk, "at_risk is the whole report's: 12, not the preview's 3");
+  assert.equal(seg.rows.filter((r) => r.at_risk).length, 3);
+  assert.deepEqual([seg.total, seg.shown, seg.limit, seg.complete], [60, 10, 10, false], "it says it is a preview, and of what");
+  assert.match(seg.order, /newest published marks first, by the mark's own date \(not printed\)/);
+  assert.match(seg.order, /the whole report is at-risk first, then by mark id/, "and says what the whole report's own order is");
+  assert.match(seg.more_note, /^50 further \(9 of them at risk\) — household \{ read: "stakes" \} with no limit is every row$/, "an at-risk row left out is NAMED, never hidden");
+  assert.equal("next_offset" in seg, false, "no pager: the rest is the one bare read");
+  for (const r of seg.rows) { assert.equal("date" in r, false, "no date is printed"); assert.deepEqual(r, whole.rows.find((w) => w.mark === r.mark), "a preview row is the whole report's row, whole (body included)"); }
+  for (const k of ["next_settlement", "clock", "escrow_at_town_sha", "escrow_ingested_at", "catches_up_at", "rule", "later_stakes"])
+    assert.deepEqual(seg[k], whole[k], `${k} stays whole`);
+});
+
+test("POS-902 · THE CONTINUATION RETURNS THE OMITTED ROWS: the bare read is every row, in the report's own order, with no preview fields", async () => {
+  const E = EXPECTED.prolific;
+  const whole = await stakesFor([E.handle], await pos902Readers());
+  for (const k of ["shown", "total", "limit", "complete", "order", "more_note"]) assert.equal(k in whole, false, `the bare read is the whole report, as it always was: no ${k}, no silent preview`);
+  assert.equal(whole.rows.length, 60);
+  assert.deepEqual(whole.rows.slice(0, 12).every((r) => r.at_risk === true), true, "its own order: at-risk first");
+  const preview = await stakesFor([E.handle], await pos902Readers({ limit: 10 }));
+  const omitted = whole.rows.filter((r) => !preview.rows.some((p) => p.mark === r.mark));
+  assert.equal(omitted.length, 50, "the 50 rows the preview left out are all in the whole read");
+  assert.equal(omitted.filter((r) => r.at_risk).length, 9);
+});
+
+test("POS-902 · an ordinary house fits whole (complete, no continuation named); an empty one and an unreadable one keep their honest meaning", async () => {
+  const ord = await stakesFor([EXPECTED.ordinary.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
+  assert.deepEqual([ord.count, ord.at_risk, ord.rows.length], [8, 1, 8]);
+  for (const k of ["shown", "total", "limit", "complete", "order", "more_note"]) assert.equal(k in ord, false, `nothing was cut, so there is no ${k}: the page is what it always was`);
+  assert.equal(ord.rows[0].at_risk, true, "and in the report's own order, at-risk first");
+  const none = await stakesFor([EXPECTED.empty.handle], await pos902Readers({ limit: DOORSTEP_STAKES }));
+  assert.deepEqual([none.count, none.rows.length, "complete" in none], [0, 0, false]);
+  assert.match(none.note, /no published mark of yours stands on world main/, "empty stays 'none', with its own note");
+  const down = await stakesFor([EXPECTED.prolific.handle], await pos902Readers({ limit: DOORSTEP_STAKES, escrow: async () => ({ townSha: HEAD, byMark: null, reason: "the docket store is down — unknown, not zero" }) }));
+  assert.match(down.unavailable, /unknown, not zero/);
+  assert.equal(down.at_risk, null, "unavailable is not zero");
+  assert.equal(down.count, 60); assert.equal(down.rows.length, 10);
+  assert.ok(down.rows.every((r) => r.escrow === null && r.at_risk === null));
+  assert.equal(/at risk\)/.test(down.more_note), false, "an unmeasured page names no at-risk count it does not have");
+  const worldDown = await stakesFor([EXPECTED.prolific.handle], await pos902Readers({ limit: DOORSTEP_STAKES, world: async () => { throw new Error("no clone"); } }));
+  assert.match(worldDown.unavailable, /unknown here, not empty/); assert.equal(worldDown.count, 0, "an unread world is its own sentence, not a preview");
+});
+
+test("POS-902 · newestFirst / previewOf: dated marks newest first, undated or unreadable dates last, ties by mark id; no limit is the list untouched", () => {
+  const rows = [{ mark: "b" }, { mark: "a" }, { mark: "c" }, { mark: "d" }];
+  const dates = { a: "2026-01-01T00:00:00Z", b: "2026-03-01T00:00:00Z", c: "not a date", d: undefined };
+  assert.deepEqual(newestFirst(rows, (id) => dates[id]).map((r) => r.mark), ["b", "a", "c", "d"], "undated rows last, in id order");
+  assert.deepEqual(previewOf(rows), { rows, meta: {} });
+  assert.equal(previewOf(rows, { limit: 0, dateOf: (id) => dates[id] }).rows.length, 1, "a zero limit is not an empty preview");
+  assert.deepEqual(previewOf(rows, { limit: 9, dateOf: (id) => dates[id] }), { rows, meta: {} }, "a list that fits is answered whole, in its own order");
+});
+
+// ── on the finished doorstep, both skins ────────────────────────────────────────────────────────────────────────────────────
+
+test("POS-902 · the finished doorstep's stakes: the newest few on BOTH skins, the whole report's totals and clocks, and the named read returns every omitted row", async (t) => {
+  const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  const { callTool } = await import("../src/mcp.mjs");
+  const { publishedState } = await import("../src/world-branches.mjs");
+  const ix = await indexStore(fixtureTown(), { db: "stakes_902" });
+  const restore = await ix.useInProcess();
+  try {
+    const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
+    const marks = (await publishedState(WORLD_CLONE)).state.marks.filter((m) => m.by === "wright");      // THE INDEPENDENT TOTAL, counted off the published world
+    assert.ok(marks.length > DOORSTEP_STAKES * 5, `the pinned world gives wright many published marks (${marks.length}); a fixture that fits inside the cap proves nothing`);
+    const whole = await callTool("household", { read: "stakes", args: { handle: "wright" } }, ctx);   // the named continuation, bare
+    assert.equal(whole.rows.length, marks.length, "the bare read returns every row");
+    assert.equal(whole.count, marks.length);
+    assert.equal("shown" in whole, false, "the continuation is not itself a preview");
+    const newestIds = [...marks].sort((a, b) => (Date.parse(b.date) || -Infinity) - (Date.parse(a.date) || -Infinity) || a.id.localeCompare(b.id)).slice(0, DOORSTEP_STAKES).map((m) => m.id);
+    const sizes = {};
+    for (const slim of [false, true]) {
+      const d = await doorstepBundle("wright", { ...ctx, slim });
+      const s = d.stakes, skin = slim ? "slim" : "full";
+      assert.deepEqual(s.rows.map((r) => r.mark), newestIds, `${skin}: the newest ten by the published marks' own dates, counted independently`);
+      assert.deepEqual([s.count, s.total, s.shown, s.complete], [marks.length, marks.length, DOORSTEP_STAKES, false], `${skin}: the true total`);
+      assert.equal(s.at_risk, whole.at_risk, `${skin}: at_risk is the whole report's`);
+      for (const k of ["next_settlement", "clock", "escrow_at_town_sha", "escrow_ingested_at", "catches_up_at"]) assert.deepEqual(s[k], whole[k], `${skin}: ${k} stays whole`);
+      assert.match(s.more_note, new RegExp(`^${marks.length - DOORSTEP_STAKES} further .*household \\{ read: "stakes" \\} with no limit is every row$`));
+      assert.deepEqual(s.args, { handle: "wright", limit: DOORSTEP_STAKES });
+      assert.equal(s.rows.some((r) => "date" in r), false, "no date is printed");
+      const left = whole.rows.filter((r) => !s.rows.some((p) => p.mark === r.mark));
+      assert.equal(left.length, marks.length - DOORSTEP_STAKES, `${skin}: every omitted row is in the continuation`);
+      // SAME-FIXTURE SIZES, the original instruments: indent-1 serialized UTF-8 bytes, and compact JSON characters. The base is this very page with the stakes
+      // segment as it was before the cap (every row, no preview fields); NOT compressed transfer, NOT today's production.
+      const { limit: _l, shown: _s, total: _t, complete: _c, order: _o, more_note: _m, ...bare } = s;
+      const baseSeg = { ...bare, args: { handle: "wright" }, rows: whole.rows };
+      const base = { ...d, stakes: baseSeg };
+      const m = (x) => ({ bytes: Buffer.byteLength(JSON.stringify(x, null, 1), "utf8"), chars: JSON.stringify(x).length });
+      sizes[skin] = { base: m(base), candidate: m(d), stakesBase: m(baseSeg), stakesCandidate: m(s) };
+      assert.ok(sizes[skin].candidate.bytes < sizes[skin].base.bytes, `${skin}: the capped page is smaller on the same fixture`);
+      assert.ok(sizes[skin].stakesCandidate.bytes * 5 < sizes[skin].stakesBase.bytes, `${skin}: the stakes segment shrinks to a fraction of its uncapped self`);
+    }
+    t.diagnostic(`POS-902 sizes (same fixture: wright, ${marks.length} published marks; indent-1 UTF-8 bytes / compact JSON chars) ${JSON.stringify(sizes)}`);
+  } finally { await restore(); await ix.stop(); }
+});
+
+test("POS-902 · a prolific house's doorstep, through the injected reader: the newest few with an at-risk total that is not the preview's; empty and unavailable keep their meaning", async () => {
+  const { doorstepBundle } = await import("../src/doorstep-bundle.mjs");
+  const ix = await indexStore(fixtureTown(), { db: "stakes_902_inv" });
+  const restore = await ix.useInProcess();
+  try {
+    const ctx = { key: null, asOf: "fixturesha000000000000000000000000000000", canWrite: false, clone: null, pen: null, odb: null };
+    const big = await doorstepBundle("wright", { ...ctx, stakesReaders: await pos902Readers({}, { prolific: "wright" }) });
+    assert.deepEqual([big.stakes.count, big.stakes.at_risk, big.stakes.shown, big.stakes.total, big.stakes.complete], [60, 12, 10, 60, false], "totals known from how the invented house is built");
+    assert.deepEqual(big.stakes.rows.map((r) => r.mark), NEWEST_TEN.map((id) => id.replace("prolific-one", "wright")));
+    const none = await doorstepBundle("wright", { ...ctx, stakesReaders: await pos902Readers({}, { prolific: "someone-else" }) });
+    assert.deepEqual([none.stakes.count, none.stakes.rows.length], [0, 0], "a resident with no published marks: an honest empty, with its note");
+    assert.match(none.stakes.note, /no published mark of yours/);
+    const down = await doorstepBundle("wright", { ...ctx, stakesReaders: await pos902Readers({ escrow: async () => { throw new Error("down"); } }, { prolific: "wright" }) });
+    assert.equal(down.stakes.at_risk, null, "unavailable is never zero");
+    assert.match(down.stakes.unavailable, /unknown, not zero/);
+    assert.equal(down.stakes.count, 60);
+  } finally { await restore(); await ix.stop(); }
 });
