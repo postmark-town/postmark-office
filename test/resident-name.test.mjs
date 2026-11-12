@@ -188,11 +188,11 @@ test("the WHOLE public refusals are pinned (code, defect and hint); the size hin
 test("the declaration contract publishes the name rule in reader-characters, not as a JSON Schema maxLength, with both refusals", async () => {
   const { DECLARE_SCHEMA, DECLARE_BOUNCES } = await import("../src/declare.mjs");
   const a = DECLARE_SCHEMA.properties.agent;
-  assert.match(a.description, /at most 48 reader-characters/);
+  assert.equal(a.description, "Their name, as they are called at home: at most 48 characters.", "Wright's fit, exactly");
   assert.equal(a.maxLength, undefined, "maxLength would count UTF-16 units, the wrong counter");
   const rules = DECLARE_BOUNCES.filter((b) => b.field === "agent");
   assert.deepEqual(rules.map((b) => b.code), [422, 413]);
-  assert.match(rules[0].rule, /at most 48 reader-characters; longer is refused with its count/);
+  assert.equal(rules[0].rule, "agent is at most 48 characters, counted as a reader sees them (an emoji is one); longer is refused with its count", "Wright's fit, exactly");
   assert.match(rules[1].rule, /too large to store; use fewer symbols/);
   assert.doesNotMatch(JSON.stringify(rules), /\b500\b/);
 });
