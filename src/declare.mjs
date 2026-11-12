@@ -299,7 +299,7 @@ export function conformance(args = {}, { db, registry, clone, key, pending = nul
   try {
     ({ handle } = validateResidencyRequest(args, db));
   } catch (e) {
-    const field = /card/i.test(e.defect ?? "") ? "card" : "handle";
+    const field = /card/i.test(e.defect ?? "") ? "card" : /name|characters/i.test(e.defect ?? "") && !/handle/i.test(e.defect ?? "") ? "agent" : "handle";
     // THE TAKEN HANDLE MAY BE THEIR OWN (jetto/join-household, 2026-08-31).
     // This is the founding door, so it is where a resident who joined by the PR
     // lane with the optional `household:` left blank arrives when they go
