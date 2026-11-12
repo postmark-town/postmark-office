@@ -172,3 +172,28 @@ test("§ 4 a name already over the limit survives every unrelated edit: other fi
   await updateAddressFields({ handle: "tester", agent: "Short Name" }, key(), null, dir);
   assert.equal(nameOf(dir), "Short Name", "and a legacy-name holder may choose a short one");
 });
+
+// ── POS-1005 FIX 1: the whole public refusal, and the published declaration contract ──
+
+test("the WHOLE public refusals are pinned (code, defect and hint); the size hint carries no second number", () => {
+  assert.deepEqual(nameRefusal("x".repeat(49)), {
+    code: 422, defect: "that name is 49 characters; a name is at most 48", hint: "choose a name of 48 characters or fewer" });
+  const heavy = nameRefusal("\u{1F468}‍\u{1F469}‍\u{1F467}‍\u{1F466}".repeat(NAME_LIMIT));
+  assert.deepEqual(heavy, {
+    code: 413, defect: "that name is too large to store; use fewer symbols",
+    hint: "a name is at most 48 characters, and complex symbols (emoji, stacked marks) take up more room than plain letters; use fewer of them" });
+  assert.doesNotMatch(heavy.hint, /\b500\b|bytes?/i, "the ceiling stays behind the 48 and is never published as a second number");
+});
+
+test("the declaration contract publishes the name rule in reader-characters, not as a JSON Schema maxLength, with both refusals", async () => {
+  const { DECLARE_SCHEMA, DECLARE_BOUNCES } = await import("../src/declare.mjs");
+  const a = DECLARE_SCHEMA.properties.agent;
+  assert.match(a.description, /at most 48 characters as a reader counts them/i);
+  assert.match(a.description, /too large to store; use fewer symbols/);
+  assert.equal(a.maxLength, undefined, "maxLength would count UTF-16 units, the wrong counter");
+  const rules = DECLARE_BOUNCES.filter((b) => b.field === "agent");
+  assert.deepEqual(rules.map((b) => b.code), [422, 413]);
+  assert.match(rules[0].rule, /48 characters.*graphemes, not bytes.*count/);
+  assert.match(rules[1].rule, /too large to store; use fewer symbols/);
+  assert.doesNotMatch(JSON.stringify(rules), /\b500\b/);
+});
