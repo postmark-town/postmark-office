@@ -92,6 +92,8 @@ export const SETTLE_REFUSALS = Object.freeze({
   NO_PEN: { code: 503, defect: "not-yet-open", hint: "this office has no pen token, so it cannot read the join PR back — nothing was written" },
   GITHUB: { code: 502, defect: "the pen couldn't read the town's PRs", hint: "nothing was written; try again shortly" },
   NO_PR: { code: 409, defect: "no join PR for this handle", hint: "a merged pen join opens from the branch residency/<handle>; nothing was written" },
+  // POS-1012 (Wright, 2026-11-12 09:30Z): the SAME refusal, code and defect, with a hint that says what happened when a merged join for the handle exists from a FORK
+  NO_PR_FORK: { code: 409, defect: "no join PR for this handle", hint: "this join was made by hand from a fork, and this door does not settle those; the office's keep tick settles it within about fifteen minutes, so nothing needs retrying and nothing was written" },
   NOT_A_JOIN: { code: 409, defect: "this PR is not a single-address join", hint: "a hand-written join adds one WHITE_PAGES/<handle>/ADDRESS.md and touches nothing outside that folder; anything else is a person's read" },
   CARD_NOT_AUTHOR: { code: 409, defect: "the card's github: is not the account that opened the PR", hint: "a hand-written join is keyed by its author's GitHub id, and the card's github: must resolve to that same id — a person reads it" },
   OTHER_HOUSE: { code: 409, defect: "the card names a house its author is not on", hint: "the account that opened the PR is not one of that house's accounts — a person's call (a sibling vouches by letter)" },
@@ -139,12 +141,40 @@ export async function findJoin(pen, handle) {
     `/repos/${pen.owner}/${pen.repo}/pulls?state=all&per_page=100&head=${encodeURIComponent(`${pen.owner}:${branch}`)}`);
   if (!r.ok) throw refuse(SETTLE_REFUSALS.GITHUB, `listing the join PRs answered ${r.status}`);
   const prs = (Array.isArray(r.json) ? r.json : []).filter((p) => p?.head?.ref === branch);
-  if (!prs.length) throw refuse(SETTLE_REFUSALS.NO_PR, `no PR from ${branch}`);
+  if (!prs.length) throw refuse((await mergedForkJoinExists(pen, handle)) ? SETTLE_REFUSALS.NO_PR_FORK : SETTLE_REFUSALS.NO_PR, `no PR from ${branch}`);
   const newest = (list) => list.filter((p) => p.merged_at).sort((a, b) => String(b.merged_at).localeCompare(String(a.merged_at)))[0];
   const pens = prs.filter((p) => Number(p?.user?.id) === PEN_GH_ID);
   const pr = pens.length ? newest(pens) : newest(prs);
   if (!pr) throw refuse(SETTLE_REFUSALS.NOT_MERGED, `#${(pens[0] ?? prs[0]).number} is ${(pens[0] ?? prs[0]).state}`);
   return joinOfMergedPR(pen, pr);
+}
+
+// POS-1012 — choosing the NO_PR hint, and nothing else. Is there a MERGED join for `handle` that came from a FORK? Read-only and bounded, with the same listing of
+// merged PRs the keep tick reads (deploy/settle-pass.mjs § mergedSince): the newest closed PRs on the base, merged ones from another repository, whose files are
+// judged by the door's own `judgeJoinPR` and name this handle. POSITIVE evidence only: any doubt, a failed read or a deleted fork answers false, and the refusal
+// stays as it is. It never chooses a PR to settle and never widens the door's lookup; the result only picks the words.
+const FORK_PAGES = 2, FORK_CANDIDATES = 10;
+export async function mergedForkJoinExists(pen, handle) {
+  try {
+    const here = `${pen.owner}/${pen.repo}`.toLowerCase();
+    const repo = `/repos/${pen.owner}/${pen.repo}`;
+    let candidates = 0;
+    for (let page = 1; page <= FORK_PAGES; page++) {
+      const r = await ghFetch(pen, "GET", `${repo}/pulls?state=closed&base=${encodeURIComponent(pen.baseBranch)}&sort=updated&direction=desc&per_page=100&page=${page}`);
+      if (!r.ok) return false;
+      const prs = Array.isArray(r.json) ? r.json : [];
+      for (const pr of prs) {
+        const from = String(pr?.head?.repo?.full_name ?? "").toLowerCase();
+        if (!pr?.merged_at || !from || from === here || Number(pr?.user?.id) === PEN_GH_ID) continue;
+        if (++candidates > FORK_CANDIDATES) return false;
+        const f = await ghFetch(pen, "GET", `${repo}/pulls/${pr.number}/files?per_page=100`);
+        if (!f.ok) continue;
+        try { if (judgeJoinPR(pr, f.json).handle === handle) return true; } catch { /* not a join, or not this one */ }
+      }
+      if (prs.length < 100) break;
+    }
+  } catch { /* the hint is a courtesy: a failed read keeps today's refusal */ }
+  return false;
 }
 
 /**
