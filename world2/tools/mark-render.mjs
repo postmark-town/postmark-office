@@ -166,7 +166,7 @@ const instantOf = (v) => {
  * numbers (`{ at, extent, points? }`). PURE.
  */
 export function footprintsFromChain({ chain, originId, originSince, current }) {
-  if (!Array.isArray(chain) || !chain.length || originSince == null || originSince === "") return null;
+  if (!Array.isArray(chain) || !chain.length || originId == null || originSince == null || originSince === "") return null;
   if (!Number.isFinite(Date.parse(String(originSince)))) return null;
   const origin = chain.find((c) => String(c?.id) === String(originId));
   if (!origin) return null;

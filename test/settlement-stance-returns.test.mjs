@@ -24,7 +24,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { settlementRig, WORLD, LAW_SHA, MARKS } from "./helpers/settlement-seed.mjs";
+import { settlementRig, WORLD, LAW_SHA, MARKS, TOWN_SHA } from "./helpers/settlement-seed.mjs";
 import { servedSettlement, settlementTakesAway, resetSettlementCaches, foldWithWords, stanceReturnsWhole } from "../src/world-settlement.mjs";
 import { materializeAtRef } from "../src/world-branches.mjs";
 
@@ -146,4 +146,65 @@ test("lawCarriesRulingB: the clearing's journal can tell a law with ruling B fro
   assert.equal(lawCarriesRulingB(WORLD, "0bcb9c1c55c0631ccf312af43b9f8f6533256cc4"), false, "the engine before #171 does not");
   assert.equal(lawCarriesRulingB(WORLD, "f".repeat(40)), null, "a sha the checkout lacks is unread, never a no");
   assert.equal(lawCarriesRulingB(null, LAW_SHA), null, "no checkout, no answer");
+});
+
+// ── POS-571 · THE SERVED LABEL READS SENIORITY CELL BY CELL, AS ITS FOLD DOES ──
+//
+// World LOGOS conflict-matrix § Roles from seniority (RULED 2026-10-04): "per-cell
+// (whoever first covered a cell is that cell's incumbent)", and "an expansion is
+// a newcomer on its new cells". The served label (world-settlement.mjs § labelsFor)
+// asks the engine at the settlement's own law (header.law_sha) through the
+// combinator the inbox and the door use (town-stance.mjs § elderByFirstCover), of
+// copies decorated with the facts the fold reads (world-snapshot.mjs § withClaimedAt).
+// The estate was first laid 08-01 over x 950..1050 and amended (locked 10-02) to
+// reach x 1150; the mill was laid 08-15 at x 1100..1140, ground only the amend reached.
+//
+// FLIP: in labelsFor, hand labelMarks elderByFirstLaid(...) again → the mill is
+// labelled as awaiting the estate and the estate as awaiting no one of the mill's.
+
+const CELLS = {
+  estate: sited("east/the-estate", "east", box(1050, 0, 200, 100), "2026-10-02T06:00:00Z"),
+  mill: sited("miller/the-mill", "miller", box(1120, 0, 40, 40), "2026-08-15T00:00:00Z"),
+};
+const boxOf = ({ at, extent }) => `((${at.x - extent.w / 2},${at.y - extent.h / 2}),(${at.x + extent.w / 2},${at.y + extent.h / 2}))`;
+const ESTATE_ID = "0e570000-0000-4000-8000-000000000001", ESTATE_AMEND = "0e570000-0000-4000-8000-000000000002", MILL_ID = "0e570000-0000-4000-8000-000000000003";
+async function cellsInTheStore(c, { stake = null, amend = true } = {}) {
+  await c.query("DELETE FROM marks WHERE slug = ANY($1)", [["east/the-estate", "miller/the-mill"]]);
+  const claim = (id, slug, by, geometry, date, decided, supersedes = null) => c.query(
+    `INSERT INTO claims (id, window_id, class, claimant, household, status, body, geometry, stake, data, slug, decided_at, supersedes)
+     VALUES ($1, 501, 'sited', $3, $3, 'locked', 'x', $4, 0, $5, $2, $6, $7)`, [id, slug, by, JSON.stringify(geometry), JSON.stringify({ date }), decided, supersedes]);
+  await claim(ESTATE_ID, "east/the-estate", "east", box(1000, 0, 100, 100), "2026-08-01T00:00:00Z", "2026-10-01T06:00:00Z");
+  if (amend) await claim(ESTATE_AMEND, "east/the-estate", "east", box(1050, 0, 200, 100), "2026-10-02T06:00:00Z", "2026-10-02T06:00:00Z", ESTATE_ID);
+  await claim(MILL_ID, "miller/the-mill", "miller", box(1120, 0, 40, 40), "2026-08-15T00:00:00Z", "2026-10-01T06:00:00Z");
+  for (const [id, m] of [[ESTATE_ID, CELLS.estate], [MILL_ID, CELLS.mill]])
+    await c.query(
+      `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
+       VALUES ($1, $2, 'sited', $3, $3, $4, $5, $6::box, 'standing', 501, $7)`,
+      [id, m.slug, m.owner, m.body, JSON.stringify(m.geometry), boxOf(m.geometry), JSON.stringify(m.data)]);
+  if (stake) await c.query("INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, $2, $3, $3, $3, 100, 1)", [TOWN_SHA, stake.mark, stake.holder]);
+}
+
+test("POS-571 · SERVED: the label says the estate awaits the mill's word and the mill awaits none of the estate's, and the settlement's own fold agrees", { skip }, async () => {
+  await seed({ cutover: "S10", s11Marks: [MARKS.plot, CELLS.estate, CELLS.mill], before: (c) => cellsInTheStore(c, { stake: { mark: "miller/the-mill", holder: "miller" } }) });
+  const r = await serve();
+  assert.equal(r.meta.labels_omitted, undefined);
+  assert.ok((markOf(r, "east/the-estate").awaiting ?? []).includes("miller"), "on the cells the amend added, the mill was there first: the estate awaits its word");
+  assert.ok(!(markOf(r, "miller/the-mill").awaiting ?? []).includes("east"), "and the mill awaits no word of the estate's");
+  // THE FOLD AGREES, on S11's own fold input (world-snapshot.mjs § snapshotFoldArgs, decorated by
+  // withClaimedAt from the same store) and the engine at its law: a market word rides the grantor's
+  // `consent` (world consent.mjs § resolveConsent), so the mill's opposition is authored there.
+  const { snapshotFoldArgs } = await import("../src/world-snapshot.mjs");
+  const { args } = await asOffice(async (p) => snapshotFoldArgs(p, (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]));
+  assert.equal(args.marks.find((m) => m.id === "east/the-estate")?.footprints?.length, 2, "the settlement's fold input carries the estate's footprints");
+  const engine = await import(pathToFileURL(join(materializeAtRef(WORLD, LAW_SHA, "tools"), "tools", "marks-fold.mjs")).href);
+  const millSays = engine.fold({ ...args, marks: args.marks.map((m) => (m.id === "miller/the-mill" ? { ...m, consent: { "east/the-estate": "opposed" } } : m)) });
+  assert.equal(millSays.marks.some((m) => m.id === "east/the-estate"), false, "the fold counts the word the label says is owed");
+  assert.equal(millSays.returned.find((x) => x.mark === "east/the-estate")?.returned_from, "miller/the-mill");
+});
+
+test("POS-571 · SERVED, no history: without the amend's locked claim the label keeps the whole-mark answer", { skip }, async () => {
+  await seed({ cutover: "S10", s11Marks: [MARKS.plot, CELLS.estate, CELLS.mill], before: (c) => cellsInTheStore(c, { amend: false }) });
+  const r = await serve();
+  assert.ok((markOf(r, "miller/the-mill").awaiting ?? []).includes("east"), "dated 08-01 as a whole, the estate is the mill's elder, as before");
+  assert.ok(!(markOf(r, "east/the-estate").awaiting ?? []).includes("miller"));
 });
