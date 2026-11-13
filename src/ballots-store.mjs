@@ -52,8 +52,9 @@ import { POST_COLUMNS, rowOf, insertPost, updatePost } from "./events-store.mjs"
 import {
   BALLOT_CLASS, BALLOT_AUTHOR, BALLOT_HANDS, BALLOT_STATES, STATE_STAKING, STATE_CLOSED, STATE_SUBMISSIONS,
   ballotPostId, ballotFileName, ballotFilePath, ballotFromFile, changedTerms, headroomOf, tallyOf, TOPIC_RE,
+  judgeTermsMove, composeBallotAct, choiceStanding, topicOfPost,
 } from "./ballots.mjs";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { planStampedCommit, landPlannedVia } from "./stamp-lines.mjs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -149,25 +150,47 @@ export function planIngest(post, want, { topic, hand }) {
     return [{ action: ACT_POST, payload: { post: id, class: BALLOT_CLASS, title: want.title, body: want.body,
       state: want.state, fields: want.fields, hand } }];
   const acts = [];
-  const changed = changedTerms(post, want);
-  if (changed.length) {
-    const payload = { post: id, changed, hand };
-    for (const k of changed) {
-      if (k === "title" || k === "body") payload[k] = want[k];
-      else (payload.fields ??= {})[k] = want.fields[k];
-    }
-    acts.push({ action: ACT_AMEND_POST, payload });
-  }
   const from = BALLOT_STATES.indexOf(post.state);
   const to = BALLOT_STATES.indexOf(want.state);
   if (to < from)
     throw refuse(409, `ballot "${topic}" stands ${post.state} and its file says ${want.state}`,
       "a ballot moves forward only (submissions, staking, closed); nothing was taken in");
+  judgeTermsMove(post, want, topic);   // POS-983: once staking opens, its terms only grow
+  const changed = changedTerms(post, want);
+  if (changed.length) {
+    const payload = { post: id, changed, hand };
+    for (const k of changed) {
+      if (k === "title" || k === "body") payload[k] = want[k];
+      else (payload.fields ??= {})[k] = want.fields[k] ?? null;
+    }
+    acts.push({ action: ACT_AMEND_POST, payload });
+  }
   if (to > from)
     acts.push(want.state === STATE_CLOSED
       ? { action: ACT_CLOSE, payload: { post: id, state: STATE_CLOSED, hand } }
       : { action: ACT_ADVANCE, payload: { post: id, from: post.state, to: want.state, hand } });
   return acts;
+}
+
+/**
+ * Bring `post` (held FOR UPDATE by the caller) to what its file says, on the
+ * caller's transaction: the acts planIngest plans, each folded into the row.
+ * `{ post, did, act_ids }`.
+ */
+async function takeInVia(client, post, want, { topic, hand, now }) {
+  const id = ballotPostId(topic);
+  const plan = planIngest(post, want, { topic, hand });
+  const ids = [];
+  for (const a of plan) {
+    const actId = await insertAct(client, actRow({ action: a.action, actor: BALLOT_AUTHOR, object: id, payload: a.payload, now }));
+    const household = post?.household ?? await householdKeyFor(client, BALLOT_AUTHOR);
+    const row = applyPostAct({ posts: new Map(post ? [[id, post]] : []), responses: new Map() },
+      { id: actId, action: a.action, actor: BALLOT_AUTHOR, object: id, payload: a.payload, household });
+    if (post) await updatePost(client, row); else await insertPost(client, row);
+    post = row;
+    ids.push(actId);
+  }
+  return { post, did: plan.map((a) => a.action), act_ids: ids };
 }
 
 function judgeHand(hand) {
@@ -200,20 +223,10 @@ export async function ingestBallotFiles(clone, { hand, now = Date.now(), env = p
         continue;
       }
       const done = await write(async (client) => {
-        let post = await ballotRow(client, id, { forUpdate: true });
-        const plan = planIngest(post, want, { topic: f.topic, hand });
-        const ids = [];
-        for (const a of plan) {
-          const actId = await insertAct(client, actRow({ action: a.action, actor: BALLOT_AUTHOR, object: id, payload: a.payload, now }));
-          const household = post?.household ?? await householdKeyFor(client, BALLOT_AUTHOR);
-          const row = applyPostAct({ posts: new Map(post ? [[id, post]] : []), responses: new Map() },
-            { id: actId, action: a.action, actor: BALLOT_AUTHOR, object: id, payload: a.payload, household });
-          if (post) await updatePost(client, row); else await insertPost(client, row);
-          post = row;
-          ids.push(actId);
-        }
-        const also = inTransaction ? await inTransaction(client, post, f.topic) : undefined;
-        return { did: plan.map((a) => a.action), act_ids: ids, ...(also !== undefined ? { also } : {}) };
+        const post = await ballotRow(client, id, { forUpdate: true });
+        const took = await takeInVia(client, post, want, { topic: f.topic, hand, now });
+        const also = inTransaction ? await inTransaction(client, took.post, f.topic) : undefined;
+        return { did: took.did, act_ids: took.act_ids, ...(also !== undefined ? { also } : {}) };
       }, env);
       out.topics.push({ topic: f.topic, ...done });
     } catch (e) {
@@ -222,6 +235,97 @@ export async function ingestBallotFiles(clone, { hand, now = Date.now(), env = p
     }
   }
   return out;
+}
+
+// ── a hand's act: the file it means, taken in, in one landing (POS-983) ─────
+//
+// The town's hands put a ballot up, amend it, advance it and close it at the
+// town door (src/ballot-acts.mjs, under the town lock). The act does what the
+// founder's hand-written file always did, in one step: it writes the ballot
+// file and takes it in. So:
+//
+//   1. the post and the file are READ; they must already agree (a file the
+//      office has not taken in is the tick's to take, never carried in under
+//      another act's name), and the act composes the file it means
+//      (ballots.mjs § composeBallotAct), judged as the ingest judges a file;
+//   2. ONE store transaction: the post FOR UPDATE (moved since 1: refused,
+//      nothing written), the file written, the ingest's acts and row, the
+//      pen's commit and push (the remote holds the file), and the store
+//      commits, last. A file the pen cannot land rolls the store back, and the
+//      file is put back as it stood.
+//
+// Nothing signs a ledger line here: a ballot's acts move no stamp. The stakes
+// and the returns stay the engine's and the close tool's.
+
+const putBackFile = (path, arrived) => {
+  if (arrived != null) { if (!existsSync(path) || readFileSync(path, "utf8") !== arrived) writeFileSync(path, arrived); }
+  else if (existsSync(path)) unlinkSync(path);
+};
+
+/**
+ * One hand's act on a ballot. `verb` is post | amend | advance | close and
+ * `args` the door's (post: `{ topic, title, … }`, the others `{ post, … }`);
+ * `hand` is judged here as the ingest judges it (the door has already judged
+ * that the caller's credential holds it). `today` is the town day a choice
+ * joins on. `commit: { message(answer) }` lands the file with the pen;
+ * `land(answer, client)` replaces it (a test seam). Answers
+ * `{ topic, post, did, act_ids, file, commit? }`; throws a refusal.
+ */
+export async function ballotActInStore({ clone, verb, args = {}, hand, today, commit = null, land = null, now = Date.now(), env = process.env }) {
+  judgeHand(hand);
+  const named = String((verb === "post" ? args.topic : args.post) ?? "").trim();
+  const topic = verb === "post" ? named : topicOfPost(named);
+  if (verb === "post" && !TOPIC_RE.test(topic))
+    throw refuse(422, named ? `"${named}" is not a ballot topic` : "which topic?", "topic: lowercase letters, digits and hyphens (it names the file, WHITE_PAGES/ballot-<topic>.json)", { field: "topic" });
+  if (verb !== "post" && !topic)
+    throw refuse(named ? 404 : 422, named ? `no ballot "${named}"` : "which ballot?", `post: "${ballotPostId("<topic>")}", as town { read: "posts", args: { class: "ballot" } } names it`, { field: "post" });
+  const id = ballotPostId(topic);
+  const path = join(clone, "WHITE_PAGES", ballotFileName(topic));
+
+  // 1 · the read, and the act's file
+  const post = await read((c) => ballotRow(c, id), env);
+  const arrived = existsSync(path) ? readFileSync(path, "utf8") : null;
+  let file = null;
+  if (arrived != null) {
+    try { file = JSON.parse(arrived); }
+    catch { throw refuse(409, `${ballotFilePath(topic)} does not parse`, "the founder's file is the ballot's entrance; mend it first; nothing was written", { held: true }); }
+  }
+  if (file || post) {
+    const was = file ? ballotFromFile(file, topic) : null;
+    if (!file || !post || was.state !== post.state || changedTerms(post, was).length)
+      throw refuse(409, `ballot "${topic}"'s file and its post disagree (the file: ${file ? file.status : "missing"}; the post: ${post ? post.state : "missing"})`,
+        "the office takes the founder's ballot file in at its next tick (tools/ballots-backfill.mjs --apply); act again after it; nothing was written", { held: true });
+  }
+  const { json } = composeBallotAct(verb, args, { file, post, topic, today });
+  const want = ballotFromFile(json, topic);
+  const planned = planIngest(post, want, { topic, hand });   // refuses here, before the file is touched
+  if (!planned.length) throw refuse(422, `that ${verb} changes nothing on ballot "${topic}"`, "nothing was written");
+  const bytes = JSON.stringify(json, null, 2) + "\n";
+
+  // 2 · the landing: one store transaction, the file and the push inside it
+  try {
+    return await officeWrite(async (client) => {
+      const nowPost = await ballotRow(client, id, { forUpdate: true });
+      if (JSON.stringify([nowPost?.state, nowPost?.last_act]) !== JSON.stringify([post?.state, post?.last_act]))
+        throw refuse(409, `ballot "${topic}" moved under this ${verb}`, "another act on it landed first; read it again and act again; nothing was written", { held: true });
+      writeFileSync(path, bytes);
+      const took = await takeInVia(client, nowPost, want, { topic, hand, now });
+      const answer = { topic, post: took.post, did: took.did, act_ids: took.act_ids, file: ballotFilePath(topic) };
+      let out = null;
+      try {
+        if (land) out = await land(answer, client);
+        else if (commit) out = await landPlannedVia(client, clone, null, [path], commit.message(answer), { env });
+      } catch (e) { throw Object.assign(e, { fromLand: true }); }
+      if (out?.error) throw refuse(out.error.code ?? 503, out.error.defect, out.error.hint, { held: true });
+      if (out?.commit !== undefined) answer.commit = out.commit;
+      return answer;
+    }, { env });
+  } catch (e) {
+    putBackFile(path, arrived);
+    if (isRefusal(e) || e?.fromLand) throw e;
+    if (e?.name === "LateCrossingError") throw refuse(409, e.message, "the act was stamped for a candle the record will not take; nothing was written");
+    throw Object.assign(UNREACHABLE(), { cause: String(e?.message ?? e).slice(0, 160) });
+  }
 }
 
 // ── the vote: one act, the resident's one response ──────────────────────────
@@ -286,11 +390,14 @@ const fingerprintOf = (post, votes) => JSON.stringify([post.state, post.last_act
  * for the caller to commit. `prepare` answers `{ paths?, undo? }` or
  * `{ error }` (a refusal, nothing written).
  *
+ * `preview: true` (POS-502) answers step 2's judgement and stops there: no
+ * key is needed, and nothing is signed, written, locked or committed.
+ *
  * Answers the town engine's clip result (requested, applied, clipped, the
  * headroom and balance before and after, vote_minted), plus `act_id` and
  * `commit` when it wrote. Throws `{ code, defect, hint }` for a refusal.
  */
-export async function stakeInStore({ clone, keyPem, payload, prepare = null, commit = null, land = null, now = Date.now(), env = process.env }) {
+export async function stakeInStore({ clone, keyPem, payload, prepare = null, commit = null, land = null, preview = false, now = Date.now(), env = process.env }) {
   const { handle, topic, candidate, via, date } = payload ?? {};
   if (!handle || !topic || !candidate || !via || !date)
     throw refuse(422, "incomplete stake", "required: handle, topic, candidate, n, via, date");
@@ -338,12 +445,22 @@ export async function stakeInStore({ clone, keyPem, payload, prepare = null, com
 
       const balance = state.balances.get(handle) ?? 0;
       const applied = Math.min(n, room, balance);
+      // POS-983: the answer names the choice in its own words (credit, link, note) and its standing
+      // (staked, backing_households), as every reader does: here as it stood, and once the vote lands, with it
       const result = { requested: n, applied, clipped: applied < n,
-        household_headroom_before: room, balance_before: balance, vote_minted: false };
+        household_headroom_before: room, balance_before: balance, vote_minted: false, choice: choiceStanding(post, votes, candidate) };
       if (applied <= 0) {
         result.reason = room <= 0
           ? "your household has no headroom left on this candidate"
           : "your balance has no stamps free to stake";
+        return result;
+      }
+      // POS-502: the preview is this judgement, every check above, and nothing past it: no line is
+      // signed, no file touched, no lock or transaction taken. What the stake would add is said.
+      if (preview) {
+        result.vote_minted = !state.voteMinted.has(`${handle}|${topic}`) && state.lawAt(date).rules === "stamps-v2";
+        result.household_headroom_after = room - applied;
+        result.balance_after = balance - applied + (result.vote_minted ? 1 : 0);
         return result;
       }
 
@@ -355,6 +472,9 @@ export async function stakeInStore({ clone, keyPem, payload, prepare = null, com
       const lines = mint.appendSigned(clone, canonicals, keyPem);
       result.household_headroom_after = room - applied;
       result.balance_after = balance - applied + (result.vote_minted ? 1 : 0);
+      // the choice's standing WITH this stake, judged here, before `prepare` writes the mail receipt from it:
+      // the landing below refuses and judges again if the ballot moved, so what lands is what this says
+      result.choice = choiceStanding(post, [...votes, { handle, fields: { stakes: [{ act: Number.MAX_SAFE_INTEGER, candidate, n: applied, mint_key: mintKey }] } }], candidate);
       const prepared = prepare ? await prepare(result) : null;
       if (prepared?.error) throw refuse(prepared.error.code ?? 503, prepared.error.defect, prepared.error.hint, prepared.error.held ? { held: true } : {});
       const plan = commit ? await planStampedCommit(clone, { env, engine: mint }) : null;

@@ -330,6 +330,16 @@ see its draft before it is eligible to walk there.
   (default `postmark-town/postmark`), `POSTMARK_TOWN_BRANCH` (default `main`); the GitHub API base
   is `GITHUB_API_URL` (same override the OAuth dance uses). No pen token → `409 not-yet-open`.
 
+## A household's Hearth choice (POS-962)
+
+`PATCH /households/{slug}/hearth` with `{"hearth": "<id>"}` — or `{"hearth": null}` (or the default's own id) to go back to the default — keeps the
+Hearth the household chose on its own record (`households.hearth`, migration 093). It is **a signed-in human's act, and no new grant**: the credential
+must carry a verified GitHub account that the household's record binds (`accounts`, the likeness answer's test); a resident key with no account behind
+it, another household's account, a missing house and an id that is not a registered entry (a folder with a regular `hearth.html` on the town repo's
+`PROJECTS/household-hearths/`, read from the town clone at the write) refuse (`403`/`404`/`422`; an unreadable clone or a store without 093 is `503`).
+The choice is public: `GET /households` and the town's `tools/households.json` carry it as `hearth`, and no key means the default. A preview never
+reaches this door.
+
 ## Write verbs (step 5) — resident editing (a household's own files)
 
 Four `PATCH` verbs let a signed-in household edit **its own residents'** public

@@ -122,7 +122,9 @@ function firstDiff(a, b) {
 // args: { full: true } asks for, so that ask is held to the record's answer for
 // the bare ask (RECORDED_AS). The read's line on the bare menu says so.
 const CHANGED = {
-  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
+  // POS-962: the manifest's writes list gains the household's Hearth door (the record predates it; nothing else in that answer moves).
+  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"],
+    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth"]']],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
@@ -150,11 +152,22 @@ CHANGED["MCP household {}"].push(
 CHANGED["MCP household {}"].push(
   [`{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}}]`,
     `{"act":"buy-parcel-room","teaches":"Buy room for one more parcel.","fields":{"from":{"required":true},"preview":{}}},{"act":"letter-note","teaches":"Note a letter.","fields":{"letter":{"required":true},"state":{"required":true},"on":{}}}]`]);
+// AND A BALLOT STAKE PREVIEWS (POS-502, Wright 2026-11-09 23:48Z): stake-vote takes preview, the dry run every other
+// stamp-moving door has, and the index lists it among the act's fields. Nothing else in the row moves.
+CHANGED["MCP household {}"].push(
+  [`"candidate":{"required":true},"stamps":{"required":true}}}`,
+    `"candidate":{"required":true},"stamps":{"required":true},"preview":{}}}`]);
 // AND THE RSVP CARD TEACHES ITS REST CALL (POS-911, Darko 2026-11-05 21:18 EST, "Raise to 9,088 (rec)"): the card's last
 // sentence names the public address, which the recorded answer does not have. Nothing else in the row moves.
 CHANGED["MCP household {}"].push(
   ["it needs a public https endpoint you run.",
     "it needs a public https endpoint you run. Over REST: POST https://postmark.town/api/household with do: rsvp and args: { event }."]);
+// AND THE HEARTH'S PUBLIC READS (POS-1027): closer and happened name a house (anyone's public record, your own whole read without one), the menu gains day and
+// hearth, and send takes resend, the bounced letter it replaces. Nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"closer":"who your house writes most, this fortnight"`, `"closer":"who a house writes most"`],
+  [`"happened":"what your house did, newest first","waiting"`, `"happened":"what a house did, newest first","day":"a resident's day","hearth":"a house's Hearth","waiting"`],
+  [`"stake_stamps":{}}},{"act":"stake-vote"`, `"stake_stamps":{},"resend":{}}},{"act":"stake-vote"`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
