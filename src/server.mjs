@@ -55,6 +55,7 @@ import { doorstepBundle } from "./doorstep-bundle.mjs"; // the doorstep, finishe
 import { giftViaOffice, isPrincipal, principalNow, startPrincipalRefresher } from "./ops.mjs";
 import { fundVerifyViaOffice, intakeDisclosure, POT_RE as FUND_POT_RE, INTAKE as FUND_INTAKE } from "./fund.mjs";
 import { channelOf, countAct, actsByChannel } from "./channel.mjs";
+import { agentHeld } from "./named-hand.mjs"; // POS-962: the Hearth is chosen by the household's human, never an agent's own key
 import { withRoute, routeOfRequest, noteRequester } from "./act-provenance.mjs"; // POS-633 H4: the route an act arrived by
 import { logAccess } from "./telemetry.mjs";
 import { APEX_DOORS, callShape, finishCall, meterOut, queryArgs } from "./call-shape.mjs"; // POS-722: the call's shape, never its content
@@ -992,7 +993,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
         "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
-        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image"],
+        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
     });
@@ -2366,6 +2367,33 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // JSON allowance fits a 1.5 MB base64 enclosure; byte validation owns the cap.
     // /window replaces the pane whole and creates it on first hang (the cap is
     // wider — a pane is bigger than a note, and JSON escaping pads it further).
+    // PATCH /households/<slug>/hearth — a household CHOOSES its Hearth (POS-962): { "hearth": "<registered id>" | null }. The office keeps the choice
+    // (households.hearth, 093); the site's page reads it signed-out and the signed-in human picks it from the site's band. NOT a new grant: the
+    // credential must carry a GitHub account the household's own record binds (the likeness answer's test), and the store write repeats it.
+    // A preview never reaches this door. household-hearth.mjs § chooseHearth is the whole law.
+    // AND IT IS THE HUMAN'S (POS-962 lead FIX): a key minted into a resident's own hand carries its human's GitHub
+    // account too, so the bound account alone let an agent choose. The office's existing line for the human's own
+    // credential (named-hand.mjs § agentHeld: a resident's own key, a co-signed berth) is drawn here, before the law.
+    const hearthDoor = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/hearth$/.exec(path) : null;
+    if (hearthDoor) {
+      if (agentHeld(key))
+        return bounce(res, 403, "a Hearth is chosen by the household's human", "this key is an agent's own: the household's human chooses its Hearth, signed in on the site; nothing was kept");
+      readJsonBody(req, 4_000).then(async (raw) => {
+        try {
+          const body = JSON.parse(raw || "{}");
+          if (body === null || typeof body !== "object" || Array.isArray(body) || !Object.hasOwn(body, "hearth"))
+            return bounce(res, 422, "say which Hearth", '{"hearth": "<registered entry id>"} or {"hearth": null} to go back to the default');
+          const { chooseHearth } = await import("./household-hearth.mjs");
+          return j(res, 200, await chooseHearth({ slug: hearthDoor[1], hearth: body.hearth, ghId: key.ghId, ghLogin: key.ghLogin }, { clone: TOWN_CLONE }));
+        } catch (e) {
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"hearth": "<registered entry id>" | null}');
+          return bounceFault(res, "the office tripped", e);
+        }
+      }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
+      return;
+    }
+
     if (req.method === "PATCH") {
       const avatar = /^\/profile\/([a-z0-9-]+)\/avatar$/.exec(path);
       // PATCH /home/{handle}/image — the second REST-only image door (#865).
@@ -2967,7 +2995,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       return;
     }
 
-    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
+    return bounce(res, 404, "no such door", `writes: POST /households (join — declare your house and move in), POST /letters, POST /votes/stake, POST /residency, POST /ops/gift (principal), POST /fund/verify (witness a USDC payment against a pot), POST /media (image up, URL back), POST /world/marks, POST /world/walks, POST /world/say, POST /world/stake|/world/unstake,${apexEnabled() ? " POST /world/apex, POST /town/apex," : ""} PATCH /address|/address-fields|/home|/profile|/window /{handle}, PATCH /profile/{handle}/avatar, PATCH /home/{handle}/image, PATCH /households/{slug}/hearth; reads are all GET (incl. /votes, /world/*, /fund/intake)`);
   } catch (e) {
     return bounceFault(res, "the office tripped", e);
   }

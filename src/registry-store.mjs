@@ -52,12 +52,14 @@ import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 // missing column reads as NULL, "never answered", instead of failing every
 // registry read (sign-in among them) between a deploy and its migration.
 // `invited_by` (085, POS-576) is read the same way, for the same reason, and so is `likeness_state`
-// (092, POS-726 slice B): a store that has not taken 092 yet reads it as NULL.
+// (092, POS-726 slice B): a store that has not taken 092 yet reads it as NULL. And so is `hearth` (093, POS-962): the id of the Hearth the
+// household chose, as text, NULL when it chose nothing or the store has not taken 093.
 const HOUSEHOLDS_SQL = `
   SELECT slug, ord, name, human, accounts, residents, since, member_of, declared_by, formerly,
          provisional, home_images, to_jsonb(households) -> 'likeness' AS likeness,
          to_jsonb(households) -> 'invited_by' AS invited_by,
-         to_jsonb(households) -> 'likeness_state' AS likeness_state
+         to_jsonb(households) -> 'likeness_state' AS likeness_state,
+         to_jsonb(households) ->> 'hearth' AS hearth
     FROM households
    ORDER BY ord`;
 
@@ -225,8 +227,9 @@ const COLUMNS = ["slug", "ord", "name", "human", "accounts", "residents", "since
 // `likeness` (081, WLD-83) is kept out for the same reason, and has one writer
 // of its own, `setHouseholdLikeness` below. `invited_by` (085, POS-576) too:
 // its one writer is `setHouseholdInvitedBy`, at the declaration. `likeness_state`
-// (092, POS-726 slice B) too: its one writer is `setLikenessRequest` (a request only), from the signed-in form.
-const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state"];
+// (092, POS-726 slice B) too: its one writer is `setLikenessRequest` (a request only), from the signed-in form. `hearth` (093, POS-962)
+// too: its one writer is `setHouseholdHearth`.
+const SEED_COLUMNS = [...COLUMNS, "home_images", "likeness", "invited_by", "likeness_state", "hearth"];
 const PIN_COLUMNS = ["handle", "login", "gh_id", "pinned", "renamed", "note", "retired", "renamed_to"];
 
 const placeholders = (n, offset = 0) => Array.from({ length: n }, (_, i) => `$${i + 1 + offset}`).join(", ");
@@ -512,6 +515,34 @@ export async function setLikenessRequest({ slug, from, to, ghId, depicts }, env 
       [slug, JSON.stringify(to), ghId, from == null ? null : JSON.stringify(from), depicts], env);
   } catch (e) {
     if (e?.code === "42703") return { missingColumn: true };   // undefined_column: 092 is not on this store yet
+    throw e;
+  }
+  if (r === null) return null;
+  return { slug: r.length ? r[0].slug : null };
+}
+
+/**
+ * The Hearth a household chose, written onto its row (POS-962, migration 093): the id of a registered entry, or NULL to choose nothing.
+ *
+ * The ONE store writer of `hearth`; `src/household-hearth.mjs § chooseHearth` is the one caller. ONE STATEMENT: the row is found by its slug AND by
+ * the signed-in account being one of its `accounts`, so an account the record does not bind writes nothing, and a household cannot reach another's
+ * row (as setHouseholdLikeness). Whether the id is a registered entry is the caller's check, made before this write.
+ *
+ * Returns `{ slug }` of the row written, `null` when the office is not pointed at the record, `{ slug: null }` when no row matched, or
+ * `{ missingColumn: true }` when the store has not taken 093.
+ */
+export async function setHouseholdHearth({ slug, hearth, ghId }, env = process.env) {
+  let r;
+  try {
+    r = await actsQuery(
+      `UPDATE households
+          SET hearth = $2::text
+        WHERE slug = $1
+          AND accounts @> jsonb_build_array(jsonb_build_object('id', ($3)::bigint))
+    RETURNING slug`,
+      [slug, hearth ?? null, ghId], env);
+  } catch (e) {
+    if (e?.code === "42703") return { missingColumn: true };   // undefined_column: 093 is not on this store yet
     throw e;
   }
   if (r === null) return null;

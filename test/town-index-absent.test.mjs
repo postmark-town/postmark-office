@@ -122,7 +122,9 @@ function firstDiff(a, b) {
 // args: { full: true } asks for, so that ask is held to the record's answer for
 // the bare ask (RECORDED_AS). The read's line on the bare menu says so.
 const CHANGED = {
-  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"]],
+  // POS-962: the manifest's writes list gains the household's Hearth door (the record predates it; nothing else in that answer moves).
+  "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"],
+    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth"]']],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
