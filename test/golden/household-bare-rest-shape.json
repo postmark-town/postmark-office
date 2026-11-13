@@ -258,6 +258,10 @@
      "required": "boolean",
      "type": "string"
     },
+    "preview": {
+     "description": "string",
+     "type": "string"
+    },
     "stamps": {
      "description": "string",
      "required": "boolean",
