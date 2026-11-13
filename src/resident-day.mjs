@@ -11,7 +11,7 @@
 // read (or whose window was cut) is named in `unavailable` and is never counted as nothing: with any source unavailable `quiet` is null and no quiet sentence is
 // said, so a missing input can never read as a calm day. The sentences are deterministic: the same record gives the same words, in a fixed order.
 
-import { PUBLIC_HOUSE_VERBS } from "./hearth-public.mjs";
+import { PUBLIC_HOUSE_VERBS, isPublicAct } from "./hearth-public.mjs";
 import { wentRows } from "./household-read-v2.mjs";
 import { recipientsOf } from "./town-index-store.mjs";
 
@@ -118,7 +118,7 @@ export async function dayRead({ handle, date } = {}, { ix, nowMs = Date.now(), i
   const acts = await soft("acts", async () => {
     const r = await ix.actsOfActor(h, { fromIso: from, toIso: to, verbs: PUBLIC_HOUSE_VERBS });
     if (r.cut) throw new Error("cut");
-    return { read: true, rows: r.rows };
+    return { read: true, rows: r.rows.filter(isPublicAct) };   // the store filters too; a row a draft left behind is not the day's
   }, "the acts could not be read for the whole day");
   const stamps = await soft("stamps", async () => {
     const lines = await ix.stampLinesSince(from, { limit: 20000 });

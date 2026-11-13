@@ -26,6 +26,7 @@ const HOUSE = "fixture-house";
 const MEMBERS = ["r000", "r001", "r002", "r-harbor"];
 const NOW = Date.parse("2026-09-27T06:00:00Z");
 const SECRET = "SENTINEL-private-award-9f3a";
+const DRAFT = "SENTINEL-draft-4c1d"; // the name of a mark that was never published
 
 function houseDb() {
   const db = emptyTown();
@@ -71,14 +72,26 @@ after(() => {
 {
   const owner = await IX.store.connect("world2_owner");
   try {
-    const act = (at, actor, action, object, payload = {}) =>
-      owner.query("INSERT INTO acts (at, crossing, actor, action, object, class, household, payload) VALUES ($1,1,$2,$3,$4,'voice',$5,$6)",
-        [at, actor, action, object, `hh:${HOUSE}`, JSON.stringify(payload)]);
+    const act = (at, actor, action, object, payload = {}, cls = "voice") =>
+      owner.query("INSERT INTO acts (at, crossing, actor, action, object, class, household, payload) VALUES ($1,1,$2,$3,$4,$7,$5,$6)",
+        [at, actor, action, object, `hh:${HOUSE}`, JSON.stringify(payload), cls]);
     await act("2026-09-27T01:00:00Z", "r000", "say", "the-town/porch");
     await act("2026-09-27T01:05:00Z", "r001", "walk", "the-town/quay");
     await act("2026-09-27T01:10:00Z", "r000", "award", `${SECRET}/mark`, { note: SECRET });
     await act("2026-09-27T01:15:00Z", `human-of-${HOUSE}`, "say", "the-town/porch");
     await act("2026-09-27T01:20:00Z", "r001", "answer-sign-up", `${SECRET}/event`, { note: SECRET });
+    // a draft is not public: its withdrawal (journalWithdraw: was_published false), and a draft's leave-mark and amend (they mirror only while the candle is off, so
+    // they carry no put_forward). Missing and false are the same: neither is proof of publication.
+    await act("2026-09-27T02:00:00Z", "r001", "withdraw", `${DRAFT}/withdrawn`, { by: "r001", slug: "withdrawn", was_published: false }, "mark");
+    await act("2026-09-27T02:01:00Z", "r001", "withdraw", `${DRAFT}/withdrawn-bare`, { by: "r001", slug: "withdrawn-bare" }, "mark");
+    await act("2026-09-27T02:02:00Z", "r001", "leave-mark", `${DRAFT}/left`, { slug: "left" }, "mark");
+    await act("2026-09-27T02:03:00Z", "r001", "leave-mark", `${DRAFT}/left-false`, { slug: "left-false", put_forward: false }, "mark");
+    await act("2026-09-27T02:04:00Z", "r001", "amend", `${DRAFT}/amended`, { slug: "amended" }, "mark");
+    // the positive controls: a published withdrawal, a put-forward leave-mark and amend, and another class's amend, all r000's
+    await act("2026-09-27T02:10:00Z", "r000", "withdraw", "r000/published-gone", { by: "r000", slug: "published-gone", was_published: true }, "mark");
+    await act("2026-09-27T02:11:00Z", "r000", "leave-mark", "r000/lamp", { slug: "lamp", put_forward: true }, "mark");
+    await act("2026-09-27T02:12:00Z", "r000", "amend", "r000/lamp", { slug: "lamp", put_forward: true }, "mark");
+    await act("2026-09-27T02:13:00Z", "r000", "amend", "r000/an-idea", { note: "a post's amend" }, "idea");
   } finally { await owner.end(); }
 }
 
@@ -93,6 +106,9 @@ test("1 · happened, named: the public verbs only, nothing of a private act in t
   assert.ok(r.rows.length >= 3, "the say, the walk and the human's say");
   for (const row of r.rows) assert.ok(PUBLIC_HOUSE_VERBS.includes(row.action ?? row.verb ?? row.act), `a public verb: ${JSON.stringify(row)}`);
   assert.ok(!JSON.stringify(r).includes(SECRET), "a private act's words and objects are nowhere in the answer");
+  assert.ok(!JSON.stringify(r).includes(DRAFT), "no draft's name: not its withdrawal, not its leave-mark or amend, with the candle off or on");
+  const objects = r.rows.map((x) => `${x.verb} ${x.object}`);
+  for (const kept of ["withdraw r000/published-gone", "leave-mark r000/lamp", "amend r000/lamp", "amend r000/an-idea"]) assert.ok(objects.includes(kept), `${kept} is published: it stays (${objects.join(" | ")})`);
   const human = await anon({ read: "happened", household: HOUSE, hand: "human" });
   assert.equal(human.hand, "human");
   assert.equal(human.rows.length, 1);
@@ -122,6 +138,7 @@ test("3 · own key with no household keeps its whole owner read; an anonymous ca
   assert.equal(own.error, undefined, JSON.stringify(own));
   assert.equal(own.public, undefined, "the owner's read is not marked public");
   assert.ok(JSON.stringify(own).includes(SECRET), "the owner's whole read still holds the owner-only acts");
+  assert.ok(JSON.stringify(own).includes(DRAFT), "and the owner's own drafts: the owner's read is unchanged");
   const none = await anon({ read: "closer" });
   assert.equal(none.code, 401);
   assert.match(none.hint, /household/);
@@ -142,7 +159,7 @@ test("4 · the Hearth: every part is its recorded standalone call, made with no 
   assert.equal(bundle.read, "hearth");
   assert.equal(bundle.household, HOUSE);
   assert.deepEqual(Object.keys(bundle.parts), ["house", "posts", "closer", "went", "happened", "feed", "days", "pairs"]);
-  assert.ok(!JSON.stringify(bundle).includes(SECRET), "no private act in any part");
+  assert.ok(!JSON.stringify(bundle).includes(SECRET) && !JSON.stringify(bundle).includes(DRAFT), "no private act and no draft in any part");
   const single = ["house", "closer", "went", "happened", "feed"].map((k) => bundle.parts[k]);
   const list = [...bundle.parts.posts, ...bundle.parts.days, ...bundle.parts.pairs];
   assert.equal(bundle.parts.posts.length, 2);
@@ -165,6 +182,28 @@ test("5 · days: one per ashore member in the house's order, today UTC; pairs: u
   const keys = pairs.map((p) => `${p.via.args.a}/${p.via.args.b}`);
   assert.deepEqual(keys, ["r000/r-stranger", "r001/r-stranger"]);
   assert.deepEqual(keys, [...new Set(keys)].sort());
+});
+
+test("5b · day, anonymous: a draft's withdrawal, leave-mark and amend are not counted; the published ones are", async () => {
+  const r1 = await anon({ read: "day", handle: "r001", date: "2026-09-27" });
+  assert.equal(r1.error, undefined, JSON.stringify(r1));
+  assert.ok(!(r1.counts.marks_withdrawn > 0) && !(r1.counts.marks_left > 0), JSON.stringify(r1.counts));
+  assert.ok(!r1.sentences.some((s) => /withdrew|left /.test(s)), r1.sentences.join(" | "));
+  const r0 = await anon({ read: "day", handle: "r000", date: "2026-09-27" });
+  assert.equal(r0.counts.marks_withdrawn, 1);
+  assert.equal(r0.counts.marks_left, 1);
+  assert.ok(!JSON.stringify([r1, r0]).includes(DRAFT));
+});
+
+test("5c · the SQL does the work, not only the fixture's filter: excluded rows take no page's limit, and the owner's reads still see them", async () => {
+  const ix = storeIndexPooled(scratch);
+  const pub = await ix.houseActs(`hh:${HOUSE}`, { verbs: [...PUBLIC_HOUSE_VERBS], sinceIso: "2026-09-27T00:00:00Z", limit: 3 });
+  assert.equal(pub.rows.length, 3);
+  assert.ok(pub.rows.every((x) => !String(x.object).includes(DRAFT)), "the limit is spent on public rows only");
+  const all = await ix.houseActs(`hh:${HOUSE}`, { sinceIso: "2026-09-27T00:00:00Z" });
+  assert.ok(all.rows.some((x) => String(x.object).includes(DRAFT)), "no verbs given (the owner's read): every act");
+  const mine = await ix.actsOfActor("r001", { fromIso: "2026-09-27T00:00:00Z", toIso: "2026-09-28T00:00:00Z", verbs: [...PUBLIC_HOUSE_VERBS] });
+  assert.ok(mine.rows.every((x) => !String(x.object).includes(DRAFT)));
 });
 
 test("6 · an unknown house is refused, not bundled empty", async () => {

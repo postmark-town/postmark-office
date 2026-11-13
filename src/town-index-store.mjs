@@ -27,6 +27,7 @@
 // inside `officeRead`'s READ ONLY transaction and a test runs it on its own.
 
 import { wholeNumber } from "./whole-number.mjs";
+import { publicActSql } from "./hearth-public.mjs"; // POS-1027: which acts a public read may name
 // The row SHAPES (pages, cards, entries) are queries.mjs's own exported
 // functions; only the SQL is written here. A reader that restated a shape
 // would be the private copy that drifts.
@@ -660,11 +661,12 @@ export async function houseActs(q, household, { afterId = null, sinceIso = null,
   if (before) add("id < $?::bigint", before);
   if (who) add("actor = ANY($?::text[])", who);
   // POS-1027: a PUBLIC read names the verbs that are public record (hearth-public.mjs § PUBLIC_HOUSE_VERBS); an owner's read names none and sees every act of the house
-  if (Array.isArray(verbs)) add("action = ANY($?::text[])", verbs.map(String));
+  if (Array.isArray(verbs)) { add("action = ANY($?::text[])", verbs.map(String)); where.push(publicActSql()); }   // and a verb is not proof: a draft's withdrawal, a draft's leave/amend (hearth-public.mjs)
   // 079's columns, when the store has them (POS-633 part 3): the recorded hand, for and route
   const { actsHaveProvenance } = await import("./act-provenance.mjs");
   const recorded = (await actsHaveProvenance(q)) ? ", hand, for_handle, route" : "";
-  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}
+  const facts = Array.isArray(verbs) ? ", class, payload->>'was_published' AS was_published, payload->>'put_forward' AS put_forward" : "";   // kept for the public projection's second filter; happenedRow never shows them
+  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}${facts}
       FROM acts WHERE ${where.join(" AND ")} ORDER BY acts.id DESC LIMIT ${n + 1}`, params)).rows;
   const kept = rows.slice(0, n);
   // past the cut, the read goes on below the last id it kept (review of #678, item 4)
@@ -786,8 +788,8 @@ export async function actsOfActor(q, actor, { fromIso, toIso, verbs, limit = 500
   const params = [actor, lo, fromIso, toIso, verbs.map(String)];
   let hiSql = "";
   if (hiRaw != null) { params.push(String(BigInt(hiRaw) + 50n)); hiSql = " AND id < $6::bigint"; }   // the few acts filed late sit a little past the bound; `at` decides
-  const rows = (await q.query(`SELECT id::text AS id, at, action, object, class, at_anchor FROM acts
-      WHERE actor = $1 AND id >= $2::bigint${hiSql} AND at >= $3::timestamptz AND at < $4::timestamptz AND action = ANY($5::text[]) ORDER BY acts.id LIMIT ${n + 1}`, params)).rows;
+  const rows = (await q.query(`SELECT id::text AS id, at, action, object, class, at_anchor, payload->>'was_published' AS was_published, payload->>'put_forward' AS put_forward FROM acts
+      WHERE actor = $1 AND id >= $2::bigint${hiSql} AND at >= $3::timestamptz AND at < $4::timestamptz AND action = ANY($5::text[]) AND ${publicActSql()} ORDER BY acts.id LIMIT ${n + 1}`, params)).rows;
   return { rows: rows.slice(0, n), cut: rows.length > n };
 }
 

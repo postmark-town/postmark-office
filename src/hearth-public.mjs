@@ -24,6 +24,30 @@ export const PUBLIC_HOUSE_VERBS = Object.freeze([
   "post", "amend", "close", "advance", "vote", "sign-up", "withdraw-sign-up", "host", "amend-event", "cancel-event", "rsvp", "announce",
 ]);
 
+/**
+ * A VERB IS NOT PROOF A ROW IS PUBLIC (POS-1027 fix, review of 13c13ab0). Two of the allowlisted verbs also write rows for a mark that is still a private draft:
+ *   · `withdraw` of a class-mark: world.mjs § journalWithdraw writes `{ by, slug, was_published }` for a draft the author took back as well as for a published mark;
+ *     only `was_published: true` is the town's record, the NAME of an unpublished draft is not;
+ *   · `leave-mark` and `amend` of a class-mark: world-journal.mjs § privateDraftAct keeps a draft out of `acts` only while the docket's candle is on; with it off
+ *     they mirror, so only `put_forward: true` (the door's verdict that the act stakes the mark) is public.
+ * Other classes' `amend` (a post's) is untouched. A missing or false flag is not proof of publication. The same decision is made in SQL (publicActSql, so
+ * excluded rows never take a page's limit or cut) and in JS (isPublicAct, for rows a caller hands in), from the facts the store keeps internally and never
+ * shows: a row's `was_published` and `put_forward` are the strings `true`/`false` read from its payload, or booleans.
+ */
+export function publicActSql(alias = "") {
+  const c = (col) => (alias ? `${alias}.${col}` : col);
+  const flag = (k) => `COALESCE(${c("payload")}->>'${k}', '') = 'true'`;
+  return `NOT (${c("class")} = 'mark' AND ((${c("action")} = 'withdraw' AND NOT ${flag("was_published")}) OR (${c("action")} IN ('leave-mark', 'amend') AND NOT ${flag("put_forward")})))`;
+}
+const isTrue = (v) => v === true || v === "true";
+/** The same decision over a row carrying `class`, `action`, `was_published` and `put_forward` (a row with no class is not a mark). */
+export function isPublicAct(row) {
+  if (String(row?.class ?? "") !== "mark") return true;
+  if (row.action === "withdraw") return isTrue(row.was_published);
+  if (row.action === "leave-mark" || row.action === "amend") return isTrue(row.put_forward);
+  return true;
+}
+
 /** The house's acts a public read may name, as a Set (the filter the verbs option gives the store, kept for the doors that filter rows). */
 export const PUBLIC_VERB_SET = new Set(PUBLIC_HOUSE_VERBS);
 

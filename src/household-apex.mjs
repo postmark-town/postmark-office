@@ -1501,7 +1501,7 @@ async function householdDeep(what, f, args, key, ctx) {
     const actors = [...mine, `human-of-${house.slug}`];
     const acts = await ix.houseActs(`hh:${house.slug}`, { actors, beforeId: f.before ?? null, ...(named ? { verbs: hp.PUBLIC_HOUSE_VERBS } : {}), ...(since?.hw ? { afterId: since.hw } : { sinceIso: after }) });
     // a public read keeps only the public verbs: asked of the store above, and held again here, so a store that ignored the ask still cannot leak a private act
-    const visible = named ? acts.rows.filter((a) => hp.PUBLIC_VERB_SET.has(String(a.action))) : acts.rows;
+    const visible = named ? acts.rows.filter((a) => hp.PUBLIC_VERB_SET.has(String(a.action)) && hp.isPublicAct(a)) : acts.rows;
     const rows = hp.byHand(visible.map((a) => v2.happenedRow(a, { houseName: house.rec.name })), judgedHand.hand);
     const next = encodeCursor({ crossing: currentCrossing(nowMs), ms: nowMs, hw: acts.hw });
     const out = { read: "happened", household: house.slug, ...(named ? { public: true } : {}), ...(judgedHand.hand ? { hand: judgedHand.hand } : {}), ...(since ? { since: after } : { window: "the last 12 hours" }), ...page(rows), cursor: next };

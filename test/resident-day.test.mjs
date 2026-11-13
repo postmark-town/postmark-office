@@ -36,7 +36,7 @@ test("1 · a busy day: letters, public acts and stamps become plain sentences in
       { id: "undelivered", to_h: "zed", delivered_at: null }],
     received: [{ id: "r1", from_h: "bo" }],
     acts: [{ action: "say", class: "voice", object: "the-town/porch" }, { action: "say", class: "voice", object: "the-town/porch" }, { action: "walk", class: "move", object: "the-town/quay" },
-      { action: "enter", class: "move", object: "the-town/quay" }, { action: "leave-mark", class: "mark", object: "ada/lamp" }, { action: "post", class: "idea", object: "ada/an-idea" },
+      { action: "enter", class: "move", object: "the-town/quay" }, { action: "leave-mark", class: "mark", object: "ada/lamp", put_forward: "true" }, { action: "post", class: "idea", object: "ada/an-idea" },
       { action: "stake", class: "mark", object: "x/y" }, { action: "rsvp", class: "event", object: "e/1" }],
     lines: [line("2026-11-12", "ada", "stake:world-mark/x/y", 5, "via: web"), line("2026-11-12", "ada", "stake:vote/topic", 2), line("2026-11-12", "ada", "bo", 3, "for: gift"),
       line("2026-11-11", "ada", "stake:pot/lamp", 9), line("2026-11-12", "bo", "stake:world-mark/z/z", 7)],
@@ -68,6 +68,18 @@ test("1 · a busy day: letters, public acts and stamps become plain sentences in
   const again = await dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW + 99_999, ix: ix({ sent: [{ id: "l1", to_h: "limen", delivered_at: "x" }] }) });
   const twice = await dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW, ix: ix({ sent: [{ id: "l1", to_h: "limen", delivered_at: "x" }] }) });
   assert.deepEqual(again, twice);
+});
+
+test("1b · a draft is not the day: an unpublished withdrawal and an unstaked leave or amend are not counted, published ones and other classes' amends are", async () => {
+  const mark = (action, extra = {}) => ({ action, class: "mark", object: "ada/lamp", ...extra });
+  const r = await dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW, ix: ix({ acts: [
+    mark("withdraw", { was_published: "false" }), mark("withdraw"), mark("withdraw", { was_published: "true" }),
+    mark("leave-mark", { put_forward: "false" }), mark("leave-mark"), mark("leave-mark", { put_forward: "true" }), mark("amend"), mark("amend", { put_forward: "true" }),
+    { action: "amend", class: "idea", object: "ada/an-idea" },
+  ] }) });
+  assert.equal(r.counts.marks_withdrawn, 1, "only the published withdrawal");
+  assert.ok(r.sentences.includes("withdrew 1 mark"));
+  assert.equal(r.counts.marks_left, 1, "only the put-forward leave-mark");
 });
 
 test("2 · QUIET IS NOT UNAVAILABLE: a day read whole and found empty says so; any source that cannot be read is named and no quiet sentence is said", async () => {
