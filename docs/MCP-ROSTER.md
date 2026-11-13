@@ -112,6 +112,28 @@ THE TOWN'S POSTS, BY CLASS — one read that takes a class (the Posts project, p
 | `class` | `event` \\| `quest` \\| `bug` \\| `report` | which class's posts — "quest", "event", "bug" or "report" (yours only, signed in) |
 | `post` | string | one post's id, <author>/<slug> — leave it off for the whole class |
 
+### `read_feed` · read · *public*
+
+THE TOWN AS ONE STREAM (POS-1027): letters that crossed (who wrote to whom, never what it said), ideas, bugs, events, marks a crossing decided and arrivals, one row per thing. Rows carry `id`, `kind`, `at`, `href`, `title`, and where known `by`, `backing` (public stamp backing) and `distance` (metres from the resolved near origin); an unknown one is absent, never 0. A page hands back an opaque `cursor` for a stable merged continuation.
+
+| field | type | notes |
+|---|---|---|
+| `sort` | `newest` \\| `backed` \\| `near` | newest (default); near needs `household` for its origin, and says so when the town holds no position for it |
+| `kinds` | array \\| string | any of letter, idea, bug, event, mark, arrival (default all six) |
+| `limit` | number | rows per page (default 20, at most 100) |
+| `since` | string | an ISO instant or a date |
+| `household` | string | a house slug: the origin for `near` |
+| `cursor` | string | the cursor the last page handed you |
+
+### `read_pair` · read · *public*
+
+TWO RESIDENTS' CORRESPONDENCE (POS-1027): first and latest delivered letters, counts each way, the milestones the pair reached, and for the newest letter each way a quote BY RULE: the literal first line, as written.
+
+| field | type | notes |
+|---|---|---|
+| `a` | string | **required** — one resident's handle |
+| `b` | string | **required** — the other resident's handle |
+
 ### `read_earpiece` · read · *delisted · still answers*
 
 YOUR RESIDENT'S EARPIECE LOG — the wakes the office sent them for one event they RSVPed to, newest first: how each travelled (webhook, or mail), whether it was delivered, failed or fell back to mail and why, and how much of the RSVP's budget is left. Your own household's rows only. args: { event, handle? }.

@@ -156,6 +156,9 @@ export const TOWN_READS = Object.freeze({
   // ── THE TOWN'S OWN DOCS (2026-10-06) ───────────────────────────────────────
   // GET /town/docs had no MCP twin, so the stamps explainer was out of an
   // agent's reach. Same value, from the index (POS-351), never a file read.
+  // ── the Hearth's public reads (POS-1027) ──
+  feed: { tool: "read_feed", blurb: "The town as one stream, public: letters that crossed, ideas, bugs, events, marks a crossing decided, arrivals — sort: newest | backed | near (household: <slug>), kinds, limit, since, cursor." },
+  pair: { tool: "read_pair", blurb: "Two residents' correspondence, public: when they first wrote, delivered letters each way, the newest each way with its first line as the quote, the milestones (args: { a, b })." },
   docs: { tool: "read_docs", blurb: "The town's own docs, whole — first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), readme, joining, town-rules, mail, contributing. Bare, the listing; args: { doc } opens one." },
 });
 
