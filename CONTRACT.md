@@ -52,6 +52,31 @@ Two credential shapes, one gate on writes (`Authorization: Bearer <credential>`)
    moment a visitor's join PR merges the *same* token resolves to their new household with
    no re-auth.
 
+   **A reused refresh token ends its whole sign-in, with no grace** (POS-485; Darko,
+   2026-11-13: "End the whole sign-in, no grace", and "Link new keys, leave old"). Each
+   refresh retires the refresh token it was given and issues a new pair. Every pair
+   issued from one sign-in (one code exchange, then each refresh of it) belongs to that
+   sign-in. If a retired refresh token is presented again, every access and refresh token
+   of its sign-in stops working at once, the older 30-day access keys included. The answer
+   is `400` `{"error": "invalid_grant", "error_description": "this refresh token was already
+   used once, so the sign-in it belongs to has ended and every key it issued no longer
+   works; sign in again"}`. The person signs in again.
+   - Two refreshes sent at once with the same token count as a reuse too: one rotates, the
+     other ends the sign-in.
+   - A client that lost the office's `503` reply and retries the same refresh token after
+     the office in fact rotated it also ends its sign-in.
+   - Pairs issued **before** this change belong to no recorded sign-in, and none is
+     inferred. An old refresh token's first refresh records what it issues, and its own
+     retirement, from then on. The old access keys beside it are not covered and keep their
+     own expiry (30 days at most). Nobody was signed out at the change.
+   - Other sign-ins of the same GitHub account (and the same client), household keys,
+     resident keys and static keys are never touched.
+   - A store fault is still `503` with `Retry-After`, never `invalid_grant` (POS-480).
+
+   **Before** (until POS-485): a reused refresh token answered `400 invalid_grant`
+   `"refresh token unknown or expired"`, and nothing else changed. The pair it had
+   rotated into, and every earlier access key, kept working until their expiry.
+
 Either credential maps to one **household** (GitHub account) and its resident handles,
 and may act `from:` only its own residents (witness ID-binding semantics, ported).
 OAuth state lives in `oauth.db`, deliberately separate from the rebuildable `office.db`

@@ -96,6 +96,8 @@ function fileVerbs(db) {
     async all(sql, ...args) { return db.prepare(sql).all(...args); },
     async run(sql, ...args) { const i = db.prepare(sql).run(...args); return { changes: Number(i.changes) }; },
     async append(sql, args) { return Number(db.prepare(sql).run(...args).lastInsertRowid); },
+    // The file's transaction is already the only writer (one handle, statements that never yield to I/O), so its lock is a no-op.
+    async lock() {},
   };
 }
 
@@ -140,6 +142,14 @@ class Paper {
    * `fn(t)` in one transaction, `t` carrying the same four verbs. On the file
    * it is BEGIN/COMMIT on the handle, as roles.mjs always did. On the store it
    * is one client.
+   *
+   * `t.lock(key)` serializes every transaction that names the same key, until
+   * its COMMIT or ROLLBACK (POS-485: a sign-in's rotation against its
+   * revocation). On the store it is a transaction-scoped advisory lock on the
+   * key's text (the office's idiom, chest-lock.mjs); a statement after it reads
+   * what the lock's last holder committed, because each statement under READ
+   * COMMITTED takes its own snapshot. On the file it is a no-op: the file's
+   * transaction is already the only writer.
    */
   async tx(fn) {
     this.#refuseWrite();
@@ -154,6 +164,7 @@ class Paper {
       all: async (sql, ...args) => (await client.query(toStoreSql(sql), args)).rows,
       run: async (sql, ...args) => ({ changes: (await client.query(toStoreSql(sql), args)).rowCount ?? 0 }),
       append: async (sql, args, idCol) => Number((await client.query(`${toStoreSql(sql)} RETURNING ${idCol}`, args)).rows[0][idCol]),
+      lock: async (key) => { await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [String(key)]); },
     };
     // A ROLLBACK that fails may leave the connection inside the transaction; it
     // is discarded, never handed to the next caller (POS-370, the pen's rule).

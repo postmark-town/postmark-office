@@ -148,6 +148,8 @@ export const LANDED = {
   "092_household_likeness_state.sql": { probe: col("households", "likeness_state") },
   // 093 (POS-962): the Hearth a household chose, on its row.
   "093_household_hearth.sql": { probe: `${col("households", "hearth")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_hearth_id')` },
+  // 094 (POS-485): the sign-in a token pair came from, and its index (the file's last statement).
+  "094_oauth_signin_family.sql": { probe: `${col("oauth_tokens", "family")} AND ${rel("oauth_tokens_family")}` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */
