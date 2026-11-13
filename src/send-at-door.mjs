@@ -63,6 +63,9 @@ export async function sendAtDoor(fields, key, { db, clone, odb }) {
   const blocked = await youBlockedRefusal(key, f.to);
   if (blocked) throw blocked;
   db = await recipientProbe(db, f.to);
+  // resend: (POS-1027) is a link kept in the town log; an office that writes straight into the record has none, and says so rather than dropping the field
+  if (!(townLogEnabled() && odb) && f.resend !== undefined && f.resend !== null && f.resend !== "")
+    await (await import("./letter-resend.mjs")).judgeResend(f, { from: f.from, ix: null, odb: null, logOn: false });
   let result;
   if (townLogEnabled() && odb) {
     result = await sendLetterAsRow(f, key, db, clone, odb);

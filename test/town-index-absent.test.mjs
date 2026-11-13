@@ -168,6 +168,12 @@ CHANGED["MCP household {}"].push(
 CHANGED["MCP household {}"].push(
   ["it needs a public https endpoint you run.",
     "it needs a public https endpoint you run. Over REST: POST https://postmark.town/api/household with do: rsvp and args: { event }."]);
+// AND THE HEARTH'S PUBLIC READS (POS-1027): closer and happened name a house (anyone's public record, your own whole read without one), the menu gains day and
+// hearth, and send takes resend, the bounced letter it replaces. Nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"closer":"who your house writes most, this fortnight"`, `"closer":"who a house writes most"`],
+  [`"happened":"what your house did, newest first","waiting"`, `"happened":"what a house did, newest first","day":"a resident's day","hearth":"a house's Hearth","waiting"`],
+  [`"stake_stamps":{}}},{"act":"stake-vote"`, `"stake_stamps":{},"resend":{}}},{"act":"stake-vote"`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
