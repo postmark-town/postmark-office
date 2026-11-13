@@ -787,7 +787,7 @@ export async function actsOfActor(q, actor, { fromIso, toIso, verbs, limit = 500
   let hiSql = "";
   if (hiRaw != null) { params.push(String(BigInt(hiRaw) + 50n)); hiSql = " AND id < $6::bigint"; }   // the few acts filed late sit a little past the bound; `at` decides
   const rows = (await q.query(`SELECT id::text AS id, at, action, object, class, at_anchor FROM acts
-      WHERE actor = $1 AND id >= $2::bigint${hiSql} AND at >= $3::timestamptz AND at < $4::timestamptz AND action = ANY($5::text[]) ORDER BY id LIMIT ${n + 1}`, params)).rows;
+      WHERE actor = $1 AND id >= $2::bigint${hiSql} AND at >= $3::timestamptz AND at < $4::timestamptz AND action = ANY($5::text[]) ORDER BY acts.id LIMIT ${n + 1}`, params)).rows;
   return { rows: rows.slice(0, n), cut: rows.length > n };
 }
 
