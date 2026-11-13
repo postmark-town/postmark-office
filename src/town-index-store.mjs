@@ -753,12 +753,20 @@ export async function letterBodies(q, ids) {
  * The newest delivered letters town-wide, newest first, for the feed: at most `limit` rows, and only those delivered at or after `sinceIso` when one is given.
  * The order is the public letter index's own (NEWEST: delivered_at as text, a bare date as that day's midnight, ties on id).
  */
-export async function lettersDeliveredFeed(q, { sinceIso = null, beforeIso = null, limit = 200 } = {}) {
+export async function lettersDeliveredFeed(q, { sinceIso = null, beforeIso = null, resume = null, limit = 200 } = {}) {
   const n = Math.min(Math.max(Number(limit) || 200, 1), 1000);
   const params = [];
   let where = "delivered_at IS NOT NULL";
   if (sinceIso) { params.push(sinceIso); where += ` AND delivered_at COLLATE "C" >= $${params.length}`; }
-  if (beforeIso) { params.push(beforeIso); where += ` AND delivered_at COLLATE "C" <= $${params.length}`; }   // inclusive: a page boundary never skips a letter delivered at the very instant
+  if (resume?.at) {
+    // the feed's cursor, as a POSITION in its order (time newest first, then id ascending): older letters, and at that very instant only those after the cursor's id
+    // (none when the instant is wholly served), so a run of equal times longer than the page is read on from the exact letter, never from the instant
+    params.push(resume.at);
+    const t = `$${params.length}`;
+    if (resume.exclusive) where += ` AND delivered_at COLLATE "C" < ${t}`;
+    else if (resume.afterId != null) { params.push(resume.afterId); where += ` AND (delivered_at COLLATE "C" < ${t} OR (delivered_at COLLATE "C" = ${t} AND id COLLATE "C" > $${params.length}))`; }
+    else where += ` AND delivered_at COLLATE "C" <= ${t}`;
+  } else if (beforeIso) { params.push(beforeIso); where += ` AND delivered_at COLLATE "C" <= $${params.length}`; }   // inclusive: a page boundary never skips a letter delivered at the very instant
   const rows = (await q.query(`SELECT id, from_h, to_h, date, delivered_at, thread FROM town_letters WHERE ${where} ORDER BY ${NEWEST} LIMIT ${n + 1}`, params)).rows;
   return { rows: rows.slice(0, n), cut: rows.length > n };
 }
@@ -771,8 +779,13 @@ export async function lettersOfDay(q, handle, day) {
   const cols = "id, from_h, to_h, date, delivered_at, CASE WHEN strpos(json, '\"toList\"') > 0 THEN json ELSE NULL END AS multi";
   const sent = (await q.query(`SELECT ${cols} FROM town_letters WHERE from_h = $1 AND date = $2`, [handle, day])).rows;
   const before = new Date(Date.parse(`${day}T00:00:00Z`) - 14 * 86_400_000).toISOString().slice(0, 10);
-  const got = (await q.query(`SELECT ${cols} FROM town_letters WHERE to_h = $1 AND date >= $2 AND date <= $3 AND delivered_at IS NOT NULL`, [handle, before, day])).rows
-    .filter((r) => String(r.delivered_at).startsWith(day));
+  // the column holds the letter's FIRST recipient (town-index.mjs § letterRows: `l.to`); the rest of a letter to several ride only in its json toList, which no index
+  // reaches, so that half is a scan of the same 15-day window (as lettersAround's multi scan), kept to the letters that really name this resident
+  const first = (await q.query(`SELECT ${cols} FROM town_letters WHERE to_h = $1 AND date >= $2 AND date <= $3 AND delivered_at IS NOT NULL`, [handle, before, day])).rows;
+  const several = (await q.query(`SELECT ${cols} FROM town_letters WHERE date >= $1 AND date <= $2 AND delivered_at IS NOT NULL AND strpos(json, '"toList"') > 0`, [before, day])).rows
+    .filter((r) => recipientsOf(r).includes(handle));
+  const seen = new Set(first.map((r) => r.id));
+  const got = [...first, ...several.filter((r) => !seen.has(r.id))].filter((r) => String(r.delivered_at).startsWith(day));
   return { sent, received: got };
 }
 

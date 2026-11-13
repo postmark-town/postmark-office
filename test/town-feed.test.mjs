@@ -14,7 +14,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { feedRead, FEED_KINDS, encodeFeedCursor, decodeFeedCursor, keyOf, compareKeys, instantOf, FETCH_CAP } from "../src/town-feed.mjs";
+import { feedRead, FEED_KINDS, encodeFeedCursor, decodeFeedCursor, keyOf, compareKeys, instantOf, FETCH_CAP, afterResume, resumeFor } from "../src/town-feed.mjs";
 
 const T = (min) => new Date(Date.parse("2026-11-13T12:00:00Z") - min * 60_000).toISOString();
 const row = (kind, id, min, extra = {}) => ({ id, kind, at: T(min), href: `https://example.test/${kind}/${id}`, title: `${kind} ${id}`, ...extra });
@@ -22,10 +22,10 @@ const row = (kind, id, min, extra = {}) => ({ id, kind, at: T(min), href: `https
 /** Sources over fixed rows, honouring since/before/cap the way a real source does, and counting the calls. */
 function sources(rows, { cut = {}, fail = {}, origin = { x: 0, y: 0, from: "the test" } } = {}) {
   const calls = [];
-  const by = (kind) => async ({ since, before, cap }) => {
+  const by = (kind) => async ({ since, before, resume, cap }) => {
     calls.push([kind, since, before, cap]);
     if (fail[kind]) throw new Error("store down");
-    const mine = rows.filter((r) => r.kind === kind && (!since || (r.at != null && r.at >= since)) && (!before || r.at == null || r.at <= before))
+    const mine = rows.filter((r) => r.kind === kind && (!since || (r.at != null && r.at >= since)) && (!before || r.at == null || r.at <= before) && afterResume(r, resume))
       .sort((a, b) => (a.at === b.at ? String(a.id).localeCompare(String(b.id)) : a.at < b.at ? 1 : -1));
     const take = cut[kind] ?? cap;
     return { rows: mine.slice(0, take), cut: mine.length > take };
@@ -161,6 +161,58 @@ test("4 · a source cut at its cap is named; a time-ordered page never serves a 
   const truth = [...letters, ...others].sort((a, b) => (a.at === b.at ? (FEED_KINDS.indexOf(a.kind) - FEED_KINDS.indexOf(b.kind)) || a.id.localeCompare(b.id) : a.at < b.at ? 1 : -1)).map((x) => `${x.kind}:${x.id}`);
   assert.deepEqual(seen, truth, "a cut source is read on down, so nothing is skipped across the cut");
   assert.ok(FETCH_CAP >= 100);
+});
+
+test("4b · A RUN OF EQUAL TIMES LONGER THAN A SOURCE'S CAP IS READ ON FROM THE EXACT ROW: 501 letters at one instant are every one of them, five pages and then the end", async () => {
+  const at = T(5);
+  const letters = Array.from({ length: 501 }, (_, i) => ({ id: String(i).padStart(4, "0"), kind: "letter", at, href: "h", title: "t" }));
+  const { sources: s } = sources(letters, { cut: { letter: FETCH_CAP } });
+  const seen = [];
+  let cursor, last, pages = 0;
+  do {
+    last = await feedRead({ kinds: ["letter"], limit: 100, ...(cursor ? { cursor } : {}) }, { sources: s });
+    assert.equal(last.error, undefined, JSON.stringify(last));
+    seen.push(...last.rows.map((r) => r.id));
+    cursor = last.cursor;
+    if (++pages > 12) assert.fail("the read does not end");
+  } while (cursor);
+  assert.deepEqual(seen, letters.map((l) => l.id), "all 501, once each, in the order");
+  assert.equal(last.complete, true);
+  assert.equal(last.incomplete, undefined, "the end says nothing is stranded");
+});
+
+test("4c · a cut source inside a run of equal times is not skipped by a row of another kind at that instant, and a feed is never complete with rows stranded", async () => {
+  const at = T(5);
+  const rows = [...Array.from({ length: 7 }, (_, i) => ({ id: `L${i}`, kind: "letter", at, href: "h", title: "t" })),   // letter ranks before idea and bug at one instant
+    { id: "I0", kind: "idea", at, href: "h", title: "t" }, { id: "B0", kind: "bug", at, href: "h", title: "t" }, row("letter", "OLD", 30), row("idea", "OLDI", 40)];
+  const { sources: s } = sources(rows, { cut: { letter: 3 } });
+  const seen = [];
+  let cursor, pages = 0, final;
+  do {
+    final = await feedRead({ limit: 2, ...(cursor ? { cursor } : {}) }, { sources: s });
+    seen.push(...final.rows.map((r) => r.id));
+    if (final.complete) assert.equal(final.cursor, undefined, "complete means no continuation");
+    cursor = final.cursor;
+    if (++pages > 30) assert.fail("the read does not end");
+  } while (cursor);
+  const whole = (await feedRead({ limit: 100 }, { sources: sources(rows).sources })).rows.map((r) => r.id);
+  assert.deepEqual(seen, whole, "a cut source gives the same list as an uncut one, row for row");
+  assert.equal(new Set(seen).size, seen.length);
+});
+
+test("4d · resumeFor and afterResume: what is still to come for a kind after a cursor inside one instant", () => {
+  const at = "2026-11-13T12:00:00.000Z";
+  const key = [at, 1, "I5"];   // an idea (rank 1)
+  assert.deepEqual(resumeFor("letter", key), { at, afterId: null, exclusive: true }, "letters rank first at an instant: all served");
+  assert.deepEqual(resumeFor("idea", key), { at, afterId: "I5", exclusive: false });
+  assert.deepEqual(resumeFor("bug", key), { at, afterId: null, exclusive: false });
+  const r = (id, atx) => ({ id, at: atx });
+  assert.equal(afterResume(r("I6", at), resumeFor("idea", key)), true);
+  assert.equal(afterResume(r("I5", at), resumeFor("idea", key)), false);
+  assert.equal(afterResume(r("L9", at), resumeFor("letter", key)), false);
+  assert.equal(afterResume(r("L9", "2026-11-13T11:00:00.000Z"), resumeFor("letter", key)), true, "older always");
+  assert.equal(afterResume(r("L9", "2026-11-13T13:00:00.000Z"), resumeFor("letter", key)), false, "newer never");
+  assert.equal(afterResume(r("x", null), resumeFor("letter", key)), true, "no time ranks last: still to come");
 });
 
 test("5 · bad arguments are refused by name", async () => {

@@ -46,6 +46,25 @@ const timeDesc = (x, y) => (x === y ? 0 : x == null ? 1 : y == null ? -1 : x < y
 const asc = (x, y) => (x === y ? 0 : x < y ? -1 : 1);
 const distAsc = (x, y) => asc(x ?? Infinity, y ?? Infinity);
 
+/**
+ * What a source must still give for this kind after a newest-order cursor `[at, rank, id]`: the rows at the cursor's instant that come AFTER it (a kind earlier in
+ * the order at one instant is wholly served, the same kind goes on after the id, a later kind is wholly to come). `{ at, afterId, exclusive }`; rows older than `at` always.
+ */
+export function resumeFor(kind, key) {
+  const [at, rank, id] = key;
+  const mine = RANK[kind];
+  return mine < rank ? { at, afterId: null, exclusive: true } : mine === rank ? { at, afterId: String(id), exclusive: false } : { at, afterId: null, exclusive: false };
+}
+/** Whether a row stands after a `resume` (a source with the whole set in hand filters by this; one with a query puts it in the query). */
+export function afterResume(row, resume) {
+  if (!resume) return true;
+  const a = row.at ?? null;
+  if (resume.at == null) return a == null && !resume.exclusive && (resume.afterId == null || String(row.id) > resume.afterId);
+  if (a == null || a < resume.at) return true;
+  if (a > resume.at) return false;
+  return !resume.exclusive && (resume.afterId == null || String(row.id) > resume.afterId);
+}
+
 /** A row's key for a sort: the values that order it, ending with the kind's rank and the id (so two rows never share a key). */
 export function keyOf(row, sort) {
   const tail = [RANK[row.kind], String(row.id)];
@@ -129,16 +148,22 @@ export async function feedRead(args = {}, { sources } = {}) {
   const effective = nearUnavailable ? "newest" : sort;   // an unranked near is newest, said
   if (cursor && nearUnavailable && cursor.sort === "near") cursor = null;   // a near cursor cannot continue an unranked page
 
-  // each source, once per page, below the cursor's time when the order is by time (so a cut source is read on down, never skipped)
+  // each source, once per page, from the cursor's POSITION when the order is by time (so a cut source is read on down, never skipped): `before` is its time,
+  // inclusive, and `resume` says which rows at that very instant are still to come FOR THIS KIND (resumeFor): a source cut in the middle of a run of equal times
+  // goes on from the exact row, not from the instant, so 501 letters at one instant are five pages and not 500 of them
   const before = cursor && effective === "newest" ? cursor.key[0] : null;
   const unavailable = [], incomplete = [];
   const gathered = [];
-  const horizons = [];
+  const horizons = [];   // for a cut source, the key of the last row it returned: nothing after it, in the order, is known to be complete
   for (const kind of k.kinds) {
     try {
-      const r = await sources[kind]({ since: sinceAt, before, cap: FETCH_CAP });
+      const r = await sources[kind]({ since: sinceAt, before, resume: cursor && effective === "newest" ? resumeFor(kind, cursor.key) : null, cap: FETCH_CAP });
       for (const row of r.rows ?? []) gathered.push(row);
-      if (r.cut) { incomplete.push(kind); const oldest = (r.rows ?? []).map((x) => x.at).filter(Boolean).sort()[0]; if (oldest) horizons.push(oldest); }
+      if (r.cut) {
+        incomplete.push(kind);
+        const reach = (r.rows ?? []).map((x) => keyOf(x, "newest")).sort((a, b) => compareKeys(b, a, "newest"))[0];   // the farthest into the order it read
+        if (reach && reach[0] != null) horizons.push(reach);
+      }
     } catch (e) {
       if (e?.name === "TownIndexUnreachable") throw e;
       unavailable.push({ kind, reason: `the ${kind} source could not be read (${plainReason(e, "record", `the ${kind} source`)}): its rows are missing here, not absent from the town` });
@@ -159,19 +184,22 @@ export async function feedRead(args = {}, { sources } = {}) {
   rows.sort((x, y) => compareKeys(keyOf(x, effective), keyOf(y, effective), effective));
   if (cursor) rows = rows.filter((r) => compareKeys(keyOf(r, effective), cursor.key, effective) > 0);
 
-  // a time-ordered page holds back the rows below the oldest reach of a cut source: that source may have more there
+  // a time-ordered page holds back the rows after the nearest reach of a cut source, in the order itself (not by time alone: a source cut inside a run of equal
+  // times may have more of that run): that source may have more there
   let heldBack = false, horizon = null;
   if (effective === "newest" && horizons.length) {
-    horizon = horizons.sort().at(-1);
-    const kept = rows.filter((r) => r.at != null && r.at >= horizon);
+    horizon = horizons.sort((a, b) => compareKeys(a, b, "newest"))[0];
+    const kept = rows.filter((r) => compareKeys(keyOf(r, "newest"), horizon, "newest") <= 0);
     heldBack = kept.length < rows.length;
     rows = kept;
   }
   const page = rows.slice(0, limit);
   const last = page.at(-1);
   // where the next page begins: below the last row served, or (a page that held everything back) at the horizon the cut source reached
-  const nextKey = page.length && (rows.length > limit || heldBack) ? keyOf(last, effective)
-    : !page.length && heldBack ? [horizon, FEED_KINDS.length, "\uffff"] : null;
+  // and a page that served everything a cut source returned is not the end: the source has more, so the page says where it goes on
+  const cutBelow = effective === "newest" && horizons.length > 0;
+  const nextKey = page.length && (rows.length > limit || heldBack || cutBelow) ? keyOf(last, effective)
+    : !page.length && heldBack ? horizon : null;
   const more = nextKey !== null;
   return {
     read: "feed", sort: effective, ...(effective !== sort ? { sort_asked: sort } : {}), kinds: k.kinds,

@@ -63,19 +63,31 @@ export function daySentences({ letters, received, acts, stamps }) {
     const entered = by((a) => a.action === "enter");
     const left = by((a) => a.action === "leave-mark");
     const withdrew = by((a) => a.action === "withdraw" && a.class === "mark");
-    const backed = by((a) => a.action === "stake" || a.action === "unstake");
+    const backed = by((a) => a.action === "stake");
+    const unstaked = by((a) => a.action === "unstake");   // taking stamps back is not backing
     const posted = by((a) => a.action === "post");
-    const moved = by((a) => ["amend", "close", "advance", "sign-up", "withdraw-sign-up", "vote", "rsvp", "host", "announce", "amend-event", "cancel-event"].includes(a.action) && a.class !== "mark");
+    const MOVED = ["amend", "close", "advance", "sign-up", "withdraw-sign-up", "vote", "rsvp", "host", "announce", "amend-event", "cancel-event"];
+    const moved = by((a) => MOVED.includes(a.action) && a.class !== "mark");
+    // every public act the sentences above do not word is still the day's: counted, and named by its verb, so an active day is never called quiet (take, give, drop, exit, ride, land, a put-forward amend…)
+    const wordedOnce = new Set([...said, ...walks, ...entered, ...left, ...withdrew, ...backed, ...unstaked, ...posted, ...moved]);
+    const other = acts.rows.filter((a) => !wordedOnce.has(a));
     out("said", said.length); out("walks", walks.length); out("went_in", entered.length); out("marks_left", left.length);
     out("marks_withdrawn", withdrew.length); out("marks_backed", backed.length); out("posts_put_up", posted.length); out("post_acts", moved.length);
+    out("marks_unstaked", unstaked.length); out("other_acts", other.length);
     if (said.length) sentences.push(said.length === 1 ? "said something" : `spoke ${plural(said.length, "time")}`);
     if (walks.length) sentences.push(`walked ${plural(walks.length, "time")}`);
     if (entered.length) sentences.push(`went in ${nameList(entered.map((a) => a.object).filter(Boolean)) || plural(entered.length, "place")}`);
     if (left.length) sentences.push(`left ${plural(left.length, "mark")}`);
     if (withdrew.length) sentences.push(`withdrew ${plural(withdrew.length, "mark")}`);
     if (backed.length) sentences.push(`backed ${plural(backed.length, "mark")} with stamps`);
+    if (unstaked.length) sentences.push(`took stamps back from ${plural(unstaked.length, "stake")}`);
     if (posted.length) sentences.push(`put up ${nameList(posted.map((a) => `a ${a.class ?? "post"}`)) || plural(posted.length, "post")}`);
     if (moved.length) sentences.push(`took part in ${plural(moved.length, "post")} (${plural(moved.length, "act")})`);
+    if (other.length) {
+      const verbs = {};
+      for (const a of other) verbs[a.action] = (verbs[a.action] ?? 0) + 1;
+      sentences.push(`did ${plural(other.length, "other public thing")} (${Object.entries(verbs).sort(([x], [y]) => (x < y ? -1 : 1)).map(([v, n]) => `${v} ×${n}`).join(", ")})`);
+    }
   }
   if (stamps?.read) {
     const kinds = {};
@@ -83,6 +95,10 @@ export function daySentences({ letters, received, acts, stamps }) {
     const total = (...ks) => ks.reduce((n, k) => n + (kinds[k] ?? 0), 0);
     out("stamps_on_marks", total("mark")); out("stamps_on_ideas", total("idea")); out("stamps_on_ballots", total("ballot")); out("stamps_on_pots", total("pot")); out("stamps_given", total("gift"));
     for (const [k, label] of [["idea", "an idea"], ["mark", "a mark"], ["ballot", "a ballot"], ["pot", "a pot"]]) if (kinds[k]) sentences.push(`put ${plural(kinds[k], "stamp")} behind ${plural(stamps.rows.filter((r) => r.kind === k).length, label.replace(/^an? /, ""))}`);
+    const known = new Set(["idea", "mark", "ballot", "pot", "gift"]);
+    const rest = stamps.rows.filter((r) => !known.has(r.kind));
+    out("stamps_other", rest.reduce((n, r) => n + r.stamps, 0));
+    if (rest.length) sentences.push(`moved ${plural(rest.reduce((n, r) => n + r.stamps, 0), "stamp")} in other ways (${[...new Set(rest.map((r) => r.kind))].sort().join(", ")})`);
     if (kinds.gift) sentences.push(`gave ${plural(kinds.gift, "stamp")} to ${nameList(stamps.rows.filter((r) => r.kind === "gift").map((r) => r.to))}`);
   }
   return { sentences, counts };
@@ -130,7 +146,10 @@ export async function dayRead({ handle, date } = {}, { ix, nowMs = Date.now(), i
   const parts = { letters: letters.read ? { read: true, rows: letters.sent } : letters, received: letters.read ? { read: true, rows: letters.received } : letters, acts, stamps };
   const { sentences, counts } = daySentences(parts);
   const blind = unavailable.length > 0;
-  const quiet = blind ? null : sentences.length === 0;
+  // QUIET IS "EVERY SOURCE WAS READ AND HELD NOTHING", not "no sentence": a day with public rows is never quiet, whether or not a rule words them
+  const anything = parts.letters.rows?.length || parts.received.rows?.length || acts.rows?.length || stamps.rows?.length;
+  if (!blind && anything && !sentences.length) sentences.push("did public things the day's rules do not word yet");
+  const quiet = blind ? null : !anything;
   return {
     read: "day", handle: h, date: day,
     sentences: quiet ? [`A quiet day: nothing public was recorded for ${h} on ${day}.`] : sentences,

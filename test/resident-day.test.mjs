@@ -82,6 +82,30 @@ test("1b · a draft is not the day: an unpublished withdrawal and an unstaked le
   assert.equal(r.counts.marks_left, 1, "only the put-forward leave-mark");
 });
 
+test("1c · AN ACTIVE DAY IS NEVER CALLED QUIET: a public act the rules do not word (exit, take, give, drop, a put-forward mark amend) and a stamp kind they do not word are counted and said; an unstake is not backing", async () => {
+  const day = (opts) => dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW, ix: ix(opts) });
+  const exitOnly = await day({ acts: [{ action: "exit", class: "movement", object: "the-town/quay" }] });
+  assert.equal(exitOnly.quiet, false, "one public act, every source read: not quiet");
+  assert.deepEqual(exitOnly.sentences, ["did 1 other public thing (exit ×1)"]);
+  assert.equal(exitOnly.counts.other_acts, 1);
+  const many = await day({ acts: [{ action: "take", class: "item", object: "a/b" }, { action: "take", class: "item", object: "a/c" }, { action: "give", class: "item", object: "a/d" }, { action: "drop", class: "item", object: "a/e" },
+    { action: "amend", class: "mark", object: "ada/lamp", put_forward: "true" }] });
+  assert.equal(many.quiet, false);
+  assert.deepEqual(many.sentences, ["did 5 other public things (amend ×1, drop ×1, give ×1, take ×2)"]);
+  const un = await day({ acts: [{ action: "unstake", class: "mark", object: "x/y" }] });
+  assert.equal(un.quiet, false);
+  assert.deepEqual(un.sentences, ["took stamps back from 1 stake"]);
+  assert.ok(!un.sentences.some((t) => /backed/.test(t)), "taking stamps back is not backing a mark");
+  assert.equal(un.counts.marks_backed, 0);
+  assert.equal(un.counts.marks_unstaked, 1);
+  // a ledger line of a kind with no sentence of its own is still the day's
+  const burn = await day({ lines: [line("2026-11-12", "ada", "burn:the-fire", 4)] });
+  assert.equal(burn.quiet, false, JSON.stringify(burn));
+  assert.ok(burn.sentences.length >= 1 && !/quiet day/.test(burn.sentences[0]));
+  // and the day with nothing in any source stays quiet
+  assert.equal((await day({})).quiet, true);
+});
+
 test("2 · QUIET IS NOT UNAVAILABLE: a day read whole and found empty says so; any source that cannot be read is named and no quiet sentence is said", async () => {
   const quiet = await dayRead({ handle: "ada", date: "2026-11-12" }, { nowMs: NOW, ix: ix() });
   assert.equal(quiet.quiet, true);

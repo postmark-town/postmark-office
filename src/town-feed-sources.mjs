@@ -12,12 +12,12 @@
 // that is town-feed.mjs, and its tests, which do not need a store.
 
 import { apiUrl } from "./public-base.mjs";
-import { instantOf } from "./town-feed.mjs";
+import { instantOf, afterResume } from "./town-feed.mjs";
 
-const byNewest = (x, y) => (x.at === y.at ? 0 : x.at == null ? 1 : y.at == null ? -1 : x.at < y.at ? 1 : -1) || String(x.id).localeCompare(String(y.id));
+const byNewest = (x, y) => (x.at === y.at ? 0 : x.at == null ? 1 : y.at == null ? -1 : x.at < y.at ? 1 : -1) || (String(x.id) < String(y.id) ? -1 : String(x.id) > String(y.id) ? 1 : 0);   // the feed's order: time newest first, then id ascending
 /** Bound a source's rows by `since` / `before` (inclusive) and `cap`; newest first. */
-function bound(rows, { since, before, cap }) {
-  const kept = rows.filter((r) => (!since || (r.at != null && r.at >= since)) && (!before || r.at == null || r.at <= before)).sort(byNewest);
+function bound(rows, { since, before, resume = null, cap }) {
+  const kept = rows.filter((r) => (!since || (r.at != null && r.at >= since)) && (!before || r.at == null || r.at <= before) && afterResume(r, resume)).sort(byNewest);
   return { rows: kept.slice(0, cap), cut: kept.length > cap };
 }
 
@@ -44,30 +44,30 @@ const postAt = (p) => instantOf(p.history?.[0]?.at ?? p.latest?.at ?? null);
 export function realSources({ ix, clone, nowMs = Date.now(), readers = {} } = {}) {
   const lazy = async (name, spec) => readers[name] ?? (await import(spec))[name];
   const sources = {
-    async letter({ since, before, cap }) {
-      const r = await ix.lettersDeliveredFeed({ sinceIso: since, beforeIso: before, limit: cap });
+    async letter({ since, before, resume, cap }) {
+      const r = await ix.lettersDeliveredFeed({ sinceIso: since, beforeIso: before, resume, limit: cap });
       const rows = r.rows.map((l) => ({
         id: l.id, kind: "letter", ...instantOf(l.delivered_at ?? l.date), href: apiUrl(`/letters/${l.id}`),
         title: `${l.from_h} wrote to ${l.to_h}`, by: l.from_h,
       }));
       return { rows: rows.filter((x) => (!before || x.at == null || x.at <= before)), cut: r.cut };
     },
-    async idea({ since, before, cap }) {
+    async idea({ since, before, resume, cap }) {
       const postsAtOffice = await lazy("postsAtOffice", "./town-posts.mjs");
       const posts = await allPosts("idea", { postsAtOffice, nowMs });
       return bound(posts.map((p) => ({
         id: p.id, kind: "idea", ...postAt(p), href: apiUrl(`/posts/${p.id}?class=idea`), title: p.title ?? p.id, by: p.author ?? null, state: p.state ?? null,
         ...(Number.isFinite(Number(p.backing?.net)) ? { backed: Number(p.backing.net) } : {}),
-      })), { since, before, cap });
+      })), { since, before, resume, cap });
     },
-    async bug({ since, before, cap }) {
+    async bug({ since, before, resume, cap }) {
       const postsAtOffice = await lazy("postsAtOffice", "./town-posts.mjs");
       const posts = await allPosts("bug", { postsAtOffice, nowMs });
       return bound(posts.map((p) => ({
         id: p.id, kind: "bug", ...postAt(p), href: apiUrl(`/posts/${p.id}?class=bug`), title: p.title ?? p.id, by: p.author ?? null, state: p.state ?? null,
-      })), { since, before, cap });
+      })), { since, before, resume, cap });
     },
-    async event({ since, before, cap }) {
+    async event({ since, before, resume, cap }) {
       const postsAtOffice = await lazy("postsAtOffice", "./town-posts.mjs");
       const posts = await allPosts("event", { postsAtOffice, nowMs });
       // where each event is stands in the calendar read, not the posts row; a calendar that cannot be read leaves the places out (no distance), said by the row having none
@@ -83,11 +83,11 @@ export function realSources({ ix, clone, nowMs = Date.now(), readers = {} } = {}
         return { id: p.id, kind: "event", ...postAt(p), href: apiUrl(`/calendar/${p.id}`), title: p.title ?? p.id, by: p.author ?? null, state: p.state ?? null,
           ...(e?.starts ? { starts: e.starts } : {}),
           ...(pl && Number.isFinite(Number(pl.x)) && pl.x !== null && pl.y !== null ? { place: { x: Number(pl.x), y: Number(pl.y), ...(pl.mark ? { mark: pl.mark } : {}) } } : {}) };
-      }), { since, before, cap });
+      }), { since, before, resume, cap });
     },
-    async mark({ since, before, cap }) {
+    async mark({ since, before, resume, cap }) {
       const claimRowsDecidedSince = await lazy("claimRowsDecidedSince", "./world2-claims.mjs");
-      const decided = await claimRowsDecidedSince(since ?? "1970-01-01T00:00:00.000Z");
+      const decided = await claimRowsDecidedSince(since ?? "1970-01-01T00:00:00.000Z", resume?.at ? { until: resume.at, afterSlug: resume.afterId, exclusive: resume.exclusive } : {});   // from the cursor's own position: the store's newest 500 are counted from THERE
       const publishedMarksTownwide = await lazy("publishedMarksTownwide", "./town-marks.mjs");
       let published = new Map();
       try { published = new Map(publishedMarksTownwide().map((m) => [m.id, m])); } catch { /* no backing or place: the rows say neither */ }
@@ -101,14 +101,14 @@ export function realSources({ ix, clone, nowMs = Date.now(), readers = {} } = {}
           ...(at && Number.isFinite(Number(at.x)) && Number.isFinite(Number(at.y)) ? { place: { x: Number(at.x), y: Number(at.y) } } : {}),
         };
       });
-      const r = bound(rows, { since, before, cap });
+      const r = bound(rows, { since, before, resume, cap });
       return { rows: r.rows, cut: r.cut || decided.length >= 500 };   // the store's own read stops at 500
     },
-    async arrival({ since, before, cap }) {
+    async arrival({ since, before, resume, cap }) {
       const roster = await ix.roster();
       return bound(roster.filter((e) => e.joined && !e.is_office).map((e) => ({
         id: e.handle, kind: "arrival", ...instantOf(e.joined), href: apiUrl(`/residents/${e.handle}`), title: `${e.display ?? e.handle} arrived`, by: e.handle,
-      })), { since, before, cap });
+      })), { since, before, resume, cap });
     },
     // the near origin: where the house's residents stand on the walkers roll (house-bundle.mjs § standsOf), their centre; none placed, none guessed
     async origin(household) {
