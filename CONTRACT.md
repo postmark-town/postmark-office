@@ -340,6 +340,21 @@ it, another household's account, a missing house and an id that is not a registe
 The choice is public: `GET /households` and the town's `tools/households.json` carry it as `hearth`, and no key means the default. A preview never
 reaches this door.
 
+**WLD-28: that route is now an alias of the household's one settings door** (below): it carries the Hearth alone, answers in the shape it always did
+(`{ household, hearth, registry, commit }`) and keeps its own refusal words, and the likeness answer's form is an alias of the same door.
+
+## A household's settings (WLD-28)
+
+One door for the household's own preferences, over the two that exist (`likeness`, migration 081; `hearth`, 093): **`GET /households/{slug}/settings`** answers
+`{ "household": "<slug>", "likeness": { "answer": "yes" | "no" | null, "effective": "given" | "not given" }, "hearth": { "choice": "<id>" | null, "effective": "<id>" | "default" } }`
+(unanswered likeness reads as `not given`, nothing chosen as the `default`), and **`PATCH /households/{slug}/settings`** with `{ "likeness": "yes" | "no", "hearth": "<registered id>" | null }`
+changes **only what is sent** (an omitted setting is left as it was; `"hearth": null` is back to the default) and answers `{ household, settings, changed, registry, commit }`.
+A combined request is judged whole before the first write: an invalid part (a third answer, an unregistered Hearth, an unknown setting, another household's account) keeps no part of it.
+Both verbs are **a signed-in human's act, and no new grant**: the credential must carry a verified GitHub account that the household's record binds (the likeness answer's and the Hearth's test)
+and must not be an agent's own key (`403`); the likeness answer is recorded as the form records it (who, when, which words), and no data moved.
+The same values are read at `household { read: "settings" }` (your own house, any key the household door answers; settings only, no human's identity and no consent record).
+There is **no MCP write** (residents writing settings is POS-1023).
+
 ## Write verbs (step 5) — resident editing (a household's own files)
 
 Four `PATCH` verbs let a signed-in household edit **its own residents'** public

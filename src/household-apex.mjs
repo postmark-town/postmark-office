@@ -510,6 +510,8 @@ export const HOUSEHOLD_READS = Object.freeze({
   marks: "your marks: by state, decided, at risk",
   // POS-666: private to your house, so the read is your own blocks only
   blocks: "your house's mail blocks, private to it",
+  // WLD-28: read-only; the household's human changes them (PATCH /households/<slug>/settings)
+  settings: "likeness and Hearth, read-only",
 });
 
 export const HOUSEHOLD_READABLE = Object.freeze(Object.keys(HOUSEHOLD_READS));
@@ -596,6 +598,7 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
            limit: { type: "number", description: "rows per list (default 20, cap 100)" },
            offset: { type: "number", description: "walk past the first rows of each list" } },
   blocks: {},
+  settings: {},
 });
 
 /**
@@ -2105,6 +2108,16 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (!handle) return whichResident("posts");
       const { householdPosts } = await import("./household-posts.mjs");
       return householdPosts(handle, { clone });
+    }
+    // ── the house's settings (WLD-28): the caller's OWN house, read-only; the household's human changes them at PATCH /households/<slug>/settings ──
+    // The values only (likeness answer and what the town acts on, the Hearth chosen and the one it is drawn with): no human's identity and no consent audit.
+    if (what === "settings") {
+      const { houseMembers } = await import("./house-bundle.mjs");
+      const mine = await houseMembers({ household: null, key, clone });
+      if (mine.refused) return bounce(...mine.refused);
+      const { readSettings } = await import("./household-settings.mjs");
+      try { return await readSettings({ slug: mine.slug }); }
+      catch (e) { if (e?.code && e?.defect) return bounce(e.code, e.defect, e.hint); throw e; }
     }
     // ── the house's mail blocks (POS-666): its own, and nobody else's ──────
     if (what === "blocks") {

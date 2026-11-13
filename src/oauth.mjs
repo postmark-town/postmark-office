@@ -1233,9 +1233,11 @@ async function handleOauthRoute(req, res, ctx) {
       if (body.decision !== "yes" && body.decision !== "no")
         return html(res, 400, page("No answer given", "<p>Nothing was changed. Open the link again to answer yes or no.</p>"));
       try {
-        const { setLikeness } = await import("./likeness.mjs");
-        const done = await setLikeness({ slug: pending.slug, answer: body.decision, ghId: pending.gh_id, ghLogin: pending.gh_login },
-          { clone: ctx.clone });
+        // WLD-28: the form's answer is an ALIAS of the one settings door (household-settings.mjs § changeSettings): the one setting it always carried,
+        // answered in the likeness writer's own shape and with its own refusal words
+        const { changeSettings } = await import("./household-settings.mjs");
+        const done = (await changeSettings({ slug: pending.slug, changes: { likeness: body.decision }, ghId: pending.gh_id, ghLogin: pending.gh_login },
+          { clone: ctx.clone, alias: "likeness" })).parts.likeness;
         // a yes is thanked in Darko's words (10-22); a no stays plain and kind
         const { answeredPage } = await import("./likeness-pages.mjs");
         return html(res, 200, answeredPage({ answer: done.likeness.answer, rendered: done.registry.rendered,

@@ -190,6 +190,12 @@ export async function likenessNeed(slug, handles, { clone = null, registry = nul
   }] };
 }
 
+/** THE JUDGMENT of an answer, before anything is written (and so before a combined settings request keeps any part of itself, WLD-28): yes or no, nothing else. */
+export function judgeLikeness(answer) {
+  if (answer !== "yes" && answer !== "no") throw bounce(422, "the answer is yes or no", "there is no third answer: not answering reads as no");
+  return answer;
+}
+
 /**
  * THE ONE WRITER. Called only by the signed-in form (src/oauth.mjs), with the
  * GitHub identity the sign-in proved.
@@ -207,7 +213,7 @@ export async function setLikeness({ slug, answer, ghId, ghLogin } = {},
   { clone = null, env = process.env, write = setHouseholdLikeness, drain = drainRegistry, now = () => new Date() } = {}) {
   const s = String(slug ?? "").trim();
   if (!s) throw bounce(422, "which household?", "the likeness question is answered for one household");
-  if (answer !== "yes" && answer !== "no") throw bounce(422, "the answer is yes or no", "there is no third answer: not answering reads as no");
+  judgeLikeness(answer);
   if (ghId == null) throw bounce(401, "no signed-in account", "the likeness question is answered after a GitHub sign-in, never with a key");
   const likeness = {
     answer,
