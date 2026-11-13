@@ -292,7 +292,9 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 // its REST call at the public address, which the connector's bare answer carries once (the frozen 8,951 B baseline had 9 B of room).
 // SLIM_CEILING to 9,088 (+128), superseding POS-666/h's 8,960 for the connector; REST_CEILING stays 28,672. Measured by F5c below on
 // the final wording (not trimmed to fit): connector bare 9,038 B (+87 B, the sentence), REST bare 28,216 B.
-const REST_CEILING = 28_672;
+// POS-502/a (Darko, 2026-11-12 22:54 EST): "Raise to 28,800 bytes".
+// Keep the ruled name and stake wording; only the REST budget changes.
+const REST_CEILING = 28_800;
 // POS-730 (2026-11-07, RULED by Darko 21:31 EST on 11-06 in the picker, POS-730/b, "Raise to 9,216"; Wright AUTH 02:31Z): the letter-note
 // act card joins the connector's bare roster (about 121 B), so SLIM_CEILING to 9,216 (+128), superseding POS-911's 9,088; REST_CEILING
 // stays 28,672. Measured by F5c below on the final wording (not trimmed to fit): connector bare 9,159 B UTF-8 (+121 B over the 9,038 B before the card), REST bare 28,611 B.
@@ -304,6 +306,15 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-09 FOR POS-502 (Wright 23:48Z, resident-on-behalf v1: the human stakes on a ballot
+  // from the site, preview first): the act `stake-vote` gained the field `preview`, the dry run every other
+  // stamp-moving door already has (stamps-preview.mjs). ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/7/fields/preview/{type,description}` (2 leaves) and removed or retyped none. Its description is
+  // "true = dry run" because the REST bare answer then measures 28671 of its 28672 B ceiling; the tool's own
+  // description says the rest. PSA for the release notes: "household { do: \"stake-vote\", args: { …, preview:
+  // true } } answers what a ballot stake would do (applied, the clip, headroom and balance after, the first-stake
+  // mint) and writes nothing; and a stake made from the site is recorded as the household's human's, for the
+  // resident it spends."
   // ⚑ REGENERATED 2026-11-07 FOR POS-730 (Darko 2026-11-06 14:32 EDT, "Build that shape"): the household
   // gained the act `letter-note`, a household's private note on a letter it received. ADDITIVE and proven
   // so: the capture diff added exactly `/acts/21/{act,blurb,teaches,dispatches_to}` and

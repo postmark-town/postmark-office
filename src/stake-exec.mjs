@@ -12,7 +12,8 @@
 // Env: TOWN_CLONE, STAMP_KEY (path to the pen's ed25519 pem), TOWN_PUSH=1,
 //      BOT_NAME/BOT_EMAIL (penCommit's), TOWN_TZ, and the office's store
 //      (WORLD2_PG / WORLD2_PG_URL, the pen's own).
-// argv[2]: JSON { handle, topic, candidate, n, via, date }.
+// argv[2]: JSON { handle, topic, candidate, n, via, date, route?, residents? }
+//          (route and residents: the door's H4 scope, POS-502).
 //
 // Exit 0 with {applied,...} or {error:{code,defect,hint}} (a bounce is an
 // answer); exit 1 only when the machinery itself trips.
@@ -23,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { penTransaction } from "./write.mjs";
 import { stakeInStore } from "./ballots-store.mjs";
+import { withRoute, noteRequester } from "./act-provenance.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLONE = process.env.TOWN_CLONE ?? resolve(HERE, "..", "town-clone");
@@ -40,7 +42,13 @@ async function main() {
   // no commit behind, and (POS-349) no vote: the store's transaction rolls back
   // with it. It carries the resident's request and cannot be re-derived, so a
   // refused one is gone — which is what they were told.
-  const result = await penTransaction(CLONE, async () => {
+  // THE DOOR'S PROVENANCE, CARRIED (POS-502; act-provenance.mjs § H4). The
+  // door's route and its requesting key's residents arrive in the payload and
+  // open the same scope here that the door's process had, so the vote act
+  // records whose hand, for whom and by which route. Absent, there is no route
+  // (a tool, a test), never "unknown".
+  const { route = null, residents = [] } = payload;
+  const result = await withRoute(route, async () => { noteRequester({ handles: new Set(residents) }); return penTransaction(CLONE, async () => {
     if (process.env.TOWN_PUSH === "1")
       execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
     // The ledger lands on the stake's own store transaction, so the vote and
@@ -53,7 +61,7 @@ async function main() {
       if (e.code) return { error: { code: e.code, defect: e.defect, hint: e.hint } };
       throw e;
     }
-  });
+  }); });
   // The store pool would hold the process open: the answer is written, then the exit.
   process.stdout.write(JSON.stringify(result) + "\n", () => process.exit(0));
 }

@@ -2353,7 +2353,8 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "stake-vote": {
         const { votesAvailable, stakeViaOffice } = await import("./votes.mjs");
         if (!canWrite || !votesAvailable(clone)) { result = bounce(503, "not-yet-open", "the office has no town clone with the ballot engine"); break; }
-        result = await stakeViaOffice(clone, fields, key);
+        // the channel names the ledger's `via` (web from the site), as the pot stake's does (POS-502)
+        result = await stakeViaOffice(clone, fields, key, { channel });
         break;
       }
       case "address-fields": {
