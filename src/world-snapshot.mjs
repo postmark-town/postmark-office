@@ -28,7 +28,7 @@
 // parent exactly as the store's uuids do.
 
 import { createHash } from "node:crypto";
-import { firstClaimInstant, footprintsFromChain, FOOTPRINT_CHAIN_SQL } from "../world2/tools/mark-render.mjs";
+import { firstClaimInstant, footprintsThroughShape, FOOTPRINT_CHAIN_SQL } from "../world2/tools/mark-render.mjs";
 import { STANDING_ROWS_SQL, REGISTER_ROWS_SQL } from "../world2/tools/world-snapshot-seal.mjs";
 
 const sha256 = (s) => createHash("sha256").update(Buffer.from(s, "utf8")).digest("hex");
@@ -464,10 +464,10 @@ export async function firstClaimedBySlug(p, slugs, { pending = [] } = {}) {
  * geometry has changed, its footprints (POS-571). Every mark, not only a parcel:
  * a mark's age is its first-laid date wherever the law asks who came first, and
  * seniority at contact reads it of any mark (world tools/consent.mjs §
- * seniorAtContact). The footprints are the write-down's own
- * (`mark-render.mjs § footprintsFromChain`), checked against THIS record's shape,
- * so a record folded as it stood before a later amend carries none rather than
- * another moment's. Edits `marks` in place; returns it.
+ * seniorAtContact). The footprints are read for THIS record's shape, the moment
+ * it was sealed or served (`mark-render.mjs § footprintsThroughShape`): the chain
+ * through that shape, so an amend locked after it neither drops the history that
+ * crossed nor adds a footprint that had not. Edits `marks` in place; returns it.
  */
 export async function withClaimedAt(p, marks, { pending = [] } = {}) {
   const dated = marks.filter((m) => m?.id);
@@ -483,7 +483,7 @@ export async function withClaimedAt(p, marks, { pending = [] } = {}) {
   const chainOf = new Map(rows.map((r) => [String(r.slug), r]));
   for (const m of placed) {
     const r = chainOf.get(String(m.id));
-    const footprints = r ? footprintsFromChain({ chain: r.claim_chain, originId: r.id, originSince: first.get(String(m.id)), current: m }) : null;
+    const footprints = r ? footprintsThroughShape({ chain: r.claim_chain, originId: r.id, originSince: first.get(String(m.id)), current: m }) : null;
     if (footprints) m.footprints = footprints;
   }
   return marks;

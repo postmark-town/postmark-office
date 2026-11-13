@@ -168,15 +168,25 @@ const CELLS = {
 };
 const boxOf = ({ at, extent }) => `((${at.x - extent.w / 2},${at.y - extent.h / 2}),(${at.x + extent.w / 2},${at.y + extent.h / 2}))`;
 const ESTATE_ID = "0e570000-0000-4000-8000-000000000001", ESTATE_AMEND = "0e570000-0000-4000-8000-000000000002", MILL_ID = "0e570000-0000-4000-8000-000000000003";
-async function cellsInTheStore(c, { stake = null, amend = true } = {}) {
-  await c.query("DELETE FROM marks WHERE slug = ANY($1)", [["east/the-estate", "miller/the-mill"]]);
+// P3: the estate's later amend (locked 10-04, after S11's seal) reaching x 1250, and a barn (09-05) only it reaches
+const ESTATE_LATER = "0e570000-0000-4000-8000-000000000004", BARN_ID = "0e570000-0000-4000-8000-000000000005";
+const LATER_SHAPE = box(1100, 0, 300, 100);
+CELLS.estateLater = sited("east/the-estate", "east", LATER_SHAPE, "2026-10-04T06:00:00Z");
+CELLS.barn = sited("barner/the-barn", "barner", box(1230, 0, 20, 20), "2026-09-05T00:00:00Z");
+async function cellsInTheStore(c, { stake = null, amend = true, later = false } = {}) {
+  await c.query("DELETE FROM marks WHERE slug = ANY($1)", [["east/the-estate", "miller/the-mill", "barner/the-barn"]]);
   const claim = (id, slug, by, geometry, date, decided, supersedes = null) => c.query(
     `INSERT INTO claims (id, window_id, class, claimant, household, status, body, geometry, stake, data, slug, decided_at, supersedes)
      VALUES ($1, 501, 'sited', $3, $3, 'locked', 'x', $4, 0, $5, $2, $6, $7)`, [id, slug, by, JSON.stringify(geometry), JSON.stringify({ date }), decided, supersedes]);
   await claim(ESTATE_ID, "east/the-estate", "east", box(1000, 0, 100, 100), "2026-08-01T00:00:00Z", "2026-10-01T06:00:00Z");
   if (amend) await claim(ESTATE_AMEND, "east/the-estate", "east", box(1050, 0, 200, 100), "2026-10-02T06:00:00Z", "2026-10-02T06:00:00Z", ESTATE_ID);
   await claim(MILL_ID, "miller/the-mill", "miller", box(1120, 0, 40, 40), "2026-08-15T00:00:00Z", "2026-10-01T06:00:00Z");
-  for (const [id, m] of [[ESTATE_ID, CELLS.estate], [MILL_ID, CELLS.mill]])
+  if (later) {
+    await claim(ESTATE_LATER, "east/the-estate", "east", LATER_SHAPE, "2026-10-04T06:00:00Z", "2026-10-04T06:00:00Z", ESTATE_ID);
+    await claim(BARN_ID, "barner/the-barn", "barner", CELLS.barn.geometry, "2026-09-05T00:00:00Z", "2026-10-01T06:00:00Z");
+  }
+  // the store's row is the newest locked version, whatever a settlement has served
+  for (const [id, m] of [[ESTATE_ID, later ? CELLS.estateLater : CELLS.estate], [MILL_ID, CELLS.mill], ...(later ? [[BARN_ID, CELLS.barn]] : [])])
     await c.query(
       `INSERT INTO marks (id, slug, kind, owner, household, body, geometry, bbox, status, locked_window, data)
        VALUES ($1, $2, 'sited', $3, $3, $4, $5, $6::box, 'standing', 501, $7)`,
@@ -200,6 +210,31 @@ test("POS-571 · SERVED: the label says the estate awaits the mill's word and th
   const millSays = engine.fold({ ...args, marks: args.marks.map((m) => (m.id === "miller/the-mill" ? { ...m, consent: { "east/the-estate": "opposed" } } : m)) });
   assert.equal(millSays.marks.some((m) => m.id === "east/the-estate"), false, "the fold counts the word the label says is owed");
   assert.equal(millSays.returned.find((x) => x.mark === "east/the-estate")?.returned_from, "miller/the-mill");
+});
+
+// P3 (round 3 of the review of office#1019; Bevel's FIX 17:35Z): served marks carry
+// no footprints, so the label and the settlement's fold input rebuild them from the
+// store, whose chain can run past what was served. They read through the served
+// shape (mark-render.mjs § footprintsThroughShape). FLIP: in world-snapshot.mjs §
+// withClaimedAt use footprintsFromChain again → the label loses the mill's seat
+// and the fold input its history while the later amend waits.
+test("POS-571 · SERVED, a LATER amend locked but not crossed: the label and the settlement's fold input keep the served history; served at the newer shape, they advance", { skip }, async () => {
+  await seed({ cutover: "S10", s11Marks: [MARKS.plot, CELLS.estate, CELLS.mill, CELLS.barn], before: (c) => cellsInTheStore(c, { stake: { mark: "miller/the-mill", holder: "miller" }, later: true }) });
+  const r = await serve();
+  assert.ok((markOf(r, "east/the-estate").awaiting ?? []).includes("miller"), "the crossed expansion still makes the estate await the mill's word");
+  assert.ok(!(markOf(r, "east/the-estate").awaiting ?? []).includes("barner"), "and not the barn's: the served estate does not reach it");
+  const { snapshotFoldArgs } = await import("../src/world-snapshot.mjs");
+  const foldInput = async () => (await asOffice(async (p) => snapshotFoldArgs(p, (await p.query("SELECT * FROM world_snapshots WHERE id = 2")).rows[0]))).args;
+  const at11 = await foldInput();
+  assert.deepEqual(at11.marks.find((m) => m.id === "east/the-estate")?.footprints?.map((f) => f.since), ["2026-08-01T00:00:00Z", "2026-10-02T06:00:00.000Z"],
+    "S11's fold input carries the history through the shape it sealed, never the amend locked after it");
+
+  // SERVED AT THE NEWER SHAPE: the same store, S11 sealing the later amend
+  await seed({ cutover: "S10", s11Marks: [MARKS.plot, CELLS.estateLater, CELLS.mill, CELLS.barn], before: (c) => cellsInTheStore(c, { stake: { mark: "miller/the-mill", holder: "miller" }, later: true }) });
+  const next = await serve();
+  const awaits = markOf(next, "east/the-estate").awaiting ?? [];
+  assert.ok(awaits.includes("barner") && awaits.includes("miller"), `the barn was first on the cells the later amend added, and the mill keeps its own (${awaits.join(", ")})`);
+  assert.equal((await foldInput()).marks.find((m) => m.id === "east/the-estate")?.footprints?.length, 3, "and the fold input reads the whole chain through it");
 });
 
 test("POS-571 · SERVED, no history: without the amend's locked claim the label keeps the whole-mark answer", { skip }, async () => {

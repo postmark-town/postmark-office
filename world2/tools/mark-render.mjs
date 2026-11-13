@@ -166,6 +166,38 @@ const instantOf = (v) => {
  * numbers (`{ at, extent, points? }`). PURE.
  */
 export function footprintsFromChain({ chain, originId, originSince, current }) {
+  const out = chainFootprints({ chain, originId, originSince });
+  const now = shapeOf(current);
+  if (!out || out.length < 2 || !now) return null;
+  return sameShape(now, shapeOfFootprint(out[out.length - 1])) ? out : null;
+}
+
+/**
+ * THE SAME HISTORY, AS A READER OF A SERVED MOMENT NEEDS IT (POS-571 P3, round 3
+ * of the review of office#1019; Bevel 2026-11-13 17:35Z). A reader's mark is the
+ * shape some settlement served (the door's canon, the label's served World, the
+ * store's fold of a sealed snapshot), and the claims can run ahead of it: an amend
+ * locked after that crossing ends the chain at a newer shape, which the
+ * write-down's rule above reads as "not whole" and drops, though every footprint
+ * up to the served one stood and crossed. So a reader takes the chain's proven
+ * prefix, from the origin through the last footprint that IS the served shape.
+ * Footprints after it are later than any the served shape needed, so no cell it
+ * covers is dated otherwise; one that never reaches the served shape is no
+ * history at all, never a guessed one. Two footprints at least, as above. PURE.
+ */
+export function footprintsThroughShape({ chain, originId, originSince, current }) {
+  const out = chainFootprints({ chain, originId, originSince });
+  const now = shapeOf(current);
+  if (!out || !now) return null;
+  let through = -1;
+  for (let i = out.length - 1; i >= 0; i--) if (sameShape(now, shapeOfFootprint(out[i]))) { through = i; break; }
+  return through >= 1 ? out.slice(0, through + 1) : null;
+}
+
+const shapeOfFootprint = (f) => ({ at: f.at, extent: f.extent, ...(f.points ? { points: f.points } : {}) });
+
+/** The whole chain as footprints, oldest first, or null when it is not whole (origin present, every claim dated). PURE. */
+function chainFootprints({ chain, originId, originSince }) {
   if (!Array.isArray(chain) || !chain.length || originId == null || originSince == null || originSince === "") return null;
   if (!Number.isFinite(Date.parse(String(originSince)))) return null;
   const origin = chain.find((c) => String(c?.id) === String(originId));
@@ -178,13 +210,10 @@ export function footprintsFromChain({ chain, originId, originSince, current }) {
     const shape = shapeOf(g);
     if (!shape) continue;
     const last = out[out.length - 1];
-    if (last && sameShape(shape, { at: last.at, extent: last.extent, ...(last.points ? { points: last.points } : {}) })) continue;
+    if (last && sameShape(shape, shapeOfFootprint(last))) continue;
     out.push({ since, ...shape });
   }
-  const now = shapeOf(current);
-  if (out.length < 2 || !now) return null;
-  const end = out[out.length - 1];
-  return sameShape(now, { at: end.at, extent: end.extent, ...(end.points ? { points: end.points } : {}) }) ? out : null;
+  return out;
 }
 
 export function recordFromRow(row) {

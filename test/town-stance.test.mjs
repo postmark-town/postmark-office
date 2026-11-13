@@ -461,16 +461,29 @@ test("5g · elderByFirstLaid: first-laid instants as ISO or milliseconds, else t
 // `elderByFirstLaid(firstLaid)` again → the estate is offered the mill, the
 // mill's word is refused, and the first half reds.
 
-const cellRepo = join(scratch, "world-cells");
-{
+/** A World in a bottle carrying the real engine at the suite's pin, serving `marks`. → its path. */
+async function cellWorld(name, marks, households) {
+  const dir = join(scratch, name);
   const { worldClone } = await import("./fixture-paths.mjs");
   const engine = execFileSync("git", ["-C", worldClone(), "ls-tree", "--name-only", "HEAD", "tools/"], { encoding: "utf8" })
     .split("\n").filter((p) => /^tools\/[^/]+\.mjs$/.test(p) && !p.endsWith(".test.mjs"));
   for (const p of engine) {
-    const f = join(cellRepo, p);
+    const f = join(dir, p);
     mkdirSync(dirname(f), { recursive: true });
     writeFileSync(f, execFileSync("git", ["-C", worldClone(), "show", `HEAD:${p}`], { encoding: "utf8", maxBuffer: 64 << 20 }));
   }
+  const f = join(dir, "WORLD", "world-state.json");
+  mkdirSync(dirname(f), { recursive: true });
+  writeFileSync(f, JSON.stringify({ tick: 0, marks, parcels: [], households }));
+  writeFileSync(join(dir, "WORLD", "skeleton.json"), JSON.stringify({ features: [] }));
+  const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  g("init", "-q", "-b", "main"); g("config", "user.email", "t@postmark.invalid"); g("config", "user.name", "cells");
+  g("add", "-A"); g("commit", "-qm", "canon");
+  return dir;
+}
+const CELL_HOUSEHOLDS = { east: "hh:east", miller: "hh:mill", holder: "hh:holder", shedder: "hh:shed", barner: "hh:barn" };
+let cellRepo;
+{
   const D = (d) => `2026-08-${d}T00:00:00.000Z`;
   const cellMarks = [
     { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: D("20"), body: "the estate, reaching east" },
@@ -479,14 +492,10 @@ const cellRepo = join(scratch, "world-cells");
     // west edge, amended 09-01 to reach further in
     { id: "holder/the-plot", by: "holder", kind: "parcel", tier: "home", at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 }, date: D("10"), body: "the plot" },
     { id: "shedder/the-shed", by: "shedder", kind: "sited", tier: "market", at: { x: 990, y: 0 }, extent: { w: 40, h: 20 }, date: "2026-09-01T00:00:00.000Z", body: "the shed" },
+    // P3's barn, laid 09-05 at x 220..240: ground only the estate's later amend (09-10) reaches
+    { id: "barner/the-barn", by: "barner", kind: "sited", tier: "market", at: { x: 230, y: 0 }, extent: { w: 20, h: 20 }, date: "2026-09-05T00:00:00.000Z", body: "the barn" },
   ];
-  const f = join(cellRepo, "WORLD", "world-state.json");
-  mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify({ tick: 0, marks: cellMarks, parcels: [], households: { east: "hh:east", miller: "hh:mill", holder: "hh:holder", shedder: "hh:shed" } }));
-  writeFileSync(join(cellRepo, "WORLD", "skeleton.json"), JSON.stringify({ features: [] }));
-  const g = (...a) => execFileSync("git", ["-C", cellRepo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  g("init", "-q", "-b", "main"); g("config", "user.email", "t@postmark.invalid"); g("config", "user.name", "cells");
-  g("add", "-A"); g("commit", "-qm", "canon");
+  cellRepo = await cellWorld("world-cells", cellMarks, CELL_HOUSEHOLDS);
 }
 const CELL_D = (d) => `2026-08-${d}T00:00:00.000Z`;
 const ESTATE_ORIGIN = { slug: "east/the-estate", id: "c-estate-0", status: "locked", laid_date: CELL_D("01"), submitted_at: CELL_D("01"), decided_at: CELL_D("01"), geometry: { at: { x: 0, y: 0 }, extent: { w: 100, h: 100 } } };
@@ -536,6 +545,53 @@ test("5h · NO HISTORY keeps the whole-mark door: without the amend's locked cla
   assert.ok(read.includes("east/the-estate"), "the candidate is there to read");
   for (const leak of ["2026-08-01", "footprints", "claimed_at", "since", "geometry"])
     assert.equal(read.includes(leak), false, `no ${leak} in the candidate rows`);
+});
+
+// 5h, A LATER AMEND LOCKED BUT NOT YET CROSSED (P3, round 3 of the review of
+// office#1019; Bevel's FIX 17:35Z): the estate's expansion (08-20) crossed, so
+// canon serves it and the fold read its file's two footprints; a further amend
+// (09-10, reaching x 250) is locked and has not crossed. The door judges canon's
+// shape, so it reads the chain through that shape (mark-render.mjs §
+// footprintsThroughShape), never the whole-chain rule that drops it. Once the
+// newer shape is served, the door reads through it. FLIP: in worldForStances use
+// footprintsFromChain again → the first two assertions red (the scalar answer).
+const ESTATE_LATER = { slug: "east/the-estate", id: "c-estate-2", status: "locked", laid_date: "2026-09-10T00:00:00.000Z", submitted_at: "2026-09-10T00:00:00.000Z", decided_at: "2026-09-10T00:00:00.000Z", geometry: { at: { x: 100, y: 0 }, extent: { w: 300, h: 100 } } };
+const BARN_CLAIM = { slug: "barner/the-barn", id: "c-barn-0", status: "locked", laid_date: "2026-09-05T00:00:00.000Z", submitted_at: "2026-09-05T00:00:00.000Z", decided_at: "2026-09-05T00:00:00.000Z", geometry: { at: { x: 230, y: 0 }, extent: { w: 20, h: 20 } } };
+const barner = { household: "hh:barn", handles: new Set(["barner"]) };
+const offeredAt = async (repo, key) => (await stanceInbox(repo, key)).candidates.map((c) => c.mark);
+
+test("5h · a LATER amend locked but not crossed keeps the door on the served history: the mill is still offered the estate, the estate refused on the mill; once the newer shape is served, the door advances", async () => {
+  FIRST = [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER, MILL_CLAIM, BARN_CLAIM];
+  CLAIMS = [claim("east/the-estate", "c-estate-2"), claim("miller/the-mill", "c-mill-0"), claim("barner/the-barn", "c-barn-0")];
+  assert.deepEqual(await offered(miller), ["east/the-estate"], "the crossed expansion still makes the mill first on those cells");
+  assert.deepEqual(await offered(east), [], "and gives the estate no word on the mill");
+  assert.deepEqual(await offered(barner), [], "the barn is on no ground the served estate covers");
+  const r = await cellSpeak({ on: "east/the-estate", stance: "opposed" }, miller);
+  assert.equal(r.on, "east/the-estate", "the incumbent's word is recorded");
+  await assert.rejects(() => cellSpeak({ on: "miller/the-mill", stance: "opposed" }, east), (e) => e.code === 403);
+  assert.equal(written().filter((w) => w.payload.on === "miller/the-mill").length, 0);
+
+  // THE SERVED FOLD'S HISTORY: what the crossed file carries is exactly what the door reads now
+  const { footprintsFromChain, footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
+  const served = { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } };
+  const atTheCrossing = footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND], originId: "c-estate-0", originSince: CELL_D("01"), current: served });
+  assert.equal(atTheCrossing?.length, 2, "the write-down printed two footprints at the crossing");
+  assert.deepEqual(footprintsThroughShape({ chain: [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER], originId: "c-estate-0", originSince: CELL_D("01"), current: served }), atTheCrossing,
+    "the door's history through the served shape is the file's");
+  assert.equal(footprintsFromChain({ chain: [ESTATE_ORIGIN, ESTATE_AMEND, ESTATE_LATER], originId: "c-estate-0", originSince: CELL_D("01"), current: served }), null,
+    "where the whole-chain rule, the write-down's, would read nothing");
+
+  // ONCE THE NEWER SHAPE IS SERVED: the door reads through it
+  const next = await cellWorld("world-cells-next", [
+    { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 100, y: 0 }, extent: { w: 300, h: 100 }, date: "2026-09-10T00:00:00.000Z", body: "the estate, reaching further" },
+    { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: CELL_D("15"), body: "the mill" },
+    { id: "barner/the-barn", by: "barner", kind: "sited", tier: "market", at: { x: 230, y: 0 }, extent: { w: 20, h: 20 }, date: "2026-09-05T00:00:00.000Z", body: "the barn" },
+  ], CELL_HOUSEHOLDS);
+  assert.deepEqual(await offeredAt(next, barner), ["east/the-estate"], "the barn was first on the cells the later amend added");
+  assert.deepEqual(await offeredAt(next, east), [], "and the estate has no word on the barn or the mill");
+  // (the mill's household has already spoken on the estate above, so its inbox no longer offers it)
+  await assert.rejects(() => declareStanceViaOffice(next, { on: "miller/the-mill", stance: "opposed" }, east, { crossing: 145 }), (e) => e.code === 403,
+    "the mill keeps its cells: the estate's word on it is still refused");
 });
 
 // 5h, A PARCEL KEEPS ITS OWN LAW (P2, round 2 of the review of office#1019; Bevel's

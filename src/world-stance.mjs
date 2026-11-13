@@ -657,7 +657,7 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   // not yet cleared) keeps its own date, as before.
   const laid = await stanceQuery(FIRST_LAID_SELECT, [marks.map((m) => String(m.id))], env);
   if (laid.unreachable) return { unreachable: laid.unreachable };
-  const { firstClaimInstant, footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const { firstClaimInstant, footprintsThroughShape } = await import("../world2/tools/mark-render.mjs");
   const firstLaid = new Map(), originOf = new Map(), chainOf = new Map();
   for (const r of laid.rows ?? []) {
     if (!r?.slug) continue;
@@ -672,9 +672,10 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
   // cell wherever a mark's footprints say which of its cells are new (world
   // consent.mjs § seniorAtContact: "an expansion is a newcomer on its new
   // cells"), so the door asks the same blessed engine the same question, of the
-  // same claims it already reads: the footprints are the write-down's own
-  // (`mark-render.mjs § footprintsFromChain`), from the earliest locked claim on
-  // through each locked claim after it, whole or not at all. They and the
+  // same claims it already reads: the footprints from the earliest locked claim
+  // on, through the canon shape the door is judging (`mark-render.mjs §
+  // footprintsThroughShape`), so an amend locked but not yet crossed neither drops
+  // the history canon's fold read nor adds what it has not (P3). They and the
   // instants stay in this closure: `elder` hands `awaitingOf` a yes or no, and
   // no date or footprint joins a candidate. An engine that cannot answer per
   // cell (one older than the rule, or one that cannot be read) leaves the
@@ -687,7 +688,7 @@ export async function worldForStances(repo, { dbPath: _dbPath = null, env = proc
     if (records.has(id)) return records.get(id);
     const at = firstLaid.get(id);
     const since = Number.isFinite(at) ? new Date(at).toISOString() : null;
-    const footprints = since ? footprintsFromChain({ chain: chainOf.get(id) ?? [], originId: originOf.get(id), originSince: since, current: m }) : null;
+    const footprints = since ? footprintsThroughShape({ chain: chainOf.get(id) ?? [], originId: originOf.get(id), originSince: since, current: m }) : null;
     const rec = { id, kind: m?.kind, at: m?.at, extent: m?.extent, ...(Array.isArray(m?.points) ? { points: m.points } : {}),
       date: m?.date, ...(since ? { claimed_at: since } : {}), ...(footprints ? { footprints } : {}) };
     records.set(id, rec);
