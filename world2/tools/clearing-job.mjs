@@ -67,6 +67,8 @@ import { candidateRowOf, prospectiveTiers } from "./prospective-standing.mjs"; /
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
 import { sealSnapshot, NEXT_SETTLEMENT_SQL } from "./world-snapshot-seal.mjs";
+// THE SETTLEMENT'S LAST TWO DECISIONS (POS-1025): the withdrawal and the commons unpublish, before the seal. See step 7.5.
+import { settlementDecides, WITHDRAW_CAUSE, UNPUBLISH_CAUSE } from "./settlement-decides.mjs";
 // WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
 import { stancesAtSeal, lawCarriesRulingB } from "../../src/world-settlement.mjs";
 // THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
@@ -747,6 +749,22 @@ try {
   const { standing, moved, notes, containment: containmentSeen } = await recomputeStanding(q);
   for (const n of notes) console.log(`  ⚑ standing: ${n}`);
 
+  // 7.5 · THE SETTLEMENT'S LAST TWO DECISIONS, BEFORE ITS SEAL (POS-1025; Darko
+  //     2026-11-13, POS-1025/c: "What publishes is decided inside the settlement
+  //     and stays fixed"). The withdrawal its owner asked for, and the commons
+  //     mark with no stamps behind it, both used to leave canon AFTER the seal (the
+  //     sweep, then retire-unpublished feeding the store back). They leave here,
+  //     with the same causes and the same return to drafts, the registry kept as
+  //     the sweep kept its file, and the standing walked again when ground left.
+  //     The world's unpublish rule is read at the pinned law, never copied; an
+  //     input the store cannot answer keeps the mark and is named on the receipt.
+  //     settlement-decides.mjs is the step.
+  const decided = await settlementDecides(q, { windowId, townSha, lawSha, worldRepo });
+  for (const s of decided.withdrawn) console.log(`  ⚑ settlement: ${s} withdrawn by its owner — retired (${WITHDRAW_CAUSE})`);
+  for (const s of decided.unpublished) console.log(`  ⚑ settlement: ${s} a commons mark with no stamps behind it — retired (${UNPUBLISH_CAUSE}), back to its household's drafts`);
+  for (const u of decided.unchecked ?? []) console.log(`  ⚑ settlement: ${u.slug} UNCHECKED for the commons rule (kept) — ${u.why}`);
+  if (decided.restanding) console.log(`  ⚑ settlement: the standing walked again after ${decided.withdrawn.length + decided.unpublished.length} retirement(s): ${decided.restanding.moved} moved`);
+
   // 8 · THE SEAL — the World this window leaves, copied into the store's
   //     snapshot tables in THIS transaction (054_world_snapshots.sql).
   //
@@ -824,6 +842,9 @@ try {
       ...(held.printed.length ? { hold_printed: held.printed } : {}),
       ...(held.returned?.length ? { hold_returned: held.returned } : {}),
       ...(held.notes.length ? { hold_not_printed: held.notes } : {}),
+      // THE SETTLEMENT'S OWN ACCOUNT (POS-1025, step 7.5): what left canon by which door, what went back to
+      // drafts, what the commons rule could not check, and the registry it kept.
+      settlement: decided,
       // The seal's own account: which snapshot this window wrote.
       snapshot: { id: sealed.id, settlement: sealed.sealed_settlement, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
       standing: {
