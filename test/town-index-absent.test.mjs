@@ -126,7 +126,9 @@ const CHANGED = {
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"],
     ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth","PATCH /households/{slug}/settings"]'],
     // WLD-28: the manifest's reads list gains the household's settings read (GET /households/{slug}/settings), after /household
-    ['"/household","/keys/claim?handle="', '"/household","/households/{slug}/settings","/keys/claim?handle="']],
+    ['"/household","/keys/claim?handle="', '"/household","/households/{slug}/settings","/keys/claim?handle="'],
+    // and it names the read among the keyed ones: it answers 401 without a key (test/manifest-keyed-reads.test.mjs)
+    ['"/world2/my-marks"]', '"/world2/my-marks","/households/{slug}/settings"]']],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
