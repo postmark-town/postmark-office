@@ -511,7 +511,7 @@ test("CORE-32 · fix_myself: true is carried from the door through the act, the 
   const { pen, posts } = setup();
   const { BUG_POST_PROPERTIES, TOWN_POST_TOOLS } = await import("../src/town-post.mjs");
   assert.equal(BUG_POST_PROPERTIES.fix_myself?.type, "boolean", "the card advertises the field, as a boolean");
-  assert.match(BUG_POST_PROPERTIES.fix_myself.description, /^class "bug", post only: optional — true says you'd like first go at fixing it yourself: your seven days run from reproduced/);
+  assert.match(BUG_POST_PROPERTIES.fix_myself.description, /^class "bug", post only: optional — true says you'd like first go at the cause, the brief and the fix yourself: your seven days run from reproduced/);
   const amendCard = TOWN_POST_TOOLS.find((t) => t.name === "town_amend").inputSchema.properties;
   assert.equal("fix_myself" in amendCard, false, "amend does not take it");
 
@@ -529,6 +529,15 @@ test("CORE-32 · fix_myself: true is carried from the door through the act, the 
   // amend takes no such control: it neither changes it nor records it
   await refusedWith(amendAtTown({ post: r.post.id, fix_myself: false }, ERRANT, { now: NOW, roll: ROLL }), 422, /nothing to amend/);
   assert.equal(posts.get(r.post.id).fields.fix_myself, true, "an amend did not touch it");
+});
+
+test("CORE-32 · both published bug-argument lists name fix_myself (the town tool's description and the flat town_post description), as the card does", () => {
+  // The delisted flat tool teaches nothing: a resident's agent learns the bug post from these two sentences, so a field missing from either goes unused.
+  for (const file of ["src/town-apex.mjs", "src/mcp.mjs"]) {
+    const src = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.ok(src.includes('args: { class: \\"bug\\", title, body, issue?, steps?, record?, fix_myself?, handle? }') || src.includes('args { class: \\"bug\\", title, body (at most 600 characters), issue?, steps?, record?, fix_myself?, handle? }'), `${file}: the bug's argument list names fix_myself?`);
+    assert.ok(!/issue\?, steps\?, record\?, handle\?/.test(src), `${file}: no bug argument list is left without it`);
+  }
 });
 
 test("CORE-32 · fix_myself: false and omitted both leave the record exactly as before (the open default)", async () => {

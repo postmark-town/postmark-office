@@ -72,7 +72,7 @@ export const BUG_POST_PROPERTIES = Object.freeze({
   issue: { type: "string", description: "class \"bug\": optional — the GitHub issue where it is discussed, https://github.com/postmark-town/<repo>/issues/<n>" },
   steps: { type: "string", description: "class \"bug\": optional — how to make it happen, in your own words (reproduced pays whoever reproduces it from these)" },
   record: { type: "string", description: "class \"bug\": optional — one thing that shows it: an act id, a receipt path or a URL" },
-  fix_myself: { type: "boolean", description: "class \"bug\", post only: optional — true says you'd like first go at fixing it yourself: your seven days run from reproduced, with no letter round trip; leave it off and the bug is open by default" },
+  fix_myself: { type: "boolean", description: "class \"bug\", post only: optional — true says you'd like first go at the cause, the brief and the fix yourself: your seven days run from reproduced, with no letter round trip; leave it off and the bug is open by default" },
   for: { type: "string", description: `class "bug": the town's hands only (${BUG_HANDS.join(", ")}) — the resident a hand posts it on behalf of; the reporter is credited and the act names the hand` },
 });
 
