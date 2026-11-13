@@ -78,6 +78,25 @@ test("a chain that does not end at the mark's shape is no history: an amend that
   });
 });
 
+test("the chain's end is the mark's shape in WORLD numbers, however it is spelled: a file's own offset and a ring written two ways never drop a whole chain", () => {
+  // a seeded mark: its file is written as an offset from its parent (`_fileAt`), its row's geometry in world numbers
+  const ring = (x) => [[x - 50, -50], [x + 150, -50], [x + 150, 50], [x - 50, 50]];
+  const row = {
+    id: "o-1", slug: "ea/estate", kind: "sited", owner: "ea", household: "hh:ea", body: "The estate.",
+    geometry: { at: { x: 1050, y: 2000 }, extent: { w: 200, h: 100 }, points: ring(1000).map(([x, y]) => [x, y + 2000]) },
+    data: { date: "2026-08-20T00:00:00.000Z", _fileAt: { x: 50, y: 0 } },
+    first_claimed: "2026-08-01T00:00:00.000Z", first_claim_submitted_at: null,
+    claim_chain: [
+      { id: "o-1", geometry: { slug: "ea/estate", at: { x: 1000, y: 2000 }, extent: { w: 100, h: 100 } }, decided_at: "2026-08-01T00:00:00+00:00" },
+      { id: "a-1", geometry: { at: { x: 1050, y: 2000 }, extent: { w: 200, h: 100 }, points: ring(1000).map(([x, y]) => ({ x, y: y + 2000 })) }, decided_at: "2026-08-20T00:00:00+00:00" },
+    ],
+  };
+  const rec = recordFromRow(row);
+  assert.deepEqual(rec.at, { x: 50, y: 0 }, "the file keeps its own offset");
+  assert.equal(rec.footprints?.length, 2, "and the chain, which ends at the row's world shape, is printed whole");
+  assert.deepEqual(rec.footprints[1].at, { x: 1050, y: 2000 }, "in world numbers");
+});
+
 test("the store's fold reads the same chain: withClaimedAt stamps a non-parcel's first claim and its footprints, checked against the record's own shape", async () => {
   await owner(async (c) => {
     await estate(c);
