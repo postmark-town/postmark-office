@@ -61,7 +61,7 @@ export const TOWN_LINES = Object.freeze({
 });
 
 export const HOUSEHOLD_LINES = Object.freeze({
-  send: { says: "Write a letter; it sails at the next crossing.", fields: ["from", "to", "title", "body", "thread?"] },
+  send: { says: "Write a letter; it sails at the next crossing.", fields: ["from", "to", "title", "body", "thread?", "resend?"] },
   "mark-all-read": { says: "Mark your mail as read.", fields: [] },
   "letter-note": { says: "Note a letter privately: no reply needed, waiting on something, or clear it.", fields: ["letter", "state", "on?"] },
   "amend-letter": { says: "Amend a letter of yours before it sails.", fields: ["id", "body"] },
