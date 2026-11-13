@@ -72,6 +72,7 @@ export const BUG_POST_PROPERTIES = Object.freeze({
   issue: { type: "string", description: "class \"bug\": optional — the GitHub issue where it is discussed, https://github.com/postmark-town/<repo>/issues/<n>" },
   steps: { type: "string", description: "class \"bug\": optional — how to make it happen, in your own words (reproduced pays whoever reproduces it from these)" },
   record: { type: "string", description: "class \"bug\": optional — one thing that shows it: an act id, a receipt path or a URL" },
+  fix_myself: { type: "boolean", description: "class \"bug\", post only: optional — true says you'd like first go at fixing it yourself: your seven days run from reproduced, with no letter round trip; leave it off and the bug is open by default" },
   for: { type: "string", description: `class "bug": the town's hands only (${BUG_HANDS.join(", ")}) — the resident a hand posts it on behalf of; the reporter is credited and the act names the hand` },
 });
 
@@ -87,7 +88,7 @@ export const BALLOT_POST_PROPERTIES = Object.freeze({
 const IDEA_ONLY = ["slug", "at", "on", "stamps", "by", "image"];
 const EVENT_ONLY = ["title", "invitation", "place", "starts", "ends", "doors_open", "handle"];
 const QUEST_ONLY = ["quest"];
-const BUG_ONLY = ["issue", "steps", "record", "for"];
+const BUG_ONLY = ["issue", "steps", "record", "for", "fix_myself"];
 const BALLOT_ONLY = ["topic", "window", "choices"];
 // What a ballot takes at post (POS-983): its topic, its text, its choices, and which of your residents is the hand.
 const BALLOT_TAKES = ["class", "title", "body", "handle", ...BALLOT_ONLY];
@@ -150,7 +151,7 @@ export async function townPostEvent(args = {}, key = null, { roll = null, env = 
     // caller sending it on a bug has understood staking and misjudged the class.
     if (args.stamps !== undefined) return bounceOf(BUG_NO_STAKE());
     const stray = strays(args, Object.keys(args).filter((f) => !BUG_TAKES.includes(f) && args[f] !== undefined), "a bug",
-      "a bug takes title, body, and optionally issue, steps, record and handle (for, by the town's hands only)");
+      "a bug takes title, body, and optionally issue, steps, record, fix_myself and handle (for, by the town's hands only)");
     if (stray) return stray;
     return answer(() => postAtTown(args, key, { roll }));
   }
@@ -167,14 +168,14 @@ export async function townPostEvent(args = {}, key = null, { roll = null, env = 
     return answer(() => postAtTown(args, key));
   }
   if (c !== EVENT_CLASS) return null;
-  const stray = strays(args, [...IDEA_ONLY, ...QUEST_ONLY, ...BUG_ONLY, ...BALLOT_ONLY], "an event", "an event takes title, body (or invitation), place, starts, ends, doors_open and handle — slug, at, on and stamps are an idea's, quest a quest's, issue, steps, record and for a bug's, topic, window and choices a ballot's");
+  const stray = strays(args, [...IDEA_ONLY, ...QUEST_ONLY, ...BUG_ONLY, ...BALLOT_ONLY], "an event", "an event takes title, body (or invitation), place, starts, ends, doors_open and handle — slug, at, on and stamps are an idea's, quest a quest's, issue, steps, record, fix_myself and for a bug's, topic, window and choices a ballot's");
   if (stray) return stray;
   return answer(() => postAtTown(args, key));
 }
 
 /** The idea lane's own judgement, unchanged: its required fields, and no event field. */
 export function ideaPrecheck(args = {}, tool) {
-  const stray = strays(args, [...EVENT_ONLY, ...QUEST_ONLY, ...BUG_ONLY], `class "${String(args.class ?? "").trim() || "idea"}"`, "title, place, starts, ends and doors_open are an event's (class: \"event\"), quest a quest's (class: \"quest\"), issue, steps, record and for a bug's (class: \"bug\"); an idea takes slug and body");
+  const stray = strays(args, [...EVENT_ONLY, ...QUEST_ONLY, ...BUG_ONLY], `class "${String(args.class ?? "").trim() || "idea"}"`, "title, place, starts, ends and doors_open are an event's (class: \"event\"), quest a quest's (class: \"quest\"), issue, steps, record, fix_myself and for a bug's (class: \"bug\"); an idea takes slug and body");
   if (stray) return stray;
   return validateArgs({ ...tool, inputSchema: { ...tool.inputSchema, required: IDEA_REQUIRED } }, { ...args });
 }

@@ -602,7 +602,7 @@ async function postBug(fields, key, { now, env, roll }) {
   } else {
     reporter = standpointHandle(fields, key);
   }
-  const text = judgeBugText({ title: fields.title, body: fields.body, issue: fields.issue, steps: fields.steps, record: fields.record });
+  const text = judgeBugText({ title: fields.title, body: fields.body, issue: fields.issue, steps: fields.steps, record: fields.record, fix_myself: fields.fix_myself });
   return write(async (client) => {
     const { rows } = await client.query("SELECT id, state, ends FROM posts WHERE id LIKE $1", [`${reporter}/%`]);
     const id = mintBugId(reporter, text.title, new Set(rows.map((r) => r.id)));

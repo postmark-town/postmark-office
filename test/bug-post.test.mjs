@@ -501,6 +501,66 @@ test("5 · a bug's text is judged: title and body required, body ≤ 600, issue 
   assert.match(stray.defect, /a bug does not take: starts/);
 });
 
+// ── CORE-32 · the reporter's self-fix declaration ───────────────────────────
+//
+// `fix_myself` is an optional boolean at POST only: the reporter says they'd like first go at fixing it themselves. It is recorded, not enforced: only
+// `true` is carried (fields.fix_myself), so false and omission leave every record byte-for-byte as before. The tests below fail if the card advertises
+// the field and the writer drops it, at each seam: the post act's payload, the posts row, the posts read, and the rebuild.
+
+test("CORE-32 · fix_myself: true is carried from the door through the act, the row, the read and the rebuild; the card advertises it (and amend does not)", async () => {
+  const { pen, posts } = setup();
+  const { BUG_POST_PROPERTIES, TOWN_POST_TOOLS } = await import("../src/town-post.mjs");
+  assert.equal(BUG_POST_PROPERTIES.fix_myself?.type, "boolean", "the card advertises the field, as a boolean");
+  assert.match(BUG_POST_PROPERTIES.fix_myself.description, /^class "bug", post only: optional — true says you'd like first go at fixing it yourself: your seven days run from reproduced/);
+  const amendCard = TOWN_POST_TOOLS.find((t) => t.name === "town_amend").inputSchema.properties;
+  assert.equal("fix_myself" in amendCard, false, "amend does not take it");
+
+  // through the REAL door seam (townPostEvent validates the lane, then the writer)
+  const viaDoor = await townPostEvent({ ...BUG, fix_myself: true }, ERRANT, { roll: ROLL });
+  assert.equal(viaDoor?.error, undefined, JSON.stringify(viaDoor));
+  const r = await postAtTown({ ...BUG, title: "The latch sticks", fix_myself: true }, ERRANT, { now: NOW, roll: ROLL });
+  assert.equal(r.post.fields.fix_myself, true, "the post answer carries it: the writer did not drop it");
+  assert.equal(JSON.parse(pen.rows().at(-1).payload).fields.fix_myself, true, "the post act's payload carries it");
+  assert.equal(posts.get(r.post.id).fields.fix_myself, true, "the posts row carries it");
+  const read = await postsAtOffice({ class: "bug", post: r.post.id }, { now: NOW, roll: ROLL });
+  assert.equal(read.post.fields.fix_myself, true, "the ladder read the Bug Catcher uses carries it");
+  const out = await dryRun(pen);
+  assert.equal(out.equal, true, out.drift.join("\n"));   // the rebuild folds the act back into exactly the row the pen wrote, flag included
+  // amend takes no such control: it neither changes it nor records it
+  await refusedWith(amendAtTown({ post: r.post.id, fix_myself: false }, ERRANT, { now: NOW, roll: ROLL }), 422, /nothing to amend/);
+  assert.equal(posts.get(r.post.id).fields.fix_myself, true, "an amend did not touch it");
+});
+
+test("CORE-32 · fix_myself: false and omitted both leave the record exactly as before (the open default)", async () => {
+  const { pen } = setup();
+  const omitted = await postAtTown({ ...BUG, title: "The latch sticks" }, ERRANT, { now: NOW, roll: ROLL });
+  const unset = await postAtTown({ ...BUG, title: "The hinge sticks", fix_myself: false }, ERRANT, { now: NOW, roll: ROLL });
+  assert.deepEqual(omitted.post.fields, {});
+  assert.deepEqual(unset.post.fields, {}, "false records nothing");
+  const [a, b] = pen.rows().slice(-2).map((x) => JSON.parse(x.payload).fields);
+  assert.deepEqual([a, b], [{}, {}]);
+  assert.equal((await postsAtOffice({ class: "bug", post: unset.post.id }, { now: NOW, roll: ROLL })).post.fields.fix_myself, undefined);
+});
+
+test("CORE-32 · fix_myself must be a boolean: a string, number, null or object is refused by name and writes nothing; and it is a bug's only", async () => {
+  const { pen } = setup();
+  const before = pen.rows().length;
+  for (const bad of ["true", "yes", 1, 0, null, {}, []]) {
+    const refused = await postAtTown({ ...BUG, fix_myself: bad }, ERRANT, { now: NOW, roll: ROLL }).then(() => null, (e) => e);
+    assert.ok(refused, `${JSON.stringify(bad)} was accepted`);
+    assert.equal(refused.code, 422);
+    assert.equal(refused.field, "fix_myself");
+    assert.match(refused.defect, /fix_myself is true or false/);
+  }
+  assert.equal(pen.rows().length, before, "a refused post wrote an act");
+  // another class refuses it by name, at the door's own lane check
+  for (const cls of ["event", "quest", "ballot"]) {
+    const stray = await townPostEvent({ class: cls, title: "t", body: "b", quest: "q", topic: "t", fix_myself: true }, WRIGHT);
+    assert.match(stray?.defect ?? "", /does not take: .*fix_myself/, `class ${cls}`);
+  }
+  assert.equal(pen.rows().length, before, "no act was written for another class");
+});
+
 // ── 6 ───────────────────────────────────────────────────────────────────────
 
 test("6 · the posts read answers class bug with its finished states; the rebuild folds the bug acts into exactly the rows the pen wrote", async () => {
