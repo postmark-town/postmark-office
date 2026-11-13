@@ -192,7 +192,7 @@ test("D1 · every can act names every field it takes, grouped by intent", async 
     assert.ok(text.includes(actFields(act)), `${act} rides with its fields`);
     for (const f of lineFields(HOUSEHOLD_LINES[act].fields)) assert.ok(actFields(act).includes(f), `${act} names ${f}`);
   }
-  assert.equal(actFields("send"), "send { from, to, title, body, thread? }");
+  assert.equal(actFields("send"), "send { from, to, title, body, thread?, resend? }");   // POS-1027: resend?, the bounced letter this one replaces
   // profile's fields are read from their one owner (edit.mjs § PROFILE_FIELD_DOC), pronouns included (#677)
   const { PROFILE_FIELD_DOC } = await import("../src/edit.mjs");
   assert.equal(actFields("profile"), `profile { ${Object.keys(PROFILE_FIELD_DOC).map((f) => `${f}?`).join(", ")} }`);
@@ -307,7 +307,9 @@ test("closer · pairs with everyone outside the house, a multi-recipient letter 
   const houseOf = (h) => ({ damaris: "Mayflower", "isabella-cognita": "Casa Cognita", kai: "Kai's House" })[h] ?? null;
   const rows = closerRows(letters, { mine: HOUSE9, houseOf, mints: new Map([["l1", 1], ["l2", 1], ["l4", 1]]), milestones: new Map([["damaris", [{ by: "wright", rung: 1 }]]]) });
   assert.deepEqual(rows.map((r) => [r.with, r.of, r.letters]), [["damaris", "Mayflower", 2], ["isabella-cognita", "Casa Cognita", 1], ["kai", "Kai's House", 1]]);
-  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "milestones", "stamps_between", "last_at"]);
+  assert.deepEqual(Object.keys(rows[0]), ["with", "of", "letters", "house_members", "milestones", "stamps_between", "last_at"]);
+  // POS-1027: which of the house's residents wrote with each correspondent (a pair read's `a`)
+  assert.deepEqual(rows.map((r) => [r.with, r.house_members]), [["damaris", ["rei", "wright"]], ["isabella-cognita", ["mari"]], ["kai", ["mari"]]]);
   assert.equal(rows[0].stamps_between, 2);
   assert.equal(rows[0].last_at, "2026-10-19T12:06:00.000Z");
   assert.ok(!rows.some((r) => "says" in r), "D6: no says");
@@ -325,8 +327,8 @@ test("went and mints · read by the ledger's own grammar: a giver of ours is wen
     { canonical: "- 2026-10-19 · damaris → stake:world-mark/x/y · 1 · via: api", written_at: "2026-10-19T20:00:00Z" },
   ];
   assert.deepEqual(wentRows(lines, HOUSE9), [
-    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, via: "api" },
-    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, for: "correction:abc" },
+    { at: "2026-10-19T20:00:00.000Z", date: "2026-10-19", from: "rei", to: "stake:world-mark/damaris/the-spring", stamps: 1, kind: "mark", via: "api" },   // POS-1027: each row gains its kind
+    { at: "2026-10-15T09:00:00.000Z", date: "2026-10-15", from: "wright", to: "BURN", stamps: 10, kind: "burn", for: "correction:abc" },
   ]);
   assert.deepEqual([...mintsByLetter(lines, HOUSE9)], [["augie-2026-10-19-to-mari-the-view", 1]]);
 });
