@@ -218,6 +218,13 @@ lawful AS (
     -- sealed against, copied beside the marks; INSERT only, the same reason.
     ('clearing_job', 'register_versions',       'INSERT'),
     ('clearing_job', 'world_snapshot_register', 'INSERT'),
+    -- 095_settlement_printout.sql (POS-1025). The publications registry the
+    -- settlement decides on before its seal (the commons rule reads it). INSERT
+    -- opens a row and UPDATE only ever closes one (to_window): a registry entry
+    -- that changes is closed and reopened, so the registry as sealed at any
+    -- window stays readable. No DELETE.
+    ('clearing_job', 'settlement_publications', 'INSERT'),
+    ('clearing_job', 'settlement_publications', 'UPDATE'),
     ('law_ingester', 'law_projection',   'INSERT'),
     ('law_ingester', 'law_projection',   'DELETE'),
     ('law_ingester', 'stamp_projection', 'INSERT'),

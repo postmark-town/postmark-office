@@ -43,7 +43,9 @@ export function marksDigestOf(pairs) {
 export function snapshotDigestOf({ marks_digest, law_sha, town_sha, world_sha, register_digest = null, stance_through = null, stances = null }) {
   // A header sealed before 064 has no register and its digest has four parts;
   // one sealed with no word read (before 069, or back-filled) has no sixth, and
-  // one sealed with no recorded decision (before 072) no seventh.
+  // one sealed with no recorded decision (before 072) no seventh. The number a
+  // seal allocates (095) is the decision's own `settlement_inferred`, so it is
+  // named by the seventh part and adds none.
   const base = `${marks_digest} ${law_sha ?? "-"} ${town_sha ?? "-"} ${world_sha ?? "-"}`;
   const withRegister = register_digest ? `${base} ${register_digest}` : base;
   const withWords = stance_through != null ? `${withRegister} ${stance_through}` : withRegister;

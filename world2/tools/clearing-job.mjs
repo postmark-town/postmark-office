@@ -66,7 +66,7 @@ import { classLayerVia, isGround } from "./standing.mjs";
 import { candidateRowOf, prospectiveTiers } from "./prospective-standing.mjs"; // 5.5's walk input, shared with the stake door (POS-674/701)
 // THE SEAL (POS-357, R1): a pure SQL copy of the World this window leaves, in
 // this transaction. The module imports nothing; see its header and step 8.
-import { sealSnapshot } from "./world-snapshot-seal.mjs";
+import { sealSnapshot, NEXT_SETTLEMENT_SQL } from "./world-snapshot-seal.mjs";
 // WHETHER STANCES COUNT AT THE SETTLEMENT THIS CROSSING MAKES (POS-364, 072): decided here, recorded by the seal. See step 8.
 import { stancesAtSeal, lawCarriesRulingB } from "../../src/world-settlement.mjs";
 // THE CANDLE'S LOCK (POS-404): the clearing and the claim door take turns. Taken right after BEGIN.
@@ -770,9 +770,16 @@ try {
   //     this job holds (TOWN_STANCE_CUTOVER, from its own unit's env) against
   //     the settlement this crossing makes, recorded on the header and covered
   //     by its digest. Every reader reads the record; nothing recomputes it.
-  const stances = await stancesAtSeal({ query: q }, { env: process.env });
-  const sealed = await sealSnapshot(q, { windowId, stances });
-  console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}`);
+  //
+  //     AND ITS NUMBER (095, POS-1025; Darko 2026-11-13, "Every settlement"): the
+  //     seal allocates the settlement this window IS, quiet or not, under the
+  //     candle lock this transaction already holds, and the decision above is made
+  //     at that number. A rolled-back window takes none; the settlement unit prints
+  //     and tags exactly this number, and a retry of its printout reuses it.
+  const { rows: [{ next: settlementNumber }] } = await q(NEXT_SETTLEMENT_SQL);
+  const stances = await stancesAtSeal({ query: q }, { env: process.env, number: Number(settlementNumber) });
+  const sealed = await sealSnapshot(q, { windowId, stances, settlement: Number(settlementNumber) });
+  console.log(`  ⚑ snapshot: ${sealed.marks} standing mark(s), ${sealed.new_versions} new version(s), register ${sealed.register_rows} row(s) (${sealed.new_register_versions} new), digest ${sealed.digest.slice(0, 12)}; settlement S${sealed.sealed_settlement}`);
   // And whether the law it was sealed on carries ruling B (world#171): a cutover
   // sealed on an older law returns every stance-opposed mark with its children,
   // for good (DEPLOY.md § 072, step 0).
@@ -818,7 +825,7 @@ try {
       ...(held.returned?.length ? { hold_returned: held.returned } : {}),
       ...(held.notes.length ? { hold_not_printed: held.notes } : {}),
       // The seal's own account: which snapshot this window wrote.
-      snapshot: { id: sealed.id, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
+      snapshot: { id: sealed.id, settlement: sealed.sealed_settlement, digest: sealed.digest, marks_digest: sealed.marks_digest, marks: sealed.marks, new_versions: sealed.new_versions, register_digest: sealed.register_digest, register_rows: sealed.register_rows },
       standing: {
         recomputed: standing.length, moved: moved.length,
         // Capped, because the receipt is evidence and not an export: the first

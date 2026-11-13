@@ -148,6 +148,8 @@ export const LANDED = {
   "092_household_likeness_state.sql": { probe: col("households", "likeness_state") },
   // 093 (POS-962): the Hearth a household chose, on its row.
   "093_household_hearth.sql": { probe: `${col("households", "hearth")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_hearth_id')` },
+  // 095 (POS-1025): the seal's number, the publications registry, and the printout's record (the file's last object).
+  "095_settlement_printout.sql": { probe: `${col("world_snapshots", "sealed_settlement")} AND ${rel("settlement_publications")} AND to_regprocedure('public.record_printout(integer, text)') IS NOT NULL` },
 };
 
 /** The schema files in the order a store takes them — name order, as the CI floor applies them. */

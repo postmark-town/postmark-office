@@ -533,16 +533,20 @@ export async function settlementTakesAway(p, header, { worldRepo, townRepo = nul
  * THE SEAL'S DECISION (072; Wright, 2026-10-09: decide once, at the seal). The
  * clearing job asks this just before it seals and hands the answer to the seal,
  * which records it on the header: `{ counted, cutover, settlement_inferred, how }`.
- * The snapshot being sealed has no settlements row yet, so its number is the
- * settlement this crossing makes (§ settlementNumberAt: the store's newest plus
- * one, `how: "inferred"`). The only caller is the seal; every reader reads the
- * record (§ stancesOf). A malformed cutover throws: the seal never guesses it.
+ * Since 095 the seal allocates its own number (world-snapshot-seal.mjs §
+ * NEXT_SETTLEMENT_SQL) and hands it in as `number`: the decision is made at
+ * that number, `how: "sealed"`. Without one (a store before 095), the snapshot
+ * being sealed has no settlements row yet, so its number is the settlement this
+ * crossing makes (§ settlementNumberAt: the store's newest plus one, `how:
+ * "inferred"`). The only caller is the seal; every reader reads the record (§
+ * stancesOf). A malformed cutover throws: the seal never guesses it.
  */
-export async function stancesAtSeal(p, { env = process.env, header = { id: null } } = {}) {
+export async function stancesAtSeal(p, { env = process.env, header = { id: null }, number = null } = {}) {
   const { stancesCountAt } = await import("./town-stance.mjs");
-  const at = await settlementNumberAt(p, header);
+  const at = number != null ? { number: Number(number), sealed: true } : await settlementNumberAt(p, header);
   const gate = stancesCountAt(at.number, env);
-  return { counted: gate.counts, cutover: gate.cutover == null ? null : `S${gate.cutover}`, settlement_inferred: at.number, how: at.inferred ? "inferred" : "row" };
+  return { counted: gate.counts, cutover: gate.cutover == null ? null : `S${gate.cutover}`, settlement_inferred: at.number,
+    how: at.sealed ? "sealed" : at.inferred ? "inferred" : "row" };
 }
 
 /**
@@ -599,6 +603,8 @@ export const NO_WORDS = Object.freeze({ townWords: new Map(), holderOpposed: [],
  */
 export async function settlementNumberAt(p, header) {
   if (header?.settlement != null) return { number: Number(header.settlement), inferred: null };
+  // THE SEAL'S OWN NUMBER (095): a snapshot sealed since the settlement prints itself names it, and nothing infers it.
+  if (header?.sealed_settlement != null) return { number: Number(header.sealed_settlement), inferred: null };
   if (header?.id != null) {
     const { rows: [r] } = await p.query("SELECT number FROM settlements WHERE snapshot_id = $1 ORDER BY number LIMIT 1", [header.id]);
     if (r?.number != null) return { number: Number(r.number), inferred: null };
