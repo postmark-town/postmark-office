@@ -53,7 +53,7 @@ cp "$src" "$AWS_STUB_DIR/"
 function run({ bucket, stub }) {
   const dir = mkdtempSync(join(scratch, "night-"));
   const p = (...s) => posix(join(dir, ...s));
-  for (const d of ["bin", "lab", "state", "dumps", "base", "wal", "intake", "s3"]) mkdirSync(join(dir, d));
+  for (const d of ["bin", "lab", "state", "dumps", "base", "wal", "intake", "s3", "tmp"]) mkdirSync(join(dir, d));
   writeFileSync(join(dir, "bin", "aws"), STUB, { mode: 0o755 });
   writeFileSync(join(dir, "dumps", "world2-20261112T081000Z.dump"), "a custom-format dump\n");
   writeFileSync(join(dir, "intake", "wallets-registrations.jsonl"), '{"act":"register"}\n');
@@ -62,6 +62,13 @@ function run({ bucket, stub }) {
     "set -uo pipefail",
     `WORLD2_LAB='${p("lab")}'; WORLD2_STATE_DIR='${p("state")}'; WORLD2_ENV_FILE='${p("no-env")}'`,
     `. '${posix(LIB)}'`,
+    // the lib's w2_json_escape is python3, which is the box's and never this machine's (CRAFT: no python, ever): the
+    // same escape in node, so fail()'s detail is written the same way without it
+    `w2_json_escape() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.stringify(s.trim().slice(-600))))'; }`,
+    // and if anything in the lane still reached for python, it says so instead of running it
+    `python3() { echo "$*" >> '${p("python.log")}'; return 127; }; python() { python3 "$@"; }`,
+    // its own TMPDIR, so the ship's staging dir (mktemp -t) is checked for leaks after every run
+    `export TMPDIR='${p("tmp")}'`,
     // a function, not a PATH entry: it shadows a real aws on the runner, and a Windows path's drive colon can't split PATH
     `aws() { bash '${p("bin", "aws")}' "$@"; }`,
     `export AWS_STUB='${stub}' AWS_STUB_LOG='${p("aws.log")}' AWS_STUB_DIR='${p("s3")}'`,
@@ -83,8 +90,16 @@ function run({ bucket, stub }) {
     state: existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : null,
     calls: existsSync(join(dir, "aws.log")) ? readFileSync(join(dir, "aws.log"), "utf8").trim().split("\n") : [],
     uploaded: readdirSync(join(dir, "s3")).sort(),
+    leftInTmp: readdirSync(join(dir, "tmp")),
+    python: existsSync(join(dir, "python.log")),
   };
 }
+
+// every night, shipped or failed, leaves no staging dir behind (the EXIT trap removes it), and runs no python here
+const noLeak = (r) => {
+  assert.deepEqual(r.leftInTmp, [], `the ship's staging dir leaked: ${r.leftInTmp.join(", ")}`);
+  assert.equal(r.python, false, "the harnessed lane called python on this machine");
+};
 
 test("an unset bucket fails the unit at ship, and nothing goes up", { skip: bash }, () => {
   // the stub would SUCCEED here: a lane without the guard would ship to "s3:///…" and read shipped
@@ -94,6 +109,7 @@ test("an unset bucket fails the unit at ship, and nothing goes up", { skip: bash
   assert.equal(r.state?.stage, "ship");
   assert.match(r.state?.detail ?? "", /NOWHERE ELSE/);
   assert.deepEqual(r.calls, [], "the lane called aws with no bucket");
+  noLeak(r);
 });
 
 test("a failed upload fails the unit at ship", { skip: bash }, () => {
@@ -103,6 +119,7 @@ test("a failed upload fails the unit at ship", { skip: bash }, () => {
   assert.equal(r.state?.stage, "ship");
   assert.match(r.state?.detail ?? "", /S3 upload to s3:\/\/a-bucket\/world2\/20261112T081000Z failed/);
   assert.equal(r.calls.length, 1, "the lane kept uploading after the first refusal");
+  noLeak(r);
 });
 
 test("a good upload reaches shipped, with the night's files up and LATEST.json last", { skip: bash }, () => {
@@ -115,4 +132,5 @@ test("a good upload reaches shipped, with the night's files up and LATEST.json l
   // LATEST.json goes LAST, so a night with a LATEST.json is a night whose upload finished (the cold restore reads it so)
   assert.match(r.calls.at(-1), /LATEST\.json s3:\/\/a-bucket\/world2\/20261112T081000Z\/LATEST\.json/);
   assert.ok(r.calls.every((c) => c.startsWith("s3 cp ")), "the lane made an aws call other than s3 cp");
+  noLeak(r);
 });

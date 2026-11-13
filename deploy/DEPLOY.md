@@ -2611,8 +2611,9 @@ read back from the box, because its role can't read the bucket's configuration
   noncurrent versions at 7. So **the bucket keeps about the last 90 nights**, and
   a night's objects are gone about 97 days after it shipped.
 - Nights from 2026-08-29 up to the git ship's retirement are in the archived
-  GitHub repo `wright-starforge/postmark-world2-backups`, in parts
-  (`cat dumps/<file>.part-* > <file>`).
+  GitHub repo `wright-starforge/postmark-world2-backups`. Nights before
+  2026-11-04 shipped whole (`dumps/<file>`); from 11-04 on they're in parts
+  (`cat dumps/<file>.part-* > <file>`), with the sum of the whole beside them.
 - **The box's access is the instance role `postmark-box-backup`.** Its one
   policy, `postmark-world2-backup-nodelete`, gives `s3:ListBucket` on the bucket
   and `s3:PutObject` and `s3:GetObject` on its objects. It has no delete and no
@@ -2640,16 +2641,17 @@ alone fails every night at `ship`, because the lane won't run without a bucket:
    `state/backup.json` should read `shipped`, with its `s3` field naming the
    night.
 
-**The cold restore, when the box is gone.** This runs on a new box with
-Postgres, the store's roles and an empty database (§ Install, § The one Postgres
-change), or on any machine that can read the bucket:
+**The cold restore, when the box is gone.** This is a hand-run, and **only ever
+into a new, empty database: never against the live store.** It runs on a new
+box with Postgres, the store's roles and an empty database (§ Install, § The one
+Postgres change), or on any machine that can read the bucket:
 
     aws s3 ls s3://<bucket>/world2/                  # nights are fixed-width UTC stamps, so sort order is time order
     aws s3 ls s3://<bucket>/world2/<stamp>/          # take the newest night that HAS a LATEST.json:
                                                      # it uploads last, so a night without one didn't finish
     aws s3 cp --recursive s3://<bucket>/world2/<stamp>/ ./night/
     cd night && sha256sum -c world2-<stamp>.dump.sha256     # it must say OK before anything reads the dump
-    pg_restore --clean --if-exists --no-owner --no-acl -d <db> world2-<stamp>.dump
+    pg_restore --exit-on-error --no-owner --no-acl -d <new-empty-db> world2-<stamp>.dump
 
 Then put back what rode beside the dump, as `LATEST.json` names it:
 - **The intake files** (`<name>-<file>`) go to the source paths under `intake`.
