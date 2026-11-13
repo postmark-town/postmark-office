@@ -292,7 +292,9 @@ const REST = () => ctx({ schemas: SCHEMAS, schemaRequired: REQUIRED });
 // its REST call at the public address, which the connector's bare answer carries once (the frozen 8,951 B baseline had 9 B of room).
 // SLIM_CEILING to 9,088 (+128), superseding POS-666/h's 8,960 for the connector; REST_CEILING stays 28,672. Measured by F5c below on
 // the final wording (not trimmed to fit): connector bare 9,038 B (+87 B, the sentence), REST bare 28,216 B.
-const REST_CEILING = 28_672;
+// POS-502/a (Darko, 2026-11-12 22:54 EST): "Raise to 28,800 bytes".
+// Keep the ruled name and stake wording; only the REST budget changes.
+const REST_CEILING = 28_800;
 // POS-730 (2026-11-07, RULED by Darko 21:31 EST on 11-06 in the picker, POS-730/b, "Raise to 9,216"; Wright AUTH 02:31Z): the letter-note
 // act card joins the connector's bare roster (about 121 B), so SLIM_CEILING to 9,216 (+128), superseding POS-911's 9,088; REST_CEILING
 // stays 28,672. Measured by F5c below on the final wording (not trimmed to fit): connector bare 9,159 B UTF-8 (+121 B over the 9,038 B before the card), REST bare 28,611 B.
