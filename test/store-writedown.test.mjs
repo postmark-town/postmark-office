@@ -1200,6 +1200,106 @@ test("F-claim-ingest · marks-ingest never reads claimed_at back as a resident's
   assert.deepEqual(recordDiff({ kind: "parcel", body: "b", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), ["body"], "a real change is still read");
 });
 
+// ── F-first-laid · EVERY MARK'S AGE, AND ITS FOOTPRINTS, REACH THE TREE'S FOLD (POS-571) ──
+//
+// World LOGOS conflict-matrix § Roles from seniority: "A mark's age is its
+// first-laid date, the start of its claim chain; an amend does not make an elder
+// mark young" (2026-10-07), and "per-cell (whoever first covered a cell is that
+// cell's incumbent)", "an expansion is a newcomer on its new cells" (2026-10-04).
+// Until POS-571 only a parcel carried its first claim into its mark.md, and no
+// mark carried its footprints. Driven end to end, like F-claim: store rows as the
+// door left them, rendered by the write-down, written to sketchbooks, extracted,
+// loaded and folded by the world's engine at the pin (which reads footprints:
+// postmark-world#388).
+
+async function firstLaidEngine() {
+  const { materializeAtRef } = await import("../src/world-branches.mjs");
+  const { pathToFileURL, fileURLToPath } = await import("node:url");
+  const WORLD_CLONE = process.env.WORLD_CLONE ?? join(dirname(fileURLToPath(import.meta.url)), "..", "world-clone");
+  const sha = execFileSync("git", ["-C", WORLD_CLONE, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const tools = join(materializeAtRef(WORLD_CLONE, sha, "tools"), "tools");
+  const engine = await import(pathToFileURL(join(tools, "marks-fold.mjs")).href);
+  const consent = await import(pathToFileURL(join(tools, "consent.mjs")).href);
+  assert.equal(consent.SENIORITY_PER_CELL, true, `the pinned world engine (${sha.slice(0, 9)}) must read footprints cell by cell (postmark-world#388): test/clone-pins.json`);
+  return engine;
+}
+
+/** A store row for a sited mark, and its locked claim chain (`CLAIM_CHAIN_SQL`'s shape). */
+const sitedRow = ({ slug, owner, at, extent, date, firstClaimed, chain = null, consent = null }) => ({
+  id: `id-${slug}`, slug, kind: "sited", owner, household: owner, body: `${slug}.`, locked_window: 177,
+  geometry: { at, extent }, data: { date, tier: "market", ...(consent ? { consent } : {}) },
+  first_claimed: firstClaimed, first_claim_submitted_at: null, claim_chain: chain,
+});
+
+function foldThroughTheTree(engine, rows, stakes) {
+  const repo = join(scratch, `first-laid-${++seq}`);
+  mkdirSync(repo, { recursive: true });
+  const g = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...SEED_ENV } });
+  g("init", "-q", "-b", "main"); g("config", "user.email", "seed@postmark.invalid"); g("config", "user.name", "seed");
+  writeFileSync(join(repo, "README.md"), "canon\n");
+  g("add", "-A"); g("commit", "-qm", "canon");
+  const report = storeWriteDown({ repo, at: Date.parse(AT_ISO), input: foldInput(rows.map((r) => ({ slug: r.slug, kind: r.kind, by: r.owner, household: r.household, locked_window: 177, ...renderedMarkOf(r) }))) });
+  const marks = [];
+  for (const h of report.households) {
+    const out = join(scratch, `first-laid-tree-${++seq}`);
+    mkdirSync(out, { recursive: true });
+    execFileSync("git", ["-C", repo, "archive", "--format=tar", `--output=${join(out, "w.tar")}`, h.branch, "--", "WORLD"]);
+    execFileSync("tar", ["-xf", "w.tar"], { cwd: out });
+    marks.push(...engine.loadTreeMarks(join(out, "WORLD", "marks")).filter((m) => !marks.some((n) => n.id === m.id)));
+  }
+  return { marks, state: engine.fold({ marks, terrain: { features: [] }, stakes, tick: 1 }) };
+}
+let renderedMarkOf;
+
+const D = (d) => `2026-08-${d}T00:00:00.000Z`;
+const stakeOn = (mark, n) => ({ holder: "s", mark, n, weight: n, tick: 0 });
+
+test("F-first-laid · a NON-PARCEL elder amended after its neighbour keeps its age through the write-down: the neighbour has no word on it", async () => {
+  ({ renderedMark: renderedMarkOf } = await import("../world2/tools/mark-render.mjs"));
+  const engine = await firstLaidEngine();
+  // the hall was first laid 08-01 and amended (its words) 10-08; the shed came on 08-15 and opposes it
+  const hall = (firstClaimed) => sitedRow({ slug: "ha/hall", owner: "ha", at: { x: 0, y: 0 }, extent: { w: 100, h: 100 }, date: "2026-10-08T12:00:00.000Z", firstClaimed });
+  const shed = sitedRow({ slug: "sh/shed", owner: "sh", at: { x: 0, y: 0 }, extent: { w: 20, h: 20 }, date: D("15"), firstClaimed: D("15"), consent: { "ha/hall": "opposed" } });
+  const kept = foldThroughTheTree(engine, [hall(D("01")), shed], [stakeOn("sh/shed", 100)]);
+  assert.equal(kept.marks.find((m) => m.id === "ha/hall")?.claimed_at, D("01"), "the hall's mark.md carries its first claim, though it is no parcel");
+  assert.ok(kept.state.marks.some((m) => m.id === "ha/hall"), "the amend did not make the hall the shed's newcomer");
+  // CONTROL: the same rows with no first claim to print are the old answer: the restamped hall is the newcomer
+  const young = foldThroughTheTree(engine, [hall(null), shed], [stakeOn("sh/shed", 100)]);
+  assert.equal(young.state.marks.some((m) => m.id === "ha/hall"), false, "dated by its amend, the hall is returned");
+});
+
+test("F-first-laid · an EXPANSION is a newcomer on its new cells: footprints ride the write-down in world numbers, and the mill laid before the amend holds the word there", async () => {
+  ({ renderedMark: renderedMarkOf } = await import("../world2/tools/mark-render.mjs"));
+  const engine = await firstLaidEngine();
+  // the estate: first laid 08-01 over x -50..50, amended 08-20 to reach x 150; the mill: 08-10 at x 100..140
+  const chain = [
+    { id: "id-ea/estate", geometry: { slug: "ea/estate", at: { x: 0, y: 0 }, extent: { w: 100, h: 100 } }, decided_at: D("01") },
+    { id: "amend-1", geometry: { at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } }, decided_at: D("20") },
+  ];
+  const estate = (withChain) => sitedRow({ slug: "ea/estate", owner: "ea", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: D("20"), firstClaimed: D("01"), chain: withChain ? chain : null });
+  const mill = sitedRow({ slug: "mi/mill", owner: "mi", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: D("10"), firstClaimed: D("10"), consent: { "ea/estate": "opposed" } });
+  const perCell = foldThroughTheTree(engine, [estate(true), mill], [stakeOn("mi/mill", 100)]);
+  assert.deepEqual(perCell.marks.find((m) => m.id === "ea/estate")?.footprints, [
+    { since: D("01"), at: { x: 0, y: 0 }, extent: { w: 100, h: 100 } },
+    { since: D("20"), at: { x: 50, y: 0 }, extent: { w: 200, h: 100 } },
+  ], "the estate's mark.md carries its footprints, read back whole");
+  assert.equal(perCell.state.marks.some((m) => m.id === "ea/estate"), false, "on the cells the amend added, the mill was there first");
+  // CONTROL: no chain, no footprints: the whole estate is dated by its first claim, the mill's elder
+  const scalar = foldThroughTheTree(engine, [estate(false), mill], [stakeOn("mi/mill", 100)]);
+  assert.equal(scalar.marks.find((m) => m.id === "ea/estate")?.footprints, undefined);
+  assert.ok(scalar.state.marks.some((m) => m.id === "ea/estate"), "without its history the estate keeps the old answer");
+});
+
+test("F-first-laid-ingest · marks-ingest never reads footprints back as a resident's change, and an amend never carries them into the store", async () => {
+  const { recordDiff, carriedRow } = await import("../world2/tools/marks-ingest.mjs");
+  const footprints = [{ since: D("01"), at: { x: 0, y: 0 }, extent: { w: 1, h: 1 } }];
+  assert.deepEqual(recordDiff({ kind: "sited", body: "a", footprints }, { kind: "sited", body: "a" }), [], "the printed history is no change");
+  assert.deepEqual(recordDiff({ kind: "sited", body: "b", footprints }, { kind: "sited", body: "a" }), ["body"], "a real change is still read");
+  const was = { slug: "x/y", kind: "sited", body: "a", geometry: null, data: { date: D("01") } };
+  const ref = { slug: "x/y", kind: "sited", body: "b", geometry: null, data: { date: D("02"), footprints } };
+  assert.equal(carriedRow(was, ref, new Set(recordDiff({ ...ref.data, body: "b" }, { ...was.data, body: "a" }))).data.footprints, undefined, "the amend carries the words, never the printed history");
+});
+
 // ── W · AN OWED WITHDRAWAL IS A REMOVAL ON ITS SKETCHBOOK (WLD-88) ──────────
 //
 // The store crossing wrote no removal from G1 (2026-09-08) on, so the sweep's
