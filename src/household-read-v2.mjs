@@ -582,9 +582,10 @@ export function closerRows(letters, { mine, house = null, houseOf = () => null, 
     const at = r.delivered_at;
     for (const other of parties) {
       if (home.has(other)) continue;
-      const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null };
+      const cur = by.get(other) ?? { letters: 0, ids: [], last_at: null, locals: new Set() };
       cur.letters += 1;
       cur.ids.push(r.id);
+      for (const p of parties) if (ours.has(p)) cur.locals.add(p);
       if (!cur.last_at || String(at) > String(cur.last_at)) cur.last_at = at;
       by.set(other, cur);
     }
@@ -592,6 +593,7 @@ export function closerRows(letters, { mine, house = null, houseOf = () => null, 
   return [...by.entries()]
     .map(([h, d]) => ({
       with: h, of: houseOf(h), letters: d.letters,
+      house_members: [...d.locals].sort(),   // POS-1027: which of the house's residents wrote with them: a pair read's `a`
       ...(milestones ? { milestones: milestones.get(h) ?? [] } : {}),
       ...(mints ? { stamps_between: d.ids.reduce((n, id) => n + (mints.get(id) ?? 0), 0) } : {}),
       last_at: d.last_at,
@@ -614,12 +616,33 @@ export function mintsByLetter(lines, mine) {
 }
 
 /**
+ * What a stamp that went was spent on (POS-1027: a design groups the rows by it), from the ledger line's own target and reason:
+ *   mark    stake:world-mark/<id>      a stake behind a mark
+ *   idea    stake:world-mark/<id>      …when `ideaIds` (the idea posts' ids) holds that id: an idea is backed through the same target
+ *   ballot  stake:vote/…               a stake on a ballot's choice
+ *   pot     stake:pot/…                a stake on a funding pot
+ *   gift    <handle> · for: gift       stamps given to a resident outside the house
+ *   burn    BURN                       stamps burned (a correction)
+ *   other   anything else the grammar admits, never guessed into one of the above
+ * The row keeps every field it had (from, to, stamps, for, via): `kind` is added beside them, nothing is dropped.
+ */
+export function wentKind(to, why, ideaIds = null) {
+  const target = String(to ?? "");
+  if (target.startsWith("stake:world-mark/")) return ideaIds?.has?.(target.slice("stake:world-mark/".length)) ? "idea" : "mark";
+  if (target.startsWith("stake:vote/")) return "ballot";
+  if (target.startsWith("stake:pot/")) return "pot";
+  if (target === "BURN") return "burn";
+  if (why === "gift" && !target.includes(":")) return "gift";
+  return "other";
+}
+
+/**
  * The house's stamps that WENT, as dated ledger rows, newest first: every
  * line whose giver is one of `mine` (a stake, a gift, a burn, a pot stake).
  * A MINT is not one (stamps arriving), nor is an escrow coming home, nor a
  * gift between two residents of the house: it never left the house.
  */
-export function wentRows(lines, mine, { house = mine } = {}) {
+export function wentRows(lines, mine, { house = mine, ideaIds = null } = {}) {
   const home = house instanceof Set ? house : new Set(house ?? []);
   const out = [];
   for (const { canonical, written_at } of lines ?? []) {
@@ -629,6 +652,7 @@ export function wentRows(lines, mine, { house = mine } = {}) {
     const via = /(?:^| · )via: (\S+)/.exec(note)?.[1] ?? null;
     const why = /(?:^| · )for: (\S+)/.exec(note)?.[1] ?? null;
     out.push({ at: written_at ? new Date(written_at).toISOString() : null, date: m[1], from: m[2], to: m[3], stamps: Number(m[4]),
+      kind: wentKind(m[3], why, ideaIds),
       ...(why ? { for: why } : {}), ...(via ? { via } : {}) });
   }
   return out;

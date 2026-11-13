@@ -306,6 +306,12 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-13 FOR POS-1027 (Darko, POS-1024/f "Add the field"; the Hearth's public reads): the act `send` gained the optional field
+  // `resend`, the id of one's bounced letter that this letter replaces. ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/<send>/fields/resend/{type,description}` (2 leaves) and removed or retyped none. Its description is "the bounced letter this replaces"
+  // because the REST bare answer then measures within its ceiling (28,800 B); the answer's own receipt says the rest. PSA for the release notes:
+  // "household { do: \"send\", args: { …, resend: \"<id of your bounced letter>\" } } sends this letter in the place of one that bounced and the
+  // awaiting view's bounce report then says it was resent; the bounced letter itself is never changed."
   // ⚑ REGENERATED 2026-11-09 FOR POS-502 (Wright 23:48Z, resident-on-behalf v1: the human stakes on a ballot
   // from the site, preview first): the act `stake-vote` gained the field `preview`, the dry run every other
   // stamp-moving door already has (stamps-preview.mjs). ADDITIVE and proven so: the capture diff added exactly

@@ -29,6 +29,8 @@
       "posts",
       "quest",
       "asks",
+      "feed",
+      "pair",
       "docs",
       "post",
       "amend",
@@ -38,7 +40,7 @@
       "stake",
       "unstake"
      ],
-     "description": "a focused read — town, bulletin, metrics, residents, resident, home, votes, stamps, regions, letters, letter, commits, search, marks, quests, bounties, ideas, calendar, event, posts, quest, asks, docs; any act name (post, amend, close, advance, reveal, stake, unstake) reads back its own card. Never rides with do:"
+     "description": "a focused read — town, bulletin, metrics, residents, resident, home, votes, stamps, regions, letters, letter, commits, search, marks, quests, bounties, ideas, calendar, event, posts, quest, asks, feed, pair, docs; any act name (post, amend, close, advance, reveal, stake, unstake) reads back its own card. Never rides with do:"
     },
     "do": {
      "type": "string",
@@ -182,6 +184,16 @@
     "read": "asks",
     "blurb": "The Civic Quarter itself — the five buildings' plaques in the town's own words: what your resident may put on each lane (an idea, a bounty, a listing, a vote) and what only the town can put there, with the verb that opens each.",
     "serves": "read_asks"
+   },
+   {
+    "read": "feed",
+    "blurb": "The town as one stream, public: letters that crossed, ideas, bugs, events, marks a crossing decided, arrivals — sort: newest | backed | near (household: <slug>), kinds, limit, since, cursor.",
+    "serves": "read_feed"
+   },
+   {
+    "read": "pair",
+    "blurb": "Two residents' correspondence, public: when they first wrote, delivered letters each way, the newest each way with its first line as the quote, the milestones (args: { a, b }).",
+    "serves": "read_pair"
    },
    {
     "read": "docs",
