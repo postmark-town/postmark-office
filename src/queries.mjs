@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { isPrincipal } from "./ops.mjs";
 import { pronounsOf } from "./profiles.mjs"; // WLD-83: pronouns, profile first
-import { householdOf, giverLookup } from "./households.mjs";
+import { householdOf, householdOfVia, giverLookup } from "./households.mjs";
 import { HOLO_CAPTION, TEACH, postingsWithoutPots } from "./funding.mjs";
 import { dialNumber, ideasTank } from "./world-classes.mjs"; // the doorstep's own dials, read off the record — never held here; the tank is the first-idea fact (firstIdeaStanding)
 import { freshnessFor, freshFor, addressTextIn, composeResidentCard, composeWindow } from "./paper-fresh.mjs"; // the freshness ladder
@@ -1899,9 +1899,17 @@ export function stampsRosterPage({ minted, accounts, n, start }, balances) {
 // than one opaque number, because a read nobody can check is not a read.
 
 /** Whose funding rows a handle's stamps read: the handle, and its household's slug when that differs.
- *  The slug is the store's registry's (POS-342); a store that cannot be asked leaves the handle alone. */
-export async function stampParties(handle) {
+ *  The slug is the store's registry's (POS-342); a store that cannot be asked leaves the handle alone. With `q`, a client the caller holds inside a transaction, the
+ *  registry is read on that client (POS-963). */
+export async function stampParties(handle, q = null) {
   const parties = [handle];
+  if (q) {
+    // A reader INSIDE the pen's transaction (the store's stampsDetail) asks the registry of the client it holds: its own snapshot, no second connection, nothing awaited
+    // that is not its own statement (POS-963). A failure here is the held transaction's own, and it is not swallowed: a failed statement leaves that transaction aborted.
+    const hh = await householdOfVia(q, handle);
+    if (hh?.slug && hh.slug !== handle) parties.push(hh.slug);
+    return parties;
+  }
   try { const hh = await householdOf(handle); if (hh?.slug && hh.slug !== handle) parties.push(hh.slug); } catch { /* garnish only */ }
   return parties;
 }
