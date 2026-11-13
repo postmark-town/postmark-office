@@ -16,9 +16,14 @@
 // page the rows older than that source's oldest returned row are held back for the next page (it re-reads the source below the cursor), so a cut source
 // can never make the merged order skip one of its rows.
 
+import { plainReason } from "./fault-words.mjs"; // POS-657: a read's plain reason, the raw error to the log
+
 const bounce = (code, defect, hint) => ({ error: "bounce", code, defect, hint });
 
 export const FEED_KINDS = Object.freeze(["letter", "idea", "bug", "event", "mark", "arrival"]);
+/** A row as the consumer's contract spells it (POS-1027): `backing` (public stamp backing) and `distance` (metres from the resolved near origin); an unknown one is absent, never 0. */
+const spelled = ({ backed, distance_m, ...r }) => ({ ...r, ...(backed !== undefined ? { backing: backed } : {}), ...(distance_m !== undefined ? { distance: distance_m } : {}) });
+
 export const FEED_SORTS = Object.freeze(["newest", "backed", "near"]);
 export const FEED_LIMIT = 20;
 export const FEED_MAX = 100;
@@ -136,7 +141,7 @@ export async function feedRead(args = {}, { sources } = {}) {
       if (r.cut) { incomplete.push(kind); const oldest = (r.rows ?? []).map((x) => x.at).filter(Boolean).sort()[0]; if (oldest) horizons.push(oldest); }
     } catch (e) {
       if (e?.name === "TownIndexUnreachable") throw e;
-      unavailable.push({ kind, reason: `the ${kind} source could not be read (${String(e?.message ?? e).slice(0, 100)}): its rows are missing here, not absent from the town` });
+      unavailable.push({ kind, reason: `the ${kind} source could not be read (${plainReason(e, "record", `the ${kind} source`)}): its rows are missing here, not absent from the town` });
     }
   }
   // the rows that exist: no duplicate thing (a kind's id is unique), a time before `since` is out, the distance and backing are the row's own
@@ -172,7 +177,7 @@ export async function feedRead(args = {}, { sources } = {}) {
     read: "feed", sort: effective, ...(effective !== sort ? { sort_asked: sort } : {}), kinds: k.kinds,
     ...(sinceAt ? { since: sinceAt } : {}), limit, ...limitNote,
     ...(nearUnavailable ? { near_unavailable: nearUnavailable } : origin ? { near_from: origin.from ?? `${household}'s position` } : {}),
-    shown: page.length, rows: page,
+    shown: page.length, rows: page.map(spelled),
     complete: !more && !unavailable.length && !(incomplete.length && effective !== "newest"),
     ...(more ? { cursor: encodeFeedCursor(effective, nextKey), more_note: 'pass cursor back: town { read: "feed", args: { cursor, sort, kinds, limit } } continues below the last row' } : {}),
     ...(incomplete.length ? { incomplete: incomplete.map((kind) => ({ kind, cap: FETCH_CAP, note: effective === "newest" ? `the ${kind} source holds more than ${FETCH_CAP} rows at once; older ones come on later pages` : `the ${kind} source holds more than ${FETCH_CAP} rows; this ranking is over its newest ${FETCH_CAP}` })) } : {}),

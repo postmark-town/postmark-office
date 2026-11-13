@@ -67,18 +67,21 @@ test("2 · backed ranks by the stamps behind a row; near by metres from the hous
   const { sources: s } = sources(MIX);
   const backed = await feedRead({ sort: "backed", limit: 100 }, { sources: s });
   assert.deepEqual(backed.rows.slice(0, 2).map((x) => x.id), ["M1", "I1"], "nine, then five (the newer of the fives first)");
-  assert.deepEqual(backed.rows.map((x) => x.backed ?? 0), backed.rows.map((x) => x.backed ?? 0).slice().sort((a, b) => b - a), "descending, rows with none as 0");
+  assert.deepEqual(backed.rows.map((x) => x.backing ?? 0), backed.rows.map((x) => x.backing ?? 0).slice().sort((a, b) => b - a), "descending, rows with none as 0");
+  assert.ok(backed.rows.every((x) => !("backed" in x) && !("distance_m" in x)), "the contract's spelling: backing and distance");
+  assert.equal(backed.rows.find((x) => x.id === "M1").backing, 9);
+  assert.ok(backed.rows.filter((x) => x.backing === undefined).length > 0, "none is absent, never a made-up 0");
   const near = await feedRead({ sort: "near", household: "h", limit: 100 }, { sources: s });
   assert.equal(near.sort, "near");
-  assert.deepEqual(near.rows.slice(0, 3).map((x) => [x.id, x.distance_m]), [["E1", 5], ["I1", 50], ["M1", 1000]]);
-  assert.ok(near.rows.slice(3).every((x) => x.distance_m === undefined), "a row with no place has no distance and ranks last");
+  assert.deepEqual(near.rows.slice(0, 3).map((x) => [x.id, x.distance]), [["E1", 5], ["I1", 50], ["M1", 1000]]);
+  assert.ok(near.rows.slice(3).every((x) => x.distance === undefined), "a row with no place has no distance and ranks last");
   // no origin: said, and the rows come newest
   const { sources: none } = sources(MIX, { origin: { unavailable: "the walkers roll places none of h's residents" } });
   const unranked = await feedRead({ sort: "near", household: "h", limit: 100 }, { sources: none });
   assert.equal(unranked.sort, "newest");
   assert.equal(unranked.sort_asked, "near");
   assert.match(unranked.near_unavailable, /walkers roll places none/);
-  assert.ok(unranked.rows.every((x) => x.distance_m === undefined));
+  assert.ok(unranked.rows.every((x) => x.distance === undefined));
   const noHouse = await feedRead({ sort: "near" }, { sources: s });
   assert.match(noHouse.near_unavailable, /pass household/);
 });
