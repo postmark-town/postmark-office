@@ -64,20 +64,24 @@ test("2 · claimRowsDecidedSince reads the newest 500 from the cursor\x27s posit
        VALUES (1, 'sited', 'wright', 'hh:fixture', 'locked', $1::timestamptz, $2, '{"at":{"x":1,"y":1}}', '(1,1),(0,0)'::box, 0, '{}', $3)`, [decidedAt, `${slug}.`, slug]);
     for (const sl of slugs) await add(sl, AT);
     await add("m-old", "2026-09-26T12:00:00.000Z");
+    // one millisecond, two microseconds, and the slug order is the OPPOSITE of the microsecond order: the order is by the millisecond then the slug, as the seek is
+    await add("p-a2", "2026-09-25T12:00:00.000100Z");
+    await add("p-q1", "2026-09-25T12:00:00.000900Z");
   } finally { await owner.end(); }
   const env = IX.env;
   const slugsOf = async (opts) => (await claimRowsDecidedSince("1970-01-01T00:00:00.000Z", { env, ...opts })).map((r) => r.slug);
-  assert.deepEqual(await slugsOf({}), ["m-a", "m-b", "m-c", "m-d", "m-old"], "newest first, then slug ascending");
-  assert.deepEqual(await slugsOf({ until: AT, afterSlug: "m-b" }), ["m-c", "m-d", "m-old"]);
-  assert.deepEqual(await slugsOf({ until: AT, exclusive: true }), ["m-old"]);
-  assert.deepEqual(await slugsOf({ until: AT, afterSlug: null }), ["m-a", "m-b", "m-c", "m-d", "m-old"]);
+  assert.deepEqual(await slugsOf({}), ["m-a", "m-b", "m-c", "m-d", "m-old", "p-a2", "p-q1"], "newest first to the millisecond, then slug ascending (p-a2 is the earlier microsecond and still first)");
+  assert.deepEqual(await slugsOf({ until: AT, afterSlug: "m-b" }), ["m-c", "m-d", "m-old", "p-a2", "p-q1"]);
+  assert.deepEqual(await slugsOf({ until: "2026-09-25T12:00:00.000Z", afterSlug: "p-a2" }), ["p-q1"], "the seek and the order agree inside one millisecond");
+  assert.deepEqual(await slugsOf({ until: AT, exclusive: true }), ["m-old", "p-a2", "p-q1"]);
+  assert.deepEqual(await slugsOf({ until: AT, afterSlug: null }), ["m-a", "m-b", "m-c", "m-d", "m-old", "p-a2", "p-q1"]);
   // through the feed\x27s own mark source: the cursor\x27s position reaches the store\x27s read
   const asked = [];
   const src = realSources({ ix: ix(), clone: null, readers: { claimRowsDecidedSince: async (since, opts) => { asked.push(opts); return claimRowsDecidedSince(since, { env, ...opts }); }, publishedMarksTownwide: () => [] } });
   const first = await src.mark({ since: null, before: null, resume: null, cap: 500 });
-  assert.deepEqual(first.rows.map((r) => r.id), ["m-a", "m-b", "m-c", "m-d", "m-old"]);
+  assert.deepEqual(first.rows.map((r) => r.id), ["m-a", "m-b", "m-c", "m-d", "m-old", "p-a2", "p-q1"]);
   const next = await src.mark({ since: null, before: AT, resume: { at: AT, afterId: "m-b", exclusive: false }, cap: 500 });
-  assert.deepEqual(next.rows.map((r) => r.id), ["m-c", "m-d", "m-old"]);
+  assert.deepEqual(next.rows.map((r) => r.id), ["m-c", "m-d", "m-old", "p-a2", "p-q1"]);
   assert.deepEqual(asked.at(-1), { until: AT, afterSlug: "m-b", exclusive: false });
 });
 
