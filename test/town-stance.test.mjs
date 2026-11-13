@@ -475,10 +475,14 @@ const cellRepo = join(scratch, "world-cells");
   const cellMarks = [
     { id: "east/the-estate", by: "east", kind: "sited", tier: "market", at: { x: 50, y: 0 }, extent: { w: 200, h: 100 }, date: D("20"), body: "the estate, reaching east" },
     { id: "miller/the-mill", by: "miller", kind: "sited", tier: "market", at: { x: 120, y: 0 }, extent: { w: 40, h: 40 }, date: D("15"), body: "the mill" },
+    // P2's shapes, far from the estate: a parcel claimed 08-10, and a shed first laid 08-01 over its
+    // west edge, amended 09-01 to reach further in
+    { id: "holder/the-plot", by: "holder", kind: "parcel", tier: "home", at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 }, date: D("10"), body: "the plot" },
+    { id: "shedder/the-shed", by: "shedder", kind: "sited", tier: "market", at: { x: 990, y: 0 }, extent: { w: 40, h: 20 }, date: "2026-09-01T00:00:00.000Z", body: "the shed" },
   ];
   const f = join(cellRepo, "WORLD", "world-state.json");
   mkdirSync(dirname(f), { recursive: true });
-  writeFileSync(f, JSON.stringify({ tick: 0, marks: cellMarks, parcels: [], households: { east: "hh:east", miller: "hh:mill" } }));
+  writeFileSync(f, JSON.stringify({ tick: 0, marks: cellMarks, parcels: [], households: { east: "hh:east", miller: "hh:mill", holder: "hh:holder", shedder: "hh:shed" } }));
   writeFileSync(join(cellRepo, "WORLD", "skeleton.json"), JSON.stringify({ features: [] }));
   const g = (...a) => execFileSync("git", ["-C", cellRepo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   g("init", "-q", "-b", "main"); g("config", "user.email", "t@postmark.invalid"); g("config", "user.name", "cells");
@@ -532,6 +536,53 @@ test("5h · NO HISTORY keeps the whole-mark door: without the amend's locked cla
   assert.ok(read.includes("east/the-estate"), "the candidate is there to read");
   for (const leak of ["2026-08-01", "footprints", "claimed_at", "since", "geometry"])
     assert.equal(read.includes(leak), false, `no ${leak} in the candidate rows`);
+});
+
+// 5h, A PARCEL KEEPS ITS OWN LAW (P2, round 2 of the review of office#1019; Bevel's
+// FIX 17:07Z): a parcel "speaks only on what came after it", whole-mark (world
+// consent.mjs § cameAfter), and seniority at contact never reads cells for a
+// parcel. The shed was first laid 08-01, before the plot (08-10), and amended
+// 09-01 further into it: the fold ignores the plot's word on it, so the door
+// neither offers it nor records it. FLIP: drop the parcel guard in town-stance.mjs
+// § elderByFirstCover → the plot's household is offered the shed, and this reds.
+const PLOT_CLAIM = { slug: "holder/the-plot", id: "c-plot-0", status: "locked", laid_date: CELL_D("10"), submitted_at: CELL_D("10"), decided_at: CELL_D("10"), geometry: { at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 } } };
+const SHED_ORIGIN = { slug: "shedder/the-shed", id: "c-shed-0", status: "locked", laid_date: CELL_D("01"), submitted_at: CELL_D("01"), decided_at: CELL_D("01"), geometry: { at: { x: 980, y: 0 }, extent: { w: 20, h: 20 } } };
+const SHED_AMEND = { slug: "shedder/the-shed", id: "c-shed-1", status: "locked", laid_date: "2026-09-01T00:00:00.000Z", submitted_at: "2026-09-01T00:00:00.000Z", decided_at: "2026-09-01T00:00:00.000Z", geometry: { at: { x: 990, y: 0 }, extent: { w: 40, h: 20 } } };
+const holder = { household: "hh:holder", handles: new Set(["holder"]) };
+
+test("5h · a PARCEL keeps its own law at the door: the plot's household is not offered the shed amended into it, its word is refused with nothing written, and the fold ignores that word too", async () => {
+  FIRST = [PLOT_CLAIM, SHED_ORIGIN, SHED_AMEND];
+  CLAIMS = [claim("holder/the-plot", "c-plot-0"), claim("shedder/the-shed", "c-shed-1")];
+  assert.deepEqual(await offered(holder), [], "first laid before the plot, the shed is not the plot's to answer, whatever its amend reached");
+  await assert.rejects(() => cellSpeak({ on: "shedder/the-shed", stance: "opposed" }, holder), (e) => {
+    assert.equal(e.code, 403, "the word the fold would ignore is refused");
+    return true;
+  });
+  assert.equal(written().filter((w) => w.payload.on === "shedder/the-shed").length, 0, "and nothing was written");
+
+  const { pathToFileURL } = await import("node:url");
+  const engine = await import(pathToFileURL(join(cellRepo, "tools", "marks-fold.mjs")).href);
+  const { footprintsFromChain } = await import("../world2/tools/mark-render.mjs");
+  const shed = { id: "shedder/the-shed", slug: "the-shed", by: "shedder", household: "shedder", kind: "sited", tier: "market", at: { x: 990, y: 0 }, extent: { w: 40, h: 20 }, date: "2026-09-01T00:00:00.000Z", claimed_at: CELL_D("01"), body: "s",
+    footprints: footprintsFromChain({ chain: [SHED_ORIGIN, SHED_AMEND], originId: "c-shed-0", originSince: CELL_D("01"), current: { at: { x: 990, y: 0 }, extent: { w: 40, h: 20 } } }) };
+  const plot = { id: "holder/the-plot", slug: "the-plot", by: "holder", household: "holder", kind: "parcel", tier: "market", at: { x: 1000, y: 0 }, extent: { w: 25, h: 25 }, date: CELL_D("10"), body: "p", consent: { "shedder/the-shed": "opposed" } };
+  assert.equal(shed.footprints?.length, 2, "the shed carries its history, so the cells could have been asked");
+  const state = engine.fold({ marks: [plot, shed], terrain: { features: [] }, tick: 1, stakes: [] });
+  assert.ok(state.marks.some((m) => m.id === "shedder/the-shed"), "the fold ignores the plot's word: the shed came first");
+});
+
+test("elderByFirstCover · a parcel on EITHER side keeps the whole-mark answer, whatever the cells would say", () => {
+  const always = (grantorFirst) => () => ({ grantorFirst });
+  const asked = [];
+  const wholeMark = (g, m) => { asked.push([g.id, m.id]); return g.id < m.id; };
+  const parcel = { id: "a/plot", kind: "parcel" }, sited = { id: "b/shed", kind: "sited" }, other = { id: "c/mill", kind: "sited" };
+  for (const cells of [true, false]) {
+    const elder = elderByFirstCover({ firstCoverOrder: always(cells), recordOf: (m) => m, wholeMark });
+    assert.equal(elder(parcel, sited), true, "a parcel as the ground: whole-mark");
+    assert.equal(elder(sited, parcel), false, "a parcel as the newcomer: whole-mark");
+    assert.equal(elder(sited, other), cells, "and two non-parcels take the cells' answer");
+  }
+  assert.deepEqual(asked, [["a/plot", "b/shed"], ["b/shed", "a/plot"], ["a/plot", "b/shed"], ["b/shed", "a/plot"]], "whole-mark answered every parcel comparison, and only those");
 });
 
 // 5f, on the estate and the mill (Bevel's FIX, 16:39Z: "the label and door agree

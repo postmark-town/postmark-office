@@ -427,6 +427,11 @@ export function elderByFirstLaid(firstLaid) {
 export function elderByFirstCover({ firstCoverOrder = null, recordOf, wholeMark }) {
   if (typeof firstCoverOrder !== "function") return wholeMark;
   return (g, m) => {
+    // A PARCEL KEEPS ITS OWN LAW, whole-mark on both sides: it "speaks only on what
+    // came after it", by first-laid instant (world consent.mjs § cameAfter), and
+    // the engine's seniority at contact refuses a parcel on either side before any
+    // cell is read (§ seniorAtContact). So the cells are never asked of a parcel.
+    if (g?.kind === "parcel" || m?.kind === "parcel") return wholeMark(g, m);
     const byCell = firstCoverOrder(recordOf(g), recordOf(m));
     return byCell ? byCell.grantorFirst === true : wholeMark(g, m);
   };
