@@ -3185,14 +3185,16 @@ Every new or refreshed OAuth pair records its sign-in in `oauth_tokens.family`, 
 
 Box steps (Jetto's hand, never a lane's):
 
-1. **Apply 094 BEFORE the code.** The new code names `family` in every pair it issues. Against a store without the column, every sign-in and refresh rolls back and answers `503` with `Retry-After`: nobody is signed out, but nobody can sign in or refresh until 094 lands.
-   - The office before this change ignores the column, so 094 can land any time before the deploy. It does not touch the clearing's tables, so it needs no window around the clearing.
+1. **Apply and prove 094 BEFORE the train PR is approved.** The new code names `family` in every pair it issues. Against a store without the column, every sign-in and refresh rolls back and answers `503` with `Retry-After`: nobody is signed out, but nobody can sign in or refresh until 094 lands.
+   - **Approving the train PR IS the deploy.** That approval's release-train run cuts the release tag and deploys it in the same run (§ The auto-deploy). So there is no moment between the tag and the code, and the SQL cannot come from the tag. Source it from the reviewed commit, or from the train once #1021 has landed there; the 094 file is the same at both.
+   - The office before this change ignores the column, so 094 can land any time before that approval. It does not touch the clearing's tables, so it needs no window around the clearing.
    - The file waits at most 5 s for its lock (`lock_timeout`). Behind a long transaction on `oauth_tokens` it fails with `lock_not_available` and changes nothing: run it again.
-   - It is idempotent. Same pipe as 079 above:
+   - It is idempotent. The pipe is 079's above, from a commit instead of a tag:
    ```sh
-   CLONE=G:/Postmark/repo-clones/wright/office; TAG=release/2026-w47   # the tag being shipped
-   git -C $CLONE fetch -q origin --tags
-   git -C $CLONE show "$TAG:world2/schema/094_oauth_signin_family.sql" | ssh meepo-ec2 'set -e
+   CLONE=G:/Postmark/repo-clones/wright/office
+   REF=b0356f0e1e92614ba65abc85f8853f4fc08fe612   # #1021's reviewed commit; or REF=origin/train/2026-w47 once #1021 has landed there
+   git -C $CLONE fetch -q origin
+   git -C $CLONE show "$REF:world2/schema/094_oauth_signin_family.sql" | ssh meepo-ec2 'set -e
      DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
      sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
    ```
@@ -3203,7 +3205,7 @@ Box steps (Jetto's hand, never a lane's):
    sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.oauth_tokens_family')"                                                              # oauth_tokens_family
    sudo -n -u postgres psql -d "$DB" -tAc "SELECT has_table_privilege('office_api', 'oauth_tokens', 'UPDATE')"                                           # f (unchanged)
    ```
-2. **Deploy the code.** A minute after the next sign-in or refresh, `SELECT kind, count(*) FROM oauth_tokens WHERE family IS NOT NULL GROUP BY 1` names `access` and `refresh`, and `spent` once a refresh has run. Read it by count only: a token is never printed or copied.
+2. **Deploy the code: the train PR's approval, only once step 1's proof reads as above.** Its own release-train run deploys it. With `OFFICE_AUTODEPLOY` off, the deploy is the hand-carry of that tag, which also follows step 1. A minute after the next sign-in or refresh, `SELECT kind, count(*) FROM oauth_tokens WHERE family IS NOT NULL GROUP BY 1` names `access` and `refresh`, and `spent` once a refresh has run. Read it by count only: a token is never printed or copied.
 3. **Rollback** of the code needs no store step. The old code ignores `family`, and `spent` rows are inert to it (no reader matches the kind, and its sweep skips their NULL expiry). Refreshes keep working, without the reuse rule. After a later re-deploy, the sweep removes the `spent` rows whose sign-in has no live key left.
 
 ## Two site rebuilds per run, not three (POS-944, 2026-11-08)
