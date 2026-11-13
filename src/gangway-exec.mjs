@@ -8,7 +8,7 @@
 // Env: TOWN_CLONE, TOWN_PUSH=1, BOT_NAME/BOT_EMAIL, TOWN_TZ, WORLD2_PG(_URL).
 // argv[2]: JSON { act, actorGhId }.
 
-import { freshenIfPush, exitOnFault } from "./clone-fresh.mjs";
+import { freshenExec } from "./clone-fresh.mjs";
 import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,7 @@ async function main() {
   if (!existsSync(CLONE))
     return answer({ error: { code: 409, defect: "not-yet-open", hint: "the office has no town clone to render the gangway into" } });
   answer(await penTransaction(CLONE, async () => {
-    freshenIfPush(CLONE);   // POS-382: refuse a dirty copy by name, before anything is written
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
     try {
       return await gangwayUnderLock({ act, actorGhId, clone: CLONE });
     } catch (e) {
@@ -40,4 +40,4 @@ async function main() {
   }));
 }
 
-main().catch(exitOnFault);   // POS-382: a dirty copy is an ANSWER (503), anything else is the machinery's trip
+main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });

@@ -87,15 +87,15 @@ export function freshenClone(clone, { waitMs = Number(process.env.TOWN_CLEAN_WAI
 export const freshenIfPush = (clone) => { if (process.env.TOWN_PUSH === "1") freshenClone(clone); };
 
 /**
- * An exec's last resort: the refusal is its ANSWER (the one JSON line the door reads, exit 0), logged with the dirt to its own stderr; anything else is the
- * machinery's trip, as before (the stack to the log, exit 1).
+ * What an exec does at its pull: freshen, or ANSWER the refusal and stop. The refusal is its one JSON line (the answer the door reads, exit 0), logged with the dirt to its own
+ * stderr; it comes before the write has touched anything, so there is nothing for the pen's undo to put back. Any other failure is the machinery's trip, as before.
  */
-export function exitOnFault(e) {
-  if (isNeedsTending(e)) {
+export function freshenExec(clone) {
+  try { freshenIfPush(clone); }
+  catch (e) {
+    if (!isNeedsTending(e)) throw e;
     console.error(`[clone-fresh] refused: the town clone has ${e.dirt?.length ?? 0} path(s) a pull cannot write over: ${(e.dirt ?? []).slice(0, 8).join(", ")}`);
     console.log(JSON.stringify({ error: { code: e.code, defect: e.defect, hint: e.hint } }));
     process.exit(0);
   }
-  console.error(String(e?.stack ?? e));
-  process.exit(1);
 }

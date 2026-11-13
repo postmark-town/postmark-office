@@ -13,7 +13,7 @@
 // Exit 0 with the answer or { error: { code, field, defect, hint } } (a refusal
 // is an answer); exit 1 only when the machinery itself trips.
 
-import { freshenIfPush, exitOnFault } from "./clone-fresh.mjs";
+import { freshenExec } from "./clone-fresh.mjs";
 import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,7 +36,7 @@ async function main() {
   // push cannot land, leaves none of its printed files behind, and
   // nameInviterUnderLock takes its row back.
   answer(await penTransaction(CLONE, async () => {
-    freshenIfPush(CLONE);   // POS-382: refuse a dirty copy by name, before anything is written
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
     // No index probe, unlike the join: nothing here reads the town index, only
     // the registry, which nameInviterUnderLock reads from the record itself.
     try {
@@ -49,4 +49,4 @@ async function main() {
   }));
 }
 
-main().catch(exitOnFault);   // POS-382: a dirty copy is an ANSWER (503), anything else is the machinery's trip
+main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });

@@ -204,7 +204,6 @@ test("6 · ONE HELPER: no write in src/ pulls on its own; the two swallowing rea
   for (const f of ["crossing-exec.mjs", "walk-exec.mjs"]) assert.match(readFileSync(join(src, f), "utf8"), /"pull", "--rebase", "-q"\], \{ encoding: "utf8" \}\); \} catch \{ \/\* offline\/behind/, `${f} swallows its pull: a read of what it holds, never a 500`);
   for (const f of readdirSync(src).filter((x) => /-exec\.mjs$/.test(x) && !/^(walk|crossing|leave)-/.test(x))) {
     const text = readFileSync(join(src, f), "utf8");
-    if (/penTransaction\(/.test(text)) assert.match(text, /freshenIfPush\(CLONE\)/, `${f} freshens through the shared helper`);
-    if (/penTransaction\(/.test(text)) assert.match(text, /main\(\)\.catch\(exitOnFault\)/, `${f} answers the refusal`);
+    if (/penTransaction\(/.test(text)) assert.match(text, /freshenExec\(CLONE\)/, `${f} freshens through the shared helper`);
   }
 });

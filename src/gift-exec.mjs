@@ -16,7 +16,7 @@
 // { error: { code, defect, hint } } (a bounce is an answer); exit 1 only when
 // the machinery itself trips.
 
-import { freshenIfPush, exitOnFault } from "./clone-fresh.mjs";
+import { freshenExec } from "./clone-fresh.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -61,7 +61,7 @@ async function main() {
   // carries the giver's request and cannot be re-derived, so a refused one is
   // gone — which is what the giver was told.
   answer(await penTransaction(CLONE, async () => {
-    freshenIfPush(CLONE);   // POS-382: refuse a dirty copy by name, before anything is written
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
 
     // Catch the ledger up so the gift lands on a settled tail (idempotent — the
     // ferry --appends each crossing, so between crossings this is a no-op), then
@@ -99,4 +99,4 @@ async function main() {
   }));
 }
 
-main().catch(exitOnFault);   // POS-382: a dirty copy is an ANSWER (503), anything else is the machinery's trip
+main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
