@@ -254,7 +254,9 @@ test("buildReceipt fills every unrecorded step as notrun, always names a source,
   assert.throws(() => buildReceipt({ source: "scheduled", run: "a", started: "yesterday", at: "2026-10-13T08:08:00Z", exit: 0 }), /bad timestamps/);
   assert.throws(() => buildReceipt({ source: "scheduled", run: "a", started: "2026-10-13T08:07:00Z", at: "2026-10-13T08:08:00Z", exit: 256 }), /bad exit/);
   for (const ok of ["exit:1", "exit:128", "ledger-red", "prereq:mint", "signal:TERM", "no-change", "switch-off", "unchecked", "write-failed"]) assert.match(ok, REASON_RE);
-  for (const bad of ["exit:1234", "prereq:Mint", "signal:KILL", "ledger-red ", "error: see log", ""]) assert.doesNotMatch(bad, REASON_RE);
+  // POS-1030: what became of a mint commit whose push answered no, and the mint refused onto one still unsettled
+  for (const ok of ["landed-unacked", "unmade", "unconfirmed", "moved", "gone", "prereq:unlanded"]) assert.match(ok, REASON_RE);
+  for (const bad of ["exit:1234", "prereq:Mint", "signal:KILL", "ledger-red ", "error: see log", "", "unmade ", "landed"]) assert.doesNotMatch(bad, REASON_RE);
 });
 
 test("the writer CLI: one receipt per call into the named log, through a temp file renamed over it", () => {
