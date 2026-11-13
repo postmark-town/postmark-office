@@ -300,7 +300,11 @@ by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
 
 **Before each later rehearsal** (the nightly freshen stands the clone back on
 the seed and the store keeps the last rehearsal's rows): run the seed advance
-below with the seed's current pair, then the rehearsal. The pair, read from origin
+below with the seed's current pair, then the rehearsal, before the open window's
+close that the advance prints. The advance reseeds the registry from the clone, so
+the keep tick welcomes no rehearsal house the town never held, and trues up the
+open window's close, so the bless names the window the rehearsal cleared (POS-950).
+No hand SQL comes between them. The pair, read from origin
 in a box shell, since a clone's local tags are only as new as its last fetch:
 ```sh
 for c in town-clone world-clone; do sudo -u meepo git -C /srv/postmark-office-dev/$c ls-remote origin refs/tags/sandbox/seed 'refs/tags/sandbox/seed^{}' | tail -n1 | cut -f1; done
@@ -329,18 +333,33 @@ dev's. Then, in order, stopping at the first failure and naming it:
    having written nothing, and prints the retag for someone whose clone can push.
    Run it, then run the script again.
 2. **The freshen** stands the clones on the seed and re-signs.
-3. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
+3. **The registry.** The seed's `tools/households.json` holds no rehearsal house, and
+   the store still holds the last rehearsal's. So `households`, `household_pins` and
+   `registry_meta` are emptied as `world2_owner` (`office_api` holds no DELETE), in one
+   statement that refuses any database but the sandbox; `registry-seed --apply` fills
+   them from the town clone, and `registry-drain --check` must say byte-equal.
+4. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
    `stamp-lines --sync` records the seed's lines past them, then `--verify`.
-4. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
+5. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
    head already exists).
-5. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
+6. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
    that sha. A world sha that doesn't descend from the pin stops here, and the stop
    prints the line that clears the pin.
-6. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
+7. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
    as the law pen). Nothing else writes dev's snapshot, and the preflight doesn't read it.
-7. **The preflight.** The script's last line then names the full rehearsal, which is yours.
+8. **The window true-up.** A clearing opens the next window at the cleared one's
+   scheduled close, for 12 hours, and dev has no candle between rehearsals, so the open
+   window's close is long past by the next one. Cleared as it stands, its successor's
+   close would be past too, and the bless would name that successor. So a past close
+   moves to 11 hours from now, as `world2_owner`, in one statement that refuses any
+   database but the sandbox and any count of open windows but one. A close still ahead
+   is left alone. The step prints the close: rehearse before it, or run the advance again.
+9. **The preflight.** The script's last line then names the full rehearsal, which is yours.
 
 Every step is safe to repeat, so after a stop, fix the cause and run the same line.
+
+A seed past the suite's pins (`test/clone-pins.json`) needs a pin-move PR on the
+train beside it, in POS-953's shape. The plan prints this too.
 
 No testers on dev during an advance. The dev office stays up, and the trim doesn't
 take the lock its stamped writes take, so a tester's act between the trim and the
