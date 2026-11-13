@@ -341,17 +341,23 @@ The choice is public: `GET /households` and the town's `tools/households.json` c
 reaches this door.
 
 **WLD-28: that route is now an alias of the household's one settings door** (below): it carries the Hearth alone, answers in the shape it always did
-(`{ household, hearth, registry, commit }`) and keeps its own refusal words, and the likeness answer's form is an alias of the same door.
+(`{ household, hearth, registry, commit }`) and keeps its own credential and refusal words, and the likeness answer's signed-in form is an alias of the same door.
 
 ## A household's settings (WLD-28)
 
 One door for the household's own preferences, over the two that exist (`likeness`, migration 081; `hearth`, 093): **`GET /households/{slug}/settings`** answers
 `{ "household": "<slug>", "likeness": { "answer": "yes" | "no" | null, "effective": "given" | "not given" }, "hearth": { "choice": "<id>" | null, "effective": "<id>" | "default" } }`
-(unanswered likeness reads as `not given`, nothing chosen as the `default`), and **`PATCH /households/{slug}/settings`** with `{ "likeness": "yes" | "no", "hearth": "<registered id>" | null }`
+(unanswered likeness reads as `not given`, nothing chosen as the `default`), and **`PATCH /households/{slug}/settings`** with `{ "hearth": "<registered id>" | null }`
 changes **only what is sent** (an omitted setting is left as it was; `"hearth": null` is back to the default) and answers `{ household, settings, changed, registry, commit }`.
-A combined request is judged whole before the first write: an invalid part (a third answer, an unregistered Hearth, an unknown setting, another household's account) keeps no part of it.
-Both verbs are **a signed-in human's act, and no new grant**: the credential must carry a verified GitHub account that the household's record binds (the likeness answer's and the Hearth's test)
-and must not be an agent's own key (`403`); the likeness answer is recorded as the form records it (who, when, which words), and no data moved.
+Both verbs are **a signed-in human's act, and no new grant**: the credential must carry a verified GitHub account that the household's record binds and must not be an
+agent's own key (`403`). **Each setting keeps its own credential:**
+- **the Hearth** is chosen here with what `PATCH /households/{slug}/hearth` always took: the human's household key, an OAuth access token, or the browser;
+- **the likeness answer is never a bearer's** (WLD-83 D2: "the human answers through a GitHub sign-in, never through a key"). A `PATCH` here that submits `likeness`,
+  from a household key or an access token, is refused **whole** (`403`, before anything is read or written; a valid Hearth beside it is not kept) and pointed at the
+  signed-in form, `GET /oauth/likeness?household=<slug>`. That form is the answer's one road, an alias of this door: it records the answer as it always did (who, when, which words).
+
+A request is judged whole before the first write: an invalid part (a likeness answer from a bearer, an unregistered Hearth, an unknown setting, another household's account)
+keeps no part of it. No data moved.
 The same values are read at `household { read: "settings" }` (your own house, any key the household door answers; settings only, no human's identity and no consent record).
 There is **no MCP write** (residents writing settings is POS-1023).
 

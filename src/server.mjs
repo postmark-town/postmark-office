@@ -2392,8 +2392,10 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // account too, so the bound account alone let an agent choose. The office's existing line for the human's own
     // credential (named-hand.mjs § agentHeld: a resident's own key, a co-signed berth) is drawn here, before the law.
     // PATCH /households/<slug>/settings — THE ONE SETTINGS DOOR (WLD-28): { "likeness": "yes" | "no", "hearth": "<registered id>" | null }, only what is sent changes.
-    // The same human, the same binding and the same refusal of an agent's own key as the Hearth door above (which is now an alias of this one); the likeness
-    // answer is the likeness form's writer, consent recorded as before. household-settings.mjs § changeSettings is the whole law.
+    // Each setting keeps its own ruled credential (Wright, 2026-11-13 15:40Z): the Hearth takes what its door below (now an alias of this one) always took, the
+    // same human, the same binding and the same refusal of an agent's own key; the LIKENESS answer is never a bearer's (D2: "the human answers through a GitHub
+    // sign-in, never through a key"), so a request here that submits it, from a household key or an access token, is refused whole and pointed at the signed-in
+    // form. household-settings.mjs § changeSettings is the whole law.
     const settingsDoor = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/settings$/.exec(path) : null;
     if (settingsDoor) {
       if (agentHeld(key))

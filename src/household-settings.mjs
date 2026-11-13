@@ -11,18 +11,23 @@
 //     repeats the household's binding. This file judges, orders and combines them; it writes nothing itself.
 //   · the old doors are ALIASES of this one: `PATCH /households/<slug>/hearth` and the likeness form's answer call `changeSettings` with the one setting they
 //     always carried and answer in the shape they always answered (`parts.hearth`, `parts.likeness`), so a caller of either sees no change.
-//   · authority is unchanged: the credential must carry a GitHub account the household's own record BINDS and must not be an agent's own key (named-hand.mjs
-//     § agentHeld, drawn at the route, as the Hearth's door always drew it). The likeness form's caller is the signed-in browser session, as before. No resident
-//     key, Iris delegation or preview reaches a write.
+//   · EACH SETTING KEEPS ITS OWN RULED CREDENTIAL (Wright, 2026-11-13 15:40Z, settling the go's "the same GitHub-sign-in test"): every write needs a GitHub
+//     account the household's own record BINDS, and then
+//       - the HEARTH is chosen with what its door always took: a bearer that is not an agent's own key (named-hand.mjs § agentHeld, drawn at the route), or the browser;
+//       - the LIKENESS answer is the browser sign-in's ALONE (WLD-83 D2, Darko 2026-10-19 18:59: "the human answers through a GitHub sign-in, never through a key").
+//         Only the signed-in form (src/oauth.mjs § /oauth/likeness) says `browserSignIn: true`; any other caller submitting `likeness` (a household key, an
+//         OAuth/MCP access token) is refused WHOLE before anything is read or written, the Hearth beside it included, and pointed at the form's link.
+//     No resident key, Iris delegation or preview reaches a write.
 //
-// A COMBINED REQUEST IS ALL-OR-NOTHING AT THE JUDGMENT: every submitted setting is judged (its shape, the household, the binding, and for the Hearth the
-// registered entries) BEFORE the first write, so an invalid combination keeps no part of itself. Only a submitted setting changes: an omitted one is left exactly
-// as it was (an omitted `hearth` is not `hearth: null`, which means "back to the default"). The two writes are separate store statements, so the one that can
-// fail for the store's own reasons (the Hearth, whose migration may not be on a store yet) is written FIRST; if it refuses, nothing was kept.
+// A COMBINED REQUEST IS ALL-OR-NOTHING AT THE JUDGMENT: every submitted setting is judged (its credential, its shape, the household, the binding, and for the
+// Hearth the registered entries) BEFORE the first write, so an invalid combination keeps no part of itself. Only a submitted setting changes: an omitted one is
+// left exactly as it was (an omitted `hearth` is not `hearth: null`, which means "back to the default"). No public door carries both settings in one write: the
+// bearer door cannot carry the likeness answer and the form carries nothing else. Were both ever sent, the Hearth (whose migration may not be on a store yet) is
+// written FIRST, so its refusal keeps nothing.
 
 import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows } from "./registry-rows.mjs";
-import { accountBinds, likenessOfHouse, judgeLikeness, setLikeness } from "./likeness.mjs";
+import { accountBinds, likenessOfHouse, likenessLink, judgeLikeness, setLikeness } from "./likeness.mjs";
 import { chooseHearth, judgeHearth, hearthOf, DEFAULT_HEARTH } from "./household-hearth.mjs";
 
 /** The settings this door holds, in the order they are read and written. */
@@ -78,9 +83,10 @@ const ALIAS_WORDS = Object.freeze({
  * THE WRITE. `changes` is `{ likeness?: "yes" | "no", hearth?: "<registered id>" | null }`: only what is present changes. Judged whole, then written Hearth-first.
  * Answers `{ household, settings, changed, registry, commit, parts }`; `settings` is the household's settings as they now stand, `parts` is each writer's own answer
  * (the alias doors answer in those shapes). `alias` ("hearth" | "likeness") keeps that old door's own words for the refusals raised before its writer is reached.
+ * `browserSignIn` is true ONLY from the likeness form, whose GitHub sign-in just proved `ghId` in a browser; without it a submitted `likeness` is refused whole (D2).
  */
 export async function changeSettings({ slug, changes, ghId, ghLogin } = {},
-  { clone = null, env = process.env, loadRows = loadRegistryRows, registered, writeHearth, writeLikeness, drain, now, alias = null } = {}) {
+  { clone = null, env = process.env, loadRows = loadRegistryRows, registered, writeHearth, writeLikeness, drain, now, alias = null, browserSignIn = false } = {}) {
   const words = ALIAS_WORDS[alias] ?? null;
   const s = String(slug ?? "").trim();
   if (!s) throw bounce(422, "which household?", "settings are changed for one household: PATCH /households/<slug>/settings");
@@ -92,6 +98,12 @@ export async function changeSettings({ slug, changes, ghId, ghLogin } = {},
   if (unknown.length) throw bounce(422, `no setting called ${unknown.map((k) => `"${k}"`).join(", ")}`, `the settings are: ${SETTINGS.join(", ")}`);
   const submitted = SETTINGS.filter((k) => Object.hasOwn(changes, k));
   if (!submitted.length) throw bounce(422, "say what to change", '{"likeness": "yes" | "no", "hearth": "<registered entry id>" | null} — only what you send changes');
+
+  // 0. the likeness answer's own credential (D2): a browser sign-in, never a bearer. The WHOLE request is refused, before the record is read
+  if (submitted.includes("likeness") && browserSignIn !== true)
+    throw bounce(403, "the human answers the likeness question through a GitHub sign-in, never through a key",
+      `open ${likenessLink(s)} in a browser and answer there; a household key or an access token cannot record it. Nothing in this request was kept` +
+      (submitted.includes("hearth") ? ": send the Hearth alone to change it here" : ""));
 
   // 1. the shapes, before the record is read (as each writer always judged them first)
   if (submitted.includes("likeness")) judgeLikeness(changes.likeness);

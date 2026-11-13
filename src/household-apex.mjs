@@ -510,7 +510,7 @@ export const HOUSEHOLD_READS = Object.freeze({
   marks: "your marks: by state, decided, at risk",
   // POS-666: private to your house, so the read is your own blocks only
   blocks: "your house's mail blocks, private to it",
-  // WLD-28: read-only; the household's human changes them (PATCH /households/<slug>/settings)
+  // WLD-28: read-only; the household's human changes them (the Hearth at PATCH /households/<slug>/settings, the likeness answer only at its signed-in form)
   settings: "likeness and Hearth, read-only",
 });
 
@@ -2109,7 +2109,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       const { householdPosts } = await import("./household-posts.mjs");
       return householdPosts(handle, { clone });
     }
-    // ── the house's settings (WLD-28): the caller's OWN house, read-only; the household's human changes them at PATCH /households/<slug>/settings ──
+    // ── the house's settings (WLD-28): the caller's OWN house, read-only; the household's human changes them (the Hearth at PATCH /households/<slug>/settings, the likeness answer at its signed-in form) ──
     // The values only (likeness answer and what the town acts on, the Hearth chosen and the one it is drawn with): no human's identity and no consent audit.
     if (what === "settings") {
       const { houseMembers } = await import("./house-bundle.mjs");

@@ -21,7 +21,9 @@
 //                rendered into the town's tools/households.json by the drain,
 //                so each answer is a commit in the town's history.
 //   the writer   `setLikeness` below, called ONLY by the form the office renders
-//                after a GitHub sign-in (src/oauth.mjs § /oauth/likeness). No
+//                after a GitHub sign-in (src/oauth.mjs § /oauth/likeness), through
+//                the settings door's browser-only gate (household-settings.mjs,
+//                WLD-28: a bearer submitting likeness there is refused). No
 //                key reaches it, the human's own included: a key cannot tell
 //                its human from an agent holding it, and a sign-in in a browser
 //                can (D2).
