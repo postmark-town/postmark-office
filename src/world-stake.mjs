@@ -20,6 +20,7 @@
 //   3. The lock — writes go through a subprocess under the ferry's flock, so a
 //      stake append can never race a crossing's mint pass.
 
+import { tendingBefore, TENDING_DEFECT } from "./clone-fresh.mjs";
 import { worldFreezeBounce } from "./freeze.mjs";
 import { existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -617,6 +618,9 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     // happened to be on the box — and the clip case, which is the founder's
     // whole reason for asking, is only reachable against a balance you control.
     held = heldAtOffice,
+    // THE SEVENTH (POS-382): is the town clone dirt a pull cannot write over? Asked before the promotion writes a claim onto the docket, so a dirty copy is the named
+    // 503 with nothing written (clone-fresh.mjs § tendingBefore). Injectable for the same reason as the rest.
+    tending = (clone) => tendingBefore(clone),
     // THE FIFTH (WLD-27 A): has this mark's dropped unit already left? A read
     // of the record, asked before anything is promoted or charged. It is the
     // early answer only; the exec asks again under the mark's lock, which is
@@ -735,6 +739,8 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   //
   // A ✦0 stake's ground is walked FIRST, while the draft is still the draft the
   // promotion will put forward; it changes nothing about whether it goes.
+  const unsafe = tending(TOWN_CLONE);
+  if (unsafe) return bounce(unsafe.code, unsafe.defect, unsafe.hint);
   const zeroGround = n === 0 ? await judgeGround() : null;
   let putForward = null;
   let promotionRefused = null;
@@ -816,7 +822,21 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   const heldBefore = await held(who.handle);
 
   const staked = await ledger({ verb: "stake", handle: who.handle, mark: args.mark, n, via: "api", date: townDay() });
-  if (staked?.error) return staked;
+  if (staked?.error) {
+    // the exec found the copy dirty (a writer slipped in after the door looked): the promotion this act made is taken back by this act, so "nothing was written" stays true
+    if (staked.code === 503 && staked.defect === TENDING_DEFECT && putForward?.promoted) {
+      try {
+        const { retractPendingClaim } = await import("./world2-claims.mjs");
+        const undone = await retractPendingClaim(null, { windowId: putForward.window, slug: args.mark, claimant: by });
+        if (!undone) throw new Error("no pending row came back off the docket");
+      } catch (e) {
+        console.error(`[world-stake] the promotion of "${args.mark}" could not be retracted after the copy refused: ${String(e?.message ?? e)}`);
+        return bounce(500, `the office's town copy needs tending, and the claim for "${args.mark}" could not be taken back`,
+          "the stamp ledger moved nothing, so this claim stands on the docket with nothing behind it. Withdraw it (`world { do: \"withdraw-mark\" }`) or back it before the close, and tell the postmaster", { held: 0, requested: n });
+      }
+    }
+    return staked;
+  }
 
   // ── THE DOOR CLOSES ITS OWN LOOP (#2686) ─────────────────────────────────
   //

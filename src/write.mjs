@@ -8,6 +8,7 @@
 //
 // Env: TOWN_CLONE (path), TOWN_PUSH=1 to push, BOT_NAME / BOT_EMAIL.
 
+import { freshenClone } from "./clone-fresh.mjs";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, rmdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, isAbsolute, resolve } from "node:path";
@@ -824,7 +825,7 @@ export function enqueueLetter(args, key, db, clone, acceptedIdentity = null) {
   // or nothing (POS-296): a letter that is refused leaves no file behind, so a
   // re-send is not bounced 409 by the corpse of the first try.
   const commit = penTransaction(clone, () => {
-    if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) git(clone, "pull", "--rebase", "-q");
+    if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) freshenClone(clone);   // POS-382: a dirty copy refuses by name (503), before the letter file is written
     const file = join(clone, relFile);
     const outbox = dirname(file);
     if (existsSync(file)) throw bounce(409, "that letter file already exists", "change the title");

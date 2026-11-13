@@ -18,6 +18,7 @@
 // Exit 0 with {applied,...} or {error:{code,defect,hint}} (a bounce is an
 // answer); exit 1 only when the machinery itself trips.
 
+import { freshenIfPush, exitOnFault } from "./clone-fresh.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,8 +50,7 @@ async function main() {
   // (a tool, a test), never "unknown".
   const { route = null, residents = [] } = payload;
   const result = await withRoute(route, async () => { noteRequester({ handles: new Set(residents) }); return penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenIfPush(CLONE);   // POS-382: refuse a dirty copy by name, before anything is written
     // The ledger lands on the stake's own store transaction, so the vote and
     // the ledger's stamp_lines rows (POS-341, STAMP_LINES=store) are recorded
     // together or not at all; the rows are computed before it opens.
@@ -66,4 +66,4 @@ async function main() {
   process.stdout.write(JSON.stringify(result) + "\n", () => process.exit(0));
 }
 
-main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
+main().catch(exitOnFault);   // POS-382: a dirty copy is an ANSWER (503), anything else is the machinery's trip

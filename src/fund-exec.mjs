@@ -28,6 +28,7 @@
 // { error: { code, defect, hint } } (a bounce is an answer); exit 1 only when
 // the machinery itself trips.
 
+import { freshenIfPush, exitOnFault } from "./clone-fresh.mjs";
 import { existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,8 +102,7 @@ async function main() {
   // receipt carries the payer's request data and cannot be re-derived, so a
   // refused one is gone — which is what the payer was told.
   answer(await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenIfPush(CLONE);   // POS-382: refuse a dirty copy by name, before anything is written
 
     try {
       // catch the ledger up so the receipt lands on a settled tail, then witness
@@ -134,4 +134,4 @@ async function main() {
   }));
 }
 
-main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
+main().catch(exitOnFault);   // POS-382: a dirty copy is an ANSWER (503), anything else is the machinery's trip

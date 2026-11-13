@@ -26,6 +26,7 @@
 // Env: TOWN_CLONE, STAMP_KEY, TOWN_PUSH, BOT_NAME/BOT_EMAIL, TOWN_TZ.
 // argv[2]: JSON { handle, pot, n, via, date }.
 
+import { freshenIfPush, exitOnFault } from "./clone-fresh.mjs";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -100,8 +101,7 @@ async function main() {
   // WHOLE OR NOTHING (POS-296), stake-exec's shape: a keeping stake the pen
   // cannot land leaves no line and no commit behind.
   const result = await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenIfPush(CLONE);   // POS-382: refuse a dirty copy by name, before anything is written
 
     const { state, pots } = await potStakeInputs(CLONE);
     const result = clipPotStake({ state, pots, ...payload });
@@ -135,5 +135,5 @@ const isMain = (() => {
   catch { return pathToFileURL(process.argv[1]).href === import.meta.url; }
 })();
 if (isMain) {
-  main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
+  main().catch(exitOnFault);   // POS-382: a dirty copy is an ANSWER (503), anything else is the machinery's trip
 }

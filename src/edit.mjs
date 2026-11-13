@@ -24,6 +24,7 @@
 //   • no handle/github/region edits (those are PR / judgment lanes)
 //   • size courtesy on every body
 
+import { freshenClone } from "./clone-fresh.mjs";
 import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -259,7 +260,7 @@ function selfContainedOnly(html) {
 // Skipped inside the drain's pen batch, which pulled once when it opened
 // (write.mjs § THE PEN BATCH, POS-723).
 const pullIfPush = (clone) => {
-  if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) execFileSync("git", ["-C", clone, "pull", "--rebase", "-q"], { encoding: "utf8" });
+  if (process.env.TOWN_PUSH === "1" && !inPenBatch(clone)) freshenClone(clone);   // POS-382: a dirty copy refuses by name (503), before the edit is written
 };
 
 // The last commit that touched one town path, or null. Garnish discipline: a

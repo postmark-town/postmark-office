@@ -18,6 +18,7 @@
 // argv[2]: JSON { handle, date, via, expect? } — expect is { household, nth },
 // the room the door's call saw (the retry guard; parcel-room.mjs § ONE CALL, ONE ROOM).
 
+import { freshenIfPush, exitOnFault } from "./clone-fresh.mjs";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -47,8 +48,7 @@ async function main() {
 
   // WHOLE OR NOTHING (POS-296): a purchase the pen cannot land leaves no line and no commit.
   const result = await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenIfPush(CLONE);   // POS-382: refuse a dirty copy by name, before anything is written
     // ONE CALL, ONE ROOM (the 10-26 review's F1): `expect` is the room the
     // door's call saw. Already bought, by this click or the one before it, is
     // that purchase's receipt, and nothing is written (parcel-room.mjs § quoteAt).
@@ -74,5 +74,5 @@ const isMain = (() => {
   catch { return pathToFileURL(process.argv[1]).href === import.meta.url; }
 })();
 if (isMain) {
-  main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
+  main().catch(exitOnFault);   // POS-382: a dirty copy is an ANSWER (503), anything else is the machinery's trip
 }
