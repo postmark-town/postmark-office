@@ -9,7 +9,8 @@
 //
 // The store is seeded the way the box's was: the registry from the town's two
 // printouts, then the town index from a snapshot (town-index-ingest --seed), as
-// law_ingester. The town clone has no remote, so nothing it does can leave the
+// law_ingester; then the settlement printout's cutover preconditions (POS-1025):
+// the settlements backfilled from the world's tags and its registry seeded. The town clone has no remote, so nothing it does can leave the
 // machine; the office's GITHUB_API_URL names a loopback port the rehearsal's
 // stub takes. A store that cannot start FAILS (embedded-store.mjs § NO_STORE).
 
@@ -204,6 +205,29 @@ export async function localDevTarget({
     // THE LAW the candle computes against (the dev store holds a world-law head; a
     // clearing refuses without one), ingested from the world clone as law_ingester.
     await ingestLaw(store, world);
+
+    // THE PRINTOUT'S CUTOVER PRECONDITIONS (POS-1025, deploy/DEPLOY.md § 095), as the dev box holds them.
+    // The settlements table current with the world's tags (the keeping tick's settlements-backfill), so the
+    // clearing numbers its seal past every real settlement/S<n> the world carries; and the sweep's registry
+    // copied into the store once (publications-seed), so the first printout renders the registry the world
+    // already carries rather than an empty one. The first printout's base is the rehearsal's own cutover step.
+    const noPg = { ...process.env };
+    for (const k of Object.keys(noPg)) if (/^(PG[A-Z]*|WORLD2_[A-Z_]*URL)$/.test(k)) delete noPg[k];
+    execFileSync(process.execPath, [join(OFFICE, "world2", "tools", "settlements-backfill.mjs"), "--world-repo", world, "--apply", "--prod", "--quiet", "--pg-url", store.url("office_api")],
+      { cwd: OFFICE, env: noPg, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const { seedRowsOf, seedPublications, REGISTRY_REL } = await import("../../world2/tools/publications-seed.mjs");
+    const worldMain = g(world, "rev-parse", "HEAD");
+    const onMain = new Set(g(world, "ls-tree", "-r", "--name-only", worldMain, "--", "WORLD/marks").split("\n").filter(Boolean));
+    const seedRows = seedRowsOf(g(world, "show", `${worldMain}:${REGISTRY_REL}`), (p) => onMain.has(p));
+    const so = await store.connect("world2_owner");
+    try {
+      await so.query("BEGIN");
+      const seeded = await seedPublications((text, args) => so.query(text, args), seedRows);
+      if (seeded.status !== "seeded") throw new Error(`the stand-in's publications seed: ${seeded.status} ${seeded.why ?? ""}`);
+      await so.query("COMMIT");
+    } catch (e) { await so.query("ROLLBACK").catch(() => {}); throw e; }
+    finally { await so.end(); }
+    log(`store: settlements current with the world's tags; the registry seeded (${seedRows.length} rows)`);
 
     const officePort = await freePort();
     const ghPort = await freePort();

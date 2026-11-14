@@ -276,6 +276,32 @@ const OPERATOR_ACTS = {
       required: ["state", "reason"],
     },
   },
+  // POS-1025/b: the town's hands amend or withdraw a mark that is not theirs, as its own author, through the clearing
+  // (src/mark-repair.mjs). The hand is the credential's; the route is `operator`; no stamp moves.
+  "repair-mark": {
+    tool: null, residue: null,
+    may: async (key) => (await import("./mark-repair.mjs")).callerMayRepair(key),
+    fields: {
+      properties: {
+        mark: { type: "string", description: "the mark's id, <by>/<slug>, as canon names it" },
+        act: { type: "string", description: "amend or withdraw" },
+        reason: { type: "string", description: "why, in the words chosen: the mark's resident reads it on the act" },
+        handle: { type: "string", description: "which of this key's town hands repairs, when it holds more than one" },
+        as: { type: "string", description: "\"town\", and only for a town mark: never inferred" },
+        body: { type: "string", description: "an amend's body, as the resident's own amend sends it" },
+        kind: { type: "string", description: "an amend's kind" },
+        class: { type: "string", description: "an amend's class, in the old spelling" },
+        at: { type: "object", description: "an amend's place {x,y}" },
+        extent: { type: "object", description: "an amend's footprint {w,h}" },
+        points: { type: "array", description: "an amend's outline [[x,y],…]" },
+        slot: { type: "string", description: "an amend's slot (predicated and naming marks)" },
+        value: { type: "string", description: "an amend's value (predicated and naming marks)" },
+        parent_id: { type: "string", description: "an amend's parent (predicated and naming marks)" },
+        image: { type: "string", description: "an amend's image" },
+      },
+      required: ["mark", "act", "reason"],
+    },
+  },
 };
 
 async function operatorAct(act, key, ctx = {}) {
@@ -2458,6 +2484,11 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       case "gangway": {
         const { gangwayAtOffice } = await import("./gangway-door.mjs");
         result = await gangwayAtOffice(fields, key, { clone, rdb: ctx?.rdb ?? null });
+        break;
+      }
+      case "repair-mark": {
+        const { repairMarkAtOffice } = await import("./mark-repair.mjs");
+        result = await repairMarkAtOffice(fields, key);
         break;
       }
     }

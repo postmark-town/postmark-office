@@ -11,6 +11,7 @@
 // | a resident acts itself        | rei   | rei  | mcp   | "by rei"                          |
 // | the human acts for a resident | human | rei  | site  | "by Starforge's human for rei"    |
 // | the human acts as the human   | human | —    | site  | "by Starforge's human"            |
+// | an operator repairs rei's mark | wright | rei | operator | (POS-1025/b, withOperator below) |
 //
 // THE ROUTE IS THE DOOR'S, set once where the transport is known (server.mjs §
 // handle) and carried to the pen by an AsyncLocalStorage scope, as the retry
@@ -42,6 +43,13 @@ const scope = new AsyncLocalStorage();
 
 /** Run `fn` with `route` as the door's route for every act it writes. An unknown word is no route. */
 export const withRoute = (route, fn) => scope.run({ route: ROUTES.includes(route) ? route : null, residents: null }, fn);
+
+/**
+ * THE OPERATOR'S HAND (POS-1025/b, the repair door; mark-repair.mjs). Every act `fn` writes is filed under its
+ * actor, the mark's own author (`for`), by `hand`, the operator the repair door judged against the credential,
+ * on the `operator` route. It is the scope's, never a payload's: no field a caller sends can name it.
+ */
+export const withOperator = (hand, fn) => scope.run({ route: "operator", residents: null, operator: String(hand) }, fn);
 
 /** Once the bearer resolves: the residents the requesting key holds, for the site rule. Outside a scope, nothing. */
 export function noteRequester(key) {
@@ -75,8 +83,9 @@ const parsed = (payload) => {
  * spelled `for_handle` in SQL. A site act is the human's only when its actor
  * is one of the requesting key's own residents.
  */
-export function provenanceOf(row, route = currentRoute(), residents = currentResidents()) {
+export function provenanceOf(row, route = currentRoute(), residents = currentResidents(), operator = scope.getStore()?.operator ?? null) {
   const actor = String(row?.actor ?? "");
+  if (operator) return { hand: operator, for_handle: actor || null, route: "operator" };
   if (/^human-of-/.test(actor)) return { hand: "human", for_handle: null, route };
   const seated = parsed(row?.payload)?.as_human;
   const atTheirWheel = route === "site" && residents instanceof Set && residents.has(actor);

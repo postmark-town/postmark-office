@@ -203,8 +203,9 @@ test("the shipped manifest is readable whole, and declares nothing until a migra
 });
 
 // ── END TO END: the pen itself, over a fake store and a real git target ──────
-// derive's four SELECTs answered in pg's shapes (the stub in
-// world2-snapshot-export.test.mjs, narrowed); an unexpected statement throws.
+// derive's five SELECTs answered in pg's shapes (the stub in
+// world2-snapshot-export.test.mjs, narrowed; window 201 sealed before 095, so no
+// snapshot row); an unexpected statement throws.
 function store({ acts }) {
   const windows = [{ id: "201", opens_at: new Date("2026-09-20T12:00:00Z"), closes_at: new Date("2026-09-21T00:00:00Z"),
     status: "closed", law_sha: "law201", town_sha: "town201", cleared_at: new Date("2026-09-20T18:00:00Z") }];
@@ -213,6 +214,7 @@ function store({ acts }) {
     if (sql.includes("FROM windows")) return { rows: windows };
     if (sql.includes("FROM acts")) return { rows: acts.filter((a) => Number(a.crossing) <= Number(params[0])) };
     if (sql.includes("FROM marks")) return { rows: [] };
+    if (sql.includes("FROM world_snapshots")) return { rows: [] };
     throw new Error(`unexpected: ${sql}`);
   } };
 }

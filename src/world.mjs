@@ -5061,6 +5061,8 @@ function overCapHint(by, slug) {
 export const ON_BEHALF_PLACERS = Object.freeze(["illuminator", "worldkeeper", "wright"]);
 const PLACED_BY_KEY = "_placed_by";
 const CONSENT_KEY = "_consent";
+/** An operator's repair names its reason on the act (POS-1025/b), underscored like the placer's. */
+export const REPAIR_REASON_KEY = "_repair_reason";
 
 /** Null when this is not a placement on another's behalf (the caller answers the unchanged 403); otherwise who placed, on whose asking, under which household. */
 async function placingOnBehalf(by, payload, key, bounce) {
@@ -5209,7 +5211,9 @@ async function namedMadeRecord(payload, by, key, bounce) {
 export async function leaveMarkViaOffice(worldClone, payload = {}, key = null, opts = {}) { return perceived(() => leaveMarkAct(worldClone, payload, key, opts)); }
 // `fromHand` IS THE HOLD DOOR'S, AND ONLY ITS SET-DOWN OF A THING MADE IN HAND PASSES IT (POS-766/e): the
 // draft keeps the made thing's own name, which every other leave is refused (G2). No payload can set it.
-async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false } = {}) {
+// `operator` IS THE REPAIR DOOR'S, AND ONLY ITS AMEND PASSES IT (POS-1025/b; mark-repair.mjs § repairMarkAtOffice): the
+// mark's own author and household, judged by every guard below as their own amend; no payload can set it.
+async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = null, mistsCrossing = null, dropUnit = null, fromHand = false, operator = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   // ── MARKS MADE INTO A HOLDER (LOGOS v2, lane O2; 16:02 items 1–2) ─────────
@@ -5266,8 +5270,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   }
   const by = byOther ? payload.by : named ?? payload.by ?? (handles.length === 1 ? handles[0] : undefined);
   if (!by) throw bounce(422, "which resident is leaving this mark?", handles.length ? `pass by: one of ${handles.join(", ")}` : "this key acts for no resident");
-  const onBehalf = key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
-  if (!key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
+  // AN OPERATOR'S REPAIR (POS-1025/b) amends as the mark's own author: its hand is judged at the repair door and
+  // rides the act's provenance scope (act-provenance.mjs § withOperator), never this key's residents
+  const onBehalf = operator || key?.handles?.has(by) ? null : await placingOnBehalf(by, payload, key, bounce);
+  if (!operator && !key?.handles?.has(by) && !onBehalf) throw bounce(403, `"${by}" is not one of your residents`, `this key acts for: ${handles.join(", ") || "(none)"}`);
   if (!onBehalf && (payload.consent !== undefined || payload.placed_by !== undefined))
     throw bounce(422, "consent and placed_by are for a placement on another resident's behalf",
       `"${by}" is your own resident — leave the mark without them`);
@@ -5447,7 +5453,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     // THE ADMIN ROLE (WLD-21, Darko 2026-10-18): an admin household may make the
     // three passage classes exactly (the world's admin-makers.mjs), asked only
     // after makers said no; the refusal's words for everyone else are unchanged (G6).
-    if (!droppedUnit && !makers.may && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
+    // An operator repairing a town mark AS THE TOWN (POS-1025/b) is the town's pen, the one road a town-only class arrives by.
+    if (!droppedUnit && !makers.may && !operator?.asTown && !(await (await import("./admin-role.mjs")).adminMakes(klass, by)))
       throw bounce(422, `class "${klass}" is town-only`,
         makers.read
           ? `its makers is false (set on ${makers.from}): a resident may make an instance unless it would give them control over something that mints or confers standing (the-town/nothing-you-control-mints), so this class is the town's to make — world { explain: "${klass}" } says who makes what`
@@ -5577,7 +5584,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // THE ACT'S HOUSEHOLD. A placement on a resident's behalf lands under the
   // RESIDENT'S household, never the placer's (POS-233): it is their act, their
   // live layer, their sketchbook and their cap, and their own amend must find it.
-  const household = onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
+  const household = operator ? operator.household : onBehalf ? onBehalf.household : String(key?.household ?? "").trim();
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household before leaving a mark");
 
   // THE INLINE STAKE'S CALLER, ASKED BEFORE THE ACT IS WRITTEN (office #226).
@@ -5635,6 +5642,8 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
     ...(payload.preview === true ? { preview: true } : {}),
     ...(setDown ? { _set_down: setDown } : {}),
     ...(onBehalf ? { [PLACED_BY_KEY]: onBehalf.placer, [CONSENT_KEY]: onBehalf.consent } : {}),
+    // the operator's reason, underscored as `_placed_by` is: the act's payload carries it, a mark file never does
+    ...(operator ? { [REPAIR_REASON_KEY]: operator.reason } : {}),
     // `stamps` now RIDES the declaration instead of being stripped here. It was
     // stripped because 1.0 routes escrow through the stake verb and the record
     // had no use for it — but under the stake-is-the-boundary ruling the amount
@@ -5771,7 +5780,10 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
 // exec cannot: WHOSE hand (the mark's by must be on your key — only the hand
 // that left a mark may withdraw it) and the LEDGER (escrow anchors a mark; the
 // stake ledger lives town-side, so the check runs here before anything spawns).
-export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false } = {}) {
+// `operator` IS THE REPAIR DOOR'S, AS FOR leaveMarkAct (POS-1025/b): the mark's own author and household, withdrawn
+// under every guard below, the escrow first. A set-down unit or holder goes back to its dropper only by the dropper's
+// own withdrawal, so a repair refuses it by name rather than end it with nothing returned.
+export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, { units = null, escrowOf = null, undoSetDown = false, operator = null } = {}) {
   { const fz = worldFreezeBounce(); if (fz) return fz; }
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const mark = String(args.mark ?? "").trim();
@@ -5801,9 +5813,9 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
   if (!mark || !mark.includes("/")) throw bounce(422, "which mark?", "pass mark: '<by>/<slug>' — ids as the telling shows them");
   const by = mark.slice(0, mark.indexOf("/"));
   const slug = mark.slice(mark.indexOf("/") + 1);
-  if (!key?.handles?.has(by)) throw bounce(403, `only the hand that left a mark may withdraw it — "${by}" is not on your key`,
+  if (!operator && !key?.handles?.has(by)) throw bounce(403, `only the hand that left a mark may withdraw it — "${by}" is not on your key`,
     `this key acts for: ${[...(key?.handles ?? [])].join(", ") || "(none)"}`);
-  const household = String(key?.household ?? "").trim();
+  const household = operator ? operator.household : String(key?.household ?? "").trim();
   if (!household) throw bounce(403, "this credential has no resident household", "sign in as a resident household");
 
   // Escrow anchors — the law world_stake_read already states. Your own stake
@@ -5837,6 +5849,16 @@ export async function withdrawMarkViaOffice(worldClone, args = {}, key = null, {
     // ledger read fail and hand in the class law; the office passes neither.
     const guard = withdrawEscrowGuard({ mark, escrow: escrowOf ?? ((m) => ledgerEscrowOf(m)) });
     try {
+      if (operator) {
+        const [{ droppedUnitOnGitLane }, { setDownHolderOnGitLane }] = await Promise.all([import("./world-units.mjs"), import("./set-down-return.mjs")]);
+        for (const asked of [droppedUnitOnGitLane, setDownHolderOnGitLane]) {
+          const r = await asked({ mark, by, household }, units ?? null);
+          if (r?.code === 503) throw bounce(r.code, r.defect, r.hint);
+          if (r) throw bounce(409, `"${mark}" was set down from a resident's hands, and only its dropper's own withdrawal sends it back`,
+            "a repair moves nothing between hands: withdrawn by an operator it would end with nothing returned. Ask its dropper to withdraw it, or amend it instead. Nothing was written.");
+        }
+        return await journalWithdraw({ by, slug, household, guard, cause: { repair: operator.reason } });
+      }
       // A SET-DOWN THAT DID NOT LAND (setDownMade's own undo, `undoSetDown`, never a resident's call): the
       // thing and all it holds are still in hand, so its draft goes without the empty-holder guard, under the
       // guard that proves it (WLD-138; set-down-return.mjs § stillInHandGuard)

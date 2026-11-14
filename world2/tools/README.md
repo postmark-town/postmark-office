@@ -919,6 +919,12 @@ this pen can make, and it stops the run.
 read — the certification says what the law was when the state it certifies was
 cleared.
 
+`settlement` and `snapshot_digest` (POS-1025) are that window's seal: the number the
+clearing gave it and its snapshot's digest, the pair its public `settlement/S<n>` tag
+names on the world. Both are written at the seal and never move. A window sealed
+before migration 095 has no number, and its certification carries neither key, so
+every certification signed before them re-derives byte for byte.
+
 `archives` and `archives_sha` go beyond gold §2's list of three, on purpose: the
 acts cursor alone binds the log's *length*. It would notice an act appended and
 miss an act **rewritten**, and "the office cannot rewrite history without the repo
