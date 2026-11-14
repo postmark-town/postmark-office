@@ -2088,7 +2088,7 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       const { pageStances } = await import("./household-read-page.mjs");
       const answer = await (ctx.readers?.stances ?? stancesForHandles)(scope, { cursor: f.cursor ?? null, limit: f.limit, by: f.by ?? null, over: f.over ?? null, setDowns: true });
       // paged only on the connector's own call (ctx.connector); REST and the doorstep's nested calls read the canonical answer, and `part` is a connector read
-      const paged = ctx.connector === true ? pageStances(answer, { part: f.part, cursor: f.cursor }) : answer;
+      const paged = ctx.connector === true ? pageStances(answer, { part: f.part, cursor: f.cursor, handle: named }) : answer;
       return paged?.error === "bounce" ? bounce(paged.code, paged.defect, paged.hint) : paged;
     }
     // ── what the crossings did to your things (2026-09-07, #2526) ───────────
