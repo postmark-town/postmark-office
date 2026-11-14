@@ -80,8 +80,9 @@ const COUNTED = new Set(["standing", "accepted"]);
 const ACT_WORD = Object.freeze({ host: "post", "amend-event": "amend", "cancel-event": "close" });
 
 const POST_COLUMNS = "id, class, title, author, household, starts, ends, fields, state, last_act";
-/** The classes whose rows carry their body to a class reader (§ BODY): the ballot's is its resources (POS-983). */
-const BODY_CLASSES = new Set(["ballot"]);
+/** The classes whose rows carry their body to a class reader (§ BODY): the ballot's is its resources (POS-983); the bug's is the reporter's own
+ *  public words, which a checker reads before a yes (POS-942). */
+const BODY_CLASSES = new Set(["ballot", "bug"]);
 
 /** An event's state from the clock: announced | live | ended, or cancelled. */
 export function eventState(row, now) {
@@ -310,7 +311,7 @@ async function ideaRows(members, whose, { townClone }) {
 const STARTS = Symbol("starts");
 /** A post's class `fields`, for a class reader that joins them (a quest's registry id); never on this read's answer. */
 export const FIELDS = Symbol("fields");
-/** A post's body, for a class reader that answers it (a ballot's, POS-983); never on this read's answer. */
+/** A post's body, for a class reader that answers it (a ballot's, POS-983; a bug's, POS-942); never on this read's answer. */
 export const BODY = Symbol("body");
 export const TERMINAL_STATES = Object.freeze(["ended", STATE_CANCELLED]);
 const terminal = (r) => TERMINAL_STATES.includes(r.state);
