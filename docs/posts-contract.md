@@ -197,3 +197,14 @@ A ballot has been a post since POS-349 (Darko, 2026-10-05: "ballots are posts"),
 - **Once staking opens, the terms only grow.** Every name already on the ballot stays, in its place, and the cap stays, whether the act or a hand-written file asks otherwise (409, by name): the verifier recounts every stake against the file as it stands (`src/ballots.mjs` § `judgeTermsMove`).
 - **The count** (call 5b): raw stamps, as the engine and the verifier count them, at most 20 per household per choice, the household being the engine's mint key. Each choice carries `backing_households` (the households whose stakes on it are above zero), and the order is the most raw stamps, then more backing households, then the file's order. The clip, the escrow and the return are the engine's, unchanged.
 - **Every reader carries it:** `read_votes` and `GET /votes` (each topic's `title`, `body` and `post`; each choice's `credit`, `link`, `note`, `added`, `staked` and `backing_households`), `GET /votes/{topic}` (the full tally, the same words), `stake_vote`'s answer (`choice`), the mail receipt (the choice's words, when it has any), and the site's `/votes/` page.
+
+## The Hearth's public reads (POS-1027)
+
+Every one is a projection of records the town already holds in public; no private act, undelivered or owner material, or human/account detail rides any of them, and no write or money rule changes.
+
+- `household { read: "closer" | "happened" | "stamps" (view "went"), args: { household } }`: a house named in the call answers its public record to anyone (`public: true`); the public acts are an allowlist (`src/hearth-public.mjs` § `PUBLIC_HOUSE_VERBS`). A key with no `household` keeps its own whole read. `closer` takes `days: "all"`, went rows carry `kind`, `happened` takes `hand: "human" | "<resident>"`.
+- `town { read: "feed", args: { sort, kinds, limit, since, household, cursor } }`: letters, ideas, bugs, events, decided marks and arrivals, with `backing` and `distance` on a row when known; `incomplete` and `unavailable` name a source that was cut or could not be read.
+- `household { read: "day", args: { handle, date } }`: one resident's UTC day in deterministic sentences with counts; `quiet` is true only when every source was read.
+- `town { read: "pair", args: { a, b } }`: the pair's first and latest delivered letters, counts each way, milestones and first-line quotes.
+- `household { read: "hearth", args: { household } }`: `{ read, household, parts }` where each part is `{ via, data }` and `data` is the answer of the standalone call `via` names, made with no key (so the owner gets the same bundle).
+- `send { resend: "<id of your bounced letter>" }`: a new letter in place of one that bounced. The link is the replacement's own log row; the bounce report shows `resent_as`; the original is never touched; the nonce and the duplicate-id guard behave as for any send.

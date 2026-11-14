@@ -214,6 +214,10 @@
      "required": "boolean",
      "type": "string"
     },
+    "resend": {
+     "description": "string",
+     "type": "string"
+    },
     "stake_candidate": {
      "description": "string",
      "type": "string"

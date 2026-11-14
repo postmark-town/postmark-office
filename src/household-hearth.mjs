@@ -56,6 +56,22 @@ export function registeredHearths(clone) {
 export const hearthOf = (rec) => (typeof rec?.hearth === "string" && HEARTH_ID.test(rec.hearth) ? rec.hearth : null);
 
 /**
+ * THE JUDGMENT of a Hearth value, before anything is written (and so before a combined settings request keeps any part of itself, WLD-28): `hearth` is a
+ * registered entry's id, or null / "" / the default's own id for "back to the default". Returns the id to keep, or null for the default; throws the named refusal.
+ */
+export function judgeHearth(hearth, { clone = null, registered = registeredHearths } = {}) {
+  if (hearth !== null && typeof hearth !== "string") throw bounce(422, "hearth is an entry id, or null for the default", '{"hearth": "<id>"} — the id of a registered Hearth, or {"hearth": null} to go back to the default');
+  const id = hearth === null || hearth === "" || hearth === DEFAULT_HEARTH ? null : hearth;
+  if (id !== null) {
+    if (!HEARTH_ID.test(id)) throw bounce(422, "that is not an entry id", "an entry id is lowercase letters, digits and hyphens, at most 40: the name of its folder in PROJECTS/household-hearths");
+    let known;
+    try { known = registered(clone); } catch { throw bounce(503, "the town's Hearth entries cannot be read right now", "nothing was kept; try again shortly"); }
+    if (!known.has(id)) throw bounce(422, `"${id}" is not a registered Hearth`, `choose one of: ${[...known].sort().join(", ") || "(none)"}`);
+  }
+  return id;
+}
+
+/**
  * THE WRITE. `hearth` is a registered entry's id, or null to go back to the default. The account must be the GitHub-signed-in one the household's
  * record binds. Answers `{ household, hearth, registry, commit }`; `hearth` is what is now saved (null: the default).
  */
@@ -64,7 +80,7 @@ export async function chooseHearth({ slug, hearth, ghId, ghLogin } = {},
   const s = String(slug ?? "").trim();
   if (!s) throw bounce(422, "which household?", "a Hearth is chosen for one household: PATCH /households/<slug>/hearth");
   if (ghId == null) throw bounce(403, "a Hearth is chosen by the household's human", "this credential carries no verified GitHub account; sign in on the site and choose there");
-  if (hearth !== null && typeof hearth !== "string") throw bounce(422, "hearth is an entry id, or null for the default", '{"hearth": "<id>"} — the id of a registered Hearth, or {"hearth": null} to go back to the default');
+  if (hearth !== null && typeof hearth !== "string") judgeHearth(hearth);   // the shape is refused first, as it always was: before the record is read
 
   const rows = await loadRegistryRows(env);
   if (rows === null) throw bounce(409, "the household record is not open", "the office is not pointed at the town's record right now: nothing was kept; try again shortly");
@@ -72,13 +88,8 @@ export async function chooseHearth({ slug, hearth, ghId, ghLogin } = {},
   if (!rec) throw bounce(404, `no household "${s}"`, "a Hearth is chosen for a household the town keeps");
   if (!accountBinds(rec, ghId)) throw bounce(403, `this account does not keep "${s}"`, "only an account the town's record binds to this household can choose its Hearth");
 
-  const id = hearth === null || hearth === "" || hearth === DEFAULT_HEARTH ? null : hearth;
-  if (id !== null) {
-    if (!HEARTH_ID.test(id)) throw bounce(422, "that is not an entry id", "an entry id is lowercase letters, digits and hyphens, at most 40: the name of its folder in PROJECTS/household-hearths");
-    let known;
-    try { known = registered(clone); } catch { throw bounce(503, "the town's Hearth entries cannot be read right now", "nothing was kept; try again shortly"); }
-    if (!known.has(id)) throw bounce(422, `"${id}" is not a registered Hearth`, `choose one of: ${[...known].sort().join(", ") || "(none)"}`);
-  }
+  const id = judgeHearth(hearth, { clone, registered });
+
 
   const written = await write({ slug: s, hearth: id, ghId: Number(ghId) }, env);
   if (written === null) throw bounce(409, "the household record is not open", "the office is not pointed at the town's record right now: nothing was kept; try again shortly");

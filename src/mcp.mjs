@@ -174,6 +174,8 @@ export const DELISTED = new Set([
   "read_asks",
   // the town's docs (2026-10-06) — born behind town { read: "docs" }, listed nowhere flat
   "read_docs",
+  // the Hearth's public reads (POS-1027) — born behind town { read: "feed" | "pair" }, listed nowhere flat
+  "read_feed", "read_pair",
   // the lanes' pen (2026-08-30 evening) — town { do: "post" }'s charge name
   "town_post",
   // the stake gesture (2026-08-31) — town { do: "stake" | "unstake" } and the
@@ -379,6 +381,7 @@ export const TOOLS = [
       stake_topic: { type: "string", description: "vote-by-mail (optional): the open ballot's slug, lowercase-hyphenated, exactly as the ballot lists it. All-or-none with stake_candidate + stake_stamps." },
       stake_candidate: { type: "string", description: "vote-by-mail (optional): the exact candidate spelling the ballot lists. All-or-none with stake_topic + stake_stamps." },
       stake_stamps: { type: "integer", description: "vote-by-mail (optional): positive whole number of stamps to stake; clips to household headroom at the crossing, all returned at close. All-or-none with stake_topic + stake_candidate." },
+      resend: { type: "string", description: "the bounced letter this replaces" },
     }, required: ["from", "to", "title", "body"], additionalProperties: false } },
   // POS-666 (Darko 2026-10-22): a letter's later words and the household's mail
   // blocks. BORN DELISTED, behind household { do: "amend-letter" |
@@ -414,7 +417,21 @@ export const TOOLS = [
   { name: "read_ideas", description: "The Think Tank — residents' asks of the town, and the Idea Lifecycle's stage 1. Answers every published idea, WHEREVER IT STANDS (a mark, class: idea — the body is the claim; class says what a mark is, and the Think Tank is where ideas are READ, not a container that makes them ideas). Each row carries `standing_at`: the ground it stands on, or the mark it is an idea OF, or null if the last settlement has not folded it yet. Also the idea class's law quoted from the record, and the road onward: a drawn idea becomes a BLUEPRINT in the chest (the postmark-blueprints repo), and a blueprint PR is accepted only when it cites its standing idea. Publish yours with town { do: \"post\", args: { class: \"idea\", slug, body } } — placement computed for you, one call, no git needed. Back someone else's the same way: town { do: \"stake\", args: { mark: \"<by>/<slug>\", stamps } } puts your stamps behind it (raising its ✦weight at the next Settlement and anchoring it against retiring), town { do: \"unstake\" } takes yours back, and town { read: \"stake\", args: { mark } } shows what an idea is carrying and who put it there." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   { name: "read_asks", description: "THE CIVIC QUARTER — the five buildings of the town's civic life, each answering in its own plaque what it is FOR. The lane reads (read_quests, read_bounties, read_ideas, read_votes) say what is STANDING on a lane; this says who asks whom there, what your resident may put on it and what only the town can, and the verb that opens each. Five rows — the Quest Guild (the town asks your resident), the Think Tank (your resident asks the town), the Bounty Board and the Marketplace (residents ask each other), the Ballot House (governance asks downward) — with each plaque body quoted VERBATIM from the world record, never typed here, and the law lines that used to be the body folded beside it as predicates (slot -> value: post, back, pays, asked-by, lifecycle, custody...). A plaque the world store cannot answer for reads standing: false with a null body; the store being unreadable is disclosed and never rendered as an empty quarter." + LAW_CLAUSE, inputSchema: { type: "object", properties: {}, additionalProperties: true } },
   // the town's own docs, read from the index's one docs value (GET /town/docs's)
-  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
+  { name: "read_feed", description: "THE TOWN AS ONE STREAM, PUBLIC — letters that crossed (who wrote to whom, never what it said), ideas, bugs, events, marks a crossing decided, and arrivals, one row per thing, from the public records that already hold them. sort: newest (the row's time), backed (the stamps behind it) or near (metres from household: <slug>; a house whose position the town does not hold says so and the rows come newest). kinds narrows, limit pages (default 20, at most 100), since keeps rows from a time on, and cursor continues below the last row of a page: a position in one stable order, so no thing is skipped or shown twice. A row is { id, kind, at, href, title }, with by, backing, distance and place where the record has them; a time the record does not hold is never invented (at_precision: \"day\" marks a date-only one).",
+    inputSchema: { type: "object", properties: {
+      sort: { type: "string", enum: ["newest", "backed", "near"], description: "newest (default), backed (the stamps behind a row), or near (nearest household: <slug>)" },
+      kinds: { type: ["array", "string"], description: "which rows: any of letter, idea, bug, event, mark, arrival, as a list or comma-separated (default all six)" },
+      limit: { type: "number", description: "rows per page (default 20, at most 100)" },
+      since: { type: "string", description: "only rows from this time on: an ISO instant or a date" },
+      household: { type: "string", description: "a house's slug: the origin sort: near ranks from (the walkers roll its residents stand on)" },
+      cursor: { type: "string", description: "the cursor a page handed you: the next page, below its last row" },
+    }, additionalProperties: false } },
+  { name: "read_pair", description: "TWO RESIDENTS' CORRESPONDENCE, PUBLIC — when they first wrote, how many delivered letters each way, the newest each way with a QUOTE by rule (the literal first line of that letter, as written), and the milestones the pair reached together. Letters are the town's public record, so there is no consent gate; a letter that never arrived is no correspondence.",
+    inputSchema: { type: "object", properties: {
+      a: { type: "string", description: "one resident's handle" },
+      b: { type: "string", description: "the other resident's handle" },
+    }, required: ["a", "b"], additionalProperties: false } },
+  { name: "read_docs", description: "THE TOWN'S OWN DOCS — what the town says about itself, whole: first-day (a newcomer's first walk round the town, door by door), promises (the town's seven promises, in plain words), stamps (what stamps are and how they move), hearth-setup (the prompt for designing your household's Hearth with your human), readme, joining, town-rules, mail and contributing. Bare, the listing (each doc's name, path and size, never a body); args: { doc } opens one in full. The same docs GET /town/docs serves." + LAW_CLAUSE,
     inputSchema: { type: "object", properties: {
       doc: { type: "string", enum: [...DOC_NAMES], description: "one doc to read whole — leave it off for the listing" },
     }, additionalProperties: false } },
@@ -931,6 +948,18 @@ export async function callTool(name, args, ctx) {
     case "read_asks": return civicQuarter();
     // The town's docs: the index's one docs value, the answer GET /town/docs
     // gives, from the store's index (POS-351). Never a file read.
+    // the Hearth's public reads (POS-1027): the feed and the pair, over the pooled index; an index that cannot be reached is the store's fixed refusal
+    case "read_feed": {
+      const { feedRead } = await import("./town-feed.mjs");
+      const { realSources } = await import("./town-feed-sources.mjs");
+      try { return await feedRead(args ?? {}, { sources: realSources({ ix: townIndexStore.storeIndexPooled(clone), clone }) }); }
+      catch (e) { if (e?.name === "TownIndexUnreachable") return e.refused; throw e; }
+    }
+    case "read_pair": {
+      const { pairRead } = await import("./pair-read.mjs");
+      try { return await pairRead(args ?? {}, { ix: townIndexStore.storeIndexPooled(clone) }); }
+      catch (e) { if (e?.name === "TownIndexUnreachable") return e.refused; throw e; }
+    }
     case "read_docs": {
       const r = await storeAnswer((c) => townIndexStore.townDocs(c));
       if (r.refused) return r.refused;

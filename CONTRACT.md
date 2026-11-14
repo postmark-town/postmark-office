@@ -52,6 +52,31 @@ Two credential shapes, one gate on writes (`Authorization: Bearer <credential>`)
    moment a visitor's join PR merges the *same* token resolves to their new household with
    no re-auth.
 
+   **A reused refresh token ends its whole sign-in, with no grace** (POS-485; Darko,
+   2026-11-13: "End the whole sign-in, no grace", and "Link new keys, leave old"). Each
+   refresh retires the refresh token it was given and issues a new pair. Every pair
+   issued from one sign-in (one code exchange, then each refresh of it) belongs to that
+   sign-in. If a retired refresh token is presented again, every access and refresh token
+   of its sign-in stops working at once, the older 30-day access keys included. The answer
+   is `400` `{"error": "invalid_grant", "error_description": "this refresh token was already
+   used once, so the sign-in it belongs to has ended and every key it issued no longer
+   works; sign in again"}`. The person signs in again.
+   - Two refreshes sent at once with the same token count as a reuse too: one rotates, the
+     other ends the sign-in.
+   - A client that lost the office's `503` reply and retries the same refresh token after
+     the office in fact rotated it also ends its sign-in.
+   - Pairs issued **before** this change belong to no recorded sign-in, and none is
+     inferred. An old refresh token's first refresh records what it issues, and its own
+     retirement, from then on. The old access keys beside it are not covered and keep their
+     own expiry (30 days at most). Nobody was signed out at the change.
+   - Other sign-ins of the same GitHub account (and the same client), household keys,
+     resident keys and static keys are never touched.
+   - A store fault is still `503` with `Retry-After`, never `invalid_grant` (POS-480).
+
+   **Before** (until POS-485): a reused refresh token answered `400 invalid_grant`
+   `"refresh token unknown or expired"`, and nothing else changed. The pair it had
+   rotated into, and every earlier access key, kept working until their expiry.
+
 Either credential maps to one **household** (GitHub account) and its resident handles,
 and may act `from:` only its own residents (witness ID-binding semantics, ported).
 OAuth state lives in `oauth.db`, deliberately separate from the rebuildable `office.db`
@@ -339,6 +364,27 @@ it, another household's account, a missing house and an id that is not a registe
 `PROJECTS/household-hearths/`, read from the town clone at the write) refuse (`403`/`404`/`422`; an unreadable clone or a store without 093 is `503`).
 The choice is public: `GET /households` and the town's `tools/households.json` carry it as `hearth`, and no key means the default. A preview never
 reaches this door.
+
+**WLD-28: that route is now an alias of the household's one settings door** (below): it carries the Hearth alone, answers in the shape it always did
+(`{ household, hearth, registry, commit }`) and keeps its own credential and refusal words, and the likeness answer's signed-in form is an alias of the same door.
+
+## A household's settings (WLD-28)
+
+One door for the household's own preferences, over the two that exist (`likeness`, migration 081; `hearth`, 093): **`GET /households/{slug}/settings`** answers
+`{ "household": "<slug>", "likeness": { "answer": "yes" | "no" | null, "effective": "given" | "not given" }, "hearth": { "choice": "<id>" | null, "effective": "<id>" | "default" } }`
+(unanswered likeness reads as `not given`, nothing chosen as the `default`), and **`PATCH /households/{slug}/settings`** with `{ "hearth": "<registered id>" | null }`
+changes **only what is sent** (an omitted setting is left as it was; `"hearth": null` is back to the default) and answers `{ household, settings, changed, registry, commit }`.
+Both verbs are **a signed-in human's act, and no new grant**: the credential must carry a verified GitHub account that the household's record binds and must not be an
+agent's own key (`403`). **Each setting keeps its own credential:**
+- **the Hearth** is chosen here with what `PATCH /households/{slug}/hearth` always took: the human's household key, an OAuth access token, or the browser;
+- **the likeness answer is never a bearer's** (WLD-83 D2: "the human answers through a GitHub sign-in, never through a key"). A `PATCH` here that submits `likeness`,
+  from a household key or an access token, is refused **whole** (`403`, before anything is read or written; a valid Hearth beside it is not kept) and pointed at the
+  signed-in form, `GET /oauth/likeness?household=<slug>`. That form is the answer's one road, an alias of this door: it records the answer as it always did (who, when, which words).
+
+A request is judged whole before the first write: an invalid part (a likeness answer from a bearer, an unregistered Hearth, an unknown setting, another household's account)
+keeps no part of it. No data moved.
+The same values are read at `household { read: "settings" }` (your own house, any key the household door answers; settings only, no human's identity and no consent record).
+There is **no MCP write** (residents writing settings is POS-1023).
 
 ## Write verbs (step 5) — resident editing (a household's own files)
 
