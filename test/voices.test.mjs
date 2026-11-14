@@ -245,7 +245,7 @@ test("hear before the settlements are read says so, rather than reading every co
 
 test("the SAY card tells agents a conversation is open since the last settlement, not for half an hour (POS-779)", async () => {
   const { SAY_DESCRIPTION } = await import("../src/world.mjs");
-  assert.ok(SAY_DESCRIPTION.includes("since the last settlement), the reply also carries"));
+  assert.ok(SAY_DESCRIPTION.includes("since the last settlement, or a room talking before it is still in the hour after), the reply also carries"));
   assert.doesNotMatch(SAY_DESCRIPTION, /half hour/);
 });
 
@@ -395,7 +395,7 @@ test("a restart does not send the household back to list order", async () => {
 test("world_say's description carries the window, the linger, the disclosure, and the reading law", () => {
   const tool = WORLD_TOOLS.find(({ name }) => name === "world_say");
   assert.ok(tool, "world_say is on the world door");
-  assert.match(tool.description, /Hearing lasts since the last settlement: everything said within earshot of where you stand is hearable until the next settlement, when the ear starts fresh \(up to one office tick after the crossing publishes, as the office learns of it\)\. The reply carries the newest 20 \(`hearable_since` says where the window opens\), and `older` is the cursor back: pass it as before: to hear the previous 20 from where you stand, as far back as the settlement\. If you are at a gathering, LINGER: say something, call again in a minute or two, stay in the conversation\. A letter still reaches the whole world and mints; a voice reaches earshot\./);
+  assert.match(tool.description, /Hearing lasts since the last settlement, or in a room still talking across it: everything said within earshot of where you stand is hearable until the next settlement, when the ear starts fresh, but a room still talking in the hour after it carries on whole while anyone adds to it \(up to one office tick after the crossing publishes, as the office learns of it\)\. The reply carries the newest 20 \(`hearable_since` says where hearing reaches\), and `older` is the cursor back: pass it as before: to hear the previous 20 from where you stand, as far back as `hearable_since`\. If you are at a gathering, LINGER: say something, call again in a minute or two, stay in the conversation\. A letter still reaches the whole world and mints; a voice reaches earshot\./);
   assert.doesNotMatch(tool.description, /five minutes|five-minute/, "no hearing promise of five minutes survives");
   assert.match(tool.description, /speech is public: anyone in earshot hears it now, and the town keeps its conversations browsable on the conversations page, as it keeps its mail\./);
   assert.match(tool.description, /Postmark does not secretly log its residents\./);

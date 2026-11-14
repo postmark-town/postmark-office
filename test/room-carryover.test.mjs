@@ -208,3 +208,49 @@ test("FALSIFIER: restoring the old epoch split would break the cross-edge room (
   assert.equal(oldSplit(first, inGrace, [edge]), true, "the old rule split here");
   assert.equal(clusterVoices([v(first), v(inGrace)], { earshotM: EARSHOT_M, boundaries: [edge] }).length, 1, "the new rule keeps one room");
 });
+
+// ── the bounds: what a carried room loses is said, and its name survives (the FIX pass) ─────────────────
+test("memory trim: a carried room's lost front is disclosed, hearable_since names what is actually heard, and the room keeps its id", async () => {
+  const { store, tick, settle } = bench(AT, { memoryMax: 5 });
+  for (let i = 1; i <= 5; i++) { await store.say("mira", `m${i}`); tick(20_000); }
+  const idBefore = store.conversations().live[0].id;
+  settle(); tick(10 * MIN);
+  const whole = await store.hear("pell");
+  assert.deepEqual(said(whole), ["m1", "m2", "m3", "m4", "m5"]);
+  assert.equal(whole.hearing_disclosed, undefined, "nothing lost yet");
+  assert.equal(whole.hearable_since, new Date(T0).toISOString(), "hearing reaches the room's first say, not the settlement edge");
+  await store.say("odo", "g1"); tick(20_000);
+  const cut = await store.hear("pell");
+  assert.deepEqual(said(cut), ["m2", "m3", "m4", "m5", "g1"]);
+  assert.match(cut.hearing_disclosed, /carried across the settlement has lost its earliest voices/);
+  assert.equal(cut.hearable_since, new Date(T0 + 20_000).toISOString(), "the earliest voice this ear can still be given");
+  const c = store.conversations();
+  assert.equal(c.live.length, 1);
+  assert.equal(c.live[0].id, idBefore, "the same room, named the same after its first say left memory");
+  assert.equal(c.settlement_since, new Date(T0 + 100_000).toISOString(), "settlement_since stays the published edge");
+  await store.say("odo", "g2"); tick(20_000);
+  assert.equal(store.conversations().live[0].id, idBefore, "and again after the next trim");
+});
+
+test("memory identity equals the stored record's for the same room", async () => {
+  const { store, tick, settle } = bench(AT, { memoryMax: 5 });
+  const rows = [];
+  for (let i = 1; i <= 5; i++) { rows.push({ ...v(T0 + (i - 1) * 20_000), handle: "mira" }); await store.say("mira", `m${i}`); tick(20_000); }
+  settle(); tick(10 * MIN);
+  for (let i = 1; i <= 3; i++) { rows.push({ ...v(T0 + 100_000 + 10 * MIN + (i - 1) * 20_000), handle: "odo" }); await store.say("odo", `g${i}`); tick(20_000); }
+  const mem = store.conversations().live[0].id;
+  const stored = port.conversationsOf(rows, { now: T0 + 30 * MIN, earshotM: EARSHOT_M, boundaries: [T0 + 100_000], fadeMs: 5 * MIN });
+  assert.equal(stored.live[0].id, mem);
+});
+
+test("/world2/say: a carried room's read says it holds only part of it, and hearable_since names the earliest row returned", async () => {
+  const sweeps = [S1, S1 - 12 * H];
+  const acts = [sayAct(1, S1 - 20 * MIN, "mira"), sayAct(2, S1 + 5 * MIN, "odo", 10)];
+  const r = await sayAt(acts, S1 + 30 * MIN, sweeps);
+  assert.deepEqual(heardBy(r), ["mira", "odo"]);
+  assert.equal(r.body.hearable_since, iso(S1 - 20 * MIN), "the reach is the earliest row returned; the edge is the settlement's");
+  assert.match(r.body.read_bound_disclosed, /carried across the settlement/);
+  const plain = await sayAt([sayAct(1, S1 + 5 * MIN, "odo")], S1 + 30 * MIN, sweeps);
+  assert.equal(plain.body.hearable_since, iso(S1));
+  assert.equal(plain.body.read_bound_disclosed, undefined);
+});

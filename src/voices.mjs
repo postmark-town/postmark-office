@@ -154,7 +154,7 @@ export const TEXT_MAX = dial("text_max");
 export const PRESENCE_MS = dial("presence_min");
 
 /** The ear's window, in the words every surface says it in — one place. The instant rides each reply as `hearable_since`. */
-export const HEARING_WINDOW = "since the last settlement";
+export const HEARING_WINDOW = "since the last settlement, or in a room still talking across it";
 
 /**
  * Where the room's record is kept, in one line (POS-330, Kogane at Office Hours
@@ -431,12 +431,31 @@ export function createVoices({
   // the newest instant a trim dropped; a reply whose window opens before it
   // names the cut rather than passing a short page off as the whole window.
   let cutAt = null;
+  // A ROOM KEEPS ITS NAME WHEN ITS FRONT LEAVES MEMORY (CORE-97). A room's id is its first say's (`t<at>-<handle>`), and a room that renews at every
+  // settlement outlives the memory's first say. So a trim that drops the front of a room (and keeps its back) records, against the room's first KEPT say,
+  // the id the room already had: the stored record, which holds every say, names it the same. `rootOf` is voice object -> id, only for voices held;
+  // `cutRooms` is the same for the disclosure (a room whose front is gone from memory says so). Bounded by memoryMax; no store, the log is the road.
+  const rootOf = new Map();
   function trimmed(list) {
     if (list.length <= memoryMax) return list;
     const cut = list.length - memoryMax;
     cutAt = list[cut - 1].at;
-    return list.slice(cut);
+    const kept = list.slice(cut);
+    const held = new Set(kept);
+    const next = new Map();
+    for (const [key, spoken] of groupByRoom(list)) {
+      for (const c of clusterVoices(spoken, { earshotM, boundaries: boundariesAt(now()) })) {
+        const heldHere = c.voices.filter((v) => held.has(v));
+        if (!heldHere.length) continue;
+        const id = rootOf.get(c.voices[0]) ?? (heldHere.length < c.voices.length ? `t${c.voices[0].at}-${c.voices[0].handle}` : null);
+        if (id) next.set(heldHere[0], id);
+      }
+    }
+    rootOf.clear();
+    for (const [v, id] of next) rootOf.set(v, id);
+    return kept;
   }
+  const idOfCluster = (c) => rootOf.get(c.voices[0]) ?? null;
 
   // The window at `t`, never throwing: a reader that trips hears as if nothing
   // were hearable before `t`'s own settlement is unknown — which it says.
@@ -614,7 +633,7 @@ export function createVoices({
       audible.push({ v, x: heard.x, y: heard.y, structural: false });
     }
     stats.clusters += 1;
-    return { t, audible, clusters: wantClusters ? clusters : null, window, boundaries };
+    return { t, audible, clusters: wantClusters ? clusters : null, window, boundaries, carriedCut: carried.cut };
   }
 
   // THE RECORD, CLUSTERED ROOM BY ROOM (POS-886).
@@ -632,12 +651,14 @@ export function createVoices({
   // The voices of every room that is still open at `t` and began before the window's edge: the room carried across it (CORE-97).
   function carriedVoices(clusters, t, since) {
     const out = new Set();
+    out.cut = new Set(); // voices of a carried room whose front is no longer in memory
     if (!clusters || since == null) return out;
     const marks = boundariesAt(t);
     for (const list of clusters.values()) {
       for (const c of list) {
         if (c.voices[0].at >= since || !roomOpen(c.latest, t, marks)) continue;
-        for (const v of c.voices) out.add(v);
+        const lost = rootOf.has(c.voices[0]);
+        for (const v of c.voices) { out.add(v); if (lost) out.cut.add(v.handle + "|" + v.at); }
       }
     }
     return out;
@@ -650,13 +671,17 @@ export function createVoices({
     roomMemo = { key, list, clusters };
     return clusters;
   }
-  function clusterByRoomUncached(list, boundaries) {
+  function groupByRoom(list) {
     const byRoom = new Map();
     for (const v of list) {
       const key = v.room ?? null;
       if (!byRoom.has(key)) byRoom.set(key, []);
       byRoom.get(key).push(v);
     }
+    return byRoom;
+  }
+  function clusterByRoomUncached(list, boundaries) {
+    const byRoom = groupByRoom(list);
     const clusters = new Map();
     for (const [key, spoken] of byRoom) clusters.set(key, clusterVoices(spoken, { earshotM, boundaries }));
     return clusters;
@@ -796,7 +821,8 @@ export function createVoices({
   async function reply(handle, here, t, spoke, since = null, { snap = null, presentIn, before = null, standAs = null, counted = true } = {}) {
     const fresh = (v) => !(Number.isFinite(since) && v.at <= since);
     snap ??= await snapshot(t);
-    const heard = heardBy(here, snap).filter(fresh);
+    const everHeard = heardBy(here, snap);
+    const heard = everHeard.filter(fresh);
     const page = Number.isFinite(before) ? heard.filter((v) => v.at < before) : heard;
     const within = page.slice(-hearMax); // newest last
 
@@ -897,8 +923,15 @@ export function createVoices({
     // is older still — pass it back as `before` for the previous page
     out.older = page.length > within.length ? within[0].at : null;
     // where the window opens, so a reader can see how far back `older` can go
-    out.hearable_since = snap.window?.since != null ? new Date(snap.window.since).toISOString() : null;
+    // CORE-97: a room carried across the settlement is heard from its own start, so where hearing reaches is the earliest voice this ear can
+    // be given (the window's edge when none is older); `conversations()`' `settlement_since` keeps naming the published edge itself.
+    const reach = everHeard.length && snap.window?.since != null ? Math.min(snap.window.since, everHeard[0].at) : snap.window?.since;
+    out.hearable_since = reach != null ? new Date(reach).toISOString() : null;
+    const carriedCut = everHeard.some((v) => snap.carriedCut?.has(v.handle + "|" + v.at));
     const told = [snap.window?.disclosure,
+      carriedCut
+        ? `a room carried across the settlement has lost its earliest voices from this office's memory (it keeps at most ${memoryMax}): hearing reaches back only to ${out.hearable_since} for it, and the conversations page keeps the rest`
+        : null,
       cutAt != null && snap.window?.since != null && cutAt >= snap.window.since
         ? `this office keeps at most ${memoryMax} voices in memory, and more than that have been said since the settlement — voices before ${new Date(cutAt).toISOString()} are no longer hearable (the conversations page keeps them)`
         : null].filter(Boolean);
@@ -1138,7 +1171,7 @@ export function createVoices({
   function conversations({ closedMax = 40, voiceCap = 80, before = null } = {}) {
     const t = now();
     // `fade_minutes` is the DISPLAY fade (POS-226, Keemin 2026-09-26): how long a
-    // page draws a voice. `hearable_since` beside it is where an ear's window opens.
+    // page draws a voice. `hearable_since` beside it is where an ear's hearing reaches (the window's edge, or earlier for a room carried across it).
     const boundaries = boundariesAt(t);
     const since = liveSince(boundaries);
     // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
@@ -1160,8 +1193,8 @@ export function createVoices({
       close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement, unless someone adds to it in the hour after (POS-779, CORE-97) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
       settlement_since: boundaries.length ? new Date(since).toISOString() : null,
       ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
-      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
-      closed: page.map((c) => threadOf(c, { live: false, voiceCap })),
+      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...threadOf(c, { live: true, voiceCap }), ...(idOfCluster(c) ? { id: idOfCluster(c) } : {}) })),
+      closed: page.map((c) => ({ ...threadOf(c, { live: false, voiceCap }), ...(idOfCluster(c) ? { id: idOfCluster(c) } : {}) })),
       earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,
         note: "this is the office's short in-memory record, so speech older than it holds is not here" },
     };
