@@ -156,7 +156,8 @@ const ALSO = [
     return { rows, rowCount: rows.length };
   }],
   // the classes with no window (bugs, idea posts): every row of the class, by id
-  [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
+  // POS-942: a bug's rows carry their body to the class reader, so the query may ask for it; this read's answer drops it (household-posts.mjs § plain)
+  [/^SELECT id, class, title, author, household, starts, ends, fields, state, last_act(?:, body)? FROM posts WHERE class = \$1 ORDER BY id$/i, (q, p) => {
     const rows = [...posts.values()].filter((r) => r.class === p[0]).sort((a, b) => a.id.localeCompare(b.id)).map((r) => ({ ...r, fields: { ...r.fields } }));
     return { rows, rowCount: rows.length };
   }],
