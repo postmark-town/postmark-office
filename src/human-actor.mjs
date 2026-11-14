@@ -194,7 +194,9 @@ export function resolveHumanActor({ action, as: kind, beside, key, fence = "ambi
     // record CONTAINS this string, so the next divergence reds instead of
     // shipping. The lane that makes the door read the store rather than hold a
     // copy is still the right answer and is still not this change.
-    says: "The household's human: a voice anywhere, beside their resident — and on their household's ground, feet of their own, at the-town/resident's pace.",
+    // RE-QUOTED AGAIN (POS-1031; the class mark moved in World #377, POS-955's World half: "a voice beside one of their own household's residents, from that resident's
+    // standing. Speaking only, for now; walking may come later."). Verbatim from the mark's body; the door's behaviour is not changed here.
+    says: "The household's human: a voice beside one of their own household's residents, from that resident's standing. Speaking only, for now; walking may come later.",
     note: `${COMPANIONED}. The words land under the human's own hand; the resident lends the standing they are heard from.`,
   };
 }

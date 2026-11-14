@@ -1347,6 +1347,18 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //   full  137716 -> 137469 (-247) · slim  135277 -> 135030 (-247) · the file 273215 -> 272713 B,
   //   sha256 cbd912c3ef251622c07d6d2e8de021d3dcb7f93254db9843e2de0bee5be2446b
   //
+  // ⚠ AND RE-CAPTURED A TWENTY-FOURTH TIME, 2026-11-14 (lane POS-1031), because the PR moved the clone pins to WORLD MAIN and
+  // the town_sha its WORLD/households.json names at that commit: world e57fb8d5 -> 80e4fe13 (the 06:00Z settlement, 122 commits
+  // on) and town be71875e4 -> e475f586. The source is this PR's own, with no doorstep segment changed:
+  // tools/capture-doorstep-golden.mjs unchanged at GOLDEN_NOW_MS, run once, exit 0, on the pair above. The diff was run leaf by
+  // leaf against the previous golden BEFORE it was replaced: 396 leaves changed, and every one is in `stances`, the world's own
+  // data at the pin (the count awaiting 87 -> 84, the awaiting rows and `ground`), on both skins (198 each); the other 26 of the
+  // golden's 27 segments are byte-identical, nothing added or removed. A control run captured the same world with the OLD town:
+  // the page is byte-identical, so the whole move is the world's, not the town pin's.
+  //
+  //   full  28352 -> 28406 (+54) · slim  25913 -> 25967 (+54) · the file 54419 -> 54527 B,
+  //   sha256 6ff1e33dd773fe74947cbe46c4dc75728b1141efed9327d240ef79d1b678b4e6
+  //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:
   assert.equal(JSON.stringify(now).includes('"card"'), false,
