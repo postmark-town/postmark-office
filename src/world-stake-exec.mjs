@@ -11,6 +11,7 @@
 // Exit 0 with {applied,...} or {error:{code,defect,hint}} (a bounce is an answer);
 // exit 1 only when the machinery itself trips.
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -53,8 +54,7 @@ async function main() {
       // WHOLE OR NOTHING (POS-296), stake-exec's shape: a stake or unstake the pen
       // cannot land leaves no line and no commit behind.
       return penTransaction(CLONE, async () => {
-        if (process.env.TOWN_PUSH === "1")
-          execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+        freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
 
         let result;
         try {

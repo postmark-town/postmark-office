@@ -298,7 +298,12 @@ const REST_CEILING = 28_800;
 // POS-730 (2026-11-07, RULED by Darko 21:31 EST on 11-06 in the picker, POS-730/b, "Raise to 9,216"; Wright AUTH 02:31Z): the letter-note
 // act card joins the connector's bare roster (about 121 B), so SLIM_CEILING to 9,216 (+128), superseding POS-911's 9,088; REST_CEILING
 // stays 28,672. Measured by F5c below on the final wording (not trimmed to fit): connector bare 9,159 B UTF-8 (+121 B over the 9,038 B before the card), REST bare 28,611 B.
-const SLIM_CEILING = 9_216;
+// WLD-28 (2026-11-13, RULED by Darko 22:08Z, authenticated, relayed by Rivet 23:38Z): the connector's hard cap is exactly 10,000 bytes
+// (not 10 KiB, not 9,344), superseding POS-730/b's 9,216; REST_CEILING stays 28,800. The Sunday train refresh merged WLD-28's `settings`
+// read line into Hearth v2's `day` and `hearth` lines, each under 9,216 alone. Measured by F5c below on the final wording (not trimmed to
+// fit): connector bare 9,172 B at the merge base 7d430077, 9,216 B at WLD-28's b6b5c07e (+44), 9,215 B at the train's 273606ee (+43),
+// 9,259 B merged (+87); REST bare 28,793 B. It still sits far below the unabridged answer, so losing the abridgement trips it at once.
+const SLIM_CEILING = 10_000;
 
 test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST bare answer keeps its SHAPE, every key and the type at it', async () => {
   const { shapeOf } = await import("../tools/capture-household-golden.mjs");
@@ -306,6 +311,12 @@ test('F5 · CONTRACT.md: "REST: stable/simple for frozen consumers" — the REST
   assert.ok(existsSync(GOLDEN), `the golden is the receipt; without it this test proves nothing (${GOLDEN})`);
   assert.deepEqual(shapeOf(full), JSON.parse(readFileSync(GOLDEN, "utf8")),
     "a pane in the wild reads named keys off this answer. A key REMOVED or RETYPED is the break the shape rule names. A key ADDED reddens this too, and is meant to: additive growth is lawful but 'shape changes ship with a PSA' (founder, 2026-08-31), so the golden is regenerated deliberately, with the PSA, rather than drifting quietly — which is exactly what the old byte golden let the profile act do");
+  // ⚑ REGENERATED 2026-11-13 FOR POS-1027 (Darko, POS-1024/f "Add the field"; the Hearth's public reads): the act `send` gained the optional field
+  // `resend`, the id of one's bounced letter that this letter replaces. ADDITIVE and proven so: the capture diff added exactly
+  // `/acts/<send>/fields/resend/{type,description}` (2 leaves) and removed or retyped none. Its description is "the bounced letter this replaces"
+  // because the REST bare answer then measures within its ceiling (28,800 B); the answer's own receipt says the rest. PSA for the release notes:
+  // "household { do: \"send\", args: { …, resend: \"<id of your bounced letter>\" } } sends this letter in the place of one that bounced and the
+  // awaiting view's bounce report then says it was resent; the bounced letter itself is never changed."
   // ⚑ REGENERATED 2026-11-09 FOR POS-502 (Wright 23:48Z, resident-on-behalf v1: the human stakes on a ballot
   // from the site, preview first): the act `stake-vote` gained the field `preview`, the dry run every other
   // stamp-moving door already has (stamps-preview.mjs). ADDITIVE and proven so: the capture diff added exactly
@@ -1335,6 +1346,20 @@ test("F7c5 · THE MORNING PAGE DID NOT FATTEN — the doorstep bundle is byte-id
   //
   //   full  137716 -> 137469 (-247) · slim  135277 -> 135030 (-247) · the file 273215 -> 272713 B,
   //   sha256 cbd912c3ef251622c07d6d2e8de021d3dcb7f93254db9843e2de0bee5be2446b
+  //
+  // ⚠ AND RE-CAPTURED A TWENTY-FOURTH TIME, 2026-11-14 (lane POS-1031), because the PR moved the clone pins to WORLD MAIN and
+  // the town_sha its WORLD/households.json names at that commit: world e57fb8d5 -> 80e4fe13 (the 06:00Z settlement, 122 commits
+  // on) and town be71875e4 -> e475f586. The source is this PR's own, with no doorstep segment changed:
+  // tools/capture-doorstep-golden.mjs unchanged at GOLDEN_NOW_MS, run once, exit 0, on CI-SHAPED clones (suite-clones.sh's own
+  // fetch at the new pins: sparse, HEAD and origin/main at the pins, 1 town tag and 172 world tags). A capture on a full pool-tree
+  // clone is NOT the same page (it differed in 110 leaves, all in `stances`), which is why the capture is on the clones CI reads.
+  // The diff was run leaf by leaf against the previous golden BEFORE it was replaced: 496 leaves changed, and every one is in
+  // `stances`, the world's own data at the pin (the count awaiting 87 -> 85, the awaiting rows and `ground`), on both skins (248
+  // each); the other 26 of the golden's 27 segments are byte-identical, nothing added or removed. A control capture on the same
+  // clones with the OLD town gives a byte-identical page, so the whole move is the world's, not the town pin's.
+  //
+  //   full  28352 -> 28348 (-4) · slim  25913 -> 25909 (-4) · the file 54419 -> 54415 B,
+  //   sha256 0f622f7b9827992514486f3619eae93d555e8ef75965c52834cc0add2f638291
   //
   // So the assertion below is the one that actually carries the promise, and it
   // is stated separately so a future regeneration cannot quietly absorb a card:

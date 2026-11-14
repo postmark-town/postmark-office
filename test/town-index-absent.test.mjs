@@ -13,7 +13,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -22,7 +22,7 @@ import { putValues, fixtureTown } from "./fixture.mjs";
 import { startStore } from "./helpers/embedded-store.mjs";
 import { seedTownIndex } from "./helpers/index-to-store.mjs";
 import { twinGolden, steady } from "./helpers/twin-golden.mjs";
-import { overlayRegistry, overlayCard, frontMatterScalar, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
+import { overlayRegistry, overlayCard, overlayHomeImages, homeImagesOf, frontMatterScalar, firstDiffPath } from "./helpers/pos896-fixtures.mjs";
 import { townClone, townModuleUrl } from "./fixture-paths.mjs";
 import { seedStaticKeys } from "./helpers/static-keys.mjs"; // POS-352: static keys are store rows
 import { currentCrossing } from "../src/crossings.mjs"; // the town clock the manifest serves
@@ -124,7 +124,11 @@ function firstDiff(a, b) {
 const CHANGED = {
   // POS-962: the manifest's writes list gains the household's Hearth door (the record predates it; nothing else in that answer moves).
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"],
-    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth"]']],
+    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth","PATCH /households/{slug}/settings"]'],
+    // WLD-28: the manifest's reads list gains the household's settings read (GET /households/{slug}/settings), after /household
+    ['"/household","/keys/claim?handle="', '"/household","/households/{slug}/settings","/keys/claim?handle="'],
+    // and it names the read among the keyed ones: it answers 401 without a key (test/manifest-keyed-reads.test.mjs)
+    ['"/world2/my-marks"]', '"/world2/my-marks","/households/{slug}/settings"]']],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
@@ -143,7 +147,9 @@ CHANGED["MCP household {}"].push(
     "taken into the office's keeping the moment it conforms, and it sails on the next ferry crossing."],
   [`{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}}]`,
     `{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}},{"act":"amend-letter","teaches":"Amend a letter of yours before it sails; only the last version sails.","fields":{"id":{"required":true},"body":{"required":true}}},{"act":"withdraw-letter","teaches":"Withdraw a letter of yours before it sails.","fields":{"id":{"required":true}}},{"act":"block","teaches":"Block a household's mail, both ways, privately.","fields":{"household":{"required":true}}},{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`],
-  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`]);
+  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`],
+  // AND THE HOUSEHOLD'S SETTINGS READ (WLD-28): `settings` joins the reads after blocks; nothing else in the answer moves.
+  [`"blocks":"your house's mail blocks, private to it"`, `"blocks":"your house's mail blocks, private to it","settings":"likeness and Hearth, read-only"`]);
 // AND PARCEL ROOM BOUGHT AHEAD (POS-762/e, Darko 2026-10-23): the act joins the index after unblock.
 CHANGED["MCP household {}"].push(
   [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,
@@ -162,6 +168,12 @@ CHANGED["MCP household {}"].push(
 CHANGED["MCP household {}"].push(
   ["it needs a public https endpoint you run.",
     "it needs a public https endpoint you run. Over REST: POST https://postmark.town/api/household with do: rsvp and args: { event }."]);
+// AND THE HEARTH'S PUBLIC READS (POS-1027): closer and happened name a house (anyone's public record, your own whole read without one), the menu gains day and
+// hearth, and send takes resend, the bounced letter it replaces. Nothing else in the answer moves.
+CHANGED["MCP household {}"].push(
+  [`"closer":"who your house writes most, this fortnight"`, `"closer":"who a house writes most"`],
+  [`"happened":"what your house did, newest first","waiting"`, `"happened":"what a house did, newest first","day":"a resident's day","hearth":"a house's Hearth","waiting"`],
+  [`"stake_stamps":{}}},{"act":"stake-vote"`, `"stake_stamps":{},"resend":{}}},{"act":"stake-vote"`]);
 // AND THE GLANCE'S TWO FIELDS (POS-633): the household tool takes read_shape and
 // since now, and the one recorded answer that lists the tool's fields says so.
 CHANGED['MCP household {"read":"letter","id":"limen-2026-07-01-to-wright-the-gap"}'] = [["this tool takes: do, read, explain, args, handle, hide_bounces_older_than_days, view",
@@ -204,7 +216,9 @@ const pristine = (was) => {
   if (gone.size) { try { was = JSON.stringify(dropSteps(JSON.parse(was))); } catch { /* not JSON: nothing to drop */ } }
   const card = readFileSync(join(TOWN, "WHITE_PAGES", "wright", "ADDRESS.md"), "utf8");
   const fields = { architecture: frontMatterScalar(card, "architecture"), note: frontMatterScalar(card, "note") };
-  return overlayCard(overlayRegistry(was, { rawQuests, fixturePotIds: [] }), { handle: "wright", fields });
+  // and the card's `homeImages` are the image files under wright's HOME/ in the pinned town (POS-1031: wright-at-la-cave.jpg arrived after the recorded town)
+  const images = homeImagesOf("wright", readdirSync(join(TOWN, "WHITE_PAGES", "wright", "HOME")));
+  return overlayHomeImages(overlayCard(overlayRegistry(was, { rawQuests, fixturePotIds: [] }), { handle: "wright", fields }), { handle: "wright", images });
 };
 // the twin's recorded answer under `label` (helpers/twin-golden.mjs), against this one;
 // `asked` is the town clock's crossing read just before the ask

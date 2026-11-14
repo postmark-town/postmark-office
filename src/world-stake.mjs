@@ -20,6 +20,7 @@
 //   3. The lock — writes go through a subprocess under the ferry's flock, so a
 //      stake append can never race a crossing's mint pass.
 
+import { tendingBefore, TENDING_DEFECT } from "./clone-fresh.mjs";
 import { worldFreezeBounce } from "./freeze.mjs";
 import { existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
@@ -617,6 +618,9 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
     // happened to be on the box — and the clip case, which is the founder's
     // whole reason for asking, is only reachable against a balance you control.
     held = heldAtOffice,
+    // THE SEVENTH (POS-382): is the town clone dirt a pull cannot write over? Asked before the promotion writes a claim onto the docket, so a dirty copy is the named
+    // 503 with nothing written (clone-fresh.mjs § tendingBefore: async, with the execs' bounded wait). Injectable for the same reason as the rest.
+    tending = (clone) => tendingBefore(clone),
     // THE FIFTH (WLD-27 A): has this mark's dropped unit already left? A read
     // of the record, asked before anything is promoted or charged. It is the
     // early answer only; the exec asks again under the mark's lock, which is
@@ -735,6 +739,8 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   //
   // A ✦0 stake's ground is walked FIRST, while the draft is still the draft the
   // promotion will put forward; it changes nothing about whether it goes.
+  const unsafe = await tending(TOWN_CLONE);
+  if (unsafe) return bounce(unsafe.code, unsafe.defect, unsafe.hint);
   const zeroGround = n === 0 ? await judgeGround() : null;
   let putForward = null;
   let promotionRefused = null;
@@ -816,7 +822,16 @@ export async function worldStakeViaOffice(args = {}, key = null, deps = {}) {
   const heldBefore = await held(who.handle);
 
   const staked = await ledger({ verb: "stake", handle: who.handle, mark: args.mark, n, via: "api", date: townDay() });
-  if (staked?.error) return staked;
+  if (staked?.error) {
+    // THE ONE RACE THAT KEEPS ITS WRITE (Darko, 2026-11-13, "Honest partial answer"): a writer slipped in after the door's look, and the exec refused the dirty copy AFTER the
+    // promotion had put the draft forward. That promotion stands, exactly as it always has: it replaced the author's earlier pending claim and released the draft's act in
+    // one transaction no retraction can undo, and nothing here tries. So the answer says what is true: the mark is put forward, THIS stake moved no new stamps, and it can be
+    // tried again. It does NOT say nothing was written, and it never says what stands behind the mark: earlier backing may be there.
+    if (staked.code === 503 && staked.defect === TENDING_DEFECT && putForward?.promoted)
+      return bounce(503, `the office's town copy needs tending; "${args.mark}" was put forward, but this stake moved no new stamps`,
+        `the mark is on the docket as the promotion left it, and this stake took no stamps: any backing it already had is untouched. The office's copy of the town record had changes it cannot write over. Try the same stake again once the copy is tended; the roll-call reports it if it stays this way`);
+    return staked;
+  }
 
   // ── THE DOOR CLOSES ITS OWN LOOP (#2686) ─────────────────────────────────
   //

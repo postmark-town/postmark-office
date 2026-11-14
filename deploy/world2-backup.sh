@@ -393,7 +393,7 @@ cat > "$SHIP/LATEST.json" <<JSON
   },
   "intake": {$INTAKE_STATUS},
   "intake_why": "POS-346: wallet registrations and each rail's seen-but-unwitnessed payments exist on the box and nowhere else until they become store rows",
-  "restore": "aws s3 cp s3://<bucket>/world2/<stamp>/<file> . && aws s3 cp s3://<bucket>/world2/<stamp>/<file>.sha256 . && sha256sum -c <file>.sha256 && pg_restore --clean --if-exists --no-owner --no-acl -d <db> <file> (nights before the git ship's retirement are also in the archived GitHub repo, in parts: cat dumps/<file>.part-* > <file>)",
+  "restore": "aws s3 cp s3://<bucket>/world2/<stamp>/<file> . && aws s3 cp s3://<bucket>/world2/<stamp>/<file>.sha256 . && sha256sum -c <file>.sha256 && pg_restore --exit-on-error --no-owner --no-acl -d <new-empty-db> <file> (a hand-run, only ever into a new, empty database, never against the live store; DEPLOY.md § The S3 route. Nights before the git ship's retirement are also in the archived GitHub repo: whole before 2026-11-04 as dumps/<file>, in parts from then: cat dumps/<file>.part-* > <file>)",
   "restore_roles": "aws s3 cp the roles-<stamp>.db beside the dump to /srv/postmark-office/roles.db (the office opens it at boot; it is a whole database, not a delta); an in-store night has no file, its roles are in the dump",
   "restore_intake": "aws s3 cp each <name>-<file> back to the source path named under intake (each watcher reads its file whole on its next tick)"
 }

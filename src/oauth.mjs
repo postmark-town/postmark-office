@@ -118,6 +118,10 @@ export function oauthSchema(db) {
   // here matches it, and the sweep skips it (NULL expires).
   for (const col of ["household TEXT", "handles TEXT"])
     try { db.exec(`ALTER TABLE tokens ADD COLUMN ${col}`); } catch { /* already there */ }
+  // The sign-in a token pair came from (POS-485, kind access, refresh and
+  // spent): § THE SIGN-IN'S FAMILY below. The store's column and index are 094.
+  try { db.exec("ALTER TABLE tokens ADD COLUMN family TEXT"); } catch { /* already there */ }
+  db.exec("CREATE INDEX IF NOT EXISTS tokens_family ON tokens (family)");
   // Additive migration for boxes whose berths table predates the web of towns
   // (2026-08-16): a berth may DECLARE the town it sailed from. A claim, not a
   // paper — attestation is the deferred half of the portal.
@@ -127,12 +131,17 @@ export function oauthSchema(db) {
   try { db.exec("ALTER TABLE berths ADD COLUMN rules_read_at INTEGER"); } catch { /* already there */ }
 }
 
-const sweep = async (odb) => {
+/** The housekeeping deletes. Exported for the suite's cleanup proofs (POS-485); the office runs it only through `sweepAfter`. */
+export const sweep = async (odb) => {
   const P = asPaper(odb);
   const t = now();
   await P.run("DELETE FROM pending WHERE expires < ?", t);
   await P.run("DELETE FROM codes WHERE expires < ?", t);
   await P.run("DELETE FROM tokens WHERE expires < ?", t);
+  // A retired refresh token's evidence (kind 'spent', no expiry of its own) is kept while ANY key of its sign-in can still
+  // authenticate, so a replay is recognized for as long as it could matter (POS-485); once none can, it goes.
+  await P.run("DELETE FROM tokens WHERE kind = 'spent' AND NOT EXISTS (SELECT 1 FROM tokens AS live WHERE live.family = tokens.family"
+    + " AND live.kind IN ('access', 'refresh') AND live.expires >= ?)", t);
   await sweepClaims(P);
 };
 
@@ -1233,9 +1242,12 @@ async function handleOauthRoute(req, res, ctx) {
       if (body.decision !== "yes" && body.decision !== "no")
         return html(res, 400, page("No answer given", "<p>Nothing was changed. Open the link again to answer yes or no.</p>"));
       try {
-        const { setLikeness } = await import("./likeness.mjs");
-        const done = await setLikeness({ slug: pending.slug, answer: body.decision, ghId: pending.gh_id, ghLogin: pending.gh_login },
-          { clone: ctx.clone });
+        // WLD-28: the form's answer is an ALIAS of the one settings door (household-settings.mjs § changeSettings): the one setting it always carried,
+        // answered in the likeness writer's own shape and with its own refusal words. It is the ONE caller that says `browserSignIn`: the account this pending
+        // row carries was proved by a GitHub sign-in in this browser (D2), so it is the likeness answer's one road; the bearer door is refused it
+        const { changeSettings } = await import("./household-settings.mjs");
+        const done = (await changeSettings({ slug: pending.slug, changes: { likeness: body.decision }, ghId: pending.gh_id, ghLogin: pending.gh_login },
+          { clone: ctx.clone, alias: "likeness", browserSignIn: true })).parts.likeness;
         // a yes is thanked in Darko's words (10-22); a no stays plain and kind
         const { answeredPage } = await import("./likeness-pages.mjs");
         return html(res, 200, answeredPage({ answer: done.likeness.answer, rendered: done.registry.rendered,
@@ -1393,6 +1405,18 @@ async function handleOauthRoute(req, res, ctx) {
   // code cannot be spent twice. Anything thrown inside is the office's fault,
   // not the grant's: it answers 503 with Retry-After, and never `invalid_grant`,
   // which a client reads as "sign in again".
+  //
+  // A REUSED REFRESH TOKEN ENDS ITS WHOLE SIGN-IN, NO GRACE (POS-485; Darko,
+  // 2026-11-13 09:09 EST: "End the whole sign-in, no grace"). § THE SIGN-IN'S
+  // FAMILY says how a sign-in is known. A rotation keeps the retired token's
+  // hash as evidence (kind 'spent'); presenting it again deletes every access
+  // and refresh token of its family, the descendants and the older 30-day access
+  // keys alike, and answers `invalid_grant`, in words that say so. Two refreshes
+  // of one token are the same case: the DELETE still decides which one rotates,
+  // and the other, finding the evidence, ends the sign-in, the winner's new pair
+  // included (no fork survives). A rotation and a revocation of one family are
+  // decided under the family's lock (paperwork.mjs § tx, `lock`), so neither can
+  // miss the other's commit.
   if (req.method === "POST" && path === "/oauth/token") {
     const body = parseForm(await readBody(req), req.headers["content-type"]);
     // A MALFORMED GRANT IS THE CLIENT'S, NEVER AN OUTAGE (review of #449,
@@ -1421,21 +1445,33 @@ async function handleOauthRoute(req, res, ctx) {
           if (body.client_id && body.client_id !== grant.client_id) return refuse("client_id mismatch");
           if (body.redirect_uri && body.redirect_uri !== grant.redirect_uri) return refuse("redirect_uri mismatch");
           if (!body.code_verifier || sha256(body.code_verifier) !== grant.code_challenge) return refuse("PKCE verification failed");
-          return { grant: await issueTokens(t, grant) };
+          return { grant: await issueTokens(t, grant, newFamily()) };   // a new sign-in is a new family
         }
         const hash = sha256(body.refresh_token ?? "");
-        const row = await t.get("SELECT * FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash);
-        if (!row || row.expires < now()) return refuse("refresh token unknown or expired");
-        const { changes } = await t.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash); // rotate
-        if (!changes) return refuse("refresh token unknown or expired"); // another grant took it first
-        return { grant: await issueTokens(t, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login }) };
+        const row = await t.get("SELECT * FROM tokens WHERE token_hash = ? AND kind IN ('refresh', 'spent')", hash);
+        if (!row) return refuse("refresh token unknown or expired");
+        if (row.kind === "spent") return endSignIn(t, row.family);
+        if (row.expires < now()) return refuse("refresh token unknown or expired");
+        if (row.family) await t.lock(familyLock(row.family));
+        const { changes } = await t.run("DELETE FROM tokens WHERE token_hash = ? AND kind = 'refresh'", hash); // rotate: the claim
+        if (!changes) {
+          // another grant took it first, or its sign-in was ended meanwhile: the evidence, if any, is committed by now
+          const spent = await t.get("SELECT family FROM tokens WHERE token_hash = ? AND kind = 'spent'", hash);
+          return spent ? endSignIn(t, spent.family) : refuse("refresh token unknown or expired");
+        }
+        // A pre-switch refresh (no family) starts its sign-in's family here, and its own hash joins it as evidence; the access
+        // keys issued beside it before the switch carry no family and stay outside the rule until they expire (POS-485/b).
+        const family = row.family ?? newFamily();
+        await t.run("INSERT INTO tokens (token_hash, kind, family, created) VALUES (?, 'spent', ?, ?)", hash, family, now());
+        return { grant: await issueTokens(t, { client_id: row.client_id, gh_id: row.gh_id, gh_login: row.gh_login }, family) };
       });
     } catch (e) {
       // "MAY NOT", NEVER "NOTHING WAS" (review of #449, finding 4): a COMMIT the
       // store applied whose acknowledgement was lost to the outage throws here
-      // too, and then the old refresh token is gone. The window is narrow and
-      // accepted as residual this week (a grace for the retired token is
-      // Darko's call, alongside family revocation); the answer must not promise.
+      // too, and then the old refresh token is retired. Its retry is a reuse and
+      // ends the sign-in: Darko ruled no grace (POS-485/a, 2026-11-13), and
+      // the client was already signed out by that loss before. The answer
+      // must not promise.
       console.error(`[oauth] the token endpoint could not reach its record (answered 503; the record may not have been changed) [${e?.code ?? e?.name ?? "?"}]: ${String(e?.message ?? e).slice(0, 200)}`);
       return jres(res, 503, { error: "temporarily_unavailable",
         error_description: "the office could not reach its record, so your sign-in may not have been changed; send the same request again after Retry-After seconds" },
@@ -1492,8 +1528,45 @@ export async function handleOauth(req, res, ctx) {
   } finally { sweepAfter(ctx); }
 }
 
-/** The new pair, written inside the caller's transaction `tx` (the token endpoint's: POS-480). Answers the grant's body. */
-async function issueTokens(tx, grant) {
+// ── THE SIGN-IN'S FAMILY (POS-485) ───────────────────────────────────────────
+//
+// RULED (Darko, 2026-11-13): 09:09 EST, POS-485/a, "End the whole sign-in, no grace"; 13:1x EST, POS-485/b, "Link new keys,
+// leave old": from the switch, every new or refreshed pair records its sign-in and falls under the reuse rule; access keys
+// issued before the switch stay outside it until they expire on their own (30 days at most), and nobody is signed out.
+//
+//   family   `tokens.family` (the store's 094): a random id, made once per sign-in (an authorization-code exchange) and
+//            carried by every pair its refreshes issue. It is never shown to anyone and is not a credential.
+//   spent    a refresh token retired by its rotation leaves a row of kind 'spent' on its own hash (the token itself is never
+//            stored), with its family and no expiry: the evidence that recognizes it if it comes back. The sweep removes it
+//            once no access or refresh token of its family can still authenticate.
+//   legacy   a pair issued before the switch has no family, and none is inferred: not from the account, the client or the
+//            times, because one account holds many sign-ins and same-account keys are not proof of one. A pre-switch
+//            refresh's first rotation starts a family for what it issues and records its own hash in it; the pre-switch
+//            access keys beside it cannot be linked and keep their own expiry.
+//
+// Household, resident, static and berth keys have no family and no rotation, and nothing here touches them.
+
+/** A new sign-in's family id. Random, and only ever compared for equality. */
+const newFamily = () => rand(18);
+/** The advisory-lock key a family's rotations and its revocation share. */
+const familyLock = (family) => `oauth-family:${family}`;
+
+/** The words a client is given when a retired refresh token comes back: the sign-in has ended (POS-485/a). */
+export const SIGN_IN_ENDED = "this refresh token was already used once, so the sign-in it belongs to has ended and every key it issued no longer works; sign in again";
+
+/**
+ * END THE WHOLE SIGN-IN, inside the token endpoint's transaction: every access and refresh token of `family` is deleted, so
+ * the bearer lookup (`oauthLookup`, by hash) refuses each at once. Its 'spent' evidence stays until the sweep, so a second
+ * replay is answered the same way. Answers the refusal; the transaction commits it.
+ */
+async function endSignIn(t, family) {
+  await t.lock(familyLock(family));
+  await t.run("DELETE FROM tokens WHERE family = ? AND kind IN ('access', 'refresh')", family);
+  return { refused: SIGN_IN_ENDED };
+}
+
+/** The new pair of sign-in `family`, written inside the caller's transaction `tx` (the token endpoint's: POS-480). Answers the grant's body. */
+async function issueTokens(tx, grant, family) {
   const access = rand(32);
   const refresh = rand(32);
   const t = now();
@@ -1502,11 +1575,11 @@ async function issueTokens(tx, grant) {
   // seven columns — so the moment this lane added four, the whole GitHub
   // sign-in would have died on an arity error. A bare VALUES list is a
   // schema assumption written where nobody reads it.
-  const cols = "INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created)";
-  await tx.run(`${cols} VALUES (?, 'access', ?, ?, ?, ?, ?)`,
-    sha256(access), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + ACCESS_TTL_S, t);
-  await tx.run(`${cols} VALUES (?, 'refresh', ?, ?, ?, ?, ?)`,
-    sha256(refresh), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + REFRESH_TTL_S, t);
+  const cols = "INSERT INTO tokens (token_hash, kind, gh_id, gh_login, client_id, expires, created, family)";
+  await tx.run(`${cols} VALUES (?, 'access', ?, ?, ?, ?, ?, ?)`,
+    sha256(access), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + ACCESS_TTL_S, t, family);
+  await tx.run(`${cols} VALUES (?, 'refresh', ?, ?, ?, ?, ?, ?)`,
+    sha256(refresh), grant.gh_id, grant.gh_login, grant.client_id ?? "", t + REFRESH_TTL_S, t, family);
   return {
     access_token: access, token_type: "Bearer", expires_in: ACCESS_TTL_S,
     refresh_token: refresh, scope: "town",
