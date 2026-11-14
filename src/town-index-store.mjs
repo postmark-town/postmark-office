@@ -194,7 +194,7 @@ export async function stampsRoster(q, { limit, offset } = {}) {
 /** One handle's stamps detail: its balance row, with the funding and keeping rows of its parties. */
 export async function stampsDetail(q, handle) {
   const row = (await q.query("SELECT balance, mint_count, staked FROM town_stamps WHERE handle = $1", [handle])).rows[0];
-  const parties = await stampParties(handle);
+  const parties = await stampParties(handle, q);   // the registry through the held client, never a second pool while this transaction is open (POS-963)
   const holoRows = (await q.query(
     `SELECT h.party, h.pot, h.holo, h.epoch, h.date, h.receipt, r.usd AS usd
        FROM town_funding_holo h LEFT JOIN town_pot_receipts r ON r.receipt = h.receipt

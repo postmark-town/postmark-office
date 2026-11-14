@@ -16,7 +16,8 @@
 //
 // Env: TOWN_CLONE, STAMP_KEY, TOWN_PUSH, BOT_NAME/BOT_EMAIL, TOWN_TZ.
 // argv[2]: JSON { handle, date, via, expect? } — expect is { household, nth },
-// the room the door's call saw (the retry guard; parcel-room.mjs § ONE CALL, ONE ROOM).
+// the room the door's call saw (the retry guard; parcel-room.mjs § ONE CALL, ONE ROOM),
+// and under a nonce `handle`, the payer of the purchase its key names (§ THE RETRY KEY).
 
 import { freshenExec } from "./clone-fresh.mjs";
 import { readFileSync, existsSync, realpathSync } from "node:fs";

@@ -134,14 +134,20 @@ function advance({ args = ["--town", TOWN, "--world", WORLD, "--go"], env = {}, 
 // Each act's mark in the log, in the script's order. Reads are not among them.
 const ACTS = [
   ["the freshen", /^systemctl start postmark-dev-freshen\.service$/],
+  ["the registry clear", /^psql .*DELETE FROM households; DELETE FROM household_pins; DELETE FROM registry_meta;/],
+  ["the registry seed", /^node tools\/registry-seed\.mjs --apply --clone /],
+  ["the registry check", /^node tools\/registry-drain\.mjs --check --clone /],
   ["the trim", /^psql .*DELETE FROM stamp_lines WHERE seq > \d+/],
   ["the sync", /^node world2\/tools\/stamp-lines\.mjs --sync --clone /],
   ["the verify", /^node world2\/tools\/stamp-lines\.mjs --verify --clone /],
   ["the reseed", /^node world2\/tools\/town-index-ingest\.mjs .*--seed --reseed$/],
   ["the law", /^node world2\/tools\/law-ingest\.mjs --law-repo /],
   ["the snapshot", /^node src\/world-hydrate\.mjs .*--to-store$/],
+  ["the window true-up", /^psql .*UPDATE windows SET closes_at/],
   ["the preflight", /^node tools\/dev-rehearsal\.mjs --user meepo --only preflight$/],
 ];
+// The owner's one statement (POS-950): a DO block, so one transaction, refused inside it unless the database is the sandbox.
+const OWNER_ONCE = `psql -d ${SANDBOX} -X -v ON_ERROR_STOP=1 -c SET ROLE world2_owner; DO $once$ BEGIN IF current_database() <> '${SANDBOX}' THEN RAISE EXCEPTION 'REFUSED: % is not the dev sandbox; nothing was written', current_database(); END IF; `;
 const actsIn = (calls) => calls.flatMap((c) => ACTS.filter(([, re]) => re.test(c)).map(([name]) => name));
 const WRITE_VERB = /^git .* (fetch|tag|push|reset|switch|commit) /;
 const assertNothingWrote = (r) => {
@@ -157,7 +163,9 @@ test("without --go it prints the plan and runs nothing at all, not even a read",
   assert.deepEqual(r.calls, [], "not one box command was called");
   assert.match(r.stdout, /Nothing ran/);
   for (const [word, sha] of [["town", TOWN], ["world", WORLD]]) assert.match(r.stdout, new RegExp(`${word} ${sha}`));
-  for (const step of ["retag", "freshen", "stamp-lines --sync, then --verify", "--seed --reseed", "law-ingest", "world-hydrate --to-store", "--only preflight"]) assert.ok(r.stdout.includes(step), step);
+  for (const step of ["retag", "freshen", "registry-seed --apply", "registry-drain --check", "stamp-lines --sync, then --verify", "--seed --reseed", "law-ingest", "world-hydrate --to-store", "the window true-up", "9. the preflight"]) assert.ok(r.stdout.includes(step), step);
+  // text only: a seed past the suite's pins needs the pins moved beside it (POS-950's third item)
+  assert.match(r.stdout, /test\/clone-pins\.json\) needs a pin-move PR on the train beside it, in POS-953's shape/);
 });
 
 test("a missing or short sha is usage, and runs nothing, --go or not", { skip }, () => {
@@ -326,6 +334,35 @@ test("a store that lost the agreement at line 1, or that is empty, trims to noth
   }
 });
 
+// ── the registry and the window (POS-950) ────────────────────────────────────
+
+test("the registry is emptied as the owner in one statement that asserts the sandbox, then seeded and checked from the dev town clone as the dev office", { skip }, () => {
+  const r = advance();
+  assert.equal(r.status, 0, r.stderr);
+  const registry = r.calls.filter((c) => /\b(households|household_pins|registry_meta)\b/.test(c));
+  assert.deepEqual(registry, [`${OWNER_ONCE}DELETE FROM households; DELETE FROM household_pins; DELETE FROM registry_meta; END $once$`],
+    "one statement touches the three tables: the guard, then the three DELETEs, nothing else");
+  assert.ok(r.calls.includes(`node tools/registry-seed.mjs --apply --clone ${r.tree}/town-clone`), r.calls.join("\n"));
+  assert.ok(r.calls.includes(`node tools/registry-drain.mjs --check --clone ${r.tree}/town-clone`), r.calls.join("\n"));
+  // as the dev office, whose env file the refusals checked, not the law pen
+  for (const tool of ["tools/registry-seed.mjs", "tools/registry-drain.mjs"]) assert.ok(r.envs.includes(`${tool} PGUSER= PGDATABASE= STAMP_LINES=`), `${tool}: ${r.envs.join("\n")}`);
+});
+
+test("the window SQL is only the true-up: one statement as the owner, the sandbox asserted in it, one open window or nothing moves, and only a past close moves, to 11 hours from now", { skip }, () => {
+  const r = advance();
+  assert.equal(r.status, 0, r.stderr);
+  const touching = r.calls.filter((c) => /\bwindows\b/.test(c));
+  assert.equal(touching.length, 1, touching.join("\n"));
+  const [sql] = touching;
+  assert.ok(sql.startsWith(OWNER_ONCE), sql);
+  assert.ok(sql.includes("IF (SELECT count(*) FROM windows WHERE status = 'open') <> 1 THEN RAISE EXCEPTION "), "it refuses unless exactly one window is open");
+  // its one write: the open window's close, and only a close already past
+  assert.deepEqual(sql.match(/\b(UPDATE|INSERT INTO|DELETE FROM)\s+\w+[^;]*;/g),
+    ["UPDATE windows SET closes_at = date_trunc('second', now()) + interval '11 hours' WHERE status = 'open' AND closes_at <= now();"]);
+  assert.ok(!r.calls.some((c) => /\bsettlements\b/.test(c)), "no settlements row is touched");
+  assert.match(r.stdout, /Rehearse before the open window closes \(step 8 names when\)/);
+});
+
 // ── the retag: this box can't push it, so it stops and prints it ─────────────
 
 test("origin's tag is not the pair: stops at step 1 having written nothing, and prints the retag for the repo that differs", { skip }, () => {
@@ -357,30 +394,34 @@ test("an annotated tag is read by the commit it points at", { skip }, () => {
 
 const FAILS = [
   { fail: "^systemctl start postmark-dev-freshen", step: 2, name: "the freshen", ran: 0 },
-  { fail: "^psql .*DELETE FROM stamp_lines", step: 3, name: "the stamp chain: trim, sync, verify", ran: 1 },
-  { fail: "^node .*stamp-lines\\.mjs --sync", step: 3, name: "the stamp chain: trim, sync, verify", ran: 2 },
-  { fail: "^node .*stamp-lines\\.mjs --verify", step: 3, name: "the stamp chain: trim, sync, verify", ran: 3 },
-  { fail: "^node .*town-index-ingest", step: 4, name: "the town index, reseeded at the clone's head", ran: 4 },
-  { fail: "^node .*law-ingest", step: 5, name: "the world law, ingested forward", ran: 5 },
-  { fail: "^node .*world-hydrate", step: 6, name: "the world graph snapshot, rebuilt from the seed", ran: 6 },
-  { fail: "^node tools/dev-rehearsal", step: 7, name: "the preflight", ran: 7 },
+  { fail: "^psql .*DELETE FROM households", step: 3, name: "the registry: clear, seed, check", ran: 1, says: "clearing households, household_pins and registry_meta failed" },
+  { fail: "^node tools/registry-seed\\.mjs --apply", step: 3, name: "the registry: clear, seed, check", ran: 2, says: "registry-seed --apply failed" },
+  { fail: "^node tools/registry-drain\\.mjs --check", step: 3, name: "the registry: clear, seed, check", ran: 3, says: "registry-drain --check is red" },
+  { fail: "^psql .*DELETE FROM stamp_lines", step: 4, name: "the stamp chain: trim, sync, verify", ran: 4 },
+  { fail: "^node .*stamp-lines\\.mjs --sync", step: 4, name: "the stamp chain: trim, sync, verify", ran: 5 },
+  { fail: "^node .*stamp-lines\\.mjs --verify", step: 4, name: "the stamp chain: trim, sync, verify", ran: 6 },
+  { fail: "^node .*town-index-ingest", step: 5, name: "the town index, reseeded at the clone's head", ran: 7 },
+  { fail: "^node .*law-ingest", step: 6, name: "the world law, ingested forward", ran: 8 },
+  { fail: "^node .*world-hydrate", step: 7, name: "the world graph snapshot, rebuilt from the seed", ran: 9 },
+  { fail: "^psql .*UPDATE windows SET closes_at", step: 8, name: "the window true-up", ran: 10, says: "the true-up of the open window's close failed" },
+  { fail: "^node tools/dev-rehearsal", step: 9, name: "the preflight", ran: 11 },
 ];
 
-for (const { fail, step, name, ran } of FAILS) {
+for (const { fail, step, name, ran, says } of FAILS) {
   test(`a failing step stops the rest and is named: ${fail}`, { skip }, () => {
     const r = advance({ env: { STUB_FAIL: fail } });
     assert.equal(r.status, 1, r.stderr);
-    assert.ok(r.stderr.includes(`STOPPED at step ${step} (${name})`), r.stderr);
+    assert.ok(r.stderr.includes(`STOPPED at step ${step} (${name})${says ? `: ${says}` : ""}`), r.stderr);
     assert.deepEqual(actsIn(r.calls).slice(0, ran), ACTS.slice(0, ran).map(([n]) => n), "everything before it ran");
     assert.equal(actsIn(r.calls).length, ran + 1, "the failing act is the last one");
     assert.doesNotMatch(r.stdout, /full rehearsal is yours/);
   });
 }
 
-test("a world-law pin that law-ingest held stops at step 5, though law-ingest exited 0, and names the remedy", { skip }, () => {
+test("a world-law pin that law-ingest held stops at step 6, though law-ingest exited 0, and names the remedy", { skip }, () => {
   const r = advance({ env: { STUB_PIN: OLD } });
   assert.equal(r.status, 1, r.stderr);
-  assert.ok(r.stderr.includes(`STOPPED at step 5 (the world law, ingested forward): the world-law pin stands at ${OLD}, not ${WORLD}`), r.stderr);
+  assert.ok(r.stderr.includes(`STOPPED at step 6 (the world law, ingested forward): the world-law pin stands at ${OLD}, not ${WORLD}`), r.stderr);
   // With the row gone, law-ingest's pinMove reads "no pin yet" and moves it (test/law-pin-forward.test.mjs).
   assert.ok(r.stderr.includes(`sudo -u postgres psql -d ${SANDBOX} -v ON_ERROR_STOP=1 -c "SET ROLE world2_owner; DELETE FROM projection_heads WHERE repo = 'world-law'"`), r.stderr);
   assert.deepEqual(actsIn(r.calls).slice(-1), ["the law"], "neither the snapshot nor the preflight ran");
@@ -393,11 +434,11 @@ for (const [what, setup, how] of [
   ["the clone's ledger can't be read", { ledger: null }, "could not compare"],
   ["it prints words, not counts", { env: { STUB_CHAIN_PRINTS: "no counts here" } }, "not three counts"],
 ]) {
-  test(`a chain comparison that fails stops at step 3, before the trim: ${what}`, { skip }, () => {
+  test(`a chain comparison that fails stops at step 4, before the trim: ${what}`, { skip }, () => {
     const r = advance(setup);
     assert.equal(r.status, 1, r.stderr);
-    assert.ok(r.stderr.includes(`STOPPED at step 3 (the stamp chain: trim, sync, verify)`), r.stderr);
+    assert.ok(r.stderr.includes(`STOPPED at step 4 (the stamp chain: trim, sync, verify)`), r.stderr);
     assert.ok(r.stderr.includes(how), r.stderr);
-    assert.deepEqual(actsIn(r.calls), ["the freshen"], "the freshen ran, and nothing after it");
+    assert.deepEqual(actsIn(r.calls), ["the freshen", "the registry clear", "the registry seed", "the registry check"], "the freshen and the registry ran, and nothing after them");
   });
 }

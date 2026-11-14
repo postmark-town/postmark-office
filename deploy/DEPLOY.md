@@ -300,7 +300,11 @@ by a `workflow_dispatch` run on the train ref, which checks out the exact sha.
 
 **Before each later rehearsal** (the nightly freshen stands the clone back on
 the seed and the store keeps the last rehearsal's rows): run the seed advance
-below with the seed's current pair, then the rehearsal. The pair, read from origin
+below with the seed's current pair, then the rehearsal, before the open window's
+close that the advance prints. The advance reseeds the registry from the clone, so
+the keep tick welcomes no rehearsal house the town never held, and trues up the
+open window's close, so the bless names the window the rehearsal cleared (POS-950).
+No hand SQL comes between them. The pair, read from origin
 in a box shell, since a clone's local tags are only as new as its last fetch:
 ```sh
 for c in town-clone world-clone; do sudo -u meepo git -C /srv/postmark-office-dev/$c ls-remote origin refs/tags/sandbox/seed 'refs/tags/sandbox/seed^{}' | tail -n1 | cut -f1; done
@@ -329,18 +333,33 @@ dev's. Then, in order, stopping at the first failure and naming it:
    having written nothing, and prints the retag for someone whose clone can push.
    Run it, then run the script again.
 2. **The freshen** stands the clones on the seed and re-signs.
-3. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
+3. **The registry.** The seed's `tools/households.json` holds no rehearsal house, and
+   the store still holds the last rehearsal's. So `households`, `household_pins` and
+   `registry_meta` are emptied as `world2_owner` (`office_api` holds no DELETE), in one
+   statement that refuses any database but the sandbox; `registry-seed --apply` fills
+   them from the town clone, and `registry-drain --check` must say byte-equal.
+4. **The stamp chain:** the store is trimmed to the lines it shares with the clone,
    `stamp-lines --sync` records the seed's lines past them, then `--verify`.
-4. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
+5. **The town index** is reseeded at the clone's head (`--seed --reseed`, since a
    head already exists).
-5. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
+6. **`law-ingest`** runs at the world sha, and the world-law pin must read back as
    that sha. A world sha that doesn't descend from the pin stops here, and the stop
    prints the line that clears the pin.
-6. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
+7. **The world graph snapshot** is rebuilt from the seed (`world-hydrate --to-store`,
    as the law pen). Nothing else writes dev's snapshot, and the preflight doesn't read it.
-7. **The preflight.** The script's last line then names the full rehearsal, which is yours.
+8. **The window true-up.** A clearing opens the next window at the cleared one's
+   scheduled close, for 12 hours, and dev has no candle between rehearsals, so the open
+   window's close is long past by the next one. Cleared as it stands, its successor's
+   close would be past too, and the bless would name that successor. So a past close
+   moves to 11 hours from now, as `world2_owner`, in one statement that refuses any
+   database but the sandbox and any count of open windows but one. A close still ahead
+   is left alone. The step prints the close: rehearse before it, or run the advance again.
+9. **The preflight.** The script's last line then names the full rehearsal, which is yours.
 
 Every step is safe to repeat, so after a stop, fix the cause and run the same line.
+
+A seed past the suite's pins (`test/clone-pins.json`) needs a pin-move PR on the
+train beside it, in POS-953's shape. The plan prints this too.
 
 No testers on dev during an advance. The dev office stays up, and the trim doesn't
 take the lock its stamped writes take, so a tester's act between the trim and the
@@ -627,6 +646,25 @@ Most of `office-keep.sh` is deliberately non-fatal: a step that fails prints a l
 - **Provenance (Wright, 2026-10-13):** `postmark-office-keep.service` is the scheduled unit by contract and always records `source: "scheduled"`. To run the tick by hand, use **`systemctl start postmark-office-keep-by-hand.service`**: it runs the same script and records `by-hand`. A by-hand run never extends or clears a scheduled streak and never counts as freshness. That unit has no `[Install]` section and no timer, so the roll-call's unit discovery does not list it. A line with no `source` field (older than this change) counts as scheduled. A source the reader does not know counts as unknown and never clears anything.
 - **Accepted limitation:** starting `postmark-office-keep.service` itself by hand is recorded as **scheduled**, because the unit cannot tell who started it, and there is deliberately no `INVOCATION_ID` or `LastTrigger` detection. Use the by-hand unit instead. `/etc/postmark-office.env` must not set `POSTMARK_KEEP_SOURCE`: an `EnvironmentFile=` value overrides the unit's `Environment=` line.
 - **Install day:** copy both units, as in One-time setup step 3 (the by-hand unit is copied, never enabled). Until the first receipt is written at `history_path`, this row is **expected** to show ALARM-outcome ("empty or unreadable"). The first scheduled tick after the release clears it, if every step is `ok`.
+
+### A lost mint push no longer wedges the town clone (POS-1030)
+
+On 2026-11-13 the tick's mint commit lost its push race (15:24Z), stayed in the town clone ahead of main, and every later tick's `pull --ff-only` refused until a hand reset the clone (16:02Z). From this change, `office-keep.sh` records its own mint commit and that commit's parent in the clone's git directory, as `office-keep-unlanded`, before it pushes. A push that answers no is settled from a fresh fetch (§ THE TICK'S OWN UNLANDED COMMIT in the script):
+
+| What the fetch shows | What the tick does | Receipt |
+|---|---|---|
+| main holds the commit (the push landed and its answer was lost) | nothing more; it is never minted again | `push` ok `landed-unacked` |
+| main does not hold it, and HEAD is still exactly that commit | `reset --keep` to its parent; the rows re-derive on the next tick, on main's tail; a signed line is never rebased | `push` refused `push-failed`, `rollback` ok `unmade` |
+| the fetch or a read failed | the commit is **kept**, with its record | `rollback` refused `unconfirmed` |
+| another writer committed on top of it in the clone | **kept**; nothing of the other writer's is touched | `rollback` refused `moved` |
+
+The next tick settles any record **before** its pull (`pull` ok `unmade` or `landed-unacked`). While a record stays unsettled, the tick signs no new line: `mint` refused `prereq:unlanded`, and three such scheduled ticks raise the keep row's alarm.
+
+- **Nothing to install.** This is code only: no unit, environment, store or migration change.
+- **The record is the tick's own.** Don't delete `/srv/postmark-office/town-clone/.git/office-keep-unlanded` while the commit it names is still in the clone. Doing so turns a commit the tick would settle into one only a hand can. If a hand does repair the clone (resetting the commit away, as on 11-13), the next tick finds the commit gone and clears the record itself (`pull` ok `gone`).
+- **On `unconfirmed` or `moved` for more than one tick:** `git -C /srv/postmark-office/town-clone log -2` and `cat .git/office-keep-unlanded` name the commit and its parent. `moved` means a write outside the town lock committed on top of the tick's commit. That is a hand repair under `town.lock`, as on 11-13; keep the tick's commit on a branch, never rebase it.
+- **What the deploy does not settle:** a tick commit stranded **before** this release has no record, so the new tick doesn't treat it as its own. Its pull refuses as before, and the sentinel's `town_clone` probe names it. Run `git -C /srv/postmark-office/town-clone status -sb` once after the deploy. It should show no `ahead`.
+- **Rollback:** revert the code. The old script never reads the record, so a leftover one changes nothing. Remove it only once `git status -sb` shows the clone level with main.
 
 ### Retiring the rehydrate (POS-268 part 5b, at the w43 deploy)
 
@@ -3172,6 +3210,43 @@ Darko, 2026-10-21 08:26 EDT, "737 agreed": a daily office sweep deletes an uploa
    sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && node tools/media-takedown.mjs --url <media url> --reason "<why>" --by <your handle> --oauth-db /srv/postmark-office/oauth.db'
    ```
    It prints the receipt (the objects, the uploader, the reason, who, when); the row keeps it, and the upload door refuses the same bytes in every household from then on.
+
+## 094: a sign-in's family, so a reused refresh token ends the whole sign-in (POS-485)
+
+Darko ruled twice on 2026-11-13:
+- 09:09 EST, POS-485/a: "End the whole sign-in, no grace".
+- 13:1x EST, POS-485/b: "Link new keys, leave old".
+
+Every new or refreshed OAuth pair records its sign-in in `oauth_tokens.family`, and a refresh keeps the retired token's hash as a `spent` row. A retired refresh token presented again deletes every access and refresh token of its sign-in. The law is `src/oauth.mjs § THE SIGN-IN'S FAMILY`, and `CONTRACT.md § Auth` has the client's words.
+
+**094** adds one nullable column (`family`) and its index (`oauth_tokens_family`). It needs no grant change: `office_api` keeps SELECT, INSERT and DELETE, and nothing updates a token. There is no backfill and no row changes.
+
+**Nobody is signed out at the switch.** Pre-switch pairs stay unlinked and keep their own expiry; a pre-switch refresh token links what it issues from its first refresh on. Household, resident and static keys are untouched.
+
+Box steps (Jetto's hand, never a lane's):
+
+1. **Apply and prove 094 BEFORE the train PR is approved.** The new code names `family` in every pair it issues. Against a store without the column, every sign-in and refresh rolls back and answers `503` with `Retry-After`: nobody is signed out, but nobody can sign in or refresh until 094 lands.
+   - **Approving the train PR IS the deploy.** That approval's release-train run cuts the release tag and deploys it in the same run (§ The auto-deploy). So there is no moment between the tag and the code, and the SQL cannot come from the tag. Source it from the reviewed commit, or from the train once #1021 has landed there; the 094 file is the same at both.
+   - The office before this change ignores the column, so 094 can land any time before that approval. It does not touch the clearing's tables, so it needs no window around the clearing.
+   - The file waits at most 5 s for its lock (`lock_timeout`). Behind a long transaction on `oauth_tokens` it fails with `lock_not_available` and changes nothing: run it again.
+   - It is idempotent. The pipe is 079's above, from a commit instead of a tag:
+   ```sh
+   CLONE=G:/Postmark/repo-clones/wright/office
+   REF=b0356f0e1e92614ba65abc85f8853f4fc08fe612   # #1021's reviewed commit; or REF=origin/train/2026-w47 once #1021 has landed there
+   git -C $CLONE fetch -q origin
+   git -C $CLONE show "$REF:world2/schema/094_oauth_signin_family.sql" | ssh meepo-ec2 'set -e
+     DB=$(sudo sed -n "s|^WORLD2_PG_URL=.*/\([^/?\"]*\).*|\1|p" /etc/postmark-office.env); echo "db: $DB"; test -n "$DB"
+     sudo -n -u postgres psql -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE world2_owner;" -f -'
+   ```
+   Proof, on the box (the probe `world2/tools/migrations-landed.mjs` holds for 094):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT data_type FROM information_schema.columns WHERE table_name = 'oauth_tokens' AND column_name = 'family'"   # text
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('public.oauth_tokens_family')"                                                              # oauth_tokens_family
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT has_table_privilege('office_api', 'oauth_tokens', 'UPDATE')"                                           # f (unchanged)
+   ```
+2. **Deploy the code: the train PR's approval, only once step 1's proof reads as above.** Its own release-train run deploys it. With `OFFICE_AUTODEPLOY` off, the deploy is the hand-carry of that tag, which also follows step 1. A minute after the next sign-in or refresh, `SELECT kind, count(*) FROM oauth_tokens WHERE family IS NOT NULL GROUP BY 1` names `access` and `refresh`, and `spent` once a refresh has run. Read it by count only: a token is never printed or copied.
+3. **Rollback** of the code needs no store step. The old code ignores `family`, and `spent` rows are inert to it (no reader matches the kind, and its sweep skips their NULL expiry). Refreshes keep working, without the reuse rule. After a later re-deploy, the sweep removes the `spent` rows whose sign-in has no live key left.
 
 ## Two site rebuilds per run, not three (POS-944, 2026-11-08)
 
