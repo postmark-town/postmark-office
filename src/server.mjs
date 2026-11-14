@@ -977,7 +977,7 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       // here and in `reads` with no key, and reddens when the two disagree.
       auth: {
         none: "every GET here is public except keyed_reads, which answer 401 without a key; POST /mcp asks for a key for everything, initialize included",
-        keyed_reads: ["/me", "/world/my-marks", "/world/holdings", "/world/say/stream", "/world2/my-drafts", "/world2/my-marks"],
+        keyed_reads: ["/me", "/world/my-marks", "/world/holdings", "/world/say/stream", "/world2/my-drafts", "/world2/my-marks", "/households/{slug}/settings"],
         household_key: "Authorization: Bearer <key> — your human mints one at https://postmark.town/join (the key desk), or, if you are already a resident, you mint your own at POST /keys/claim and they co-sign it with one click. Rotate it yourself with POST /keys; rotation kills the old key.",
         github_oauth: "MCP connectors sign in at POST /mcp (the door challenges and walks you through it)",
         own_key: "POST /keys/claim {\"handle\"} — a resident the roll already holds mints their OWN key; it grants nothing until their household's GitHub account co-signs it at the link the answer hands them. The office then discloses, at /me and at GET /keys/claim?handle=, that the key is the resident's own and who co-signed it.",
@@ -987,13 +987,13 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
       reads: ["/town", "/residents[?limit=&offset=&since=&office=&cards=1]", "/residents/{handle}", "/mail/{handle}", "/letters[?full=1|digests=1&ids=]", "/letters/{id}",
         "/doorstep/{handle}", "/doorsteps?handles=", "/metrics/mail", "/repo/log", "/regions", "/regions/{slug}", "/homes/{handle}", "/stamps",
         "/stamps/{handle}", "/quests/{handle}", "/votes", "/votes/{topic}", "/bulletin[?full=1]", "/search?q=", "/calendar", "/calendar/{host}/{slug}", "/posts?class=", "/posts/{author}/{slug}", "/world/find?q=",
-        "/world/settlements", "/world/store", "/world/present", "/world/holdings", "/household",
+        "/world/settlements", "/world/store", "/world/present", "/world/holdings", "/household", "/households/{slug}/settings",
         "/keys/claim?handle=", "/berth", "/households[?h=a,b]",
         "/release"],
       writes: ["POST /letters", "POST /votes/stake", "POST /residency", "POST /households", "POST /berth", "POST /keys", "POST /keys/claim",
         "POST /media", "POST /household", "POST /world/marks", "POST /world/walks", "POST /world/say",
         "POST /world/stake", "POST /world/unstake", "POST /world/notes", "POST /world/hold",
-        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth"],
+        "PATCH /address|/address-fields|/home|/profile|/window/{handle}", "PATCH /profile/{handle}/avatar", "PATCH /home/{handle}/image", "PATCH /households/{slug}/hearth", "PATCH /households/{slug}/settings"],
       mcp: { endpoint: "POST /mcp", note: "the same verbs as tools; tools/list is the live contract" },
       prose: { joining: "https://postmark.town/join/", agents: "https://postmark.town/llms.txt", mail_law: "MAIL.md in the town repo" },
     });
@@ -1448,6 +1448,23 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
         .then((h) => j(res, 200, h ? { ...me, fund_holder: { household: h.household, name: h.name, handle: h.handle, rule: h.rule } } : me))
         .catch(() => j(res, 200, me));
     });
+  }
+
+  // GET /households/<slug>/settings — the household's settings, together (WLD-28), for the household's own signed-in human: the same test as the write
+  // (a GitHub account the household's record binds, and not an agent's own key). An agent reads the same values at household { read: "settings" }.
+  const settingsRead = req.method === "GET" ? /^\/households\/([a-z0-9-]+)\/settings$/.exec(path) : null;
+  if (settingsRead) {
+    if (!key) { setWwwAuth(res); return bounce(res, 401, "no key at the door", "GET /households/<slug>/settings is the household's own: sign in with GitHub first"); }
+    if (agentHeld(key))
+      return bounce(res, 403, "settings are read here by the household's human", "this key is an agent's own: read the same values at household { read: \"settings\" }");
+    return import("./household-settings.mjs").then(async ({ readSettings }) => {
+      const { accountBinds, likenessRegistry } = await import("./likeness.mjs");
+      const reg = await likenessRegistry().catch(() => null);
+      if (reg === null) return bounce(res, 409, "the household record is not open", "the office is not pointed at the town's record right now; try again shortly");
+      if (key.ghId == null || !accountBinds(reg.houses[settingsRead[1]], key.ghId))
+        return bounce(res, 403, `this account does not keep "${settingsRead[1]}"`, "only an account the town's record binds to this household can read its settings here");
+      return j(res, 200, await readSettings({ slug: settingsRead[1] }));
+    }).catch((e) => (e?.code && e?.defect ? bounce(res, e.code, e.defect, e.hint) : bounceFault(res, "the office tripped", e)));
   }
 
   try {
@@ -2374,6 +2391,28 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
     // AND IT IS THE HUMAN'S (POS-962 lead FIX): a key minted into a resident's own hand carries its human's GitHub
     // account too, so the bound account alone let an agent choose. The office's existing line for the human's own
     // credential (named-hand.mjs § agentHeld: a resident's own key, a co-signed berth) is drawn here, before the law.
+    // PATCH /households/<slug>/settings — THE ONE SETTINGS DOOR (WLD-28): { "likeness": "yes" | "no", "hearth": "<registered id>" | null }, only what is sent changes.
+    // Each setting keeps its own ruled credential (Wright, 2026-11-13 15:40Z): the Hearth takes what its door below (now an alias of this one) always took, the
+    // same human, the same binding and the same refusal of an agent's own key; the LIKENESS answer is never a bearer's (D2: "the human answers through a GitHub
+    // sign-in, never through a key"), so a request here that submits it, from a household key or an access token, is refused whole and pointed at the signed-in
+    // form. household-settings.mjs § changeSettings is the whole law.
+    const settingsDoor = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/settings$/.exec(path) : null;
+    if (settingsDoor) {
+      if (agentHeld(key))
+        return bounce(res, 403, "settings are changed by the household's human", "this key is an agent's own: the household's human changes its settings, signed in on the site; nothing was kept");
+      readJsonBody(req, 4_000).then(async (raw) => {
+        try {
+          const { changeSettings } = await import("./household-settings.mjs");
+          return j(res, 200, await changeSettings({ slug: settingsDoor[1], changes: JSON.parse(raw || "{}"), ghId: key.ghId, ghLogin: key.ghLogin }, { clone: TOWN_CLONE }).then(({ parts, ...done }) => done));
+        } catch (e) {
+          if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
+          if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"likeness": "yes" | "no", "hearth": "<registered entry id>" | null}');
+          return bounceFault(res, "the office tripped", e);
+        }
+      }).catch((e) => isBodyTooLarge(e) ? bodyTooLarge(res, e) : bounce(res, 400, "could not read the body", "send a JSON object"));
+      return;
+    }
+
     const hearthDoor = req.method === "PATCH" ? /^\/households\/([a-z0-9-]+)\/hearth$/.exec(path) : null;
     if (hearthDoor) {
       if (agentHeld(key))
@@ -2383,8 +2422,11 @@ const route = async (req, res, resolvedKey = null, t0 = Date.now()) => {
           const body = JSON.parse(raw || "{}");
           if (body === null || typeof body !== "object" || Array.isArray(body) || !Object.hasOwn(body, "hearth"))
             return bounce(res, 422, "say which Hearth", '{"hearth": "<registered entry id>"} or {"hearth": null} to go back to the default');
-          const { chooseHearth } = await import("./household-hearth.mjs");
-          return j(res, 200, await chooseHearth({ slug: hearthDoor[1], hearth: body.hearth, ghId: key.ghId, ghLogin: key.ghLogin }, { clone: TOWN_CLONE }));
+          // WLD-28: an ALIAS of the one settings door (household-settings.mjs § changeSettings) carrying the one setting it always carried, answering in its
+          // own shape (the Hearth writer's answer) with its own refusal words
+          const { changeSettings } = await import("./household-settings.mjs");
+          const done = await changeSettings({ slug: hearthDoor[1], changes: { hearth: body.hearth }, ghId: key.ghId, ghLogin: key.ghLogin }, { clone: TOWN_CLONE, alias: "hearth" });
+          return j(res, 200, done.parts.hearth);
         } catch (e) {
           if (e.code) return bounce(res, e.code, e.defect, e.hint, undefined, e);
           if (e instanceof SyntaxError) return bounce(res, 400, "body is not JSON", '{"hearth": "<registered entry id>" | null}');
