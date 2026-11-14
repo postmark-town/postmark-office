@@ -124,7 +124,11 @@ function firstDiff(a, b) {
 const CHANGED = {
   // POS-962: the manifest's writes list gains the household's Hearth door (the record predates it; nothing else in that answer moves).
   "REST /": [["rehydrates from the town repo every few minutes;", "the office's store re-reads the town repo every fifteen minutes;"],
-    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth"]']],
+    ['"PATCH /home/{handle}/image"]', '"PATCH /home/{handle}/image","PATCH /households/{slug}/hearth","PATCH /households/{slug}/settings"]'],
+    // WLD-28: the manifest's reads list gains the household's settings read (GET /households/{slug}/settings), after /household
+    ['"/household","/keys/claim?handle="', '"/household","/households/{slug}/settings","/keys/claim?handle="'],
+    // and it names the read among the keyed ones: it answers 401 without a key (test/manifest-keyed-reads.test.mjs)
+    ['"/world2/my-marks"]', '"/world2/my-marks","/households/{slug}/settings"]']],
   "MCP household {}": [["every resident of a house in one answer, each under the doorstep's own names — household: <slug>",
     "a house's members, a row each, paged; full: true is the whole house — household: <slug>"],
     // POS-633 part 2: the stakes line shortened to make room, and the two deep reads on the menu
@@ -143,7 +147,9 @@ CHANGED["MCP household {}"].push(
     "taken into the office's keeping the moment it conforms, and it sails on the next ferry crossing."],
   [`{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}}]`,
     `{"act":"mark-all-read","teaches":"Mark all read.","fields":{"handle":{}}},{"act":"amend-letter","teaches":"Amend a letter of yours before it sails; only the last version sails.","fields":{"id":{"required":true},"body":{"required":true}}},{"act":"withdraw-letter","teaches":"Withdraw a letter of yours before it sails.","fields":{"id":{"required":true}}},{"act":"block","teaches":"Block a household's mail, both ways, privately.","fields":{"household":{"required":true}}},{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`],
-  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`]);
+  [`"marks":"your marks: by state, decided, at risk"`, `"marks":"your marks: by state, decided, at risk","blocks":"your house's mail blocks, private to it"`],
+  // AND THE HOUSEHOLD'S SETTINGS READ (WLD-28): `settings` joins the reads after blocks; nothing else in the answer moves.
+  [`"blocks":"your house's mail blocks, private to it"`, `"blocks":"your house's mail blocks, private to it","settings":"likeness and Hearth, read-only"`]);
 // AND PARCEL ROOM BOUGHT AHEAD (POS-762/e, Darko 2026-10-23): the act joins the index after unblock.
 CHANGED["MCP household {}"].push(
   [`{"act":"unblock","teaches":"Lift a block.","fields":{"household":{"required":true}}}]`,
