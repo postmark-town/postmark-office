@@ -5,7 +5,8 @@
 //   1. stake_candidate is ONE SHORT LINE, judged as `thread` is: the thread's own 255-character cap, and no LF, CR, U+2028 or U+2029, judged BEFORE trimming so a terminator trimming
 //      would hide is still refused; spaces and any Unicode spelling still land, padding is still trimmed, and the stake trio stays all-or-none;
 //   2. a value is judged by its TYPE before any coercion it controls: a null-prototype object, one whose toString throws or an array nested 20,000 deep is a 422 naming its
-//      type, never a 500 (the REST door answered 500 on `String(thread)`), and nothing is written;
+//      type, never a 500, AT THE WRITER TESTED HERE (enqueueLetter / validateLetter; the REST door answered 500 on `String(thread)`). The doors in front of it are not driven by this
+//      file: send-at-door reads `from` through inferSender before it reaches the writer, and that is outside this change;
 //   3. no refusal echoes a value whole: a long value is cut short, an object is named by `typeof`;
 //   4. every refusal drives the REAL validation path (enqueueLetter), leaves the clone untouched, and the same writer lands an honest letter straight after (a live control).
 //   The controls are capable of turning red: each case below fails on the code before this change (a hostile value threw, a U+2028 candidate landed).
@@ -88,6 +89,19 @@ test("legitimate candidate spellings still land: spaces, Unicode, padding trimme
   }
 });
 
+test("a long VALID topic slug still lands: the topic has the slug grammar and no length cap of its own", () => {
+  const slug = Array.from({ length: 130 }, (_, i) => `part${i}`).join("-");   // lowercase-hyphenated, well past 300 characters
+  assert.ok(slug.length > 300 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug));
+  const clone = tempClone();
+  try {
+    enqueueLetter({ ...ok, title: "my ballot", ...stake, stake_topic: slug }, fixtureKey, db, clone);
+    const text = readFileSync(join(outboxOf(clone), readdirSync(outboxOf(clone))[0]), "utf8");
+    assert.ok(text.includes(`\nstake_topic: ${slug}\nstake_candidate: Waystation\n`), "the long slug is written as given");
+  } finally { rmSync(clone, { recursive: true, force: true }); }
+  // and the grammar still refuses what is not a slug, short or long, with a clipped diagnostic
+  assert.match(bounce({ ...ok, ...stake, stake_topic: `${slug}-X` }).message, /^stake_topic ".{0,40}" is not a ballot slug$/);
+});
+
 test("the stake trio is still all-or-none, and a valid trio lands after thread: (stamps coerced to a bare integer)", () => {
   assert.match(bounce({ ...ok, stake_topic: "the-name", stake_candidate: "Waystation" }).defect, /incomplete stake/);
   const clone = tempClone();
@@ -112,7 +126,7 @@ for (const [name, make] of Object.entries(HOSTILE)) {
   });
 }
 
-test("from, to, title and body that are not text → 422 by type, never a 500", () => {
+test("from, to, title and body that are not text → 422 by type at the writer (enqueueLetter), never a trip there", () => {
   for (const field of ["from", "to", "title", "body"]) {
     for (const make of Object.values(HOSTILE)) {
       const e = bounce({ ...ok, [field]: make() });

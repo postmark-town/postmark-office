@@ -2774,7 +2774,7 @@ export const PSA_SLUG = "public-service-announcements";
 // the em dash and a plain hyphen because a heading is prose and prose drifts.
 // THE GRAMMAR, as a regex: /^##\s+(\d{4}-\d{2}-\d{2})\s*(?:\(([^)]*)\))?\s*[—-]\s*(.+?)\s*$/. It is read by hand below (psaHeading) because that regex is QUADRATIC on a line a
 // blank run cannot finish: `\s*` and `(.+?)\s*$` can eat the same blanks, so on failure (a lone CR, U+2028 or U+2029 survives the line split and `.` cannot cross it) the engine
-// tries every split (148 ms at 16k characters, 652 ms at 32k; office #943). The hand read gives the same captures on every line, which test/psa-heading-linear.test.mjs
+// tries every split (148 ms at 16k characters, 652 ms at 32k; office #943). The hand read gives the same captures on every line, which test/pos-923-linear-reads.test.mjs
 // holds against the regex itself over every short string of its alphabet.
 const LINE_END = /[\n\r\u2028\u2029]/;   // what `.` cannot match
 const BLANK = /\s/;

@@ -131,7 +131,7 @@ const LINE_END = /[\n\r\u2028\u2029]/;
 /**
  * `/^date:\s*(.+?)\s*$/m.exec(front)?.[1]` — the first `date:` line's value — read once from the left instead of by the regex, which is QUADRATIC on a run of blanks it
  * cannot finish (`\s*` and `(.+?)\s*$` eat the same blanks and the engine tries every split: 388 ms at 16k characters; office #943). The same answer on every text
- * (test/psa-heading-linear.test.mjs holds it against the regex over every short string of its alphabet), including the regex's quirks: `\s*` crosses line ends, so a
+ * (test/pos-923-linear-reads.test.mjs holds it against the regex over every short string of its alphabet), including the regex's quirks: `\s*` crosses line ends, so a
  * value may sit on a later line, and when only blanks follow the value is the last character `.` can match.
  */
 export function frontDate(front) {

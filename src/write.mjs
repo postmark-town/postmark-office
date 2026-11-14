@@ -684,7 +684,7 @@ function buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce) {
     if (typeof v !== "string") throw bounce(422, `${name} must be text, not ${shown(v)}`, name === "stake_topic" ? "lowercase-hyphenated, exactly as the ballot lists the topic" : "one line; the exact candidate spelling the ballot lists");
   if (typeof stake_stamps !== "number" && typeof stake_stamps !== "string")
     throw bounce(422, `stake_stamps must be a positive whole number, not ${shown(stake_stamps)}`, "stake a positive integer count of stamps");
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(stake_topic.slice(0, 300)) || stake_topic.length > 300)
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(stake_topic))
     throw bounce(422, `stake_topic ${shown(stake_topic)} is not a ballot slug`, "lowercase-hyphenated, exactly as the ballot lists the topic");
   // THE CANDIDATE IS ONE SHORT LINE (POS-923, F2): it is written into the letter's frontmatter as a single line the crossing's parsers read, so it is judged as `thread` is: the same
   // 255-character cap, and no line terminator of any kind (LF, CR, U+2028, U+2029), judged BEFORE trimming so a terminator trimming would hide is still refused. Spaces and any
@@ -729,7 +729,8 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   // they default the SAME way: the whole point of the change is that the office
   // never rejects a letter the ferry would have accepted.
   thread ||= "new";
-  // the four fields the door reads as text are text (POS-923): anything else is named by its type, never coerced (a null-prototype object or a throwing toString was a 500)
+  // the four fields THIS WRITER reads as text are text (POS-923): anything else is named by its type here, never coerced (a null-prototype object or a throwing toString was a 500 at this
+  // writer). Doors that read `from` before they reach it (send-at-door.mjs § inferSender) are not changed by this.
   for (const [name, v] of [["from", from], ["to", to], ["title", title], ["body", body]])
     if (typeof v !== "string") throw bounce(422, `${name} must be text, not ${shown(v)}`, "send_letter takes from, to, title and body as plain text");
   if (!key.handles.has(from))
