@@ -12,8 +12,9 @@ const { markRecord } = await import("../src/mark-record.mjs");
 const ROOT = join(import.meta.dirname, "..");
 const fold = await import(pathToFileURL(join(ROOT, "world-clone", "tools", "marks-fold.mjs")));
 
-// WLD-173's provisional property table (postmark-world#391, comment 6880156812): the names the class declares
-const SPARK_PROPS = ["recounting", "experienced_at", "experienced_until", "room", "circle", "circle_path", "event", "picture", "image_prompt", "acts", "present", "parent_spark"];
+// WLD-173's property table (postmark-world#391 at 3dee06d4, tools/spark.mjs § SPARK_FIELDS): the names the class declares — `rooms`,
+// the room ids, since the room-set wire (POS-1035; no singular `room`)
+const SPARK_PROPS = ["recounting", "experienced_at", "experienced_until", "rooms", "circle", "circle_path", "event", "picture", "image_prompt", "acts", "present", "parent_spark"];
 
 test("properties are carried by NAME — only the class's own; the record's own fields can never ride in as one", () => {
   const ok = S.carriedProperties("spark", { recounting: "the sorbet ran out first", experienced_at: "2026-11-14T20:01:00.000Z", circle: 50101, circle_path: [50101], present: ["pica-house", "seth-house"] }, SPARK_PROPS);
@@ -42,7 +43,7 @@ test("THE ROUND TRIP (WLD-173 Q2): the office's writer, read back by the World's
   const carried = S.carriedProperties("spark", {
     recounting: "Pica opened the counter; Seth found the lemon one sour, and Claran asked who painted the sign.",
     experienced_at: "2026-11-14T19:30:00.000Z", experienced_until: "2026-11-14T22:00:00.000Z",
-    room: "t1794686460000-pica", event: "pica/sorbet-opening",
+    rooms: ["t1794686460000-pica", "t1794686520000-seth"], event: "pica/sorbet-opening",
     circle: 50101, circle_path: [50101, 50105, 50110], acts: [50101, 50102, 50113],
     present: ["pica-house", "seth-house", "the-town"], picture: "https://example.invalid/sorbet.jpg", parent: "pica/the-first-sorbet",
   }, SPARK_PROPS).fields;
@@ -62,7 +63,7 @@ test("THE ROUND TRIP (WLD-173 Q2): the office's writer, read back by the World's
 
 test("values that LOOK risky but read back whole are carried: opaque ids, exponent-free decimals, words that are not numbers, a mid-text bracket", () => {
   const keep = {
-    room: "t1794686460000-pica", event: "pica/sorbet-opening", parent: "pica/the-first-sorbet",
+    rooms: ["t1794686460000-pica"], event: "pica/sorbet-opening", parent: "pica/the-first-sorbet",
     recounting: "true", image_prompt: "1e5 lemons, 3.5 metres of counter, and [a toast] mid-sentence", circle: -0.5, acts: [1, "2", { k: "v" }],
     picture: "https://example.invalid/sorbet.jpg?w=640&h=480", experienced_at: "2026-11-14T19:30:00.000Z",
   };
@@ -80,14 +81,15 @@ test("the round trip's EXACT INCOMPATIBILITIES are refused at the door, by field
     ["recounting", "we sang #3 twice", /a # is read as the start of a comment/],
     ["picture", "https://example.invalid/clip#t=30", /a # is read as the start of a comment/],
     ["recounting", "line one\nline two", /a line break ends the field/],
-    ["room", "2026", /a number-shaped text is read back as a number/],
+    ["image_prompt", "2026", /a number-shaped text is read back as a number/],
+    ["rooms", ["t1794686460000-pica#2"], /a # inside it/],
     ["recounting", "{the toast}", /starts with \{/],
     ["recounting", "[an aside]", /read back as a list, or refused by the World's lint/],
     ["recounting", " padded ", /trimmed/],
     ["present", ["pica#house"], /a # inside it/],
     // Bevel 16:32:27Z: numeric and JSON coercion, opaque ids, URL fragments
     ["event", "007", /number-shaped/],
-    ["room", "-12.5", /number-shaped/],
+    ["image_prompt", "-12.5", /number-shaped/],
     ["recounting", "{\"toast\": 1}", /starts with \{/],
     ["recounting", "[1, 2]", /read back as a list/],
     ["picture", "https://example.invalid/a.jpg#frag", /a # is read/],

@@ -145,7 +145,7 @@ function engineDir() {
 
 const engineImport = (file) => import(pathToFileURL(join(engineDir(), "tools", file)));
 
-// IS THIS A SPARK? THE WORLD'S ANSWER, NEVER THE OFFICE'S (POS-1035, placement A; World #391 at 45f57eea). The World owns the
+// IS THIS A SPARK? THE WORLD'S ANSWER, NEVER THE OFFICE'S (POS-1035, placement A; World #391 at 3dee06d4). The World owns the
 // spark class and its place rules: `tools/mark-kind.mjs § isSparkIn` over the class index of the marks in hand. An engine that
 // does not yet export it (before #391 lands at the blessed ref) answers no — a spark is then refused as any unknown placement is,
 // never placed by a rule this office made up. `sparkWorld()` hands back the engine's spark helpers too, or null.
@@ -154,6 +154,15 @@ async function sparkWorld() {
     const [mk, sp, fold] = await Promise.all([engineImport("mark-kind.mjs"), engineImport("spark.mjs").catch(() => null), engineImport("marks-fold.mjs").catch(() => ({}))]);
     return typeof mk.isSparkIn === "function" ? { mk, sp, fold } : null;
   } catch { return null; }
+}
+/**
+ * A ROOM SET'S PLACE, THE WORLD'S ONE RULE (POS-1035; World #391 at 3dee06d4, tools/spark.mjs § roomsPlace): the rectangular
+ * envelope over every member room's absolute bounds. Answers the engine's own function, or null when its engine has none (the
+ * room-set class not at this office's pin) — the caller then holds; it never computes a place of its own.
+ */
+export async function sparkRoomsPlace() {
+  const w = await sparkWorld();
+  return typeof w?.sp?.roomsPlace === "function" ? w.sp.roomsPlace : null;
 }
 /**
  * THE EVENT'S SPARK, JUDGED BY THE MARK ROAD AND WRITTEN BY NOBODY YET (POS-1035; event-sparks.mjs § completeEvent). The same
