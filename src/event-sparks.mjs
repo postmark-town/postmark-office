@@ -19,6 +19,81 @@ import * as talk from "../world2/tools/conversations.mjs";
 import { PUBLIC_ACTS } from "./world-read-v2.mjs";
 import { publicActSql } from "./hearth-public.mjs";
 
+/** The spark class's name (WLD-173: `the-town/spark`, extends mark; written `kind: spark`, no `class:` line). */
+export const SPARK_CLASS = "spark";
+
+// ── A CLASS'S PROPERTIES, CARRIED BY NAME (WLD-173's office half) ────────────
+//
+// The mark road picked a class's fields by hand (a bounty's ask, a chest's contents), so a class the World adds — the spark first —
+// could not carry its own properties: its record would land without them. `properties: { … }` on leave-mark carries each one BY
+// NAME, and only a name the class declares as its own `kind: property` node in the law (world-classes.mjs § classOwnProperties).
+// Lists ride as lists, which the record writes in its existing strict-JSON form (mark-record.mjs § fmtVal, as `points` rides).
+// A name the class does not declare is refused, never written; the core record's own fields cannot be smuggled in this way.
+//
+// THE SPARK'S `parent` (Darko 11-14 10:46: "let sparks declare their parent if they want to as a field"; WLD-173 Q3). The maker
+// says `parent`; the record stores it as the non-placement property `parent_spark`. It NEVER becomes core `parent:` — the record
+// grammar's containment edge, which would read the spark as anchored under its target.
+
+/** Core record fields a class property may never carry (mark-record.mjs § RECORD_FIELDS and DERIVED, and the containment edge). */
+export const CORE_FIELDS = Object.freeze(["kind", "by", "tier", "date", "at", "extent", "points", "slot", "value", "class", "ask", "reward",
+  "status", "image", "version", "slug", "body", "household", "amend", "stamps", "put_forward", "parent", "parent_id", "id"]);
+
+/**
+ * `properties` (the caller's object) → the fields to write, or `{ refused: { code, defect, hint } }`. `own` is the class's own
+ * property names (a Set or array). Absent `properties` carries nothing.
+ */
+export function carriedProperties(klass, properties, own) {
+  if (properties === undefined || properties === null) return { fields: {} };
+  const no = (defect, hint) => ({ refused: { code: 422, defect, hint } });
+  if (typeof properties !== "object" || Array.isArray(properties)) return no("properties is an object of the class's own properties, by name", "properties: { <name>: <value>, … }");
+  const names = new Set(own ?? []);
+  const given = { ...properties };
+  if (klass === SPARK_CLASS && given.parent !== undefined) {
+    if (given.parent_spark !== undefined) return no("parent and parent_spark name the same link", "send parent: \"<by>/<slug>\" — the record stores it as parent_spark");
+    given.parent_spark = given.parent;
+    delete given.parent;
+  }
+  const fields = {};
+  for (const [k, v] of Object.entries(given)) {
+    if (CORE_FIELDS.includes(k))
+      return no(`${k} is the record's own field, not a property of ${klass}`, k === "parent" ? "a mark's parent is its containment; a spark's own link is properties.parent" : "send it as itself, outside properties");
+    if (!names.has(k))
+      return no(`class ${klass} has no property "${k}"`, names.size ? `its own properties: ${[...names].sort().join(", ")}` : `class ${klass} declares no properties of its own in the law`);
+    if (v === undefined || v === null) continue;
+    const lost = recordLoss(v);
+    if (lost) return no(`properties.${k} would not read back whole from the town's record: ${lost}`,
+      "the record is one line per field (the World's marks-fold.mjs § parseRecord); send the value in a form that line keeps, or leave it out");
+    fields[k] = v;
+  }
+  return { fields };
+}
+
+/**
+ * WHAT ONE RECORD LINE CANNOT CARRY (the WLD-173 Q2 round trip, measured against the World's own reader, marks-fold.mjs §
+ * parseRecord, which this office's writer feeds through mark-record.mjs § fmtVal). A string is written bare, so the reader would:
+ * cut it at a `#` (its comment), end the field at a newline, read a number-shaped string as a number, and try a `{`/`[`-led string
+ * as JSON. A list or object is written as strict JSON and reads back whole — unless a `#` inside it is cut the same way. Returns
+ * the reason, or null when the value round-trips. Refused at the door, never written to be lost silently (WLD-41's rule).
+ */
+export function recordLoss(v) {
+  if (typeof v === "number" || typeof v === "boolean") return null;
+  if (typeof v === "string") {
+    if (/[\r\n]/.test(v)) return "a line break ends the field";
+    if (v.includes("#")) return "a # is read as the start of a comment, and everything after it is lost";
+    if (v !== v.trim()) return "leading or trailing spaces are trimmed";
+    if (/^-?\d+(\.\d+)?$/.test(v)) return "a number-shaped text is read back as a number";
+    if (v.startsWith("{")) return "a text that starts with { is read back as a structure";
+    // a `[`-led text is kept as text unless it parses as a list, or ends with `]` (then the World's lint calls the line lossy)
+    if (v.startsWith("[") && (v.endsWith("]") || (() => { try { JSON.parse(v); return true; } catch { return false; } })()))
+      return "a text in [ … ] is read back as a list, or refused by the World's lint";
+    return null;
+  }
+  const json = JSON.stringify(v);
+  if (json === undefined) return "it is not a value the record can write";
+  if (json.includes("#")) return "a # inside it is read as the start of a comment, and the rest of the line is lost";
+  return null;
+}
+
 /** The ruled no-conversation extent (WLD-173 Q1, Darko 09:37 EST: "an extent locked at 60 radius (base earshot)"). */
 export const SPARK_RADIUS_M = 60;
 /** How near the event's place a public act must be to count as there, and a room's voice to be the event's room: earshot. */

@@ -51,7 +51,11 @@ import { visitorRulesGate } from "./visitor-rules.mjs"; // POS-300: a berth read
 import { berthHandleOf, isBerthHandle, withStanding } from "./speaker-standing.mjs"; // POS-739: a visitor walks and says, where it stands
 import { harborWritesOpen, HARBOR_BOUNCE } from "./harbor-gate.mjs"; // POS-739: a harbor household walks as its berth, no other way
 import { classNodeNameOf, isSited, kindFieldOf, lineageOf, markClassOf } from "./world-grants.mjs"; // the kind rung: a mark's class and standing, in both forms (LOGOS v2, O1)
-import { classNames, classRoster, classDials, classExtendsOf, classProperty, departurePace, freeCellIn } from "./world-classes.mjs";
+import { classNames, classRoster, classDials, classExtendsOf, classProperty, classOwnProperties, departurePace, freeCellIn } from "./world-classes.mjs";
+import { SPARK_CLASS, carriedProperties } from "./event-sparks.mjs"; // POS-1035: WLD-173's office half — properties by name, the spark's form
+// The classes whose fields this door picks by hand (the bounty's ask, a chest's contents, a candy's label, a thing's holding word):
+// they keep their own named fields; every other class carries its law-declared properties through `properties`.
+const HAND_PICKED_CLASSES = Object.freeze(["bounty", "chest", "candy", "thing"]);
 import { makersOf } from "./holding-law.mjs"; // who may make an instance: the class's own makers (LOGOS v2, O1) // which classes exist — read from the record, never held
 import { askedCrossing } from "./crossings.mjs"; // WLD-29: one rule for the crossing a read asked
 import { readHouseholdActivity, litOf, lightsUnknownWhy, houseFocus, lightsAnswer } from "./household-activity.mjs"; // WLD-29: a shown house's porch light
@@ -5401,7 +5405,13 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   if (tier !== undefined) throw bounce(422, "tier: is not a field", "standing is derived from the ground your mark stands on — drop tier and the walk will answer it");
   if (kind === "sited" || kind === "parcel") {
     if (!at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) throw bounce(422, "sited/parcel marks need at {x,y}", "grid meters east/south of the Origin");
-    if (kind === "sited" && (!extent || !(Number(extent.w) || Number(extent.h)))) throw bounce(422, "a sited mark needs an extent {w,h}", "its footprint in grid meters");
+    // A SPARK'S FRAME MAY BE A POINT OR A LINE (POS-1035 frozen frame; Bevel 16:25:14Z): a real single-point room keeps its explicit
+    // zero width/height, never padded. Its frame is the event's or the circle's, not ground it stands on.
+    const sparkFrame = klass !== undefined && lineageOf(String(klass), classExtendsOf()).includes(SPARK_CLASS);
+    if (kind === "sited" && sparkFrame) {
+      if (!extent || !Number.isFinite(Number(extent.w)) || !Number.isFinite(Number(extent.h)) || Number(extent.w) < 0 || Number(extent.h) < 0)
+        throw bounce(422, "a spark needs an extent {w,h}, each 0 or more", "its frame: the room's bounds, or 120×120 (the 60 m radius) with no conversation");
+    } else if (kind === "sited" && (!extent || !(Number(extent.w) || Number(extent.h)))) throw bounce(422, "a sited mark needs an extent {w,h}", "its footprint in grid meters");
     // The parcel dial is the town's, not the claimant's (Keemin, 2026-07-31 —
     // the vermillion 200×200 class dies at the door, not in lint).
     if (kind === "parcel" && extent !== undefined) throw bounce(422, "a parcel carries no extent — every parcel is the town's 25×25, centred on your at", "leave extent off; the door sets the dial");
@@ -5564,6 +5574,17 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // the holding law's own sentence (holding-law § holdingOf), never clamped.
   const holderFields = klass === "chest" ? null
     : (await import("./kind-holding.mjs")).holderWordOf({ payload, klass, classProperty, extendsOf: classExtendsOf() });
+  // A CLASS'S OWN PROPERTIES, BY NAME (POS-1035, WLD-173's office half; event-sparks.mjs § carriedProperties). Only a class whose
+  // fields this door does not pick by hand carries them; a name the class does not declare in the law is refused, never written.
+  let carried = {};
+  if (payload.properties !== undefined) {
+    if (klass === undefined || HAND_PICKED_CLASSES.includes(String(klass)))
+      throw bounce(422, klass === undefined ? "properties belong to a classed mark" : `class ${klass}'s fields are its own named fields, not properties`,
+        klass === undefined ? "send kind: \"<class>\" with the class's properties" : "send them as the fields this card names");
+    const c = carriedProperties(String(klass), payload.properties, Object.keys(classOwnProperties(String(klass))));
+    if (c.refused) throw bounce(c.refused.code, c.refused.defect, c.refused.hint);
+    carried = c.fields;
+  }
 
   if (klass === "bounty") {
     if (kind !== "sited") throw bounce(422, "a bounty notice is a sited mark", "pin it to the board: a small sited mark within the Bounty Board's ground at the Town Centre");
@@ -5651,7 +5672,7 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
         // only a proved candy reaches here (§ A CANDY ON THE GROUND), and each field is written only when
         // sent: String(undefined) once wrote the text "undefined" into four claims and their acts (POS-692)
         : klass === "candy" ? { class: klass, ...(payload.label != null ? { label: String(payload.label) } : {}), ...(payload.dropped != null ? { dropped: String(payload.dropped) } : {}) }
-          : { class: klass, ...(holderFields ?? {}) };
+          : { class: klass, ...(holderFields ?? {}), ...carried };
   // ── THE FORM IT IS WRITTEN IN (LOGOS v2 part 2; O1's body, G3: "The office's
   // own writers stay on the old form here and flip in O2") ─────────────────────
   // A classed mark whose class stands as sited in the class layer's own tree is
@@ -5668,8 +5689,9 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // by here, so `kind: sited` + `class: parcel` (or a class under it) keeps
   // the old form and can never be filed as a parcel.
   const extendsOfClass = classExtendsOf();
-  const newForm = klass !== undefined && kind === "sited" && isSited({ kind: String(klass) }, extendsOfClass)
-    && !lineageOf(String(klass), extendsOfClass).includes("parcel");
+  // A SPARK is written in the new form too (WLD-173: `kind: spark`, no `class:` line), though it is not sited: its frame is no ground.
+  const newForm = klass !== undefined && kind === "sited" && ((isSited({ kind: String(klass) }, extendsOfClass)
+    && !lineageOf(String(klass), extendsOfClass).includes("parcel")) || lineageOf(String(klass), extendsOfClass).includes(SPARK_CLASS));
   const { class: _spelled, ...ownFields } = classFields;
   const clean = { slug, kind: newForm ? String(klass) : kind, at, extent, points, body: String(body).trim(), slot, value, parent_id, by, household, date: new Date().toISOString(),
     ...(newForm ? ownFields : classFields), ...(image !== undefined ? { image } : {}), ...(payload.amend === true ? { amend: true } : {}),
@@ -7491,6 +7513,8 @@ export const WORLD_TOOLS = [
       capacity: { type: "number", description: "a holder only: how many it holds, a whole number within its class's bounds (thing: 1–120, default 30); out of bounds is refused, never clamped" },
       open: { type: "boolean", description: "a holder only: whether other households may give into and take from it (default true)" },
       portable: { type: "boolean", description: "a thing only: whether it can be taken and carried (default true)" },
+      // POS-1035 (WLD-173's office half): a class the World declares carries its own properties by name
+      properties: { type: "object", description: "a class's own properties, by name — each one the class declares as a property in the town's law (lists as lists). A name the class does not declare is refused. For a spark, parent: \"<by>/<slug>\" is your spark's own link to another spark (stored as parent_spark); it never places it." },
     }, required: ["kind"], additionalProperties: false } },
   { name: "world_note",
     description: "Leave a private note to your returning self. The office keeps it in its own record, readable only by your household's keys, and never writes it to any repository; it is one current note, not a journal. Read it back with world { read: \"note-to-self\" }: it answers the acting resident's note as `note` (null if none). The body may be at most 2000 characters. A one-resident key defaults to its resident; a multi-resident key must choose with handle:.",
