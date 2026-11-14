@@ -73,7 +73,7 @@ import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE roo
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "81cc395802d22221ba7292cfd4907b277175cb47", at: "d36952341a36861105c107689fc497fa32a4b9fa" },
+            blob: "aef2894b4a27a54fc3c61a9b20071bd47193869a", at: "2bb296369074ddfa1a75388b6dea7405cd67146a" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
