@@ -98,17 +98,37 @@ function watch(pool) {
   pool.connect = (...a) => {
     seen.checkouts += 1;
     seen.peakWaiting = Math.max(seen.peakWaiting, pool.waitingCount);
-    const p = connect(...a);
-    if (a.length) return p;
-    return p.then((c) => {
-      if (!c.__watched) { c.__watched = true; const q = c.query.bind(c); c.query = (t, ...r) => { note(t); return q(t, ...r); }; }
+    const hold = (c) => {
+      if (c && !c.__watched) { c.__watched = true; const q = c.query.bind(c); c.query = (t, ...r) => { note(t); return q(t, ...r); }; }
       return c;
-    }, (e) => { seen.errors += 1; throw e; });
+    };
+    // pg-pool has two acquire styles and Pool.query uses the CALLBACK one (pg-pool/index.js § query: this.connect((err, client) => …)): a failed acquire
+    // arrives as `err` there and as a rejection here, and both are counted
+    if (typeof a[0] === "function") {
+      const cb = a[0];
+      return connect((err, client, done) => { if (err) seen.errors += 1; cb(err, client, done); }); // Pool.query's statement is noted by the pool.query wrapper above
+    }
+    return connect(...a).then(hold, (e) => { seen.errors += 1; throw e; });
   };
   return seen;
 }
 
 // ── the shape of the fix, on its own ────────────────────────────────────────
+
+test("the instrument counts an acquire timeout in BOTH of pg-pool's styles (the control for the zero it is asked for below)", async () => {
+  const { default: pg } = await import("pg");
+  const tiny = new pg.Pool({ connectionString: store.url("office_api"), max: 1, connectionTimeoutMillis: 150 });
+  tiny.on("error", () => {});
+  const seen = watch(tiny);
+  const held = await tiny.connect();                                   // the pool's one connection is out
+  await assert.rejects(tiny.query("SELECT 1"), /timeout exceeded when trying to connect/); // Pool.query: the callback style
+  await assert.rejects(tiny.connect(), /timeout exceeded when trying to connect/);         // the promise style
+  assert.equal(seen.errors, 2, "one callback-style and one promise-style acquire failure, both seen");
+  held.release();
+  await tiny.query("SELECT 1");
+  assert.equal(seen.errors, 2, "a good acquire adds none");
+  await tiny.end();
+});
 
 test("trailingFlight: a burst of callers shares two runs, each begun after its callers asked; errors reach the sharers and nothing sticks", async () => {
   let reads = 0, state = 0;
@@ -158,7 +178,9 @@ test("a crowd acting at once: the act doors scan the passage record a handful of
   try {
     const answers = await Promise.all(HANDLES.map((h) => worldApex({ do: "take", args: { mark: "sbx-c00/home" }, handle: h }, { household: "sbx-crowd", handles: new Set(HANDLES) })));
     assert.equal(answers.length, CROWD);
-    for (const a of answers) assert.ok(a && typeof a === "object", "every act door answered");
+    // PREFLIGHT / RESOURCE COVERAGE, NOT ACT THROUGHPUT: this fixture has no law graph loaded, so each act door does its orient and eyes (the gather this
+    // test measures) and then refuses at the law, by name. Nothing here claims an act was admitted or landed.
+    for (const a of answers) assert.ok(a?.code === 503 && /the law that binds this act cannot be read/.test(String(a.defect)), `every act door reached its law gate: ${JSON.stringify(a).slice(0, 160)}`);
     // the act door's first step is orient and eyes (it cannot judge an act without them); each asks who is inside what
     assert.ok(passageScans(onActs) <= 4, `${passageScans(onActs)} count(*) scans of the passage record for ${CROWD} acts at once (it was one per orient and eyes: about ${CROWD * 4})`);
     assert.ok(passageReads(onActs) <= 4, `${passageReads(onActs)} whole-record reads`);
