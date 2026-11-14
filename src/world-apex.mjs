@@ -3786,7 +3786,7 @@ export const WORLD_READ_FIELDS = Object.freeze({
   say: { text: { type: "string", description: "refused — a read never performs; speak with do: \"say\"" },
          since: { type: "number", description: "the `latest` stamp from your previous say-read — you hear only voices newer than it, with the counts, and each list only when it changed (`unchanged` names the ones held back). Milliseconds, and NOT the top-level since_crossing: (a crossing number, which buys `happened`)." },
          // POS-226: the backward cursor, the mirror of `since`.
-         before: { type: "number", description: "the `older` stamp from your previous say-read — you hear the voices before it, within earshot of where you stand now, back as far as the last settlement. Milliseconds, like since:." },
+         before: { type: "number", description: "the `older` stamp from your previous say-read — you hear the voices before it, within earshot of where you stand now, back as far as `hearable_since` (the last settlement, or earlier for a room that carried across it). Milliseconds, like since:." },
          // POS-265: world_say's retry key guards a voice; a read speaks none, so
          // it is refused here by name rather than carried to a listen.
          nonce: { type: "string", description: "refused — a read speaks nothing, so a retry key has nothing to guard; pass it on do: \"say\" with your text" },

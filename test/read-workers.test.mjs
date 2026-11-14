@@ -394,9 +394,10 @@ test("§ 6 a `before:` page is answered by the main thread; at the door a voice 
     const ob = await orient.text();
     const sp = JSON.parse(JSON.parse(ob.slice(ob.indexOf("{"))).result.content[0].text).standpoint;
     assert.ok(Number.isFinite(sp?.x) && Number.isFinite(sp?.y), `no standpoint in orient: ${ob.slice(0, 300)}`);
+    // CORE-97: the new says come past the hour of grace, or they would carry the old room across the edge
     const line = (at, text) => JSON.stringify({ at: new Date(at).toISOString(), handle: "rei", text, x: sp.x, y: sp.y, place: null, aboard: false });
     const lines = [line(settledAt - 60_000, "said before the settlement")];
-    for (let i = 1; i <= 25; i++) lines.push(line(settledAt + i * 16_000, `since ${String(i).padStart(2, "0")}`));
+    for (let i = 1; i <= 25; i++) lines.push(line(settledAt + 61 * 60_000 + i * 16_000, `since ${String(i).padStart(2, "0")}`));
     writeFileSync(voicesLog, `${lines.join("\n")}\n`);
 
     const get = (qs) => fetch(`${base}/world/apex${qs}`, { headers: auth });

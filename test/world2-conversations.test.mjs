@@ -165,7 +165,10 @@ test("two aboard voices are ONE room however far the water moved", () => {
 });
 
 test("a cluster from a finished settlement never reopens", () => {
-  const voices = [v(0, 0), v(2000, 0)];
+  // CORE-97: a room is carried through a settlement by a say inside the hour after it; past the hour it never reopens
+  const hour = 60 * 60 * 1000;
+  const voices = [v(0, 0), v(2000 + hour, 0)];
   assert.equal(clusterVoices(voices, { earshotM: 60, boundaries: [1000] }).length, 2);
-  assert.equal(clusterVoices(voices, { earshotM: 60, boundaries: [5000] }).length, 1);
+  assert.equal(clusterVoices(voices, { earshotM: 60, boundaries: [5000 + hour] }).length, 1);
+  assert.equal(clusterVoices([v(0, 0), v(2000, 0)], { earshotM: 60, boundaries: [1000] }).length, 1, "a say inside the grace carries the room");
 });
