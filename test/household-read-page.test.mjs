@@ -178,7 +178,7 @@ test("P10 · a lone row that fits the cap goes out whole, even past the 9,000 pa
   assert.equal(p.awaiting[0].body, original, "the body is whole");
 });
 
-test("P11 · an alert's nested about.body over the cap is cut, and plainly says no existing read holds it (neither kind has a verified opening)", () => {
+test("P11 · an alert's nested about.body over the cap is cut and its marker names the REST needs-you read and the row (both producer shapes)", () => {
   const big = "庭".repeat(4000);
   const alert = (kind, mark) => ({ kind, severity: "act", about: { mark, body: big }, message: "m", act: { verb: "world.stake", args: { mark } }, since: "d", until: null });
   const needs = (rows) => ({ read: "needs-you", household: "h", residents: ["r000"], as_of: "x", count: rows.length, alerts: rows, alerts_unread: [] });
