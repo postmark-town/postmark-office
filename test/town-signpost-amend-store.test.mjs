@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { startStore } from "./helpers/embedded-store.mjs";
-import { amendPlan, applyGate, MARK, NEW_BODY } from "../tools/town-signpost-amend.mjs";
+import { amendPlan, applyGate, MARK, OLD_BODY, NEW_BODY } from "../tools/town-signpost-amend.mjs";
 
 const CLONE = join(process.cwd(), "world-clone");
 const store = await startStore({ db: "town_signpost_amend" });
@@ -38,8 +38,15 @@ test("dry run, the gate, and the write: nothing on the preview, one act as the t
   const { guardedLiveMarks } = await import("../src/world2-guards.mjs");
   const live = () => guardedLiveMarks(null, { actor: "the-town" });
 
-  const plan = amendPlan(canonForGuards().byId.get(MARK) ?? null, await live());
-  assert.equal(plan.refusal, undefined, plan.refusal);
+  // POS-1031: once World #312's approved text is in canon, the tool's plan against the real record is "already amended" (nothing written); before it, clean. Assert whichever is true of
+  // the canon read, then drive the office's own amend through a real amendable control: the SAME canon mark carrying the words the tool was approved to replace.
+  const real = canonForGuards().byId.get(MARK) ?? null;
+  const truth = amendPlan(real, await live());
+  if (real?.body === NEW_BODY) assert.deepEqual(truth, { refusal: "already amended: canon carries the approved text; nothing written" }, "canon carries the approved text: the tool refuses, nothing written");
+  else assert.equal(truth.refusal, undefined, truth.refusal);
+  assert.deepEqual(await actsFor(), [], "and either way the plan wrote nothing");
+  const plan = amendPlan({ ...real, body: OLD_BODY }, await live());
+  assert.equal(plan.refusal, undefined, `the amendable control plans an amend: ${plan.refusal}`);
 
   const preview = await journalLeaveMark({ ...plan.clean, preview: true });
   assert.equal(preview.preview, true);
