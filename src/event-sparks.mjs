@@ -173,27 +173,25 @@ export function placeFrame(place) {
 const near = (p, place, m = EVENT_PLACE_M) => Math.hypot(p.x - place.x, p.y - place.y) <= m;
 
 /**
- * THE ROOM, from voices already read off the record. `voices` are `voiceRecords` voices (each with `at` ms, `x`, `y`); `edges` the
- * published settlements (ms). Pure, so the read and the tick resolve the same room from the same rows. Returns
- * `{ room: thread | null, rooms: n, history, note? }` — `history: "unavailable"` when the window opens before the oldest settlement
- * this office knows, since then a voice's settlement (and so its room) cannot be told; that is never read as no conversation.
+ * THE ROOMS, from voices already read off the record. `voices` are `voiceRecords` voices (each with `at` ms, `x`, `y`); `edges` the
+ * published settlements (ms). Pure, so the read and the tick resolve the same rooms from the same rows. Returns
+ * `{ rooms: [thread…], history, note? }` — `history: "unavailable"` when the window opens before the oldest settlement this office
+ * knows, since then a voice's settlement (and so its room) cannot be told; that is never read as no conversation.
  */
 export function eventRoomFrom(voices, { window, place, edges = [], earshotM = talk.SAY_DIAL_SPEC.earshot_m[0] }) {
   const marks = [...edges].filter(Number.isFinite).sort((a, b) => a - b);
   if (marks.length && window.from < marks[0])
-    return { room: null, candidates: [], history: "unavailable",
-      note: `the event's window opens before the oldest settlement this office has read (${iso(marks[0])}), so the room its talk formed cannot be told — this is not evidence that nobody spoke` };
+    return { rooms: [], history: "unavailable",
+      note: `the event's window opens before the oldest settlement this office has read (${iso(marks[0])}), so the rooms its talk formed cannot be told — this is not evidence that nobody spoke` };
   const inWindow = voices.filter((v) => v.at >= window.from && v.at <= window.to);
   const clusters = talk.clusterVoices(inWindow, { earshotM, boundaries: marks });
   // PLACE MEMBERSHIP is the office's existing rule for "the conversation at a point" (voices.mjs § openConversationAt): a room
-  // with a voice within earshot of the point. Nothing here ranks rooms: no ruled source picks one of several (Rivet 17:28Z), so
-  // every candidate is listed in the order it started, and `room` is bound only when there is exactly one.
+  // with a voice within earshot of the point. EVERY such room is the event's (Darko via Wright 18:46:13Z, "All of them,
+  // combined"): none is ranked or chosen, and they are listed in the order they started.
   const here = clusters.filter((c) => c.voices.some((v) => near(v, place, earshotM))).sort((a, b) => a.voices[0].at - b.voices[0].at);
   // the conversations page's own thread header (its id, bounds, participants, counts); its lines are the circle reads' to serve
   const header = (c) => { const { voices: _lines, ...thread } = talk.threadOf(c, { live: false, voiceCap: 1 }); return thread; };
-  const candidates = here.map(header);
-  return { room: candidates.length === 1 ? candidates[0] : null, candidates, history: "complete",
-    ...(candidates.length > 1 ? { binding: "unresolved", note: `${candidates.length} conversations formed at the place in the window (a settlement split one, or two groups talked apart); which is the event's room is not ruled, so none is chosen` } : {}),
+  return { rooms: here.map(header), history: "complete",
     ...(marks.length ? {} : { settlement_note: "no settlement could be read, so the window's talk is grouped as one settlement" }) };
 }
 
@@ -232,17 +230,18 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   // WLD-74: a say spoken inside a dungeon room is not on a public read, and so not in an event's public room either
   const spoken = sayRows.filter((r) => !(r.payload?.room ?? r.payload?.payload?.room));
   const { voices, unplaced } = talk.voiceRecords(spoken, { centreOf, strict: false });
-  const room = eventRoomFrom(voices, { window: scoped, place, edges });
+  const found = eventRoomFrom(voices, { window: scoped, place, edges });
   const placed = actRows.map((r) => ({ ...r, point: talk.composeAnchor({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf) }));
   const present = presentFrom(placed, { window: scoped, place });
   const complete = until === window.to;
   return {
     window: { from: iso(window.from), to: iso(window.to), ...(complete ? {} : { as_of: iso(until) }) },
     complete,
-    room: room.room ? { ...room.room, frame: roomFrame(room.room) } : null,
-    room_history: room.history,
-    ...(room.candidates?.length > 1 ? { room_binding: room.binding, rooms_at_place: room.candidates.map((c) => ({ ...c, frame: roomFrame(c) })) } : {}),
-    ...(room.note ? { room_note: room.note } : {}),
+    // every room of the event, in the order it started, each with its own frozen frame — never a combined one (the footprint of
+    // several is with Wright: the rectangular envelope or the disjoint union)
+    rooms: found.rooms.map((c) => ({ ...c, frame: roomFrame(c) })),
+    room_history: found.history,
+    ...(found.note ? { room_note: found.note } : {}),
     present,
     present_basis: `households with a public act (${PRESENCE_ACTS.join(", ")}) within ${EVENT_PLACE_M} m of the event's place inside its window — never RSVPs, never who is there now`,
     ...(unplaced.length ? { unplaced_says: unplaced.length } : {}),
@@ -376,8 +375,9 @@ export async function stakedCancel({ handle, id, door, now = Date.now(), date },
 //
 // At its end a staked event becomes ONE put-forward spark through the mark road, its 20 come home whole and the spark's own stake
 // of 1 backs it (19 home, 1 kept) — in ONE locked, signed batch and ONE store transaction, or not at all:
-//   1 · read (no transaction): the event's evidence. Several candidate rooms is the open Call — HELD, nothing moves; a room that
-//       cannot be read is HELD too, never turned into the no-conversation radius.
+//   1 · read (no transaction): the event's evidence. Every room at the place is the event's; while the footprint several rooms
+//       combine into is with Wright, several are HELD, nothing moves; rooms that cannot be read are HELD too, never turned into the
+//       no-conversation radius.
 //   2 · the spark, judged by the mark road's own leave (world.mjs § journalLeaveMark { plan }): every guard a real leave runs, the
 //       World's spark pre-check, and the verdict — it must go forward with its 1 stamp, or the completion is HELD and says why.
 //   3 · its id: <host>/<event-slug>, else the first unused numeric suffix, checked against published marks, every claim (the
@@ -397,17 +397,24 @@ export function recountingOf(row) {
   return body || String(row?.title ?? "").trim();
 }
 
-/** The spark's place and time, and its properties, from the event and its evidence (the frozen frame). */
+/**
+ * The spark's place and time, and its properties, from the event and its evidence (the frozen frame). No room: the place and the
+ * locked circle; one room: its frame. Several rooms are all the event's (18:46:13Z), but the footprint they combine into is with
+ * Wright, so the completion holds before asking for one here. ⚑ The spark record names its room as `room` in World's current
+ * draft class (45f57eea); the agreed `rooms` id array replaces it with World's class update, not before (no Office-only field).
+ */
 export function sparkDeclaration(row, evidence) {
+  if (evidence.rooms.length > 1) throw new Error(`${row.id}: several rooms — their combined footprint is not ruled`);
   const place = { x: Number(row.place_x), y: Number(row.place_y) };
-  const frame = evidence.room ? evidence.room.frame : placeFrame(place);
+  const [room] = evidence.rooms;
+  const frame = room ? room.frame : placeFrame(place);
   return {
     at: frame.at, extent: frame.extent,
     properties: {
       recounting: recountingOf(row),
       experienced_at: evidence.window.from, experienced_until: evidence.window.to,
       event: row.id,
-      ...(evidence.room ? { room: evidence.room.id } : {}),
+      ...(room ? { room: room.id } : {}),
       ...(evidence.present.length ? { present: evidence.present } : {}),
     },
   };
@@ -462,7 +469,8 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges }), { env });
     if (!evidence?.complete) return held("its window is not over yet");
     if (evidence.room_history !== "complete") return held("its room cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
-    if (evidence.room_binding === "unresolved") return held("several rooms formed at its place — which one its spark binds is an open Call", { rooms: evidence.rooms_at_place.map((r) => r.id) });
+    if (evidence.rooms.length > 1)
+      return held("several rooms formed at its place — all are its own, and the footprint they combine into (the rectangular envelope or the disjoint union) is with Wright", { rooms: evidence.rooms.map((r) => r.id) });
 
     // 3 · the ledger first: a fresh completion, or the retry of one whose lines landed and whose store transaction did not
     const by = String(row.fields.stake.by);
@@ -528,7 +536,7 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
       return { event: row.id, completed: true, spark: sparkId, spark_act: sparkAct, act_id: receipt.act_id,
         stake: { returned: Number(row.fields.stake.n), to: by, backing: EVENT_SPARK_BACKING, home: Number(row.fields.stake.n) - EVENT_SPARK_BACKING },
         ...(landed?.commit ? { commit: landed.commit } : {}), ...(recovering ? { recovered: "its lines were already in the ledger; only the store's half was written" } : {}),
-        room: evidence.room?.id ?? null, present: evidence.present };
+        rooms: evidence.rooms.map((r) => r.id), present: evidence.present };
     }, { household: prepared.household ?? row.household, env });
   } catch (e) { return asAnswer(e); }
 }

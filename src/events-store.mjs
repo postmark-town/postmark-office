@@ -1173,7 +1173,7 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
       const row = await eventRow(client, id);
       if (!row) throw refuse(404, `no event "${id}"`, 'ids are <host>/<slug> — town { read: "calendar" } lists them');
       const view = eventView(row, await rsvpHandles(client, id), now, await announcementsOf(client, [id]));
-      // POS-1035 (CORE-82): once its doors have opened, an event answers its window, the room its talk formed and the households
+      // POS-1035 (CORE-82): once its doors have opened, an event answers its window, every room its talk formed and the households
       // with a public act there — resolved by the office from the record, never by the site from RSVPs or today's positions
       if (row.state !== STATE_CANCELLED) {
         let edges = [];

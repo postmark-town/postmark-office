@@ -36,28 +36,29 @@ test("the event's room: the record's talk inside the window, clustered as the co
   ];
   const r = S.eventRoomFrom(voices, { window: { from: min(0), to: min(120) }, place: PLACE, edges: [min(-600)] });
   assert.equal(r.history, "complete");
-  assert.equal(r.room.id, `t${min(1)}-pica`);
-  assert.equal(r.room.voice_count, 3, "the window scopes it: the early and late voices are not this event's talk");
-  assert.deepEqual(r.room.participants, ["pica", "seth", "liv"]);
-  assert.equal("voices" in r.room, false, "the room's header; its lines are the circle reads' to serve");
-  assert.deepEqual(S.roomFrame(r.room), { room: r.room.id, at: { x: 125, y: 202.5 }, extent: { w: 50, h: 5 } });
+  assert.equal(r.rooms.length, 1, "the bigger room elsewhere is not the event's");
+  const [room] = r.rooms;
+  assert.equal(room.id, `t${min(1)}-pica`);
+  assert.equal(room.voice_count, 3, "the window scopes it: the early and late voices are not this event's talk");
+  assert.deepEqual(room.participants, ["pica", "seth", "liv"]);
+  assert.equal("voices" in room, false, "the room's header; its lines are the circle reads' to serve");
+  assert.deepEqual(S.roomFrame(room), { room: room.id, at: { x: 125, y: 202.5 }, extent: { w: 50, h: 5 } });
 });
 
 test("no talk at the place is no room (the radius frame applies); talk the office cannot place in a settlement is UNAVAILABLE, never 'no conversation'", () => {
   const none = S.eventRoomFrom([voice("far", 1, 900, 900)], { window: { from: min(0), to: min(60) }, place: PLACE, edges: [min(-600)] });
-  assert.deepEqual([none.room, none.history], [null, "complete"]);
+  assert.deepEqual([none.rooms, none.history], [[], "complete"]);
   const old = S.eventRoomFrom([voice("pica", 1, 100, 200)], { window: { from: min(0), to: min(60) }, place: PLACE, edges: [min(30)] });
-  assert.deepEqual([old.room, old.history], [null, "unavailable"]);
+  assert.deepEqual([old.rooms, old.history], [[], "unavailable"]);
   assert.match(old.note, /not evidence that nobody spoke/);
 });
 
-test("a settlement inside the window splits the talk (until CORE-97 carries it): every candidate room is listed, and NONE is chosen — no ranking is ruled", () => {
+test("several rooms at the place (a settlement split the talk, until CORE-97 carries it): ALL are the event's, in start order — none ranked or chosen (18:46:13Z, \"All of them, combined\")", () => {
   const voices = [voice("a", 1, 100, 200), voice("b", 2, 100, 201), voice("c", 40, 100, 200), voice("d", 41, 101, 200), voice("e", 42, 100, 199)];
   const r = S.eventRoomFrom(voices, { window: { from: min(0), to: min(60) }, place: PLACE, edges: [min(-600), min(30)] });
-  assert.equal(r.room, null, "two candidates: the binding is unresolved, not guessed by size");
-  assert.equal(r.binding, "unresolved");
-  assert.deepEqual(r.candidates.map((c) => [c.id, c.voice_count]), [[`t${min(1)}-a`, 2], [`t${min(40)}-c`, 3]], "in the order they started");
-  assert.match(r.note, /2 conversations formed at the place.*none is chosen/);
+  assert.deepEqual(r.rooms.map((c) => [c.id, c.voice_count]), [[`t${min(1)}-a`, 2], [`t${min(40)}-c`, 3]], "both, in the order they started — the bigger is not preferred");
+  assert.equal("room" in r, false, "no single room, no binding field");
+  assert.equal("binding" in r, false);
 });
 
 test("present: the households with a public act at the place in the window — once each, sorted; nothing without a household or a place", () => {
@@ -96,7 +97,7 @@ async function act(action, actor, m, x, y, household, payload = {}) {
     VALUES ($1, 0, $2, $3, $4, $5, 'world', $6, $7, $8)`, [new Date(min(m)), actor, action, action === "say" ? "voice" : action, JSON.stringify(payload), x, y, household]);
 }
 
-test("one event's evidence: its window, the room its talk formed at its place (with the frozen frame), and the households with a public act there", async () => {
+test("one event's evidence: its window, the rooms its talk formed at its place (each with its frozen frame), and the households with a public act there", async () => {
   await event("pica/sorbet-opening", 0, 120, { doors: -30 });
   await act("say", "pica", -20, 100, 200, "pica-house", { text: "Welcome, everyone!", place: "the cave" });
   await act("say", "seth", 10, 131, 200, "seth-house", { text: "Is the lemon one sour?", place: "the cave", reply_to: 1 });
@@ -110,8 +111,10 @@ test("one event's evidence: its window, the room its talk formed at its place (w
   assert.deepEqual(ev.window, { from: new Date(min(-30)).toISOString(), to: new Date(min(120)).toISOString() }, "doors_open → ends");
   assert.equal(ev.complete, true);
   assert.equal(ev.room_history, "complete");
-  assert.equal(ev.room.voice_count, 2);
-  assert.deepEqual(ev.room.frame, { room: ev.room.id, at: { x: 115.5, y: 200 }, extent: { w: 31, h: 0 } }, "exact midpoint, a half and a zero kept");
+  assert.equal(ev.rooms.length, 1);
+  assert.equal(ev.rooms[0].voice_count, 2);
+  assert.deepEqual(ev.rooms[0].frame, { room: ev.rooms[0].id, at: { x: 115.5, y: 200 }, extent: { w: 31, h: 0 } }, "exact midpoint, a half and a zero kept");
+  assert.equal("room" in ev, false, "the room set replaces the single room");
   assert.deepEqual(ev.present, ["otter-house", "pica-house", "seth-house"], "public acts at the place in the window; never the RSVP");
   assert.match(ev.present_basis, /never RSVPs/);
 });
@@ -398,15 +401,18 @@ test("completion is HELD, nothing moved: before its end, when its room cannot be
   assert.match((await complete(dir, row, Date.parse(row.ends) - 60_000)).held, /not ended/);
   // a settlement the office knows that is newer than the window's start: the room cannot be told — never "no conversation"
   assert.match((await complete(dir, row, now, { edges: [Date.parse(row.ends)] })).held, /room cannot be told/);
-  // two groups talking apart at the place, split by a settlement inside the window: the open Call
+  // two groups talking apart at the place, split by a settlement inside the window: both rooms are the event's, and the footprint
+  // they combine into is with Wright — held, both named, nothing guessed
   const doors = Date.parse(row.fields.doors_open ?? row.starts);
   const say = async (who, at, x) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy, household)
     VALUES ($1, 0, $2, 'say', 'voice', $3, 'world', $4, 900, $5)`, [new Date(at), who, JSON.stringify({ text: `${who} here`, place: "the counter" }), x, `${who}-house`]);
   await say("held-a", doors + 60_000, 900);
   await say("held-b", doors + 30 * 60_000, 920);
   const split = await complete(dir, row, now, { edges: [doors - 3_600_000, doors + 10 * 60_000] });
-  assert.match(split.held, /several rooms formed/);
+  assert.match(split.held, /several rooms formed at its place — all are its own, and the footprint they combine into .* is with Wright/);
   assert.equal(split.rooms.length, 2);
+  assert.throws(() => S.sparkDeclaration(row, { rooms: [{ id: "a" }, { id: "b" }], window: {}, present: [] }), /combined footprint is not ruled/,
+    "no declaration can be built for several rooms until the footprint is ruled");
   const edges = [doors - 3_600_000]; // one settlement before the window: the two says are one room, which binds
   // the mark road keeps it a draft, or refuses it: held, and says why
   assert.match((await complete(dir, row, now, { edges, planLeave: async () => ({ refused: { defect: "outside the world", hint: "World's guard" } }) })).held,
