@@ -139,6 +139,8 @@ test("one event's evidence: its window, the rooms its talk formed at its place (
   assert.equal(ev.rooms[0].voice_count, 2);
   assert.deepEqual(ev.rooms[0].frame, { room: ev.rooms[0].id, at: { x: 115.5, y: 200 }, extent: { w: 31, h: 0 } }, "exact midpoint, a half and a zero kept");
   assert.equal("frame" in ev, false, "the rooms' combined place is the World's (roomsPlace), asked when the spark is made — not a second copy in the read");
+  assert.deepEqual(ev.gallery, { rooms: [ev.rooms[0].id], sparks: [] }, "the gallery's coverage is the event's rooms; no accepted spark there yet: known none");
+  assert.equal(ev.spark, null, "and no root before completion");
   assert.equal("room" in ev, false, "the room set replaces the single room");
   assert.deepEqual(ev.present, ["otter-house", "pica-house", "seth-house"], "public acts at the place in the window; never the RSVP");
   assert.match(ev.present_basis, /never RSVPs/);

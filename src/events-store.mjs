@@ -64,7 +64,7 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, sparkTextRefusal } from "./event-sparks.mjs";
+import { eventEvidence, eventSparkOf, eventGalleryOf, EVENT_SPARK_BACKING, sparkTextRefusal } from "./event-sparks.mjs";
 import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
@@ -1182,6 +1182,9 @@ export async function calendarAtOffice(fields = {}, { now = Date.now(), env = pr
         if (evidence) {
           // its own spark, by the identity its completion recorded: accepted (standing) or waiting on acceptance; null before it ends
           evidence.spark = await eventSparkOf(client, row);
+          // and every accepted spark across its rooms (the gallery); a store that cannot answer is said, never an empty list
+          try { Object.assign(evidence, await eventGalleryOf(client, evidence, { root: row.fields?.completed?.spark ?? null })); }
+          catch { Object.assign(evidence, { gallery: null, gallery_note: "the store could not answer the gallery's read just now — unknown, not none" }); }
           view.evidence = evidence;
         }
       }

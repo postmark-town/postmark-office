@@ -307,6 +307,26 @@ export async function eventSparkOf(q, row) {
   return { id: String(id), accepted: false, status: c?.status ?? "unknown" };
 }
 
+/**
+ * THE EVENT'S GALLERY (POS-1035 → CORE-82, Facet via Rivet 20:03Z): every ACCEPTED spark across every room the event bound,
+ * beside its root (`evidence.spark`, never repeated here). Membership is the World's spine for an event's spark — every circle
+ * spark in any of its rooms (tools/spark.mjs § sparkChildren, by roomsOf) — and acceptance is the store's: a standing mark. So:
+ * the standing sparks whose `rooms` share a room with the event's, in the order they were accepted. Coverage is literal:
+ *   · `{ rooms: [the room ids covered], sparks: [spark…] }` — an empty `sparks` is KNOWN none in those rooms (no rooms: none);
+ *   · `gallery: null` with `gallery_note` — the rooms cannot be told (unknown history), so neither can the gallery.
+ * While the event is still on, the rooms covered are those so far (`window.as_of`).
+ */
+export async function eventGalleryOf(q, evidence, { root = null } = {}) {
+  if (evidence?.room_history !== "complete")
+    return { gallery: null, gallery_note: "the event's rooms cannot be told (its window opens before the settlements this office has read), so neither can its gallery — unknown, not none" };
+  const rooms = evidence.rooms.map((r) => String(r.id));
+  if (!rooms.length) return { gallery: { rooms: [], sparks: [] } };
+  const { rows } = await q.query(
+    `${STANDING_SPARKS_SQL} AND jsonb_typeof(data->'rooms') = 'array' AND data->'rooms' ?| $1::text[] AND slug <> $2 ORDER BY locked_window, slug`,
+    [rooms, root == null ? "" : String(root)]);
+  return { gallery: { rooms, sparks: rows.map(sparkView) } };
+}
+
 // ── THE EXECUTOR (POS-1035): the hosting stake and its whole return, under the town lock ──
 //
 // Spawned by the doors (events-store.mjs § viaStakeExec) through execUnderTownLock, as every office act that signs a ledger line
