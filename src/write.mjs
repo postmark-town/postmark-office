@@ -33,6 +33,10 @@ const THREAD_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 // on an Error, which is the shape both doors catch and turn into an answer.
 const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
 
+// WHAT A REFUSAL MAY SAY OF A VALUE THE RESIDENT SUPPLIED (POS-923): never the value whole, and never through a coercion the value controls. A string is shown short and printable;
+// anything else is named by its type (`typeof`), which no object can make throw or grow (a null-prototype object, one whose toString throws, a deep array). `String(thread)` here was a 500.
+const shown = (v) => (typeof v === "string" ? JSON.stringify(v.slice(0, 40).replace(/[^ -~]/g, "?")) : `(a ${typeof v})`);
+
 // ONE CLOCK (postmark#2922). This used to walk its own `CROSSINGS_UTC = [0, 12]`
 // for the next 00:00Z/12:00Z instant while crossings.mjs counted the same
 // beats from the ledger's epoch — two files, one clock, and a doorstep that
@@ -664,6 +668,9 @@ export function landPenBatch(batch, { acts, message }) {
 // ballot, the exact candidate, and household headroom are the crossing's law, not
 // the door's; we just refuse a malformed intent (named-field bounce, door manners).
 // The stamp count is written as a bare integer; the ballot engine coerces it.
+/** vote-by-mail's candidate: the thread's own bound (THREAD_RE), the same short line. */
+export const STAKE_CANDIDATE_MAX = 255;
+
 function buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce) {
   const present = (v) => v !== undefined && v !== null && v !== "";
   const given = [stake_topic, stake_candidate, stake_stamps].filter(present).length;
@@ -671,14 +678,27 @@ function buildStakeFm({ stake_topic, stake_candidate, stake_stamps }, bounce) {
   if (given < 3)
     throw bounce(422, "incomplete stake",
       "vote-by-mail is all-or-none: set stake_topic, stake_candidate, and stake_stamps together, or leave all three off");
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(stake_topic)))
-    throw bounce(422, `stake_topic "${stake_topic}" is not a ballot slug`, "lowercase-hyphenated, exactly as the ballot lists the topic");
-  const candidate = String(stake_candidate).trim();
-  if (!candidate || candidate.includes("\n"))
+  // TYPES FIRST, before any coercion (POS-923): the topic and the candidate are text, the stamps a number or the digits of one. Anything else is named by its type and refused, so no value
+  // can make a coercion throw (a 500) or grow a diagnostic.
+  for (const [name, v] of [["stake_topic", stake_topic], ["stake_candidate", stake_candidate]])
+    if (typeof v !== "string") throw bounce(422, `${name} must be text, not ${shown(v)}`, name === "stake_topic" ? "lowercase-hyphenated, exactly as the ballot lists the topic" : "one line; the exact candidate spelling the ballot lists");
+  if (typeof stake_stamps !== "number" && typeof stake_stamps !== "string")
+    throw bounce(422, `stake_stamps must be a positive whole number, not ${shown(stake_stamps)}`, "stake a positive integer count of stamps");
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(stake_topic))
+    throw bounce(422, `stake_topic ${shown(stake_topic)} is not a ballot slug`, "lowercase-hyphenated, exactly as the ballot lists the topic");
+  // THE CANDIDATE IS ONE SHORT LINE (POS-923, F2): it is written into the letter's frontmatter as a single line the crossing's parsers read, so it is judged as `thread` is: the same
+  // 255-character cap, and no line terminator of any kind (LF, CR, U+2028, U+2029), judged BEFORE trimming so a terminator trimming would hide is still refused. Spaces and any
+  // Unicode spelling are fine: a candidate is a name, not an id. The refusals say how long it was, never what it was.
+  if (stake_candidate.length > STAKE_CANDIDATE_MAX)
+    throw bounce(422, `stake_candidate is too long: at most ${STAKE_CANDIDATE_MAX} characters (yours has ${stake_candidate.length})`, "the exact candidate spelling the ballot lists is a short name");
+  if (/[\n\r\u2028\u2029]/.test(stake_candidate))
+    throw bounce(422, "stake_candidate must be one line", "no line breaks of any kind: the exact candidate spelling the ballot lists, on one line");
+  const candidate = stake_candidate.trim();
+  if (!candidate)
     throw bounce(422, "stake_candidate must be a name", "one line; the exact candidate spelling the ballot lists");
   const n = Number(stake_stamps);
   if (!Number.isInteger(n) || n <= 0)
-    throw bounce(422, `stake_stamps "${stake_stamps}" is not a positive whole number`, "stake a positive integer count of stamps");
+    throw bounce(422, `stake_stamps ${shown(stake_stamps)} is not a positive whole number`, "stake a positive integer count of stamps");
   return `stake_topic: ${stake_topic}\nstake_candidate: ${candidate}\nstake_stamps: ${n}\n`;
 }
 
@@ -709,18 +729,22 @@ export function validateLetter({ from, to, title, thread, body, stake_topic, sta
   // they default the SAME way: the whole point of the change is that the office
   // never rejects a letter the ferry would have accepted.
   thread ||= "new";
+  // the four fields THIS WRITER reads as text are text (POS-923): anything else is named by its type here, never coerced (a null-prototype object or a throwing toString was a 500 at this
+  // writer). Doors that read `from` before they reach it (send-at-door.mjs § inferSender) are not changed by this.
+  for (const [name, v] of [["from", from], ["to", to], ["title", title], ["body", body]])
+    if (typeof v !== "string") throw bounce(422, `${name} must be text, not ${shown(v)}`, "send_letter takes from, to, title and body as plain text");
   if (!key.handles.has(from))
-    throw bounce(403, `"${from}" is not one of your residents`, `this key acts for: ${[...key.handles].join(", ")}`);
+    throw bounce(403, `${shown(from)} is not one of your residents`, `this key acts for: ${[...key.handles].join(", ")}`);
   // the index's answers through its probe: the store's held snapshot (POS-268; office.db's went with it, POS-656)
   const ix = probeOf(db);
   if (!ix.hasResident(to))
-    throw bounce(422, `no resident "${to}"`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");
+    throw bounce(422, `no resident ${shown(to)}`, "handles are lowercase-hyphenated, as in WHITE_PAGES/");
   // THE THREAD IS AN ID OR `new`, NOTHING ELSE (POS-921). It is written into the letter's frontmatter
   // as one line, and the crossing's parsers read that line, so it is judged here against the
   // envelope's id grammar (THREAD_RE) before anything is looked up or written. The value is echoed
   // back short and printable, never whole.
   if (thread !== "new" && !(typeof thread === "string" && THREAD_RE.test(thread)))
-    throw bounce(422, `thread ${JSON.stringify(String(thread).slice(0, 40).replace(/[^ -~]/g, "?"))} is not a letter id`,
+    throw bounce(422, `thread ${shown(thread)} is not a letter id`,
       'set thread to "new", or to the exact id of the letter you are answering, as your inbox lists it: letters, digits and - . _ only, with no spaces, quotes or line breaks');
   // A COPY THAT HAS NOT CAUGHT UP NEVER REFUSES A REAL REPLY (POS-332). The
   // index is a copy of the town record, refreshed between crossings, so a

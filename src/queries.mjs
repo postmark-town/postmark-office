@@ -2772,7 +2772,45 @@ export const PSA_SLUG = "public-service-announcements";
 // than one entry ("## 2026-08-17 (night) — one door for the world's acts").
 // Tolerant of CRLF because the town is written on two platforms, and of both
 // the em dash and a plain hyphen because a heading is prose and prose drifts.
-const PSA_HEADING = /^##\s+(\d{4}-\d{2}-\d{2})\s*(?:\(([^)]*)\))?\s*[—-]\s*(.+?)\s*$/;
+// THE GRAMMAR, as a regex: /^##\s+(\d{4}-\d{2}-\d{2})\s*(?:\(([^)]*)\))?\s*[—-]\s*(.+?)\s*$/. It is read by hand below (psaHeading) because that regex is QUADRATIC on a line a
+// blank run cannot finish: `\s*` and `(.+?)\s*$` can eat the same blanks, so on failure (a lone CR, U+2028 or U+2029 survives the line split and `.` cannot cross it) the engine
+// tries every split (148 ms at 16k characters, 652 ms at 32k; office #943). The hand read gives the same captures on every line, which test/pos-923-linear-reads.test.mjs
+// holds against the regex itself over every short string of its alphabet.
+const LINE_END = /[\n\r\u2028\u2029]/;   // what `.` cannot match
+const BLANK = /\s/;
+export function psaHeading(line) {
+  const s = String(line);
+  if (!s.startsWith("##")) return null;
+  let i = 2;
+  while (i < s.length && BLANK.test(s[i])) i += 1;
+  if (i === 2) return null;                                              // ## then at least one blank
+  const date = s.slice(i, i + 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  i += 10;
+  while (i < s.length && BLANK.test(s[i])) i += 1;
+  let qualifier;
+  if (s[i] === "(") {                                                    // the optional qualifier: up to the first ")"
+    const close = s.indexOf(")", i + 1);
+    if (close < 0) return null;
+    qualifier = s.slice(i + 1, close);
+    i = close + 1;
+    while (i < s.length && BLANK.test(s[i])) i += 1;
+  }
+  if (s[i] !== "—" && s[i] !== "-") return null;
+  i += 1;
+  // the title: the rest, trimmed both ends; one character at least, and no line end inside it
+  let from = i, to = s.length;
+  while (from < to && BLANK.test(s[from])) from += 1;
+  if (from === to) {
+    // only blanks remain: the regex leaves the LAST character that `.` can match as the title, so a heading never has an empty one
+    let k = to - 1;
+    while (k >= i && LINE_END.test(s[k])) k -= 1;
+    return k >= i ? [s, date, qualifier, s[k]] : null;
+  }
+  while (to > from && BLANK.test(s[to - 1])) to -= 1;
+  const title = s.slice(from, to);
+  return LINE_END.test(title) ? null : [s, date, qualifier, title];
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -2797,7 +2835,7 @@ export function parsePsaEntries(body) {
   const entries = [];
   let open = null;
   for (const line of lines) {
-    const m = PSA_HEADING.exec(line);
+    const m = psaHeading(line);
     if (m) {
       if (open) entries.push(open);
       open = { date: m[1], qualifier: m[2] ?? null, title: m[3], lines: [] };

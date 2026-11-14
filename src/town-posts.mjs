@@ -277,8 +277,9 @@ export async function postsAtOffice(fields = {}, { now = Date.now(), env = proce
       return { ...plain(r), fields: { quest: f.quest ?? null }, terms: questTerms(entry), history: historyOf(r.id) };
     }).sort((a, b) => (order.get(a.fields.quest) ?? Infinity) - (order.get(b.fields.quest) ?? Infinity) || a.id.localeCompare(b.id));
   } else if (cls === BUG_CLASS) {
-    // the jar's order, the bug read's own (bugs.mjs § THE JAR'S ORDER), never the shared postOrder
-    posts = rows.map((r) => ({ ...plain(r), fields: { ...(r[FIELDS] ?? {}) },
+    // the jar's order, the bug read's own (bugs.mjs § THE JAR'S ORDER), never the shared postOrder.
+    // POS-942: the body is the reporter's own words, served beside the fields, so a checker reads them from the public read and not only from the store.
+    posts = rows.map((r) => ({ ...plain(r), body: r[BODY] ?? "", fields: { ...(r[FIELDS] ?? {}) },
       history: historyOf(r.id) })).sort(bugJarOrder);
   } else if (cls === IDEA_CLASS) {
     // An idea (POS-290) carries its body, its own fields (links, of), its
