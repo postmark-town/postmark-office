@@ -409,10 +409,16 @@ WORLD_BASE="$(git -C "$CLONE" rev-parse main)"
 # printout that succeeded (world2/tools/settlement-printout.mjs § WHAT IT
 # PRINTS). It decides nothing. It answers:
 #   printed          one `settlement: S<n> printout …` commit on the clone
-#   quiet            the seal changed nothing on main; nothing to commit
+#   quiet            the seal changed nothing on main: an EMPTY printout commit,
+#                    so every settlement has its own commit, dated when it
+#                    printed, for its tag to stand on (POS-1025/a)
 #   already-printed  this window's printout is recorded: a retry after the
 #                    record, so the crossing has nothing left to do but say so
+#   already-on-main  an earlier attempt's printout stands on main, unrecorded
+#                    (its tag or record refused): that commit is tagged and
+#                    recorded, and nothing is printed twice under one number
 #   dry              DRY: the files are written and nothing is committed
+#                    (`quiet: true` when it would change nothing)
 #   refused          by name (a frame that cannot keep a nested mark, a stale
 #                    replay, a seal with no number or no base): nothing prints,
 #                    the settlement stays unprinted, and the next crossing's
@@ -431,6 +437,12 @@ if ! (cd "$OFFICE" && node "$OFFICE/world2/tools/settlement-printout.mjs" print 
 fi
 PRINT_STATUS="$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.status))' "$PRINTOUT_JSON")"
 SETTLEMENT_N="$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.settlement??""))' "$PRINTOUT_JSON")"
+# WHAT THE PRINTOUT DID, in one word for every step below: a dry printout is the
+# one it rehearses (`quiet: true` when it would change nothing on main).
+PRINT_KIND="$PRINT_STATUS"
+if [ "$PRINT_STATUS" = "dry" ]; then
+  PRINT_KIND="$(node -e 'const r=require(process.argv[1]);process.stdout.write(r.quiet===true?"quiet":"printed")' "$PRINTOUT_JSON")"
+fi
 echo "[settlement-auto] printout: S$SETTLEMENT_N (window $DOCKET_WINDOW) $PRINT_STATUS$(node -e 'const r=require(process.argv[1]);const s=r.summary;process.stdout.write(s?" — "+s.written+" written, "+s.removed+" removed, "+s.reframed+" re-framed":"")' "$PRINTOUT_JSON")" >&2
 
 # ── THE HARM GATE, REPORTED (POS-1025/c) ─────────────────────────────────────
@@ -445,7 +457,7 @@ echo "[settlement-auto] printout: S$SETTLEMENT_N (window $DOCKET_WINDOW) $PRINT_
 # settlement changed no mark.
 HARM_JSON=""
 HARM_RED=0
-if [ "$PRINT_STATUS" = "printed" ] || [ "$PRINT_STATUS" = "dry" ]; then
+if [ "$PRINT_KIND" = "printed" ]; then
   HARM_JSON="$WORK/harm.json"
   node -e 'const r=require(process.argv[1]);const ids=(xs)=>(xs||[]).map((x)=>x&&(x.id||x.slug)).filter(Boolean).map((id)=>({id}));require("node:fs").writeFileSync(process.argv[2],JSON.stringify({published:ids(r.written),unpublished:ids(r.removed),withdrawn:[],reframed:ids(r.reframed)},null,1)+"\n")' \
     "$PRINTOUT_JSON" "$WORK/acts.json"
@@ -518,16 +530,22 @@ RECORD_JSON=""
 TAG_OK=1
 if [ "$PRINT_STATUS" != "already-printed" ] && [ -n "$SETTLEMENT_N" ]; then
   TAG="settlement/S$SETTLEMENT_N"
+  # The printout this crossing just pushed is main's newest commit; one an earlier attempt pushed and
+  # could not record stands where it is (already-on-main), and that is the commit tagged and recorded.
+  PRINTED_AT="$WORLD_TO"
+  if [ "$PRINT_STATUS" = "already-on-main" ]; then
+    PRINTED_AT="$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.commit))' "$PRINTOUT_JSON")"
+  fi
   TAG_JSON="$WORK/tag.json"
   TAG_DRY_FLAG=""
   if [ "$DRY" = "1" ]; then TAG_DRY_FLAG="--dry-run"; fi
   git -C "$CLONE" tag -d "$TAG" >/dev/null 2>&1 || true
   git -C "$CLONE" fetch -q origin "refs/tags/$TAG:refs/tags/$TAG" >/dev/null 2>&1 || true
   if (cd "$OFFICE" && node "$OFFICE/world2/tools/settlement-printout.mjs" tag \
-        --world "$CLONE" --window "$DOCKET_WINDOW" --commit "$WORLD_TO" $TAG_DRY_FLAG) > "$TAG_JSON" 2>"$WORK/tag.err"; then
+        --world "$CLONE" --window "$DOCKET_WINDOW" --commit "$PRINTED_AT" $TAG_DRY_FLAG) > "$TAG_JSON" 2>"$WORK/tag.err"; then
     TAG_STATUS="$(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.status))' "$TAG_JSON")"
     if [ "$TAG_STATUS" = "would-tag" ]; then
-      withheld "the tag $TAG at $WORLD_TO, and its push"
+      withheld "the tag $TAG at $PRINTED_AT, and its push"
     elif [ "$TAG_STATUS" = "tagged" ] && ! git -C "$CLONE" push -q origin "refs/tags/$TAG"; then
       TAG_OK=0
       node -e 'const fs=require("node:fs");const p=process.argv[1];const r=JSON.parse(fs.readFileSync(p,"utf8"));r.status="refused";r.refused="tag-push-refused";r.detail="origin refused the tag push (a tag of that name arrived since the fetch); it is never forced";fs.writeFileSync(p,JSON.stringify(r,null,1)+"\n")' "$TAG_JSON" || true
@@ -536,11 +554,11 @@ if [ "$PRINT_STATUS" != "already-printed" ] && [ -n "$SETTLEMENT_N" ]; then
     TAG_OK=0
   fi
   if [ "$TAG_OK" = "1" ] && [ "$DRY" = "1" ]; then
-    withheld "the store's record of the printout (record_printout, window $DOCKET_WINDOW at $WORLD_TO)"
+    withheld "the store's record of the printout (record_printout, window $DOCKET_WINDOW at $PRINTED_AT)"
   elif [ "$TAG_OK" = "1" ]; then
     RECORD_JSON="$WORK/record.json"
     if ! (cd "$OFFICE" && node "$OFFICE/world2/tools/settlement-printout.mjs" record \
-          --window "$DOCKET_WINDOW" --commit "$WORLD_TO") > "$RECORD_JSON" 2>"$WORK/record.err"; then
+          --window "$DOCKET_WINDOW" --commit "$PRINTED_AT") > "$RECORD_JSON" 2>"$WORK/record.err"; then
       TAG_OK=0
       [ -s "$RECORD_JSON" ] || node -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({status:"refused",refused:"record-tripped",detail:process.argv[2]},null,1)+"\n")' "$RECORD_JSON" "$(head -c 300 "$WORK/record.err" | tr '\n"' ' .')"
     fi
@@ -560,7 +578,7 @@ fi
 SUITE_TMP="$WORK/tmp"; mkdir -p "$SUITE_TMP"
 SUITE_JSON="$WORK/suite.json"
 SUITE_WORD="suite not run"
-if [ "$PRINT_STATUS" = "printed" ] || [ "$PRINT_STATUS" = "dry" ]; then
+if [ "$PRINT_KIND" = "printed" ]; then
   if (cd "$CLONE" && TMPDIR="$SUITE_TMP" TMP="$SUITE_TMP" TEMP="$SUITE_TMP" npm run test:candle --silent) > "$WORK/suite.log" 2>&1; then
     node -e 'const fs=require("node:fs");fs.writeFileSync(process.argv[1],JSON.stringify({ran:true,red:false,reds:[],reds_total:0,log:null},null,1)+"\n")' "$SUITE_JSON" 2>/dev/null || SUITE_JSON=""
     SUITE_WORD="suite green"
@@ -584,13 +602,15 @@ fi
 # neither is a publication, so neither may answer `--recurring`'s question yes).
 # The report-only findings ride both words, and each is escalated AFTER the
 # receipt, so the issue quotes a receipt that says what published.
-case "$PRINT_STATUS" in
-  printed|dry)
+case "$PRINT_KIND" in
+  printed)
     report published "S$SETTLEMENT_N printed: $(node -e 'const r=require(process.argv[1]);const s=r.summary||{};process.stdout.write(s.written+" written, "+s.removed+" removed, "+s.reframed+" re-framed")' "$PRINTOUT_JSON" 2>/dev/null || echo 'printed')" ;;
   quiet)
-    report quiet "S$SETTLEMENT_N sealed with nothing to print; main stands at $WORLD_TO" ;;
+    report quiet "S$SETTLEMENT_N sealed with nothing to print; its empty printout is $WORLD_TO" ;;
   already-printed)
     report quiet "S$SETTLEMENT_N was already printed at $(node -e 'const r=require(process.argv[1]);process.stdout.write(String(r.commit||"").slice(0,12))' "$PRINTOUT_JSON" 2>/dev/null); nothing left to do" ;;
+  already-on-main)
+    report quiet "S$SETTLEMENT_N's printout already stood on main at $(printf %s "$PRINTED_AT" | cut -c1-12) from an earlier attempt; this crossing tagged and recorded it" ;;
   *)
     report refused "the printout answered a status this crossing does not know: $PRINT_STATUS"
     echo "[settlement-auto] UNKNOWN PRINTOUT STATUS \"$PRINT_STATUS\"" >&2

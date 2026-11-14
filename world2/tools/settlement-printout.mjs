@@ -155,6 +155,19 @@ async function entriesOf(q, sRows, changed) {
 
 // ── the git half ────────────────────────────────────────────────────────────
 
+/**
+ * The commit on the clone's HEAD that is settlement `n`'s printout, by its subject, or null. A settlement
+ * prints once (POS-1025/a), so its subject names one commit; the search is bounded to the last 500 commits,
+ * far past the two settlements a day and every write between them.
+ */
+export function printoutOnMain(world, n) {
+  const want = `settlement: S${n} printout `;
+  for (const line of git(world, ["log", "-n", "500", "--format=%H %s", "HEAD"]).split("\n")) {
+    if (line.slice(41).startsWith(want)) return line.slice(0, 40);
+  }
+  return null;
+}
+
 /** Does any mark.md stand anywhere beneath `dir`? (the sweep's seat-keeping test) */
 function holdsAStandingMark(dir) {
   if (!existsSync(dir)) return false;
@@ -192,6 +205,12 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
   const sealed = await snapshotHeader({ query: q }, { window });
   if (sealed?.printout_sha)
     return { status: "already-printed", settlement: sealed.sealed_settlement, window, commit: sealed.printout_sha, snapshot: { id: sealed.id, digest: sealed.digest } };
+  // AND A RETRY OF A PRINTOUT THAT LANDED BUT WAS NOT RECORDED (its tag or record refused after the push):
+  // its commit already stands on main, so it is THE printout, and printing again would make a second,
+  // empty one for the same number that its own tag then disagrees with. Answered with that commit.
+  const onMain = sealed?.sealed_settlement != null ? printoutOnMain(world, sealed.sealed_settlement) : null;
+  if (onMain)
+    return { status: "already-on-main", settlement: sealed.sealed_settlement, window, commit: onMain, snapshot: { id: sealed.id, digest: sealed.digest } };
   const { S, P } = await printoutPair(q, { window, sinceWindow });
 
   const [sRows, pRows] = await Promise.all([snapshotRows({ query: q }, S.marks_digest), snapshotRows({ query: q }, P.marks_digest)]);
@@ -316,16 +335,21 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
     removed: gone, reframed: reframed.map((r) => ({ id: r.id ?? null, file: r.file ? relative(world, r.file).replace(/\\/g, "/") : null })),
     framed: plan.framed, registry: registryChange,
   };
-  if (dryRun) return { status: "dry", ...receipt, summary };
+  // DRY writes the files and commits nothing; `quiet` says whether the printout would change anything on main
+  if (dryRun) return { status: "dry", quiet: !git(world, ["status", "--porcelain", "--", MARKS_REL, REGISTRY_REL, ...DERIVED.filter((p) => existsSync(join(world, p)))]).trim(), ...receipt, summary };
 
   git(world, ["add", "-A", "--", MARKS_REL, REGISTRY_REL, ...DERIVED.filter((p) => existsSync(join(world, p)))]);
   const staged = git(world, ["diff", "--cached", "--name-only"]).trim();
-  if (!staged) return { status: "quiet", ...receipt, summary, commit: head };
+  // EVERY SETTLEMENT IS PRINTED (POS-1025/a), a quiet one too: a settlement that changed nothing on main
+  // is an EMPTY printout commit, so each settlement has its own commit, dated when it printed, for its tag
+  // to stand on. A tag on an older commit would date the settlement by that commit (settlements-backfill
+  // reads the window and published_at off the tagged commit's date) and stand two numbers on one commit.
   const message = `settlement: S${S.sealed_settlement} printout — ${summary.written} written, ${summary.removed} removed, ${summary.reframed} re-framed`
     + `\n\nThe settlement's printout of its sealed snapshot (POS-1025): window ${window}, snapshot ${S.id} ${S.digest}, town ${S.town_sha ?? "-"}.`
-    + `\nMeasured from S${P.sealed_settlement ?? "?"} (window ${P.window_id}). Nothing here was decided after the seal.`;
-  git(world, ["commit", "--quiet", "-F", "-"], { input: message });
-  return { status: "printed", ...receipt, summary, commit: git(world, ["rev-parse", "HEAD"]).trim() };
+    + `\nMeasured from S${P.sealed_settlement ?? "?"} (window ${P.window_id}). Nothing here was decided after the seal.`
+    + (staged ? "" : "\nThe settlement changed nothing on main: an empty printout, so it is printed and tagged like every other.");
+  git(world, ["commit", "--quiet", ...(staged ? [] : ["--allow-empty"]), "-F", "-"], { input: message });
+  return { status: staged ? "printed" : "quiet", ...receipt, summary, commit: git(world, ["rev-parse", "HEAD"]).trim() };
 }
 
 /** The annotated tag's message: the pair the notary certifies, and the town line snapshot-backfill reads. PURE. */

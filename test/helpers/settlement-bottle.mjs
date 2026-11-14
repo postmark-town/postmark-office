@@ -91,10 +91,19 @@ if (mode === "print") {
     say({ status: "refused", refused: "reframe-refused", detail: "the frame alpha/old-hall cannot keep alpha/one exactly", reframe: { id: "alpha/one" } }, 1);
   if (process.env.PRINTOUT_SAYS === "already-printed")
     say({ status: "already-printed", settlement: ${SETTLEMENT}, window: ${WINDOW}, commit: git("rev-parse", "HEAD"), snapshot });
+  // the real tool finds it by subject (settlement-printout.mjs § printoutOnMain); the stub, when told to
+  if (process.env.PRINTOUT_SAYS === "already-on-main") {
+    const line = git("log", "-n", "500", "--format=%H %s", "HEAD").split("\\n").find((l) => l.slice(41).startsWith("settlement: S${SETTLEMENT} printout "));
+    say({ status: "already-on-main", settlement: ${SETTLEMENT}, window: ${WINDOW}, commit: line.slice(0, 40), snapshot });
+  }
   const base = { settlement: ${SETTLEMENT - 1}, window: ${WINDOW - 1}, printout_sha: null, world: git("rev-parse", "HEAD") };
   if (process.env.PRINTOUT_SAYS === "quiet") {
+    // a settlement that changed nothing is an EMPTY printout commit (POS-1025/a), unless dry
     writeFileSync(join(world, ".git", "printout-stakes.json"), "[]\\n");
-    say({ status: "quiet", settlement: ${SETTLEMENT}, window: ${WINDOW}, snapshot, base, written: [], removed: [], reframed: [], framed: [], summary: { written: 0, unchanged: 1, removed: 0, reframed: 0 }, commit: git("rev-parse", "HEAD") });
+    const quiet = { status: "quiet", settlement: ${SETTLEMENT}, window: ${WINDOW}, snapshot, base, written: [], removed: [], reframed: [], framed: [], summary: { written: 0, unchanged: 1, removed: 0, reframed: 0 } };
+    if (flag("--dry-run")) say({ ...quiet, status: "dry", quiet: true });
+    git("-c", "user.name=printout", "-c", "user.email=p@x.invalid", "commit", "-q", "--allow-empty", "-m", "settlement: S${SETTLEMENT} printout — 0 written, 0 removed, 0 re-framed");
+    say({ ...quiet, commit: git("rev-parse", "HEAD") });
   }
   mkdirSync(join(world, "WORLD", "marks", "alpha", "one"), { recursive: true });
   writeFileSync(join(world, "WORLD", "marks", "alpha", "one", "mark.md"), "---\\nkind: sited\\nby: alpha\\n---\\n\\none\\n");
@@ -104,7 +113,7 @@ if (mode === "print") {
     written: [{ id: "alpha/one", path: "WORLD/marks/alpha/one/mark.md" }], removed: [{ slug: "alpha/old", path: "WORLD/marks/alpha/old/mark.md" }],
     reframed: [], framed: [], registry: { added: [], reclassed: [], removed: ["alpha/old"] },
     summary: { written: 1, unchanged: 0, removed: 1, reframed: 0 } };
-  if (flag("--dry-run")) say({ status: "dry", ...receipt });
+  if (flag("--dry-run")) say({ status: "dry", quiet: false, ...receipt });
   git("add", "-A", "--", "WORLD");
   git("-c", "user.name=printout", "-c", "user.email=p@x.invalid", "commit", "-qm", "settlement: S${SETTLEMENT} printout — 1 written, 1 removed, 0 re-framed");
   say({ status: "printed", ...receipt, commit: git("rev-parse", "HEAD") });

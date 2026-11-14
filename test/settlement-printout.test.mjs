@@ -167,6 +167,13 @@ test("1 · PRINT: the sealed delta and nothing else — the new mark at its fili
   assert.deepEqual(keys.filter((k) => k !== NEW), Object.keys(FILE.published).filter((k) => k !== takenId), "and in the file's own order");
 });
 
+test("1b · a RETRY before the record finds its printout already on main: the same commit, nothing printed twice under one number", { skip }, async () => {
+  const head = git(WORLD, "rev-parse", "HEAD").trim();
+  const again = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 1 }));
+  assert.deepEqual([again.status, again.settlement, again.commit], ["already-on-main", S2.sealed_settlement, head]);
+  assert.equal(git(WORLD, "rev-parse", "HEAD").trim(), head, "no second (empty) printout for the same settlement");
+});
+
 test("2 · TAG: settlement/S<n> at the printout, naming the digest; again is a no-op; a tag standing anywhere else is refused, never moved", { skip }, async () => {
   const head = git(WORLD, "rev-parse", "HEAD").trim();
   const tag = await asClearing((q) => tagSettlement(q, { world: WORLD, window: WIN + 1, commit: head }));
@@ -201,6 +208,26 @@ test("3 · RECORD: once, the world-marks head only for the highest printed; a di
   await assert.rejects(asClearing((q) => printSettlement(q, { world: WORLD, window: WIN })), (e) => e.reason === "stale-replay");
   const printed = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 1 }));
   assert.equal(printed.status, "already-printed", "a recorded printout is not printed twice");
+});
+
+test("4 · EVERY SETTLEMENT IS PRINTED: one that changed nothing is an EMPTY printout commit for its tag to stand on; dry, it says quiet and writes nothing", { skip, timeout: 240000 }, async () => {
+  // The clearing of WIN+1 opened WIN+2; it clears with nothing claimed, and its seal changes nothing on main.
+  const r = clear(WIN + 2);
+  assert.equal(r.code, 0, r.out);
+  const [S3] = await read("SELECT sealed_settlement FROM world_snapshots WHERE window_id = $1", [WIN + 2]);
+  assert.equal(S3.sealed_settlement, S2.sealed_settlement + 1, "every seal is numbered, a quiet one too");
+  const head = git(WORLD, "rev-parse", "HEAD").trim();
+  const dry = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 2, dryRun: true }));
+  assert.deepEqual([dry.status, dry.quiet], ["dry", true]);
+  assert.equal(git(WORLD, "status", "--porcelain", "--", "WORLD").trim(), "", "and it wrote nothing");
+  const out = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 2 }));
+  assert.equal(out.status, "quiet");
+  assert.equal(git(WORLD, "rev-parse", "HEAD^").trim(), head, "one commit on main");
+  assert.equal(out.commit, git(WORLD, "rev-parse", "HEAD").trim());
+  assert.equal(git(WORLD, "diff", "--name-only", head, "HEAD").trim(), "", "and it is empty");
+  assert.match(git(WORLD, "log", "-1", "--format=%s").trim(), new RegExp(`^settlement: S${S3.sealed_settlement} printout — 0 written, 0 removed, 0 re-framed$`));
+  const tag = await asClearing((q) => tagSettlement(q, { world: WORLD, window: WIN + 2, commit: out.commit }));
+  assert.equal(tag.status, "tagged", "its own tag on its own commit, never a second number on another settlement's");
 });
 
 test("deltaOf is the sealed difference and nothing else (PURE)", () => {

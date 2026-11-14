@@ -88,13 +88,20 @@ test("a record that fails after the tag: published, tagged, recorded false, a pe
   assert.equal(run.receipt.record.status, "refused");
   assert.match(run.escalations ?? "", /FILED tag/);
   assert.equal(historyLines(run)[0].recorded, false);
-  // The retry: the store has not recorded it, so the printout prints again; the delta is empty
-  // (main already carries it), so it is quiet, and the tag already stands at that commit.
-  const retry = cross(b, { PRINTOUT_SAYS: "quiet" });
+  // The retry: the store has not recorded it, and its printout already stands on main (the real tool
+  // finds it by subject, settlement-printout.mjs § printoutOnMain), so nothing is printed twice: that
+  // commit is tagged (already, by the first attempt) and recorded, under the same number.
+  const printedAt = g(b.origin, "rev-parse", "main");
+  const retry = cross(b, { PRINTOUT_SAYS: "already-on-main" });
   assert.equal(retry.res.status, 0, why(retry));
+  assert.equal(retry.receipt.status, "quiet");
+  assert.match(retry.receipt.detail, /^S214's printout already stood on main at [0-9a-f]{12} from an earlier attempt; this crossing tagged and recorded it$/);
   assert.equal(retry.receipt.tag.status, "already-tagged", "the same number, the same tag, not a second one");
   assert.equal(retry.receipt.record.status, "recorded");
+  assert.equal(retry.storeWrites.trim(), `RECORDED 213 ${printedAt}`, "the record names the first attempt's printout");
   assert.equal(retry.receipt.settlement, SETTLEMENT);
+  assert.equal(g(b.origin, "log", "--format=%s", "main").split("\n").filter((s) => s.startsWith("settlement: S214 printout")).length, 1, "one printout commit for one number");
+  assert.equal(historyLines(retry)[0].recorded, true);
 });
 
 test("a retry AFTER the record finds it already printed: quiet, and neither the tag nor the record is asked again", { skip }, () => {

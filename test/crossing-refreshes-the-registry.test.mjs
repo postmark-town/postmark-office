@@ -94,8 +94,11 @@ if (mode === "print") {
   writeFileSync(process.env.REGISTRY_SEEN_OUT, readFileSync(join(world, "WORLD", "households.json"), "utf8"));
   writeFileSync(join(world, ".git", "printout-stakes.json"), "[]\\n");
   const base = { settlement: 213, window: 212, printout_sha: null, world: git("rev-parse", "HEAD") };
-  if (process.env.PRINTOUT_PUBLISHES !== "1")
+  if (process.env.PRINTOUT_PUBLISHES !== "1") {
+    // a settlement that changed nothing is an EMPTY printout commit (POS-1025/a)
+    git("commit", "-q", "--allow-empty", "-m", "settlement: S214 printout — 0 written, 0 removed, 0 re-framed");
     say({ status: "quiet", settlement: 214, window: 213, base, written: [], removed: [], reframed: [], summary: { written: 0, unchanged: 0, removed: 0, reframed: 0 }, commit: git("rev-parse", "HEAD") });
+  }
   const p = join(world, "WORLD", "marks", "alpha", "one", "mark.md");
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, "---\\nkind: sited\\nby: alpha\\n---\\n\\none\\n");
@@ -536,8 +539,16 @@ test("F3 · a second crossing over an unchanged town commits nothing and stays q
 
   // The export re-stamps `generated_at` on every run, so a refresh that copied
   // unconditionally would put a commit on world main every twelve hours forever.
-  assert.equal(secondSha, firstSha,
-    "an unchanged town must move nothing: the substance is compared, not the stamp");
+  // Since the printout every settlement is a commit of its own (an empty one when
+  // it changed nothing, POS-1025/a), so main moves by exactly that one commit and
+  // the registry does not move with it.
+  assert.equal(execFileSync("git", ["-C", second.origin, "rev-parse", "main^"], { encoding: "utf8" }).trim(), firstSha,
+    "an unchanged town adds only the settlement's own printout: the substance is compared, not the stamp");
+  assert.equal(execFileSync("git", ["-C", second.origin, "log", "-1", "--format=%s", "main"], { encoding: "utf8" }).trim(),
+    "settlement: S214 printout — 0 written, 0 removed, 0 re-framed");
+  assert.equal(execFileSync("git", ["-C", second.origin, "diff", "--name-only", firstSha, secondSha], { encoding: "utf8" }).trim(), "",
+    "and it changed no file");
+  assert.equal(second.receipt.registry.commit, null, "no registry commit");
   assert.equal(second.receipt.registry.ran, true, "and the crossing still LOOKED — that is the whole receipt");
   assert.equal(second.receipt.registry.changed, false);
   assert.equal(second.receipt.status, "quiet",
