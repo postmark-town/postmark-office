@@ -1800,19 +1800,29 @@ else meepo can read on the box: `tools/ferry.mjs`, `tools/stamp-verify.mjs` and
 need TOWN_TZ, git reads and their own writes in the clone, and nothing else. Now
 each runs through `tools/town-tool-sandbox.mjs <ferry|verify|quests> --clone`,
 which connects to `postmark-town-tool.socket` (meepo only, 0600). Each
-connection starts one `postmark-town-tool@.service`, which runs as meepo, with
-no env file and no network, with `/srv`, `/etc`, the homes, `/var` and `/run`
-out of sight, the clone read-only except `WHITE_PAGES` and `TOWN_BULLETIN`, and
-its `.git` read-only. The ferry runs there `--no-git`. The client does the pull
+connection starts one `postmark-town-tool@.service`. It runs as meepo, in its own
+user namespace (`PrivateUsers=yes`). Without that, it could open every other
+meepo process's `/proc/<pid>/environ` and reach the stamp key through
+`/proc/<pid>/root`. It has no env file and no network, a syscall filter, and
+`/srv`, `/etc`, the homes, `/var` and `/run` out of sight. The clone is
+read-only except `WHITE_PAGES` and `TOWN_BULLETIN`, and its `.git` is
+read-only. Before it answers, it kills whatever the tool left running. The ferry runs there `--no-git`. The client does the pull
 before it and the commit and push after it, with ferry.mjs's own message, push
-retry and report fields. It refuses on a symlink in the writable directories, or
-a change outside what the tool writes. The stage names, the undo and the witness
-record are unchanged. The why and the exchange are in the tool's header.
+retry. The report it hands the witness takes the sha, `committed`, `pushed` and
+`files` from the client, never from the tool. It refuses on a symlink in the
+writable directories, any change to an ignored file there, or a change outside
+what the tool writes. The stage names and the witness record are unchanged. The
+undo and the opening clean now take ignored files too, in both writable
+directories (`clean -fdxq -- WHITE_PAGES TOWN_BULLETIN`); neither held an
+untracked or ignored file on 2026-11-14. The why and the exchange are in the
+tool's header.
 
-**Not covered here:** the git-mode mint (`tools/stamp-mint.mjs --append --key`),
-which must hold the key, is POS-994's B and Darko's call. Also not covered are
-the owed path's `tools/stamp-verify-owed.mjs` (store mode only) and the keep
-tick's `tools/stamp-verify.mjs --registry` (`deploy/office-keep.sh`).
+**Not covered here:** every town tool that holds a key is POS-994's B and
+Darko's call. That means the git-mode mint (`tools/stamp-mint.mjs --append
+--key`) in the ferry and in the keep tick, and `tools/witness-chain.mjs` with
+the witness key. Also not covered are the owed path's
+`tools/stamp-verify-owed.mjs` (store mode only) and the keep tick's
+`tools/stamp-verify.mjs --registry` (`deploy/office-keep.sh`).
 
 **Install after POS-988's**, since both replace the ferry unit. Do it by hand,
 away from a crossing (not 23:50–00:40 or 11:50–12:40 UTC), and only after the
@@ -1857,9 +1867,23 @@ Every secret line must read `ENOENT` (the stamp key, the credential store, the
 office env, the `/etc` env files meepo's group can read, `/var/backups`,
 `/home/meepo`). The clone's `tools`, root, `.git` and `.git/config` must read
 `EROFS` for writing, and `WHITE_PAGES` and `TOWN_BULLETIN` `ok`. TCP must read
-`EAFNOSUPPORT`, and `git rev-parse HEAD` must succeed. Then remove the probe and
-`$d` by name. If (a) is not green or (b) reaches anything, stop here: the ferry
-still runs the tools itself, and nothing has changed for it.
+`EAFNOSUPPORT`, and `git rev-parse HEAD` must succeed.
+
+(c) Other meepo processes, under the same settings (Truey's F1 on #1048). This
+probe only opens, stats and lists, and never reads a byte of another process.
+Pass it the office's pid:
+```sh
+pid=$(systemctl show -p MainPID --value postmark-office.service)
+# probe: openSync/closeSync /proc/$pid/environ; statSync /proc/$pid/root/srv/postmark-office/stamp-key.pem;
+#        readdirSync /proc/$pid/fd; and whether readdirSync("/proc") lists $pid. Run it as in (b), with $pid as its argument.
+```
+`environ`, the key through `root` and `fd` must each read `ENOENT` or `EACCES`,
+never `OPENABLE`, and `/proc` must not list the pid. On 2026-11-14, without
+`PrivateUsers=yes`, all three read `OPENABLE`.
+
+Then remove the probes and `$d` by name. If (a) is not green, or (b) or (c)
+reaches anything, stop here: the ferry still runs the tools itself, and nothing
+has changed for it.
 
 **3. The ferry unit.**
 ```sh

@@ -11,8 +11,15 @@ Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-
 # run at every crossing. Measured on POS-994 (2026-11-14), they need TOWN_TZ,
 # git reads, the clone, and writes to WHITE_PAGES (the ferry) and
 # TOWN_BULLETIN/quests.md (the quests), and nothing else.
-#   · User=meepo, not a DynamicUser: the ferry moves meepo's files in the clone.
-#     So it is the mounts below, not the uid, that keep meepo's secrets away;
+#   · User=meepo, not a DynamicUser: the ferry moves meepo's files in the clone
+#     (31,513 of them aren't group-writable, so another uid couldn't);
+#   · PrivateUsers=yes: its own user namespace. As plain meepo it could open
+#     every other meepo process's /proc/<pid>/environ (the waiting ferry client's
+#     and the office's whole env), stat the stamp key through /proc/<pid>/root,
+#     and reach .git/hooks through the ferry's own mounts (Truey's F1 on #1048).
+#     In the namespace those processes are invisible: proved on the box
+#     2026-11-14, OPENABLE as plain meepo and ENOENT here. PrivatePIDs would be
+#     the other way, and needs systemd 257 (the box has 255);
 #   · no EnvironmentFile: none of the office's keys and tokens. TOWN_TZ comes
 #     over the socket, and the tool sees PATH, HOME and TOWN_TZ only;
 #   · TemporaryFileSystem=/srv:ro: the office tree (the stamp key, the push
@@ -29,10 +36,20 @@ Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-
 #     socket (AF_UNIX stays open for node) are out of sight;
 #   · PrivateNetwork and RestrictAddressFamilies: no network;
 #   · ProtectSystem=strict and PrivateTmp: beyond the two clone directories it
-#     writes only its own /tmp, and MemoryMax, TasksMax and LimitFSIZE bound it;
+#     writes only its own /tmp. MemoryMax and TasksMax bound it; LimitFSIZE
+#     bounds each file, not the total, so a tool could still fill the disk
+#     through WHITE_PAGES (the disk alarm is the backstop, not this unit);
+#   · SystemCallFilter=@system-service: the system calls a service needs, and no
+#     others (no mount, no ptrace, no kernel keyring);
+#   · KillMode=control-group and TimeoutStopSec=5s: serve kills whatever the tool
+#     left running before it answers (Truey's F2), and the unit's stop takes what
+#     is left at once instead of in 90 s;
 #   · CollectMode=inactive-or-failed: a refused run's instance is unloaded once
 #     it ends, so no failed per-connection instance lingers for the roll-call.
 # MemoryDenyWriteExecute is NOT set: node's JIT needs it.
+# NOT run here: the git-mode mint (tools/stamp-mint.mjs --append --key) in the
+# ferry and in the keep tick, and tools/witness-chain.mjs, all of which hold a
+# key (POS-994's B, Darko's call).
 
 [Service]
 ExecStart=/usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs serve --clone /srv/postmark-office/town-clone
@@ -41,6 +58,7 @@ StandardOutput=socket
 StandardError=journal
 User=meepo
 Group=meepo
+PrivateUsers=yes
 TemporaryFileSystem=/srv:ro
 BindReadOnlyPaths=/srv/postmark-office/tools/town-tool-sandbox.mjs
 BindReadOnlyPaths=/srv/postmark-office/town-clone
@@ -76,6 +94,10 @@ RestrictNamespaces=yes
 RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+KillMode=control-group
+TimeoutStopSec=5s
 RuntimeMaxSec=20min
 MemoryMax=2G
 TasksMax=64

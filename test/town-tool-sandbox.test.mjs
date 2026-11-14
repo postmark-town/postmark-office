@@ -26,7 +26,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realp
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { changedBetween, checkRequest, ferry, fingerprint, runTool, SOCKET, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
+import { changedBetween, checkRequest, ferry, fingerprint, runTool, SOCKET, stragglerPids, symlinksUnder, TOOLS } from "../tools/town-tool-sandbox.mjs";
 import { DECOY_ENV } from "./helpers/town-tool-socket.mjs";
 
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -59,6 +59,10 @@ test("the sandbox unit: meepo with no environment, no network, and only the clon
   for (const line of [
     "ExecStart=/usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs serve --clone /srv/postmark-office/town-clone",
     "StandardInput=socket", "StandardOutput=socket", "User=meepo", "Group=meepo",
+    // Truey's F1 on #1048: as plain meepo, /proc/<pid>/environ and /proc/<pid>/root of every meepo process
+    "PrivateUsers=yes", "SystemCallFilter=@system-service",
+    // Truey's F2: nothing outlives the run for long
+    "KillMode=control-group", "TimeoutStopSec=5s",
     "PrivateNetwork=yes", "IPAddressDeny=any", "RestrictAddressFamilies=AF_UNIX",
     "TemporaryFileSystem=/srv:ro", "TemporaryFileSystem=/etc:ro", "TemporaryFileSystem=/run:ro", "TemporaryFileSystem=/var:ro",
     "TemporaryFileSystem=/opt:ro", "ProtectHome=tmpfs", "ProtectSystem=strict", "PrivateTmp=yes", "NoNewPrivileges=yes",
@@ -92,6 +96,9 @@ test("the ferry's chain runs the three town tools through the sandbox, and none 
   assert.ok(p.includes(`${client} quests --clone "$TOWN_CLONE"`), "the quest snapshot goes through the sandbox");
   assert.doesNotMatch(p, /\bnode tools\/(ferry|stamp-verify|quest-progress)\.mjs/, "no town tool of these three runs in the ferry's process");
   assert.match(p, /node tools\/stamp-mint\.mjs --append --key/, "the git-mode mint still runs here, until POS-994's B is ruled");
+  assert.equal(p.split('clean -fdxq -- WHITE_PAGES TOWN_BULLETIN').length - 1, 2,
+    "the undo and the opening pair both clean the two writable directories, ignored files too (Truey's F4)");
+  assert.doesNotMatch(p, /clean -fdq -- WHITE_PAGES[;& ]/, "no clean that leaves ignored files behind");
   assert.ok(settings(unit("postmark-ferry.service")).includes("EnvironmentFile=/etc/postmark-office.env"),
     "the ferry keeps its env; the town tools are what no longer share it");
 });
@@ -118,6 +125,18 @@ test("checkRequest takes a named tool, this sandbox's own clone, and TOWN_TZ alo
   assert.throws(() => checkRequest(null, own), /no request/);
 });
 
+// ── F2: what a tool leaves running ──────────────────────────────────────────
+
+test("stragglerPids names the instance's other processes, and nothing outside a postmark-town-tool@ instance", () => {
+  const unitCg = "0::/system.slice/system-postmark\\x2dtown\\x2dtool.slice/postmark-town-tool@3-4021-1001.service\n";
+  assert.deepEqual(stragglerPids(unitCg, "100\n200\n300\n", 200), [100, 300], "every pid but serve's own");
+  assert.deepEqual(stragglerPids(unitCg, "200\n", 200), [], "serve alone: nothing to kill");
+  assert.equal(stragglerPids("0::/user.slice/user-1000.slice/session-3.scope\n", "1\n2\n", 2), null,
+    "a test's stand-in, or anything that isn't the unit's own cgroup, kills nothing");
+  assert.equal(stragglerPids("0::/system.slice/postmark-office.service\n", "1\n", 9), null, "not the office's either");
+  assert.equal(stragglerPids("", "1\n", 9), null);
+});
+
 // ── a scratch town ──────────────────────────────────────────────────────────
 
 let seq = 0;
@@ -132,7 +151,8 @@ function town(tools = {}) {
   const seed = join(root, "seed"), origin = join(root, "town.git"), clone = join(root, "clone");
   put(seed, {
     "WHITE_PAGES/mail-ledger.md": "mail ledger\n", "WHITE_PAGES/stamp-ledger.md": "row 1\n",
-    "WHITE_PAGES/alice/outbox/to-bob.md": "a letter\n", "TOWN_BULLETIN/quests.md": "quests\n", "tools/README.md": "town tools\n", ...tools,
+    "WHITE_PAGES/alice/outbox/to-bob.md": "a letter\n", "TOWN_BULLETIN/quests.md": "quests\n", "tools/README.md": "town tools\n",
+    ".gitignore": "*.cache\n", ...tools,
   });
   g(root, "init", "-q", "-b", "main", seed);
   g(seed, "config", "core.autocrlf", "false");
@@ -284,6 +304,26 @@ test("the quests may write quests.md and nothing else", { skip: posix }, async (
   });
 });
 
+// Truey's F4: git add and a plain git clean pass an ignored file by, and office code may read it.
+test("an ignored file the tool writes is refused, even where the tool may write", { skip: posix }, async () => {
+  const t = town();
+  await withFake(t.clone, (c) => writeFileSync(join(c, "WHITE_PAGES/alice/notes.cache"), "planted\n"), {}, async (s) => {
+    assert.equal((await runTool("ferry", t.clone, { socketPath: s.path, env: {} })).code, 1, "under WHITE_PAGES, the ferry's own ground");
+  });
+  const u = town();
+  await withFake(u.clone, (c) => { mkdirSync(join(c, "TOWN_BULLETIN/x.cache"), { recursive: true }); writeFileSync(join(c, "TOWN_BULLETIN/x.cache/a"), "planted\n"); }, {}, async (s) => {
+    assert.equal((await runTool("quests", u.clone, { socketPath: s.path, env: {} })).code, 1, "and an ignored directory, by what is inside it");
+  });
+  const v = town();
+  writeFileSync(join(v.clone, "WHITE_PAGES/alice/notes.cache"), "there before\n");
+  await withFake(v.clone, (c) => appendFileSync(join(c, "WHITE_PAGES/alice/notes.cache"), "changed\n"), {}, async (s) => {
+    assert.equal((await runTool("ferry", v.clone, { socketPath: s.path, env: {} })).code, 1, "an ignored file that was there and changed");
+  });
+  await withFake(v.clone, null, {}, async (s) => {
+    assert.equal((await runTool("ferry", v.clone, { socketPath: s.path, env: {} })).code, 0, "the control: one left alone passes");
+  });
+});
+
 test("the client exits 1 on a refusal, a tool's own failure, a malformed answer, or no sandbox", { skip: posix }, async () => {
   const t = town();
   for (const answer of [{ ok: false, stage: "sandbox", why: "no" }, { ok: false, exit: 3 }, { out: 7 }]) {
@@ -315,6 +355,27 @@ test("the ferry commits and pushes what the sandboxed ferry moved, with ferry.mj
   const r = JSON.parse(readFileSync(report, "utf8"));
   assert.deepEqual([r.committed, r.pushed, r.delivered], [true, true, 1]);
   assert.deepEqual(r.files.sort(), ["WHITE_PAGES/bob/inbox/from-alice.md", "WHITE_PAGES/mail-ledger.md"], "the files the commit carried (added or changed), as the witness reads them");
+});
+
+// Truey's F3: the witness signs this report, so the tool's word reaches it only as counts, a date and a crossing number.
+test("the report the witness reads takes the sha, committed, pushed and files from the client, never from the tool", { skip: posix }, async () => {
+  const t = town();
+  const report = join(t.root, "report.json");
+  const head = g(t.clone, "rev-parse", "HEAD").trim();
+  const lie = JSON.stringify({ ran: true, crossing: 293, town_sha: "b".repeat(40), date: "2026-11-15", delivered: 0, bounced: 0,
+    committed: true, pushed: true, files: ["WHITE_PAGES/forged.md"], signed_by: "nobody" });
+  await withFake(t.clone, null, { report: lie }, async (s) => {
+    assert.equal(await ferry(t.clone, report, { socketPath: s.path, env: {} }), 0);
+  });
+  assert.deepEqual(JSON.parse(readFileSync(report, "utf8")), {
+    ran: true, crossing: 293, town_sha: head, date: "2026-11-15", delivered: 0, bounced: 0, committed: false, pushed: false, files: [],
+  }, "the sha is the clone's own, nothing was committed or pushed, and no field the client doesn't know rides along");
+  for (const bad of [{ crossing: -1 }, { crossing: "293" }, { date: "tomorrow" }, { delivered: 1.5 }]) {
+    const u = town();
+    await withFake(u.clone, null, { report: JSON.stringify({ ...JSON.parse(lie), ...bad, committed: false, pushed: false, files: [] }) }, async (s) => {
+      assert.equal(await ferry(u.clone, join(u.root, "r.json"), { socketPath: s.path, env: {} }), 1, JSON.stringify(bad));
+    });
+  }
 });
 
 test("a quiet crossing commits nothing and still writes its report", { skip: posix }, async () => {

@@ -28,13 +28,20 @@
 // sandbox cannot take the key from it (POS-994's B, Darko's call).
 //
 // ── WHAT THE SANDBOX IS ─────────────────────────────────────────────────────
-// It runs as meepo, because the ferry moves meepo's files in the clone. So the
-// unit, not the uid, is what keeps the secrets out of reach: no EnvironmentFile,
-// no network, /srv hidden but for the clone and this file, /etc hidden but for
-// the few files node and git read, /home, /root, /var, /run, /opt, /mnt, /media
-// and /snap hidden, and in the clone only WHITE_PAGES and TOWN_BULLETIN
-// writable. The clone's .git is read-only: a hook or a config line planted there
-// would run in the client's next git push, outside the sandbox.
+// It runs as meepo, because the ferry moves meepo's files in the clone, but in
+// its own user namespace (PrivateUsers=yes). Without that, a tool could reach
+// every other meepo process through /proc: the waiting client's and the
+// office's environ, the stamp key through /proc/<pid>/root, their open fds
+// (Truey's F1 on #1048, proved on the box 2026-11-14: OPENABLE as meepo, ENOENT
+// in the namespace). Beyond that, the unit keeps the secrets out of reach: no
+// EnvironmentFile, no network, /srv hidden but for the clone and this file, /etc
+// hidden but for the few files node and git read, /home, /root, /var, /run,
+// /opt, /mnt, /media and /snap hidden, and in the clone only WHITE_PAGES and
+// TOWN_BULLETIN writable. The clone's .git is read-only: a hook or a config line
+// planted there would run in the client's next git push, outside the sandbox.
+// Before it answers, serve kills every other process left in its instance's
+// cgroup, so nothing a tool started outlives the checks the client then makes
+// (Truey's F2).
 //
 // ── THE EXCHANGE ────────────────────────────────────────────────────────────
 // The client sends one JSON object, `{ tool, clone, env }`, and half-closes:
@@ -55,9 +62,15 @@
 //     runs with rights, into a read of what it names);
 //   · any path outside the tool's own writes changed, by name or by content
 //     (verify writes nothing; quests writes TOWN_BULLETIN/quests.md; the ferry
-//     writes under WHITE_PAGES).
+//     writes under WHITE_PAGES);
+//   · any gitignored path under the writable directories changed, whatever the
+//     tool: git add and git clean pass ignored files by, and office code may read
+//     them (Truey's F4).
 // For the ferry it also refuses a staged symlink or submodule, a report it can't
-// read, and counts that don't match what changed.
+// read, and counts that don't match what changed. The report it hands the
+// witness is rebuilt from the tool's counts and date alone: the town sha is the
+// client's own rev-parse, and committed, pushed and files are the client's own
+// facts, never the tool's word (Truey's F3).
 //
 // Exit codes (client): 0 the tool ran green and every check held; 1 a refusal (the
 // tool's own non-zero exit, the sandbox's refusal, a missing socket, a malformed
@@ -124,6 +137,35 @@ export function checkRequest(req, ownClone) {
   return { tool: req.tool, env };
 }
 
+/**
+ * The other processes in this instance's own cgroup, from /proc/self/cgroup's
+ * line and that cgroup's cgroup.procs: what a tool left running. null outside a
+ * postmark-town-tool@ instance (a test's stand-in), where there is nothing to kill.
+ */
+export function stragglerPids(cgroupText, procsText, self) {
+  const path = /^0::(\/\S*)$/m.exec(String(cgroupText))?.[1];
+  if (!path || !/\/postmark-town-tool@[^/]+\.service$/.test(path)) return null;
+  return String(procsText).split("\n").map(Number).filter((p) => Number.isInteger(p) && p > 0 && p !== self);
+}
+
+/** SIGKILL every other process in this instance until none is left; false if they won't go. */
+function killStragglers() {
+  let cg;
+  try { cg = readFileSync("/proc/self/cgroup", "utf8"); } catch { return true; }
+  const path = /^0::(\/\S*)$/m.exec(cg)?.[1];
+  const nap = new Int32Array(new SharedArrayBuffer(4));
+  for (let round = 0; round < 100; round += 1) {
+    let left;
+    try { left = stragglerPids(cg, readFileSync(`/sys/fs/cgroup${path}/cgroup.procs`, "utf8"), process.pid); } catch { return false; }
+    if (left === null) return true;
+    if (left.length === 0) return true;
+    console.error(`[town-tool] killing ${left.length} process(es) the tool left running`);
+    for (const pid of left) { try { process.kill(pid, "SIGKILL"); } catch { /* gone already */ } }
+    Atomics.wait(nap, 0, 0, 20);
+  }
+  return false;
+}
+
 /** The sandbox's half: one request on fd 0, one answer on fd 1. Logs go to stderr (the journal). */
 export async function serve(cloneArg) {
   const input = new Socket({ fd: 0, readable: true, writable: false, allowHalfOpen: true });
@@ -141,6 +183,8 @@ export async function serve(cloneArg) {
     });
     const exit = r.status ?? 1;
     console.error(`[town-tool] ${tool}: exit ${exit}${r.signal ? ` (${r.signal})` : ""}${r.error ? ` (${r.error.code})` : ""}`);
+    // F2: nothing the tool started may still be writing when the client checks the clone
+    if (!killStragglers()) throw new Error("a process the tool started would not die");
     answer = {
       ok: exit === 0 && !r.signal && !r.error, exit,
       out: Buffer.from(r.stdout ?? "").toString("base64"), err: Buffer.from(r.stderr ?? "").toString("base64"),
@@ -191,25 +235,36 @@ export function symlinksUnder(clone, dirs = WRITABLE) {
  * HEAD, and the digest catches a path that was already changed and changed again.
  */
 export function fingerprint(clone, allowed) {
-  const out = mustGit(clone, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], "git status");
+  const out = mustGit(clone, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignored=matching"], "git status");
   const map = {};
   for (const entry of out.split("\0")) {
     if (entry.length < 4) continue;
-    const rel = entry.slice(3);
-    if (allowed.some((a) => (a.endsWith("/") ? rel.startsWith(a) : rel === a))) continue;
-    const abs = join(clone, rel);
-    let digest;
-    try {
-      const st = lstatSync(abs);
-      digest = st.isSymbolicLink() ? `link:${readlinkSync(abs)}`
-        : st.isFile() ? createHash("sha256").update(readFileSync(abs)).digest("hex") : `kind:${st.mode}`;
-    } catch (e) {
-      if (e?.code !== "ENOENT") throw e;
-      digest = "gone";
+    const code = entry.slice(0, 2);
+    const rel = entry.slice(3).replace(/\/$/, "");
+    if (code === "!!") {
+      // F4: an ignored path under the writable directories is never a tool's to change, whatever the tool
+      if (!WRITABLE.some((d) => rel === d || rel.startsWith(`${d}/`))) continue;
+      map[`!${rel}`] = `!! ${digestOf(join(clone, rel))}`;
+      continue;
     }
-    map[rel] = `${entry.slice(0, 2)} ${digest}`;
+    if (allowed.some((a) => (a.endsWith("/") ? rel.startsWith(a) : rel === a))) continue;
+    map[rel] = `${code} ${digestOf(join(clone, rel))}`;
   }
   return map;
+}
+
+/** What is on disk at `abs`: a link's target, a file's sha256, a directory's entries' digests, or "gone". */
+function digestOf(abs) {
+  let st;
+  try { st = lstatSync(abs); } catch (e) { if (e?.code === "ENOENT") return "gone"; throw e; }
+  if (st.isSymbolicLink()) return `link:${readlinkSync(abs)}`;
+  if (st.isFile()) return createHash("sha256").update(readFileSync(abs)).digest("hex");
+  if (st.isDirectory()) {
+    const h = createHash("sha256");
+    for (const name of readdirSync(abs).sort()) h.update(`${name}\0${digestOf(join(abs, name))}\0`);
+    return `dir:${h.digest("hex")}`;
+  }
+  return `kind:${st.mode}`;
 }
 
 /** What changed between two fingerprints, as names. */
@@ -315,7 +370,7 @@ export async function ferry(clone, reportPath, opts = {}) {
     }
     return code;
   };
-  let real;
+  let real, townSha;
   try {
     real = realpathSync(clone);
     if (mustGit(real, ["remote"], "git remote").trim()) {
@@ -323,20 +378,33 @@ export async function ferry(clone, reportPath, opts = {}) {
       const pulled = mustGit(real, ["pull", "--ff-only"], "git pull").trim();
       if (pulled) console.log(`  ${pulled.replace(/\n/g, "\n  ")}`);
     } else console.log("git: no remote — skipping pull");
+    // the sha the ferry reads (--no-git, it pulls nothing) is this one; the report names it from here, not from the tool
+    townSha = mustGit(real, ["rev-parse", "HEAD"], "git rev-parse").trim();
   } catch (e) {
     return finish(1, e?.message ?? String(e));
   }
   const r = await runTool("ferry", real, opts);
+  let said = null;
   if (r.report !== null && r.report !== undefined) {
     try {
       const parsed = JSON.parse(r.report);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) report = parsed;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) said = parsed;
     } catch { /* an unreadable report is named below */ }
   }
-  if (r.code !== 0) return finish(1, report.error ? null : "the sandboxed ferry refused");
+  // F3: the witness signs what this report says, so only the tool's counts, date and crossing number come from
+  // the tool, each checked; the sha is the client's own, and committed, pushed and files are the client's facts.
+  report = {
+    ran: said?.ran === true, crossing: count(said?.crossing) ? said.crossing : null, town_sha: /^[0-9a-f]{40}$/.test(townSha) ? townSha : null,
+    date: /^\d{4}-\d{2}-\d{2}$/.test(String(said?.date)) ? said.date : null,
+    delivered: count(said?.delivered) ? said.delivered : null, bounced: count(said?.bounced) ? said.bounced : null,
+    committed: false, pushed: false, files: [],
+  };
+  if (r.code !== 0) {
+    return finish(1, typeof said?.error === "string" ? `the sandboxed ferry refused: ${said.error.slice(0, 500)}` : "the sandboxed ferry refused");
+  }
   try {
-    if (report.ran !== true || !count(report.delivered) || !count(report.bounced) || !/^\d{4}-\d{2}-\d{2}$/.test(String(report.date))) {
-      throw new Error("the ferry exited 0 without a readable report (ran, delivered, bounced, date)");
+    if (!report.ran || report.crossing === null || report.delivered === null || report.bounced === null || report.date === null) {
+      throw new Error("the ferry exited 0 without a readable report (ran, crossing, delivered, bounced, date)");
     }
     mustGit(real, ["add", "-A", "--", "WHITE_PAGES"], "git add");
     const raw = mustGit(real, ["diff", "--cached", "--raw", "-z", "--no-renames"], "git diff --cached");

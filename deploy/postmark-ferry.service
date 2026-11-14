@@ -35,8 +35,13 @@ WorkingDirectory=/srv/postmark-office
 # twin assumed an ephemeral checkout): a crashed prior run leaves
 # moved-but-uncommitted letters; reset restores them to their outboxes (HEAD
 # keeps any committed-but-unpushed office work), clean is scoped to
-# WHITE_PAGES so nothing else is ever touched. The ledger-derived dedupe then
-# re-sweeps idempotently.
+# WHITE_PAGES and TOWN_BULLETIN so nothing else is ever touched. The
+# ledger-derived dedupe then re-sweeps idempotently. The clean takes ignored
+# files too (-x, POS-994): those two directories are where the sandboxed town
+# tools can write, and an ignored file a refused tool planted there would
+# otherwise outlive the refusal (git add and a plain clean both pass it by).
+# Neither directory holds an untracked or ignored file of anyone's between
+# crossings (read on the box 2026-11-14: none).
 # After the crossing, the mint pass (gold plan postmark-mint): derive any owed
 # stamp lines from the fresh mail-ledger, sign with the box key, verify
 # (chain + signatures + replay + conservation), and only a green verify
@@ -119,8 +124,9 @@ WorkingDirectory=/srv/postmark-office
 # report fields. The client refuses (exit 1, so the undo below puts the clone
 # back) on a symlink in the clone's writable directories, or a change outside
 # what the tool writes. The stage names and the witness record are unchanged.
-# NOT here yet: the town's tools/stamp-mint.mjs below, which must hold the stamp
-# key to sign (POS-994's B, Darko's call), and the owed path's
+# NOT here yet: every town tool that holds a key (POS-994's B, Darko's call):
+# tools/stamp-mint.mjs below, which must hold the stamp key to sign, and
+# tools/witness-chain.mjs above, with the witness key. Nor the owed path's
 # tools/stamp-verify-owed.mjs (store mode only).
 # THE TOWN-LOG DRAIN RIDES FIRST (POS-44 wave 4, the ferry bridge). Flag-on,
 # a join, a paper edit and a sent letter are ROWS in the office's town log, and
@@ -196,7 +202,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
         || echo "[witness] the record is owed, not published: the next crossing or settlement pays it" >&2; }; \
   undo() { rc=$?; [ "$rc" -eq 0 ] || { \
       git -C "$TOWN_CLONE" reset --hard -q HEAD; \
-      git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES; \
+      git -C "$TOWN_CLONE" clean -fdxq -- WHITE_PAGES TOWN_BULLETIN; \
       echo "[ferry] a gate refused (exit $rc): the town clone is back at its last commit, and the refused step re-runs at the next crossing" >&2; }; \
     witness "$rc"; }; \
   trap undo EXIT; trap "exit 143" TERM; trap "exit 130" INT; trap "exit 129" HUP; \
@@ -206,7 +212,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   owed_ok=0; \
   verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs verify --clone "$TOWN_CLONE"; fi; }; \
   git -C "$TOWN_CLONE" reset --hard -q HEAD && \
-  git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES && \
+  git -C "$TOWN_CLONE" clean -fdxq -- WHITE_PAGES TOWN_BULLETIN && \
   wstage=drain && /usr/bin/node /srv/postmark-office/tools/town-drain-run.mjs && \
   git -C "$TOWN_CLONE" push -q && \
   wstage=ferry && cd "$TOWN_CLONE" && /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs ferry --clone "$TOWN_CLONE" --report "$wreport" && \
