@@ -263,19 +263,13 @@ export function clusterVoices(list, { earshotM = EARSHOT_M, fadeMs = FADE_MS, bo
   return [...closed, ...open].sort((a, b) => a.latest - b.latest);
 }
 
-function threadOf(cluster, { live, voiceCap, voicesBefore = null, memoryMax = null }) {
+function threadOf(cluster, { live, voiceCap }) {
   const voices = cluster.voices;
   const first = voices[0];
   const last = voices[voices.length - 1];
   const participants = [];
   for (const v of voices) if (!participants.includes(v.handle)) participants.push(v.handle);
-  // THE VOICES PAGE BACK (POS-951; little-pica's second ask, "the keyless conversations feed can't page back"): `voicesBefore` (ms) keeps only the voices strictly earlier,
-  // and the page is the newest `voiceCap` of those, widened to take every voice tied on its oldest instant, so the next page (strictly earlier than this one's oldest) can never
-  // skip a line or repeat one.
-  const pool = Number.isFinite(voicesBefore) ? voices.filter((v) => v.at < voicesBefore) : voices;
-  let from = Math.max(0, pool.length - voiceCap);
-  while (from > 0 && pool[from - 1].at === pool[from].at) from -= 1;
-  const shown = pool.slice(from);
+  const shown = voices.slice(-voiceCap);
   // The thread's GROUND: a bbox over every voice in the cluster — the shown
   // list is capped, so anyone measuring from `voices` alone under-reads a long
   // night. Chaining means a conversation can cover far more ground than one
@@ -308,8 +302,6 @@ function threadOf(cluster, { live, voiceCap, voicesBefore = null, memoryMax = nu
     latest: new Date(last.at).toISOString(),
     participants,
     voice_count: voices.length,
-    ...(from > 0 && shown.length ? { voices_earlier: { remaining: from, before_ms: shown[0].at, before: new Date(shown[0].at).toISOString(),
-      note: `pass voices_before=${shown[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ""}` } } : {}),
     voices: shown.map((v) => ({
       handle: v.handle,
       standing: standingOf(v.handle),
@@ -319,6 +311,27 @@ function threadOf(cluster, { live, voiceCap, voicesBefore = null, memoryMax = nu
       x: Math.round(v.x),
       y: Math.round(v.y),
     })),
+  };
+}
+
+/**
+ * A thread as the keyless feed shows it, its voices PAGED BACK (POS-951; little-pica's second ask, "the keyless conversations feed can't page back"). `threadOf` is unchanged (it is
+ * VENDORED, verbatim, into world2/tools/conversations.mjs); this wraps it. `voicesBefore` (ms) keeps only the voices strictly earlier, and the page is the newest `voiceCap` of those,
+ * WIDENED to take every voice tied on its oldest instant, so the next page (strictly earlier than this one's oldest) can never skip a line or repeat one. The thread's own facts
+ * (`voice_count`, ground, participants, started, latest) stay the whole room's. A thread with voices behind its page says so (`voices_earlier`) and the memory bound.
+ */
+function pagedThread(cluster, { live, voiceCap, voicesBefore = null, memoryMax = null }) {
+  const meta = threadOf(cluster, { live, voiceCap: 1 });
+  const pool = Number.isFinite(voicesBefore) ? cluster.voices.filter((v) => v.at < voicesBefore) : cluster.voices;
+  let from = Math.max(0, pool.length - voiceCap);
+  while (from > 0 && pool[from - 1].at === pool[from].at) from -= 1;
+  const raw = pool.slice(from);
+  const voices = raw.length ? threadOf({ voices: raw }, { live, voiceCap: raw.length }).voices : [];
+  return {
+    ...meta,
+    ...(from > 0 && raw.length ? { voices_earlier: { remaining: from, before_ms: raw[0].at, before: new Date(raw[0].at).toISOString(),
+      note: `pass voices_before=${raw[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ""}` } } : {}),
+    voices,
   };
 }
 
@@ -1267,8 +1280,8 @@ export function createVoices({
       // POS-951 (little-pica and spark-the-builder, 2026-11-07, after the Harbour Stew): the two things a listener on this feed needs that nothing here said
       place_note: "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. The steady fields are the thread's `id`, its `at` {x, y} and `extent`, and each voice's own `x` and `y` (and `at_ms`); anchor a listener on the ground by distance, not on the label.",
       voices_note: `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms>) for the voices before them, live threads included. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`,
-      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...threadOf(c, { live: true, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
-      closed: page.map((c) => ({ ...threadOf(c, { live: false, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
+      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...pagedThread(c, { live: true, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
+      closed: page.map((c) => ({ ...pagedThread(c, { live: false, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
       earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,
         note: "this is the office's short in-memory record, so speech older than it holds is not here" },
     };
