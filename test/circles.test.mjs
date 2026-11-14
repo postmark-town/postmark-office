@@ -225,8 +225,9 @@ test("named history past the first page: ?circle= finds a circle in any cluster,
 
 const DIR = mkdtempSync(join(tmpdir(), "circles-"));
 let logN = 0;
-function door(where, { pen = true } = {}) {
-  const clock = { t: T };
+function door(where, { pen = true, settled = false, memoryMax } = {}) {
+  // `settled`: the bench publishes settlements (CORE-97's room-across-a-settlement rule applies); `settle()` publishes one now
+  const clock = { t: T, settledAt: T - 3_600_000, edges: [T - 3_600_000] };
   const path = join(DIR, `voices-${++logN}.jsonl`);
   let next = 70001;
   const written = [];
@@ -235,10 +236,13 @@ function door(where, { pen = true } = {}) {
     place: async () => "the Cave Interior",
     logPath: path,
     now: () => clock.t,
-    hearingWindow: () => ({ since: T - 3_600_000, source: "the bench", disclosure: null }),
+    hearingWindow: () => ({ since: clock.settledAt, source: "the bench", disclosure: null }),
+    ...(settled ? { settlements: () => [...clock.edges] } : {}),
+    ...(memoryMax ? { memoryMax } : {}),
     beforeSpoke: pen ? async (voice) => { written.push({ ...voice }); return { id: next++ }; } : null,
   });
-  return { store, clock, path, written, tick: (ms = 16_000) => { clock.t += ms; } };
+  return { store, clock, path, written, tick: (ms = 16_000) => { clock.t += ms; },
+    settle: () => { clock.settledAt = clock.t; clock.edges.push(clock.t); } };
 }
 
 test("the say door: an id on every receipt and line, reply_to by id persists once on the act, and the room reads as circles", async () => {
@@ -365,4 +369,64 @@ test("the say door: the default read stays near the budget as MCP text, measured
   const said = await store.say("r29", "and one more, kept by a nonce", { nonce: "n-1", doorExtra: async () => extra });
   assert.equal(said.conversation.circles.budget.used, C.mcpBytes({ ...said, ...extra }));
   assert.equal(said.nonce, "n-1");
+});
+
+// ── CORE-97 × circles (merged on train/2026-w47 as b2d92c9a): a room carried across a settlement is ONE conversation, so its circles
+// do not split — a reply crosses the settlement, the room keeps the page's id, and ?room= / ?circle= find it by that id ──
+
+test("CORE-97: a reply crosses the settlement inside a carried room — one conversation, one circle, the page's own room id", async () => {
+  const { store, tick, settle } = door({ pica: { x: 0, y: 0 }, seth: { x: 10, y: 0 }, claran: { x: 20, y: 0 } }, { settled: true });
+  await store.say("pica", "Welcome, everyone!");
+  tick(10 * 60_000);
+  settle();                                   // the settlement falls mid-conversation
+  tick(20 * 60_000);                          // a say inside the hour after it carries the room (CORE-97)
+  const r = await store.say("seth", "Is the lemon one sour?", { replyTo: 70001 });
+  assert.deepEqual(r.said, { id: 70002, reply_to: 70001, to: "pica", linked: "id" }, "the reply resolves across the settlement: the same room");
+  tick();
+  const heard = await store.hear("claran");
+  assert.deepEqual(heard.conversation.circles.elsewhere.map((s) => [s.circle, s.says]), [[70001, 2]], "one circle, both says — not split at the settlement");
+  const page = store.conversations();
+  assert.equal(page.live.length, 1);
+  const [thread] = page.live;
+  assert.equal(thread.id, `t${T}-pica`, "the page names the room by its first say");
+  assert.deepEqual(thread.voices.map((v) => v.circle), [70001, 70001]);
+  const room = store.conversations({ find: { room: thread.id } }).find;
+  assert.equal(room.room.id, thread.id, "?room= finds it by the page's id");
+  assert.equal(room.room.live, true, "live while the room is open (roomOpen), not only inside the newest settlement");
+  assert.deepEqual(room.circles.elsewhere.map((s) => [s.circle, s.says]), [[70001, 2]]);
+  const circle = store.conversations({ find: { circle: 70002 } }).find;
+  assert.deepEqual(circle.circle_read.path, [70001, 70002], "?circle= reads the circle whole across the settlement");
+  assert.equal(circle.room.id, thread.id);
+});
+
+test("CORE-97: past the hour of grace the room has closed — a reply to it is refused as outside the room (call 21), and nothing is written", async () => {
+  const { store, tick, settle, written } = door({ pica: { x: 0, y: 0 }, seth: { x: 10, y: 0 } }, { settled: true });
+  await store.say("pica", "Welcome, everyone!");
+  tick(10 * 60_000);
+  settle();
+  tick(61 * 60_000);                          // silence through the whole hour after the settlement: the room closed at the hour
+  const r = await store.say("seth", "Is the lemon one sour?", { replyTo: 70001 });
+  assert.equal(r.code, 422);
+  assert.match(r.defect, /say 70001 is not in the room you are speaking into/);
+  assert.equal(written.length, 1, "nothing written for the refused say");
+});
+
+test("CORE-97: a carried room whose front has left memory keeps its id — ?room= still finds it by the page's id, and its lost parents are named, never silently re-rooted", async () => {
+  const { store, tick, settle } = door({ pica: { x: 0, y: 0 }, seth: { x: 10, y: 0 }, liv: { x: 5, y: 0 } }, { settled: true, memoryMax: 3 });
+  await store.say("pica", "Welcome, everyone!");          // 70001, the room's first say
+  tick();
+  await store.say("seth", "Hello!", { replyTo: 70001 });   // 70002
+  tick(10 * 60_000);
+  settle();
+  tick(5 * 60_000);
+  await store.say("liv", "Late, sorry!", { replyTo: 70002 }); // 70003, carries the room
+  tick();
+  await store.say("pica", "Welcome, Liv.", { replyTo: 70003 }); // 70004 — memory now holds 70002..70004 (it keeps 3)
+  const page = store.conversations();
+  const [thread] = page.live;
+  assert.equal(thread.id, `t${T}-pica`, "the room keeps its first say's id after that say left memory (CORE-97's recorded root)");
+  const found = store.conversations({ find: { room: `t${T}-pica` } }).find;
+  assert.equal(found.room?.id, `t${T}-pica`, "?room= finds it by that id");
+  assert.equal(found.history, "unavailable", "its front is gone from memory: said, not passed off as complete");
+  assert.deepEqual(found.circles.broken.map((b) => [b.id, b.reply_to]), [[70002, 70001]], "the reply whose parent left memory is named");
 });

@@ -474,7 +474,9 @@ export function findOf(searchParams) {
 export function findConversation(clusters, { circle = null, room = null, after = null } = {}, { thread, budget = CIRCLE_BUDGET_BYTES, source, measure = mcpBytes } = {}) {
   const id = sayIdOf(circle);
   if (circle != null && id == null) return { refused: { defect: `"${circle}" is not a say id`, hint: "?circle=<the id on a say line> — or ?room=<a thread's id>" } };
-  const roomOf = (c) => `t${c.voices[0].at}-${c.voices[0].handle}`;
+  // a room's id is the page's: its recorded root (CORE-97, memory: the room keeps its name when its front leaves memory or it
+  // carries across a settlement), else its first say (the record, which holds the room whole)
+  const roomOf = (c) => c.root ?? `t${c.voices[0].at}-${c.voices[0].handle}`;
   const hit = id != null ? clusters.find((c) => c.voices.some((v) => sayIdOf(v.id) === id)) : clusters.find((c) => roomOf(c) === String(room));
   const asked = id != null ? { circle: id } : { room: String(room) };
   if (!hit)

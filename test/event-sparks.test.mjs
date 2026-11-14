@@ -27,22 +27,34 @@ test("the frozen frame: a real room's exact bbox midpoint and differences — ha
   assert.deepEqual(S.placeFrame({ x: "100", y: 200 }), { at: { x: 100, y: 200 }, extent: { w: 120, h: 120 } }, "no conversation: the place, a 60 m radius");
 });
 
-test("the event's room: the record's talk inside the window, clustered as the conversations page clusters it, at the place", () => {
+const talk = await import("../world2/tools/conversations.mjs");
+/** The ids the conversations page gives the same record (world2/tools/conversations.mjs § conversationsOf): the parity the event's rooms keep. */
+const pageIds = (voices, { now, edges }) => {
+  const page = talk.conversationsOf(voices.filter((v) => v.at <= now), { now, earshotM: 60, boundaries: edges, fadeMs: 600_000, closedMax: 999 });
+  return [...page.live, ...page.closed].map((t) => t.id);
+};
+
+test("the event's room is the PAGE's room: clustered from the record exactly as the conversations page clusters it, picked by a voice inside the window at the place — a room that began before the doors keeps its own id", () => {
   const voices = [
-    voice("early", -30, 100, 200),            // before doors: not the event's talk
+    voice("early", -30, 100, 200),            // before the doors, at the place, in the same settlement: the room began here
     voice("pica", 1, 100, 200), voice("seth", 2, 110, 205), voice("liv", 3, 150, 200),
     voice("far", 4, 900, 900), voice("far2", 5, 905, 900), voice("far3", 6, 910, 900), // a bigger room, elsewhere
-    voice("late", 200, 100, 200),             // after ends
+    voice("late", 200, 100, 200),             // after the window: not in the read as of its end
   ];
-  const r = S.eventRoomFrom(voices, { window: { from: min(0), to: min(120) }, place: PLACE, edges: [min(-600)] });
+  const window = { from: min(0), to: min(120) }, edges = [min(-600)];
+  const r = S.eventRoomFrom(voices, { window, place: PLACE, edges });
   assert.equal(r.history, "complete");
   assert.equal(r.rooms.length, 1, "the bigger room elsewhere is not the event's");
   const [room] = r.rooms;
-  assert.equal(room.id, `t${min(1)}-pica`);
-  assert.equal(room.voice_count, 3, "the window scopes it: the early and late voices are not this event's talk");
-  assert.deepEqual(room.participants, ["pica", "seth", "liv"]);
+  assert.equal(room.id, `t${min(-30)}-early`, "the room's own id, from its first say — not one made from the window's slice");
+  assert.ok(pageIds(voices, { now: window.to, edges }).includes(room.id), "the id the conversations page gives it");
+  assert.equal(room.voice_count, 4, "the room whole, as of the window's end (the later say is not read)");
+  assert.deepEqual(room.participants, ["early", "pica", "seth", "liv"]);
   assert.equal("voices" in room, false, "the room's header; its lines are the circle reads' to serve");
   assert.deepEqual(S.roomFrame(room), { room: room.id, at: { x: 125, y: 202.5 }, extent: { w: 50, h: 5 } });
+  // a room at the place that said nothing inside the window is not the event's
+  const before = S.eventRoomFrom([voice("gone", -300, 100, 200)], { window, place: PLACE, edges: [min(-600), min(-120)] });
+  assert.deepEqual(before.rooms, [], "talk that ended before the doors (closed at a settlement) is no room of the event");
 });
 
 test("no talk at the place is no room (the radius frame applies); talk the office cannot place in a settlement is UNAVAILABLE, never 'no conversation'", () => {
@@ -53,12 +65,20 @@ test("no talk at the place is no room (the radius frame applies); talk the offic
   assert.match(old.note, /not evidence that nobody spoke/);
 });
 
-test("several rooms at the place (a settlement split the talk, until CORE-97 carries it): ALL are the event's, in start order — none ranked or chosen (18:46:13Z, \"All of them, combined\")", () => {
-  const voices = [voice("a", 1, 100, 200), voice("b", 2, 100, 201), voice("c", 40, 100, 200), voice("d", 41, 101, 200), voice("e", 42, 100, 199)];
-  const r = S.eventRoomFrom(voices, { window: { from: min(0), to: min(60) }, place: PLACE, edges: [min(-600), min(30)] });
-  assert.deepEqual(r.rooms.map((c) => [c.id, c.voice_count]), [[`t${min(1)}-a`, 2], [`t${min(40)}-c`, 3]], "both, in the order they started — the bigger is not preferred");
-  assert.equal("room" in r, false, "no single room, no binding field");
-  assert.equal("binding" in r, false);
+test("CORE-97 × the event: a room that carries across a settlement inside the window is ONE room of the event, under the page's id; one that fell silent past the hour of grace is two — ALL the event's, in start order, none ranked (18:46:13Z)", () => {
+  const window = { from: min(0), to: min(150) }, edges = [min(-600), min(30)];
+  // a say at min(40) is within the hour after the settlement at min(30): it carries the room through it (CORE-97)
+  const carried = [voice("a", 1, 100, 200), voice("b", 2, 100, 201), voice("c", 40, 100, 200), voice("d", 41, 101, 200)];
+  const one = S.eventRoomFrom(carried, { window, place: PLACE, edges });
+  assert.deepEqual(one.rooms.map((c) => [c.id, c.voice_count]), [[`t${min(1)}-a`, 4]], "carried across the settlement: one room, its first say's id");
+  assert.deepEqual(pageIds(carried, { now: window.to, edges }), [`t${min(1)}-a`], "the page names it the same");
+  // silence past the hour after the settlement (min(30) + 60 min = min(90)) closes it; a later say starts another room
+  const split = [voice("a", 1, 100, 200), voice("b", 2, 100, 201), voice("c", 100, 100, 200), voice("d", 101, 101, 200), voice("e", 102, 100, 199)];
+  const two = S.eventRoomFrom(split, { window, place: PLACE, edges });
+  assert.deepEqual(two.rooms.map((c) => [c.id, c.voice_count]), [[`t${min(1)}-a`, 2], [`t${min(100)}-c`, 3]], "both, in the order they started — the bigger is not preferred");
+  assert.deepEqual(new Set(pageIds(split, { now: window.to, edges })), new Set(two.rooms.map((c) => c.id)), "the page's two rooms, the same ids");
+  assert.equal("room" in two, false, "no single room, no binding field");
+  assert.equal("binding" in two, false);
 });
 
 test("the spark's place: every room, placed by the World's roomsPlace from absolute bounds in start order; a proved empty set is the locked circle; unknown history or a null for real rooms is HELD", () => {
@@ -428,15 +448,16 @@ test("completion is HELD, nothing moved: before its end, when its rooms cannot b
   assert.match((await complete(dir, row, Date.parse(row.ends) - 60_000)).held, /not ended/);
   // a settlement the office knows that is newer than the window's start: the room cannot be told — never "no conversation"
   assert.match((await complete(dir, row, now, { edges: [Date.parse(row.ends)] })).held, /room cannot be told/);
-  // two groups talking apart at the place, split by a settlement inside the window: both rooms are the event's (all of them,
+  // two groups talking apart at the place: both rooms are the event's (all of them,
   // combined), placed together by the World's roomsPlace — its null for real rooms, or an engine without it, is HELD, never the
   // locked circle
   const doors = Date.parse(row.fields.doors_open ?? row.starts);
   const say = async (who, at, x) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy, household)
     VALUES ($1, 0, $2, 'say', 'voice', $3, 'world', $4, 900, $5)`, [new Date(at), who, JSON.stringify({ text: `${who} here`, place: "the counter" }), x, `${who}-house`]);
-  await say("held-a", doors + 60_000, 900);
-  await say("held-b", doors + 30 * 60_000, 920);
-  const split = { edges: [doors - 3_600_000, doors + 10 * 60_000] };
+  // two groups each 50 m from the place and 100 m apart (beyond earshot of each other): two rooms, whatever the settlements
+  await say("held-a", doors + 60_000, 850);
+  await say("held-b", doors + 30 * 60_000, 950);
+  const split = { edges: [doors - 3_600_000] };
   const nulled = await complete(dir, row, now, { ...split, roomsPlace: () => null });
   assert.match(nulled.held, /placed none of its 2 room\(s\)' bounds — a null is not "no room"/);
   assert.equal(nulled.rooms.length, 2);
@@ -454,7 +475,7 @@ test("completion is HELD, nothing moved: before its end, when its rooms cannot b
   const done = await complete(dir, row, now, { ...split, roomsPlace: worldPlace });
   assert.equal(done.completed, true, JSON.stringify(done));
   assert.equal(done.rooms.length, 2);
-  assert.deepEqual(asked.at(-1), [{ x0: 900, y0: 900, x1: 900, y1: 900 }, { x0: 920, y0: 900, x1: 920, y1: 900 }], "each room's absolute bounds, in start order");
+  assert.deepEqual(asked.at(-1), [{ x0: 850, y0: 900, x1: 850, y1: 900 }, { x0: 950, y0: 900, x1: 950, y1: 900 }], "each room's absolute bounds, in start order");
   const call = plannerCalls.at(-1);
   assert.deepEqual(call.properties.rooms, done.rooms, "the record's rooms: every room id");
   assert.equal("room" in call.properties, false);

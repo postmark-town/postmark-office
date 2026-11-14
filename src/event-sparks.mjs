@@ -175,22 +175,31 @@ export function placeFrame(place) {
 const near = (p, place, m = EVENT_PLACE_M) => Math.hypot(p.x - place.x, p.y - place.y) <= m;
 
 /**
- * THE ROOMS, from voices already read off the record. `voices` are `voiceRecords` voices (each with `at` ms, `x`, `y`); `edges` the
- * published settlements (ms). Pure, so the read and the tick resolve the same rooms from the same rows. Returns
- * `{ rooms: [thread…], history, note? }` — `history: "unavailable"` when the window opens before the oldest settlement this office
- * knows, since then a voice's settlement (and so its room) cannot be told; that is never read as no conversation.
+ * THE ROOMS, from voices already read off the record. `voices` are `voiceRecords` voices (each with `at` ms, `x`, `y`): the record as
+ * the conversations page reads it, up to the instant asked; `edges` the published settlements (ms). Pure, so the read and the tick
+ * resolve the same rooms from the same rows. Returns `{ rooms: [thread…], history, note? }` — `history: "unavailable"` when the window
+ * opens before the oldest settlement this office knows, since then a voice's settlement (and so its room) cannot be told; that is
+ * never read as no conversation.
+ *
+ * THE PAGE'S OWN ROOMS (POS-1035 × CORE-97 parity): the rooms are clustered exactly as the conversations page clusters the record —
+ * every voice from the oldest published settlement on, one continuation rule (talk.clusterVoices → hearing-window § roomOpen: a room
+ * carries across a settlement while anyone speaks in the hour after it) — and then the event's are picked out. So a room that began
+ * before the doors, or that carried across a settlement into the window, is the event's under the SAME id the page, `?room=`, its
+ * circles and their sparks' `rooms` name it by — never a second id made from the window's slice of it.
  */
 export function eventRoomFrom(voices, { window, place, edges = [], earshotM = talk.SAY_DIAL_SPEC.earshot_m[0] }) {
   const marks = [...edges].filter(Number.isFinite).sort((a, b) => a - b);
   if (marks.length && window.from < marks[0])
     return { rooms: [], history: "unavailable",
       note: `the event's window opens before the oldest settlement this office has read (${iso(marks[0])}), so the rooms its talk formed cannot be told — this is not evidence that nobody spoke` };
-  const inWindow = voices.filter((v) => v.at >= window.from && v.at <= window.to);
-  const clusters = talk.clusterVoices(inWindow, { earshotM, boundaries: marks });
+  // the page's grouping: a voice older than the oldest published settlement has no known epoch, and is not grouped (as the page says)
+  const grouped = voices.filter((v) => v.at <= window.to && (!marks.length || v.at >= marks[0]));
+  const clusters = talk.clusterVoices(grouped, { earshotM, boundaries: marks });
   // PLACE MEMBERSHIP is the office's existing rule for "the conversation at a point" (voices.mjs § openConversationAt): a room
-  // with a voice within earshot of the point. EVERY such room is the event's (Darko via Wright 18:46:13Z, "All of them,
-  // combined"): none is ranked or chosen, and they are listed in the order they started.
-  const here = clusters.filter((c) => c.voices.some((v) => near(v, place, earshotM))).sort((a, b) => a.voices[0].at - b.voices[0].at);
+  // with a voice within earshot of the point — here, a voice spoken inside the event's window. EVERY such room is the event's
+  // (Darko via Wright 18:46:13Z, "All of them, combined"): none is ranked or chosen, and they are listed in the order they started.
+  const inWindow = (v) => v.at >= window.from && v.at <= window.to;
+  const here = clusters.filter((c) => c.voices.some((v) => inWindow(v) && near(v, place, earshotM))).sort((a, b) => a.voices[0].at - b.voices[0].at);
   // the conversations page's own thread header (its id, bounds, participants, counts); its lines are the circle reads' to serve
   const header = (c) => { const { voices: _lines, ...thread } = talk.threadOf(c, { live: false, voiceCap: 1 }); return thread; };
   return { rooms: here.map(header), history: "complete",
@@ -220,9 +229,12 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   const until = Math.min(window.to, now);
   if (until < window.from) return null; // doors not open yet: nothing to tell
   const scoped = { from: window.from, to: until };
-  // one client, one query at a time (pg queues concurrent queries on a client, and is retiring that)
+  // one client, one query at a time (pg queues concurrent queries on a client, and is retiring that). The says are the record as the
+  // conversations page groups it (from the oldest published settlement), up to the instant asked: the rooms are the page's own.
+  const oldest = [...edges].filter(Number.isFinite).sort((a, b) => a - b)[0];
   const { rows: sayRows } = await client.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-                   WHERE action = ANY($1) AND at >= $2 AND at <= $3 ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS, iso(scoped.from), iso(scoped.to)]);
+                   WHERE action = ANY($1) AND at <= $2 ${Number.isFinite(oldest) ? "AND at >= $3" : ""} ${talk.VOICE_ORDER_SQL}`,
+    [talk.VOICE_ACTIONS, iso(scoped.to), ...(Number.isFinite(oldest) ? [iso(oldest)] : [])]);
   const { rows: markRows } = await client.query(talk.ANCHOR_MARKS_SQL);
   const { rows: actRows } = await client.query(`SELECT id, at, action, household, at_anchor, at_dx, at_dy FROM acts
                    WHERE action = ANY($1) AND household IS NOT NULL AND at >= $2 AND at <= $3 AND ${publicActSql()}
@@ -233,6 +245,9 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   const spoken = sayRows.filter((r) => !(r.payload?.room ?? r.payload?.payload?.room));
   const { voices, unplaced } = talk.voiceRecords(spoken, { centreOf, strict: false });
   const found = eventRoomFrom(voices, { window: scoped, place, edges });
+  // the says this read could not place, counted for the event's own window (the read reaches further back, for the rooms' sake)
+  const windowActs = new Set(spoken.filter((r) => ms(r.at) >= scoped.from && ms(r.at) <= scoped.to).map((r) => String(r.id)));
+  const unplacedInWindow = unplaced.filter((u) => windowActs.has(String(u.act_id))).length;
   const placed = actRows.map((r) => ({ ...r, point: talk.composeAnchor({ anchor: r.at_anchor, dx: r.at_dx, dy: r.at_dy }, centreOf) }));
   const present = presentFrom(placed, { window: scoped, place });
   const complete = until === window.to;
@@ -246,7 +261,7 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
     ...(found.note ? { room_note: found.note } : {}),
     present,
     present_basis: `households with a public act (${PRESENCE_ACTS.join(", ")}) within ${EVENT_PLACE_M} m of the event's place inside its window — never RSVPs, never who is there now`,
-    ...(unplaced.length ? { unplaced_says: unplaced.length } : {}),
+    ...(unplacedInWindow ? { unplaced_says: unplacedInWindow } : {}),
   };
 }
 
