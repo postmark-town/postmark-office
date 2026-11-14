@@ -26,8 +26,10 @@
 //
 //   a mark whose sealed version differs (or is new)  rendered from S's version row by the write-down's own
 //                                                    planner (store-writedown.mjs § planStoreWriteDown:
-//                                                    Gate A filing, the one framer, `markRecord`)
-//   a mark in P and not in S                         its file removed, and every seat left holding no
+//                                                    Gate A filing, the one framer, `markRecord`), FILED
+//                                                    under the house S's sealed register names for its
+//                                                    owner, never today's `marks` row (§ sealedHouseOf)
+//   a mark in P and not in S                        its file removed, and every seat left holding no
 //                                                    standing mark with it (the sweep's husk rule)
 //   every other standing mark                        re-framed only when its frame changed, by the world's
 //                                                    own verb (tools/reparent-keep-world.mjs §
@@ -72,7 +74,9 @@ import { planStoreWriteDown, normalizeMark, handOffPrint, sketchbookNameFor, wal
 import { isNestedFiling } from "../../src/world-journal.mjs";
 import { fileFramer } from "../../src/world-drain.mjs";
 import { renderedMark } from "./mark-render.mjs";
-import { snapshotHeader, snapshotRows, firstClaimedBySlug } from "../../src/world-snapshot.mjs";
+import { snapshotHeader, snapshotRows, snapshotRegisterRows, registerOfVersions, firstClaimedBySlug } from "../../src/world-snapshot.mjs";
+import { keyOfSlug, resolveHouse } from "../../src/household-deriver.mjs";
+import { TOWN_CLAIMANT, TOWN_HOUSEHOLD_BY_NAME } from "./materialize.mjs";
 import { stakesFromStore } from "./fold-input.mjs";
 
 export const REGISTRY_REL = "WORLD/settlement-publications.json";
@@ -141,23 +145,67 @@ export function deltaOf(pRows, sRows) {
   return { changed, removed };
 }
 
-/** The write-down's mark entries for the changed slugs, rendered from S's VERSION rows (never the live table). */
-async function entriesOf(q, sRows, changed) {
+/**
+ * WHERE A MARK IS FILED, FROM THE SEAL (the review of #1022, Rivet's fix 2). The household names the printed path
+ * and the registry's `household`, so it is read where the seal keeps it, never from today's `marks` rows: a print
+ * delayed past a household change must render the tree its seal did. A mark's household is materialize.mjs §
+ * ownerHouseholdFor's answer for its owner (`hh:<slug>`, the town's `solo:the-town` by name), and both of its
+ * inputs are sealed: the owner in the version row (054), the register in the snapshot's register (064). So the
+ * same deriver runs over the sealed register. A seal with no register, or an owner it names no house for, refuses
+ * by name; nothing falls back to the live table.
+ *
+ * THE ONE PLACE THIS CAN DIFFER FROM THE LIVE COLUMN AT THE SEAL: `marks.household` is computed when a mark is
+ * materialized, so a mark changed in an earlier, unprinted window whose owner then moved house before this seal
+ * stands in the live column under its old house and is filed here under the house the seal names. The seal does not
+ * keep `marks.household` itself; this is the sealed answer, and the receipt says so (`filed_from`).
+ */
+async function sealedHouseOf(q, S) {
+  if (!S.register_digest)
+    throw new PrintoutRefusal("sealed-without-register",
+      `S${S.sealed_settlement} (window ${S.window_id}) carries no sealed register (064), so where its marks are filed cannot be read from the seal; nothing was printed`);
+  const rows = await snapshotRegisterRows({ query: q }, S.register_digest);
+  const lost = rows.filter((r) => r.row == null).map((r) => r.key);
+  if (!rows.length || lost.length)
+    throw new PrintoutRefusal("sealed-register-unreadable",
+      `S${S.sealed_settlement}'s sealed register ${rows.length ? `is missing ${lost.length} version(s) (first: ${lost.slice(0, 3).join(", ")})` : "holds no rows"}; nothing was printed`);
+  const { registry, pins } = await registerOfVersions(rows);
+  return (owner) => {
+    const handle = String(owner ?? "").trim();
+    if (handle === TOWN_CLAIMANT) return TOWN_HOUSEHOLD_BY_NAME;
+    const key = keyOfSlug(resolveHouse(handle, registry, pins).slug);
+    if (!key)
+      throw new PrintoutRefusal("no-sealed-household",
+        `the register sealed with S${S.sealed_settlement} names no house for ${JSON.stringify(handle)}, so its mark has nowhere the seal files it; nothing was printed`);
+    return key;
+  };
+}
+
+/** The window whose seal first carried each changed version: when it was locked, as the seals record it. */
+async function firstSealedWindows(q, S, versions) {
+  if (!versions.length) return new Map();
+  const { rows } = await q(
+    `SELECT l.slug, min(s.window_id) AS window_id
+       FROM world_snapshots s JOIN world_snapshot_marks l ON l.marks_digest = s.marks_digest
+      WHERE s.window_id <= $1 AND (l.slug, l.digest) IN (SELECT * FROM unnest($2::text[], $3::text[]))
+      GROUP BY l.slug`,
+    [S.window_id, versions.map((v) => v.slug), versions.map((v) => v.digest)]);
+  return new Map(rows.map((r) => [r.slug, Number(r.window_id)]));
+}
+
+/** The write-down's mark entries for the changed slugs, rendered and FILED from S alone (never the live table). */
+async function entriesOf(q, S, sRows, changed) {
   if (!changed.length) return [];
   const want = new Set(changed);
-  const versions = sRows.filter((r) => want.has(r.slug)).map((r) => ({ slug: r.slug, row: JSON.parse(r.row) }));
-  const { rows: live } = await q("SELECT slug, household, locked_window FROM marks WHERE slug = ANY($1::text[])", [changed]);
-  const liveOf = new Map(live.map((r) => [r.slug, r]));
+  const versions = sRows.filter((r) => want.has(r.slug)).map((r) => ({ slug: r.slug, digest: r.digest, row: JSON.parse(r.row) }));
+  const houseOf = await sealedHouseOf(q, S);
+  const sealedIn = await firstSealedWindows(q, S, versions);
   const first = await firstClaimedBySlug({ query: q }, versions.filter((v) => v.row.kind === "parcel").map((v) => v.slug));
-  return versions.map(({ slug, row }) => {
-    const l = liveOf.get(slug) ?? {};
-    return {
-      slug, kind: row.kind, by: row.owner, household: l.household ?? null,
-      locked_window: l.locked_window == null ? null : Number(l.locked_window),
-      founder_commit: row.data?.founder_commit ?? null,
-      ...renderedMark({ ...row, first_claimed: first.get(slug) ?? null, first_claim_submitted_at: null }),
-    };
-  });
+  return versions.map(({ slug, row }) => ({
+    slug, kind: row.kind, by: row.owner, household: houseOf(row.owner),
+    locked_window: sealedIn.get(slug) ?? null,
+    founder_commit: row.data?.founder_commit ?? null,
+    ...renderedMark({ ...row, first_claimed: first.get(slug) ?? null, first_claim_submitted_at: null }),
+  }));
 }
 
 // ── the git half ────────────────────────────────────────────────────────────
@@ -222,7 +270,7 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
 
   const [sRows, pRows] = await Promise.all([snapshotRows({ query: q }, S.marks_digest), snapshotRows({ query: q }, P.marks_digest)]);
   const { changed, removed } = deltaOf(pRows, sRows);
-  const entries = await entriesOf(q, sRows, changed);
+  const entries = await entriesOf(q, S, sRows, changed);
 
   // the write-down's readers of main, and the world's framer over the same clone
   const publishedPathOf = publishedPathReader(world, head);
@@ -341,6 +389,8 @@ export async function printSettlement(q, { world, window, sinceWindow = null, dr
     changed: changed.length, written: upserts.map((u) => ({ id: u.id, path: u.path })), unchanged: plan.unchanged.map((u) => u.id),
     removed: gone, reframed: reframed.map((r) => ({ id: r.id ?? null, file: r.file ? relative(world, r.file).replace(/\\/g, "/") : null })),
     framed: plan.framed, registry: registryChange,
+    // where each mark was filed from: the seal, never the live table (sealedHouseOf, firstSealedWindows)
+    filed_from: { household: "the register sealed with this settlement", locked_window: "the first seal that carried the version", register_digest: S.register_digest ?? null },
   };
   // DRY writes the files and commits nothing; `quiet` says whether the printout would change anything on main
   if (dryRun) return { status: "dry", quiet: !git(world, ["status", "--porcelain", "--", MARKS_REL, REGISTRY_REL, ...DERIVED.filter((p) => existsSync(join(world, p)))]).trim(), ...receipt, summary };

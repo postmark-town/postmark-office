@@ -56,7 +56,10 @@
 --   record_printout(window, sha)   SECURITY DEFINER, EXECUTE to clearing_job only. It records the sha on
 --                                  that window's snapshot (refusing a different one), and moves the head
 --                                  to it only when that snapshot is the highest-numbered printed one, so a
---                                  stale replay never moves the head backwards. Idempotent.
+--                                  stale replay never moves the head backwards. Idempotent. Records run one
+--                                  at a time (a transaction-scoped advisory lock taken before the snapshot
+--                                  or the maximum is read), so two overlapping records for different windows
+--                                  cannot both read themselves as the highest.
 --
 -- ── COMPATIBILITY: APPLY BEFORE THE CODE ────────────────────────────────────
 --
@@ -126,6 +129,12 @@ BEGIN
   IF p_sha IS NULL OR p_sha !~ '^[0-9a-f]{40}$' THEN
     RAISE EXCEPTION 'record_printout: "%" is not a full commit sha', p_sha;
   END IF;
+  -- ONE RECORD AT A TIME, before anything is read (the review of #1022, F1). Two records for different
+  -- windows lock different snapshot rows, so each could read itself as the highest printed, and the older
+  -- one's upsert, waiting on the head row, would then write over the newer one's. Taken here, the second
+  -- record waits until the first has committed, and its max() sees the first. Transaction-scoped: it is
+  -- released at commit or rollback, and nothing else takes this key.
+  PERFORM pg_advisory_xact_lock(hashtext('record_printout:world-marks'));
   SELECT id, sealed_settlement, world_snapshots.printout_sha AS sha INTO snap
     FROM public.world_snapshots WHERE window_id = p_window FOR UPDATE;
   IF NOT FOUND THEN

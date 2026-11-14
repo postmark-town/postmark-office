@@ -134,9 +134,18 @@ test("setup: the last printed seal (S1, the pinned world's main) and the next (S
   assert.equal(S2.sealed_settlement, S1.sealed_settlement + 1);
 });
 
-test("1 · PRINT: the sealed delta and nothing else — the new mark at its filing, the taken file and its seat gone, the registry as sealed, the fold, one commit", { skip, timeout: 240000 }, async () => {
+test("1 · PRINT, DELAYED PAST A HOUSEHOLD CHANGE: the sealed delta and nothing else — the new mark at its sealed filing, the taken file and its seat gone, the registry as sealed, the fold, one commit", { skip, timeout: 240000 }, async () => {
   const [takenId, takenRow] = TAKEN;
+  // AFTER S2 SEALED, BEFORE IT PRINTS (the review of #1022, Rivet's fix 2): sable leaves Rabbit for a new house,
+  // Otter, in the live register, and the live marks row follows. The seal named Rabbit; the printout files from the
+  // seal, so the delayed print renders exactly the tree a prompt one would have.
+  await owner(async (c) => {
+    await c.query("DELETE FROM households WHERE slug = 'rabbit'");
+    await c.query(`INSERT INTO households (slug, ord, name, residents, since, declared_by, accounts) VALUES ('otter', 1, 'Otter', ARRAY['sable'], '2026-11-03', 'sable', '[]')`);
+    await c.query("UPDATE marks SET household = 'hh:otter' WHERE slug = $1", [NEW]);
+  });
   const out = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 1 }));
+  assert.equal(out.filed_from?.household, "the register sealed with this settlement", "the receipt says where filing came from");
   assert.equal(out.status, "printed", JSON.stringify(out).slice(0, 600));
   assert.equal(out.settlement, S2.sealed_settlement);
   assert.deepEqual(out.written.map((w) => w.id), [NEW]);
@@ -163,6 +172,7 @@ test("1 · PRINT: the sealed delta and nothing else — the new mark at its fili
   assert.ok(!(takenId in after), "its registry row goes with it");
   assert.equal(keys.at(-1), NEW, "the new publication joins at the end, as the sweep's object did");
   assert.deepEqual(after[NEW].path, newPath);
+  assert.equal(after[NEW].household, "rabbit", "registered under the house the seal names, never Otter, where sable lives now");
   for (const [id, r] of Object.entries(FILE.published)) if (id !== takenId) assert.deepEqual(after[id], r, `${id}: kept byte for byte`);
   assert.deepEqual(keys.filter((k) => k !== NEW), Object.keys(FILE.published).filter((k) => k !== takenId), "and in the file's own order");
 });
@@ -231,6 +241,57 @@ test("4 · EVERY SETTLEMENT IS PRINTED: one that changed nothing is an EMPTY pri
   assert.match(git(WORLD, "log", "-1", "--format=%s").trim(), new RegExp(`^settlement: S${S3.sealed_settlement} printout — 0 written, 0 removed, 0 re-framed$`));
   const tag = await asClearing((q) => tagSettlement(q, { world: WORLD, window: WIN + 2, commit: out.commit }));
   assert.equal(tag.status, "tagged", "its own tag on its own commit, never a second number on another settlement's");
+});
+
+// THE GAP CARRIED (the brief's own falsifier: "after an unprinted seal, the next successful delta must include all
+// still-canonical changes since the last successful printout, not only the next window's docket"). A change sealed
+// in a window whose settlement is never printed must reach world main with the next printout, read off the rendered
+// tree and the printout's base: a base taken from the last WINDOW instead of the last PRINTED seal would leave it out.
+const GAP = "sable/the-gap-stone", NEXT = "sable/the-next-lamp";
+const putForward = (win, slug, at, body) => owner(async (c) => {
+  await c.query(
+    `INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, data, slug)
+     VALUES ($1, 'sited', 'sable', 'hh:otter', 'pending', $2, $3, $4::box, 1, $5, $6)`,
+    [win, body, JSON.stringify({ slug, at, extent: EXT }), box(at, EXT), JSON.stringify({ by: "sable", date: "2026-11-04" }), slug]);
+  // a stamp behind it at the town's sha, so the commons rule keeps it standing through every later seal
+  await c.query(`INSERT INTO escrow_projection (town_sha, mark, holder, household, own_household, n, weight_k) VALUES ($1, $2, 'sable', 'hh:otter', 'hh:otter', 1, 1)`, [TOWN_SHA2, slug]);
+});
+
+test("5 · THE GAP CARRIED: a change sealed in a window never printed reaches main with the next printout, measured from the last PRINTED seal", { skip, timeout: 240000 }, async () => {
+  // S3 (window WIN+2, test 4) printed but was never recorded: its retry finds it on main and records it, so S3 is the last printed seal
+  const s3 = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 2 }));
+  assert.equal(s3.status, "already-on-main");
+  await asClearing((q) => recordPrintout(q, { window: WIN + 2, commit: s3.commit }));
+
+  // S4 (window WIN+3): the gap stone locks and seals; its settlement is never printed
+  await putForward(WIN + 3, GAP, { x: -92000, y: -92000 }, "A stone sealed in a window nobody printed.");
+  let r = clear(WIN + 3);
+  assert.equal(r.code, 0, r.out);
+  // S5 (window WIN+4): the next lamp locks and seals; this is the printout that runs
+  await putForward(WIN + 4, NEXT, { x: -93000, y: -93000 }, "A lamp, the next window's own.");
+  r = clear(WIN + 4);
+  assert.equal(r.code, 0, r.out);
+  const [S3, S4, S5] = await read("SELECT window_id, sealed_settlement, printout_sha FROM world_snapshots WHERE window_id = ANY($1) ORDER BY window_id", [[WIN + 2, WIN + 3, WIN + 4]]);
+  assert.equal(S4.printout_sha, null, "S4 is sealed and unprinted: the gap");
+
+  const before = git(WORLD, "rev-parse", "HEAD").trim();
+  const out = await asClearing((q) => printSettlement(q, { world: WORLD, window: WIN + 4 }));
+  assert.equal(out.status, "printed", JSON.stringify(out).slice(0, 600));
+  assert.equal(out.settlement, S5.sealed_settlement);
+  assert.deepEqual([out.base.settlement, out.base.window, out.base.printout_sha], [S3.sealed_settlement, WIN + 2, s3.commit],
+    "measured from the last PRINTED seal (S3), never the last window (S4)");
+  assert.deepEqual(out.written.map((w) => w.id).sort(), [GAP, NEXT].sort(), "the gap's change and the next window's, both");
+
+  // the artifact itself: both files stand on main at their filing, each the one serializer's bytes of its sealed row
+  const touched = git(WORLD, "diff", "--name-only", `${before}..HEAD`).split("\n").filter(Boolean);
+  for (const slug of [GAP, NEXT]) {
+    const path = `WORLD/marks/${slug}/mark.md`;
+    assert.ok(touched.includes(path), `${path} is in the printout's commit: ${touched.join(", ")}`);
+    const [row] = await read("SELECT slug, kind, owner, body, geometry, data FROM marks WHERE slug = $1", [slug]);
+    assert.equal(readFileSync(join(WORLD, path), "utf8"), renderRecord(row), `${slug}: rendered from the seal`);
+  }
+  const registry = JSON.parse(readFileSync(join(WORLD, "WORLD/settlement-publications.json"), "utf8")).published;
+  assert.ok(GAP in registry && NEXT in registry, "and both join the registry as sealed");
 });
 
 test("deltaOf is the sealed difference and nothing else (PURE)", () => {
