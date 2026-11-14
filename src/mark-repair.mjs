@@ -100,7 +100,7 @@ export function repairPlan(args, canonMark) {
 export function repairGate(preview) {
   if (preview?.would !== "amend") return `the office's preview would not amend this mark (${JSON.stringify(preview?.would ?? null)}); nothing written`;
   if (preview.put_forward !== true)
-    return "the amend would stand as a private draft and not publish: the ground it stands on asks a stake the mark's own escrow does not meet, and a repair moves no stamp. Nothing was written; its resident can stake it, or the ground's rule decides";
+    return "the amend would stand as a draft, not the town's canon, and not publish: the ground it stands on asks a stake the mark's own escrow does not meet, and a repair moves no stamp. Nothing was written; its resident can stake it, or the ground's rule decides";
   return null;
 }
 
