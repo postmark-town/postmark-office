@@ -1,0 +1,83 @@
+[Unit]
+Description=Postmark town tools — one sandboxed town tool, for the ferry (POS-994)
+# Started by postmark-town-tool.socket, one instance per connection, with the
+# connection on stdin and stdout. It runs the serve half of
+# tools/town-tool-sandbox.mjs: one of the town's tools/ferry.mjs --no-git,
+# tools/stamp-verify.mjs or tools/quest-progress.mjs --snapshot, chosen by name
+# from a fixed list, run in the town clone. The client keeps the pull, the
+# commit and the push.
+#
+# WHAT IT IS DENIED, AND WHY EACH LINE IS HERE. The three are town repo code,
+# run at every crossing. Measured on POS-994 (2026-11-14), they need TOWN_TZ,
+# git reads, the clone, and writes to WHITE_PAGES (the ferry) and
+# TOWN_BULLETIN/quests.md (the quests), and nothing else.
+#   · User=meepo, not a DynamicUser: the ferry moves meepo's files in the clone.
+#     So it is the mounts below, not the uid, that keep meepo's secrets away;
+#   · no EnvironmentFile: none of the office's keys and tokens. TOWN_TZ comes
+#     over the socket, and the tool sees PATH, HOME and TOWN_TZ only;
+#   · TemporaryFileSystem=/srv:ro: the office tree (the stamp key, the push
+#     credential store, the witness key), the other clones and the world2 lab are
+#     out of sight. The town clone and this one tool come back read-only, and in
+#     the clone only WHITE_PAGES and TOWN_BULLETIN are writable. The clone's .git
+#     stays read-only: a hook or a config line planted there would run in the
+#     client's git push, outside this sandbox;
+#   · TemporaryFileSystem=/etc:ro, with the few files node and git read bound
+#     back: meepo's group can read env files under /etc (measured on POS-994), so
+#     /etc is an allowlist here, not a denylist;
+#   · ProtectHome=tmpfs and the /var, /run, /opt, /mnt, /media and /snap tmpfs:
+#     meepo's home, the backups meepo owns under /var/backups, and any filesystem
+#     socket (AF_UNIX stays open for node) are out of sight;
+#   · PrivateNetwork and RestrictAddressFamilies: no network;
+#   · ProtectSystem=strict and PrivateTmp: beyond the two clone directories it
+#     writes only its own /tmp, and MemoryMax, TasksMax and LimitFSIZE bound it;
+#   · CollectMode=inactive-or-failed: a refused run's instance is unloaded once
+#     it ends, so no failed per-connection instance lingers for the roll-call.
+# MemoryDenyWriteExecute is NOT set: node's JIT needs it.
+
+[Service]
+ExecStart=/usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs serve --clone /srv/postmark-office/town-clone
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+User=meepo
+Group=meepo
+TemporaryFileSystem=/srv:ro
+BindReadOnlyPaths=/srv/postmark-office/tools/town-tool-sandbox.mjs
+BindReadOnlyPaths=/srv/postmark-office/town-clone
+BindPaths=/srv/postmark-office/town-clone/WHITE_PAGES
+BindPaths=/srv/postmark-office/town-clone/TOWN_BULLETIN
+TemporaryFileSystem=/etc:ro
+BindReadOnlyPaths=/etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime
+TemporaryFileSystem=/run:ro
+TemporaryFileSystem=/var:ro
+TemporaryFileSystem=/opt:ro
+TemporaryFileSystem=/mnt:ro
+TemporaryFileSystem=/media:ro
+TemporaryFileSystem=/snap:ro
+ProtectHome=tmpfs
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RuntimeMaxSec=20min
+MemoryMax=2G
+TasksMax=64
+LimitFSIZE=512M
+CollectMode=inactive-or-failed

@@ -106,6 +106,22 @@ WorkingDirectory=/srv/postmark-office
 # outputs only when the sandboxed seal and verify both exit 0; anything else
 # exits 1 here. The stage, the undo, the witness record and this shell's commit
 # are unchanged. The sandbox is deploy/postmark-town-seal@.service.
+# THE TOWN'S TOOLS RUN WITH NONE OF THIS UNIT'S RIGHTS EITHER (POS-994, shape A,
+# Wright 2026-11-14). tools/ferry.mjs, tools/stamp-verify.mjs and
+# tools/quest-progress.mjs --snapshot are town code from the clone's tools/, and
+# measured they need TOWN_TZ, git reads and their own writes in the clone, and
+# no key, no credential and no network. So each runs through
+# tools/town-tool-sandbox.mjs in postmark-town-tool@.service: as meepo, with no
+# env file, no network, /srv, /etc and the homes out of sight, the clone
+# read-only but WHITE_PAGES and TOWN_BULLETIN, and its .git read-only. The ferry
+# runs there --no-git, and the client keeps what needs rights: the pull before,
+# and the commit and push after, with ferry.mjs's own message, push retry and
+# report fields. The client refuses (exit 1, so the undo below puts the clone
+# back) on a symlink in the clone's writable directories, or a change outside
+# what the tool writes. The stage names and the witness record are unchanged.
+# NOT here yet: the town's tools/stamp-mint.mjs below, which must hold the stamp
+# key to sign (POS-994's B, Darko's call), and the owed path's
+# tools/stamp-verify-owed.mjs (store mode only).
 # THE TOWN-LOG DRAIN RIDES FIRST (POS-44 wave 4, the ferry bridge). Flag-on,
 # a join, a paper edit and a sent letter are ROWS in the office's town log, and
 # this is the step that turns them into the record. Three things pin it to this
@@ -188,12 +204,12 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
     /usr/bin/node "$TOWN_CLONE/tools/witness-chain.mjs" owe-open --owed "$WITNESS_OWED" --kind mail-crossing --attempt "$wattempt" \
       || echo "[witness] this crossing could not be opened: its outcome is still owed when it decides" >&2; fi; \
   owed_ok=0; \
-  verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else node tools/stamp-verify.mjs; fi; }; \
+  verify() { if [ "$owed_ok" = 1 ]; then /usr/bin/node /srv/postmark-office/tools/stamp-verify-owed.mjs; else /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs verify --clone "$TOWN_CLONE"; fi; }; \
   git -C "$TOWN_CLONE" reset --hard -q HEAD && \
   git -C "$TOWN_CLONE" clean -fdq -- WHITE_PAGES && \
   wstage=drain && /usr/bin/node /srv/postmark-office/tools/town-drain-run.mjs && \
   git -C "$TOWN_CLONE" push -q && \
-  wstage=ferry && cd "$TOWN_CLONE" && node tools/ferry.mjs --report "$wreport" && \
+  wstage=ferry && cd "$TOWN_CLONE" && /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs ferry --clone "$TOWN_CLONE" --report "$wreport" && \
   wstage=mint && if [ "$STAMP_LINES" = store ]; then \
     if /bin/bash /srv/postmark-office/deploy/town-index-ingest.sh; then \
       node /srv/postmark-office/world2/tools/stamp-mint-run.mjs --append --key /srv/postmark-office/stamp-key.pem --clone "$TOWN_CLONE"; \
@@ -216,7 +232,7 @@ ExecStart=/usr/bin/flock -w 300 /srv/postmark-office/town.lock /bin/sh -c ' \
   wstage=quests && if [ "$STAMP_LINES" = store ]; then \
     node /srv/postmark-office/world2/tools/quest-snapshot-run.mjs --clone "$TOWN_CLONE"; \
   else \
-    node tools/quest-progress.mjs --snapshot; \
+    /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs quests --clone "$TOWN_CLONE"; \
   fi && \
   { git diff --quiet -- TOWN_BULLETIN/quests.md || { \
       git add TOWN_BULLETIN/quests.md && \

@@ -1791,6 +1791,94 @@ seal runs in the ferry again, as before. The socket can stay. To take it away,
 run `sudo systemctl disable --now postmark-town-seal.socket` and remove its two
 unit files.
 
+### The town's tools run in their own sandbox (POS-994, shape A)
+
+The ferry used to run three town tools straight from the clone, as meepo, with
+the office env, the stamp key, the push credential, the network and everything
+else meepo can read on the box: `tools/ferry.mjs`, `tools/stamp-verify.mjs` and
+`tools/quest-progress.mjs --snapshot`. Measured on POS-994 (2026-11-14), they
+need TOWN_TZ, git reads and their own writes in the clone, and nothing else. Now
+each runs through `tools/town-tool-sandbox.mjs <ferry|verify|quests> --clone`,
+which connects to `postmark-town-tool.socket` (meepo only, 0600). Each
+connection starts one `postmark-town-tool@.service`, which runs as meepo, with
+no env file and no network, with `/srv`, `/etc`, the homes, `/var` and `/run`
+out of sight, the clone read-only except `WHITE_PAGES` and `TOWN_BULLETIN`, and
+its `.git` read-only. The ferry runs there `--no-git`. The client does the pull
+before it and the commit and push after it, with ferry.mjs's own message, push
+retry and report fields. It refuses on a symlink in the writable directories, or
+a change outside what the tool writes. The stage names, the undo and the witness
+record are unchanged. The why and the exchange are in the tool's header.
+
+**Not covered here:** the git-mode mint (`tools/stamp-mint.mjs --append --key`),
+which must hold the key, is POS-994's B and Darko's call. Also not covered are
+the owed path's `tools/stamp-verify-owed.mjs` (store mode only) and the keep
+tick's `tools/stamp-verify.mjs --registry` (`deploy/office-keep.sh`).
+
+**Install after POS-988's**, since both replace the ferry unit. Do it by hand,
+away from a crossing (not 23:50–00:40 or 11:50–12:40 UTC), and only after the
+release carrying this change is live, so that
+`/srv/postmark-office/tools/town-tool-sandbox.mjs` exists. The order is the
+socket, then the proof, and only then the ferry unit. A ferry unit that calls a
+missing socket refuses its ferry stage before any mail moves, every crossing.
+
+**1. The socket.**
+```sh
+sudo cp /srv/postmark-office/deploy/postmark-town-tool.socket \
+        /srv/postmark-office/deploy/postmark-town-tool@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now postmark-town-tool.socket
+systemctl show postmark-town-tool.socket -p ActiveState -p Listen    # active, /run/postmark-town-tool.sock (Stream)
+stat -c '%U %a' /run/postmark-town-tool.sock                          # meepo 600
+```
+
+**2. The proof.** It writes nothing in the town clone, and nothing outside its
+own temp directory.
+
+(a) The real verify through the socket, under the lock, as the crossing runs it:
+```sh
+sudo -u meepo flock -w 300 /srv/postmark-office/town.lock \
+  node /srv/postmark-office/tools/town-tool-sandbox.mjs verify --clone /srv/postmark-office/town-clone; echo "exit $?"
+# the town's own "✓ stamp-ledger verified", exit 0
+sudo -u meepo git -C /srv/postmark-office/town-clone status --porcelain   # nothing
+```
+
+(b) A probe under the unit's own settings, as a transient unit. It replaces
+nothing and starts no instance of the template. It prints only whether each
+thing was reachable (an error code, or `ok`), never what it read. The probe file
+is POS-994's (2026-11-14 23:16Z) and is kept on the issue.
+```sh
+d=$(mktemp -d); chmod 755 "$d"   # put the probe there as $d/probe.mjs, mode 644
+args=(); while IFS= read -r l; do args+=(-p "$l"); done < <(grep -E '^[A-Za-z]+=' /etc/systemd/system/postmark-town-tool@.service \
+  | grep -vE '^(ExecStart|StandardInput|StandardOutput|StandardError|CollectMode|BindReadOnlyPaths=/srv/postmark-office/tools/)')
+sudo systemd-run --quiet --wait --pipe --collect "${args[@]}" -p "BindReadOnlyPaths=$d/probe.mjs:/srv/postmark-office/tools/town-tool-sandbox.mjs" \
+  /usr/bin/node /srv/postmark-office/tools/town-tool-sandbox.mjs
+```
+Every secret line must read `ENOENT` (the stamp key, the credential store, the
+office env, the `/etc` env files meepo's group can read, `/var/backups`,
+`/home/meepo`). The clone's `tools`, root, `.git` and `.git/config` must read
+`EROFS` for writing, and `WHITE_PAGES` and `TOWN_BULLETIN` `ok`. TCP must read
+`EAFNOSUPPORT`, and `git rev-parse HEAD` must succeed. Then remove the probe and
+`$d` by name. If (a) is not green or (b) reaches anything, stop here: the ferry
+still runs the tools itself, and nothing has changed for it.
+
+**3. The ferry unit.**
+```sh
+sudo cp -n /etc/systemd/system/postmark-ferry.service /var/backups/postmark-ferry.service.pre-pos994   # the rollback copy; -n keeps the first one
+sudo cp /srv/postmark-office/deploy/postmark-ferry.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+Nothing is started by hand: the next crossing is the first sandboxed one. After
+it, `journalctl -u 'postmark-town-tool@*'` shows `[town-tool] ferry: exit 0`,
+`verify: exit 0` (twice) and `quests: exit 0`. `journalctl -u postmark-ferry`
+shows the town's own ferry lines, then `git: committed — ferry: …` and
+`git: pushed` on a crossing with mail. The witness record names `--stage done`.
+
+**Rollback:** `sudo cp /var/backups/postmark-ferry.service.pre-pos994
+/etc/systemd/system/postmark-ferry.service && sudo systemctl daemon-reload`. The
+three tools run in the ferry again, as before. The socket can stay. To take it
+away, run `sudo systemctl disable --now postmark-town-tool.socket` and remove
+its two unit files.
+
 ### The store mint at the crossing: the ferry's sandbox, then the switch (POS-341, prod)
 
 This is the prod order for `STAMP_LINES=store`. The dev rehearsal's steps 6–8

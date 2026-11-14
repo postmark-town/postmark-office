@@ -394,7 +394,11 @@ export const CROSSING = [
   { phase: "ferry", name: "drain", box: "tools/town-drain-run.mjs",
     run: (ctx) => officeJob(ctx, "tools/town-drain-run.mjs", ["--clone", ctx.t.townClone, "--date", ctx.today, ...(ctx.useFlock ? [] : ["--unlocked"])]),
     commit: (ctx) => `town-log: crossing ${ctx.today} (dev rehearsal ${ctx.run})` },
-  { phase: "ferry", name: "ferry", box: "town:tools/ferry.mjs",
+  // POS-994: on the box the town's ferry, verify and quests run in postmark-town-tool@.service through
+  // tools/town-tool-sandbox.mjs, which serves prod's clone only and fixes their arguments (no --date). The
+  // rehearsal runs the same town tools on dev's clone itself, with the dev office's rights, as before; the
+  // client's own checks and its commit are tested in test/town-tool-sandbox.test.mjs.
+  { phase: "ferry", name: "ferry", box: "tools/town-tool-sandbox.mjs ferry",
     run: (ctx) => townJob(ctx, "tools/ferry.mjs", ["--no-git", "--date", ctx.today]),
     commit: (ctx) => `ferry: crossing ${ctx.today} (dev rehearsal ${ctx.run})` },
   { phase: "ferry", name: "index-before-mint", box: "deploy/town-index-ingest.sh", when: "store", nonFatal: true,
@@ -407,13 +411,13 @@ export const CROSSING = [
     run: (ctx) => officeJob(ctx, "world2/tools/stamp-mint-run.mjs", ["--append", "--key", ctx.stampKey, "--clone", ctx.t.townClone]) },
   { phase: "ferry", name: "mint", box: "town:tools/stamp-mint.mjs", when: "git",
     run: (ctx) => townJob(ctx, "tools/stamp-mint.mjs", ["--append", "--key", ctx.stampKey]) }, // committed after the verify, as the box does
-  { phase: "ferry", name: "verify", box: "town:tools/stamp-verify.mjs", onlyIf: (ctx) => !ctx.mintSkipped,
+  { phase: "ferry", name: "verify", box: "tools/town-tool-sandbox.mjs verify", onlyIf: (ctx) => !ctx.mintSkipped,
     run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", []), commit: "mint: crossing pass" },
   { phase: "ferry", name: "verify-owed", box: "tools/stamp-verify-owed.mjs", onlyIf: (ctx) => !!ctx.mintSkipped,
     run: (ctx) => officeJob(ctx, "tools/stamp-verify-owed.mjs", [], { cwd: ctx.t.townClone }), commit: "mint: crossing pass" },
   { phase: "ferry", name: "ballot", box: "tools/ballot-pass-run.mjs",
     run: (ctx) => officeJob(ctx, "tools/ballot-pass-run.mjs", ["--key", ctx.stampKey]) },
-  { phase: "ferry", name: "verify-ballot", box: "town:tools/stamp-verify.mjs", onlyIf: (ctx) => !ctx.mintSkipped,
+  { phase: "ferry", name: "verify-ballot", box: "tools/town-tool-sandbox.mjs verify", onlyIf: (ctx) => !ctx.mintSkipped,
     run: (ctx) => townJob(ctx, "tools/stamp-verify.mjs", []), commit: "ballot: crossing pass" },
   { phase: "ferry", name: "verify-ballot-owed", box: "tools/stamp-verify-owed.mjs", onlyIf: (ctx) => !!ctx.mintSkipped,
     run: (ctx) => officeJob(ctx, "tools/stamp-verify-owed.mjs", [], { cwd: ctx.t.townClone }), commit: "ballot: crossing pass" },
@@ -421,7 +425,7 @@ export const CROSSING = [
     run: (ctx) => officeJob(ctx, "world2/tools/stamp-lines.mjs", ["--sync", "--clone", ctx.t.townClone]) },
   { phase: "ferry", name: "quests", box: "world2/tools/quest-snapshot-run.mjs", when: "store",
     run: (ctx) => officeJob(ctx, "world2/tools/quest-snapshot-run.mjs", ["--clone", ctx.t.townClone]), commit: "quests: crossing leaderboard" },
-  { phase: "ferry", name: "quests", box: "town:tools/quest-progress.mjs", when: "git",
+  { phase: "ferry", name: "quests", box: "tools/town-tool-sandbox.mjs quests", when: "git",
     run: (ctx) => townJob(ctx, "tools/quest-progress.mjs", ["--snapshot"]), commit: "quests: crossing leaderboard" },
   // POS-988: the seal and its verify run in postmark-town-seal@.service, reached through its socket, as on the box.
   // The socket installs only after the release that carries it is live (DEPLOY.md § The seal runs in its own
