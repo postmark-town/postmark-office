@@ -5435,7 +5435,12 @@ async function leaveMarkAct(worldClone, payload = {}, key = null, { setDown = nu
   // walk's verdict over the ground; nothing here writes or forwards the field.
   if (tier !== undefined) throw bounce(422, "tier: is not a field", "standing is derived from the ground your mark stands on — drop tier and the walk will answer it");
   // A SPARK, as the World answers it (sparkByWorld above: its mark-kind.mjs § isSparkIn over the canon's class index) — asked once
-  const isSpark = klass !== undefined && await sparkByWorld({ kind: String(klass) }, canonForGuards()?.marks ?? []);
+  // Asked only of a class this door does not pick by hand, and never able to change another mark's answer: an unreadable canon or
+  // engine is "not a spark" here, and every refusal it would have caused is left to the door's own later checks, in their order.
+  let isSpark = false;
+  if (klass !== undefined && !HAND_PICKED_CLASSES.includes(String(klass))) {
+    try { isSpark = await sparkByWorld({ kind: String(klass) }, canonForGuards()?.marks ?? []); } catch { isSpark = false; }
+  }
   if (kind === "sited" || kind === "parcel") {
     if (!at || !Number.isFinite(Number(at.x)) || !Number.isFinite(Number(at.y))) throw bounce(422, "sited/parcel marks need at {x,y}", "grid meters east/south of the Origin");
     // A SPARK'S FRAME MAY BE A POINT OR A LINE (POS-1035 frozen frame; Bevel 16:25:14Z): a real single-point room keeps its explicit

@@ -64,7 +64,8 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, eventStakeOn } from "./event-sparks.mjs"; // POS-1035: an event's window, room and who came; its stake
+import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, eventStakeOn } from "./event-sparks.mjs";
+import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
  * The settlements this office has published (ms), where a conversation splits — world.mjs's one reader of them, asked lazily so
@@ -442,7 +443,8 @@ async function viaStakeExec(payload, env) {
     out = await execUnderTownLock(STAKE_EXEC(), JSON.stringify(payload), { ...env, TOWN_CLONE: env.TOWN_CLONE ?? join(dirname(fileURLToPath(import.meta.url)), "..", "town-clone") });
   } catch (e) {
     if (lockTimedOut(e)) throw refuse(LOCK_BUSY.code, LOCK_BUSY.defect, LOCK_BUSY.hint);
-    throw refuse(503, "the event's stake could not be written just now", "nothing was written and no stamp moved — try again shortly", { cause: String(e?.message ?? e).slice(0, 160) });
+    // its words go to the log, never the answer (fault-words.mjs § faultLogged)
+    throw refuse(503, "the event's stake could not be written just now — nothing was written and no stamp moved; try again shortly", faultLogged("the event stake executor tripped", e));
   }
   const result = JSON.parse(String(out).trim().split("\n").at(-1));
   if (result.error) throw refuse(result.error.code ?? 503, result.error.defect, result.error.hint);
