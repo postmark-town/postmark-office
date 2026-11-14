@@ -62,7 +62,7 @@ import { loadRegistryRows } from "./registry-store.mjs";
 import { registryFromRows, pinsFromRows } from "./registry-rows.mjs";
 import { HANDLE_RE, joinBranch, houseForName, houseForAccount, planRegistryJoin, ghFetch } from "./residency.mjs";
 import { mintHousehold, joinHousehold, collectingDrain, NO_DRAIN } from "./ceremony.mjs";
-import { planHouseKey, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
+import { planHouseKey, planHouseKeyBeforeSigning, appendHouseKey, houseKeyBounce, registryWith } from "./house-key.mjs";
 import { penCommit, landOrRefuse } from "./write.mjs";
 import { landSource } from "./arrival-source.mjs"; // POS-770: where a household came from, privately
 import { holdsHand, REGISTRAR_HANDS } from "./named-hand.mjs";
@@ -243,10 +243,14 @@ function tickSince(cursorPath, now) {
 }
 
 // The refusals settleUnderLock would give a hand join that a person must read,
-// asked read-only against the record and the clone. (The house-key judgment signs
-// with the pen's key under the lock and is not asked here: a residual the report
-// names.) Parity with settleUnderLock is asserted in test/settle-join.test.mjs.
-export function handDurableRefusal({ handle, found, card, registry, clone, date }) {
+// asked read-only against the record and the clone, the house-key judgment
+// included as far as the lock asks it BEFORE it looks for the pen's key (AHEAD and
+// SPLIT, house-key.mjs § judgeHouseKeyBeforeSigning, over the same plan). The pen
+// key, the signing and the TODAY replay stay under the lock and are not asked, so
+// TODAY (the weather: the pass holds it for its next tick) is never a refusal here.
+// Parity with settleUnderLock is asserted in test/settle-join.test.mjs.
+// `date` is the town's day, as the pass reckons it, never UTC's.
+export function handDurableRefusal({ handle, found, card, registry, pins = {}, clone, date }) {
   if (reservedHandleRefusal(handle)) return SETTLE_REFUSALS.RESERVED;
   if (ledgerKnowsUnbound(clone, handle, found.ghId)) return SETTLE_REFUSALS.MINTED;
   if (String(cardGithub(card) ?? "").toLowerCase() !== String(found.cardLogin ?? "").toLowerCase()) return SETTLE_REFUSALS.CARD_NOT_AUTHOR;
@@ -255,13 +259,30 @@ export function handDurableRefusal({ handle, found, card, registry, clone, date 
   const byAccount = houseForAccount(registry, found.ghId, found.ghLogin);
   const byName = named ? houseForName(registry, named) : null;
   if (byName && byName !== byAccount) return SETTLE_REFUSALS.OTHER_HOUSE;
-  if (!byAccount) {
-    try {
-      if (planRegistryJoin(registry, { handle, household: named, ghId: found.ghId, ghLogin: found.ghLogin, siblings: [], date })?.action !== "created") return SETTLE_REFUSALS.NO_HOUSE;
-    } catch { return SETTLE_REFUSALS.NO_HOUSE; }
+  // the same plan settleUnderLock makes: the house the join lands in, who is in it
+  // once it lands, and the accounts a newly founded house starts with
+  let slug = byAccount, minted = null;
+  if (!slug) {
+    const siblings = Object.entries(pins).filter(([, p]) => Number(p.id) === Number(found.ghId)).map(([k]) => k);
+    let plan;
+    try { plan = planRegistryJoin(registry, { handle, household: named, ghId: found.ghId, ghLogin: found.ghLogin, siblings, date }); }
+    catch { return SETTLE_REFUSALS.NO_HOUSE; }
+    if (plan?.action !== "created") return SETTLE_REFUSALS.NO_HOUSE;
+    slug = plan.slug;
+    minted = { residents: [...plan.siblings] };
   }
+  const residents = [...new Set([...(minted ? minted.residents : registry.households[slug]?.residents ?? []), handle])];
+  const early = planHouseKeyBeforeSigning(clone, [{ handle, slug, residents }], {
+    date, registry: registryWith(registry, slug, residents, minted ? { accounts: [{ login: found.ghLogin, id: found.ghId }] } : {}),
+  });
+  if (early?.refusal) return early.refusal;
   return null;
 }
+
+// The town's day exactly as the pass reckons it (deploy/settle-pass.mjs § townDate:
+// the calendar day in TOWN_TZ, never UTC's). Repeated here, not imported, because the
+// pass imports this file; the general clock is not refactored (POS-1033).
+const townDateAt = (now) => new Intl.DateTimeFormat("en-CA", { timeZone: process.env.TOWN_TZ ?? "America/New_York" }).format(now);
 
 /**
  * The truthful answer for a merged hand-written join, or null when the door
@@ -280,7 +301,8 @@ export async function handJoinAnswer(pen, handle, { env = process.env, clone, cu
   const rows = await loadRegistryRows(env);
   if (rows === null) return null;
   const registry = registryFromRows(rows);
-  const pin = pinsFromRows(rows)[handle];
+  const pins = pinsFromRows(rows);
+  const pin = pins[handle];
   if (pin) return alreadySettled(handle, pin, registry);
 
   if (String(pr.merged_at) < tick.since) {
@@ -295,7 +317,9 @@ export async function handJoinAnswer(pen, handle, { env = process.env, clone, cu
     if (!c.ok) return null;
     card = Buffer.from(String(c.json?.content ?? ""), "base64").toString("utf8");
   } catch { return null; }
-  if (handDurableRefusal({ handle, found, card, registry, clone, date: now.toISOString().slice(0, 10) })) return null; // a known refusal is never promised away
+  // a known refusal is never promised away, and neither is one the door could not read: a throw (the engine, the ledger) is doubt
+  try { if (handDurableRefusal({ handle, found, card, registry, pins, clone, date: townDateAt(now) })) return null; }
+  catch { return null; }
 
   return {
     settled: false,

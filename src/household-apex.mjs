@@ -243,7 +243,7 @@ const OPERATOR_ACTS = {
     tool: null, residue: null,
     may: async (key) => (await import("./settle-join.mjs")).callerMaySettle(key),
     fields: {
-      properties: { handle: { type: "string", description: "the handle whose join PR the office pen opened and the Registrar merged" } },
+      properties: { handle: { type: "string", description: "the handle whose merged join to settle: a pen join (the office pen opened it from residency/<handle>) is settled here; for a merged hand-written join the answer says whether it is already bound, pending the office's next tick, or passed by the tick without binding, and nothing is written" } },
       required: ["handle"],
     },
   },

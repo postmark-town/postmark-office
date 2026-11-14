@@ -248,6 +248,22 @@ export function houseKeyBounce(refusal, detail = null) {
 }
 
 /**
+ * The two judgments `judgeHouseKey` makes BEFORE the pen's key is so much as
+ * looked for, extracted whole (POS-1033) so a read-only caller asks exactly what
+ * the lock asks: AHEAD (the ledger's tail past today) and SPLIT (the house left
+ * on two keys). Reads the clone, touches no key, signs and replays nothing,
+ * writes nothing. Answers `{ refusal, detail[, splits] }`, or null when neither
+ * refuses; the pen-key check, signing and the TODAY replay stay in `judgeHouseKey`.
+ */
+export function judgeHouseKeyBeforeSigning(clone, lines, { date, registry }) {
+  const tail = ledgerTail(readFileSync(join(clone, LEDGER_REL), "utf8"));
+  if (tail && tail > date) return { refusal: HOUSE_KEY_REFUSALS.AHEAD, detail: `the tail is ${tail}, today is ${date}` };
+  const splits = householdKeySplits(clone, lines, registry);
+  if (splits.length) return { refusal: HOUSE_KEY_REFUSALS.SPLIT, detail: splits.join(" · "), splits };
+  return null;
+}
+
+/**
  * Judge planned lines and sign them, before anything is written: the tail,
  * the split, the pen, the replay. Returns `{ signed, refusal, detail, splits,
  * replay }`; `refusal` is null when the lines may be written.
@@ -255,10 +271,8 @@ export function houseKeyBounce(refusal, detail = null) {
 export function judgeHouseKey(clone, planned, { date, registry }) {
   const lines = planned?.lines ?? [];
   if (!lines.length) return { signed: [], refusal: null };
-  const tail = ledgerTail(readFileSync(join(clone, LEDGER_REL), "utf8"));
-  if (tail && tail > date) return { signed: [], refusal: HOUSE_KEY_REFUSALS.AHEAD, detail: `the tail is ${tail}, today is ${date}` };
-  const splits = householdKeySplits(clone, lines, registry);
-  if (splits.length) return { signed: [], refusal: HOUSE_KEY_REFUSALS.SPLIT, detail: splits.join(" · "), splits };
+  const early = judgeHouseKeyBeforeSigning(clone, lines, { date, registry });
+  if (early) return { signed: [], ...early };
   if (!existsSync(DRAIN_KEY_PATH())) return { signed: [], refusal: HOUSE_KEY_REFUSALS.NO_PEN, detail: DRAIN_KEY_PATH() };
   const signed = signedRegistryLines(clone, lines.map((l) => l.line));
   const replay = replayHolds(clone, { signed, handles: [...new Set(lines.map((l) => l.handle))], date });
@@ -278,6 +292,19 @@ export function planHouseKey(clone, joins, { date, registry }) {
   if (!existsSync(join(clone, LEDGER_REL))) return null;
   const planned = houseKeyLines(joins, { date, keys: currentKeysOf(clone) });
   return { lines: planned.lines, ...judgeHouseKey(clone, planned, { date, registry }) };
+}
+
+/**
+ * `planHouseKey` asked READ-ONLY and only as far as the lock asks before it looks
+ * for the pen's key (POS-1033): the same lines over the same clone, then AHEAD and
+ * SPLIT. Null when the clone carries no ledger, or nothing is planned, or neither
+ * refuses; else `{ refusal, detail }`. It never loads a key.
+ */
+export function planHouseKeyBeforeSigning(clone, joins, { date, registry }) {
+  if (!existsSync(join(clone, LEDGER_REL))) return null;
+  const planned = houseKeyLines(joins, { date, keys: currentKeysOf(clone) });
+  if (!planned.lines?.length) return null;
+  return judgeHouseKeyBeforeSigning(clone, planned.lines, { date, registry });
 }
 
 /**
