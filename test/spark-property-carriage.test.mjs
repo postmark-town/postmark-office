@@ -156,9 +156,10 @@ test("THE SITE'S SPARKS (CORE-82): accepted = standing in marks; a circle's spar
   await mark("seth/y-on-a", "seth", { kind: "spark", recounting: "y", experienced_at: "2026-11-14T20:00:00.000Z", circle: 50101, circle_path: [50101], parent_spark: "pica/x-on-a" });
   await mark("amia/z-on-b", "amia", { kind: "spark", recounting: "z", experienced_at: "2026-11-14T20:00:00.000Z", circle: 50105, circle_path: [50101, 50105] });
   await mark("liv/gone", "liv", { kind: "spark", recounting: "g", experienced_at: "2026-11-14T20:00:00.000Z", circle: 50101, circle_path: [50101] }, "retired");
-  // a spark still waiting on acceptance is a claim, not a mark: never in the collection
+  // a spark still waiting on acceptance is a claim, not a mark: never in the collection. As the pen writes one: its class is
+  // the mark's kind and its slug the whole <by>/<slug> id (world2-claims § claimTxFromJournal)
   await owner.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, stake, data, slug)
-    VALUES ($1, 'mark', 'noe', 'noe-house', 'pending', 'waiting', $2, 1, $3, 'w-pending')`,
+    VALUES ($1, 'spark', 'noe', 'noe-house', 'pending', 'waiting', $2, 1, $3, 'noe/w-pending')`,
     [w.id, JSON.stringify({ at: { x: 0, y: 0 }, extent: { w: 0, h: 0 } }), JSON.stringify({ kind: "spark", circle: 50101, circle_path: [50101] })]);
 
   const a = await S.acceptedSparksOfCircle(owner, 50101);

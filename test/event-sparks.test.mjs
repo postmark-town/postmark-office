@@ -287,3 +287,213 @@ test("legacy: an event scheduled before this shipped (stored with no stake) stay
   assert.equal("stake" in closed, false);
   assert.equal(ledgerText(dir), before, "no line: it never staked, and is not charged now");
 });
+
+// ── THE COMPLETION, on the same fixtures: one spark, 19 home and 1 backing, in one batch and one transaction — or nothing ──
+//
+// The mark road's planner is handed in (completeEvent's `planLeave`): the World pin CI reads does not know the spark class until
+// World #391 is blessed, and the planner's own guards are World's to prove. Everything after it is the office's real road — the
+// spark's act and claim on the candle, its mark lock, the event's receipt FOR UPDATE, and the ledger's landing in the bottle.
+
+const { completeEvent, landedCompletionOf } = await import("../src/event-sparks.mjs");
+const { eventRowAtOffice } = await import("../src/events-store.mjs");
+const { penTransaction } = await import("../src/write.mjs");
+const { townDay } = await import("../src/votes.mjs");
+const { verifyStampLinesVia } = await import("../src/stamp-lines.mjs");
+
+const plannerCalls = [];
+const planLeave = async ({ by, household, slug, body, at, extent, properties, stamps }) => {
+  plannerCalls.push({ by, slug, body, at, extent, properties, stamps });
+  const id = `${by}/${slug}`;
+  return { planned: true, id, put_forward: true, ground_min: 0, entry: {
+    actor: by, household, action: "leave-mark", object: id, cls: "mark",
+    payload: { slug, kind: "spark", by, household, body, at, extent, ...properties, stamps, put_forward: true } } };
+};
+let candleLit = false;
+async function lightTheCandle() {
+  if (candleLit) return;
+  // the claim pen reads the process's own switches (world2-claims § candleEnabled), as the office's does
+  Object.assign(process.env, { WORLD2_PG: "1", WORLD2_PG_URL: store.url("office_api"), WORLD2_CANDLE: "1" });
+  await owner.query("INSERT INTO windows (id, opens_at, closes_at, status) VALUES (1035, now() - interval '1 day', now() + interval '1 day', 'open')");
+  candleLit = true;
+}
+const keyPem = () => readFileSync(KEY_FILE, "utf8");
+const completionEnv = (dir) => ({ ...stakeEnv(dir), WORLD2_CANDLE: "1", STAMP_LINES: "store" });
+/** A staked event posted in the bottle, read back as the store holds it, and the instant after it ended. */
+async function endedEvent(dir, title, { at = null } = {}) {
+  await lightTheCandle();
+  // each bottle is its own town with its own ledger: the store's copy of the lines starts empty for it, as at a town's genesis
+  await owner.query("TRUNCATE stamp_lines");
+  const posted = await postAtTown({ ...eventArgs(title), ...(at ? { place: { at } } : {}) }, keyOf("wright"), { env: completionEnv(dir) });
+  const row = await eventRowAtOffice(posted.post.id, { env: ENV });
+  return { row, after: Date.parse(row.ends) + 60_000 };
+}
+const complete = (dir, row, now, opts = {}) => penTransaction(dir, () =>
+  completeEvent(row, { clone: dir, keyPem: keyPem(), env: completionEnv(dir), now, date: townDay(), planLeave, ...opts }));
+const claimOf = async (id) => (await owner.query("SELECT class, status, stake, claimant FROM claims WHERE slug = $1", [id])).rows;
+const storeVerifies = async (dir) => verifyStampLinesVia(owner, dir);
+
+test("completion: an ended staked event becomes ONE put-forward spark — all 20 come home and the spark's own 1 backs it (19 home), the town's verifier green", async () => {
+  const dir = townInABottle();
+  const { row, after: now } = await endedEvent(dir, "Sorbet finale");
+  assert.equal(await liquidOf(dir, "wright"), 5);
+  const head = git(dir, "rev-parse", "HEAD").trim();
+  const out = await complete(dir, row, now);
+  const slug = row.id.split("/").slice(1).join("/");
+  assert.equal(out.completed, true, JSON.stringify(out));
+  assert.equal(out.spark, `wright/${slug}`, "identity: <host>/<event-slug>");
+  assert.deepEqual(out.stake, { returned: 20, to: "wright", backing: 1, home: 19 });
+  const call = plannerCalls.at(-1);
+  assert.equal(call.body, "Sorbet finale", "the headline is the title");
+  assert.equal(call.stamps, 1);
+  assert.deepEqual(call.extent, { w: 120, h: 120 }, "no conversation at the place: the 60 m radius frame");
+  assert.equal(call.properties.event, row.id);
+
+  const text = ledgerText(dir);
+  assert.match(text, new RegExp(`· stake:post/${row.id} → wright · 20 · for: post-return`));
+  assert.match(text, new RegExp(`· wright → stake:world-mark/wright/${slug} · 1 · via: api`));
+  assert.ok(landedCompletionOf((await import(`${new URL(`file://${join(dir, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`)).parseStampLedger(text), row.id, "wright", 20),
+    "the batch is the pair a retry would recognise");
+  assert.equal(await liquidOf(dir, "wright"), 24, "5 left after the stake, 19 home");
+  assert.notEqual(git(dir, "rev-parse", "HEAD").trim(), head, "the batch was committed");
+  assert.equal(git(dir, "status", "--porcelain").trim(), "");
+  const v = verifies(dir);
+  assert.equal(v.status, 0, `the town's own verifier passes: ${v.stdout}${v.stderr}`);
+  assert.deepEqual((await storeVerifies(dir)).problems, [], "the store's copy of the lines matches the ledger");
+
+  const stored = await postRow(row.id);
+  assert.equal(stored.fields.completed.spark, `wright/${slug}`);
+  assert.deepEqual(stored.fields.stake.returned, { act: stored.fields.completed.act, n: 20, to: "wright" });
+  assert.deepEqual(stored.fields.stake.backing, { spark: `wright/${slug}`, n: 1 });
+  const claims = await claimOf(`wright/${slug}`);
+  assert.equal(claims.length, 1, "exactly one spark claim");
+  assert.equal(claims[0].class, "spark");
+  assert.notEqual(claims[0].status, "draft", "put forward, never a draft");
+});
+
+test("completion: a second tick does nothing — no second spark, no second return — and the pass no longer finds it due", async () => {
+  const dir = townInABottle();
+  const { row, after: now } = await endedEvent(dir, "Sorbet twice");
+  assert.equal((await complete(dir, row, now)).completed, true);
+  const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
+  const slug = row.id.split("/").slice(1).join("/");
+
+  const again = await complete(dir, await eventRowAtOffice(row.id, { env: ENV }), now + 60_000);
+  assert.match(again.held, /not a staked, open event/, "the row it reads is complete");
+  const stale = await complete(dir, row, now + 60_000); // the row as the first tick read it: the ledger and the receipt refuse
+  assert.ok(stale.error || stale.held, JSON.stringify(stale));
+  assert.equal(ledgerText(dir), lines, "no line signed");
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "no commit");
+  assert.equal((await claimOf(`wright/${slug}`)).length, 1);
+  assert.equal((await claimOf(`wright/${slug}-2`)).length, 0, "no second spark under a suffix");
+  const { DUE_EVENTS_SQL } = await import("../deploy/event-sparks-pass.mjs");
+  const due = (await owner.query(DUE_EVENTS_SQL, [new Date(now + 60_000).toISOString()])).rows.map((r) => r.id);
+  assert.ok(!due.includes(row.id));
+});
+
+test("completion is HELD, nothing moved: before its end, when its room cannot be told, when several rooms formed, or when its spark would not go forward", async () => {
+  const dir = townInABottle();
+  // its own place: the record is append-only, and the talk this test adds must not be any other event's
+  const { row, after: now } = await endedEvent(dir, "Sorbet held", { at: { x: 900, y: 900 } });
+  const lines = ledgerText(dir);
+  assert.match((await complete(dir, row, Date.parse(row.ends) - 60_000)).held, /not ended/);
+  // a settlement the office knows that is newer than the window's start: the room cannot be told — never "no conversation"
+  assert.match((await complete(dir, row, now, { edges: [Date.parse(row.ends)] })).held, /room cannot be told/);
+  // two groups talking apart at the place, split by a settlement inside the window: the open Call
+  const doors = Date.parse(row.fields.doors_open ?? row.starts);
+  const say = async (who, at, x) => owner.query(`INSERT INTO acts (at, crossing, actor, action, class, payload, at_anchor, at_dx, at_dy, household)
+    VALUES ($1, 0, $2, 'say', 'voice', $3, 'world', $4, 900, $5)`, [new Date(at), who, JSON.stringify({ text: `${who} here`, place: "the counter" }), x, `${who}-house`]);
+  await say("held-a", doors + 60_000, 900);
+  await say("held-b", doors + 30 * 60_000, 920);
+  const split = await complete(dir, row, now, { edges: [doors - 3_600_000, doors + 10 * 60_000] });
+  assert.match(split.held, /several rooms formed/);
+  assert.equal(split.rooms.length, 2);
+  const edges = [doors - 3_600_000]; // one settlement before the window: the two says are one room, which binds
+  // the mark road keeps it a draft, or refuses it: held, and says why
+  assert.match((await complete(dir, row, now, { edges, planLeave: async () => ({ refused: { defect: "outside the world", hint: "World's guard" } }) })).held,
+    /would not go forward: outside the world/);
+  assert.match((await complete(dir, row, now, { edges, planLeave: async (a) => ({ ...(await planLeave(a)), put_forward: false }) })).held, /kept it a draft/);
+  assert.equal(ledgerText(dir), lines, "no line signed by any held completion");
+  assert.equal((await postRow(row.id)).fields.completed, undefined);
+});
+
+test("completion interrupted after its lines landed and before the store committed: the retry finishes it from the ledger's own batch — no new line, no re-sign", async () => {
+  const dir = townInABottle();
+  const { row, after: now } = await endedEvent(dir, "Sorbet interrupted");
+  const slug = row.id.split("/").slice(1).join("/");
+  // the state such an interruption leaves: the batch signed and committed in the town, nothing in the store
+  const mint = await import(`${new URL(`file://${join(dir, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
+  const ws = await import(`${new URL(`file://${join(dir, "tools", "world-stake.mjs")}`).href}?t=${Date.now()}`);
+  mint.appendSigned(dir, [mint.postReturnLine({ date: townDay(), post: row.id, handle: "wright", n: 20 })], keyPem());
+  assert.equal(ws.worldStakeApply(dir, { handle: "wright", mark: `wright/${slug}`, n: 1, via: "api", date: townDay() }, keyPem()).applied, 1);
+  git(dir, "add", "WHITE_PAGES/stamp-ledger.md");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "landed batch, store rolled back");
+  const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
+  assert.equal(await liquidOf(dir, "wright"), 24);
+
+  const out = await complete(dir, row, now);
+  assert.equal(out.completed, true, JSON.stringify(out));
+  assert.equal(out.spark, `wright/${slug}`, "the ledger's spark, followed");
+  assert.match(out.recovered, /already in the ledger/);
+  assert.equal(ledgerText(dir), lines, "not re-signed: the ledger is byte for byte the same");
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "no new commit");
+  assert.equal(await liquidOf(dir, "wright"), 24, "19 home once, 1 backing once");
+  assert.deepEqual((await storeVerifies(dir)).problems, [], "the store now holds the lines the town already had");
+  assert.equal((await claimOf(`wright/${slug}`)).length, 1);
+  assert.equal((await postRow(row.id)).fields.completed.spark, `wright/${slug}`);
+});
+
+test("completion never adopts or guesses: a return that is not its batch is refused, a ledger's spark id already held is refused, and a fresh id taken is suffixed", async () => {
+  // a foreign return: the stake came home without its backing — not this completion's batch
+  const dir = townInABottle();
+  const { row, after: now } = await endedEvent(dir, "Sorbet foreign");
+  const mint = await import(`${new URL(`file://${join(dir, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
+  mint.appendSigned(dir, [mint.postReturnLine({ date: townDay(), post: row.id, handle: "wright", n: 20 })], keyPem());
+  git(dir, "add", "WHITE_PAGES/stamp-ledger.md");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "a return alone");
+  let lines = ledgerText(dir);
+  const foreign = await complete(dir, row, now);
+  assert.equal(foreign.error?.code, 503, JSON.stringify(foreign));
+  assert.match(foreign.error.defect, /not as this completion's batch/);
+  assert.equal(ledgerText(dir), lines);
+  assert.equal((await postRow(row.id)).fields.completed, undefined);
+
+  // the ledger's batch names a spark id this office already holds as another claim: refused, never adopted
+  const dir2 = townInABottle();
+  const two = await endedEvent(dir2, "Sorbet taken");
+  const slug2 = two.row.id.split("/").slice(1).join("/");
+  const ws = await import(`${new URL(`file://${join(dir2, "tools", "world-stake.mjs")}`).href}?t=${Date.now()}`);
+  const mint2 = await import(`${new URL(`file://${join(dir2, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
+  mint2.appendSigned(dir2, [mint2.postReturnLine({ date: townDay(), post: two.row.id, handle: "wright", n: 20 })], keyPem());
+  ws.worldStakeApply(dir2, { handle: "wright", mark: `wright/${slug2}`, n: 1, via: "api", date: townDay() }, keyPem());
+  git(dir2, "add", "WHITE_PAGES/stamp-ledger.md");
+  git(dir2, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-q", "-m", "landed batch");
+  await owner.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, slug)
+    VALUES (1035, 'sited', 'wright', 'solo:wright', 'pending', 'A bench.', '{}', box(point(1,1), point(2,2)), 0, $1)`, [`wright/${slug2}`]);
+  lines = ledgerText(dir2);
+  const taken = await complete(dir2, two.row, two.after);
+  assert.equal(taken.error?.code, 503, JSON.stringify(taken));
+  assert.match(taken.error.defect, /already holds as another mark or claim/);
+  assert.equal(ledgerText(dir2), lines);
+  assert.equal((await claimOf(`wright/${slug2}`)).length, 1, "the other claim is untouched and no spark joined it");
+
+  // a fresh completion whose id is already someone's claim takes the first unused suffix
+  const dir3 = townInABottle();
+  const three = await endedEvent(dir3, "Sorbet suffix");
+  const slug3 = three.row.id.split("/").slice(1).join("/");
+  await owner.query(`INSERT INTO claims (window_id, class, claimant, household, status, body, geometry, bbox, stake, slug)
+    VALUES (1035, 'sited', 'wright', 'solo:wright', 'pending', 'A lamp.', '{}', box(point(1,1), point(2,2)), 0, $1)`, [`wright/${slug3}`]);
+  const suffixed = await complete(dir3, three.row, three.after);
+  assert.equal(suffixed.spark, `wright/${slug3}-2`, JSON.stringify(suffixed));
+  assert.equal((await claimOf(`wright/${slug3}-2`))[0]?.class, "spark");
+});
+
+test("the pass: a stamp ledger with lines nobody committed is not touched (exit 3); no arguments is usage (exit 2)", async () => {
+  const { main } = await import("../deploy/event-sparks-pass.mjs");
+  const dir = townInABottle();
+  writeFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), `${ledgerText(dir)}- uncommitted\n`);
+  const quiet = console.error; console.error = () => {};
+  try {
+    assert.equal(await main(["--town", dir, "--key", KEY_FILE], ENV), 3);
+    assert.equal(await main([], ENV), 2);
+  } finally { console.error = quiet; }
+});

@@ -220,14 +220,13 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   const until = Math.min(window.to, now);
   if (until < window.from) return null; // doors not open yet: nothing to tell
   const scoped = { from: window.from, to: until };
-  const [{ rows: sayRows }, { rows: markRows }, { rows: actRows }] = await Promise.all([
-    client.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
-                   WHERE action = ANY($1) AND at >= $2 AND at <= $3 ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS, iso(scoped.from), iso(scoped.to)]),
-    client.query(talk.ANCHOR_MARKS_SQL),
-    client.query(`SELECT id, at, action, household, at_anchor, at_dx, at_dy FROM acts
+  // one client, one query at a time (pg queues concurrent queries on a client, and is retiring that)
+  const { rows: sayRows } = await client.query(`SELECT id, at, actor, action, at_anchor, at_dx, at_dy, payload FROM acts
+                   WHERE action = ANY($1) AND at >= $2 AND at <= $3 ${talk.VOICE_ORDER_SQL}`, [talk.VOICE_ACTIONS, iso(scoped.from), iso(scoped.to)]);
+  const { rows: markRows } = await client.query(talk.ANCHOR_MARKS_SQL);
+  const { rows: actRows } = await client.query(`SELECT id, at, action, household, at_anchor, at_dx, at_dy FROM acts
                    WHERE action = ANY($1) AND household IS NOT NULL AND at >= $2 AND at <= $3 AND ${publicActSql()}
-                   ORDER BY at, id`, [PRESENCE_ACTS, iso(scoped.from), iso(scoped.to)]),
-  ]);
+                   ORDER BY at, id`, [PRESENCE_ACTS, iso(scoped.from), iso(scoped.to)]);
   const centres = talk.anchorCentres(markRows);
   const centreOf = (id) => centres.get(id) ?? null;
   // WLD-74: a say spoken inside a dungeon room is not on a public read, and so not in an event's public room either
@@ -304,9 +303,8 @@ export async function eventSparkOf(q, row) {
   if (!id) return null;
   const { rows: [m] } = await q.query(`${STANDING_SPARKS_SQL} AND slug = $1`, [String(id)]);
   if (m) return sparkView(m);
-  const [by, ...leaf] = String(id).split("/");
   const { rows: [c] } = await q.query(
-    "SELECT status FROM claims WHERE claimant = $1 AND slug = $2 AND status <> 'draft' ORDER BY submitted_at DESC LIMIT 1", [by, leaf.join("/")]);
+    "SELECT status FROM claims WHERE slug = $1 AND status <> 'draft' ORDER BY submitted_at DESC LIMIT 1", [String(id)]);
   return { id: String(id), accepted: false, status: c?.status ?? "unknown" };
 }
 
@@ -434,12 +432,11 @@ export function landedCompletionOf(entries, post, by, n) {
 /** Is a mark id free in every place an identity lives? (`q` holds the host household's keys, so its drafts are seen.) */
 async function sparkIdFree(q, by, slug) {
   const id = `${by}/${slug}`;
-  const [{ rows: m }, { rows: c }, { rows: a }] = await Promise.all([
-    q.query("SELECT 1 FROM marks WHERE slug = $1 LIMIT 1", [id]),
-    q.query("SELECT 1 FROM claims WHERE claimant = $1 AND slug = $2 LIMIT 1", [by, slug]),
-    q.query("SELECT 1 FROM acts WHERE object = $1 AND class = 'mark' LIMIT 1", [id]),
-  ]);
-  return !m.length && !c.length && !a.length;
+  // one query at a time on the one client; a claim's slug is the whole <by>/<slug> id (world2-claims § claimTxFromJournal)
+  for (const sql of ["SELECT 1 FROM marks WHERE slug = $1 LIMIT 1", "SELECT 1 FROM claims WHERE slug = $1 LIMIT 1",
+    "SELECT 1 FROM acts WHERE object = $1 AND class = 'mark' LIMIT 1"])
+    if ((await q.query(sql, [id])).rows.length) return false;
+  return true;
 }
 async function freeSparkSlug(q, by, base) {
   if (await sparkIdFree(q, by, base)) return base;
@@ -447,7 +444,8 @@ async function freeSparkSlug(q, by, base) {
   return null;
 }
 
-export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api" }) {
+/** `planLeave` is the mark road's planner (world.mjs § planSparkLeave); a test hands its own where the World pin lacks the class. */
+export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api", planLeave = null }) {
   const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
   try {
     if (!row?.fields?.stake || row.fields.stake.returned || row.fields.completed) return held("not a staked, open event");
@@ -499,9 +497,9 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     const sparkId = `${by}/${slug}`;
 
     // 2 · the spark, judged by the mark road's own leave, written by nobody yet
-    const world = await import("./world.mjs");
+    const planner = planLeave ?? (await import("./world.mjs")).planSparkLeave;
     const decl = sparkDeclaration(row, evidence);
-    const leave = await world.planSparkLeave({ by, household: row.household, slug, body: String(row.title), ...decl, stamps: EVENT_SPARK_BACKING });
+    const leave = await planner({ by, household: row.household, slug, body: String(row.title), ...decl, stamps: EVENT_SPARK_BACKING });
     if (leave?.refused) return held(`its spark would not go forward: ${leave.refused.defect}`, { hint: leave.refused.hint });
     if (!leave?.planned || leave.put_forward !== true) return held("its spark would not go forward with its 1 stamp (the mark road kept it a draft)");
     const prepared = await journal.prepareActFlipped(leave.entry);
