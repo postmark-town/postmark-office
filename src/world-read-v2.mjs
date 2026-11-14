@@ -321,7 +321,9 @@ export const SAID_MAX = 140;
 export function heardBlock(voices = []) {
   return voices.slice(-HEARD_CAP).map((v) => {
     const said = String(v.said ?? "");
-    return { from: v.handle, standing: standingOf(v.handle), said: said.length > SAID_MAX ? `${said.slice(0, SAID_MAX - 1).trimEnd()}…` : said, ago: v.ago };
+    // POS-1035 (call 24): a heard line may carry its say's id, so a glance can answer it (reply_to) or open its circle — optional, additive
+    return { from: v.handle, standing: standingOf(v.handle), said: said.length > SAID_MAX ? `${said.slice(0, SAID_MAX - 1).trimEnd()}…` : said, ago: v.ago,
+      ...(v.id != null ? { id: v.id } : {}) };
   });
 }
 

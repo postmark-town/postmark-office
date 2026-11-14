@@ -59,7 +59,7 @@ export function carriedProperties(klass, properties, own) {
       return no(`${k} is the record's own field, not a property of ${klass}`, k === "parent" ? "a mark's parent is its containment; a spark's own link is properties.parent" : "send it as itself, outside properties");
     if (!names.has(k))
       return no(`class ${klass} has no property "${k}"`, names.size ? `its own properties: ${[...names].sort().join(", ")}` : `class ${klass} declares no properties of its own in the law`);
-    if (v === undefined || v === null) continue;
+    if (v === undefined || v === null || v === "") continue; // nothing to write: the record writes no empty line (mark-record § markRecord)
     const lost = recordLoss(v);
     if (lost) return no(`properties.${k} would not read back whole from the town's record: ${lost}`,
       "the record is one line per field (the World's marks-fold.mjs § parseRecord); send the value in a form that line keeps, or leave it out");
@@ -76,7 +76,10 @@ export function carriedProperties(klass, properties, own) {
  * the reason, or null when the value round-trips. Refused at the door, never written to be lost silently (WLD-41's rule).
  */
 export function recordLoss(v) {
-  if (typeof v === "number" || typeof v === "boolean") return null;
+  // a number survives only in the spelling the reader turns back into one (no exponent, no NaN/Infinity); the reader never
+  // makes a boolean, so true/false would come back as text
+  if (typeof v === "number") return /^-?\d+(\.\d+)?$/.test(String(v)) ? null : `${String(v)} is not read back as the same number`;
+  if (typeof v === "boolean") return "a true/false is read back as text";
   if (typeof v === "string") {
     if (/[\r\n]/.test(v)) return "a line break ends the field";
     if (v.includes("#")) return "a # is read as the start of a comment, and everything after it is lost";

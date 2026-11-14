@@ -60,6 +60,21 @@ test("THE ROUND TRIP (WLD-173 Q2): the office's writer, read back by the World's
   assert.equal("tier" in back, false);
 });
 
+test("values that LOOK risky but read back whole are carried: opaque ids, exponent-free decimals, words that are not numbers, a mid-text bracket", () => {
+  const keep = {
+    room: "t1794686460000-pica", event: "pica/sorbet-opening", parent: "pica/the-first-sorbet",
+    recounting: "true", image_prompt: "1e5 lemons, 3.5 metres of counter, and [a toast] mid-sentence", circle: -0.5, acts: [1, "2", { k: "v" }],
+    picture: "https://example.invalid/sorbet.jpg?w=640&h=480", experienced_at: "2026-11-14T19:30:00.000Z",
+  };
+  const fields = S.carriedProperties("spark", keep, SPARK_PROPS).fields;
+  const text = markRecord({ kind: "spark", by: "a", date: "2026-11-14", ...fields }, "b");
+  assert.deepEqual(fold.lossyValues(text), []);
+  const back = fold.parseRecord(text, "x.md");
+  for (const [k, v] of Object.entries(fields)) assert.deepEqual(back[k], v, `${k}: value and type`);
+  assert.equal(typeof back.recounting, "string", "the word true stays a word");
+  assert.deepEqual(S.carriedProperties("spark", { picture: "" }, SPARK_PROPS), { fields: {} }, "an empty text writes nothing, as null does (the record writes no empty line)");
+});
+
 test("the round trip's EXACT INCOMPATIBILITIES are refused at the door, by field, never written to be lost", () => {
   const cases = [
     ["recounting", "we sang #3 twice", /a # is read as the start of a comment/],
@@ -70,6 +85,15 @@ test("the round trip's EXACT INCOMPATIBILITIES are refused at the door, by field
     ["recounting", "[an aside]", /read back as a list, or refused by the World's lint/],
     ["recounting", " padded ", /trimmed/],
     ["present", ["pica#house"], /a # inside it/],
+    // Bevel 16:32:27Z: numeric and JSON coercion, opaque ids, URL fragments
+    ["event", "007", /number-shaped/],
+    ["room", "-12.5", /number-shaped/],
+    ["recounting", "{\"toast\": 1}", /starts with \{/],
+    ["recounting", "[1, 2]", /read back as a list/],
+    ["picture", "https://example.invalid/a.jpg#frag", /a # is read/],
+    ["circle", 1e21, /is not read back as the same number/],
+    ["circle", Number.NaN, /is not read back as the same number/],
+    ["acts", true, /a true\/false is read back as text/],
   ];
   for (const [k, v, re] of cases) {
     const r = S.carriedProperties("spark", { [k]: v }, SPARK_PROPS);

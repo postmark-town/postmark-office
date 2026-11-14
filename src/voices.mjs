@@ -671,6 +671,7 @@ export function createVoices({
     return heard.slice(-cap).map((v) => ({
       handle: v.handle, standing: standingOf(v.handle), said: v.text, ago: agoWords(t - v.at),
       distance: distanceWords(distM(v.heardFrom ?? v, at)), at_ms: v.at,
+      ...(v.id != null ? { id: v.id } : {}), // POS-1035: the say's id, optional and additive (call 24)
     }));
   }
 
@@ -685,7 +686,7 @@ export function createVoices({
   function earshotSnapshot() {
     const t = now();
     if (memo && t - memo.t >= 0 && t - memo.t < EARSHOT_MEMO_MS) return memo.p;
-    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}) }, x, y, structural })) }));
+    const p = snapshot(t, { clusters: false }).then((snap) => ({ t, audible: snap.audible.map(({ v, x, y, structural }) => ({ v: { handle: v.handle, text: v.text, at: v.at, x: v.x, y: v.y, aboard: Boolean(v.aboard), ...(v.room ? { room: v.room } : {}), ...(v.id != null ? { id: v.id } : {}) }, x, y, structural })) }));
     const mine = { t, p };
     memo = mine;
     p.catch(() => { if (memo === mine) memo = null; });

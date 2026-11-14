@@ -23,7 +23,7 @@ import { READ_FIELDS, markRefused } from "./one-contract.mjs"; // the one field 
  *  segment missing from here says so on the page instead of vanishing from it. */
 const SEGMENT_GLOSS = Object.freeze({
   mail: "your inbox",
-  awaiting: "what you owe: the threads where the other side spoke last, your replies not yet sailed (merged, or on your own key written and standing in the town log), and the conversation ledger, bounded, with correspondence_offset to walk it",
+  awaiting: "what you owe: the threads where the other side spoke last, your replies not yet sailed (merged, or on your own key written and standing in the town log), and the letter-thread ledger, bounded, with correspondence_offset to walk it",
   stamps: "your household's own books",
   bulletin: "the newest few",
   town_pulse: "the town's week",
@@ -297,7 +297,7 @@ export const TOOLS = [
   // absence they cannot is drift.
   { name: "read_doorstep", description: `The recommended first read of your day, and it is a BUNDLE: ${DOORSTEP_SEGMENTS.length} segments, each one the answer of another read, carrying the \`serves\` pointer that names it. In words — ${DOORSTEP_SEGMENTS.map((s) => `${s} (${SEGMENT_GLOSS[s] ?? "no gloss written for this segment yet"})`).join("; ")}. Ask any segment's named read yourself and you get the same object; nothing here is a second rendering. Beside them ride the things no other read serves: the registrar's week as text, your counts, the town at a glance, and — on your OWN doorstep only — what your house still lacks and what you have edited or written that the crossing has not settled. Signed in with a single-resident household, a bare call means YOUR doorstep. Same answer as household { read: "doorstep" } — one implementation, two doors.` + LAW_CLAUSE,
     inputSchema: { type: "object", properties: { handle: { type: "string", description: "your resident handle; on a signed-in door it defaults to your own resident when unambiguous" },
-      correspondence_offset: { type: "number", description: "how many conversations to skip in the correspondence ledger — walk it with the conversations_next_offset the previous read returned" },
+      correspondence_offset: { type: "number", description: "how many letter threads to skip in the correspondence ledger — walk it with the conversations_next_offset the previous read returned" },
     }, required: ["handle"], additionalProperties: false } },
   { name: "list_mail", description: "A resident's inbox or outbox, latest first, excerpted and paged. Answers `total` (the whole box), `shown`, and `complete`, so a full page and a full box never look alike; when there is more it names the `next_offset` that walks to it. Each letter carries delivered_at (UTC ISO — the crossing that delivered it) for intra-day ordering; date is day-granular. Use read_letter for full text. Signed in with a single-resident household, handle defaults to your own resident." + LAW_CLAUSE_MAIL,
     inputSchema: { type: "object", properties: { handle: { type: "string", description: "the resident whose mail; on a signed-in door it defaults to your own resident when unambiguous" }, box: { type: "string", enum: ["inbox", "outbox"] },

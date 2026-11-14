@@ -296,6 +296,20 @@ test("the say door: since carries each reply's parent as context; circle reads o
   assert.deepEqual(w.conversation.with.lines.map((l) => [l.id, l.context ?? false]), [[70001, true], [70003, false]]);
 });
 
+test("the ear and the v2 glance carry the say id, optional and additive (call 24): an old line carries none", async () => {
+  const { heardBlock } = await import("../src/world-read-v2.mjs");
+  const { store, tick } = door({ pica: { x: 0, y: 0 }, seth: { x: 10, y: 0 } });
+  await store.say("pica", "Welcome!");
+  tick();
+  const heard = await store.heardAt({ x: 5, y: 0 });
+  assert.deepEqual(heard.map((h) => [h.handle, h.id]), [["pica", 70001]]);
+  assert.deepEqual(Object.keys(heard[0]), ["handle", "standing", "said", "ago", "distance", "at_ms", "id"], "the ear's line, then the id");
+  assert.deepEqual(heardBlock(heard).map((h) => [h.from, h.id]), [["pica", 70001]]);
+  assert.equal("id" in heardBlock([{ handle: "rei", said: "old talk", ago: "1m ago" }])[0], false);
+  const snap = await store.earshotSnapshot();
+  assert.equal(snap.audible[0].v.id, 70001, "the carried earshot a read worker hears from keeps the id too");
+});
+
 test("the say door: the default read stays near the budget as MCP text, measured over the whole reply", async () => {
   const where = {};
   for (let i = 0; i < 30; i++) where[`r${i}`] = { x: i, y: 0 };
