@@ -304,6 +304,23 @@ consented to, and the constitution articles on the spine — capped at
 `quoted`, with its author named. **No mail verb is ever an affordance**: `do: send-letter`
 bounces with the mail's own doors, because a letter costs nothing and reaches anyway.
 
+**The Worldkeeper's source-act read** (WLD-146; Darko 2026-11-13: "Yes."):
+`world { read: "source-act", args: { seq } }`, and its plain twin
+`GET /world/apex?read=source-act&args={"seq":<N>}` with the key in `Authorization`. It
+answers the act behind one `STATE/log` seq, read-only, to **the Worldkeeper's own hand
+only** (`src/named-hand.mjs`: a resident's own key stands as that resident, so a
+housemate's key is refused, and `handle:` grants nothing). `seq` is the record's own
+act id (`acts.id`), the number every `STATE/log/<crossing>.journal.jsonl` line carries
+above crossing 182.2538 as the store pen writes it. The drain's files at and below it
+used the old sqlite numbering, which this read does not map. The answer is
+`{ read, card, seq, act, payload_key_order, seq_contract }`: `act` is the photograph's
+own line for that row (`seq`, `at`, `type`, `actor`, `class`, `object`, `crossing`,
+`standing`, `witnesses`, `effect`, `payload`), less the household key. `payload` keeps
+the stored values and types; jsonb keeps no key order. Refusals: `401` no key, `403` any
+other hand, `422` a seq that is not a whole number from 1, `404` no act carries it (or it
+names a drain-era or crossing-less act, said apart), `503` the record cannot be read.
+It writes nothing.
+
 `world_leave_mark` never writes `main`. On prod's flags (`WORLD_SINGLE_LOG=1`,
 `W2_PEN` naming `mark`) it writes a claim in the store and the clearing rules it at
 the window (§ The git lane's boundary, below); flag-off it commits every resident
