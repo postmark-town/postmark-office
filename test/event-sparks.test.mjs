@@ -168,7 +168,7 @@ test("the lasting list: every ended event past the calendar's week, newest end f
 // pay again; an interrupted act rolls back its coupled changes (no row, no line, no commit); a legacy (switch-off) event stays free.
 
 const { generateKeyPairSync } = await import("node:crypto");
-const { mkdirSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+const { mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync } = await import("node:fs");
 const { join, resolve, dirname } = await import("node:path");
 const { execFileSync, spawnSync } = await import("node:child_process");
 const { fileURLToPath } = await import("node:url");
@@ -517,4 +517,24 @@ test("the pass: a stamp ledger with lines nobody committed is not touched (exit 
     assert.equal(await main(["--town", dir, "--key", KEY_FILE], ENV), 3);
     assert.equal(await main([], ENV), 2);
   } finally { console.error = quiet; }
+});
+
+test("the pass never signs onto a RED ledger: with an event due it is judged by the mint's own arrival check and refused (exit 4); a quiet tick runs no verify", async () => {
+  const { main } = await import("../deploy/event-sparks-pass.mjs");
+  const dir = townInABottle();
+  appendFileSync(join(dir, "WHITE_PAGES", "stamp-ledger.md"), "- 2026-11-14 · a line no key signed · wright → ada · 3\n");
+  git(dir, "-c", "user.name=fixture", "-c", "user.email=fixture@test.invalid", "commit", "-qam", "a red line, committed");
+  assert.notEqual(verifies(dir).status, 0, "the fixture ledger is red to the town's own verifier");
+  const lines = ledgerText(dir), head = git(dir, "rev-parse", "HEAD").trim();
+  const quiet = [console.error, process.stderr.write]; console.error = () => {}; process.stderr.write = () => true;
+  try {
+    assert.equal(await main(["--town", dir, "--key", KEY_FILE], ENV), 0, "nothing due: the ledger is not judged at all");
+    await owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+      VALUES ('wright/red-ledger-night', 'event', 'Red ledger night', '', 'wright', 'wright-house', NULL, 10, 20, $1, $2, 'announced', $3, 0, 1, 1)`,
+      [new Date(Date.now() - 7_200_000), new Date(Date.now() - 3_600_000), JSON.stringify({ doors_open: new Date(Date.now() - 7_200_000).toISOString(), stake: { n: 20, by: "wright" } })]);
+    assert.equal(await main(["--town", dir, "--key", KEY_FILE], ENV), 4, "an event due on a red ledger: refused");
+  } finally { [console.error, process.stderr.write] = quiet; }
+  assert.equal(ledgerText(dir), lines, "nothing signed");
+  assert.equal(git(dir, "rev-parse", "HEAD").trim(), head, "nothing committed");
+  assert.equal((await postRow("wright/red-ledger-night")).fields.completed, undefined, "the event waits for a green ledger");
 });

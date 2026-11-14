@@ -1,6 +1,6 @@
 // event-sparks-pass.mjs — the keeping tick's step that turns a staked event that has ended into its spark (POS-1035; call 22).
 //
-//   node deploy/event-sparks-pass.mjs --town <clone> --key <pem> [--world <clone>]
+//   node deploy/event-sparks-pass.mjs --town <clone> --key <pem> [--world <clone>] [--registry <file>]
 //   node deploy/event-sparks-pass.mjs --town <clone> --dry-run
 //
 // ── WHAT IT DOES ─────────────────────────────────────────────────────────────
@@ -23,11 +23,18 @@
 // UPDATE, so a second tick finds it complete and does nothing. An event whose room cannot be told, or where several rooms formed
 // (an open Call), is HELD: named in the output, nothing moved, asked again next tick.
 //
-// Exit: 0 every due event completed or held; 1 a completion was refused (non-fatal, the tick goes on); 2 usage; 3 a dirty ledger.
+// ── NEVER ONTO A RED LEDGER ──────────────────────────────────────────────────
+//
+// When an event is due, the ledger is first judged by the mint's own arrival check (tools/stamp-verify-owed.mjs: owed mints and
+// settlements are not red; anything else the town verifier finds is). A red ledger is the mint's refusal too, and no completion
+// signs onto it (exit 4). Only when something is due: a quiet tick costs no verify of its own (the tick's lock hold stays as it was).
+//
+// Exit: 0 every due event completed or held; 1 a completion was refused (non-fatal, the tick goes on); 2 usage; 3 a dirty ledger;
+// 4 a red ledger.
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -43,7 +50,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const keyPath = arg(argv, "--key");
   const dry = argv.includes("--dry-run");
   if (!town || (!keyPath && !dry)) {
-    console.error("usage: node deploy/event-sparks-pass.mjs --town <clone> --key <pem> [--world <clone>] | --town <clone> --dry-run");
+    console.error("usage: node deploy/event-sparks-pass.mjs --town <clone> --key <pem> [--world <clone>] [--registry <file>] | --town <clone> --dry-run");
     return 2;
   }
   if (!existsSync(join(town, "WHITE_PAGES", "stamp-ledger.md"))) { console.error(`no stamp ledger under ${town}`); return 2; }
@@ -58,6 +65,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const due = (await officeRead((q) => q.query(DUE_EVENTS_SQL, [new Date(now).toISOString()]), { env })).rows.map(rowOf);
   if (dry) { for (const r of due) console.log(JSON.stringify({ event: r.id, due: true, ends: r.ends })); return 0; }
   if (!due.length) return 0;
+  const registry = arg(argv, "--registry");
+  const verify = spawnSync(process.execPath, [join(HERE, "..", "tools", "stamp-verify-owed.mjs"), "--repo", town, ...(registry ? ["--registry", registry] : [])],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  if (verify.status !== 0) {
+    process.stderr.write(`${verify.stdout ?? ""}${verify.stderr ?? ""}`);
+    console.error(`[event-sparks] the stamp ledger is red (the verify above names the line) — ${due.length} due event(s) wait; no completion signs onto it`);
+    return 4;
+  }
 
   const { completeEvent } = await import("../src/event-sparks.mjs");
   const { penTransaction } = await import("../src/write.mjs");

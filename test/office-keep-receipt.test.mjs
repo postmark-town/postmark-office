@@ -375,6 +375,7 @@ const SOFT = [
   // POS-1035: the event-sparks pass refused (a completion it could not finish), or met a ledger nobody committed (exit 3)
   ["sparks", { STUB_FAIL: "sparks" }, { sparks: "refused:exit:7" }],
   ["sparks (a ledger with lines nobody committed: skipped, asked again next tick)", { STUB_SPARKS_RC: "3" }, { sparks: "skip:prereq:clean_ledger" }],
+  ["sparks (an event due on a red ledger: refused as the mint refuses it)", { STUB_SPARKS_RC: "4" }, { sparks: "refused:ledger-red" }],
   // a failed run prints no soft-step lines, so carried and amends never ran
   ["settlements", { STUB_FAIL: "settlements" }, { settlements: "refused:exit:7", carried: "notrun", chests: "notrun", amends: "notrun", drops: "notrun", endings: "notrun" }],
   // POS-612: each soft step's failure leaves the run's exit 0 and settlements ok,
@@ -416,10 +417,9 @@ test("mint · a ledger that arrives red: mint refused ledger-red (exit 0 is not 
   assert.deepEqual(steps(receipt(fx)), {
     ...GREEN, mint: "refused:ledger-red", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
     verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
-    sparks: "refused:ledger-red", // POS-1035: the same arrival check, so no completion signs onto a ledger the mint would not
   });
-  // the second verify is the sparks step's own arrival check; the pass itself never runs
-  assert.deepEqual(calls(fx).slice(0, 7), ["registry", "settle", "standing", "gangway", "verify", "verify", "settlements"]);
+  // POS-1035: the sparks pass runs (nothing is due here, so it judges no ledger; with an event due it refuses a red one, exit 4)
+  assert.deepEqual(calls(fx).slice(0, 7), ["registry", "settle", "standing", "gangway", "verify", "sparks", "settlements"]);
   assert.ok(published(fx));
 });
 
