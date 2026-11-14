@@ -158,16 +158,18 @@ const CONTEXT_KEYS = ["standing", "ground", "law", "teach", "set_downs_awaiting"
  *  - no `part`, and it does not: the marks page that fits, the read's context counted and named instead of carried
  *    (`context`), each context list readable by its `part`;
  *  - `part`: one context list, paged by size with its own cursor (set_downs, takes, standing, ground), or `teach`.
- * `args` are the read's own fields (cursor, limit, by, over, part).
+ * `args` are the read's own fields (cursor, limit, part, and the named `handle`: the scope the answer was read for). An opening that
+ * names a cursor or an index must name the same scope, so `handle` rides every opening this builds (CORE-96 review).
  */
 export function pageStances(answer, args = {}) {
   if (!answer || answer.unavailable || !Array.isArray(answer.awaiting)) return answer;
   const part = args.part == null || args.part === "" ? null : String(args.part);
+  const handle = args.handle == null ? "" : String(args.handle).trim();
   if (part == null) {
     if (textBytes(answer) <= CAP_BYTES) return answer;
-    return marksPage(answer, startOf(args.cursor));
+    return marksPage(answer, startOf(args.cursor), handle);
   }
-  if (part === "teach") return teachPage(answer);
+  if (part === "teach") return teachPage(answer, handle);
   const listOf = STANCE_PARTS[part];
   if (!listOf) return { error: "bounce", code: 422, defect: `part: "${part}" is not a part of the stances read`, hint: `part is one of ${Object.keys(STANCE_PARTS).join(" | ")} | teach; omit it for the marks` };
   const rows = listOf(answer);
@@ -175,7 +177,7 @@ export function pageStances(answer, args = {}) {
   const { answer: out } = fitRows(rows, startOf(args.cursor), (page, next) => ({
     read: "stances", part, total: rows.length, shown: page.length, offset: startOf(args.cursor),
     ...(unavailable ? { unavailable } : {}), rows: page, cursor: next, complete: next == null,
-  }), { sourceOf: stancePartSource(part) });
+  }), { sourceOf: stancePartSource(part, handle) });
   return out;
 }
 
@@ -184,9 +186,9 @@ export function pageStances(answer, args = {}) {
  * set-downs, standing and ground lists are the REST answer's own, in the same order (an index is absolute); the takes are the
  * `awaiting_your_word` rows with act "take", so they are found by their thing.
  */
-function stancePartSource(part) {
+function stancePartSource(part, handle) {
   const list = { set_downs: "set_downs_awaiting", takes: "awaiting_your_word", standing: "standing", ground: "ground" }[part];
-  return (path, row, index) => restOpening({ read: "stances" }, `${list}${part === "takes" ? `[thing=${JSON.stringify(row?.thing ?? "")}]` : `[${index}]`}${pathStr(path)}`);
+  return (path, row, index) => restOpening({ read: "stances", ...(handle ? { handle } : {}) }, `${list}${part === "takes" ? `[thing=${JSON.stringify(row?.thing ?? "")}]` : `[${index}]`}${pathStr(path)}`);
 }
 
 /**
@@ -194,7 +196,7 @@ function stancePartSource(part) {
  * Where each string lives whole: the response-function file named in `teach.from` (the strings quoted from it), and the law mark
  * `teach.after_it_is_published.law_mark` (`the_law_reaches`). `unruled` is composed from both. A string with no such source says so.
  */
-function teachPage(answer) {
+function teachPage(answer, handle) {
   const teach = answer.teach ?? {};
   const law = teach.after_it_is_published?.law_mark ?? teach.law_mark ?? null;
   const file = typeof teach.from === "string" && teach.from ? `${teach.from} in the world checkout` : null;
@@ -205,7 +207,7 @@ function teachPage(answer) {
     const origin = ["what_opposed_does", "until_you_speak", "any_latency"].includes(p) ? file
       : p === "after_it_is_published.the_law_reaches" ? lawRead
       : p.startsWith("after_it_is_published.unruled") ? [file, lawRead].filter(Boolean).join(" and ") : null;
-    return `${restOpening({ read: "stances" }, `teach${pathStr(path)}`)}${origin ? `; quoted from ${origin}` : ""}`;
+    return `${restOpening({ read: "stances", ...(handle ? { handle } : {}) }, `teach${pathStr(path)}`)}${origin ? `; quoted from ${origin}` : ""}`;
   };
   const build = (t) => ({ read: "stances", part: "teach", law: answer.law, teach: t });
   const whole = build(teach);
@@ -215,16 +217,16 @@ function teachPage(answer) {
 
 /**
  * Where a stance row's long field lives whole: the canonical `GET /household?read=stances` at this row's own cursor (the index in the
- * narrowed inbox the page started at), one row, in the same `by`/`over` scope the answer says it was narrowed to; a mark's body is
- * also the world's bare mark focus.
+ * narrowed inbox the page started at), one row, in the same `handle`, `by` and `over` scope the call was made in (a cursor is an index
+ * into THAT inbox: a named resident's is not the house's); a mark's body is also the world's bare mark focus.
  */
-const stanceSource = (answer, start) => (path, row) => {
-  const query = { read: "stances", ...(answer.only?.by != null ? { by: answer.only.by } : {}), ...(answer.only?.over != null ? { over: answer.only.over } : {}), cursor: String(start), limit: "1" };
+const stanceSource = (answer, start, handle) => (path, row) => {
+  const query = { read: "stances", ...(handle ? { handle } : {}), ...(answer.only?.by != null ? { by: answer.only.by } : {}), ...(answer.only?.over != null ? { over: answer.only.over } : {}), cursor: String(start), limit: "1" };
   const body = path.join(".") === "body" ? markSource(row?.mark) : null;
   return `${restOpening(query, `awaiting[0]${pathStr(path)}`)}${body ? `; the mark itself: ${body}` : ""}`;
 };
 
-function marksPage(answer, start) {
+function marksPage(answer, start, handle) {
   const { awaiting, cursor: _c, complete: _k, ids: _i, ...rest } = answer;
   const lean = Object.fromEntries(Object.entries(rest).filter(([k]) => !CONTEXT_KEYS.includes(k)));
   const narrowed = answer.only != null;
@@ -243,7 +245,7 @@ function marksPage(answer, start) {
     cursor: next != null ? String(start + page.length) : upstreamNext,
     complete: next == null && answer.complete,
     context,
-  }), { sourceOf: stanceSource(answer, start) });
+  }), { sourceOf: stanceSource(answer, start, handle) });
   return out;
 }
 

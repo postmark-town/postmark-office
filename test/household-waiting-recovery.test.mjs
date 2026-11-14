@@ -381,6 +381,52 @@ test("R8 · every field family a page can cut: the marker's REST opening returns
   assert.deepEqual([p.rows[0].kind, p.rows[0].about.mark, p.rows[0].act.verb], ["mark-taken", "r000/old-big", "world.stake"]);
 });
 
+test("R9 · a stances call narrowed to ONE resident: the opening carries the handle, so its cursor finds the same row (multi-resident house, real derivation)", async () => {
+  // r000 holds the big parcel (the three streams), r001 the orchard (the solos): their inboxes differ, so a cursor means a different row in each
+  const inbox = async (handles, cursor) => (await stancesForHandles(handles, { cursor, limit: 1, setDowns: true })).awaiting[0].mark;
+  const rowOfR000 = await inbox(["r000"], "10");
+  const rowOfHouse = await inbox(["r000", "r001"], "10");
+  assert.notEqual(rowOfR000, rowOfHouse, "the fixture separates the scopes: row 10 of r000's inbox is not row 10 of the house's");
+  const huge = HUGE("a stance body");
+  // the long body goes on the ONE row by its mark id, in whichever scope reads it (so equality alone cannot hide a locator that opens another row)
+  const only = (target) => ({ stances: async (...a) => { const d = await stancesForHandles(...a); for (const c of d.awaiting) if (c.mark === target) c.body = huge; return d; } });
+  const run = async (target, topLevel) => {
+    const readers = { ...ctx.readers, ...only(target) };
+    const page = await householdApex({ read: "stances", ...topLevel }, key, { ...ctx, readers });
+    assert.ok(bytesOf(text(page)) <= CAP_BYTES, `${bytesOf(text(page))} bytes`);
+    const m = leafStrings(page).map((s) => MARKER_AT_END.exec(s)).find(Boolean);
+    assert.ok(m, "a cut marker");
+    assert.equal(bytesOf(m[1]) + Number(m[2]), bytesOf(huge), "exact");
+    const restCtx = { clone: scratch, asOf: AS_OF, odb: ctx.odb, nowMs: ctx.nowMs, ix: ctx.ix, readers };
+    const { value } = await resolveOpening(m[3], restCtx);
+    assert.equal(value, huge, `the opening ${m[3].slice(0, 110)} returns the entire original`);
+    const row = await resolveOpening(m[3].split("; ")[0].replace(/\.body$/, ".mark"), restCtx).catch(() => null);
+    return { source: m[3], opens: row?.value };
+  };
+  // the named resident: the marker names handle=r000 and the opening returns THAT row (not the house's row 10)
+  const named = await run(rowOfR000, { handle: "r000", cursor: "10" });
+  assert.match(named.source, /^GET \/household\?read=stances&handle=r000&cursor=10&limit=1 → awaiting\[0\]\.body/);
+  // the house-wide control: no handle in the call, none in the opening
+  const house = await run(rowOfHouse, { cursor: "10" });
+  assert.ok(!/handle=/.test(house.source), `no handle where none was named: ${house.source}`);
+  assert.match(house.source, /^GET \/household\?read=stances&cursor=10&limit=1 → awaiting\[0\]\.body/);
+  // the other resident: its own scope, its own row
+  const r001 = await inbox(["r001"], "10");
+  assert.match((await run(r001, { handle: "r001", cursor: "10" })).source, /handle=r001&cursor=10/);
+  // and the same scope rides the context and teaching openings
+  const ctxLists = async (part, mutate) => {
+    const readers = { ...ctx.readers, stances: async (...a) => mutate(await stancesForHandles(...a)) };
+    const page = await householdApex({ read: "stances", handle: "r000", args: { part, ...(part === "teach" ? {} : { cursor: "2" }) } }, key, { ...ctx, readers }); // the long row is index 2 of its list
+    const m = leafStrings(page).map((s) => MARKER_AT_END.exec(s)).find(Boolean);
+    assert.ok(m, `${part}: a cut marker`);
+    assert.match(m[3], /^GET \/household\?read=stances&handle=r000 → /, `${part}: the opening names the handle`);
+    assert.equal((await resolveOpening(m[3], { clone: scratch, asOf: AS_OF, odb: ctx.odb, nowMs: ctx.nowMs, ix: ctx.ix, readers })).value, huge, `${part}: whole`);
+  };
+  await ctxLists("set_downs", (d) => { d.set_downs_awaiting[2].answer = huge; return d; });
+  await ctxLists("standing", (d) => ({ ...d, standing: [{ on: "a/b", stance: "welcomed" }, { on: "c/d", stance: "opposed" }, { on: "e/f", stance: "welcomed", note: huge }] }));
+  await ctxLists("teach", (d) => ({ ...d, teach: { ...d.teach, any_latency: huge, from: "LOGOS/the-response-function.md" } }));
+});
+
 test("R7 · a caller that is not the connector reads the canonical answers of all three reads: whole, unfolded, unpaged", async () => {
   const rest = { ...ctx, connector: false };
   const w = await householdApex({ read: "waiting" }, key, rest);
