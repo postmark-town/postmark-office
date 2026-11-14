@@ -159,6 +159,19 @@ export function circleIndex(voices) {
   return { byId, children, tops, broken, timeline, rootOf, pathOf, subtree };
 }
 
+/**
+ * A SAY AS A REFERENCE, for a read that serves the fact of a say and never its words (the close block's POS-1024 row: the feed and
+ * the day): `{ id, reply_to? }` from an act row (`id`, and the `reply_to` scalar its read selected), or null for any other act or a
+ * row with no act number. Old talk carries no reply_to, and none is made up.
+ */
+export function sayReferenceOf(row) {
+  if (row?.action !== "say") return null;
+  const id = sayIdOf(row.id);
+  if (id == null) return null;
+  const replyTo = sayIdOf(row.reply_to);
+  return { id, ...(replyTo != null ? { reply_to: replyTo } : {}) };
+}
+
 /** The flat lines for every voice of a room, in the order given, each carrying its circle when it resolves (threadOf's lines). */
 export function sayLines(voices, index = circleIndex(voices)) {
   return voices.map((v) => sayLine(v, index.rootOf(v)));

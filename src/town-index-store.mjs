@@ -48,6 +48,12 @@ import { errorSaid } from "./fault-words.mjs"; // an error's text for the LOG on
 
 import { freshnessFor, composeHome, composeFoundedHome } from "./paper-fresh.mjs"; // the freshness ladder, as home below uses it
 
+/**
+ * A SAY'S PARENT REFERENCE (POS-1035; the close block's POS-1024 row): the act number a say answers (`payload.reply_to`), selected
+ * alone — never the payload, never the words — and only for `action = 'say'`. Null for every other act and every old say.
+ */
+export const SAY_REPLY_SQL = "CASE WHEN action = 'say' THEN payload->>'reply_to' END AS reply_to";
+
 const UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", LOWER = "abcdefghijklmnopqrstuvwxyz";
 /** sqlite's LIKE: ASCII case folded on both sides, nothing else. */
 const likeAscii = (col, param, escape = "\\") => `translate(${col}, '${UPPER}', '${LOWER}') LIKE translate(${param}, '${UPPER}', '${LOWER}') ESCAPE '${escape}'`;
@@ -666,7 +672,8 @@ export async function houseActs(q, household, { afterId = null, sinceIso = null,
   const { actsHaveProvenance } = await import("./act-provenance.mjs");
   const recorded = (await actsHaveProvenance(q)) ? ", hand, for_handle, route" : "";
   const facts = Array.isArray(verbs) ? ", class, payload->>'was_published' AS was_published, payload->>'put_forward' AS put_forward" : "";   // kept for the public projection's second filter; happenedRow never shows them
-  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human${recorded}${facts}
+  // POS-1035: a say's one stored parent reference (its act number), and only that scalar — never the words (SAY_REPLY_SQL)
+  const rows = (await q.query(`SELECT id::text AS id, at, actor, action, object, at_anchor, payload->>'as_human' AS as_human, ${SAY_REPLY_SQL}${recorded}${facts}
       FROM acts WHERE ${where.join(" AND ")} ORDER BY acts.id DESC LIMIT ${n + 1}`, params)).rows;
   const kept = rows.slice(0, n);
   // past the cut, the read goes on below the last id it kept (review of #678, item 4)
@@ -801,7 +808,7 @@ export async function actsOfActor(q, actor, { fromIso, toIso, verbs, limit = 500
   const params = [actor, lo, fromIso, toIso, verbs.map(String)];
   let hiSql = "";
   if (hiRaw != null) { params.push(String(BigInt(hiRaw) + 50n)); hiSql = " AND id < $6::bigint"; }   // the few acts filed late sit a little past the bound; `at` decides
-  const rows = (await q.query(`SELECT id::text AS id, at, action, object, class, at_anchor, payload->>'was_published' AS was_published, payload->>'put_forward' AS put_forward FROM acts
+  const rows = (await q.query(`SELECT id::text AS id, at, action, object, class, at_anchor, payload->>'was_published' AS was_published, payload->>'put_forward' AS put_forward, ${SAY_REPLY_SQL} FROM acts
       WHERE actor = $1 AND id >= $2::bigint${hiSql} AND at >= $3::timestamptz AND at < $4::timestamptz AND action = ANY($5::text[]) AND ${publicActSql()} ORDER BY acts.id LIMIT ${n + 1}`, params)).rows;
   return { rows: rows.slice(0, n), cut: rows.length > n };
 }
