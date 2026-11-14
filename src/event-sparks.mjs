@@ -165,6 +165,18 @@ export function roomFrame(thread) {
   return { room: thread.id, at: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, extent: { w: x1 - x0, h: y1 - y0 } };
 }
 
+/**
+ * The frame of an event's rooms, all of them combined (Wright 18:46:13Z; POS-1035-room-set-response.md): the rectangular envelope
+ * — the least x0/y0 and the greatest x1/y1 over every member room — then the same exact midpoint and differences. It includes the
+ * gaps between rooms, and the parcel words standing in them apply as anywhere. One room's envelope is that room's own frame.
+ */
+export function roomsFrame(threads) {
+  if (!threads?.length) return null;
+  const x0 = Math.min(...threads.map((t) => t.extent.x0)), y0 = Math.min(...threads.map((t) => t.extent.y0));
+  const x1 = Math.max(...threads.map((t) => t.extent.x1)), y1 = Math.max(...threads.map((t) => t.extent.y1));
+  return { rooms: threads.map((t) => t.id), at: { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }, extent: { w: x1 - x0, h: y1 - y0 } };
+}
+
 /** The frame with no conversation: the maker's resolved place (an event's canonical place) and the 60 m radius. */
 export function placeFrame(place) {
   return { at: { x: Number(place.x), y: Number(place.y) }, extent: { w: 2 * SPARK_RADIUS_M, h: 2 * SPARK_RADIUS_M } };
@@ -237,9 +249,10 @@ export async function eventEvidence(client, event, { now = Date.now(), edges = [
   return {
     window: { from: iso(window.from), to: iso(window.to), ...(complete ? {} : { as_of: iso(until) }) },
     complete,
-    // every room of the event, in the order it started, each with its own frozen frame — never a combined one (the footprint of
-    // several is with Wright: the rectangular envelope or the disjoint union)
+    // every room of the event, in the order it started, each with its own frozen frame; and the frame they combine into, the
+    // rectangular envelope over all of them (null with no room: the spark then stands at the place in the locked circle)
     rooms: found.rooms.map((c) => ({ ...c, frame: roomFrame(c) })),
+    frame: roomsFrame(found.rooms),
     room_history: found.history,
     ...(found.note ? { room_note: found.note } : {}),
     present,
@@ -375,9 +388,9 @@ export async function stakedCancel({ handle, id, door, now = Date.now(), date },
 //
 // At its end a staked event becomes ONE put-forward spark through the mark road, its 20 come home whole and the spark's own stake
 // of 1 backs it (19 home, 1 kept) — in ONE locked, signed batch and ONE store transaction, or not at all:
-//   1 · read (no transaction): the event's evidence. Every room at the place is the event's; while the footprint several rooms
-//       combine into is with Wright, several are HELD, nothing moves; rooms that cannot be read are HELD too, never turned into the
-//       no-conversation radius.
+//   1 · read (no transaction): the event's evidence. Every room at the place is the event's, framed by their envelope; while
+//       World's room-set class (the `rooms` record field) is unpublished, several are HELD, nothing moves; rooms that cannot be read
+//       are HELD too, never turned into the no-conversation radius.
 //   2 · the spark, judged by the mark road's own leave (world.mjs § journalLeaveMark { plan }): every guard a real leave runs, the
 //       World's spark pre-check, and the verdict — it must go forward with its 1 stamp, or the completion is HELD and says why.
 //   3 · its id: <host>/<event-slug>, else the first unused numeric suffix, checked against published marks, every claim (the
@@ -399,15 +412,16 @@ export function recountingOf(row) {
 
 /**
  * The spark's place and time, and its properties, from the event and its evidence (the frozen frame). No room: the place and the
- * locked circle; one room: its frame. Several rooms are all the event's (18:46:13Z), but the footprint they combine into is with
- * Wright, so the completion holds before asking for one here. ⚑ The spark record names its room as `room` in World's current
- * draft class (45f57eea); the agreed `rooms` id array replaces it with World's class update, not before (no Office-only field).
+ * locked circle; rooms: their envelope (`evidence.frame`, roomsFrame). ⚑ THE RECORD'S ROOM FIELD IS WORLD'S: its current draft
+ * class (45f57eea) has the single `room`, and the agreed `rooms` id array that records several replaces it with World's room-set
+ * class update — not before, and never as an Office-only field. So several rooms cannot be recorded yet, and the completion holds
+ * on that before asking here.
  */
 export function sparkDeclaration(row, evidence) {
-  if (evidence.rooms.length > 1) throw new Error(`${row.id}: several rooms — their combined footprint is not ruled`);
+  if (evidence.rooms.length > 1) throw new Error(`${row.id}: ${evidence.rooms.length} rooms — World's room-set class (rooms) is not published yet`);
   const place = { x: Number(row.place_x), y: Number(row.place_y) };
   const [room] = evidence.rooms;
-  const frame = room ? room.frame : placeFrame(place);
+  const frame = evidence.frame ?? placeFrame(place);
   return {
     at: frame.at, extent: frame.extent,
     properties: {
@@ -470,7 +484,7 @@ export async function completeEvent(row, { clone, keyPem, env = process.env, now
     if (!evidence?.complete) return held("its window is not over yet");
     if (evidence.room_history !== "complete") return held("its room cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
     if (evidence.rooms.length > 1)
-      return held("several rooms formed at its place — all are its own, and the footprint they combine into (the rectangular envelope or the disjoint union) is with Wright", { rooms: evidence.rooms.map((r) => r.id) });
+      return held("several rooms formed at its place — all are its own, and the World's room-set class that records them (`rooms`) is not published yet", { rooms: evidence.rooms.map((r) => r.id), frame: evidence.frame });
 
     // 3 · the ledger first: a fresh completion, or the retry of one whose lines landed and whose store transaction did not
     const by = String(row.fields.stake.by);
