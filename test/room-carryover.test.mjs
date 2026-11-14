@@ -243,6 +243,65 @@ test("memory identity equals the stored record's for the same room", async () =>
   assert.equal(stored.live[0].id, mem);
 });
 
+test("memory trim that loses the WHOLE pre-edge part of a carried room still says so, and keeps the id", async () => {
+  const { store, tick, settle } = bench(AT, { memoryMax: 3 });
+  await store.say("mira", "m1"); tick(20 * MIN);                 // 05:40 + 20 min: the edge falls at T0 + 20 min
+  settle(); tick(5 * MIN);
+  await store.say("odo", "g1"); tick(20_000);
+  await store.say("odo", "g2"); tick(20_000);
+  const id = store.conversations().live[0].id;
+  assert.equal(store._voices().length, 3);
+  assert.equal((await store.hear("pell")).hearing_disclosed, undefined, "all of it is still held");
+  await store.say("odo", "g3"); tick(20_000);                    // trims m1: nothing before the edge is held any more
+  const r = await store.hear("pell");
+  assert.deepEqual(said(r), ["g1", "g2", "g3"]);
+  assert.match(r.hearing_disclosed, /carried across the settlement has lost its earliest voices/, "an unknown earlier prefix does not read as complete");
+  assert.equal(store.conversations().live[0].id, id, "the id is the room's, not the earliest held say's");
+});
+
+test("a spatial bridge that leaves memory leaves ONE room with the stored record's id", async () => {
+  const at = { bridge: { x: 48, y: 0 }, west: { x: 0, y: 0 }, east: { x: 96, y: 0 }, ear: { x: 48, y: 5 } };
+  const { store, tick } = bench(at, { memoryMax: 3 });
+  await store.say("west", "w1"); tick(20_000);
+  await store.say("east", "e1"); tick(20_000);                  // two rooms: 96 m apart, out of earshot (60 m)
+  assert.equal(store.conversations().live.length, 2);
+  await store.say("bridge", "b1"); tick(20_000);                // joins them
+  assert.equal(store.conversations().live.length, 1);
+  const joined = store.conversations().live[0].id;
+  await store.say("east", "e2"); tick(20_000);                  // trims w1
+  await store.say("east", "e3"); tick(20_000);                  // trims e1
+  await store.say("east", "e4"); tick(20_000);                  // trims the bridge: east alone remains of the memory's three
+  const c = store.conversations();
+  assert.equal(c.live.length, 1, "one room, not two fragments");
+  assert.equal(c.live[0].id, joined);
+  assert.equal(joined, `t${T0}-west`, "the stored record names it by its first say");
+});
+
+test("the room's root rides the log line, and a restarted office reads it back without walking the log", async () => {
+  const log = join(DIR, "restart.jsonl");
+  const a = bench(AT, { logPath: log, memoryMax: 4 });
+  for (let i = 1; i <= 6; i++) { await a.store.say("mira", `m${i}`); a.tick(20_000); }
+  const idA = a.store.conversations().live[0].id;
+  const b = bench(AT, { logPath: log, memoryMax: 4 });
+  b.tick(6 * 20_000);
+  b.store._voices();
+  assert.equal(b.store.room.stats.clustered, 0, "loading the log clusters nothing");
+  assert.equal(b.store.conversations().live[0].id, idA, "the same room after a restart that holds only its last four voices");
+  const base = b.store.room.stats.clustered;
+  await b.store.say("odo", "after");
+  assert.ok(b.store.room.stats.clustered - base <= 1, "a say walks the held list once: the append's walk, read again by the reply");
+});
+
+test("/world2/say: a room open just after the edge whose earlier epoch lies behind the 13 h read says it may be part of a carried room", async () => {
+  const sweeps = [S2, S1];
+  // a say 30 min after S2, read at S2 + 11.5 h: the read (13 h) reaches S2 - 1.5 h, not back to S1 (12 h before S2)
+  const acts = [sayAct(1, S2 + 30 * MIN, "odo")];
+  const r = await sayAt(acts, S2 + 11.5 * H, sweeps);
+  assert.match(r.body.read_bound_disclosed, /carried across the settlement/);
+  const near = await sayAt(acts, S2 + 45 * MIN, sweeps);
+  assert.equal(near.body.read_bound_disclosed, undefined, "a read that reaches back to the previous settlement holds the whole epoch");
+});
+
 test("/world2/say: a carried room's read says it holds only part of it, and hearable_since names the earliest row returned", async () => {
   const sweeps = [S1, S1 - 12 * H];
   const acts = [sayAct(1, S1 - 20 * MIN, "mira"), sayAct(2, S1 + 5 * MIN, "odo", 10)];

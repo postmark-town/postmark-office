@@ -414,7 +414,7 @@ export function createVoices({
   // built (one derivation of what the town can hear at an instant), and the
   // three beneath it are the expensive reads a snapshot makes. The push's
   // falsifier reads these to show fifty waiters cost one room per voice.
-  const stats = { rooms: 0, heardFrom: 0, clusters: 0, nearby: 0 };
+  const stats = { rooms: 0, heardFrom: 0, clusters: 0, clustered: 0, nearby: 0 };
   // THE PRESENCE MAP is RAM (see lastPresent below): it records that a handle
   // spoke or listened here, and it is evicted by `presenceMs` below.
   //
@@ -431,31 +431,39 @@ export function createVoices({
   // the newest instant a trim dropped; a reply whose window opens before it
   // names the cut rather than passing a short page off as the whole window.
   let cutAt = null;
-  // A ROOM KEEPS ITS NAME WHEN ITS FRONT LEAVES MEMORY (CORE-97). A room's id is its first say's (`t<at>-<handle>`), and a room that renews at every
-  // settlement outlives the memory's first say. So a trim that drops the front of a room (and keeps its back) records, against the room's first KEPT say,
-  // the id the room already had: the stored record, which holds every say, names it the same. `rootOf` is voice object -> id, only for voices held;
-  // `cutRooms` is the same for the disclosure (a room whose front is gone from memory says so). Bounded by memoryMax; no store, the log is the road.
-  const rootOf = new Map();
+  // A ROOM KEEPS ITS NAME, AND ITS MEMBERS, WHEN ITS FRONT LEAVES MEMORY (CORE-97). A room's id is its first say's (`t<at>-<handle>`), and a room that renews at every
+  // settlement outlives the memory's first say. So every voice names its room's ROOT at the moment it is spoken, on its own log line (`root`, and `merged` when
+  // the say joined two rooms that had different roots): the log is the road, hydrate reads the names back with no clustering, and an old line without one still reads.
+  // `parent` is a union-find over root ids (earlier root wins), only for the merges the log recorded; a bridge that has left memory leaves its two sides still one room.
+  const parent = new Map();
+  const rootAtOf = (id) => Number(/^t(\d+)-/.exec(id)?.[1]);
+  const ownId = (v) => `t${v.at}-${v.handle}`;
+  function findRoot(id) {
+    let r = id;
+    while (parent.has(r) && parent.get(r) !== r) r = parent.get(r);
+    for (let c = id; c !== r;) { const n = parent.get(c); parent.set(c, r); c = n; }
+    return r;
+  }
+  function unionRoots(a, b) {
+    const ra = findRoot(a), rb = findRoot(b);
+    if (ra === rb) return ra;
+    const [lo, hi] = rootAtOf(ra) <= rootAtOf(rb) ? [ra, rb] : [rb, ra];
+    parent.set(hi, lo);
+    return lo;
+  }
+  const rootOfVoice = (v) => (v.root ? findRoot(v.root) : ownId(v));
+  // a cluster's root: the earliest root among its voices (an old line without one stands for itself)
+  function clusterRoot(c) {
+    let best = null;
+    for (const v of c.voices) { const r = rootOfVoice(v); if (best == null || rootAtOf(r) < rootAtOf(best)) best = r; }
+    return best;
+  }
   function trimmed(list) {
     if (list.length <= memoryMax) return list;
     const cut = list.length - memoryMax;
     cutAt = list[cut - 1].at;
-    const kept = list.slice(cut);
-    const held = new Set(kept);
-    const next = new Map();
-    for (const [key, spoken] of groupByRoom(list)) {
-      for (const c of clusterVoices(spoken, { earshotM, boundaries: boundariesAt(now()) })) {
-        const heldHere = c.voices.filter((v) => held.has(v));
-        if (!heldHere.length) continue;
-        const id = rootOf.get(c.voices[0]) ?? (heldHere.length < c.voices.length ? `t${c.voices[0].at}-${c.voices[0].handle}` : null);
-        if (id) next.set(heldHere[0], id);
-      }
-    }
-    rootOf.clear();
-    for (const [v, id] of next) rootOf.set(v, id);
-    return kept;
+    return list.slice(cut);
   }
-  const idOfCluster = (c) => rootOf.get(c.voices[0]) ?? null;
 
   // The window at `t`, never throwing: a reader that trips hears as if nothing
   // were hearable before `t`'s own settlement is unknown — which it says.
@@ -498,7 +506,8 @@ export function createVoices({
         const v = JSON.parse(line);
         const at = Date.parse(v.at);
         if (!v.handle || !Number.isFinite(at) || !Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
-        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}) });
+        voices.push({ handle: v.handle, text: String(v.text ?? ""), at, x: v.x, y: v.y, place: v.place ?? null, aboard: Boolean(v.aboard), ...(v.room ? { room: String(v.room) } : {}), ...(typeof v.root === "string" && Number.isFinite(rootAtOf(v.root)) ? { root: v.root } : {}) });
+        if (typeof v.root === "string" && Array.isArray(v.merged)) for (const m of v.merged) if (typeof m === "string" && Number.isFinite(rootAtOf(m)) && Number.isFinite(rootAtOf(v.root))) unionRoots(v.root, m);
       } catch { /* a torn line is not a reason to lose the town's speech */ }
     }
     voices.sort((a, b) => a.at - b.at);
@@ -510,6 +519,16 @@ export function createVoices({
     hydrate();
     voices.push(voice);
     voices = trimmed(voices);
+    // the room this say joins names it: the clusters are the ones the reply's snapshot is about to read (memoised, so no second walk)
+    const mine = (clusterByRoom(voices, boundariesAt(now())).get(voice.room ?? null) ?? []).find((c) => c.voices.includes(voice));
+    let merged = [];
+    if (mine) {
+      const roots = [...new Set(mine.voices.map(rootOfVoice))];
+      const lead = roots.reduce((a, b) => (rootAtOf(b) < rootAtOf(a) ? b : a), roots[0]);
+      for (const r of roots) if (r !== lead) unionRoots(lead, r);
+      merged = roots.filter((r) => r !== lead);
+      voice.root = lead;
+    }
     const file = pathOf();
     const line = `${JSON.stringify({
       at: new Date(voice.at).toISOString(),
@@ -520,6 +539,8 @@ export function createVoices({
       place: voice.place,
       aboard: voice.aboard,
       ...(voice.room ? { room: voice.room } : {}),
+      ...(voice.root ? { root: voice.root } : {}),
+      ...(merged.length ? { merged } : {}),
     })}\n`;
     try {
       mkdirSync(dirname(file), { recursive: true });
@@ -656,8 +677,9 @@ export function createVoices({
     const marks = boundariesAt(t);
     for (const list of clusters.values()) {
       for (const c of list) {
-        if (c.voices[0].at >= since || !roomOpen(c.latest, t, marks)) continue;
-        const lost = rootOf.has(c.voices[0]);
+        const began = rootAtOf(c.root) ?? c.voices[0].at;
+        if (began >= since || !roomOpen(c.latest, t, marks)) continue;
+        const lost = began < c.voices[0].at; // the room began earlier than its first voice still held
         for (const v of c.voices) { out.add(v); if (lost) out.cut.add(v.handle + "|" + v.at); }
       }
     }
@@ -671,6 +693,19 @@ export function createVoices({
     roomMemo = { key, list, clusters };
     return clusters;
   }
+  // Two memory clusters that name the same root are one room whose bridge has left memory: they stay one (membership, not only the id).
+  function mergedByRoot(cs) {
+    const by = new Map();
+    const out = [];
+    for (const c of cs) {
+      c.root = clusterRoot(c);
+      // only a root a voice RECORDED joins clusters: an old line's own id is no one else's name (two says can share an instant)
+      const host = c.voices.some((v) => v.root) ? by.get(c.root) : null;
+      if (host) { host.voices.push(...c.voices); host.voices.sort((a, b) => a.at - b.at); host.latest = Math.max(host.latest, c.latest); }
+      else { if (c.voices.some((v) => v.root)) by.set(c.root, c); out.push(c); }
+    }
+    return out.sort((a, b) => a.latest - b.latest);
+  }
   function groupByRoom(list) {
     const byRoom = new Map();
     for (const v of list) {
@@ -681,9 +716,10 @@ export function createVoices({
     return byRoom;
   }
   function clusterByRoomUncached(list, boundaries) {
+    stats.clustered += 1; // walks of the held list: one per distinct list (the append's, which the reply's snapshot reads again)
     const byRoom = groupByRoom(list);
     const clusters = new Map();
-    for (const [key, spoken] of byRoom) clusters.set(key, clusterVoices(spoken, { earshotM, boundaries }));
+    for (const [key, spoken] of byRoom) clusters.set(key, mergedByRoot(clusterVoices(spoken, { earshotM, boundaries })));
     return clusters;
   }
 
@@ -1175,7 +1211,7 @@ export function createVoices({
     const boundaries = boundariesAt(t);
     const since = liveSince(boundaries);
     // WLD-74: the page is keyless and has entered nothing: a voice spoken inside a dungeon room is not on it
-    const clusters = clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries });
+    const clusters = mergedByRoot(clusterVoices(hydrate().filter((v) => !v.room), { earshotM, boundaries }));
     const live = [];
     const closed = [];
     for (const c of clusters) (roomOpen(c.latest, t, boundaries) ? live : closed).push(c);
@@ -1193,8 +1229,8 @@ export function createVoices({
       close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement, unless someone adds to it in the hour after (POS-779, CORE-97) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
       settlement_since: boundaries.length ? new Date(since).toISOString() : null,
       ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
-      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...threadOf(c, { live: true, voiceCap }), ...(idOfCluster(c) ? { id: idOfCluster(c) } : {}) })),
-      closed: page.map((c) => ({ ...threadOf(c, { live: false, voiceCap }), ...(idOfCluster(c) ? { id: idOfCluster(c) } : {}) })),
+      live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...threadOf(c, { live: true, voiceCap }), ...(c.root ? { id: c.root } : {}) })),
+      closed: page.map((c) => ({ ...threadOf(c, { live: false, voiceCap }), ...(c.root ? { id: c.root } : {}) })),
       earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,
         note: "this is the office's short in-memory record, so speech older than it holds is not here" },
     };
