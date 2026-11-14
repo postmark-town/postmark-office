@@ -608,11 +608,20 @@ whole: nothing is paged for them, and `part` is ignored (and needs-you's `cursor
   at `args: { part: "set_downs_awaiting" | "takes_awaiting" | "unplaced_bounces" | "key_asks" | "likeness_question" |
   "stakes_at_risk" | "alerts", cursor }`, its rows whole as needs-you gives them. The marks are read at `stances`.
 - A single field that would push one row (or the teaching block) over 10,000 bytes is **cut with a plain marker**, in the field
-  itself: `… […cut <N> bytes; the whole text: <the read that holds it>]` (the marker counts the UTF-8 bytes removed, exactly), or
-  `no read is verified to hold this field whole`. A stance row's or an at-risk row's mark body is `world { mark: "<id>" }`; the
-  teaching block's quoted text is the response-function file it names and the law mark's read; an alert's `about.body` has no
-  verified opening and says so. There is no field cursor and no fragment paging; a lone row that fits
-  the cap is delivered whole, never cut merely to reach the 9,000-byte page target.
+  itself: `… […cut <N> bytes; the whole text: GET /household?<query> → <locator>]` (the marker counts the UTF-8 bytes removed,
+  exactly). **The opening is the REST door's canonical read** (`GET /household?read=needs-you&household=<slug>` or
+  `?read=stances[&handle=…&by=…&over=…&cursor=…&limit=1]`, authenticated, for the key that holds the house; a stances call
+  narrowed to one resident names that `handle`, because its cursor and indices are that resident's inbox's, not the house's): it hands the same flat query to
+  the same producer without the connector's mark, so its answer is whole, unfolded and unpaged, and the locator
+  (`alerts[3].about.body`, `awaiting[0].body`, `teach.any_latency`, `awaiting_your_word[thing="…"].answer`) finds the field in it. It
+  is not the connector's `household { read: "needs-you" }`, which folds again, and a whole REST answer is not promised to fit the
+  connector's cap. This holds for every field a page can cut: alert `about.body` (both producer shapes, a retired mark's body
+  included: the alert row is the copy, a drafts list or a world receipt is not) and `message`, bounce reasons, key-ask and likeness
+  prose, set-down, take and at-risk rows, the stances rows, `standing`, `ground` and the teaching block. A mark's body is also
+  `world { mark: "<id>" }` and the teaching block's quoted text its response-function file (`; the mark itself: …`, `; quoted
+  from …`). A field a producer adds later with no opening here says `no read is verified to hold this field whole`, never that
+  none exists. There is no field cursor and no fragment paging; a lone row that fits the cap is delivered whole, never cut merely
+  to reach the 9,000-byte page target.
 - A cursor is an index into that list, as a string; a page says `complete` and `cursor: null` at its end. Unavailable,
   empty and cut are three different words: `unavailable` names the cause, `total: 0` is none, and a cursor is more.
 

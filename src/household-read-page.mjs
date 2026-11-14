@@ -68,6 +68,11 @@ const setAt = (root, path, v) => { let o = root; for (const k of path.slice(0, -
  * `sourceOf(path, row)` is the read or source that holds that field whole, or null.
  */
 export function cutToCap(row, build, { cap = CAP_BYTES, sourceOf = () => null } = {}) {
+  // a row that is itself a string (the ground list's ids) is cut as the one field `_`, and its path is told to the opening as []
+  if (typeof row === "string") {
+    const r = cutToCap({ _: row }, (w) => build(w._), { cap, sourceOf: (p) => sourceOf(p.slice(1), row) });
+    return { answer: r.answer, cuts: r.cuts.map((c) => ({ ...c, path: "" })) };
+  }
   const cur = structuredClone(row);
   const cuts = new Map();
   for (let i = 0; i < 200; i++) {
@@ -97,7 +102,9 @@ export function cutToCap(row, build, { cap = CAP_BYTES, sourceOf = () => null } 
  * `sourceOf(path, row)` names where a row's long field lives whole, for a row that has to be cut.
  * Returns `{ answer, taken, next }`.
  */
-export function fitRows(rows, start, build, { budget = PAGE_BYTES, sourceOf } = {}) {
+export function fitRows(rows, start, build, { budget = PAGE_BYTES, sourceOf: sourceAt } = {}) {
+  // a row cut here is rows[start]: its opening is told that index (the absolute index in the list the read walks)
+  const sourceOf = sourceAt ? (path, row) => sourceAt(path, row, start) : undefined;
   const avail = rows.slice(start);
   const nextOf = (n) => (start + n < rows.length ? String(start + n) : null);
   const at = (n) => build(avail.slice(0, n), nextOf(n));
@@ -117,6 +124,18 @@ export function fitRows(rows, start, build, { budget = PAGE_BYTES, sourceOf } = 
 
 /** The read that holds a mark's body whole: the world's bare mark focus (world-apex.mjs, `world { mark: "<id>" }`). */
 export const markSource = (id) => (id ? `world { mark: ${JSON.stringify(String(id))} }` : null);
+
+/** `[2].about.body`-style locator tail for a path of keys and indices. */
+export const pathStr = (path) => path.map((k) => (/^\d+$/.test(String(k)) ? `[${k}]` : `.${k}`)).join("");
+
+/**
+ * THE OPENING OF A CUT FIELD (CORE-96): the REST door's canonical read, and where in its answer the whole string is.
+ * `GET /household?<query>` is server.mjs § GET /household, which hands the flat query to householdApex WITHOUT `ctx.connector`:
+ * the canonical producer's answer, whole, unfolded and unpaged, for the authenticated key that holds the house. It is not
+ * the connector's `household { read: … }`, which would answer the fold again. A whole REST answer is not promised to fit the
+ * connector's cap; it is the place the full text is, and `locator` finds the field in it.
+ */
+export const restOpening = (query, locator) => `GET /household?${new URLSearchParams(query).toString()} → ${locator}`;
 
 const call = (read, args) => `household { read: "${read}"${args ? `, args: { ${args} }` : ""} }`;
 
@@ -139,16 +158,18 @@ const CONTEXT_KEYS = ["standing", "ground", "law", "teach", "set_downs_awaiting"
  *  - no `part`, and it does not: the marks page that fits, the read's context counted and named instead of carried
  *    (`context`), each context list readable by its `part`;
  *  - `part`: one context list, paged by size with its own cursor (set_downs, takes, standing, ground), or `teach`.
- * `args` are the read's own fields (cursor, limit, by, over, part).
+ * `args` are the read's own fields (cursor, limit, part, and the named `handle`: the scope the answer was read for). An opening that
+ * names a cursor or an index must name the same scope, so `handle` rides every opening this builds (CORE-96 review).
  */
 export function pageStances(answer, args = {}) {
   if (!answer || answer.unavailable || !Array.isArray(answer.awaiting)) return answer;
   const part = args.part == null || args.part === "" ? null : String(args.part);
+  const handle = args.handle == null ? "" : String(args.handle).trim();
   if (part == null) {
     if (textBytes(answer) <= CAP_BYTES) return answer;
-    return marksPage(answer, startOf(args.cursor));
+    return marksPage(answer, startOf(args.cursor), handle);
   }
-  if (part === "teach") return teachPage(answer);
+  if (part === "teach") return teachPage(answer, handle);
   const listOf = STANCE_PARTS[part];
   if (!listOf) return { error: "bounce", code: 422, defect: `part: "${part}" is not a part of the stances read`, hint: `part is one of ${Object.keys(STANCE_PARTS).join(" | ")} | teach; omit it for the marks` };
   const rows = listOf(answer);
@@ -156,8 +177,18 @@ export function pageStances(answer, args = {}) {
   const { answer: out } = fitRows(rows, startOf(args.cursor), (page, next) => ({
     read: "stances", part, total: rows.length, shown: page.length, offset: startOf(args.cursor),
     ...(unavailable ? { unavailable } : {}), rows: page, cursor: next, complete: next == null,
-  }));
+  }), { sourceOf: stancePartSource(part, handle) });
   return out;
+}
+
+/**
+ * Where a context row's long field lives whole: the canonical `GET /household?read=stances`, in the list the part pages. The
+ * set-downs, standing and ground lists are the REST answer's own, in the same order (an index is absolute); the takes are the
+ * `awaiting_your_word` rows with act "take", so they are found by their thing.
+ */
+function stancePartSource(part, handle) {
+  const list = { set_downs: "set_downs_awaiting", takes: "awaiting_your_word", standing: "standing", ground: "ground" }[part];
+  return (path, row, index) => restOpening({ read: "stances", ...(handle ? { handle } : {}) }, `${list}${part === "takes" ? `[thing=${JSON.stringify(row?.thing ?? "")}]` : `[${index}]`}${pathStr(path)}`);
 }
 
 /**
@@ -165,17 +196,18 @@ export function pageStances(answer, args = {}) {
  * Where each string lives whole: the response-function file named in `teach.from` (the strings quoted from it), and the law mark
  * `teach.after_it_is_published.law_mark` (`the_law_reaches`). `unruled` is composed from both. A string with no such source says so.
  */
-function teachPage(answer) {
+function teachPage(answer, handle) {
   const teach = answer.teach ?? {};
   const law = teach.after_it_is_published?.law_mark ?? teach.law_mark ?? null;
   const file = typeof teach.from === "string" && teach.from ? `${teach.from} in the world checkout` : null;
   const lawRead = markSource(law);
+  // every teaching string is in the canonical stances answer's `teach`; the file and the law mark are kept as its provenance
   const sourceOf = (path) => {
     const p = path.join(".");
-    if (["what_opposed_does", "until_you_speak", "any_latency"].includes(p)) return file;
-    if (p === "after_it_is_published.the_law_reaches") return lawRead;
-    if (p.startsWith("after_it_is_published.unruled")) return [file, lawRead].filter(Boolean).join(" and ") || null;
-    return null;
+    const origin = ["what_opposed_does", "until_you_speak", "any_latency"].includes(p) ? file
+      : p === "after_it_is_published.the_law_reaches" ? lawRead
+      : p.startsWith("after_it_is_published.unruled") ? [file, lawRead].filter(Boolean).join(" and ") : null;
+    return `${restOpening({ read: "stances", ...(handle ? { handle } : {}) }, `teach${pathStr(path)}`)}${origin ? `; quoted from ${origin}` : ""}`;
   };
   const build = (t) => ({ read: "stances", part: "teach", law: answer.law, teach: t });
   const whole = build(teach);
@@ -183,10 +215,18 @@ function teachPage(answer) {
   return cutToCap(teach, build, { sourceOf }).answer;
 }
 
-/** Where a stance row's long field lives whole: its mark's body is the world's bare mark focus. */
-const stanceSource = (path, row) => (path.join(".") === "body" ? markSource(row?.mark) : null);
+/**
+ * Where a stance row's long field lives whole: the canonical `GET /household?read=stances` at this row's own cursor (the index in the
+ * narrowed inbox the page started at), one row, in the same `handle`, `by` and `over` scope the call was made in (a cursor is an index
+ * into THAT inbox: a named resident's is not the house's); a mark's body is also the world's bare mark focus.
+ */
+const stanceSource = (answer, start, handle) => (path, row) => {
+  const query = { read: "stances", ...(handle ? { handle } : {}), ...(answer.only?.by != null ? { by: answer.only.by } : {}), ...(answer.only?.over != null ? { over: answer.only.over } : {}), cursor: String(start), limit: "1" };
+  const body = path.join(".") === "body" ? markSource(row?.mark) : null;
+  return `${restOpening(query, `awaiting[0]${pathStr(path)}`)}${body ? `; the mark itself: ${body}` : ""}`;
+};
 
-function marksPage(answer, start) {
+function marksPage(answer, start, handle) {
   const { awaiting, cursor: _c, complete: _k, ids: _i, ...rest } = answer;
   const lean = Object.fromEntries(Object.entries(rest).filter(([k]) => !CONTEXT_KEYS.includes(k)));
   const narrowed = answer.only != null;
@@ -205,7 +245,7 @@ function marksPage(answer, start) {
     cursor: next != null ? String(start + page.length) : upstreamNext,
     complete: next == null && answer.complete,
     context,
-  }), { sourceOf: stanceSource });
+  }), { sourceOf: stanceSource(answer, start, handle) });
   return out;
 }
 
@@ -244,21 +284,22 @@ export function pageNeeds(answer, args = {}) {
   const { answer: out } = fitRows(list, start, (page, next) => ({
     read: "needs-you", household: answer.household, part, total: list.length, shown: page.length, offset: start,
     ...extras, rows: page, cursor: next, complete: next == null,
-  }), { sourceOf: needsSource(part) });
+  }), { sourceOf: needsSource(part, answer.household) });
   return out;
 }
 
 /**
- * Where a needs-you row's long field lives whole, by part. An at-risk row's body is a published mark's: the world's bare mark focus.
- * An alert's `about.body` has NO verified opening, so none is promised: a mark-taken alert's mark has left the world (the focus
- * answers a receipt for a missing mark, world.mjs § worldInvestigate, not the stored body), and an escrow-on-missing-mark alert's
- * mark is in neither the world nor the store (alerts.mjs). Fields the office composes itself (a message, a reason) have no other copy.
+ * Where a needs-you row's long field lives whole, whatever the part (CORE-96): the canonical `GET /household?read=needs-you` for this
+ * house, in the list the part pages, at the row's absolute index (the lists are needs-you's own, in the same order). That is the one
+ * place every row family's text lives whole: an alert's `about.body` (either producer shape, and the retired mark's body with it:
+ * the alert row IS the copy, a drafts list is not), an office-composed message or reason, the likeness question's prose, the
+ * at-risk and set-down rows. An at-risk row's body is also a published mark's: the world's bare mark focus.
  */
-function needsSource(part) {
-  return (path, row) => {
-    const p = path.join(".");
-    if (part === "stakes_at_risk" && p === "body") return markSource(row?.mark);
-    return null;
+function needsSource(part, slug) {
+  const list = part === "alerts" ? "alerts" : `${part}.rows`;
+  return (path, row, index) => {
+    const origin = part === "stakes_at_risk" && path.join(".") === "body" ? markSource(row?.mark) : null;
+    return `${restOpening({ read: "needs-you", ...(slug ? { household: slug } : {}) }, `${list}[${index}]${pathStr(path)}`)}${origin ? `; the mark itself: ${origin}` : ""}`;
   };
 }
 

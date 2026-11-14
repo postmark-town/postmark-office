@@ -98,7 +98,7 @@ import { stakesFromStore } from "../world2/tools/fold-input.mjs";
 import { escrowPresenceAt } from "../world2/tools/escrow-presence.mjs";
 import { blessedRef, materializeAtRef } from "./world-branches.mjs";
 import { WORLD_CLONE, placeWordsFrom, markPage, thingStandsBlock, hearingWindowAt, settlementsKnown, heldPlaced } from "./world.mjs";
-import { hearable } from "./hearing-window.mjs";
+import { hearable, roomOpen, ROOM_GRACE_MS } from "./hearing-window.mjs";
 import { HEARING_WINDOW } from "./voices.mjs";
 // 1.0's own backed row, imported rather than restated — see portfolio-reads.mjs
 // § THE DECISIONS ARE NOT RE-EXPRESSED HERE.
@@ -1417,20 +1417,42 @@ export async function world2Serve(path, searchParams, { p: injected = null, hear
     try { win = hearingWindow(at.ms); } catch { win = null; }
     const since = Number.isFinite(win?.since) ? win.since : null;
     // each voice carries its speaker's standing (POS-739): "visitor" for a berth, "resident" otherwise
-    const emissions = live.emissionsOfClass(rows).filter((e) => hearable(Date.parse(e.born_at), at.ms, since))
+    // CORE-97: a room still open across the settlement edge is heard whole. The rows are clustered with the ONE room policy
+    // (hearing-window.mjs roomOpen, through talk.clusterVoices) on the published edges; a row of an open room that began before
+    // the window's edge is hearable too. The 13 h bound still cuts what it cuts: a carried room can reach behind it, so a read that carried
+    // one says so in read_bound_disclosed, and hearable_since names the earliest row actually returned (`conversations` keeps the published edge).
+    const sounds = live.emissionsOfClass(rows);
+    const edges = publishedEdges({ settlements, hearingWindow: () => win, ms: at.ms }); // the window already read: one ask per instant
+    const carried = new Set();
+    let maybeCarried = false;
+    if (since != null && edges.length) {
+      const spoken = sounds.map((e) => ({ at: Date.parse(e.born_at), x: e.x, y: e.y, aboard: Boolean(e.props?.aboard), e }));
+      const prevEdge = edges.filter((m) => m < since).at(-1) ?? null;
+      for (const c of talk.clusterVoices(spoken, { earshotM: dials.earshot_m.value, boundaries: edges })) {
+        // a room open now whose first row this read holds sits just after the edge: it may have begun before it, behind the read's bound, when the read
+        // does not reach back to the previous settlement (a room carried across the edge was talking in the epoch before it)
+        if (c.voices[0].at >= since && c.voices[0].at - since <= ROOM_GRACE_MS && roomOpen(c.latest, at.ms, edges) && (prevEdge == null || readFrom > prevEdge)) maybeCarried = true;
+        if (c.voices[0].at >= since || !roomOpen(c.latest, at.ms, edges)) continue;
+        for (const v of c.voices) carried.add(v.e);
+      }
+    }
+    const emissions = sounds.filter((e) => hearable(Date.parse(e.born_at), at.ms, since) || (carried.has(e) && Date.parse(e.born_at) <= at.ms))
       .map((e) => ({ ...e, standing: standingOf(e.source) }));
+    const reachMs = emissions.length && since != null ? Math.min(since, Date.parse(emissions[0].born_at)) : since;
+    const carriedRead = since != null && sounds.some((e) => carried.has(e) && Date.parse(e.born_at) <= at.ms);
     const fellBack = talk.sayDialsDisclosure(dials);
     const body = {
-      what: `the voices still hearable at this instant: everything said ${HEARING_WINDOW} (POS-226), the same window the live ear hears. A query, never a delete`,
+      what: `the voices still hearable at this instant: everything said ${HEARING_WINDOW} (POS-226), and the whole of a room still talking across that settlement (it carries on for an hour after it, and for as long as anyone adds to it), the same hearing the live ear has. A query, never a delete`,
       evaluated_at: new Date(at.ms).toISOString(),
-      hearable_since: since != null ? new Date(since).toISOString() : null,
+      hearable_since: reachMs != null ? new Date(reachMs).toISOString() : null,
       ...(win?.disclosure || since == null
         ? { hearing_window_disclosed: win?.disclosure ?? "the last settlement could not be read, so hearing reaches back 13 h, as far as this read holds (SAY_READ_SQL)" } : {}),
       // THE READ'S BOUND, SAID WHERE IT CUTS (POS-694): when the window opens
       // earlier than the 13 h this read holds (no settlement read, or an older
       // blessed one standing in), hearing reaches the bound, not the window.
-      ...(since == null || since < readFrom
-        ? { read_bound_disclosed: `this read holds only what was said in the 13 h before the instant asked (SAY_READ_SQL), so hearing reaches back to ${new Date(readFrom).toISOString()}${since == null ? "" : `, not to the window's opening at ${new Date(since).toISOString()}`}` } : {}),
+      ...(since == null || since < readFrom || carriedRead || maybeCarried
+        ? { read_bound_disclosed: `this read holds only what was said in the 13 h before the instant asked (SAY_READ_SQL), so hearing reaches back to ${new Date(readFrom).toISOString()}${since == null || since >= readFrom ? "" : `, not to the window's opening at ${new Date(since).toISOString()}`}`
+            + ((carriedRead || maybeCarried) ? "; a room carried across the settlement is heard from the earliest of its voices this read holds, and any of it said before that is cut (the conversations read keeps it)" : "") } : {}),
       total_in_the_air: emissions.length,
       earshot_rule: mode === "current"
         ? `one radius for the whole answer (${radiusM} m), the way voices.mjs's live ear reads it`

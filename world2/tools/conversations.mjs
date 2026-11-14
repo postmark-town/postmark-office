@@ -69,6 +69,7 @@
 
 import { placedCentreOfRow } from "../../src/held.mjs"; // a held anchor's last place (POS-688, W4)
 import { sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circles.mjs"; // POS-1035: the one flat say line and its circle, shared with voices.mjs
+import { roomOpen } from "../../src/hearing-window.mjs"; // CORE-97: the ONE room-across-a-settlement policy
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
@@ -161,16 +162,13 @@ const chains = (a, b, earshotM) => (a.aboard && b.aboard) || distM(a, b) <= ears
 export function clusterVoices(list, { earshotM, fadeMs, boundaries = null } = {}) {
   const sorted = [...list].sort((a, b) => a.at - b.at);
   const marks = Array.isArray(boundaries) ? boundaries.filter(Number.isFinite).sort((a, b) => a - b) : null;
-  const epochOf = marks && ((at) => {
-    let lo = 0, hi = marks.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (marks[mid] <= at) lo = mid + 1; else hi = mid; }
-    return lo;
-  });
   const open = [];
   const closed = [];
   for (const v of sorted) {
     for (let i = open.length - 1; i >= 0; i--) {
-      const over = epochOf ? epochOf(open[i].latest) !== epochOf(v.at) : v.at - open[i].latest > fadeMs;
+      // CORE-97: voices.mjs `clusterVoices`, verbatim: a room is over once its first settlement edge has passed AND the
+      // hour of grace after it ran out with no say belonging to it; the policy itself is imported, not copied.
+      const over = marks ? !roomOpen(open[i].latest, v.at, marks) : v.at - open[i].latest > fadeMs;
       if (over) closed.push(...open.splice(i, 1));
     }
     const hits = open.filter((c) => c.voices.some((o) => chains(o, v, earshotM)));
@@ -461,12 +459,12 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
       now: new Date(t).toISOString(),
       earshot_m: earshotM,
       settlement_since: marks.length ? new Date(since).toISOString() : null,
-      find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: c.latest >= since, voiceCap }), source: "record" }),
+      find: findConversation(clusters, find, { thread: (c) => threadOf(c, { live: roomOpen(c.latest, t, marks), voiceCap }), source: "record" }),
     };
   }
   const live = [];
   const closed = [];
-  for (const c of clusters) (c.latest >= since ? live : closed).push(c);
+  for (const c of clusters) (roomOpen(c.latest, t, marks) ? live : closed).push(c);
   const paged = Number.isFinite(before);
   const older = (paged ? closed.filter((c) => c.latest < before) : closed).sort((a, b) => b.latest - a.latest);
   let cut = Math.min(closedMax, older.length);
@@ -477,7 +475,7 @@ export function conversationsOf(voices, { now, earshotM, boundaries = [], closed
     earshot_m: earshotM,
     fade_minutes: Math.round(fadeMs / 60000),
     close_minutes: null,
-    close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement (POS-779) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
+    close_minutes_deprecated: "close_minutes is retired and always null: a conversation no longer closes on a silence, it ends at the settlement, unless someone adds to it in the hour after (POS-779, CORE-97) — read `settlement_since` for where the current one began. It leaves this body a month after 2026-10-24.",
     settlement_since: marks.length ? new Date(since).toISOString() : null,
     ...(marks.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
     live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => threadOf(c, { live: true, voiceCap })),
