@@ -72,7 +72,7 @@ import { sayIdOf, sayLines, circleIndex, findConversation } from "../../src/circ
 
 export const VENDOR = Object.freeze({
   voices: { repo: "postmark-town/postmark-office", path: "src/voices.mjs",
-            blob: "cebeeb0fb5b1ef07a938cbe503ae6e7276819b7c", at: "bbdd9876bf394dbac69910f59f1ac2f33c022788" },
+            blob: "9e923b3510820512dfa7d873ba9a131789a9360e", at: "e29b3eabf1fcc39486137dc5a15ba6c66079b6d1" },
   journal: { repo: "postmark-town/postmark-office", path: "src/world-journal.mjs",
              blob: "70c5a1f8ee751062678c696aee40975fcf969cd7", at: "207cdaa52314ffc4ab16109c10dddbead1c92bdd" },
 });
