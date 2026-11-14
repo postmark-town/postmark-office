@@ -320,6 +320,23 @@ export function metaFor(crossing, lines, { asOfWorld = null } = {}) {
 }
 
 /**
+ * The `acts` columns a photograph line is built from, in the select's order.
+ * The Worldkeeper's source-act read (source-act.mjs, WLD-146) selects these
+ * same columns for one act, so its answer and the photograph's line come from
+ * one row shape.
+ */
+export const ACT_COLUMNS =
+  "id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy, witnesses, class, payload, effect, household";
+
+/**
+ * The store-era `seq`: the register's own `acts.id`, as a number (`pg` hands a
+ * bigint back as a string). This is the number every line the store pen writes
+ * carries (see `MERGE_HAZARD` for why it is not the drain's), and the number the
+ * source-act read is keyed by.
+ */
+export const storeSeqOf = (a) => Number(a.id);
+
+/**
  * THE RE-DERIVATION.
  *
  * `client` is anything with `query(text, params) -> { rows }` — the office's
@@ -346,7 +363,7 @@ export async function stateLogFromStore(client, {
   upto = null,
   asOfWorld = null,
   householdNameFor = (k) => k,
-  seqOf = (a) => Number(a.id),
+  seqOf = storeSeqOf,
   lastDrainedWindow = null,
 } = {}) {
   if (window == null || !Number.isFinite(Number(window))) {
@@ -356,13 +373,11 @@ export async function stateLogFromStore(client, {
     throw new Error(`window ${window} is at or below the last drained window ${lastDrainedWindow} — ${MERGE_HAZARD}`);
   }
   const params = [Number(window)];
-  let sql = "SELECT id, at, crossing, actor, action, object, at_anchor, at_dx, at_dy,"
-    // `journal_seq` IS GONE from this select with the column (G1 / POS-156,
-    // migration 025). The `seq` gap below is unchanged and its cause now reads
-    // without pointing at a column: the world's record has no store source for
-    // the old sqlite sequence, and the register's `id` is the sequence it has.
-    + " witnesses, class, payload, effect, household"
-    + " FROM acts WHERE crossing = $1";
+  // `journal_seq` IS GONE from this select with the column (G1 / POS-156,
+  // migration 025). The `seq` gap below is unchanged and its cause now reads
+  // without pointing at a column: the world's record has no store source for
+  // the old sqlite sequence, and the register's `id` is the sequence it has.
+  let sql = `SELECT ${ACT_COLUMNS} FROM acts WHERE crossing = $1`;
   if (upto != null) { params.push(upto); sql += ` AND at <= $${params.length}`; }
   sql += " ORDER BY id";
 
