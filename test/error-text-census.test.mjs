@@ -50,6 +50,7 @@ const ALLOWED = {
   "ashore.mjs": [1, `${OWN}: a backfill's why, printed by its tool`],
   "ballots-store.mjs": [7, `${OWN}: LateCrossingError's ruled message (x3: the write, the stake, a hand's ballot act), an UNREACHABLE refusal's \`cause\` field (x4, never sent)`],
   "ceremony.mjs": [1, `${OWN}: a log variable`],
+  "clone-fresh.mjs": [1, `${OWN}: a classifier (POS-382): it reads git's own refusal of a pull to tell dirt (the named 503) from any other pull failure, and never says the text`],
   "crossing-exec.mjs": [2, `${OWN}: PenUnreachableError's ruled sentence; the push error a receipt discloses`],
   "declare-exec.mjs": [1, `${OWN}: mintRefusal relays a refusal (an HTTP status) by its own defect; any other error, codeless or foreign, is FAULT_LOGGED above it`],
   "drop-recovery.mjs": [2, `${OPERATOR} (the drop-recovery pass's report)`],

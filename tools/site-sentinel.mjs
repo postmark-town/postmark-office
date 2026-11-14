@@ -1033,7 +1033,7 @@ export function classifyClone({ state, seen = null, nowMs, dirtyGraceMs = DIRTY_
     const age = dirt.age_ms == null ? "an unknown time (every changed path is a deletion, so there is no mtime to read)" : humanDuration(dirt.age_ms);
     return {
       verdict: "DOWN",
-      reason: `${state.path} has ${dirt.files.length} uncommitted tracked file${dirt.files.length > 1 ? "s" : ""}, the oldest changed ${age} ago: ${nameFiles(state)}. Every office write that pulls this clone (git pull --rebase) refuses until a person commits the change or restores the file`,
+      reason: `${state.path} has ${dirt.files.length} uncommitted tracked file${dirt.files.length > 1 ? "s" : ""}, the oldest changed ${age} ago: ${nameFiles(state)}. Every office write that pulls this clone (git pull --rebase) now refuses by name, \"the office's town copy needs tending; nothing was written\" (a 503, POS-382), until a person commits the change or restores the file. Letters keep sailing meanwhile, so this is where it shows`,
       seen: clock.seen,
       detail: { files: dirt.files, dirty_since: dirt.since_ms == null ? null : new Date(dirt.since_ms).toISOString() },
     };

@@ -19,6 +19,7 @@
 // the room the door's call saw (the retry guard; parcel-room.mjs § ONE CALL, ONE ROOM),
 // and under a nonce `handle`, the payer of the purchase its key names (§ THE RETRY KEY).
 
+import { freshenExec } from "./clone-fresh.mjs";
 import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -48,8 +49,7 @@ async function main() {
 
   // WHOLE OR NOTHING (POS-296): a purchase the pen cannot land leaves no line and no commit.
   const result = await penTransaction(CLONE, async () => {
-    if (process.env.TOWN_PUSH === "1")
-      execFileSync("git", ["-C", CLONE, "pull", "--rebase", "-q"], { encoding: "utf8" });
+    freshenExec(CLONE);   // POS-382: a dirty copy is answered by name (503) and exits, before anything is written
     // ONE CALL, ONE ROOM (the 10-26 review's F1): `expect` is the room the
     // door's call saw. Already bought, by this click or the one before it, is
     // that purchase's receipt, and nothing is written (parcel-room.mjs § quoteAt).
