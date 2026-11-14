@@ -422,8 +422,12 @@ test("completion is HELD, nothing moved: before its end, when its room cannot be
   assert.match(split.held, /several rooms formed at its place — all are its own, and the World's room-set class that records them \(`rooms`\) is not published yet/);
   assert.equal(split.rooms.length, 2);
   assert.deepEqual(split.frame, { rooms: split.rooms, at: { x: 910, y: 900 }, extent: { w: 20, h: 0 } }, "the envelope over both, its zero height kept");
-  assert.throws(() => S.sparkDeclaration(row, { rooms: [{ id: "a" }, { id: "b" }], window: {}, present: [] }), /room-set class \(rooms\) is not published yet/,
+  assert.throws(() => S.sparkDeclaration(row, { rooms: [{ id: "a" }, { id: "b" }], room_history: "complete", window: {}, present: [] }), /room-set class \(rooms\) is not published yet/,
     "no declaration names several rooms in the single-room class");
+  assert.throws(() => S.sparkDeclaration(row, { rooms: [], frame: null, room_history: "unavailable", window: {}, present: [] }), /cannot be told/,
+    "unknown history is not a proved empty set: never the no-conversation frame");
+  assert.equal(S.sparkDeclaration(row, { rooms: [], frame: null, room_history: "complete", window: {}, present: [] }).extent.w, 120,
+    "a PROVED empty set is the place and the locked circle");
   const edges = [doors - 3_600_000]; // one settlement before the window: the two says are one room, which binds
   // the mark road keeps it a draft, or refuses it: held, and says why
   assert.match((await complete(dir, row, now, { edges, planLeave: async () => ({ refused: { defect: "outside the world", hint: "World's guard" } }) })).held,

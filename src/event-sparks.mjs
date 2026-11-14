@@ -418,6 +418,8 @@ export function recountingOf(row) {
  * on that before asking here.
  */
 export function sparkDeclaration(row, evidence) {
+  // unknown history is not a proved empty room set: it never selects the no-conversation frame
+  if (evidence.room_history !== "complete") throw new Error(`${row.id}: its rooms cannot be told (history ${evidence.room_history ?? "unknown"}) — no frame is chosen`);
   if (evidence.rooms.length > 1) throw new Error(`${row.id}: ${evidence.rooms.length} rooms — World's room-set class (rooms) is not published yet`);
   const place = { x: Number(row.place_x), y: Number(row.place_y) };
   const [room] = evidence.rooms;
