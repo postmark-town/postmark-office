@@ -2542,6 +2542,21 @@ export function townQuestBoardOf({ registry, boardForHandle, today }, pots, potI
 // resident page reads), the board reads the world itself.
 
 /**
+ * `{ invite: { month, paid } }` for a handle from the index's `quest_invites` meta value
+ * (town-index.mjs § invitesOf), or `{}` when the index holds none or it is bent: then
+ * the town leaves the monthly row uncounted. A handle the value does not list is a
+ * counted zero for the value's month.
+ */
+export function inviteEntry(value, handle) {
+  try {
+    const v = JSON.parse(value ?? "null");
+    if (typeof v?.month !== "string" || !/^\d{4}-\d{2}$/.test(v.month) || !v.paid || typeof v.paid !== "object") return {};
+    const n = Object.hasOwn(v.paid, handle) ? v.paid[handle] : 0;
+    return Number.isInteger(n) && n >= 0 ? { invite: { month: v.month, paid: n } } : {};
+  } catch { return {}; }
+}
+
+/**
  * A resident's quest board (or the town's, with no handle) from its index
  * reads: `src` answers progressRow, standing, pots and potIds, sync or async.
  * Called by the store's questBoardOfRows (town-index-store.mjs), whose `src`
@@ -2576,6 +2591,11 @@ export async function questBoardWith(src, meta, handle, clone, { worldSited: dec
     send: row.send, receive: row.receive,
     sentTo: names(row.sent_to), heardFrom: names(row.heard_from),
     household: { key: "", size: row.house_size, send: row.house_send, receive: row.house_receive },
+    // BRING A NEIGHBOUR (POS-961): the household's inviter-side payouts in the town month, folded by the town's own
+    // tool at ingest and carried in meta.quest_invites; the town's boardForHandle counts the monthly row when this
+    // entry names the town month (and leaves it uncounted, never a zero, when it does not). Only a FRESH index
+    // speaks: a stale hydrate stays unmeasured, as the daily bars do. A value that does not parse is no value.
+    ...inviteEntry(meta.quest_invites, handle),
   } : null;
   // ONE world-store read for the first-idea row: `boardForHandle` wants the
   // boolean and the standing join wants the date beside it.

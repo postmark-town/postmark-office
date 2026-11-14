@@ -352,6 +352,29 @@ export async function fundingRows(TOWN, { log = console } = {}) {
 }
 
 /**
+ * BRING A NEIGHBOUR's monthly count, for `town_meta` (POS-961). The town's own fold
+ * (tools/quest-progress.mjs § foldQuestProgress) already carries it on every handle's
+ * entry as `invite: { month, paid }`: the household's INVITER-side payouts dated in the
+ * town month, by canonical inviting household (`invitesPaidByHouse`, POS-816/g). This
+ * only carries that answer to the board, as one small meta value, so the hot read never
+ * parses the ledger: `{ month, paid: { <handle>: <n> } }`, handles whose house was paid
+ * at least once (a handle absent from `paid` is a COUNTED zero for `month`). Null when
+ * the town's fold predates the field, so the board keeps the row unmeasured, never a
+ * zero it cannot know. Sorted, so two runs over one ledger write one value.
+ */
+export function invitesOf(prog) {
+  let month = null;
+  const paid = [];
+  for (const [handle, p] of prog) {
+    const m = p?.invite?.month;
+    if (typeof m !== "string") continue;
+    month ??= m;
+    if (m === month && Number.isInteger(p.invite.paid) && p.invite.paid > 0) paid.push([handle, p.invite.paid]);
+  }
+  return month ? JSON.stringify({ month, paid: Object.fromEntries(paid.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) }) : null;
+}
+
+/**
  * Quests — today's per-resident progress (quest gold Phase 2), folded with the
  * town's OWN tool, and the standing rows (the board's non-daily facts; the rules
  * live in src/quest-standing.mjs). Answers null when the checkout has no quest
@@ -380,7 +403,7 @@ export async function questRows(TOWN, town, { log = console, base = null, welcom
     progress.put([handle, p.send, p.receive, p.household.size, p.household.send, p.household.receive,
       JSON.stringify(p.sentTo ?? []), JSON.stringify(p.heardFrom ?? [])]);
   }
-  const out = { progress: progress.rows(), questDay: today, questRegistry: readFileSync(registryPath, "utf8"), standing: null };
+  const out = { progress: progress.rows(), questDay: today, questRegistry: readFileSync(registryPath, "utf8"), invites: invitesOf(prog), standing: null };
 
   // ── the standing rows: what the record already knew and nobody joined ──────
   // ONE derivation, not a second one: every fact comes from the town's own
@@ -513,6 +536,7 @@ export async function deriveTownIndex(TOWN, { log = console, base = null, welcom
   t.quest_progress = q?.progress ?? [];
   t.quest_standing = q?.standing ?? [];
   if (q) meta.push(["quest_day", q.questDay], ["quest_registry", q.questRegistry]);
+  if (q?.invites) meta.push(["quest_invites", q.invites]); // POS-961: bring a neighbour's monthly count
 
   const atlas = atlasRows(TOWN, town, { log });
   t.regions = atlas?.regions ?? [];
