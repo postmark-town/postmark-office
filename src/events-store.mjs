@@ -37,7 +37,7 @@ import { sessionKeysVia } from "./household-deriver.mjs";
 import { currentCrossing } from "./crossings.mjs";
 import { rungWords } from "./post-words.mjs";
 import { apiUrl } from "./public-base.mjs";
-import { wakesNote, earpieceEnabled } from "./earpiece.mjs";
+import { wakesNote, earpieceEnabled, PEN_HANDLE } from "./earpiece.mjs";
 import { WORLD_ANCHOR } from "./world-journal.mjs";
 import {
   QUEST_CLASS, QUEST_AUTHOR, STATE_OPEN, STATE_CLOSED, questPostId, questEntries, judgeQuestEntry, judgeQuestHand,
@@ -55,7 +55,7 @@ import { REPORT_CLASS, REPORT_ID_RE, REPORT_NO_AMEND, REPORT_NO_CLOSE } from "./
 import { INVITE_CLASS, INVITE_ID_RE } from "./invite-pay.mjs"; // POS-816: an invitation's payout is held, lifted or cancelled by the hands' advance
 import { BALLOT_CLASS, topicOfPost } from "./ballots.mjs"; // POS-983: a ballot is put up and carried by the town's hands (ballot-acts.mjs)
 import {
-  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
+  EVENT_CLASS, ACT_POST, ACT_AMEND_POST, ACT_CLOSE, ACT_COMPLETE, ACT_ADVANCE, ACT_REVEAL, ACT_RECREDIT, ACT_SKIP, ACT_RSVP, ACT_ANNOUNCE, ENDED_LIST_DAYS,
   STATE_CANCELLED, RESPONSE_RSVP, RESPONSE_STANDING,
   BUDGET_DEFAULT, BUDGET_MAX, FELL_BACK_NO_ECHO, SECRET_BYTES, SECRET_NOTE, HARNESS_REUSED_NOTE,
   refuse, mintEventId, judgeInterval, judgePlaceShape, placeFromMarkRow, anchorForPlace,
@@ -64,7 +64,7 @@ import {
 } from "./events.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, eventStakeOn, sparkTextRefusal } from "./event-sparks.mjs";
+import { eventEvidence, eventSparkOf, EVENT_SPARK_BACKING, sparkTextRefusal } from "./event-sparks.mjs";
 import { faultLogged } from "./fault-words.mjs"; // POS-1035: an event's window, room and who came; its stake
 
 /**
@@ -311,11 +311,33 @@ async function postEvent(handle, input, { now, env, door, stake = null }) {
 /** The id a new event of this host and title would take now (read-only): what a hosting stake's ledger line names before the post is written. */
 export async function nextEventId(handle, title, { now = Date.now(), env = process.env } = {}) {
   const text = judgeText({ title, body: "" }, { bodyField: "body" });
-  return read(async (client) => {
+  // part of a write (the hosting stake signs the id it reads), so an unreachable record refuses in the pen's own words
+  return write(async (client) => {
     const { rows: held } = await client.query("SELECT id, state, ends FROM posts WHERE id LIKE $1", [`${handle}/%`]);
     const taken = new Map(held.map((r) => [r.id, { cancelled: r.state === STATE_CANCELLED, ends: isoOrNull(r.ends) }]));
     return mintEventId(handle, text.title, (i) => taken.get(i) ?? null, now);
   }, env);
+}
+
+/**
+ * THE COMPLETION'S RECEIPT, on the caller's transaction (POS-1035): the event row read FOR UPDATE, refused unless it is still
+ * a staked, ended, uncancelled, unreturned and uncompleted event — so a retry or a second tick can never complete it twice — then
+ * the town's internal `complete` act and the row it folds to (`fields.completed`, the stake's whole return and its spark backing).
+ */
+export async function recordCompletionVia(client, id, { spark, n, to, backing, now }) {
+  const prev = await eventRow(client, id, { forUpdate: true });
+  if (!prev) throw refuse(404, `no event "${id}"`, "nothing was written");
+  if (prev.state === STATE_CANCELLED) throw refuse(409, `"${id}" was cancelled`, "a cancelled event makes no spark; its stake came home with the cancellation", { moved: true });
+  if (prev.fields?.completed) throw refuse(409, `"${id}" is already complete (its spark is ${prev.fields.completed.spark})`, "nothing was written — it completes once", { moved: true });
+  if (!prev.fields?.stake || prev.fields.stake.returned) throw refuse(409, `"${id}" has no open stake to complete`, "nothing was written", { moved: true });
+  if (Date.parse(prev.ends) > now) throw refuse(409, `"${id}" has not ended`, "an event completes at its end", { moved: true });
+  if (prev.fields.stake.by !== to || Number(prev.fields.stake.n) !== Number(n)) throw refuse(409, `"${id}"'s stake is ${prev.fields.stake.n} from ${prev.fields.stake.by}`, "nothing was written", { moved: true });
+  const at = new Date(now).toISOString();
+  const payload = { post: id, spark, at, stake_returned: { n, to }, backing };
+  const actId = await insertAct(client, actRow({ action: ACT_COMPLETE, actor: PEN_HANDLE, event: id, payload, place: placeOfRow(prev), now }));
+  const row = applyPostAct({ posts: new Map([[id, prev]]), responses: new Map() }, { id: actId, action: ACT_COMPLETE, actor: PEN_HANDLE, object: id, payload, household: prev.household });
+  await updatePost(client, row);
+  return { act_id: actId, row };
 }
 
 /** POS-1035: the staked post and the staked cancellation, for the executor (event-sparks.mjs) that holds the town lock and signs. */
@@ -437,11 +459,17 @@ export async function hostAtOffice(fields, key, { now = Date.now(), env = proces
 
 // ── THE HOSTING STAKE'S ROAD (POS-1035) ─────────────────────────────────────
 //
-// With EVENT_STAKE on, a new event is posted by the executor (event-sparks.mjs), which holds the town lock, checks the posting
-// resident's own liquid stamps, signs the stake line and lands it in the post's own transaction. A staked event's cancellation
-// takes the same road whatever the switch says, so its stake always comes home. Everything else is the door it always was.
+// Every new event is posted by the executor (event-sparks.mjs), which holds the town lock, checks the posting resident's own
+// liquid stamps, signs the stake line and lands it in the post's own transaction. A staked event's cancellation takes the same
+// road, so its stake always comes home. An event stored without a stake (scheduled before this shipped) keeps the free road.
 const STAKE_EXEC = () => join(dirname(fileURLToPath(import.meta.url)), "event-sparks.mjs");
+// THE TESTS' SEAM, and only theirs: the post machine's own tests run on an in-process stub pen with no town and no store, which a
+// spawned executor cannot see. `stakeExecutorForTests(fn)` hands them an in-process one; `null` puts the real one back. Nothing
+// in the office calls it, and no environment reaches it: there is no switch here, every new event stakes.
+let stakeExecOverride = null;
+export function stakeExecutorForTests(fn) { stakeExecOverride = typeof fn === "function" ? fn : null; }
 async function viaStakeExec(payload, env) {
+  if (stakeExecOverride) return stakeExecOverride(payload, env);
   const { execUnderTownLock, lockTimedOut, LOCK_BUSY } = await import("./town-lock.mjs");
   let out;
   try {
@@ -456,7 +484,6 @@ async function viaStakeExec(payload, env) {
   return result;
 }
 async function hostOrStake(handle, input, { now, env, door }) {
-  if (!eventStakeOn(env)) return postEvent(handle, input, { now, env, door });
   // the cheap refusals first, before the town lock is taken (the executor judges them again, inside it)
   judgeText({ title: input.title, body: input.body }, { bodyField: door === "household" ? "invitation" : "body" });
   judgeInterval(input, now);

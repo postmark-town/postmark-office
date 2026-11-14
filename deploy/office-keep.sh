@@ -474,6 +474,21 @@ keep_settle_unlanded() {
     armed=0
     keep_step rollback ok not-needed
   ) || echo "[office-keep] mint catch-up FAILED (non-fatal) — run stamp-verify in the town clone" >&2
+  # ── the staked events that ended become sparks (POS-1035; call 22) ──────────
+  # Still under the town lock, and AFTER the mint has committed, pushed and
+  # synced: each completion signs its own two lines, lands them in its own
+  # store transaction and commits them itself, and one that cannot land puts
+  # its lines back — true only on a clean ledger, so the pass refuses a dirty
+  # one (exit 3) and the next tick asks again. Non-fatal either way.
+  sparks_rc=0
+  node /srv/postmark-office/deploy/event-sparks-pass.mjs \
+      --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem --world "$WORLD_CLONE" || sparks_rc=$?
+  case "$sparks_rc" in
+    0) keep_step sparks ok ;;
+    3) keep_step sparks skip prereq:clean_ledger ;;
+    *) keep_step sparks refused "exit:$sparks_rc"
+       echo "[office-keep] event-sparks pass had refusals (non-fatal) — the next tick asks again" >&2 ;;
+  esac
   git clone --local --quiet "$TOWN_CLONE" "$SNAP/town" || { keep_rc=$?; keep_step snapshot refused "exit:$keep_rc"; exit "$keep_rc"; }
   keep_step snapshot ok
 ) 9>>"$LOCK"

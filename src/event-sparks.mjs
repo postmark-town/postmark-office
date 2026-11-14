@@ -25,11 +25,10 @@ import { publicActSql } from "./hearth-public.mjs";
 // and writes nothing; no clipping, no pooling, no housemate's stamps. The position is the town ledger's own post stake
 // (`<host> → stake:post/<event> · 20 · side: for`), reserved until the event is cancelled (all of it comes home, whole, in the
 // cancellation's act) or completes (the whole position comes home and the spark's own 1-stamp stake backs it: 19 home, 1 kept).
-// Events already scheduled when this ships carry no stake and stay free. EVENT_STAKE=on is the switch: the law line (POS-1045)
-// is read before it ships. A staked event's cancellation always returns its stake, whatever the switch says.
+// Every event posted from here on stakes (no switch: Rivet's final money scope). Events already scheduled when this ships carry no
+// stake in their stored row and stay free; a staked event's cancellation and completion always settle its stake.
 export const EVENT_STAKE = 20;
 export const EVENT_SPARK_BACKING = 1;
-export const eventStakeOn = (env = process.env) => String(env?.EVENT_STAKE ?? "").trim().toLowerCase() === "on";
 
 /**
  * WILL THIS EVENT'S WORDS SURVIVE AS ITS SPARK? (Rivet 18:39Z: representability is checked before a paid host or amend commits,
@@ -372,6 +371,127 @@ export async function stakedCancel({ handle, id, door, now = Date.now(), date },
     const plan = await planStampedCommit(clone, { env });
     return await store.closeStakedEvent(handle, id, { now, env, door, stakeReturn: { n: Number(staked.n), to: staked.by,
       land: (client) => landPlannedVia(client, clone, plan, [path], `event stake home: ${id} -> ${staked.by} · ${staked.n} (cancelled)`, { env }) } });
+  } catch (e) { return asAnswer(e); }
+}
+
+// ── THE COMPLETION (call 22; Darko 11:00 EST "a spark anyway, 1 kept"; Rivet's seam responses) ──────────────────────────────
+//
+// At its end a staked event becomes ONE put-forward spark through the mark road, its 20 come home whole and the spark's own stake
+// of 1 backs it (19 home, 1 kept) — in ONE locked, signed batch and ONE store transaction, or not at all:
+//   1 · read (no transaction): the event's evidence. Several candidate rooms is the open Call — HELD, nothing moves; a room that
+//       cannot be read is HELD too, never turned into the no-conversation radius.
+//   2 · the spark, judged by the mark road's own leave (world.mjs § journalLeaveMark { plan }): every guard a real leave runs, the
+//       World's spark pre-check, and the verdict — it must go forward with its 1 stamp, or the completion is HELD and says why.
+//   3 · its id: <host>/<event-slug>, else the first unused numeric suffix, checked against published marks, every claim (the
+//       household's drafts included, under its own keys) and every act — never an overwrite, an amend or an adoption.
+//   4 · signed (the town lock is held by the keep tick's mint step): the whole post-return of 20, then the spark's own 1-stamp
+//       world stake (the engine's worldStakeApply, which sees the 20 already home).
+//   5 · ONE officeWrite under the spark household's keys: the spark's act and claim (world-journal § writePreparedVia, the pen's
+//       own two writes), its mark lock (mark-stake-lock § stakeGuard), the event's receipt (events-store § recordCompletionVia,
+//       FOR UPDATE: never twice), and LAST the ledger's landing (stamp-lines § landPlannedVia). A ledger that moved, an id taken
+//       meanwhile or an event that moved answers `moved`, and penTransaction puts the signed lines back.
+
+/** The spark's recounting, from the event's own words. ⚑ The mapping is Wright's Call (POS-1035-completion-seam-response § 1): the
+ *  recommended reading is the invitation verbatim, sourced as the event's original words, with the title when there is none —
+ *  never words written for the host. It stands in this one function so the ruling replaces it here and nowhere else. */
+export function recountingOf(row) {
+  const body = String(row?.body ?? "").trim();
+  return body || String(row?.title ?? "").trim();
+}
+
+/** The spark's place and time, and its properties, from the event and its evidence (the frozen frame). */
+export function sparkDeclaration(row, evidence) {
+  const place = { x: Number(row.place_x), y: Number(row.place_y) };
+  const frame = evidence.room ? evidence.room.frame : placeFrame(place);
+  return {
+    at: frame.at, extent: frame.extent,
+    properties: {
+      recounting: recountingOf(row),
+      experienced_at: evidence.window.from, experienced_until: evidence.window.to,
+      event: row.id,
+      ...(evidence.room ? { room: evidence.room.id } : {}),
+      ...(evidence.present.length ? { present: evidence.present } : {}),
+    },
+  };
+}
+
+/** Is a mark id free in every place an identity lives? (`q` holds the host household's keys, so its drafts are seen.) */
+async function sparkIdFree(q, by, slug) {
+  const id = `${by}/${slug}`;
+  const [{ rows: m }, { rows: c }, { rows: a }] = await Promise.all([
+    q.query("SELECT 1 FROM marks WHERE slug = $1 LIMIT 1", [id]),
+    q.query("SELECT 1 FROM claims WHERE claimant = $1 AND slug = $2 LIMIT 1", [by, slug]),
+    q.query("SELECT 1 FROM acts WHERE object = $1 AND class = 'mark' LIMIT 1", [id]),
+  ]);
+  return !m.length && !c.length && !a.length;
+}
+async function freeSparkSlug(q, by, base) {
+  if (await sparkIdFree(q, by, base)) return base;
+  for (let i = 2; i < 1000; i++) if (await sparkIdFree(q, by, `${base}-${i}`)) return `${base}-${i}`;
+  return null;
+}
+
+export async function completeEvent(row, { clone, keyPem, env = process.env, now = Date.now(), date, edges = [], via = "api" }) {
+  const held = (why, extra = {}) => ({ event: row.id, held: why, ...extra });
+  try {
+    if (!row?.fields?.stake || row.fields.stake.returned || row.fields.completed) return held("not a staked, open event");
+    if (Date.parse(row.ends) > now) return held("not ended");
+    const pen = await import("./world2-pen.mjs");
+    const store = await import("./events-store.mjs");
+    const journal = await import("./world-journal.mjs");
+    const { stakeGuard } = await import("./mark-stake-lock.mjs");
+    const { planStampedCommit, landPlannedVia } = await import("./stamp-lines.mjs");
+    const { join } = await import("node:path");
+    const { pathToFileURL } = await import("node:url");
+
+    // 1 · the evidence, read whole (no transaction)
+    const evidence = await pen.officeRead((q) => eventEvidence(q, row, { now, edges }), { env });
+    if (!evidence?.complete) return held("its window is not over yet");
+    if (evidence.room_history !== "complete") return held("its room cannot be told (the window opens before the settlements this office has read)", { note: evidence.room_note });
+    if (evidence.room_binding === "unresolved") return held("several rooms formed at its place — which one its spark binds is an open Call", { rooms: evidence.rooms_at_place.map((r) => r.id) });
+
+    // 3 · the id, under the host household's own keys (its drafts count as used)
+    const by = String(row.fields.stake.by);
+    const base = String(row.id).split("/").slice(1).join("/");
+    const slug = await pen.officeWrite((q) => freeSparkSlug(q, by, base), { household: row.household, env });
+    if (!slug) return held("no free spark id under its slug");
+    const sparkId = `${by}/${slug}`;
+
+    // 2 · the spark, judged by the mark road's own leave, written by nobody yet
+    const world = await import("./world.mjs");
+    const decl = sparkDeclaration(row, evidence);
+    const leave = await world.planSparkLeave({ by, household: row.household, slug, body: String(row.title), ...decl, stamps: EVENT_SPARK_BACKING });
+    if (leave?.refused) return held(`its spark would not go forward: ${leave.refused.defect}`, { hint: leave.refused.hint });
+    if (!leave?.planned || leave.put_forward !== true) return held("its spark would not go forward with its 1 stamp (the mark road kept it a draft)");
+    const prepared = await journal.prepareActFlipped(leave.entry);
+
+    // 4 · signed: the whole return, then the spark's own stake
+    const mint = await import(pathToFileURL(join(clone, "tools", "stamp-mint.mjs")).href);
+    const ws = await import(pathToFileURL(join(clone, "tools", "world-stake.mjs")).href);
+    const path = join(clone, "WHITE_PAGES", "stamp-ledger.md");
+    const { readFileSync } = await import("node:fs");
+    const position = postPositionOf(mint.parseStampLedger(readFileSync(path, "utf8")), row.id, by);
+    if (position.returned || position.n !== Number(row.fields.stake.n))
+      return refusal(503, `the ledger holds ${position.n} on "${row.id}" for ${by}${position.returned ? " (already returned)" : ""}, and the event's record says ${row.fields.stake.n} unreturned`,
+        "the office's record and the town's ledger disagree; nothing was written — the operator reconciles it (a return that landed without its receipt is never signed again)");
+    mint.appendSigned(clone, [mint.postReturnLine({ date, post: row.id, handle: by, n: Number(row.fields.stake.n) })], keyPem);
+    const staked = ws.worldStakeApply(clone, { handle: by, mark: sparkId, n: EVENT_SPARK_BACKING, via, date }, keyPem);
+    if (staked.applied !== EVENT_SPARK_BACKING) return refusal(503, `the spark's backing did not apply (${staked.reason ?? "applied " + staked.applied})`, "nothing was written; the lines are put back");
+    const plan = await planStampedCommit(clone, { env });
+
+    // 5 · ONE transaction: the spark, its lock, the receipt, and last the ledger
+    return await pen.officeWrite(async (client) => {
+      if (!(await sparkIdFree(client, by, slug))) throw Object.assign(new Error("moved"), { code: 409, defect: `${sparkId} was taken meanwhile`, hint: "nothing was written; the next tick tries again" });
+      const { actId: sparkAct } = await journal.writePreparedVia(client, prepared);
+      await stakeGuard(sparkId)(client);
+      const receipt = await store.recordCompletionVia(client, row.id, { spark: sparkId, n: Number(row.fields.stake.n), to: by, backing: EVENT_SPARK_BACKING, now });
+      const landed = await landPlannedVia(client, clone, plan, [path], `event complete: ${row.id} -> spark ${sparkId} · ${row.fields.stake.n} home, ${EVENT_SPARK_BACKING} backing`, { env });
+      if (landed?.moved) throw Object.assign(new Error("moved"), { code: 409, defect: "the stamp ledger moved while the completion was landing", hint: "nothing was written; the next tick tries again" });
+      if (landed?.error) throw Object.assign(new Error("not landed"), landed.error);
+      return { event: row.id, completed: true, spark: sparkId, spark_act: sparkAct, act_id: receipt.act_id,
+        stake: { returned: Number(row.fields.stake.n), to: by, backing: EVENT_SPARK_BACKING, home: Number(row.fields.stake.n) - EVENT_SPARK_BACKING },
+        ...(landed?.commit ? { commit: landed.commit } : {}), room: evidence.room?.id ?? null, present: evidence.present };
+    }, { household: prepared.household ?? row.household, env });
   } catch (e) { return asAnswer(e); }
 }
 

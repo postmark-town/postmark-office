@@ -46,6 +46,9 @@ export const ACT_ANNOUNCE = "announce";
 export const ACT_POST = "post";
 export const ACT_AMEND_POST = "amend";
 export const ACT_CLOSE = "close";
+// POS-1035: the town's INTERNAL completion of a staked event (the keep tick's, never a resident's door act): the event's spark made
+// and its stake come home in one act. The stored state stays as it was; "ended" is still the clock's (Rivet's seam response (3)).
+export const ACT_COMPLETE = "complete";
 // The bug class's one move along its lifecycle (Posts phase 2): the state it
 // moves to, and the class's own fields that stage sets.
 export const ACT_ADVANCE = "advance";
@@ -454,6 +457,18 @@ export function applyPostAct(state, act) {
     // act, and the fold carries that it did — so a second cancellation, or a completion, can see it was paid and never pays twice
     if (p.stake_returned && prev.fields?.stake)
       row.fields = { ...prev.fields, stake: { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) } } };
+    state.posts.set(id, row);
+    return row;
+  }
+  // THE COMPLETION (POS-1035; call 22): `fields.completed { act, spark, at }` — the identity of the spark it made, recorded ONCE —
+  // and the stake's whole return with the backing it now gives that spark. Nothing else about the row moves.
+  if (act.action === ACT_COMPLETE) {
+    if (!prev) return null;
+    const fields = { ...prev.fields, completed: { act: actId, spark: String(p.spark), at: String(p.at) } };
+    if (p.stake_returned && prev.fields?.stake)
+      fields.stake = { ...prev.fields.stake, returned: { act: actId, n: Number(p.stake_returned.n), to: String(p.stake_returned.to) },
+        backing: { spark: String(p.spark), n: Number(p.backing ?? 0) } };
+    const row = { ...prev, fields, last_act: actId };
     state.posts.set(id, row);
     return row;
   }

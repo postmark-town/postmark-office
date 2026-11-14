@@ -155,6 +155,34 @@ async function sparkWorld() {
     return typeof mk.isSparkIn === "function" ? { mk, sp, fold } : null;
   } catch { return null; }
 }
+/**
+ * THE EVENT'S SPARK, JUDGED BY THE MARK ROAD AND WRITTEN BY NOBODY YET (POS-1035; event-sparks.mjs § completeEvent). The same
+ * declaration the leave door builds for a spark — the World's own class answer, its properties carried by name, the World's
+ * pre-check — then journalLeaveMark { plan }: every guard and the put-forward verdict a real leave runs, and the entry it would
+ * write handed back for the completion's one transaction. `{ refused: { defect, hint } }` when any of them says no.
+ */
+export async function planSparkLeave({ by, household, slug, body, at, extent, properties, stamps }) {
+  try {
+    const marks = canonForGuards()?.marks ?? [];
+    if (!(await sparkByWorld({ kind: "spark" }, marks)))
+      return { refused: { defect: "this office's World engine does not know the spark class yet", hint: "the event's spark waits for the World's class at the blessed ref (World #391); nothing was written" } };
+    const c = carriedProperties("spark", properties, Object.keys(classOwnProperties("spark")), { spark: true });
+    if (c.refused) return { refused: c.refused };
+    const clean = { slug, kind: "spark", at, extent, body: String(body).trim(), by, household, date: new Date().toISOString(), ...c.fields, stamps };
+    const w = await sparkWorld();
+    if (typeof w?.sp?.sparkProblems === "function") {
+      const radiusM = typeof w.sp.sparkRadiusM === "function" ? w.sp.sparkRadiusM(marks) : null;
+      const isDate = typeof w.fold?.isValidMarkDate === "function" ? w.fold.isValidMarkDate : (s) => Number.isFinite(Date.parse(String(s)));
+      const problems = w.sp.sparkProblems({ ...clean, id: `${by}/${slug}` }, { radiusM, isDate });
+      if (problems.length) return { refused: { defect: problems[0], hint: problems.slice(1).join("; ") || "the World's spark class (tools/spark.mjs)" } };
+    }
+    return await journalLeaveMark(clean, { plan: true });
+  } catch (e) {
+    if (e?.defect) return { refused: { defect: e.defect, hint: e.hint } };
+    throw e;
+  }
+}
+
 async function sparkByWorld(m, marks) {
   const w = await sparkWorld();
   if (!w) return false;
@@ -4621,7 +4649,9 @@ export async function markStandsOnOwnGround(clean, canon = null) {
  */
 // Exported for tools/town-signpost-amend.mjs (POS-606), the one reviewed amend written as the town: it runs this
 // insert and every guard in it, never a door. journalWithdraw is exported the same way.
-export async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null } = {}) {
+// `plan` (POS-1035): every read, judgement and guard of a real leave, then the entry it would write handed back instead of written
+// — for an act that must land with others in ONE transaction (the event's completion: world-journal § prepareActFlipped).
+export async function journalLeaveMark(clean, { crossing = currentCrossing(), guard = null, plan = false } = {}) {
   const bounce = (code, defect, hint) => { const e = new Error(defect); Object.assign(e, { code, defect, hint }); return e; };
   const id = `${clean.by}/${clean.slug}`;
   const canon = canonForGuards();
@@ -4885,6 +4915,7 @@ export async function journalLeaveMark(clean, { crossing = currentCrossing(), gu
         ? "the prior declaration is superseded — every version stays in the log; canon shows the latest at the next crossing"
         : "a draft stands in the live layer; it enters canon at the next crossing that ratifies it",
     };
+    if (plan) return { planned: true, id, entry, put_forward: putForward, ground_min: groundMin };
     // ── LANE SIX OF THE PEN FLIP (W2_PEN=…,mark; runbook C6) ────────────────
     //
     // The candle lane, and the one the flip refused longest — not by ruling but

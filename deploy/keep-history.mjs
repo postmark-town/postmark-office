@@ -40,6 +40,8 @@ export const SOFT_STEPS = Object.freeze([
   "registry", "settle", "standing", "gangway",
   // invite: Bring a neighbour's pass (POS-816), right after the welcome it follows
   "mint", "welcome", "invite", "bugstage", "ballots", "verify", "commit", "push", "sync", "rollback",
+  // sparks: a staked event that ended becomes its spark (POS-1035), after the mint's commit and before the snapshot
+  "sparks",
   // carried, chests, amends and drops: settlements-backfill's four soft steps,
   // in the order it runs them, recorded apart from it because each is
   // non-fatal by design (POS-612 and POS-627, review-612).
@@ -50,7 +52,7 @@ export const SOFT_STEPS = Object.freeze([
   // the world graph snapshot (POS-268 5b moved it off the rehydrate; review-593 c)
   "world",
 ]);
-export const STEPS = Object.freeze(["lock", "pull", "fetch", ...SOFT_STEPS.slice(0, 14), "snapshot", ...SOFT_STEPS.slice(14), "publish"]);
+export const STEPS = Object.freeze(["lock", "pull", "fetch", ...SOFT_STEPS.slice(0, 15), "snapshot", ...SOFT_STEPS.slice(15), "publish"]);
 export const STATUSES = Object.freeze(["ok", "refused", "skip", "notrun"]);
 export const SOURCES = Object.freeze(["scheduled", "by-hand"]);
 export const SIGNALS = Object.freeze(["TERM", "INT", "HUP"]);

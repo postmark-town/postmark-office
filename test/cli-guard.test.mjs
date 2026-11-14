@@ -225,6 +225,8 @@ const ROSTER = {
   "tools/world-gexf.mjs": { args: ["--out", NOWHERE_OUT], env: NO_PG, code: 1, needle: "no world graph" },
   // deploy/
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
+  // POS-1035: the keep tick's event-sparks pass — no arguments, so it answers its usage and touches nothing
+  "deploy/event-sparks-pass.mjs": { args: [], code: 2, needle: "usage: node deploy/event-sparks-pass.mjs" },
   "deploy/settlement-classify.mjs": { args: [], code: 0, needle: '"class"' },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it

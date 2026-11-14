@@ -51,13 +51,14 @@ const alarmsFor = (alarms, step) => alarms.filter((a) => a.startsWith(`${step} `
 // review-593 c: the world snapshot (POS-268 5b) is a soft step, after hhkeys_log.
 // 28 since WLD-25: a named creature's ending, the same run's fifth soft step, after drops.
 // 29 since POS-816: the invite pass, right after the welcome pass.
-test("the step list is the script's: 29 steps, 5 fatal and 24 soft, no step twice", () => {
-  assert.equal(STEPS.length, 29);
-  assert.equal(new Set(STEPS).size, 29);
+test("the step list is the script's: 30 steps, 5 fatal and 25 soft, no step twice", () => {
+  assert.equal(STEPS.length, 30);
+  assert.equal(new Set(STEPS).size, 30);
   assert.deepEqual(STEPS.slice(STEPS.indexOf("settlements"), STEPS.indexOf("settlements") + 7), ["settlements", "carried", "chests", "amends", "drops", "endings", "positions"]);
   assert.deepEqual([...STEPS].sort(), [...FATAL_STEPS, ...SOFT_STEPS].sort());
   assert.deepEqual(STEPS.slice(0, 3), ["lock", "pull", "fetch"]);
-  assert.equal(STEPS[17], "snapshot", "after the fourteen locked soft steps (the invite pass among them since POS-816)");
+  assert.equal(STEPS[18], "snapshot", "after the fifteen locked soft steps (the invite pass among them since POS-816, the event-sparks pass since POS-1035)");
+  assert.equal(STEPS[17], "sparks", "the event-sparks pass runs under the lock after the mint's commit, before the snapshot");
   assert.deepEqual(STEPS.slice(-3), ["hhkeys_log", "world", "publish"]);
 });
 

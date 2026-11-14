@@ -198,7 +198,7 @@ const liquidOf = async (dir, handle) => {
   const mint = await import(`${new URL(`file://${join(dir, "tools", "stamp-mint.mjs")}`).href}?t=${Date.now()}`);
   return mint.foldBalances(mint.parseStampLedger(ledgerText(dir))).get(handle) ?? 0;
 };
-const stakeEnv = (dir, on = true) => ({ ...ENV, ...(on ? { EVENT_STAKE: "on" } : {}), TOWN_CLONE: dir, STAMP_KEY: KEY_FILE, TOWN_LOCK: join(bottle, `town-${townN}.lock`), TOWN_PUSH: "" });
+const stakeEnv = (dir) => ({ ...ENV, TOWN_CLONE: dir, STAMP_KEY: KEY_FILE, TOWN_LOCK: join(bottle, `town-${townN}.lock`), TOWN_PUSH: "" });
 const keyOf = (handle) => ({ handles: new Set([handle]), household: `${handle}-house` });
 const T_POST = Date.now();
 const eventArgs = (title) => ({ class: "event", title, body: "sorbet on the counter", place: { at: { x: 10, y: 20 } },
@@ -275,14 +275,15 @@ test("a staked event's words are checked BEFORE money moves (Rivet 18:39Z): an i
     (e) => e.code === 422 && /title would not survive/.test(e.defect), "an amendment is held to the same line");
 });
 
-test("legacy: with the switch off an event posts free and cancels free — no stake, no line (events scheduled before this ships stay free)", async () => {
+test("legacy: an event scheduled before this shipped (stored with no stake) stays free — it cancels with no stamp moving, and nothing is charged retroactively", async () => {
   const dir = townInABottle();
   const before = ledgerText(dir);
-  const posted = await postAtTown(eventArgs("Free tea"), keyOf("wright"), { env: stakeEnv(dir, false) });
-  assert.equal("stake" in posted, false);
-  assert.equal((await postRow(posted.post.id)).fields.stake, undefined);
-  const closed = await closeAtTown({ post: posted.post.id }, keyOf("wright"), { env: stakeEnv(dir, true) });
-  assert.equal(closed.state, "cancelled", "a free event's cancellation is free even with the switch on");
+  // a row as the store already holds it: no stake
+  await owner.query(`INSERT INTO posts (id, class, title, body, author, household, place_mark, place_x, place_y, starts, ends, state, fields, revised, posted_act, last_act)
+    VALUES ('wright/old-free-tea', 'event', 'Old free tea', '', 'wright', 'wright-house', NULL, 10, 20, $1, $2, 'announced', $3, 0, 1, 1)`,
+    [new Date(Date.now() + 3_600_000), new Date(Date.now() + 7_200_000), JSON.stringify({ doors_open: new Date(Date.now() + 3_600_000).toISOString() })]);
+  const closed = await closeAtTown({ post: "wright/old-free-tea" }, keyOf("wright"), { env: stakeEnv(dir) });
+  assert.equal(closed.state, "cancelled");
   assert.equal("stake" in closed, false);
-  assert.equal(ledgerText(dir), before);
+  assert.equal(ledgerText(dir), before, "no line: it never staked, and is not charged now");
 });
