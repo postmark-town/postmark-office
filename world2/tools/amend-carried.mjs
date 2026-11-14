@@ -126,6 +126,39 @@ const git = (repo, args) => execFileSync("git", ["-C", repo, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024,
 }).trim();
 
+const BLANK = /\s/;
+const LINE_END = /[\n\r\u2028\u2029]/;
+/**
+ * `/^date:\s*(.+?)\s*$/m.exec(front)?.[1]` — the first `date:` line's value — read once from the left instead of by the regex, which is QUADRATIC on a run of blanks it
+ * cannot finish (`\s*` and `(.+?)\s*$` eat the same blanks and the engine tries every split: 388 ms at 16k characters; office #943). The same answer on every text
+ * (test/pos-923-linear-reads.test.mjs holds it against the regex over every short string of its alphabet), including the regex's quirks: `\s*` crosses line ends, so a
+ * value may sit on a later line, and when only blanks follow the value is the last character `.` can match.
+ */
+export function frontDate(front) {
+  const s = String(front);
+  const n = s.length;
+  // the facts the regex re-derives at every step, once: from each index, is the run of blanks that starts there ended by a line end or by the end of the text?
+  const endsLine = new Uint8Array(n + 1);
+  endsLine[n] = 1;
+  for (let i = n - 1; i >= 0; i -= 1) endsLine[i] = LINE_END.test(s[i]) ? 1 : (BLANK.test(s[i]) ? endsLine[i + 1] : 0);
+  for (let at = s.indexOf("date:"); at >= 0; at = s.indexOf("date:", at + 1)) {
+    if (at > 0 && !LINE_END.test(s[at - 1])) continue;                  // ^ (multiline): the start, or just after a line end
+    const i = at + 5;
+    let g = i;
+    while (g < n && BLANK.test(s[g])) g += 1;
+    if (g < n) {                                                         // the value starts at the first non-blank and runs to the first place a line end or the end of text follows (blanks between are the \s*)
+      let e = g + 1;
+      while (e < n && !endsLine[e] ) e += 1;
+      return s.slice(g, e);                                              // e is the FIRST place a line end or the end follows, so no blank trails it
+    }
+    // only blanks follow: the value is the last character that `.` can match
+    let k = n - 1;
+    while (k >= i && LINE_END.test(s[k])) k -= 1;
+    if (k >= i) return s[k];
+  }
+  return null;
+}
+
 /**
  * A mark file's frontmatter `date` and its body, or null when the text has no
  * frontmatter. PURE. Line endings are normalised; quotes around the date go.
@@ -137,8 +170,8 @@ export function markFileParts(text) {
   if (end === -1) return null;
   const front = t.slice(4, end);
   const body = t.slice(end + 4).replace(/^[^\n]*\n?/, "");
-  const m = /^date:\s*(.+?)\s*$/m.exec(front);
-  return { date: m ? m[1].replace(/^["']|["']$/g, "") : null, body };
+  const found = frontDate(front);
+  return { date: found !== null ? found.replace(/^["']|["']$/g, "") : null, body };
 }
 
 /**
