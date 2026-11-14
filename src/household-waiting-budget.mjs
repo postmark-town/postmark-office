@@ -1,39 +1,28 @@
 // household-waiting-budget.mjs — CORE-88: the waiting read fits the connector, and what waits stays findable.
 //
-// THE MEASUREMENT (CORE-84, the founder household): household { read: "waiting" }
-// answered 70,691 UTF-8 bytes of MCP text, and the client refused it. The agreed
-// cap is 10,000 bytes (Wright, 2026-11-14: "Give the household waiting read a
-// budget under the 10,000-byte connector cap and fold the rest into stubs with
-// counts and the read that opens each group … Nothing waiting may be lost.").
+// THE MEASUREMENT (CORE-84, the founder household): household { read: "waiting" } answered 70,691 UTF-8 bytes of MCP
+// text, and the client refused it. The agreed cap is 10,000 bytes (Wright, 2026-11-14: "Give the household waiting read a
+// budget under the 10,000-byte connector cap and fold the rest into stubs with counts and the read that opens each group
+// … Nothing waiting may be lost.").
 //
-// WHAT THIS IS. A bounded PRESENTATION of the answer householdWaiting already
-// composes, never a different definition of who or what waits. An answer that
-// already fits is returned as it was, byte for byte. One that does not is
-// folded, and says so (`folded`):
+// WHAT THIS IS. A bounded PRESENTATION of the answer householdWaiting already composes, never a different definition of
+// who or what waits. An answer that already fits is returned as it was, byte for byte. One that does not is folded, and
+// says so (`folded`):
 //
-//   non-mark parts  (set-downs, takes, key asks, at-risk marks, alerts, bounces,
-//                   the likeness question): each row rides as an IDENTITY ROW,
-//                   bodyless (the mark's body, a cause that is constant text),
-//                   so every item is named whatever its body weighs, with what
-//                   acting on it takes. A body rides the read of its own part.
-//   mark groups     whole (sample and all), then a STUB (counts, ids, act, the
-//                   read that opens it, no body), then one line, then a count.
+//   non-mark parts  (set-downs, takes, key asks, at-risk marks, alerts, bounces, the likeness question): each row rides as
+//                   an IDENTITY ROW, bodyless, so every item is named whatever its body weighs, with what acting on it
+//                   takes. A part with rows not shown says how many, and names the call that pages them.
+//   mark groups     whole (sample and all), then a STUB (counts, ids, act, the read that opens it, no body), then one
+//                   line, then a count; the groups not named are reached by walking `stances`.
 //
-// A body is never cut: a sample that does not fit is folded whole. A row past
-// the budget is counted, with the existing read that lists it and what that
-// read costs, said plainly where it is not bounded.
+// EVERY CALL NAMED HERE PAGES BY SIZE (household-read-page.mjs): `stances` (marks, and its set_downs and takes parts),
+// `needs-you` (its parts). Each page of them fits PAGE_BYTES whole, with a cursor; that is what makes the stub a recovery
+// and not a pointer. A body is never cut: a sample that does not fit is folded whole.
 //
-// WHAT A RECOVERY READ COSTS. `stances` carries every body of the marks it
-// lists, so a group's `open` and the walk name a `limit` taken from the page's
-// own rows (GROUP_PAGE_BYTES of them). `stances` also carries its teaching
-// block and the stances already spoken, which this fold cannot size: said so.
-//
-// THE BUDGET. WAITING_BUDGET_BYTES is measured on the text the connector
-// delivers: JSON.stringify(answer, null, 1), as mcp.mjs § contentFor writes it,
-// in UTF-8 bytes (a character is up to four). test/household-waiting-budget.test.mjs
-// pins that this measure IS contentFor's.
+// THE BUDGET. WAITING_BUDGET_BYTES is measured on the text the connector delivers: JSON.stringify(answer, null, 1), as
+// mcp.mjs § contentFor writes it, in UTF-8 bytes. test/household-waiting-budget.test.mjs pins that this measure IS contentFor's.
 
-import { STANCE_WORDS } from "./household-read-v2.mjs";
+import { textBytes } from "./household-read-page.mjs";
 
 /** The delivered MCP text this read may take, in UTF-8 bytes. The connector's cap is 10,000; the rest is headroom for a field the door adds. */
 export const WAITING_BUDGET_BYTES = 9000;
@@ -41,56 +30,37 @@ export const WAITING_BUDGET_BYTES = 9000;
 export const CONNECTOR_CAP_BYTES = 10000;
 /** How much of the budget identity rows may take before the marks are placed (the rest is for the groups). */
 export const ROWS_SHARE = 0.75;
-/**
- * The rows one recovery page of `stances` is sized to carry, in UTF-8 bytes as the connector delivers them (a row's whole JSON, body included).
- * The rest of the cap is the read's own: its teaching block, the ground you hold and the stances you have spoken, which this fold cannot
- * size (1.7 KB on the test house; more where the house holds many marks or has spoken many stances).
- */
-export const GROUP_PAGE_BYTES = 6000;
-
-/** A stance row heavier than this is a page of its own: `limit: 1` reads it alone, and it does not set a group's limit. */
-export const HEAVY_ROW_BYTES = GROUP_PAGE_BYTES / 2;
 
 /** The text the connector delivers for an answer (mcp.mjs § contentFor), in UTF-8 bytes. */
-export const deliveredBytes = (answer) => Buffer.byteLength(JSON.stringify(answer, null, 1), "utf8");
+export const deliveredBytes = textBytes;
 const bytes = (s) => Buffer.byteLength(String(s ?? ""), "utf8");
-/** One stance row as the connector delivers it inside `awaiting`: its JSON, two spaces deeper on every line. */
-export const rowBytes = (row) => { const j = JSON.stringify(row, null, 1); return bytes(j) + 2 * j.split("\n").length + 1; };
 
 const pick = (row, keys) => Object.fromEntries(keys.filter((k) => row?.[k] !== undefined).map((k) => [k, row[k]]));
 
-const NEEDS_YOU = { read: 'household { read: "needs-you" }', cost: "unbudgeted: its rows ride whole, bodies and all, so it can exceed the connector's cap on a big house" };
-const STANCES_SETDOWNS = { read: 'household { read: "stances", args: { limit: 1 } }', cost: "every set-down and take rides whole on it beside one mark; it also carries a teaching block and the stances already spoken, which the connector's cap may not hold" };
-const MAIL = { read: 'household { read: "mail", args: { view: "awaiting", handle: "<resident>" } }', cost: "one resident's mail, paged" };
-const NO_STAKES_READ = { read: null, cost: 'no bounded read lists the at-risk marks past these: household { read: "stakes" } lists every published mark, at-risk first, bodies whole (unbudgeted), and its limit: answers the newest rows, not the at-risk ones' };
+/** The call that pages a part from `cursor` (the rows already shown). */
+const stancesPart = (part) => (cursor) => `household { read: "stances", args: { part: "${part}", cursor: "${cursor}" } }`;
+const needsPart = (part) => (cursor) => `household { read: "needs-you", args: { part: "${part}", cursor: "${cursor}" } }`;
 
 /** The non-mark parts, in the order they claim the budget; `identity` is the bodyless row. */
 const PARTS = [
-  { key: "alerts", rows: (a) => a.alerts, flat: true, ...NEEDS_YOU,
+  { key: "alerts", rows: (a) => a.alerts, flat: true, call: needsPart("alerts"),
     identity: (r) => ({ ...pick(r, ["kind", "severity"]), about: r.about ? { mark: r.about.mark } : null, ...pick(r, ["message", "act", "since", "until"]) }) },
-  { key: "key_asks", rows: (a) => a.key_asks?.rows, ...NEEDS_YOU, identity: (r) => pick(r, ["handle", "asks_standing"]) },
-  { key: "stakes_at_risk", rows: (a) => a.stakes_at_risk?.rows, ...NO_STAKES_READ, identity: (r) => pick(r, ["mark", "class", "escrow", "at_risk", "act"]) },
-  { key: "set_downs_awaiting", rows: (a) => a.set_downs_awaiting?.rows, ...STANCES_SETDOWNS, identity: (r) => pick(r, ["thing", "made_by", "owner", "set_down_by", "at", "act_id", "answer"]) },
-  { key: "takes_awaiting", rows: (a) => a.takes_awaiting?.rows, optional: true, ...STANCES_SETDOWNS, identity: (r) => pick(r, ["thing", "made_by", "owner", "act", "by", "act_id", "answer"]) },
-  { key: "unplaced_bounces", rows: (a) => a.unplaced_bounces?.rows, ...MAIL, identity: (r) => pick(r, ["handle", "date", "path", "reason"]) },
-  { key: "likeness_question", rows: (a) => a.likeness_question?.rows, ...NEEDS_YOU, identity: (r) => pick(r, ["household", "residents", "link"]) },
+  { key: "key_asks", rows: (a) => a.key_asks?.rows, call: needsPart("key_asks"), identity: (r) => pick(r, ["handle", "asks_standing"]) },
+  { key: "stakes_at_risk", rows: (a) => a.stakes_at_risk?.rows, call: needsPart("stakes_at_risk"), identity: (r) => pick(r, ["mark", "class", "escrow", "at_risk", "act"]) },
+  { key: "set_downs_awaiting", rows: (a) => a.set_downs_awaiting?.rows, call: stancesPart("set_downs"), identity: (r) => pick(r, ["thing", "made_by", "owner", "set_down_by", "at", "act_id", "answer"]) },
+  { key: "takes_awaiting", rows: (a) => a.takes_awaiting?.rows, optional: true, call: stancesPart("takes"), identity: (r) => pick(r, ["thing", "made_by", "owner", "act", "by", "act_id", "answer"]) },
+  { key: "unplaced_bounces", rows: (a) => a.unplaced_bounces?.rows, call: needsPart("unplaced_bounces"), identity: (r) => pick(r, ["handle", "date", "path", "reason"]) },
+  { key: "likeness_question", rows: (a) => a.likeness_question?.rows, call: needsPart("likeness_question"), identity: (r) => pick(r, ["household", "residents", "link"]) },
 ];
 
-const cursorOf = (text) => /cursor: "([^"]*)"/.exec(String(text))?.[1] ?? "";
-
-const byResident = (rows) => {
-  const by = {};
-  for (const r of rows) by[r.handle ?? "?"] = (by[r.handle ?? "?"] ?? 0) + 1;
-  return by;
-};
+const OPEN = 'household { read: "stances", args: { by, over, limit: 100 } }';
+const WALK = 'household { read: "stances", args: { limit: 100 } }';
 
 /**
  * Fold a composed waiting answer to the budget. `answer` is householdWaiting's:
  * needs-you's answer with `read: "waiting"` and `groups` (needGroups, none cut).
- * `marks` is the stance page those groups were drawn from (rows with their
- * bodies), used only to size the recovery reads.
  */
-export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, marks = [] } = {}) {
+export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES } = {}) {
   const fullBytes = deliveredBytes(answer);
   if (fullBytes <= budget) return answer;
 
@@ -98,30 +68,11 @@ export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, marks = [] 
   const stanceTotal = answer.stances_awaiting?.total ?? 0;
   const pageMarks = answer.stances_awaiting?.shown ?? 0;
 
-  // how many of a run of marks one `stances` page can carry, whichever page: the most rows in a row whose rows as delivered are GROUP_PAGE_BYTES at most
-  // in EVERY window of that size (a later page can be heavier than the first), and at least one (a single row heavier than that cannot be cut)
-  const pageOf = (rows) => {
-    // a row heavier than half a page cannot share one, and is the read's to deliver whole whatever the limit: it does not set the limit
-    const w = rows.map((r) => { const n = rowBytes(r); return n > HEAVY_ROW_BYTES ? 0 : n; });
-    for (let k = Math.min(100, w.length); k > 1; k--) {
-      let sum = w.slice(0, k).reduce((n, x) => n + x, 0), worst = sum;
-      for (let i = k; i < w.length; i++) { sum += w[i] - w[i - k]; worst = Math.max(worst, sum); }
-      if (worst <= GROUP_PAGE_BYTES) return k;
-    }
-    return 1;
-  };
-  const inGroup = (g) => marks.filter((m) => m.by === g.by && (m.on_your_ground ?? [])[0] === g.over);
-  const walkLimit = pageOf(marks);
-  const limits = groups.map((g) => pageOf(inGroup(g)));
-  const open = (g, i) => `household { read: "stances", args: { by: ${JSON.stringify(g.by)}, over: ${JSON.stringify(g.over)}, limit: ${limits[i]} } }${limits[i] < g.count ? ` (${limits[i]} a page: cursor ${limits[i]}, ${2 * limits[i]}, …)` : ""}`;
-  // the group's own act, its read bounded the same way (needGroups' groupAct names limit: 100)
-  const actOf = (g, i) => (g.count <= g.ids.length ? g.act
-    : `${open(g, i)}, then declare-stance-on { on: <ids>, stance: ${STANCE_WORDS} }`);
-  const stub = (g, i) => {
+  const openOf = (g) => `household { read: "stances", args: { by: ${JSON.stringify(g.by)}, over: ${JSON.stringify(g.over)}, limit: 100 } }`;
+  const stub = (g) => {
     const { sample, ...rest } = g;
-    return { ...rest, act: actOf(g, i), sample_folded: `${bytes(sample)} bytes of body not shown`, open: open(g, i) };
+    return { ...rest, sample_folded: `${bytes(sample)} bytes of body not shown`, open: openOf(g) };
   };
-  const whole = (g, i) => ({ ...g, act: actOf(g, i) });
   const line = (g) => ({ by: g.by, over: g.over, count: g.count });
 
   // 0 = counted only, 1 = a line, 2 = a stub, 3 = whole
@@ -134,16 +85,16 @@ export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, marks = [] 
       count: answer.count,
       folded: {
         budget_bytes: budget, cap_bytes: CONNECTOR_CAP_BYTES, full_bytes: fullBytes,
-        note: 'folded to fit the connector; nothing waiting is dropped. Each part says its total and how many identity rows ride (named, with what acting on them takes, and no body: a mark\'s body rides stances, an alert\'s rides needs-you); what is not here is counted with the read that lists it. count is the whole house\'s.',
+        note: "folded to fit the connector; nothing waiting is dropped. Each part says its total and how many identity rows ride (named, with what acting on them takes, and no body); the rest is read by the call the part names, a page at a time (each page fits, and carries its cursor). count is the whole house's.",
       },
     };
     out.stances_awaiting = {
       total: stanceTotal, shown: pageMarks,
       in_groups: "the marks read are grouped below by author and place; a group not named is counted in groups_more",
-      ...(answer.stances_awaiting?.more ? { more: `household { read: "stances", args: { cursor: ${JSON.stringify(cursorOf(answer.stances_awaiting.more))}, limit: ${walkLimit} } }` } : {}),
+      ...(answer.stances_awaiting?.more ? { more: answer.stances_awaiting.more } : {}),
       ...(answer.stances_awaiting?.unavailable ? { unavailable: answer.stances_awaiting.unavailable } : {}),
     };
-    out.groups = groups.flatMap((g, i) => (tier[i] === 3 ? [whole(g, i)] : tier[i] === 2 ? [stub(g, i)] : []));
+    out.groups = groups.flatMap((g, i) => (tier[i] === 3 ? [g] : tier[i] === 2 ? [stub(g)] : []));
     const listed = groups.flatMap((g, i) => (tier[i] === 1 ? [line(g)] : []));
     const left = groups.flatMap((g, i) => (tier[i] === 0 ? [g] : []));
     if (listed.length || left.length) {
@@ -154,11 +105,10 @@ export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, marks = [] 
           groups: left.length, marks: left.reduce((n, g) => n + g.count, 0),
           note: "not named here: each is one author's marks over one place of yours, listed by the walk below",
         } } : {}),
-        open: `household { read: "stances", args: { limit: ${walkLimit} } } walks every mark in inbox order, ${walkLimit} a page (cursor ${walkLimit}, ${2 * walkLimit}, …), bodies whole and beside its teaching block and your spoken stances, which the connector's cap may not hold; a page holding one very long mark may exceed it, and limit: 1 reads that mark alone; one group: args { by, over, limit }`,
+        open: `${OPEN} lists one group's marks; ${WALK} walks every mark in inbox order. Both come in pages that fit the connector: follow the cursor each hands back`,
       };
     }
-    // the composer's scope sentence stands; its walk is bounded the way the others are
-    if (answer.groups_note) out.groups_note = answer.groups_note.replace(/household \{ read: "stances", args: \{ cursor: ("[^"]*") \} \}/, `household { read: "stances", args: { cursor: $1, limit: ${walkLimit} } }`);
+    if (answer.groups_note) out.groups_note = answer.groups_note;
     for (const p of parts) {
       const was = answer[p.key];
       const shown = p.all.slice(0, p.rows).map(p.identity);
@@ -167,8 +117,7 @@ export function foldWaiting(answer, { budget = WAITING_BUDGET_BYTES, marks = [] 
         total: p.all.length, shown: shown.length,
         ...(p.key === "stakes_at_risk" && was?.next_settlement !== undefined ? { next_settlement: was.next_settlement } : {}),
         ...(was?.unavailable ? { unavailable: was.unavailable } : {}),
-        ...(p.key === "unplaced_bounces" && cut ? { by_resident: byResident(p.all) } : {}),
-        ...(cut ? { rows_not_shown: cut, read: p.read, read_cost: p.cost } : {}),
+        ...(cut ? { rows_not_shown: cut, read: p.call(shown.length) } : {}),
         rows: shown,
       };
       if (p.flat) { if (p.all.length) out[p.key] = body; }

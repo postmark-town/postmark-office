@@ -565,7 +565,8 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
   stances: { cursor: { type: "string", description: "walk the inbox from where you last looked" },
              limit: { type: "number", description: "how many candidates" },
              by: { type: "string", description: "only the marks this household laid — the `by` of a waiting group" },
-             over: { type: "string", description: "only the marks lying over this ground of yours — the `over` of a waiting group; the answer's `ids` then go straight into declare-stance-on { on: [...] }" } },
+             over: { type: "string", description: "only the marks lying over this ground of yours — the `over` of a waiting group; the answer's `ids` then go straight into declare-stance-on { on: [...] }" },
+             part: { type: "string", description: "one list of a paged answer instead of the marks: set_downs | takes | standing | ground | teach; cursor: walks it" } },
   outcomes: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   rulings: { crossings: { type: "number", description: "how many crossings back to look — the morning window is two" } },
   stakes: { limit: { type: "number", description: "the newest N rows (the doorstep shows a few); omit for every row" } },
@@ -590,7 +591,9 @@ export const HOUSEHOLD_READ_FIELDS = Object.freeze({
            limit: { type: "number", description: "how many members a page carries (default 10, at most 50)" },
            offset: { type: "number", description: "walk past the first members" },
            full: { type: "boolean", description: "true answers the whole house as it was before POS-720: every resident's doorstep segments and the town-wide blocks" } },
-  "needs-you": { household: { type: "string", description: "the house's slug — omit for the house your key holds" } },
+  "needs-you": { household: { type: "string", description: "the house's slug — omit for the house your key holds" },
+                 part: { type: "string", description: "one part of a paged answer: set_downs_awaiting | takes_awaiting | unplaced_bounces | key_asks | likeness_question | stakes_at_risk | alerts" },
+                 cursor: { type: "string", description: "with part: walk it from where the last page ended" } },
   posts: {},
   closer: CLOSER_FIELDS,
   correspondents: CLOSER_FIELDS, // round 4: the glance block's own name for closer
@@ -1559,8 +1562,7 @@ async function householdWaiting(key, ctx) {
   // CORE-88: folded to the connector's budget when it does not fit (household-waiting-budget.mjs); a house that fits reads what it always read
   const { foldWaiting } = await import("./household-waiting-budget.mjs");
   return foldWaiting({ ...needs, read: "waiting", groups: v2.needGroups(stances.awaiting ?? [], { max: Infinity }),
-    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) },
-  { marks: stances.awaiting ?? [] });
+    ...(stances.cursor ? { groups_note: `groups are drawn from the first ${(stances.awaiting ?? []).length} of ${stances.stances_awaiting}; household { read: "stances", args: { cursor: "${stances.cursor}" } } walks the rest` } : {}) });
 }
 
 /**
@@ -2080,7 +2082,11 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       if (!scope.length)
         return bounce(422, "whose word?", "pass handle: — or call with a key that holds a resident; the inbox is derived from the ground your household holds");
       const { stancesForHandles } = await import("./world-stance.mjs");
-      return stancesForHandles(scope, { cursor: f.cursor ?? null, limit: f.limit, by: f.by ?? null, over: f.over ?? null, setDowns: true });
+      // CORE-88: an answer that would not fit the connector comes in pages (household-read-page.mjs); one that fits is returned as it was
+      const { pageStances } = await import("./household-read-page.mjs");
+      const answer = await (ctx.readers?.stances ?? stancesForHandles)(scope, { cursor: f.cursor ?? null, limit: f.limit, by: f.by ?? null, over: f.over ?? null, setDowns: true });
+      const paged = pageStances(answer, { part: f.part, cursor: f.cursor });
+      return paged?.error === "bounce" ? bounce(paged.code, paged.defect, paged.hint) : paged;
     }
     // ── what the crossings did to your things (2026-09-07, #2526) ───────────
     //
@@ -2158,11 +2164,16 @@ async function householdApexRead(args, key, ctx, { db, clone, odb, pen, schemas,
       // /household, whose query string is not judged (see THE READ VALIDATES).
       const full = f.full === true || f.full === "true";
       const r = what === "needs-you"
-        ? await needsYou({ household: f.household }, { key, clone, odb, asOf, ix })
+        ? await needsYou({ household: f.household }, { key, clone, odb, asOf, ix, ...(ctx.readers ? { readers: ctx.readers } : {}) })
         : full
           ? await houseBundle({ household: f.household }, { key, asOf, clone, odb, ix })
           : await housePage({ household: f.household, limit: f.limit, offset: f.offset }, { key, asOf, clone, odb, ix });
-      return r?.refused ? bounce(...r.refused) : r;
+      if (r?.refused) return bounce(...r.refused);
+      if (what !== "needs-you") return r;
+      // CORE-88: needs-you that would not fit the connector comes in parts and pages (household-read-page.mjs); one that fits is returned as it was
+      const { pageNeeds } = await import("./household-read-page.mjs");
+      const paged = pageNeeds(r, { part: f.part, cursor: f.cursor });
+      return paged?.error === "bounce" ? bounce(paged.code, paged.defect, paged.hint) : paged;
     }
     // ── the house's posts (POS-293) · src/household-posts.mjs ──────────────
     // Public, like the doorstep it is a segment of: any resident's handle
