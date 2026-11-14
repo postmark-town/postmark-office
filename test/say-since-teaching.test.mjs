@@ -82,10 +82,11 @@ test("2 · the doors say plainly that the place label wanders and which fields a
   const feed = worldConversations(new URLSearchParams(""));
   assert.match(feed.place_note, /`place` label is the name where its LATEST voice stands, and it WANDERS as a room moves/);
   assert.match(feed.place_note, /six names in an hour/);
-  assert.match(feed.place_note, /steady fields are the thread's `id`, its `at` \{x, y\} and `extent`, and each voice's own `x` and `y`/);
+  assert.match(feed.place_note, /Its `at` is that same latest voice's point and its `extent` a box over the voices it holds, so both are SNAPSHOTS that move and grow with the room\. The steady things are the thread's `id` and what each voice recorded: its own `x`, `y` and `at_ms`/);
+  assert.doesNotMatch(feed.place_note, /steady fields are the thread's `id`, its `at`/, "the thread's `at` is not called steady: it is the latest voice's point");
   const card = WORLD_TOOLS.find((t) => t.name === "world_say").description;
-  assert.match(card, /A conversation's `place` label WANDERS as a room moves, so never filter on it: its `id`, its `at` x\/y and each voice's own x\/y are the steady fields\./);
-  assert.ok(SAY_DESCRIPTION.includes("never filter on it"), "the exported card says it too");
+  assert.match(card, /A conversation's `place` label WANDERS as a room moves, and so do its `at` \(the latest voice's point\) and its `extent` \(a box over the voices it holds\): never filter on them\. The steady things are its `id` and what each voice recorded, its own x, y and at_ms\./);
+  assert.ok(SAY_DESCRIPTION.includes("never filter on them"), "the exported card says it too");
   // CORE-97's continuation words are still there on the same card and feed
   assert.match(SAY_DESCRIPTION, /Your first call buys the room; the rest of the evening costs almost nothing/);
   assert.ok(store.conversations().earlier.note.includes("office's short in-memory record"));

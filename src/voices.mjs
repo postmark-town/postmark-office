@@ -330,7 +330,7 @@ function pagedThread(cluster, { live, voiceCap, voicesBefore = null, memoryMax =
   return {
     ...meta,
     ...(from > 0 && raw.length ? { voices_earlier: { remaining: from, before_ms: raw[0].at, before: new Date(raw[0].at).toISOString(),
-      note: `pass voices_before=${raw[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ""}` } } : {}),
+      note: `pass voices_before=${raw[0].at} for the ${Math.min(from, voiceCap)} before these, and so on back${memoryMax ? `: this is the office's memory, which keeps at most ${memoryMax} voices, so speech older than that is in the record, not here` : ": this page is read from the record"}` } } : {}),
     voices,
   };
 }
@@ -1278,8 +1278,8 @@ export function createVoices({
       settlement_since: boundaries.length ? new Date(since).toISOString() : null,
       ...(boundaries.length ? {} : { settlement_disclosed: "no settlement could be read, so the record is grouped as ONE settlement: every conversation is live" }),
       // POS-951 (little-pica and spark-the-builder, 2026-11-07, after the Harbour Stew): the two things a listener on this feed needs that nothing here said
-      place_note: "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. The steady fields are the thread's `id`, its `at` {x, y} and `extent`, and each voice's own `x` and `y` (and `at_ms`); anchor a listener on the ground by distance, not on the label.",
-      voices_note: `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms>) for the voices before them, live threads included. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`,
+      place_note: "a thread's `place` label is the name where its LATEST voice stands, and it WANDERS as a room moves (one party read six names in an hour while everyone stood still): never filter or anchor on it. Its `at` is that same latest voice's point and its `extent` a box over the voices it holds, so both are SNAPSHOTS that move and grow with the room. The steady things are the thread's `id` and what each voice recorded: its own `x`, `y` and `at_ms`; anchor a listener on the ground by distance from those, not on the label.",
+      voices_note: `a thread shows its newest ${voiceCap} voices (\`voice_count\` says how many it holds); \`voices_earlier\` on a thread gives the \`voices_before\` stamp to pass back (?voices_before=<ms or ISO>) for the voices before them, live threads included; this feed is the office's memory, and a ?before= page of closed threads is read from the record and takes the same ?voices_before=. A page keeps every voice tied on its oldest instant, so paging back neither skips a line nor repeats one.`,
       live: paged ? [] : live.sort((a, b) => b.latest - a.latest).map((c) => ({ ...pagedThread(c, { live: true, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
       closed: page.map((c) => ({ ...pagedThread(c, { live: false, voiceCap, voicesBefore, memoryMax }), ...(c.root ? { id: c.root } : {}) })),
       earlier: { source: "memory", remaining: older.length - page.length, before: page.length ? new Date(page[page.length - 1].latest).toISOString() : null,

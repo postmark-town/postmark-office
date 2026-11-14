@@ -98,6 +98,64 @@ test("the page: voices.mjs's own conversations() over a log, against conversatio
   assert.ok(paged > 10, `${paged} pages behind a cursor were compared, not only first pages`);
 });
 
+// POS-951: the twin of the paged thread. The page test above stays under the 80-voice cap, so it could not see a thread cut at the cap: this one cuts every thread at 3 voices and walks
+// `voices_before` back through the whole record, producer against port, every page and every thread, and checks the walk loses and repeats nothing.
+test("OVER THE CAP: voices.mjs conversations() and conversationsOf agree on every thread, every voices_before page; the walk reads each voice exactly once", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pos951-vendor-"));
+  const noteless = (cs) => JSON.stringify(cs.map((c) => (c.voices_earlier ? { ...c, voices_earlier: { ...c.voices_earlier, note: undefined } } : c)));
+  let cut = 0, pages = 0;
+  try {
+    for (let seed = 101; seed <= 130; seed++) {
+      const { voices, edges } = cloud(seed);
+      const log = join(dir, `voices-${seed}.jsonl`);
+      writeFileSync(log, voices.map((v) => JSON.stringify({ at: new Date(v.at).toISOString(), handle: v.handle, text: v.text, x: v.x, y: v.y, place: v.place, aboard: v.aboard })).join("\n") + "\n");
+      const now = T0 + 40 * H;
+      const oracle = producer.createVoices({
+        standpoint: async () => null, logPath: () => log, now: () => now,
+        earshotM: 60, fadeMs: 5 * 60_000, settlements: () => edges, memoryMax: Infinity,
+        hearingWindow: () => ({ since: edges[edges.length - 1], source: "the test's sweeps", disclosure: null }),
+      });
+      const asked = (voicesBefore) => ({
+        theirs: oracle.conversations({ closedMax: 1000, voiceCap: 3, voicesBefore }),
+        mine: port.conversationsOf(voices, { now, earshotM: 60, boundaries: edges, fadeMs: 5 * 60_000, closedMax: 1000, voiceCap: 3, voicesBefore }),
+      });
+      const threads = (r) => [...r.live, ...r.closed];
+      const first = asked(null);
+      // the twin, whole page for whole page, at the first page and at a cursor into every thread
+      const cursors = [null, ...threads(first.theirs).filter((c) => c.voices_earlier).map((c) => c.voices_earlier.before_ms)];
+      for (const voicesBefore of cursors) {
+        const { theirs, mine } = asked(voicesBefore);
+        assert.equal(noteless(mine.live), noteless(theirs.live), `live (seed ${seed} cursor ${voicesBefore})`);
+        assert.equal(noteless(mine.closed), noteless(theirs.closed), `closed (seed ${seed} cursor ${voicesBefore})`);
+        assert.equal(mine.place_note, theirs.place_note, "the same place words");
+        assert.equal(mine.voices_note, theirs.voices_note, "the same voices words");
+        for (const c of threads(theirs)) if (c.voices_earlier) assert.match(c.voices_earlier.note, /this is the office's memory/);
+        for (const c of threads(mine)) if (c.voices_earlier) assert.match(c.voices_earlier.note, /this page is read from the record$/, "the record's page says it is the record, not the office's memory");
+        pages += 1;
+      }
+      // every thread, walked back by ITS OWN cursor, reads each of its voices exactly once, oldest first (the producer and the port alike)
+      const wholeAll = threads(oracle.conversations({ closedMax: 1000, voiceCap: 100000 }));
+      // (thread ids are not unique across a record's settlements, so a thread is matched by its place in the page, which does not move with the cursor)
+      for (const [at, c] of threads(first.theirs).entries()) {
+        for (const side of ["theirs", "mine"]) {
+          let got = c.voices.map((v) => `${v.at_ms}|${v.handle}|${v.said}`);
+          let cur = (c.voices_earlier ?? null)?.before_ms ?? null;
+          if (cur != null) cut += 1;
+          for (let hop = 0; cur != null && hop < 500; hop++) {
+            const t = threads(asked(cur)[side])[at];
+            got = [...t.voices.map((v) => `${v.at_ms}|${v.handle}|${v.said}`), ...got];
+            cur = t.voices_earlier?.before_ms ?? null;
+          }
+          const whole = wholeAll[at].voices.map((v) => `${v.at_ms}|${v.handle}|${v.said}`);
+          assert.deepEqual(got, whole, `thread #${at} ${c.id} (seed ${seed}, ${side}) walked back whole`);
+        }
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.ok(cut > 50, `${cut} thread pages were really cut at the cap`);
+  assert.ok(pages > 30, `${pages} voices_before pages were compared`);
+});
+
 const blobOf = (path) => execFileSync("git", ["-C", ROOT, "hash-object", path], { encoding: "utf8" }).trim();
 
 test("THE PIN: VENDOR.voices.blob is the blob of the voices.mjs in this checkout, and its `at` commit carries that same blob", () => {
