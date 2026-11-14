@@ -98,7 +98,7 @@ test("one crossing, end to end, through the dev office's doors, the Mists at the
   const stopped = r.steps.find((s) => !s.ok);
   assert.equal(r.green, true, `${stopped ? `RED at ${stopped.id}: ${stopped.problems[0]}` : `RED: ${r.error ?? "no step ran"}`}\n${text}`);
   const ran = r.steps.filter((s) => !s.pending).map((s) => s.id);
-  assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand", "refused-alone", "stamp-sandbox"], text);
+  assert.deepEqual(ran, ["preflight", "sign-in", "join", "resident", "letters", "crossing", "cutover", "claim", "clearing", "settle", "bless", "clearing-rerun", "by-hand", "refused-alone", "stamp-sandbox"], text);
   assert.deepEqual(r.steps.filter((s) => s.pending).map((s) => s.id), [], "no step is pending (POS-356 landed in #427)");
   // the ground the preflight found, inside the box the wall leaves at every keyframe (POS-595): the
   // box derived from the stand-in's own blessed skeleton, never a literal that a ruled move of the

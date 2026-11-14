@@ -122,7 +122,8 @@ test("the clearing seals every standing mark, in its own window's transaction, a
   assert.ok(h, "window 302 has its snapshot");
   assert.equal(h.marks, 4, "hall, hall-name, shed-note and the new well; the retired shed is not standing");
   assert.deepEqual([h.law_sha, h.town_sha, h.world_sha], [LAW_SHA, TOWN_SHA, WORLD_SHA], "the shas come from the store's own projection_heads");
-  assert.deepEqual(w.receipts.snapshot, { id: h.id, digest: h.digest, marks_digest: h.marks_digest, marks: 4, new_versions: 4, register_digest: h.register_digest, register_rows: 2 });
+  assert.deepEqual(w.receipts.snapshot, { id: h.id, settlement: 1, digest: h.digest, marks_digest: h.marks_digest, marks: 4, new_versions: 4, register_digest: h.register_digest, register_rows: 2 });
+  assert.equal(h.sealed_settlement, 1, "the store's first settlement: nothing sealed or tag-read before it (095)");
 
   const rows = await withPen("snapshot_reader", (c) => snapshotRows(c, h.marks_digest));
   assert.deepEqual(rows.map((x) => x.slug), ["mari/hall", "mari/hall-name", "mari/shed-note", "mari/well"]);
@@ -159,10 +160,15 @@ test("a second clearing over an unchanged World shares the list and writes no ne
   const r = clear(303);
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /snapshot: 4 standing mark\(s\), 0 new version\(s\)/);
-  const hs = await read("SELECT window_id, digest, marks_digest FROM world_snapshots ORDER BY window_id");
+  const hs = await read("SELECT * FROM world_snapshots ORDER BY window_id");
   assert.deepEqual(hs.map((x) => x.window_id), [302, 303]);
-  assert.equal(hs[0].marks_digest, hs[1].marks_digest);
-  assert.equal(hs[0].digest, hs[1].digest, "same marks, same shas: the same World, the same digest");
+  assert.equal(hs[0].marks_digest, hs[1].marks_digest, "same marks: the same World");
+  // EVERY SETTLEMENT IS NUMBERED (095, POS-1025/a): two settlements of one World are two settlements, and
+  // the decision each records names its number, so the digests differ by exactly that and nothing else.
+  assert.deepEqual(hs.map((x) => x.sealed_settlement), [1, 2]);
+  assert.notEqual(hs[0].digest, hs[1].digest);
+  assert.equal(snapshotDigestOf({ ...hs[1], stances: { ...hs[1].stances, settlement_inferred: 1 } }), hs[0].digest,
+    "same marks, same shas: with the number put back, the same digest");
   const [{ n }] = await read("SELECT count(*)::int AS n FROM world_snapshot_marks");
   assert.equal(n, 4, "one list, kept once");
 });
@@ -383,6 +389,7 @@ test("072 against seeded rows: a snapshot sealed before 072 keeps its digest and
         [win, h.digest, h.marks_digest, h.law_sha, h.town_sha, h.world_sha, h.register_digest, h.stance_through]);
     await c.query(readFileSync(join(ROOT, "world2", "schema", "072_snapshot_stances.sql"), "utf8"));
     await c.query(readFileSync(join(ROOT, "world2", "schema", "072_snapshot_stances.sql"), "utf8"));   // idempotent
+    await c.query(readFileSync(join(ROOT, "world2", "schema", "095_settlement_printout.sql"), "utf8"));   // and the floor's later widening of 072's check (POS-1025)
   });
   const rows = await read("SELECT window_id, digest, stances, stance_through::text FROM world_snapshots ORDER BY window_id");
   assert.deepEqual(rows.map((r) => [r.window_id, r.digest, r.stances]), [[300, before.digest, null], [301, before069.digest, null]], "the digests are untouched, the column NULL");
@@ -391,12 +398,14 @@ test("072 against seeded rows: a snapshot sealed before 072 keeps its digest and
   assert.equal(stancesOf({ id: 1, stances: null }).counts, false, "no record reads as not counted");
 });
 
-test("072: a new seal under each cutover case writes the expected record, and the digest covers it", { skip }, async () => {
+test("072 + 095: a new seal under each cutover case writes the expected record at the number it SEALED, and the digest covers it", { skip }, async () => {
+  // 095 (POS-1025, "Every settlement"): the seal allocates its own number, so the decision is made at it
+  // (`how: "sealed"`), never inferred from the settlements table at the crossing.
   const cases = [
-    [null, { counted: false, cutover: null, settlement_inferred: 8, how: "inferred" }],
-    ["S7", { counted: true, cutover: "S7", settlement_inferred: 8, how: "inferred" }],
-    ["S8", { counted: true, cutover: "S8", settlement_inferred: 8, how: "inferred" }],
-    ["S9", { counted: false, cutover: "S9", settlement_inferred: 8, how: "inferred" }],
+    [null, { counted: false, cutover: null, settlement_inferred: 8, how: "sealed" }],
+    ["S7", { counted: true, cutover: "S7", settlement_inferred: 8, how: "sealed" }],
+    ["S8", { counted: true, cutover: "S8", settlement_inferred: 8, how: "sealed" }],
+    ["S9", { counted: false, cutover: "S9", settlement_inferred: 8, how: "sealed" }],
   ];
   for (const [cutover, expected] of cases) {
     await seed();
@@ -404,14 +413,39 @@ test("072: a new seal under each cutover case writes the expected record, and th
     await owner((c) => c.query("INSERT INTO settlements (number, tag_sha, published_at, window_id, blessed_at) VALUES (7, $1, '2026-10-01T07:00:00Z', 300, '2026-10-01T07:00:00Z')", ["c".repeat(40)]));
     const r = run(JOB, ["--window", "302"], { WORLD2_CLEARING_URL: store.url("clearing_job"), ...(cutover ? { TOWN_STANCE_CUTOVER: cutover } : {}) });
     assert.equal(r.code, 0, r.out);
-    assert.ok(r.out.includes(`⚑ stances: ${expected.counted ? "COUNTED" : "not counted"} at S8 (inferred), cutover ${cutover ?? "unset"}; law ${LAW_SHA.slice(0, 12)} unread for ruling B`), r.out);
+    assert.ok(r.out.includes(`⚑ stances: ${expected.counted ? "COUNTED" : "not counted"} at S8 (sealed), cutover ${cutover ?? "unset"}; law ${LAW_SHA.slice(0, 12)} unread for ruling B`), r.out);
     const h = await withPen("snapshot_reader", (c) => snapshotHeader(c, { window: 302 }));
     assert.deepEqual(h.stances, expected, `cutover ${cutover ?? "unset"}`);
+    assert.equal(h.sealed_settlement, 8, "the seal records the number it is");
     const rows = await withPen("snapshot_reader", (c) => snapshotRows(c, h.marks_digest));
     const reg = await withPen("snapshot_reader", (c) => snapshotRegisterRows(c, h.register_digest));
-    assert.deepEqual(checkSnapshot(h, rows, reg), [], "JS recomputes the digest the seal wrote, the decision included");
+    assert.deepEqual(checkSnapshot(h, rows, reg), [], "JS recomputes the digest the seal wrote, the decision and the number included");
     assert.notEqual(snapshotDigestOf({ ...h, stances: null }), h.digest, "the decision is part of what the digest names");
+    assert.notEqual(snapshotDigestOf({ ...h, stances: { ...h.stances, settlement_inferred: 9 } }), h.digest, "and so is the number, through it");
   }
+});
+
+test("095: EVERY SEAL IS NUMBERED, quiet ones included, from the greatest the store has named; a dry run takes none", { skip }, async () => {
+  await seed();
+  await owner((c) => c.query("INSERT INTO settlements (number, tag_sha, published_at, window_id, blessed_at) VALUES (7, $1, '2026-10-01T07:00:00Z', 300, '2026-10-01T07:00:00Z')", ["c".repeat(40)]));
+  const dry = run(JOB, ["--window", "302", "--dry-run"], { WORLD2_CLEARING_URL: store.url("clearing_job") });
+  assert.equal(dry.code, 0, dry.out);
+  assert.match(dry.out, /settlement S8/);
+  assert.deepEqual(await read("SELECT window_id FROM world_snapshots"), [], "a dry run rolls its number back with its seal");
+  for (const [win, n] of [[302, 8], [303, 9], [304, 10]]) {
+    const r = run(JOB, ["--window", String(win)], { WORLD2_CLEARING_URL: store.url("clearing_job") });
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, new RegExp(`settlement S${n}\\b`), "a quiet window (nothing claimed after the first) is numbered all the same");
+  }
+  assert.deepEqual((await read("SELECT window_id, sealed_settlement FROM world_snapshots ORDER BY window_id")).map((x) => [x.window_id, x.sealed_settlement]),
+    [[302, 8], [303, 9], [304, 10]]);
+  // a keeper's tag read in later (the office tick) never collides: the next seal goes past it
+  await owner((c) => c.query("INSERT INTO settlements (number, tag_sha, published_at, window_id, blessed_at) VALUES (12, $1, '2026-10-02T07:00:00Z', 301, '2026-10-02T07:00:00Z')", ["d".repeat(40)]));
+  const r = run(JOB, ["--window", "305"], { WORLD2_CLEARING_URL: store.url("clearing_job") });
+  assert.equal(r.code, 0, r.out);
+  assert.equal((await read("SELECT sealed_settlement FROM world_snapshots WHERE window_id = 305"))[0].sealed_settlement, 13);
+  // and the number is unique: a second seal can never name it
+  await assert.rejects(owner((c) => c.query("UPDATE world_snapshots SET sealed_settlement = 13 WHERE window_id = 304")), /world_snapshots_sealed_settlement/);
 });
 
 test("072: a malformed cutover is never guessed: the clearing refuses and the window rolls back", { skip }, async () => {
@@ -443,6 +477,8 @@ test("072 waits at most 5 s for its lock behind a running reader, then fails cha
   await owner((c) => c.query(readFileSync(join(ROOT, "world2", "schema", "072_snapshot_stances.sql"), "utf8")));
   const [{ t }] = await read("SELECT data_type AS t FROM information_schema.columns WHERE table_name = 'world_snapshots' AND column_name = 'stances'");
   assert.equal(t, "jsonb", "and between crossings it applies");
+  // the floor goes on to 095, which widens 072's check (POS-1025), as every store this file's later tests seal on
+  await owner((c) => c.query(readFileSync(join(ROOT, "world2", "schema", "095_settlement_printout.sql"), "utf8")));
 });
 
 test.after(async () => { if (!skip) await store.stop(); });

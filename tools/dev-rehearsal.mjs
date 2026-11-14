@@ -722,6 +722,45 @@ export function plan() {
       },
     },
     {
+      id: "cutover",
+      title: "the settlement printout's cutover, where the store has printed nothing yet (POS-1025, DEPLOY.md § 095): the settlements current with the world's tags, the registry seeded, and the first printout's base named (SETTLEMENT_SINCE_WINDOW): the newest window sealed below the open one, or with none, the open window cleared first as that base",
+      async run(ctx) {
+        const [{ printed }] = await ctx.s.q("clearing_job", "SELECT count(*)::int AS printed FROM world_snapshots WHERE printout_sha IS NOT NULL");
+        if (printed) return { printed };
+        // the preconditions, read before any seal is numbered: a seal numbered under a real tag would refuse its tag
+        const pre = [];
+        const [{ n }] = await ctx.s.q("office_api", "SELECT coalesce(max(number), 0)::int AS n FROM settlements");
+        const tags = ctx.t.worldClone && existsSync(join(ctx.t.worldClone, ".git"))
+          ? git(ctx.t.worldClone, "tag", "-l", "settlement/S*").split("\n").map((x) => Number(x.slice(12))).filter(Number.isInteger) : [];
+        const newestTag = Math.max(0, ...tags);
+        if (n < newestTag) pre.push(`the store's settlements reach S${n} and the dev world clone's tags S${newestTag}: the clearing would number its seal under a real settlement/S<n> and the crossing's tag would refuse. Run settlements-backfill (the keeping tick's, --apply --prod) over the dev world clone first`);
+        const [{ live }] = await ctx.s.q("clearing_job", "SELECT count(*)::int AS live FROM settlement_publications WHERE to_window IS NULL");
+        if (!live) pre.push("the store holds no settlement_publications: the first printout would render an empty registry over the world's. Seed it once from the dev world clone's main (world2/tools/publications-seed.mjs, as world2_owner) first");
+        if (pre.length) return { printed, pre };
+        const [open] = await ctx.s.q("office_api", "SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
+        if (!open) return { printed, pre: ["the store has no open window: the candle is out"] };
+        const [base] = await ctx.s.q("clearing_job", "SELECT window_id, sealed_settlement FROM world_snapshots WHERE window_id < $1 ORDER BY window_id DESC LIMIT 1", [open.id]);
+        if (base) { ctx.sinceWindow = Number(base.window_id); return { printed, base: ctx.sinceWindow, seal: base.sealed_settlement }; }
+        // NO SEALED WINDOW AT ALL (the local stand-in's store): the open window, holding no rehearsal claim yet,
+        // is cleared now as the base, the clock compressed as the clearing step compresses it. Its seal is
+        // numbered and never printed: the ruled gap (POS-1025/a).
+        await ctx.s.q("clearing_job", "UPDATE windows SET closes_at = date_trunc('second', now()) WHERE id = $1 AND status = 'open' AND closes_at > now()", [open.id]);
+        const cleared = await ctx.clearing(Number(open.id));
+        if (cleared.code === 0) ctx.sinceWindow = Number(open.id);
+        const [sealed] = cleared.code === 0 ? await ctx.s.q("clearing_job", "SELECT sealed_settlement FROM world_snapshots WHERE window_id = $1", [open.id]) : [];
+        return { printed, base: Number(open.id), seal: sealed?.sealed_settlement ?? null, cleared };
+      },
+      async check(ctx, r, rec) {
+        if (r.printed) { rec.notes.push(`the store has recorded ${r.printed} printout(s): the settlement measures from the last of them, no cutover`); return []; }
+        if (r.pre) return r.pre;
+        if (r.cleared && r.cleared.code !== 0) return [`clearing the open window ${r.base} as the first printout's base: clearing-job exited ${r.cleared.code}: ${tail(r.cleared.out)}`];
+        const [snap] = await ctx.s.q("clearing_job", "SELECT id FROM world_snapshots WHERE window_id = $1", [r.base]);
+        if (!snap) return [`window ${r.base}, the first printout's base, has no sealed snapshot`];
+        rec.notes.push(`the first printout measures from window ${r.base}${r.cleared ? ", cleared now with no rehearsal claim" : ", the newest sealed below the open one"} (${r.seal == null ? "sealed before 095" : `S${r.seal}, sealed and never printed: the ruled gap`}); SETTLEMENT_SINCE_WINDOW=${r.base} rides the next settlement once`);
+        return [];
+      },
+    },
+    {
       id: "claim",
       title: "the first resident claims a parcel through POST /world/marks (free: min stake 0), into the open window",
       async run(ctx) {
@@ -781,21 +820,26 @@ export function plan() {
     },
     {
       id: "settle",
-      title: "the settlement crosses the cleared window from the store (settlement-auto.sh, SETTLEMENT_SOURCE=store) into a bare copy of the world",
-      async run(ctx) { return ctx.settling ?? ctx.settlement(); },
+      title: "the settlement prints the cleared window's sealed snapshot, tags it settlement/S<n> and records it (settlement-auto.sh), into a bare copy of the world",
+      async run(ctx) { return (ctx.settled = await (ctx.settling ?? ctx.settlement())); },
       async check(ctx, r) { return settled(ctx, r, { byHand: false, window: ctx.window }); },
     },
     {
       id: "bless",
-      title: "the keeper's bless (an annotated settlement tag on the copy), then the keeping tick's settlements-backfill writes the row",
+      title: "the settlement's own tag (settlement/S<n>, cut by the crossing at its printout and pushed to the copy), then the keeping tick's settlements-backfill writes its row",
       async run(ctx) {
-        const tags = git(ctx.worldBare, "tag", "-l", "settlement/S*").split("\n").filter(Boolean).map((x) => Number(x.slice(12))).filter(Number.isInteger);
-        const [{ n }] = await ctx.s.q("office_api", "SELECT coalesce(max(number), 0) AS n FROM settlements");
-        ctx.blessed = Math.max(Number(n), ...tags, 0) + 1;
-        ctx.blessedSha = git(ctx.worldBare, "rev-parse", "main");
-        git(ctx.worldBare, "-c", "user.name=dev-rehearsal (the keeper's hand)", "-c", "user.email=dev-rehearsal@postmark.invalid",
-          "tag", "-a", `settlement/S${ctx.blessed}`, ctx.blessedSha, "-m", `S${ctx.blessed} (dev rehearsal ${ctx.run}): blessed over window ${ctx.window}`);
+        // THE CROSSING CUTS THE TAG NOW (POS-1025/a): the keeper's hand no longer blesses, so this step reads
+        // the number from the receipt, the commit from the tag the crossing pushed, and holds the two together.
+        const settled = ctx.settled ?? (ctx.settling ? await ctx.settling : null);
+        let receipt = null;
+        try { receipt = JSON.parse(readFileSync(settled?.report ?? "", "utf8")); } catch { /* named below */ }
+        if (!receipt) return { setup: `no settlement receipt to read the tag from (${settled?.report ?? "the settlement did not run"})` };
+        if (!["tagged", "already-tagged"].includes(receipt.tag?.status)) return { setup: `the settlement's receipt names no tag it cut: ${JSON.stringify(receipt.tag ?? null)} (${receipt.status ?? "no status"}: ${String(receipt.detail ?? "").slice(0, 200)})` };
+        ctx.blessed = Number(receipt.settlement);
+        ctx.blessedSha = receipt.tag.commit;
         const tag = `settlement/S${ctx.blessed}`;
+        const onCopy = gitQuiet(ctx.worldBare, "rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`).stdout.trim();
+        if (onCopy !== ctx.blessedSha) return { setup: `the copy's ${tag} stands at ${onCopy || "nothing"}, not at the receipt's ${ctx.blessedSha}` };
         // THE ROW, FROM A VIEW HOLDING ONLY THIS BLESSING. The backfill writes a row
         // for every tag its checkout carries and REFUSES a tag whose row disagrees
         // ("a moved tag is a person's finding"). The dev store keeps each rehearsal's
@@ -814,11 +858,15 @@ export function plan() {
         return ctx.job("world2/tools/settlements-backfill.mjs", ["--world-repo", view, "--apply", "--prod", "--quiet"]);
       },
       async check(ctx, r) {
+        if (r.setup) return [r.setup];
         if (r.code !== 0) return [`settlements-backfill exited ${r.code}: ${tail(r.out)}`];
         const [row] = await ctx.s.q("office_api", "SELECT tag_sha, window_id, blessed_at FROM settlements WHERE number = $1", [ctx.blessed]);
         if (!row) return [`the store holds no settlements row for S${ctx.blessed} after the backfill`];
         const p = [];
-        if (row.tag_sha !== ctx.blessedSha) p.push(`S${ctx.blessed}'s row names ${row.tag_sha}, not the blessed ${ctx.blessedSha}`);
+        if (row.tag_sha !== ctx.blessedSha) p.push(`S${ctx.blessed}'s row names ${row.tag_sha}, not the tagged printout ${ctx.blessedSha}`);
+        const [snap] = await ctx.s.q("clearing_job", "SELECT sealed_settlement, printout_sha FROM world_snapshots WHERE window_id = $1", [ctx.window]);
+        if (Number(snap?.sealed_settlement) !== ctx.blessed) p.push(`window ${ctx.window}'s seal is numbered S${snap?.sealed_settlement ?? "none"}, its tag S${ctx.blessed}`);
+        if (snap?.printout_sha !== ctx.blessedSha) p.push(`window ${ctx.window}'s seal records the printout ${snap?.printout_sha ?? "none"}, its tag ${ctx.blessedSha}`);
         if (Number(row.window_id) !== Number(ctx.window)) p.push(`S${ctx.blessed}'s row names window ${row.window_id}, not the cleared ${ctx.window}`);
         if (!row.blessed_at) p.push(`S${ctx.blessed}'s row has no blessed_at (an annotated tag carries one)`);
         return p;
@@ -1085,7 +1133,7 @@ async function settled(ctx, r, { byHand, window, mark = ctx.mark }) {
   // CI keeps only this line, so a red that names no receipt cannot be read (POS-595's KF red,
   // 6 times 10-12..10-17, cause unread)
   if (!files.some((f) => f.includes(`/${mark}/`) || f.endsWith(`/${mark}.md`))) p.push(`the copy's main (${head.slice(0, 9)}) carries no file for ${mark} after the crossing (receipt: ${receipt.status ?? "no status"}: ${String(receipt.detail ?? "").slice(0, 300)})`);
-  if (receipt.docket_window != null && Number(receipt.docket_window) !== Number(window)) p.push(`the crossing folded window ${receipt.docket_window}, not ${window}`);
+  if (receipt.docket?.window != null && Number(receipt.docket.window) !== Number(window)) p.push(`the crossing printed window ${receipt.docket.window}, not ${window}`);
   return p;
 }
 
@@ -1362,7 +1410,7 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
      * every edge that leaves the run pointed into the scratch directory:
      *   · world: SETTLEMENT_CLONE clones from WORLD_CLONE's origin, and that
      *     origin is a bare copy of the dev world clone, so publish_main's push
-     *     and the keeper's tag land there and nowhere else;
+     *     and the crossing's settlement/S<n> tag land there and nowhere else;
      *   · town: the crossing pins origin/main of TOWN_CLONE, so its town is a
      *     view whose origin is the dev town clone (the rehearsal's commits),
      *     never GitHub's town;
@@ -1375,7 +1423,7 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
       if (!ctx.worldBare) {
         if (!t.worldClone || !existsSync(join(t.worldClone, ".git"))) return { setup: `no world clone at ${t.worldClone}` };
         ctx.worldBare = join(scratch, "world.git");
-        // tags come along: the bless numbers the next settlement after the world's real ones
+        // tags come along: the crossing's tag must not stand where a real settlement/S<n> already does
         execFileSync("git", ["clone", "-q", "--bare", "--local", t.worldClone, ctx.worldBare], { windowsHide: true });
         const branch = gitQuiet(t.worldClone, "symbolic-ref", "--short", "-q", "HEAD").stdout.trim();
         if (branch !== "main") git(ctx.worldBare, "update-ref", "refs/heads/main", git(t.worldClone, "rev-parse", "HEAD"));
@@ -1390,6 +1438,9 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
         if (tb !== "main") return { setup: `the dev town clone is on ${tb || "a detached HEAD"}, not main: the settlement pins origin/main` };
       }
       const n = (ctx.settlements = (ctx.settlements ?? 0) + 1);
+      // the cutover's base (the cutover step) rides the first settlement only; every later one measures from the last printout
+      const since = ctx.sinceWindow ?? null;
+      ctx.sinceWindow = null;
       const report = join(scratch, `settlement-${n}.json`);
       const logPath = join(scratch, `settlement-${n}.log`);
       // Asynchronous, its output to a file: the scheduled crossing STARTS before
@@ -1404,7 +1455,8 @@ export function crossingContext({ t, s, db, run, scratch, stub = null, stubPort 
           TOWN_CLONE: ctx.townView, WORLD_CLONE: ctx.worldView,
           SETTLEMENT_CLONE: join(scratch, `sweep-${n}`),
           SETTLEMENT_REPORT: report,
-          SETTLEMENT_SOURCE: "store", STATE_LOG_SOURCE: "store",
+          STATE_LOG_SOURCE: "store",
+          ...(since != null ? { SETTLEMENT_SINCE_WINDOW: String(since) } : {}),
           SETTLEMENT_BY_HAND: byHand ? "1" : "0",
           SETTLEMENT_ESCALATE_CRED: join(scratch, "no-credentials-on-purpose"),
           SETTLEMENT_CLEARING_WAIT_S: "180",

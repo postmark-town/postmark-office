@@ -150,6 +150,8 @@ export const LANDED = {
   "093_household_hearth.sql": { probe: `${col("households", "hearth")} AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'households_hearth_id')` },
   // 094 (POS-485): the sign-in a token pair came from, and its index (the file's last statement).
   "094_oauth_signin_family.sql": { probe: `${col("oauth_tokens", "family")} AND ${rel("oauth_tokens_family")}` },
+  // 095 (POS-1025): the seal's number, the publications registry, and the printout's record (the file's last object).
+  "095_settlement_printout.sql": { probe: `${col("world_snapshots", "sealed_settlement")} AND ${rel("settlement_publications")} AND to_regprocedure('public.record_printout(integer, text)') IS NOT NULL` },
   // 096 (POS-939): a room purchase's retry key, private, office_api's only.
   "096_parcel_room_nonces.sql": { probe: `${rel("parcel_room_nonces")} AND has_table_privilege('office_api', 'parcel_room_nonces', 'INSERT') AND NOT has_table_privilege('snapshot_reader', 'parcel_room_nonces', 'SELECT')` },
 };

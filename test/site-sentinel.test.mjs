@@ -1998,6 +1998,48 @@ test("§11 judgeQuietRange: a range of saves, merges and registry commits is cov
   assert.equal(isSweepPublication("settlement: sweep 0 published, 2 unpublished, 0 left drafted"), true, "an unpublication moves the record too");
   assert.equal(isSweepPublication("settlement: household registry re-derived from the town at dcb5dbc89"), false);
   assert.equal(isSweepPublication("crossing-save 243: 152 entities, 189 events"), false);
+  // POS-1025: the printout's subject. The settlement's own number is not a count, so S214 alone never makes it one.
+  assert.equal(isSweepPublication("settlement: S214 printout — 3 written, 0 removed, 0 re-framed"), true);
+  assert.equal(isSweepPublication("settlement: S214 printout — 0 written, 1 removed, 0 re-framed"), true, "a removal moves the record too");
+  assert.equal(isSweepPublication("settlement: S214 printout — 0 written, 0 removed, 0 re-framed"), false);
+});
+
+// ── §11 THE PRINTOUT'S REPORT-ONLY FINDINGS (POS-1025/c) ────────────────────
+test("§11 a published printout whose harm gate named harm is DOWN at once, naming the check and the marks — no grace", () => {
+  const receipt = RECEIPT({
+    settlement: 214,
+    harm: { ok: false, checks: [{ name: "moved", ok: false, count: 1, rows: ["neth/warm-stone: 10,10 -> 64,10 (no act names it)"] }, { name: "lint", ok: true, count: 0, rows: [] }] },
+  });
+  // the tag covers the world, and it is only five minutes after the sweep: neither saves it
+  const r = classifySettlement({ receipt, newestTag: { n: 214, sha: W_1011 }, covered: true, nowMs: at("2026-10-11T18:05:00Z") });
+  assert.equal(r.verdict, "DOWN");
+  assert.match(r.reason, /published S214, and the harm gate named harm over its printout: moved: neth\/warm-stone: 10,10 -> 64,10/);
+  assert.match(r.reason, /SHIPPING\.md § 9/);
+  const couldNot = classifySettlement({ receipt: RECEIPT({ harm: { ok: false, ran: false, could_not_gate: "world 1234567 carries no tools/harm-gate.mjs" } }), newestTag: S102, covered: true, nowMs: at("2026-10-11T18:05:00Z") });
+  assert.equal(couldNot.verdict, "DOWN");
+  assert.match(couldNot.reason, /could not gate \(world 1234567 carries no tools\/harm-gate\.mjs\)/);
+});
+
+test("§11 a published printout whose tag or record refused is DOWN at once, and says a tag is never moved", () => {
+  const tagged = classifySettlement({
+    receipt: RECEIPT({ settlement: 214, tag: { status: "refused", refused: "tag-conflict", detail: "settlement/S214 already stands at 0cca7f2b08a3" } }),
+    newestTag: S102, covered: false, nowMs: at("2026-10-11T18:05:00Z"),
+  });
+  assert.equal(tagged.verdict, "DOWN");
+  assert.match(tagged.reason, /published S214, and its tag refused \(tag-conflict: settlement\/S214 already stands at 0cca7f2b08a3\); a settlement tag is never moved/);
+  const recorded = classifySettlement({
+    receipt: RECEIPT({ settlement: 214, tag: { status: "tagged" }, record: { status: "refused", refused: "record-tripped", detail: "no pen" } }),
+    newestTag: { n: 214, sha: W_1011 }, covered: true, nowMs: at("2026-10-11T18:05:00Z"),
+  });
+  assert.equal(recorded.verdict, "DOWN");
+  assert.match(recorded.reason, /the store's record of it refused \(record-tripped: no pen\)/);
+});
+
+test("§11 CONTROL: a published printout with no harm, tagged and recorded, under its own tag, is OK", () => {
+  const receipt = RECEIPT({ settlement: 214, harm: { ok: true, checks: [] }, tag: { status: "tagged" }, record: { status: "recorded" } });
+  const r = classifySettlement({ receipt, newestTag: { n: 214, sha: W_1011 }, covered: true, nowMs: at("2026-10-11T18:05:00Z") });
+  assert.equal(r.verdict, "OK");
+  assert.match(r.reason, /S214 covers the 18:00Z sweep/);
 });
 
 test("§11 a QUIET sweep on a world past the tag, with no publication in between, is OK — never a page", () => {

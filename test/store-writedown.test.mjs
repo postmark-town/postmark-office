@@ -1194,12 +1194,6 @@ test("F-claim-undated · a parcel with no date keeps the bytes it has always had
   assert.equal(recordFromRow(amended).claimed_at, "2026-07-21T09:00:00.000Z");
 });
 
-test("F-claim-ingest · marks-ingest never reads claimed_at back as a resident's change: it is the store's fact printed into the file", async () => {
-  const { recordDiff } = await import("../world2/tools/marks-ingest.mjs");
-  assert.deepEqual(recordDiff({ kind: "parcel", body: "a", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), []);
-  assert.deepEqual(recordDiff({ kind: "parcel", body: "b", claimed_at: "2026-07-21" }, { kind: "parcel", body: "a" }), ["body"], "a real change is still read");
-});
-
 // ── W · AN OWED WITHDRAWAL IS A REMOVAL ON ITS SKETCHBOOK (WLD-88) ──────────
 //
 // The store crossing wrote no removal from G1 (2026-09-08) on, so the sweep's

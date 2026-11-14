@@ -3258,3 +3258,73 @@ sudo systemctl daemon-reload
 ```
 
 A run that spends both passes still publishes what it built, and its report says so ("2 passes are spent — the next tick takes it"). The next tick, 30 minutes later, builds what's left. To check: `systemctl show postmark-site-refresh -p Environment` carries `SITE_REFRESH_MAX_PASSES=2`.
+
+## The settlement printout (095): the settlement prints itself (POS-1025, the office half of POS-365)
+
+Darko, 2026-11-13: "Printout only", and three answers the same evening: **/a "Every settlement"** (every seal is numbered, a quiet one too; a retry keeps its number; a window never printed leaves a gap; the tag is cut only after a successful printout; an old tag is never rewritten), **/b "Both"** (an operator may amend and withdraw a mark without its resident's consent; the economy is unchanged, no stamp moves) and **/c "Report only"** (after the seal, the harm gate, the lint and the world suite only alarm). The build disposition: one retirement with no legacy flag; every decision is made before the seal, the printout only renders it; a scoped writer for the `world-marks` head; the existing alarm route.
+
+**What changes.**
+- **The clearing decides, then seals.** Before the seal it retires the owner's withdrawals (`settlement-withdraw`) and the unbacked commons marks (`settlement-unpublish`, back to their drafts), and keeps the publications registry (`settlement_publications`), as the sweep and `retire-unpublished.mjs` did after it (`world2/tools/settlement-decides.mjs`). Then it numbers the seal: `world_snapshots.sealed_settlement`, one more than the greatest of the sealed numbers and `settlements.number`.
+- **The crossing prints.** `deploy/settlement-auto.sh` waits for the docket as before, then: the printout (`world2/tools/settlement-printout.mjs print`: the sealed delta from the last printed seal, rendered onto world main, one commit `settlement: S<n> printout — N written, M removed, K re-framed`; a settlement that changed nothing is an EMPTY printout commit, so every settlement has its own commit for its tag), the harm gate (reported), the push (never forced), the annotated tag `settlement/S<n>` at the pushed printout (naming the number, window, snapshot and digest; never moved; a tag already standing elsewhere is refused and alarmed), the record (`record_printout`: `printout_sha`, `printed_at`, and the `world-marks` head for the highest printed), then the world suite (reported). Exit 0 published or quiet, 1 refused, 2 race, as before. A refused printout publishes nothing and alarms (`printout-refused`); its window stays sealed and unprinted, and the next printout's delta carries it, because it measures from the last printout, not from the last window.
+- **A retry never mints a second identity.** A crossing whose printout landed but whose record did not finds it on main by its subject (`already-on-main`), tags and records it under the same number; one already recorded answers `already-printed` and does nothing.
+- **Retired, with their tests:** the git source (`SETTLEMENT_SOURCE=git` now refuses by name), the drain, the write-down's sketchbook half, the sweep invocation, `deploy/surveyed-reading.mjs`, `deploy/refused-marks.mjs`, `deploy/settlement-classify.mjs`, `world2/tools/retire-unpublished.mjs`, and the marks pen: `world2/tools/marks-ingest.mjs`, `deploy/world2-marks-ingest.sh` and `postmark-world2-marks-ingest.{service,timer}` (its roll-call row is `retired`; its tree row is gone).
+- **The operator's repair** (`household { do: "repair-mark", args: { mark, act: "amend" | "withdraw", reason, … } }`): the town's hands only, filed as the mark's own author and household through the resident's own doors and every guard, the operator recorded as the act's hand on the `operator` route (079), no stamp moved; law and class marks refused (`src/mark-repair.mjs`).
+- **The notary** certifies the newest window's settlement number and snapshot digest beside its other bindings, only for a window sealed with a number, so every certification already signed re-derives byte for byte.
+- **Alarms** (the existing route): the receipt carries `settlement`, `printout`, `tag`, `record`, `harm` and `suite`; the escalation files `printout`, `tag` and `harm-warning` as well as `suite-warning`; the sentinel reads a printout subject as a publication and reads named harm, or a refused tag or record over it, as DOWN; the roll-call alarms on `printout-refused` at once and on three crossings in a row that published without a record (`unrecorded_runs`).
+
+**The paired cutover, Jetto's hand, never a lane's: dev first, then the box.** World's POS-1026 (Bevel) deletes the sweep on the world side; it merges only after this cutover is live on the box, and the printout keeps calling the world's `tools/marks-fold.mjs` and `tools/reparent-keep-world.mjs`, which Bevel keeps. The Worldkeeper's blessing changes too: the crossing cuts `settlement/S<n>` itself, so the keeper stops tagging at the cutover (World doctrine, Rei's; it is a precondition, not code here). No crossing between the steps below may run the old code against the new store or the reverse, and no retired writer may run against a release that no longer carries it: do 1 to 6 between two crossings (after the 05:45:40 / 17:45:40Z clearing's settlement has finished, before the next clearing).
+
+1. **Apply 095 BEFORE the code.** Additive and idempotent (the seal number column, the registry table, `record_printout`). The release before this one ignores all three. Same pipe as 079 above, with `095_settlement_printout.sql`. Proof (the probe `world2/tools/migrations-landed.mjs` holds for 095):
+   ```sh
+   DB=$(sudo sed -n 's|^WORLD2_PG_URL=.*/\([^/?"]*\).*|\1|p' /etc/postmark-office.env)
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT count(*) FROM information_schema.columns WHERE table_name = 'world_snapshots' AND column_name IN ('sealed_settlement','printout_sha','printed_at')"   # 3
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT to_regclass('settlement_publications') IS NOT NULL, to_regprocedure('record_printout(integer, text)') IS NOT NULL"   # t|t
+   ```
+2. **The settlements table is current with the world's tags,** so the first numbered seal comes after every real `settlement/S<n>` (the keeping tick's own backfill, once more by hand, then its verify):
+   ```sh
+   sudo -u meepo bash -c 'cd /srv/postmark-office && set -a && . /etc/postmark-office.env && set +a && git -C "$WORLD_CLONE" fetch -q --tags origin && node world2/tools/settlements-backfill.mjs --apply --prod --quiet --world-repo "$WORLD_CLONE" && node world2/tools/settlements-backfill.mjs --verify --world-repo "$WORLD_CLONE"'
+   ```
+   `SELECT max(number) FROM settlements` equals the newest `settlement/S<n>` on the world's origin. If the keeper blesses between this step and step 5, run it again.
+3. **Seed the registry once,** from world main as it stands at the cutover (dry first; a re-run with the same rows is `already-seeded`, a different registry in the store is refused):
+   ```sh
+   SHA=$(git -C /srv/world2-lab/ingest-clones/world rev-parse origin/main)
+   . /srv/world2-lab/ops/world2-lib.sh && w2_pgenv world2_owner PG_WORLD2_OWNER_PASSWORD
+   node /srv/postmark-office/world2/tools/publications-seed.mjs --world-repo /srv/world2-lab/ingest-clones/world --sha "$SHA" --dry-run
+   node /srv/postmark-office/world2/tools/publications-seed.mjs --world-repo /srv/world2-lab/ingest-clones/world --sha "$SHA"
+   ```
+4. **Quiesce the marks pen BEFORE the release switch.** Its timer fires at :12/:27/:42/:57 and runs `world2/tools/marks-ingest.mjs` out of the release tree, and the release in step 5 no longer carries that module: a fire after the switch would run against deleted code. So the pen stops on the release that still has it:
+   ```sh
+   sudo systemctl disable --now postmark-world2-marks-ingest.timer
+   while systemctl is-active -q postmark-world2-marks-ingest.service; do sleep 5; done   # a run in progress finishes its own transaction; never kill it
+   systemctl is-enabled postmark-world2-marks-ingest.timer      # disabled
+   systemctl is-active postmark-world2-marks-ingest.timer       # inactive
+   systemctl is-active postmark-world2-marks-ingest.service     # inactive (or failed: read its journal before going on)
+   sudo jq -r .at /srv/world2-lab/state/ingest-marks.json       # its last stamp, before the disable; it never moves again
+   ```
+   Go on only when all four say so. The unit files stay installed (disabled) until step 8, so a rollback before then is one `enable --now`. Between this step and step 5 a hand commit to a mark file on world main is not carried into the store, exactly as it will not be after the cutover (CONTRACT.md § The git lane's boundary); keep those minutes short.
+5. **Ship the code** (the release carrying POS-1025). The next clearing seals a numbered snapshot. The roll-call row for the marks pen now reads `retired`, and may name it unretired until step 8 removes its files.
+6. **Name the first printout's base, for one crossing only.** The base is the window whose world the last sweep published: the newest PUBLISHED crossing's store window (the old receipts' `as_of.window`, the same number as that crossing's journal line `docket: window N locked`):
+   ```sh
+   sudo -n -u postgres psql -d "$DB" -tAc "SELECT receipt::jsonb #>> '{as_of,window}' FROM crossing_receipts WHERE status = 'published' ORDER BY id DESC LIMIT 1"
+   ```
+   A drop-in on the scheduled unit:
+   ```sh
+   sudo mkdir -p /etc/systemd/system/postmark-settlement.service.d
+   printf '[Service]\nEnvironment=SETTLEMENT_SINCE_WINDOW=<that window>\n' | sudo tee /etc/systemd/system/postmark-settlement.service.d/cutover-base.conf
+   sudo systemctl daemon-reload
+   ```
+   **Remove it as soon as the first printout is recorded** (`rm` the file, `daemon-reload`). Left in place, the next crossing refuses by name (`since-window-after-cutover`, "Remove SETTLEMENT_SINCE_WINDOW from the unit's environment") and publishes nothing until it is gone. The first printout carries every still-canonical change since that base, and its subject names its number.
+7. **Read the first printout:** the receipt (`/srv/postmark-harbor/settlement-auto.json`, its history line in `settlement-auto-history.jsonl` beside it) says `printout.status` `printed` (or `quiet`), `tag.status` `tagged` and `record.status` `recorded`, with `settlement` its number; `git ls-remote origin refs/tags/settlement/S<n>` on the world clone names the tag, and `git cat-file -p settlement/S<n>` its digest; `SELECT sealed_settlement, printout_sha FROM world_snapshots ORDER BY window_id DESC LIMIT 2` names it, and `SELECT sha FROM projection_heads WHERE repo = 'world-marks'` is that commit. The next night's notary certification carries `settlement` and `snapshot_digest`. Then remove the step-6 drop-in.
+8. **Clean up the retired pen, last** (it has not run since step 4; removing its files is what makes the retirement final, so it waits until the first printout has been read and a rollback is no longer wanted): remove `postmark-world2-marks-ingest.{service,timer}` and `/etc/systemd/system/postmark-world2-marks-ingest.service.d/`, remove `/srv/world2-lab/ops/world2-marks-ingest.sh`, `sudo systemctl daemon-reload`. Carry the ops scripts as the roll-call's `world2-ops-scripts` row says. The roll-call then reads the row `retired` with nothing loaded.
+
+**On dev first, with the rehearsal.** `node tools/dev-rehearsal.mjs` (DEPLOY § The dev rehearsal) carries a `cutover` step: with no printout recorded, it goes red, by name, on a settlements table behind the world's tags or an empty registry (steps 2 and 3 above), then names the base as step 6 does and passes it to its first settlement only. Its `bless` step now reads the crossing's own tag and holds the seal, the tag, the record and the settlements row to one number and one commit.
+
+**The paired dev rehearsal, byte for byte (the brief's receipt; fixtures are not it).** From ONE dev store dump and ONE dev world main: restore, run the release before this one's settlement over window W into a bare copy A; restore the same dump again, apply 095 and steps 2 and 3, run this release's settlement over the same W with `SETTLEMENT_SINCE_WINDOW` naming W's predecessor into a bare copy B. Then `git -C B diff --name-status <A's main> <B's main> -- WORLD/` names every file the two disagree on, and each is either explained (named before: the commit's subject and parentage, the registry file's rows the store now keeps, `parent` from the framer) or a stop. Every differing file goes in the receipt by name.
+
+**Rollback, in this order, and only before the first printout is tagged.** The release before this one runs unchanged over a 095 store (the columns are nullable, 095 only widens the stances check, the table and the function go unused).
+1. Remove the step-6 drop-in (`daemon-reload`), so no crossing on either release names a base.
+2. Redeploy the previous release, which carries the marks pen's code again.
+3. Only then bring the pen back, so it never runs against a release without its module: `sudo systemctl enable --now postmark-world2-marks-ingest.timer`. Its files are still installed: step 8 comes after the first printout, and past that point there is no rollback to the sweep (below).
+4. Confirm it with the roll-call, whose manifest is the old release's again.
+
+While rolled back, the store's registry no longer follows the sweep's file, so a later cutover's seed refuses by name if they differ; that registry is reconciled by a person before the seed runs again. After a printout is tagged, there is no rollback to the sweep: the store numbers seals and the keeper no longer tags, so the old crossing and the new numbers would disagree. Stop `postmark-settlement.timer` and fix forward; a tag is never moved or deleted.

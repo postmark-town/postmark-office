@@ -72,6 +72,23 @@
 // already the finding, and a transport that could turn a refusal into a crash
 // would be a second, worse outage on top of the first.
 //
+// ── AND THE PRINTOUT'S THREE (POS-1025, 2026-11-13) ─────────────────────────
+//
+// Since the settlement prints its sealed snapshot, what publishes is decided
+// before the seal, and after it the checks only raise alarms (POS-1025/c "Report
+// only"). Three classes carry those alarms, each gated on its own receipt:
+//
+//   · `printout`      the printout REFUSED: the settlement is sealed and
+//                     unprinted, and the next crossing composes the same refusal
+//                     until the record is repaired. Terminal, so it files on the
+//                     first occurrence;
+//   · `harm-warning`  the town PUBLISHED and the harm gate named harm over the
+//                     printed tree, or could not gate: the crisis class of
+//                     2026-09-16, now an alarm over a publication that landed;
+//   · `tag`           the town PUBLISHED and its tag or the store's record of the
+//                     printout refused: a settlement/S<n> that stands elsewhere is
+//                     never moved, so a person decides.
+//
 // Usage:
 //   node deploy/settlement-escalate.mjs --class canon-bad --receipt /srv/postmark-harbor/settlement-auto.json
 //   node deploy/settlement-escalate.mjs --class suite-red --receipt <path> \
@@ -89,8 +106,11 @@ export const DEFAULT_CRED = "/srv/postmark-office/.git-credentials";
 export function titleFor(klass) {
   // a warning is not a refusal, and its standing issue must not be found under
   // a refusal's name: the town published, and the title says so
-  return klass === "suite-warning" ? `settlement warning: ${klass}` : `settlement refusal: ${klass}`;
+  return WARNING_CLASSES.has(klass) ? `settlement warning: ${klass}` : `settlement refusal: ${klass}`;
 }
+
+/** The classes filed over a crossing that PUBLISHED: a warning, never a refusal. */
+export const WARNING_CLASSES = new Set(["suite-warning", "harm-warning", "tag"]);
 
 /** The token out of a git credential store, or null. Never logged, never returned in a body. */
 export function tokenFrom(text) {
@@ -138,6 +158,21 @@ export function isHarmRefusal(receipt) {
 }
 export function isSuiteWarning(receipt) {
   return receipt?.status === "published" && receipt?.suite?.red === true;
+}
+
+/**
+ * THE PRINTOUT'S THREE (POS-1025), gated the same way: each must be what its
+ * class says, on the receipt's own fields, or nothing is filed.
+ */
+const LANDED = new Set(["published", "quiet"]);
+export function isPrintoutRefusal(receipt) {
+  return receipt?.status === "refused" && (receipt?.printout?.status === "refused" || receipt?.class === "printout-refused");
+}
+export function isHarmWarning(receipt) {
+  return LANDED.has(receipt?.status) && receipt?.harm != null && receipt.harm.ok === false;
+}
+export function isTagWarning(receipt) {
+  return LANDED.has(receipt?.status) && (receipt?.tag?.status === "refused" || receipt?.record?.status === "refused");
 }
 
 /**
@@ -225,6 +260,26 @@ export function bodyFor(klass, receipt, { at = new Date().toISOString(), suiteLo
       + "pull request (the sweep or the record, whichever the rows name); the next crossing carries the town. If "
       + "the gate COULD NOT RUN (no report, no fold, no tool at this world sha), that is the finding, and the "
       + "repair is the crossing's own chain.",
+    printout:
+      "THE PRINTOUT REFUSED (POS-1025). The settlement was decided and sealed in the clearing; its printout onto "
+      + "world main could not be made, so it is SEALED AND UNPRINTED — no world commit, no settlement tag, nothing "
+      + "recorded. The receipt's `printout` block names why (a frame whose leaving cannot keep a nested mark's world "
+      + "position, a stale replay, a seal with no number or no base). The next crossing measures from the last "
+      + "printout that succeeded and composes the same refusal until the record is repaired; once it is, `sudo "
+      + "systemctl start postmark-settlement-by-hand.service` prints the newest unprinted settlement under its own number.",
+    "harm-warning":
+      "THE TOWN IS PUBLISHED, AND THE HARM GATE NAMED HARM OVER IT (POS-1025/c: after the seal the checks only "
+      + "raise alarms). The gate compared the printed tree with the one it started from and found a resident's mark "
+      + "moved or lost with no act naming it, the printout's word not matching the tree, a stampless fold, or two "
+      + "parcels on one ground — or it could not gate at all. What published was what the settlement sealed, so "
+      + "the repair is the record or the printout itself (a world or office pull request), and the next settlement "
+      + "carries it. The checks and the marks are named below.",
+    tag:
+      "THE TOWN IS PUBLISHED, AND ITS SETTLEMENT IS NOT RECORDED AS PRINTED. World main carries the printout, but "
+      + "the `settlement/S<n>` tag or the store's record of it refused (the receipt's `tag` and `record` blocks say "
+      + "which, in their own words). A settlement tag is never moved or rewritten: a tag-conflict means S<n> already "
+      + "stands on another commit, and a person decides which is canon. A record that tripped is usually the store "
+      + "pen; once repaired, `sudo systemctl start postmark-settlement-by-hand.service` finishes it under the same number.",
     "suite-warning":
       "THE TOWN IS PUBLISHED. The grammar suite ran after the push and went red — a WARNING, not a refusal "
       + "(founder-ruled 2026-09-16: the suite holds no crossing; harm does). Every resident's mark stands where "
@@ -233,10 +288,15 @@ export function bodyFor(klass, receipt, { at = new Date().toISOString(), suiteLo
   };
   const nextStep = OVERRIDE[klass] ?? receipt?.next_step ?? "read the refusal below and decide the removal lane.";
 
+  const S = receipt?.settlement != null ? ` S${receipt.settlement}` : "";
+  const FIRST = {
+    "suite-warning": `**${klass}** — the settlement${S} PUBLISHED at \`${receipt?.at ?? at}\` and its grammar suite went red afterwards.`,
+    "harm-warning": `**${klass}** — the settlement${S} PUBLISHED at \`${receipt?.at ?? at}\` and the harm gate named harm over its printout.`,
+    tag: `**${klass}** — the settlement${S} PUBLISHED at \`${receipt?.at ?? at}\` and is not recorded as printed.`,
+    printout: `**${klass}** — the settlement${S} is sealed and its printout refused at \`${receipt?.at ?? at}\`.`,
+  };
   const lines = [
-    klass === "suite-warning"
-      ? `**${klass}** — the settlement PUBLISHED at \`${receipt?.at ?? at}\` and its grammar suite went red afterwards.`
-      : `**${klass}** — the settlement refused at \`${receipt?.at ?? at}\` and cannot clear itself.`,
+    FIRST[klass] ?? `**${klass}** — the settlement refused at \`${receipt?.at ?? at}\` and cannot clear itself.`,
     "",
     "### What to do",
     "",
@@ -244,9 +304,20 @@ export function bodyFor(klass, receipt, { at = new Date().toISOString(), suiteLo
     "",
   ];
 
+  // THE PRINTOUT'S OWN WORDS (POS-1025): why it refused, or which of the tag and
+  // the record did, above the receipt.
+  if (klass === "printout") {
+    const p = receipt?.printout ?? {};
+    lines.push("### The printout's refusal", "", "```", `${p.refused ?? "(no reason carried)"}: ${p.detail ?? ""}`, "```", "");
+    if (p.reframe) lines.push("The mark it could not keep:", "", "```json", JSON.stringify(p.reframe, null, 1), "```", "");
+  }
+  if (klass === "tag") {
+    lines.push("### The tag and the record", "", "```json", JSON.stringify({ tag: receipt?.tag ?? null, record: receipt?.record ?? null }, null, 1), "```", "");
+  }
+
   // THE HARM GATE'S OWN ROWS, above the receipt: the checks that tripped and the
   // marks each one named, which is the whole of what a person acts on.
-  if (klass === "harm") {
+  if (klass === "harm" || klass === "harm-warning") {
     const tripped = (receipt?.harm?.checks ?? []).filter((c) => c && c.ok !== true);
     lines.push("### The harm gate's own rows", "");
     if (tripped.length) {
@@ -254,9 +325,10 @@ export function bodyFor(klass, receipt, { at = new Date().toISOString(), suiteLo
         lines.push(`**${c.name}** — ${c.count ?? (c.rows ?? []).length} row(s)${c.note ? ` (${c.note})` : ""}`, "", "```",
           ...((c.rows ?? []).length ? c.rows : ["(no rows carried)"]), "```", "");
       }
-    } else if (receipt?.harm == null) {
-      lines.push("The gate did not produce a report: it could not run. The receipt's `detail` says why (no report, "
-        + "no fold, or no `tools/harm-gate.mjs` at this world sha). That is the finding.", "");
+    } else if (receipt?.harm == null || receipt.harm.ran === false) {
+      lines.push("The gate did not produce a report: it could not run. "
+        + (receipt?.harm?.could_not_gate ? `It said: ${receipt.harm.could_not_gate}. ` : "The receipt's `detail` says why (no report, "
+        + "no fold, or no `tools/harm-gate.mjs` at this world sha). ") + "That is the finding.", "");
     } else {
       lines.push("The receipt carries a harm report with no tripped check — the caller escalated `harm` over a "
         + "gate that found none. Read the receipt's `detail`.", "");
@@ -358,6 +430,17 @@ export async function escalate({
     log("[settlement-escalate] NOT FILED — `--class harm` was asked over a receipt that is not a harm refusal "
       + `(status ${JSON.stringify(receipt?.status ?? null)}). Nothing was filed.`);
     return { filed: false, reason: "not-a-harm-refusal", title };
+  }
+  // The printout's three (POS-1025), the same gate for the same reason.
+  const PRINTOUT_GATES = {
+    printout: [isPrintoutRefusal, "a refused printout"],
+    "harm-warning": [isHarmWarning, "a published crossing whose harm gate named harm or could not gate"],
+    tag: [isTagWarning, "a published crossing whose tag or record refused"],
+  };
+  if (PRINTOUT_GATES[klass] && !PRINTOUT_GATES[klass][0](receipt)) {
+    log(`[settlement-escalate] NOT FILED — \`--class ${klass}\` was asked over a receipt that is not ${PRINTOUT_GATES[klass][1]} `
+      + `(status ${JSON.stringify(receipt?.status ?? null)}). Nothing was filed.`);
+    return { filed: false, reason: `not-a-${klass}`, title };
   }
   if (klass === "suite-warning" && !isSuiteWarning(receipt)) {
     log("[settlement-escalate] NOT FILED — `--class suite-warning` was asked over a receipt that is not a published "

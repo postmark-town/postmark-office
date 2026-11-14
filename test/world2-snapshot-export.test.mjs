@@ -249,6 +249,36 @@ test("`exported_at` is the ONLY field a re-run may differ by", () => {
   assert.notEqual(certificationSubstance(one), certificationSubstance(moved));
 });
 
+test("THE SETTLEMENT'S PAIR (POS-1025): a window sealed with a number certifies it and its digest; one sealed before 095 certifies exactly as before", () => {
+  const base = {
+    cursors: { acts_cursor: 2401, marks_count: 831 }, windowCursor: 150,
+    pins: { law_sha: "aa", town_sha: "bb" }, marksDigest: "sha256:cc",
+    archives: [{ window: 150, lines: 2, bytes: "x\ny\n" }], exportedAt: "2026-08-28T00:00:00.000Z",
+  };
+  const before = certification(base);
+  // a seal before 095 (no number), or no snapshot at all: not one key added, so every signed certification re-derives
+  assert.equal(certificationSubstance(certification({ ...base, seal: { sealed_settlement: null, digest: "d".repeat(64) } })), certificationSubstance(before));
+  assert.equal(certificationSubstance(certification({ ...base, seal: null })), certificationSubstance(before));
+  assert.equal("settlement" in before, false);
+  const sealed = certification({ ...base, seal: { sealed_settlement: "214", digest: "d".repeat(64) } });
+  assert.equal(sealed.settlement, 214);
+  assert.equal(sealed.snapshot_digest, "d".repeat(64));
+  // the pair is substance: a certification that named another number or digest is a different state
+  assert.notEqual(certificationSubstance(sealed), certificationSubstance(certification({ ...base, seal: { sealed_settlement: 215, digest: "d".repeat(64) } })));
+  assert.notEqual(certificationSubstance(sealed), certificationSubstance(certification({ ...base, seal: { sealed_settlement: 214, digest: "e".repeat(64) } })));
+});
+
+test("derive reads the NEWEST certified window's seal, and only that one", async () => {
+  const windows = [
+    { id: 150, status: "closed", opens_at: new Date("2026-08-26T00:00:00Z"), closes_at: new Date("2026-08-26T05:45:00Z"), cleared_at: new Date("2026-08-26T05:45:16Z"), law_sha: "aa", town_sha: "bb" },
+  ];
+  const d = await derive(fakeClient({ windows, acts: [], seals: [{ window_id: 149, sealed_settlement: 7, digest: "f".repeat(64) }, { window_id: 150, sealed_settlement: 8, digest: "d".repeat(64) }] }), { now: Date.parse("2026-09-30T00:00:00Z") });
+  assert.deepEqual(d.seal, { window_id: 150, sealed_settlement: 8, digest: "d".repeat(64) });
+  const cert = certification({ ...d, exportedAt: "x" });
+  assert.equal(cert.settlement, 8);
+  assert.equal(cert.snapshot_digest, "d".repeat(64));
+});
+
 test("the certification binds the archives' CONTENT, not only the log's length", () => {
   // The acts cursor alone would notice an act appended and miss an act
   // rewritten — and the sentence this pen exists to make true is "the office
@@ -503,9 +533,10 @@ test("the boundary is the sailing instant itself, not a moment either side of it
 // shapes `pg` hands them over (bigint and numeric as TEXT), and nothing else —
 // an unexpected statement throws rather than returning an obliging empty set.
 
-function fakeClient({ windows, acts, marks = [] }) {
+function fakeClient({ windows, acts, marks = [], seals = [] }) {
   return {
     async query(sql, params = []) {
+      if (sql.includes("FROM world_snapshots")) return { rows: seals.filter((s) => Number(s.window_id) === Number(params[0])) };
       if (sql.includes("acts_cursor")) {
         const ids = acts.map((a) => Number(a.id));
         return { rows: [{

@@ -650,6 +650,10 @@ export async function crossNow(L, { ferry = true, settle = true, keep = false, l
     }
     if (settle) {
       const t0 = Date.now();
+      // the printout's cutover (POS-1025), as the rehearsal takes it: a no-op once the store has recorded a printout
+      const cut = step("cutover");
+      const cutoverProblems = await cut.check(ctx, await cut.run(ctx), { notes });
+      if (cutoverProblems.length) return { green: false, problems: cutoverProblems, notes };
       const [win] = await s.q("office_api", "SELECT id FROM windows WHERE status = 'open' ORDER BY id DESC LIMIT 1");
       if (!win) return { green: false, problems: ["the store has no open window: the candle is out (reset the sandbox)"], notes };
       ctx.window = Number(win.id);
@@ -663,6 +667,7 @@ export async function crossNow(L, { ferry = true, settle = true, keep = false, l
       log(`the clearing (window ${ctx.window}) and the settlement (${ms(t0)})`);
       if (problems.length) return { green: false, problems, notes };
       const blessed = await step("bless").run(ctx);
+      if (blessed.setup) return { green: false, problems: [blessed.setup], notes };
       if (blessed.code !== 0) return { green: false, problems: [`the bless's settlements-backfill exited ${blessed.code}: ${tail(blessed.out)}`], notes };
       // the sandbox's world takes the blessed commit (its own clone; never pushed anywhere)
       git(t.worldClone, "merge", "-q", "--ff-only", `settlement/S${ctx.blessed}`);

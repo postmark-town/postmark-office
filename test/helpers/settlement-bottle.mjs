@@ -1,11 +1,19 @@
-// settlement-bottle.mjs — ONE STORE CROSSING, IN A BOTTLE (POS-242).
+// settlement-bottle.mjs — ONE PRINTOUT CROSSING, IN A BOTTLE (POS-242; POS-1025).
 //
 // Moved out of test/settlement-dry-leg.test.mjs so the rehearsal runner's own
 // test (world2-rehearsal-dry.test.mjs) drives the same bottle: a fixture office
-// whose receipt, history, surveyed reading, retry and settlement-auto.sh are the
-// REAL files, and whose store tools, registry pair and escalation are stubs that
-// log their argv and write the way the real tool writes when not told to be dry.
-// That file's header says why each stub is shaped as it is.
+// whose receipt, history, retry and settlement-auto.sh are the REAL files, and
+// whose store tools, registry pair and escalation are stubs that log their argv
+// and write the way the real tool writes when not told to be dry.
+//
+// THE PRINTOUT IS A STUB OF ITS SHELL CONTRACT (world2/tools/settlement-printout.mjs
+// needs a sealed store to read): `print` writes alpha/one, removes alpha/old and
+// commits `settlement: S214 printout — 1 written, 1 removed, 0 re-framed` (or,
+// under --dry-run, writes and commits nothing; `quiet` changes nothing); `tag`
+// cuts a REAL annotated `settlement/S214` at --commit, so the crossing's own tag
+// push is the real one; `record` appends to STORE_WRITES. Each answers the JSON
+// the real tool answers, and refuses on demand (PRINTOUT_SAYS, PRINTOUT_TAG,
+// PRINTOUT_RECORD).
 
 import { after } from "node:test";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -39,10 +47,14 @@ const at = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : 
 const flag = (n) => process.argv.includes(n);
 `;
 
+export const SETTLEMENT = 214;
+export const WINDOW = 213;
+export const DIGEST = "d".repeat(64);
+
 const STUBS = {
   "world2/tools/await-clearing.mjs": `${LOGGER}
 logArgs("await-clearing");
-process.stdout.write(JSON.stringify({ window: 213, cleared_at: "2026-10-01T05:45:44Z", waited_s: 0 }) + "\\n");
+process.stdout.write(JSON.stringify({ window: ${WINDOW}, cleared_at: "2026-10-01T05:45:44Z", waited_s: 0 }) + "\\n");
 `,
   // The REAL writer, over a register that answers STATE_LOG_ACTS: the real
   // writeJournalWindow merges by seq, and the real penCommit pushes when the
@@ -50,10 +62,10 @@ process.stdout.write(JSON.stringify({ window: 213, cleared_at: "2026-10-01T05:45
   "world2/tools/state-log-write.mjs": `${LOGGER}
 import { pathToFileURL } from "node:url";
 logArgs("state-log-write");
-if (flag("--check")) { process.stdout.write(JSON.stringify({ window: 213, crossings: [] }) + "\\n"); process.exit(0); }
+if (flag("--check")) { process.stdout.write(JSON.stringify({ window: ${WINDOW}, crossings: [] }) + "\\n"); process.exit(0); }
 const acts = process.env.STATE_LOG_ACTS ? JSON.parse(process.env.STATE_LOG_ACTS) : [1];
 const rows = acts.map((id) => ({
-  id, at: new Date(Date.UTC(2026, 9, 1, 1, 0, id)).toISOString(), crossing: 213, actor: "alpha", action: "say", object: null,
+  id, at: new Date(Date.UTC(2026, 9, 1, 1, 0, id)).toISOString(), crossing: ${WINDOW}, actor: "alpha", action: "say", object: null,
   at_anchor: null, at_dx: null, at_dy: null, witnesses: null,
   class: "voice", payload: { text: "hello" }, effect: "spoken", household: "solo:alpha",
 }));
@@ -61,37 +73,70 @@ const rows = acts.map((id) => ({
 process.argv[1] = "the-bottle";
 const { writeStateLog } = await import(pathToFileURL(${JSON.stringify(join(OFFICE, "world2", "tools", "state-log-write.mjs"))}).href);
 const out = await writeStateLog({ async query() { return { rows }; } },
-  { world: at("--world"), windows: [213], dryRun: flag("--dry-run") });
-process.stdout.write(JSON.stringify({ window: 213, ...out }) + "\\n");
+  { world: at("--world"), windows: [${WINDOW}], dryRun: flag("--dry-run") });
+process.stdout.write(JSON.stringify({ window: ${WINDOW}, ...out }) + "\\n");
 `,
-  "world2/tools/fold-input-cli.mjs": `${LOGGER}
-logArgs("fold-input-cli");
-process.stdout.write(JSON.stringify({ stakes: [{ holder: "alpha", mark: "alpha/one", n: 1, weight: 3, tick: 0 }] }) + "\\n");
-`,
-  "src/store-writedown.mjs": `${LOGGER}
+  "world2/tools/settlement-printout.mjs": `${LOGGER}
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-logArgs("store-writedown");
+const mode = process.argv[2];
+logArgs("settlement-printout");
+const say = (o, code = 0) => { process.stdout.write(JSON.stringify(o) + "\\n"); process.exit(code); };
 const world = at("--world");
 const git = (...a) => execFileSync("git", ["-C", world, ...a], { encoding: "utf8" }).trim();
-git("checkout", "-q", "-B", "draft/alpha", "main");
-mkdirSync(join(world, "WORLD", "marks", "alpha", "one"), { recursive: true });
-writeFileSync(join(world, "WORLD", "marks", "alpha", "one", "mark.md"), "---\\nkind: sited\\nby: alpha\\n---\\n\\none\\n");
-git("add", "-A");
-git("-c", "user.name=store", "-c", "user.email=s@x.invalid", "commit", "-qm", "store write-down: 1 mark(s) — alpha (window 213)");
-git("checkout", "-q", "main");
-process.stdout.write(JSON.stringify({ written: 1, marks: 1, households: ["alpha"], as_of: { window: 213 },
-  ingest: { storeSha: "abcdef1234", reason: "at-head", behind: 0 }, sketchbooks_cleared: { removed_remote: 0, removed_local: 0 } }) + "\\n");
-`,
-  "world2/tools/retire-unpublished.mjs": `${LOGGER}
-import { appendFileSync, readFileSync } from "node:fs";
-logArgs("retire-unpublished");
-const sweep = JSON.parse(readFileSync(at("--sweep"), "utf8"));
-const slugs = (sweep.unpublished || []).map((r) => r.id);
-if (flag("--dry-run")) { process.stdout.write(JSON.stringify({ dry_run: true, would_retire: slugs }) + "\\n"); process.exit(0); }
-appendFileSync(process.env.STORE_WRITES, "RETIRED " + slugs.join(",") + "\\n");
-process.stdout.write(JSON.stringify({ ran: true, count: slugs.length, retired: slugs.map((slug) => ({ slug })), already_retired: [], absent: [], window: 213 }) + "\\n");
+const snapshot = { id: 77, digest: ${JSON.stringify(DIGEST)}, town_sha: "f".repeat(40) };
+if (mode === "print") {
+  if (process.env.PRINTOUT_SAYS === "refused")
+    say({ status: "refused", refused: "reframe-refused", detail: "the frame alpha/old-hall cannot keep alpha/one exactly", reframe: { id: "alpha/one" } }, 1);
+  if (process.env.PRINTOUT_SAYS === "already-printed")
+    say({ status: "already-printed", settlement: ${SETTLEMENT}, window: ${WINDOW}, commit: git("rev-parse", "HEAD"), snapshot });
+  // the real tool finds it by subject (settlement-printout.mjs § printoutOnMain); the stub, when told to
+  if (process.env.PRINTOUT_SAYS === "already-on-main") {
+    const line = git("log", "-n", "500", "--format=%H %s", "HEAD").split("\\n").find((l) => l.slice(41).startsWith("settlement: S${SETTLEMENT} printout "));
+    say({ status: "already-on-main", settlement: ${SETTLEMENT}, window: ${WINDOW}, commit: line.slice(0, 40), snapshot });
+  }
+  const base = { settlement: ${SETTLEMENT - 1}, window: ${WINDOW - 1}, printout_sha: null, world: git("rev-parse", "HEAD") };
+  if (process.env.PRINTOUT_SAYS === "quiet") {
+    // a settlement that changed nothing is an EMPTY printout commit (POS-1025/a), unless dry
+    writeFileSync(join(world, ".git", "printout-stakes.json"), "[]\\n");
+    const quiet = { status: "quiet", settlement: ${SETTLEMENT}, window: ${WINDOW}, snapshot, base, written: [], removed: [], reframed: [], framed: [], summary: { written: 0, unchanged: 1, removed: 0, reframed: 0 } };
+    if (flag("--dry-run")) say({ ...quiet, status: "dry", quiet: true });
+    git("-c", "user.name=printout", "-c", "user.email=p@x.invalid", "commit", "-q", "--allow-empty", "-m", "settlement: S${SETTLEMENT} printout — 0 written, 0 removed, 0 re-framed");
+    say({ ...quiet, commit: git("rev-parse", "HEAD") });
+  }
+  mkdirSync(join(world, "WORLD", "marks", "alpha", "one"), { recursive: true });
+  writeFileSync(join(world, "WORLD", "marks", "alpha", "one", "mark.md"), "---\\nkind: sited\\nby: alpha\\n---\\n\\none\\n");
+  rmSync(join(world, "WORLD", "marks", "alpha", "old"), { recursive: true, force: true });
+  writeFileSync(join(world, ".git", "printout-stakes.json"), JSON.stringify([{ holder: "alpha", mark: "alpha/one", n: 1, weight: 3, tick: 0 }]) + "\\n");
+  const receipt = { settlement: ${SETTLEMENT}, window: ${WINDOW}, snapshot, base,
+    written: [{ id: "alpha/one", path: "WORLD/marks/alpha/one/mark.md" }], removed: [{ slug: "alpha/old", path: "WORLD/marks/alpha/old/mark.md" }],
+    reframed: [], framed: [], registry: { added: [], reclassed: [], removed: ["alpha/old"] },
+    summary: { written: 1, unchanged: 0, removed: 1, reframed: 0 } };
+  if (flag("--dry-run")) say({ status: "dry", quiet: false, ...receipt });
+  git("add", "-A", "--", "WORLD");
+  git("-c", "user.name=printout", "-c", "user.email=p@x.invalid", "commit", "-qm", "settlement: S${SETTLEMENT} printout — 1 written, 1 removed, 0 re-framed");
+  say({ status: "printed", ...receipt, commit: git("rev-parse", "HEAD") });
+}
+if (mode === "tag") {
+  const tag = "settlement/S${SETTLEMENT}";
+  const commit = git("rev-parse", at("--commit") + "^{commit}");
+  if (process.env.PRINTOUT_TAG === "conflict")
+    say({ status: "refused", refused: "tag-conflict", detail: tag + " already stands at 0cca7f2b08a3", tag, existing: "0cca7f2b08a3" }, 1);
+  let existing = null;
+  try { existing = git("rev-parse", "--verify", "--quiet", "refs/tags/" + tag + "^{commit}"); } catch { existing = null; }
+  if (existing === commit) say({ status: "already-tagged", tag, commit, digest: snapshot.digest });
+  if (existing) say({ status: "refused", refused: "tag-conflict", detail: tag + " already stands at " + existing.slice(0, 12), tag, existing }, 1);
+  if (flag("--dry-run")) say({ status: "would-tag", tag, commit });
+  git("-c", "user.name=printout", "-c", "user.email=p@x.invalid", "tag", "-a", tag, commit, "-m", "settlement: S${SETTLEMENT}\\nwindow: ${WINDOW}\\nsnapshot: 77\\ndigest: " + snapshot.digest);
+  say({ status: "tagged", tag, commit, digest: snapshot.digest });
+}
+if (mode === "record") {
+  if (process.env.PRINTOUT_RECORD === "fail") { console.error("record_printout: could not connect to the store"); process.exit(1); }
+  appendFileSync(process.env.STORE_WRITES, "RECORDED " + at("--window") + " " + at("--commit") + "\\n");
+  say({ status: "recorded", settlement: ${SETTLEMENT}, commit: at("--commit"), head_advanced: true });
+}
+console.error("usage: settlement-printout.mjs print|tag|record"); process.exit(2);
 `,
   "deploy/settlement-escalate.mjs": `${LOGGER}
 import { appendFileSync } from "node:fs";
@@ -106,71 +151,64 @@ mkdirSync(join(at("--world"), "WORLD"), { recursive: true });
 writeFileSync(join(at("--world"), "WORLD", "households.json"), JSON.stringify({ alpha: ["alpha"], n: process.env.REGISTRY_N || "1" }) + "\\n");
 `,
   "deploy/settlement-registry.mjs": `${LOGGER}
-import { copyFileSync } from "node:fs";
+import { copyFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 logArgs("settlement-registry");
-copyFileSync(at("--fresh"), join(at("--world"), "WORLD", "households.json"));
-process.stdout.write(JSON.stringify({ changed: true, commit_message: "registry: refreshed (fixture)", summary: "1 household (fixture)", verified_at: at("--town-sha") }) + "\\n");
+const target = join(at("--world"), "WORLD", "households.json");
+let was = null; try { was = readFileSync(target, "utf8"); } catch { /* new */ }
+const now = readFileSync(at("--fresh"), "utf8");
+if (was !== now) copyFileSync(at("--fresh"), target);
+process.stdout.write(JSON.stringify({ changed: was !== now, commit_message: "registry: refreshed (fixture)", summary: "1 household (fixture)", verified_at: at("--town-sha") }) + "\\n");
 `,
 };
 
 // The real files the crossing composes its receipt and its history with.
-const REAL = ["deploy/settlement-auto.sh", "deploy/settlement-receipt.mjs", "deploy/surveyed-reading.mjs", "deploy/refused-marks.mjs",
-  "deploy/settlement-history.mjs", "deploy/settlement-retry.sh"];
+const REAL = ["deploy/settlement-auto.sh", "deploy/settlement-receipt.mjs", "deploy/settlement-history.mjs", "deploy/settlement-retry.sh"];
 
 let seq = 0;
 
 /**
- * ONE STORE CROSSING, IN A BOTTLE. `quiet` makes the sweep publish nothing (the
- * registry-only crossing, whose push is publish_main's other caller); `harm`
- * makes the harm gate name a mark (`"env"`: only under BOTTLE_HARM=1); `suiteRed`
- * reddens the post-push checker. Origin's hook logs every push it receives to
- * `pushes`, one line per ref, so a test can count them.
+ * ONE PRINTOUT CROSSING, IN A BOTTLE. `harm` makes the harm gate name a mark
+ * (`"env"`: only under BOTTLE_HARM=1); `suiteRed` reddens the post-push
+ * checker; `registryN` seeds the world's households file so a crossing's
+ * refresh can be made to change nothing. Origin's hook logs every push it
+ * receives to `pushes`, one line per ref, so a test can count them.
  */
-export function bottle({ quiet = false, harm = false, suiteRed = true } = {}) {
+export function bottle({ harm = false, suiteRed = true, registryN = null, suiteReds = null, realEscalate = false } = {}) {
   const root = join(scratch, `b${++seq}`);
   const office = join(root, "office");
   mkdirSync(join(root, "harbor"), { recursive: true });
-  for (const f of REAL) {
+  // `realEscalate`: the REAL escalator, which with no credential prints ISSUE-WANTED and the whole
+  // body, gated on the receipt's own fields — the wiring test's observable (settlement-suite-red-escalates).
+  for (const f of realEscalate ? [...REAL, "deploy/settlement-escalate.mjs"] : REAL) {
     mkdirSync(dirname(join(office, f)), { recursive: true });
     copyFileSync(join(OFFICE, f), join(office, f));
   }
   for (const [f, src] of Object.entries(STUBS)) {
+    if (realEscalate && f === "deploy/settlement-escalate.mjs") continue;
     mkdirSync(dirname(join(office, f)), { recursive: true });
     writeFileSync(join(office, f), src);
   }
 
-  // the world: canon on main, a sweep that commits, a harm gate, a checker suite
+  // the world: canon on main, a harm gate, a checker suite
   const seed = join(root, "world-seed");
   mkdirSync(join(seed, "tools"), { recursive: true });
   mkdirSync(join(seed, "WORLD", "marks", "alpha", "old"), { recursive: true });
   writeFileSync(join(seed, "WORLD", "marks", "alpha", "old", "mark.md"), "---\nkind: sited\nby: alpha\n---\n\nold\n");
-  writeFileSync(join(seed, "tools", "settlement-sweep.mjs"), `
-import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-const repo = process.cwd();
-const quiet = ${JSON.stringify(quiet)};
-if (!quiet) {
-  writeFileSync(join(repo, "WORLD", "swept.txt"), "swept\\n");
-  execFileSync("git", ["-C", repo, "add", "-A"]);
-  execFileSync("git", ["-C", repo, "-c", "user.name=sweep", "-c", "user.email=s@x.invalid", "commit", "-qm", "settlement: sweep 1 published"]);
-}
-process.stdout.write(JSON.stringify({
-  published: quiet ? [] : ["alpha/one"], unpublished: quiet ? [] : [{ id: "alpha/old" }],
-  left_drafted: [], withdrawn: [], quarantined: [], dropped: [], rebased: [],
-  surveyed: { branches: 1, delta_rows: 1, escrow_backed_deltas: 1 },
-}) + "\\n");
-`);
-  // `harm: "env"` names harm only on a crossing run with BOTTLE_HARM=1, so one
-  // bottle can be refused and then pass.
-  writeFileSync(join(seed, "tools", "harm-gate.mjs"), harm === "env"
+  if (registryN != null) writeFileSync(join(seed, "WORLD", "households.json"), JSON.stringify({ alpha: ["alpha"], n: String(registryN) }) + "\n");
+  // The gate records the acts it was handed, so a test reads what the printout declared.
+  const gateArgs = `import { appendFileSync, readFileSync } from "node:fs";\nconst i = process.argv.indexOf("--sweep");\nif (process.env.STUB_LOG) appendFileSync(process.env.STUB_LOG, "harm-gate " + process.argv.slice(2).join(" ") + " ACTS " + readFileSync(process.argv[i + 1], "utf8").replace(/\\s+/g, "") + "\\n");\n`;
+  // `harm: "crash"` is a gate that cannot gate (exit 2, no report); `harm: "absent"` is a world with no gate at all.
+  if (harm !== "absent") writeFileSync(join(seed, "tools", "harm-gate.mjs"), gateArgs + (harm === "env"
     ? 'if (process.env.BOTTLE_HARM === "1") { process.stdout.write(JSON.stringify({ ok: false, checks: [{ name: "moved", ok: false, count: 1, rows: ["alpha/one: moved with no act"] }] }) + "\\n"); process.exit(1); }\nprocess.stdout.write(JSON.stringify({ ok: true, checks: [] }) + "\\n");\n'
+    : harm === "crash"
+    ? 'console.error("harm-gate: could not gate — no WORLD/world-state.json — the fold did not run"); process.exit(2);\n'
     : harm
     ? 'process.stdout.write(JSON.stringify({ ok: false, checks: [{ name: "moved", ok: false, count: 1, rows: ["alpha/one: moved with no act"] }] }) + "\\n"); process.exit(1);\n'
-    : 'process.stdout.write(JSON.stringify({ ok: true, checks: [] }) + "\\n");\n');
+    : 'process.stdout.write(JSON.stringify({ ok: true, checks: [] }) + "\\n");\n'));
+  const reds = suiteReds ?? ["not ok 1 - a fixture red"];
   writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "world-fixture", scripts: {
-    "test:candle": suiteRed ? "node -e \"console.log('not ok 1 - a fixture red'); process.exit(1)\"" : "node -e \"\"",
+    "test:candle": suiteRed ? `node -e "${reds.map((r) => `console.log('${r}');`).join("")} process.exit(1)"` : "node -e \"\"",
   } }));
   execFileSync("git", ["init", "-q", "-b", "main", seed], { stdio: "ignore" });
   g(seed, "add", "-A");
@@ -204,7 +242,7 @@ process.stdout.write(JSON.stringify({
 export const originRefs = (origin) => g(origin, "for-each-ref", "--format=%(refname) %(objectname)");
 
 export function cross(b, env = {}) {
-  const sweep = join(b.root, `sweep-${++seq}`);
+  const clone = join(b.root, `clone-${++seq}`);
   const files = {
     stubLog: join(b.root, `stubs-${seq}.log`),
     storeWrites: join(b.root, `store-writes-${seq}.log`),
@@ -220,14 +258,13 @@ export function cross(b, env = {}) {
       OFFICE_ROOT: b.office,
       TOWN_CLONE: b.townClone,
       WORLD_CLONE: b.worldClone,
-      SETTLEMENT_CLONE: sweep,
+      SETTLEMENT_CLONE: env.SETTLEMENT_CLONE ?? clone,
       SETTLEMENT_REPORT: files.report,
-      SETTLEMENT_SOURCE: "store",
       STATE_LOG_SOURCE: "store",
       // As on the box: /etc/postmark-office.env carries TOWN_PUSH=1, which
       // makes the photograph's penCommit a push unless the crossing says not.
       TOWN_PUSH: "1",
-      // The retire step runs only with a pen. Nothing listens on port 1.
+      // The printout's pen, as /etc/postmark-world2-clearing.env carries it. The stub never connects.
       WORLD2_CLEARING_URL: "postgres://nobody@127.0.0.1:1/world2_rehearsal",
       // One attempt: the retry is settlement-retry.test.mjs's.
       SETTLEMENT_ATTEMPT: "1",
@@ -241,11 +278,10 @@ export function cross(b, env = {}) {
   let receipt = null;
   try { receipt = JSON.parse(read(files.report)); } catch { /* none */ }
   return {
-    res, receipt, sweep, files, before, after: originRefs(b.origin),
+    res, receipt, clone: env.SETTLEMENT_CLONE ?? clone, files, before, after: originRefs(b.origin),
     stubs: (read(files.stubLog) ?? "").split("\n").filter(Boolean),
     storeWrites: read(files.storeWrites),
     escalations: read(files.escalations),
     history: read(files.report.replace(/\.json$/, "-history.jsonl")),
   };
 }
-

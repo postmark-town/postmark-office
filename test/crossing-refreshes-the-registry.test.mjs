@@ -47,7 +47,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -55,6 +55,70 @@ import { fileURLToPath } from "node:url";
 const OFFICE = join(dirname(fileURLToPath(import.meta.url)), "..");
 const scratch = mkdtempSync(join(tmpdir(), "postmark-hhrefresh-"));
 after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch { /* litter */ } });
+
+// ── THE OFFICE UNDER TEST (POS-1025) ────────────────────────────────────────
+//
+// The REAL office — the real export, the real registry comparator, the real
+// script, receipt and history — with exactly two tools stood in for the store
+// the printout needs: the docket wait (a window, at once) and the printout
+// itself (world2/tools/settlement-printout.mjs, a stub of its shell contract).
+// Every other file is a symlink to the checkout, so a module it imports
+// resolves to the real one. The printout stub records THE REGISTRY IT READ, at
+// the instant the fold would read it: that file is this lane's instrument, as
+// the stub sweep's was before the printout.
+const UNDER_TEST = (() => {
+  const root = join(scratch, "office-under-test");
+  const STUBBED = new Set(["await-clearing.mjs", "settlement-printout.mjs"]);
+  for (const top of readdirSync(OFFICE)) {
+    if (top === ".git" || top === "world2") continue;
+    mkdirSync(root, { recursive: true });
+    symlinkSync(join(OFFICE, top), join(root, top));
+  }
+  mkdirSync(join(root, "world2", "tools"), { recursive: true });
+  for (const w of readdirSync(join(OFFICE, "world2"))) if (w !== "tools") symlinkSync(join(OFFICE, "world2", w), join(root, "world2", w));
+  for (const t of readdirSync(join(OFFICE, "world2", "tools"))) if (!STUBBED.has(t)) symlinkSync(join(OFFICE, "world2", "tools", t), join(root, "world2", "tools", t));
+  writeFileSync(join(root, "world2", "tools", "await-clearing.mjs"),
+    'process.stdout.write(JSON.stringify({ window: 213, cleared_at: "2026-09-08T05:45:44Z", waited_s: 0 }) + "\\n");\n');
+  writeFileSync(join(root, "world2", "tools", "settlement-printout.mjs"), `
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+const mode = process.argv[2];
+const at = (n) => { const i = process.argv.indexOf(n); return i !== -1 ? process.argv[i + 1] : null; };
+const say = (o) => { process.stdout.write(JSON.stringify(o) + "\\n"); process.exit(0); };
+const env = { ...process.env, GIT_AUTHOR_NAME: "printout", GIT_AUTHOR_EMAIL: "p@x.invalid", GIT_COMMITTER_NAME: "printout", GIT_COMMITTER_EMAIL: "p@x.invalid", GIT_AUTHOR_DATE: "2026-09-08T00:00:00Z", GIT_COMMITTER_DATE: "2026-09-08T00:00:00Z" };
+const world = at("--world");
+const git = (...a) => execFileSync("git", ["-C", world, ...a], { encoding: "utf8", env }).trim();
+if (mode === "print") {
+  // WHAT THE FOLD WOULD HAVE READ, written outside the repo.
+  writeFileSync(process.env.REGISTRY_SEEN_OUT, readFileSync(join(world, "WORLD", "households.json"), "utf8"));
+  writeFileSync(join(world, ".git", "printout-stakes.json"), "[]\\n");
+  const base = { settlement: 213, window: 212, printout_sha: null, world: git("rev-parse", "HEAD") };
+  if (process.env.PRINTOUT_PUBLISHES !== "1") {
+    // a settlement that changed nothing is an EMPTY printout commit (POS-1025/a)
+    git("commit", "-q", "--allow-empty", "-m", "settlement: S214 printout — 0 written, 0 removed, 0 re-framed");
+    say({ status: "quiet", settlement: 214, window: 213, base, written: [], removed: [], reframed: [], summary: { written: 0, unchanged: 0, removed: 0, reframed: 0 }, commit: git("rev-parse", "HEAD") });
+  }
+  const p = join(world, "WORLD", "marks", "alpha", "one", "mark.md");
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, "---\\nkind: sited\\nby: alpha\\n---\\n\\none\\n");
+  git("add", "-A", "--", "WORLD");
+  git("commit", "-qm", "settlement: S214 printout — 1 written, 0 removed, 0 re-framed");
+  say({ status: "printed", settlement: 214, window: 213, base, written: [{ id: "alpha/one", path: "WORLD/marks/alpha/one/mark.md" }], removed: [], reframed: [], summary: { written: 1, unchanged: 0, removed: 0, reframed: 0 }, commit: git("rev-parse", "HEAD") });
+}
+if (mode === "tag") {
+  const commit = git("rev-parse", at("--commit") + "^{commit}");
+  let existing = null; try { existing = git("rev-parse", "--verify", "--quiet", "refs/tags/settlement/S214^{commit}"); } catch { existing = null; }
+  // this file's crossings repeat one settlement's number; the tag's own rules are settlement-printout-crossing's
+  if (existing) say({ status: "already-tagged", tag: "settlement/S214", commit: existing });
+  git("tag", "-a", "settlement/S214", commit, "-m", "settlement: S214");
+  say({ status: "tagged", tag: "settlement/S214", commit });
+}
+if (mode === "record") say({ status: "recorded", settlement: 214, commit: at("--commit"), head_advanced: true });
+process.exit(2);
+`);
+  return root;
+})();
 // THE STORE the crossing's household export renders (POS-350): the export reads
 // the registry from the store, never the fixture town's printouts, so each
 // crossing re-states the store from the town seed first.
@@ -130,43 +194,9 @@ function crossing(label, { env = {}, pins = null, declared = null, reuse = null,
     households: { alpha: "solo:alpha" },
     logins: { alpha: "solo:alpha", "alpha-hub": "gh:1" },
   }, null, 2)}\n`);
-  // A sweep stub that behaves like the real one where this script touches it,
-  // plus the one thing this lane needs: it records THE REGISTRY IT READ, at the
-  // instant the fold would have read it. That file is the instrument.
-  writeFileSync(join(seed, "tools", "settlement-sweep.mjs"), `
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-const at = (n, d) => { const i = process.argv.indexOf(n); return i !== -1 ? process.argv[i + 1] : d; };
-const stakes = JSON.parse(readFileSync(at("--stakes"), "utf8"));
-const repo = process.cwd();
-// WHAT THE FOLD WOULD HAVE READ. Written outside the repo so the assertion is
-// about the input the wall gets, not about a file the sweep could have fixed up.
-writeFileSync(process.env.REGISTRY_SEEN_OUT, readFileSync(join(repo, "WORLD", "households.json"), "utf8"));
-// WHAT THE CHAIN TOLD THE WORLD ABOUT THE REGISTRY. This stub cannot refuse —
-// that is the REAL sweep's job and F14 drives it — so what it can do is record
-// the claim, and let a test assert the crossing always makes one.
-writeFileSync(process.env.SWEEP_ARGV_OUT, process.argv.slice(2).join(" "));
-const drafts = execFileSync("git", ["-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/draft/", "refs/remotes/origin/draft/"], { encoding: "utf8" })
-  .split("\\n").map((l) => l.trim()).filter(Boolean);
-// A quiet sweep unless the caller plants something to publish: the registry-only
-// crossing is one of the states under test and it must be reachable.
-if (process.env.SWEEP_PUBLISHES === "1") {
-  const p = join(repo, "WORLD", "swept.txt");
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, String(drafts.length) + " sketchbook(s) seen; " + stakes.length + " stake row(s)\\n");
-  execFileSync("git", ["-C", repo, "add", "-A"]);
-  execFileSync("git", ["-C", repo, "commit", "-qm", "settlement: sweep 1 published"], { env: { ...process.env, GIT_AUTHOR_NAME: "sweep", GIT_AUTHOR_EMAIL: "s@x.invalid", GIT_COMMITTER_NAME: "sweep", GIT_COMMITTER_EMAIL: "s@x.invalid", GIT_AUTHOR_DATE: "2026-09-08T00:00:00Z", GIT_COMMITTER_DATE: "2026-09-08T00:00:00Z" } });
-}
-process.stdout.write(JSON.stringify({
-  published: process.env.SWEEP_PUBLISHES === "1" ? ["alpha/one"] : [],
-  unpublished: [], left_drafted: [], withdrawn: [], quarantined: [], dropped: [], rebased: drafts,
-  surveyed: { branches: drafts.length, delta_rows: drafts.length, escrow_backed_deltas: 0 },
-}) + "\\n");
-`);
-  // the harm gate (2026-09-16) is the crossing's refusing gate; a fixture world
-  // that carries none is a crossing that cannot gate and refuses, so the bottle
-  // answers it: no harm, nothing to name
+  // the harm gate, reported after the seal (POS-1025/c): a fixture world that
+  // carries none would raise an alarm on every printout, so the bottle answers
+  // it: no harm, nothing to name
   writeFileSync(join(seed, "tools", "harm-gate.mjs"),
     'process.stdout.write(JSON.stringify({ ok: true, base: "HEAD", before: 1, after: 1, checks: [] }) + "\\n");\n');
   writeFileSync(join(seed, "package.json"), JSON.stringify({ name: "world-fixture", scripts: { test: "node -e \"\"", "test:candle": "node -e \"\"" } }));
@@ -297,24 +327,24 @@ function runCrossing(root, { env = {} } = {}) {
   const origin = join(root, "world.git");
   const harbor = join(root, "harbor");
   const seen = join(root, `registry-seen-${++seq}.json`);
-  const argvOut = join(root, `sweep-argv-${seq}.txt`);
 
   REG.seedFromSync(join(root, "town-seed"));
-  const res = spawnSync("sh", [join(OFFICE, "deploy", "settlement-auto.sh")], {
+  const res = spawnSync("sh", [join(UNDER_TEST, "deploy", "settlement-auto.sh")], {
     encoding: "utf8",
     env: {
       ...process.env,
-      OFFICE_ROOT: OFFICE,
+      OFFICE_ROOT: UNDER_TEST,
       TOWN_CLONE: townClone,
       WORLD_CLONE: sweepClone,
       SETTLEMENT_CLONE: sweepClone,
       SETTLEMENT_REPORT: join(harbor, "settlement-auto.json"),
       SETTLEMENT_HISTORY: join(harbor, "settlement-auto-history.jsonl"),
       SETTLEMENT_ATTEMPT: "1",
-      WORLD_SINGLE_LOG: "1",
-      WORLD_DYNAMIC_DB: join(root, "dynamic.db"),
+      // the photograph is test/state-log-through-the-clearing's; this file's question is the registry
+      SETTLEMENT_STATE_LOG: "0",
+      // an alarm in this bottle prints ISSUE-WANTED rather than reaching GitHub
+      SETTLEMENT_ESCALATE_CRED: join(root, "no-such-credentials"),
       REGISTRY_SEEN_OUT: seen,
-      SWEEP_ARGV_OUT: argvOut,
       ...REG.env,
       ...env,
     },
@@ -323,7 +353,7 @@ function runCrossing(root, { env = {} } = {}) {
   let receipt = null;
   try { receipt = JSON.parse(readFileSync(join(harbor, "settlement-auto.json"), "utf8")); } catch { /* none */ }
   let registrySeen = null;
-  try { registrySeen = JSON.parse(readFileSync(seen, "utf8")); } catch { /* the sweep never ran */ }
+  try { registrySeen = JSON.parse(readFileSync(seen, "utf8")); } catch { /* the printout never ran */ }
 
   // WHAT REACHED ORIGIN. The clone's copy is what the crossing wrote; origin's
   // is what it PUBLISHED, and only the second is a receipt that could not exist
@@ -333,10 +363,7 @@ function runCrossing(root, { env = {} } = {}) {
     published = JSON.parse(execFileSync("git", ["-C", origin, "show", "main:WORLD/households.json"], { encoding: "utf8" }));
   } catch { /* origin has no registry */ }
 
-  let sweepArgs = "";
-  try { sweepArgs = readFileSync(argvOut, "utf8"); } catch { /* the sweep never ran */ }
-
-  return { root, origin, sweepClone, res, receipt, registrySeen, published, sweepArgs };
+  return { root, origin, sweepClone, res, receipt, registrySeen, published };
 }
 
 /**
@@ -348,7 +375,7 @@ const wallBinds = (registry, by, branch) =>
   Boolean(registry?.households?.[by]) && Boolean(registry?.logins?.[branch.replace(/^draft\//, "").toLowerCase()]);
 
 test("F1 · a handle pinned after the standing registry's stamp is in the registry the crossing publishes, and the wall can bind it", { skip: !SH_OK && "no POSIX sh" }, () => {
-  const c = crossing("refresh", { env: { SETTLEMENT_SOURCE: "git" } });
+  const c = crossing("refresh", { env: {} });
   assert.equal(c.res.status, 0, `the crossing must complete: ${c.res.stderr}`);
 
   // The published file, out of the bare origin.
@@ -377,7 +404,7 @@ test("F1 · a handle pinned after the standing registry's stamp is in the regist
 
 test("F2 · THE FLIP — skip the step and the same wall cannot bind the same handle", { skip: !SH_OK && "no POSIX sh" }, () => {
   // The control for F1. One seam, one variable, and it must go the other way.
-  const c = crossing("flip", { env: { SETTLEMENT_SOURCE: "git", SETTLEMENT_REGISTRY: "0" } });
+  const c = crossing("flip", { env: { SETTLEMENT_REGISTRY: "0" } });
   assert.equal(c.res.status, 0, `the crossing must still complete with the step disabled: ${c.res.stderr}`);
 
   assert.equal(c.published.generated_at, OLD_STAMP,
@@ -403,12 +430,9 @@ test("F2 · THE FLIP — skip the step and the same wall cannot bind the same ha
   assert.match(c.res.stderr, /REGISTRY UNVERIFIED \(bypass\)/,
     "and the crossing shouts it where the operator watching the run will see it");
 
-  // AND THE CHAIN MUST HAVE TOLD THE WORLD SO. The bypass is the case the first
-  // cut got wrong: it passed a verification unconditionally, so the documented
-  // escape hatch refused on the very file it exists to tolerate.
-  assert.match(c.res.stderr + c.sweepArgs, /--registry-unverified/,
-    "the crossing must state the registry was NOT verified, or the world cannot tell a bypass from a "
-    + "crossing that simply forgot");
+  // (The World sweep that took `--registry-unverified` was retired with the
+  // printout, POS-1025; the receipt and the journal above are where the bypass
+  // is stated now, and the printout read the stale file, as registrySeen shows.)
 });
 
 test("F13 · THE CROSSING AFTER A QUIET ONE PUBLISHES — the town moves, the mapping does not", { skip: !SH_OK && "no POSIX sh" }, () => {
@@ -425,13 +449,13 @@ test("F13 · THE CROSSING AFTER A QUIET ONE PUBLISHES — the town moves, the ma
   // No test asked for this state, which is why it shipped: F3 runs a second
   // crossing over a town that has NOT moved, so the two shas are equal and the
   // defect is invisible.
-  const first = crossing("quiet-then-move", { env: { SETTLEMENT_SOURCE: "git" } });
+  const first = crossing("quiet-then-move", { env: {} });
   assert.equal(first.res.status, 0, first.res.stderr);
   const stampAfterFirst = first.published.town_sha;
   assert.ok(stampAfterFirst, "the first crossing must have written a stamped registry");
 
   const moved = moveTownWithoutMovingTheMapping(first.root, "one");
-  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  const second = runCrossing(first.root, { env: {} });
 
   assert.equal(second.res.status, 0,
     `the crossing after a quiet one MUST complete — this is the blocker: ${second.res.stderr}`);
@@ -458,26 +482,24 @@ test("F13 · THE CROSSING AFTER A QUIET ONE PUBLISHES — the town moves, the ma
 
   // And a THIRD crossing, because "after a quiet one" must not be a one-off.
   moveTownWithoutMovingTheMapping(first.root, "two");
-  const third = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  const third = runCrossing(first.root, { env: {} });
   assert.equal(third.res.status, 0, `and the one after that: ${third.res.stderr}`);
   assert.equal(third.receipt.registry.changed, false);
 });
 
-test("F16 · every crossing STATES something about the registry, verified or bypassed", { skip: !SH_OK && "no POSIX sh" }, () => {
-  // The construction's own seam. The world refuses a caller that states neither,
-  // and the only way this chain states neither is a future edit dropping the
-  // flag — which is precisely the regression that would put the town back where
-  // it was in August, silently. So the claim is asserted on the crossing's own
-  // invocation of the sweep.
-  const verified = crossing("states-verified", { env: { SETTLEMENT_SOURCE: "git" } });
-  assert.match(verified.sweepArgs, /--registry-verified-at [0-9a-f]{40}/,
-    "a crossing that refreshed must hand the world the sha it verified against");
-  assert.ok(!/--town-sha/.test(verified.sweepArgs),
-    "and NOT --town-sha, which is the flag that asked the wrong question");
-
-  const bypassed = crossing("states-bypass", { env: { SETTLEMENT_SOURCE: "git", SETTLEMENT_REGISTRY: "0" } });
-  assert.match(bypassed.sweepArgs, /--registry-unverified/,
-    "a crossing that skipped the refresh must say so, or the world cannot tell it from one that forgot");
+test("F16 · every crossing STATES something about the registry on its receipt, verified or bypassed", { skip: !SH_OK && "no POSIX sh" }, () => {
+  // The sweep's `--registry-verified-at`/`--registry-unverified` flags were this
+  // construction's seam until the printout retired the sweep (POS-1025). The
+  // claim now lives on the receipt, and a crossing that states neither is the
+  // regression that would put the town back where it was in August, silently.
+  const verified = crossing("states-verified", { env: {} });
+  assert.equal(verified.receipt.registry.verified, true);
+  assert.match(String(verified.receipt.registry.verified_at), /^[0-9a-f]{40}$/,
+    "a crossing that refreshed names the sha it verified against");
+  const bypassed = crossing("states-bypass", { env: { SETTLEMENT_REGISTRY: "0" } });
+  assert.equal(bypassed.receipt.registry.verified, false);
+  assert.equal(bypassed.receipt.registry.bypass, true,
+    "a crossing that skipped the refresh must say so, or nobody can tell it from one that forgot");
 });
 
 test("F17 · VERIFIED IMPLIES STAMPED — an unstamped standing registry is rewritten even when the mapping matches", { skip: !SH_OK && "no POSIX sh" }, () => {
@@ -492,7 +514,7 @@ test("F17 · VERIFIED IMPLIES STAMPED — an unstamped standing registry is rewr
   // verified: a claim neither side could check, which is the 2026-08-07 state
   // with a fresh receipt on top.
   const pins = { alpha: { login: "alpha-hub", id: 1 } };   // exactly what the fixture registry holds
-  const c = crossing("verified-implies-stamped", { env: { SETTLEMENT_SOURCE: "git" }, pins });
+  const c = crossing("verified-implies-stamped", { env: {},pins });
 
   assert.equal(c.res.status, 0, c.res.stderr);
   assert.equal(c.receipt.registry.changed, true,
@@ -507,18 +529,26 @@ test("F17 · VERIFIED IMPLIES STAMPED — an unstamped standing registry is rewr
 });
 
 test("F3 · a second crossing over an unchanged town commits nothing and stays quiet", { skip: !SH_OK && "no POSIX sh" }, () => {
-  const first = crossing("idem", { env: { SETTLEMENT_SOURCE: "git" } });
+  const first = crossing("idem", { env: {} });
   assert.equal(first.res.status, 0, first.res.stderr);
   const firstSha = execFileSync("git", ["-C", first.origin, "rev-parse", "main"], { encoding: "utf8" }).trim();
 
-  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  const second = runCrossing(first.root, { env: {} });
   assert.equal(second.res.status, 0, second.res.stderr);
   const secondSha = execFileSync("git", ["-C", second.origin, "rev-parse", "main"], { encoding: "utf8" }).trim();
 
   // The export re-stamps `generated_at` on every run, so a refresh that copied
   // unconditionally would put a commit on world main every twelve hours forever.
-  assert.equal(secondSha, firstSha,
-    "an unchanged town must move nothing: the substance is compared, not the stamp");
+  // Since the printout every settlement is a commit of its own (an empty one when
+  // it changed nothing, POS-1025/a), so main moves by exactly that one commit and
+  // the registry does not move with it.
+  assert.equal(execFileSync("git", ["-C", second.origin, "rev-parse", "main^"], { encoding: "utf8" }).trim(), firstSha,
+    "an unchanged town adds only the settlement's own printout: the substance is compared, not the stamp");
+  assert.equal(execFileSync("git", ["-C", second.origin, "log", "-1", "--format=%s", "main"], { encoding: "utf8" }).trim(),
+    "settlement: S214 printout — 0 written, 0 removed, 0 re-framed");
+  assert.equal(execFileSync("git", ["-C", second.origin, "diff", "--name-only", firstSha, secondSha], { encoding: "utf8" }).trim(), "",
+    "and it changed no file");
+  assert.equal(second.receipt.registry.commit, null, "no registry commit");
   assert.equal(second.receipt.registry.ran, true, "and the crossing still LOOKED — that is the whole receipt");
   assert.equal(second.receipt.registry.changed, false);
   assert.equal(second.receipt.status, "quiet",
@@ -530,7 +560,7 @@ test("F4 · a registry-only crossing publishes and still reports `quiet`, so the
   // `main != origin/main` test would have called this `published` with six zero
   // channels — and settlement-history's `--recurring` reads exactly that word to
   // decide whether the town has settled in three days.
-  const c = crossing("registry-only", { env: { SETTLEMENT_SOURCE: "git" } });
+  const c = crossing("registry-only", { env: {} });
   assert.equal(c.res.status, 0, c.res.stderr);
   assert.equal(c.receipt.status, "quiet",
     "a registry refresh must never be able to answer `has this town settled` with yes");
@@ -541,11 +571,11 @@ test("F4 · a registry-only crossing publishes and still reports `quiet`, so the
 });
 
 test("F5 · an export that trips refuses the crossing rather than folding on a registry nobody can vouch for", { skip: !SH_OK && "no POSIX sh" }, () => {
-  const c = crossing("broken-export", { env: { SETTLEMENT_SOURCE: "git" }, breakExport: true });
+  const c = crossing("broken-export", { env: {},breakExport: true });
   assert.equal(c.res.status, 1, "a registry that cannot be derived is a refusal, not a quiet fallback");
   assert.equal(c.receipt.status, "refused");
   assert.match(String(c.receipt.detail), /household registry could not be re-derived/);
-  assert.equal(c.registrySeen, null, "and nothing folded — the sweep never ran");
+  assert.equal(c.registrySeen, null, "and nothing was printed — the printout never ran");
   assert.equal(c.published.generated_at, OLD_STAMP, "origin is untouched");
 });
 
@@ -577,26 +607,18 @@ test("F6 · the stamp must name the tree the values came from, or nothing is wri
   assert.equal(JSON.parse(readFileSync(join(world, "WORLD", "households.json"), "utf8")).households[NEWCOMER], `gh:${NEWCOMER_ID}`);
 });
 
-test("F7 · the refresh runs on a STORE crossing too, because the wall and the lint still read this file", { skip: !SH_OK && "no POSIX sh" }, () => {
-  // A store crossing refuses early here (no candle, no store credential in a
-  // fixture), and that is the point: the registry step runs BEFORE any of that,
-  // so the receipt must show it ran even on a crossing that went on to refuse.
-  // The store's `identities`/`town_roll` do not yet feed the wall or the lint,
-  // so a store crossing that skipped this step would fold on the same stale file.
-  //
-  // NO WAIT FOR A CANDLE THAT CANNOT COME (POS-491). Since POS-350 the fixture
-  // DOES carry a store credential (REG.env, for the registry's export), so the
-  // crossing's candle wait (await-clearing.mjs, settlement-auto.sh:837) connects
-  // and polls its full SETTLEMENT_CLEARING_WAIT_S default, 240 s, for a window
-  // no fixture clears: 258 s for this one test, past the file's 180 s timeout,
-  // which is the hang CI measured (the watcher's tree, office#484). Zero asks
-  // once and refuses `clearing-did-not-run`, which is the early refusal this
-  // test was written against.
-  const c = crossing("store", { env: { SETTLEMENT_SOURCE: "store", SETTLEMENT_CLEARING_WAIT_S: "0" } });
-  assert.equal(c.receipt.source, "store");
-  assert.equal(c.receipt.registry.ran, true,
-    "the registry refresh is not git-mode only — under `store` the same three readers still read this file");
-  assert.equal(c.receipt.registry.changed, true);
+test("F7 · the refresh lands BEFORE the printout, as its own commit, and both reach origin in that order (POS-1025)", { skip: !SH_OK && "no POSIX sh" }, () => {
+  // The printout's fold reads WORLD/households.json, so the refresh must be on
+  // main before the printout looks; and the printout requires a clean world, so
+  // the refresh commits on its own rather than riding the printout's commit.
+  const c = crossing("ordered", { env: { PRINTOUT_PUBLISHES: "1" } });
+  assert.equal(c.res.status, 0, c.res.stderr);
+  assert.equal(c.receipt.status, "published");
+  const log = execFileSync("git", ["-C", c.origin, "log", "-2", "--format=%s", "main"], { encoding: "utf8" }).trim().split("\n");
+  assert.equal(log[0], "settlement: S214 printout — 1 written, 0 removed, 0 re-framed", "the printout is main's newest commit");
+  assert.equal(c.receipt.registry.commit, execFileSync("git", ["-C", c.origin, "rev-parse", "main^"], { encoding: "utf8" }).trim(),
+    "and the registry's commit is its parent");
+  assert.equal(c.registrySeen.households[NEWCOMER], `solo:${NEWCOMER}`, "the printout read the refreshed registry");
   assert.equal(c.receipt.registry.households, 2);
 });
 
@@ -618,13 +640,13 @@ const sameOtherMaps = (a, b, why) => {
 };
 
 test("P1 · a world rendered before pinned_ids gets them on the next crossing, even a quiet one", { skip: !SH_OK && "no POSIX sh" }, () => {
-  const first = crossing("pins-materialise", { env: { SETTLEMENT_SOURCE: "git" } });
+  const first = crossing("pins-materialise", { env: {} });
   assert.equal(first.res.status, 0, first.res.stderr);
   assert.ok(first.published.pinned_ids && Object.keys(first.published.pinned_ids).length, "the export renders pinned_ids");
   const { pinned_ids, pinned_ids_note, ...before } = first.published;
   publishRegistry(first.root, before); // stamped, the same mapping, no pinned_ids: world main before #796
   moveTownWithoutMovingTheMapping(first.root, "pins");
-  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  const second = runCrossing(first.root, { env: {} });
   assert.equal(second.res.status, 0, second.res.stderr);
   sameOtherMaps(second.published, before, "a quiet crossing");
   assert.equal(second.receipt.registry.changed, true, "pinned_ids moved, so the registry is rewritten");
@@ -640,11 +662,11 @@ const KILN = { schema_version: 1, households: { "kiln-house": {
 const KILN_PINS = (id) => ({ alpha: { login: "alpha-hub", id }, [NEWCOMER]: { login: NEWCOMER_LOGIN, id: NEWCOMER_ID } });
 
 test("P2 · a re-pin to another account of the same house moves the id on main, and the old id binds nothing", { skip: !SH_OK && "no POSIX sh" }, () => {
-  const first = crossing("pins-repin", { env: { SETTLEMENT_SOURCE: "git" }, pins: KILN_PINS(900000401), declared: KILN });
+  const first = crossing("pins-repin", { env: {},pins: KILN_PINS(900000401), declared: KILN });
   assert.equal(first.res.status, 0, first.res.stderr);
   assert.equal(first.published.pinned_ids["900000401"], "hh:kiln-house");
   restateTown(first.root, { pins: KILN_PINS(900000402) });
-  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  const second = runCrossing(first.root, { env: {} });
   assert.equal(second.res.status, 0, second.res.stderr);
   sameOtherMaps(second.published, first.published, "a re-pin within the house");
   assert.equal(second.receipt.registry.changed, true);
@@ -653,13 +675,13 @@ test("P2 · a re-pin to another account of the same house moves the id on main, 
 });
 
 test("P3 · an id the export stops binding (now on two houses' lists) is gone from main", { skip: !SH_OK && "no POSIX sh" }, () => {
-  const first = crossing("pins-conflict", { env: { SETTLEMENT_SOURCE: "git" }, pins: KILN_PINS(900000401), declared: KILN });
+  const first = crossing("pins-conflict", { env: {},pins: KILN_PINS(900000401), declared: KILN });
   assert.equal(first.res.status, 0, first.res.stderr);
   assert.equal(first.published.pinned_ids["900000401"], "hh:kiln-house");
   // a second house lists the same account: the export leaves the id out, and names it
   const ash = { "ash-house": { name: "Ash House", since: "2026-01-01", declared_by: "ash", residents: [], accounts: [{ login: "ash-hub", id: 900000401 }] } };
   restateTown(first.root, { declared: { schema_version: 1, households: { ...ash, ...KILN.households } } });
-  const second = runCrossing(first.root, { env: { SETTLEMENT_SOURCE: "git" } });
+  const second = runCrossing(first.root, { env: {} });
   assert.equal(second.res.status, 0, second.res.stderr);
   sameOtherMaps(second.published, first.published, "a conflict on the account lists");
   assert.equal(second.receipt.registry.changed, true);

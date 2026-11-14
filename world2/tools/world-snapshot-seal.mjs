@@ -35,7 +35,9 @@
 //   snapshot digest   sha256 of "<marks_digest> <law_sha> <town_sha> <world_sha> <register_digest>",
 //                     "-" for an absent value, then " <stance_through>" when it is set (069),
 //                     then " stances:<counted|not-counted>:<cutover|->:<settlement|->:<how>"
-//                     when the decision is recorded (072)
+//                     when the decision is recorded (072). The number a seal allocates (095,
+//                     `sealed_settlement`) is the decision's `settlement_inferred` (`how:
+//                     "sealed"`), so the digest already names it; it adds no part of its own
 //
 // THE TOWN'S WORDS (POS-362, 069_snapshot_stance_through.sql; Darko 2026-10-08,
 // option A). The opposed half of a settlement is one more source: the seal
@@ -131,7 +133,7 @@ const HEADER_SQL = `
            (SELECT sha FROM projection_heads WHERE repo = 'town')        AS town_sha,
            (SELECT sha FROM projection_heads WHERE repo = 'world-marks') AS world_sha,
            (SELECT max(id) FROM acts WHERE class = 'stance')             AS stance_through)
-  INSERT INTO world_snapshots (window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances)
+  INSERT INTO world_snapshots (window_id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances, sealed_settlement)
   SELECT $1, encode(sha256(convert_to(
            list.marks_digest || ' ' || coalesce(heads.law_sha, '-') || ' ' ||
            coalesce(heads.town_sha, '-') || ' ' || coalesce(heads.world_sha, '-') || ' ' ||
@@ -141,9 +143,9 @@ const HEADER_SQL = `
              || ':' || coalesce($2::jsonb->>'cutover', '-') || ':' || coalesce($2::jsonb->>'settlement_inferred', '-')
              || ':' || coalesce($2::jsonb->>'how', '-') END, 'UTF8')), 'hex'),
          list.marks_digest, list.marks, heads.law_sha, heads.town_sha, heads.world_sha, rlist.register_digest,
-         heads.stance_through, $2::jsonb
+         heads.stance_through, $2::jsonb, $3::int
     FROM list, rlist, heads
-  RETURNING id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances,
+  RETURNING id, digest, marks_digest, marks, law_sha, town_sha, world_sha, register_digest, stance_through, stances, sealed_settlement,
             (SELECT register_rows FROM rlist) AS register_rows`;
 
 /**
@@ -153,16 +155,31 @@ const HEADER_SQL = `
  * and the marks it copies can never disagree.
  *
  * @param {(text: string, args?: any[]) => Promise<{rows: object[], rowCount: number}>} q
- * @param {{ windowId: number, stances?: object|null }} o  `stances`: the decision (072), null records none
+ * @param {{ windowId: number, stances?: object|null, settlement?: number|null }} o  `stances`: the decision (072),
+ *   null records none; `settlement`: the number this seal IS (095, § NEXT_SETTLEMENT_SQL), null records none
  * @returns {Promise<{ id: number, digest: string, marks_digest: string, marks: number,
  *   new_versions: number, register_digest: string, register_rows: number, new_register_versions: number,
- *   law_sha: string|null, town_sha: string|null, world_sha: string|null, stance_through: string|null }>}
+ *   law_sha: string|null, town_sha: string|null, world_sha: string|null, stance_through: string|null,
+ *   sealed_settlement: number|null }>}
  */
-export async function sealSnapshot(q, { windowId, stances = null }) {
+export async function sealSnapshot(q, { windowId, stances = null, settlement = null }) {
+  // The digest names the number through the decision (§ THE DIGESTS), so the two must be one number.
+  if (settlement != null && stances != null && Number(stances.settlement_inferred) !== Number(settlement))
+    throw new Error(`the seal is S${settlement} but its stance decision was made at S${stances.settlement_inferred}: one seal, one number`);
   const versions = await q(VERSIONS_SQL);
   await q(LIST_SQL);
   const register = await q(REGISTER_VERSIONS_SQL);
   await q(REGISTER_LIST_SQL);
-  const { rows: [h] } = await q(HEADER_SQL, [windowId, stances == null ? null : JSON.stringify(stances)]);
+  const { rows: [h] } = await q(HEADER_SQL, [windowId, stances == null ? null : JSON.stringify(stances), settlement]);
   return { ...h, new_versions: versions.rowCount, new_register_versions: register.rowCount };
 }
+
+/**
+ * THE NUMBER THIS SEAL IS (095; Darko 2026-11-13, POS-1025/a "Every settlement"): the greatest number the
+ * store has ever named, sealed or tag-read, plus one. Asked by the clearing inside its own transaction,
+ * after the candle lock, so two clearings never read the same greatest; a clearing that rolls back takes
+ * no number. Every seal is numbered, a quiet one included. One statement, no engine: the seal's own rule.
+ */
+export const NEXT_SETTLEMENT_SQL = `
+  SELECT greatest(coalesce((SELECT max(sealed_settlement) FROM world_snapshots), 0),
+                  coalesce((SELECT max(number) FROM settlements), 0)) + 1 AS next`;

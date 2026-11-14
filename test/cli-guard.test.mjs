@@ -223,7 +223,6 @@ const ROSTER = {
   "tools/world-gexf.mjs": { args: ["--out", NOWHERE_OUT], env: NO_PG, code: 1, needle: "no world graph" },
   // deploy/
   "deploy/publish-windows.mjs": { args: [], code: 2, needle: "usage: node deploy/publish-windows.mjs" },
-  "deploy/settlement-classify.mjs": { args: [], code: 0, needle: '"class"' },
   "deploy/settlement-escalate.mjs": { args: ["--dry-run", "--credentials", NOWHERE], code: 0, needle: "" },
   // --recurring answers with an exit code and no words, by design (settlement-auto.sh reads it
   // as a POSIX `if`); exit 1 against a never-true guard's 0 is the whole proof here.
@@ -281,15 +280,12 @@ const ROSTER = {
   "world2/tools/graph-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: graph-ingest.mjs" },
   "tools/arena-archive.mjs": { args: [], env: {}, code: 2, needle: "usage: arena-archive.mjs" },
   "world2/tools/ledger-backfill.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: WORLD2_PG_URL=" },
-  // No --world-repo: stops on usage before any git or Postgres (POS-142).
-  "world2/tools/marks-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: marks-ingest.mjs" },
   "world2/tools/pointer-ingest.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: pointer-ingest.mjs --world-repo" },
   // No connection named: stops before any Postgres (POS-302).
   "world2/tools/position-snapshot.mjs": { args: [], env: NO_PG, code: 2, needle: "no --pg-url, no PG* environment, and no WORLD2_PG_URL" },
   "world2/tools/replay-ingest.mjs": { args: ["--help"], env: NO_PG, code: 0, needle: "usage: replay-ingest.mjs" },
   // No --tree: stops on usage before any git read or Postgres connect (POS-242).
   "world2/tools/rehearse.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: rehearse.mjs" },
-  "world2/tools/retire-unpublished.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: retire-unpublished.mjs" },
   "world2/tools/return-past-takes.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: return-past-takes.mjs" },
   // The calendar's rebuild (POS-207): no --dry-run, so it refuses before it
   // opens any connection — it has no write mode at all.
@@ -335,6 +331,10 @@ const ROSTER = {
   "world2/tools/notes-import.mjs": { args: [], env: NO_PG, code: 2, needle: "pass exactly one of --dry-run or --apply" },
   "world2/tools/window-reanchor.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: window-reanchor.mjs --dry-run | --apply" },
   "world2/tools/witness-settlement.mjs": { args: [], env: NO_PG, code: 2, needle: "witness-settlement: --receipt, --event and --town are required" },
+  // POS-1025: the printout refuses a missing mode before it reads a seal or opens a store.
+  "world2/tools/settlement-printout.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: settlement-printout.mjs print" },
+  // POS-1025: the cutover's one copy of the registry refuses with no --world-repo before it reads a file or a store.
+  "world2/tools/publications-seed.mjs": { args: [], env: NO_PG, code: 2, needle: "usage: publications-seed.mjs --world-repo" },
 };
 
 // ── the scan: which files carry an entry guard at all ────────────────────────

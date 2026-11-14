@@ -266,15 +266,16 @@
       "outcome": {
         "history_path": "/srv/postmark-harbor/settlement-auto-history.jsonl",
         "alarm_on_classes": [
-          "canon-bad"
+          "canon-bad",
+          "printout-refused"
         ],
         "zero_published_runs": 3,
         "why": "THE CLOCK IS NOT THE WORK. Until 2026-08-30 this row judged timer recency and nothing else, so the board would have read a green tick over the night of 08-31: the timer fired at 02:38:50Z exactly as scheduled and the crossing refused at 02:39:26Z with {\"phase\":\"unknown\"}, publishing nothing. TWO SHAPES ARE JUDGED HERE AND THEY FAIL DIFFERENTLY. A canon-bad refusal (deploy/settlement-classify.mjs) is loud and instantaneous — the failing path is in origin/main s own tree, so no rerun ever clears it and one occurrence is already forever; it alarms on sight. STARVATION is quiet and only exists across crossings: on 2026-08-26 a crossing left 42 marks drafted and reported nothing, and a starving crossing printed 0 published, 0 unpublished and read as a quiet day for two days — every receipt individually honest, the pattern the finding. Three consecutive crossings that published nothing WHILE left_drafted grew is work arriving with none getting out. THE WINDOW IS THREE because two is a weekend of genuinely nothing eligible and four is two full days of silence, which is the length the 08-26 starvation actually ran. The log is written by deploy/settlement-history.mjs at the end of every decided crossing; a single receipt file is overwritten twice a day and structurally cannot hold a pattern. AND A REFUSAL THAT KEEPS COMING BACK: the class rule above catches the refusal that announces itself terminal; unsettled_runs catches the one that does not and is terminal anyway. postmark-world 7f866059 (2026-08-30 22:40) says it in its own message — the fault \"was the sweep s standing 2-error lint refusal (every crossing since 08-28 re-drained them, dropped one, tripped on the other)\": six input-bad refusals over three days, each individually rerunnable, none ever cleared, because what produced them was upstream of the rerun. It is judged on STATUS and not on left_drafted, because a refused crossing never reaches the point of having channel counts — its receipt carries zeros, so the starvation rule is structurally blind to it.",
         "means": "Read the receipt at /srv/postmark-harbor/settlement-auto.json — its `class` and `next_step` say whether this is yours to rerun or yours to repair. INSTALL-DAY NOTE: this row is EXPECTED to read ALARM-outcome until the first crossing after deploy writes the log, and it clears itself then.",
         "unsettled_runs": 3,
-        "retire_null_runs": 3,
-        "retire_why": "A STEP THAT DEGRADES LOUDLY IS STILL UNREAD IF NOBODY COUNTS THE NOTICES. The retire step (G1 lane 1, 2026-09-08) tells the store what the world unpublished; until it existed nothing in the live write path ever set marks.status = retired, and the pre-cutover dump read 1,019 standing and 0 retired, ever. It is built to degrade loudly rather than to fail the crossing: a box whose settlement unit carries no WORLD2_CLEARING_URL writes retired: {ran: false} with its reason into every receipt and publishes canon anyway, which is correct — the world is already pushed by that line, and refusing there would write refused over a crossing that really landed. But a named absence repeated twice a day forever reads exactly like a quiet town, which is the 2026-08-26 starvation lesson one rule up wearing new clothes. NULL AND ZERO ARE DIFFERENT FACTS AND ONLY ONE OF THEM ALARMS: retired: 0 means the step ran and there was nothing to retire, which is the common green case; retired: null means nobody asked. Alarming on zero would fire on nearly every crossing and teach the board to be ignored. THE WINDOW IS THREE for its sibling's reason — two is a weekend, four is two full days of the register drifting from canon. A history line written before this field existed has no retired key at all and deliberately does not match, so an old log never alarms about a step that did not exist when it was written, and this rule needs no install-day exception.",
-        "retire_means": "Read the receipt at /srv/postmark-harbor/settlement-auto.json — its `retired` block names the reason in its own words. If it reads that WORLD2_CLEARING_URL is unset, the fix is the box carry: the settlement unit reads WORLD2_CLEARING_URL from EnvironmentFile=/etc/postmark-world2-clearing.env — ONE file, shared with the candle since 2026-09-12 (office #26); if it is missing or stale the URL is unset here and the candle cannot log in either, so repair that one file, daemon-reload, and both units follow. A non-empty `absent` list in that same block is a DIFFERENT finding and not this alarm — it means the world unpublished a mark the store never materialized."
+        "unrecorded_runs": 3,
+        "unrecorded_why": "THE PRINTOUT NOBODY RECORDED (POS-1025; it replaces the retire step's retired: null rule, whose decision the clearing now makes before its seal). Since the printout cutover the settlement prints its sealed snapshot onto world main, tags it settlement/S<n> and records it in the store (095 record_printout), which moves the store's world-marks head. A tag or record that refuses after the push degrades loudly by design: main is already published, so the crossing reports and escalates rather than refusing over a publication that landed. A notice repeated crossing after crossing still reads like a quiet town unless something counts it. FALSE AND NULL ARE DIFFERENT FACTS AND ONLY ONE OF THEM ALARMS: recorded: false is a printout that was pushed and not recorded; recorded: null is a crossing that printed nothing (a refusal, judged by unsettled_runs above). THE WINDOW IS THREE for its siblings' reason. A history line from before the cutover has no recorded key and deliberately does not match, so this rule needs no install-day exception.",
+        "unrecorded_means": "Read the receipt at /srv/postmark-harbor/settlement-auto.json — its `tag` and `record` blocks name the refusal in their own words. A tag-conflict means a settlement/S<n> already stands on another commit: never move it; it goes to a person (DEPLOY § 095). A record that tripped is usually the store pen: the settlement unit reads WORLD2_CLEARING_URL from EnvironmentFile=/etc/postmark-world2-clearing.env, shared with the candle. Once repaired, `sudo systemctl start postmark-settlement-by-hand.service` prints the newest unprinted settlement under its own number."
       }
     },
     {
@@ -548,18 +549,11 @@
     },
     {
       "unit": "postmark-world2-marks-ingest.timer",
-      "label": "the World 2.0 marks pen",
-      "stage": "live",
-      "activation_owner": "Keemin — RULED 2026-09-23 18:4x EDT on POS-142: 'the class fix goes — a marks ingest at every bless, then prod's fold flips to the store — this week, no separate sitting'. The store had no ingest for the world repo's marks: door-made writes reach it through the clearing, every file-side change after the 08-28 seed did not, and PR #173's rows fold differed from the published file by 7 missing marks and ~50 stale rows. Unit source: deploy/postmark-world2-marks-ingest.{service,timer}, script deploy/world2-marks-ingest.sh, tool world2/tools/marks-ingest.mjs. Installed by Wright's hand, dev sandbox first.",
-      "cadence": "every 15 minutes, :12/:27/:42/:57 UTC — five minutes after the office tick that fetches a fresh settlement tag; the tool acts only on a new blessing and is a no-op between them, so the bless is the trigger and the clock is how the box notices it",
-      "cadence_source": "systemctl show postmark-world2-marks-ingest.timer -p TimersCalendar",
-      "heartbeat": {
-        "kind": "state_file",
-        "path": "/srv/world2-lab/state/ingest-marks.json",
-        "stamp_field": "at",
-        "stale_after_minutes": 45
-      },
-      "stale_means": "The store stops learning the world repo's own changes, and the rows fold drifts from the published file one crossing at a time — the exact silence POS-142 measured (7 marks no row held, ~50 stale rows, and nothing anywhere red). Every fire writes the state file, the no-op ones included, so a stale `at` means the pen is not running, not that nothing was blessed. Read `status` beside the stamp: `failed` with a fresh `at` is a STOP or a refused write, and `receipt`/`detail` name which; a STOP is a fact the row shape cannot hold and wants a person, never a retry. The allowance is 45 minutes, three fires: one missed fire is weather, three is the rail."
+      "label": "the World 2.0 marks pen, retired",
+      "stage": "retired",
+      "activation_owner": "Retired by POS-1025, the settlement printout (Darko's go, 'Printout only', 2026-11-13; the brief retires marks-ingest, its wrappers and units at the paired cutover, and the build disposition makes it one retirement with no legacy flag), the unit files, its script and its tool removed from the release in the same change; the box's retire steps are Jetto's. It was Keemin's ruling of 2026-09-23 on POS-142 ('a marks ingest at every bless, then prod's fold flips to the store'), installed by Wright's hand.",
+      "retired_because": "The store is the marks' record and the world's files are printed from it (POS-1025): the settlement prints its sealed snapshot onto world main, and nothing reads the files back into the store. The world-marks head this pen kept is advanced by the settlement's own record of its printout (095 § record_printout), at the commit its settlement/S<n> tag stands on. A change a person must make to a resident's mark goes through the operator's repair act (household { do: \"repair-mark\" }), through the clearing; law and class marks keep law-ingest.",
+      "retire_steps": "DEPLOY.md § The settlement printout (095), its cutover: step 4, BEFORE the release that removes its code, sudo systemctl disable --now postmark-world2-marks-ingest.timer and confirm it quiet (timer disabled and inactive, no service run in progress); step 8, after the first printout is read, remove both unit files and the office-tree drop-in directory (/etc/systemd/system/postmark-world2-marks-ingest.service.d), remove /srv/world2-lab/ops/world2-marks-ingest.sh, daemon-reload"
     },
     {
       "unit": "postmark-world2-notary.timer",
@@ -1023,23 +1017,13 @@
         "activation_owner": "Keemin — the split is his ruling of 2026-09-19 (postmark#2893); the drop-in and this row are the same install."
       },
       {
-        "id": "world2-marks-ingest",
-        "unit": "postmark-world2-marks-ingest.service",
-        "label": "the World 2.0 marks pen's office tree",
-        "env_key": "WORLD2_OFFICE",
-        "require_env": "/etc/systemd/system/postmark-world2-marks-ingest.service.d/office-tree.conf (deploy/postmark-world2-office-tree.conf)",
-        "must_be": "release",
-        "why": "marks-ingest.mjs execs out of this tree and writes `marks` and `claims` through materialize.mjs — the same pen shape the clearing uses. A marks pen on an old tree writes rows in a shape the deployed clearing and fold no longer read. require_env rather than a default, as on the law pen: a unit whose drop-in went missing must redden, not fall back to a tree that happens to be right today.",
-        "activation_owner": "Keemin — the ingest is his ruling of 2026-09-23 (POS-142); the drop-in and this row are the same install, by Wright's hand."
-      },
-      {
         "id": "world2-ops-scripts",
         "kind": "file_copy",
         "label": "the World 2.0 ops scripts on the box",
         "path": "/srv/world2-lab/ops",
         "from": "deploy",
-        "match": "^(?!town-index-ingest\\.sh$).*\\.sh$",
-        "retired_copies": "town-index-ingest.sh is not compared here since POS-341 (Darko 2026-10-20 15:38): postmark-town-index.service runs the release copy, /srv/postmark-office/deploy/town-index-ingest.sh, the same file the ferry runs, so the copy in this directory is execed by nothing. It stays on the box until Wright retires it by hand, and this row must not redden on it meanwhile.",
+        "match": "^(?!(town-index-ingest|world2-marks-ingest)\\.sh$).*\\.sh$",
+        "retired_copies": "town-index-ingest.sh is not compared here since POS-341 (Darko 2026-10-20 15:38): postmark-town-index.service runs the release copy, /srv/postmark-office/deploy/town-index-ingest.sh, the same file the ferry runs, so the copy in this directory is execed by nothing. It stays on the box until Wright retires it by hand, and this row must not redden on it meanwhile. world2-marks-ingest.sh is not compared since POS-1025: it retired with its unit at the settlement printout's cutover, the release carries it no more, and the box's copy goes with the unit's retire steps (DEPLOY.md § The settlement printout (095)).",
         "why": "THE SAME CLASS ONE LAYER DOWN, and it is already live. The four world2 units do not exec node directly — their ExecStart is /srv/world2-lab/ops/world2-<lane>.sh, and DEPLOY.md calls that directory 'a plain file copy from this repo'. No deploy writes it. On 2026-09-05 a one-line default in world2-refresh-clone.sh had to be carried by scp, and DEPLOY.md's own sentence for it is 'The box's copy of the script is stale until it is carried.' Nothing goes red while it is uncarried, which is the whole complaint. The drop-in above pins which OFFICE the scripts read; this row is what says the SCRIPTS themselves are the ones that shipped. Read as bytes, so a CRLF from a Windows copy reddens here rather than failing later in a way that reads like a missing file.",
         "repair": "scp deploy/world2-*.sh meepo-ec2:/srv/world2-lab/ops/ && ssh meepo-ec2 'chmod +x /srv/world2-lab/ops/*.sh' — then re-run the roll-call",
         "activation_owner": "Wright — the ops directory was placed by hand on 2026-08-29 with the four world2 lanes and has been carried by hand since."

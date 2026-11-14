@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 
 import {
   escalate, titleFor, bodyFor, tokenFrom, DEFAULT_REPO, isSuiteRedRefusal, notOkLines,
+  isPrintoutRefusal, isHarmWarning, isTagWarning,
 } from "../deploy/settlement-escalate.mjs";
 
 const REPO = "postmark-town/postmark";
@@ -360,4 +361,68 @@ test("FALSIFIER 5 · its title is its own, so it never lands on another class's 
   assert.equal(titleFor("suite-red"), "settlement refusal: suite-red");
   assert.notEqual(titleFor("suite-red"), titleFor("canon-bad"));
   assert.notEqual(titleFor("suite-red"), titleFor("recurring-refusal"));
+});
+
+// ── THE PRINTOUT'S THREE (POS-1025) ─────────────────────────────────────────
+//
+// After the seal the checks only raise alarms (POS-1025/c), so two of these are
+// WARNINGS over a crossing that published, and one is the refused printout.
+
+const PRINTED = (over = {}) => ({
+  at: "2026-11-14T06:00:00Z", status: "published", settlement: 214, world_from: "aaaa", world_to: "bbbb",
+  printout: { ran: true, status: "printed", written: [{ id: "neth/warm-stone", path: "WORLD/marks/neth/warm-stone/mark.md" }], removed: [] },
+  harm: { ok: true, checks: [] }, tag: { status: "tagged", tag: "settlement/S214" }, record: { status: "recorded" },
+  detail: "S214 printed: 1 written, 0 removed, 0 re-framed", ...over,
+});
+const HARMED = PRINTED({ harm: { ok: false, checks: [{ name: "lost", ok: false, count: 1, rows: ["neth/warm-stone: gone, and no act names it"] }] } });
+const UNTAGGED = PRINTED({ tag: { status: "refused", refused: "tag-conflict", detail: "settlement/S214 already stands at 0cca7f2b08a3" }, record: null });
+const PRINT_REFUSED = {
+  at: "2026-11-14T06:00:00Z", status: "refused", settlement: null, class: "printout-refused",
+  printout: { ran: true, status: "refused", refused: "reframe-refused", detail: "the frame neth/old-hall cannot keep neth/warm-stone exactly", reframe: { id: "neth/warm-stone" } },
+  detail: "the printout refused: reframe-refused — …",
+};
+
+test("POS-1025 · each class FILES over its own receipt, and its body says what to read first", async () => {
+  for (const [klass, receipt, says] of [
+    ["harm-warning", HARMED, /PUBLISHED at `2026-11-14T06:00:00Z` and the harm gate named harm[\s\S]*\*\*lost\*\* — 1 row[\s\S]*neth\/warm-stone: gone, and no act names it/],
+    ["tag", UNTAGGED, /S214 PUBLISHED[\s\S]*is not recorded as printed[\s\S]*never moved[\s\S]*"refused": "tag-conflict"/],
+    ["printout", PRINT_REFUSED, /sealed and its printout refused[\s\S]*SEALED AND UNPRINTED[\s\S]*reframe-refused: the frame neth\/old-hall/],
+  ]) {
+    const { calls, fetchStub } = stubGithub({ issues: [] });
+    const r = await withFetch(fetchStub, () => escalate({ klass, receipt, token: "t", repo: REPO, log: quiet }));
+    assert.equal(r.filed, true, `${klass} was not filed`);
+    const created = calls.find((c) => c.method === "POST");
+    assert.match(created.body.body, says, `${klass}'s body`);
+  }
+});
+
+test("POS-1025 · a receipt that is not what the class says FILES NOTHING, and the gates pass their own", async () => {
+  const cases = [
+    ["harm-warning", PRINTED(), "a clean publication"],
+    ["harm-warning", PRINT_REFUSED, "a refusal (harm on a refused printout is not a warning over a publication)"],
+    ["tag", PRINTED(), "a tagged and recorded publication"],
+    ["printout", PRINTED(), "a publication"],
+    ["printout", { status: "refused", detail: "the household registry refused: …", printout: { ran: false } }, "a refusal before the printout"],
+  ];
+  for (const [klass, receipt, what] of cases) {
+    const { calls, fetchStub } = stubGithub({ issues: [] });
+    const r = await withFetch(fetchStub, () => escalate({ klass, receipt, token: "t", repo: REPO, log: quiet }));
+    assert.equal(r.filed, false, `${klass} over ${what} filed an issue`);
+    assert.equal(r.reason, `not-a-${klass}`);
+    assert.deepEqual(calls, [], "the gate comes before any request");
+  }
+  // the control: each gate passes its own receipt, or the cases above are satisfied by a gate that refuses everything
+  assert.equal(isHarmWarning(HARMED), true);
+  assert.equal(isHarmWarning(PRINTED({ status: "quiet", harm: { ok: false, ran: false, could_not_gate: "no tool" } })), true);
+  assert.equal(isTagWarning(UNTAGGED), true);
+  assert.equal(isTagWarning(PRINTED({ record: { status: "refused", refused: "record-tripped" } })), true);
+  assert.equal(isPrintoutRefusal(PRINT_REFUSED), true);
+});
+
+test("POS-1025 · the two warnings are titled as warnings, and every class has its own standing issue", () => {
+  assert.equal(titleFor("harm-warning"), "settlement warning: harm-warning");
+  assert.equal(titleFor("tag"), "settlement warning: tag");
+  assert.equal(titleFor("printout"), "settlement refusal: printout");
+  const titles = ["printout", "harm-warning", "tag", "harm", "suite-warning", "canon-bad", "recurring-refusal", "race"].map(titleFor);
+  assert.equal(new Set(titles).size, titles.length);
 });
