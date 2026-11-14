@@ -51,7 +51,7 @@ function prefixOf(s, keep) {
 }
 
 /** The marker a cut field ends with: the exact bytes cut, and where the whole text lives (or that no existing read holds it). */
-export const cutMarker = (cutBytes, source) => ` […cut ${cutBytes} bytes; ${source ? `the whole text: ${source}` : "no existing read holds this field whole"}]`;
+export const cutMarker = (cutBytes, source) => ` […cut ${cutBytes} bytes; ${source ? `the whole text: ${source}` : "no read is verified to hold this field whole"}]`;
 
 /** Every string in `value`, as `{ path, value }` (paths are dotted keys and array indices). */
 function stringLeaves(value, path = []) {

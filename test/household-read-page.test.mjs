@@ -147,7 +147,7 @@ test("P5 · a part that does not exist is refused by name", () => {
 const bytes = (s) => Buffer.byteLength(s, "utf8");
 /** The cut field's kept text and its marker, split; the marker says exactly how many bytes were cut and where the whole text is. */
 const split = (cut) => {
-  const m = / \[…cut (\d+) bytes; (the whole text: (.*)|no existing read holds this field whole)\]$/s.exec(cut);
+  const m = / \[…cut (\d+) bytes; (the whole text: (.*)|no read is verified to hold this field whole)\]$/s.exec(cut);
   assert.ok(m, `a marker at the end of: ${cut.slice(-160)}`);
   return { kept: cut.slice(0, m.index), cutBytes: Number(m[1]), source: m[3] ?? null };
 };

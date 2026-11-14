@@ -312,10 +312,10 @@ test("R8 · a single field over the cap, through the real dispatcher: cut with i
   const first = await read({ part: "alerts" });
   assert.ok(!first.error, JSON.stringify(first).slice(0, 300));
   assert.ok(bytesOf(text(first)) <= CAP_BYTES, `${bytesOf(text(first))} bytes`);
-  const cutOf = (body) => /^(.*) \[…cut (\d+) bytes; (the whole text: (.*)|no existing read holds this field whole)\]$/s.exec(body);
+  const cutOf = (body) => /^(.*) \[…cut (\d+) bytes; (the whole text: (.*)|no read is verified to hold this field whole)\]$/s.exec(body);
   const m = cutOf(first.rows[0].about.body);
   assert.ok(m, "the first alert's body is cut with a marker");
-  assert.equal(m[3], "no existing read holds this field whole", "no verified opening for a retired mark's body: none is promised");
+  assert.equal(m[3], "no read is verified to hold this field whole", "no verified opening for a retired mark's body: none is promised");
   assert.equal(bytesOf(m[1]) + Number(m[2]), bytesOf(huge), "kept + cut = the field, exactly");
   assert.deepEqual([first.rows[0].kind, first.rows[0].about.mark, first.rows[0].act.verb], ["mark-taken", "r000/old-huge", "world.stake"]);
   // the whole walk: every alert once, each page under the cap, the escrow alert's body honestly without a source
@@ -330,7 +330,7 @@ test("R8 · a single field over the cap, through the real dispatcher: cut with i
   }
   assert.deepEqual(got.map((r) => r.about.mark), rows.map((r) => r.about.mark), "no alert lost or doubled");
   const e = cutOf(got[1].about.body);
-  assert.equal(e[3], "no existing read holds this field whole", "no source is promised where none exists");
+  assert.equal(e[3], "no read is verified to hold this field whole", "no source is promised where none exists");
   // the real teaching block, through the dispatcher, fits the cap whole
   const teach = await callRead("stances", { part: "teach" });
   assert.ok(bytesOf(text(teach)) <= CAP_BYTES, `${bytesOf(text(teach))} bytes`);
