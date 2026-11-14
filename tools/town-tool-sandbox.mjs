@@ -155,7 +155,7 @@ export function stragglerPids(cgroupText, procsText, self, env = process.env) {
 }
 
 /** SIGKILL every other process in this instance until none is left; false if they won't go. */
-function killStragglers() {
+export function killStragglers() {
   if (!process.env.INVOCATION_ID) return true;
   let cg;
   try { cg = readFileSync("/proc/self/cgroup", "utf8"); } catch { return true; }
