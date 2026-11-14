@@ -307,7 +307,7 @@ test("the manifest validates the keep outcome on its own fields, with no dummy u
   assert.throws(loads({ ...KEEP_ROW, outcome: { history_path: "/fixture/x.jsonl" } }), /no unsettled_runs/);
 });
 
-test("the shipped manifest's keep row loads, judges the 24 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
+test("the shipped manifest's keep row loads, judges the 25 soft steps at N=3 and 45 minutes, beside unchanged crossing rows", () => {
   const m = loadManifest(DEFAULT_MANIFEST);
   const keepRow = m.units.find((r) => r.unit === "postmark-office-keep.timer");
   // the keep row carries two blocks since POS-268 5b: this receipt, and the household-keys line

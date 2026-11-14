@@ -134,6 +134,14 @@ if (process.env.STUB_OTHER_WRITER) {
 }`),
   "tools/bug-stage-plan.mjs": plain("bugstage"),
   "tools/ballots-backfill.mjs": plain("ballots"),
+  // The event-sparks pass (POS-1035), after the mint's commit and before the snapshot. Its one guard is the real pass's: a stamp
+  // ledger holding lines nobody committed is not touched (exit 3, the next tick asks again). Otherwise nothing is due here.
+  "deploy/event-sparks-pass.mjs": plain("sparks", `
+import { execFileSync } from "node:child_process";
+const town = process.argv[process.argv.indexOf("--town") + 1];
+const dirty = execFileSync(${JSON.stringify(which("git") ?? "git")}, ["-C", town, "status", "--porcelain", "--", ${JSON.stringify(LEDGER)}], { encoding: "utf8" }).trim();
+if (dirty) { console.error("[event-sparks] the stamp ledger holds lines nobody committed — stub"); process.exit(3); }
+if (process.env.STUB_SPARKS_RC) process.exit(Number(process.env.STUB_SPARKS_RC)); // the pass's own exit, as the shell maps it`),
   // STAMP_LINES=store: the store's mint pass appends and commits its own lines
   "world2/tools/stamp-mint-run.mjs": plain("mint-run", `
 import { execFileSync } from "node:child_process";
@@ -314,7 +322,7 @@ const steps = (r) => Object.fromEntries(Object.entries(r.steps).map(([k, v]) => 
 const GREEN = {
   lock: "ok", pull: "ok", fetch: "ok", registry: "ok", settle: "ok", standing: "ok", gangway: "ok",
   mint: "ok", welcome: "ok", invite: "ok", bugstage: "ok", ballots: "ok", verify: "ok", commit: "ok", push: "ok",
-  sync: "ok:switch-off", rollback: "ok:not-needed", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok",
+  sync: "ok:switch-off", rollback: "ok:not-needed", sparks: "ok", snapshot: "ok", settlements: "ok", carried: "ok", chests: "ok", amends: "ok", drops: "ok", endings: "ok", positions: "ok",
   hhkeys: "ok", hhkeys_log: "ok", world: "ok", publish: "ok",
 };
 const OWED = { STUB_APPEND: "mint row 3" };
@@ -364,6 +372,9 @@ const SOFT = [
   ["invite", { STUB_FAIL: "invite" }, { invite: "refused:exit:7" }],
   ["bugstage", { STUB_FAIL: "bugstage" }, { bugstage: "refused:exit:7" }],
   ["ballots", { STUB_FAIL: "ballots" }, { ballots: "refused:exit:7" }],
+  // POS-1035: the event-sparks pass refused (a completion it could not finish), or met a ledger nobody committed (exit 3)
+  ["sparks", { STUB_FAIL: "sparks" }, { sparks: "refused:exit:7" }],
+  ["sparks (a ledger with lines nobody committed: skipped, asked again next tick)", { STUB_SPARKS_RC: "3" }, { sparks: "skip:prereq:clean_ledger" }],
   // a failed run prints no soft-step lines, so carried and amends never ran
   ["settlements", { STUB_FAIL: "settlements" }, { settlements: "refused:exit:7", carried: "notrun", chests: "notrun", amends: "notrun", drops: "notrun", endings: "notrun" }],
   // POS-612: each soft step's failure leaves the run's exit 0 and settlements ok,
@@ -405,8 +416,10 @@ test("mint · a ledger that arrives red: mint refused ledger-red (exit 0 is not 
   assert.deepEqual(steps(receipt(fx)), {
     ...GREEN, mint: "refused:ledger-red", welcome: "notrun", invite: "notrun", bugstage: "notrun", ballots: "notrun",
     verify: "notrun", commit: "notrun", push: "notrun", sync: "notrun", rollback: "ok:not-needed",
+    sparks: "refused:ledger-red", // POS-1035: the same arrival check, so no completion signs onto a ledger the mint would not
   });
-  assert.deepEqual(calls(fx).slice(0, 6), ["registry", "settle", "standing", "gangway", "verify", "settlements"]);
+  // the second verify is the sparks step's own arrival check; the pass itself never runs
+  assert.deepEqual(calls(fx).slice(0, 7), ["registry", "settle", "standing", "gangway", "verify", "verify", "settlements"]);
   assert.ok(published(fx));
 });
 

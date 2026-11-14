@@ -479,16 +479,24 @@ keep_settle_unlanded() {
   # synced: each completion signs its own two lines, lands them in its own
   # store transaction and commits them itself, and one that cannot land puts
   # its lines back — true only on a clean ledger, so the pass refuses a dirty
-  # one (exit 3) and the next tick asks again. Non-fatal either way.
-  sparks_rc=0
-  node /srv/postmark-office/deploy/event-sparks-pass.mjs \
-      --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem --world "$WORLD_CLONE" || sparks_rc=$?
-  case "$sparks_rc" in
-    0) keep_step sparks ok ;;
-    3) keep_step sparks skip prereq:clean_ledger ;;
-    *) keep_step sparks refused "exit:$sparks_rc"
-       echo "[office-keep] event-sparks pass had refusals (non-fatal) — the next tick asks again" >&2 ;;
-  esac
+  # one (exit 3) and the next tick asks again. And no completion signs onto a
+  # ledger the mint would not: the same arrival check first (owed mints are
+  # not red), so a ledger that is red stays untouched by this step too.
+  # Non-fatal either way.
+  if ! node /srv/postmark-office/tools/stamp-verify-owed.mjs --repo "$TOWN_CLONE" --registry "$REGISTRY_FILE"; then
+    echo "[office-keep] event sparks OFF — the ledger is red (stamp-verify above names the line), so no completion signs onto it; the next tick asks again" >&2
+    keep_step sparks refused ledger-red
+  else
+    sparks_rc=0
+    node /srv/postmark-office/deploy/event-sparks-pass.mjs \
+        --town "$TOWN_CLONE" --key /srv/postmark-office/stamp-key.pem --world "$WORLD_CLONE" || sparks_rc=$?
+    case "$sparks_rc" in
+      0) keep_step sparks ok ;;
+      3) keep_step sparks skip prereq:clean_ledger ;;
+      *) keep_step sparks refused "exit:$sparks_rc"
+         echo "[office-keep] event-sparks pass had refusals (non-fatal) — the next tick asks again" >&2 ;;
+    esac
+  fi
   git clone --local --quiet "$TOWN_CLONE" "$SNAP/town" || { keep_rc=$?; keep_step snapshot refused "exit:$keep_rc"; exit "$keep_rc"; }
   keep_step snapshot ok
 ) 9>>"$LOCK"
