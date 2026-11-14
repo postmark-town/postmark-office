@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ROOM_GRACE_MS, edgeAfter, roomOpen } from "../src/hearing-window.mjs";
@@ -259,22 +259,52 @@ test("memory trim that loses the WHOLE pre-edge part of a carried room still say
   assert.equal(store.conversations().live[0].id, id, "the id is the room's, not the earliest held say's");
 });
 
-test("a spatial bridge that leaves memory leaves ONE room with the stored record's id", async () => {
+test("a spatial bridge that leaves memory leaves ONE room, BOTH sides kept, with the stored record's id", async () => {
   const at = { bridge: { x: 48, y: 0 }, west: { x: 0, y: 0 }, east: { x: 96, y: 0 }, ear: { x: 48, y: 5 } };
-  const { store, tick } = bench(at, { memoryMax: 3 });
-  await store.say("west", "w1"); tick(20_000);
-  await store.say("east", "e1"); tick(20_000);                  // two rooms: 96 m apart, out of earshot (60 m)
+  const { store, tick } = bench(at, { memoryMax: 5 });
+  const say = async (h, t) => { await store.say(h, t); tick(20_000); };
+  await say("west", "w1"); await say("east", "e1");             // two rooms: 96 m apart, out of earshot (60 m)
   assert.equal(store.conversations().live.length, 2);
-  await store.say("bridge", "b1"); tick(20_000);                // joins them
+  await say("bridge", "b1");                                     // joins them
   assert.equal(store.conversations().live.length, 1);
   const joined = store.conversations().live[0].id;
-  await store.say("east", "e2"); tick(20_000);                  // trims w1
-  await store.say("east", "e3"); tick(20_000);                  // trims e1
-  await store.say("east", "e4"); tick(20_000);                  // trims the bridge: east alone remains of the memory's three
+  await say("west", "w2"); await say("east", "e2");
+  await say("west", "w3"); await say("east", "e3"); await say("west", "w4"); // w1, e1 and the bridge have left; both sides are still held
+  const held = store._voices().map((v) => v.text);
+  assert.equal(held.length, 5);
+  assert.ok(!held.includes("b1") && held.some((t) => t.startsWith("w")) && held.some((t) => t.startsWith("e")), "the bridge is gone, both sides remain");
   const c = store.conversations();
   assert.equal(c.live.length, 1, "one room, not two fragments");
   assert.equal(c.live[0].id, joined);
   assert.equal(joined, `t${T0}-west`, "the stored record names it by its first say");
+});
+
+test("legacy voices are joined ONCE: a say into a room of rootless lines records no alias list again", async () => {
+  const log = join(DIR, "legacy.jsonl");
+  const lines = [];
+  for (let i = 0; i < 30; i++) lines.push(JSON.stringify({ at: new Date(T0 + i * 20_000).toISOString(), handle: "mira", text: `old ${i}`, x: 0, y: 0, place: null, aboard: false }));
+  writeFileSync(log, lines.join("\n") + "\n");
+  const b = bench(AT, { logPath: log, memoryMax: 100 });
+  b.tick(30 * 20_000);
+  for (let i = 0; i < 6; i++) { await b.store.say("odo", `new ${i}`); b.tick(20_000); }
+  const written = readFileSync(log, "utf8").trim().split("\n").slice(30).map((l) => JSON.parse(l));
+  assert.equal(written.length, 6);
+  assert.ok(written[0].merged?.length >= 29, "the first say records the join of the old room, once");
+  for (const w of written.slice(1)) assert.equal(w.merged, undefined, "later says repeat nothing");
+  assert.equal(written[1].root, written[0].root);
+});
+
+test("an ordinary say records no join, and the alias map stays bounded by the memory", async () => {
+  const quiet = bench(AT, { memoryMax: 5 });
+  for (let i = 0; i < 40; i++) { await quiet.store.say("mira", `q${i}`); quiet.tick(20_000); }
+  assert.equal(quiet.store._aliases(), 0, "a say into one room unions nothing");
+  // many rooms joined by bridges, a round at a time: every round is a real join
+  const at = {};
+  const rounds = 40;
+  for (let r = 0; r < rounds; r++) { at[`w${r}`] = { x: 0, y: r * 1000 }; at[`e${r}`] = { x: 96, y: r * 1000 }; at[`b${r}`] = { x: 48, y: r * 1000 }; }
+  const { store, tick } = bench(at, { memoryMax: 6 });
+  for (let r = 0; r < rounds; r++) for (const h of [`w${r}`, `e${r}`, `b${r}`]) { await store.say(h, h); tick(20_000); }
+  assert.ok(store._aliases() <= 2 * 6 + 3, `aliases ${store._aliases()} stay within twice the memory (plus the say being made)`);
 });
 
 test("the room's root rides the log line, and a restarted office reads it back without walking the log", async () => {

@@ -451,18 +451,32 @@ export function createVoices({
     parent.set(hi, lo);
     return lo;
   }
-  const rootOfVoice = (v) => (v.root ? findRoot(v.root) : ownId(v));
+  const rootOfVoice = (v) => findRoot(v.root ?? ownId(v)); // an old line stands for itself, resolved through any join the log recorded for it
   // a cluster's root: the earliest root among its voices (an old line without one stands for itself)
   function clusterRoot(c) {
     let best = null;
     for (const v of c.voices) { const r = rootOfVoice(v); if (best == null || rootAtOf(r) < rootAtOf(best)) best = r; }
     return best;
   }
+  // The map only needs the joins a HELD voice still names: past twice the memory, resolve every held voice's root to its final root and keep just those.
+  function pruneRoots(held) {
+    if (parent.size <= 2 * memoryMax) return;
+    const keep = new Map();
+    for (const v of held) {
+      const id = v.root ?? ownId(v); // an old line's join is recorded against its own id
+      const r = findRoot(id);
+      if (r !== id) keep.set(id, r);
+    }
+    parent.clear();
+    for (const [k, r] of keep) parent.set(k, r);
+  }
   function trimmed(list) {
-    if (list.length <= memoryMax) return list;
+    if (list.length <= memoryMax) { pruneRoots(list); return list; }
     const cut = list.length - memoryMax;
     cutAt = list[cut - 1].at;
-    return list.slice(cut);
+    const kept = list.slice(cut);
+    pruneRoots(kept);
+    return kept;
   }
 
   // The window at `t`, never throwing: a reader that trips hears as if nothing
@@ -523,8 +537,9 @@ export function createVoices({
     const mine = (clusterByRoom(voices, boundariesAt(now())).get(voice.room ?? null) ?? []).find((c) => c.voices.includes(voice));
     let merged = [];
     if (mine) {
-      const roots = [...new Set(mine.voices.map(rootOfVoice))];
-      const lead = roots.reduce((a, b) => (rootAtOf(b) < rootAtOf(a) ? b : a), roots[0]);
+      // the roots of the rooms this say joins are the OTHER voices' (its own fresh id is no join): none, and it founds a room under its own id
+      const roots = [...new Set(mine.voices.filter((v) => v !== voice).map(rootOfVoice))];
+      const lead = roots.length ? roots.reduce((a, b) => (rootAtOf(b) < rootAtOf(a) ? b : a), roots[0]) : ownId(voice);
       for (const r of roots) if (r !== lead) unionRoots(lead, r);
       merged = roots.filter((r) => r !== lead);
       voice.root = lead;
@@ -1284,5 +1299,5 @@ export function createVoices({
     now,
   };
 
-  return { say, hear, heardAt, earshotSnapshot, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _presence: presence };
+  return { say, hear, heardAt, earshotSnapshot, conversations, lastPresent, room, log: pathOf, _voices: () => hydrate(), _aliases: () => parent.size, _presence: presence };
 }
