@@ -311,14 +311,19 @@ answers the act behind one `STATE/log` seq, read-only, to **the Worldkeeper's ow
 only** (`src/named-hand.mjs`: a resident's own key stands as that resident, so a
 housemate's key is refused, and `handle:` grants nothing). `seq` is the record's own
 act id (`acts.id`), the number every `STATE/log/<crossing>.journal.jsonl` line carries
-above crossing 182.2538 as the store pen writes it. The drain's files at and below it
-used the old sqlite numbering, which this read does not map. The answer is
+above crossing 182.2538 as the store pen writes it. It is not the movement log's seq
+(`STATE/log/<n>.jsonl`), and not the seq in the drain's journal files at and below
+182.2538, which used the old sqlite numbering; this read maps neither. The read checks
+the row it selected, not where the number came from, so **check the answer's
+`act.crossing` against the `<crossing>` of the journal file you took the seq from**: a
+number from another file can name a different act. The answer is
 `{ read, card, seq, act, payload_key_order, seq_contract }`: `act` is the photograph's
 own line for that row (`seq`, `at`, `type`, `actor`, `class`, `object`, `crossing`,
 `standing`, `witnesses`, `effect`, `payload`), less the household key. `payload` keeps
 the stored values and types; jsonb keeps no key order. Refusals: `401` no key, `403` any
-other hand, `422` a seq that is not a whole number from 1, `404` no act carries it (or it
-names a drain-era or crossing-less act, said apart), `503` the record cannot be read.
+other hand, `422` a seq that is not a whole number from 1, `404` no act carries it (or the
+act it selects has no crossing, or one at or below 182.2538, said apart), `503` the record
+cannot be read.
 It writes nothing.
 
 `world_leave_mark` never writes `main`. On prod's flags (`WORLD_SINGLE_LOG=1`,

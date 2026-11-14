@@ -23,9 +23,16 @@
 // The store pen's: `acts.id` (state-log-from-store.mjs § storeSeqOf), the number
 // every `STATE/log/<crossing>.journal.jsonl` line carries above crossing
 // 182.2538. The drain's files at and below it were numbered by the old sqlite
-// journal, a different numbering that no store column keeps (§ MERGE_HAZARD).
-// This read maps none of it: an act of that era answers as no store-era line,
-// never as whichever act a drain-era seq happens to equal.
+// journal, a different numbering that no store column keeps (§ MERGE_HAZARD),
+// and the movement log beside them (`STATE/log/<n>.jsonl`) keeps a seq of its
+// own. This read maps neither.
+//
+// What it checks is the ROW it selected, not where the caller's number came
+// from: a selected row whose crossing is absent or at or below 182.2538 is no
+// store-pen line, and answers 404. A bare number copied from a drain-era or
+// movement file is not detected here; it reads whichever act carries that id.
+// So the answer carries the act's `crossing`, and the caller matches it to the
+// journal file it took the seq from (`SEQ_CONTRACT`).
 //
 // ── WHAT IT ANSWERS ──────────────────────────────────────────────────────────
 //
@@ -56,7 +63,8 @@ export const SOURCE_ACT_HAND = "worldkeeper";
  * The drain's last photographed crossing. `deploy/settlement-auto.sh` hands the
  * same value to the store pen as `--last-drained` (`STATE_LOG_LAST_DRAINED`'s
  * default), and the pen refuses every window at or below it, so no line the
- * store pen wrote carries an act from this crossing or earlier.
+ * store pen wrote carries an act from this crossing or earlier. It classifies
+ * the selected row; it says nothing about where a supplied number came from.
  */
 export const DRAIN_LAST_CROSSING = 182.2538;
 
@@ -67,7 +75,8 @@ export const SOURCE_ACT_FIELDS = Object.freeze({
 /** The seq this read is keyed by, in one sentence the answer carries. */
 export const SEQ_CONTRACT =
   `seq is the world's record's own act id (acts.id): the number every STATE/log/<crossing>.journal.jsonl line carries above crossing ${DRAIN_LAST_CROSSING}, as the store pen writes it. `
-  + `The drain's files at and below ${DRAIN_LAST_CROSSING} were numbered by the old sqlite journal, a different numbering this read does not map.`;
+  + `It is not the movement log's seq (STATE/log/<n>.jsonl), and not the seq in the drain's journal files at and below ${DRAIN_LAST_CROSSING}, which used the old sqlite numbering; this read maps neither. `
+  + `Check the answer's act.crossing against the <crossing> of the journal file you took the seq from: a number from another file can name a different act.`;
 
 export const SOURCE_ACT_SQL = `SELECT ${ACT_COLUMNS} FROM acts WHERE id = $1`;
 

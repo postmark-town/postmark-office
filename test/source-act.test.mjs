@@ -286,7 +286,7 @@ test("WLD-146: a seq no act carries is a 404 that says so, not an empty payload"
   assert.equal(r.payload, undefined);
 });
 
-test("WLD-146: a drain-era act or one with no crossing answers as no store-era line, never as the act its id happens to be", async () => {
+test("WLD-146: a selected row whose crossing is at or below the drain's last, or absent, answers 404 and never its own payload", async () => {
   assert.equal(DRAIN_LAST_CROSSING, 182.2538);
   for (const name of ["drainEra", "noCrossing"]) {
     const r = await read(ids[name]);
