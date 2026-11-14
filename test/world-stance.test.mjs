@@ -799,7 +799,7 @@ test("CORE-95: a quote over the bound is cut at a whole character, ends in a pla
   assert.equal(teach.after_it_is_published.the_law_reaches, LATE_WELCOME_SAYS, "the late-welcome mark is not trimmed");
 });
 
-// WRIGHT, CORE-88 fit, 2026-11-14 16:18Z: "Please size the per-quote bound so a teaching answer with its usual number of quotes plus its own
+// WRIGHT, CORE-95 fit, 2026-11-14 16:18Z: "Please size the per-quote bound so a teaching answer with its usual number of quotes plus its own
 // fields stays under 10,000. Measure how many quotes one answer carries at most, and set the bound from that … with a test asserting the
 // whole answer's bytes." The answer is what the consumer sends: {read, part, law, teach} through the real pageStances (which cuts again only
 // if the answer does not fit), measured in the connector's own unit (JSON.stringify(…, null, 1), UTF-8). So this asserts the PRODUCER's markers
@@ -808,7 +808,7 @@ test("CORE-95: the WHOLE teaching answer, with its fields and envelope, is under
   // JSON escapes (" and \) and multibyte text in every quote, ~25 KB each, so all three quotes are cut at the producer
   const esc = (n) => Array.from({ length: n }, (_, i) => ["é", "—", "🙂", '"', "\\", "a", "b c"][i % 7]).join("");
   const w = writeLaw("world-whole-answer", { a: esc(12000), b: esc(12000) });
-  const late = "🙂".repeat(150);                       // the late-welcome body at its valid worst: a mark body is at most 150 characters, here all 4-byte
+  const late = "🙂".repeat(150);                       // a PRINTABLE STRESS CASE for the late-welcome body (150 four-byte characters), not a limit the record enforces: the body is a kind property the mark lint exempts from the 150 cap, and JSON control characters cost up to 6 bytes each, so growth there is not bounded by this test
   const teach = stanceTeach(w, { lateWelcome: late });
   const { law } = await stanceShadow(repo, houseA, { dbPath });   // the read's real `law` line
   const answer = { awaiting: [], law, teach };
