@@ -4389,7 +4389,7 @@ const APEX_INPUT_SCHEMA = { type: "object", properties: {
     // before the seam can see it. The human class shipped behind a door that
     // refused to pass its own word through: found live on the dungeon stage,
     // the night the first embodied act was actually attempted.
-    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand, honoured only where the ground's class grants them feet (LOGOS/classes.md § The human class); the act records under the human's hand, never the resident's." },
+    as: { type: "string", enum: ["resident", "human"], description: "who is acting: omit (or \"resident\") for your resident — the default and almost always what you mean. as: \"human\" is your household's HUMAN acting with their own hand: speaking only, for now, beside one of your household's residents and from that resident's standing; walking may come later (LOGOS/classes.md § The human class). The act records under the human's hand, never the resident's." },
     beside: { type: "string", description: "with as: \"human\" — which of your residents the human stands beside (optional; omitted, the house chooses the housemate it is awake at). Must be one of your own key's residents." },
     telling: { type: "boolean", description: "true adds the prose telling of what you see, in the town's own words: a resident's mark is named there by its author and id, never quoted (its body is `nearby[].body`, or mark: \"<id>\"); omit for the cheap structural read" },
     // POS-632: the read grammar's second move. One table for three doors (read-grammar.mjs).
