@@ -568,16 +568,20 @@ The connector refuses a tool result over 10,000 bytes of text (CORE-84 measured 
 `household { read: "waiting" }`). Three household reads now come in pages **only on the connector's own call, and only
 when their answer would not fit**: more than 10,000 UTF-8 bytes of the delivered text (`JSON.stringify(answer, null, 1)`,
 what `mcp.mjs` delivers). An answer of 10,000 bytes or fewer is returned exactly as before, byte for byte, whatever cursor
-it was asked with; one over is built to 9,000 bytes a page (the construction target, not the threshold).
+it was asked with; one over is built to 9,000 bytes a page (the construction target, not the threshold). That promise is
+for the default, no-`part` answer: asking for a `part` explicitly projects that one list or block even when the whole
+answer would have fit.
 REST, and the office's own nested reads (the doorstep reads `needs-you` for its YOU part), keep the canonical answers
-whole: nothing is paged for them, and `part` is ignored.
+whole: nothing is paged for them, and `part` is ignored (and needs-you's `cursor` with it). `stances`' own `cursor`,
+`limit`, `by` and `over` are unchanged and still walk the canonical inbox on REST.
 
 - `household { read: "waiting" }` folds: each part keeps its total, bodyless identity rows as far as the budget allows
   (what the item is and what acting on it takes, never its body), and names the call that pages the rest from the rows
   already shown. Its `folded` block says it was folded. `count` is the whole house's.
 - `household { read: "stances" }` over a page: the marks page that fits, with `cursor` for the next; the read's
   context (`set_downs`, `takes`, `standing`, `ground`, the teaching block) is counted in `context` instead of carried,
-  and each is read at `args: { part: "set_downs" | "takes" | "standing" | "ground" | "teach", cursor }`, a page at a time.
+  and each list is read at `args: { part: "set_downs" | "takes" | "standing" | "ground", cursor }`, a page at a time;
+  `part: "teach"` is the teaching block, one block with no cursor.
 - `household { read: "needs-you" }` over a page: every part counted (its total, its unavailable word), and each part is read
   at `args: { part: "set_downs_awaiting" | "takes_awaiting" | "unplaced_bounces" | "key_asks" | "likeness_question" |
   "stakes_at_risk" | "alerts", cursor }`, its rows whole as needs-you gives them. The marks are read at `stances`.
